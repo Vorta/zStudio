@@ -228,7 +228,7 @@ internal static class PropertiesWindowChecks
             timer.Tick += (_, _) =>
             {
                 if (app.Windows.Cast<Window>().FirstOrDefault(w => w.Title == title) is not { } dialog) return;
-                var button = ((StackPanel)dialog.Content).Children.OfType<WrapPanel>().Single().Children.OfType<Button>().Single(b => Equals(b.Content, answer));
+                var button = ((Panel)dialog.Content).Children.OfType<WrapPanel>().Single().Children.OfType<Button>().Single(b => Equals(b.Content, answer));
                 button.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
             };
             timer.Start();

@@ -36,6 +36,11 @@ public partial class MainWindow : Window
     private AnimationEditor? animation;
     private bool pendingAnimationPlay;
     private bool allowClose, resolvingClose;
+    /// <summary>The app is closing every document; a source project's edits cannot stay with another of its worlds.</summary>
+    private bool closingAllDocuments;
+    /// <summary>A source project whose unsaved edits the user chose to discard while closing; its other worlds close without asking again.</summary>
+    /// <summary>A Discard the user chose for a project's edits, valid only while the workspace is as it was then (its revision).</summary>
+    private (Recoil.Zbd.Core.Sources.SourceWorkspace Workspace, long Revision)? discardApprovedWorkspace;
     private DecodedImage? decoded;
     private JsonObject? properties;
     private WaveFileReader? wave;
@@ -61,6 +66,14 @@ public partial class MainWindow : Window
         WorldDifficulty.ItemsSource = MainViewModel.DifficultyChoices;
         ViewModel.PropertyChanged += DifficultyPreferenceChanged;
         ViewModel.ConfirmDiscardAsync = ConfirmDocumentCloseAsync;
+        ViewModel.ResolveDraftsAsync = async () =>
+        {
+            if (animation?.ResolvePendingDrafts() == false || !await ResolvePropertiesDraftsAsync() || !await ResolveInspectionDraftsAsync()) return false;
+            // An applied scene-card edit (or any other) rebuilds its world without the caller awaiting it; decisions wait for it.
+            await SourceWorldsIdleAsync();
+            return true;
+        };
+        ViewModel.CloseDecisionsStarting = ForgetStaleDiscardApproval;
         ViewModel.ValidateNavigationPublication = closesDocuments =>
         {
             RequireAutomationMutationAvailable();
@@ -69,6 +82,7 @@ public partial class MainWindow : Window
                 throw new Recoil.Zbd.Automation.StudioCommandException("pending_drafts", "Resolve unfinished preview input before changing documents.");
         };
         ViewModel.ValidateReload = doc => { RequireAutomationMutationAvailable(); RequireNoDrafts(doc); };
+        ViewModel.ReloadSourceWorld = ReloadSourceWorldAsync;
         var s = ViewModel.Settings;
         RestoreWindowSize(new(SystemParameters.VirtualScreenWidth, SystemParameters.VirtualScreenHeight));
         InitializeWorkspace();
@@ -98,9 +112,11 @@ public partial class MainWindow : Window
         else throw new IOException("The supplied path does not exist: " + path);
         UpdateRecent();
     });
-    private async Task RunUi(Func<Task> work)
+    private Task RunUi(Func<Task> work) => ReportUi(async () => { if (!await ResolveInspectionDraftsAsync() || animation?.ResolvePendingDrafts() == false) return; await work(); });
+    /// <summary>Runs GUI work, reporting its failure; <see cref="RunUi"/> first resolves pending preview input.</summary>
+    private async Task ReportUi(Func<Task> work)
     {
-        try { if (!ResolveInspectionDrafts() || animation?.ResolvePendingDrafts() == false) return; await work(); }
+        try { await work(); }
         catch (Recoil.Zbd.Automation.StudioCommandException ex) when (ex.Code == "context_changed") { }
         catch (OperationCanceledException) { ViewModel.Status = "Operation canceled"; }
         catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException) { Report(ex); }
@@ -155,22 +171,120 @@ public partial class MainWindow : Window
     private Task OpenBrowserFile(string path) => RunUi(async () => { var doc = await ViewModel.OpenFileAsync(path); if (doc != null && ViewModel.SelectedDocument == doc) SelectNavigatorSection(1); });
     private async void SearchDoubleClick(object sender, MouseButtonEventArgs e) { if (SearchList.SelectedItem is SearchHit hit) await Navigate(hit); }
     private async void RelatedDoubleClick(object sender, MouseButtonEventArgs e) { if (RelatedList.SelectedItem is SearchHit hit) await Navigate(hit); }
-    private Task Navigate(SearchHit hit) => RunUi(async () => { var doc = await ViewModel.OpenFileAsync(hit.File); if (doc == null) return; doc.Query = ""; doc.KindFilter = "All types"; doc.SelectedAsset = doc.Assets.FirstOrDefault(a => a.Record.Kind == hit.Kind && a.Index == hit.Index); AssetGrid.ScrollIntoView(doc.SelectedAsset); });
+    private Task Navigate(SearchHit hit) => RunUi(async () => { var doc = await ViewModel.OpenFileAsync(hit.File); if (doc == null) return; doc.Query = ""; doc.KindFilter = "All types"; doc.SelectedAsset = doc.Assets.FirstOrDefault(a => a.Record.Kind == hit.Kind && a.Index == hit.Index); if (doc.SelectedAsset is { } selected) await EnsureAssetPreviewAsync(doc, selected.Record); AssetGrid.ScrollIntoView(doc.SelectedAsset); });
     private async void DocumentChanged(object? sender, PropertyChangedEventArgs e)
     {
         if (!ready || e.PropertyName != nameof(MainViewModel.SelectedDocument)) return;
         var doc = ViewModel.SelectedDocument; if (doc == shownDocument) return;
-        if (!ResolveInspectionDrafts() || animation?.ResolvePendingDrafts() == false) { ViewModel.SelectedDocument = shownDocument; return; }
+        var resolving = ResolveInspectionDraftsAsync();
+        if (!resolving.IsCompleted)
+        {
+            // Yes applied a source world's draft, which rebuilds the shown world: stay on it until that finishes, then go on
+            // to the document asked for, unless another was chosen meanwhile.
+            ViewModel.SelectedDocument = shownDocument;
+            if (await resolving && ViewModel.SelectedDocument == shownDocument && doc is { IsDisposed: false } && ViewModel.Documents.Contains(doc)) ViewModel.SelectedDocument = doc;
+            return;
+        }
+        if (!await resolving || animation?.ResolvePendingDrafts() == false) { ViewModel.SelectedDocument = shownDocument; return; }
+        CancelPreview(); // Release old-document interactions before worker discovery can yield.
+        foreach (UIElement element in new UIElement[] { ImageToolbar, ImageScroll, SceneToolbar, SceneHost, AnimationHost, AudioPanel, StructuredPanel, EventsTab }) element.Visibility = Visibility.Collapsed;
+        EmptyPreview.Visibility = Visibility.Visible; EmptyPreview.Text = "Loading preview…";
         shownDocument = doc; Workspace.Visibility = doc == null ? Visibility.Collapsed : Visibility.Visible; Welcome.Visibility = doc == null ? Visibility.Visible : Visibility.Collapsed;
+        // Publish the whole transition before starting any work: selection events must not replace its task
+        // with an asset-only preview while texture discovery is still pending.
+        TaskCompletionSource transition = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        pendingPreviewDocument = doc; pendingDocumentPreview = transition.Task; previewWork = transition.Task;
+        long generation = ++documentPreviewGeneration;
+        try { await PrepareDocumentPreviewAsync(doc, generation); transition.SetResult(); }
+        catch (Exception error) when (error is not (OutOfMemoryException or StackOverflowException))
+        {
+            // An accepted document remains open even if its presentation fails. Report here for GUI-only
+            // navigation too; command waiters observe the fault without retracting the document.
+            if (error is not OperationCanceledException && generation == documentPreviewGeneration && ViewModel.SelectedDocument == doc)
+                ViewModel.AddProblem("Preview unavailable: " + JsonData.ShownText(error.Message, 512), file: doc?.Path);
+            transition.TrySetException(error);
+        }
+        finally
+        {
+            if (ReferenceEquals(pendingDocumentPreview, transition.Task)) { pendingDocumentPreview = null; pendingPreviewDocument = null; }
+        }
+    }
+    private long documentPreviewGeneration;
+    private DocumentModel? pendingPreviewDocument;
+    private Task? pendingDocumentPreview;
+    private long preparingAssetGeneration;
+    private AssetRecord? preparingAsset;
+    private bool preparingAssetSuperseded;
+    internal Func<AssetResolver, string, CancellationToken, Task<string[]>> DiscoverTexturePacksAsync { get; set; } =
+        static (resolver, path, token) => Task.Run(() => resolver.TexturePacks(path, token), token).WaitAsync(token);
+    private async Task PrepareDocumentPreviewAsync(DocumentModel? doc, long generation)
+    {
+        if (doc != null)
+            doc.SelectedAsset ??= doc.Assets.FirstOrDefault(a => a.Record.Content is Recoil.Zbd.Core.Animation.AnimationEntry { RootName.Length: > 0 }) ?? doc.Assets.FirstOrDefault();
+        string[]? packs = null;
+        if (doc?.Document.Scene != null && ViewModel.Resolver is { } resolver)
+        {
+            using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(doc.Lifetime.Token, ViewModel.WorkspaceToken, shutdownToken, preview.Token);
+            try { packs = await DiscoverTexturePacksAsync(resolver, doc.Path, cancellation.Token); }
+            catch (OperationCanceledException) { return; }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+            {
+                if (generation == documentPreviewGeneration && !doc.IsDisposed && ViewModel.SelectedDocument == doc && shownDocument == doc)
+                    ViewModel.AddProblem("Texture variants: " + JsonData.ShownText(error.Message, 512), file: doc.Path);
+            }
+            if (cancellation.IsCancellationRequested || generation != documentPreviewGeneration || doc.IsDisposed || ViewModel.SelectedDocument != doc || shownDocument != doc) return;
+        }
+        if (generation != documentPreviewGeneration || ViewModel.SelectedDocument != doc || shownDocument != doc) return;
         updating = true;
-        TexturePackCombo.ItemsSource = doc?.Document.Scene != null ? ViewModel.Resolver?.TexturePacks(doc.Path).Select(p => new PackChoice(Path.GetFileName(p), p)).Prepend(new("Automatic texture variant", null)).ToArray() : null;
+        TexturePackCombo.ItemsSource = packs?.Select(p => new PackChoice(Path.GetFileName(p), p)).Prepend(new("Automatic texture variant", null)).ToArray();
         TexturePackCombo.DisplayMemberPath = nameof(PackChoice.Name); TexturePackCombo.SelectedIndex = 0; updating = false;
-        if (doc != null) { doc.SelectedAsset ??= doc.Assets.FirstOrDefault(a => a.Record.Content is Recoil.Zbd.Core.Animation.AnimationEntry { RootName.Length: > 0 }) ?? doc.Assets.FirstOrDefault(); await ShowAsset(doc, doc.SelectedAsset?.Record); }
+        if (doc != null)
+        {
+            AssetRecord? selected;
+            bool superseded;
+            do
+            {
+                selected = doc.SelectedAsset?.Record;
+                preparingAssetGeneration = generation; preparingAsset = selected; preparingAssetSuperseded = false;
+                try { await ShowAssetCore(doc, selected); }
+                finally
+                {
+                    superseded = preparingAssetGeneration == generation && preparingAssetSuperseded;
+                    if (preparingAssetGeneration == generation) { preparingAssetGeneration = 0; preparingAsset = null; }
+                }
+            }
+            while (generation == documentPreviewGeneration && !doc.IsDisposed && ViewModel.SelectedDocument == doc && (superseded || !ReferenceEquals(selected, doc.SelectedAsset?.Record)));
+        }
         else { CancelPreview(); shownAsset = null; ViewModel.Status = ViewModel.HasRoot ? $"{ViewModel.Files.Count:N0} files · choose a file to inspect" : "Ready"; }
     }
     private async void AssetSelectionChanged(object sender, SelectionChangedEventArgs e)
     {
-        if (ready && ViewModel.SelectedDocument is { } doc && AssetGrid.SelectedItem is AssetItem item && doc.Assets.Contains(item) && !(doc == shownDocument && shownAsset?.Id == item.Record.Id && animation != null)) await ShowAsset(doc, item.Record);
+        // A binding can realize a programmatic selection after its preview has already started. That is presentation
+        // of the same snapshot, not another navigation request; do not cancel/reload the preview it is catching up with.
+        if (ready && ViewModel.SelectedDocument is { } doc && AssetGrid.SelectedItem is AssetItem item && doc.Assets.Contains(item) &&
+            !IsShownAssetSnapshot(doc, item.Record))
+        {
+            var transition = pendingPreviewDocument == doc ? pendingDocumentPreview : null;
+            Task? work = null;
+            try { work = ShowAsset(doc, item.Record); await work; }
+            catch (OperationCanceledException) { }
+            catch (Exception error) when (error is not (OutOfMemoryException or StackOverflowException))
+            {
+                // DocumentChanged owns errors from the whole-document transition. AssetGrid can receive a deferred
+                // realization event for that same task, and an async-void handler must observe its fault rather than
+                // rethrow it through WPF. Avoid duplicating the bounded diagnostic already emitted by that transition.
+                if ((work == null || !ReferenceEquals(work, transition)) && !preview.IsCancellationRequested && !doc.IsDisposed && ViewModel.SelectedDocument == doc && shownDocument == doc)
+                    ViewModel.AddProblem("Preview unavailable: " + JsonData.ShownText(error.Message, 512), file: doc.Path);
+            }
+        }
+    }
+    private bool IsShownAssetSnapshot(DocumentModel doc, AssetRecord asset) => doc == shownDocument &&
+        (ReferenceEquals(shownAsset, asset) || shownAsset?.Id == asset.Id && animation != null);
+    private Task EnsureAssetPreviewAsync(DocumentModel doc, AssetRecord asset)
+    {
+        // SelectedItem's binding may be deferred while the Assets page is unrealized/reparented. Navigation owns its
+        // preview task directly instead of accidentally awaiting the previously selected asset's completed task.
+        return IsShownAssetSnapshot(doc, asset) ? previewWork : ShowAsset(doc, asset);
     }
     private void CancelPreview()
     {
@@ -187,7 +301,17 @@ public partial class MainWindow : Window
         preview.Cancel(); preview.Dispose(); preview = CancellationTokenSource.CreateLinkedTokenSource(shutdownToken); scene?.Clear(); StopAudio(); decoded = null; TextureImage.Source = null;
         RefreshSceneTree();
     }
-    private Task ShowAsset(DocumentModel doc, AssetRecord? asset) => previewWork = ShowAssetCore(doc, asset);
+    private Task ShowAsset(DocumentModel doc, AssetRecord? asset)
+    {
+        if (pendingPreviewDocument == doc && pendingDocumentPreview is { IsCompleted: false } pending)
+        {
+            // Discovery only defers selection; once an asset starts loading, preserve immediate supersession.
+            if (preparingAssetGeneration == documentPreviewGeneration && !ReferenceEquals(preparingAsset, asset))
+            { preparingAssetSuperseded = true; preview.Cancel(); }
+            return pending;
+        }
+        return previewWork = ShowAssetCore(doc, asset);
+    }
     private async Task ShowAssetCore(DocumentModel doc, AssetRecord? asset)
     {
         if (shutdownToken.IsCancellationRequested) return;
@@ -245,13 +369,17 @@ public partial class MainWindow : Window
                 int count = new SceneLods(doc.PreviewDocument.Scene!).Count(asset.Kind == AssetKind.World ? null : root is int r ? [r] : []);
                 updating = true; LodCombo.ItemsSource = SceneLods.Choices(count); LodCombo.SelectedIndex = Math.Min(selectedLod, count - 1); LodCombo.IsEnabled = count > 1; updating = false;
                 SceneToolbar.Visibility = SceneHost.Visibility = Visibility.Visible;
-                WorldHighlights.Visibility = asset.Kind == AssetKind.World ? Visibility.Visible : Visibility.Collapsed; WorldDifficultyGroup.Visibility = asset.Kind == AssetKind.World && snapshot.Game != GameVariant.MechWarrior3 ? Visibility.Visible : Visibility.Collapsed; WorldMission.Visibility = Visibility.Collapsed;
+                WorldHighlights.Visibility = asset.Kind == AssetKind.World ? Visibility.Visible : Visibility.Collapsed;
+                SourceWorldTools.Visibility = asset.Kind == AssetKind.World && doc.SourceWorld != null ? Visibility.Visible : Visibility.Collapsed; WorldDifficultyGroup.Visibility = asset.Kind == AssetKind.World && snapshot.Game != GameVariant.MechWarrior3 ? Visibility.Visible : Visibility.Collapsed; WorldMission.Visibility = Visibility.Collapsed;
                 if (scene == null) { scene = new(); scene.Information += s => { PreviewInfo.Text = s; PreviewInfo.ToolTip = s; }; scene.NodeSelected += InspectNode; ConfigureAiScene(scene); ConfigurePickupScene(scene); SceneHost.Content = scene; ConfigureFlyScene(scene); }
                 if (asset.Kind == AssetKind.World) await PopulateWorldMissionsAsync(doc, token);
                 string? exactMission = ExactMissionFor(doc.Path, ViewModel.Resolver.SelectedMission(doc.Path));
                 var mission = asset.Kind == AssetKind.World ? await MissionSceneLoader.LoadAsync(doc.PreviewDocument, ViewModel.Resolver, token: token, difficulty: ViewModel.Difficulty, mission: exactMission, exactMission: exactMission != null) : null;
+                // A source world's placement edits are carried back to its sources (see MoveSourcePlacementAsync).
                 if (mission != null) { await doc.GetPickupEditsAsync(ViewModel.Resolver, token); await PopulateWorldMissionsAsync(doc, token); }
                 await scene.ShowAsync(doc.PreviewDocument, asset, ViewModel.Resolver, PreferredPack, LodCombo.SelectedIndex, token, BackdropEnabled.IsChecked == true, mission); token.ThrowIfCancellationRequested(); ApplySceneOptions();
+                // A rebuilt source world keeps the camera of the build it replaced.
+                if (pendingSourceView is { } rebuilt && rebuilt.Document == doc) { pendingSourceView = null; scene.RestoreView(rebuilt.View); }
                 var shownOptions = ReadStaticSceneOptions();
                 publishedStaticOptions = shownOptions with { Difficulty = mission is { Layout.DifficultyApplies: true } ? mission.Layout.Difficulty : ViewModel.Difficulty, Mission = mission?.Layout.MissionArchive ?? shownOptions.Mission };
                 if (mission != null) ViewModel.AdoptMissionFallback(doc.Path, mission.Layout);
@@ -311,7 +439,8 @@ public partial class MainWindow : Window
                 ViewModel.SelectedDocument == doc && shownAsset?.Id == asset?.Id)
             {
                 using var recovery = PreviewOperation.Begin(CancellationToken.None);
-                await ShowAsset(doc, asset);
+                // This is the current transition's own recovery, not a new selection waiting for that transition.
+                await ShowAssetCore(doc, asset);
             }
         }
         catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException) { if (!token.IsCancellationRequested) { EmptyPreview.Text = "Preview unavailable: " + ex.Message; Report(ex); } }
@@ -339,22 +468,41 @@ public partial class MainWindow : Window
         var sourceBytes = asset == null ? doc.Document.Bytes : original == null ? ReadOnlyMemory<byte>.Empty : doc.Document.Slice(original.Offset, original.Length);
         RawText.Text = original == null && asset != null ? "New record: no original source bytes." : Hex(sourceBytes.Span[..Math.Min(sourceBytes.Length, 4096)], original?.Offset ?? 0) + (sourceBytes.Length > 4096 ? "\n… first 4,096 original source bytes shown." : "");
         PreviewSubtitle.Text = asset == null ? doc.Description : $"{asset.Kind} #{asset.Index} · {asset.Length:N0} edited bytes" + (original == null ? " · new record" : $" · source 0x{original.Offset:X}");
-        RelatedList.ItemsSource = asset == null ? null : FindRelated(asset, doc).ToArray();
+        var related = asset == null ? null : FindRelated(asset, doc);
+        RelatedList.ItemsSource = related?.Items;
+        RelatedLimit.Visibility = related?.Truncated == true ? Visibility.Visible : Visibility.Collapsed;
     }
-    private IEnumerable<SearchHit> FindRelated(AssetRecord asset, DocumentModel doc)
+    private MainViewModel.RelatedMatches FindRelated(AssetRecord asset, DocumentModel doc)
     {
-        HashSet<string> names = new(StringComparer.OrdinalIgnoreCase) { asset.Name };
-        foreach (string name in Strings(asset.Metadata)) names.Add(name);
-        if (asset.Content is ScriptContent script) foreach (string argument in script.Instructions.SelectMany(i => i)) names.Add(argument);
-        if (asset.Content is GameModel model && doc.PreviewDocument.Scene is { } sceneData)
-            foreach (int mat in model.Polygons.Select(p => p.MaterialIndex).Distinct()) if (mat >= 0 && mat < sceneData.Materials.Count) { int tex = sceneData.Materials[mat].Int("texture_index", -1); if (tex >= 0 && tex < sceneData.Textures.Count) names.Add(sceneData.Textures[tex].Text("name")); }
-        return names.Where(n => n.Length > 1).SelectMany(n => ViewModel.Related(n, doc.Path)).Distinct().Take(300);
+        bool deep = false;
+        var result = ViewModel.Related(Names(), doc.Path);
+        return deep ? result with { Truncated = true } : result;
+        IEnumerable<string> Names()
+        {
+            yield return asset.Name;
+            foreach (string name in Strings(asset.Metadata, 0, () => deep = true)) yield return name;
+            if (asset.Content is ScriptContent script) foreach (var instruction in script.Instructions)
+            {
+                yield return ""; // Empty instructions still consume the passive inspection work budget.
+                foreach (string argument in instruction) yield return argument;
+            }
+            if (asset.Content is GameModel model && doc.PreviewDocument.Scene is { } sceneData)
+                foreach (var polygon in model.Polygons)
+                {
+                    int mat = polygon.MaterialIndex;
+                    int tex = mat >= 0 && mat < sceneData.Materials.Count ? sceneData.Materials[mat].Int("texture_index", -1) : -1;
+                    yield return tex >= 0 && tex < sceneData.Textures.Count ? sceneData.Textures[tex].Text("name") : "";
+                }
+        }
     }
-    private static IEnumerable<string> Strings(JsonNode? node)
+    private static IEnumerable<string> Strings(JsonNode? node, int depth, Action truncated)
     {
-        if (node is JsonValue value && value.TryGetValue<string>(out string? text)) { if (text.Length is > 1 and < 128) yield return text; }
-        else if (node is JsonObject obj) { foreach (var p in obj) foreach (string s in Strings(p.Value)) yield return s; }
-        else if (node is JsonArray array) { foreach (var p in array) foreach (string s in Strings(p)) yield return s; }
+        // Count containers and non-text leaves too: a large metadata tree with no names must not bypass the work bound.
+        yield return node is JsonValue value && value.TryGetValue<string>(out string? text) && text.Length is > 1 and < 128 ? text : "";
+        if (node is not (JsonObject or JsonArray)) yield break;
+        if (depth >= 32) { truncated(); yield break; }
+        if (node is JsonObject obj) { foreach (var p in obj) foreach (string s in Strings(p.Value, depth + 1, truncated)) yield return s; }
+        else if (node is JsonArray array) { foreach (var p in array) foreach (string s in Strings(p, depth + 1, truncated)) yield return s; }
     }
     private void SetProperties(JsonObject value) { properties = value; }
     private static string LimitedJson(JsonObject value) { string text = value.ToJsonString(JsonData.Options); return text.Length > 500_000 ? text[..500_000] + "\n… export JSON for the complete document." : text; }
@@ -650,13 +798,29 @@ public partial class MainWindow : Window
                 // Discard (and a canceled Save As) can finish synchronously. Leave the
                 // original WPF Closing event before showing prompts or calling Close again.
                 await Dispatcher.Yield(DispatcherPriority.Normal);
-                if (animation?.ResolvePendingDrafts() == false || !await ResolvePropertiesDraftsAsync()) return;
+                if (animation?.ResolvePendingDrafts() == false || !await ResolvePropertiesDraftsAsync() || !await ResolveInspectionDraftsAsync()) return;
+                if (sourceWorkspaceBusy) ViewModel.Status = "Waiting for the source world to finish rebuilding before closing…";
+                // A save replacing the project's files finishes (or is undone) first; its documents are then decided as saved or not.
+                else if (!sourceSaveWork.IsCompleted) ViewModel.Status = "Waiting for the source project's save to finish before closing…";
+                await SourceWorldsIdleAsync();
+                ForgetStaleDiscardApproval();
+                closingAllDocuments = true;
                 foreach (var document in ViewModel.Documents.ToArray())
+                {
+                    document.ApprovedCloseRevision = null;
                     if (!await ConfirmDocumentCloseAsync(document)) return;
+                }
+                // Each answer covers the state its question showed: a document changed since (work that finished while a later
+                // document was asked about), or opened and edited meanwhile, keeps the application open.
+                if (ViewModel.Documents.FirstOrDefault(d => d.IsDirty && d.ApprovedCloseRevision != d.Revision) is { } changed)
+                {
+                    ViewModel.Status = "Close canceled: " + changed.Title.TrimEnd(' ', '*') + " changed after its close decision; its edits were kept.";
+                    return;
+                }
                 allowClose = true;
             }
             catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException) { Report(ex); return; }
-            finally { resolvingClose = false; }
+            finally { resolvingClose = closingAllDocuments = false; discardApprovedWorkspace = null; }
             Close();
             return;
         }
@@ -666,6 +830,16 @@ public partial class MainWindow : Window
         // A canceled close never reaches this irreversible lifetime boundary.
         allowClose = true; automationCloseRequested = false; IsEnabled = false;
         shutdown.Cancel(); operation?.Cancel();
+        // An interrupted save being resolved stops between two files, so the files and its journal agree when the process ends;
+        // a source project save stops before it replaces a file, or finishes (or is undone).
+        if (!sourceRecoveryWork.IsCompleted || !sourceSaveWork.IsCompleted)
+        {
+            e.Cancel = true; resolvingClose = true;
+            await Dispatcher.Yield(DispatcherPriority.Normal);
+            try { await Task.WhenAll(sourceRecoveryWork, sourceSaveWork).ContinueWith(static _ => { }, TaskScheduler.Default); }
+            finally { resolvingClose = false; }
+            Close(); return;
+        }
         if (mcpHost != null || mcpStopTask is { IsCompleted: false } || automationOperations.Values.Any(j => !j.Work.IsCompleted))
         {
             e.Cancel = true; resolvingClose = true;

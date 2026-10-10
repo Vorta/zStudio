@@ -1,6 +1,6 @@
 # Engine evidence
 
-What the retail engine does that source projects and the world editor rely on, with the evidence for each fact.
+What the retail engine does that source projects and the world editor rely on, with the evidence for each fact. It settles the open investigations of the [world editor plan](world-editor-plan.md#open-investigations) as far as the code and the shipped data can. What only the running game can settle is listed per topic and collected in [In-game tests](#in-game-tests).
 
 Researched 2026-10-03 against the 1999 retail executable (1998 where noted) and the reconstructed source. Labels:
 
@@ -9,7 +9,7 @@ Researched 2026-10-03 against the 1999 retail executable (1998 where noted) and 
 - **[D]**: measured on the shipped 1998/1999 data.
 - **[U]**: reconstruction only or inference, still to confirm.
 
-Addresses are retail.
+Addresses are retail. The zone probes are documented in the plan, under [How the engine sees a map](world-editor-plan.md#how-the-engine-sees-a-map), and modelled by `ZoneProbe` in Core.
 
 ## Common rules
 
@@ -101,6 +101,54 @@ Addresses are retail.
   - The animation preview takes the highest live slot (freed slots keep their names but are not nodes): `AnimationPreviewContext.ResolveRoot` with the binding loop's chain (`NameLookups.RootPositions`, entry state at +0x98), its whole-world fallback (the most recently created node), effect templates, the texture-cycle lookup in `Textures.cs`, and the mission's AI vehicles. Lookups made as the mission loads see only the world file's nodes.
   - Check and export report ambiguous supported whole-world lookups (`WorldLookups`), and which of those bindings an export or edit changes. The report covers literal texture-script names and animation roots, fallback references and prerequisite roots; runtime macro operands, successful subtree bindings and other resource categories are outside this report. See the [reported lookup scope and limitations](source-project.md#reconstruct-check-and-export).
   - An explicit refactor (renaming the dish, one `smoke1`, restricting wildcards) changes shipped behaviour and must be stated, never silent.
+
+## Craters and quicksand
+
+- **Pipeline** [B, BN]:
+  - **Hit:** a weapon's `CRATER (min max)` hits a node with CanModify (0x10000). The radius is uniform in [min, max]; `MAX_CRATER_RADIUS` is never applied on this path, and shipped radii are 10–39.
+  - **Template:** `declient.zrd` `CRATER` gives `POINTS 6` and `DEPTH 1.7` in every mission.
+  - **Moving inward** (`InitFeatureFromEventTemplate` 0x456c80 [BN]): the centre moves so the circle lies at least 1 unit inside the impact cell.
+  - **Clipping:** the outline is clipped into the touched surfaces (`ClipPatch` 0x46b1f0 [BN]).
+  - **Bowl:** `n` quads and `n` triangles, its centre 2 × DEPTH below the impact (`CreateFeature` 0x457140 [BN]).
+- **Grid, limit, eviction.**
+  - The feature grid is the world's cell grid. Each 64-byte area record counts its craters at byte +0x39, which is 0 in every shipped cell.
+  - A cell refuses a crater once its count reaches world byte +0x4C [BN]: 16 in every shipped world, at most 255 (`WorldPartitionMaxDECFeatureCount`). Craters and quicksand share the count.
+  - Nothing is evicted. A refused crater plays the normal impact effect.
+- **No stacking.** A crater is refused when its outline box, with a 5-unit margin, overlaps an existing feature in the cell [BN]. The bowl node is also ClipTo (`gwNodeSetFlag17` 0x447d70 [B]), so later outlines over it are cancelled.
+- **What the test sees** (`ProcessNodePolygonSetXY` 0x46b550 [BN], `ClipPatch`):
+  - only the impact cell's top-level list (clamped to the edge cell) and the world overflow list, overflow first;
+  - only active (0x04) nodes with their own model, and every ClipTo node before any CanModify node; a node with both counts as ClipTo;
+  - no zone, gate, height, LOD or child test;
+  - the model's own vertices with **no transform**.
+  - So a transformed or nested CanModify node never craters as placed; M2 `g502`/`g503` are such cases [D]. A ClipTo group without its own model blocks nothing; M2 has 30 such bunker groups [D]. Every overlapping CanModify layer is cut at any height; one shipped spot is M4 `g659`/`g660` over `g671`/`g672` [D].
+- **Each accepted crater creates:**
+  - one bowl node, ClipTo, gated, with the zone of the first touched CanModify node whose zone is not 0xFF [BN 0x46af40]; its polygons carry no zones (count 0);
+  - one bowl model;
+  - one replacement model for every touched node, holding a full copy of its polygons (`ApplyNodeDiPairs` 0x46ae40 [B]). Quicksand creates 2 nodes and 2 models.
+  - At radius 25, 88–100% of craters touch a single node; at most 3 nodes in M2 and 4 in M4 [D].
+- **Model limits while clipping.**
+  - A replacement model is rebuilt polygon by polygon (`AddPolygonEx` 0x483650 [BN]). The polygon that would need vertex 923 is dropped, and so is everything after it, while the crater still succeeds.
+  - Shipped growth is 6.5–11 vertices per crater per node (at most 26), so 16 craters reach 291 vertices at worst [D].
+  - Crater models carry no normals.
+  - Clipped pieces get UVs from a flat projection of their first three corners and are rounded to 1/256.
+  - A crater inside one polygon goes through `TriangulatePolygonWithHole` 0x46c070 [BN], whose 32-entry edge stack has no bounds check.
+- **Saved games.**
+  - Saving writes each crater's original template (`WriteFeatureSectionsToZAR` 0x457b40 [B]).
+  - Loading reloads the modified nodes' models from `gamez.zbd` by slot, deletes the bowls, resets their cells' counts and replays the craters (0x457c10, 0x457750 [B]).
+  - [U] A road crater may come back with the default crater material after a restart, because the material is matched by address.
+  - Animation states are saved with their nodes' slots (`NodePtrToValidatedIndex`, `zeff_anim_save.c` [U]), so a save made before a world's slots changed restores them onto other nodes; saves made with the retail files keep working with exports that give every node its shipped slot.
+- **Multiplayer** [U, from the reconstruction]: a crater event names its surface's material by its index in the world's material table (`craterTypeId`, `IndexFromPtrOrMinus1`); the receiver looks the index up in its own table without a range check, and nothing compares the players' files. Players need the same exported worlds: another material order shows other craters' textures. Rebuilt worlds order their used materials differently from the shipped ones and omit the shipped worlds' unused colour materials (made by the original tool for point entries such as lens flares), so they are not crater-compatible with the shipped files; the user decided that is not needed (2026-10-05).
+- **Retail bugs** [BN]:
+  - A clip that fails partway leaks the models it already built.
+  - `ClipPatch` sizes its result array by the cell's node count but also clips overflow-list CanModify nodes, so more touched nodes than the cell holds overruns the heap. No shipped CanModify node is in the overflow list [D].
+- **For zStudio (crater-capable terrain):**
+  - Use only top-level nodes with their own model and an identity transform, in a cell, never in the overflow list.
+  - Keep at most about 450 vertices per node, so 16 craters fit in the 922-vertex budget.
+  - Use convex, upward, UV-mapped polygons of at most about 30 corners.
+  - Make cells at least 2·Rmax + 2 wide (80 for the shipped weapons).
+  - Keep overhang into neighbouring cells under 1 unit.
+  - Allow one CanModify layer at any point.
+  - The plan's crater test means: active top-level ClipTo nodes with their own model, in the impact cell or the overflow list, tested in model space.
 
 ## Animation runtime
 
@@ -265,6 +313,62 @@ These are the keys the game reads. Anything else in a file is ignored. Types are
 - **Address space.** No executable is large-address-aware, so the game, the wrapper and the driver share 2 GiB. Expect 2–3 times the pack's size in the process [U].
 - **UVs.** Shipped models are drawn with their stored float UVs (`RenderNodeHardware` 0x477b30, `SubmitPolygon` 0x4abb20 [BN]). Geometry built during play (craters, quicksand, clipped CanModify pieces) is rounded to 1/256 by `AddPolygonEx` 0x483650 [BN], up to 2 texels on a 1024 texture.
 - **Frame time.** Each opaque polygon is its own draw call, and transform, lighting and clipping run on the CPU. Frame time follows polygon count rather than texture size [U]. The shipped 1999 worlds hold 4,243–15,119 polygons in all (m11–m6), at most 170 in one model [D]; the engine sets no polygon limit of its own, so zStudio reports terrain painting that adds more than 16,000 polygons rather than refusing it.
+
+The measurements that remain are in [In-game tests](#in-game-tests) under T1–T7.
+
+## In-game tests
+
+Run on a disposable copy of the game (for example `D:\RecoilTest`), exporting into that copy only, never into a protected corpus. Tools: Process Monitor, VMMap, `typeperf`, PresentMon, and optionally the dgVoodoo debug build with DebugView.
+
+**Rendering target**
+
+- **T1. Pack choice.**
+  - Set dgVoodoo VRAM to 8, 16, 64, 256, 1024 MB and 2 and 4 GB in turn. Process Monitor shows the first `rtexture<N>` probed and the one that opens.
+  - Pass: N follows VRAM and no setting ends on `texturemax` or `texture.zbd`.
+- **T2. Maximum texture size.**
+  - Replace textures visible at the M1 start with labelled grids of 512² to 4096², plus 1024×128 and 1024×64, using a profile with `maximumDimension` 4096 and no budget.
+  - Pass per size: the grid renders instead of the default texture. 1024×64 must show the default.
+- **T3. Memory tiers.**
+  - Build packs from upscaled textures at 32–512 MiB and select each tier through VRAM.
+  - Log virtual bytes with `typeperf` and the largest free block with VMMap over load, play, three restarts, save, load and a mission change.
+  - Pass: peak at most 1.5 GiB, largest free block at least 256 MiB, restarts within 32 MiB, and no default textures.
+- **T4. Runtime growth.** Make 50, 100 and 200 craters, kills and effects on the chosen tier. Pass: growth recorded, peak at most 1.5 GiB over 30 minutes.
+- **T5. Frame time.** PresentMon for 60 s at three repeatable views with the original packs, the `modern` packs and the top tier. Pass: modern p99 within 10% of original and at most 16.7 ms.
+- **T6. UV precision.** A 1024 grid on two quads with UVs off the 1/256 grid.
+  - Pass: it matches the zStudio preview within 0.5 texel.
+  - Then crater it: the code predicts jumps of up to 2 texels at the patch edge.
+- **T7. Mipmaps.** Repeat T5 with dgVoodoo's mipmapping `appdriven` and `autogen_bilinear`, judging shimmer and frame time.
+
+**Craters**
+
+- **T8.** In M1, 17 separated craters in one cell. Predicted: the 17th is refused.
+- **T9.** In M2, fire at `g502` (x ≈ 2900–3070, z ≈ 885–1010). Predicted: no crater.
+- **T10.** In M4, a crater at x ≈ 2206, z ≈ 2800, where layers are stacked. Check the rim heights.
+- **T11.** Crater a road, save, restart and load. Predicted: the crater may come back with the sand crater material.
+
+**Vehicles and animation**
+
+- **T12.** Two `amphi` copies. Kill the second.
+  - With `STOP_ANIMATION radar_spin` in its death sequence: predicted, the first copy's radar stops.
+  - Then save and load with one copy dead.
+- **T13.** A three-turn spin in one segment, and 600 iterations of a 1 s loop against a stopwatch: about half a frame of drift per iteration.
+
+**Missions**
+
+- **T14. Multiplayer m14, no patch.**
+  - Copy `zbd\m7` to `zbd\m14`, add `m14_zbd.gs`, `support\initm14.gw`, `commonm14.gw` and `tex_fxm14.gw`, and a `dialog.zrd` world entry.
+  - Host, choose world 8, join with a second client. Predicted: every weapon is available.
+- **T15. Single-player save retargeted to m14.** A save from m2 with its mission number changed to 14, and m2's files copied as m14. It should load and round-trip.
+
+**Resources**
+
+- **T16.** Remove `activate_rad` from one M1 network: does its vehicle move before being shot?
+- **T17.** Complete M3's objective 5 and open the objectives panel. Predicted heading: "INACTIVE".
+- **T18.** Delete `READ_SOUND` from M1 objective 3, complete objective 3 before objective 2, then review. Predicted: a crash.
+
+**Zones** (see the plan)
+
+- **T19.** Walk M1 across zone transitions with the camera low and high: drawn geometry follows the camera's zones, not the vehicle's.
 
 ### Camera horizon source commands
 

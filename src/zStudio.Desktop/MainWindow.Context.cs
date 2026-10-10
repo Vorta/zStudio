@@ -53,7 +53,11 @@ public partial class MainWindow
     }
     private void UpdateSearchHint()
     {
-        SearchHint.Text = ViewModel.GlobalQuery.Trim().Length < 2 ? "Search this root: type at least two characters in Search all assets." : ViewModel.SearchResults.Count == 0 ? "No matching assets in this root. Try a shorter name or a file path." : (ViewModel.SearchIsLimited ? "First 500 matches · refine your search for more specific results." : $"{ViewModel.SearchResults.Count:N0} results.") + " Double-click or press Enter to open the exact record.";
+        string results = ViewModel.GlobalQuery.Trim().Length < 2 ? "Search this root: type at least two characters in Search all assets." : ViewModel.SearchResults.Count == 0 ? "No matching indexed assets. Try a shorter name or a file path." : (ViewModel.SearchIsLimited ? "First 500 indexed matches · refine your search for more specific results." : $"{ViewModel.SearchResults.Count:N0} indexed results.") + " Double-click or press Enter to open the exact record.";
+        SearchHint.Text = ViewModel.SearchIndexNotice.Length == 0 ? results : ViewModel.SearchIndexNotice + "\n" + results;
+        RelatedLimit.Text = ViewModel.SearchIndexComplete
+            ? "Limited name-based matches: reference, index or result limits were reached. Use Search to find other indexed assets."
+            : ViewModel.SearchIndexNotice;
     }
     private async void SearchKeyDown(object sender, System.Windows.Input.KeyEventArgs e)
     {

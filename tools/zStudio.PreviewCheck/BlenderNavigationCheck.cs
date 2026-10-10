@@ -249,6 +249,7 @@ internal static class BlenderNavigationCheck
         data.Nodes.Add(new(1, "rear", "object3d", null, [], [], new(), new()));
         typeof(SceneViewport).GetProperty(nameof(SceneViewport.PreviewScene))!.SetValue(view, data);
         ((List<MeshGeometryModel3D>)typeof(SceneViewport).GetField("meshes", fields)!.GetValue(view)!).Add(mesh);
+        ((Dictionary<HelixToolkit.SharpDX.MeshGeometry3D, (System.Numerics.Vector3 Min, System.Numerics.Vector3 Max)>)typeof(SceneViewport).GetField("staticMeshBounds", fields)!.GetValue(view)!).Add(geometry, (new(-1, -1, 0), new(1, 1, 0)));
         ScenePlacement[] placements = [new(0, 0, "front", mesh.Instances[0]), new(1, 0, "rear", mesh.Instances[1])];
         foreach (string name in new[] { "placements", "visiblePlacements" })
             ((Dictionary<MeshGeometryModel3D, ScenePlacement[]>)typeof(SceneViewport).GetField(name, fields)!.GetValue(view)!).Add(mesh, placements);
@@ -346,7 +347,7 @@ internal static class BlenderNavigationCheck
         var instances = mesh.Instances; var pose = view.CaptureView();
         var previousInspection = view.InspectionContent;
         var window = Window.GetWindow(view); double previousHeight = window.Height;
-        var card = new SceneInspectionCard(view, _ => new JsonObject { ["Node"] = "Cube input fixture", ["Editable"] = false }, _ => { }, _ => { });
+        var card = new SceneInspectionCard(view, _ => new JsonObject { ["Node"] = "Cube input fixture", ["Editable"] = false }, _ => { }, _ => null);
         view.InspectionContent = card;
         mesh.Instances = [System.Numerics.Matrix4x4.CreateScale(1000, 1000, 1) * System.Numerics.Matrix4x4.CreateTranslation(0, 0, -100)];
         try

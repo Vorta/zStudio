@@ -1,0 +1,271 @@
+using System.IO;
+using System.IO.Pipes;
+using System.Reflection;
+using System.Text.Json.Nodes;
+using System.Windows;
+using System.Windows.Controls;
+using ModelContextProtocol.Client;
+using ModelContextProtocol.Protocol;
+using Recoil.Zbd.Automation;
+using Recoil.Zbd.Core;
+using Recoil.Zbd.Core.Sources;
+using Recoil.Zbd.Desktop;
+using Recoil.Zbd.Mcp;
+using Recoil.Zbd.Tests;
+using Xunit;
+
+namespace Recoil.Zbd.Desktop.Tests;
+
+/// <summary>Source worlds through the real named-pipe MCP connection: a model from another mission, undo, save and reload.</summary>
+internal static class SourceWorldMcpChecks
+{
+    internal static async Task Run()
+    {
+        using var fixture = new SourceWorldFixture();
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(90)); var token = deadline.Token;
+        var main = new MainWindow { Left = -12000, ShowInTaskbar = false }; main.Show();
+        string? sessionFolder = null;
+        try
+        {
+            await using var host = new LocalMcpHost(main.Commands, "test");
+            await using var pipe = new NamedPipeClientStream(".", host.Instance.Pipe, PipeDirection.InOut, PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly); await pipe.ConnectAsync(token);
+            await using var client = await McpClient.CreateAsync(new StreamClientTransport(pipe, pipe), cancellationToken: token);
+
+            var none = await Job("source_world_open", new() { ["mission"] = "m1" }, "failed"); Assert.Equal("no_project", none["code"]!.GetValue<string>());
+            // Builds left in the project's preview folder (here by another zStudio) are derived data: Files never lists them.
+            string leftover = Path.Combine(SourceWorlds.PreviewRoot(fixture.Project), "other", "1", "m1", "gamez.zbd");
+            Directory.CreateDirectory(Path.GetDirectoryName(leftover)!); await File.WriteAllBytesAsync(leftover, [0], token);
+            // Also when the folder opened holds the project.
+            await main.ViewModel.OpenRootAsync(fixture.Root, token);
+            Assert.DoesNotContain(main.ViewModel.Files, f => f.Path.StartsWith(SourceWorlds.PreviewRoot(fixture.Project), StringComparison.OrdinalIgnoreCase));
+            Assert.Contains(main.ViewModel.Files, f => f.RelativePath == Path.Combine("project", "gamegen", "m1.gs"));
+            await main.ViewModel.OpenRootAsync(fixture.Project, token);
+            Assert.DoesNotContain(main.ViewModel.Files, f => f.Path.StartsWith(SourceWorlds.PreviewRoot(fixture.Project), StringComparison.OrdinalIgnoreCase));
+            Assert.Contains(main.ViewModel.Files, f => f.RelativePath == Path.Combine("gamegen", "m1.gs"));
+            Directory.Delete(Path.Combine(SourceWorlds.PreviewRoot(fixture.Project), "other"), true);
+            var unknown = await Job("source_world_open", new() { ["mission"] = "m9" }, "failed"); Assert.Equal("invalid_argument", unknown["code"]!.GetValue<string>());
+
+            // Hold the first mission scan, before any source workspace or document is acquired. Even reopening
+            // the same path replaces its lifetime; the old GUI request must not adopt that new generation.
+            var readMissions = main.ReadSourceWorldMissionsAsync;
+            TaskCompletionSource scanEntered = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            TaskCompletionSource<IReadOnlyList<string>> scanRelease = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            CancellationToken scanToken = default;
+            main.ReadSourceWorldMissionsAsync = (_, ct) => { scanToken = ct; scanEntered.SetResult(); return scanRelease.Task; };
+            try
+            {
+                var opening = SourceTask<DocumentModel>("OpenSourceWorldAsync", "m1", token, false);
+                await scanEntered.Task.WaitAsync(token);
+                long generation = main.ViewModel.WorkspaceGeneration;
+                await main.ViewModel.OpenRootAsync(fixture.Project, token);
+                Assert.True(main.ViewModel.WorkspaceGeneration > generation); Assert.True(scanToken.IsCancellationRequested);
+                string status = main.ViewModel.Status;
+                scanRelease.SetResult(["m1", "m2"]); // Deliberately ignore cancellation to exercise the publication guard.
+                Assert.Equal("context_changed", (await Assert.ThrowsAsync<StudioCommandException>(() => opening)).Code);
+                Assert.Empty(main.ViewModel.Documents); Assert.Null(main.ViewModel.SelectedDocument);
+                Assert.Null(typeof(MainWindow).GetField("sourceWorkspace", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(main));
+                Assert.Equal(status, main.ViewModel.Status);
+            }
+            finally { main.ReadSourceWorldMissionsAsync = readMissions; scanRelease.TrySetResult([]); }
+
+            // Tools lists the project's worlds.
+            typeof(MainWindow).GetMethod("ToolsMenuOpened", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(main, [main, new RoutedEventArgs(MenuItem.SubmenuOpenedEvent, main)]);
+            var worlds = (MenuItem)main.FindName("SourceWorldMenu");
+            Assert.Equal(Visibility.Visible, worlds.Visibility); Assert.False(((MenuItem)main.FindName("AddSourceModelMenu")).IsEnabled);
+            while (worlds.Items.Count != 2 || worlds.Items[0] is MenuItem { IsEnabled: false }) { token.ThrowIfCancellationRequested(); await Task.Delay(10, token); }
+            Assert.Equal(["m1", "m2"], worlds.Items.Cast<MenuItem>().Select(i => ((TextBlock)i.Header).Text));
+
+            // The world is a private build, shown read-only with the source world tools.
+            var opened = (await Job("source_world_open", new() { ["mission"] = "m1" }))["document"]!;
+            var doc = Document(opened);
+            Assert.Equal("m1", opened["sourceWorld"]!["mission"]!.GetValue<string>());
+            Assert.Equal("m1 world (sources)", doc.Title);
+            // It is built in zStudio's working folder of the project, never among the sources or outside the project.
+            Assert.StartsWith(SourceWorlds.PreviewRoot(fixture.Project) + Path.DirectorySeparatorChar, doc.Path, StringComparison.OrdinalIgnoreCase);
+            sessionFolder = Path.GetDirectoryName(Path.GetDirectoryName(Path.GetDirectoryName(doc.Path)));
+            Assert.Null(doc.ModelEdits);
+            await Preview();
+            Assert.Equal(Visibility.Visible, ((FrameworkElement)main.FindName("SourceWorldTools")).Visibility);
+            // Placements of a source world are edited through its sources, so the world can be unlocked like any map.
+            Assert.Equal(Visibility.Visible, ((FrameworkElement)main.FindName("PickupTools")).Visibility);
+            await Call("pickup_lock", new() { ["document"] = Id(doc), ["revision"] = doc.Revision, ["locked"] = false });
+            Assert.False(doc.PickupsLocked);
+            await Call("pickup_lock", new() { ["document"] = Id(doc), ["revision"] = doc.Revision, ["locked"] = true });
+            // Opening it again activates the same document.
+            Assert.Equal(Id(doc), (await Job("source_world_open", new() { ["mission"] = "M1" }))["document"]!["id"]!.GetValue<string>());
+
+            var models = await Call("source_world_models", new() { ["query"] = "bft" });
+            Assert.Equal("data/m2/models/bft/tank.gltf", models["items"]![0]!["path"]!.GetValue<string>());
+            var definitions = await Call("source_world_definitions", new() { ["document"] = Id(doc), ["name"] = "tank" });
+            Assert.Equal(SourceWorldFixture.TankDefinitions, definitions["files"]![0]!["path"]!.GetValue<string>());
+
+            // Adding a model from m2 rebuilds the world into a replacement document; the old one is released.
+            var added = Document((await Job("source_world_add_model", new() { ["document"] = Id(doc), ["revision"] = doc.Revision, ["model"] = fixture.Tank, ["name"] = "tank" }))["document"]!);
+            Assert.True(doc.IsDisposed); Assert.NotEqual(doc.SessionId, added.SessionId);
+            Assert.False(File.Exists(doc.Path));
+            Assert.True(added.IsDirty); Assert.Equal("m1 world (sources) *", added.Title);
+            Assert.Contains(added.PreviewDocument.Scene!.Nodes, n => n.Name == "tank");
+            // One change of the project's workspace: the script and the animation list.
+            Assert.Equal(["data/m1/zrdr/anim.zad", "gamegen/m1.gs"], added.SourceWorld!.Workspace.History.Single().Files.Select(f => f.Relative).Order(StringComparer.Ordinal));
+            Assert.Contains("enemies\\\\tank.zad", System.Text.Encoding.Latin1.GetString(added.SourceWorld.Workspace.Read("data/m1/zrdr/anim.zad")!));
+            var stale = await Job("source_world_add_model", new() { ["document"] = Id(doc), ["revision"] = 0, ["model"] = fixture.Tank, ["name"] = "tank2" }, "failed");
+            Assert.Equal("stale_document", stale["code"]!.GetValue<string>());
+            var bad = await Job("source_world_add_model", new() { ["document"] = Id(added), ["revision"] = added.Revision, ["model"] = "gamegen/m1.gs", ["name"] = "x" }, "failed");
+            Assert.Equal("invalid_argument", bad["code"]!.GetValue<string>());
+            var placed = Document((await Job("source_world_add_model", new()
+            {
+                ["document"] = Id(added), ["revision"] = added.Revision, ["model"] = fixture.Tank, ["name"] = "tank_wreck",
+                ["position"] = new Dictionary<string, object?> { ["x"] = 100, ["y"] = 0, ["z"] = -50 }, ["heading"] = 90, ["definitionFiles"] = Array.Empty<string>()
+            }))["document"]!);
+            await Preview();
+            Assert.Contains(placed.PreviewDocument.Scene!.Nodes, n => n.Name == "tank_wreck");
+            // Exports read the scripts on disk, so the pending additions must be saved or discarded first.
+            var unsaved = await Job("source_export", new() { ["outputs"] = new[] { "m1/gamez.zbd" } }, "failed");
+            Assert.Equal("unsaved_changes", unsaved["code"]!.GetValue<string>()); Assert.Contains("m1 world", unsaved["message"]!.GetValue<string>());
+
+            // A placed model cannot be named like a node of its own (the tank's root node is "hull"): AddChild finds the
+            // newest node with the name, which would attach that inner node and leave the placed root out of the world.
+            var shadowed = await Job("source_world_add_model", new()
+            {
+                ["document"] = Id(placed), ["revision"] = placed.Revision, ["model"] = fixture.Tank, ["name"] = "hull",
+                ["position"] = new Dictionary<string, object?> { ["x"] = 10, ["y"] = 0, ["z"] = 10 }, ["definitionFiles"] = Array.Empty<string>()
+            }, "failed");
+            Assert.Equal("build_failed", shadowed["code"]!.GetValue<string>()); Assert.Contains("hull", shadowed["message"]!.GetValue<string>());
+            Assert.False(placed.IsDisposed); Assert.Equal(2, placed.SourceWorld!.Workspace.UndoCount); Assert.False(placed.SourceWorld!.Workspace.CanRedo);
+
+            // An edit canceled while its world rebuilds is withdrawn: the shown world never had it.
+            using (CancellationTokenSource cancel = new())
+            {
+                var canceled = SourceTask<DocumentModel>("AddSourceModelAsync", placed, new SourceWorldAddition(new(fixture.Tank, "tank_canceled"), []), cancel.Token);
+                cancel.Cancel();
+                await Assert.ThrowsAnyAsync<OperationCanceledException>(() => canceled);
+            }
+            Assert.False(placed.IsDisposed); Assert.Equal(2, placed.SourceWorld!.Workspace.UndoCount); Assert.False(placed.SourceWorld!.Workspace.CanRedo);
+
+            // While an edit is prepared or rebuilds the world, nothing else edits or saves it: an edit it cannot
+            // be built with (here a malformed glTF) never reaches the project or changes accepted history.
+            string scriptPath = fixture.Path("gamegen/m1.gs"); byte[] scriptBefore = await File.ReadAllBytesAsync(scriptPath, token);
+            fixture.Write("data/m1/models/broken.gltf", "{");
+            var failing = SourceTask<DocumentModel>("AddSourceModelAsync", placed, new SourceWorldAddition(new("data/m1/models/broken.gltf", "broken"), []), CancellationToken.None);
+            Assert.True(placed.SourceWorld!.IsRebuilding); Assert.Same(placed, main.ViewModel.SelectedDocument);
+            foreach (string command in new[] { "DocumentSave", "DocumentUndo", "AddSourceModel" }) Assert.False(((UIElement)main.FindName(command)).IsEnabled, command);
+            Assert.Equal("busy", (await Assert.ThrowsAsync<StudioCommandException>(async () => await SourceTask<IReadOnlyList<string>>("SaveSourceWorldAsync", placed, CancellationToken.None))).Code);
+            Assert.Equal("busy", (await Assert.ThrowsAsync<StudioCommandException>(() => SourceTask<DocumentModel>("UndoSourceWorldAsync", placed, false, CancellationToken.None))).Code);
+            Assert.Equal("build_failed", (await Assert.ThrowsAsync<StudioCommandException>(() => failing)).Code);
+            Assert.Equal(scriptBefore, await File.ReadAllBytesAsync(scriptPath, token));
+            Assert.False(placed.IsDisposed); Assert.Equal(2, placed.SourceWorld!.Workspace.UndoCount); Assert.False(placed.SourceWorld!.Workspace.CanRedo);
+            Assert.False(placed.SourceWorld!.IsRebuilding);
+            foreach (string command in new[] { "DocumentSave", "DocumentUndo", "AddSourceModel" }) Assert.True(((UIElement)main.FindName(command)).IsEnabled, command);
+            File.Delete(fixture.Path("data/m1/models/broken.gltf"));
+
+            // Undo and redo rebuild too.
+            var undone = Document(await Call("undo_redo", new() { ["document"] = Id(placed), ["revision"] = placed.Revision, ["action"] = "undo" }));
+            Assert.DoesNotContain(undone.PreviewDocument.Scene!.Nodes, n => n.Name == "tank_wreck");
+            var redone = Document(await Call("undo_redo", new() { ["document"] = Id(undone), ["revision"] = undone.Revision, ["action"] = "redo" }));
+            Assert.Contains(redone.PreviewDocument.Scene!.Nodes, n => n.Name == "tank_wreck");
+
+            // Save writes the script and the animation list; there is no Save As.
+            var saveAs = await Job("save_document", new() { ["document"] = Id(redone), ["revision"] = redone.Revision, ["destination"] = Path.Combine(fixture.Root, "x.zbd") }, "failed");
+            Assert.Equal("invalid_argument", saveAs["code"]!.GetValue<string>());
+            var saved = await Job("save_document", new() { ["document"] = Id(redone), ["revision"] = redone.Revision });
+            Assert.Equal(["data/m1/zrdr/anim.zad", "gamegen/m1.gs"], saved["written"]!.AsArray().Select(w => w!.GetValue<string>()).Order(StringComparer.Ordinal));
+            Assert.Empty(new SourcePublisher(fixture.Project).FindInterrupted(token));
+            Assert.False(redone.IsDirty);
+            string script = fixture.Path("gamegen/m1.gs");
+            Assert.Contains("LoadGameGen tank.gltf tank\r\n", await File.ReadAllTextAsync(script, token));
+
+            // A file touched by another world must not invalidate this build.
+            const string unrelated = "data/m2/models/unrelated.gltf";
+            fixture.Write(unrelated, """{"asset":{"version":"2.0"},"nodes":[]}""");
+            var workspace = redone.SourceWorld!.Workspace;
+            var unrelatedBytes = workspace.Read(unrelated, token)!;
+            Assert.DoesNotContain(unrelated, redone.SourceBuild!.Dependencies);
+            workspace.Apply("Another world edit", [(unrelated, unrelatedBytes.Concat(new byte[] { 32 }).ToArray())], token);
+            await workspace.SaveAsync(token);
+            await File.AppendAllTextAsync(fixture.Path(unrelated), "# outside m1\\r\\n", token);
+            Assert.Contains(unrelated, workspace.ExternalChanges());
+            await main.ViewModel.CheckExternalChangesAsync(); Assert.False(redone.IsStale);
+            Assert.False(await Task.Run(() => redone.SourceInputsChanged(token), token));
+            await File.WriteAllBytesAsync(fixture.Path(unrelated), unrelatedBytes, token);
+            await workspace.ReloadAsync(token);
+
+            // A changed model marks the world stale; reloading rebuilds it from disk.
+            await main.ViewModel.CheckExternalChangesAsync(); Assert.False(redone.IsStale);
+            File.SetLastWriteTimeUtc(fixture.Path(fixture.Tank), DateTime.UtcNow.AddMinutes(2));
+            await main.ViewModel.CheckExternalChangesAsync(); Assert.True(redone.IsStale);
+            var reloaded = Document(await Job("reload_document", new() { ["document"] = Id(redone), ["revision"] = redone.Revision }));
+            Assert.False(reloaded.IsStale); Assert.Contains(reloaded.PreviewDocument.Scene!.Nodes, n => n.Name == "tank_wreck");
+            // A touched, saved source can change without changing its file stamp. Reload must see its new authoritative bytes.
+            var sourceStamp = File.GetLastWriteTimeUtc(script);
+            string beforeSameStamp = await File.ReadAllTextAsync(script, token);
+            string afterSameStamp = beforeSameStamp.Replace("set worldName world", "set worldName other", StringComparison.Ordinal);
+            Assert.NotEqual(beforeSameStamp, afterSameStamp);
+            await File.WriteAllTextAsync(script, afterSameStamp, token); File.SetLastWriteTimeUtc(script, sourceStamp);
+            Assert.Contains("gamegen/m1.gs", reloaded.SourceWorld!.Workspace.ExternalChanges());
+            reloaded = Document(await Job("reload_document", new() { ["document"] = Id(reloaded), ["revision"] = reloaded.Revision }));
+            Assert.Contains(reloaded.PreviewDocument.Scene!.Nodes, n => n.Name == "other");
+            Assert.False(reloaded.IsStale);
+
+            // After the script changes on disk, the pending edits cannot be kept and reloading starts from the file.
+            var pending = Document((await Job("source_world_add_model", new() { ["document"] = Id(reloaded), ["revision"] = reloaded.Revision, ["model"] = "data/m1/models/m1.gltf", ["name"] = "extra", ["definitionFiles"] = Array.Empty<string>() }))["document"]!);
+            // The GUI's Reload found no conflict, so it asked nothing; the script changing before the rebuild's own check
+            // refuses the reload instead of dropping the edits unasked.
+            Assert.Same(pending, main.ViewModel.SelectedDocument);
+            var rebuild = main.ViewModel.ReloadSourceWorld!;
+            main.ViewModel.ReloadSourceWorld = async (d, accepted, t) =>
+            {
+                await File.AppendAllTextAsync(script, "# elsewhere\r\n", t); File.SetLastWriteTimeUtc(script, DateTime.UtcNow.AddMinutes(3));
+                return await rebuild(d, accepted, t);
+            };
+            try { await main.ViewModel.ReloadAsync(); }
+            finally { main.ViewModel.ReloadSourceWorld = rebuild; }
+            Assert.False(pending.IsDisposed); Assert.True(pending.SourceWorld!.Workspace.IsFileDirty("gamegen/m1.gs"));
+            Assert.Contains(main.ViewModel.Problems, p => p.Message.Contains("changed on disk while the workspace holds unsaved edits", StringComparison.Ordinal));
+            var refused = await Job("reload_document", new() { ["document"] = Id(pending), ["revision"] = pending.Revision }, "failed");
+            Assert.Equal("unsaved_changes", refused["code"]!.GetValue<string>());
+            var conflict = await Job("save_document", new() { ["document"] = Id(pending), ["revision"] = pending.Revision }, "failed");
+            Assert.Equal("external_change", conflict["code"]!.GetValue<string>());
+            Assert.EndsWith("# elsewhere\r\n", await File.ReadAllTextAsync(script, token));
+            var undoneExtra = Document(await Call("undo_redo", new() { ["document"] = Id(pending), ["revision"] = pending.Revision, ["action"] = "undo" }));
+            var fresh = Document(await Job("reload_document", new() { ["document"] = Id(undoneExtra), ["revision"] = undoneExtra.Revision }));
+            Assert.False(fresh.SourceWorld!.Workspace.CanUndo); Assert.Contains(fresh.PreviewDocument.Scene!.Nodes, n => n.Name == "tank");
+
+            // Closing the world removes its private files.
+            await Call("close_document", new() { ["document"] = Id(fresh), ["revision"] = fresh.Revision });
+            Assert.False(Directory.Exists(sessionFolder));
+
+            async Task Preview()
+            {
+                var work = (Task)typeof(MainWindow).GetField("previewWork", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(main)!;
+                await work.WaitAsync(token);
+            }
+            // The GUI's own entry points, called on the dispatcher as its commands call them.
+            Task<T> SourceTask<T>(string method, params object[] arguments)
+            {
+                try { return (Task<T>)typeof(MainWindow).GetMethod(method, BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(main, arguments)!; }
+                catch (TargetInvocationException ex) when (ex.InnerException != null) { System.Runtime.ExceptionServices.ExceptionDispatchInfo.Throw(ex.InnerException); throw; }
+            }
+            DocumentModel Document(JsonNode state) => main.ViewModel.Documents.Single(d => d.SessionId.ToString() == state["id"]!.GetValue<string>());
+            static string Id(DocumentModel d) => d.SessionId.ToString();
+            async Task<JsonNode> Call(string name, Dictionary<string, object?> arguments, bool error = false)
+            {
+                var result = await client.CallToolAsync("zstudio_" + name, arguments, cancellationToken: token);
+                string text = string.Join(";", result.Content.OfType<TextContentBlock>().Select(c => c.Text));
+                Assert.True((result.IsError == true) == error, text);
+                return error ? JsonValue.Create(text)! : JsonNode.Parse(result.Content.OfType<TextContentBlock>().Single().Text)!;
+            }
+            async Task<JsonNode> Job(string name, Dictionary<string, object?> arguments, string expected = "completed")
+            {
+                var job = await Call(name, arguments); string id = job["id"]!.GetValue<string>();
+                while (job["State"]!.GetValue<string>() is "queued" or "running") { await Task.Delay(10, token); job = await Call("operation", new() { ["id"] = id }); }
+                Assert.True(job["State"]!.GetValue<string>() == expected, job.ToJsonString()); return job["result"]!;
+            }
+        }
+        finally
+        {
+            foreach (var doc in main.ViewModel.Documents.ToArray()) main.ViewModel.CloseResolved(doc);
+            main.Close();
+            if (sessionFolder != null) Assert.False(Directory.Exists(sessionFolder));
+        }
+    }
+}
