@@ -333,7 +333,7 @@ public partial class MainWindow : Window
             if (retained is Guid id) SelectResourceNode(item, id);
         }
         else CentralTree.ItemsSource = asset?.Kind == AssetKind.Zrd && json["tree"] is JsonNode hierarchy ? ZrdTree(doc, asset, hierarchy) : json.Select(p => new InspectorNode(p.Key, p.Value)).ToArray();
-        ContentText.Text = asset?.Content is ScriptContent script ? script.Text.Length > 65536 ? script.Text[..65536] + "\n… first 65,536 characters; export for full text." : script.Text : LimitedJson(json);
+        ContentText.Text = asset?.Content is ScriptContent script ? script.PreviewText + (script.TextTruncated ? "\n… first 65,536 characters; export for full text." : "") : LimitedJson(json);
         RefreshScriptGrid(doc, asset);
         var original = asset == null ? null : doc.OriginalAsset(asset);
         var sourceBytes = asset == null ? doc.Document.Bytes : original == null ? ReadOnlyMemory<byte>.Empty : doc.Document.Slice(original.Offset, original.Length);

@@ -4,10 +4,18 @@ using Recoil.Zbd.Core.Formats;
 namespace Recoil.Zbd.Core;
 
 public sealed record ResolvedTexture(ZbdDocument Document, AssetRecord Asset, bool Ambiguous);
-public sealed class AssetResolver(string root) : IDisposable
+public sealed class AssetResolver : IDisposable
 {
+    internal const long MaximumCachedBytes = 512L * 1024 * 1024;
+    private readonly long maximumCachedBytes;
+    public AssetResolver(string root) : this(root, MaximumCachedBytes) { }
+    internal AssetResolver(string root, long maximumCachedBytes)
+    {
+        if (maximumCachedBytes < 0 || maximumCachedBytes > MaximumCachedBytes) throw new ArgumentOutOfRangeException(nameof(maximumCachedBytes));
+        Root = Path.GetFullPath(root); this.maximumCachedBytes = maximumCachedBytes;
+    }
     public ResourceEditOwnership EditOwnership { get; } = new();
-    public string Root { get; } = Path.GetFullPath(root);
+    public string Root { get; }
     private readonly Dictionary<string, string> missions = new(StringComparer.OrdinalIgnoreCase);
     public string? SelectedMission(string worldPath) { lock (missions) return missions.GetValueOrDefault(Path.GetDirectoryName(Path.GetFullPath(worldPath))!); }
     public void SelectMission(string worldPath, string archive) => TrySelectMission(worldPath, archive, null, false);
@@ -51,54 +59,86 @@ public sealed class AssetResolver(string root) : IDisposable
         }
         WorkspaceSnapshotsChanged?.Invoke();
     }
-    public IEnumerable<string> ResourceDirectories(string context)
+    public IEnumerable<string> ResourceDirectories(string context) => ResourceDirectories(context, new CompiledInventory());
+    internal IEnumerable<string> ResourceDirectories(string context, CompiledInventory inventory)
     {
+        inventory.Path(context.Length); inventory.Path(Root.Length);
         string directory = Path.GetDirectoryName(context)!;
         var candidates = new List<string> { directory, Root };
         string? parent = Path.GetDirectoryName(directory);
-        if (parent != null && File.Exists(Path.Combine(parent,"image.zbd")) && FormatRegistry.Probe(Path.Combine(parent,"image.zbd")).Family == FormatFamily.TexturePack) candidates.Add(parent);
+        if (parent != null)
+        {
+            inventory.Path(parent.Length + 10L);
+            string image = Path.Combine(parent, "image.zbd");
+            if (File.Exists(image) && FormatRegistry.Probe(image).Family == FormatFamily.TexturePack) candidates.Add(parent);
+        }
         return candidates.Distinct(StringComparer.OrdinalIgnoreCase);
     }
-    public string[] TexturePacks(string context)
+    public string[] TexturePacks(string context, CancellationToken token = default) => TexturePacks(context, new CompiledInventory(token));
+    internal string[] TexturePacks(string context, CompiledInventory inventory)
     {
+        inventory.Path(context.Length);
         string directory = Path.GetDirectoryName(context)!;
-        var paths = ResourceDirectories(context).SelectMany(Directory.EnumerateFiles);
-        return paths.Where(p => Path.GetExtension(p).Equals(".zbd", StringComparison.OrdinalIgnoreCase))
-            .Where(p => Path.GetDirectoryName(p)!.Equals(directory, StringComparison.OrdinalIgnoreCase) || Path.GetFileName(p).Contains("image", StringComparison.OrdinalIgnoreCase) || Path.GetFileName(p).Contains("mechtex", StringComparison.OrdinalIgnoreCase))
-            .Distinct(StringComparer.OrdinalIgnoreCase).Where(p => FormatRegistry.Probe(p).Family == FormatFamily.TexturePack)
-            .OrderByDescending(p => PackPriority(Path.GetFileNameWithoutExtension(p))).ThenBy(p => p, StringComparer.OrdinalIgnoreCase).ToArray();
+        List<(string Path, int Priority)> paths = []; HashSet<string> seen = new(StringComparer.OrdinalIgnoreCase);
+        foreach (string folder in ResourceDirectories(context, inventory))
+            foreach (string path in inventory.Files(folder, sort: false))
+            {
+                inventory.Path(path.Length);
+                string name = Path.GetFileName(path);
+                if (!Path.GetDirectoryName(path)!.Equals(directory, StringComparison.OrdinalIgnoreCase) && !name.Contains("image", StringComparison.OrdinalIgnoreCase) && !name.Contains("mechtex", StringComparison.OrdinalIgnoreCase)) continue;
+                if (seen.Add(path) && FormatRegistry.Probe(path).Family == FormatFamily.TexturePack)
+                { inventory.Rows(1); paths.Add((path, PackPriority(Path.GetFileNameWithoutExtension(path)))); }
+            }
+        inventory.Sort(paths, (a, b) => a.Priority != b.Priority ? b.Priority.CompareTo(a.Priority) : StringComparer.OrdinalIgnoreCase.Compare(a.Path, b.Path), p => p.Path);
+        inventory.Rows(paths.Count); return paths.Select(p => p.Path).ToArray();
     }
     private static int PackPriority(string name)
     {
         var m = Regex.Match(name, @"^(r?texture)(\d+)$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
         return m.Success && int.TryParse(m.Groups[2].Value, out int n) ? (m.Groups[1].Value.StartsWith('r') ? 1000 : 2000) + Math.Min(n, 999) : name.Contains("image", StringComparison.OrdinalIgnoreCase) ? -100 : 0;
     }
-    public async Task<ZbdDocument> OpenCachedAsync(string path, CancellationToken token)
+    public Task<ZbdDocument> OpenCachedAsync(string path, CancellationToken token) => OpenCachedAsync(path, FormatRegistry.MaximumDocumentBytes, token);
+    internal async Task<ZbdDocument> OpenCachedAsync(string path, long maximumBytes, CancellationToken token, AssetReadBudget? budget = null)
     {
+        if (maximumBytes < 0 || maximumBytes > FormatRegistry.MaximumDocumentBytes) throw new ArgumentOutOfRangeException(nameof(maximumBytes));
         token.ThrowIfCancellationRequested();
-        lock (snapshotGate) if (publishedSnapshots.TryGetValue(path, out var snapshot)) return snapshot;
+        lock (snapshotGate) if (publishedSnapshots.TryGetValue(path, out var snapshot)) return Admitted(snapshot);
         await gate.WaitAsync(token).ConfigureAwait(false);
         try
         {
-            if (cache.TryGetValue(path, out var found) && found.Document.Stamp == FileStamp.Read(path)) { cache[path] = (found.Document, ++clock); return found.Document; }
-            var doc = await FormatRegistry.Default.OpenAsync(path, token).ConfigureAwait(false); cache[path] = (doc, ++clock);
-            while (cache.Count > 4) cache.Remove(cache.MinBy(p => p.Value.Used).Key);
+            if (cache.TryGetValue(path, out var found) && found.Document.Stamp == FileStamp.Read(path)) { var retained = Admitted(found.Document); cache[path] = (retained, ++clock); return retained; }
+            cache.Remove(path); found = default;
+            long bytes = FileStamp.Read(path).Length;
+            if (bytes > maximumBytes)
+                throw new InvalidDataException($"{JsonData.ShownText(path)} exceeds {maximumBytes:N0} bytes (remaining read allowance).");
+            if (bytes > maximumCachedBytes)
+                throw new InvalidDataException($"{JsonData.ShownText(path)} exceeds {maximumCachedBytes:N0} bytes (shared cache allowance).");
+            budget?.Document(path, bytes);
+            budget?.ColdRead(bytes);
+            // Evict before opening: retaining four maximum-size documents while allocating a fifth
+            // is not bounded by a document-count limit. The gate also serializes concurrent opens.
+            while (cache.Count > 0 && (cache.Count >= 4 || cache.Values.Sum(p => (long)p.Document.Bytes.Length) > maximumCachedBytes - bytes))
+                cache.Remove(cache.MinBy(p => p.Value.Used).Key);
+            // SourceRead checks its held handle's length against this bound before allocating. Growth
+            // after the stamp read cannot exceed the space reserved above; no transient fifth buffer.
+            var doc = await FormatRegistry.Default.OpenAsync(path, bytes, token).ConfigureAwait(false); cache[path] = (doc, ++clock);
             return doc;
         }
         finally { gate.Release(); }
-    }
-    public async Task<ResolvedTexture?> ResolveTextureAsync(string context, string name, string? preferredPack, CancellationToken token)
-    {
-        string[] packs = TexturePacks(context);
-        if (preferredPack != null) packs = packs.OrderByDescending(p => p.Equals(preferredPack, StringComparison.OrdinalIgnoreCase)).ToArray();
-        string key = Path.GetFileNameWithoutExtension(name);
-        foreach (string path in packs)
+        ZbdDocument Admitted(ZbdDocument document)
         {
-            token.ThrowIfCancellationRequested(); var doc = await OpenCachedAsync(path, token).ConfigureAwait(false);
-            var matches = doc.Assets.Where(a => a.Kind == AssetKind.Texture && (a.Name.Equals(name, StringComparison.OrdinalIgnoreCase) || Path.GetFileNameWithoutExtension(a.Name).Equals(key, StringComparison.OrdinalIgnoreCase))).ToArray();
-            if (matches.Length > 0) return new(doc, matches[0], matches.Length > 1);
+            if (document.Bytes.Length > maximumBytes) throw new InvalidDataException("The texture pack exceeds the remaining edit buffer budget.");
+            budget?.Document(path, document.Bytes.Length);
+            return document;
         }
-        return null;
+    }
+    public TextureLookupOperation BeginTextureLookup(string context, string? preferredPack = null) => new(this, context, preferredPack);
+    public Task<ResolvedTexture?> ResolveTextureAsync(string context, string name, string? preferredPack, CancellationToken token)
+        => BeginTextureLookup(context, preferredPack).ResolveAsync(name, token);
+    internal bool HasTextureLookupStamp(string path, FileStamp stamp)
+    {
+        lock (snapshotGate) if (publishedSnapshots.TryGetValue(path, out var snapshot)) return snapshot.Stamp == stamp;
+        return FileStamp.Read(path) == stamp;
     }
     public async Task InvalidateAsync(IEnumerable<string> paths, CancellationToken token = default)
     {

@@ -88,18 +88,23 @@ public partial class MainWindow
             if (table is < 1 or > 5 || index <= 0 || index >= e.References[table].Count) throw new StudioCommandException("read_only", "Reference is reserved, unavailable or unverified.");
             d.AnimationEdits!.RetargetReference(e.Index, table, index, Text(a, "name")); return Result(DocumentState(d));
         });
-        RegisterJob(r, "pickups", "Load/list all authored mission pickup placements and owning archive identities, including difficulty counterparts.", [DocumentParameter, .. PageParameters], false, async (a, token) =>
+        RegisterJob(r, "pickups", "Load/list all authored mission pickup placements and owning archive identities, including difficulty counterparts. Full identities are retained; long or escaped paths shorten pages, so follow nextOffset. Combined query text is bounded before copying; omit query and page if that allowance is exceeded.", [DocumentParameter, .. PageParameters], false, async (a, token) =>
         {
             var d = TargetDocument(a); using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(token, d.Lifetime.Token); var edits = await d.GetPickupEditsAsync(ViewModel.Resolver ?? throw new StudioCommandException("no_workspace", "Open a root first."), cancellation.Token);
             token.ThrowIfCancellationRequested();
             if (d.IsDisposed || !ViewModel.Documents.Contains(d)) throw new StudioCommandException("stale_document", "The pickup document is no longer open. Read zstudio_state before retrying.");
             cancellation.Token.ThrowIfCancellationRequested();
-            return Page(edits.Records, a, p => p.Type + " " + p.Source.ResourceName + " " + edits.TargetPath(p.Source.ArchivePath),
-                p => new { source = p.Source, p.Type, position = edits.Position(p.Source), rotationRadians = edits.Rotation(p.Source), p.OriginalPosition, scope = edits.Scope(p.Source).Description, target = edits.TargetPath(p.Source.ArchivePath) });
+            InspectionResultBudget.Search search = new();
+            return Page(edits.Records, a,
+                project: p => new { source = p.Source, p.Type, position = edits.Position(p.Source), rotationRadians = edits.Rotation(p.Source), p.OriginalPosition, scope = edits.Scope(p.Source).Description, target = edits.TargetPath(p.Source.ArchivePath) },
+                matches: (p, query) => search.Pickup(p, edits.TargetPath(p.Source.ArchivePath), query),
+                maximumRowBytes: p => InspectionResultBudget.Pickup(p, edits.TargetPath(p.Source.ArchivePath), edits.Scope(p.Source).Description));
         });
         Register(r, "pickup_lock", "Gate Whole world object cards, selection bounds and transform editing. Locking closes the card; unlock alone does not select an object. Source/tree inspection and hover remain available. Legacy command/state names are retained; new documents start locked. Pending drafts require explicit resolution.", true, [DocumentParameter, RevisionParameter, P("locked", "boolean", "Whether Whole world cards and placement edits are locked; inverse of Unlock editing.", true)], a =>
         {
-            var d = TargetDocument(a, true); SetSceneEditingLocked(d, Flag(a, "locked")); return Result(DocumentState(d));
+            var d = TargetDocument(a, true);
+            if (!Flag(a, "locked") && PickupPlacementEditSession.ReadOnlyWorld(d.Document.Probe) is { } reason) throw new StudioCommandException("read_only", reason);
+            SetSceneEditingLocked(d, Flag(a, "locked")); return Result(DocumentState(d));
         });
         Register(r, "pickup_move", "Move a pickup to exact coordinates as one undoable operation, including unambiguous difficulty counterparts. Requires unlocked placements.", true,
             [DocumentParameter, RevisionParameter, new("source", "object", "Exact source identity returned by pickups; field names are case-sensitive.", true, Properties:

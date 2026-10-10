@@ -13,6 +13,7 @@ public sealed class FormatRegistry
     private readonly Dictionary<FormatFamily, IZbdFormatReader> readers = new IZbdFormatReader[]
     { new TextureReader(), new ArchiveReader(), new ScriptReader(), new AnimationReader(), new GameZReader() }.ToDictionary(r => r.Family);
     public static FormatRegistry Default { get; } = new();
+    internal const string SourceZrdDescription = "zReader source text", SourceScriptDescription = "Gamegen script source";
     public const long MaximumDocumentBytes = 512L * 1024 * 1024;
     /// <summary>
     /// Supported entries per stored directory/table (archive members, texture/script records, GameZ tables), far above
@@ -48,10 +49,12 @@ public sealed class FormatRegistry
             uint expected = family switch { FormatFamily.Scripts => 7, FormatFamily.Animation => 28, _ => 15 };
             int minimum = family == FormatFamily.GameZ ? 36 : 12;
             if (prefix.Length < minimum) return new(family, version, Recognition.Malformed, "Truncated header");
-            bool supported = version == expected || family == FormatFamily.GameZ && version == 27 || family == FormatFamily.Animation && version == 39;
-            string versions = family switch { FormatFamily.GameZ => "15 or 27", FormatFamily.Animation => "28 or 39", _ => expected.ToString(System.Globalization.CultureInfo.InvariantCulture) };
+            bool supported = version == expected || family == FormatFamily.GameZ && version is 13 or 27 || family == FormatFamily.Animation && version == 39;
+            string versions = family switch { FormatFamily.GameZ => "13, 15 or 27", FormatFamily.Animation => "28 or 39", _ => expected.ToString(System.Globalization.CultureInfo.InvariantCulture) };
+            // Version 13 is the RECOIL demos' world format (July and August 1998): read-only.
+            string description = family == FormatFamily.GameZ && version == 13 ? $"{family} · version 13 (1998 demo, read-only)" : $"{family} · version {version}";
             return new(family, version, supported ? Recognition.Supported : Recognition.UnsupportedVersion,
-                supported ? $"{family} · version {version}" : $"Unsupported {family} version {version} (expected {versions})");
+                supported ? description : $"Unsupported {family} version {version} (expected {versions})");
         }
         if (prefix.Length >= 24 && magic == 0 && version == 1)
         {
@@ -74,12 +77,14 @@ public sealed class FormatRegistry
         return new(FormatFamily.Unknown, null, Recognition.Unknown, "Unrecognized format · raw inspection available");
     }
 
-    public async Task<ZbdDocument> OpenAsync(string path, CancellationToken token = default)
+    public Task<ZbdDocument> OpenAsync(string path, CancellationToken token = default) => OpenAsync(path, MaximumDocumentBytes, token);
+    internal async Task<ZbdDocument> OpenAsync(string path, long maximumBytes, CancellationToken token)
     {
+        if (maximumBytes < 0 || maximumBytes > MaximumDocumentBytes) throw new ArgumentOutOfRangeException(nameof(maximumBytes));
         path = System.IO.Path.GetFullPath(path);
         FileStamp stamp = FileStamp.Read(path);
         ValidateDocumentSize(stamp.Length);
-        byte[] bytes = await File.ReadAllBytesAsync(path, token).ConfigureAwait(false);
+        byte[] bytes = await Sources.SourceRead.AllAsync(path, maximumBytes, token).ConfigureAwait(false);
         if (FileStamp.Read(path) != stamp) throw new IOException("The file changed while opening. Reload it to read a consistent snapshot.");
         return await Task.Run(() => OpenBytes(path, bytes, stamp, token), token).ConfigureAwait(false);
     }

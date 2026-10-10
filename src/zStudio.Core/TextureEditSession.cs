@@ -17,36 +17,75 @@ public sealed class TextureEditSession : ContentEditSession
         if (source.Probe.Family != FormatFamily.TexturePack || source.Probe.Version != 1) throw new InvalidDataException("A v1 texture pack is required.");
         return new Dictionary<string, TexturePackEdit>(StringComparer.OrdinalIgnoreCase) { [source.Path] = new(source, new Dictionary<int, TexturePayload>(), []) };
     }
-    public async Task<IReadOnlyList<TextureTargetCandidate>> DiscoverTargetsAsync(int index, AssetResolver resolver, CancellationToken token = default)
+    public Task<IReadOnlyList<TextureTargetCandidate>> DiscoverTargetsAsync(int index, AssetResolver resolver, CancellationToken token = default)
+        => DiscoverTargetsAsync(index, resolver, TextureLookupOperation.MaximumColdReadBytes, TextureLookupOperation.MaximumWork, token);
+    internal async Task<IReadOnlyList<TextureTargetCandidate>> DiscoverTargetsAsync(int index, AssetResolver resolver,
+        long maximumBytes, long maximumWork, CancellationToken token)
     {
         var before = Current; var aliases = SaveAsAliases();
+        long revision = resolver.SnapshotRevision;
         return await Task.Run(async () =>
         {
+        AssetReadBudget reads = new(maximumBytes, maximumBytes);
+        long work = maximumWork;
+        void Spend(long units)
+        {
+            token.ThrowIfCancellationRequested();
+            if (units < 0 || units > work) throw new InvalidDataException("Texture target discovery exceeds its work allowance; select explicit targets instead.");
+            work -= units;
+        }
+        // These documents are owned by the edit session, not the resolver's evictable cache.
+        foreach (var current in before.Documents.Values) { Spend(1); reads.Document(current.Path, current.Bytes.Length); }
+        Spend(before.Documents[SourcePath].Assets.Count);
         var selected = before.Documents[SourcePath].Assets.SingleOrDefault(a => a.Index == index) ?? throw new InvalidDataException("Texture no longer exists.");
         List<TextureTargetCandidate> results = [];
-        var paths = resolver.TexturePacks(SourcePath).Where(p => !aliases.Contains(p) && Path.GetDirectoryName(p)!.Equals(Path.GetDirectoryName(SourcePath), StringComparison.OrdinalIgnoreCase)).ToArray();
+        string sourceDirectory = Path.GetDirectoryName(SourcePath)!;
+        var paths = resolver.TexturePacks(SourcePath, token).Where(p => !aliases.Contains(p) && Path.GetDirectoryName(p)!.Equals(sourceDirectory, StringComparison.OrdinalIgnoreCase)).ToArray();
         if (paths.Length > 64) throw new InvalidDataException("Discovery supports at most 64 sibling packs. Select explicit targets instead.");
         foreach (string path in paths)
         {
             token.ThrowIfCancellationRequested();
-            var doc = before.Documents.TryGetValue(path, out var current) ? current : await resolver.OpenCachedAsync(path, token);
-            var matches = doc.Assets.Where(a => a.Name.Equals(selected.Name, StringComparison.OrdinalIgnoreCase)).ToArray();
-            if (matches.Length == 0) results.Add(new(path, null, selected.Name, 0, 0, false, "No matching texture."));
+            var doc = before.Documents.TryGetValue(path, out var current) ? current : await resolver.OpenCachedAsync(path, FormatRegistry.MaximumDocumentBytes, token, reads);
+            List<AssetRecord> matches = [];
+            foreach (var asset in doc.Assets)
+            {
+                Spend(1L + asset.Name.Length + selected.Name.Length);
+                if (asset.Name.Equals(selected.Name, StringComparison.OrdinalIgnoreCase))
+                {
+                    if (results.Count + matches.Count >= 16384) throw new InvalidDataException("Too many ambiguous candidates. Select explicit record targets instead.");
+                    matches.Add(asset);
+                }
+            }
+            if (matches.Count == 0) results.Add(new(path, null, selected.Name, 0, 0, false, "No matching texture."));
+            Spend(doc.Diagnostics.Count);
+            bool malformed = doc.Diagnostics.Any(d => d.Severity == "Error");
             foreach (var asset in matches)
             {
                 var info = asset.Content as TextureInfo;
-                results.Add(new(path, asset.Index, asset.Name, info?.Width ?? 0, info?.Height ?? 0, matches.Length > 1,
-                    doc.Diagnostics.Any(d => d.Severity == "Error") || info == null ? "Malformed texture pack." : null));
+                results.Add(new(path, asset.Index, asset.Name, info?.Width ?? 0, info?.Height ?? 0, matches.Count > 1,
+                    malformed || info == null ? "Malformed texture pack." : null));
                 if (results.Count > 16384) throw new InvalidDataException("Too many ambiguous candidates. Select explicit record targets instead.");
             }
         }
+        token.ThrowIfCancellationRequested();
+        if (!ReferenceEquals(Current, before) || resolver.SnapshotRevision != revision)
+            throw new InvalidDataException("Texture sources changed during target discovery; retry with the current textures.");
         return results;
         }, token);
     }
-    public async Task<PreparedContentEdit> PrepareAsync(string pngPath, int? index, string name, IReadOnlyList<TextureTarget>? targets,
-        AssetResolver resolver, CancellationToken token = default)
+    public Task<PreparedContentEdit> PrepareAsync(string pngPath, int? index, string name, IReadOnlyList<TextureTarget>? targets,
+        AssetResolver resolver, CancellationToken token = default) => PrepareAsync(pngPath, index, name, targets, resolver, FormatRegistry.MaximumDocumentBytes, token);
+    internal async Task<PreparedContentEdit> PrepareAsync(string pngPath, int? index, string name, IReadOnlyList<TextureTarget>? targets,
+        AssetResolver resolver, long maximumSourceBytes, CancellationToken token)
     {
-        var before = Current; var packs = new Dictionary<string, TexturePackEdit>((IReadOnlyDictionary<string, TexturePackEdit>)before.State, StringComparer.OrdinalIgnoreCase);
+        token.ThrowIfCancellationRequested();
+        var before = Current;
+        // One 4096-square master, its resized result/decoder scratch and encoded copies are bounded separately
+        // from the immutable prior packs, before PNG decoding or cloning replacement dictionaries.
+        await Task.Run(() => CheckConstruction(before, token, 256L * 1024 * 1024), token);
+        var packs = new Dictionary<string, TexturePackEdit>((IReadOnlyDictionary<string, TexturePackEdit>)before.State, StringComparer.OrdinalIgnoreCase);
+        EditBufferBudget sources = new(maximumSourceBytes);
+        foreach (var pack in packs.Values) { token.ThrowIfCancellationRequested(); sources.Document(pack.Source); }
         using var input = new FileStream(pngPath, FileMode.Open, FileAccess.Read, FileShare.Read);
         if (input.Length > MaximumPngBytes) throw new InvalidDataException("PNG input exceeds 16 MiB.");
         byte[] png = new byte[(int)input.Length]; await input.ReadExactlyAsync(png, token);
@@ -63,9 +102,11 @@ public sealed class TextureEditSession : ContentEditSession
             if (!Path.GetDirectoryName(target.Path)!.Equals(Path.GetDirectoryName(SourcePath), StringComparison.OrdinalIgnoreCase)) throw new InvalidDataException("Variant targets must be sibling mission texture packs.");
             if (!packs.ContainsKey(target.Path))
             {
-                var doc = await resolver.OpenCachedAsync(target.Path, token);
+                var doc = await resolver.OpenCachedAsync(target.Path, sources.Remaining, token);
+                sources.Document(doc);
                 if (doc.Probe.Family != FormatFamily.TexturePack || doc.Probe.Version != 1 || doc.Diagnostics.Any(d => d.Severity == "Error")) throw new InvalidDataException("An intact v1 texture pack is required: " + target.Path);
                 packs[target.Path] = new(doc, new Dictionary<int, TexturePayload>(), []); baselines[target.Path] = doc;
+                await Task.Run(() => CheckConstruction(new ContentSnapshot(before.Documents, packs), token, 256L * 1024 * 1024), token);
                 if (packs.Values.Sum(p => (long)p.Source.Bytes.Length) > FormatRegistry.MaximumDocumentBytes) throw new InvalidDataException("Texture batch exceeds 512 MiB.");
             }
         }
@@ -90,6 +131,9 @@ public sealed class TextureEditSession : ContentEditSession
                     var doc = documents.GetValueOrDefault(target.Path) ?? state.Source;
                     var asset = doc.Assets.SingleOrDefault(a => a.Index == target.Index) ?? throw new InvalidDataException("Missing target texture.");
                     if (!asset.Name.Equals(main.Name, StringComparison.OrdinalIgnoreCase) || asset.Content is not TextureInfo info) throw new InvalidDataException("Variant targets must identify the same texture name explicitly.");
+                    // Reader-backed variants can exceed the 4096-square input master. Count both RGBA
+                    // buffers and encoding scratch for this actual target before either resize or decode.
+                    CheckConstruction(new ContentSnapshot(documents, packs), token, 64L * 1024 * 1024 + 12L * info.Width * info.Height);
                     var resized = TexturePackWriter.Resize(image, info.Width, info.Height, token);
                     if (TextureDecoder.Decode(doc, asset, token).Rgba.AsSpan().SequenceEqual(resized.Rgba)) { documents[target.Path] = doc; continue; }
                     var encoded = TexturePackWriter.Encode(asset.Name, resized, doc, asset, token);
@@ -101,7 +145,7 @@ public sealed class TextureEditSession : ContentEditSession
                 }
             }
             if (documents.Values.Sum(d => (long)d.Bytes.Length) > FormatRegistry.MaximumDocumentBytes) throw new InvalidDataException("Prepared texture batch exceeds 512 MiB.");
-            return new PreparedContentEdit(before, new(documents, packs), baselines);
+            return Admit(new PreparedContentEdit(before, new(documents, packs), baselines), token);
             void Publish(string path)
             {
                 long total = packs.Values.Sum(p => (long)p.Source.Bytes.Length + p.Added.Count * 40L + p.Replacements.Values.Sum(v => (long)v.Bytes.Length) + p.Added.Sum(v => (long)v.Bytes.Length));

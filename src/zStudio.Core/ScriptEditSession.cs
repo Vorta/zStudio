@@ -6,12 +6,15 @@ public sealed class ScriptEditSession : ContentEditSession
 {
     public PreparedScriptPackage Package => (PreparedScriptPackage)Current.State;
     public ScriptEditSession(ZbdDocument document) : base(document, document.Scripts ?? throw new InvalidDataException("An intact v7 prepared-script pack is required.")) { }
+    internal ScriptEditSession(ZbdDocument document, long maximumRetainedBytes, long maximumConstructionBytes = EditRetentionBudget.MaximumConstructionBytes)
+        : base(document, document.Scripts ?? throw new InvalidDataException("An intact v7 prepared-script pack is required."), maximumRetainedBytes, maximumConstructionBytes) { }
     public PreparedScriptEntry Entry(Guid id) => Package.Entries.SingleOrDefault(e => e.Id == id) ?? throw new InvalidDataException("The script entry no longer exists.");
     public Task<PreparedContentEdit> PrepareEntryAsync(string action, Guid entry = default, string name = "", int position = -1, uint fileTime = 0, CancellationToken token = default)
     {
         var before = Current;
         return Task.Run(() =>
         {
+            CheckConstruction(before, token);
             var package = (PreparedScriptPackage)before.State; var entries = package.Entries.ToList(); int index = entries.FindIndex(e => e.Id == entry);
             if (action != "add" && index < 0) throw new InvalidDataException("The script entry no longer exists.");
             if (action is "add" or "duplicate" or "rename") PreparedScriptWriter.ValidateName(name);
@@ -30,9 +33,15 @@ public sealed class ScriptEditSession : ContentEditSession
     }
     public Task<PreparedContentEdit> PrepareInstructionAsync(Guid entry, string action, Guid instruction = default, IReadOnlyList<string>? tokens = null, int position = -1, CancellationToken token = default)
     {
-        var before = Current; var frozenTokens = tokens?.ToArray();
+        var before = Current;
+        long added = 0;
+        if (tokens != null) PreparedScriptWriter.ValidateTokens(tokens);
+        if (tokens != null) foreach (string value in tokens)
+        { token.ThrowIfCancellationRequested(); added = checked(added + 256L + 8L * (value?.Length ?? 0)); }
+        var frozenTokens = tokens?.ToArray();
         return Task.Run(() =>
         {
+            CheckConstruction(before, token, added);
             var package = (PreparedScriptPackage)before.State; var entries = package.Entries.ToList(); int e = entries.FindIndex(e => e.Id == entry);
             if (e < 0) throw new InvalidDataException("The script entry no longer exists.");
             var list = entries[e].Instructions.ToList(); int index = list.FindIndex(i => i.Id == instruction);
@@ -62,7 +71,7 @@ public sealed class ScriptEditSession : ContentEditSession
         var previous = (PreparedScriptPackage)before.State;
         bool identitiesChanged = !previous.Entries.Select(e => e.Id).SequenceEqual(package.Entries.Select(e => e.Id)) ||
             previous.Entries.Zip(package.Entries).Any(pair => !pair.First.Instructions.Select(i => i.Id).SequenceEqual(pair.Second.Instructions.Select(i => i.Id)));
-        return new(before, new(new Dictionary<string, ZbdDocument>(StringComparer.OrdinalIgnoreCase) { [SourcePath] = doc }, package), before.Documents, identitiesChanged);
+        return Admit(new(before, new(new Dictionary<string, ZbdDocument>(StringComparer.OrdinalIgnoreCase) { [SourcePath] = doc }, package), before.Documents, identitiesChanged), token);
     }
     private static void Move<T>(List<T> list, int index, int position)
     {

@@ -281,7 +281,7 @@
   },
   {
     "Name": "zstudio_inspect_asset",
-    "Description": "Read original asset metadata/content and a separately frozen edited snapshot at one revision. ZRD/script inspection bounds nodes, instructions and strings. Model/world/sound lists preview 32 records; nested metadata has node/depth/text budgets with properties_truncated. Motion metadata previews 32 parts with 128-character names; motion_records pages tracks. Animation inspection previews 4 records per reference table, 4 puffers and 16 sequence summaries; sequence Properties previews 8 events, event/tail raw previews use 256 bytes, and keyframe streams are omitted. Totals/truncation flags disclose omissions; animation_records/references/property_fields inspect individual records. JSON export retains complete data. Closed or changed documents reject stale results.",
+    "Description": "Read original asset metadata/content and a separately frozen edited snapshot at one revision. ZRD/script inspection bounds nodes, instructions and strings. Model/world/sound lists preview 32 records; nested metadata has node/depth/text budgets with properties_truncated. Motion metadata previews up to 32 parts with 128-character names within a shared 4,096-part allowance per archive; motion_records pages all tracks. Animation inspection previews 4 records per reference table, 4 puffers and 16 sequence summaries; sequence Properties previews 8 events, event/tail raw previews use 256 bytes, and keyframe streams are omitted. Totals/truncation flags disclose omissions; animation_records/references/property_fields inspect individual records. JSON export retains complete data. Closed or changed documents reject stale results.",
     "Mutates": false,
     "Parameters": [
       {
@@ -443,7 +443,7 @@
   },
   {
     "Name": "zstudio_save_document",
-    "Description": "Verified save: animations require a NEW destination outside the source root; pickup/AI/tank coordinates save owning archives or explicit new destinations; model edits save all texture variants before GameZ; ZAR/ZRD, script and texture saves verify and atomically replace each working destination or create new Save As files. Batches return saved paths and errors; state.contentEdits lists affected content paths and targets. Partial content/coordinate Save As retains every requested destination; ordinary Save retries unpublished copies without overwriting existing files. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Description": "Verified save: animations require a NEW destination outside the source root; pickup/AI/tank coordinates save owning archives or explicit new destinations; model edits save all texture variants before GameZ; ZAR/ZRD, script and texture saves verify and atomically replace each working destination or create new Save As files. Batch results preview at most 64 saved/remaining paths and 32 errors, each at most 512 characters, with SavedPathCount/SavedPathsTruncated, RemainingPathCount/RemainingPathsTruncated and ErrorCount/ErrorsTruncated. Source saves return written with writtenCount/writtenTruncated under the same path bound. All files are still saved; truncated previews are not full path identities. Global state.contentEdits reports fileCount with empty files/filesTruncated; per-document command results preview affected paths and targets. Partial content/coordinate Save As retains every requested destination; ordinary Save retries unpublished copies without overwriting existing files. Returns an operation ID; use zstudio_operation to await/read the result.",
     "Mutates": true,
     "Parameters": [
       {
@@ -467,7 +467,7 @@
       {
         "Name": "destination",
         "Type": "string",
-        "Description": "New single-file Save As path (animation, ZAR/ZRD, script or texture pack). Omit to save working files.",
+        "Description": "Full path of a new single-file Save As (animation, ZAR/ZRD, script or texture pack). Omit to save working files.",
         "Required": false,
         "Choices": null,
         "Properties": null
@@ -475,7 +475,7 @@
       {
         "Name": "modelDirectory",
         "Type": "string",
-        "Description": "Model Save As directory; all GameZ/texture destinations must be new. Omit for verified save to the working files.",
+        "Description": "Full path of the model Save As directory; all GameZ/texture destinations must be new. Omit for verified save to the working files.",
         "Required": false,
         "Choices": null,
         "Properties": null
@@ -490,7 +490,7 @@
         "AdditionalProperties": {
           "Name": "",
           "Type": "string",
-          "Description": "New Save As path for this source archive.",
+          "Description": "New Save As full path for this source archive.",
           "Required": false,
           "Choices": null,
           "Properties": null
@@ -522,7 +522,7 @@
       {
         "Name": "destination",
         "Type": "string",
-        "Description": "Destination directory.",
+        "Description": "Full path of the destination directory.",
         "Required": true,
         "Choices": null,
         "Properties": null
@@ -620,7 +620,7 @@
   },
   {
     "Name": "zstudio_problems",
-    "Description": "List file/operation problems with original severity and source context.",
+    "Description": "List file/operation problems with original severity and complete source context. Long or escaped rows shorten pages; follow nextOffset.",
     "Mutates": false,
     "Parameters": [
       {
@@ -739,7 +739,7 @@
   },
   {
     "Name": "zstudio_preview_state",
-    "Description": "Read active preview options, camera and playback state.",
+    "Description": "Read active preview options, camera and playback state. texturePacks retains full choice names and paths on a bounded page (offset/limit, default 100, maximum 200); follow texturePackNextOffset and texturePackCount. Long or escaped paths shorten the page.",
     "Mutates": false,
     "Parameters": [
       {
@@ -749,6 +749,26 @@
         "Required": true,
         "Choices": null,
         "Properties": null
+      },
+      {
+        "Name": "offset",
+        "Type": "integer",
+        "Description": "Zero-based texture-pack choice offset; default 0.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": 0,
+        "Maximum": 2147483647
+      },
+      {
+        "Name": "limit",
+        "Type": "integer",
+        "Description": "Texture-pack page size, 1\u2013200; default 100.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": 1,
+        "Maximum": 200
       }
     ]
   },
@@ -982,7 +1002,7 @@
   },
   {
     "Name": "zstudio_scene_nodes",
-    "Description": "List active assembled scene nodes by index (motion previews include only the selected assembly), including instance metadata (64 JSON nodes/1024 text characters per row, inspection_truncated when shortened). MW3 actor labels/query matching use 128-character prefixes; actor NameCharacters/NameTruncated disclose shortening. Full authored data remains available through JSON export.",
+    "Description": "List active assembled scene nodes by index (motion previews include only the selected assembly), including instance metadata (64 JSON nodes/1024 text characters per row, inspection_truncated when shortened). Full actor/source identities are retained; long or escaped text shortens pages, so follow nextOffset. MW3 actor labels/query matching use 128-character prefixes; actor NameCharacters/NameTruncated disclose shortening. Full authored data remains available through JSON export.",
     "Mutates": false,
     "Parameters": [
       {
@@ -1480,7 +1500,7 @@
   },
   {
     "Name": "zstudio_animation_runtime",
-    "Description": "Read preview status, sequence runtime, dispatched event occurrences, problems or bound scene nodes. Timing thresholds and observed dispatches remain distinct.",
+    "Description": "Read preview status, sequence runtime, dispatched event occurrences, problems or bound scene nodes. Scene metadata previews retain at most 64 JSON nodes and 1024 text characters, with inspection_truncated; full metadata is available through JSON export. Identities remain complete; long rows shorten pages, so follow nextOffset. Timing thresholds and observed dispatches remain distinct.",
     "Mutates": false,
     "Parameters": [
       {
@@ -3224,7 +3244,7 @@
   },
   {
     "Name": "zstudio_pickups",
-    "Description": "Load/list all authored mission pickup placements and owning archive identities, including difficulty counterparts. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Description": "Load/list all authored mission pickup placements and owning archive identities, including difficulty counterparts. Full identities are retained; long or escaped paths shorten pages, so follow nextOffset. Combined query text is bounded before copying; omit query and page if that allowance is exceeded. Returns an operation ID; use zstudio_operation to await/read the result.",
     "Mutates": true,
     "Parameters": [
       {
@@ -3491,7 +3511,7 @@
       {
         "Name": "destination",
         "Type": "string",
-        "Description": "Export folder outside the source tree.",
+        "Description": "Full path of an export folder outside the source tree.",
         "Required": true,
         "Choices": null,
         "Properties": null
@@ -3518,7 +3538,7 @@
   },
   {
     "Name": "zstudio_model_replace",
-    "Description": "Validate an explicit version-1 OBJ/PNG replacement manifest, then accept the entire batch as one document undo step. Model indices and source SHA-256 must match. Shared file ownership is acquired before acceptance; conflicting writers leave the document unchanged. Saves use save_document. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Description": "Validate an explicit version-1 OBJ/PNG replacement manifest, then accept the entire batch as one document undo step. Model indices and source SHA-256 must match. Shared file ownership is acquired before acceptance; conflicting writers leave the document unchanged. Saves use save_document. texturePacks previews at most 64 paths of 512 characters, with texturePackCount/texturePacksTruncated; all prepared packs remain part of the edit and save. Returns an operation ID; use zstudio_operation to await/read the result.",
     "Mutates": true,
     "Parameters": [
       {
@@ -4387,7 +4407,7 @@
       {
         "Name": "path",
         "Type": "string",
-        "Description": "OBJ file path.",
+        "Description": "Full path of the OBJ file.",
         "Required": true,
         "Choices": null,
         "Properties": null
@@ -4449,7 +4469,7 @@
   },
   {
     "Name": "zstudio_texture_import",
-    "Description": "Replace a texture from RGB/RGBA PNG (16 MiB; up to 4096\u00D74096), or add a named texture when index is omitted. Replacement dimensions must match the selected record. Explicit sibling targets retain their dimensions, using premultiplied-alpha resampling and private palettes for indexed records. One undo step owns the complete batch. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Description": "Replace a texture from RGB/RGBA PNG (16 MiB; up to 4096\u00D74096), or add a named texture when index is omitted. Replacement dimensions must match the selected record. Explicit sibling targets retain their dimensions, using premultiplied-alpha resampling and private palettes for indexed records. One undo step owns the complete batch. Results preview at most 64 files with fileCount/filesTruncated; Path/destination keep 512 characters with PathTruncated/destinationTruncated. Each file includes at most 4 diagnostics of 256 characters with diagnosticCount/diagnosticsTruncated and MessageTruncated. All affected files remain owned and saved. Returns an operation ID; use zstudio_operation to await/read the result.",
     "Mutates": true,
     "Parameters": [
       {
@@ -4473,7 +4493,7 @@
       {
         "Name": "path",
         "Type": "string",
-        "Description": "PNG input path.",
+        "Description": "Full path of the PNG input.",
         "Required": true,
         "Choices": null,
         "Properties": null
@@ -4513,7 +4533,7 @@
             {
               "Name": "path",
               "Type": "string",
-              "Description": "Texture pack path.",
+              "Description": "Full texture pack path, as texture_targets returns it.",
               "Required": true,
               "Choices": null,
               "Properties": null

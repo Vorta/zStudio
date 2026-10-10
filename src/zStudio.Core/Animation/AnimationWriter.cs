@@ -1,5 +1,4 @@
 using System.Buffers.Binary;
-using System.Security.Cryptography;
 
 namespace Recoil.Zbd.Core.Animation;
 
@@ -47,37 +46,163 @@ public static class AnimationWriter
         payload.Write(sequence.OpaqueTail); byte[] header = (byte[])sequence.Bytes.Clone(); BinaryPrimitives.WriteInt32LittleEndian(header.AsSpan(60), checked((int)payload.Length));
         using MemoryStream result = new(); result.Write(header); payload.Position = 0; payload.CopyTo(result); return result.ToArray();
     }
-    public static async Task SaveAsAsync(AnimationPackage package, string path, string source, string protectedRoot, CancellationToken token = default)
+    public static Task SaveAsAsync(AnimationPackage package, string path, string source, string protectedRoot, CancellationToken token = default) =>
+        SaveAsAsync(package, path, source, protectedRoot, EditRetentionBudget.MaximumConstructionBytes, token);
+
+    internal static async Task SaveAsAsync(AnimationPackage package, string path, string source, string protectedRoot, long maximumConstructionBytes, CancellationToken token = default)
     {
+        EditRetentionBudget.Limit(maximumConstructionBytes, EditRetentionBudget.MaximumConstructionBytes);
         path = Path.GetFullPath(path); source = Path.GetFullPath(source); protectedRoot = Path.GetFullPath(protectedRoot);
-        if (path.Equals(source, StringComparison.OrdinalIgnoreCase) || IsInside(path, protectedRoot) || path.Split(Path.DirectorySeparatorChar).Any(p => p.Equals("zbd_1998", StringComparison.OrdinalIgnoreCase) || p.Equals("zbd_1999", StringComparison.OrdinalIgnoreCase)))
+        if (path.Equals(source, StringComparison.OrdinalIgnoreCase) || IsInside(path, protectedRoot) || PickupPlacementEditSession.IsProtectedPath(path) ||
+            OperatingSystem.IsWindows() && IsInside(WindowsSavePath.ResolveExistingParent(path),
+                Path.GetDirectoryName(WindowsSavePath.ResolveExistingParent(Path.Combine(protectedRoot, ".zstudio-root-probe")))!))
             throw new IOException("Save the edited animation to a new file outside the source dataset.");
         if (File.Exists(path)) throw new IOException("Choose a new filename; Save As does not replace existing files.");
         for (var parent = new DirectoryInfo(Path.GetDirectoryName(path)!); parent != null; parent = parent.Parent)
             if (parent.Exists && parent.Attributes.HasFlag(FileAttributes.ReparsePoint)) throw new IOException("Save As through directory links is not supported; choose a direct destination.");
+        using DirectoryLease directories = new();
+        string captured = directories.CapturedPath(path);
+        string capturedRoot = Path.GetDirectoryName(directories.CapturedPath(Path.Combine(protectedRoot, ".zstudio-root-probe")))!;
+        if (IsInside(captured, capturedRoot) || PickupPlacementEditSession.IsProtectedPath(captured))
+            throw new IOException("Save the edited animation to a new file outside the source dataset.");
+        // Admit the complete save, not only the edited entry. The first output remains alive beside
+        // the fresh reader graph while the second writer verifies it. No destination is created on refusal.
+        await Task.Run(() => CheckSaveConstruction(package, maximumConstructionBytes, token), token).ConfigureAwait(false);
+        directories.Parent(path, create: true);
         byte[] bytes = await Task.Run(() => Write(package, token), token).ConfigureAwait(false);
         var reopened = AnimationPackage.Read(bytes, token);
         if (!bytes.AsSpan().SequenceEqual(Write(reopened, token))) throw new InvalidDataException("Animation save failed its round-trip check.");
-        string directory = Path.GetDirectoryName(path)!; Directory.CreateDirectory(directory); string temporary = Path.Combine(directory, ".animation-" + Guid.NewGuid().ToString("N") + ".tmp");
+        string directory = Path.GetDirectoryName(path)!; string temporary = Path.Combine(directory, ".animation-" + Guid.NewGuid().ToString("N") + ".tmp");
+        using SealedFile staged = await SealedFile.CreateAsync(temporary, bytes, directories, token).ConfigureAwait(false);
+        token.ThrowIfCancellationRequested();
+        staged.MoveTo(path);
+    }
+    private static void CheckSaveConstruction(AnimationPackage package, long maximumBytes, CancellationToken token)
+    {
+        RetainedDocumentBudget budget = new(maximumBytes);
         try
         {
-            await using (FileStream stream = new(temporary, FileMode.CreateNew, FileAccess.Write, FileShare.None, 65536, FileOptions.Asynchronous | FileOptions.WriteThrough))
-            { await stream.WriteAsync(bytes, token).ConfigureAwait(false); await stream.FlushAsync(token).ConfigureAwait(false); }
-            byte[] check = await File.ReadAllBytesAsync(temporary, token).ConfigureAwait(false);
-            if (!CryptographicOperations.FixedTimeEquals(SHA256.HashData(bytes), SHA256.HashData(check))) throw new IOException("The written animation did not pass verification.");
-            token.ThrowIfCancellationRequested(); File.Move(temporary, path, false);
+            // Active input belongs to construction too; the editor separately admits source raw bytes,
+            // old undo/redo and saved snapshots. Shared current buffers are counted once, without caches
+            // being materialized just to measure them.
+            budget.Object(package, 256L + 16L * package.Entries.Count, token);
+            budget.Bytes(package.Prefix, token); budget.Bytes(package.Tail, token);
+            foreach (var entry in package.Entries) budget.AnimationEntry(entry, token);
+            foreach (var diagnostic in package.Diagnostics) budget.Text(diagnostic.Message, token);
+            checked
+            {
+                SaveStreamShape output = new(); long peak = 0, largestEntry = 0;
+                // The reader copies all serialized payloads, and independently creates each occurrence
+                // even if the input happens to share a record. It does not prepare keyframe caches.
+                long readerObjects = 4096L + 32L * package.Entries.Count;
+                output.Write(package.Prefix.Length);
+                foreach (var entry in package.Entries)
+                {
+                    token.ThrowIfCancellationRequested();
+                    var shape = Entry(entry);
+                    peak = Math.Max(peak, output.Capacity + shape.Peak);
+                    output.Write(shape.Length, shape.Length); largestEntry = Math.Max(largestEntry, shape.Length);
+                }
+                output.Write(package.Tail.Length); output.Finish();
+                Formats.FormatRegistry.ValidateDocumentSize(output.Length);
+                // Keep the last entry result conservatively live until Write returns, as well as its
+                // cloned prefix. Stream growth includes old and new backing arrays before the copy.
+                peak = package.Prefix.LongLength + Math.Max(peak, output.Peak + largestEntry);
+                long reopened = output.Length + readerObjects;
+                budget.Reserve(output.Length + reopened + peak + 131_072, token);
+
+                (long Length, long Peak) Entry(AnimationEntry entry)
+                {
+                    readerObjects += 2048L + 32L * (entry.Sequences.Count + entry.Puffers.Count);
+                    var primary = Sequence(entry.Primary);
+                    SaveStreamShape stream = new(); long localPeak = primary.Peak, largestSequence = 0;
+                    stream.Write(entry.Bytes.Length);
+                    for (int table = 0; table < 8; table++)
+                    {
+                        if (package.Version == 39 && table == 3)
+                            foreach (var record in entry.Puffers)
+                            { token.ThrowIfCancellationRequested(); readerObjects += 192; stream.Write(record.Bytes.Length); }
+                        foreach (var record in entry.References[table])
+                        { token.ThrowIfCancellationRequested(); readerObjects += 192; stream.Write(record.Bytes.Length); }
+                    }
+                    stream.Write(primary.Length);
+                    foreach (var sequence in entry.Sequences)
+                    {
+                        var shape = Sequence(sequence);
+                        localPeak = Math.Max(localPeak, primary.Length + stream.Capacity + shape.Peak);
+                        stream.Write(shape.Length, shape.Length); largestSequence = Math.Max(largestSequence, shape.Length);
+                    }
+                    stream.Finish();
+                    return (stream.Length, entry.Bytes.LongLength + Math.Max(localPeak, primary.Length + largestSequence + stream.Peak));
+                }
+                (long Length, long Peak) Sequence(AnimationSequence sequence)
+                {
+                    token.ThrowIfCancellationRequested();
+                    // Includes list capacity and possible opaque-tail diagnostic/name; record payload
+                    // bytes themselves are already included once in the serialized length above.
+                    readerObjects += 1024L + 256L * sequence.Events.Count;
+                    SaveStreamShape payload = new(); long largestEvent = 0;
+                    foreach (var ev in sequence.Events)
+                    {
+                        token.ThrowIfCancellationRequested();
+                        payload.Write(ev.Bytes.Length, ev.Bytes.Length); largestEvent = Math.Max(largestEvent, ev.Bytes.Length);
+                    }
+                    payload.Write(sequence.OpaqueTail.Length);
+                    SaveStreamShape result = new(); result.Write(sequence.Bytes.Length); result.Write(payload.Length); result.Finish();
+                    return (result.Length, Math.Max(payload.Peak, largestEvent + sequence.Bytes.LongLength + payload.Capacity + result.Peak));
+                }
+            }
         }
-        finally { if (File.Exists(temporary)) File.Delete(temporary); }
+        catch (InvalidDataException) when (budget.Exhausted) { throw EditRetentionBudget.Refusal(); }
+        catch (OverflowException) { throw EditRetentionBudget.Refusal(); }
+    }
+    /// <summary>Allocation shape of the growing MemoryStreams used above; bytes, not an input-size multiplier.</summary>
+    private struct SaveStreamShape
+    {
+        internal long Length, Capacity, Peak;
+        internal void Write(long bytes, long temporary = 0)
+        {
+            checked
+            {
+                Length += bytes;
+                if (Length > Capacity)
+                {
+                    long next = Math.Max(256, Math.Max(Length, 2 * Capacity));
+                    Peak = Math.Max(Peak, Capacity + next + temporary); Capacity = next;
+                }
+                Peak = Math.Max(Peak, Capacity + temporary);
+            }
+        }
+        internal void Finish() => Peak = Math.Max(Peak, checked(Capacity + Length)); // ToArray
     }
     private static bool IsInside(string path, string root) => path.Equals(root, StringComparison.OrdinalIgnoreCase) || path.StartsWith(Path.TrimEndingDirectorySeparator(root) + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
 }
 
 /// <summary>Entry snapshots keep undo independent of renderer runtime state.</summary>
-public sealed class AnimationEditSession(AnimationPackage package)
+public sealed class AnimationEditSession
 {
-    public AnimationPackage Package { get; } = package;
+    public AnimationPackage Package { get; }
+    private readonly AnimationEntry[] sourceEntries;
+    private readonly long maximumRetainedBytes, maximumConstructionBytes, sourceBytes;
     private readonly Stack<Edit> undo = [], redo = [];
     private long revision, nextRevision, savedRevision;
+    public AnimationEditSession(AnimationPackage package) : this(package, EditRetentionBudget.MaximumRetainedBytes, EditRetentionBudget.MaximumConstructionBytes) { }
+    internal AnimationEditSession(AnimationPackage package, long maximumRetainedBytes, long maximumConstructionBytes)
+    {
+        EditRetentionBudget.Limit(maximumRetainedBytes, EditRetentionBudget.MaximumRetainedBytes);
+        EditRetentionBudget.Limit(maximumConstructionBytes, EditRetentionBudget.MaximumConstructionBytes);
+        Package = package; this.maximumRetainedBytes = maximumRetainedBytes; this.maximumConstructionBytes = maximumConstructionBytes;
+        // The desktop source document retains its original raw file and entry graph beside this working package.
+        // Reserve that raw size without copying it; shared entry/buffer identities are counted only once below.
+        sourceBytes = package.Prefix.LongLength + package.Tail.LongLength;
+        foreach (var entry in package.Entries) sourceBytes = checked(sourceBytes + EncodedLength(entry));
+        RetainedDocumentBudget initial = new(maximumRetainedBytes);
+        initial.Reserve(checked(sourceBytes + 512L + 64L * package.Entries.Count), default);
+        initial.Bytes(package.Prefix, default); initial.Bytes(package.Tail, default);
+        foreach (var entry in package.Entries) initial.AnimationEntry(entry, default);
+        sourceEntries = package.Entries.ToArray();
+        _ = Ownership();
+    }
     public bool IsDirty => revision != savedRevision;
     public bool CanUndo => undo.Count > 0;
     public bool CanRedo => redo.Count > 0;
@@ -120,11 +245,66 @@ public sealed class AnimationEditSession(AnimationPackage package)
     }
     public void Apply(int index, string description, Action<AnimationEntry> change)
     {
-        var before = Package.Entries[index]; var after = before.Clone(); change(after);
+        var before = Package.Entries[index];
+        _ = Ownership(); // Existing undo/redo remains owned throughout preparation; never evict it to make a failed edit fit.
+        RetainedDocumentBudget preparation = new(maximumConstructionBytes);
+        preparation.AnimationEntry(before, default);
+        long shape = preparation.UsedBytes, beforeBytes = EncodedLength(before);
+        // Supported callbacks duplicate at most one entry's records, or rewrite one sparse keyframe stream.
+        // Admit the clone, possible duplicate, stream growth/copy and fixed headers before invoking them.
+        preparation.Reserve(checked(shape + 6 * beforeBytes + 65536), default);
+        var after = before.Clone(); change(after);
+        RetainedDocumentBudget comparison = new(maximumConstructionBytes);
+        comparison.AnimationEntry(after, default);
+        long afterBytes = EncodedLength(after);
+        // SequenceBytes and WriteEntry use growing streams. The first result remains alive while the
+        // second is written: admit both comparisons before either serializer allocates a payload.
+        comparison.Reserve(checked(Math.Max(8 * beforeBytes, beforeBytes + 8 * afterBytes) + 65536), default);
         if (AnimationWriter.WriteEntry(before).AsSpan().SequenceEqual(AnimationWriter.WriteEntry(after))) return;
-        long next = ++nextRevision; undo.Push(new(index, description, before, after, revision, next)); redo.Clear();
-        if (undo.Count > 128) { var retained = undo.Take(128).Reverse().ToArray(); undo.Clear(); foreach (var item in retained) undo.Push(item); }
-        Package.Entries[index] = after; revision = next; Changed?.Invoke();
+        long next = checked(nextRevision + 1);
+        Edit pending = new(index, description, before, after, revision, next);
+        var retained = Ownership(index, after, history: false);
+        Count(retained, pending); // Mandatory immediate undo must fit even when all older history is evicted.
+        List<Edit> keep = [pending];
+        foreach (var edit in undo)
+        {
+            if (keep.Count == 128) break;
+            var checkpoint = retained.Checkpoint();
+            try { Count(retained, edit); keep.Add(edit); }
+            catch (InvalidDataException) when (retained.Exhausted) { retained.Restore(checkpoint); break; }
+        }
+        undo.Clear(); for (int i = keep.Count - 1; i >= 0; i--) undo.Push(keep[i]);
+        redo.Clear(); Package.Entries[index] = after; revision = nextRevision = next; Changed?.Invoke();
+    }
+    private RetainedDocumentBudget Ownership(int replaced = -1, AnimationEntry? replacement = null, bool history = true)
+    {
+        RetainedDocumentBudget budget = new(maximumRetainedBytes);
+        budget.Reserve(checked(sourceBytes + 512L + 32L * (sourceEntries.Length + Package.Entries.Count)), default);
+        budget.Bytes(Package.Prefix, default); budget.Bytes(Package.Tail, default);
+        foreach (var entry in sourceEntries) budget.AnimationEntry(entry, default);
+        for (int i = 0; i < Package.Entries.Count; i++) budget.AnimationEntry(i == replaced ? replacement! : Package.Entries[i], default);
+        foreach (var diagnostic in Package.Diagnostics)
+            if (budget.Object(diagnostic, 128, default)) budget.Text(diagnostic.Message, default);
+        if (history)
+            foreach (var edit in undo.Concat(redo)) Count(budget, edit);
+        return budget;
+    }
+    private static void Count(RetainedDocumentBudget budget, Edit edit)
+    {
+        if (!budget.Object(edit, 128, default)) return;
+        budget.Text(edit.Description, default); budget.AnimationEntry(edit.Before, default); budget.AnimationEntry(edit.After, default);
+    }
+    private static long EncodedLength(AnimationEntry entry)
+    {
+        long length = entry.Bytes.LongLength;
+        foreach (var lane in entry.References) foreach (var record in lane) length = checked(length + record.Bytes.LongLength);
+        foreach (var record in entry.Puffers) length = checked(length + record.Bytes.LongLength);
+        foreach (var sequence in entry.AllSequences)
+        {
+            length = checked(length + sequence.Bytes.LongLength + sequence.OpaqueTail.LongLength);
+            foreach (var ev in sequence.Events) length = checked(length + ev.Bytes.LongLength);
+        }
+        return length;
     }
     public void Undo() { if (!undo.TryPop(out var e)) return; Package.Entries[e.Index] = e.Before; revision = e.BeforeRevision; redo.Push(e); Changed?.Invoke(); }
     public void Redo() { if (!redo.TryPop(out var e)) return; Package.Entries[e.Index] = e.After; revision = e.AfterRevision; undo.Push(e); Changed?.Invoke(); }

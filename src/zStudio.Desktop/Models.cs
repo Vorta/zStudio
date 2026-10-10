@@ -76,17 +76,29 @@ public sealed partial class DocumentModel : ObservableObject, IDisposable
         : ScriptEdits is { } scripts ? scripts.Package.Entries.ElementAtOrDefault(asset.Index)?.SourceIndex is int index ? Document.Assets.SingleOrDefault(a => a.Index == index) : null
         : Document.Assets.SingleOrDefault(a => a.Kind == asset.Kind && a.Index == asset.Index);
     public event Action? ModelEditsChanged;
-    private readonly Stack<bool> sceneUndo = [], sceneRedo = [];
+    // The order of model (true) and pickup/AI coordinate (false) steps, oldest first. Each kind's entries match
+    // its session's own undo/redo steps one for one, so every step changes the document.
+    private readonly List<bool> sceneUndo = [], sceneRedo = [];
     private AssetResolver? workspaceResolver;
-    public bool CanUndoScene => sceneUndo.Count > 0;
-    public bool CanRedoScene => sceneRedo.Count > 0;
-    internal bool NextSceneEditIsModel(bool redo) => (redo ? sceneRedo : sceneUndo).TryPeek(out bool model) && model;
-    private void RecordSceneEdit(bool model) { sceneUndo.Push(model); sceneRedo.Clear(); }
+    public bool CanUndoScene => CanStepScene(false);
+    public bool CanRedoScene => CanStepScene(true);
+    // A session cannot step while it saves; its entry then waits instead of being consumed.
+    private bool CanStepScene(bool redo) => (redo ? sceneRedo : sceneUndo) is { Count: > 0 } history &&
+        (history[^1] ? redo ? ModelEdits?.CanRedo : ModelEdits?.CanUndo : redo ? PickupEdits?.CanRedo : PickupEdits?.CanUndo) == true;
+    internal bool NextSceneEditIsModel(bool redo) => CanStepScene(redo) && (redo ? sceneRedo : sceneUndo)[^1];
+    private void RecordSceneEdit(bool model, int retired = 0)
+    {
+        // The model session retired its oldest steps: their entries are the oldest model entries.
+        if (retired > 0) sceneUndo.RemoveAll(entry => entry && retired-- > 0);
+        sceneUndo.Add(model); sceneRedo.Clear();
+        // A new edit of either kind ends both sessions' redo branches, as it ends the shared one.
+        if (model) PickupEdits?.ClearRedo(); else ModelEdits?.ClearRedo();
+    }
     public void UndoScene(bool redo)
     {
+        if (!CanStepScene(redo)) return;
         var from = redo ? sceneRedo : sceneUndo; var to = redo ? sceneUndo : sceneRedo;
-        if (!from.TryPop(out bool model)) return;
-        to.Push(model);
+        bool model = from[^1]; from.RemoveAt(from.Count - 1); to.Add(model);
         if (model) { if (redo) ModelEdits!.Redo(); else ModelEdits!.Undo(); }
         else { if (redo) PickupEdits!.Redo(); else PickupEdits!.Undo(); }
     }
@@ -253,7 +265,7 @@ public sealed partial class DocumentModel : ObservableObject, IDisposable
         {
             ModelEdits = new(doc);
             ModelEdits.BeforeEdit += ClaimResourcePaths;
-            ModelEdits.EditAccepted += () => RecordSceneEdit(true);
+            ModelEdits.EditAccepted += retired => RecordSceneEdit(true, retired);
             ModelEdits.Changed += () =>
             {
                 Revision++; PublishSceneSnapshots();

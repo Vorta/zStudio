@@ -117,7 +117,7 @@ public partial class MainWindow
         {
             if (ViewModel.Resolver is { } resolver) await resolver.InvalidateAsync(result.SavedPaths, doc.Lifetime.Token);
             foreach (var open in ViewModel.Documents) open.InvalidateMissionContext();
-            ViewModel.CheckExternalChanges(); ViewModel.Status = "Saved and verified: " + string.Join("; ", result.SavedPaths);
+            ViewModel.CheckExternalChanges(); ViewModel.Status = $"Saved and verified {result.SavedPaths.Count} files";
         }
         foreach (string error in result.Errors) ViewModel.AddProblem(error, file: doc.Path);
         PickupEditsChanged(); return result;
@@ -162,7 +162,7 @@ public partial class MainWindow
                     try
                     {
                         if (asset.Kind == AssetKind.Texture) TextureDecoder.Decode(doc, asset, cancellation.Token);
-                        else if (asset.Kind == AssetKind.Zrd) ZrdDecoder.Decode(doc.Slice(asset.Offset, asset.Length), cancellation.Token);
+                        else if (asset.Kind == AssetKind.Zrd) ZrdDecoder.ReadAsset(doc, asset, cancellation.Token);
                         else if (asset.Kind == AssetKind.Sound) WaveDecoder.Read(doc.Slice(asset.Offset, asset.Length), cancellation.Token);
                     }
                     catch (InvalidDataException ex) { diagnostics.Add(new("Error", "File / operation", asset.Name + ": " + ex.Message, selected.Path, asset.Index, asset.Offset)); }

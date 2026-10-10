@@ -17,6 +17,7 @@ internal static class PropertiesWindowChecks
 {
     internal static async Task Run(Application app)
     {
+        ComponentFieldChecks.Run();
         CheckKeyframeInspection();
         var main = new MainWindow { Left = -12000, ShowInTaskbar = false };
         main.Show();

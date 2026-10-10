@@ -54,15 +54,19 @@ public partial class MainWindow
             }
             return Result(new { header = asset.Metadata, palette = Page(colors, a, color => System.Text.Json.JsonSerializer.Serialize(color)).Data });
         });
-        Register(r, "preview_state", "Read active preview options, camera and playback state.", false, [PreviewParameter], a =>
+        Register(r, "preview_state", "Read active preview options, camera and playback state. texturePacks retains full choice names and paths on a bounded page (offset/limit, default 100, maximum 200); follow texturePackNextOffset and texturePackCount. Long or escaped paths shorten the page.", false,
+            [PreviewParameter, new("offset", "integer", "Zero-based texture-pack choice offset; default 0.", Minimum: 0, Maximum: int.MaxValue), new("limit", "integer", "Texture-pack page size, 1–200; default 100.", Minimum: 1, Maximum: 200)], a =>
         {
-            RequirePreview(a); return Result(new { preview = previewId, asset = shownAsset?.Id, animation = animation?.PreviewState(), motion = motion?.State,
+            RequirePreview(a);
+            var packs = Page(animation == null && SceneHost.Visibility == Visibility.Visible ? TexturePackCombo.Items.Cast<PackChoice>() : [], a,
+                maximumRowBytes: p => InspectionResultBudget.Pack(p.Name, p.Path)).Data;
+            return Result(new { preview = previewId, asset = shownAsset?.Id, animation = animation?.PreviewState(), motion = motion?.State,
                 camera = motion?.Viewport.CaptureView() ?? animation?.Viewport.CaptureView() ?? (SceneHost.Visibility == Visibility.Visible ? scene?.CaptureView() : null),
                 framingSelection = motion?.Viewport.FramingSelection ?? animation?.Viewport.FramingSelection ?? (SceneHost.Visibility == Visibility.Visible ? scene?.FramingSelection : null),
                 ai = AiPreviewState(),
                 lod = motion?.Lod ?? animation?.PreviewLod ?? (SceneHost.Visibility == Visibility.Visible ? (int?)LodCombo.SelectedIndex : null), difficulty = MissionWorldPath != null || motion != null ? null : ViewModel.Difficulty.ToString(),
                 mission = animation?.MissionArchive ?? scene?.Mission?.Layout.MissionArchive,
-                texturePacks = animation == null && SceneHost.Visibility == Visibility.Visible ? TexturePackCombo.Items.Cast<PackChoice>().ToArray() : [],
+                texturePacks = packs["items"], texturePackCount = packs["total"], texturePackOffset = packs["offset"], texturePackNextOffset = packs["nextOffset"],
                 textured = animation != null ? true : SceneHost.Visibility == Visibility.Visible ? TexturesEnabled.IsChecked : null,
                 wireframe = animation != null ? false : SceneHost.Visibility == Visibility.Visible ? Wireframe.IsChecked : null,
                 bounds = animation != null ? false : SceneHost.Visibility == Visibility.Visible ? BoundsEnabled.IsChecked : null,
@@ -72,10 +76,11 @@ public partial class MainWindow
                 sound = wave == null ? null : new { seconds = wave.CurrentTime.TotalSeconds, duration = wave.TotalTime.TotalSeconds, playing = player?.PlaybackState == PlaybackState.Playing } });
         });
         RegisterCameraCommand(r);
-        Register(r, "scene_nodes", "List active assembled scene nodes by index (motion previews include only the selected assembly), including instance metadata (64 JSON nodes/1024 text characters per row, inspection_truncated when shortened). MW3 actor labels/query matching use 128-character prefixes; actor NameCharacters/NameTruncated disclose shortening. Full authored data remains available through JSON export.", false, [PreviewParameter, .. PageParameters], a =>
+        Register(r, "scene_nodes", "List active assembled scene nodes by index (motion previews include only the selected assembly), including instance metadata (64 JSON nodes/1024 text characters per row, inspection_truncated when shortened). Full actor/source identities are retained; long or escaped text shortens pages, so follow nextOffset. MW3 actor labels/query matching use 128-character prefixes; actor NameCharacters/NameTruncated disclose shortening. Full authored data remains available through JSON export.", false, [PreviewParameter, .. PageParameters], a =>
         {
             var viewport = TargetViewport(a); return Page(viewport.InspectableNodes.Where(n => n.Name.Contains(Text(a,"query"),StringComparison.OrdinalIgnoreCase)), a,
-                project: n => new { n.Index,n.Name,n.Class, Metadata = JsonData.PreviewObject(n.Metadata, 64, 1024), actor = viewport.ActorAt(n.Index) });
+                project: n => new { n.Index,n.Name,n.Class, Metadata = JsonData.PreviewObject(n.Metadata, 64, 1024), actor = viewport.ActorAt(n.Index) },
+                maximumRowBytes: n => InspectionResultBudget.SceneNode(n.Name, n.Class, viewport.ActorAt(n.Index)));
         });
         Register(r, "scene_selection", "Select/inspect a scene node with bounded metadata and inspection_truncated. Isolate includes its descendants; isolate and show_all are available only in static model/Whole world previews, matching the GUI.", true, [PreviewParameter, P("action","string","Selection operation; isolate/show_all require a static model or Whole world preview.",true,"select","isolate","show_all"), P("node","integer","Node index.")], a =>
         {
@@ -211,7 +216,7 @@ public partial class MainWindow
         });
         RegisterJob(r, "animation_transport", "Play/pause/stop, frame-step or seek the current animation.", [PreviewParameter,P("action","string","Transport action.",true,"play","pause","stop","previous","next","seek"),P("seconds","number","Seek time in seconds.")], false, async (a, _) =>
         { var editor = TargetAnimation(a); RequireNoDrafts(shownDocument); await editor.TransportAsync(Text(a,"action"),Number(a,"seconds")); return Result(editor.PreviewState()); });
-        Register(r, "animation_runtime", "Read preview status, sequence runtime, dispatched event occurrences, problems or bound scene nodes. Timing thresholds and observed dispatches remain distinct.", false,
+        Register(r, "animation_runtime", "Read preview status, sequence runtime, dispatched event occurrences, problems or bound scene nodes. Scene metadata previews retain at most 64 JSON nodes and 1024 text characters, with inspection_truncated; full metadata is available through JSON export. Identities remain complete; long rows shorten pages, so follow nextOffset. Timing thresholds and observed dispatches remain distinct.", false,
             [PreviewParameter,P("section","string","Data section.",true,"status","sequences","events","problems","scene"),.. PageParameters], a => Result(TargetAnimation(a).RuntimeData(Text(a,"section"),Int(a,"offset"),Int(a,"limit",100),Text(a,"query"))));
         Register(r, "animation_select", "Select an authored sequence/event without changing playback phase or retargeting Properties.", true,
             [PreviewParameter,P("sequence","string","Sequence GUID; omit for entry."),P("event","string","Event GUID; omit for sequence.")], a =>

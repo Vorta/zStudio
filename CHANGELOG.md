@@ -2,6 +2,12 @@
 
 Version numbers follow `MAJOR.MINOR.PATCH`; the 0.x series is under active development. Release tags and downloadable archives use the same version.
 
+## 0.8.0 — unreleased
+
+- Write GameZ worlds from an in-memory model.
+- Open the worlds of the July and August 1998 RECOIL demos (GameZ version 13) read-only: their models, Whole world, scene tree and node properties. Version 13 differs from the releases' version 15 in its node slots (the cached box stored as eight corners in the parent's space) and Object3D records (a translation beside the matrix); both read into the same world model. The August demo's version-28 animations preview against its version-13 worlds; the July demos' animations (versions 26 and 27) are not supported yet.
+- The 1998 demo worlds' placements open read-only (`pickup_lock` refuses to unlock them).
+
 ## 0.7.1 — 2026-09-29
 
 - Add MechWarrior 3 base-game support through the shared format library: version-27 worlds and mech hierarchies, version-4 motion clips, and version-39 compiled animations. Preserve version-specific layouts, record identities and opaque data, with byte-exact animation/motion no-op writes.

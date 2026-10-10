@@ -6,16 +6,56 @@ namespace Recoil.Zbd.Core;
 public sealed record ScenePlacement(int NodeIndex, int ModelIndex, string Name, Matrix4x4 Transform);
 public sealed record SceneView(IReadOnlyList<ScenePlacement> Placements, IReadOnlyList<Diagnostic> Diagnostics);
 public sealed record MeshPart(int MaterialIndex, Vector3[] Positions, Vector3[] Normals, Vector2[] TextureCoordinates, int[] Indices)
-{ public Vector4[] Colors { get; init; } = []; }
+{
+    public Vector4[] Colors { get; init; } = [];
+    /// <summary>
+    /// The zero-based source GameModel.Polygons index for each triangle (three consecutive Indices).
+    /// Empty when the producer supplied no source mapping; it never means polygon zero.
+    /// </summary>
+    public int[] TrianglePolygons { get; init; } = [];
+    /// <summary>Polygon identity for each emitted vertex; vertices are duplicated at polygon boundaries.</summary>
+    public int[] VertexPolygons { get; init; } = [];
+}
 
 public static class SceneBuilder
 {
     public static IEnumerable<int> Children(GameNode node)
+        => Children(node, node.Children);
+
+    // Mission placement accumulates its selected world's edges before publishing one final array. Traversal
+    // during construction must still see those current edges, with the same partition/deduplication semantics.
+    internal static IEnumerable<int> Children(GameNode node, IEnumerable<int> children)
     {
-        IEnumerable<int> children = node.Children;
         if (node.Class == "world" && node.Data["partitions"] is JsonArray rows)
             children = children.Concat(rows.OfType<JsonArray>().SelectMany(row => row.OfType<JsonObject>()).SelectMany(cell => cell["node_indices"]?.AsArray().Select(v => checked((int)JsonData.Integer(v))) ?? [])).Distinct();
         return children;
+    }
+    /// <summary>Operation-bounded equivalent of Children, charging raw partition entries even when duplicates collapse.</summary>
+    internal static IEnumerable<int> Children(GameNode node, Worlds.LookupWorkBudget work)
+    {
+        if (node.Class != "world" || node.Data["partitions"] is not JsonArray rows)
+        {
+            foreach (int child in node.Children) { work.Reserve(1); yield return child; }
+            yield break;
+        }
+        HashSet<int> seen = [];
+        foreach (int child in node.Children) { work.Reserve(1); if (seen.Add(child)) yield return child; }
+        foreach (var row in rows)
+        {
+            work.Reserve(1);
+            if (row is not JsonArray cells) continue;
+            foreach (var cell in cells)
+            {
+                work.Reserve(1);
+                if (cell is not JsonObject value || value["node_indices"] == null) continue;
+                foreach (var index in value["node_indices"]!.AsArray())
+                {
+                    work.Reserve(1);
+                    int child = checked((int)JsonData.Integer(index));
+                    if (seen.Add(child)) yield return child;
+                }
+            }
+        }
     }
     // zMat4x3: three basis vectors followed by translation. System.Numerics
     // uses row-vector composition, so local * parent implements MatMultiply.
@@ -49,23 +89,45 @@ public static class SceneBuilder
     }
     public static SceneView ForAsset(GameScene scene, AssetRecord asset, int lodLevel = 0, CancellationToken token = default)
     {
+        token.ThrowIfCancellationRequested();
         if (asset.Kind == AssetKind.World) return Assemble(scene, lodLevel, token: token);
         if (SceneLods.PreviewRoot(scene, asset) is int root) return Assemble(scene, lodLevel, token: token, rootIndex: root);
         return new([new(-1, asset.Index, asset.Name, Matrix4x4.Identity)], []);
     }
     public static SceneView Assemble(GameScene scene, int lodLevel = 0, bool includeHidden = false, CancellationToken token = default, int? rootIndex = null)
+        => Assemble(scene, lodLevel, includeHidden, token, rootIndex, new Worlds.LookupWorkBudget(MaximumTraversalWork, token));
+
+    internal const long MaximumTraversalWork = 4_000_000;
+    internal const int MaximumPlacements = 200_000;
+
+    internal static SceneView Assemble(GameScene scene, int lodLevel, bool includeHidden, CancellationToken token, int? rootIndex,
+        Worlds.LookupWorkBudget work, int maximumPlacements = MaximumPlacements)
     {
-        List<ScenePlacement> placements = []; List<Diagnostic> diagnostics = []; HashSet<int> activePath = [];
-        SceneLods lods = new(scene);
-        var roots = scene.Nodes.Where(n => rootIndex is int root ? n.Index == root : n.Class == "world").ToArray();
-        foreach (var root in roots) Visit(root.Index, Matrix4x4.Identity, 0);
-        return new(placements, diagnostics);
+        if (maximumPlacements is < 0 or > MaximumPlacements) throw new ArgumentOutOfRangeException(nameof(maximumPlacements));
+        List<ScenePlacement> placements = []; BoundedDiagnostics diagnostics = new(); HashSet<int> activePath = [];
+        bool refusing = false;
+        SceneLods lods;
+        try
+        {
+            // LOD band discovery scans stored edges once, rather than expanded occurrences. Admit that
+            // prepass too, before its arrays/dictionaries, and account for roots that are not selected.
+            foreach (var node in scene.Nodes) { token.ThrowIfCancellationRequested(); work.Reserve(1L + node.Children.Length); }
+            lods = new(scene);
+            foreach (var root in scene.Nodes)
+            {
+                token.ThrowIfCancellationRequested();
+                if (rootIndex is int selected ? root.Index == selected : root.Class == "world") Visit(root.Index, Matrix4x4.Identity, 0);
+            }
+        }
+        catch (InvalidDataException ex) when (work.Exhausted)
+        { throw new InvalidDataException("Scene traversal exceeds its work budget. Simplify repeated instances or preview a smaller subtree.", ex); }
+        return new(placements, diagnostics.Messages.Select(message => new Diagnostic("Warning", message)).ToArray());
         void Visit(int index, Matrix4x4 parent, int depth)
         {
             token.ThrowIfCancellationRequested();
-            if (index < 0 || index >= scene.Nodes.Count) { diagnostics.Add(new("Warning", $"Missing scene node {index}.")); return; }
-            if (depth > 256 || !activePath.Add(index)) { diagnostics.Add(new("Warning", $"Cyclic or excessive scene hierarchy at node {index}.")); return; }
-            if (placements.Count >= 200_000) throw new InvalidDataException("Scene instance limit exceeded.");
+            work.Reserve(1);
+            if (index < 0 || index >= scene.Nodes.Count) { diagnostics.Add($"Missing scene node {index}."); return; }
+            if (depth > 256 || !activePath.Add(index)) { diagnostics.Add($"Cyclic or excessive scene hierarchy at node {index}."); return; }
             GameNode node = scene.Nodes[index];
             try
             {
@@ -75,17 +137,23 @@ public static class SceneBuilder
                 Matrix4x4 transform = LocalTransform(node) * parent;
                 if (node.ModelIndex is int model)
                 {
-                    if (model >= 0 && model < scene.Models.Count) placements.Add(new(index, model, node.Name, transform));
-                    else diagnostics.Add(new("Warning", $"Node {index} references missing model {model}."));
+                    if (model >= 0 && model < scene.Models.Count)
+                    {
+                        if (placements.Count >= maximumPlacements) { refusing = true; throw new InvalidDataException("Scene instance limit exceeded."); }
+                        placements.Add(new(index, model, node.Name, transform));
+                    }
+                    else diagnostics.Add($"Node {index} references missing model {model}.");
                 }
                 // The world grid owns terrain/static roots outside the ordinary
                 // child list. A root can occur in multiple adjacent cells.
-                foreach (int child in Children(node))
+                foreach (int child in Children(node, work))
                 {
                     if (lods.Includes(index, child, lodLevel)) Visit(child, transform, depth + 1);
                 }
             }
-            catch (InvalidDataException ex) { diagnostics.Add(new("Warning", $"Node {index}: {ex.Message}")); }
+            // Local malformed data remains inspectable. A descendant's operation-wide refusal
+            // must escape every ancestor instead of becoming a warning followed by more traversal.
+            catch (InvalidDataException ex) when (!work.Exhausted && !refusing) { diagnostics.Add($"Node {index}: {ex.Message}"); }
             finally { activePath.Remove(index); }
         }
     }
@@ -96,7 +164,7 @@ public static class GeometryBuilder
     public static IReadOnlyList<MeshPart> Build(GameModel model, IList<Diagnostic>? diagnostics = null, CancellationToken token = default)
     {
         bool colored = model.Polygons.Any(p => p.Colors.Length != 0);
-        Dictionary<int, (List<Vector3> Positions, List<Vector3> Normals, List<Vector2> Uvs, List<int> Indices, List<Vector4> Colors)> groups = [];
+        Dictionary<int, (List<Vector3> Positions, List<Vector3> Normals, List<Vector2> Uvs, List<int> Indices, List<Vector4> Colors, List<int> TrianglePolygons, List<int> VertexPolygons)> groups = [];
         for (int p = 0; p < model.Polygons.Length; p++)
         {
             token.ThrowIfCancellationRequested(); Polygon polygon = model.Polygons[p];
@@ -106,13 +174,14 @@ public static class GeometryBuilder
             if (vertices.Any(v => !float.IsFinite(v.X) || !float.IsFinite(v.Y) || !float.IsFinite(v.Z))) { diagnostics?.Add(new("Warning", $"Model {model.Index}, polygon {p}: nonfinite vertices.")); continue; }
             int[] triangles = (polygon.Flags & 1024) != 0 ? TriangleStrip(vertices.Length) : Triangulate(vertices);
             if (triangles.Length == 0) { diagnostics?.Add(new("Warning", $"Model {model.Index}, polygon {p}: degenerate polygon.")); continue; }
-            if (!groups.TryGetValue(polygon.MaterialIndex, out var group)) { group = ([], [], [], [], []); groups.Add(polygon.MaterialIndex, group); }
+            if (!groups.TryGetValue(polygon.MaterialIndex, out var group)) { group = ([], [], [], [], [], [], []); groups.Add(polygon.MaterialIndex, group); }
             int offset = group.Positions.Count;
             Vector3 normal = Vector3.Cross(vertices[triangles[1]] - vertices[triangles[0]], vertices[triangles[2]] - vertices[triangles[0]]);
             normal = normal.LengthSquared() > 1e-12f ? Vector3.Normalize(normal) : Vector3.UnitY;
             for (int i = 0; i < vertices.Length; i++)
             {
                 group.Positions.Add(vertices[i]);
+                group.VertexPolygons.Add(p);
                 if (colored)
                 {
                     var color = polygon.Colors.Length == vertices.Length ? polygon.Colors[i] / 255f : Vector3.One;
@@ -123,8 +192,10 @@ public static class GeometryBuilder
                 group.Uvs.Add(polygon.Uvs.Length == vertices.Length ? polygon.Uvs[i] : Vector2.Zero);
             }
             foreach (int i in triangles) group.Indices.Add(offset + i);
+            for (int i = 0; i < triangles.Length; i += 3) group.TrianglePolygons.Add(p);
         }
-        return groups.Select(g => new MeshPart(g.Key, g.Value.Positions.ToArray(), g.Value.Normals.ToArray(), g.Value.Uvs.ToArray(), g.Value.Indices.ToArray()) { Colors = colored ? g.Value.Colors.ToArray() : [] }).ToArray();
+        return groups.Select(g => new MeshPart(g.Key, g.Value.Positions.ToArray(), g.Value.Normals.ToArray(), g.Value.Uvs.ToArray(), g.Value.Indices.ToArray())
+        { Colors = colored ? g.Value.Colors.ToArray() : [], TrianglePolygons = g.Value.TrianglePolygons.ToArray(), VertexPolygons = g.Value.VertexPolygons.ToArray() }).ToArray();
     }
     public static int[] TriangleStrip(int count)
     {

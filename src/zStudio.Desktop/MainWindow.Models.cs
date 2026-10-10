@@ -14,13 +14,15 @@ public partial class MainWindow
     private void RegisterModelCommands(StudioCommands r)
     {
         RegisterJob(r, "model_bundle_export", "Export all authored models under a node or an animation root as assembled and local OBJ/MTL/PNG files with stable indices, transforms and source fingerprint.",
-            [.. AssetParameters, P("destination", "string", "Export folder outside the source tree.", true), new("rootNode", "integer", "Explicit GameZ root node, required for ambiguous animation roots.", Minimum: 0, Maximum: int.MaxValue), P("texturePack", "string", "Optional preferred texture pack.")], true,
-            async (a, token) => Result(await ExportModelBundleAsync(TargetDocument(a), TargetAsset(TargetDocument(a), a), Text(a,"destination"), a.ContainsKey("rootNode") ? Int(a,"rootNode") : null, Text(a,"texturePack") is { Length: > 0 } pack ? pack : null, token)));
-        RegisterJob(r, "model_replace", "Validate an explicit version-1 OBJ/PNG replacement manifest, then accept the entire batch as one document undo step. Model indices and source SHA-256 must match. Shared file ownership is acquired before acceptance; conflicting writers leave the document unchanged. Saves use save_document.",
+            [.. AssetParameters, P("destination", "string", "Full path of an export folder outside the source tree.", true), new("rootNode", "integer", "Explicit GameZ root node, required for ambiguous animation roots.", Minimum: 0, Maximum: int.MaxValue), P("texturePack", "string", "Optional preferred texture pack.")], true,
+            async (a, token) => Result(await ExportModelBundleAsync(TargetDocument(a), TargetAsset(TargetDocument(a), a), FullPath(a, "destination"), a.ContainsKey("rootNode") ? Int(a,"rootNode") : null, Text(a,"texturePack") is { Length: > 0 } pack ? pack : null, token)));
+        RegisterJob(r, "model_replace", "Validate an explicit version-1 OBJ/PNG replacement manifest, then accept the entire batch as one document undo step. Model indices and source SHA-256 must match. Shared file ownership is acquired before acceptance; conflicting writers leave the document unchanged. Saves use save_document. texturePacks previews at most 64 paths of 512 characters, with texturePackCount/texturePacksTruncated; all prepared packs remain part of the edit and save.",
             [DocumentParameter, RevisionParameter, P("manifest", "string", "Absolute replacement manifest JSON path.", true)], false, async (a, token) =>
             {
-                var doc = TargetDocument(a, true); await ReplaceModelsAsync(doc, Text(a,"manifest"), doc.Revision, token);
-                return Result(new { document = DocumentState(doc), totalModels = doc.ModelEdits!.Current.World.Scene!.Models.Count, texturePacks = doc.ModelEdits.Current.Textures.Keys.ToArray() });
+                var doc = TargetDocument(a, true); await ReplaceModelsAsync(doc, FullPath(a, "manifest"), doc.Revision, token);
+                var packs = FileResultPreview.Paths(doc.ModelEdits!.Current.Textures.Keys, doc.ModelEdits.Current.Textures.Count);
+                return Result(new { document = DocumentState(doc), totalModels = doc.ModelEdits.Current.World.Scene!.Models.Count,
+                    texturePacks = packs.Values, texturePackCount = packs.Count, texturePacksTruncated = packs.Truncated });
             });
     }
     private async Task<ModelBundleResult> ExportModelBundleAsync(DocumentModel doc, AssetRecord asset, string destination, int? explicitRoot, string? pack, CancellationToken token)
@@ -47,6 +49,7 @@ public partial class MainWindow
     private async Task ReplaceModelsAsync(DocumentModel doc, string manifest, long revision, CancellationToken token)
     {
         var edits = doc.ModelEdits ?? throw new InvalidDataException("Open the matching GameZ v15 file to replace models.");
+        if (edits.UnavailableReason is { } unavailable) throw new InvalidDataException(unavailable);
         var resolver = ViewModel.Resolver ?? throw new StudioCommandException("no_workspace", "Open a root first.");
         RequireNoDrafts();
         RequireSingleModelOwner();
@@ -54,11 +57,16 @@ public partial class MainWindow
         ViewModel.Status = "Validating model replacement and all texture variants…";
         var batch = await Task.Run(() => ModelImport.ReadAsync(manifest, cancellation.Token), cancellation.Token);
         var prepared = await edits.PrepareAsync(batch, resolver, cancellation.Token);
-        cancellation.Token.ThrowIfCancellationRequested(); RequireAutomationMutationAvailable(); RequireNoDrafts();
-        if (doc.IsDisposed || !ViewModel.Documents.Contains(doc)) throw new StudioCommandException("stale_document", "The target document was closed.");
-        if (doc.Revision != revision) throw new StudioCommandException("revision_conflict", "The document changed while importing; no replacement was accepted.");
-        RequireSingleModelOwner();
-        edits.Accept(prepared);
+        try
+        {
+            cancellation.Token.ThrowIfCancellationRequested(); RequireAutomationMutationAvailable(); RequireNoDrafts();
+            if (doc.IsDisposed || !ViewModel.Documents.Contains(doc)) throw new StudioCommandException("stale_document", "The target document was closed.");
+            if (doc.Revision != revision) throw new StudioCommandException("revision_conflict", "The document changed while importing; no replacement was accepted.");
+            RequireSingleModelOwner();
+            edits.Accept(prepared);
+        }
+        // An abandoned candidate must not occupy the retained allowance until a garbage collection.
+        catch { edits.Discard(prepared); throw; }
         // Publication is complete. Rebuild accepted snapshots using the document lifetime, not a revoked request.
         using (PreviewOperation.Begin(CancellationToken.None)) await RefreshModelDependentsAsync(doc);
         ViewModel.Status = $"Replaced {batch.Models.Count} models · unsaved · {prepared.Textures.Count} texture variants";
@@ -87,7 +95,7 @@ public partial class MainWindow
         foreach (string error in result.Errors) ViewModel.AddProblem(error, file: doc.Path);
         if (directory != null) doc.LastSavedCopy = Path.Combine(directory, Path.GetFileName(doc.Path));
         doc.IsStale = false;
-        ViewModel.Status = "Saved and verified: " + string.Join("; ", result.SavedPaths);
+        ViewModel.Status = $"Saved and verified {result.SavedPaths.Count} files";
         return result;
     }
     private async void ExportModelBundleClick(object sender, RoutedEventArgs e)
@@ -103,6 +111,7 @@ public partial class MainWindow
         if (doc.SelectedAsset?.Record.Content is Recoil.Zbd.Core.Formats.MechAssembly)
         { await ResourceUiAsync(() => ReplaceMechModelDialogAsync(doc)); return; }
         if (doc.ModelEdits == null) return;
+        if (doc.ModelEdits.UnavailableReason is { } unavailable) { MessageBox.Show(this, unavailable, "Model replacement"); return; }
         OpenFileDialog dialog = new() { Title = "Replace models · select replacement manifest", Filter = "Replacement manifest|*.json" }; if (dialog.ShowDialog(this) != true) return;
         try { await ReplaceModelsAsync(doc, dialog.FileName, doc.Revision, CancellationToken.None); }
         catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException) { Report(ex); MessageBox.Show(this, ex.Message, "Model replacement"); }
