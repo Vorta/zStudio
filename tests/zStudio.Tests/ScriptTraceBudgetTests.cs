@@ -51,13 +51,15 @@ public sealed class ScriptTraceBudgetTests
     [InlineData("SetTextureDirectory")]
     public void ReorderingRetainsEarlierViewsAndChargesNewHistory(string command)
     {
-        var lines = Lines($"{command} ../data/a;../data/b\n{command} ../data/a");
+        // A listed folder keeps its place; another spelling of it is a new entry at the head (zRdrAddSearchPaths, strcmp).
+        var lines = Lines($"{command} ../data/a;../data/b\n{command} ../data/a\n{command} ..\\data\\a");
         ScriptTraceBudget budget = new(12);
         var trace = ScriptTrace.Trace(_ => lines, "m1.gs", [], budget, token: Token);
         IReadOnlyList<string> View(int index) => command == "SetModelDirectory" ? trace[index].ModelDirectories : trace[index].TextureDirectories;
         Assert.Equal(["data/b", "data/a"], View(0));
-        Assert.Equal(["data/a", "data/b"], View(1));
-        Assert.NotSame(View(0), View(1));
+        Assert.Same(View(0), View(1));
+        Assert.Equal(["data/a", "data/b"], View(2));
+        Assert.NotSame(View(0), View(2));
         Assert.Equal(12, budget.UsedUnits);
     }
 
