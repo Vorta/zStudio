@@ -23,6 +23,11 @@ public sealed partial class WorldAssembler(IProjectFiles files, CancellationToke
     internal long CommandAllocationLimit { get; init; } = WorldCommandBudget.MaximumBytes;
     internal long OperandReferenceLimit { get; init; } = ScriptOperandBudget.MaximumReferences;
     internal long OperandCharacterLimit { get; init; } = ScriptOperandBudget.MaximumCharacters;
+    internal long ProbeLimit { get; init; } = WorldSearchBudget.MaximumProbes;
+    internal long ModelByteLimit { get; init; } = WorldSearchBudget.MaximumModelBytes;
+    private WorldSearchBudget? searchBudget;
+    /// <summary>The probes and model bytes this build has spent (see <see cref="WorldSearchBudget"/>).</summary>
+    internal WorldSearchBudget Search => searchBudget ??= new(ProbeLimit, ModelByteLimit);
     private ScriptOperandBudget? operandBudget;
     private ScriptOperandBudget Operands => operandBudget ??= new(OperandReferenceLimit, OperandCharacterLimit);
     private LookupWorkBudget? lookupWork;
@@ -107,7 +112,7 @@ public sealed partial class WorldAssembler(IProjectFiles files, CancellationToke
     {
         if (depth > MaximumScriptDepth) throw new InvalidDataException($"Scripts source each other more than {MaximumScriptDepth} levels deep.");
         string relative = $"{SourceProject.GameGenFolder}/{script.Replace('\\', '/')}";
-        if (!files.Exists(relative)) { diagnostics.Add($"Script {script} does not exist."); return; }
+        if (!Exists(relative)) { diagnostics.Add($"Script {script} does not exist."); return; }
         ScriptFiles.Add(relative);
         // Each script is read once per assembly: one sourced many times (or holding only comments) costs its instructions, not its text again.
         if (!parsedScripts.TryGetValue(relative, out var lines))
@@ -351,7 +356,24 @@ public sealed partial class WorldAssembler(IProjectFiles files, CancellationToke
     }
 
     /// <summary>SetModelDirectory, SetTextureDirectory and RdrSetPath: the engine's search-path rule (<see cref="DirectorySearchList"/>), on the project's folders.</summary>
-    private void AddDirectories(DirectorySearchList list, string value) => list.Add(value, directoryWork, files.FolderExists);
+    private void AddDirectories(DirectorySearchList list, string value) => list.Add(value, directoryWork, FolderExists);
+    private bool FolderExists(string folder) { Search.Probe(); return files.FolderExists(folder); }
+    /// <summary>Every file the build looks for is charged to <see cref="Search"/> before the provider is asked.</summary>
+    private bool Exists(string relative) { Search.Probe(); return files.Exists(relative); }
+    /// <summary>
+    /// Reads a model, buffer or terrain input within what is left of <see cref="Search"/>'s model bytes; the provider refuses a
+    /// larger file before it holds it.
+    /// </summary>
+    private byte[] ReadModelInput(string path, ProjectReadLimits limits)
+    {
+        long left = Search.ModelBytesLeft;
+        bool reduced = left < limits.MaximumBytes;
+        byte[] bytes;
+        try { bytes = files.Read(path, token, reduced ? limits.WithMaximum(left) : limits); }
+        catch (InvalidDataException ex) when (reduced) { throw Search.Exceeded(path, ex); }
+        Search.Read(path, bytes.LongLength);
+        return bytes;
+    }
     /// <summary><c>..\data\m1\models</c> (relative to the gamegen folder) → <c>data/m1/models</c>; other paths are outside the project.</summary>
     internal static string? ProjectPath(string scriptPath)
     {
@@ -606,9 +628,9 @@ public sealed partial class WorldAssembler(IProjectFiles files, CancellationToke
             ReadFile = (uri, from) =>
             {
                 string file = Relative(GeometryPath(from), uri);
-                if (!files.Exists(file)) throw new InvalidDataException($"{from} names {JsonData.ShownText(uri)}, which does not exist.");
+                if (!Exists(file)) throw new InvalidDataException($"{from} names {JsonData.ShownText(uri)}, which does not exist.");
                 ModelFiles.Add(file);
-                return (files.Read(file, token, ProjectReadLimits.Bytes(TerrainRecipe.MaximumBytes)), file);
+                return (ReadModelInput(file, ProjectReadLimits.Bytes(TerrainRecipe.MaximumBytes)), file);
             },
             Grid = database ? () => Grid(pendingWorld!) : null,
             TerrainPieceImported = (node, recipe, piece, surface) =>
@@ -712,14 +734,14 @@ public sealed partial class WorldAssembler(IProjectFiles files, CancellationToke
     }
     private (GltfDocument Document, string Path) LoadDocument(string path)
     {
-        if (!files.Exists(path)) throw new InvalidDataException($"The model {JsonData.ShownText(path)} does not exist.");
+        if (!Exists(path)) throw new InvalidDataException($"The model {JsonData.ShownText(path)} does not exist.");
         ModelFiles.Add(path);
         try
         {
-            var doc = ReadModel(files.Read(path, token, ProjectReadLimits.Model(maximumJsonBytes: ModelJsonByteLimit)), path, (buffer, remaining) =>
+            var doc = ReadModel(ReadModelInput(path, ProjectReadLimits.Model(maximumJsonBytes: ModelJsonByteLimit)), path, (buffer, remaining) =>
             {
                 ModelFiles.Add(buffer);
-                return files.Read(buffer, token, ProjectReadLimits.Bytes(remaining));
+                return ReadModelInput(buffer, ProjectReadLimits.Bytes(remaining));
             }, token, ModelBufferByteLimit);
             return (doc, path);
         }
@@ -759,8 +781,8 @@ public sealed partial class WorldAssembler(IProjectFiles files, CancellationToke
         // The world stores the name in a 20-byte Latin-1 field and the packs are built from files of that name.
         if (textureName.Length is < 1 or > 19 || textureName.Any(c => c > 255 || char.IsControl(c) || c is '/' or '\\' or ':'))
             throw new InvalidDataException($"{from}: texture name '{JsonData.ShownText(textureName)}' needs 1–19 Latin-1 characters without path separators{(uri.Length > 0 ? $"; rename its PNG, {JsonData.ShownText(Path.GetFileName(uri))}" : "")}.");
-        string? file = textureDirectories.Folders.Select(d => $"{d}/{textureName}{TextureSources.Extension}").FirstOrDefault(files.Exists);
-        if (file == null && uri.Length > 0) { string candidate = Relative(from, uri); if (files.Exists(candidate)) file = candidate; }
+        string? file = textureDirectories.Folders.Select(d => $"{d}/{textureName}{TextureSources.Extension}").FirstOrDefault(Exists);
+        if (file == null && uri.Length > 0) { string candidate = Relative(from, uri); if (Exists(candidate)) file = candidate; }
         if (file == null) diagnostics.Add($"{from}: texture {textureName} has no PNG; the game shows its default texture.");
         else if (TextureFiles.TryGetValue(textureName, out string? other) && !other.Equals(file, StringComparison.OrdinalIgnoreCase))
             diagnostics.Add($"Texture {textureName} comes from both {other} and {file}; the pack uses {other}.");

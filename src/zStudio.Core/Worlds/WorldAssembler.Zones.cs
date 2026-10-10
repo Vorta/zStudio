@@ -15,7 +15,7 @@ public sealed partial class WorldAssembler
         if (!SourceProject.MissionName().IsMatch(mission)) return;
         string path = SourceMapZones.PathForMission(mission);
         // The missing-file probe participates in the same source snapshot as every other build input.
-        if (!files.Exists(path)) return;
+        if (!Exists(path)) return;
         missionModels = new(SourceMapZones.Parse(files.Read(path, token, ProjectReadLimits.Bytes(SourceMapZones.MaximumBytes)), token), token);
         zoneManifest = path;
         ModelFiles.Add(path);
@@ -28,7 +28,7 @@ public sealed partial class WorldAssembler
 
     private bool ModelExists(string logical)
     {
-        return missionModels?.Exists(logical, files.Exists) ?? files.Exists(logical);
+        return missionModels?.Exists(logical, Exists) ?? Exists(logical);
     }
 
     private string? ZoneReference(string logical, int node)
