@@ -144,14 +144,16 @@ public partial class MainWindow
             [DocumentParameter, .. PageParameters], a => { var d = TargetDocument(a); return Result(new { d.Revision, members = Page(ResourceSession(d).Current.Members.Select((m, i) => (Member: m, Index: i)), a, x => x.Member.Name,
                 x => new { member = x.Member.Id, index = x.Index, x.Member.SourceIndex, x.Member.Name, bytes = x.Member.Data.Length }).Data }); });
         RegisterJob(r, "archive_edit", "Add, replace, rename, duplicate, delete or reorder a ZAR member as one undoable edit. add_zrd creates an empty array. Names use Latin-1 and are not identities. Move position is the final zero-based index. The active preview follows the selected member UUID; deleting or changing its content kind clears or retargets the viewer, including Undo/Redo.",
-            [DocumentParameter, RevisionParameter, P("action", "string", "Member operation.", true, "add", "add_zrd", "replace", "rename", "duplicate", "delete", "move"), P("member", "string", "Required member UUID except for add/add_zrd."), P("name", "string", "Required for add/add_zrd/rename/duplicate; 1–63 Latin-1 characters."), P("path", "string", "Input file for add/replace."), new("position", "integer", "Final index for move.", Minimum: 0, Maximum: int.MaxValue)], false,
-            async (a, token) => { var d = TargetDocument(a, true); var edits = ResourceSession(d); await ApplyResourceAsync(d, ct => edits.PrepareArchiveAsync(Text(a,"action"), GuidArg(a,"member"), Text(a,"name"), Text(a,"path"), Int(a,"position",-1), ct), d.Revision, token); return Result(DocumentState(d)); });
+            [DocumentParameter, RevisionParameter, P("action", "string", "Member operation.", true, "add", "add_zrd", "replace", "rename", "duplicate", "delete", "move"), P("member", "string", "Required member UUID except for add/add_zrd."), P("name", "string", "Required for add/add_zrd/rename/duplicate; 1–63 Latin-1 characters."), P("path", "string", "Full path of the input file for add/replace."), new("position", "integer", "Final index for move.", Minimum: 0, Maximum: int.MaxValue)], false,
+            async (a, token) => { var d = TargetDocument(a, true); var edits = ResourceSession(d); string input = FullPath(a, "path"); await ApplyResourceAsync(d, ct => edits.PrepareArchiveAsync(Text(a,"action"), GuidArg(a,"member"), Text(a,"name"), input, Int(a,"position",-1), ct), d.Revision, token); return Result(DocumentState(d)); });
         RegisterJob(r, "resource_select", "Select a member and optional ZRD node by stable UUID in the visible Data tree. Properties retains its pinned target.",
             [DocumentParameter, MemberParameter, P("node", "string", "Optional ZRD node UUID.")], false, async (a, token) =>
             {
                 RequireNoDrafts(); var d = TargetDocument(a); Guid member = GuidArg(a,"member"), node = GuidArg(a,"node");
                 _ = ResourceSession(d).Member(member);
                 if (node != Guid.Empty && (await ResourceTreeAsync(d, member, token)).Find(node) == null) throw new InvalidDataException("Node no longer exists.");
+                // Input may have arrived while the tree was read; changing the shown document would decide it.
+                RequireNoDrafts();
                 ViewModel.SelectedDocument = d; d.Query = ""; d.KindFilter = "All types"; d.SelectedAsset = d.Assets.Single(x => x.ResourceId == member); SelectNavigatorSection(1);
                 await previewWork;
                 if (shownDocument != d || d.SelectedAsset?.ResourceId != member) throw new StudioCommandException("context_changed", "Resource selection changed.");

@@ -97,7 +97,7 @@ public static partial class ZrdDecoder
             throw new InvalidDataException("This archive member exceeds the shared typed-decoding budget; use raw inspection, exact member export or replacement.");
         if (asset.Content is ZrdNode tree) return tree;
         var bytes = document.Slice(asset.Offset, asset.Length);
-        return Read(bytes, token);
+        return document.SourceSyntax == "zrd-text" ? Sources.ZrdText.Parse(bytes.Span, token) : Read(bytes, token);
     }
 
     internal static ZrdNode? TryRead(ReadOnlyMemory<byte> bytes, CancellationToken token, ArchiveZrdBudget? allocation = null)

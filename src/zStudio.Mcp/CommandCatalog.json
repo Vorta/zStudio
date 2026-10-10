@@ -3670,7 +3670,7 @@
       {
         "Name": "path",
         "Type": "string",
-        "Description": "Input file for add/replace.",
+        "Description": "Full path of the input file for add/replace.",
         "Required": false,
         "Choices": null,
         "Properties": null
