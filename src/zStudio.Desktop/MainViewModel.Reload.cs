@@ -7,10 +7,13 @@ namespace Recoil.Zbd.Desktop;
 public sealed partial class MainViewModel
 {
     internal Action<DocumentModel>? ValidateReload { get; set; }
+    /// <summary>Rebuilds a source world from the project on disk (see MainWindow.SourceWorlds).</summary>
+    internal Func<DocumentModel, bool, CancellationToken, Task<DocumentModel>>? ReloadSourceWorld { get; set; }
 
     internal async Task<DocumentModel> ReloadDocumentAsync(DocumentModel original, long revision, bool discardAccepted = false, CancellationToken cancellationToken = default)
     {
-        long generation = ++navigationGeneration;
+        if (original.SourceWorld != null && ReloadSourceWorld is { } rebuild) return await rebuild(original, discardAccepted, cancellationToken);
+        long generation = AdvanceNavigation();
         var selected = SelectedDocument;
         string reloadPath = original.ContentEdits?.TargetPath(original.Path) ?? original.ResourceEdits?.TargetPath ?? original.ModelEdits?.TargetPath(original.Path) ?? original.Path;
         using var request = CancellationTokenSource.CreateLinkedTokenSource(workspace.Token, original.Lifetime.Token, cancellationToken);
@@ -28,6 +31,7 @@ public sealed partial class MainViewModel
         Validate();
         Status = "Reloading " + Path.GetFileName(reloadPath) + "…";
         ZbdDocument loaded;
+        PreparedDocument prepared;
         try
         {
             loaded = await LoadDocumentAsync(reloadPath, request.Token).WaitAsync(request.Token);
@@ -36,6 +40,9 @@ public sealed partial class MainViewModel
                 original.Document.Probe.Recognition == Recognition.Supported && loaded.Probe.Recognition != Recognition.Supported ||
                 loaded.Diagnostics.Any(d => d.Severity == "Error" && d.Message.StartsWith("Parsing stopped:", StringComparison.Ordinal)))
                 throw new InvalidDataException("The replacement file could not be fully parsed. The existing document was retained.");
+            Validate();
+            prepared = await PrepareDocumentAsync(loaded, request.Token);
+            request.Token.ThrowIfCancellationRequested();
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         { throw new StudioCommandException("context_changed", "The document or workspace changed during reload."); }
@@ -43,7 +50,7 @@ public sealed partial class MainViewModel
         { throw new StudioCommandException("open_failed", "Could not reload; the existing document was retained. " + ex.Message); }
 
         Validate();
-        var replacement = new DocumentModel(loaded) { Query = original.Query, KindFilter = original.KindFilter };
+        var replacement = new DocumentModel(prepared) { Query = original.Query, KindFilter = original.KindFilter };
         replacement.AttachResolver(Resolver);
         var asset = original.SelectedAsset?.Record;
         replacement.SelectedAsset = asset == null ? null : replacement.Assets.FirstOrDefault(a => a.Record.Kind == asset.Kind && a.Record.Index == asset.Index);
@@ -61,15 +68,29 @@ public sealed partial class MainViewModel
 
     private async Task ReloadSelectedAsync()
     {
-        if (SelectedDocument is not { } original || !await CanRemoveAsync(original)) return;
+        // Committing pending input first: it can rebuild the selected source world, which is then the one reloaded.
+        if (ResolveDraftsAsync != null && !await ResolveDraftsAsync()) return;
+        CloseDecisionsStarting?.Invoke();
+        if (SelectedDocument is not { } original) return;
+        // A source world keeps its pending edits across a rebuild unless its own files changed on disk. Its rebuild checks the
+        // disk again and drops them only with the Discard chosen here; a change this check missed refuses the reload instead.
+        bool needsDecision = original.SourceWorld == null;
+        if (original.SourceWorld is { } world)
+        {
+            var changed = await Task.Run(() => world.Workspace.ExternalChanges(original.Lifetime.Token));
+            if (original.IsDisposed || SelectedDocument != original) return;
+            needsDecision = changed.Any(world.Workspace.IsFileDirty);
+        }
+        if (needsDecision && !await CanRemoveAsync(original)) return;
         if (original.IsDisposed || SelectedDocument != original) return;
-        // CanRemoveAsync may have saved edits or resolved input. That accepted
-        // state is the snapshot; further edits during parsing reject publication.
+        // CanRemoveAsync may have saved edits or resolved input. That accepted state (the one its question showed) is
+        // the snapshot; an edit accepted after the decision, or during parsing, rejects publication.
         long generation = navigationGeneration + 1;
-        try { await ReloadDocumentAsync(original, original.Revision, discardAccepted: true); }
+        try { await ReloadDocumentAsync(original, needsDecision ? original.ApprovedCloseRevision ?? original.Revision : original.Revision, discardAccepted: true); }
         catch (StudioCommandException ex)
         {
-            bool OwnsRequest() => generation == navigationGeneration && !original.IsDisposed && SelectedDocument == original;
+            // A source world's reload does not take a navigation generation; its failure is always the request's to report.
+            bool OwnsRequest() => original.SourceWorld != null ? ex.Code != "context_changed" : generation == navigationGeneration && !original.IsDisposed && SelectedDocument == original;
             if (OwnsRequest()) AddProblem(ex.Message, file: original.Path);
             if (OwnsRequest()) Status = ex.Message;
         }

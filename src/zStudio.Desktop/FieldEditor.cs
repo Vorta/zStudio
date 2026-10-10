@@ -21,6 +21,8 @@ public partial class FieldEditor : UserControl
     protected readonly List<Action> referenceRefresh = [];
     protected string inputScope = "properties";
     public bool HasPendingDrafts => draftInputs.Any(d => d.Draft.IsPending || d.Draft.IsCommitting);
+    /// <summary>Drafts with input no commit is applying yet (a committing draft is excluded).</summary>
+    public bool HasUncommittedDrafts => draftInputs.Any(d => d.Draft.IsPending && !d.Draft.IsCommitting);
     private protected sealed record DraftInput(FieldDraft Draft, FrameworkElement Control, Action Display, string Scope);
     protected virtual void RefreshProperties() { }
     protected static void Label(StackPanel panel,string text,bool title = false) => panel.Children.Add(new TextBlock { Text = text,TextWrapping = TextWrapping.Wrap,FontWeight = title ? FontWeights.SemiBold : FontWeights.Normal,Opacity = title ? 1 : .75,Margin = new(0,3,0,6) });
@@ -110,7 +112,7 @@ public partial class FieldEditor : UserControl
     }
     protected bool CanCommitFocus(FrameworkElement group)
     {
-        if (refreshingFields || disposed || committingDraft || !group.IsVisible || group.IsKeyboardFocusWithin || (Window.GetWindow(this) is MainWindow { IsChangingLayout: true } || Window.GetWindow(this)?.Owner is MainWindow { IsChangingLayout: true })) return false;
+        if (refreshingFields || disposed || committingDraft || !group.IsVisible || !group.IsEnabled || group.IsKeyboardFocusWithin || (Window.GetWindow(this) is MainWindow { IsChangingLayout: true } || Window.GetWindow(this)?.Owner is MainWindow { IsChangingLayout: true })) return false;
         // Navigating presentation chrome is not an implicit source edit. Commands that
         // need current stored values explicitly resolve drafts before running.
         for (var target = Keyboard.FocusedElement as DependencyObject; target != null; target = target is Visual ? VisualTreeHelper.GetParent(target) : LogicalTreeHelper.GetParent(target))
@@ -132,8 +134,19 @@ public partial class FieldEditor : UserControl
         if (!input.Draft.IsAsync) return CommitInput(input);
         if (disposed) return false;
         committingDraft = true;
+        // A source world's edit blocks Properties input while it rebuilds (the owner sets that), which takes focus; focus
+        // returns where it was, while the window is active.
+        var focused = Keyboard.FocusedElement as UIElement;
         try { bool result = await input.Draft.CommitAsync(); if (!disposed) input.Display(); return result; }
-        finally { committingDraft = false; if (!disposed && !HasPendingDrafts) RefreshProperties(); }
+        finally
+        {
+            committingDraft = false;
+            if (!disposed)
+            {
+                if (focused is { IsVisible: true, IsEnabled: true } && IsAncestorOf(focused) && Window.GetWindow(this)?.IsActive == true) focused.Focus();
+                if (!HasPendingDrafts) RefreshProperties();
+            }
+        }
     }
     public async Task<bool> ResolvePendingDraftsAsync()
     {
@@ -225,7 +238,8 @@ public partial class FieldEditor : UserControl
         Button button = new() { Content = text, Margin = new(2), Padding = new(6,3,6,3) };
         button.Click += async (_, _) =>
         {
-            if (!await ResolvePendingDraftsAsync()) return;
+            // A draft whose commit rebuilt a source world closed this editor; the action belongs to the old document.
+            if (!await ResolvePendingDraftsAsync() || disposed) return;
             button.IsEnabled = false; committingDraft = true;
             try { await action(); }
             catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException) { MessageBox.Show(Window.GetWindow(this), ex.Message, "Edit properties"); }

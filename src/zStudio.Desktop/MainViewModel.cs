@@ -39,29 +39,55 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     private readonly Dictionary<string,FolderNode> fileNodes = new(StringComparer.OrdinalIgnoreCase);
     private FolderNode? otherOpenFiles;
     private long navigationGeneration;
+    private CancellationTokenSource? documentPreparation;
+    private long AdvanceNavigation()
+    {
+        documentPreparation?.Cancel();
+        return ++navigationGeneration;
+    }
     private bool disposed;
     internal long NavigationGeneration => navigationGeneration;
     internal long WorkspaceGeneration { get; private set; }
     internal long WorkspaceNavigationGeneration { get; private set; }
     internal Func<string, CancellationToken, Task<ZbdDocument>> LoadDocumentAsync { get; set; } =
         static (path, token) => Task.Run(() => FormatRegistry.Default.OpenAsync(path, token), token).WaitAsync(token);
+    // Invoked on the preparation worker, before constructing any UI-bound views.
+    internal Action<ZbdDocument, CancellationToken>? PreparingDocument { get; set; }
+    private async Task<PreparedDocument> PrepareDocumentAsync(ZbdDocument document, CancellationToken token)
+    {
+        var preparing = PreparingDocument;
+        using var preparation = CancellationTokenSource.CreateLinkedTokenSource(token);
+        documentPreparation = preparation;
+        try
+        {
+            return await Task.Run(() =>
+            {
+                preparation.Token.ThrowIfCancellationRequested();
+                preparing?.Invoke(document, preparation.Token);
+                return PreparedDocument.Create(document, preparation.Token);
+            }, preparation.Token);
+        }
+        finally { if (documentPreparation == preparation) documentPreparation = null; }
+    }
     internal Func<string, CancellationToken, Task<bool>> CheckRootExistsAsync { get; set; } =
         static (path, token) => Task.Run(() => Directory.Exists(path), token).WaitAsync(token);
+    internal Func<string, CancellationToken, RootFileInventory> ReadRootInventory { get; set; } =
+        static (path, token) => RootFileInventory.Read(path, DisplayPathComparer, token);
     public MainViewModel()
     {
         difficulty = Settings.Difficulty;
-        Documents.CollectionChanged += (_,_) => { ++navigationGeneration; SynchronizeOpenFiles(); };
+        Documents.CollectionChanged += (_,_) => { AdvanceNavigation(); SynchronizeOpenFiles(); };
     }
     partial void OnSelectedDocumentChanging(DocumentModel? value)
     { if (SelectedDocument != null) SelectedDocument.PropertyChanged -= SelectedDocumentSelectionChanged; }
     partial void OnSelectedDocumentChanged(DocumentModel? value)
     {
-        ++navigationGeneration;
+        AdvanceNavigation();
         if (value != null) value.PropertyChanged += SelectedDocumentSelectionChanged;
         SynchronizeOpenFiles();
     }
     private void SelectedDocumentSelectionChanged(object? sender, PropertyChangedEventArgs e)
-    { if (e.PropertyName == nameof(DocumentModel.SelectedAsset)) ++navigationGeneration; }
+    { if (e.PropertyName == nameof(DocumentModel.SelectedAsset)) AdvanceNavigation(); }
     private void RequireCurrentNavigation(long generation)
     {
         if (disposed || generation != navigationGeneration)
@@ -86,7 +112,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         {
             if (otherOpenFiles == null) { otherOpenFiles = new("Other open files", "Files opened outside the selected root"); Folders.Add(otherOpenFiles); }
             var file = new FileEntry(doc.Path,doc.Path,doc.Document.Probe);
-            FolderNode node = new(Path.GetFileName(Path.GetDirectoryName(doc.Path)) + "/" + file.Name,doc.Path,file) { Document = doc, IsActive = doc == SelectedDocument };
+            FolderNode node = new(doc.SourceWorld?.Label ?? Path.GetFileName(Path.GetDirectoryName(doc.Path)) + "/" + file.Name,doc.Path,file) { Document = doc, IsActive = doc == SelectedDocument };
             fileNodes.Add(doc.Path,node); otherOpenFiles.Children.Add(node);
         }
         if (otherOpenFiles != null)
@@ -102,11 +128,31 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { AddProblem("Could not save mission difficulty: " + ex.Message); }
     }
     public Func<DocumentModel, Task<bool>>? ConfirmDiscardAsync { get; set; }
+    /// <summary>Raised once a root (also the same one again) is open, with its path and HasRoot set.</summary>
+    public event Action? RootPublished;
+    /// <summary>
+    /// Whether the root just published was opened by a caller that validates publication itself instead of asking (an MCP
+    /// request): what <see cref="RootPublished"/> finds is then reported, not asked about in a dialog.
+    /// </summary>
+    internal bool RootOpenedWithoutPrompts { get; private set; }
+    /// <summary>Resolves pending GUI input before close decisions: committing it can rebuild (replace) a source world.</summary>
+    public Func<Task<bool>>? ResolveDraftsAsync { get; set; }
+    /// <summary>A new set of close decisions starts: decisions left from an earlier, unfinished one no longer apply.</summary>
+    public Action? CloseDecisionsStarting { get; set; }
+    /// <summary>Every document is being closed (a root change), so a project's edits cannot stay with another of its documents.</summary>
+    internal bool ClosingAllDocuments { get; private set; }
     internal Action<bool>? ValidateNavigationPublication { get; set; }
     private CancellationTokenSource workspace = new();
     /// <summary>Canceled when the workspace root is replaced; long operations owned by a workspace link to it.</summary>
     internal CancellationToken WorkspaceToken => workspace.Token;
     private readonly List<SearchHit> index = [];
+    internal const int MaximumIndexedAssets = 250_000;
+    internal const long MaximumIndexedNameCharacters = 8L * 1024 * 1024;
+    // Tests may narrow admission without constructing an enormous root. Production always uses these defaults.
+    internal int SearchIndexRowLimit { get; set; } = MaximumIndexedAssets;
+    internal long SearchIndexNameLimit { get; set; } = MaximumIndexedNameCharacters;
+    [ObservableProperty] private bool searchIndexComplete;
+    [ObservableProperty] private string searchIndexNotice = "";
     [ObservableProperty] private string rootPath = "Open a ZBD folder to start exploring";
     [ObservableProperty] private string status = "Ready";
     [ObservableProperty] private bool isBusy;
@@ -117,7 +163,8 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     public async Task OpenRootAsync(string root, CancellationToken cancellationToken = default, Action? beforePublish = null)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        long generation = ++navigationGeneration;
+        if (beforePublish == null && ResolveDraftsAsync != null && !await ResolveDraftsAsync()) return;
+        long generation = AdvanceNavigation();
         RequireCurrentNavigation(generation);
         root = Path.GetFullPath(root);
         // Directory checks can block on unavailable network shares. Keep that work off
@@ -134,14 +181,34 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         if (!exists) throw new DirectoryNotFoundException(root);
         Dictionary<DocumentModel, long> acceptedRevisions = [];
         if (beforePublish == null)
-            foreach (var document in Documents.ToArray())
+            try
             {
-                if (!await CanRemoveAsync(document)) return;
-                cancellationToken.ThrowIfCancellationRequested(); RequireCurrentNavigation(generation);
-                acceptedRevisions.Add(document, document.Revision);
+                ClosingAllDocuments = true;
+                CloseDecisionsStarting?.Invoke();
+                foreach (var document in Documents.ToArray())
+                {
+                    if (!await CanRemoveAsync(document)) return;
+                    cancellationToken.ThrowIfCancellationRequested(); RequireCurrentNavigation(generation);
+                    var decided = Replacement(document);
+                    // A decision covers the state its question showed, not an edit accepted after it.
+                    if (!decided.IsDisposed && Documents.Contains(decided)) acceptedRevisions[decided] = decided.ApprovedCloseRevision ?? decided.Revision;
+                }
             }
-        cancellationToken.ThrowIfCancellationRequested();
-        if (acceptedRevisions.Any(pair => pair.Key.IsDisposed || pair.Key.Revision != pair.Value))
+            finally { ClosingAllDocuments = false; }
+        // Close decisions can save new files into this root. Discover afterward, but keep the old workspace
+        // intact until the complete bounded listing/tree and the final navigation/revision checks succeed.
+        RootFileInventory scanned;
+        using (var scan = CancellationTokenSource.CreateLinkedTokenSource(workspace.Token, cancellationToken))
+        {
+            var scanToken = scan.Token;
+            try { scanned = await Task.Run(() => ReadRootInventory(root, scanToken), scanToken).WaitAsync(scanToken); }
+            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+            { throw new StudioCommandException("context_changed", "The workspace changed while scanning the requested folder."); }
+        }
+        cancellationToken.ThrowIfCancellationRequested(); RequireCurrentNavigation(generation);
+        // Publication closes every document: one changed after its decision, or opened and edited since, keeps the workspace.
+        if (acceptedRevisions.Any(pair => pair.Key.IsDisposed || pair.Key.Revision != pair.Value)
+            || beforePublish == null && Documents.Any(d => d.IsDirty && !acceptedRevisions.ContainsKey(d)))
             throw new StudioCommandException("revision_conflict", "A document changed after its close decision. Its current edits were retained.");
         ValidateNavigationPublication?.Invoke(true);
         beforePublish?.Invoke(); RequireCurrentNavigation(generation);
@@ -161,35 +228,32 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
             try { if (Path.GetFullPath(map).StartsWith(rootPrefix, StringComparison.OrdinalIgnoreCase) && File.Exists(map)) Resolver.SelectMission(map, mission); }
             catch (Exception ex) when (ex is ArgumentException or InvalidDataException or NotSupportedException or IOException or UnauthorizedAccessException) { }
         Files = []; Folders.Clear(); fileNodes.Clear(); otherOpenFiles = null; Diagnostics.Clear(); Problems.Clear(); SearchResults.Clear(); index.Clear();
+        SearchIndexComplete = false; SearchIndexNotice = "Asset names are still being indexed; search and related results are incomplete.";
         RootPath = root; HasRoot = true; IsBusy = true; WorkspaceNavigationGeneration = navigationGeneration; Status = "Scanning files…";
+        RootOpenedWithoutPrompts = beforePublish != null;
+        RootPublished?.Invoke();
         Settings.LastRoot = root; Settings.RecentRoots.RemoveAll(p => p.Equals(root, StringComparison.OrdinalIgnoreCase)); Settings.RecentRoots.Insert(0, root); Settings.RecentRoots = Settings.RecentRoots.Take(8).ToList();
         try
         {
-            List<FileEntry> found = await Task.Run(() =>
+            // The scanned listing belongs to the published root, so it is shown even when the request is canceled now.
+            workspaceToken.ThrowIfCancellationRequested();
+            Files = scanned.Files;
+            foreach (var pair in scanned.FileNodes) fileNodes.Add(pair.Key, pair.Value);
+            Folders.Add(scanned.Root);
+            Status = $"{Files.Count:N0} files · {Files.Count(f => f.Path.EndsWith(".zbd", StringComparison.OrdinalIgnoreCase)):N0} ZBDs · indexing names…";
+            await IndexAsync(scanned.Files, token);
+        }
+        catch (OperationCanceledException)
+        {
+            // Publication committed the root: a request canceled now stops only indexing, and the root stays open with
+            // an incomplete index (callers report it opened). A newer workspace that replaced it reports the cancellation.
+            if (WorkspaceGeneration != committedWorkspace) cancellationToken.ThrowIfCancellationRequested();
+            else
             {
-                List<FileEntry> entries = [];
-                var options = new EnumerationOptions { RecurseSubdirectories = true, IgnoreInaccessible = true, AttributesToSkip = FileAttributes.ReparsePoint };
-                foreach (string file in Directory.EnumerateFiles(root, "*", options))
-                { token.ThrowIfCancellationRequested(); entries.Add(new(file, Path.GetRelativePath(root, file), FormatRegistry.Probe(file))); }
-                return entries.OrderBy(f => f.RelativePath, DisplayPathComparer)
-                    .ThenBy(f => f.RelativePath, StringComparer.OrdinalIgnoreCase).ToList();
-            }, token).WaitAsync(token);
-            token.ThrowIfCancellationRequested(); Files = found;
-            FolderNode rootNode = new(Path.GetFileName(root), root); Dictionary<string, FolderNode> directories = new(StringComparer.OrdinalIgnoreCase) { [root] = rootNode };
-            foreach (var file in found)
-            {
-                string directory = Path.GetDirectoryName(file.Path)!;
-                FolderNode node = new(file.Name,file.Path,file); fileNodes[file.Path] = node; EnsureDirectory(directory).Children.Add(node);
-            }
-            Folders.Add(rootNode); Status = $"{found.Count:N0} files · {found.Count(f => f.Path.EndsWith(".zbd", StringComparison.OrdinalIgnoreCase)):N0} ZBDs · indexing names…";
-            await IndexAsync(found, token);
-            FolderNode EnsureDirectory(string path)
-            {
-                if (directories.TryGetValue(path, out var node)) return node;
-                node = new(Path.GetFileName(path), path); directories[path] = node; EnsureDirectory(Path.GetDirectoryName(path)!).Children.Add(node); return node;
+                SearchIndexNotice = "Asset indexing was canceled; search and related results are incomplete. Files and direct opening remain available.";
+                RefreshSearch(); Status = "Scan canceled";
             }
         }
-        catch (OperationCanceledException) { if (WorkspaceGeneration == committedWorkspace) Status = "Scan canceled"; cancellationToken.ThrowIfCancellationRequested(); }
         catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException)
         {
             if (WorkspaceGeneration != committedWorkspace)
@@ -200,25 +264,44 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     }
     private async Task IndexAsync(List<FileEntry> files, CancellationToken token)
     {
-        int completed = 0; int warnings = 0;
+        int completed = 0; int warnings = 0; long nameCharacters = 0;
+        bool limited = false, failed = false;
+        int rowLimit = Math.Clamp(SearchIndexRowLimit, 0, MaximumIndexedAssets);
+        long nameLimit = Math.Clamp(SearchIndexNameLimit, 0, MaximumIndexedNameCharacters);
         foreach (var file in files.Where(f => f.Probe.Recognition == Recognition.Supported))
         {
             token.ThrowIfCancellationRequested();
             try
             {
                 var doc = await Task.Run(() => FormatRegistry.Default.OpenAsync(file.Path, token), token).WaitAsync(token);
-                token.ThrowIfCancellationRequested(); index.AddRange(doc.Assets.Select(a => new SearchHit(file.Path, a.Kind, a.Index, a.Name)));
+                token.ThrowIfCancellationRequested();
+                foreach (var asset in doc.Assets)
+                {
+                    token.ThrowIfCancellationRequested();
+                    // Paths are shared with the bounded Files inventory. Bound both row overhead and names retained
+                    // across documents before constructing a hit or growing the list; keep every admitted identity whole.
+                    if (index.Count >= rowLimit || asset.Name.Length > nameLimit - nameCharacters)
+                    { limited = true; break; }
+                    nameCharacters += asset.Name.Length;
+                    index.Add(new(file.Path, asset.Kind, asset.Index, asset.Name));
+                }
+                failed |= doc.Diagnostics.Any(d => d.Severity == "Error");
                 foreach (var diagnostic in doc.Diagnostics) { warnings++; if (Diagnostics.Count < 500) AddProblem(diagnostic.Message, diagnostic.Severity, file.Path, diagnostic.AssetIndex, diagnostic.Offset); }
                 Status = $"Indexed {++completed} containers · {index.Count:N0} assets";
+                if (limited) break;
             }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException) { token.ThrowIfCancellationRequested(); AddProblem(ex.Message, "Error", file.Path); }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException) { token.ThrowIfCancellationRequested(); failed = true; AddProblem(ex.Message, "Error", file.Path); }
         }
-        token.ThrowIfCancellationRequested(); RefreshSearch(); Status = $"{Files.Count:N0} files · {index.Count:N0} indexed assets · {warnings} reader diagnostics";
+        token.ThrowIfCancellationRequested();
+        SearchIndexComplete = !limited && !failed;
+        SearchIndexNotice = limited ? "Asset indexing stopped at its row or name-text limit; search and related results are incomplete. Open a smaller folder to index more. Files and direct opening remain available."
+            : failed ? "Some files could not be fully indexed; search and related results are incomplete. See Problems. Files and direct opening remain available." : "";
+        RefreshSearch(); Status = $"{Files.Count:N0} files · {index.Count:N0} indexed assets · {warnings} reader diagnostics" + (SearchIndexComplete ? "" : " · search index incomplete");
     }
     public async Task<DocumentModel?> OpenFileAsync(string path, CancellationToken cancellationToken = default, Action? beforePublish = null, bool activate = true)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        long generation = ++navigationGeneration;
+        long generation = AdvanceNavigation();
         RequireCurrentNavigation(generation);
         path = Path.GetFullPath(path);
         var existing = Documents.FirstOrDefault(d => d.Path.Equals(path, StringComparison.OrdinalIgnoreCase));
@@ -228,10 +311,12 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         try
         {
             var doc = await LoadDocumentAsync(path, token); token.ThrowIfCancellationRequested();
+            RequireCurrentNavigation(generation);
+            var prepared = await PrepareDocumentAsync(doc, token); token.ThrowIfCancellationRequested();
             RequireCurrentNavigation(generation); ValidateNavigationPublication?.Invoke(false); beforePublish?.Invoke(); RequireCurrentNavigation(generation);
             existing = Documents.FirstOrDefault(d => d.Path.Equals(path, StringComparison.OrdinalIgnoreCase));
             if (existing != null) { if (activate) SelectedDocument = existing; return existing; }
-            DocumentModel model = new(doc); model.AttachResolver(Resolver); Documents.Add(model); if (activate) SelectedDocument = model;
+            DocumentModel model = new(prepared); model.AttachResolver(Resolver); Documents.Add(model); if (activate) SelectedDocument = model;
             foreach (var diagnostic in doc.Diagnostics) AddProblem(diagnostic.Message, diagnostic.Severity, path, diagnostic.AssetIndex, diagnostic.Offset);
             Status = model.Description; return model;
         }
@@ -249,31 +334,158 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         { RequireCurrentNavigation(generation); throw; }
     }
     public void Close(DocumentModel document) { if (document.IsDirty) throw new InvalidOperationException("Use CloseAsync to resolve unsaved edits."); RemoveDocument(document); }
-    public async Task CloseAsync(DocumentModel document) { if (await CanRemoveAsync(document)) RemoveDocument(document); }
-    private Task<bool> CanRemoveAsync(DocumentModel document) => ConfirmDiscardAsync?.Invoke(document) ?? Task.FromResult(!document.IsDirty);
+    public async Task CloseAsync(DocumentModel document)
+    {
+        CloseDecisionsStarting?.Invoke();
+        if (!await CanRemoveAsync(document)) return;
+        var decided = Replacement(document);
+        // The decision covers the state its question showed; an edit accepted since then keeps the document open.
+        if (decided.ApprovedCloseRevision is { } approved && approved != decided.Revision)
+        { Status = "Close canceled: " + decided.Title.TrimEnd(' ', '*') + " changed after its close decision; its edits were kept."; return; }
+        RemoveDocument(decided);
+    }
+    /// <summary>A source world's document after resolving its drafts rebuilt it (the original is then disposed).</summary>
+    private DocumentModel Replacement(DocumentModel document) =>
+        document.IsDisposed && document.SourceWorld?.Owner is { IsDisposed: false } owner && Documents.Contains(owner) ? owner : document;
+    private Task<bool> CanRemoveAsync(DocumentModel document)
+    {
+        document.ApprovedCloseRevision = null;
+        return ConfirmDiscardAsync?.Invoke(document) ?? Task.FromResult(!document.IsDirty);
+    }
     private void RemoveDocument(DocumentModel document) { int i = Documents.IndexOf(document); Documents.Remove(document); document.Dispose(); if (SelectedDocument == document) SelectedDocument = Documents.Count > 0 ? Documents[Math.Clamp(i, 0, Documents.Count - 1)] : null; }
     public Task ReloadAsync() => ReloadSelectedAsync();
-    public void CheckExternalChanges()
+    public void CheckExternalChanges() => _ = CheckExternalChangesAsync();
+    /// <summary>
+    /// Marks documents whose files changed on disk. A source world compares the stamps of every project file its build read
+    /// (thousands for a retail mission), so that runs off the UI thread; the task completes when those results are shown.
+    /// </summary>
+    internal Task CheckExternalChangesAsync()
     {
+        List<Task> pending = [];
         foreach (var doc in Documents)
+        {
+            // While a save replaces the project's files they differ from what the workspace last read; the save's end is the next state.
+            if (doc.SourceWorld != null) { if (!doc.SourceWorld.Workspace.IsSaving) pending.Add(CheckSourceWorldAsync(doc)); continue; }
             try { doc.IsStale = (doc.ContentEdits is { } content ? content.HasExternalChanges() : doc.ResourceEdits is { } resources ? FileStamp.Read(resources.TargetPath) != resources.TargetStamp : doc.ModelEdits?.HasExternalChanges() ?? FileStamp.Read(doc.Path) != doc.Document.Stamp) || doc.PickupEdits?.HasExternalChanges() == true; }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { doc.IsStale = true; }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException) { doc.IsStale = true; }
+        }
+        return Task.WhenAll(pending);
+    }
+    private readonly Dictionary<DocumentModel, Task> sourceWorldChecks = [];
+    private Task CheckSourceWorldAsync(DocumentModel doc)
+    {
+        if (sourceWorldChecks.TryGetValue(doc, out var running)) return running;
+        TaskCompletionSource done = new();
+        sourceWorldChecks[doc] = done.Task;
+        _ = Run();
+        return done.Task;
+        async Task Run()
+        {
+            long revision = doc.Revision; bool stale;
+            try
+            {
+                try { stale = await Task.Run(() => doc.SourceInputsChanged()); }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException) { stale = true; }
+                // An edit, save or rebuild during the check makes its result obsolete; the next check reads the new state.
+                if (!doc.IsDisposed && doc.Revision == revision && doc.SourceWorld?.Workspace.IsSaving != true) doc.IsStale = stale;
+            }
+            finally { sourceWorldChecks.Remove(doc); done.SetResult(); }
+        }
+    }
+    /// <summary>Publishes a document built elsewhere (a source world), as opening a file would.</summary>
+    internal void AddDocument(DocumentModel model, bool activate)
+    {
+        model.AttachResolver(Resolver); Documents.Add(model); if (activate) SelectedDocument = model;
+        Status = model.Description;
+    }
+    /// <summary>Replaces <paramref name="original"/> in place with a rebuilt document; the original is disposed.</summary>
+    internal void ReplaceDocument(DocumentModel original, DocumentModel replacement)
+    {
+        int index = Documents.IndexOf(original);
+        if (index < 0) throw new StudioCommandException("context_changed", "The document was closed.");
+        AdvanceNavigation();
+        replacement.Query = original.Query; replacement.KindFilter = original.KindFilter;
+        replacement.AttachResolver(Resolver);
+        var asset = original.SelectedAsset?.Record;
+        replacement.SelectedAsset = asset == null ? null : replacement.Assets.FirstOrDefault(a => a.Record.Kind == asset.Kind && a.Record.Index == asset.Index) ?? replacement.Assets.FirstOrDefault(a => a.Record.Kind == asset.Kind);
+        bool selected = SelectedDocument == original;
+        Documents[index] = replacement;
+        if (selected) SelectedDocument = replacement;
+        original.Dispose();
+        SynchronizeOpenFiles();
     }
     partial void OnGlobalQueryChanged(string value) => RefreshSearch();
     private void RefreshSearch()
     {
         SearchIsLimited = false; SearchResults.Clear(); string query = GlobalQuery.Trim(); if (query.Length < 2) return;
-        var matches = index.Where(h => h.Name.Contains(query, StringComparison.OrdinalIgnoreCase) || h.Location.Contains(query, StringComparison.OrdinalIgnoreCase)).Take(501).ToArray();
+        var matches = SearchIndex(query).Take(501).ToArray();
         SearchIsLimited = matches.Length > 500;
         foreach (var hit in matches.Take(500)) SearchResults.Add(hit);
     }
-    public IEnumerable<SearchHit> Related(string name, string context) => index.Where(h => !h.File.Equals(context, StringComparison.OrdinalIgnoreCase) && Path.GetFileNameWithoutExtension(h.Name).Equals(Path.GetFileNameWithoutExtension(name), StringComparison.OrdinalIgnoreCase)).Take(100);
-    internal IEnumerable<SearchHit> SearchIndex(string query) => index.Where(h => h.Name.Contains(query, StringComparison.OrdinalIgnoreCase) || h.Location.Contains(query, StringComparison.OrdinalIgnoreCase));
+    internal sealed record RelatedMatches(IReadOnlyList<SearchHit> Items, bool Truncated);
+    internal RelatedMatches Related(IEnumerable<string> names, string context)
+    {
+        var result = MatchRelated(names, index, context);
+        return SearchIndexComplete ? result : result with { Truncated = true };
+    }
+    /// <summary>One index scan, preserving reference order and index order within each name, with bounded input and retained matches.</summary>
+    internal static RelatedMatches MatchRelated(IEnumerable<string> names, IEnumerable<SearchHit> source, string context,
+        int maximumNames = 65_536, int maximumEntries = 1_000_000, long maximumNameCharacters = 4 * 1024 * 1024, long maximumIndexCharacters = 64 * 1024 * 1024)
+    {
+        Dictionary<string, int> ranks = new(StringComparer.OrdinalIgnoreCase);
+        bool truncated = false; int inspected = 0; long characters = 0;
+        foreach (string name in names)
+        {
+            if (++inspected > maximumNames || (characters += name.Length) > maximumNameCharacters) { truncated = true; break; }
+            if (name.Length <= 1) continue;
+            string key = Path.GetFileNameWithoutExtension(name);
+            ranks.TryAdd(key, ranks.Count);
+        }
+        if (ranks.Count == 0) return new([], truncated);
+        var comparer = Comparer<(int Rank, int Position, SearchHit Hit)>.Create((a, b) => a.Rank != b.Rank ? a.Rank.CompareTo(b.Rank) : a.Position.CompareTo(b.Position));
+        SortedSet<(int Rank, int Position, SearchHit Hit)> kept = new(comparer);
+        HashSet<SearchHit> identities = [];
+        Dictionary<int, int> counts = [];
+        inspected = 0; characters = 0;
+        foreach (var hit in source)
+        {
+            if (++inspected > maximumEntries || (characters += (long)hit.Name.Length + hit.File.Length) > maximumIndexCharacters) { truncated = true; break; }
+            if (hit.File.Equals(context, StringComparison.OrdinalIgnoreCase) || !ranks.TryGetValue(Path.GetFileNameWithoutExtension(hit.Name), out int rank) || identities.Contains(hit)) continue;
+            if (counts.GetValueOrDefault(rank) == 100 || kept.Count == 300 && rank >= kept.Max.Rank) { truncated = true; continue; }
+            kept.Add((rank, inspected, hit)); identities.Add(hit); counts[rank] = counts.GetValueOrDefault(rank) + 1;
+            if (kept.Count > 300)
+            {
+                var last = kept.Max; kept.Remove(last); identities.Remove(last.Hit); counts[last.Rank]--;
+                truncated = true;
+            }
+        }
+        return new(kept.Select(p => p.Hit).ToArray(), truncated);
+    }
+    internal IEnumerable<SearchHit> SearchIndex(string query, CancellationToken token = default)
+    {
+        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(workspace.Token, token);
+        foreach (var hit in MatchSearch(index, query, cancellation.Token)) yield return hit;
+    }
+    /// <summary>Match the displayed location once per indexed file, retaining only its boolean result.
+    /// IndexAsync shares FileEntry.Path across that file's hits; reference keys avoid hashing a long path per member.</summary>
+    internal static IEnumerable<SearchHit> MatchSearch(IEnumerable<SearchHit> source, string query, CancellationToken token = default)
+    {
+        Dictionary<string, bool>? locations = null;
+        foreach (var hit in source)
+        {
+            token.ThrowIfCancellationRequested();
+            if (hit.Name.Contains(query, StringComparison.OrdinalIgnoreCase)) { yield return hit; continue; }
+            locations ??= new(ReferenceEqualityComparer.Instance);
+            if (!locations.TryGetValue(hit.File, out bool matches))
+                locations.Add(hit.File, matches = hit.Location.Contains(query, StringComparison.OrdinalIgnoreCase));
+            if (matches) yield return hit;
+        }
+    }
     internal void CloseResolved(DocumentModel doc) => RemoveDocument(doc);
     public void Dispose()
     {
         if (disposed) return;
-        disposed = true; ++navigationGeneration; ++WorkspaceGeneration;
+        disposed = true; AdvanceNavigation(); ++WorkspaceGeneration;
         if (SelectedDocument != null) SelectedDocument.PropertyChanged -= SelectedDocumentSelectionChanged;
         workspace.Cancel(); foreach (var doc in Documents) doc.Dispose(); workspace.Dispose(); GC.SuppressFinalize(this);
     }

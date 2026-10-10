@@ -201,8 +201,9 @@ public partial class MainWindow
         // Exports read source files from disk, so pending edits to them must be saved or discarded first. A source
         // world shows a private build in the project's zstudio/cache/worlds, but its pending edits belong to the project's scripts.
         string project = Path.TrimEndingDirectorySeparator(Path.GetFullPath(root)), prefix = Path.EndsInDirectorySeparator(project) ? project : project + Path.DirectorySeparatorChar;
-        if (ViewModel.Documents.FirstOrDefault(d => d.IsDirty && Path.GetFullPath(d.Path).StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) is { } dirty)
-            throw new StudioCommandException("unsaved_changes", $"Save or discard the edits to {Path.GetFileName(dirty.Path)} before exporting.");
+        if (ViewModel.Documents.FirstOrDefault(d => d.IsDirty && (d.SourceWorld is { } world ? world.Root.Equals(project, StringComparison.OrdinalIgnoreCase)
+            : Path.GetFullPath(d.Path).StartsWith(prefix, StringComparison.OrdinalIgnoreCase))) is { } dirty)
+            throw new StudioCommandException("unsaved_changes", $"Save or discard the edits to {dirty.SourceWorld?.Label ?? Path.GetFileName(dirty.Path)} before exporting.");
         // Opening another root cancels the export; its result never publishes into the new workspace.
         long generation = ViewModel.WorkspaceGeneration;
         using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(token, ViewModel.WorkspaceToken); operation = cancellation; CancelOperationItem.IsEnabled = true;
@@ -324,7 +325,7 @@ public partial class MainWindow
                 bool opened = open && notOpened == null && ViewModel.HasRoot && ViewModel.RootPath.Equals(Path.GetFullPath(report.Project), StringComparison.OrdinalIgnoreCase);
                 var result = Result(ReconstructResult(report, opened));
                 if (notOpened != null) result.Data.AsObject()["openRefused"] = new JsonObject { ["code"] = notOpened.Code, ["message"] = Bounded(notOpened.Message, 512) };
-                return result;
+                return opened ? IndexCompleteness(result) : result;
             });
         RegisterJob(r, "source_export", "Build game files of the open source project from its files on disk. Without destination, only check that they build. With destination (outside the project), stage, re-parse and then write the selected outputs, or nothing if any fails; existing game files are replaced only with overwrite, and restored if publication fails. Outputs work in the game but are not byte-identical to the shipped files. Unsaved edits to project files must be resolved first. The result lists the lookups by name the built missions make as the game loads them (texture-effect FindNode, animation roots, attach nodes outside their root, node and tracked-node names inside animations that fall back to the whole world, the first node of each activation prerequisite path) whose name several nodes share, with the node the game finds (lookups, at most 256), and those that find another node than in the destination files the export replaced (lookupChanges, also in notes).",
             [P("destination", "string", "Optional output folder (a full path); omit to check without writing."),
@@ -432,8 +433,9 @@ public partial class MainWindow
     {
         if (e.OriginalSource != sender) return;
         string? root = SourceProjectRoot;
-        SourceMenuSeparator.Visibility = ExportSourceMenu.Visibility = ExportSourceFileMenu.Visibility = CheckSourceMenu.Visibility = SourceProfileMenu.Visibility = root != null ? Visibility.Visible : Visibility.Collapsed;
-        if (root != null) { _ = FillExportSourceFileMenuAsync(root); _ = FillSourceProfileMenuAsync(root); }
+        SourceMenuSeparator.Visibility = ExportSourceMenu.Visibility = ExportSourceFileMenu.Visibility = CheckSourceMenu.Visibility = SourceProfileMenu.Visibility = SourceWorldMenu.Visibility = AddSourceModelMenu.Visibility = SourceRecoveryMenu.Visibility = root != null ? Visibility.Visible : Visibility.Collapsed;
+        AddSourceModelMenu.IsEnabled = ViewModel.SelectedDocument?.SourceWorld is { IsRebuilding: false } && !sourceWorkspaceBusy;
+        if (root != null) { _ = FillExportSourceFileMenuAsync(root); _ = FillSourceWorldMenuAsync(root); _ = FillSourceProfileMenuAsync(root); }
     }
     /// <summary>Lists the project's build profiles; the checked one is what exports and checks build until another is chosen.</summary>
     private async Task FillSourceProfileMenuAsync(string root)

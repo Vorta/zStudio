@@ -67,7 +67,7 @@ internal static class ShutdownMcpChecks
             {
                 var dialog = app.Windows.Cast<Window>().FirstOrDefault(w => w.Owner == main && w.Title == "Unsaved changes");
                 if (dialog == null) return;
-                var buttons = ((StackPanel)dialog.Content).Children.OfType<WrapPanel>().Single();
+                var buttons = ((Grid)dialog.Content).Children.OfType<WrapPanel>().Single();
                 buttons.Children.OfType<Button>().Single(b => Equals(b.Content, "Cancel"))
                     .RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
                 closeCanceled.TrySetResult(); timer.Stop();

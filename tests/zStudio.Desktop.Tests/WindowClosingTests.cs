@@ -61,6 +61,16 @@ public sealed class WindowClosingTests
                     await MissionOwnershipChecks.Run();
                     Volatile.Write(ref phase, "source project, recovery and model workflows");
                     await SourceProjectMcpChecks.Run();
+                    await LinkedSourceProjectChecks.Run();
+                    await ExportSafetyMcpChecks.Run();
+                    await SourceWorldMcpChecks.Run();
+                    await SourceDefinitionPagingChecks.Run();
+                    await SourceWorkspaceStateBoundsChecks.Run();
+                    await FileResultBoundsMcpChecks.Run();
+                    await SourceRecoveryMcpChecks.Run();
+                    await SourceProjectReadMcpChecks.Run();
+                    await SourceSaveMcpChecks.Run();
+                    await SourcePreviewChangeMcpChecks.Run();
                     Volatile.Write(ref phase, "terrain, map zones and world editing");
                     await WorldCompareMcpChecks.Run();
                     await WorldCompareBoundsChecks.Run();
@@ -91,6 +101,8 @@ public sealed class WindowClosingTests
                     await DraftResolutionMcpChecks.Run();
                     await AnimationMcpCancellationChecks.Run();
                     await ReloadChecks.Run();
+                    Volatile.Write(ref phase, "compiled asset inventory");
+                    await CompiledInventoryChecks.Run();
                 }
                 catch (Exception ex) { failure ??= ex; }
                 finally
@@ -141,7 +153,7 @@ public sealed class WindowClosingTests
                             }
                             Assert.NotEmpty(pending);
                             string answer = pending.Dequeue(); prompts++;
-                            var buttons = ((StackPanel)dialog.Content).Children.OfType<WrapPanel>().Single();
+                            var buttons = ((Grid)dialog.Content).Children.OfType<WrapPanel>().Single();
                             buttons.Children.OfType<Button>().Single(b => Equals(b.Content, answer))
                                 .RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
                         }
