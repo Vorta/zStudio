@@ -25,6 +25,8 @@ public sealed record AnimationField(string Name, int Offset, AnimationFieldKind 
     public void Write(AnimationRecord record, string text)
     {
         if (ReadOnly) throw new InvalidOperationException("Runtime/opaque fields are read-only.");
+        if (Kind != AnimationFieldKind.Text && text.Length > AnimationScriptLexing.MaximumTokenBytes)
+            throw new InvalidDataException($"A numeric field accepts at most {AnimationScriptLexing.MaximumTokenBytes:N0} characters. Enter only its scalar or X, Y, Z values.");
         int Integer() => text.StartsWith("0x", StringComparison.OrdinalIgnoreCase) ? unchecked((int)uint.Parse(text.AsSpan(2), NumberStyles.HexNumber, CultureInfo.InvariantCulture)) : int.Parse(text, CultureInfo.InvariantCulture);
         switch (Kind)
         {
@@ -32,8 +34,15 @@ public sealed record AnimationField(string Name, int Offset, AnimationFieldKind 
             case AnimationFieldKind.Short: record.SetShort(Offset, checked((short)Integer())); break;
             case AnimationFieldKind.Float: record.SetFloat(Offset, float.Parse(text, CultureInfo.InvariantCulture)); break;
             case AnimationFieldKind.Vector:
-                float[] xyz = text.Split([',', ' '], StringSplitOptions.RemoveEmptyEntries).Select(s => float.Parse(s, CultureInfo.InvariantCulture)).ToArray();
-                if (xyz.Length != 3) throw new InvalidDataException("Enter three numbers: X, Y, Z.");
+                Span<float> xyz = stackalloc float[3]; int count = 0;
+                foreach (var range in text.AsSpan().SplitAny(", "))
+                {
+                    var value = text.AsSpan()[range]; if (value.IsEmpty) continue;
+                    if (count == 3) throw new InvalidDataException("Enter three numbers: X, Y, Z.");
+                    xyz[count++] = float.Parse(value, CultureInfo.InvariantCulture);
+                }
+                if (count != 3) throw new InvalidDataException("Enter three numbers: X, Y, Z.");
+                for (int i = 0; i < 3; i++) if (!float.IsFinite(xyz[i])) throw new InvalidDataException("Edited numbers must be finite.");
                 record.SetVector(Offset, new Vector3(xyz[0], xyz[1], xyz[2])); break;
             default: record.SetInt(Offset, Integer()); break;
         }
@@ -80,7 +89,7 @@ public static partial class AnimationCatalog
         new(21,"Animate camera",108,[B("Channels"),N("Camera node",16),V("Near clip: start/end/rate",20),V("Far clip: start/end/rate",32),V("Clip distance: start/end/rate",44),V("FOV X (radians): start/end/rate",56),V("FOV Y (radians): start/end/rate",68),V("Viewport X: start/end/rate",80),V("Viewport Y: start/end/rate",92),F("Duration (s)",104)],"Approximate: perspective camera",104),
         new(22,"Release waiting sequence",48,[S("Sequence name",12),I("Sequence cache",44,true)]),
         new(23,"Stop sequence",48,[S("Sequence name",12),I("Sequence cache",44,true)]),
-        new(24,"Launch child animation",80,[S("Animation name",12,20),I("Runtime state",32,true),N("Bound node",44,1,true),new("Launch flags",46,AnimationFieldKind.Short,2),new("Entry cache",48,AnimationFieldKind.Short,2,ReadOnly:true),N("Runtime slot",50,7,true),N("Reference node",52,1,true),V("Position",56),V("Rotation",68)]),
+        new(24,"Launch child animation",80,[S("Animation name",12),N("Bound node",44,1,true),new("Launch flags",46,AnimationFieldKind.Short,2),new("Entry cache",48,AnimationFieldKind.Short,2,ReadOnly:true),N("Runtime slot",50,7,true),N("Reference node",52,1,true),V("Position",56),V("Rotation",68)]),
         new(25,"Stop named animation",48,[S("Animation name",12),I("Entry cache",44,true)]),
         new(26,"Reset / clean up named animation",48,[S("Animation name",12),I("Entry cache",44,true)]),
         new(27,"Request animation finish",48,[S("Animation name",12),I("Entry cache",44,true)]),

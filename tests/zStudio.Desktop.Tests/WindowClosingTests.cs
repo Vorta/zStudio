@@ -48,6 +48,7 @@ public sealed class WindowClosingTests
                     await McpWorkspaceChecks.Run(app);
                     await SceneInspectionInputChecks.Run();
                     await SceneInspectionMcpChecks.Run();
+                    await InspectionResultMcpChecks.Run();
                     await SceneTreeMcpChecks.Run();
                     await SceneSelectionMcpChecks.Run();
                     await Mw3MissionMcpChecks.Run();
@@ -80,6 +81,7 @@ public sealed class WindowClosingTests
                     await MotionLibraryRefreshChecks.Run();
                     Volatile.Write(ref phase, "animation, drafts and document preparation");
                     await AnimationFogChecks.Run();
+                    await AnimationTextureQueueChecks.Run();
                     await ContentEditingMcpChecks.Run();
                     await NavigationMcpChecks.Run();
                     await GuiNavigationChecks.Run();

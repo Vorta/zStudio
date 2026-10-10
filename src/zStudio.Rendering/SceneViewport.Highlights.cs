@@ -8,9 +8,9 @@ namespace Recoil.Zbd.Rendering;
 
 public sealed partial class SceneViewport
 {
-    private sealed record SurfaceAppearance(DiffuseMaterial Normal, WorldSurfaceKind Kind, TextureModel? AlphaMask, bool Horizon);
+    private sealed record SurfaceAppearance(DiffuseMaterial Normal, WorldSurfaceKind Kind, TextureModel? AlphaMask, bool Horizon, int Zone = 0xFF);
     private readonly Dictionary<MeshGeometryModel3D, SurfaceAppearance> surfaceAppearances = [];
-    private readonly Dictionary<(DiffuseMaterial Normal, WorldHighlightMode Mode), DiffuseMaterial> highlightMaterials = [];
+    private readonly Dictionary<(DiffuseMaterial Normal, WorldHighlightMode Mode, int Zone), DiffuseMaterial> highlightMaterials = [];
     public WorldHighlightMode HighlightMode { get; private set; }
 
     /// <summary>Changes only appearance; mesh/instance identities, picking and camera stay intact.</summary>
@@ -21,36 +21,27 @@ public sealed partial class SceneViewport
         foreach (var (mesh, surface) in surfaceAppearances)
         {
             if (!WorldSurfaceHighlights.Matches(surface.Kind, mode)) { mesh.Material = surface.Normal; continue; }
-            if (!highlightMaterials.TryGetValue((surface.Normal, mode), out var material))
+            int zone = mode == WorldHighlightMode.Zones ? surface.Zone : -1;
+            if (!highlightMaterials.TryGetValue((surface.Normal, mode, zone), out var material))
             {
                 material = PreviewMaterials.Create(surface.Horizon);
                 float alpha = surface.Normal.DiffuseColor.Alpha;
+                var (r, g, b) = WorldSurfaceHighlights.ZoneColor(surface.Zone);
                 material.DiffuseColor = mode switch
                 {
                     WorldHighlightMode.NonDefaultSoils => new Color4(1, 1, 0, alpha),
                     WorldHighlightMode.CanModify => new Color4(0, 1, 0, alpha),
+                    WorldHighlightMode.Zones => new Color4(r, g, b, alpha),
                     _ => new Color4(1, 0, 0, alpha)
                 };
                 material.EnableUnLit = true;
                 // White RGB removes authored texture colors while keeping alpha-zero holes.
                 // These maps deliberately do not participate in the normal Textures toggle.
                 material.DiffuseMap = surface.AlphaMask;
-                highlightMaterials.Add((surface.Normal, mode), material);
+                highlightMaterials.Add((surface.Normal, mode, zone), material);
             }
             mesh.Material = material;
         }
-    }
-
-    private static byte[] WhiteAlphaMask(DecodedImage image, CancellationToken token)
-    {
-        var mask = new byte[image.Rgba.Length];
-        for (int i = 0; i < mask.Length; i += 4)
-        {
-            if ((i & 0xffff) == 0) token.ThrowIfCancellationRequested();
-            mask[i] = mask[i + 1] = mask[i + 2] = 255;
-            mask[i + 3] = image.Rgba[i + 3];
-        }
-        return mask;
     }
 
     private void ClearWorldHighlights()

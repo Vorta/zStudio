@@ -48,6 +48,32 @@ public sealed partial class AnimationTests
         Assert.Equal(99, SceneBuilder.LocalTransform(initial.Scene.Nodes[0]).M41);
         var started = BuildMission(context.World, context.Package, null, null, Arr(Str("NEW_GAME_START"), Str("setup")));
         Assert.Equal(new Vector3(12,3,4), SceneBuilder.LocalTransform(started.Scene.Nodes[0]).Translation);
+        // Nested startup lists retain their authored order, including repeated names. The final distinct
+        // animation must run after setup, without advancing either program beyond its immediate frontier.
+        var last = MissionEntry(2, "last", "animated");
+        var move = AnimationCatalog.Create(7); move.SetShort(28, 1); move.SetVector(16, new(31, 2, 1)); last.Sequences[0].Events.Add(move);
+        context.Package.Entries.Add(last); bytes = Pack(context.Package);
+        var nested = Arr(Arr(Str("NEW_GAME_START"), Arr(Str("setup"), Arr(Str("setup"), Str("last")))));
+        Assert.Equal(new Vector3(31, 2, 1), SceneBuilder.LocalTransform(BuildMission(context.World, context.Package, null, null, nested).Scene.Nodes[0]).Translation);
+
+        // Repeated matching ancestors used to enumerate every descendant before any operation admission.
+        // A small shared allowance exercises the actual Build path without a large allocation/time probe.
+        JsonNode leaves = Arr([.. Enumerable.Range(0, 128).Select(_ => (JsonNode)Str("missing")), Str("setup")]);
+        var token = TestContext.Current.CancellationToken;
+        Assert.Equal(new Vector3(12, 3, 4), SceneBuilder.LocalTransform(MissionSceneLoader.BuildWithBudget(context.World,
+            new MissionPlacementBudget(token, maximumWork: 32768), context.Package, null, null,
+            Arr(Str("NEW_GAME_START"), leaves.DeepClone()), token: token).Scene.Nodes[0]).Translation);
+        JsonNode overlapping = leaves;
+        for (int i = 0; i < 24; i++) overlapping = Arr(Str("NEW_GAME_START"), overlapping);
+        Assert.Throws<InvalidDataException>(() => MissionSceneLoader.BuildWithBudget(context.World,
+            new MissionPlacementBudget(token, maximumWork: 32768), context.Package, null, null, overlapping, token: token));
+        using var cancel = CancellationTokenSource.CreateLinkedTokenSource(token);
+        int reservations = 0;
+        var canceledBudget = new MissionPlacementBudget(cancel.Token, reserved: () => { if (++reservations == 5000) cancel.Cancel(); });
+        Assert.ThrowsAny<OperationCanceledException>(() => MissionSceneLoader.BuildWithBudget(context.World,
+            canceledBudget, context.Package, null, null, overlapping, token: cancel.Token));
+        Assert.Equal(new Vector3(12, 3, 4), SceneBuilder.LocalTransform(BuildMission(context.World, context.Package, null, null,
+            Arr(Str("NEW_GAME_START"), Str("setup"))).Scene.Nodes[0]).Translation);
         Assert.Equal(bytes, Pack(context.Package)); Assert.Equal(Vector3.Zero, SceneBuilder.LocalTransform(context.Scene.Nodes[0]).Translation);
     }
     [Fact]
@@ -69,7 +95,7 @@ public sealed partial class AnimationTests
         var launch = AnimationCatalog.Create(24); launch.SetText(12,"child",20); launch.Threshold = .1f; parent.Sequences[0].Events.Add(launch);
         AnimationPlayer player = new(context,0); var after = player.EvaluateForTest(1.1); Assert.Equal(42, Assert.Single(after.Nodes).Transform.M41);
         player.EvaluateForTest(.05,true); Assert.Equal(after.Nodes,player.EvaluateForTest(1.1,true).Nodes);
-        player.Reset(); Assert.Equal(0,Assert.Single(player.Frame().Nodes).Transform.M41);
+        player.Reset(TestContext.Current.CancellationToken); Assert.Equal(0,Assert.Single(player.Frame(TestContext.Current.CancellationToken).Nodes).Transform.M41);
     }
     [Fact]
     public void CopiedAnimationRootsRemainDistinctFromTheWorldActor()
@@ -87,7 +113,7 @@ public sealed partial class AnimationTests
         context.Mission = BuildMission(context.World,null,Arr(Str("animated_01"),Spawn(9,2,7,0)),Arr(Str("animated"),Arr()),null);
         int root = context.Mission.Actors[0].Root; context.RootOverrides[0] = root;
         Assert.Equal(root, context.ResolveNode(context.Package.Entries[0],1));
-        var pose = Assert.Single(new AnimationPlayer(context,0).Frame().Nodes);
+        var pose = Assert.Single(new AnimationPlayer(context,0).Frame(TestContext.Current.CancellationToken).Nodes);
         Assert.Equal(root,pose.SourceNode); Assert.Equal(new Vector3(9,2,7),pose.Transform.Translation);
     }
     [Fact]
@@ -113,6 +139,28 @@ public sealed partial class AnimationTests
         var position=AnimationCatalog.Create(7); position.SetShort(28,1); position.SetVector(16,new(17,3,9)); entry.Sequences[0].Events.Add(position); context.Package.Entries.Add(entry);
         var mission=BuildMission(context.World,context.Package,null,null,null);
         Assert.Equal(new Vector3(17,3,9),SceneBuilder.LocalTransform(mission.Scene.Nodes[0]).Translation);
+
+        // The load runs every cleanup before any started entry's events (0x45fb30), and nothing it or the startup list
+        // marked running starts again (0x45d930): a later cleanup cannot undo "mover", and neither launch repeats its step.
+        context=MissionFixture(); var mover=MissionEntry(1,"mover","animated"); mover.Bytes[153]=4;
+        var step=AnimationCatalog.Create(7); step.SetShort(28,1); step.SetInt(12,1); step.SetVector(16,new(0,5,0)); mover.Sequences[0].Events.Add(step);
+        var hide=AnimationCatalog.Create(6); hide.SetShort(16,1); hide.SetInt(12,0); mover.Sequences[0].Events.Add(hide);
+        var later=AnimationCatalog.Create(6); later.SetShort(16,1); later.Threshold=5; mover.Sequences[0].Events.Add(later);
+        var launcher=MissionEntry(2,"launcher","animated"); launcher.Bytes[153]=4; var launch=AnimationCatalog.Create(24); launch.SetText(12,"mover",20); launcher.Sequences[0].Events.Add(launch);
+        var reset=MissionEntry(3,"reset","animated"); reset.SetInt(148,0x20); var show=AnimationCatalog.Create(6); show.SetShort(16,1); show.SetInt(12,1); reset.Primary.Events.Add(show);
+        context.Package.Entries.AddRange([mover,launcher,reset]);
+        var node=BuildMission(context.World,context.Package,null,null,Arr(Str("NEW_GAME_START"),Str("mover"))).Scene.Nodes[0];
+        Assert.Equal(new Vector3(0,5,0),SceneBuilder.LocalTransform(node).Translation); Assert.Equal(0u,node.Metadata.UInt("flags")&4);
+
+        // A range-gated entry runs only while the player's spawn (10,2,30), 1004 squared units from its node, is in range (0x45d010).
+        context=MissionFixture();
+        foreach (var (name,range,lift) in new[] { ("far",1004f,10f), ("near",1005f,1f) })
+        {
+            var gated=MissionEntry(context.Package.Entries.Count,name,"animated"); gated.Bytes[153]=4; gated.SetInt(148,2); gated.SetFloat(160,range);
+            var up=AnimationCatalog.Create(7); up.SetShort(28,1); up.SetInt(12,1); up.SetVector(16,new(0,lift,0)); gated.Sequences[0].Events.Add(up); context.Package.Entries.Add(gated);
+        }
+        node=BuildMission(context.World,context.Package,Arr(Str("animated_01"),Spawn(10,2,30,0)),Arr(Str("animated"),Arr()),null).Scene.Nodes[0];
+        Assert.Equal(new Vector3(0,1,0),SceneBuilder.LocalTransform(node).Translation);
     }
     [Fact]
     public void CyclicStartupIsBoundedAndDoesNotChangePrograms()
@@ -120,7 +168,8 @@ public sealed partial class AnimationTests
         var context=MissionFixture(); var entry=MissionEntry(1,"cycle","animated"); var launch=AnimationCatalog.Create(24); launch.SetText(12,"cycle",20); entry.Sequences[0].Events.Add(launch); context.Package.Entries.Add(entry);
         byte[] before=Pack(context.Package);
         var mission=BuildMission(context.World,context.Package,null,null,Arr(Str("NEW_GAME_START"),Str("cycle")));
-        Assert.Contains(mission.Diagnostics,n=>n.Contains("instance limit",StringComparison.OrdinalIgnoreCase)); Assert.Equal(before,Pack(context.Package));
+        // ActivateRuntime does not start a running animation again (m6/m13 transporters restart each other at zero time).
+        Assert.DoesNotContain(mission.Diagnostics,n=>n.Contains("instance limit",StringComparison.OrdinalIgnoreCase)); Assert.Equal(before,Pack(context.Package));
     }
     [Fact]
     public void InvalidTemplateHierarchyRollsBackOnlyItsPreviewClone()
@@ -136,7 +185,7 @@ public sealed partial class AnimationTests
         var context=MissionFixture(); var motion=MissionEntry(1,"later_motion","animated"); var position=AnimationCatalog.Create(7); position.SetShort(28,1); position.SetVector(16,new(100,0,0)); motion.Sequences[0].Events.Add(position); context.Package.Entries.Add(motion);
         context.Mission=BuildMission(context.World,context.Package,null,null,null);
         Assert.Contains(0,context.Mission.DormantRoots);
-        var frame=new AnimationPlayer(context,0).Frame(); Assert.True(Assert.Single(frame.Nodes).Visible);
+        var frame=new AnimationPlayer(context,0).Frame(TestContext.Current.CancellationToken); Assert.True(Assert.Single(frame.Nodes).Visible);
         Assert.Contains(frame.Diagnostics,n=>n.Contains("individual preview"));
         Assert.Empty(SceneBuilder.Assemble(context.Scene,token:TestContext.Current.CancellationToken).Placements);
     }

@@ -36,19 +36,24 @@ public sealed partial class AnimationPlayer
     public const double StepSeconds = 1.0 / 60;
     public const int MaximumInstances = 256;
     private readonly AnimationPreviewContext context;
+    private AnimationEntryLookup entryLookup = null!;
     private readonly int entryIndex;
     private readonly bool resetPhase;
     public int LodLevel { get; set; }
     private List<Instance> instances = [];
     private Dictionary<int, Node> sharedNodes = [];
     private bool initializingScene;
+    /// <summary>Entries and roots the mission load marked running without an instance in this player.</summary>
+    private HashSet<(int Entry, int Root)>? loadRunning;
+    private AnimationBindingOperation? bindingOperation;
     private List<Effect> effects = [];
     private List<AnimationTrace> trace = [];
     private HashSet<string> notes = [];
     private Dictionary<long, AnimationLight> lights = [];
     private Dictionary<long, AnimationSoundCue> activeSounds = [];
     private readonly List<AnimationSoundCue> cues = [];
-    private readonly SortedDictionary<long, Checkpoint> checkpoints = [];
+    private SortedDictionary<long, Checkpoint> checkpoints = [];
+    private bool resetInitialized;
     private long ticks, nextId, traceOrdinal, traceDropped;
     private uint randomState;
     private int randomIndex;
@@ -79,34 +84,73 @@ public sealed partial class AnimationPlayer
     public bool IsComplete => instances.All(i => i.Finished) && effects.Count == 0;
 
     public AnimationPlayer(AnimationPreviewContext context, int entryIndex, int seed = 1, bool resetPhase = false)
+        : this(context, entryIndex, seed, resetPhase, default) { }
+    public AnimationPlayer(AnimationPreviewContext context, int entryIndex, int seed, bool resetPhase, CancellationToken token)
     {
-        this.context = context; this.entryIndex = entryIndex; this.resetPhase = resetPhase; Seed = seed; Reset();
+        this.context = context; this.entryIndex = entryIndex; this.resetPhase = resetPhase; Seed = seed; Reset(token);
     }
-    public void Reset()
+    private AnimationPlayer(AnimationPreviewContext context, AnimationBindingOperation operation)
     {
+        this.context = context; entryIndex = 0; Seed = 1; bindingOperation = operation; initializingScene = true;
+        entryLookup = operation.EntryLookup();
+        randomState = 1;
+        for (int i = 0; i < randomTable.Length; i++) { randomState = unchecked(randomState * 214013 + 2531011); randomTable[i] = ((randomState >> 16) & 32767) / 32767f; }
+    }
+    /// <summary>
+    /// This reset's name and subtree indexes, kept across playback ticks: the context's scene and entries are frozen while a
+    /// player uses them (edits create a new context), and a reset, scene replacement or node-count change rebuilds them.
+    /// </summary>
+    private AnimationBindingOperation.Indexes bindingIndexes = new();
+    private IDisposable BeginBinding(CancellationToken token)
+    {
+        var previous = bindingOperation;
+        // Kept indexes count against every operation that uses them, so a tick still fits its allowance;
+        // past half of it they are rebuilt rather than grown without bound.
+        if (bindingIndexes.Retained > AnimationBindingOperation.MaximumUnits / 2) bindingIndexes = new();
+        AnimationBindingOperation next = new(context, token, shared: bindingIndexes);
+        next.Reserve(1 + bindingIndexes.Retained);
+        bindingOperation = next;
+        return new BindingScope(() => bindingOperation = previous);
+    }
+    private sealed class BindingScope(Action restore) : IDisposable { public void Dispose() => restore(); }
+    public void Reset() => Reset(default);
+    public void Reset(CancellationToken token)
+    {
+        if (resetInitialized) { ReplaceResetState(token); return; }
+        using var binding = BeginBinding(token);
+        // The GUI may reset a player after accepted edits; never retain an index of the previous entry names.
+        entryLookup = bindingOperation!.EntryLookup();
+        InvalidateRetainedState();
         ticks = nextId = traceOrdinal = traceDropped = 0; previewIssues.Clear(); diagnosticContext = new(entryIndex); measuredEnd = 0; unavailableDuration = false; randomIndex = 0; randomState = unchecked((uint)Seed);
         for (int i = 0; i < randomTable.Length; i++) { randomState = unchecked(randomState * 214013 + 2531011); randomTable[i] = ((randomState >> 16) & 32767) / 32767f; }
         instances = []; sharedNodes = []; effects = []; trace = []; notes = []; foreach (string message in context.Diagnostics) AddNote(message, "Resource", "Unclassified"); lights = []; activeSounds = []; cues.Clear(); checkpoints.Clear();
         screenColor = screenWave = Vector4.Zero; fog = null;
         AddInstance(context.Package.Entries[entryIndex], null, null, resetPhase);
-        checkpoints[0] = CaptureCheckpoint();
+        RequireState(StateBytes(instances, sharedNodes) + CloneScratch(instances, sharedNodes));
+        checkpoints[0] = CaptureCheckpoint(token);
+        InvalidateRetainedState();
+        resetInitialized = true;
     }
-    public AnimationFrame Step(CancellationToken token = default) { cues.Clear(); Tick(token); return Frame(); }
+    public AnimationFrame Step(CancellationToken token = default) { token.ThrowIfCancellationRequested(); cues.Clear(); Tick(token); return Frame(token); }
     public AnimationFrame AdvanceTo(double seconds, bool seeking = false, CancellationToken token = default)
     {
         if (!double.IsFinite(seconds) || seconds < 0 || seconds > 3600) throw new InvalidDataException("Preview time must be between zero and one hour.");
-        long target = (long)Math.Floor(seconds / StepSeconds + 1e-7); cues.Clear();
+        token.ThrowIfCancellationRequested();
+        long target = (long)Math.Floor(seconds / StepSeconds + 1e-7);
         if (target < ticks)
         {
             var closest = checkpoints.LastOrDefault(p => p.Key <= target);
-            if (closest.Value == null) Reset(); else Restore(closest.Value);
+            if (closest.Value == null) Reset(token); else Restore(closest.Value, token);
         }
+        cues.Clear();
         while (ticks < target) { token.ThrowIfCancellationRequested(); Tick(token); }
         if (seeking) cues.Clear();
-        return Frame();
+        return Frame(token);
     }
     private void Tick(CancellationToken token)
     {
+        using var binding = BeginBinding(token);
+        ReleaseReplacedSequences();
         token.ThrowIfCancellationRequested(); ticks++; dispatchBudget = 10000; screenColor = screenWave = Vector4.Zero;
         foreach (var instance in instances.ToArray())
         {
@@ -125,6 +169,7 @@ public sealed partial class AnimationPlayer
                 else { instance.StopDelay = instance.Entry.F32(164); if (instance.StopDelay == 0) BeginCleanup(instance); }
             }
         }
+        ReleaseReplacedSequences();
         // Landed debris remains above the solid preview plane during subsequent
         // shrink/sink stages and concurrent transform events, without new impacts.
         ConstrainSettledGround();
@@ -140,12 +185,9 @@ public sealed partial class AnimationPlayer
             if (!cue.Persistent && Time - cue.StartedAt >= context.Sounds[cue.Name].Duration)
                 activeSounds.Remove(id);
         // Keep completed root geometry as the final pose, but release nested instances.
-        instances.RemoveAll(i => i.Finished && i.Id != 1 && !instances.Any(p => p.Children.Values.Contains(i.Id)));
-        if (!measuringDuration && ticks % 60 == 0)
-        {
-            checkpoints[ticks] = CaptureCheckpoint(); int maximum = instances.Sum(i => i.Nodes.Count) > 10000 ? 2 : 8;
-            while (checkpoints.Count > maximum + 1) checkpoints.Remove(checkpoints.Keys.First(k => k != 0));
-        }
+        if (instances.RemoveAll(i => i.Finished && i.Id != 1 && !instances.Any(p => p.Children.Values.Contains(i.Id))) > 0)
+            InvalidateRetainedState();
+        if (!measuringDuration && ticks % 60 == 0) SaveCheckpoint(token);
     }
     private void Run(Instance instance, Sequence state, float step = (float)StepSeconds)
     {
@@ -165,6 +207,7 @@ public sealed partial class AnimationPlayer
             {
                 float clock = ev.StartMode switch { 1 => instance.Elapsed, 2 => state.Elapsed, _ => state.EventElapsed };
                 if (clock < ev.Threshold) return;
+                if (!AdmitState(WorkBytes(ev))) { Block(state, RetainedStateRefusal); return; }
                 state.EventElapsed = remaining; if (state.Cursor == 0) state.Elapsed = remaining;
                 state.Work = ev.Clone(); state.Child = -1; state.KeyOffset = 0; state.KeyTime = 0;
                 if (trace.Count >= 20000) { trace.RemoveRange(0, 10000); traceDropped += 10000; }
@@ -173,7 +216,7 @@ public sealed partial class AnimationPlayer
             }
             int result;
             try { result = Execute(instance, state, state.Work!, starting, ref remaining); }
-            catch (Exception ex) when (ex is InvalidDataException or ArgumentException or ArithmeticException or IndexOutOfRangeException)
+            catch (Exception ex) when (ex is InvalidDataException or StateLimitException or ArgumentException or ArithmeticException or IndexOutOfRangeException)
             { Block(state, $"{ev.Name}: {ex.Message}"); return; }
             if (result == 0) return; // Loop/reset explicitly changed the cursor and clocks.
             state.State = result;
@@ -189,30 +232,52 @@ public sealed partial class AnimationPlayer
     private void Block(Sequence sequence, string message) { sequence.State = 4; unavailableDuration = true; AddNote(sequence.Data.Name + ": " + message); }
     private float RandomUnit() { float result = randomTable[randomIndex]; randomIndex = (randomIndex + 1) % randomTable.Length; return result; }
 
-    private Instance? AddInstance(AnimationEntry entry, Vector3? position, int? boundRoot, bool primary = false)
+    /// <param name="started">The instance is a child started at <paramref name="boundRoot"/> (ActivateRuntime binds it there
+    /// again even when it is the entry's own root), not a stop at it (StopAndCleanup, which turrets call, only at another node).</param>
+    /// <param name="prerequisitesCleared">The NEW_GAME_START list clears the entry's activation prerequisites first (0x4192d0).</param>
+    private Instance? AddInstance(AnimationEntry entry, Vector3? position, int? boundRoot, bool primary = false, bool started = false, bool prerequisitesCleared = false)
     {
-        if (instances.Count + effects.Count >= MaximumInstances) { AddNote("Preview instance limit reached (256). A looping emitter may be producing too many children."); return null; }
-        int root = boundRoot ?? context.ResolveRoot(entry);
+        var operation = bindingOperation ?? throw new InvalidOperationException("Animation binding requires an active operation.");
+        operation.Reserve(1);
+        if (instances.Count + effects.Count >= MaximumInstances)
+        { unavailableDuration = true; AddNote("Preview instance limit reached (256). A looping emitter may be producing too many children."); return null; }
+        int root = boundRoot ?? operation.Root(entry);
         if (root < 0) { unavailableDuration = true; AddNote($"Unresolved animation root: {entry.RootName}"); return null; }
-        if (initializingScene && !primary && entry.References[6].Count > 0)
+        if (initializingScene && !primary && !prerequisitesCleared && entry.References[6].Count > 0)
         { AddNote($"{entry.Name}: initialization activation prerequisites are unavailable."); return null; }
         bool shared = IsWorldNode(root) && ((entry.U32(148) & 0x8000) == 0 || boundRoot.HasValue);
-        if (!initializingScene && shared && instances.Any(i => i.Entry.Index == entry.Index && i.Root == root && !i.Finished)) return null;
-        Instance instance = new() { Id = ++nextId, Entry = entry, Root = root, Cleanup = primary, Shared = shared };
-        var sourceNodes = context.Descendants(root).ToHashSet();
+        // ActivateRuntime (0x45d930) never starts a running animation again at the same node, nor, at mission
+        // load, one that load marked running before the first frame (ApplyInitialization).
+        if (shared && (instances.Any(i => i.Entry.Index == entry.Index && i.Root == root && !i.Finished) || loadRunning?.Contains((entry.Index, root)) == true)) return null;
+        var binding = context.Binding(entry, root, operation);
+        if (boundRoot.HasValue && (started || binding != AnimationBinding.Loaded)) binding = AnimationBinding.Rebound;
+        if (context.RebindDisables(entry, root, binding, operation))
+            AddNote($"{entry.Name}: the game disables this animation bound at {context.Scene.Nodes[root].Name}, which lacks its attach node {entry.AttachName}; the preview runs it there.", "Support", "Information");
+        var descendants = operation.Descendants(root, context.Scene.Nodes.Count);
+        operation.Reserve(40L * descendants.Count);
+        var sourceNodes = descendants.ToHashSet();
         for (int r = 1; r < entry.References[1].Count; r++)
         {
-            int node = context.ResolveNode(entry, r, root);
+            // As events find them (NodeRef), so every node an event changes belongs to the instance.
+            int node = context.ResolveInstanceNode(entry, r, root, binding, operation);
             // Per-instance mission resets must not fall back to another turret's
             // identically named component when this instance lacks that part.
             if (initializingScene && boundRoot.HasValue && !sourceNodes.Contains(node)) continue;
-            if (node >= 0) sourceNodes.UnionWith(context.Descendants(node));
+            // Every existing member already brought its full transitive subtree into this set.
+            if (node >= 0 && !sourceNodes.Contains(node))
+                foreach (int child in operation.Descendants(node, context.Scene.Nodes.Count))
+                { operation.Reserve(40); sourceNodes.Add(child); }
         }
+        // Admit the whole prospective instance before allocating Nodes/SavedNodes or changing shared poses.
+        AdmitInstance(sourceNodes, shared, primary ? 1 : entry.Sequences.Count);
+        operation.Reserve(256L * sourceNodes.Count + 32L * entry.Sequences.Count);
+        Instance instance = new() { Id = ++nextId, Entry = entry, Root = root, Binding = binding, Cleanup = primary, Shared = shared };
         foreach (int index in sourceNodes)
         {
-            if (shared) { instance.Nodes[index] = SharedNode(index); continue; }
+            operation.Reserve(256L + context.Scene.Nodes[index].Parents.Length);
+            if (shared) { instance.Nodes[index] = SharedNode(index, admitted: true); continue; }
             var source = context.Scene.Nodes[index]; int parent = source.Parents.FirstOrDefault(p => sourceNodes.Contains(p), -1);
-            var matrix = parent < 0 ? context.WorldTransform(index) : SceneBuilder.LocalTransform(source);
+            var matrix = parent < 0 ? context.WorldTransform(index, operation) : SceneBuilder.LocalTransform(source);
             var node = new Node { Source = index, Parent = parent, Exact = matrix, Position = matrix.Translation, Scale = Vec(source.Data["scale"], Vector3.One), Euler = Vec(source.Data["rotate"]), Active = source.Class != "object3d" || (source.Metadata.UInt("flags") & 4) != 0, Alpha = source.Data.Float("opacity", 1), AlphaEnabled = (source.Data.UInt("flags") & 2) != 0 };
             node.Rotation = AnimationMath.FromEuler(node.Euler);
             if ((parent < 0 || source.Class == "camera") && Matrix4x4.Decompose(matrix, out var scale, out var rotation, out _))
@@ -227,58 +292,56 @@ public sealed partial class AnimationPlayer
             // Explicitly inspecting an unplaced actor's destruction/effect still
             // needs a local preview. World controllers never enable dormant actors.
             if (!initializingScene && instance.Id == 1 && rootNode.PendingPlacement && !entry.Sequences.SelectMany(s => s.Events).Any(e =>
-                e.Spec != null && e.Bytes.Length >= e.Spec.Size && (e.Type == 12 && context.ResolveNode(entry,e.I32(12),root) == root || e.Type == 7 && context.ResolveNode(entry,e.I16(28),root) == root)))
+                e.Spec != null && e.Bytes.Length >= e.Spec.Size && (e.Type == 12 && context.ResolveInstanceNode(entry,e.I32(12),root,binding,operation) == root || e.Type == 7 && context.ResolveInstanceNode(entry,e.I16(28),root,binding,operation) == root)))
             { rootNode.PendingPlacement = false; AddNote("The selected actor has no recovered starting position; this individual preview uses its stored pose.", "Support", "Information"); }
             if (position is Vector3 p) { Position(rootNode, p); rootNode.Parent = -1; }
         }
-        instance.SavedNodes = instance.Nodes.ToDictionary(p => p.Key, p => p.Value.Clone());
-        instance.Sequences = (primary ? new[] { entry.Primary } : entry.Sequences.ToArray()).Select(s => new Sequence(s)).ToList();
+        instance.SavedNodes = instance.Nodes.ToDictionary(p => p.Key, p => { operation.Reserve(1); return p.Value.Clone(); });
+        instance.Sequences = (primary ? new[] { entry.Primary } : entry.Sequences.ToArray()).Select(s => new Sequence(s) { WorkChanged = AdjustRetainedWork }).ToList();
         instances.Add(instance);
+        InvalidateRetainedState();
         if (!initializingScene && entry.References[6].Count > 0) AddNote("Manual preview activation bypasses game activation prerequisites.", "Support", "Information");
         return instance;
     }
     private Node? NodeRef(Instance instance, int reference)
     {
         if (reference == 0) return null;
-        int index = context.ResolveInstanceNode(instance.Entry, reference, instance.Root);
+        var entry = instance.Entry; int index = bindingOperation is { } operation
+            ? context.ResolveInstanceNode(entry, reference, instance.Root, instance.Binding, operation)
+            : context.ResolveInstanceNode(entry, reference, instance.Root, instance.Binding);
         if (instance.Nodes.TryGetValue(index, out var node)) return node;
-        AddNote($"{instance.Entry.Name}: unresolved node reference {reference}."); return null;
+        // RECOIL's ResolveNodeByName finds the entry's own light or sound node before the world's: no scene node. MW3 has no
+        // such evidence, so its unresolved names stay warnings.
+        if (index < 0 && context.World.Game != GameVariant.MechWarrior3 && reference > 0 && reference < entry.References[1].Count
+            && entry.References[1][reference].Text(0, 36) is var name && AnimationPreviewContext.OwnsNode(entry, name))
+            AddNote($"{entry.Name}: node reference {reference} is the animation's own light or sound {name}, which the preview does not show as a node.", "Support", "Information");
+        else AddNote($"{entry.Name}: unresolved node reference {reference}.");
+        return null;
     }
     private Matrix4x4 World(Instance instance, Node node)
     {
+        bindingOperation?.Reserve(64);
         Matrix4x4 matrix = node.Local; HashSet<int> seen = [node.Source]; int parent = node.Parent;
-        while (parent >= 0 && seen.Add(parent) && ParentNode(instance, parent) is { } p) { matrix *= p.Local; parent = p.Parent; }
-        return matrix;
-    }
-    private bool Visible(Instance instance, Node node)
-    {
-        if (!node.Active || node.PendingPlacement) return false; HashSet<int> seen = [node.Source]; int parent = node.Parent;
-        int child = node.Source;
-        while (parent >= 0 && seen.Add(parent) && ParentNode(instance, parent) is { } p)
-        { if (!p.Active || p.PendingPlacement || !context.Lods.Includes(parent, child, LodLevel)) return false; child = parent; parent = p.Parent; }
-        return true;
-    }
-    private float Opacity(Instance instance, Node node)
-    {
-        // Despite the historical SetLitFlag name, bit 2 pushes an alpha override
-        // for the subtree. Retail RenderTraverse 0x44B300; Camera.c render stacks.
-        HashSet<int> seen = [];
-        while (seen.Add(node.Source))
+        while (parent >= 0)
         {
-            if (node.AlphaEnabled) return Math.Clamp(node.Alpha, 0, 1);
-            if (ParentNode(instance, node.Parent) is not { } parent) break;
-            node = parent;
+            bindingOperation?.Reserve(64);
+            if (!seen.Add(parent) || ParentNode(instance, parent) is not { } p) break;
+            matrix *= p.Local; parent = p.Parent;
         }
-        return 1;
+        return matrix;
     }
     private void BeginCleanup(Instance instance)
     {
         if (instance.Cleanup) { Finish(instance); return; }
+        RequireState(SequenceBytes);
         instance.StopDelay = -1; instance.Cleanup = true;
         if ((instance.Entry.U32(148) & 0x40) != 0)
             foreach (var tracked in instance.Entry.References[0])
             {
-                int index = context.FindNamedBelow(instance.Root, tracked.Text(0,32));
+                // Tracked-node records hold 36-byte names, as node references do.
+                int index = bindingOperation is { } operation
+                    ? context.ResolveTrackedNode(instance.Entry, tracked.Text(0,36), instance.Root, instance.Binding, operation)
+                    : context.ResolveTrackedNode(instance.Entry, tracked.Text(0,36), instance.Root, instance.Binding);
                 if (instance.Nodes.TryGetValue(index,out var node) && instance.SavedNodes.TryGetValue(index,out var saved))
                 {
                     node.Active = saved.Active; node.Position = saved.Position; node.Euler = saved.Euler; node.Scale = saved.Scale;
@@ -287,7 +350,10 @@ public sealed partial class AnimationPlayer
                     node.GroundSupported = saved.GroundSupported;
                 }
             }
-        instance.Sequences = [new Sequence(instance.Entry.Primary)];
+        // The dispatch snapshot can still hold the replaced sequences until the frontier finishes.
+        retiredSequences.Add(instance.Sequences);
+        instance.Sequences = [new Sequence(instance.Entry.Primary) { WorkChanged = AdjustRetainedWork }];
+        InvalidateRetainedState();
         if (instance.Entry.Primary.Events.Count == 0) { measuredEnd = Math.Max(measuredEnd, Time - StepSeconds); Finish(instance); }
     }
     private void Finish(Instance instance)
@@ -296,25 +362,35 @@ public sealed partial class AnimationPlayer
         foreach (long key in activeSounds.Keys.Where(k => k >> 32 == instance.Id).ToArray()) { cues.Add(activeSounds[key] with { Stop = true }); activeSounds.Remove(key); }
         foreach (long key in lights.Keys.Where(k => k >> 32 == instance.Id).ToArray()) lights.Remove(key);
     }
-    public AnimationFrame Frame()
+    public AnimationFrame Frame() => Frame(default);
+    public AnimationFrame Frame(CancellationToken token) => Frame(token, Worlds.LookupWorkBudget.MaximumUnits);
+    internal AnimationFrame Frame(CancellationToken token, long maximumWork, Action<long>? reserved = null)
     {
+        AnimationBindingOperation frameBindings = new(context, token, maximumWork, reserved);
+        frameBindings.Reserve(1);
+        var ancestry = BeginFrameAncestry(frameBindings);
         List<AnimationNodePose> poses = []; AnimationCamera? camera = null; HashSet<long> rendered = [];
         foreach (var instance in instances) foreach (var (index, node) in instance.Nodes)
         {
+            token.ThrowIfCancellationRequested();
             var source = context.Scene.Nodes[index];
             if (source.ModelIndex is >= 0 and int model && rendered.Add(node.RenderId))
-                poses.Add(new(node.RenderId, index, model, World(instance, node), Visible(instance, node), Opacity(instance, node), node.Variant, node.Morph, Math.Max(0, Time - node.CycleStart)));
+            {
+                var pose = ancestry.Get(instance, node);
+                poses.Add(new(node.RenderId, index, model, pose.World, pose.Visible, pose.Opacity, node.Variant, node.Morph, Math.Max(0, Time - node.CycleStart)));
+            }
             if (source.Class == "camera" && node.Changed)
             {
                 // Camera.c 0x44ABF0 takes the eye from the world matrix and
                 // forward from its negative Z basis, not from a stored target.
-                var transform = World(instance, node);
+                var transform = ancestry.Get(instance, node).World;
                 var forward = Vector3.TransformNormal(-Vector3.UnitZ, transform);
                 if (float.IsFinite(forward.LengthSquared()) && forward.LengthSquared() > 1e-12f && float.IsFinite(node.Fov))
                     camera = new(transform.Translation, transform.Translation + Vector3.Normalize(forward), node.Fov * (180 / MathF.PI)) { SourceNode = index, Name = source.Name };
                 else AddNote($"Camera {source.Name} #{index}: invalid transform or field of view; follow pose is unavailable.");
             }
         }
+        EndFrameAncestry(ancestry);
         foreach (var effect in effects)
         {
             string? texture = null; var template = effect.Template;
@@ -324,14 +400,20 @@ public sealed partial class AnimationPlayer
                 frame = template.Loop ? frame % template.Textures.Length : Math.Min(frame, template.Textures.Length - 1);
                 texture = template.Textures[frame];
             }
-            Matrix4x4.Invert(context.WorldTransform(template.RootNode), out var rootInverse);
-            foreach (int index in context.Descendants(template.RootNode))
+            Matrix4x4.Invert(context.WorldTransform(template.RootNode, frameBindings), out var rootInverse);
+            foreach (int index in frameBindings.Descendants(template.RootNode, context.Scene.Nodes.Count))
             {
+                frameBindings.Reserve(64);
                 if (context.Scene.Nodes[index].ModelIndex is not int model || model < 0) continue;
-                Matrix4x4 transform = context.WorldTransform(index) * rootInverse * Matrix4x4.CreateScale(effect.Scale) * Matrix4x4.CreateTranslation(effect.Position);
+                Matrix4x4 transform = context.WorldTransform(index, frameBindings) * rootInverse * Matrix4x4.CreateScale(effect.Scale) * Matrix4x4.CreateTranslation(effect.Position);
                 bool visible = true; int child = index; HashSet<int> visited = [];
-                while (child != template.RootNode && visited.Add(child) && context.Scene.Nodes[child].Parents.FirstOrDefault(-1) is >= 0 and int parent)
-                { if (!context.Lods.Includes(parent, child, LodLevel)) { visible = false; break; } child = parent; }
+                while (child != template.RootNode)
+                {
+                    frameBindings.Reserve(64);
+                    if (!visited.Add(child) || context.Scene.Nodes[child].Parents.FirstOrDefault(-1) is not (>= 0 and int parent)) break;
+                    if (!context.Lods.Includes(parent, child, LodLevel)) { visible = false; break; }
+                    child = parent;
+                }
                 poses.Add(new((effect.Id << 32) | (uint)index, index, model, transform, visible, 1, 0, 0, effect.Age, texture));
             }
         }
@@ -348,9 +430,12 @@ public sealed partial class AnimationPlayer
             }
             if (camera != null) camera = camera with { Position = camera.Position + origin, Target = camera.Target + origin };
         }
-        return new(Time, poses, lights.Values.Select(l => l with { Position = l.Position + origin }).ToArray(),
+        token.ThrowIfCancellationRequested();
+        var result = new AnimationFrame(Time, poses, lights.Values.Select(l => l with { Position = l.Position + origin }).ToArray(),
             cues.Select(c => c with { Position = c.Position + origin }).ToArray(), activeSounds.Values.Select(c => c with { Position = c.Position + origin }).ToArray(), camera, fog, screenColor, screenWave, trace.ToArray(),
             instances.SelectMany(i => i.Sequences.Select(s => new AnimationSequenceStatus(i.Id, s.Data.Id, s.Data.Name, s.Cursor, s.State switch { 0 => "Waiting for threshold", 1 => "Running", 2 => "Complete", 3 => "Waiting for release", _ => "Unavailable" }, s.Iteration))).ToArray(), notes.Order(StringComparer.Ordinal).ToArray()) { Issues = previewIssues.Values.ToArray(), TraceDropped = traceDropped };
+        token.ThrowIfCancellationRequested();
+        return result;
     }
     private static Vector3 Vec(JsonNode? value, Vector3 fallback = default) => value == null ? fallback : new(value.Float("x", fallback.X), value.Float("y", fallback.Y), value.Float("z", fallback.Z));
     private sealed class Node
@@ -373,8 +458,18 @@ public sealed partial class AnimationPlayer
         public float Elapsed, EventElapsed, LoopElapsed, KeyTime;
         public bool ObservedInfiniteLoop;
         public long Child = -1;
-        public AnimationEvent? Work;
-        public Sequence Clone() { var copy = (Sequence)MemberwiseClone(); copy.Work = Work?.Clone(); return copy; }
+        private AnimationEvent? work;
+        public Action<long>? WorkChanged;
+        public AnimationEvent? Work
+        {
+            get => work;
+            set { long delta = WorkBytes(value) - WorkBytes(work); work = value; WorkChanged?.Invoke(delta); }
+        }
+        public Sequence Clone(CancellationToken token, Action<long>? workChanged)
+        {
+            token.ThrowIfCancellationRequested(); var copy = (Sequence)MemberwiseClone();
+            copy.work = work?.Clone(token); copy.WorkChanged = workChanged; return copy;
+        }
         public void Reset() { Cursor = 0; State = Data.ResetMode; Elapsed = EventElapsed = 0; Work = null; }
     }
     private sealed class Instance
@@ -382,15 +477,17 @@ public sealed partial class AnimationPlayer
         public required AnimationEntry Entry;
         public long Id;
         public int Root;
+        public AnimationBinding Binding;
         public float Elapsed, StopDelay = -1;
         public bool Cleanup, Finished, FinishRequested, Shared;
         public Dictionary<int, Node> Nodes = [], SavedNodes = [];
         public List<Sequence> Sequences = [];
         public Dictionary<int, long> Children = [];
-        public Instance Clone(Func<Node, Node>? cloneNode = null)
+        public Instance Clone(Func<Node, Node> cloneNode, CancellationToken token, Action<long>? workChanged = null)
         {
-            var copy = (Instance)MemberwiseClone(); copy.Nodes = Nodes.ToDictionary(p => p.Key, p => cloneNode?.Invoke(p.Value) ?? p.Value.Clone());
-            copy.SavedNodes = SavedNodes; copy.Sequences = Sequences.Select(s => s.Clone()).ToList(); copy.Children = new(Children); return copy;
+            token.ThrowIfCancellationRequested();
+            var copy = (Instance)MemberwiseClone(); copy.Nodes = Nodes.ToDictionary(p => p.Key, p => cloneNode(p.Value));
+            copy.SavedNodes = SavedNodes; copy.Sequences = Sequences.Select(s => s.Clone(token, workChanged)).ToList(); copy.Children = new(Children); return copy;
         }
     }
     private sealed class Effect
@@ -403,18 +500,29 @@ public sealed partial class AnimationPlayer
     }
     private sealed record Checkpoint(long Ticks, long NextId, int RandomIndex, List<Instance> Instances, Dictionary<int, Node> SharedNodes, List<Effect> Effects, List<AnimationTrace> Trace,
         HashSet<string> Notes, long TraceOrdinal, long TraceDropped, Dictionary<DiagnosticKey, AnimationPreviewDiagnostic> Issues, Dictionary<long, AnimationLight> Lights, Dictionary<long, AnimationSoundCue> Sounds, Vector4 Color, Vector4 Wave, AnimationFog? Fog);
-    private Checkpoint CaptureCheckpoint()
+    private Checkpoint CaptureCheckpoint(CancellationToken token)
     {
         Dictionary<Node, Node> copies = [];
-        Node Copy(Node n) { if (!copies.TryGetValue(n, out var copy)) copies[n] = copy = n.Clone(); return copy; }
-        return new(ticks, nextId, randomIndex, instances.Select(i => i.Clone(Copy)).ToList(), sharedNodes.ToDictionary(p => p.Key, p => Copy(p.Value)), effects.Select(e => e.Clone()).ToList(), [.. trace], [.. notes], traceOrdinal, traceDropped, new(previewIssues), new(lights), new(activeSounds), screenColor, screenWave, fog);
+        Node Copy(Node n) { token.ThrowIfCancellationRequested(); if (!copies.TryGetValue(n, out var copy)) copies[n] = copy = n.Clone(); return copy; }
+        return new(ticks, nextId, randomIndex, instances.Select(i => i.Clone(Copy, token)).ToList(), sharedNodes.ToDictionary(p => p.Key, p => Copy(p.Value)), effects.Select(e => e.Clone()).ToList(), [.. trace], [.. notes], traceOrdinal, traceDropped, new(previewIssues), new(lights), new(activeSounds), screenColor, screenWave, fog);
     }
-    private void Restore(Checkpoint c)
+    private void Restore(Checkpoint c, CancellationToken token)
     {
+        token.ThrowIfCancellationRequested();
+        if (!AdmitState(StateBytes(c.Instances, c.SharedNodes) + CloneScratch(c.Instances, c.SharedNodes), c)) throw new StateLimitException();
         Dictionary<Node, Node> copies = [];
-        Node Copy(Node n) { if (!copies.TryGetValue(n, out var copy)) copies[n] = copy = n.Clone(); return copy; }
-        ticks = c.Ticks; nextId = c.NextId; randomIndex = c.RandomIndex; instances = c.Instances.Select(i => i.Clone(Copy)).ToList(); sharedNodes = c.SharedNodes.ToDictionary(p => p.Key, p => Copy(p.Value)); effects = c.Effects.Select(e => e.Clone()).ToList();
-        trace = [.. c.Trace]; notes = [.. c.Notes]; traceOrdinal = c.TraceOrdinal; traceDropped = c.TraceDropped; previewIssues = new(c.Issues); lights = new(c.Lights); activeSounds = new(c.Sounds); screenColor = c.Color; screenWave = c.Wave; fog = c.Fog;
+        Node Copy(Node n) { token.ThrowIfCancellationRequested(); if (!copies.TryGetValue(n, out var copy)) copies[n] = copy = n.Clone(); return copy; }
+        // Stage the complete replacement while the accepted state and checkpoint are still accounted.
+        var restored = c.Instances.Select(i => i.Clone(Copy, token, AdjustRetainedWork)).ToList();
+        var shared = c.SharedNodes.ToDictionary(p => p.Key, p => Copy(p.Value));
+        var restoredEffects = c.Effects.Select(e => e.Clone()).ToList();
+        var restoredTrace = new List<AnimationTrace>(c.Trace); var restoredNotes = new HashSet<string>(c.Notes);
+        var restoredIssues = new Dictionary<DiagnosticKey, AnimationPreviewDiagnostic>(c.Issues);
+        var restoredLights = new Dictionary<long, AnimationLight>(c.Lights); var restoredSounds = new Dictionary<long, AnimationSoundCue>(c.Sounds);
+        token.ThrowIfCancellationRequested();
+        ticks = c.Ticks; nextId = c.NextId; randomIndex = c.RandomIndex; instances = restored; sharedNodes = shared; effects = restoredEffects;
+        trace = restoredTrace; notes = restoredNotes; traceOrdinal = c.TraceOrdinal; traceDropped = c.TraceDropped; previewIssues = restoredIssues; lights = restoredLights; activeSounds = restoredSounds; screenColor = c.Color; screenWave = c.Wave; fog = c.Fog;
+        retiredSequences.Clear(); InvalidateRetainedState();
     }
 }
 

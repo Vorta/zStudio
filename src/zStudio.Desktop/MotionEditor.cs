@@ -47,6 +47,7 @@ public sealed class MotionEditor : UserControl, IDisposable
     private int? requestedMember;
     private Guid? requestedIdentity;
     private IReadOnlyList<string> librarySkipped = [];
+    private string? previewFailure;
     public SceneViewport Viewport { get; private set; } = new();
     public event Action? SceneChanged;
     public event Action<string>? StatusChanged;
@@ -69,7 +70,7 @@ public sealed class MotionEditor : UserControl, IDisposable
             return new { member, seconds, playing = IsPlaying, loading = load != null, playbackRequested = pendingPlayback ?? IsPlaying,
                 loopSeconds = clip?.LoopTime, frameCount = clip?.FrameCount, lod = Lod, library = library?.Path, assembly = AssemblyMember,
                 assemblies = Assemblies.Take(32).Select(a => new { member = a.Index, a.Name }).ToArray(), assemblyCount = count, assembliesTruncated = count > 32,
-                diagnostics = notes.Items, diagnosticCount = notes.Count, diagnosticsTruncated = notes.Truncated, librarySkipped };
+                diagnostics = notes.Items, diagnosticCount = notes.Count, diagnosticsTruncated = notes.Truncated, librarySkipped, previewFailure };
         }
     }
     private void RefreshSupport()
@@ -155,6 +156,7 @@ public sealed class MotionEditor : UserControl, IDisposable
             var previous = Viewport; Viewport = replacement; replacement = null;
             root.Children.Remove(previous); root.Children.Add(Viewport); previous.Dispose();
             ++clipGeneration; selectedIdentity = identity; selectedMember = index; clip = nextClip; sampler = next;
+            previewFailure = null; time.ToolTip = null;
             syncing = true; assembly.SelectedItem = asset; lod.ItemsSource = choices; lod.SelectedIndex = nextLod; syncing = false;
             RefreshSupport(); Present(); await PresentationWork; SceneChanged?.Invoke();
         }
@@ -275,6 +277,16 @@ public sealed class MotionEditor : UserControl, IDisposable
     private void Present(bool tick = false)
     {
         if (disposed || clip == null) return;
+        if (sampler == null && previewFailure != null)
+        {
+            // A seek cannot revive a refused binding or publish a time that
+            // was never presented. Choosing an assembly is the retry boundary.
+            seconds = startedAt = 0;
+            syncing = true; seeker.Value = 0; syncing = false;
+            time.Text = "Preview unavailable";
+            PresentationWork = Task.FromResult(false);
+            return;
+        }
         if (sampler != null && !lifetime.IsCancellationRequested && (!tick || PresentationWork.IsCompleted))
             PresentationWork = PresentAsync(++sampleRequest, sampler, seconds, Lod);
         syncing = true; seeker.Maximum = clip.LoopTime; seeker.Value = seconds; syncing = false;
@@ -293,6 +305,20 @@ public sealed class MotionEditor : UserControl, IDisposable
             return true;
         }
         catch (OperationCanceledException) when (disposed || lifetime.IsCancellationRequested) { }
+        catch (SceneViewport.RenderLimitException ex)
+        {
+            if (!disposed && !lifetime.IsCancellationRequested && request == sampleRequest && ReferenceEquals(source, sampler))
+            {
+                // The sampled time was rejected. Invalidate this binding and any
+                // deferred resume, retaining the authored clip/library for an
+                // explicit assembly retry; MCP receives PresentationWork=false.
+                previewFailure = ex.Message.Length > 512 ? ex.Message[..512] + "…" : ex.Message;
+                seconds = startedAt = 0;
+                syncing = true; seeker.Value = 0; syncing = false;
+                time.Text = "Preview unavailable"; time.ToolTip = previewFailure;
+                ClearBinding("Motion preview unavailable: " + previewFailure + " Choose an assembly to retry.");
+            }
+        }
         catch (InvalidDataException ex) { if (!disposed && request == sampleRequest && ReferenceEquals(source, sampler)) { Pause(); StatusChanged?.Invoke(ex.Message); } }
         finally { if (sampling.IsCompleted) sampling = Task.CompletedTask; }
         return false;

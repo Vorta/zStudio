@@ -11,14 +11,17 @@ using Recoil.Zbd.Core;
 namespace Recoil.Zbd.Rendering;
 
 public sealed record SceneInspection(string Target, int Node, int Model, int Material, long? RuntimeInstance,
-    string? AiNode, Vector3? Surface, Vector3? Normal, Vector3? Origin, bool Active, double? Time);
+    string? AiNode, Vector3? Surface, Vector3? Normal, Vector3? Origin, bool Active, double? Time)
+{
+    /// <summary>Original polygon in the inspected model, resolved from the actual hit triangle.</summary>
+    public int? Polygon { get; init; }
+}
 
 public sealed partial class SceneViewport
 {
     private sealed record InspectionMesh(string Id, int Material, long? Runtime, int Node, int Model);
     private readonly Dictionary<MeshGeometryModel3D, InspectionMesh> inspectionMeshes = [];
-    private readonly Dictionary<int, MissionActor?> inspectionActors = [];
-    private bool inspectionActorsIndexed;
+    private readonly Dictionary<MeshGeometryModel3D, int[]> inspectionPolygons = [];
     private readonly Dictionary<int, Vector3> tankPositions = [];
     private readonly Grid inspectionHost = new();
     private long inspectionSerial;
@@ -85,7 +88,15 @@ public sealed partial class SceneViewport
         if (meta.Runtime == null && visiblePlacements.TryGetValue(mesh, out var visible) && instance >= 0 && instance < visible.Length)
             instance = Array.IndexOf(placements[mesh], visible[instance]);
         var result = InspectMesh(mesh, meta, instance);
-        return result == null ? null : result with { Surface = hit.PointHit, Normal = hit.NormalAtHit };
+        // Helix's linear hit tester stores a triangle ordinal in IndiceStartLocation,
+        // while its octree leaves that field unset. Both retain the vertex tuple.
+        // GeometryBuilder duplicates vertices at polygon boundaries, so three agreeing
+        // vertex identities resolve the exact face in constant time on either path.
+        int? polygon = hit.TriangleIndices is { } triangle && inspectionPolygons.TryGetValue(mesh, out var polygons) &&
+            triangle.Item1 >= 0 && triangle.Item1 < polygons.Length && triangle.Item2 >= 0 && triangle.Item2 < polygons.Length &&
+            triangle.Item3 >= 0 && triangle.Item3 < polygons.Length && polygons[triangle.Item1] == polygons[triangle.Item2] &&
+            polygons[triangle.Item1] == polygons[triangle.Item3] ? polygons[triangle.Item1] : null;
+        return result == null ? null : result with { Surface = hit.PointHit, Normal = hit.NormalAtHit, Polygon = polygon };
     }
     private SceneInspection? InspectMesh(MeshGeometryModel3D mesh, InspectionMesh meta, int instance)
     {
@@ -145,7 +156,10 @@ public sealed partial class SceneViewport
         // Consume the scene click even when a draft vetoes selection, before Helix's callbacks.
         var hit = ProbeInspection(point);
         if (hit == null) return false;
-        viewport.Focus(); SelectInspection(hit.Target); return true;
+        viewport.Focus();
+        if (SelectInspection(hit.Target) && SelectedInspection != null)
+        { SelectedInspection = SelectedInspection with { Polygon = hit.Polygon, Surface = hit.Surface, Normal = hit.Normal }; InspectionChanged?.Invoke(); }
+        return true;
     }
     private void RefreshInspection()
     {
@@ -162,7 +176,9 @@ public sealed partial class SceneViewport
         else HoverInspection = null;
         if (SelectedInspection is { } selected)
         {
-            SelectedInspection = InspectTarget(selected.Target) ?? selected with { Active = false, Origin = null, Surface = null, Normal = null };
+            SelectedInspection = InspectTarget(selected.Target) is { } refreshed
+                ? refreshed with { Polygon = selected.Polygon, Surface = selected.Surface, Normal = selected.Normal }
+                : selected with { Active = false, Origin = null, Surface = null, Normal = null };
             if (selected.AiNode != null) RefreshPickupSelection();
         }
         if (inspectionPointer != null || SelectedInspection != null) InspectionChanged?.Invoke();
@@ -173,34 +189,14 @@ public sealed partial class SceneViewport
             Vector3D.DotProduct(new Point3D(p.X, p.Y, p.Z) - camera.Position, camera.LookDirection) <= 0) return new(double.NaN, double.NaN);
         return viewport.Project(new Point3D(p.X, p.Y, p.Z));
     }
-    public MissionActor? ActorAt(int node)
-    {
-        if (Mission == null) return null;
-        if (!inspectionActorsIndexed)
-        {
-            foreach (var actor in Mission.Actors)
-            {
-                Stack<int> pending = new([actor.Root]); HashSet<int> seen = [];
-                while (pending.TryPop(out int child))
-                {
-                    if (child < 0 || child >= Mission.Scene.Nodes.Count || !seen.Add(child)) continue;
-                    // A shared descendant or duplicated placement root cannot
-                    // identify one editable instance. Never pick the first actor.
-                    if (!inspectionActors.TryAdd(child, actor)) inspectionActors[child] = null;
-                    foreach (int nested in SceneBuilder.Children(Mission.Scene.Nodes[child])) pending.Push(nested);
-                }
-            }
-            inspectionActorsIndexed = true;
-        }
-        return inspectionActors.GetValueOrDefault(node);
-    }
+    public MissionActor? ActorAt(int node) => Mission?.ActorAt(node);
     public void SetMissionCoordinates(PickupPlacementEditSession edits)
     {
         placementEdits = edits; UpdateMissionTransformPreview();
     }
     private void ClearInspection()
     {
-        inspectionMeshes.Clear(); inspectionActors.Clear(); inspectionActorsIndexed = false; tankPositions.Clear(); ++inspectionSerial;
+        inspectionMeshes.Clear(); inspectionPolygons.Clear(); tankPositions.Clear(); ++inspectionSerial;
         inspectionStamp = null; InspectionSourcePath = null;
         HoverInspection = SelectedInspection = null; inspectionPointer = null; InspectionChanged?.Invoke();
     }
