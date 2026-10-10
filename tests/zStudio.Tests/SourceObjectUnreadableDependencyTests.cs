@@ -32,9 +32,10 @@ public sealed class SourceObjectUnreadableDependencyTests
         var world = assembler.Assemble("m1.gs");
         var hull = world.Nodes.Single(n => n.Name == "hull");
         var pose = ObjectTransform.Of(hull);
+        // A turn of the shared file's hull notes the other mission's script, which keeps its own turn there.
         SourceEditPlan Edit() => SourceObjectEdits.PlanTransform(workspace, hull.Name, assembler.Provenance[hull], assembler.Executions,
-            pose with { Position = new(2, 0, 0) }, Token, "m1", pose, world: world, write: assembler.WriteInstruction);
-        Assert.Contains("Object3DRotate", Assert.Throws<InvalidDataException>(Edit).Message);
+            pose with { RotationDegrees = new(0, 30, 0) }, Token, "m1", pose, world: world, write: assembler.WriteInstruction);
+        Assert.Contains(Edit().Notes, n => n.Contains("Object3DRotate", StringComparison.Ordinal));
 
         DirectoryInfo folder = new(fixture.Path("data/common/models/blocked"));
         var denied = folder.GetAccessControl();
@@ -55,7 +56,7 @@ public sealed class SourceObjectUnreadableDependencyTests
         }
         finally { denied.RemoveAccessRule(deny); folder.SetAccessControl(denied); }
         Assert.True(File.Exists(fixture.Path(hiddenModel)));
-        Assert.Contains("Object3DRotate", Assert.Throws<InvalidDataException>(Edit).Message);
+        Assert.Contains(Edit().Notes, n => n.Contains("Object3DRotate", StringComparison.Ordinal));
     }
 
     [Theory]
@@ -75,10 +76,11 @@ public sealed class SourceObjectUnreadableDependencyTests
         var other = new WorldAssembler(new SourceWorlds.DiskFiles(fixture.Project, null), Token).Assemble("m2.gs");
         Assert.Equal(new Vector3(0, 45, 0), ObjectTransform.Of(other.Nodes.Single(n => n.Name == "hull")).RotationDegrees);
         SourceEditPlan Edit() => SourceObjectEdits.PlanTransform(workspace, hull.Name, assembler.Provenance[hull], assembler.Executions,
-            pose with { Position = new(2, 0, 0) }, mission: "m1", current: pose, world: world, write: assembler.WriteInstruction, token: Token);
+            pose with { RotationDegrees = new(0, 30, 0) }, mission: "m1", current: pose, world: world, write: assembler.WriteInstruction, token: Token);
+        bool Noted() => Edit().Notes.Any(n => n.Contains("Object3DRotate", StringComparison.Ordinal));
 
-        // Positive control: this precise other-mission instruction prevents the shared-file edit while readable.
-        Assert.Contains("Object3DRotate", Assert.Throws<InvalidDataException>(Edit).Message);
+        // Positive control: this precise other-mission instruction, which keeps its turn there, is noted while readable.
+        Assert.True(Noted());
         using (FileStream held = new(fixture.Path(locked), FileMode.Open, FileAccess.ReadWrite, FileShare.None))
         {
             var failure = Assert.Throws<IOException>(Edit);
@@ -89,19 +91,20 @@ public sealed class SourceObjectUnreadableDependencyTests
             Assert.False(workspace.CanUndo);
             Assert.Equal(0, workspace.Revision);
         }
-        // A failed attempt cannot cache absence: after releasing the lock the ordinary semantic refusal returns.
-        Assert.Contains("Object3DRotate", Assert.Throws<InvalidDataException>(Edit).Message);
+        // A failed attempt cannot cache absence: after releasing the lock the note returns.
+        Assert.True(Noted());
         Assert.Equal(modelBefore, File.ReadAllBytes(fixture.Path(fixture.Tank)));
         Assert.False(workspace.IsDirty);
 
-        // Removing the competing instruction makes the same edit valid, even with genuinely absent search candidates
-        // and an absent sourced script. The previous failure leaves neither history nor a stale failed-read cache.
+        // Without the competing instruction there is nothing to note, even with genuinely absent search candidates and an
+        // absent sourced script, and the turn reaches m2. The previous failure leaves neither history nor a stale failed-read cache.
         fixture.Write(Rotation, "# no transform\n");
         var plan = Edit();
+        Assert.DoesNotContain(plan.Notes, n => n.Contains("Object3DRotate", StringComparison.Ordinal));
         Assert.Single(plan.Changes);
         Assert.NotNull(workspace.Apply(plan.Label, plan.Changes.Select(c => (c.Relative, (byte[]?)c.Content)), Token));
         var rebuilt = new WorldAssembler(new SourceWorlds.DiskFiles(fixture.Project, workspace.Overlay()), Token).Assemble("m2.gs");
-        Assert.Equal(new Vector3(2, 0, 0), ObjectTransform.Of(rebuilt.Nodes.Single(n => n.Name == "hull")).Position);
+        Assert.Equal(new Vector3(0, 30, 0), ObjectTransform.Of(rebuilt.Nodes.Single(n => n.Name == "hull")).RotationDegrees);
         Assert.Equal(modelBefore, File.ReadAllBytes(fixture.Path(fixture.Tank))); // Still an unsaved source edit.
     }
 

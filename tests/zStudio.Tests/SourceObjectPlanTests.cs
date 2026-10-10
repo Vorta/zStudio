@@ -174,16 +174,20 @@ public sealed class SourceObjectPlanTests
         SourceWorkspace workspace = new(fixture.Project);
         SourceWorlds.AddModel(workspace, "m1", new(new(fixture.Tank, "tank_a", new(100, 0, -50)), []), Token);
         SourceWorlds.AddModel(workspace, "m1", new(new(fixture.Tank, "tank_b", new(0, 0, 30)), []), Token);
-        // A script turns tank_b's hull; tank.gltf gives the hull no transform of its own, so the turn applies.
+        // A script turns tank_b's hull.
         BeforeWrite(workspace, "FindNode tank_b\r\nFindSubNode hull\r\nObject3DRotate 0.0 45.0 0.0");
         var (build, world) = await BuildAsync(fixture, workspace, "m1");
         var hulls = world.Nodes.Where(n => n.Name == "hull").Select(n => Origin(build, world, n)).ToList();
         Assert.Equal(2, hulls.Count);
         var plain = hulls.Single(h => h.Writers.Count == 0);
-        // Turning tank_a's hull writes tank.gltf, which every load reads: tank_b's hull would take that authored matrix and
-        // drop its script turn.
-        Assert.Contains("another load of hull", Message(() => SourceObjectEdits.PlanTransform(workspace, "hull", plain, build.Executions, new(Vector3.Zero, new(0, 30, 0), Vector3.One), Token, "m1", ObjectTransform.Identity,
-            SourceObjectEdits.CopiesOf(plain, build.Provenance.Values))));
+        // Turning tank_a's hull writes tank.gltf, which every load reads; tank_b's script turn replaces the file's rotation
+        // (the engine rebuilds the hull's matrix from it), so that hull keeps its turn, which the plan notes.
+        var turned = SourceObjectEdits.PlanTransform(workspace, "hull", plain, build.Executions, new(Vector3.Zero, new(0, 30, 0), Vector3.One), Token, "m1", ObjectTransform.Identity,
+            SourceObjectEdits.CopiesOf(plain, build.Provenance.Values));
+        Assert.Contains(turned.Notes, n => n.Contains("another load of hull", StringComparison.Ordinal) && n.Contains("which keeps them", StringComparison.Ordinal));
+        Apply(workspace, turned);
+        (build, world) = await BuildAsync(fixture, workspace, "m1");
+        Assert.Equal([30f, 45f], world.Nodes.Where(n => n.Name == "hull").Select(n => MathF.Round(ObjectTransform.Of(n).RotationDegrees.Y, 3)).Order());
     }
 
     [Fact]

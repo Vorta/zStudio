@@ -257,10 +257,10 @@ public sealed class SourceObjectReviewFixTests
     }
 
     [Fact]
-    public async Task BlenderUpdatesWarnWhereAScriptTurnsANodeThatGainsATransform()
+    public async Task BlenderUpdatesWarnWhereAScriptTurnsANodeWhoseRotationTheyChange()
     {
-        // m1 loads the tank m2 loads; m2's script turns the hull of its load. An export giving the hull a transform of its own
-        // would stop that turn in m2: the update says so (it is not refused: a Blender update replaces the model whole).
+        // m1 loads the tank m2 loads; m2's script turns the hull of its load, which replaces the file's rotation and scale
+        // there. An export turning the hull does not turn m2's: the update says so (a Blender update replaces the model whole).
         using SourceWorldFixture fixture = new();
         Replace(fixture, "gamegen/m2.gs", "LoadGameGen tank.flt tank", "LoadGameGen tank.flt tank\r\nFindSubNode hull\r\nObject3DRotate 0.0 45.0 0.0");
         SourceWorkspace workspace = new(fixture.Project);
@@ -271,14 +271,17 @@ public sealed class SourceObjectReviewFixTests
         var json = JsonNode.Parse(before)!;
         foreach (var node in json["nodes"]!.AsArray().OfType<JsonObject>().Where(n => n["name"]?.GetValue<string>() == "hull")) node["rotation"] = new JsonArray(0f, 0.38268343f, 0f, 0.9238795f);
         var notes = SourceObjectEdits.ScriptTransformsReached(workspace, "m1", model, before, Encoding.UTF8.GetBytes(json.ToJsonString()), build.Provenance.Values, Token);
-        Assert.Contains("hull gains a transform of its own in the export, so gamegen/m2.gs line 16 (Object3DRotate, where m2 loads the file) stops turning or scaling it.", notes);
-        // An export that keeps every node's transform as it was warns about nothing.
+        const string Warning = "The export changes the rotation or scale of hull, which gamegen/m2.gs line 16 (Object3DRotate, where m2 loads the file) replaces with its own.";
+        Assert.Contains(Warning, notes);
+        // An export that keeps every node's rotation and scale as they were (a move included) warns about nothing.
         Assert.Empty(SourceObjectEdits.ScriptTransformsReached(workspace, "m1", model, before, before, build.Provenance.Values, Token));
+        var moved = JsonNode.Parse(before)!;
+        foreach (var node in moved["nodes"]!.AsArray().OfType<JsonObject>().Where(n => n["name"]?.GetValue<string>() == "hull")) node["translation"] = new JsonArray(1f, 2f, 3f);
+        Assert.Empty(SourceObjectEdits.ScriptTransformsReached(workspace, "m1", model, before, Encoding.UTF8.GetBytes(moved.ToJsonString()), build.Provenance.Values, Token));
         // Blender renames repeated names (hull.001); the engine name is what the build finds. A world that does not load the
         // model (no provenance for it) still hears about other missions' scripts.
         foreach (var node in json["nodes"]!.AsArray().OfType<JsonObject>().Where(n => n["name"]?.GetValue<string>() == "hull")) { node["name"] = "hull.001"; (node["extras"]?["recoil"] as JsonObject)?.Remove("name"); }
-        Assert.Contains("hull gains a transform of its own in the export, so gamegen/m2.gs line 16 (Object3DRotate, where m2 loads the file) stops turning or scaling it.",
-            SourceObjectEdits.ScriptTransformsReached(workspace, "m1", model, before, Encoding.UTF8.GetBytes(json.ToJsonString()), [], Token));
+        Assert.Contains(Warning, SourceObjectEdits.ScriptTransformsReached(workspace, "m1", model, before, Encoding.UTF8.GetBytes(json.ToJsonString()), [], Token));
     }
 
     [Fact]
@@ -292,31 +295,38 @@ public sealed class SourceObjectReviewFixTests
         var (build, world) = await BuildAsync(fixture, workspace);
         var hull = Origin(build, world, "hull");
         var shown = ObjectTransform.Of(world.Nodes.Single(n => n.Name == "hull"));
-        string Plan(ObjectTransform requested) => Message(() => SourceObjectEdits.PlanTransform(workspace, "hull", hull, build.Executions, requested, Token, "m1", shown, SourceObjectEdits.CopiesOf(hull, build.Provenance.Values)));
-        // The glTF would give the hull an authored matrix in m2 too, where the script's turn would stop applying.
-        Assert.Contains("gamegen/m2.gs line 16 (Object3DRotate) sets the transform of hull where m2 loads data/m2/models/bft/tank.gltf", Plan(shown with { RotationDegrees = new(0, 30, 0) }));
-        Assert.Contains("gamegen/m2.gs line 16", Plan(shown with { Position = new(1, 0, 0) }));
+        // The file's hull changes in m2 too, except its rotation and scale, which the script there replaces (the engine
+        // rebuilds that hull's matrix from them): the edit goes ahead and notes the script.
+        string Plan(ObjectTransform requested)
+        {
+            var plan = SourceObjectEdits.PlanTransform(workspace, "hull", hull, build.Executions, requested, Token, "m1", shown, SourceObjectEdits.CopiesOf(hull, build.Provenance.Values));
+            Assert.NotEmpty(plan.Changes);
+            return string.Join("\n", plan.Notes);
+        }
+        Assert.Contains("gamegen/m2.gs line 16 (Object3DRotate) sets the rotation and scale of hull where m2 loads data/m2/models/bft/tank.gltf, which keeps them there.", Plan(shown with { RotationDegrees = new(0, 30, 0) }));
+        // A move reaches m2's hull, whose script keeps the file's translation.
+        Assert.DoesNotContain("m2.gs", Plan(shown with { Position = new(1, 0, 0) }));
 
         // A FindNode of the name, once the file is loaded, may find that load's hull.
         Replace(fixture, "gamegen/m2.gs", "FindSubNode hull\r\nObject3DRotate 0.0 45.0 0.0", "FindNode hull\r\nObject3DScale 2.0 2.0 2.0");
-        Assert.Contains("(Object3DScale) may set the transform of hull", Plan(shown with { RotationDegrees = new(0, 30, 0) }));
+        Assert.Contains("(Object3DScale) may set the rotation and scale of hull", Plan(shown with { RotationDegrees = new(0, 30, 0) }));
         // A load's root found by its name, then the hull below it, also once renamed.
         Replace(fixture, "gamegen/m2.gs", "FindNode hull\r\nObject3DScale 2.0 2.0 2.0", "FindNode tank\r\nFindSubNode hull\r\nNodeSetDescription hull_1\r\nFindNode tank\r\nFindSubNode hull_1\r\nObject3DScale 1.5 1.5 1.5");
-        Assert.Contains("gamegen/m2.gs line 20 (Object3DScale) sets the transform", Plan(shown with { RotationDegrees = new(0, 30, 0) }));
-        // A translation there is no reason: it replaces the file's translation whatever the file holds.
+        Assert.Contains("gamegen/m2.gs line 20 (Object3DScale) sets the rotation and scale", Plan(shown with { RotationDegrees = new(0, 30, 0) }));
+        // A translation there keeps the file's rotation and scale: nothing to note.
         Replace(fixture, "gamegen/m2.gs", "FindSubNode hull_1\r\nObject3DScale 1.5 1.5 1.5", "FindSubNode hull_1\r\nObject3DTranslate 1.0 0.0 0.0");
-        Assert.NotEmpty(SourceObjectEdits.PlanTransform(workspace, "hull", hull, build.Executions, shown with { RotationDegrees = new(0, 30, 0) }, Token, "m1", shown, SourceObjectEdits.CopiesOf(hull, build.Provenance.Values)).Changes);
+        Assert.DoesNotContain("m2.gs", Plan(shown with { RotationDegrees = new(0, 30, 0) }));
         // Through a file that references the tank.
         fixture.Write("data/m2/models/bft/wrapper.gltf", """{"asset":{"version":"2.0"},"scenes":[{"nodes":[0]}],"nodes":[{"name":"wrap","extras":{"recoil":{"ref":"tank.gltf"}}}]}""");
         Replace(fixture, "gamegen/m2.gs", "LoadGameGen tank.flt tank\r\nFindNode tank\r\nFindSubNode hull\r\nNodeSetDescription hull_1\r\nFindNode tank\r\nFindSubNode hull_1\r\nObject3DTranslate 1.0 0.0 0.0",
             "LoadGameGen wrapper.flt wrapped\r\nFindSubNode hull\r\nObject3DRotate 0.0 45.0 0.0");
-        Assert.Contains("gamegen/m2.gs line 16 (Object3DRotate) sets the transform of hull where m2 loads", Plan(shown with { RotationDegrees = new(0, 30, 0) }));
+        Assert.Contains("gamegen/m2.gs line 16 (Object3DRotate) sets the rotation and scale of hull where m2 loads", Plan(shown with { RotationDegrees = new(0, 30, 0) }));
 
-        // A node of another name, or the hull of a file that does not hold this one, is no reason.
+        // A node of another name, or the hull of a file that does not hold this one, is not noted.
         Replace(fixture, "gamegen/m2.gs", "LoadGameGen wrapper.flt wrapped\r\nFindSubNode hull", "LoadGameGen tank.flt tank\r\nFindSubNode turret");
-        Assert.NotEmpty(SourceObjectEdits.PlanTransform(workspace, "hull", hull, build.Executions, shown with { RotationDegrees = new(0, 30, 0) }, Token, "m1", shown, SourceObjectEdits.CopiesOf(hull, build.Provenance.Values)).Changes);
+        Assert.DoesNotContain("m2.gs", Plan(shown with { RotationDegrees = new(0, 30, 0) }));
         Replace(fixture, "gamegen/m2.gs", "LoadGameGen tank.flt tank\r\nFindSubNode turret", "LoadGameGen m2.flt other\r\nFindSubNode hull");
-        Assert.NotEmpty(SourceObjectEdits.PlanTransform(workspace, "hull", hull, build.Executions, shown with { RotationDegrees = new(0, 30, 0) }, Token, "m1", shown, SourceObjectEdits.CopiesOf(hull, build.Provenance.Values)).Changes);
+        Assert.DoesNotContain("m2.gs", Plan(shown with { RotationDegrees = new(0, 30, 0) }));
     }
 
     [Fact]

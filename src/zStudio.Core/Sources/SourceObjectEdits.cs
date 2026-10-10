@@ -193,7 +193,11 @@ public sealed record SourceObjectTarget(SourceWorkspace Workspace, string Missio
 public static class SourceObjectEdits
 {
     private static readonly string[] TransformCommands = ["Object3DTranslate", "Object3DRotate", "Object3DScale"];
-    /// <summary>The script transforms that apply to a glTF node only while it has no transform of its own (a translation replaces the file's whatever it holds).</summary>
+    /// <summary>
+    /// The script transforms that replace a glTF node's own matrix: the engine rebuilds it from the rotation and scale the
+    /// node stores (gwObject3DSetRotation 0x44e030, SetScale 0x44df00), so the file's rotation and scale no longer apply
+    /// there. A translation (Object3DTranslate) only replaces the matrix's translation.
+    /// </summary>
     private static readonly string[] TurnAndScale = ["Object3DRotate", "Object3DScale"];
     /// <summary>Script commands that set a property of the node they apply to (fog, lights, cameras, windows), with the arguments each takes.</summary>
     public static readonly IReadOnlyDictionary<string, string> PropertyCommands = new Dictionary<string, string>(StringComparer.Ordinal)
@@ -221,9 +225,9 @@ public static class SourceObjectEdits
     /// <remarks>
     /// With <paramref name="world"/> and <paramref name="write"/>, a value a script other missions also run set (or, set by
     /// nothing yet, would get after that script created the node) is set in this mission's world script instead (see
-    /// <see cref="InThisMission"/>). A change of a glTF node is refused while a script sets the transform of another copy or
-    /// load of it, in this world (<paramref name="copies"/>, <see cref="CopiesOf"/>) or in another mission's build that
-    /// loads the file (see <see cref="TransformElsewhere"/>).
+    /// <see cref="InThisMission"/>). A rotation or scale changed in a glTF node is noted where a script rotates or scales
+    /// another copy or load of it, which keeps the script's rotation and scale: in this world (<paramref name="copies"/>,
+    /// <see cref="CopiesOf"/>) or in another mission's build that loads the file (see <see cref="TransformElsewhere"/>).
     /// </remarks>
     public static SourceEditPlan PlanTransform(SourceWorkspace workspace, string nodeName, WorldNodeProvenance origin, IReadOnlyDictionary<(string Script, int Line), int> executions, ObjectTransform requested, CancellationToken token = default, string? mission = null, ObjectTransform? current = null,
         IEnumerable<WorldNodeProvenance>? copies = null, GameZWorld? world = null, SourceInstruction? write = null)
@@ -260,9 +264,10 @@ public static class SourceObjectEdits
             }
             return lines;
         }
-        // A glTF node imported without a transform takes the scripts' TRS whole; one with its own (authored) matrix keeps its
-        // rotation and scale, while a script Object3DTranslate still sets its translation.
-        if (origin.ModelFile == null || writers.Length > 0 && !origin.ModelTransformAuthored)
+        // A glTF node imported without a transform takes the scripts' TRS whole, and so does one with its own (authored) matrix
+        // that a script rotates or scales, which replaces the matrix (keeping its translation); a script Object3DTranslate
+        // alone only sets the authored matrix's translation, which keeps its rotation and scale.
+        if (origin.ModelFile == null || writers.Length > 0 && (!origin.ModelTransformAuthored || TurnAndScale.Any(origin.Writers.ContainsKey)))
         {
             // The scripts place the object: change its transform instructions, adding those it lacks after the last one (or after the
             // instruction that created the object, which leaves it current).
@@ -289,19 +294,18 @@ public static class SourceObjectEdits
             if (scale) edit.Set(origin.Writers.GetValueOrDefault("Object3DScale"), "Object3DScale", requested.Scale, Vector3.One, anchor, current?.Scale);
             return new(label, edit.Changes(), $"{anchor.Script} line {anchor.Line}", edit.Notes);
         }
-        // A node of a glTF file: its transform is the node's, except a translation a script sets. The file's node changes in
-        // every copy of a part and every load of a model file, so a script transform of another one would start or stop
-        // applying there.
-        if ((copies ?? []).Where(c => !ReferenceEquals(c, origin)).SelectMany(c => TurnAndScale.Where(c.Writers.ContainsKey).Select(k => c.Writers[k])).FirstOrDefault() is { } other)
-            throw new InvalidDataException($"{other.Script} line {other.Line} ({other.Command}) sets the transform of another {(origin.Database ? "copy" : "load")} of {nodeName} in {origin.ModelFile}; edit those instructions in the scripts first.");
+        // A node of a glTF file that no script rotates or scales: its transform is the node's, except a translation a script
+        // sets. The file's node changes in every copy of a part and every load of a model file; one that a script rotates or
+        // scales keeps the script's rotation and scale, which replace the file's there.
+        List<(string Relative, byte[] Content)> changes = []; List<string> notes = []; List<string> places = [];
+        if ((rotation || scale) && (copies ?? []).Where(c => !ReferenceEquals(c, origin)).SelectMany(c => TurnAndScale.Where(c.Writers.ContainsKey).Select(k => c.Writers[k])).FirstOrDefault() is { } other)
+            notes.Add($"{other.Script} line {other.Line} ({other.Command}) sets the rotation and scale of another {(origin.Database ? "copy" : "load")} of {nodeName} in {origin.ModelFile}, which keeps them.");
         var translate = origin.Writers.GetValueOrDefault("Object3DTranslate");
         bool gltfPosition = position && translate == null;
-        // Other missions load the file too (a model of data/common/models): a script setting the node's transform in such a
-        // load would start or stop applying there just the same.
-        if ((rotation || scale || gltfPosition) && mission != null && TransformElsewhere(workspace, mission, origin, nodeName, token, inspection: inspection) is { } elsewhere)
-            throw new InvalidDataException($"{elsewhere.Instruction.Script} line {elsewhere.Instruction.Line} ({elsewhere.Instruction.Command}) {(elsewhere.Certain ? "sets" : "may set")} the transform of {nodeName} where {elsewhere.Mission} loads {origin.ModelFile}"
-                + $"{(elsewhere.Certain ? "" : " (it finds a node of that name once the file is loaded)")}, which a change of the file's node would make start or stop applying there; edit those instructions in the scripts first.");
-        List<(string Relative, byte[] Content)> changes = []; List<string> notes = []; List<string> places = [];
+        // Other missions load the file too (a model of data/common/models), where a script may rotate or scale the node just the same.
+        if ((rotation || scale) && mission != null && TransformElsewhere(workspace, mission, origin, nodeName, token, inspection: inspection) is { } elsewhere)
+            notes.Add($"{elsewhere.Instruction.Script} line {elsewhere.Instruction.Line} ({elsewhere.Instruction.Command}) {(elsewhere.Certain ? "sets" : "may set")} the rotation and scale of {nodeName} where {elsewhere.Mission} loads {origin.ModelFile}"
+                + $"{(elsewhere.Certain ? "" : " (it finds a node of that name once the file is loaded)")}, which keeps them there.");
         if (position && translate != null)
         {
             if (InThisMission(workspace, nodeName, label, [translate.Script], Lines(translateOnly: true), executions, token, mission, world, write, inspection) is { } mine)
@@ -317,8 +321,6 @@ public static class SourceObjectEdits
         }
         if (rotation || scale || gltfPosition)
         {
-            // Script rotation and scale are ignored only while the node's matrix is authored; an identity matrix would bring them back.
-            bool scriptBasis = origin.Writers.ContainsKey("Object3DRotate") || origin.Writers.ContainsKey("Object3DScale");
             var plan = GltfEdit(workspace, origin, label, node =>
             {
                 var local = GltfNodeEdits.Local(node);
@@ -331,8 +333,6 @@ public static class SourceObjectEdits
                 if (rotation || scale) { m = new ObjectTransform(requested.Position, ObjectTransform.Snap(requested.RotationDegrees, angles: true), ObjectTransform.Snap(requested.Scale, angles: false)).Matrix(); m.Translation = local.Translation; }
                 if (gltfPosition) m.Translation = requested.Position;
                 ObjectTransform.Finite(m);
-                if (m.IsIdentity && scriptBasis)
-                    throw new InvalidDataException($"An identity transform would let {nodeName}'s script Object3DRotate or Object3DScale apply again; change those instructions instead.");
                 // A move keeps the authored basis as written; anything else writes the new transform.
                 if (!rotation && !scale && node["matrix"] is not JsonArray) node["translation"] = Array(m.Translation.X, m.Translation.Y, m.Translation.Z);
                 else GltfNodeEdits.SetLocal(node, m);
@@ -1106,26 +1106,39 @@ public static class SourceObjectEdits
         origin.ModelFile == null ? [origin]
             : all.Where(p => p.ModelNode == origin.ModelNode && string.Equals(p.ModelFile, origin.ModelFile, StringComparison.OrdinalIgnoreCase));
     /// <summary>
-    /// Warnings for a model file's new content (a Blender update replaces it whole): a node that gains or loses a transform
-    /// of its own while a script rotates or scales it, in this world or where another mission loads the file, makes that
-    /// script's rotation and scale stop or start applying. Nodes are matched by name and order among the same name in the
-    /// hierarchy, as the file's other nodes are by animations and placements; at most 8 warnings.
+    /// Warnings for a model file's new content (a Blender update replaces it whole): a node whose rotation or scale the
+    /// export changes while a script rotates or scales it, in this world or where another mission loads the file, keeps the
+    /// script's there, which replace the file's (the engine rebuilds the node's matrix from them). Nodes are matched by name
+    /// and order among the same name in the hierarchy, as the file's other nodes are by animations and placements; at most
+    /// 8 warnings.
     /// </summary>
     public static IReadOnlyList<string> ScriptTransformsReached(SourceWorkspace workspace, string mission, string model, byte[] before, byte[] after, IEnumerable<WorldNodeProvenance> provenance, CancellationToken token = default)
     {
         // By engine name: Blender renames repeated names (wheel.001), which the import reads back. In the order import reaches
         // the nodes, not the order of the file's node list, which Blender writes as it lists children (by name).
-        List<(string Name, bool Authored, int Index)> Nodes(byte[] bytes)
+        List<(string Name, Matrix4x4? Basis, int Index)> Nodes(byte[] bytes)
         {
             GltfDocument.ValidateJsonText(bytes, token);
             return JsonNode.Parse(bytes) is JsonObject { } root && root["nodes"] is JsonArray nodes
-                ? [.. WorldGltf.ImportOrder(root, nodes).Where(i => nodes[i] is JsonObject).Select(i => (WorldGltf.EngineName((JsonObject)nodes[i]!), Authored((JsonObject)nodes[i]!), i))] : [];
+                ? [.. WorldGltf.ImportOrder(root, nodes).Where(i => nodes[i] is JsonObject).Select(i => (WorldGltf.EngineName((JsonObject)nodes[i]!), Basis((JsonObject)nodes[i]!), i))] : [];
         }
-        // A malformed transform (which no build reads, so the update replacing it is not refused here) still states one.
-        static bool Authored(JsonObject node)
+        // The rotation and scale of a node's transform: its matrix without the translation. A malformed transform (which no
+        // build reads, so the update replacing it is not refused here) has none, which differs from any.
+        static Matrix4x4? Basis(JsonObject node)
         {
-            try { return !GltfNodeEdits.Local(node).IsIdentity; }
-            catch (InvalidDataException) { return true; }
+            try { return GltfNodeEdits.Local(node) with { M41 = 0, M42 = 0, M43 = 0 }; }
+            catch (InvalidDataException) { return null; }
+        }
+        // Each axis within a fraction of its own length: an export writes values back with float noise.
+        static bool SameBasis(Matrix4x4? a, Matrix4x4? b)
+        {
+            if (a is not { } x || b is not { } y) return a == null && b == null;
+            for (int row = 0; row < 3; row++)
+            {
+                Vector3 p = new(x[row, 0], x[row, 1], x[row, 2]), q = new(y[row, 0], y[row, 1], y[row, 2]);
+                if (Vector3.Distance(p, q) > 1e-5 * Math.Max(1, ObjectTransform.Length(p))) return false;
+            }
+            return true;
         }
         var was = Nodes(before); var now = Nodes(after);
         var byName = now.ToLookup(n => n.Name, StringComparer.Ordinal);
@@ -1140,9 +1153,8 @@ public static class SourceObjectEdits
             {
                 int index = node.Index;
                 token.ThrowIfCancellationRequested();
-                if (occurrence >= later.Count || later[occurrence++].Authored == node.Authored || node.Name.Length == 0) continue;
+                if (occurrence >= later.Count || SameBasis(later[occurrence++].Basis, node.Basis) || node.Name.Length == 0) continue;
                 if (notes.Count >= 8) return notes;
-                string change = node.Authored ? "loses its transform" : "gains a transform of its own";
                 var origins = originsByNode[index].ToList();
                 var here = origins.SelectMany(o => TurnAndScale.Where(o.Writers.ContainsKey).Select(c => o.Writers[c])).FirstOrDefault();
                 string? reason = here != null ? $"{here.Script} line {here.Line} ({here.Command})" : null;
@@ -1152,16 +1164,16 @@ public static class SourceObjectEdits
                 var origin = origins.FirstOrDefault() ?? new WorldNodeProvenance { ModelFile = model, ModelNode = index, ModelNodeName = node.Name };
                 if (reason == null && TransformElsewhere(workspace, mission, origin, node.Name, token, traceBudget, inspection) is { } elsewhere)
                     reason = $"{elsewhere.Instruction.Script} line {elsewhere.Instruction.Line} ({elsewhere.Instruction.Command}, where {elsewhere.Mission} loads the file)";
-                if (reason != null) notes.Add($"{node.Name} {change} in the export, so {reason} {(node.Authored ? "starts" : "stops")} turning or scaling it.");
+                if (reason != null) notes.Add($"The export changes the rotation or scale of {node.Name}, which {reason} replaces with its own.");
             }
         }
-        if (untraced > 0 && notes.Count < 8) notes.Add($"{untraced} more nodes gain or lose a transform of their own; other missions' scripts were not checked for them.");
+        if (untraced > 0 && notes.Count < 8) notes.Add($"The export changes the rotation or scale of {untraced} more nodes; other missions' scripts were not checked for them.");
         return notes;
     }
     /// <summary>
-    /// An instruction another mission's build runs that sets the transform of <paramref name="origin"/>'s glTF node where
-    /// that mission loads the node's file (itself, or a file that references it): a change of the file's node reaches that
-    /// load too, so the script's rotation or scale would start or stop applying there. <see cref="CopiesOf"/> sees only this
+    /// An instruction another mission's build runs that rotates or scales <paramref name="origin"/>'s glTF node where that
+    /// mission loads the node's file (itself, or a file that references it): a change of the file's node reaches that load
+    /// too, except its rotation and scale, which the script's replace there. <see cref="CopiesOf"/> sees only this
     /// world; here each other mission's world script is followed as its build runs it (sources, macros and conditions, up
     /// to writing the world), and so is the node each line acts on, by name: a load's root (LoadGameGen, or a FindNode of
     /// its name), a FindSubNode below it (certain), and a FindNode or FindSubNode of the node's name once the file is
@@ -1295,8 +1307,7 @@ public static class SourceObjectEdits
                         case "NodeSetDescription":
                             if (at.Node) targets.Add(A(0)); else if (at.Root && at.Load >= 0) roots[A(0)] = at.Load;
                             break;
-                        // A script translation replaces the file's whatever the file holds; rotation and scale apply only while
-                        // the file's node has no transform of its own, so an edit of the file makes them start or stop applying.
+                        // A script rotation or scale replaces the file's node's own matrix there (a translation only its translation).
                         case "Object3DRotate" or "Object3DScale":
                             if (at.Node && !own.Contains((relative.ToLowerInvariant(), line.Number)) && (at.Load >= 0 ? LoadHolds(at.Load) : Enumerable.Range(0, at.Made).Any(LoadHolds)))
                                 hit = (new SourceInstruction(relative, line.Number, command, raw, args), at.Load >= 0);

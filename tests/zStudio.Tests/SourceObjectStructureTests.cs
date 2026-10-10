@@ -302,7 +302,8 @@ public sealed class SourceObjectStructureTests
         // One copy's lid is scaled by the script and the other's is not, so the refusal for that crate comes from the other copy.
         var slots = GameZWriter.NodeSlots(world, TestContext.Current.CancellationToken);
         Assert.Equal([0, 1], world.Nodes.Where(n => n.Name == "lid").Select(lid => build.Provenance[slots[lid]].Applied.Count).Order());
-        // Moving the unscaled copy's lid edits the part's node too, so the other copy's script scale would stop applying.
+        // Moving the unscaled copy's lid edits the part's node too; the other copy keeps its script scale, which replaces the
+        // part's rotation and scale there.
         var plain = world.Nodes.Where(n => n.Name == "lid").Select(lid => build.Provenance[slots[lid]]).Single(p => p.Applied.Count == 0);
         // Copying the unscaled lid would give every copy's part a lid built without the other copy's script scale.
         var unscaled = world.Nodes.Where(n => n.Name == "lid").Single(lid => build.Provenance[slots[lid]].Applied.Count == 0);
@@ -310,8 +311,8 @@ public sealed class SourceObjectStructureTests
         // Copying the scaled one would give the unscaled copy's part a scaled lid.
         var scaled = world.Nodes.Where(n => n.Name == "lid").Single(lid => build.Provenance[slots[lid]].Applied.Count > 0);
         Assert.Contains("one copy of lid", Assert.Throws<InvalidDataException>(() => SourceObjectEdits.PlanDuplicate(Target(workspace, "m1", build, world, scaled), "lid2", null, Token)).Message);
-        Assert.Contains("another copy of lid", Assert.Throws<InvalidDataException>(() => SourceObjectEdits.PlanTransform(workspace, "lid", plain, build.Executions,
-            new(new(1, 2, 3), Vector3.Zero, Vector3.One), Token, "m1", null, SourceObjectEdits.CopiesOf(plain, build.Provenance.Values))).Message);
+        Assert.Contains(SourceObjectEdits.PlanTransform(workspace, "lid", plain, build.Executions, new(new(1, 2, 3), Vector3.Zero, Vector3.One), Token, "m1", null,
+            SourceObjectEdits.CopiesOf(plain, build.Provenance.Values)).Notes, n => n.Contains("(Object3DScale) sets the rotation and scale of another copy of lid", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -706,8 +707,8 @@ public sealed class SourceObjectStructureTests
     public async Task AuthoredGltfNodesAreEditedWhereTheBuildTakesEachPart()
     {
         using SourceWorldFixture fixture = new();
-        // The ground has its own rotation and translation; a script translates it (the build applies that), rotates it
-        // (ignored for an authored matrix) and turns collision on.
+        // The ground has its own rotation and translation; a script translates it, rotates it (which replaces the glTF's
+        // matrix: the engine rebuilds it from the script's rotation and the translation) and turns collision off.
         var gltf = JsonNode.Parse(File.ReadAllBytes(fixture.Path("data/m1/models/m1.gltf")))!;
         var quarter = Quaternion.CreateFromAxisAngle(Vector3.UnitY, MathF.PI / 2);
         gltf["nodes"]![0]!["rotation"] = new JsonArray(quarter.X, quarter.Y, quarter.Z, quarter.W);
@@ -720,16 +721,22 @@ public sealed class SourceObjectStructureTests
         var ground = Target(workspace, "m1", build, world, "ground");
         var built = WorldUpdate.LocalMatrix(ground.Node)!.Value;
         Assert.Equal(20f, built.Translation.X, 3);
-        Assert.Equal(0f, built.M11, 3);
-        var shown = ObjectTransform.FromMatrix(built);
-        // A move changes the script's Object3DTranslate, which the build applies; the glTF stays.
-        var moved = SourceObjectEdits.PlanTransform(workspace, "ground", ground.Origin, build.Executions, shown with { Position = new(30, 0, 0) }, Token, "m1", shown);
+        Assert.Equal(MathF.Sqrt(0.5f), built.M11, 3);
+        var shown = ObjectTransform.Of(ground.Node);
+        Assert.Equal(new Vector3(0, 45, 0), shown.RotationDegrees);
+        // A move and a turn change the script's Object3DTranslate and Object3DRotate, which the build applies; the glTF stays.
+        var moved = SourceObjectEdits.PlanTransform(workspace, "ground", ground.Origin, build.Executions, shown with { Position = new(30, 0, 0), RotationDegrees = Vector3.Zero }, Token, "m1", shown);
         Assert.Equal("gamegen/m1.gs", Assert.Single(moved.Changes).Relative);
         Apply(workspace, moved);
         (build, world) = await BuildAsync(fixture, workspace, "m1");
-        Assert.Equal(30f, WorldUpdate.LocalMatrix(world.Nodes.Single(n => n.Name == "ground"))!.Value.Translation.X, 3);
-        // A rotation changes the glTF's basis and keeps the file's own translation.
+        var placed = WorldUpdate.LocalMatrix(world.Nodes.Single(n => n.Name == "ground"))!.Value;
+        Assert.Equal(1f, placed.M11, 3); Assert.Equal(30f, placed.Translation.X, 3);
+        // Without the script's rotation the glTF's own matrix applies, with the script's translation; a turn then changes the
+        // glTF's basis and keeps the file's own translation.
+        workspace.Apply("No rotate", [("gamegen/m1.gs", Encoding.Latin1.GetBytes(Text(workspace, "gamegen/m1.gs").Replace("Object3DRotate 0.0 0.0 0.0\r\n", "")))], Token);
+        (build, world) = await BuildAsync(fixture, workspace, "m1");
         ground = Target(workspace, "m1", build, world, "ground");
+        Assert.Equal(0f, WorldUpdate.LocalMatrix(ground.Node)!.Value.M11, 3);
         shown = ObjectTransform.Of(ground.Node);
         var turned = SourceObjectEdits.PlanTransform(workspace, "ground", ground.Origin, build.Executions, shown with { RotationDegrees = Vector3.Zero }, Token, "m1", shown);
         var node = (JsonObject)JsonNode.Parse(Assert.Single(turned.Changes).Content)!["nodes"]![0]!;
@@ -748,12 +755,6 @@ public sealed class SourceObjectStructureTests
         Assert.Equal(world.Nodes.Single(n => n.Name == "ground").Flags & WorldGltf.CarriedFlags, copy.Flags & WorldGltf.CarriedFlags);
         // Re-parenting under the ground would place the copy by the glTF's translation, not the script's: refused.
         Assert.Contains("A script sets ground's transform", Assert.Throws<InvalidDataException>(() => SourceObjectEdits.PlanReparent(Target(workspace, "m1", build, world, "ground2"), world.Nodes.Single(n => n.Name == "ground"), Token)).Message);
-        // Without the script's translation, an identity glTF transform would let its Object3DRotate apply again: refused.
-        workspace.Apply("No translate", [("gamegen/m1.gs", Encoding.Latin1.GetBytes(Text(workspace, "gamegen/m1.gs").Replace("Object3DTranslate 30.0 0.0 0.0\r\n", "")))], Token);
-        (build, world) = await BuildAsync(fixture, workspace, "m1");
-        ground = Target(workspace, "m1", build, world, "ground");
-        shown = ObjectTransform.Of(ground.Node);
-        Assert.Contains("Object3DRotate", Assert.Throws<InvalidDataException>(() => SourceObjectEdits.PlanTransform(workspace, "ground", ground.Origin, build.Executions, new(Vector3.Zero, Vector3.Zero, Vector3.One), Token, "m1", shown)).Message);
     }
 
     [Fact]
