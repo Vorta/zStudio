@@ -5268,6 +5268,300 @@
     ]
   },
   {
+    "Name": "zstudio_source_world_object",
+    "Description": "Describe a world object of a source world: its name, class, local transform (position, rotation in degrees about Y then X then Z, scale), node flags, and where it came from \u2014 the glTF file and node it was imported from (origin.part marks a part of the mission database, a file it references and copies wherever it does), or the script instruction that created it \u2014 with the instruction that last set each property and how often it ran. Node indices are those of zstudio_scene_nodes for the shown world. Inspection previews bound script/model paths to 256 characters and tokens to 128, with truncation flags; edits still target document and node identities.",
+    "Mutates": false,
+    "Parameters": [
+      {
+        "Name": "document",
+        "Type": "string",
+        "Description": "Document lifetime ID from zstudio_state.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "node",
+        "Type": "integer",
+        "Description": "Scene node index.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": 0,
+        "Maximum": 2147483647
+      }
+    ]
+  },
+  {
+    "Name": "zstudio_source_world_command",
+    "Description": "Set a property a script command makes on a node of a source world (fog of the world, a light\u0027s color, ranges or orientation, a camera\u0027s clip or field of view) as one undoable change of the project\u0027s workspace: the instruction that last set it changes, or a new one follows the instruction that created the node. zstudio_source_world_object lists the commands that fit the node and the arguments each set one has. The world rebuilds and the result is the replacement document. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Mutates": true,
+    "Parameters": [
+      {
+        "Name": "document",
+        "Type": "string",
+        "Description": "Document lifetime ID from zstudio_state.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "revision",
+        "Type": "integer",
+        "Description": "Expected current document revision. Read before editing.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": 0,
+        "Maximum": 9223372036854775807
+      },
+      {
+        "Name": "node",
+        "Type": "integer",
+        "Description": "Scene node index.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": 0,
+        "Maximum": 2147483647
+      },
+      {
+        "Name": "command",
+        "Type": "string",
+        "Description": "Property command.",
+        "Required": true,
+        "Choices": [
+          "WorldSetFogState",
+          "WorldSetFogColor",
+          "WorldSetFogRange",
+          "WorldSetFogAltitude",
+          "WorldSetFogDensity",
+          "LightSetColor",
+          "LightSetDiffuse",
+          "LightSetAmbient",
+          "LightSetRanges",
+          "LightSetOrientation",
+          "LightSetTranslate",
+          "LightSetActive",
+          "LightSetSaturated",
+          "CameraSetNearFarClip",
+          "CameraSetFOV",
+          "CameraSetLODMultiplier",
+          "DisplaySetClearColor"
+        ],
+        "Properties": null
+      },
+      {
+        "Name": "arguments",
+        "Type": "array",
+        "Description": "The command\u0027s arguments as script tokens (numbers as text).",
+        "Required": true,
+        "Choices": null,
+        "Properties": null,
+        "Items": {
+          "Name": "",
+          "Type": "string",
+          "Description": "One argument.",
+          "Required": false,
+          "Choices": null,
+          "Properties": null
+        },
+        "MinItems": 1,
+        "MaxItems": 8
+      }
+    ]
+  },
+  {
+    "Name": "zstudio_source_world_object_edit",
+    "Description": "Edit a world object of a source world as one undoable change of the project\u0027s workspace: move, rotate or scale it, set or clear one of its node flags, copy it, delete it, or move it under another parent. The edit changes the source that placed the object: the transform or extras of its glTF node (the mission database or one of its parts, which every copy of the part uses, or a model file, which every load of it uses), or the script instruction that set the value (refused when it ran more than once or takes the value from a macro); a value nothing set yet is added as an instruction after the one that created the object. Copying, deleting and re-parenting apply to the whole object: a node of a model a script loaded stands for that load (zstudio_source_world_object names it). A mission database object is copied, deleted or moved in its glTF file; a script\u0027s object is deleted by turning its instructions into comments, copied by loading it again before the world is written, and moved by attaching it there. The world rebuilds and the result is the replacement document (with the copy\u0027s node index); a change the world cannot be built with is taken back. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Mutates": true,
+    "Parameters": [
+      {
+        "Name": "document",
+        "Type": "string",
+        "Description": "Document lifetime ID from zstudio_state.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "revision",
+        "Type": "integer",
+        "Description": "Expected current document revision. Read before editing.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": 0,
+        "Maximum": 9223372036854775807
+      },
+      {
+        "Name": "node",
+        "Type": "integer",
+        "Description": "Scene node index.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": 0,
+        "Maximum": 2147483647
+      },
+      {
+        "Name": "action",
+        "Type": "string",
+        "Description": "What to do; inferred from the other arguments when omitted (a transform or a flag).",
+        "Required": false,
+        "Choices": [
+          "transform",
+          "flag",
+          "duplicate",
+          "delete",
+          "parent"
+        ],
+        "Properties": null
+      },
+      {
+        "Name": "position",
+        "Type": "object",
+        "Description": "New local position (or the copy\u0027s).",
+        "Required": false,
+        "Choices": null,
+        "Properties": [
+          {
+            "Name": "x",
+            "Type": "number",
+            "Description": "X.",
+            "Required": true,
+            "Choices": null,
+            "Properties": null
+          },
+          {
+            "Name": "y",
+            "Type": "number",
+            "Description": "Y.",
+            "Required": true,
+            "Choices": null,
+            "Properties": null
+          },
+          {
+            "Name": "z",
+            "Type": "number",
+            "Description": "Z.",
+            "Required": true,
+            "Choices": null,
+            "Properties": null
+          }
+        ]
+      },
+      {
+        "Name": "rotationDegrees",
+        "Type": "object",
+        "Description": "New local rotation in degrees (about Y, then X, then Z, as Object3DRotate).",
+        "Required": false,
+        "Choices": null,
+        "Properties": [
+          {
+            "Name": "x",
+            "Type": "number",
+            "Description": "X.",
+            "Required": true,
+            "Choices": null,
+            "Properties": null
+          },
+          {
+            "Name": "y",
+            "Type": "number",
+            "Description": "Y.",
+            "Required": true,
+            "Choices": null,
+            "Properties": null
+          },
+          {
+            "Name": "z",
+            "Type": "number",
+            "Description": "Z.",
+            "Required": true,
+            "Choices": null,
+            "Properties": null
+          }
+        ]
+      },
+      {
+        "Name": "scale",
+        "Type": "object",
+        "Description": "New local scale.",
+        "Required": false,
+        "Choices": null,
+        "Properties": [
+          {
+            "Name": "x",
+            "Type": "number",
+            "Description": "X.",
+            "Required": true,
+            "Choices": null,
+            "Properties": null
+          },
+          {
+            "Name": "y",
+            "Type": "number",
+            "Description": "Y.",
+            "Required": true,
+            "Choices": null,
+            "Properties": null
+          },
+          {
+            "Name": "z",
+            "Type": "number",
+            "Description": "Z.",
+            "Required": true,
+            "Choices": null,
+            "Properties": null
+          }
+        ]
+      },
+      {
+        "Name": "flag",
+        "Type": "string",
+        "Description": "Node flag to set or clear.",
+        "Required": false,
+        "Choices": [
+          "0x8",
+          "0x10",
+          "0x20",
+          "0x40",
+          "0x80",
+          "0x10000",
+          "0x20000"
+        ],
+        "Properties": null
+      },
+      {
+        "Name": "on",
+        "Type": "boolean",
+        "Description": "Whether the flag is set; required with flag.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "name",
+        "Type": "string",
+        "Description": "The copy\u0027s node name (duplicate): 1\u201332 printable characters without spaces, commas, quotes or # % ;, used by no node of the world.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "parent",
+        "Type": "integer",
+        "Description": "The new parent\u0027s scene node index (parent); -1 or the world\u0027s node makes it a root of the world (a node of a part of the mission database: a root of the part).",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": -1,
+        "Maximum": 2147483647
+      }
+    ]
+  },
+  {
     "Name": "zstudio_source_recovery",
     "Description": "List the open source project\u0027s interrupted saves (journals in zstudio/recovery): each with its files and whether each now holds the content from before the save, the content the save wrote, is missing, or was changed by another program. Returns at most 32 saves with 64 files each and total counts; file paths keep 256 characters with fileTruncated. The scan bounds all journal manifests and logs together to 64 MiB and 50,000 file rows. A committed journal only needs cleaning up. While an uncommitted one exists, the project cannot be saved. A project replacement during inspection returns context_changed; retry for the current project.",
     "Mutates": false,
@@ -5297,6 +5591,221 @@
           "abandon"
         ],
         "Properties": null
+      }
+    ]
+  },
+  {
+    "Name": "zstudio_source_zones",
+    "Description": "Inspect the map zone catalog and pinned draft. Zone assignments live in data/mN/meta/zones.json; model geometry is shared. Optional exact targets return a bounded profile/scope page.",
+    "Mutates": false,
+    "Parameters": [
+      {
+        "Name": "document",
+        "Type": "string",
+        "Description": "Document lifetime ID from zstudio_state.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "targets",
+        "Type": "array",
+        "Description": "Exact source scene nodes and, for faces, source polygon indices (as inspection returns them).",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Items": {
+          "Name": "",
+          "Type": "object",
+          "Description": "Source zone target.",
+          "Required": false,
+          "Choices": null,
+          "Properties": [
+            {
+              "Name": "node",
+              "Type": "integer",
+              "Description": "Scene node index.",
+              "Required": true,
+              "Choices": null,
+              "Properties": null,
+              "Minimum": 0,
+              "Maximum": 2147483647
+            },
+            {
+              "Name": "polygon",
+              "Type": "integer",
+              "Description": "Polygon index in the node\u0027s source mesh, the Polygon an inspection target returns; not the built model\u0027s polygon index, which differs where the build split or discarded polygons. An index no built face comes from is refused. Omit for object.",
+              "Required": false,
+              "Choices": null,
+              "Properties": null,
+              "Minimum": 0,
+              "Maximum": 2147483647
+            }
+          ]
+        },
+        "MaxItems": 4096
+      },
+      {
+        "Name": "offset",
+        "Type": "integer",
+        "Description": "Target page offset.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": 0,
+        "Maximum": 2147483647
+      }
+    ]
+  },
+  {
+    "Name": "zstudio_source_zone_draft",
+    "Description": "Open, edit, paint or apply the shared zone draft. begin opens Properties; set configures faces/objects, ordered zones, gate and shared scope; add supplies exact node/polygon targets; paint toggles the explicit GUI brush; apply accepts one undoable edit; cancel discards. Every action after begin requires the current draftToken. Geometry is unchanged by zone-only edits. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Mutates": true,
+    "Parameters": [
+      {
+        "Name": "document",
+        "Type": "string",
+        "Description": "Document lifetime ID from zstudio_state.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "revision",
+        "Type": "integer",
+        "Description": "Expected current document revision. Read before editing.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": 0,
+        "Maximum": 9223372036854775807
+      },
+      {
+        "Name": "action",
+        "Type": "string",
+        "Description": "Draft operation.",
+        "Required": true,
+        "Choices": [
+          "begin",
+          "set",
+          "add",
+          "paint",
+          "apply",
+          "cancel",
+          "label"
+        ],
+        "Properties": null
+      },
+      {
+        "Name": "draftToken",
+        "Type": "string",
+        "Description": "Current draft token from source_zones.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "faces",
+        "Type": "boolean",
+        "Description": "True for polygon faces, false for object zones.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "zones",
+        "Type": "array",
+        "Description": "Zero to three ordered face zone IDs; objects accept one ID or an empty list to keep their current zone; 255 means Any.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Items": {
+          "Name": "",
+          "Type": "integer",
+          "Description": "Zone ID.",
+          "Required": false,
+          "Choices": null,
+          "Properties": null,
+          "Minimum": 0,
+          "Maximum": 255
+        },
+        "MaxItems": 3
+      },
+      {
+        "Name": "gate",
+        "Type": "string",
+        "Description": "Object altitude-probe gate: keep retains each object\u0027s value; on/off explicitly set it.",
+        "Required": false,
+        "Choices": [
+          "keep",
+          "on",
+          "off"
+        ],
+        "Properties": null
+      },
+      {
+        "Name": "zoneId",
+        "Type": "integer",
+        "Description": "Zone ID to name with action label.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": 0,
+        "Maximum": 255
+      },
+      {
+        "Name": "label",
+        "Type": "string",
+        "Description": "Zone name of 1\u2013256 characters for action label; 255 must remain Any.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "sharedScope",
+        "Type": "boolean",
+        "Description": "Explicitly permit every use of selected logical model/mesh in this map.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "targets",
+        "Type": "array",
+        "Description": "Exact source scene nodes and, for faces, source polygon indices (as inspection returns them).",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Items": {
+          "Name": "",
+          "Type": "object",
+          "Description": "Source zone target.",
+          "Required": false,
+          "Choices": null,
+          "Properties": [
+            {
+              "Name": "node",
+              "Type": "integer",
+              "Description": "Scene node index.",
+              "Required": true,
+              "Choices": null,
+              "Properties": null,
+              "Minimum": 0,
+              "Maximum": 2147483647
+            },
+            {
+              "Name": "polygon",
+              "Type": "integer",
+              "Description": "Polygon index in the node\u0027s source mesh, the Polygon an inspection target returns; not the built model\u0027s polygon index, which differs where the build split or discarded polygons. An index no built face comes from is refused. Omit for object.",
+              "Required": false,
+              "Choices": null,
+              "Properties": null,
+              "Minimum": 0,
+              "Maximum": 2147483647
+            }
+          ]
+        },
+        "MaxItems": 4096
       }
     ]
   },

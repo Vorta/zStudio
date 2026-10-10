@@ -59,10 +59,16 @@ internal static class AiValveMcpChecks
             Assert.Equal("revision_conflict", (await Job("ai_valve_edit", stale, "failed"))["code"]!.GetValue<string>());
             await Job("resource_properties", Args(("member", member), ("node", first), ("valves", true), ("action", "open")));
             var pinned = main.OpenPropertiesWindow!.ResourceFields!; Assert.True(pinned.ValveMode); Assert.Equal(first.ToString(), pinned.Json["valveRecord"]!.GetValue<string>());
-            Button FindButton(string label) => Descendants(main.OpenPropertiesWindow!.ResourceFields!).OfType<Button>().Single(b => Equals(b.Content, label));
-            FindButton("Find uses: go").RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            // Properties rebuilds its fields asynchronously after an edit; wait for exactly one button with the label.
+            async Task<Button> FindButton(string label)
+            {
+                IEnumerable<Button> Matches() => main.OpenPropertiesWindow?.ResourceFields is { } fields ? Descendants(fields).OfType<Button>().Where(b => Equals(b.Content, label)) : [];
+                await Until(() => Matches().Count() == 1);
+                return Matches().Single();
+            }
+            (await FindButton("Find uses: go")).RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
             await Until(() => Descendants(pinned).OfType<Button>().Any(b => Equals(b.Content, "Next references")));
-            FindButton("Next references").RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            (await FindButton("Next references")).RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
             await Until(() => Descendants(pinned).OfType<Button>().Any(b => b.Content?.ToString()?.StartsWith("objectives.zrd", StringComparison.Ordinal) == true));
             Descendants(pinned).OfType<Button>().Single(b => b.Content?.ToString()?.StartsWith("objectives.zrd", StringComparison.Ordinal) == true).RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
             await Until(() => main.OpenPropertiesWindow?.ResourceFields?.MemberId == edits.Current.Members[2].Id);
@@ -74,7 +80,7 @@ internal static class AiValveMcpChecks
             await Job("ai_valve_edit", Args(("member", member), ("record", named.Id), ("operand", named.Value.Children[0].Id), ("action", "delete_item")));
             await Until(() => Descendants(main.OpenPropertiesWindow.ResourceFields!).OfType<Button>().Any(b => Equals(b.Content, "Append action")));
             long beforeAppend = doc.Revision;
-            var append = FindButton("Append action");
+            var append = await FindButton("Append action");
             append.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
             // Acceptance changes Revision before dependent preview refresh finishes.
             // The button is re-enabled only after that GUI transaction releases its guard.
@@ -82,7 +88,7 @@ internal static class AiValveMcpChecks
             Assert.Equal(2, MissionAiValves.Records("valves.zrd", edits.Tree(edits.Member(member), token), token).Last().Value.Children.Count);
             await Job("resource_properties", Args(("member", net), ("valves", true), ("action", "open")));
             pinned = main.OpenPropertiesWindow.ResourceFields!;
-            FindButton("Next binding targets").RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            (await FindButton("Next binding targets")).RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
             await Until(() => Descendants(pinned).OfType<Button>().Any(b => b.Content?.ToString()?.StartsWith("Add valve to node_16 ", StringComparison.Ordinal) == true));
             var targets = await Job("ai_valves", Args(("member", net), ("section", "targets"), ("offset", 16), ("limit", 16)));
             Assert.Equal(16, targets["records"]!["items"]!.AsArray().Count);
