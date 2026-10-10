@@ -159,6 +159,21 @@ public sealed class SourceProjectSafetyTests
         File.SetLastWriteTimeUtc(wave, File.GetLastWriteTimeUtc(wave).AddMinutes(1));
         Assert.Throws<InvalidDataException>(() => snapshot.CheckUnchanged(Token));
         Assert.Throws<InvalidDataException>(() => snapshot.Read("data/common/sounds/b.wav", Token));
+        // A search folder found missing is kept too: its appearance would put it on the search paths the build skipped.
+        // A pending file makes its folder exist.
+        SourceBuilder.Snapshot folders = new(fixture.Project, new Dictionary<string, byte[]> { ["data/pending/x.gltf"] = [] });
+        Assert.True(folders.FolderExists("data/pending"));
+        Assert.False(folders.FolderExists("data/added"));
+        Assert.Equal(["data/added"], folders.MissingFolders());
+        Assert.Contains("data/added", folders.Missing());
+        Directory.CreateDirectory(Path.Combine(fixture.Project, "data", "added"));
+        Assert.Throws<InvalidDataException>(() => folders.CheckUnchanged(Token));
+        // Every distinct path the run keeps (absent ones included) counts toward its retained-data limit.
+        SourceBuilder.Snapshot bounded = new(fixture.Project, maximumRetainedBytes: 64 * 1024);
+        void ProbeUntilRefused() { for (int i = 0; i < 10_000; i++) bounded.Exists($"data/missing/{i}.gltf"); }
+        var refused = Assert.Throws<InvalidDataException>(ProbeUntilRefused);
+        Assert.Contains("looked-up project paths", refused.Message);
+        Assert.InRange(bounded.Missing().Count, 100, 400);
     }
 
     [Fact]

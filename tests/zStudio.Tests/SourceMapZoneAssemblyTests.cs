@@ -150,7 +150,8 @@ public sealed class SourceMapZoneAssemblyTests
         Files files = new(); var doc = Model(); Store(files, "data/fallback/turret.gltf", doc);
         Manifest(files, "m1", new SourceMapZoneAsset(First, Geometry, Profile(doc, 0xFFFF0001), []));
         Assert.Contains("does not exist", Assert.Throws<InvalidDataException>(() => Assemble(files,
-            "SetModelDirectory ../data/fallback\nSetModelDirectory ../data/m1/models\nLoadGameGen turret.flt root")).Message);
+            // Another spelling of the mission's folder (listed first) searches it before the fallback again.
+            "SetModelDirectory ../data/fallback\nSetModelDirectory ..\\data\\m1\\models\nLoadGameGen turret.flt root")).Message);
         Assert.DoesNotContain("data/fallback/turret.gltf", files.Reads);
     }
 
