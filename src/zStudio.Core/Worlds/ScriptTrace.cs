@@ -4,7 +4,8 @@ namespace Recoil.Zbd.Core.Worlds;
 
 /// <summary>
 /// One executed gamegen instruction: its script, command and expanded arguments, and the model and texture directories
-/// at that point, most recently added first (the order they are searched).
+/// at that point in the order they are searched (<see cref="DirectorySearchList"/>: the most recently added new folder
+/// first; a folder named again keeps its place).
 /// </summary>
 public sealed record TracedInstruction(string Script, string Command, IReadOnlyList<string> Args, IReadOnlyList<string> ModelDirectories, string? ScriptModelDirectory, IReadOnlyList<string> TextureDirectories);
 
@@ -119,8 +120,10 @@ internal sealed class ScriptConditions
 
 /// <summary>
 /// The instructions a mission's build script runs, in order, with <c>source</c> followed and macros expanded, up to
-/// the point where it writes the world. Model directory changes are tracked, including the most recent one made by
-/// the running script itself (the folder its models came from). Scripts the build refuses (sourcing each other more than
+/// the point where it writes the world. Model directory changes are tracked, including the most recent folder named by
+/// the running script itself (the folder its models came from). Folders are listed by the engine's rule
+/// (<see cref="DirectorySearchList"/>); without a folder test every folder a script names counts as present, as in the
+/// original build tree. Scripts the build refuses (sourcing each other more than
 /// <see cref="WorldAssembler.MaximumScriptDepth"/> levels deep, or running more than
 /// <see cref="WorldAssembler.MaximumInstructions"/> instructions) are refused with <see cref="InvalidDataException"/>.
 /// </summary>
@@ -130,21 +133,22 @@ public static class ScriptTrace
         => Trace(script, entry, notes, new ScriptTraceBudget());
 
     internal static List<TracedInstruction> Trace(Func<string, IReadOnlyList<IReadOnlyList<string>>?> script, string entry, List<string> notes, ScriptTraceBudget budget,
-        BoundedDiagnostics? diagnostics = null, CancellationToken token = default)
-        => RunTrace(script, entry, notes, budget, diagnostics, null, true, token);
+        BoundedDiagnostics? diagnostics = null, CancellationToken token = default, Func<string, bool>? folderExists = null)
+        => RunTrace(script, entry, notes, budget, diagnostics, null, true, folderExists, token);
 
     /// <summary>Observe executed operands without retaining instruction history, optionally including post-write scripts.</summary>
     internal static void Visit(Func<string, IReadOnlyList<IReadOnlyList<string>>?> script, string entry,
-        Action<TracedInstruction> inspect, CancellationToken token, bool stopAtWorldWrite = true, ScriptTraceBudget? budget = null)
-        => RunTrace(script, entry, [], budget ?? new(), null, inspect, stopAtWorldWrite, token);
+        Action<TracedInstruction> inspect, CancellationToken token, bool stopAtWorldWrite = true, ScriptTraceBudget? budget = null,
+        Func<string, bool>? folderExists = null)
+        => RunTrace(script, entry, [], budget ?? new(), null, inspect, stopAtWorldWrite, folderExists, token);
 
     private static List<TracedInstruction> RunTrace(Func<string, IReadOnlyList<IReadOnlyList<string>>?> script, string entry,
         List<string> notes, ScriptTraceBudget budget, BoundedDiagnostics? diagnostics, Action<TracedInstruction>? inspect,
-        bool stopAtWorldWrite, CancellationToken token)
+        bool stopAtWorldWrite, Func<string, bool>? folderExists, CancellationToken token)
     {
         diagnostics ??= new(notes);
         List<TracedInstruction> result = []; Dictionary<string, string> variables = new(StringComparer.Ordinal);
-        List<string> directories = [], textures = []; bool written = false; ScriptConditions conditions = new();
+        DirectorySearchList directories = new(), textures = new(); bool written = false; ScriptConditions conditions = new();
         // As many instructions as the build runs: scripts sourcing each other repeatedly would otherwise multiply.
         int instructions = 0;
         // Instructions share a directory list until it changes.
@@ -176,23 +180,23 @@ public static class ScriptTrace
                 command = ScriptCommands.Core(command);
                 if (command == "SetModelDirectory")
                 {
-                    ownDirectory = WorldDirectoryPaths.Add(directories, args.Length > 0 ? args[0] : "", budget.Work) ?? ownDirectory;
-                    modelView = Snapshot(directories, modelView);
+                    ownDirectory = directories.Add(args.Length > 0 ? args[0] : "", budget.Work, folderExists) ?? ownDirectory;
+                    modelView = Snapshot(directories.Folders, modelView);
                 }
                 if (command == "SetTextureDirectory")
                 {
-                    WorldDirectoryPaths.Add(textures, args.Length > 0 ? args[0] : "", budget.Work);
-                    textureView = Snapshot(textures, textureView);
+                    textures.Add(args.Length > 0 ? args[0] : "", budget.Work, folderExists);
+                    textureView = Snapshot(textures.Folders, textureView);
                 }
                 TracedInstruction instruction = new(name, command, args, modelView, ownDirectory, textureView);
                 if (inspect == null) result.Add(instruction); else inspect(instruction);
                 if (stopAtWorldWrite && command == "GameZWriteZBDFile") written = true;
             }
         }
-        IReadOnlyList<string> Snapshot(List<string> current, IReadOnlyList<string> previous)
+        IReadOnlyList<string> Snapshot(IReadOnlyList<string> current, IReadOnlyList<string> previous)
         {
-            // Even a command that revisits several directories can finish in the same order. Its own-directory
-            // assignment still matters, but it needs no new immutable history when the final search order matches.
+            // A command that names only listed directories leaves the order as it was. Its own-directory
+            // assignment still matters, but it needs no new immutable history when the search order matches.
             if (WorldDirectoryPaths.SameOrder(current, previous, budget.Work)) return previous;
             budget.ReserveSnapshot(current.Count);
             return current.ToArray();

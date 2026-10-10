@@ -1,4 +1,6 @@
+using System.Numerics;
 using System.Text;
+using Recoil.Zbd.Core.Gltf;
 using Recoil.Zbd.Core.Worlds;
 using Xunit;
 
@@ -46,24 +48,56 @@ public sealed class WorldLoadCapacityTests
         Assert.DoesNotContain(assembler.World.Nodes, n => n.Name is "root" or "inside");
     }
 
+    /// <summary>
+    /// The engine's search-path rule (zRdrAddSearchPaths): a folder named again keeps its place, and a folder that does not
+    /// exist is not listed. As common.gw, weapons.gw and bftN.gw do, b is searched before a after a is named again, for
+    /// models and for textures.
+    /// </summary>
+    [Fact]
+    public void SearchFoldersNamedAgainKeepTheirPlaceAndMissingFoldersAreNotListed()
+    {
+        GltfPrimitive primitive = new() { Material = new() { ImageUri = "skin.png" } };
+        primitive.Positions.AddRange([Vector3.Zero, Vector3.UnitX, Vector3.UnitZ]);
+        primitive.TexCoords.AddRange([Vector2.Zero, Vector2.UnitX, Vector2.UnitY]);
+        primitive.Indices.AddRange([0, 1, 2]);
+        GltfMesh mesh = new(); mesh.Primitives.Add(primitive);
+        GltfDocument document = new(); document.Roots.Add(new() { Name = "surface", Mesh = mesh });
+        var (json, binary) = document.Write("surface.bin", Token);
+        string script = "SetModelDirectory ..\\data\\a;..\\data\\b;..\\data\\missing\nSetTextureDirectory ..\\data\\t1\nSetTextureDirectory ..\\data\\t2\n"
+            + "SetModelDirectory ..\\data\\a\nSetTextureDirectory ..\\data\\t1\nLoadGameGen surface.flt root\nLoadGameGen absent.flt other\nGameZWriteZBDFile gamez.zbd\n";
+        var assembler = new WorldAssembler(new Files(script, new()
+        {
+            ["data/a/surface.gltf"] = json, ["data/a/surface.bin"] = binary, ["data/b/surface.gltf"] = json, ["data/b/surface.bin"] = binary,
+            ["data/t1/skin.png"] = [], ["data/t2/skin.png"] = [],
+        }), Token);
+        assembler.Assemble("m1.gs");
+        Assert.Contains("data/b/surface.gltf", assembler.ModelFiles);
+        Assert.DoesNotContain("data/a/surface.gltf", assembler.ModelFiles);
+        Assert.Equal("data/t2/skin.png", assembler.TextureFiles["skin"]);
+        Assert.Contains(assembler.Warnings, w => w.EndsWith("found no model for absent.flt in data/b, data/a.", StringComparison.Ordinal));
+    }
+
     private static string Prefix(int count) => "SetModelDirectory ../data/models\n" + string.Concat(Enumerable.Repeat("NewObject3D padding\n", count));
-    private sealed class Files(string script) : IProjectFiles
+    private sealed class Files(string script, Dictionary<string, byte[]>? assets = null) : IProjectFiles
     {
         private readonly byte[] bytes = Encoding.ASCII.GetBytes(script);
-        public bool Exists(string relative) => relative is "gamegen/m1.gs" or "data/models/empty.gltf" or "data/models/one.gltf";
         private readonly byte[] empty = """{"asset":{"version":"2.0"},"scene":0,"scenes":[{"nodes":[]}],"nodes":[]}"""u8.ToArray();
         private readonly byte[] one = """{"asset":{"version":"2.0"},"scene":0,"scenes":[{"nodes":[0]}],"nodes":[{"name":"inside"}]}"""u8.ToArray();
+        private byte[]? Content(string relative) => relative switch
+        {
+            "gamegen/m1.gs" => bytes,
+            "data/models/empty.gltf" => empty,
+            "data/models/one.gltf" => one,
+            _ => assets?.GetValueOrDefault(relative),
+        };
+        public bool Exists(string relative) => Content(relative) != null;
+        public bool FolderExists(string relative) => relative == "data/models"
+            || assets?.Keys.Any(k => k.StartsWith(relative + "/", StringComparison.Ordinal)) == true;
         public byte[] Read(string relative, CancellationToken token) => Read(relative, token, ProjectReadLimits.Document);
         public byte[] Read(string relative, CancellationToken token, ProjectReadLimits limits)
         {
             token.ThrowIfCancellationRequested();
-            byte[] result = relative switch
-            {
-            "gamegen/m1.gs" => bytes,
-            "data/models/empty.gltf" => empty,
-            "data/models/one.gltf" => one,
-            _ => throw new FileNotFoundException(relative),
-            };
+            byte[] result = Content(relative) ?? throw new FileNotFoundException(relative);
             limits.Validate(result); return result;
         }
     }

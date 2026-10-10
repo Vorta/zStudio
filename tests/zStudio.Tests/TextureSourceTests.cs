@@ -171,7 +171,7 @@ public sealed class TextureSourceTests
         Assert.Empty(notes);
         var odd = TextureSources.PlaceMission("m2", ["b", "a"], false, notes);
         Assert.Equal("data/m2/textures", odd["a"]); Assert.Single(notes);
-        Assert.Equal(["data/common/effects/textures", "data/common/multi_bft/textures", "data/common/textures", "data/m9/textures"], TextureSources.MissionFolders("m9", true));
+        Assert.Equal(["data/common/multi_bft/textures", "data/common/effects/textures", "data/common/textures", "data/m9/textures"], TextureSources.MissionFolders("m9", true));
         Assert.Equal("data\\common\\textures\\rock.png", TextureSources.SortKey("data/common/Textures/Rock.png"));
     }
 

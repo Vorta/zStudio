@@ -74,7 +74,7 @@ public sealed partial class WorldAssembler(IProjectFiles files, CancellationToke
     public string? AnimationFile { get; private set; }
     /// <summary>Current script macro values, with the interpreter's case-sensitive identities.</summary>
     private readonly Dictionary<string, string> variables = new(StringComparer.Ordinal);
-    private readonly List<string> modelDirectories = [], textureDirectories = [], readerDirectories = [];
+    private readonly DirectorySearchList modelDirectories = new(), textureDirectories = new(), readerDirectories = new();
     private readonly DirectoryWorkBudget directoryWork = new();
     private readonly ScriptConditions conditions = new();
     /// <summary>The instruction lines of each script read so far, by project path (the file system finds scripts without case).</summary>
@@ -350,10 +350,8 @@ public sealed partial class WorldAssembler(IProjectFiles files, CancellationToke
         return at >= 0 && at < args.Count ? args[at] : null;
     }
 
-    private void AddDirectories(List<string> list, string value)
-    {
-        WorldDirectoryPaths.Add(list, value, directoryWork);
-    }
+    /// <summary>SetModelDirectory, SetTextureDirectory and RdrSetPath: the engine's search-path rule (<see cref="DirectorySearchList"/>), on the project's folders.</summary>
+    private void AddDirectories(DirectorySearchList list, string value) => list.Add(value, directoryWork, files.FolderExists);
     /// <summary><c>..\data\m1\models</c> (relative to the gamegen folder) → <c>data/m1/models</c>; other paths are outside the project.</summary>
     internal static string? ProjectPath(string scriptPath)
     {
@@ -552,7 +550,7 @@ public sealed partial class WorldAssembler(IProjectFiles files, CancellationToke
         // The root takes its slot after the caches of the files the load references (see OriginalLoader).
         WorldNode root = new(name, WorldNodeClass.Object3D) { Flags = 0x0108001C, Zone = 0xFF }; Object3D(root); LoadedRoots.Add(root); current = root;
         string? path = ResolveModel(file);
-        if (path == null) { Allocate(root); diagnostics.Add($"{script}: LoadGameGen found no model for {file} in {BoundedDiagnostics.DirectoryList(modelDirectories)}."); pendingWorld = null; return; }
+        if (path == null) { Allocate(root); diagnostics.Add($"{script}: LoadGameGen found no model for {file} in {BoundedDiagnostics.DirectoryList(modelDirectories.Folders)}."); pendingWorld = null; return; }
         // One load parses each file once; models follow the loader's caches (see WorldGltf.ImportContext).
         Dictionary<string, (GltfDocument, string)> documents = new(StringComparer.OrdinalIgnoreCase);
         (GltfDocument, string) Load(string file)
@@ -695,10 +693,10 @@ public sealed partial class WorldAssembler(IProjectFiles files, CancellationToke
         world.PayloadFloat(0x54), world.PayloadFloat(0x58), world.PayloadInt(0x78), world.PayloadInt(0x7C));
 
     /// <summary>
-    /// The first model directory (most recently added first) holding the file the script names: a .gltf or .glb file as
-    /// named, or for another name (the original OpenFlight .flt of older projects) its .gltf or .glb.
+    /// The first model directory (in search order, <see cref="DirectorySearchList"/>) holding the file the script names: a
+    /// .gltf or .glb file as named, or for another name (the original OpenFlight .flt of older projects) its .gltf or .glb.
     /// </summary>
-    public string? ResolveModel(string file) => ResolveModel(file, modelDirectories, ModelExists);
+    public string? ResolveModel(string file) => ResolveModel(file, modelDirectories.Folders, ModelExists);
     /// <summary>The model a <c>LoadGameGen</c> of <paramref name="file"/> loads from <paramref name="directories"/> (searched in order), or null.</summary>
     internal static string? ResolveModel(string file, IReadOnlyList<string> directories, Func<string, bool> exists)
     {
@@ -761,7 +759,7 @@ public sealed partial class WorldAssembler(IProjectFiles files, CancellationToke
         // The world stores the name in a 20-byte Latin-1 field and the packs are built from files of that name.
         if (textureName.Length is < 1 or > 19 || textureName.Any(c => c > 255 || char.IsControl(c) || c is '/' or '\\' or ':'))
             throw new InvalidDataException($"{from}: texture name '{JsonData.ShownText(textureName)}' needs 1–19 Latin-1 characters without path separators{(uri.Length > 0 ? $"; rename its PNG, {JsonData.ShownText(Path.GetFileName(uri))}" : "")}.");
-        string? file = textureDirectories.Select(d => $"{d}/{textureName}{TextureSources.Extension}").FirstOrDefault(files.Exists);
+        string? file = textureDirectories.Folders.Select(d => $"{d}/{textureName}{TextureSources.Extension}").FirstOrDefault(files.Exists);
         if (file == null && uri.Length > 0) { string candidate = Relative(from, uri); if (files.Exists(candidate)) file = candidate; }
         if (file == null) diagnostics.Add($"{from}: texture {textureName} has no PNG; the game shows its default texture.");
         else if (TextureFiles.TryGetValue(textureName, out string? other) && !other.Equals(file, StringComparison.OrdinalIgnoreCase))

@@ -50,10 +50,16 @@ public static class TextureSources
     /// <summary>Whether <see cref="PngSize"/> read the header of <paramref name="path"/> (what planning cost, for tests).</summary>
     internal static bool HeaderRead(string path) => PlanningHeaderReads.ContainsKey(path);
 
-    /// <summary>Folders searched for a mission's textures, as <c>support\common.gw</c> sets them.</summary>
+    /// <summary>
+    /// Folders searched for a mission's textures, in the order the build searches them once its scripts have set them
+    /// (<see cref="Worlds.DirectorySearchList"/>): <c>support\common.gw</c> adds the mission's <c>textures</c> and
+    /// <c>textures\bft</c>, then <c>data\effects\textures</c> (no source project has it), <c>data\common\textures</c> and
+    /// <c>data\common\effects\textures</c>, each new folder at the head; <c>bftN.gw</c> and <c>weapons.gw</c> name listed
+    /// folders again, which keeps the order, and <c>bftmulti.gw</c> adds the multiplayer vehicles' folder at the head.
+    /// </summary>
     public static IReadOnlyList<string> MissionFolders(string mission, bool multiplayer) => multiplayer
-        ? [EffectsTextures, MultiBftTextures, CommonTextures, $"data/{mission}/textures"]
-        : [EffectsTextures, CommonTextures, $"data/{mission}/textures", $"data/{mission}/textures/bft"];
+        ? [MultiBftTextures, EffectsTextures, CommonTextures, $"data/{mission}/textures"]
+        : [EffectsTextures, CommonTextures, $"data/{mission}/textures/bft", $"data/{mission}/textures"];
 
     /// <summary>The key the original build sorted pack records by: the lowercase source path.</summary>
     public static string SortKey(string relativePath) => relativePath.Replace('/', '\\').ToLowerInvariant();
