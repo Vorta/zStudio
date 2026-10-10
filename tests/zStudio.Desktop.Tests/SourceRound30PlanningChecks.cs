@@ -88,17 +88,15 @@ internal static class SourceRound30PlanningChecks
                 var world = GameZWorldReader.FromDocument(doc.Document, token);
                 var hull = Assert.Single(world.Nodes, n => n.Name == "hull");
                 int node = GameZWriter.NodeSlots(world, TestContext.Current.CancellationToken)[hull];
-                var requested = ObjectTransform.Of(hull) with { Position = new Vector3(2, 0, 0) };
+                // A turn of the shared file's hull reads m2's scripts, whose turn keeps its own there, to note it.
+                var requested = ObjectTransform.Of(hull) with { RotationDegrees = new Vector3(0, 30, 0) };
                 var method = typeof(MainWindow).GetMethod("MoveSourceObjectAsync", BindingFlags.Instance | BindingFlags.NonPublic)!;
                 Task<DocumentModel> GuiEdit() => (Task<DocumentModel>)method.Invoke(main, [doc, node, requested, token])!;
                 Dictionary<string, object?> EditArguments()
                 {
                     var args = Arguments(); args["node"] = node; args["action"] = "transform";
-                    args["position"] = new Dictionary<string, object?> { ["x"] = 2, ["y"] = 0, ["z"] = 0 }; return args;
+                    args["rotationDegrees"] = new Dictionary<string, object?> { ["x"] = 0, ["y"] = 30, ["z"] = 0 }; return args;
                 }
-                var readable = await Assert.ThrowsAsync<StudioCommandException>(GuiEdit);
-                Assert.Equal("invalid_argument", readable.Code); Assert.Contains("Object3DRotate", readable.Message);
-                Unchanged();
                 using (FileStream held = new(fixture.Path("gamegen/m2.gs"), FileMode.Open, FileAccess.ReadWrite, FileShare.None))
                 {
                     var refused = await Assert.ThrowsAsync<StudioCommandException>(GuiEdit);
@@ -110,11 +108,11 @@ internal static class SourceRound30PlanningChecks
                     Assert.Equal(refused.Message, protocol["message"]!.GetValue<string>());
                     Unchanged("gamegen/m2.gs");
                 }
-                // A failed read must not be cached as absence: releasing the lock restores the semantic refusal.
-                var retried = await Job("source_world_object_edit", EditArguments(), "failed");
-                Assert.Equal("invalid_argument", retried["code"]!.GetValue<string>());
-                Assert.Contains("Object3DRotate", retried["message"]!.GetValue<string>());
-                Unchanged();
+                // A failed read must not be cached as absence: releasing the lock, the turn goes ahead and notes m2's script.
+                var retried = await Job("source_world_object_edit", EditArguments());
+                Assert.Contains(retried["document"]!["sourceWorld"]!["editNotes"]!.AsArray(), n => n!.GetValue<string>().Contains("Object3DRotate", StringComparison.Ordinal));
+                Assert.True(workspace.IsDirty);
+                foreach (var (path, bytes) in original) Assert.Equal(bytes, File.ReadAllBytes(path));
             }
 
             Dictionary<string, object?> Arguments() => new() { ["document"] = doc.SessionId.ToString(), ["revision"] = doc.Revision };

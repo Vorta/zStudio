@@ -317,7 +317,9 @@ public sealed class WorldReviewRegressionTests
         var dependent = SourceObjectEdits.TransformElsewhere(workspace, "m1", assembler.Provenance[node], node.Name, Token);
         Assert.NotNull(dependent); Assert.Equal("m2", dependent.Value.Mission);
         var transform = ObjectTransform.Of(node);
-        Assert.Throws<InvalidDataException>(() => SourceObjectEdits.PlanTransform(workspace, node.Name, assembler.Provenance[node], assembler.Executions, transform with { Position = Vector3.UnitX }, mission: "m1", current: transform, world: world, write: assembler.WriteInstruction, token: Token));
+        // m2's turn replaces the file's rotation there, which a turn of the file's node notes.
+        var turned = SourceObjectEdits.PlanTransform(workspace, node.Name, assembler.Provenance[node], assembler.Executions, transform with { RotationDegrees = new(0, 30, 0) }, mission: "m1", current: transform, world: world, write: assembler.WriteInstruction, token: Token);
+        Assert.Contains(turned.Notes, n => n.Contains("where m2 loads", StringComparison.Ordinal));
         Assert.Empty(workspace.Overlay());
     }
 
