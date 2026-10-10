@@ -192,7 +192,8 @@ public sealed partial class WorldAssembler(IProjectFiles files, CancellationToke
         {
             case "SetModelDirectory": AddDirectories(modelDirectories, A(0)); break;
             case "SetTextureDirectory": AddDirectories(textureDirectories, A(0)); break;
-            case "RdrSetPath": AddDirectories(readerDirectories, A(0)); break;
+            // zRdrSetPath (0x48cca0) replaces the zReader path list; the other two only add to theirs.
+            case "RdrSetPath": readerDirectories.Clear(); AddDirectories(readerDirectories, A(0)); break;
             case "AnimSetZBDFile": AnimationFile = A(0); break;
             case "SetGameZNodeArraySize": World.NodeCapacity = Math.Clamp((int)F(0), 16, GameZWorld.MaximumNodeCapacity); break;
             case "SetModel3DArraySize": World.ModelCapacity = Math.Clamp((int)F(0), 16, GameZWorld.MaximumNodeCapacity); break;
@@ -355,7 +356,7 @@ public sealed partial class WorldAssembler(IProjectFiles files, CancellationToke
         return at >= 0 && at < args.Count ? args[at] : null;
     }
 
-    /// <summary>SetModelDirectory, SetTextureDirectory and RdrSetPath: the engine's search-path rule (<see cref="DirectorySearchList"/>), on the project's folders.</summary>
+    /// <summary>SetModelDirectory, SetTextureDirectory and RdrSetPath add by the engine's search-path rule (<see cref="DirectorySearchList"/>), on the project's folders.</summary>
     private void AddDirectories(DirectorySearchList list, string value) => list.Add(value, directoryWork, FolderExists);
     private bool FolderExists(string folder) { Search.Probe(); return files.FolderExists(folder); }
     /// <summary>Every file the build looks for is charged to <see cref="Search"/> before the provider is asked.</summary>
