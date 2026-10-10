@@ -1,0 +1,1008 @@
+using System.Globalization;
+using System.Numerics;
+using System.Text;
+using System.Text.Json;
+using System.Text.Json.Nodes;
+using Recoil.Zbd.Core.Gltf;
+using Recoil.Zbd.Core.Worlds;
+
+namespace Recoil.Zbd.Core.Sources;
+
+/// <summary>A model checked out for Blender: its folder under <c>zstudio/export</c> and the project files it was copied from.</summary>
+public sealed record BlenderCheckout(string Id, string Folder, string Model, DateTime CreatedUtc, IReadOnlyList<BlenderCheckoutFile> Files)
+{
+    /// <summary>Files updates from this checkout wrote (project path and SHA-256): states the project may hold without an edit since the checkout.</summary>
+    public IReadOnlyList<BlenderCheckoutFile> Applied { get; init; } = [];
+    /// <summary>The copy of the model Blender imports.</summary>
+    public string Input => Path.Combine(Folder, "input", Path.GetFileName(Model));
+    /// <summary>Where Blender exports go; each export is one glTF file (with its buffers and textures) anywhere below it.</summary>
+    public string Outbox => Path.Combine(Folder, "outbox");
+}
+/// <summary>A project file a checkout copied: its project path, its path in the checkout and its SHA-256 then.</summary>
+public sealed record BlenderCheckoutFile(string Project, string Checkout, string Sha256);
+/// <summary>An export Blender wrote into a checkout's outbox.</summary>
+public sealed record BlenderExport(string Gltf, string Relative, DateTime WrittenUtc, long Bytes);
+/// <summary>
+/// The changes an export makes to the project, with notes (shared textures, renamed nodes), the sealed copy it was read
+/// from, and the SHA-256 each changed file had in the workspace when the plan was made (null for a new file).
+/// </summary>
+public sealed record BlenderUpdatePlan(string Label, IReadOnlyList<(string Relative, byte[] Content)> Changes, IReadOnlyList<string> Notes, string Sealed)
+{
+    public IReadOnlyDictionary<string, string?> Expected { get; init; } = new Dictionary<string, string?>();
+}
+/// <summary>An update refused because project files it would replace changed since the checkout (another edit, or another update).</summary>
+public sealed class BlenderConflictException(IReadOnlyList<string> files, string? reason = null) : IOException(reason ??
+    $"The export would replace {string.Join(", ", files.Take(8))}{(files.Count > 8 ? $" and {files.Count - 8} more" : "")}, which changed in the project since the checkout or were not part of it (another model's texture of the same name). Check the model out again, rename the texture in Blender, or update anyway to replace them.")
+{
+    public IReadOnlyList<string> Files { get; } = files;
+}
+
+/// <summary>
+/// The file-based Blender round trip. <see cref="Checkout"/> copies a project model, with its buffers and textures, into
+/// <c>zstudio/export/&lt;id&gt;/input</c> as a self-contained glTF Blender opens; the artist exports a glTF (Separate:
+/// .gltf, .bin and PNG textures) into the checkout's <c>outbox</c>; <see cref="PlanUpdate"/> seals that export (copies it
+/// into <c>sealed/&lt;generation&gt;</c> while checking it does not change), reads and checks it, and plans the project
+/// changes: the model's glTF and buffer, and each texture that is new or changed. Nothing reaches the project until the
+/// plan is applied to the workspace, and nothing is applied without the user asking (Update from export).
+/// </summary>
+public static partial class SourceBlender
+{
+    public const string ExportFolder = "zstudio/export";
+    private const string ManifestName = "manifest.json";
+    private const long MaximumExportBytes = 512L * 1024 * 1024;
+    private const long MaximumManifestBytes = 64L * 1024 * 1024;
+    private const int MaximumCheckoutManifestBytes = 4 * 1024 * 1024;
+    private const long MaximumScriptCacheBytes = 64L * 1024 * 1024;
+
+    private static string Folder(string root) => Path.Combine(Path.TrimEndingDirectorySeparator(Path.GetFullPath(root)), "zstudio", "export");
+
+    /// <summary>Owns one new checkout/sealed generation, including cleanup through the same held directories.</summary>
+    private sealed class CopyFiles : IDisposable
+    {
+        private readonly DirectoryLease directories = new();
+        private readonly List<string> folders = [];
+        private readonly List<SealedFile.Ownership> files = [];
+        private readonly HashSet<string> knownFolders = new(StringComparer.OrdinalIgnoreCase);
+        private string? root;
+        private bool keep;
+
+        public void Root(string path)
+        {
+            path = Path.GetFullPath(path);
+            if (PickupPlacementEditSession.IsProtectedPath(directories.CapturedPath(path)))
+                throw new InvalidDataException("Blender checkouts cannot be written inside the protected zbd_1998/zbd_1999 folders.");
+            directories.Parent(path, create: true);
+            // A colliding folder belongs to somebody else; neither write into it nor clean it up.
+            directories.CreateDirectory(path);
+            root = path;
+            folders.Add(path); knownFolders.Add(path);
+        }
+
+        public void Folder(string path)
+        {
+            path = Path.GetFullPath(path);
+            if (knownFolders.Contains(path)) return;
+            if (root == null || !path.StartsWith(root + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+                throw new IOException("A Blender copy folder is outside its new checkout or sealed generation.");
+            Folder(Path.GetDirectoryName(path)!);
+            directories.CreateDirectory(path);
+            folders.Add(path); knownFolders.Add(path);
+        }
+
+        public void Write(string path, byte[] bytes)
+        {
+            path = Path.GetFullPath(path);
+            Folder(Path.GetDirectoryName(path)!);
+            using var output = SealedFile.Create(path, bytes, directories);
+            files.Add(output.RetainCreated());
+        }
+
+        public void Keep() => keep = true;
+
+        public void Dispose()
+        {
+            try
+            {
+                if (keep) return;
+                // No recursive path enumeration: remove only our known files and then known empty folders.
+                // A changed/occupied entry may prevent cleanup, but can never redirect it outside the held parent.
+                foreach (var file in files)
+                    try { SealedFile.DeleteOwned(file, directories); } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+                for (int i = folders.Count - 1; i >= 0; i--)
+                    try { directories.DeleteDirectory(folders[i]); } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+            }
+            finally { directories.Dispose(); }
+        }
+    }
+
+    /// <summary>
+    /// Copies <paramref name="model"/> (a project .gltf, as the workspace holds it) and the files it uses into a new checkout.
+    /// The copy shows transparent textures and, for a model a script loads as a pickup, hides its collision volume as the
+    /// game does (<see cref="Worlds.WorldGltf.ApplyPresentation"/>), also for models reconstructed before reconstruction
+    /// wrote that; it states every node's zone, so a node Blender moves keeps it (<see cref="Worlds.WorldGltf.ExplicitZones"/>).
+    /// The model is read as a build reads it before anything is copied (<see cref="GltfDocument.Read(ReadOnlySpan{byte}, Func{string, byte[]}, CancellationToken)"/>),
+    /// so what the checkout copies is bounded like a model: at most 4,096 buffers, a texture pack's 4,096 textures and
+    /// 512 MiB in all, the most an update from it takes. Every file is read once, from one snapshot of the project (the
+    /// workspace's unsaved edits, the disk for the rest), and a file another program changes before the copy is complete
+    /// refuses the checkout with <see cref="SourceFileChangedException"/>. The project's file is not changed.
+    /// </summary>
+    public static BlenderCheckout Checkout(SourceWorkspace workspace, string model, CancellationToken token = default) => Checkout(workspace, model, token, null);
+    /// <summary>As <see cref="Checkout(SourceWorkspace, string, CancellationToken)"/>; <paramref name="read"/> is told each project file the checkout has read (tests change files there).</summary>
+    internal static BlenderCheckout Checkout(SourceWorkspace workspace, string model, CancellationToken token, Action<string>? read,
+        int maximumManifestBytes = MaximumCheckoutManifestBytes, long maximumScriptCacheBytes = MaximumScriptCacheBytes,
+        long maximumTraceUnits = Worlds.ScriptTraceBudget.MaximumUnits, long maximumOperandReferences = Worlds.ScriptOperandBudget.MaximumReferences,
+        long maximumExportBytes = MaximumExportBytes, int maximumJsonBytes = GltfDocument.MaximumJsonBytes,
+        long maximumScriptSourceBytes = WorldAssembler.MaximumScriptSourceBytes, int maximumScriptTextBytes = SourceProject.MaximumSourceTextBytes)
+    {
+        CheckInputLimits(maximumExportBytes, maximumJsonBytes);
+        if (maximumScriptSourceBytes is < 0 or > WorldAssembler.MaximumScriptSourceBytes) throw new ArgumentOutOfRangeException(nameof(maximumScriptSourceBytes));
+        if (maximumScriptTextBytes is < 0 or > SourceProject.MaximumSourceTextBytes) throw new ArgumentOutOfRangeException(nameof(maximumScriptTextBytes));
+        using CopyFiles written = new();
+        var checkout = Checkout(workspace, model, token, read, written, maximumManifestBytes, maximumScriptCacheBytes, maximumTraceUnits, maximumOperandReferences, maximumExportBytes, maximumJsonBytes, maximumScriptSourceBytes, maximumScriptTextBytes);
+        written.Keep();
+        return checkout;
+    }
+    private static BlenderCheckout Checkout(SourceWorkspace workspace, string model, CancellationToken token, Action<string>? read, CopyFiles written,
+        int maximumManifestBytes, long maximumScriptCacheBytes, long maximumTraceUnits, long maximumOperandReferences, long maximumExportBytes, int maximumJsonBytes,
+        long maximumScriptSourceBytes, int maximumScriptTextBytes)
+    {
+        if (maximumManifestBytes is < 0 or > MaximumCheckoutManifestBytes) throw new ArgumentOutOfRangeException(nameof(maximumManifestBytes));
+        if (maximumScriptCacheBytes is < 0 or > MaximumScriptCacheBytes) throw new ArgumentOutOfRangeException(nameof(maximumScriptCacheBytes));
+        Worlds.ScriptTraceBudget traceBudget = new(maximumTraceUnits, maximumOperandReferences: maximumOperandReferences);
+        model = SourceWorkspace.Normalize(model);
+        workspace.CheckEditable(model);
+        if (!model.EndsWith(".gltf", StringComparison.OrdinalIgnoreCase)) throw new InvalidDataException($"{model} is not a .gltf model; Blender checkouts work on glTF files with separate buffers and textures.");
+        // One state of the project: the edits the workspace holds now, and the files on disk, each read once and unchanged
+        // until the copies are complete (edits in zStudio meanwhile are the caller's to check: ContentRevision).
+        string checkedOut = model;
+        SourceBuilder.Snapshot snapshot = new(workspace.Root, workspace.Overlay(),
+            relative => new SourceFileChangedException($"{relative} changed while {checkedOut} was checked out; check it out again.", [relative]), inventoryToken: token);
+        var project = snapshot.Files();
+        // Everything read counts, copied or only compared: together at most what an update takes.
+        long total = 0;
+        byte[]? Load(string relative) => LoadAdmitted(relative, ProjectReadLimits.Document);
+        byte[]? LoadAdmitted(string relative, ProjectReadLimits limits)
+        {
+            token.ThrowIfCancellationRequested();
+            if (!project.Exists(relative)) return null;
+            // Blender checkouts require JSON glTF Separate, including when a binary container is named .gltf.
+            long remaining = maximumExportBytes - total;
+            byte[] bytes = project.Read(relative, token, limits.WithMaximum(relative.Equals(model, StringComparison.OrdinalIgnoreCase) ? Math.Min(remaining, maximumJsonBytes) : remaining));
+            if ((total += bytes.Length) > maximumExportBytes)
+                throw new InvalidDataException($"{checkedOut} and the buffers and textures it uses hold more than 512 MiB together, more than an update from Blender takes; split the model into several files.");
+            read?.Invoke(relative);
+            return bytes;
+        }
+        byte[] json = Load(model) ?? throw new InvalidDataException($"{model} does not exist.");
+        JsonObject root = Parse(json, model, token);
+        // Read as a build reads it before anything is copied: a model the build could not load is refused, and the buffers it
+        // copies are those the reader read and bounded (at most 4,096, of 512 MiB together), each project file once.
+        Dictionary<string, byte[]> bufferBytes = new(StringComparer.OrdinalIgnoreCase);
+        try
+        {
+            var document = GltfDocument.Read(json, uri =>
+            {
+                string relative = Worlds.WorldAssembler.Relative(checkedOut, uri);
+                if (!bufferBytes.TryGetValue(relative, out var bytes)) bufferBytes[relative] = bytes = Load(relative) ?? throw new InvalidDataException($"It uses {JsonData.ShownText(relative)}, which does not exist.");
+                return bytes;
+            }, token);
+            Worlds.WorldGltf.ValidateSupported(document, model);
+        }
+        catch (InvalidDataException ex) { throw new InvalidDataException($"{model}: {ex.Message}", ex); }
+        // Worst-case JSON escaping costs six bytes per UTF-16 code unit. Reserve the fixed fields,
+        // indentation, generated id/time and instructions before making any manifest records or copy folders.
+        long manifestBytes = 2048 + 12L * model.Length;
+        List<BlenderCheckoutFile> files = [];
+        void AddFile(string relative, string copy, string sha)
+        {
+            if ((manifestBytes += 6L * (relative.Length + copy.Length) + 256) > maximumManifestBytes)
+                throw new InvalidDataException("The checkout manifest would exceed 4 MiB; split the model into several files before checking it out.");
+            files.Add(new(relative, copy, sha));
+        }
+        AddFile(model, "input/" + Path.GetFileName(model), SourceProject.Sha256(json));
+        List<(string Name, byte[] Bytes)> copies = [];
+        // Buffers sit next to the model in the checkout, each project file once under a name no other copy has (Windows
+        // compares names without case): a buffer of the same name from another folder gets a numbered name, so no copy
+        // replaces another. The update names the model's buffers itself, so these names never go back to the project.
+        Dictionary<string, string> taken = new(StringComparer.OrdinalIgnoreCase) { [Path.GetFileName(model)] = model, ["textures"] = "" };
+        Dictionary<string, string> bufferCopies = new(StringComparer.OrdinalIgnoreCase);
+        Dictionary<string, int> nextBufferSuffix = new(StringComparer.OrdinalIgnoreCase);
+        foreach (var buffer in root["buffers"] as JsonArray ?? [])
+        {
+            if (Text(buffer?["uri"]) is not { } uri || uri.StartsWith("data:", StringComparison.Ordinal)) continue;
+            string relative = Worlds.WorldAssembler.Relative(model, Uri.UnescapeDataString(uri));
+            if (!bufferCopies.TryGetValue(relative, out string? name))
+            {
+                // The reader read every buffer the file lists, used or not.
+                byte[] bytes = bufferBytes.TryGetValue(relative, out var held) ? held : throw new InvalidDataException($"{model} uses {JsonData.ShownText(relative)}, which does not exist.");
+                name = Path.GetFileName(relative);
+                if (!taken.TryAdd(name, relative))
+                {
+                    // Names only accumulate. Resume this base's first unused suffix, still checking names
+                    // another base occupied (same.bin and same.1.bin), preserving the original input order.
+                    string basename = name, stemName = Path.GetFileNameWithoutExtension(relative), extension = Path.GetExtension(relative);
+                    int suffix = nextBufferSuffix.GetValueOrDefault(basename, 1);
+                    do { name = $"{stemName}.{suffix++}{extension}"; } while (!taken.TryAdd(name, relative));
+                    nextBufferSuffix[basename] = suffix;
+                }
+                copies.Add((name, bytes));
+                AddFile(relative, "input/" + name, SourceProject.Sha256(bytes));
+                bufferCopies[relative] = name;
+            }
+            buffer!["uri"] = Uri.EscapeDataString(name);
+        }
+        // Textures in its textures folder, under their file names: the engine's names for them, which the update maps back by.
+        // Images of one file share its copy; two different files of one name cannot both be shown (nor packed: the build finds
+        // a texture by name), so the checkout refuses them rather than show one file's pixels for the other. A model that
+        // names more textures than one pack holds could not be built.
+        Dictionary<string, (string Project, string Sha256)> textures = new(StringComparer.OrdinalIgnoreCase);
+        HashSet<string> alike = new(StringComparer.OrdinalIgnoreCase);
+        Dictionary<string, Formats.TextureTransparency> transparency = new(StringComparer.OrdinalIgnoreCase);
+        List<(string Name, byte[] Bytes)> textureCopies = [];
+        foreach (var image in root["images"] as JsonArray ?? [])
+        {
+            if (Text(image?["uri"]) is not { } uri || uri.StartsWith("data:", StringComparison.Ordinal)) continue;
+            string relative = Worlds.WorldAssembler.Relative(model, Uri.UnescapeDataString(uri));
+            string name = Path.GetFileName(relative);
+            image!["uri"] = "textures/" + Uri.EscapeDataString(name);
+            if (textures.TryGetValue(name, out var copied))
+            {
+                // Each other file of the name is read once, however many images use it.
+                if (copied.Project.Equals(relative, StringComparison.OrdinalIgnoreCase) || !alike.Add(relative)) continue;
+                if (Load(relative) is { } other && SourceProject.Sha256(other) != copied.Sha256)
+                    throw new InvalidDataException($"{model} uses two different textures named {name}: {copied.Project} and {relative}. The game finds textures by name, so a build packs only one of them; rename one, or let both images use one file, before checking the model out.");
+                continue;
+            }
+            if (textures.Count >= Formats.TexturePackBuilder.MaximumRecords)
+                throw new InvalidDataException($"{model} uses more than {Formats.TexturePackBuilder.MaximumRecords:N0} textures; a texture pack holds at most {Formats.TexturePackBuilder.MaximumRecords:N0}, so a build could not pack them.");
+            if (Load(relative) is not { } bytes) continue;
+            string sha = SourceProject.Sha256(bytes);
+            textureCopies.Add((name, bytes));
+            AddFile(relative, "input/textures/" + name, sha);
+            textures[name] = (relative, sha);
+            if (Transparency(bytes, token) is { } kind) transparency[name] = kind;
+        }
+        Worlds.WorldGltf.ApplyPresentation(root, uri => transparency.TryGetValue(Path.GetFileName(uri), out var kind) ? kind : null, LoadedAsPickup(snapshot, workspace.Root, model, LoadAdmitted, maximumScriptCacheBytes, traceBudget, token, maximumScriptSourceBytes, maximumScriptTextBytes));
+        // Blender moves nodes freely: each keeps the zone it has (PlanUpdate takes the stated zones back out).
+        Worlds.WorldGltf.ExplicitZones(root);
+        byte[] checkoutJson = GltfJson.Write(root, indented: true, token);
+        var copiedBuffers = copies.ToDictionary(c => c.Name, c => c.Bytes, StringComparer.OrdinalIgnoreCase);
+        _ = GltfDocument.Read(checkoutJson, uri => copiedBuffers.TryGetValue(uri, out var bytes) ? bytes
+            : throw new InvalidDataException($"{model}: checkout buffer {JsonData.ShownText(uri)} is unavailable."), token);
+        // Nothing read changed on disk since: the copies are one state of the project.
+        snapshot.CheckUnchanged(token);
+        // The id names a folder and is typed back by MCP clients: the model's stem as plain characters, a time and a random tail.
+        string stem = new([.. Path.GetFileNameWithoutExtension(model).Select(c => char.IsAsciiLetterOrDigit(c) || c is '-' or '_' ? c : '_').Take(64)]);
+        string id = DateTime.UtcNow.ToString("yyyyMMdd-HHmmss", CultureInfo.InvariantCulture) + "-" + stem + "-" + Guid.NewGuid().ToString("N")[..6];
+        string folder = Path.Combine(Folder(workspace.Root), id), input = Path.Combine(folder, "input");
+        BlenderCheckout checkout = new(id, folder, model, DateTime.UtcNow, files);
+        JsonObject manifest = new()
+        {
+            ["format"] = "zstudio-blender-checkout", ["version"] = 1, ["id"] = id, ["model"] = model, ["created"] = checkout.CreatedUtc.ToString("o", CultureInfo.InvariantCulture),
+            ["files"] = new JsonArray(files.Select(f => (JsonNode?)new JsonObject { ["project"] = f.Project, ["checkout"] = f.Checkout, ["sha256"] = f.Sha256 }).ToArray()),
+            ["instructions"] = "Import input/" + Path.GetFileName(model) + " in Blender (File > Import > glTF 2.0). Export with File > Export > glTF 2.0, format glTF Separate (.gltf + .bin + textures), with Custom Properties enabled, into the outbox folder. Then choose Update from Blender export in zStudio."
+        };
+        byte[] writtenManifest = JsonSerializer.SerializeToUtf8Bytes(manifest, new JsonSerializerOptions { WriteIndented = true });
+        if (writtenManifest.Length > maximumManifestBytes) throw new InvalidDataException("The checkout manifest would exceed 4 MiB; split the model into several files before checking it out.");
+        SourceProject.RejectLinks(Folder(workspace.Root));
+        written.Root(folder);
+        written.Folder(Path.Combine(input, "textures")); written.Folder(Path.Combine(folder, "outbox"));
+        foreach (var (name, bytes) in copies) { token.ThrowIfCancellationRequested(); written.Write(Path.Combine(input, name), bytes); }
+        foreach (var (name, bytes) in textureCopies) { token.ThrowIfCancellationRequested(); written.Write(Path.Combine(input, "textures", name), bytes); }
+        written.Write(Path.Combine(input, Path.GetFileName(model)), checkoutJson);
+        written.Write(Path.Combine(folder, ManifestName), writtenManifest);
+        return checkout;
+    }
+
+    /// <summary>
+    /// The files and folders a listing of checkouts and exports visits, and the files the manifests it reads list: at most
+    /// <paramref name="maximum"/> (<see cref="SourceProject.MaximumScannedEntries"/>), as a scan of the project's sources.
+    /// The token is observed at each.
+    /// </summary>
+    private static SourceProject.ScanBudget ScanBudget(int maximum, CancellationToken token, InventoryBudget? inventory = null) => new(maximum, limit => new IOException(
+        $"{ExportFolder} holds more than {limit:N0} files and folders, far more than Blender checkouts need. Delete the checkouts and exports you no longer need there (each checkout is one folder), then try again."), token, inventory);
+
+    /// <summary>
+    /// The project's checkouts, newest first; a folder without a readable manifest is left out. Every file and folder the
+    /// listing visits, and every file a manifest lists, counts towards <see cref="SourceProject.MaximumScannedEntries"/>
+    /// (beyond that it is refused with <see cref="IOException"/>), and <paramref name="token"/> is observed at each.
+    /// </summary>
+    public static IReadOnlyList<BlenderCheckout> Checkouts(string root, CancellationToken token = default) => Checkouts(root, ScanBudget(SourceProject.MaximumScannedEntries, token));
+    /// <summary>
+    /// The project's checkouts (newest first), each with the exports in its outbox (newest first): one listing, bounded as
+    /// <see cref="Checkouts(string, CancellationToken)"/> is with the outboxes' files and folders counted too.
+    /// </summary>
+    public static IReadOnlyList<(BlenderCheckout Checkout, IReadOnlyList<BlenderExport> Exports)> CheckoutExports(string root, CancellationToken token = default) =>
+        CheckoutExports(root, SourceProject.MaximumScannedEntries, token);
+    /// <param name="maximumEntries">The files and folders the listing may visit (<see cref="SourceProject.MaximumScannedEntries"/>; smaller in tests).</param>
+    internal static IReadOnlyList<(BlenderCheckout Checkout, IReadOnlyList<BlenderExport> Exports)> CheckoutExports(string root, int maximumEntries, CancellationToken token, long maximumManifestBytes = MaximumManifestBytes,
+        long inventoryLimit = InventoryBudget.MaximumUnits)
+    {
+        var budget = ScanBudget(maximumEntries, token, new(inventoryLimit));
+        List<(BlenderCheckout, IReadOnlyList<BlenderExport>)> result = [];
+        foreach (var checkout in Checkouts(root, budget, maximumManifestBytes)) { budget.Rows(1); result.Add((checkout, Exports(checkout, budget))); }
+        return result;
+    }
+    private static IReadOnlyList<BlenderCheckout> Checkouts(string root, SourceProject.ScanBudget budget, long maximumManifestBytes = MaximumManifestBytes)
+    {
+        string folder = Folder(root);
+        if (!Directory.Exists(folder)) return [];
+        List<BlenderCheckout> result = [];
+        // Files beside the checkouts cost as much to pass over as folders.
+        foreach (var entry in SourceProject.Entries(folder, budget))
+        {
+            if (entry is not DirectoryInfo directory || directory.Attributes.HasFlag(FileAttributes.ReparsePoint)) continue;
+            if (Read(directory.FullName, budget, bytes =>
+            {
+                if ((maximumManifestBytes -= bytes) < 0) throw new IOException("Blender checkout manifests together exceed 64 MiB; remove checkouts no longer needed and try again.");
+            }) is { } checkout) result.Add(checkout);
+        }
+        budget.Rows(result.Count);
+        return result.OrderByDescending(c => c.CreatedUtc).ToArray();
+    }
+    public static BlenderCheckout Find(string root, string id)
+    {
+        if (id.Length is 0 or > 128 || id is "." or ".." || id.Any(c => !(char.IsAsciiLetterOrDigit(c) || c is '-' or '_' or '.'))) throw new InvalidDataException($"'{id}' is not a checkout id.");
+        string folder = Path.Combine(Folder(root), id);
+        if (new DirectoryInfo(folder) is { Exists: true } info && info.Attributes.HasFlag(FileAttributes.ReparsePoint)) throw new InvalidDataException($"The checkout {id} is a link.");
+        return Read(folder) ?? throw new InvalidDataException($"The project has no Blender checkout {id}.");
+    }
+    /// <param name="budget">When the manifest is one of a listing's: the files it lists count towards that listing's entries.</param>
+    private static BlenderCheckout? Read(string folder, SourceProject.ScanBudget? budget = null, Action<int>? charge = null)
+    {
+        string path = Path.Combine(folder, ManifestName);
+        if (!File.Exists(path) || new FileInfo(path).Length > MaximumCheckoutManifestBytes) return null;
+        try
+        {
+            byte[] bytes = SourceRead.All(path, MaximumCheckoutManifestBytes, budget?.Token ?? default);
+            charge?.Invoke(bytes.Length);
+            var manifest = JsonNode.Parse(bytes) as JsonObject;
+            if (manifest?["format"]?.GetValue<string>() != "zstudio-blender-checkout") return null;
+            string id = manifest["id"]!.GetValue<string>();
+            if (id != Path.GetFileName(folder) || id.Length is 0 or > 128 || id.Any(c => !(char.IsAsciiLetterOrDigit(c) || c is '-' or '_' or '.'))) return null;
+            budget?.Visit((long)((manifest["files"] as JsonArray)?.Count ?? 0) + ((manifest["applied"] as JsonArray)?.Count ?? 0));
+            var inventory = budget?.Inventory ?? new InventoryBudget();
+            // The bounded DOM already owns its text; admit every retained row before projecting arrays.
+            foreach (string key in new[] { "files", "applied" })
+                foreach (var row in manifest[key] as JsonArray ?? [])
+                    inventory.Path((long)row!["project"]!.GetValue<string>().Length + (key == "files" ? row["checkout"]!.GetValue<string>().Length : 0) + row["sha256"]!.GetValue<string>().Length, budget?.Token ?? default);
+            inventory.Path((long)folder.Length + manifest["model"]!.GetValue<string>().Length, budget?.Token ?? default);
+            var files = (manifest["files"] as JsonArray ?? []).Select(f => new BlenderCheckoutFile(f!["project"]!.GetValue<string>(), f["checkout"]!.GetValue<string>(), f["sha256"]!.GetValue<string>())).ToArray();
+            var applied = (manifest["applied"] as JsonArray ?? []).Select(f => new BlenderCheckoutFile(f!["project"]!.GetValue<string>(), "", f["sha256"]!.GetValue<string>())).ToArray();
+            string model = manifest["model"]!.GetValue<string>();
+            // These fields identify Windows paths, not arbitrary text. Bound them before path composition or presentation.
+            if (model.Length > 32767 || Path.GetFileName(model).Length > 255 || files.Concat(applied).Any(f => f.Project.Length > 32767 || f.Checkout.Length > 32767 || f.Sha256.Length > 64)) return null;
+            return new(id, folder, model, DateTime.Parse(manifest["created"]!.GetValue<string>(), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind), files) { Applied = applied };
+        }
+        catch (Exception ex) when (ex is JsonException or InvalidOperationException or FormatException or NullReferenceException) { return null; }
+    }
+
+    /// <summary>
+    /// The glTF files Blender exported into the checkout's outbox, newest first. Every file and folder below the outbox
+    /// counts towards <see cref="SourceProject.MaximumScannedEntries"/> (beyond that the listing is refused with
+    /// <see cref="IOException"/>), and <paramref name="token"/> is observed at each.
+    /// </summary>
+    public static IReadOnlyList<BlenderExport> Exports(BlenderCheckout checkout, CancellationToken token = default) => Exports(checkout, ScanBudget(SourceProject.MaximumScannedEntries, token));
+    private static IReadOnlyList<BlenderExport> Exports(BlenderCheckout checkout, SourceProject.ScanBudget budget)
+    {
+        budget.Path((long)checkout.Folder.Length + 7);
+        string outbox = checkout.Outbox;
+        if (!Directory.Exists(outbox)) return [];
+        List<BlenderExport> exports = [];
+        // Folders count too: a tree of empty folders costs as much to walk as one of files.
+        foreach (var entry in SourceProject.Entries(outbox, budget, recurse: true, skip: FileAttributes.ReparsePoint, ignoreInaccessible: true))
+        {
+            if (entry is FileInfo file && (file.Extension.Equals(".gltf", StringComparison.OrdinalIgnoreCase) || file.Extension.Equals(".glb", StringComparison.OrdinalIgnoreCase)))
+                exports.Add(new(file.FullName, Path.GetRelativePath(outbox, file.FullName).Replace('\\', '/'), file.LastWriteTimeUtc, file.Length));
+        }
+        budget.Rows(exports.Count);
+        return exports.OrderByDescending(e => e.WrittenUtc).ToArray();
+    }
+
+    /// <summary>
+    /// Records that an update from <paramref name="checkout"/> wrote <paramref name="plan"/>'s files, so a later export of the
+    /// same checkout may replace them without counting them as edits made since the checkout.
+    /// </summary>
+    public static void RecordApplied(BlenderCheckout checkout, BlenderUpdatePlan plan)
+    {
+        string path = Path.Combine(checkout.Folder, ManifestName);
+        using DirectoryLease directories = new();
+        directories.Parent(path);
+        byte[] writtenManifest = AppliedManifest(checkout, plan.Changes, directories);
+        string temporary = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
+        SourceProject.RejectLinks(checkout.Folder);
+        using var sealedFile = SealedFile.Create(temporary, writtenManifest, directories);
+        SourceProject.RejectLinks(checkout.Folder);
+        SourceProject.RejectNestedLinks(checkout.Folder, ManifestName);
+        sealedFile.MoveTo(path, replace: true);
+    }
+
+    // Also run while planning, before accepting any edit: a manifest limit must refuse the update, never omit states.
+    private static byte[] AppliedManifest(BlenderCheckout checkout, IReadOnlyList<(string Relative, byte[] Content)> changes, DirectoryLease? directories = null)
+    {
+        using DirectoryLease? owned = directories == null ? new() : null;
+        directories ??= owned!;
+        SourceProject.RejectLinks(checkout.Folder);
+        SourceProject.RejectNestedLinks(checkout.Folder, ManifestName);
+        string path = Path.Combine(checkout.Folder, ManifestName);
+        using FileStream input = directories.OpenFile(path, FileMode.Open, FileAccess.Read, FileShare.Read);
+        if (input.Length > MaximumCheckoutManifestBytes) throw new InvalidDataException("The checkout manifest exceeds 4 MiB; create a new checkout.");
+        byte[] previous = SourceRead.All(input, MaximumCheckoutManifestBytes, path);
+        var manifest = JsonNode.Parse(previous) as JsonObject ?? throw new InvalidDataException($"{path} is not a checkout manifest.");
+        var applied = manifest["applied"] as JsonArray ?? (JsonArray)(manifest["applied"] = new JsonArray());
+        var known = applied.Select(f => (f!["project"]!.GetValue<string>().ToUpperInvariant(), f["sha256"]!.GetValue<string>().ToUpperInvariant())).ToHashSet();
+        long estimatedBytes = previous.Length;
+        foreach (var (relative, content) in changes)
+        {
+            string sha = SourceProject.Sha256(content);
+            if (!known.Add((relative.ToUpperInvariant(), sha.ToUpperInvariant()))) continue;
+            // Charge escaped paths before appending or serializing thousands of records.
+            if ((estimatedBytes += 6L * relative.Length + 128) > MaximumCheckoutManifestBytes) throw new InvalidDataException("The checkout manifest would exceed 4 MiB; create a new checkout.");
+            applied.Add(new JsonObject { ["project"] = relative, ["sha256"] = sha });
+        }
+        byte[] writtenManifest = JsonSerializer.SerializeToUtf8Bytes(manifest, new JsonSerializerOptions { WriteIndented = true });
+        if (writtenManifest.Length > MaximumCheckoutManifestBytes) throw new InvalidDataException("The checkout manifest would exceed 4 MiB; create a new checkout.");
+        return writtenManifest;
+    }
+
+    /// <summary>
+    /// Seals the newest export (or <paramref name="export"/>, relative to the outbox), checks it and plans the project changes:
+    /// the model's glTF (with buffer and texture references pointing into the project) and buffer, and each texture Blender
+    /// changed (new, or different from its checked-out copy). A texture other models also use changes for them too; the
+    /// notes say so. Files the export would replace must still be as checked out (or as an earlier update from this
+    /// checkout left them): otherwise the update is refused with <see cref="BlenderConflictException"/>, unless
+    /// <paramref name="force"/> replaces them anyway.
+    /// </summary>
+    public static BlenderUpdatePlan PlanUpdate(SourceWorkspace workspace, BlenderCheckout checkout, string? export = null, bool force = false, CancellationToken token = default)
+        => PlanUpdate(workspace, checkout, export, force, token, MaximumExportBytes, GltfDocument.MaximumJsonBytes);
+
+    internal static BlenderUpdatePlan PlanUpdate(SourceWorkspace workspace, BlenderCheckout checkout, string? export, bool force, CancellationToken token,
+        long maximumExportBytes, int maximumJsonBytes = GltfDocument.MaximumJsonBytes)
+    {
+        CheckInputLimits(maximumExportBytes, maximumJsonBytes);
+        using CopyFiles written = new();
+        var plan = PlanUpdate(workspace, checkout, export, force, written, token, maximumExportBytes, maximumJsonBytes);
+        written.Keep();
+        return plan;
+    }
+    private static BlenderUpdatePlan PlanUpdate(SourceWorkspace workspace, BlenderCheckout checkout, string? export, bool force, CopyFiles written, CancellationToken token,
+        long maximumExportBytes, int maximumJsonBytes)
+    {
+        SourceProject.RejectLinks(checkout.Folder);
+        var exports = Exports(checkout, token);
+        var chosen = export == null ? exports.FirstOrDefault() ?? throw new InvalidDataException($"Nothing was exported into {checkout.Outbox} yet.")
+            : exports.FirstOrDefault(e => e.Relative.Equals(export.Replace('\\', '/'), StringComparison.OrdinalIgnoreCase)) ?? throw new InvalidDataException($"{export} is not an export in the outbox.");
+        if (chosen.Gltf.EndsWith(".glb", StringComparison.OrdinalIgnoreCase))
+            throw new InvalidDataException($"{chosen.Relative} is a binary glTF with embedded textures. Export again with the format glTF Separate (.gltf + .bin + textures).");
+        // Seal: copy the export and every file it uses, reading each twice so a file Blender is still writing is refused.
+        string generation = DateTime.UtcNow.ToString("yyyyMMdd-HHmmss-fff", CultureInfo.InvariantCulture) + "-" + Guid.NewGuid().ToString("N")[..8];
+        string sealedFolder = Path.Combine(checkout.Folder, "sealed", generation);
+        SourceProject.RejectNestedLinks(checkout.Folder, $"sealed/{generation}");
+        written.Root(sealedFolder);
+        string outbox = Path.GetFullPath(checkout.Outbox), exportFolder = Path.GetDirectoryName(chosen.Gltf)!;
+        SourceProject.RejectNestedLinks(checkout.Folder, Path.GetRelativePath(checkout.Folder, chosen.Gltf).Replace('\\', '/'));
+        byte[] json = Stable(chosen.Gltf, Math.Min(maximumExportBytes, maximumJsonBytes), token);
+        JsonObject root = Parse(json, chosen.Relative, token);
+        Dictionary<string, byte[]> uses = new(StringComparer.OrdinalIgnoreCase);
+        long total = json.Length;
+        // The sealed copy keeps the export's place in the outbox, so it never leaves the sealed folder.
+        void Seal(string full, byte[] bytes)
+        {
+            string target = Path.GetFullPath(Path.Combine(sealedFolder, Path.GetRelativePath(outbox, full)));
+            if (!target.StartsWith(Path.GetFullPath(sealedFolder) + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)) throw new InvalidDataException($"{full} is outside the outbox.");
+            SourceProject.RejectNestedLinks(checkout.Folder, Path.GetRelativePath(checkout.Folder, target).Replace('\\', '/'));
+            written.Write(target, bytes);
+        }
+        // A file the export names: its URI already unescaped (as glTF readers resolve them), relative to the export.
+        byte[] Use(string relative)
+        {
+            string full = Path.GetFullPath(Path.Combine(exportFolder, relative.Replace('\\', '/')));
+            if (!full.StartsWith(outbox + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)) throw new InvalidDataException($"The export uses {relative}, which is outside the outbox.");
+            if (uses.TryGetValue(full, out var known)) return known;
+            SourceProject.RejectNestedLinks(checkout.Folder, Path.GetRelativePath(checkout.Folder, full).Replace('\\', '/'));
+            // The reader's declared buffer lengths may be smaller than the actual files. Admit the opened file
+            // against what is still available before allocating it, including textures resolved below.
+            byte[] bytes = Stable(full, maximumExportBytes - total, token);
+            total += bytes.Length;
+            Seal(full, bytes);
+            return uses[full] = bytes;
+        }
+        Seal(chosen.Gltf, json);
+        // How each PNG the export uses is transparent, decoded once (here or for the textures below).
+        Dictionary<string, Formats.TextureTransparency> transparency = new(StringComparer.OrdinalIgnoreCase);
+        Formats.TextureTransparency Transparency(string relative)
+        {
+            byte[] png = Use(relative);
+            string full = Path.GetFullPath(Path.Combine(exportFolder, relative.Replace('\\', '/'))), name = Path.GetFileName(relative.Replace('\\', '/'));
+            if (transparency.TryGetValue(full, out var known)) return known;
+            if (!name.EndsWith(TextureSources.Extension, StringComparison.OrdinalIgnoreCase)) throw new InvalidDataException($"Texture {name} is not a PNG; RECOIL textures are PNG files.");
+            if (transparency.Count >= Formats.TexturePackBuilder.MaximumRecords)
+                throw new InvalidDataException($"The export uses more than {Formats.TexturePackBuilder.MaximumRecords:N0} textures; a texture pack holds at most {Formats.TexturePackBuilder.MaximumRecords:N0}, so a build could not pack them.");
+            try { return transparency[full] = Formats.TexturePackBuilder.Classify(Export.PngDecoder.Decode(png, token: token)); }
+            catch (Exception ex) when (ex is InvalidDataException or ArgumentException or OverflowException or IndexOutOfRangeException) { throw new InvalidDataException($"Texture {name} is not a readable PNG: {ex.Message}", ex); }
+        }
+        // The checkout showed transparent textures and hidden collision volumes as the game draws them; what of that a build
+        // could not tell from an authored value is taken back by the PNGs, also without engine attributes (Custom Properties
+        // off). A clip the engine cannot draw stays, for the build's preflight below to refuse.
+        byte[] presented = Worlds.WorldGltf.RemovePresentation(root, uri => Transparency(uri)) ? GltfJson.Write(root, indented: false, token) : json;
+        // Read it as a build would, to refuse what the model loader cannot take before anything changes.
+        GltfDocument document;
+        try { document = GltfDocument.Read(presented, Use, token); }
+        catch (InvalidDataException ex) { throw new InvalidDataException($"{chosen.Relative}: {ex.Message}", ex); }
+        if (!document.AllNodes().Any()) throw new InvalidDataException($"{chosen.Relative} has no nodes.");
+        string model = checkout.Model, modelFolder = Path.GetDirectoryName(model)!.Replace('\\', '/');
+        // What the export continues of the model as the project holds it: those nodes go back to the order they had (Blender
+        // lists children by name; the order decides node slots, so which of several nodes of one name a lookup finds) and to
+        // their exact transforms where Blender only rounded them, before the export is checked as a build reads it, the
+        // copies of a shared node are compared child by child and the first copy is the one the build reads.
+        byte[] projectJson = workspace.Read(model, token, GltfDocument.MaximumJsonBytes) ?? throw new InvalidDataException($"{model} no longer exists.");
+        var checkedOut = Parse(projectJson, model, token);
+        var bindings = SourceMapZoneBindings.Read(workspace, model, null, token);
+        SourceBlenderZones? continued = null; string? unordered = null;
+        try
+        {
+            var projectModel = WorldAssembler.ReadModel(projectJson, model, (path, remaining) => workspace.Read(path, token, ProjectReadLimits.Bytes(remaining))
+                ?? throw new InvalidDataException($"{model}: buffer {JsonData.ShownText(path)} is unavailable; the update needs the model as the project holds it to keep its order and its maps' zones. Restore it, or check the model out again."), token);
+            bindings.Validate(projectModel, token);
+            continued = SourceBlenderZones.Match(bindings, projectModel, document, model, token);
+        }
+        // A model no map zones may still replace a project copy that cannot be read (a buffer another program deleted, which
+        // the update asks before restoring); only its order then stays as the export lists it.
+        catch (InvalidDataException ex) when (!bindings.Any) { unordered = ex.Message; }
+        continued?.RestoreOrder(document, root);
+        continued?.RestoreTransforms(root, checkedOut);
+        Worlds.WorldGltf.ValidateSupported(document, chosen.Relative);
+        // The build refuses a model's mesh past the engine's vertex limit rather than leave polygons out; terrain surfaces are
+        // divided into pieces instead.
+        if (document.AllNodes().Any(n => n.Mesh is { } mesh && mesh.Primitives.Sum(p => (long)p.Positions.Count) > ModelBuilder.MaximumVertices)
+            && !TerrainSurfaces(workspace, model, token)) Worlds.WorldGltf.CheckVertexLimits(document, chosen.Relative, token);
+        // What Blender cannot keep by itself: copies of a shared node must agree, and a group moved as an empty passes its
+        // transform to its objects (each node keeps the zone the checkout stated for it, below).
+        Worlds.WorldGltf.CheckInstances(document, chosen.Relative);
+        UngroupTransforms(document, root, chosen.Relative);
+
+        List<(string, byte[])> changes = []; List<string> notes = [];
+        HashSet<string> changedTextures = new(StringComparer.OrdinalIgnoreCase);
+        // Buffers: one per model, named as the project names it (further buffers with a dot, which reconstruction never uses).
+        var buffers = root["buffers"] as JsonArray ?? [];
+        Dictionary<string, byte[]> mappedBuffers = new(StringComparer.OrdinalIgnoreCase);
+        for (int i = 0; i < buffers.Count; i++)
+        {
+            if (Text(buffers[i]?["uri"]) is not { } uri) throw new InvalidDataException("A buffer of the export has no file; export as glTF Separate.");
+            if (uri.StartsWith("data:", StringComparison.Ordinal)) continue;
+            string name = Path.GetFileNameWithoutExtension(model) + (i == 0 ? "" : $".{i}") + ".bin";
+            byte[] bytes = Use(Uri.UnescapeDataString(uri));
+            changes.Add(($"{modelFolder}/{name}", bytes)); mappedBuffers[name] = bytes; buffers[i]!["uri"] = Uri.EscapeDataString(name);
+        }
+        // Textures: by engine name (the file name), found where the model's textures were or, for a new one, beside them.
+        // (A checkout holds one file per name; the first of any repeated name in an older manifest counts.)
+        Dictionary<string, string> original = new(StringComparer.OrdinalIgnoreCase);
+        foreach (var file in checkout.Files.Where(f => f.Checkout.StartsWith("input/textures/", StringComparison.OrdinalIgnoreCase))) original.TryAdd(Path.GetFileName(file.Project), file.Project);
+        string textureFolder = original.Values.Select(p => Path.GetDirectoryName(p)!.Replace('\\', '/')).GroupBy(f => f, StringComparer.OrdinalIgnoreCase).OrderByDescending(g => g.Count()).Select(g => g.Key).FirstOrDefault()
+            ?? DefaultTextureFolder(model);
+        // A name is one project texture, so images of one name must be one picture: two different PNGs of one name (in
+        // different folders of the export) would both land in the same project file, the later replacing the earlier.
+        Dictionary<string, (string Uri, byte[] Png)> exported = new(StringComparer.OrdinalIgnoreCase);
+        foreach (var image in root["images"] as JsonArray ?? [])
+        {
+            if (Text(image?["uri"]) is not { } uri)
+                throw new InvalidDataException("The export embeds a texture in its buffer. Export as glTF Separate so each texture is a PNG file.");
+            if (uri.StartsWith("data:", StringComparison.Ordinal)) throw new InvalidDataException("The export embeds a texture as data. Export as glTF Separate so each texture is a PNG file.");
+            string unescaped = Uri.UnescapeDataString(uri);
+            byte[] png = Use(unescaped);
+            string name = Path.GetFileName(unescaped.Replace('\\', '/'));
+            if (!name.EndsWith(TextureSources.Extension, StringComparison.OrdinalIgnoreCase)) throw new InvalidDataException($"Texture {name} is not a PNG; RECOIL textures are PNG files.");
+            string stem = Path.GetFileNameWithoutExtension(name).ToLowerInvariant();
+            if (stem.Length is < 1 or > 19 || stem.Any(c => !(char.IsAsciiLetterOrDigit(c) || c == '_'))) throw new InvalidDataException($"Texture {name}: names need 1–19 letters, digits or '_' (the engine stores 19).");
+            string project = original.TryGetValue(name, out var known) ? known : $"{textureFolder}/{name}";
+            image!["uri"] = RelativeUri(modelFolder, project);
+            if (exported.TryGetValue(name, out var first))
+            {
+                if (!first.Png.AsSpan().SequenceEqual(png))
+                    throw new InvalidDataException($"The export has two different textures named {name}: {first.Uri} and {unescaped}. A name is one project texture ({project}; the game finds textures by name), so rename one in Blender and export again.");
+                continue;
+            }
+            // As many textures as one pack holds, each decoded once however many images show it (and the decoding can be cancelled).
+            if (exported.Count >= Formats.TexturePackBuilder.MaximumRecords)
+                throw new InvalidDataException($"The export uses more than {Formats.TexturePackBuilder.MaximumRecords:N0} textures; a texture pack holds at most {Formats.TexturePackBuilder.MaximumRecords:N0}, so a build could not pack them.");
+            _ = Transparency(unescaped);
+            exported[name] = (unescaped, png);
+            // Only what Blender changed: a checked-out texture it wrote back as it was stays as the project has it now.
+            string inputCopy = Path.Combine(checkout.Folder, "input", "textures", name);
+            if (original.ContainsKey(name) && File.Exists(inputCopy) && SourceProject.FileEquals(inputCopy, png, token)) continue;
+            // A texture the update writes needs a name a save can write (edit admission refuses it too, by its project path).
+            if (SourceProject.IsDeviceName(name))
+                throw new InvalidDataException($"Texture {name}: Windows reserves the name '{Path.GetFileNameWithoutExtension(name)}' for a device, so the project cannot save {name}. Rename the image and its PNG file in Blender, then export again.");
+            changes.Add((project, png)); changedTextures.Add(project);
+        }
+        FollowImages(root, original, chosen.Relative);
+        // A colour, transparency or Backface Culling changed in Blender is what the build uses: the material's recorded
+        // values follow what Blender shows where they no longer agree.
+        Worlds.WorldGltf.FollowShownMaterials(root);
+        // So is a node renamed in Blender, where the name the checkout recorded for it would keep the old one; a node without
+        // a recorded name takes Blender's anyway, and is listed when the export continues it (the same geometry at the same place).
+        List<(string Old, string New)> renamed = [.. Worlds.WorldGltf.FollowShownNames(root, checkedOut, chosen.Relative), .. continued?.Renamed() ?? []];
+        // Scripts, animations and placements find nodes by name; report the nodes the export renamed and those it no longer has.
+        var before = Names(checkedOut);
+        var after = Names(root);
+        // A renamed node counts under its old name here: it is reported as renamed, not as removed.
+        foreach (var (old, now) in renamed)
+        {
+            if (old.Length > 0) after[old] = after.GetValueOrDefault(old) + 1;
+            if (after.TryGetValue(now, out int count)) after[now] = count - 1;
+        }
+        if (renamed.Count > 0)
+        {
+            var shown = renamed.GroupBy(r => r).Take(16).ToArray();
+            int listed = shown.Sum(g => g.Count());
+            notes.Add($"Nodes renamed in Blender take their new names (scripts, animations and placements find nodes by name, so what they find by these names can change; {renamed.Count:N0} renamed): "
+                + string.Join(", ", shown.Select(g => $"{(g.Key.Old.Length == 0 ? "an unnamed node" : JsonData.ShownText(g.Key.Old))} → {JsonData.ShownText(g.Key.New)}{(g.Count() > 1 ? $" ({g.Count():N0} nodes)" : "")}"))
+                + (listed < renamed.Count ? $"; {renamed.Count - listed:N0} more renamed nodes." : "."));
+        }
+        // Engine attributes travel in extras.recoil, which Blender writes only with Custom Properties on.
+        bool attributesDropped = EngineAttributes(checkedOut) > 0 && EngineAttributes(root) == 0;
+        if (attributesDropped) notes.Add("The export had no engine attributes (Custom Properties off); the model's flags, zones, references and material attributes were dropped.");
+        var removed = before.Select(pair => (Name: pair.Key, Count: pair.Value - after.GetValueOrDefault(pair.Key))).Where(n => n.Count > 0).ToArray();
+        if (removed.Length > 0)
+        {
+            int removedCount = removed.Sum(n => n.Count), shown = removed.Take(16).Sum(n => n.Count);
+            notes.Add($"Nodes no longer present (animations and placements find nodes by name; {removedCount:N0} removed): "
+                + string.Join(", ", removed.Take(16).Select(n => $"{JsonData.ShownText(n.Name)} ({n.Count:N0} removed)"))
+                + (shown < removedCount ? $"; {removedCount - shown:N0} more removed nodes." : "."));
+        }
+        // The polygons the export continues go back to the model's polygon order (Blender lists them by material) with their
+        // recorded boundaries, and maps that give this geometry zones keep them (SourceBlenderZones).
+        HashSet<string> privateBuffers = new(StringComparer.OrdinalIgnoreCase);
+        continued?.Carry(document, root, Writable, Replace);
+        if (unordered != null) notes.Add($"{Path.GetFileName(model)} keeps the order of nodes and polygons the export gives (Blender lists children by name and triangles by material), because the model as the project holds it could not be read: {unordered}");
+        // A buffer whose index values a recovered polygon rewrites becomes the update's own copy; the sealed export stays as written.
+        byte[] Writable(int index)
+        {
+            string name = BufferName(index);
+            if (!mappedBuffers.TryGetValue(name, out var bytes)) throw new InvalidDataException($"{chosen.Relative}: buffer {index} is not a file of its own; export as glTF Separate.");
+            if (!privateBuffers.Add(name)) return bytes;
+            Replace(index, bytes = [.. bytes]);
+            return bytes;
+        }
+        void Replace(int index, byte[] bytes)
+        {
+            string name = BufferName(index);
+            if (bytes.Length > maximumExportBytes) throw new InvalidDataException($"{chosen.Relative}: buffer {index} would exceed the 512 MiB an update takes.");
+            mappedBuffers[name] = bytes; privateBuffers.Add(name);
+            int at = changes.FindIndex(c => c.Item1.Equals($"{modelFolder}/{name}", StringComparison.OrdinalIgnoreCase));
+            changes[at] = (changes[at].Item1, bytes);
+        }
+        string BufferName(int index) => Path.GetFileNameWithoutExtension(model) + (index == 0 ? "" : $".{index}") + ".bin";
+        // After counting the engine attributes the export carries: the zones the checkout stated go back to what the
+        // file's hierarchy gives, which can leave a node without any.
+        Worlds.WorldGltf.ImplicitZones(root, chosen.Relative);
+        byte[] updatedJson = GltfJson.Write(root, indented: true, token);
+        var updated = GltfDocument.Read(updatedJson, uri => mappedBuffers.TryGetValue(uri, out var bytes) ? bytes
+            : throw new InvalidDataException($"{model}: updated buffer {JsonData.ShownText(uri)} is unavailable."), token);
+        Worlds.WorldGltf.ValidateSupported(updated, model);
+        Worlds.WorldGltf.CheckInstances(updated, model);
+        var (zoneChanges, zonesLost, zonesRemoved, addedFaces, addedNodes) = bindings.Any ? continued!.Remap(updated, root, token) : ([], [], [], 0, 0);
+        changes.Insert(0, (model, updatedJson));
+        // What the update replaces must be as the checkout (or an earlier update from it) left it.
+        var accepted = checkout.Files.Concat(checkout.Applied).GroupBy(f => f.Project, StringComparer.OrdinalIgnoreCase).ToDictionary(g => g.Key, g => g.Select(f => f.Sha256).ToHashSet(StringComparer.OrdinalIgnoreCase), StringComparer.OrdinalIgnoreCase);
+        var currentHashes = workspace.ReadEditHashes(changes.Select(change => change.Item1).Concat(zoneChanges.Select(change => change.Relative)), token);
+        // Compare existing textures by digest, not by allocating their old payloads. A byte-identical
+        // texture is not a replacement/conflict, including when it was not in the original checkout.
+        changes.RemoveAll(change => changedTextures.Contains(change.Item1) && currentHashes[change.Item1] == SourceProject.Sha256(change.Item2));
+        // The build finds a texture by name: what the update writes must be the file its name finds, and a new one must not
+        // take the name from another file other models show.
+        var shadows = TextureShadows(workspace, model, [.. changes.Select(change => change.Item1).Where(changedTextures.Contains)], currentHashes, new HashSet<string>(bindings.Missions, StringComparer.OrdinalIgnoreCase), token);
+        Dictionary<string, string?> expected = new(StringComparer.OrdinalIgnoreCase);
+        List<string> conflicts = [];
+        foreach (var (relative, _) in changes)
+        {
+            string? current = currentHashes[relative];
+            expected[relative] = current;
+            if (changedTextures.Contains(relative)) notes.Add(current == null ? $"New texture {relative}." : $"Texture {relative} changes for every model that uses it.");
+            // A missing former input is a change too: restoring an externally deleted buffer/texture requires the
+            // same decision as replacing modified content. Only an absent file never recorded by this checkout is new.
+            if (accepted.TryGetValue(relative, out var states) ? current == null || !states.Contains(current) : current != null)
+                conflicts.Add(relative);
+        }
+        // The maps' zone files change with the model; they must still be as read when the update is applied.
+        foreach (var (relative, _) in zoneChanges) expected[relative] = currentHashes[relative];
+        string lostZones = string.Join("; ", zonesLost);
+        // One question covers everything the update would replace or drop, so one "update anyway" never hides another.
+        string shadowed = string.Join("; ", shadows.Take(8).Select(s => s.Reason)) + (shadows.Count > 8 ? $"; and {shadows.Count - 8:N0} more" : "");
+        if (!force && (conflicts.Count > 0 || shadows.Count > 0 || attributesDropped || zonesLost.Count > 0))
+        {
+            List<string> reasons = [];
+            if (attributesDropped) reasons.Add("The export has none of the model's engine attributes (extras.recoil: node flags, zones, references, materials); export again with Include → Custom Properties on.");
+            if (conflicts.Count > 0) reasons.Add($"It would replace or recreate {string.Join(", ", conflicts.Take(8))}{(conflicts.Count > 8 ? $" and {conflicts.Count - 8} more" : "")}, which changed in the project since the checkout or were not part of it (another model's texture of the same name).");
+            if (shadows.Count > 0) reasons.Add($"The game finds a texture by its name, in each mission's texture folders in order: {shadowed}. Rename the image and its PNG file in Blender to a name no texture folder of those missions holds.");
+            if (zonesLost.Count > 0) reasons.Add($"Map zones cannot follow faces the export replaced with new ones, nor nodes it replaced under another name: {lostZones}. Updating anyway gives the new faces and nodes the model's own zones (faces no zone, nodes their parent's), to be set again with Tools → Edit map zones in those maps; to keep the zones, reshape faces by moving their vertices rather than rebuilding them, and keep node names.");
+            reasons.Add("Check the model out again, or update anyway to accept this.");
+            throw new BlenderConflictException([.. (attributesDropped ? conflicts.Prepend(model) : conflicts).Concat(shadows.Select(s => s.Texture)).Concat(zonesLost.Count > 0 ? zoneChanges.Select(z => z.Relative) : []).Distinct(StringComparer.OrdinalIgnoreCase)], string.Join(" ", reasons));
+        }
+        if (conflicts.Count > 0) notes.Add($"Replaced changes made since the checkout in {string.Join(", ", conflicts.Take(8))}.");
+        if (shadows.Count > 0) notes.Add($"Updated anyway, although the game finds textures by name: {shadowed}.");
+        if (zonesLost.Count > 0) notes.Add($"Map zones did not follow faces the export replaced with new ones or nodes replaced under another name ({lostZones}); the new ones have the model's own zones. Set them with Tools → Edit map zones.");
+        // No face goes unmentioned: Blender deleted or rebuilt those the export no longer has (the ones its import drops, of
+        // triangles that share their vertices, came back in Carry).
+        if (continued?.RemovedFaces() is { Total: > 0 } gone)
+        {
+            int shown = gone.Meshes.Take(16).Sum(m => m.Faces);
+            notes.Add($"Faces no longer present in {Path.GetFileName(model)} ({gone.Total:N0} removed{(gone.Partial switch { 0 => "", 1 => ", 1 of them only in part: its other triangles stay, with its zones", _ => $", {gone.Partial:N0} of them only in part: their other triangles stay, with their zones" })}): "
+                + string.Join(", ", gone.Meshes.Take(16).Select(m => $"{(m.Holder.Length > 0 ? JsonData.ShownText(m.Holder) : "an unnamed node")} ({m.Faces:N0})"))
+                + (shown < gone.Total ? $"; {gone.Total - shown:N0} more removed faces." : ".")
+                + (zonesRemoved.Count > 0 ? $" The zones maps gave them go with them: {string.Join("; ", zonesRemoved)}." : ""));
+        }
+        // Copies made in Blender (a duplicated subtree) keep what they copy, as copies made in the world editor do.
+        if (bindings.Any && continued?.Copies is { Count: > 0 } copied)
+            notes.Add($"Nodes copied in Blender keep, in every map that uses {Path.GetFileName(model)}, the zones and map references of the nodes they copy ({copied.Count:N0} copied): "
+                + string.Join(", ", copied.Take(8).Select(c => $"{c.Copy} (a copy of {c.Original})")) + (copied.Count > 8 ? $"; {copied.Count - 8:N0} more." : "."));
+        if (addedFaces + addedNodes > 0) notes.Add($"{addedFaces:N0} new face{(addedFaces == 1 ? "" : "s")} and {addedNodes:N0} new node{(addedNodes == 1 ? "" : "s")} of {Path.GetFileName(model)} have the model's own zones in every map that uses it; set them with Tools → Edit map zones.");
+        changes.AddRange(zoneChanges);
+        _ = AppliedManifest(checkout, changes);
+        return new($"Update {Path.GetFileName(model)} from Blender", changes, notes, sealedFolder) { Expected = expected };
+
+        // The second read is compared block by block with the first, so a file of hundreds of megabytes is held once.
+        static byte[] Stable(string path, long maximum, CancellationToken token)
+        {
+            token.ThrowIfCancellationRequested();
+            var info = new FileInfo(path);
+            if (!info.Exists) throw new InvalidDataException($"{path} does not exist.");
+            if (info.Attributes.HasFlag(FileAttributes.ReparsePoint)) throw new InvalidDataException($"{path} is a link.");
+            var stamp = FileStamp.Read(path);
+            byte[] first = SourceRead.All(path, maximum, token);
+            if (FileStamp.Read(path) != stamp || !SourceProject.FileEquals(path, first, token)) throw new IOException($"{path} is still changing; wait for Blender to finish exporting.");
+            return first;
+        }
+    }
+
+    /// <summary>
+    /// The texture a material shows is the one of its image's name (the build's <see cref="WorldAssembler"/>): a texture name a
+    /// material records follows the image Blender assigned in its place, so the file does not name a texture it no longer shows.
+    /// A material whose image Blender removed, although the checkout gave Blender its PNG (<paramref name="checkedOut"/>, by
+    /// file name), is refused rather than built with the recorded texture.
+    /// </summary>
+    private static void FollowImages(JsonObject root, IReadOnlyDictionary<string, string> checkedOut, string path)
+    {
+        var textures = root["textures"] as JsonArray ?? []; var images = root["images"] as JsonArray ?? [];
+        foreach (var material in (root["materials"] as JsonArray ?? []).OfType<JsonObject>())
+        {
+            if ((material["extras"] as JsonObject)?[Worlds.WorldGltf.Key] is not JsonObject engine || Text(engine["texture"]) is not { } recorded) continue;
+            if (((material["pbrMetallicRoughness"] as JsonObject)?["baseColorTexture"] as JsonObject)?["index"] is not { } index)
+            {
+                if (checkedOut.ContainsKey(recorded + TextureSources.Extension)) throw new InvalidDataException(Worlds.WorldGltf.NoImage(path, Text(material["name"]) ?? "", engine["texture"]));
+                continue;
+            }
+            if (!GltfInteger.TryInt64(index, out long t) || t < 0 || t >= textures.Count
+                || !GltfInteger.TryInt64((textures[(int)t] as JsonObject)?["source"], out long i) || i < 0 || i >= images.Count || Text((images[(int)i] as JsonObject)?["uri"]) is not { } uri) continue;
+            string stem = Path.GetFileNameWithoutExtension(Uri.UnescapeDataString(uri)).ToLowerInvariant();
+            if (!stem.Equals(recorded, StringComparison.OrdinalIgnoreCase)) engine["texture"] = stem;
+        }
+    }
+
+    /// <summary>A texture the update writes that is not what its name finds in a mission (<see cref="TextureShadows"/>).</summary>
+    private readonly record struct TextureShadow(string Texture, string Mission, string Other, bool Hides)
+    {
+        public string Reason => Hides
+            ? $"{Mission} would find {Texture} before {Other}, which the models of {Mission} that show {Path.GetFileNameWithoutExtension(Texture)} use now"
+            : $"{Mission} finds {Other} first, so the model would show that file there, not {Texture}";
+    }
+
+    /// <summary>
+    /// Where a texture the update writes would not be what its name finds. A mission's pack holds the PNGs of its texture
+    /// folders, the first of each name in folder order (<see cref="TextureSources.MissionFolders"/>, as
+    /// <see cref="SourceBuilder.MissionTextures"/> packs them), and the game finds a texture by name; a name no folder holds is
+    /// taken from where the model's image points. So, for each texture and each mission that builds the model (a model of
+    /// <c>data/mN</c> in mN, one of <c>data/common</c> in every mission, and every mission whose map binds it, <paramref name="bound"/>,
+    /// such as 1999 m6 loading m13's <c>wlpart</c> files): another file of the name found first is what the model shows there;
+    /// and in each mission that searches the texture's folder, a new texture found before another file of its name takes the
+    /// name from that file for every model of the mission that shows it.
+    /// </summary>
+    private static List<TextureShadow> TextureShadows(SourceWorkspace workspace, string model, IReadOnlyList<string> textures, IReadOnlyDictionary<string, string?> current,
+        IReadOnlySet<string> bound, CancellationToken token)
+    {
+        List<TextureShadow> shadows = [];
+        if (textures.Count == 0) return shadows;
+        string[] parts = model.Split('/');
+        bool common = parts.Length > 2 && parts[1].Equals("common", StringComparison.OrdinalIgnoreCase);
+        SourceBuilder.Snapshot? snapshot = null;
+        // Each file once, as the workspace holds it (pending additions and deletions included).
+        Dictionary<string, bool> present = new(StringComparer.OrdinalIgnoreCase);
+        bool Exists(string relative)
+        {
+            if (!present.TryGetValue(relative, out bool found)) present[relative] = found = workspace.Exists(relative, token);
+            return found;
+        }
+        foreach (string mission in SourceProject.MissionFolders(workspace.Root, token))
+        {
+            bool builds = common || parts.Length > 2 && parts[1].Equals(mission, StringComparison.OrdinalIgnoreCase) || bound.Contains(mission);
+            IReadOnlyList<string>? folders = null;
+            foreach (string texture in textures)
+            {
+                token.ThrowIfCancellationRequested();
+                string folder = Path.GetDirectoryName(texture)!.Replace('\\', '/'), name = Path.GetFileName(texture);
+                // Only the mission's own folders and the shared ones can be among its texture folders.
+                if (!builds && !folder.StartsWith("data/common/", StringComparison.OrdinalIgnoreCase) && !folder.StartsWith($"data/{mission}/", StringComparison.OrdinalIgnoreCase)) continue;
+                folders ??= TextureSources.MissionFolders(mission, SourceBuilder.Multiplayer(workspace.Root, mission, snapshot ??= new(workspace.Root, workspace.Overlay(), inventoryToken: token), token));
+                bool searched = folders.Contains(folder, StringComparer.OrdinalIgnoreCase);
+                if (!builds && !searched) continue;
+                int at = -1;
+                for (int i = 0; i < folders.Count && at < 0; i++)
+                    if (folders[i].Equals(folder, StringComparison.OrdinalIgnoreCase) || Exists($"{folders[i]}/{name}")) at = i;
+                if (at < 0) continue;
+                if (!folders[at].Equals(folder, StringComparison.OrdinalIgnoreCase)) { if (builds) shadows.Add(new(texture, mission, $"{folders[at]}/{name}", false)); }
+                else if (current[texture] == null)
+                    for (int i = at + 1; i < folders.Count; i++)
+                        if (Exists($"{folders[i]}/{name}")) { shadows.Add(new(texture, mission, $"{folders[i]}/{name}", true)); break; }
+            }
+        }
+        return shadows;
+    }
+
+    private static void CheckInputLimits(long maximumExportBytes, int maximumJsonBytes)
+    {
+        if (maximumExportBytes is < 0 or > MaximumExportBytes) throw new ArgumentOutOfRangeException(nameof(maximumExportBytes));
+        if (maximumJsonBytes is < 0 or > GltfDocument.MaximumJsonBytes) throw new ArgumentOutOfRangeException(nameof(maximumJsonBytes));
+    }
+
+    /// <summary>
+    /// Gives the objects of a mission database group the transform an artist gave the group (a Blender empty moved, turned
+    /// or scaled): the build deletes the groups, so their objects carry transforms of their own and a group may have none
+    /// (WorldAssembler). Groups count as the build finds them, from the file's roots through groups. Refused, saying why,
+    /// where the objects cannot take it: a group with geometry, a moved group whose objects are in a part's file, and a
+    /// level-of-detail object (it stands where its parent is) or an object several parents share under a moved group.
+    /// </summary>
+    private static void UngroupTransforms(GltfDocument document, JsonObject root, string path)
+    {
+        var nodes = root["nodes"] as JsonArray ?? [];
+        HashSet<GltfNode> seen = new(ReferenceEqualityComparer.Instance);
+        foreach (var node in document.Roots) Visit(node, Matrix4x4.Identity, 0);
+
+        void Visit(GltfNode group, Matrix4x4 passed, int depth)
+        {
+            if (depth > GltfDocument.MaximumDepth || !seen.Add(group) || !Worlds.WorldGltf.IsGroup(group, path) || group.Index < 0 || group.Index >= nodes.Count || nodes[group.Index] is not JsonObject json) return;
+            string name = Worlds.WorldGltf.EngineName(group);
+            var engine = group.Extras?[Worlds.WorldGltf.Key] as JsonObject;
+            if (group.Mesh != null || engine?["model"] != null || Text(engine?["class"]) == "lod")
+                throw new InvalidDataException($"{path}: group {JsonData.ShownText(name)} has geometry of its own or is a level-of-detail node; a group of the mission database only holds objects (the build deletes it). Give the geometry an object of its own.");
+            var transform = (group.Matrix ?? Matrix4x4.Identity) * passed;
+            if (!transform.IsIdentity)
+            {
+                if (Text(engine?["ref"]) is { } || engine?[Worlds.WorldGltf.ZoneReference] != null)
+                    throw new InvalidDataException($"{path}: group {JsonData.ShownText(name)} was moved, but the objects it places are in {(Text(engine?["ref"]) is { } part ? JsonData.ShownText(part) : "a referenced model")}, which every reference to it shares; move them in that file (check it out), or move the group back.");
+                foreach (var child in group.Children)
+                {
+                    if (Worlds.WorldGltf.IsGroup(child, path)) continue;
+                    var values = child.Extras?[Worlds.WorldGltf.Key] as JsonObject;
+                    string childName = Worlds.WorldGltf.EngineName(child);
+                    if (Text(values?["class"]) == "lod") throw new InvalidDataException($"{path}: group {JsonData.ShownText(name)} was moved, but it holds the level-of-detail node {JsonData.ShownText(childName)}, which stands where its parent is and cannot take the move; move the objects below it, or move the group back.");
+                    if (values?["instance"] != null) throw new InvalidDataException($"{path}: group {JsonData.ShownText(name)} was moved, but it holds {JsonData.ShownText(childName)}, a node several parents share, which would move under each of them; move the group back.");
+                    var local = (child.Matrix ?? Matrix4x4.Identity) * transform;
+                    float[] rows = [local.M11, local.M12, local.M13, local.M21, local.M22, local.M23, local.M31, local.M32, local.M33, local.M41, local.M42, local.M43];
+                    if (!rows.All(float.IsFinite) || new[] { local.M41, local.M42, local.M43 }.Any(v => MathF.Abs(v) > SourceWorlds.MaximumCoordinate))
+                        throw new InvalidDataException($"{path}: group {JsonData.ShownText(name)} was moved so far that {JsonData.ShownText(childName)} would lie beyond ±{SourceWorlds.MaximumCoordinate:N0}.");
+                    if (nodes[child.Index] is JsonObject target) GltfNodeEdits.SetLocal(target, local);
+                }
+                GltfNodeEdits.SetLocal(json, Matrix4x4.Identity);
+            }
+            foreach (var child in group.Children) Visit(child, transform, depth + 1);
+        }
+    }
+
+    /// <summary>
+    /// Whether a terrain recipe of the project takes surfaces from <paramref name="model"/>: the build cuts those into pieces
+    /// that stay below the vertex limit, so the limit of a model's mesh is not theirs. A recipe that cannot be read is
+    /// skipped; the build reports it.
+    /// </summary>
+    private static bool TerrainSurfaces(SourceWorkspace workspace, string model, CancellationToken token)
+    {
+        foreach (string path in SourceTerrain.Recipes(workspace, token))
+        {
+            try
+            {
+                if (SourceTerrain.Read(workspace, path, token).Surfaces.Any(s => WorldAssembler.Relative(path, s.Model).Equals(model, StringComparison.OrdinalIgnoreCase))) return true;
+            }
+            catch (InvalidDataException) { }
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// Whether a mission's build loads the model as a pickup (LoadGameGen file puNNN), whose collision volume the game hides:
+    /// the load resolves its file as the build does, through the model folders the scripts set up to that point, so a
+    /// model of the same name in another folder is not the pickup (reconstruction decides the same per written file).
+    /// </summary>
+    private static bool LoadedAsPickup(SourceBuilder.Snapshot snapshot, string root, string model, Func<string, ProjectReadLimits, byte[]?> load, long maximumScriptCacheBytes, Worlds.ScriptTraceBudget traceBudget, CancellationToken token,
+        long maximumScriptSourceBytes, int maximumScriptTextBytes)
+    {
+        string stem = Path.GetFileNameWithoutExtension(model);
+        // The scripts are read from the checkout's snapshot, like the model's files.
+        var project = snapshot.Files();
+        // Each script once, as the build reads it (instruction lines); null when it does not exist.
+        Dictionary<string, IReadOnlyList<IReadOnlyList<string>>?> scripts = new(StringComparer.OrdinalIgnoreCase);
+        long scriptBytes = 0, sourceBytes = 0;
+        bool limitExceeded = false;
+        List<string> traceNotes = [];
+        BoundedDiagnostics traceDiagnostics = new(traceNotes);
+        IReadOnlyList<IReadOnlyList<string>>? Script(string name)
+        {
+            string relative = $"{SourceProject.GameGenFolder}/{name.Replace('\\', '/')}";
+            if (scripts.TryGetValue(relative, out var lines)) return lines;
+            token.ThrowIfCancellationRequested();
+            byte[]? bytes;
+            // Capacity failures are checkout failures, not a malformed mission that may simply be skipped.
+            try { bytes = load(relative, ProjectReadLimits.Text(Math.Min(maximumScriptTextBytes, maximumScriptSourceBytes - sourceBytes))); }
+            catch (InvalidDataException) { limitExceeded = true; throw; }
+            if (bytes == null) return scripts[relative] = null;
+            sourceBytes += bytes.Length;
+            string text = GameGenScriptText.Decode(bytes, token);
+            GameGenScriptText.CheckBounds(text, token);
+            // Count with the shared tokenizer, without allocating token/line objects. Include both token
+            // strings and syntax/list overhead before parsing; every cached script shares this allowance.
+            long estimate = 4L * text.Length + 256;
+            foreach (var (start, length) in GameGenScriptText.Lines(text, token))
+            {
+                token.ThrowIfCancellationRequested();
+                estimate += 256 + 64L * GameGenScriptText.TokenizeLine(text, start, start + length, null, null, token);
+            }
+            if (estimate > maximumScriptCacheBytes - scriptBytes)
+            {
+                limitExceeded = true;
+                throw new InvalidDataException("The checkout's mission script cache would exceed 64 MiB; split the source project into fewer missions before checking it out.");
+            }
+            scriptBytes += estimate;
+            return scripts[relative] = [.. GameGenScriptSyntax.Parse(text, token).Lines.Where(l => { token.ThrowIfCancellationRequested(); return l.IsInstruction; }).Select(l => l.Tokens)];
+        }
+        // The missions the project builds: a data/mN folder with its gamegen/mN.gs.
+        foreach (string entry in SourceProject.Files(root, SourceProject.GameGenFolder, n => n.EndsWith(".gs", StringComparison.OrdinalIgnoreCase), snapshot.Added, token, snapshot.Inventory))
+        {
+            string name = Path.GetFileNameWithoutExtension(entry);
+            if (!MissionScript().IsMatch(entry) || !Directory.Exists(SourceProject.Resolve(root, $"{SourceProject.DataFolder}/{name}"))) continue;
+            List<Worlds.TracedInstruction> trace;
+            // A mission whose scripts the build cannot run loads nothing.
+            try { trace = Worlds.ScriptTrace.Trace(Script, name + ".gs", traceNotes, traceBudget, traceDiagnostics, token); }
+            catch (InvalidDataException) when (!limitExceeded && !traceBudget.Exhausted) { continue; }
+            foreach (var step in trace)
+                if (step is { Command: "LoadGameGen", Args: [var file, var node, ..] } && Worlds.WorldGltf.IsPickupName(node)
+                    && Path.GetFileNameWithoutExtension(file.Replace('\\', '/')).Equals(stem, StringComparison.OrdinalIgnoreCase)
+                    && Worlds.WorldAssembler.ResolveModel(file, step.ModelDirectories, project.Exists) is { } loaded && loaded.Equals(model, StringComparison.OrdinalIgnoreCase)) return true;
+        }
+        return false;
+    }
+    [System.Text.RegularExpressions.GeneratedRegex(@"\Agamegen/m\d+\.gs\z", System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.CultureInvariant)]
+    private static partial System.Text.RegularExpressions.Regex MissionScript();
+
+    /// <summary>How a texture is transparent, or null when it is not a PNG the packs could read (the build reports those).</summary>
+    private static Formats.TextureTransparency? Transparency(byte[] png, CancellationToken token)
+    {
+        try { return Formats.TexturePackBuilder.Classify(Export.PngDecoder.Decode(png, token: token)); }
+        catch (Exception ex) when (ex is InvalidDataException or ArgumentException or OverflowException or IndexOutOfRangeException) { return null; }
+    }
+
+    private static string DefaultTextureFolder(string model)
+    {
+        // data/mN/models[/bft] → data/mN/textures[/bft]
+        string folder = Path.GetDirectoryName(model)!.Replace('\\', '/');
+        return folder.Replace("/models", "/textures", StringComparison.OrdinalIgnoreCase);
+    }
+    private static string RelativeUri(string fromFolder, string project)
+    {
+        string relative = Path.GetRelativePath(fromFolder.Replace('/', Path.DirectorySeparatorChar), project.Replace('/', Path.DirectorySeparatorChar)).Replace('\\', '/');
+        return string.Join('/', relative.Split('/').Select(Uri.EscapeDataString));
+    }
+    private static string? Text(JsonNode? node) => node is JsonValue value && value.TryGetValue(out string? text) ? text : null;
+    /// <summary>How many nodes, meshes, materials and scenes of a glTF carry engine attributes.</summary>
+    private static int EngineAttributes(JsonObject root) => new[] { "nodes", "meshes", "materials", "scenes" }
+        .Sum(key => (root[key] as JsonArray ?? []).Count(item => ((item as JsonObject)?["extras"] as JsonObject)?[Worlds.WorldGltf.Key] != null));
+    /// <summary>
+    /// The engine names of a glTF's nodes, as the build reads them (without the <c>.001</c> Blender gives each repeated name,
+    /// such as the copies of a shared node's children); unexpected shapes of extras or names (another tool's output) count as no name.
+    /// </summary>
+    private static Dictionary<string, int> Names(JsonObject root) => (root["nodes"] as JsonArray ?? [])
+        .Select(n => n is JsonObject node ? Worlds.WorldGltf.EngineName(node) : "")
+        .Where(n => n.Length > 0).GroupBy(n => n, StringComparer.Ordinal).ToDictionary(g => g.Key, g => g.Count(), StringComparer.Ordinal);
+    private static JsonObject Parse(byte[] json, string name, CancellationToken token)
+    {
+        try { GltfDocument.ValidateJsonText(json, token); return JsonNode.Parse(json, documentOptions: new() { MaxDepth = 64 }) as JsonObject ?? throw new InvalidDataException($"{name} is not a glTF JSON object."); }
+        catch (JsonException ex) { throw new InvalidDataException($"{name} is not valid JSON: {ex.Message}", ex); }
+    }
+}
