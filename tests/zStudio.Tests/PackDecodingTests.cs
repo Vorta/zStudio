@@ -71,16 +71,18 @@ public sealed class PackDecodingTests
     /// <summary>
     /// SHA-256 of each pack built from <see cref="Textures"/> by the builder that decoded every master before laying the pack
     /// out (before packs were decoded one texture at a time): Direct3D packs with and without a budget, software packs,
-    /// interface images, and budgets small enough that alpha planes decide how far textures shrink.
+    /// interface images, and budgets small enough that alpha planes decide how far textures shrink. The colour-keyed texels
+    /// are those <see cref="TexturePackBuilder.KeyedTexel"/> stores: only those words changed when it began clearing green's
+    /// low bit.
     /// </summary>
     private static readonly (TexturePackVariant Variant, string Sha256)[] Previous =
     [
-        (TexturePackVariant.FromFileName("rtexture2.zbd")!, "3d0831c92dbd56fa0d16b4584759ac0ae2ad7344326a7a153d7aa2f6e830d43a"),
-        (TexturePackVariant.FromFileName("rtexture16.zbd")!, "7676bcf9dbf0b6b5c8903e830212ac59ba385d15101674771a5116f403d2f5af"),
-        (new("rtexture64.zbd", TexturePackKind.Hardware, null, 4096), "15a5b119f849acfc40771d064faf40cc157dbb3bdd4189559c8d8d6fbdeb7db0"),
+        (TexturePackVariant.FromFileName("rtexture2.zbd")!, "78bd4ffe32f18691e3a9b9d044fb48a0b024a2556f16a94a8059037046f9f6fb"),
+        (TexturePackVariant.FromFileName("rtexture16.zbd")!, "51ac9fa461a4310ff05fa58c7a1fd3af3fa3a3a67eabf341c0861b3f084fdd76"),
+        (new("rtexture64.zbd", TexturePackKind.Hardware, null, 4096), "b3e9b26ebc2fcb97744c7587c52b0028755cc76cabb2f8c9dbed6982117dba30"),
         (TexturePackVariant.FromFileName("texturemax.zbd")!, "009ced3f0564671a04e03abded4f3ead53ce1dff7fc2286621331e15da71c9b6"),
-        (TexturePackVariant.FromFileName("image.zbd")!, "7b9add7ca2d9e9317cc3635d74fa42ee381c145c1b93a5530b1d001d0770ca5f"),
-        (new("rtexture1.zbd", TexturePackKind.Hardware, 96 * 1024, 512), "6af06ec664d44f8f0e0bd4ca0a6251104553029260bff1ce1f17f10a57b7d25f"),
+        (TexturePackVariant.FromFileName("image.zbd")!, "dd09a6ef9c030114218f001ef1dced3da375777ed0268f837fe9d5d910d49a1f"),
+        (new("rtexture1.zbd", TexturePackKind.Hardware, 96 * 1024, 512), "3b1d70d2becde08f7dbf66915aa14d5a55a8302972e93557ce5b042eb0f25d54"),
         (new("texture1.zbd", TexturePackKind.Software, 40 * 1024, 1024), "2afd634d72b46d94ef0bb39575b18b4d93c3460358fe5704e6520e6e753f78df"),
     ];
 
