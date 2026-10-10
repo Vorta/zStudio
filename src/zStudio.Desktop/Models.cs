@@ -407,6 +407,9 @@ public sealed class StudioSettings
     public Dictionary<string, double> AnimationSectionHeights { get; set; } = [];
     public string Theme { get; set; } = "System";
     public string LastRoot { get; set; } = "";
+    /// <summary>The worlds Compare worlds compared last.</summary>
+    public string CompareRetail { get; set; } = "";
+    public string CompareRebuilt { get; set; } = "";
     public List<string> RecentRoots { get; set; } = [];
     private static string SettingsPath => System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "RecoilZbdStudio", "settings.json");
     public static StudioSettings Load()

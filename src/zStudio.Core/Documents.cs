@@ -431,8 +431,9 @@ public static class JsonData
             if (!item.TryGetValue(out JsonElement element)) return item.TryGetValue(out string? s) ? Add(s) : Write(item);
             if (element.ValueKind != JsonValueKind.String) return Write(item);
             var raw = JsonMarshal.GetRawUtf8Value(element);
-            // A short string is read as its text; a longer one is shown as written, escapes and all, without its quotes.
-            return raw.Length <= 1024 ? Add(element.GetString()) : Raw(raw[1..^1]);
+            // A short string is read as its text; a longer one, or one whose text cannot be decoded, is shown as written,
+            // escapes and all, without its quotes.
+            return raw.Length <= 1024 && IsUnicodeText(raw[1..^1]) ? Add(element.GetString()) : Raw(raw[1..^1]);
         }
     }
 
@@ -446,6 +447,55 @@ public static class JsonData
         if (length <= 0) return [];
         if (length >= text.Length) return text;
         return char.IsHighSurrogate(text[length - 1]) ? text[..(length - 1)] : text[..length];
+    }
+
+    /// <summary>
+    /// Whether JSON string text as written (between its quotes, escapes undecoded) decodes to Unicode: UTF-8 bytes, and
+    /// surrogate escapes in pairs (a high \uD800–\uDBFF, then a low \uDC00–\uDFFF). System.Text.Json reads other text as
+    /// valid JSON, but decoding or comparing it (GetString, a property's Name or NameEquals, TryGetProperty on its object,
+    /// a parsed JsonObject's keys) throws InvalidOperationException, so readers refuse it first (<see cref="NotUnicode"/>).
+    /// </summary>
+    internal static bool IsUnicodeText(ReadOnlySpan<byte> written)
+    {
+        while (true)
+        {
+            // A backslash is never part of a UTF-8 sequence, so the plain text between escapes is checked whole.
+            int escape = written.IndexOf((byte)'\\');
+            if (!System.Text.Unicode.Utf8.IsValid(escape < 0 ? written : written[..escape])) return false;
+            if (escape < 0) return true;
+            written = written[escape..];
+            if (written.Length < 2) return false;
+            if (written[1] != (byte)'u') { written = written[2..]; continue; }
+            if (written.Length < 6) return false;
+            int unit = Hex(written[2..6]);
+            written = written[6..];
+            if (unit is < 0xD800 or > 0xDFFF) continue;
+            if (unit > 0xDBFF || written.Length < 6 || written[0] != (byte)'\\' || written[1] != (byte)'u' || Hex(written[2..6]) is < 0xDC00 or > 0xDFFF)
+                return false;
+            written = written[6..];
+        }
+        // The reader has checked the digits.
+        static int Hex(ReadOnlySpan<byte> digits)
+        {
+            int value = 0;
+            foreach (byte digit in digits) value = value << 4 | (digit <= (byte)'9' ? digit - '0' : (digit | 0x20) - 'a' + 10);
+            return value;
+        }
+    }
+
+    /// <summary>How a refusal of text that fails <see cref="IsUnicodeText"/> ends, after what the text is.</summary>
+    internal const string NotUnicode = "is not valid Unicode text: it holds an unpaired UTF-16 surrogate escape (\\uD800–\\uDFFF without its pair) or bytes that are not UTF-8; retype or remove it";
+
+    /// <summary>
+    /// Refuses the string or property name a reader over one span of JSON stands on when its text fails
+    /// <see cref="IsUnicodeText"/>, naming its byte offset and <paramref name="key"/> (the last property name read before it, as written).
+    /// </summary>
+    internal static void RequireUnicodeText(in Utf8JsonReader reader, ReadOnlySpan<byte> key, string source)
+    {
+        if (IsUnicodeText(reader.ValueSpan)) return;
+        string what = reader.TokenType == JsonTokenType.PropertyName ? "a key"
+            : key.IsEmpty ? "text" : $"the text after key \"{ShownText(System.Text.Encoding.UTF8.GetString(key[..Math.Min(key.Length, 3 * ShownCharacters)]))}\"";
+        throw new InvalidDataException($"{source} has {what} at byte {reader.TokenStartIndex:N0} that {NotUnicode}.");
     }
 
     public static string Hex(byte[] bytes, CancellationToken token = default)

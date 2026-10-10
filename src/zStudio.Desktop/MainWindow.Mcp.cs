@@ -123,6 +123,7 @@ public partial class MainWindow
                 return await Dispatcher.InvokeAsync(async () =>
                 {
                     token.ThrowIfCancellationRequested();
+                    automationRequest.Value = true;
                     if (mutates) RequireAutomationMutationAvailable();
                     using var scope = PreviewOperation.Begin(token);
                     var result = await action(args, token);
@@ -157,6 +158,7 @@ public partial class MainWindow
         RegisterResourceCommands(registry);
         RegisterMotionCommands(registry); RegisterMissionCommands(registry); RegisterMechCommands(registry);
         RegisterContentCommands(registry);
+        RegisterWorldCompareCommands(registry);
         return registry;
     }
 }
