@@ -59,6 +59,8 @@ public sealed class WindowClosingTests
                     await MissionSelectionChecks.RunDeletedReaderAtStartup();
                     await MissionOwnershipChecks.Run();
                     Volatile.Write(ref phase, "terrain, map zones and world editing");
+                    await WorldCompareBoundsChecks.Run();
+                    await WorldCompareBudgetChecks.Run();
                     await DemoWorldMcpChecks.Run();
                     Volatile.Write(ref phase, "navigation, lifecycle and content editing");
                     await ResponsiveNavigatorChecks.Run(app);

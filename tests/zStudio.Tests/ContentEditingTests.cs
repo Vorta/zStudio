@@ -131,6 +131,51 @@ public sealed class ContentEditingTests
         var small = TexturePackWriter.Resize(new(2, 1, [255, 0, 0, 0, 0, 0, 255, 255]), 1, 1, Token);
         Assert.Equal(new byte[] { 0, 0, 255, 128 }, small.Rgba);
     }
+    /// <summary>
+    /// Must-have: a cut-out PNG (alpha only 0 or 255) is packed colour-keyed, and the engine shows those texels through three
+    /// conversions; each must show the PNG's colours within one 5-bit step, its holes as the key and its black as opaque.
+    /// </summary>
+    [Fact]
+    public void KeyedTexelsShowTheirColoursThroughEveryEngineConversion()
+    {
+        // Odd RGB565 greens over blue below 128, such as (200, 100, 40), gained 132 blue on upload; (0, 3, 0) and black stored
+        // 0x0020, which a 555 display reads as the key.
+        (byte R, byte G, byte B)[] colours = [(200, 100, 40), (0, 0, 0), (255, 255, 255), (10, 250, 5), (90, 33, 120), (7, 130, 3), (0, 3, 0)];
+        byte[] rgba = new byte[8 * 8 * 4];
+        for (int i = 0; i < 64; i++)
+        {
+            var (r, g, b) = colours[i % colours.Length];
+            rgba[i * 4] = r; rgba[i * 4 + 1] = g; rgba[i * 4 + 2] = b; rgba[i * 4 + 3] = i % 5 == 4 ? (byte)0 : (byte)255;
+        }
+        static int Expand(int value, int bits) => bits == 5 ? value << 3 | value >> 2 : value << 2 | value >> 4;
+        foreach (string pack in new[] { "rtexture16.zbd", "texture8.zbd", "image.zbd" })
+        {
+            byte[] bytes = TexturePackBuilder.Build([new("cut", "cut", new(8, 8, rgba), Direct: true)], TexturePackVariant.FromFileName(pack)!, Token).Bytes;
+            int offset = BinaryPrimitives.ReadInt32LittleEndian(bytes.AsSpan(24 + 32));
+            Assert.Equal(0x03, bytes[offset]);
+            for (int i = 0; i < 64; i++)
+            {
+                int s = BinaryPrimitives.ReadUInt16LittleEndian(bytes.AsSpan(offset + 16 + i * 2));
+                // Direct3D on a 565 display uploads 1555 (ConvertImagePixelsForTexture, retail 0x4aa70d).
+                int upload = (s & 0x1F) | ((s >> 1) & 0x7FF0) | (s != 0 ? 0x8000 : 0);
+                // A 555 display converts each texel as it is read (zVid_Image::ReadData, retail 0x46ef05).
+                int read555 = ((s >> 1) & 0x7FE0) | (s & 0x1F);
+                bool opaque = rgba[i * 4 + 3] == 255;
+                // The software renderer draws every nonzero texel as stored (retail 0x49b7e0).
+                Assert.Equal(opaque, (upload & 0x8000) != 0); Assert.Equal(opaque, read555 != 0); Assert.Equal(opaque, s != 0);
+                if (!opaque) continue;
+                (int R, int G, int B)[] shown =
+                [
+                    (Expand(upload >> 10 & 31, 5), Expand(upload >> 5 & 31, 5), Expand(upload & 31, 5)),
+                    (Expand(read555 >> 10 & 31, 5), Expand(read555 >> 5 & 31, 5), Expand(read555 & 31, 5)),
+                    (Expand(s >> 11, 5), Expand(s >> 5 & 63, 6), Expand(s & 31, 5)),
+                ];
+                foreach (var (r, g, b) in shown)
+                    Assert.True(Math.Abs(r - rgba[i * 4]) <= 8 && Math.Abs(g - rgba[i * 4 + 1]) <= 8 && Math.Abs(b - rgba[i * 4 + 2]) <= 8,
+                        $"{pack} texel {i}: ({rgba[i * 4]}, {rgba[i * 4 + 1]}, {rgba[i * 4 + 2]}) is shown as ({r}, {g}, {b}).");
+            }
+        }
+    }
     [Fact]
     public async Task VariantBatchUndoSaveAndOwnershipAreAtomic()
     {
