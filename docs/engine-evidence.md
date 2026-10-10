@@ -99,6 +99,7 @@ Addresses are retail.
 - **Even shipped data is inconsistent.** Which `smoke1` binds differs between shipped missions. Several cross-links come from wildcard definitions applied to roots that lack the named node, which looks accidental.
 - **For zStudio:**
   - The animation preview takes the highest live slot (freed slots keep their names but are not nodes): `AnimationPreviewContext.ResolveRoot` with the binding loop's chain (`NameLookups.RootPositions`, entry state at +0x98), its whole-world fallback (the most recently created node), effect templates, the texture-cycle lookup in `Textures.cs`, and the mission's AI vehicles. Lookups made as the mission loads see only the world file's nodes.
+  - Check and export report ambiguous supported whole-world lookups (`WorldLookups`), and which of those bindings an export or edit changes. The report covers literal texture-script names and animation roots, fallback references and prerequisite roots; runtime macro operands, successful subtree bindings and other resource categories are outside this report. See the [reported lookup scope and limitations](source-project.md#reconstruct-check-and-export).
   - An explicit refactor (renaming the dish, one `smoke1`, restricting wildcards) changes shipped behaviour and must be stated, never silent.
 
 ## Animation runtime
@@ -156,6 +157,35 @@ Addresses are retail.
   - Do not key nodes the game drives, or set the priority on purpose.
   - Avoid pitch at exactly ±90° with |roll| > 90°.
   - The preview differs from retail in three ways, to label or fix: gaps between same-flag segments, the morph clamp, and 0x0B evaluated absolutely rather than incrementally.
+
+## Missions and slots
+
+- **No mission table.**
+  - Every per-mission input is formatted from the mission number without a range check: `support\initm%d.gw`, `m%d_zbd.gs` and the sound set `M%d` (`LoadMissionCoreResources` 0x417810 [BN]), and `zbd\m%d\zrdr.zbd` with its search path (0x42ecb0 [BN]).
+  - `maps\m%d.zmap`, `briefing.zrd` `CAMPAIGN%d` and `Weather.zrd` `MISSION%d` are optional.
+  - Everything else (world, animations, packs) is named by the mission's scripts. Scripts not in `interp.zbd` are read loose from the game folder (`RunScriptFile` 0x4c1500 [B]).
+  - Saved games store the number as a plain integer, with no range check on load (0x4174f0 [BN]).
+- **Choosing a mission.**
+  - **New Game** always starts mission 1 (0x41c525 [BN]).
+  - **Completing a mission** queues the next number unless the mission's `objectives.zrd` sets `FINAL_MISSION` (`inc edx` at 0x418fdf [BN]). Only m6 sets it.
+  - **Multiplayer worlds** come from `dialog.zrd` `MP_NEW_GAME/WORLD/CYCLE`, which holds up to 20 entries; entry *i* is mission *i* + 7 (0x41a5b0 [BN]).
+- **Per-number rules fixed in the executable:**
+  - **Weapons in network play:** a 13-row table (`CheckMissionWeaponAvailability` 0x43ca90 [B, BN]). Mission 14 reads past it into its own return address and allows every weapon; 15 and up read undefined stack data.
+  - **Amphibious mode** online only in missions 9, 11, 12 and 13 (0x423380 [B, BN]).
+  - **Single player:** amphibious from mission 3, hover from 4, submarine in 6 only, carried forward by saves.
+  - **Mission films:** looked up as `'M'` plus the character `'0' + number` (0x42edb0 [BN]). Missions 10 and up never match, and the shipped `M10`–`M13` entries are dead.
+- **For zStudio:**
+  - Any existing slot can be replaced as pure data.
+  - A new multiplayer arena m14 is pure data: its files, scripts and a `dialog.zrd` entry. Arenas 15 and up need a patch.
+  - A new single-player mission is reached only through the chain: clearing m6's `FINAL_MISSION` makes m7 next, and that slot is also arena 7. Otherwise New Game and the next-mission step need patches (0x41c526, 0x418fdf).
+
+## Resource archives
+
+- **A resource comes from the first mounted archive that holds its name.** `zReader::Load` (0x48cdc0 [B]) reduces the path it is given to the file name and extension and opens it with `zRdrOpenFile` (0x48d1c0 [B]), which asks each mounted archive in list order (`zIndexArchive::OpenFileByName` 0x4a6630 [B], the first member whose name matches without case, `FindRecordByNameCI` 0x4a65d0 [B]) and returns the first member found. Loose `.zrd` files and the zReader search paths are not consulted.
+- **The common archive is searched first.** `zArchive::Mount` (0x48d210 [B]) appends to the list. When the game uses its archives (`HudSensorTracker::missionFlags` nonzero, which gates both mounts), `zbd\zrdr.zbd` is mounted at startup as the current archive (`RecoilApp::LoadZbdAndStartEngine` 0x42e490 [B]). When a mission ends (`CRecoilAppPlayState::OnDeactivate` 0x42f8e0 [B]) or a saved game of another mission loads (`HudSensorTracker::ApplyMissionDataAndReload` 0x4174f0 [B]), `zRdrUnmount(0)` (0x48d2c0 [B]) frees every other archive and puts the current one back as the only entry; `zUtil::SetMissionZrdrPathsAndMountZbd` (0x42ecb0 [B]) then appends `zbd\m%d\zrdr.zbd`. A common member therefore hides a mission member of the same name.
+- **Effects.** `zEffect::InitFromPath` (0x460070 [B]) reads `effects.zrd` this way as each mission loads (`InitMissionGameplaySystems` 0x417a00; `ShutdownMissionGameplaySystems` 0x417d40 frees it through `zEffect::Reset` 0x460330 [B]), and `zEffect_Anim::LoadZbd` (0x45efb0) rejects the whole `anim.zbd` when an effect template it names is not among those templates (0x45f899 [BN]). A mission's own `effects.zrd` counts only when the common archive has none.
+- **Shipped data** [D]: in both releases the only name both in the common archive and in a mission's is `anim.zrd`, the animation definitions, which the game never reads at run time and projects keep as `.zad` files. The common archive holds `effects.zrd`, `sounds.zrd`, `pickup.zrd` and `vehicle*.zrd`; the missions hold `ai.zrd`, `aiv*.zrd`, `puppies*.zrd`, `startanims.zrd` and the `net_NN.zrd` networks.
+- **For zStudio:** an export checks animations against the `effects.zrd` the game reads (the common one when `data\common` has one), and builds a mission archive that has a resource named like a common one with a warning naming both files.
 
 ## Resource schemas
 
@@ -235,3 +265,9 @@ These are the keys the game reads. Anything else in a file is ignored. Types are
 - **Address space.** No executable is large-address-aware, so the game, the wrapper and the driver share 2 GiB. Expect 2–3 times the pack's size in the process [U].
 - **UVs.** Shipped models are drawn with their stored float UVs (`RenderNodeHardware` 0x477b30, `SubmitPolygon` 0x4abb20 [BN]). Geometry built during play (craters, quicksand, clipped CanModify pieces) is rounded to 1/256 by `AddPolygonEx` 0x483650 [BN], up to 2 texels on a 1024 texture.
 - **Frame time.** Each opaque polygon is its own draw call, and transform, lighting and clipping run on the CPU. Frame time follows polygon count rather than texture size [U]. The shipped 1999 worlds hold 4,243–15,119 polygons in all (m11–m6), at most 170 in one model [D]; the engine sets no polygon limit of its own, so zStudio reports terrain painting that adds more than 16,000 polygons rather than refusing it.
+
+### Camera horizon source commands
+
+The external GameZRecoil reconstruction's zInterp/zinterp_parse.cpp resolves both CameraSetHorizon and CameraSetHorizonXZ with FindByTypeAndName(6, name), the Object3D runtime type. zClass/Camera.c setters at retail 0x44A910 and 0x44A980 assign separate horizonNode and horizonXZNode references; the latter follows camera X/Z. The source assembler applies both commands and keeps their separate provenance. CameraRotate and CameraTranslate dispatch to Euler-angle and position setters; CameraSetActive changes node activation, and exact CameraSetNearClip/CameraSetFarClip retain the other plane. Those five commands are currently unimplemented in source assembly and are explicitly reported as such; no successful parse is claimed as their execution support.
+
+The same interpreter dispatch identifies additional saved-world mutations: Object3DSetActive activates the current node, Object3DSetPriority updates its geometry entries, NewLOD creates a LOD node, and the Matl/Model/SEQ and window-clear-polygon commands create or alter authored structures. Source assembly does not implement all of them. Its default dispatch now reports every recognized command except an explicit set of diagnostic or renderer/runtime-global settings. CameraSetDynamicLOD calls the static view-distance setting and CameraSetObjectHSETest changes the global HSE-test setting; neither edits a saved camera record. This classification is based on the inspected interpreter calls, not command names alone.
