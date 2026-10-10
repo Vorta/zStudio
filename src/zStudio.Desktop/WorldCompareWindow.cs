@@ -4,6 +4,7 @@ using System.Windows;
 using System.Windows.Automation;
 using System.Windows.Controls;
 using System.Windows.Data;
+using System.Windows.Input;
 using System.Windows.Markup;
 using Microsoft.Win32;
 using Recoil.Zbd.Core.Worlds;
@@ -26,7 +27,9 @@ internal sealed class WorldCompareWindow : Window
     private readonly Comparer compare;
     private readonly TextBox retail = new(), rebuilt = new(), filter = new() { MinWidth = 220 };
     private readonly Button browseRetail = new() { Content = "Browse…", MinWidth = 80, Margin = new(8, 0, 0, 0) }, browseRebuilt = new() { Content = "Browse…", MinWidth = 80, Margin = new(8, 0, 0, 0) };
-    private readonly Button run = new() { Content = "Compare", IsDefault = true, MinWidth = 96, Padding = new(12, 4, 12, 4) };
+    // Not the default button: Enter in the filter or the tree keeps its own meaning rather than replacing the comparison
+    // (its rows, expansion, selection and MCP context); Enter in a path box compares.
+    private readonly Button run = new() { Content = "Compare", MinWidth = 96, Padding = new(12, 4, 12, 4) };
     private readonly CheckBox differencesOnly = new() { Content = "Differences only", VerticalAlignment = VerticalAlignment.Center, Margin = new(16, 0, 0, 0) };
     private readonly TextBlock summary = new() { TextWrapping = TextWrapping.Wrap, Margin = new(0, 8, 0, 8) }, status = new() { TextWrapping = TextWrapping.Wrap, Opacity = 0.8 };
     private readonly TreeView tree = new();
@@ -104,11 +107,14 @@ internal sealed class WorldCompareWindow : Window
 
         browseRetail.Click += (_, _) => Browse(retail, "Choose the retail world (gamez.zbd)");
         browseRebuilt.Click += (_, _) => Browse(rebuilt, "Choose the rebuilt world (gamez.zbd)");
-        run.Click += async (_, _) =>
+        RoutedEventHandler compareFiles = async (_, _) =>
         {
             try { await CompareAsync(retail.Text.Trim(), rebuilt.Text.Trim(), CancellationToken.None); }
             catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException) { }
         };
+        run.Click += compareFiles;
+        foreach (var box in new[] { retail, rebuilt })
+            box.KeyDown += (_, e) => { if (e.Key == Key.Enter && run.IsEnabled) { e.Handled = true; compareFiles(run, e); } };
         differencesOnly.Checked += (_, _) => ApplyFilter(); differencesOnly.Unchecked += (_, _) => ApplyFilter();
         filter.TextChanged += (_, _) => ApplyFilter();
         // The tree's selection follows the comparison's: the tree moves its own when it refills (a filter, MCP), so only a
