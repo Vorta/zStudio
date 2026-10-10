@@ -75,6 +75,29 @@ public sealed class SourceModelExtensionTests
         Assert.Null(Assert.Single(report.Outputs).Error);
     }
 
+    /// <summary>
+    /// An added SetModelDirectory moves no folder the scripts listed before (zRdrAddSearchPaths), so an added load can find
+    /// another file of its name first: the preview refuses it instead of showing the other model.
+    /// </summary>
+    [Fact]
+    public async Task AnAddedLoadThatWouldFindAnotherFileFirstIsRefused()
+    {
+        using SourceWorldFixture fixture = new();
+        WriteSiblingModels(fixture);
+        string script = File.ReadAllText(fixture.Path("gamegen/m1.gs"));
+        fixture.Write("gamegen/m1.gs", script.Replace("# no vehicles", "SetModelDirectory ..\\data\\m2\\models\\bft", StringComparison.Ordinal));
+        SourceWorkspace workspace = new(fixture.Project);
+        SourceModelAddition addition = new("data/m1/models/tank.gltf", "new_tank");
+        SourceWorlds.AddModel(workspace, "m1", new(addition, []), Token);
+        var error = await Assert.ThrowsAsync<InvalidDataException>(() => SourceWorlds.BuildPreviewAsync(fixture.Project, "m1",
+            Path.Combine(SourceWorlds.PreviewRoot(fixture.Project), "shadowed"), workspace.Overlay(), token: Token, additions: [addition]));
+        Assert.Contains("would load data/m2/models/bft/tank.gltf, not data/m1/models/tank.gltf", error.Message);
+        // A preview built without a search folder the scripts name is stale once a pending file is added below it.
+        SourceWorldBuild preview = new("m1", "", "", [], new Dictionary<string, Recoil.Zbd.Core.FileStamp>()) { MissingFolders = ["data/added"] };
+        Assert.True(preview.AddsToMissingFolder(["data/Added/x.gltf"]));
+        Assert.False(preview.AddsToMissingFolder(["data/added.gltf", "data/addedx/x.gltf"]));
+    }
+
     private static void WriteSiblingModels(SourceWorldFixture fixture)
     {
         const string folder = "data/m1/models/";
