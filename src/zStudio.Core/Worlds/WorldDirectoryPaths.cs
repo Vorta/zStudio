@@ -38,6 +38,9 @@ internal sealed class DirectorySearchList
     /// </summary>
     internal IReadOnlyList<string> Folders => folders;
 
+    /// <summary>Empties the list, as <c>zRdrSetPath</c> (retail 0x48cca0) frees the zReader path list before adding its operand.</summary>
+    internal void Clear() { named.Clear(); folders.Clear(); }
+
     /// <summary>
     /// Adds an operand's folders. <paramref name="folderExists"/> tests a project folder; without it every folder counts as
     /// present, as in the original build tree (a missing folder holds no file, so no search finds another file).
