@@ -655,7 +655,7 @@
   },
   {
     "Name": "zstudio_operation",
-    "Description": "Read operation status/result. Poll at sensible intervals; cancel is available only for export/validation.",
+    "Description": "Read operation status/result. Poll at sensible intervals; cancel is available for exports, validation and world comparisons.",
     "Mutates": true,
     "Parameters": [
       {
@@ -669,7 +669,7 @@
       {
         "Name": "cancel",
         "Type": "boolean",
-        "Description": "Request cancellation of an export or validation.",
+        "Description": "Request cancellation of an export, validation or world comparison.",
         "Required": false,
         "Choices": null,
         "Properties": null
@@ -4868,6 +4868,101 @@
         "Name": "propertyAction",
         "Type": "string",
         "Description": "Generated action ID for invoke.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      }
+    ]
+  },
+  {
+    "Name": "zstudio_world_compare",
+    "Description": "Compare two RECOIL GameZ worlds (gamez.zbd) of version 15, or 13 for the 1998 demos, such as a retail world and one rebuilt from a source project or a demo world, in the visible Compare worlds window (Tools \u2192 Compare worlds\u2026). Their node trees are merged by parent-child structure: children match by name, then repeated names by their whole contents, then structure, their children\u0027s names and nearest position, independent of serialized node slots. After pairing, child, world-cell and overflow lists are compared in encounter order, including repeated memberships, because they can change zone selection. Each pair is the same or changed (class, flags, zone, grid cell, transform, class data, model, number of children or traversal order); other nodes are only in one world. The result gives both versions, counts them and their differences, says whether the tree is truncated (it holds at most 500,000 rows, a node under several parents appearing under each, and 256 levels), and the names several nodes share whose whole-world lookup (the engine finds a name\u0027s highest slot first) finds another node in the rebuilt world; animations bind their roots and fall back to such lookups, but search their own subtrees first, so not every one changes behaviour. Indistinguishable copies (same parents, same contents all the way down) count as the same node. The world row also reports texture-directory entry counts, load states and next-variant targets; duplicate texture names pair by directory occurrence, while distinct names may reorder. Read rows with zstudio_world_compare_tree. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Mutates": true,
+    "Parameters": [
+      {
+        "Name": "retail",
+        "Type": "string",
+        "Description": "Full path of the retail (expected) world file.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "rebuilt",
+        "Type": "string",
+        "Description": "Full path of the rebuilt (actual) world file.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      }
+    ]
+  },
+  {
+    "Name": "zstudio_world_compare_tree",
+    "Description": "Read the merged node tree of the Compare worlds window: its roots (the world node with its members, then the nodes no parent holds) or a row\u0027s children, optionally filtered before paging. A row is a pair of nodes or a node only one world has, with both slots, its status, how many rows below differ, whether a whole-world lookup of its name finds another node in the rebuilt world, whether the tree leaves out some of its children (truncated), and its differences (at most 16, values shortened to 256 characters and 1,024 in all, of differenceCount). It only reads the comparison, so it stays available while operations run: select shows a row\u0027s properties in the window, expand and collapse change only the window\u0027s tree, and these actions return busy while a dialog is open.",
+    "Mutates": false,
+    "Parameters": [
+      {
+        "Name": "context",
+        "Type": "string",
+        "Description": "Comparison context from zstudio_world_compare or a read; required for actions and row queries.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "action",
+        "Type": "string",
+        "Description": "Tree action; default read. expand, collapse and select change only the Compare worlds window\u0027s presentation.",
+        "Required": false,
+        "Choices": [
+          "read",
+          "expand",
+          "collapse",
+          "select"
+        ],
+        "Properties": null
+      },
+      {
+        "Name": "row",
+        "Type": "string",
+        "Description": "Opaque row ID: whose children to read, or the row to act on.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "differencesOnly",
+        "Type": "boolean",
+        "Description": "List only rows that differ, or hold differences below them. Independent of the window\u0027s checkbox; default false.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "offset",
+        "Type": "integer",
+        "Description": "Zero-based result offset.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": -2147483648,
+        "Maximum": 2147483647
+      },
+      {
+        "Name": "limit",
+        "Type": "integer",
+        "Description": "Page size, 1\u2013200; default 100.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": -2147483648,
+        "Maximum": 2147483647
+      },
+      {
+        "Name": "query",
+        "Type": "string",
+        "Description": "Case-insensitive text: rows whose node name, or a name below them, contains it. Independent of the window\u0027s filter.",
         "Required": false,
         "Choices": null,
         "Properties": null

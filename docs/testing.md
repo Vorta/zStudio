@@ -25,6 +25,7 @@ Tests that need game data return early unless their variable is set, so `dotnet 
 | --- | --- | --- |
 | `ZSTUDIO_CORPUS` | a RECOIL data folder (holding `interp.zbd`, `zrdr.zbd` and `m1\`), such as `zbd_1999` or `zbd_1998` | archive, world, animation, keyframe, AI and resource-editing corpus tests |
 | `ZSTUDIO_MW3_CORPUS` | a MechWarrior 3 `zbd` folder | MechWarrior 3 and AI valve tests |
+| `ZSTUDIO_DEMO_CORPUS` | a RECOIL demo's `zbd` folder from July or August 1998 (version-13 worlds) | the version-13 world test: every node's rebuilt box gives back the corners the file stores |
 | `ZSTUDIO_CONTENT_CAPTURE`, `ZSTUDIO_INSPECTION_CAPTURE` | an output folder | screenshots from the Desktop content and inspection checks |
 
 A full local gate runs the solution with the 1999 and MechWarrior 3 data:

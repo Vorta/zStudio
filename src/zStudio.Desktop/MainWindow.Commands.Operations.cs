@@ -42,6 +42,7 @@ public partial class MainWindow
     private async Task RunAutomationJobAsync(AutomationOperation job, JsonObject arguments, Func<JsonObject, CancellationToken, Task<StudioResult>> execute)
     {
         bool acquired = false;
+        automationRequest.Value = true;
         try
         {
             await automationGate.WaitAsync(job.Cancellation.Token); acquired = true; job.State = "running";
@@ -60,8 +61,8 @@ public partial class MainWindow
     }
     private void RegisterOperationCommands(StudioCommands r)
     {
-        r.Add(new("zstudio_operation", "Read operation status/result. Poll at sensible intervals; cancel is available only for export/validation.", true,
-            [P("id", "string", "Operation ID.", true), P("cancel", "boolean", "Request cancellation of an export or validation.")], async (a, token) => await Dispatcher.InvokeAsync(() =>
+        r.Add(new("zstudio_operation", "Read operation status/result. Poll at sensible intervals; cancel is available for exports, validation and world comparisons.", true,
+            [P("id", "string", "Operation ID.", true), P("cancel", "boolean", "Request cancellation of an export, validation or world comparison.")], async (a, token) => await Dispatcher.InvokeAsync(() =>
             {
                 if (!Guid.TryParse(Text(a, "id"), out var id) || !automationOperations.TryGetValue(id, out var job)) throw new StudioCommandException("unknown_operation", "Operation was not found or has expired.");
                 if (Flag(a, "cancel")) { if (!job.Cancellable) throw new StudioCommandException("not_cancellable", "This operation cannot be manually canceled."); job.Cancellation.Cancel(); }
@@ -69,13 +70,42 @@ public partial class MainWindow
             }, System.Windows.Threading.DispatcherPriority.Normal, token)));
     }
     private int documentSaveDepth;
+    /// <summary>Set for the work of an MCP request or job (it flows into what that work awaits); the GUI's own actions run without it.</summary>
+    private readonly AsyncLocal<bool> automationRequest = new();
     private void RequireAutomationMutationAvailable()
     {
         if (shutdownToken.IsCancellationRequested)
             throw new StudioCommandException("shutting_down", "The workspace is closing.");
-        if (!IsEnabled || documentSaveDepth != 0 || System.Windows.Interop.ComponentDispatcher.IsThreadModal)
-            throw new StudioCommandException("busy", "A GUI operation or document save is in progress. Retry after it completes.");
+        // A native dialog (a message box owned by Properties, a picker of Compare worlds) holds MCP changes only: the GUI's
+        // own navigation through the windows it leaves enabled is the user's action, not one the dialog's decision could lose.
+        if (!IsEnabled || documentSaveDepth != 0 || (automationRequest.Value ? GuiDialogOpen() : System.Windows.Interop.ComponentDispatcher.IsThreadModal))
+            throw new StudioCommandException("busy", "A GUI dialog, operation or document save is in progress. Retry after it completes.");
     }
+    /// <summary>
+    /// Whether a dialog of the GUI waits for the user: a modal WPF window (ShowDialog), or a native dialog whatever window
+    /// owns it, or none (a message box, a file or folder picker). A native dialog runs its own message loop, which still runs
+    /// the dispatcher work MCP calls queue, and leaves WPF's modal state and IsEnabled as they were; a change accepted then
+    /// would be overwritten or lost by the decision the dialog asks for. Call on the UI thread (the dialogs' thread).
+    /// </summary>
+    private static bool GuiDialogOpen()
+    {
+        if (System.Windows.Interop.ComponentDispatcher.IsThreadModal) return true;
+        bool open = false;
+        EnumThreadWindows(GetCurrentThreadId(), (handle, _) =>
+        {
+            if (!IsWindowVisible(handle)) return true;
+            var name = new System.Text.StringBuilder(8);
+            // #32770 is the window class of every native dialog: MessageBox, the common file and folder dialogs, task dialogs.
+            open = GetClassName(handle, name, name.Capacity) == 6 && name.ToString() == "#32770";
+            return !open;
+        }, 0);
+        return open;
+    }
+    private delegate bool ThreadWindowCallback(nint handle, nint parameter);
+    [System.Runtime.InteropServices.DllImport("user32.dll")] private static extern bool EnumThreadWindows(uint thread, ThreadWindowCallback callback, nint parameter);
+    [System.Runtime.InteropServices.DllImport("user32.dll")] private static extern bool IsWindowVisible(nint handle);
+    [System.Runtime.InteropServices.DllImport("user32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode)] private static extern int GetClassName(nint handle, System.Text.StringBuilder name, int count);
+    [System.Runtime.InteropServices.DllImport("kernel32.dll")] private static extern uint GetCurrentThreadId();
     private IDisposable BeginDocumentSave()
     {
         if (documentSaveDepth != 0) throw new StudioCommandException("busy", "A document save is already in progress.");

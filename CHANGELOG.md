@@ -4,9 +4,11 @@ Version numbers follow `MAJOR.MINOR.PATCH`; the 0.x series is under active devel
 
 ## 0.8.0 — unreleased
 
-- Write GameZ worlds from an in-memory model.
-- Open the worlds of the July and August 1998 RECOIL demos (GameZ version 13) read-only: their models, Whole world, scene tree and node properties. Version 13 differs from the releases' version 15 in its node slots (the cached box stored as eight corners in the parent's space) and Object3D records (a translation beside the matrix); both read into the same world model. The August demo's version-28 animations preview against its version-13 worlds; the July demos' animations (versions 26 and 27) are not supported yet.
+- Convert world models to and from glTF with the engine's polygon rules, keeping engine attributes in `extras.recoil` so they survive Blender. Write GameZ worlds from an in-memory model.
+- Open the worlds of the July and August 1998 RECOIL demos (GameZ version 13) read-only: their models, Whole world, scene tree and node properties, and compare them with other worlds. Version 13 differs from the releases' version 15 in its node slots (the cached box stored as eight corners in the parent's space) and Object3D records (a translation beside the matrix); both read into the same world model. The August demo's version-28 animations preview against its version-13 worlds; the July demos' animations (versions 26 and 27) are not supported yet.
+- Compare two GameZ worlds, such as a shipped world and one exported from a source project: **Tools → Compare worlds…** merges their node trees by parent-child structure, independent of node order, and marks each node as the same, changed, or only in one world, with its differing fields side by side, both slots, filters for differences and names, and the repeated names whose whole-world lookup (highest slot first) resolves to another node. MCP: `world_compare` and `world_compare_tree`.
 - The 1998 demo worlds' placements open read-only (`pickup_lock` refuses to unlock them).
+- Compare worlds stays bounded on shared hierarchies, many copies and long lists, pairs copies by contents and then position, and says when a comparison was cut short (`truncated`, `pairingTruncated`); `world_compare_tree` no longer waits behind running operations.
 
 ## 0.7.1 — 2026-09-29
 
