@@ -16,6 +16,8 @@ Resource editing uses the same [compiled-history admission limits](texture-scrip
 
 Unchanged payload bytes, original payload padding, and untouched directory metadata are retained. Changed/new payloads are appended before the rebuilt directory. Deleting a member removes its directory entry but does not compact the original payload region. A no-op serialization is byte-identical. Archives remain subject to the 512 MiB document limit.
 
+Adding or replacing a member compiles recognized zReader source text before archiving it. Such text is limited to 16 MiB, checked before reading its complete payload. Recognition uses the destination member's name and the shared structural format probe, including the archive trailer; the selected input file's extension does not override the member's identity. Binary and raw inputs retain their existing document allowance and format validation. A refused import leaves the archive, history and input file unchanged.
+
 Members that share one payload range reuse its immutable decoded tree; edits still belong to each member UUID and never change another alias. An incomplete embedded ZRD is shown as raw data with a warning, allowing archive replacement/deletion to repair it. Standalone ZRD must pass the complete bounded decoder before editing or saving is enabled; malformed files retain raw inspection and an error diagnostic.
 
 ## Typed ZRD data

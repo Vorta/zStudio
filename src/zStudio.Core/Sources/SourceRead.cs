@@ -58,6 +58,13 @@ public static class SourceRead
         return All(stream, maximum, path, token);
     }
 
+    /// <summary>Apply a caller's raw and structural allowances through the opened handle before allocating its payload.</summary>
+    public static byte[] All(string path, Worlds.ProjectReadLimits limits, CancellationToken token = default) =>
+        limits.RequiresPrefix ? AllAdmitted(path, limits.MaximumBytes, limits.CheckPrefix, token) : All(path, limits.MaximumBytes, token);
+
+    internal static byte[] All(Stream stream, Worlds.ProjectReadLimits limits, string name, CancellationToken token) =>
+        limits.RequiresPrefix ? AllAdmitted(stream, limits.MaximumBytes, name, limits.CheckPrefix, token) : All(stream, limits.MaximumBytes, name, token);
+
     internal static byte[] AllAdmitted(string path, long maximum, Admission admission, CancellationToken token, Action<Stream>? verify = null)
     {
         using FileStream stream = new(path, FileMode.Open, FileAccess.Read, Sharing, 0, FileOptions.SequentialScan);

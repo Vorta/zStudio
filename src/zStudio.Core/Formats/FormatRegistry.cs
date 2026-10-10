@@ -39,6 +39,9 @@ public sealed class FormatRegistry
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         { return new(FormatFamily.Unknown, null, Recognition.Malformed, ex.Message); }
     }
+    /// <summary>zReader data: resources (<c>.zrd</c>).</summary>
+    private static bool IsZrdExtension(string extension) =>
+        extension.Equals(".zrd", StringComparison.OrdinalIgnoreCase);
     public static FormatProbe Probe(ReadOnlySpan<byte> prefix, ReadOnlySpan<byte> trailer, long size, string extension = "")
     {
         uint magic = prefix.Length >= 4 ? BinaryPrimitives.ReadUInt32LittleEndian(prefix) : 0;
@@ -62,7 +65,7 @@ public sealed class FormatRegistry
             bool valid = 24L + palettes * 512L + records * 40L <= size;
             return new(FormatFamily.TexturePack, 1, valid ? Recognition.Supported : Recognition.Malformed, valid ? $"Texture pack · {records:N0} textures" : "Texture tables exceed file length");
         }
-        if (extension.Equals(".zrd", StringComparison.OrdinalIgnoreCase) && magic is >= 1 and <= 4)
+        if (IsZrdExtension(extension) && magic is >= 1 and <= 4)
             return new(FormatFamily.Zrd, null, Recognition.Supported, "zReader typed data");
         if (trailer.Length == 8 && BinaryPrimitives.ReadUInt32LittleEndian(trailer) == 1)
         {
@@ -74,6 +77,11 @@ public sealed class FormatRegistry
         // trailing archive index takes precedence over a standalone WAV header.
         if (prefix.Length >= 12 && prefix[..4].SequenceEqual("RIFF"u8) && prefix.Slice(8, 4).SequenceEqual("WAVE"u8))
             return new(FormatFamily.Wave, null, Recognition.Supported, "RIFF / WAVE audio");
+        // Reconstructed source text is recognized by name only after every structural format has been ruled out.
+        if (IsZrdExtension(extension) && Sources.ZrdText.LooksLikeText(prefix))
+            return new(FormatFamily.Zrd, null, Recognition.Supported, SourceZrdDescription);
+        if (extension.Equals(".gw", StringComparison.OrdinalIgnoreCase) || extension.Equals(".gs", StringComparison.OrdinalIgnoreCase))
+            return new(FormatFamily.Scripts, null, Recognition.Supported, SourceScriptDescription);
         return new(FormatFamily.Unknown, null, Recognition.Unknown, "Unrecognized format · raw inspection available");
     }
 
@@ -100,7 +108,29 @@ public sealed class FormatRegistry
         }
         try
         {
-            if (readers.TryGetValue(probe.Family, out var reader)) reader.Read(doc, token);
+            // Reconstructed sources open with the same asset model as their compiled forms.
+            if (probe.Description == SourceZrdDescription)
+            {
+                doc.SourceSyntax = "zrd-text";
+                doc.Add(AssetKind.Zrd, 0, System.IO.Path.GetFileName(path), 0, bytes.Length, content: Sources.ZrdText.Parse(bytes, token));
+            }
+            else if (probe.Description == SourceScriptDescription)
+            {
+                token.ThrowIfCancellationRequested();
+                doc.SourceSyntax = "gamegen-script"; string text = Sources.GameGenScriptText.Decode(bytes, token);
+                var lines = Sources.GameGenScriptText.TokenizeCancellable(text, token);
+                token.ThrowIfCancellationRequested();
+                string[][] instructions = new string[lines.Count][];
+                for (int i = 0; i < instructions.Length; i++)
+                {
+                    token.ThrowIfCancellationRequested();
+                    instructions[i] = lines[i].ToArray();
+                }
+                token.ThrowIfCancellationRequested();
+                doc.Add(AssetKind.Script, 0, System.IO.Path.GetFileName(path), 0, bytes.Length, new System.Text.Json.Nodes.JsonObject { ["instructions"] = lines.Count },
+                    new ScriptContent(instructions, text)).Summary = $"{lines.Count:N0} instructions";
+            }
+            else if (readers.TryGetValue(probe.Family, out var reader)) reader.Read(doc, token);
             else if (probe.Family == FormatFamily.Zrd)
                 doc.Add(AssetKind.Zrd, 0, System.IO.Path.GetFileName(path), 0, bytes.Length, content: ZrdDecoder.Read(bytes, token));
             else doc.Add(probe.Family switch { FormatFamily.Zrd => AssetKind.Zrd, FormatFamily.Wave => AssetKind.Sound, _ => AssetKind.Raw }, 0, System.IO.Path.GetFileName(path), 0, bytes.Length);
