@@ -42,7 +42,8 @@ public partial class MainWindow
             [PreviewParameter, AiSnapshotParameter, P("action", "string", "Selection operation.", true, "sources", "records", "references", "properties", "overlay", "highlight", "frame", "clear"), P("archive", "string", "Exact source archive path from sources."), P("memberIndex", "integer", "Source member index."), P("record", "string", "Optional source record UUID."), P("name", "string", "Exact valve name for highlighting."), P("visible", "boolean", "Overlay visibility."), ..PageParameters], false, async (args, token) =>
         {
             RequireNoDrafts(); var graph = TargetAiGraph(args);
-            if (Text(args, "action") == "sources") return Page(graph.ValveSources, args, s => s.Member, s => new { s.Archive, s.MemberIndex, s.Member, snapshot = graph.Id });
+            if (Text(args, "action") == "sources") return Page(graph.ValveSources, args, s => s.Member, s => new { s.Archive, s.MemberIndex, s.Member, snapshot = graph.Id },
+                maximumRowBytes: s => 256 + InspectionResultBudget.Text(s.Archive) + InspectionResultBudget.Text(s.Member) + InspectionResultBudget.Text(graph.Id));
             string action = Text(args, "action");
             if (action is "overlay" or "highlight" or "frame" or "clear")
             {

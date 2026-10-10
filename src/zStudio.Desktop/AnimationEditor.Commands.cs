@@ -26,17 +26,35 @@ public partial class AnimationEditor
     {
         if (offset < 0 || limit is < 1 or > 200) throw new StudioCommandException("invalid_argument", "Use offset >= 0 and limit 1–200.");
         JsonObject args = new() { ["offset"] = offset, ["limit"] = limit, ["query"] = query };
-        JsonObject Page<T>(IEnumerable<T> rows, Func<T, string> search, Func<T, object>? project = null) => MainWindow.Page(rows, args, search, project).Data.AsObject();
-        if (section == "problems") { var problems = Page(CurrentProblems(), p => p.Message + " " + p.Category + " " + p.Scope); problems["approximation"] = "Preview includes game-dependent approximations."; return problems; }
+        JsonObject Page<T>(IEnumerable<T> rows, Func<T, string> search, Func<T, long> maximumRowBytes, Func<T, object>? project = null)
+            => MainWindow.Page(rows, args, search, project, maximumRowBytes: maximumRowBytes).Data.AsObject();
+        if (section == "problems")
+        {
+            var problems = Page(CurrentProblems(), p => p.Message + " " + p.Category + " " + p.Scope, p =>
+                1024 + Text(p.Severity) + Text(p.Category) + Text(p.Scope) + Text(p.Message) + Text(p.Details)
+                // FileProblem is serialized too, including its computed Scope and Details. Bound their lengths
+                // from the retained path instead of constructing them again to measure the result.
+                + (p.FileProblem is { } file ? InspectionResultBudget.Problem(file) : 4));
+            problems["approximation"] = "Preview includes game-dependent approximations."; return problems;
+        }
         if (frame == null) return new { unavailable = true };
         return section switch
         {
             "events" => EventPage(),
-            "sequences" => Page(frame.Sequences, s => s.Name + " " + s.State),
-            "scene" => Page(context?.Scene.Nodes ?? [], n => n.Name + " " + n.Class, n => new { n.Index, n.Name, n.Class, n.Metadata }),
+            "sequences" => Page(frame.Sequences, s => s.Name + " " + s.State, s => 512 + Text(s.Name) + Text(s.State)),
+            // Match scene_nodes: reserve the escaped row before projecting bounded metadata, retaining the
+            // original node identity and the shared inspection_truncated disclosure. Full metadata is export-only.
+            "scene" => Page(context?.Scene.Nodes ?? [], n => n.Name + " " + n.Class,
+                n => InspectionResultBudget.SceneNode(n.Name, n.Class, null),
+                n => new { n.Index, n.Name, n.Class, Metadata = JsonData.PreviewObject(n.Metadata, 64, 1024) }),
             _ => PreviewState()
         };
-        JsonObject EventPage() { var page = Page(frame.Trace, e => e.Name + " " + e.Status); page["dropped"] = frame.TraceDropped; return page; }
+        JsonObject EventPage()
+        {
+            var page = Page(frame.Trace, e => e.Name + " " + e.Status, e => 768 + Text(e.Name) + Text(e.Status));
+            page["dropped"] = frame.TraceDropped; return page;
+        }
+        static long Text(string? value) => InspectionResultBudget.Text(value);
     }
     internal async Task SetPreviewOptionAsync(string name, JsonNode value)
     {

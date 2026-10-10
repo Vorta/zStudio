@@ -134,7 +134,8 @@ public partial class MainWindow
             var catalog = await MissionSceneLoader.Mw3MissionCatalogAsync(path, ViewModel.Resolver!, token); RequirePreview(a);
             if (a.ContainsKey("archive")) await SelectMissionAsync(Text(a, "archive"), true, token);
             string? shown = animation?.MissionArchive ?? scene?.Mission?.Layout.MissionArchive;
-            return Result(new { preview = previewId, world = path, selected = ViewModel.Resolver!.SelectedMission(path), displayed = shown, missions = Page(catalog.Missions, a, m => m.Label + " " + m.Archive).Data,
+            return Result(new { preview = previewId, world = path, selected = ViewModel.Resolver!.SelectedMission(path), displayed = shown, missions = Page(catalog.Missions, a, m => m.Label + " " + m.Archive,
+                maximumRowBytes: m => 128 + InspectionResultBudget.Text(m.Label) + InspectionResultBudget.Text(m.Archive)).Data,
                 diagnostics = catalog.Diagnostics.Take(32).Select(d => d.Length <= 512 ? d : d[..512] + "…").ToArray(), diagnosticCount = catalog.Diagnostics is PreviewNotes notes ? notes.TotalCount : catalog.Diagnostics.Count });
         });
     }

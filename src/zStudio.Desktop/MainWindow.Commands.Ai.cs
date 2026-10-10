@@ -27,7 +27,8 @@ public partial class MainWindow
                     nodes = n.Nodes.Count, constraints = n.ConstraintCount, constraintsTruncated = n.ConstraintCount > n.Constraints.Count, links = n.Nodes.Sum(p => p.PreviewLinks.Count(l => l.Target != null)),
                     linkSlots = n.Nodes.Sum(p => (long)p.LinkCount), linksTruncated = n.Nodes.Any(p => p.LinksTruncated),
                     diagnostics = n.Diagnostics.Take(8).Select(d => d with { Message = d.Message[..Math.Min(128, d.Message.Length)] }).ToArray(), diagnosticCount = n.Diagnostics.Count,
-                    diagnosticsTruncated = n.Diagnostics.Count > 8 || n.Diagnostics.Take(8).Any(d => d.Message.Length > 128) });
+                    diagnosticsTruncated = n.Diagnostics.Count > 8 || n.Diagnostics.Take(8).Any(d => d.Message.Length > 128) },
+                maximumRowBytes: n => InspectionResultBudget.AiNetwork(graph.Id, n));
         });
         Register(registry, "ai_nodes", "List authored AI nodes, XYZ, raw integer, attack_strategy and ordered link slots (three for RECOIL; MW3 preview capped at 32). link_count/links_truncated disclose full slot count and omission; inspect/export the source ZRD for all links. Network name/type previews use 256 characters with counts/truncation flags. Node queries match 70-character member/name prefixes or node_NN before pagination. Negative indices mean no link; unresolved targets retain diagnostics.", false,
             [PreviewParameter, AiSnapshotParameter, P("network", "string", "Network ID, or all/omitted for all networks."), P("section", "string", "Spatial nodes (default) or MW3 edge constraints, which have no authored position. Constraint queries match member/name prefixes (70 characters), kind prefix (256), edge_NN, attribute_NN or node_NN endpoints before pagination. KindCharacters/KindTruncated disclose shortened kinds. Parameters is a bounded preview (64 nodes, depth 8, 2048 total text characters, 512 per string), with ParametersTruncated.", false, "nodes", "constraints"), .. PageParameters], args =>
@@ -39,7 +40,8 @@ public partial class MainWindow
                 search: p => FormattableString.Invariant($"{ShortAiText(p.Network.Member)} {ShortAiText(p.Network.Name)} {ConstraintKind(p.Constraint)} edge_{p.Constraint.Index:00} attribute_{p.Constraint.AttributeIndex:00} node_{p.Constraint.FromNode:00} node_{p.Constraint.ToNode:00}"),
                 project: p => new { network = p.Network.Id, constraint = DescribeConstraint(p.Constraint) });
             return Page(graph.Networks.Where(n => network == "all" || n.Id == network).SelectMany(n => n.Nodes.Select(p => (Network: n, Node: p))), args,
-                search: p => $"{ShortAiText(p.Network.Member)} {ShortAiText(p.Network.Name)} node_{p.Node.Index:00}", project: p => DescribeAiNode(graph, p.Network, p.Node));
+                search: p => $"{ShortAiText(p.Network.Member)} {ShortAiText(p.Network.Name)} node_{p.Node.Index:00}", project: p => DescribeAiNode(graph, p.Network, p.Node),
+                maximumRowBytes: p => InspectionResultBudget.AiNode(graph.Id, p.Network, p.Node));
         });
         Register(registry, "ai_selection", "Select/clear an AI marker or open its pinned read-only Properties. Selection requires unlocked Whole world editing, enabled visualization and a matching filter. Read-only Properties remains available while locked. Frame a selected marker with camera action=frame,target=selected.", true,
             [PreviewParameter, AiSnapshotParameter, P("action", "string", "Selection action.", true, "select", "clear", "properties"), P("node", "string", "Snapshot-scoped node ID; required except for clear.")], async (args, token) =>

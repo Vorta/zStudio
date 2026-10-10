@@ -11,7 +11,7 @@ namespace Recoil.Zbd.Desktop;
 public partial class MainWindow
 {
     private static readonly StudioParameter[] PageParameters = [P("offset", "integer", "Zero-based result offset."), P("limit", "integer", "Page size, 1–200; default 100."), P("query", "string", "Case-insensitive name/path or displayed-text filter, applied before pagination.")];
-    internal static StudioResult Page<T>(IEnumerable<T> source, JsonObject a, Func<T, string>? search = null, Func<T, object>? project = null, Func<T, string, bool>? matches = null)
+    internal static StudioResult Page<T>(IEnumerable<T> source, JsonObject a, Func<T, string>? search = null, Func<T, object>? project = null, Func<T, string, bool>? matches = null, Func<T, long>? maximumRowBytes = null)
     {
         int offset = Int(a, "offset"), limit = Int(a, "limit", 100);
         if (offset < 0 || limit is < 1 or > 200) throw new StudioCommandException("invalid_argument", "Use offset >= 0 and limit 1–200.");
@@ -20,13 +20,19 @@ public partial class MainWindow
             if (matches != null) source = source.Where(item => matches(item, query));
             else if (search != null) source = source.Where(item => search(item).Contains(query, StringComparison.OrdinalIgnoreCase));
         }
-        int total = 0; List<object?> items = [];
+        int total = 0; List<object?> items = []; long bytes = 0; bool full = false;
         foreach (var item in source)
         {
-            if (total >= offset && items.Count < limit) items.Add(project == null ? item : project(item));
+            if (total >= offset && items.Count < limit && !full)
+            {
+                long cost = maximumRowBytes?.Invoke(item) ?? 0;
+                if (cost < 0 || cost > InspectionResultBudget.PageBytes) throw new StudioCommandException("too_large", "A result row exceeds the supported page size.");
+                if (bytes + cost > InspectionResultBudget.PageBytes && items.Count > 0) full = true;
+                else { items.Add(project == null ? item : project(item)); bytes += cost; }
+            }
             total++;
         }
-        return Result(new { total, offset, nextOffset = (long)offset + limit < total ? (int?)(offset + limit) : null, items });
+        return Result(new { total, offset, nextOffset = (long)offset + items.Count < total ? (int?)(offset + items.Count) : null, items });
     }
     /// <summary>A positional page of a sequence whose size is known: only the returned rows are constructed.</summary>
     internal static StudioResult PageRange(int total, JsonObject a, Func<int, object> project)
@@ -48,6 +54,8 @@ public partial class MainWindow
         RegisterJob(r, "open_root", "Open and index a ZBD root in the visible workspace. Dirty documents must be explicitly saved or closed first.", [P("path", "string", "Absolute ZBD root directory.", true)], false, async (a, token) =>
         {
             RequireRootPublication();
+            // A relative folder would resolve against zStudio's own folder, not the client's.
+            if (!Path.IsPathFullyQualified(Text(a, "path"))) throw new StudioCommandException("invalid_argument", "Give the folder as a full path.");
             string path = Path.GetFullPath(Text(a,"path"));
             long workspaceGeneration = ViewModel.WorkspaceGeneration + 1;
             await ViewModel.OpenRootAsync(path, token, RequireRootPublication);
@@ -68,7 +76,7 @@ public partial class MainWindow
         });
         RegisterJob(r, "open_document", "Open or activate an archive and its visible preview.", [P("path", "string", "Absolute archive path.", true)], false, async (a, token) =>
         {
-            RequireNoDrafts(); string path = Path.GetFullPath(Text(a, "path"));
+            RequireNoDrafts(); string path = Path.GetFullPath(FullPath(a, "path"));
             await ViewModel.EnsureRootForFileAsync(path, cancellationToken: token, beforePublish: RequireRootPublication);
             var doc = await ViewModel.OpenFileAsync(path, token, () => { RequireAutomationMutationAvailable(); RequireNoDrafts(); }) ?? throw new StudioCommandException("open_failed", ViewModel.Status);
             SelectNavigatorSection(1); await previewWork;
@@ -93,7 +101,7 @@ public partial class MainWindow
             if (EmptyPreview.Visibility == System.Windows.Visibility.Visible) throw new StudioCommandException("preview_unavailable",EmptyPreview.Text);
             return Result(new { document = DocumentState(doc), asset = asset.Id, ViewModel.Status });
         });
-        Register(r, "inspect_asset", "Read original asset metadata/content and a separately frozen edited snapshot at one revision. ZRD/script inspection bounds nodes, instructions and strings. Model/world/sound lists preview 32 records; nested metadata has node/depth/text budgets with properties_truncated. Motion metadata previews 32 parts with 128-character names; motion_records pages tracks. Animation inspection previews 4 records per reference table, 4 puffers and 16 sequence summaries; sequence Properties previews 8 events, event/tail raw previews use 256 bytes, and keyframe streams are omitted. Totals/truncation flags disclose omissions; animation_records/references/property_fields inspect individual records. JSON export retains complete data. Closed or changed documents reject stale results.", false, AssetParameters, async (a, token) =>
+        Register(r, "inspect_asset", "Read original asset metadata/content and a separately frozen edited snapshot at one revision. ZRD/script inspection bounds nodes, instructions and strings. Model/world/sound lists preview 32 records; nested metadata has node/depth/text budgets with properties_truncated. Motion metadata previews up to 32 parts with 128-character names within a shared 4,096-part allowance per archive; motion_records pages all tracks. Animation inspection previews 4 records per reference table, 4 puffers and 16 sequence summaries; sequence Properties previews 8 events, event/tail raw previews use 256 bytes, and keyframe streams are omitted. Totals/truncation flags disclose omissions; animation_records/references/property_fields inspect individual records. JSON export retains complete data. Closed or changed documents reject stale results.", false, AssetParameters, async (a, token) =>
         {
             var doc = TargetDocument(a); var asset = TargetAsset(doc, a);
             return await InspectAssetAsync(doc, asset, token);
@@ -137,10 +145,13 @@ public partial class MainWindow
         {
             var d = TargetDocument(a, true); UndoDocument(d, Text(a, "action") == "redo"); if (d.ContentEdits != null) await contentWork.WaitAsync(token); else if (d.ResourceEdits != null) await resourceWork.WaitAsync(token); else if (d.ModelEdits != null) await modelRefreshWork.WaitAsync(token); return Result(DocumentState(d));
         });
-        RegisterJob(r, "save_document", "Verified save: animations require a NEW destination outside the source root; pickup/AI/tank coordinates save owning archives or explicit new destinations; model edits save all texture variants before GameZ; ZAR/ZRD, script and texture saves verify and atomically replace each working destination or create new Save As files. Batches return saved paths and errors; state.contentEdits lists affected content paths and targets. Partial content/coordinate Save As retains every requested destination; ordinary Save retries unpublished copies without overwriting existing files.",
-            [DocumentParameter, RevisionParameter, P("destination", "string", "New single-file Save As path (animation, ZAR/ZRD, script or texture pack). Omit to save working files."), P("modelDirectory", "string", "Model Save As directory; all GameZ/texture destinations must be new. Omit for verified save to the working files."), new("destinations", "object", "Mission coordinate or texture batch source path to new Save As path map; cover every affected file.", AdditionalProperties: new("", "string", "New Save As path for this source archive.")), P("backup", "boolean", "Mission coordinate backup preference; defaults to app setting.")], false, async (a, token) =>
+        RegisterJob(r, "save_document", "Verified save: animations require a NEW destination outside the source root; pickup/AI/tank coordinates save owning archives or explicit new destinations; model edits save all texture variants before GameZ; ZAR/ZRD, script and texture saves verify and atomically replace each working destination or create new Save As files. Batch results preview at most 64 saved/remaining paths and 32 errors, each at most 512 characters, with SavedPathCount/SavedPathsTruncated, RemainingPathCount/RemainingPathsTruncated and ErrorCount/ErrorsTruncated. Source saves return written with writtenCount/writtenTruncated under the same path bound. All files are still saved; truncated previews are not full path identities. Global state.contentEdits reports fileCount with empty files/filesTruncated; per-document command results preview affected paths and targets. Partial content/coordinate Save As retains every requested destination; ordinary Save retries unpublished copies without overwriting existing files.",
+            [DocumentParameter, RevisionParameter, P("destination", "string", "Full path of a new single-file Save As (animation, ZAR/ZRD, script or texture pack). Omit to save working files."), P("modelDirectory", "string", "Full path of the model Save As directory; all GameZ/texture destinations must be new. Omit for verified save to the working files."), new("destinations", "object", "Mission coordinate or texture batch source path to new Save As path map; cover every affected file.", AdditionalProperties: new("", "string", "New Save As full path for this source archive.")), P("backup", "boolean", "Mission coordinate backup preference; defaults to app setting.")], false, async (a, token) =>
         {
             var d = TargetDocument(a, true);
+            // Save As paths are full paths, refused before anything is written (source keys name open files and are compared).
+            string destination = FullPath(a, "destination"), modelDirectory = FullPath(a, "modelDirectory");
+            if (a["destinations"] is JsonObject map) foreach (var (_, target) in map) FullPath(target?.GetValue<string>() ?? "", "every destinations path");
             IsEnabled = false; if (propertiesWindow != null) propertiesWindow.IsEnabled = false;
             try
             {
@@ -150,38 +161,41 @@ public partial class MainWindow
                     if (a.ContainsKey("destination"))
                     {
                         if (targets != null) throw new StudioCommandException("invalid_argument", "Use destination or destinations, not both.");
-                        targets = new(StringComparer.OrdinalIgnoreCase) { [d.Path] = Text(a,"destination") };
+                        targets = new(StringComparer.OrdinalIgnoreCase) { [d.Path] = destination };
                     }
-                    var result = await SaveContentAsync(d, targets, token); return Result(new { document = DocumentState(d), result });
+                    var result = await SaveContentAsync(d, targets, token);
+                    return Result(new { document = DocumentState(d), result = FileResultPreview.Saved(result.SavedPaths, result.Errors, result.RemainingPaths) });
                 }
                 if (d.ResourceEdits != null)
-                { await SaveResourcesAsync(d, Text(a, "destination") is { Length: > 0 } path ? path : null, token); return Result(DocumentState(d)); }
+                { await SaveResourcesAsync(d, destination is { Length: > 0 } path ? path : null, token); return Result(DocumentState(d)); }
                 if (d.AnimationEdits != null)
                 {
-                    if (Text(a, "destination").Length == 0) throw new StudioCommandException("destination_required", "Animation Save As requires a new output path.");
-                    await SaveAnimationToPathAsync(d, Text(a, "destination"), token); return Result(DocumentState(d));
+                    if (destination.Length == 0) throw new StudioCommandException("destination_required", "Animation Save As requires a new output path.");
+                    await SaveAnimationToPathAsync(d, destination, token); return Result(DocumentState(d));
                 }
                 ModelSaveResult? models = null;
                 if (d.ModelEdits?.IsDirty == true || d.ModelEdits != null && a.ContainsKey("modelDirectory"))
                 {
-                    models = await SaveModelsAsync(d, Text(a,"modelDirectory") is { Length: > 0 } directory ? directory : null, token);
-                    if (models.Errors.Count > 0 || d.PickupEdits?.IsDirty != true) return Result(new { document = DocumentState(d), models });
+                    models = await SaveModelsAsync(d, modelDirectory is { Length: > 0 } directory ? directory : null, token);
+                    if (models.Errors.Count > 0 || d.PickupEdits?.IsDirty != true)
+                        return Result(new { document = DocumentState(d), models = FileResultPreview.Saved(models.SavedPaths, models.Errors) });
                 }
                 if (d.PickupEdits is not { } edits) throw new StudioCommandException("unsupported", "This document has no accepted unsaved edits.");
                 var destinations = (a["destinations"] as JsonObject)?.ToDictionary(p => p.Key, p => p.Value?.GetValue<string>() ?? "", StringComparer.OrdinalIgnoreCase);
                 var saved = await SavePickupDestinationsAsync(d, destinations, Flag(a, "backup", ViewModel.Settings.CreateBackupOnSave), token);
-                return Result(new { document = DocumentState(d), result = saved, models });
+                return Result(new { document = DocumentState(d), result = FileResultPreview.Saved(saved.SavedPaths, saved.Errors),
+                    models = models == null ? null : FileResultPreview.Saved(models.SavedPaths, models.Errors) });
             }
             finally { IsEnabled = true; if (propertiesWindow != null) propertiesWindow.IsEnabled = true; }
         });
         RegisterJob(r, "export", "Export assets through the existing deterministic exporter into a new folder outside the source tree.",
-            [DocumentParameter, P("destination", "string", "Destination directory.", true), new("assets", "array", "Optional list of {kind,index}; omitted exports all.", Items: new("", "object", "Asset identity.", Properties: [new("kind", "string", "Asset kind.", true, Enum.GetNames<AssetKind>()), P("index", "integer", "Authored record index.", true)])), P("jsonOnly", "boolean", "Export inspection JSON."), P("lod", "integer", "LOD rank; default 0."), P("texturePack", "string", "Optional preferred texture pack path.")], true, async (a, token) =>
+            [DocumentParameter, P("destination", "string", "Full path of the destination directory.", true), new("assets", "array", "Optional list of {kind,index}; omitted exports all.", Items: new("", "object", "Asset identity.", Properties: [new("kind", "string", "Asset kind.", true, Enum.GetNames<AssetKind>()), P("index", "integer", "Authored record index.", true)])), P("jsonOnly", "boolean", "Export inspection JSON."), P("lod", "integer", "LOD rank; default 0."), P("texturePack", "string", "Optional preferred texture pack path.")], true, async (a, token) =>
         {
             var d = TargetDocument(a); var assets = a["assets"] is JsonArray list ? list.Select(x => TargetAsset(d, x as JsonObject ?? throw new StudioCommandException("invalid_argument", "Asset must contain kind/index."))).ToArray() : d.PreviewDocument.Assets.ToArray();
-            return Result(await ExportAssetsAsync(d, assets, Text(a, "destination"), Flag(a, "jsonOnly"), Text(a, "texturePack") is { Length: > 0 } pack ? pack : null, Int(a, "lod"), token));
+            return Result(await ExportAssetsAsync(d, assets, FullPath(a, "destination"), Flag(a, "jsonOnly"), Text(a, "texturePack") is { Length: > 0 } pack ? pack : null, Int(a, "lod"), token));
         });
         RegisterJob(r, "validate", "Validate the source archive on disk, not pending edits. Returns structured diagnostics.", [DocumentParameter], true, async (a, token) => Result(await ValidateDocumentSourceAsync(TargetDocument(a), token)));
-        Register(r, "problems", "List file/operation problems with original severity and source context.", false, PageParameters, a => Page(ViewModel.Problems, a, p => p.Message + " " + p.File + " " + p.Severity + " " + p.Category));
+        Register(r, "problems", "List file/operation problems with original severity and complete source context. Long or escaped rows shorten pages; follow nextOffset.", false, PageParameters, a => Page(ViewModel.Problems, a, p => p.Message + " " + p.File + " " + p.Severity + " " + p.Category, maximumRowBytes: InspectionResultBudget.Problem));
         RegisterOperationCommands(r);
     }
     private void RequireRootPublication()

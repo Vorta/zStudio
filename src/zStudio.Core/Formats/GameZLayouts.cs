@@ -2,15 +2,27 @@ using System.Text.Json.Nodes;
 
 namespace Recoil.Zbd.Core.Formats;
 
-/// <summary>Serialized layouts for the two supported base-game world formats.</summary>
-internal sealed class GameZLayouts(bool mw3)
+/// <summary>
+/// Serialized layouts for the supported world formats: RECOIL version 15 (the releases), RECOIL version 13 (the July and
+/// August 1998 demos, read-only) and MechWarrior 3 version 27.
+/// </summary>
+internal sealed class GameZLayouts(uint version)
 {
-    private static readonly GameZLayouts recoil = new(false), mw = new(true);
+    private static readonly GameZLayouts recoil = new(15), demo = new(13), mw = new(27);
+    private readonly bool mw3 = version == 27;
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, JsonArray> definitions = new();
     internal static GameZLayouts For(uint? version) => version switch
     {
-        15 => recoil, 27 => mw, _ => throw new InvalidDataException("Unsupported world version.")
+        15 => recoil, 13 => demo, 27 => mw, _ => throw new InvalidDataException("Unsupported world version.")
     };
+    internal uint Version => version;
+    /// <summary>
+    /// Version 13 stores a node's cached box as its eight corners in the parent's space (the box transformed by the node's
+    /// matrix) where version 15 stores the box itself, and an Object3D's translation component beside its rotation and scale
+    /// (corpus bytes of the 1998 demos: every corner set is the node's model-and-child box under its own matrix; the translation is
+    /// a script's Object3DTranslate, which the matrix also carries, and zero for a node whose matrix its model file gave).
+    /// </summary>
+    internal bool Demo => version == 13;
     internal bool HasVertexColors => mw3;
     // Supported limits for per-record metadata, far above retail pools (at most 20,000 models/nodes and about
     // 35,000 polygons per world). They bound allocation before any record is materialized.
@@ -21,7 +33,8 @@ internal sealed class GameZLayouts(bool mw3)
     internal int TextureSize => mw3 ? 40 : 36;
     internal int ModelSize => mw3 ? 92 : 84;
     internal int PolygonSize => mw3 ? 36 : 28;
-    internal int NodeSize => mw3 ? 208 : 192;
+    internal int NodeSize => mw3 ? 208 : Demo ? 264 : 192;
+    internal int Object3DSize => Demo ? 156 : 144;
     internal int WorldSize => mw3 ? 188 : 172;
     internal int PartitionSize => mw3 ? 72 : 64;
     internal int LightSize => mw3 ? 208 : 228;
@@ -33,6 +46,23 @@ internal sealed class GameZLayouts(bool mw3)
     private JsonArray Build(string name)
     {
         var fields = (JsonArray)FieldLayouts.Definitions["layouts"]![name]!.DeepClone();
+        if (Demo)
+        {
+            switch (name)
+            {
+                case "GAMEZ_NODE_BASE_LAYOUT":
+                    // The cached box becomes its eight corners in the parent's space; the model and child boxes follow.
+                    fields = new JsonArray(fields.OfType<JsonArray>().Where(f => f[1]!.GetValue<int>() < 116).Select(f => f.DeepClone()).ToArray());
+                    Add(fields, "node_corners", 116, 96, "f32a:24"); Add(fields, "model_bbox", 212, 24, "bbox"); Add(fields, "child_bbox", 236, 24, "bbox");
+                    Add(fields, "activation_ptr", 260, 4, "ptr");
+                    break;
+                case "GAMEZ_OBJECT3D_LAYOUT":
+                    // Rotation, scale, then the translation: a script's Object3DTranslate, which the matrix also carries.
+                    Shift(fields, 48, 12);
+                    Add(fields, "translate", 48, 12, "vec3");
+                    break;
+            }
+        }
         if (mw3)
         {
             switch (name)

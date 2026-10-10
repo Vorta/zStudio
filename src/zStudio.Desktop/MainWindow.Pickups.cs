@@ -23,11 +23,13 @@ public partial class MainWindow
         scene?.CancelPickupDrag();
         if (pickupDocument != null) pickupDocument.PickupEditsChanged -= PickupEditsChanged;
         pickupDocument = null; PickupTools.Visibility = Visibility.Collapsed;
-        PickupTools.IsEnabled = SceneHost.IsEnabled = true;
+        PickupTools.IsEnabled = SceneHost.IsEnabled = EditingUnlocked.IsEnabled = true;
     }
     private void AttachPickupEditor(DocumentModel document)
     {
         pickupDocument = document; document.PickupEditsChanged += PickupEditsChanged;
+        // A 1998 demo world opens read-only: its placements stay locked (inspection and hover remain).
+        EditingUnlocked.IsEnabled = PickupPlacementEditSession.ReadOnlyWorld(document.Document.Probe) == null;
         SetSceneEditingLocked(document, document.PickupsLocked);
         PickupTools.Visibility = Visibility.Visible; PickupEditsChanged();
         if (!document.PickupDiagnosticsReported && document.PickupEdits is { } edits)
@@ -58,7 +60,9 @@ public partial class MainWindow
     {
         // Keep the existing document/MCP lock identity; the visible option is
         // positively named Unlock editing, so its checked state is the inverse.
-        document.PickupsLocked = locked;
+        // A read-only world (a 1998 demo) is never unlocked.
+        document.PickupsLocked = locked || PickupPlacementEditSession.ReadOnlyWorld(document.Document.Probe) != null;
+        locked = document.PickupsLocked;
         if (pickupDocument != document) return;
         bool previous = updating; updating = true;
         try { EditingUnlocked.IsChecked = !locked; }

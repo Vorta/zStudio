@@ -20,6 +20,8 @@ public sealed partial class PickupPlacementEditSession
     public void AddCoordinates(IEnumerable<(ZbdDocument Archive, AssetRecord Asset)> resources, CancellationToken token = default, bool mw3 = false)
     {
         if (CanUndo || CanRedo || IsDirty) throw new InvalidOperationException("Coordinate sources must be loaded before editing.");
+        // Cancellation can leave successfully admitted earlier rows; invalidate before the first mutation.
+        InvalidateMembership();
         var inputs = resources.Where(r => IsCoordinateResource(r.Asset.Name)).ToArray();
         var effective = Enum.GetValues<MissionDifficulty>().ToDictionary(d => d, d =>
         {
@@ -36,8 +38,10 @@ public sealed partial class PickupPlacementEditSession
                     Overlaps(doc, asset, token))
                     throw new InvalidDataException("An intact, non-overlapping archive member is required.");
                 string archive = Path.GetFullPath(doc.Path).ToUpperInvariant();
+                string? memberIdentity = null;
+                bool archiveRegistered = false;
                 bool ai = MissionAiNetworks.IsCandidate(asset.Name);
-                var tree = asset.Content as ZrdNode ?? ZrdDecoder.Read(doc.Slice(asset.Offset, asset.Length), token);
+                var tree = ZrdDecoder.ReadAsset(doc, asset, token);
                 var fields = tree.Kind == ZrdKind.Array ? tree.Children : throw new InvalidDataException("Expected a record array.");
                 if (fields.Count == 1 && fields[0].Kind == ZrdKind.Array) fields = fields[0].Children;
                 if (fields.Count % 2 != 0) throw new InvalidDataException("Incomplete mission record pair.");
@@ -53,16 +57,19 @@ public sealed partial class PickupPlacementEditSession
                         long offset = fields[i + 1].SourceOffset;
                         if (ai && !spatialOffsets!.Contains(offset)) continue;
                         var (position, offsets) = ReadVector(row[1], doc, asset);
-                        var source = new MissionPickupSource(archive, asset.Index, asset.Name.ToUpperInvariant(), ai ? checked((int)offset) : i / 2);
+                        var source = new MissionPickupSource(archive, asset.Index, memberIdentity ??= asset.Name.ToUpperInvariant(), ai ? checked((int)offset) : i / 2);
                         var rotation = ai ? Vector3.Zero : new Vector3(0, ReadNumber(row[2]), 0);
                         var difficulties = ai ? Array.Empty<MissionDifficulty>() : effective.Where(p => p.Value.Asset?.Index == asset.Index &&
                             p.Value.Archive.Path.Equals(doc.Path, StringComparison.OrdinalIgnoreCase)).Select(p => p.Key).ToArray();
                         var record = new MissionCoordinateRecord(source, ai ? "ai" : "tank", name, position, rotation,
                             ai ? "" : MissionSceneLoader.VehicleTemplateName(name), offset, difficulties) { MissionSpecific = mw3 };
                         if (entries.ContainsKey(source)) continue;
-                        if (!archives.ContainsKey(archive)) archives.Add(archive, new(doc));
+                        if (!archiveRegistered)
+                        { if (!archives.ContainsKey(archive)) archives.Add(archive, new(doc)); archiveRegistered = true; }
+                        var entry = new Entry(new(source, name, position, rotation, difficulties), offsets, ai ? [] : [ReadScalarOffset(row[2], doc, asset)]);
+                        sourceComparer.Register(source);
                         // The common coordinate store uses the existing archive-key identity.
-                        entries.Add(source, new(new(source, name, position, rotation, difficulties), offsets, ai ? [] : [ReadScalarOffset(row[2], doc, asset)]));
+                        entries.Add(source, entry);
                         positions.Add(source, position); savedPositions.Add(source, position); otherCoordinates.Add(source, record);
                         rotations.Add(source, rotation); savedRotations.Add(source, rotation);
                     }
@@ -74,27 +81,11 @@ public sealed partial class PickupPlacementEditSession
         }
     }
 
-    private PickupPlacementScope CoordinateScope(MissionCoordinateRecord selected)
-    {
-        if (selected.Kind == "ai") return new([selected.Source], "This AI network node");
-        if (selected.MissionSpecific) return new([selected.Source], "This authored mission actor only");
-        if (selected.Difficulties.Count == 0) return new([selected.Source], "Read-only: shadowed tank resource");
-        if (selected.TemplateSourceNode == null) return new([selected.Source], "Read-only: missing or ambiguous tank template");
-        var candidates = otherCoordinates.Values.Where(r => r.Kind == "tank" && r.Template == selected.Template && r.TemplateSourceNode == selected.TemplateSourceNode &&
-            r.Difficulties.Count > 0 && r.OriginalPosition == selected.OriginalPosition && r.Rotation == selected.Rotation).ToArray();
-        var groups = candidates.GroupBy(r => (r.Source.ArchivePath, r.Source.AssetIndex)).ToArray();
-        bool unique = groups.Single(g => g.Key == (selected.Source.ArchivePath, selected.Source.AssetIndex)).Count() == 1;
-        var matches = unique ? groups.Where(g => g.Count() == 1).Select(g => g.Single()).ToArray() : [selected];
-        var affected = matches.SelectMany(r => r.Difficulties).Distinct().Order().ToArray();
-        var skipped = Enum.GetValues<MissionDifficulty>().Except(affected).ToArray();
-        return new(matches.Select(r => r.Source).ToArray(), "Applies to: " + string.Join(", ", affected) +
-            (skipped.Length == 0 ? "" : ". Unmatched or ambiguous (unchanged): " + string.Join(", ", skipped)));
-    }
-
     public MissionCoordinateRecord? Coordinate(MissionPickupSource source) => otherCoordinates.GetValueOrDefault(source);
 
     public void BindCoordinateTemplates(GameScene scene)
     {
+        InvalidateScopes();
         var templates = scene.Nodes.Where(n => n.Class == "object3d").ToLookup(n => n.Name, StringComparer.Ordinal);
         foreach (var (key, record) in otherCoordinates.ToArray())
         {
@@ -113,15 +104,34 @@ public sealed partial class PickupPlacementEditSession
 
     public AiNetworkSnapshot ApplyAiPositions(AiNetworkSnapshot snapshot, IReadOnlyDictionary<MissionPickupSource, PlacementTransform>? preview = null)
     {
+        if (!snapshot.Networks.Any(n => n.Nodes.Count > 0)) return snapshot;
+        // Hash full identities once per shared prefix rather than once per node. This view is rebuilt from the
+        // current accepted/draft dictionaries, so edits, undo and distinct equal-string instances retain semantics.
+        var acceptedPositions = new MissionCoordinateProjection<Vector3>(positions);
+        // The visible workspace supplies an ordinary dictionary. Preserve arbitrary public callers' custom
+        // lookup/comparer behavior rather than replacing it with the projection's exact source-key semantics.
+        var previewPositions = preview is Dictionary<MissionPickupSource, PlacementTransform> dictionary &&
+            (ReferenceEquals(dictionary.Comparer, EqualityComparer<MissionPickupSource>.Default) || dictionary.Comparer is MissionSourceComparer)
+            ? new MissionCoordinateProjection<PlacementTransform>(dictionary) : null;
+        Dictionary<string, string> archiveNames = new(ReferenceEqualityComparer.Instance), memberNames = new(ReferenceEqualityComparer.Instance);
         bool changed = false;
-        var networks = snapshot.Networks.Select(n => n with { Nodes = n.Nodes.Select(node =>
+        var networks = snapshot.Networks.Select(n =>
         {
-            var key = new MissionPickupSource(Path.GetFullPath(n.Archive).ToUpperInvariant(), n.MemberIndex, n.Member.ToUpperInvariant(), checked((int)node.SourceOffset));
-            if (!positions.TryGetValue(key, out var p)) return node;
-            if (preview?.TryGetValue(key, out var pending) == true) p = pending.Position;
-            if (p == node.Position) return node;
-            changed = true; return node with { Position = p };
-        }).ToArray() }).ToArray();
+            if (n.Nodes.Count == 0) return n; // Empty networks never evaluated their path/member before.
+            if (!archiveNames.TryGetValue(n.Archive, out var archive)) archiveNames.Add(n.Archive, archive = Path.GetFullPath(n.Archive).ToUpperInvariant());
+            if (!memberNames.TryGetValue(n.Member, out var member)) memberNames.Add(n.Member, member = n.Member.ToUpperInvariant());
+            var accepted = acceptedPositions.Find(archive, n.MemberIndex, member);
+            var draft = previewPositions?.Find(archive, n.MemberIndex, member);
+            return n with { Nodes = n.Nodes.Select(node =>
+            {
+                int record = checked((int)node.SourceOffset);
+                if (accepted == null || !accepted.TryGetValue(record, out var p)) return node;
+                if (draft?.TryGetValue(record, out var pending) == true) p = pending.Position;
+                else if (previewPositions == null && preview?.TryGetValue(new(archive, n.MemberIndex, member, record), out var custom) == true) p = custom.Position;
+                if (p == node.Position) return node;
+                changed = true; return node with { Position = p };
+            }).ToArray() };
+        }).ToArray();
         if (!changed) return snapshot;
         if (preview != null) return snapshot with { Networks = networks }; // A draft does not replace accepted source identities.
         using var hash = System.Security.Cryptography.IncrementalHash.CreateHash(System.Security.Cryptography.HashAlgorithmName.SHA256);

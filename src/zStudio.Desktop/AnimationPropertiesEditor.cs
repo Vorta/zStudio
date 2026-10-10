@@ -193,7 +193,11 @@ public sealed partial class AnimationPropertiesEditor : FieldEditor, IDisposable
     private void MultiFields(StackPanel panel,string label,AnimationField[] members,string[] components,bool editable)
     {
         string Read() => string.Join("|", members.Select(f => f.FormatForEditor(Event!)));
-        Input(panel,label,Read(),text => TryEdit(() => edits.EditFields(entryIndex,selectedSequence,selectedEvent,"Edit " + label,members.Zip(text.Split('|'),(f,v) => (f,v)).ToArray())),!editable,getter:Read,components:components,separator:"|");
+        Input(panel,label,Read(),text =>
+        {
+            if (members.All(f => f.Kind != AnimationFieldKind.Text)) ComponentText.CheckNumeric(text);
+            TryEdit(() => edits.EditFields(entryIndex,selectedSequence,selectedEvent,"Edit " + label,members.Zip(ComponentText.Require(text,"|",members.Length),(f,v) => (f,v)).ToArray()));
+        },!editable,getter:Read,components:components,separator:"|");
     }
     private void TransformTable(StackPanel panel,AnimationField[] members,bool editable)
     {
@@ -201,13 +205,17 @@ public sealed partial class AnimationPropertiesEditor : FieldEditor, IDisposable
         AnimationField[] ordered = [members[0],members[2],members[1]];
         string Read() => string.Join("|",Enumerable.Range(0,3).SelectMany(axis => ordered.Select(f => Event!.F32(f.Offset + axis * 4).ToEditorText())));
         string[] captions = ["X · Start","X · Rate","X · End","Y · Start","Y · Rate","Y · End","Z · Start","Z · Rate","Z · End"];
-        Input(panel,"Start / rate per second / end",Read(),text => TryEdit(() => edits.Apply(entryIndex,"Edit transform channel",entry =>
+        Input(panel,"Start / rate per second / end",Read(),text =>
         {
+            ComponentText.CheckNumeric(text);
+            TryEdit(() => edits.Apply(entryIndex,"Edit transform channel",entry =>
+            {
             var sequence = AnimationEditSession.FindSequence(entry,selectedSequence); AnimationEditSession.EnsureEditable(sequence);
-            var record = sequence.Events.Single(e => e.Id == selectedEvent); string[] values = text.Split('|');
+            var record = sequence.Events.Single(e => e.Id == selectedEvent); string[] values = ComponentText.Require(text,"|",9);
             if (values.Length != 9) throw new InvalidDataException("Enter all nine channel components.");
             for (int axis = 0; axis < 3; axis++) for (int column = 0; column < 3; column++) record.SetFloat(ordered[column].Offset + axis * 4,float.Parse(values[axis * 3 + column],CultureInfo.InvariantCulture));
-        })),!editable,getter:Read,components:captions,separator:"|",componentColumns:3);
+            }));
+        },!editable,getter:Read,components:captions,separator:"|",componentColumns:3);
         Label(panel,"Rate is stored independently; changing duration never recalculates this table.");
     }
     private void ChangeEvent(string description,Action<AnimationEvent> change) => ChangeEvents(description,list => change(list.Single(e => e.Id == selectedEvent)));

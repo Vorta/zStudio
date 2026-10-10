@@ -22,32 +22,37 @@ public sealed partial class ExportService(AssetResolver resolver) : IAssetExport
     public async Task<ExportResult> ExportAsync(ZbdDocument doc, IReadOnlyList<AssetRecord> assets, string destination, bool jsonOnly,
         string? preferredTexturePack = null, int lodLevel = 0, IProgress<ExportProgress>? progress = null, CancellationToken token = default)
     {
-        destination = ValidateExportDirectory(destination);
-        Directory.CreateDirectory(destination);
+        using DirectoryLease directories = new();
+        destination = ValidateExportDirectory(destination, directories);
+        directories.Hold(destination, create: true);
         string folder = SafeName(Path.GetFileName(Path.GetDirectoryName(doc.Path)) + "_" + Path.GetFileName(doc.Path));
         string target = Path.Combine(destination, folder); int suffix = 2;
-        while (Directory.Exists(target) || File.Exists(target)) target = Path.Combine(destination, folder + "_" + suffix++);
-        Directory.CreateDirectory(target);
+        while (directories.Exists(target)) target = Path.Combine(destination, folder + "_" + suffix++);
+        directories.CreateDirectory(target);
         List<string> errors = []; int complete = 0;
+        var textureLookup = resolver.BeginTextureLookup(doc.Path, preferredTexturePack);
         foreach (var asset in assets)
         {
             token.ThrowIfCancellationRequested();
             try
             {
                 string name = $"{asset.Kind}/{asset.Index:D5}_{SafeName(Path.GetFileName(asset.Name.Replace('\\', '/')))}";
-                if (jsonOnly) await WriteJson(target, name + ".json", AssetJson(doc, asset, token), token).ConfigureAwait(false);
+                if (jsonOnly) await WriteJson(target, name + ".json", AssetJson(doc, asset, token), token, directories).ConfigureAwait(false);
                 else if (asset.Kind == AssetKind.Texture)
-                    await WriteAtomicAsync(target, name + ".png", PngEncoder.Encode(TextureDecoder.Decode(doc, asset, token), token), token).ConfigureAwait(false);
+                    await WriteAtomicAsync(target, name + ".png", PngEncoder.Encode(TextureDecoder.Decode(doc, asset, token), token), token, directories).ConfigureAwait(false);
                 else if (asset.Content is ScriptContent script)
-                    await WriteAtomicAsync(target, name, Encoding.UTF8.GetBytes(script.Text), token).ConfigureAwait(false);
+                    await WriteAtomicAsync(target, name, Encoding.UTF8.GetBytes(script.GetText(token)), token, directories).ConfigureAwait(false);
                 else if (asset.Kind is AssetKind.Model or AssetKind.World)
-                    await ExportObj(doc, asset, target, name, preferredTexturePack, lodLevel, token).ConfigureAwait(false);
+                    await ExportObj(doc, asset, target, name, preferredTexturePack, lodLevel, token, directories, textureLookup: textureLookup).ConfigureAwait(false);
                 else if (asset.Kind is AssetKind.Animation or AssetKind.Node or AssetKind.Material or AssetKind.TextureReference)
-                    await WriteJson(target, name + ".json", AssetJson(doc, asset, token), token).ConfigureAwait(false);
+                    await WriteJson(target, name + ".json", AssetJson(doc, asset, token), token, directories).ConfigureAwait(false);
                 else
                 {
-                    await WriteAtomicAsync(target, name, doc.Slice(asset.Offset, asset.Length).ToArray(), token).ConfigureAwait(false);
-                    if (asset.Kind == AssetKind.Zrd) await WriteJson(target, name + ".json", ZrdDecoder.Decode(doc.Slice(asset.Offset, asset.Length), token), token).ConfigureAwait(false);
+                    // Prepare the typed companion before publishing either file: source .zrd/.zad bytes are text,
+                    // and a refused or malformed resource must not leave a raw file behind as a failed export.
+                    byte[]? resourceJson = asset.Kind == AssetKind.Zrd ? JsonBytes(ZrdDecoder.ReadAsset(doc, asset, token).ToJson(token)) : null;
+                    await WriteAtomicAsync(target, name, doc.Slice(asset.Offset, asset.Length).ToArray(), token, directories).ConfigureAwait(false);
+                    if (resourceJson != null) await WriteAtomicAsync(target, name + ".json", resourceJson, token, directories).ConfigureAwait(false);
                 }
                 complete++;
             }
@@ -55,7 +60,7 @@ public sealed partial class ExportService(AssetResolver resolver) : IAssetExport
             { errors.Add($"{asset.Name}: {ex.Message}"); }
             progress?.Report(new(complete + errors.Count, assets.Count, asset.Name));
         }
-        await WriteJson(target, "export-report.json", new JsonObject { ["source"] = doc.Path, ["completed"] = complete, ["errors"] = new JsonArray(errors.Select(e => (JsonNode?)JsonValue.Create(e)).ToArray()), ["purpose"] = "Standard assets; not a repackable project" }, token).ConfigureAwait(false);
+        await WriteJson(target, "export-report.json", new JsonObject { ["source"] = doc.Path, ["completed"] = complete, ["errors"] = new JsonArray(errors.Select(e => (JsonNode?)JsonValue.Create(e)).ToArray()), ["purpose"] = "Standard assets; not a repackable project" }, token, directories).ConfigureAwait(false);
         return new(target, complete, errors);
     }
     public static JsonObject AssetJson(ZbdDocument doc, AssetRecord a, CancellationToken token = default, bool boundedZrd = false)
@@ -98,7 +103,7 @@ public sealed partial class ExportService(AssetResolver resolver) : IAssetExport
         else if (a.Kind == AssetKind.Animation && doc.Animations is { } animations) result["properties"] = boundedZrd ? animations.Entries[a.Index].ToPreviewJson(token) : animations.Entries[a.Index].ToJson(token);
         else if (a.Kind == AssetKind.Zrd)
         {
-            var tree = a.Content as ZrdNode ?? ZrdDecoder.Read(doc.Slice(a.Offset, a.Length), token);
+            var tree = ZrdDecoder.ReadAsset(doc, a, token);
             result["tree"] = boundedZrd ? tree.ToPreviewJson(token) : tree.ToJson(token);
         }
         else if (a.Kind == AssetKind.Sound)
@@ -131,10 +136,11 @@ public sealed partial class ExportService(AssetResolver resolver) : IAssetExport
             return preview.Value;
         }
     }
-    private async Task ExportObj(ZbdDocument doc, AssetRecord asset, string target, string name, string? preferred, int lod, CancellationToken token, SceneView? placements = null)
+    private async Task ExportObj(ZbdDocument doc, AssetRecord asset, string target, string name, string? preferred, int lod, CancellationToken token, DirectoryLease directories, SceneView? placements = null, TextureLookupOperation? textureLookup = null)
     {
         GameScene scene = doc.Scene ?? throw new InvalidDataException("Missing GameZ scene.");
         var view = placements ?? SceneBuilder.ForAsset(scene, asset, lod, token);
+        CheckObjExpansion(scene, view, token);
         StringBuilder obj = new("# zStudio static geometry export\n"); string mtlName = Path.GetFileName(name) + ".mtl"; obj.AppendLine("mtllib " + mtlName);
         HashSet<int> usedMaterials = []; int vertexBase = 1; Dictionary<int, IReadOnlyList<MeshPart>> meshes = [];
         foreach (var placement in view.Placements)
@@ -163,6 +169,8 @@ public sealed partial class ExportService(AssetResolver resolver) : IAssetExport
             }
         }
         StringBuilder mtl = new(); List<string> notes = view.Diagnostics.Select(d => d.Message).ToList();
+        textureLookup ??= resolver.BeginTextureLookup(doc.Path, preferred);
+        BoundedDiagnostics textureNotes = new(notes);
         foreach (int index in usedMaterials.Order())
         {
             mtl.AppendLine($"newmtl material_{index}");
@@ -172,22 +180,50 @@ public sealed partial class ExportService(AssetResolver resolver) : IAssetExport
             int texture = material.Int("texture_index", -1);
             if (texture >= 0 && texture < scene.Textures.Count)
             {
-                string textureName = scene.Textures[texture].Text("name"); var resolved = await resolver.ResolveTextureAsync(doc.Path, textureName, preferred, token).ConfigureAwait(false);
+                string textureName = scene.Textures[texture].Text("name"); var resolved = await textureLookup.ResolveAsync(textureName, token).ConfigureAwait(false);
                 if (resolved != null)
                 {
                     string file = $"texture_{texture:D4}_{SafeName(resolved.Asset.Name)}.png";
                     string relative = Path.Combine(Path.GetDirectoryName(name) ?? "", file).Replace('\\', '/');
-                    if (!File.Exists(Path.Combine(target, relative))) await WriteAtomicAsync(target, relative, PngEncoder.Encode(TextureDecoder.Decode(resolved.Document, resolved.Asset, token), token), token).ConfigureAwait(false);
+                    if (!directories.Exists(Path.Combine(target, relative))) await WriteAtomicAsync(target, relative, PngEncoder.Encode(TextureDecoder.Decode(resolved.Document, resolved.Asset, token), token), token, directories).ConfigureAwait(false);
                     mtl.AppendLine("map_Kd " + file);
-                    if (resolved.Ambiguous) notes.Add($"Ambiguous texture {textureName}; used {resolved.Asset.Id}.");
+                    if (resolved.Ambiguous) textureNotes.Add($"Ambiguous texture {textureName}; used record {resolved.Asset.Index} in {resolved.Document.Path}.");
                 }
-                else notes.Add($"Unresolved texture {textureName}.");
+                else textureNotes.Add($"Unresolved texture {textureName}.");
             }
             mtl.AppendLine();
         }
-        await WriteAtomicAsync(target, name + ".mtl", Encoding.UTF8.GetBytes(mtl.ToString()), token).ConfigureAwait(false);
-        await WriteAtomicAsync(target, name + ".obj", Encoding.UTF8.GetBytes(obj.ToString()), token).ConfigureAwait(false);
-        await WriteJson(target, name + ".json", new JsonObject { ["properties"] = AssetJson(doc, asset, token), ["notes"] = new JsonArray(notes.Select(n => (JsonNode?)JsonValue.Create(n)).ToArray()) }, token).ConfigureAwait(false);
+        await WriteAtomicAsync(target, name + ".mtl", Encoding.UTF8.GetBytes(mtl.ToString()), token, directories).ConfigureAwait(false);
+        await WriteAtomicAsync(target, name + ".obj", Encoding.UTF8.GetBytes(obj.ToString()), token, directories).ConfigureAwait(false);
+        await WriteJson(target, name + ".json", new JsonObject { ["properties"] = AssetJson(doc, asset, token), ["notes"] = new JsonArray(notes.Select(n => (JsonNode?)JsonValue.Create(n)).ToArray()) }, token, directories).ConfigureAwait(false);
+    }
+    /// <summary>Charge every emitted placement before geometry expansion or text construction, including shared models.</summary>
+    internal static void CheckObjExpansion(GameScene scene, SceneView view, CancellationToken token, long maximumBytes = 64L * 1024 * 1024)
+    {
+        long remaining = maximumBytes;
+        Dictionary<int, long> modelCosts = [];
+        foreach (var placement in view.Placements)
+        {
+            token.ThrowIfCancellationRequested();
+            if (!modelCosts.TryGetValue(placement.ModelIndex, out long cost))
+            {
+                cost = 0;
+                foreach (var polygon in scene.Models[placement.ModelIndex].Polygons)
+                {
+                    token.ThrowIfCancellationRequested();
+                    if (polygon.Vertices.Length < 3) continue;
+                    // GeometryBuilder emits at most one position/normal/UV/color row per stored corner and n-2
+                    // triangles. These allowances include round-trip floats, ten-digit indices, UTF-8 names and MTL.
+                    cost += 256L * polygon.Vertices.Length + 128L * (polygon.Vertices.Length - 2) + 1024;
+                    if (cost > maximumBytes) Refuse();
+                }
+                modelCosts.Add(placement.ModelIndex, cost);
+            }
+            cost += 1024; // object name and group/material headers
+            if (cost > remaining) Refuse();
+            remaining -= cost;
+        }
+        static void Refuse() => throw new InvalidDataException("The expanded OBJ geometry exceeds the supported 64 MiB text budget. Export fewer objects together or choose a lower-detail LOD.");
     }
     public static string SafeName(string name)
     {
@@ -196,10 +232,11 @@ public sealed partial class ExportService(AssetResolver resolver) : IAssetExport
         string stem = safe.Split('.')[0]; if (new[] { "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9" }.Contains(stem, StringComparer.OrdinalIgnoreCase)) safe = "_" + safe;
         return safe;
     }
-    private string ValidateExportDirectory(string destination)
+    private string ValidateExportDirectory(string destination, DirectoryLease directories)
     {
         destination = Path.GetFullPath(destination);
-        if (IsWithin(resolver.Root, destination) || PickupPlacementEditSession.IsProtectedPath(destination))
+        string captured = directories.CapturedPath(destination);
+        if (IsWithin(directories.CapturedPath(resolver.Root), captured) || PickupPlacementEditSession.IsProtectedPath(captured))
             throw new IOException("Choose an export folder outside the opened source tree and protected datasets.");
         // Inspect ancestors above the selected folder too: a junction there can
         // otherwise redirect an apparently external export into the source tree.
@@ -219,11 +256,20 @@ public sealed partial class ExportService(AssetResolver resolver) : IAssetExport
     }
     public static async Task WriteAtomicAsync(string root, string relative, ReadOnlyMemory<byte> bytes, CancellationToken token)
     {
-        string path = DestinationPath(root, relative); Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-        if (File.Exists(path)) throw new IOException($"Export already exists: {relative}");
-        string temporary = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
-        try { await File.WriteAllBytesAsync(temporary, bytes.ToArray(), token).ConfigureAwait(false); token.ThrowIfCancellationRequested(); File.Move(temporary, path, false); }
-        finally { if (File.Exists(temporary)) File.Delete(temporary); }
+        using DirectoryLease directories = new();
+        await WriteAtomicAsync(root, relative, bytes, token, directories).ConfigureAwait(false);
     }
-    private static Task WriteJson(string root, string name, JsonNode node, CancellationToken token) => WriteAtomicAsync(root, name, Encoding.UTF8.GetBytes(node.ToJsonString(JsonData.Options) + "\n"), token);
+    private static async Task WriteAtomicAsync(string root, string relative, ReadOnlyMemory<byte> bytes, CancellationToken token, DirectoryLease directories)
+    {
+        string path = DestinationPath(root, relative);
+        if (PickupPlacementEditSession.IsProtectedPath(directories.CapturedPath(path))) throw new IOException("Export outside protected reference datasets.");
+        directories.Parent(path, create: true);
+        if (directories.Exists(path)) throw new IOException($"Export already exists: {relative}");
+        string temporary = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
+        using SealedFile staged = await SealedFile.CreateAsync(temporary, bytes, directories, token).ConfigureAwait(false);
+        token.ThrowIfCancellationRequested();
+        staged.MoveTo(path);
+    }
+    private static byte[] JsonBytes(JsonNode node) => Encoding.UTF8.GetBytes(node.ToJsonString(JsonData.Options) + "\n");
+    private static Task WriteJson(string root, string name, JsonNode node, CancellationToken token, DirectoryLease directories) => WriteAtomicAsync(root, name, JsonBytes(node), token, directories);
 }

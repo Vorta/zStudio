@@ -87,10 +87,13 @@ public sealed class MissionCoordinateGrowthTests
         var record = new AiValveRecord(Guid.NewGuid(), Guid.NewGuid(), 0, S(new string('x', 2_000_000) + "tail"), A(), "definition", 123);
         _ = MissionAiValves.MatchesSearch(record, "warm");
         long before = GC.GetAllocatedBytesForCurrentThread();
-        Assert.True(MissionAiValves.MatchesSearch(record, "TAIL"));
-        Assert.True(MissionAiValves.MatchesSearch(record, "123"));
-        Assert.False(MissionAiValves.MatchesSearch(record, "absent"));
-        Assert.True(GC.GetAllocatedBytesForCurrentThread() - before < 4096);
+        bool tail = MissionAiValves.MatchesSearch(record, "TAIL");
+        bool index = MissionAiValves.MatchesSearch(record, "123");
+        bool absent = MissionAiValves.MatchesSearch(record, "absent");
+        long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+        // Measure the search, not the test framework's first-use assertion allocations.
+        Assert.True(tail); Assert.True(index); Assert.False(absent);
+        Assert.True(allocated < 4096, $"Search allocated {allocated:N0} bytes.");
     }
 
     [Fact]
@@ -105,7 +108,9 @@ public sealed class MissionCoordinateGrowthTests
     public void SoundAliasLookupRetainsNamesAndLoopFlagsWithoutCopyingIgnoredPayload()
     {
         var tree = A(S(new string('x', 2_000_000)), A(S("fire"), S("audio\\fire.WAV"), S("LOOPED")), A(S("hit"), S("hit.wav")));
-        _ = AnimationPreviewContext.ReadSoundAliases(A(), TestContext.Current.CancellationToken).ToArray();
+        // Warm the non-empty iterator, filename and tuple materialization paths too;
+        // the measured call still traverses the entire two-million-character fixture.
+        _ = AnimationPreviewContext.ReadSoundAliases(tree, TestContext.Current.CancellationToken).ToArray();
         long before = GC.GetAllocatedBytesForCurrentThread();
         var aliases = AnimationPreviewContext.ReadSoundAliases(tree, TestContext.Current.CancellationToken).ToArray();
         long allocated = GC.GetAllocatedBytesForCurrentThread() - before;

@@ -88,6 +88,10 @@ public partial class MainWindow
     private static StudioParameter DocumentParameter => P("document", "string", "Document lifetime ID from zstudio_state.", true);
     private static StudioParameter RevisionParameter => new("revision", "integer", "Expected current document revision. Read before editing.", true, Minimum: 0, Maximum: long.MaxValue);
     private static string Text(JsonObject a, string key, string fallback = "") => a[key]?.GetValue<string>() ?? fallback;
+    /// <summary>A file or folder argument (empty when absent): only a full path, since a relative one would resolve against zStudio's own folder, which a new build replaces.</summary>
+    private static string FullPath(JsonObject a, string key) => FullPath(Text(a, key), key);
+    private static string FullPath(string path, string name) => path.Length == 0 || Path.IsPathFullyQualified(path) ? path
+        : throw new StudioCommandException("invalid_argument", $"Give {name} as a full path; a relative one would resolve against zStudio's own folder.");
     private static int Int(JsonObject a, string key, int fallback = 0) => a[key]?.GetValue<int>() ?? fallback;
     private static double Number(JsonObject a, string key, double fallback = 0) => a[key]?.GetValue<double>() ?? fallback;
     private static bool Flag(JsonObject a, string key, bool fallback = false) => a[key]?.GetValue<bool>() ?? fallback;

@@ -120,6 +120,17 @@ public partial class MainWindow
             Math.Max(0,origin.X + client.Right - monitor.Work.Right) / dpi.DpiScaleX,
             Math.Max(0,origin.Y + client.Bottom - monitor.Work.Bottom) / dpi.DpiScaleY);
     }
+    internal static Size DialogWorkArea(Window owner)
+    {
+        nint handle = new WindowInteropHelper(owner).Handle;
+        var monitor = new MonitorBounds { Size = Marshal.SizeOf<MonitorBounds>() };
+        if (handle != 0 && GetMonitorInfo(MonitorFromWindow(handle, 2), ref monitor))
+        {
+            var dpi = VisualTreeHelper.GetDpi(owner);
+            return new((monitor.Work.Right - monitor.Work.Left) / dpi.DpiScaleX, (monitor.Work.Bottom - monitor.Work.Top) / dpi.DpiScaleY);
+        }
+        return SystemParameters.WorkArea.Size;
+    }
     [StructLayout(LayoutKind.Sequential)] private struct CaptionBounds { public int Left,Top,Right,Bottom; }
     [StructLayout(LayoutKind.Sequential)] private struct ScreenPoint { public int X,Y; }
     [StructLayout(LayoutKind.Sequential)] private struct MonitorBounds { public int Size; public CaptionBounds Monitor,Work; public uint Flags; }

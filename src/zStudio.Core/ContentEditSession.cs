@@ -14,6 +14,10 @@ public abstract class ContentEditSession
     private readonly Dictionary<string, ZbdDocument> sources = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, (string Path, ReadOnlyMemory<byte> Bytes, FileStamp Stamp, bool NeedsCreate)> saved = new(StringComparer.OrdinalIgnoreCase);
     private bool saving;
+    private readonly long maximumRetainedBytes, maximumConstructionBytes;
+    // Each snapshot's decoded documents are measured once, when the edit is prepared on a worker; Accept (on the
+    // dispatcher) then sums those sizes instead of re-walking every document in the undo history.
+    private readonly DecodedCosts costs;
     public string SourcePath { get; }
     public ContentSnapshot Current { get; private set; }
     public IEnumerable<ZbdDocument> Documents => sources.Select(p => Current.Documents.TryGetValue(p.Key, out var doc) ? doc : p.Value);
@@ -46,24 +50,54 @@ public abstract class ContentEditSession
     }
     public event Action? Changed;
     public event Action<IEnumerable<string>>? BeforeEdit;
-    // Verification and destination checks remain outside this publication seam.
-    internal Action<string, string, bool> PublishFile { get; set; } = static (temp, target, createNew) =>
-    { if (createNew) File.Move(temp, target, false); else File.Replace(temp, target, null); };
-    protected ContentEditSession(ZbdDocument source, object state)
+    // Verification and destination checks remain outside this publication seam. The staged file stays held against writes
+    // and renames from its check against the verified bytes until it is in place (VerifiedDocumentSave.Seal).
+    internal Action<SealedFile, string, bool> PublishFile { get; set; } = static (staged, target, createNew) => staged.MoveTo(target, replace: !createNew);
+    protected ContentEditSession(ZbdDocument source, object state,
+        long maximumRetainedBytes = EditRetentionBudget.MaximumRetainedBytes, long maximumConstructionBytes = EditRetentionBudget.MaximumConstructionBytes)
     {
+        EditRetentionBudget.Limit(maximumRetainedBytes, EditRetentionBudget.MaximumRetainedBytes);
+        EditRetentionBudget.Limit(maximumConstructionBytes, EditRetentionBudget.MaximumConstructionBytes);
+        this.maximumRetainedBytes = maximumRetainedBytes; this.maximumConstructionBytes = maximumConstructionBytes;
+        costs = new(Math.Max(maximumRetainedBytes, maximumConstructionBytes));
         if (source.Diagnostics.Any(d => d.Severity == "Error")) throw new InvalidDataException("An intact document is required for editing.");
         SourcePath = source.Path; sources[source.Path] = source; saved[source.Path] = (source.Path, source.Bytes, source.Stamp, false);
         Current = new(new Dictionary<string, ZbdDocument>(StringComparer.OrdinalIgnoreCase) { [source.Path] = source }, state);
+        _ = Retention(Current, [], CancellationToken.None);
     }
     public void Accept(PreparedContentEdit edit)
     {
         if (saving || !ReferenceEquals(edit.Before, Current)) throw new InvalidOperationException("The document changed while preparing the edit.");
         if (!edit.IdentityOrderChanged && edit.After.Documents.Count == Current.Documents.Count && edit.After.Documents.All(p => Current.Documents.TryGetValue(p.Key, out var previous) && p.Value.Bytes.Span.SequenceEqual(previous.Bytes.Span))) return;
         if (edit.After.Documents.Keys.Any(p => !sources.ContainsKey(p) && !edit.Baselines.ContainsKey(p))) throw new InvalidOperationException("Missing prepared baseline.");
+        var budget = Retention(edit.After, edit.Baselines.Values, CancellationToken.None);
+        EditRetentionBudget.Content(budget, Current, costs, CancellationToken.None);
+        int keep = EditRetentionBudget.KeepNewest(undo, budget, (b, snapshot) => EditRetentionBudget.Content(b, snapshot, costs, CancellationToken.None));
         BeforeEdit?.Invoke(edit.After.Documents.Keys.Concat(saved.Values.Select(s => s.Path)));
         foreach (var p in edit.Baselines)
             if (!sources.ContainsKey(p.Key)) { sources.Add(p.Key, p.Value); saved.Add(p.Key, (p.Key, p.Value.Bytes, p.Value.Stamp, false)); }
-        undo.Add(Current); Trim(undo); redo.Clear(); Current = edit.After; HasAcceptedEdits = true; Changed?.Invoke();
+        if (undo.Count > keep) undo.RemoveRange(0, undo.Count - keep);
+        undo.Add(Current); TrimRaw(undo); redo.Clear(); Current = edit.After; HasAcceptedEdits = true; Changed?.Invoke();
+    }
+    private RetainedDocumentBudget Retention(ContentSnapshot next, IEnumerable<ZbdDocument> baselines, CancellationToken token)
+    {
+        RetainedDocumentBudget budget = new(maximumRetainedBytes);
+        try
+        {
+            foreach (var source in sources.Values) costs.Document(budget, source, token);
+            foreach (var baseline in saved.Values) budget.Bytes(baseline.Bytes, token);
+            foreach (var source in baselines) costs.Document(budget, source, token);
+            EditRetentionBudget.Content(budget, next, costs, token);
+            return budget;
+        }
+        catch (InvalidDataException) { throw EditRetentionBudget.Refusal(); }
+    }
+    protected void CheckConstruction(ContentSnapshot before, CancellationToken token, long added = 0)
+        => EditRetentionBudget.Construction(b => EditRetentionBudget.Content(b, before, costs, token), maximumConstructionBytes, added);
+    protected PreparedContentEdit Admit(PreparedContentEdit edit, CancellationToken token)
+    {
+        _ = Retention(edit.After, edit.Baselines.Values, token);
+        return edit;
     }
     public void UndoRedo(bool forward)
     {
@@ -71,9 +105,9 @@ public abstract class ContentEditSession
         var from = forward ? redo : undo; var to = forward ? undo : redo;
         if (from.Count == 0) return;
         BeforeEdit?.Invoke(sources.Keys.Concat(saved.Values.Select(s => s.Path)));
-        to.Add(Current); Trim(to); Current = from[^1]; from.RemoveAt(from.Count - 1); Changed?.Invoke();
+        to.Add(Current); TrimRaw(to); Current = from[^1]; from.RemoveAt(from.Count - 1); Changed?.Invoke();
     }
-    private static void Trim(List<ContentSnapshot> history)
+    private static void TrimRaw(List<ContentSnapshot> history)
     {
         long size = history.Sum(s => s.Documents.Values.Sum(d => (long)d.Bytes.Length));
         while (history.Count > 1 && (history.Count > 128 || size > 256L * 1024 * 1024))
@@ -89,7 +123,8 @@ public abstract class ContentEditSession
         if (targets.Any(p => sources.ContainsKey(p.Value) && !p.Key.Equals(p.Value, StringComparison.OrdinalIgnoreCase)))
             throw new InvalidDataException("A save destination cannot use another record's source identity in this batch, even if that source file is missing.");
         BeforeEdit?.Invoke(sources.Keys.Concat(saved.Values.Select(s => s.Path)).Concat(targets.Values));
-        saving = true; List<(ZbdDocument Doc, string Target, string Temp, bool CreateNew)> staged = []; List<string> completed = [], errors = [];
+        saving = true; List<(ZbdDocument Doc, string Target, SealedFile File, bool CreateNew)> staged = []; List<string> completed = [], errors = [];
+        using DirectoryLease directories = new();
         try
         {
             foreach (var doc in documents)
@@ -97,11 +132,14 @@ public abstract class ContentEditSession
                 token.ThrowIfCancellationRequested(); string target = targets[doc.Path];
                 bool createNew = destinations != null || saved[doc.Path].NeedsCreate;
                 VerifiedDocumentSave.ValidateDestination(target);
-                if (!createNew) await VerifiedDocumentSave.CheckBaselineAsync(target, saved[doc.Path].Bytes, token);
-                else if (File.Exists(target)) throw new IOException("Save As requires new files: " + target);
+                VerifiedDocumentSave.ValidateDestination(directories.CapturedPath(target));
+                directories.Parent(target, create: createNew);
+                if (!createNew) await VerifiedDocumentSave.CheckBaselineAsync(target, saved[doc.Path].Bytes, token, directories);
+                else if (directories.Exists(target)) throw new IOException("Save As requires new files: " + target);
                 if (!createNew && doc.Bytes.Span.SequenceEqual(saved[doc.Path].Bytes.Span)) continue;
-                string temp = target + "." + Guid.NewGuid().ToString("N") + ".tmp"; staged.Add((doc, target, temp, createNew));
-                await VerifiedDocumentSave.StageAsync(doc, temp, token, target);
+                string temp = target + "." + Guid.NewGuid().ToString("N") + ".tmp";
+                var file = await VerifiedDocumentSave.StageAsync(doc, temp, token, target, directories);
+                staged.Add((doc, target, file, createNew));
             }
             // Once every output is verified, retain the complete Save As intent.
             // A partial publication must never send a later Save back to a source.
@@ -112,9 +150,10 @@ public abstract class ContentEditSession
                 try
                 {
                     token.ThrowIfCancellationRequested(); VerifiedDocumentSave.ValidateDestination(item.Target);
-                    if (!item.CreateNew) await VerifiedDocumentSave.CheckBaselineAsync(item.Target, saved[item.Doc.Path].Bytes, token);
-                    PublishFile(item.Temp, item.Target, item.CreateNew);
-                    saved[item.Doc.Path] = (item.Target, item.Doc.Bytes, FileStamp.Read(item.Target), false); completed.Add(item.Target);
+                    if (!item.CreateNew) await VerifiedDocumentSave.CheckBaselineAsync(item.Target, saved[item.Doc.Path].Bytes, token, directories);
+                    PublishFile(item.File, item.Target, item.CreateNew);
+                    item.File.Dispose();
+                    saved[item.Doc.Path] = (item.Target, item.Doc.Bytes, FileStamp.ReadHolding(item.Target, item.Doc.Bytes.Span, directories), false); completed.Add(item.Target);
                 }
                 catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or OperationCanceledException) { errors.Add(item.Target + ": " + ex.Message); break; }
             }
@@ -123,7 +162,7 @@ public abstract class ContentEditSession
         }
         finally
         {
-            foreach (var item in staged) { try { if (File.Exists(item.Temp)) File.Delete(item.Temp); } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { } }
+            foreach (var item in staged) item.File.Dispose();
             saving = false; Changed?.Invoke();
         }
     }
@@ -139,25 +178,39 @@ internal static class VerifiedDocumentSave
         for (var d = new DirectoryInfo(Path.GetDirectoryName(path)!); d != null; d = d.Parent)
             if (d.Exists && d.Attributes.HasFlag(FileAttributes.ReparsePoint)) throw new IOException("Cannot save through directory links.");
     }
-    internal static async Task CheckBaselineAsync(string path, ReadOnlyMemory<byte> bytes, CancellationToken token)
+    internal static async Task CheckBaselineAsync(string path, ReadOnlyMemory<byte> bytes, CancellationToken token, DirectoryLease? directories = null)
     {
-        await using FileStream file = new(path, FileMode.Open, FileAccess.Read, FileShare.Read, 65536, FileOptions.Asynchronous | FileOptions.SequentialScan);
+        using DirectoryLease? owned = directories == null ? new() : null; directories ??= owned!;
+        await using FileStream file = directories.OpenFile(path, FileMode.Open, FileAccess.Read, FileShare.Read, 65536, FileOptions.Asynchronous | FileOptions.SequentialScan);
         if (file.Length != bytes.Length || !CryptographicOperations.FixedTimeEquals(await SHA256.HashDataAsync(file, token), SHA256.HashData(bytes.Span)))
             throw new IOException("The file changed outside zStudio. Reload or choose a new Save As destination.");
     }
-    internal static async Task StageAsync(ZbdDocument document, string temp, CancellationToken token, string? destination = null)
+    /// <summary>
+    /// Holds a staged save, checked against the verified <paramref name="bytes"/>, until it is in place: no other program can
+    /// write or rename it after its verification (see <see cref="SealedFile"/>).
+    /// </summary>
+    internal static SealedFile Seal(string temp, ReadOnlyMemory<byte> bytes, DirectoryLease? directories = null)
+    {
+        try { return SealedFile.Open(temp, Sources.JournalDigest.OfContent(bytes.Span), directories); }
+        catch (IOException ex) { throw new IOException("The verified save was not put in place: " + ex.Message, ex); }
+    }
+    internal static async Task<SealedFile> StageAsync(ZbdDocument document, string temp, CancellationToken token, string? destination, DirectoryLease directories)
     {
         FormatRegistry.ValidateDocumentSize(document.Bytes.Length);
-        Directory.CreateDirectory(Path.GetDirectoryName(temp)!);
-        await using (FileStream output = new(temp, FileMode.CreateNew, FileAccess.Write, FileShare.None, 65536, FileOptions.Asynchronous | FileOptions.WriteThrough))
-        { await output.WriteAsync(document.Bytes, token); await output.FlushAsync(token); output.Flush(true); }
-        byte[] bytes = await File.ReadAllBytesAsync(temp, token);
-        await Task.Run(() =>
+        directories.Parent(temp, create: true);
+        var file = await SealedFile.CreateAsync(temp, document.Bytes, directories, token).ConfigureAwait(false);
+        try
         {
-            if (!document.Bytes.Span.SequenceEqual(bytes)) throw new IOException("Saved file byte verification failed.");
-            var check = FormatRegistry.Default.OpenBytes(destination ?? document.Path, bytes, token: token);
-            if (check.Probe.Family != document.Probe.Family || check.Diagnostics.Any(d => d.Severity == "Error") || check.Assets.Count != document.Assets.Count)
-                throw new InvalidDataException("Saved file failed shared-reader verification.");
-        }, token);
+            byte[] bytes = await file.ReadAllAsync(document.Bytes.Length, token).ConfigureAwait(false);
+            await Task.Run(() =>
+            {
+                if (!document.Bytes.Span.SequenceEqual(bytes)) throw new IOException("Saved file byte verification failed.");
+                var check = FormatRegistry.Default.OpenBytes(destination ?? document.Path, bytes, token: token);
+                if (check.Probe.Family != document.Probe.Family || check.Diagnostics.Any(d => d.Severity == "Error") || check.Assets.Count != document.Assets.Count)
+                    throw new InvalidDataException("Saved file failed shared-reader verification.");
+            }, token).ConfigureAwait(false);
+            return file;
+        }
+        catch { file.Dispose(); throw; }
     }
 }

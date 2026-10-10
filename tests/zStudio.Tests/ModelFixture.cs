@@ -7,15 +7,17 @@ namespace Recoil.Zbd.Tests;
 internal static class ModelFixture
 {
     internal static ImportedMesh Mesh => new([new(-.3f,0,0),new(.3f,0,0),new(0,2,.1f)], [Vector3.UnitZ,Vector3.UnitZ,Vector3.UnitZ], [new(0,1),new(1,1),new(.5f,0)], [0,1,2]);
-    internal static byte[] GameZ()
+    /// <summary>Slot 0 is the one active material; each import takes the next free slot.</summary>
+    internal static byte[] GameZ(int materialSlots = 4)
     {
-        const int materials = 36, models = materials + 16 + 4 * 44, data = models + 12 + 2 * 88, nodes = data + 2 * 100, nodeData = nodes + 2 * 196;
+        const int materials = 36;
+        int models = materials + 16 + materialSlots * 44, data = models + 12 + 2 * 88, nodes = data + 2 * 100, nodeData = nodes + 2 * 196;
         byte[] b = new byte[nodeData + 144 + 4 + 144 + 4];
         void I(int o, int v) => BinaryPrimitives.WriteInt32LittleEndian(b.AsSpan(o), v);
         void F(int o, float v) => I(o,BitConverter.SingleToInt32Bits(v));
         I(0,0x02971222); I(4,15); I(8,0); I(12,36); I(16,materials); I(20,models); I(24,2); I(28,-1); I(32,nodes);
-        I(materials,4); I(materials + 4,1); I(materials + 8,1); I(materials + 12,0);
-        for (int i = 0; i < 4; i++) { int o = materials + 16 + i * 44; b[o] = 255; I(o + 16,-1); BinaryPrimitives.WriteInt16LittleEndian(b.AsSpan(o + 42),(short)(i is 0 or 3 ? -1 : i+1)); BinaryPrimitives.WriteInt16LittleEndian(b.AsSpan(o + 40),(short)(i < 2 ? -1 : i-1)); }
+        I(materials,materialSlots); I(materials + 4,1); I(materials + 8,1); I(materials + 12,0);
+        for (int i = 0; i < materialSlots; i++) { int o = materials + 16 + i * 44; b[o] = 255; I(o + 16,-1); BinaryPrimitives.WriteInt16LittleEndian(b.AsSpan(o + 42),(short)(i == 0 || i == materialSlots - 1 ? -1 : i+1)); BinaryPrimitives.WriteInt16LittleEndian(b.AsSpan(o + 40),(short)(i < 2 ? -1 : i-1)); }
         I(models,2); I(models + 4,2); I(models + 8,-1);
         for (int i = 0; i < 2; i++)
         {

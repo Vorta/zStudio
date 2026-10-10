@@ -17,9 +17,11 @@ internal static class PreviewMaterials
         using var shader = SharpDX.D3DCompiler.ShaderBytecode.Compile(reader.ReadToEnd(), "PSMain", "ps_5_0", SharpDX.D3DCompiler.ShaderFlags.OptimizationLevel3);
         return shader.Bytecode.Data;
     });
-    public static DefaultEffectsManager CreateEffects()
+    public static DefaultEffectsManager CreateEffects() => PreviewResourceLifetime.Create<DefaultEffectsManager>(
+        static () => new PreviewEffectsManager(), InstallPasses);
+
+    private static void InstallPasses(DefaultEffectsManager manager)
     {
-        var manager = new DefaultEffectsManager();
         GroundGridShader.Install(manager);
         manager[DefaultRenderTechniqueNames.Mesh]!.AddPass(new ShaderPassDescription(AlphaPass)
         {
@@ -43,7 +45,6 @@ internal static class PreviewMaterials
                 BlendStateDescription = DefaultBlendStateDescriptions.BSAlphaBlend,
                 DepthStencilStateDescription = pass == TintPass ? DefaultDepthStencilDescriptions.DSSDepthLess : pass.EndsWith(AlphaPass, StringComparison.Ordinal) ? DefaultDepthStencilDescriptions.DSSLessNoWrite : DefaultDepthStencilDescriptions.DSSNoDepthNoStencil
             });
-        return manager;
     }
     public static DiffuseMaterial Create(bool horizon = false, bool vertexTint = false) => new(new PreviewMaterialCore(horizon, vertexTint));
     private sealed class PreviewMaterialCore(bool horizon, bool vertexTint) : DiffuseMaterialCore

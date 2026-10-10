@@ -18,7 +18,7 @@ Texture PNG import and the prepared-script instruction editor are described in t
 
 | Game | Status |
 | --- | --- |
-| **Recoil** | Supported for the format versions tested in the 1998 and 1999 datasets. See the capabilities and limits below. |
+| **Recoil** | Supported for the format versions tested in the 1998 and 1999 datasets. The worlds of the July and August 1998 demos (GameZ version 13) open read-only. See the capabilities and limits below. |
 | **MechWarrior 3 base game** | This source tree supports version-27 worlds, mission/AI placement, mech assemblies, version-4 motion clips and version-39 animations. See [workflows and limits](docs/mechwarrior3.md); original-game acceptance of edited files has not been established. |
 | Other Zipper Interactive titles | Planned; compatibility has not yet been established. |
 
@@ -87,7 +87,7 @@ If a workspace call reports `access_disabled`, enable access in **Tools → MCP 
 | ZRD data | Edit typed nested trees, scalar values, raw float bits and ordered array structure | Edited bytes and JSON; verified Save and Save As, including the owning archive |
 | Prepared scripts | Edit ordered entries, instructions, arguments and timestamps with pinned Properties and undo | Text and JSON; verified Save and Save As |
 | Animation/effects | Edit events, sequences, references and keyframes; scrub motion/effects/audio previews in isolation or mission context | Verified new ZBD with Save As; edited JSON |
-| GameZ | Individual models, assembled static worlds, scene tree, materials, texture references and node properties; replace supported v15/v27 models and textures | OBJ/MTL/PNG component bundles, JSON; verified model/texture Save and Save As |
+| GameZ | Individual models, assembled static worlds, scene tree, materials, texture references and node properties, including the 1998 demos' version-13 worlds (read-only); replace supported v15/v27 models and textures | OBJ/MTL/PNG component bundles, JSON; verified model/texture Save and Save As |
 | MW3 mech libraries | Member-scoped hierarchy and mesh inspection, textured previews and explicit local-mesh replacement | OBJ/MTL/PNG component bundles; shared archive undo and verified Save As |
 | MW3 motion clips | Assembly binding, playback/seek, loop duration and translation/quaternion frame edits | Original/edited member bytes and JSON; shared archive undo and verified Save As |
 | Mission pickups | Select pickups in Whole world, show bounds, unlock XYZ arrows or enter coordinates, undo/redo; matching difficulties move together | Save coordinates to their owning ZBD archive; Save As; optional backups |

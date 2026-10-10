@@ -83,7 +83,7 @@ public partial class MainWindow
             int Remap(int oldNode)
             {
                 var source = previous.ActorAt(oldNode)?.CoordinateSource;
-                var matches = source != null && doc.PickupEdits?.Coordinate(source) != null ? doc.PickupEdits.Scope(source).Sources.ToHashSet() : null;
+                var matches = source != null && doc.PickupEdits?.Coordinate(source) != null ? doc.PickupEdits.Scope(source).Sources.ToHashSet(doc.PickupEdits.SourceComparer) : null;
                 return mission!.RemapNodeFrom(previous.Mission!, oldNode, matches);
             }
             previous.CancelPickupDrag(); DetachPickupEditor();

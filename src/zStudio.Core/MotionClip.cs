@@ -17,6 +17,7 @@ public sealed class MotionClip
     public required IReadOnlyList<MotionPart> Parts { get; init; }
     /// <summary>Decoded samples one archive may materialize (two dense arrays per sample); retail motion.zbd holds about 200,000.</summary>
     public const long MaximumArchiveSamples = 2_097_152;
+    internal const int MaximumPreviewParts = 32;
     /// <summary>The samples a version 4 header would materialize, or null when the header is not a supported motion header.</summary>
     internal static long? HeaderSamples(ReadOnlySpan<byte> bytes)
     {
@@ -124,11 +125,21 @@ public sealed class MotionClip
         }
         return stream.ToArray();
     }
-    public JsonObject ToJson(bool bounded = true, CancellationToken token = default) => new()
+    public JsonObject ToJson(bool bounded = true, CancellationToken token = default) =>
+        ToJson(bounded ? Math.Min(MaximumPreviewParts, Parts.Count) : Parts.Count, bounded, token);
+
+    /// <summary>Construct only the rows admitted by the archive's shared ordinary-inspection allowance.</summary>
+    internal JsonObject ToJsonPreview(int maximumParts, CancellationToken token)
+    {
+        if (maximumParts is < 0 or > MaximumPreviewParts) throw new ArgumentOutOfRangeException(nameof(maximumParts));
+        return ToJson(Math.Min(maximumParts, Parts.Count), bounded: true, token);
+    }
+
+    private JsonObject ToJson(int partCount, bool bounded, CancellationToken token) => new()
     {
         ["version"] = 4, ["loop_seconds"] = LoopTime, ["frame_count"] = FrameCount, ["part_count"] = Parts.Count,
-        ["parts_truncated"] = bounded && Parts.Count > 32,
-        ["parts"] = JsonData.Array((bounded ? Parts.Take(32) : Parts).Select((p, i) => (Part: p, Index: i)), row => new JsonObject
+        ["parts_truncated"] = Parts.Count > partCount,
+        ["parts"] = JsonData.Array(Parts.Take(partCount).Select((p, i) => (Part: p, Index: i)), row => new JsonObject
         {
             ["index"] = row.Index, ["name"] = bounded ? row.Part.Name[..Math.Min(128, row.Part.Name.Length)] : row.Part.Name,
             ["name_characters"] = row.Part.Name.Length, ["name_truncated"] = bounded && row.Part.Name.Length > 128, ["flags"] = row.Part.Flags,

@@ -47,6 +47,27 @@ public sealed class ContentEditingTests
         edits.Accept(await edits.PrepareEntryAsync("rename", entry.Id, "second", token: Token));
         Assert.Throws<InvalidOperationException>(() => edits.Accept(prepared)); Assert.Equal("second", edits.Entry(entry.Id).Name);
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => edits.PrepareEntryAsync("delete", entry.Id, token: new CancellationToken(true)));
+
+        // Timestamp changes share working instructions but retain a fresh reader-backed ScriptContent
+        // in each document. Its token arrays, not just raw bytes or Current.State, decide history retention.
+        var original = doc.Scripts!;
+        var many = original.Entries[0] with { Instructions = Enumerable.Range(0, 128).Select(_ =>
+            new ScriptInstruction(Guid.NewGuid(), new[] { "x" }.Concat(Enumerable.Repeat("", 15)).ToArray(), ReadOnlyMemory<byte>.Empty, null)).ToArray() };
+        var shaped = FormatRegistry.Default.OpenBytes("shape.zbd", PreparedScriptWriter.Write(original with { Entries = [many] }, Token), token: Token);
+        var bounded = new ScriptEditSession(shaped, 256 * 1024, 1024 * 1024);
+        Guid script = bounded.Package.Entries[0].Id;
+        for (uint i = 1; i <= 24; i++) bounded.Accept(await bounded.PrepareEntryAsync("timestamp", script, fileTime: i, token: Token));
+        int undoCount = 0;
+        while (bounded.CanUndo) { bounded.UndoRedo(false); undoCount++; }
+        Assert.InRange(undoCount, 1, 23);
+        while (bounded.CanRedo) bounded.UndoRedo(true);
+        var held = bounded.Current;
+        string[] largeTokens = ["x", .. Enumerable.Repeat(new string('a', 8192), 15)];
+        var refused = await Assert.ThrowsAsync<InvalidDataException>(() => bounded.PrepareInstructionAsync(script, "set", bounded.Package.Entries[0].Instructions[0].Id, largeTokens, token: Token));
+        Assert.Contains("allowance", refused.Message); Assert.Same(held, bounded.Current); Assert.True(bounded.CanUndo);
+        bounded.Accept(await bounded.PrepareEntryAsync("timestamp", script, fileTime: 25, token: Token));
+        bounded.UndoRedo(false); Assert.Same(held, bounded.Current);
+        bounded.UndoRedo(true); Assert.Equal(script, bounded.Package.Entries[0].Id);
     }
     [Fact]
     public void MalformedScriptPackCannotEnableEditing()

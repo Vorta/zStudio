@@ -207,19 +207,34 @@ public sealed class ResourceEditSession
     {
         if (saving) throw new InvalidOperationException("A resource save is in progress.");
         string target = Path.GetFullPath(destination ?? TargetPath), temp = target + "." + Guid.NewGuid().ToString("N") + ".tmp"; saving = true;
+        using DirectoryLease directories = new();
         try
         {
             VerifiedDocumentSave.ValidateDestination(target);
-            if (destination == null) await CheckBaseline(token); else if (File.Exists(target)) throw new IOException("Save As requires a new file.");
-            await VerifiedDocumentSave.StageAsync(Current.Document, temp, token, target);
-            token.ThrowIfCancellationRequested(); VerifiedDocumentSave.ValidateDestination(target);
-            if (destination == null) { await CheckBaseline(token); File.Replace(temp, target, null); } else File.Move(temp, target, false);
-            TargetPath = target; TargetStamp = FileStamp.Read(target); saved = Current; return target;
+            VerifiedDocumentSave.ValidateDestination(directories.CapturedPath(target));
+            directories.Parent(target, create: true);
+            if (destination == null) await CheckBaseline(token, directories); else if (File.Exists(target)) throw new IOException("Save As requires a new file.");
+            using (SealedFile staged = await VerifiedDocumentSave.StageAsync(Current.Document, temp, token, target, directories))
+            {
+                token.ThrowIfCancellationRequested(); VerifiedDocumentSave.ValidateDestination(target);
+                if (destination == null) { await CheckBaseline(token, directories); staged.MoveTo(target, replace: true); } else staged.MoveTo(target);
+            }
+            TargetPath = target; TargetStamp = FileStamp.ReadHolding(target, Current.Document.Bytes.Span, directories); saved = Current; return target;
         }
-        finally { try { if (File.Exists(temp)) File.Delete(temp); } finally { saving = false; Changed?.Invoke(); } }
+        finally { saving = false; Changed?.Invoke(); }
     }
-    private Task CheckBaseline(CancellationToken token) => VerifiedDocumentSave.CheckBaselineAsync(TargetPath, saved.Document.Bytes, token);
-    private static string Hash(ReadOnlyMemory<byte> bytes) => Convert.ToHexString(SHA256.HashData(bytes.Span));
+    private Task CheckBaseline(CancellationToken token, DirectoryLease directories) => VerifiedDocumentSave.CheckBaselineAsync(TargetPath, saved.Document.Bytes, token, directories);
+    private static string Hash(ReadOnlyMemory<byte> bytes, CancellationToken token = default)
+    {
+        using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        for (int offset = 0; offset < bytes.Length; offset += Math.Min(64 * 1024, bytes.Length - offset))
+        {
+            token.ThrowIfCancellationRequested();
+            hash.AppendData(bytes.Span.Slice(offset, Math.Min(64 * 1024, bytes.Length - offset)));
+        }
+        token.ThrowIfCancellationRequested();
+        return Convert.ToHexString(hash.GetHashAndReset());
+    }
     private static void ValidateName(string name)
     { if (name.Length is < 1 or > 63 || name.Any(c => c == 0 || c > 255)) throw new InvalidDataException("Member names require 1–63 Latin-1 characters without NUL."); }
 }

@@ -2,6 +2,8 @@
 
 These editors use the same accepted snapshots, undo history, ownership and verified saves in the GUI and MCP. They complement the model replacement and ZAR/ZRD editors. They do not execute script commands or establish compatibility of arbitrary edits with the original game.
 
+Compiled edit sessions admit up to 1 GiB of conservatively estimated retained content and use a separate 1 GiB construction allowance. Retention includes raw backing buffers, decoded records, accepted state and undo/redo, with shared objects counted once. Each snapshot's decoded documents are measured once, when its edit is prepared off the UI thread; accepting an edit then sums these cached sizes instead of walking every document in the undo history again, while raw buffers, ZRD trees and script packages that snapshots share are still counted once by identity. A successful edit can discard the oldest undo entries to stay within the allowance; a refused edit preserves the current state and history. Large documents or multi-pack edits can therefore be refused before the generic file-size ceiling is reached. These are admission estimates, not total process-memory limits.
+
 ## Replace or add a texture
 
 1. Open a texture pack from Files, then select a texture in Assets.
