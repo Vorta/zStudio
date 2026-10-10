@@ -185,20 +185,23 @@
         "type": "Project"
       },
       "Recoil.Zbd.Core": {
-        "type": "Project"
+        "type": "Project",
+        "dependencies": {
+          "Clipper2": "[2.0.0, )"
+        }
       },
       "Recoil.Zbd.Mcp": {
         "type": "Project",
         "dependencies": {
           "ModelContextProtocol.Core": "[2.2.0, )",
-          "Recoil.Zbd.Application": "[0.4.8, )"
+          "Recoil.Zbd.Application": "[0.8.0, )"
         }
       },
       "Recoil.Zbd.Rendering": {
         "type": "Project",
         "dependencies": {
           "HelixToolkit.Wpf.SharpDX": "[3.1.2, )",
-          "Recoil.Zbd.Core": "[0.4.8, )"
+          "Recoil.Zbd.Core": "[0.8.0, )"
         }
       },
       "Recoil.Zbd.Studio": {
@@ -207,10 +210,16 @@
           "CommunityToolkit.Mvvm": "[8.4.2, )",
           "NAudio.Core": "[3.1.0, )",
           "NAudio.Wasapi": "[3.1.0, )",
-          "Recoil.Zbd.Core": "[0.4.8, )",
-          "Recoil.Zbd.Mcp": "[0.4.8, )",
-          "Recoil.Zbd.Rendering": "[0.4.8, )"
+          "Recoil.Zbd.Core": "[0.8.0, )",
+          "Recoil.Zbd.Mcp": "[0.8.0, )",
+          "Recoil.Zbd.Rendering": "[0.8.0, )"
         }
+      },
+      "Clipper2": {
+        "type": "CentralTransitive",
+        "requested": "[2.0.0, )",
+        "resolved": "2.0.0",
+        "contentHash": "2X23RZxJrjRjOSZc20aqXY9jpmHLekDRy4PIMfrsi2LPNzxFYlnuqzX/nLdk77fbURHUeX+gMhUn2a1z9/wMTQ=="
       },
       "CommunityToolkit.Mvvm": {
         "type": "CentralTransitive",

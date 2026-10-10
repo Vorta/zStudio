@@ -13,6 +13,7 @@ public partial class MainWindow
     private DocumentModel? pickupDocument;
     private void ConfigurePickupScene(SceneViewport viewport)
     {
+        ConfigureTerrainScene(viewport);
         viewport.CanStartPickupEdit = () => CurrentInspectionCard is { HasDraft: true } card &&
             pickupDocument is { PickupsLocked: false } doc && card.DraftDocument == doc && card.DraftRevision == doc.Revision &&
             doc.PickupEdits?.HasExternalChanges() == false &&
