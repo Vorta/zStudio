@@ -14,7 +14,8 @@ namespace Recoil.Zbd.Desktop.Tests;
 
 /// <summary>
 /// Compare worlds at sizes far from retail: pages of rows whose text all escapes stay within the response limit, a pair's
-/// many differences are counted beyond those listed, and a tree too large to show says so in the window and through MCP.
+/// many differences are counted beyond those listed and all its property lines can be read page by page, and a tree too
+/// large to show says so in the window and through MCP.
 /// </summary>
 internal static class WorldCompareBoundsChecks
 {
@@ -53,6 +54,16 @@ internal static class WorldCompareBoundsChecks
             Assert.Equal(("More differences", "36 not listed"), (details[^1].Field, details[^1].Retail));
             var selected = await Call("world_compare_tree", new() { ["context"] = context, ["action"] = "select", ["row"] = world["row"]!.GetValue<string>() });
             Assert.Equal(details.Count, selected["selected"]!["propertyCount"]!.GetValue<int>());
+            // Every property line the window lists can be read, a page at a time (the row's, and the selected row's when it is that row).
+            List<string> fields = [];
+            for (JsonNode? read = selected; read != null;)
+            {
+                var lines = read["row"]!["properties"]!;
+                Assert.Equal(lines.ToJsonString(), read["selected"]!["properties"]!.ToJsonString());
+                fields.AddRange(lines.AsArray().Select(p => p!["field"]!.GetValue<string>()));
+                read = read["row"]!["nextPropertyOffset"] is { } next ? await Call("world_compare_tree", new() { ["context"] = context, ["row"] = world["row"]!.GetValue<string>(), ["propertyOffset"] = next.GetValue<int>() }) : null;
+            }
+            Assert.Equal(details.Select(d => d.Field), fields);
 
             // A full page of the world's 220 members: 210 worlds whose 16 cells all differ, named in characters JSON escapes.
             string text = await Text("world_compare_tree", new() { ["context"] = context, ["row"] = world["row"]!.GetValue<string>(), ["limit"] = 200 });

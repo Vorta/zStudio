@@ -206,7 +206,7 @@
         "zstudio_world_compare",
         "zstudio_world_compare_tree"
       ],
-      "note": "The window's Browse buttons choose files with the Windows dialog; world_compare takes their full paths instead. Compare maps to world_compare. Tree rows, their expansion and selection (which shows the row's properties in both worlds) map to world_compare_tree read/expand/collapse/select; the Differences only checkbox and the name filter map to its differencesOnly and query arguments, which filter MCP reads without changing the window's controls (windowFilter reports them)."
+      "note": "The window's Browse buttons choose files with the Windows dialog; world_compare takes their full paths instead. Compare maps to world_compare. Tree rows, their expansion and selection (which shows the row's properties in both worlds, read page by page with propertyOffset) map to world_compare_tree read/expand/collapse/select; the Differences only checkbox and the name filter map to its differencesOnly and query arguments, which filter MCP reads without changing the window's controls (windowFilter reports them)."
     }
   ],
   "handlers": [
