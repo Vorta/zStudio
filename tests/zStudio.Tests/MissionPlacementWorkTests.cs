@@ -161,11 +161,66 @@ public sealed class MissionPlacementWorkTests
         var result = MissionSceneLoader.BuildWithBudget(world, full, null, Actors(2), Vehicles("tank"), null, token: Token, pickups: PickupRows(2));
         var limited = new MissionPlacementBudget(Token, maximumWork: full.Work - 1);
         var error = Assert.Throws<InvalidDataException>(() => MissionSceneLoader.BuildWithBudget(world, limited, null, Actors(2), Vehicles("tank"), null, token: Token, pickups: PickupRows(2)));
-        Assert.Contains("construction work or metadata budget", error.Message);
+        Assert.Contains("units of construction work", error.Message);
         Assert.True(limited.Exhausted); Assert.Equal(before, Snapshot(world));
         var retry = MissionSceneLoader.BuildWithBudget(world, new MissionPlacementBudget(Token), null, Actors(2), Vehicles("tank"), null, token: Token, pickups: PickupRows(2));
         Assert.Equal(result.Actors, retry.Actors);
         Assert.Equal(result.Scene.Nodes[3].Children, retry.Scene.Nodes[3].Children);
+    }
+
+    [Fact]
+    public void LargeWorldBuildsWhilePlacementsStayWithinTheirAllowance()
+    {
+        // The world's own copy is the scene the reader and the preview load admitted (here more nodes than the shipped
+        // 16,000-node pool); only what placements add counts against the allowance, which still refuses repetition.
+        const int count = 20000; const long allowance = 64 * 1024;
+        var world = World([.. Enumerable.Range(0, count).Select(i => Node(i, i == 0 ? "tank" : "part")), Node(count, "world", "world")]);
+        var budget = new MissionPlacementBudget(Token, maximumCloneBytes: allowance);
+        var result = Build(world, budget, Actors(1));
+        Assert.Equal(count + 1, Assert.Single(result.Actors).Root); Assert.Equal(count + 2, result.Scene.Nodes.Count);
+        Assert.InRange(budget.CloneBytes, 1, allowance);
+        var error = Assert.Throws<InvalidDataException>(() => Build(world, new MissionPlacementBudget(Token, maximumCloneBytes: allowance), Actors(100)));
+        Assert.Contains("placements copy more than 65,536 bytes", error.Message);
+    }
+
+    [Fact]
+    public void LodAndCameraCopiesThatYieldNoChildCopyAreSkippedLikeTheGame()
+    {
+        // CopyLodNode and CopyCameraNode yield no copy when a child (light, sound) yields none; CopyObject3DNode skips
+        // them. tank_01 keeps its turret, without the mesh the LOD's copy had already made.
+        var world = World(Node(0, "tank", children: [1, 4, 5]), Node(1, "lod", "lod", parents: [0], children: [3, 2]),
+            Node(2, "lamp", "light", parents: [1]), Node(3, "mesh", parents: [1]), Node(4, "cam", "camera", parents: [0], children: [6]),
+            Node(5, "turret", parents: [0]), Node(6, "hum", "unknown_10", parents: [4]), Node(7, "world", "world"));
+        string[] before = Snapshot(world);
+        var result = Build(world, new(Token), Arr(Str("tank_01"), Spawn(1)));
+        Assert.Equal(8, Assert.Single(result.Actors).Root);
+        Assert.Equal(10, result.Scene.Nodes.Count); Assert.Equal(new[] { 0, 5 }, result.SourceNodes.Skip(8));
+        Assert.Equal(new[] { 9 }, result.Scene.Nodes[8].Children); Assert.Equal(new[] { 8 }, result.Scene.Nodes[9].Parents);
+        Assert.Equal("turret", result.Scene.Nodes[9].Name);
+        Assert.DoesNotContain(result.Diagnostics, d => d.StartsWith("Mission actor", StringComparison.Ordinal));
+        Assert.Equal(before, Snapshot(world));
+    }
+
+    [Fact]
+    public void FlaggedNodesAreSharedUncopiedAndAFlaggedTemplateIsPlacedItself()
+    {
+        // CopyNodeDispatch returns a node flagged 0x04000000 itself: both copies take the original hull as a child.
+        var world = World(Node(0, "tank", children: [1]), Node(1, "hull", parents: [0]), Node(2, "world", "world"));
+        world.Scene!.Nodes[1].Metadata["flags"] = 8 | 0x04000000;
+        string[] before = Snapshot(world);
+        var shared = Build(world, new(Token), Actors(2));
+        Assert.Equal(new[] { 3, 4 }, shared.Actors.Select(a => a.Root)); Assert.Equal(5, shared.Scene.Nodes.Count);
+        Assert.All(shared.Actors, a => Assert.Equal(new[] { 1 }, shared.Scene.Nodes[a.Root].Children));
+        Assert.Equal(new[] { 0, 3, 4 }, shared.Scene.Nodes[1].Parents);
+        Assert.Equal(before, Snapshot(world));
+        // A flagged template is the vehicle itself, renamed, so the next record finds no template of that name.
+        world.Scene.Nodes[0].Metadata["flags"] = 8 | 0x04000000;
+        before = Snapshot(world);
+        var placed = Build(world, new(Token), Actors(2));
+        var actor = Assert.Single(placed.Actors); Assert.Equal(0, actor.Root); Assert.Equal("tank_01", placed.Scene.Nodes[0].Name);
+        Assert.Equal(3, placed.Scene.Nodes.Count); Assert.Equal(new[] { 2 }, placed.Scene.Nodes[0].Parents);
+        Assert.Contains(placed.Diagnostics, d => d.StartsWith("Mission actor tank_02: Missing template tank", StringComparison.Ordinal));
+        Assert.Equal(before, Snapshot(world));
     }
 
     [Fact]
@@ -227,7 +282,7 @@ public sealed class MissionPlacementWorkTests
         var limited = new MissionPlacementBudget(Token, maximumWork: control.Work + 32);
         var error = Assert.Throws<InvalidDataException>(() => MissionSceneLoader.BuildWithBudget(world, limited, null,
             Actors(1), Vehicles("tank"), null, token: Token, aivSource: invalid));
-        Assert.Contains("construction work or metadata budget", error.Message); Assert.True(limited.Exhausted);
+        Assert.Contains("units of construction work", error.Message); Assert.True(limited.Exhausted);
         // If normalization ran before the reservation this would throw the invalid-path ArgumentException instead.
         var unused = MissionSceneLoader.BuildWithBudget(world, new MissionPlacementBudget(Token), null,
             null, null, null, token: Token, aivSource: invalid);
@@ -264,7 +319,7 @@ public sealed class MissionPlacementWorkTests
         var underlying = JsonData.UnderlyingElement; Assert.NotNull(underlying);
         Assert.True(underlying(cold).HasValue);
         var budget = new MissionPlacementBudget(Token, maximumCloneBytes: 900);
-        Assert.Throws<InvalidDataException>(() => Build(world, budget, null));
+        Assert.Throws<InvalidDataException>(() => Build(world, budget, Actors(1))); // The world's own copy is admitted apart.
         Assert.True(budget.Exhausted);
         Assert.True(underlying(cold).HasValue);
         Assert.Equal(2, world.Scene.Nodes.Count);

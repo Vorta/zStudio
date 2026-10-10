@@ -198,7 +198,7 @@ public static partial class MissionSceneLoader
             GameScene scene = new(); scene.Models.AddRange(original.Models); scene.Materials.AddRange(original.Materials); scene.Textures.AddRange(original.Textures);
             foreach (var n in original.Nodes)
             {
-                budget.Clone(n);
+                budget.Original(n);
                 scene.Nodes.Add(n with { Parents = [..n.Parents], Children = [..n.Children], Data = (JsonObject)n.Data.DeepClone(), Metadata = (JsonObject)n.Metadata.DeepClone() });
             }
             budget.Take(original.Nodes.Count); budget.Storage(256L * original.Nodes.Count); // Provenance and name-index entries.

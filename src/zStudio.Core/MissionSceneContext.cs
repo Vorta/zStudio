@@ -245,7 +245,7 @@ public static partial class MissionSceneLoader
         GameScene scene = new(); scene.Models.AddRange(original.Models); scene.Materials.AddRange(original.Materials); scene.Textures.AddRange(original.Textures);
         foreach (var node in original.Nodes)
         {
-            budget.Clone(node);
+            budget.Original(node);
             scene.Nodes.Add(node with { Parents = [.. node.Parents], Children = [.. node.Children], Data = (JsonObject)node.Data.DeepClone(), Metadata = (JsonObject)node.Metadata.DeepClone() });
         }
         List<int> sources = original.Nodes.Select(n => n.Index).ToList(); List<MissionActor> actors = []; List<string> notes = initialDiagnostics?.ToList() ?? [];
@@ -285,19 +285,22 @@ public static partial class MissionSceneLoader
                     ValidatePose(pose); // Refuse before a clone enters the live index or an existing root changes.
                     // CreateFromNamesAtPose (0x421ab0) looks both names up among all live nodes, the most recently created first
                     // (FindByTypeAndName, docs/engine-evidence.md), and uses what it finds as the vehicle whatever its class.
-                    int root = placement.Live(name);
+                    int root = placement.Live(name); bool copied = false;
                     if (root < 0)
                     {
                         int template = placement.Live(templateName);
                         if (template < 0) throw new InvalidDataException($"Missing template {JsonData.ShownText(templateName, 192)}.");
                         if (scene.Nodes[template].Class != "object3d") throw new InvalidDataException($"The game copies the {JsonData.ShownText(scene.Nodes[template].Class, 64)} node {JsonData.ShownText(templateName, 192)} (#{template}) as this vehicle, which the preview does not show.");
-                        root = CloneTree(template, name);
+                        root = CloneTree(template, name); copied = true;
                     }
                     else if (scene.Nodes[root].Class != "object3d") throw new InvalidDataException($"The game places the {JsonData.ShownText(scene.Nodes[root].Class, 64)} node #{root} of this name as the vehicle, which the preview does not show.");
                     SetPose(scene, root, pose);
                     scene.Nodes[root].Metadata["flags"] = scene.Nodes[root].Metadata.UInt("flags") | 4;
                     budget.Take(scene.Nodes[root].Parents.Length);
-                    if (!scene.Nodes[root].Parents.Contains(worldRoot)) scene.Nodes[root] = scene.Nodes[root] with { Parents = [worldRoot] };
+                    // CloneType6NodeFromTemplateAndRename (0x421a40) adds its copy to the world; a template that the copy
+                    // returned itself (CopyNodeDispatch, flag 0x04000000) keeps its own parents beside it.
+                    if (!scene.Nodes[root].Parents.Contains(worldRoot))
+                        scene.Nodes[root] = scene.Nodes[root] with { Parents = copied ? [.. scene.Nodes[root].Parents, worldRoot] : [worldRoot] };
                     placement.Attach(root, aiv: true); placement.Actor(root);
                     if (actorLabel == null) { budget.TextCopy(selection.AivResource.Length + 32L); actorLabel = $"{selection.AivResource} · {selection.Difficulty}"; }
                     positioned.Add(root); actors.Add(new(root, sources[root], name, actorLabel, CoordinateSource: CoordinateSource(recordIndex),
@@ -379,6 +382,7 @@ public static partial class MissionSceneLoader
             // by this copy are out of bounds; original source ordinals continue through the sources map.
             int before = scene.Nodes.Count;
             Dictionary<int, int> map = []; HashSet<int> path = []; Dictionary<int, List<int>> parents = [];
+            List<int> made = []; // The source of each node this copy made, in creation order.
             int Copy(int index, int depth)
             {
                 budget.Take();
@@ -388,10 +392,12 @@ public static partial class MissionSceneLoader
                     if (map.TryGetValue(index, out int existing)) return existing;
                     if (index < 0 || index >= before || scene.Nodes.Count >= 200000) throw new InvalidDataException("Invalid or excessive mission hierarchy.");
                     var source = scene.Nodes[index];
-                    // CopyNodeDispatch never copies these classes (docs/engine-evidence.md, Runtime capacity).
-                    if (source.Class is "light" or "sound" or "animate" or "sequence" or "switch" or "world") return -1;
+                    // CopyNodeDispatch (0x452400) returns a node flagged 0x04000000 itself, uncopied, and copies only
+                    // Object3D, LOD and camera nodes; every other class (light, sound, world …) yields no copy.
+                    if ((source.Metadata.UInt("flags") & 0x04000000) != 0) return index;
+                    if (source.Class is not ("object3d" or "lod" or "camera")) return -1;
                     var explicitChildren = placement.Children(source); budget.Clone(source, explicitChildren.Count);
-                    int id = scene.Nodes.Count; map[index] = id; sources.Add(sources[index]); parents.Add(id, []);
+                    int id = scene.Nodes.Count; map[index] = id; made.Add(index); sources.Add(sources[index]); parents.Add(id, []);
                     scene.Nodes.Add(source with { Index = id, Name = index == template ? name : source.Name, Parents = [], Children = [], Data = (JsonObject)source.Data.DeepClone(), Metadata = (JsonObject)source.Metadata.DeepClone() });
                     List<int> children = [];
                     // Clone admission already charged all raw children and partition JSON, before this iterator's
@@ -399,31 +405,57 @@ public static partial class MissionSceneLoader
                     foreach (int originalChild in SceneBuilder.Children(source, explicitChildren))
                     {
                         budget.Take(); int child = Copy(originalChild, depth + 1);
-                        if (child < 0)
-                        {
-                            // CopyObject3DNode skips null dispatch results; Camera/LOD abort their copy.
-                            // Roll back our unpublished copy instead of emulating the engine's leaked nodes.
-                            if (source.Class == "object3d") continue;
-                            throw new InvalidDataException($"The game cannot copy a {source.Class} template with a noncopyable child.");
-                        }
-                        children.Add(child);
+                        if (child >= 0) { children.Add(child); continue; }
+                        // CopyObject3DNode (0x452100) skips a child that yields no copy. CopyLodNode (0x452250) and
+                        // CopyCameraNode (0x451f70) yield none themselves, which their parent skips in turn (or fails
+                        // likewise). The game leaves the nodes they made so far unattached; the preview removes them.
+                        if (source.Class == "object3d") continue;
+                        Undo(id); return -1;
                     }
                     budget.Take(children.Count);
                     scene.Nodes[id] = scene.Nodes[id] with { Children = children.ToArray() };
                     // Add only after all descendants, matching the original reciprocal-parent occurrence order.
-                    foreach (int child in children) { budget.Take(); parents[child].Add(id); }
+                    foreach (int child in children)
+                    {
+                        budget.Take();
+                        if (!parents.TryGetValue(child, out var list)) parents.Add(child, list = []); // An uncopied node.
+                        list.Add(id);
+                    }
                     return id;
                 }
                 finally { path.Remove(index); }
             }
+            void Undo(int start)
+            {
+                for (int id = start; id < scene.Nodes.Count; id++)
+                {
+                    budget.Take(1L + scene.Nodes[id].Children.Length);
+                    map.Remove(made[id - before]); parents.Remove(id);
+                    foreach (int child in scene.Nodes[id].Children)
+                        if (child < start && parents.TryGetValue(child, out var list)) list.RemoveAll(parent => parent >= start);
+                }
+                made.RemoveRange(start - before, made.Count - (start - before));
+                scene.Nodes.RemoveRange(start, scene.Nodes.Count - start); sources.RemoveRange(start, sources.Count - start);
+            }
             try
             {
                 int root = Copy(template, 0);
-                foreach (var (id, list) in parents) { budget.Take(list.Count); scene.Nodes[id] = scene.Nodes[id] with { Parents = list.ToArray() }; }
+                if (root < 0) throw new InvalidDataException("The game makes no copy of this template.");
+                foreach (var (id, list) in parents)
+                {
+                    budget.Take(list.Count + (id < before ? scene.Nodes[id].Parents.Length : 0L));
+                    scene.Nodes[id] = scene.Nodes[id] with { Parents = id < before ? [.. scene.Nodes[id].Parents, .. list] : list.ToArray() };
+                }
+                if (root < before)
+                {
+                    // The template itself, which CloneType6NodeFromTemplateAndRename and CreateObjectInstance rename.
+                    string old = scene.Nodes[root].Name;
+                    scene.Nodes[root] = scene.Nodes[root] with { Name = name };
+                    placement.Renamed(root, old);
+                }
                 placement.Cloned(before); return root;
             }
             catch { scene.Nodes.RemoveRange(before, scene.Nodes.Count - before); sources.RemoveRange(before, sources.Count - before); throw; }
-
         }
     }
     public static string VehicleTemplateName(string name)

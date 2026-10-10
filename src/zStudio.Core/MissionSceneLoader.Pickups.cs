@@ -68,7 +68,10 @@ public static partial class MissionSceneLoader
                 do { budget.Name(type.TemplateName); instanceName = type.TemplateName + (suffixes[type.Index]++).ToString("D2", CultureInfo.InvariantCulture); } while (!placement.UseName(instanceName));
                 int root = cloneTree(template.Index, instanceName);
                 SetPose(scene, root, matrix); HideBvol(root);
-                scene.Nodes[root] = scene.Nodes[root] with { Parents = [worldRoot] };
+                // CreateSpawnDefAndLink (0x41d920) adds the copy to the scene; a template that the copy returned itself
+                // (CopyNodeDispatch, flag 0x04000000) keeps its own parents beside it.
+                budget.Take(scene.Nodes[root].Parents.Length);
+                scene.Nodes[root] = scene.Nodes[root] with { Parents = [.. scene.Nodes[root].Parents, worldRoot] };
                 placement.Attach(root, aiv: false);
                 normalizedSource ??= new(budget.SourceIdentity(resource.ArchivePath), resource.AssetIndex, budget.SourceIdentity(resource.ResourceName));
                 budget.TextCopy(layout.PickupResource.Length + name.Length + 64L);

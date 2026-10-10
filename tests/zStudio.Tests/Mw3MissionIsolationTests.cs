@@ -26,7 +26,7 @@ public sealed class Mw3MissionIsolationTests
         MissionPlacementBudget budget = new(Token, maximumCloneBytes: allowance);
         var error = await Assert.ThrowsAsync<InvalidDataException>(() => MissionSceneLoader.LoadMw3WithBudgetAsync(
             fixture.World, fixture.Resolver, null, false, budget, Token));
-        Assert.Contains("work or metadata budget", error.Message, StringComparison.Ordinal);
+        Assert.Contains("placements copy more than 98,304 bytes", error.Message, StringComparison.Ordinal);
         Assert.True(budget.Exhausted); Assert.InRange(budget.CloneBytes, 1, allowance);
         Assert.Equal(2, original.Nodes.Count); Assert.Equal(parents, original.Nodes[1].Parents);
         Assert.Equal(metadata, original.Nodes[1].Metadata.ToJsonString()); Assert.Equal(data, original.Nodes[1].Data.ToJsonString());

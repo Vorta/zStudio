@@ -4,15 +4,31 @@ using System.Text.Json.Nodes;
 
 namespace Recoil.Zbd.Core;
 
-/// <summary>One mission construction's work, cloned metadata and identity/display copies, admitted before allocation.</summary>
+/// <summary>
+/// One mission construction's work and retained copies, admitted before allocation. The allowances bound what
+/// placements add (vehicle and pickup copies, their identities and labels, startup lists), which repeated records
+/// can multiply. The copy of the world's own nodes is measured apart (<see cref="Original"/>): it is the size of the
+/// source scene, which the reader (at most 65,536 nodes) and a preview load's resource allowance have already
+/// admitted, so every accepted world builds its starting scene.
+/// </summary>
 internal sealed class MissionPlacementBudget
 {
     internal const long MaximumWork = 64L * 1024 * 1024, MaximumCloneBytes = 256L * 1024 * 1024;
+    // What a copy retains (JsonNode.DeepClone, .NET 10 x64, measured on reader-built nodes): a scalar value 47 bytes
+    // (a string keeps the source's characters), an object about 265 bytes with one property and 33-39 bytes per further
+    // one, an array about 125 bytes with one element and 17 per further one. On the 1998 and 1999 m1, m2 and m6 starting
+    // scenes, the world copy and the placements retain about 14.3 KB per node and are charged 1.45 times what they retain.
+    private const long ScalarBytes = 64, ObjectBytes = 320, PropertyBytes = 48, ArrayBytes = 160, ElementBytes = 24;
     private readonly CancellationToken token;
     private readonly long maximumWork, maximumCloneBytes;
     private readonly Action? reserved;
+    private bool original;
+    private string? refusal;
     internal long Work { get; private set; }
     internal long CloneBytes { get; private set; } // Includes retained source identities and formatted placement labels.
+    /// <summary>The copy of the world's own nodes, outside the allowances.</summary>
+    internal long OriginalWork { get; private set; }
+    internal long OriginalBytes { get; private set; }
     internal bool Exhausted { get; private set; }
     internal int RootPublications { get; set; }
 
@@ -26,8 +42,17 @@ internal sealed class MissionPlacementBudget
     internal void Take(long count = 1)
     {
         token.ThrowIfCancellationRequested();
-        if (Exhausted || count < 0 || count > maximumWork - Work) throw Refuse();
-        Work += count; reserved?.Invoke(); token.ThrowIfCancellationRequested();
+        if (Exhausted) throw new InvalidDataException(refusal);
+        if (count < 0 || !original && count > maximumWork - Work)
+            throw Refuse($"Mission placements need more than {maximumWork:N0} units of construction work. Reduce repeated vehicle and pickup placements or simplify their templates.");
+        if (original) OriginalWork += count; else Work += count;
+        reserved?.Invoke(); token.ThrowIfCancellationRequested();
+    }
+    /// <summary>Admit the preview's copy of one of the world's own nodes, measured apart from the allowances.</summary>
+    internal void Original(GameNode node)
+    {
+        original = true;
+        try { Clone(node); } finally { original = false; }
     }
     internal void Name(string name) => Take(1L + name.Length);
     internal void TextCopy(long characters) { Take(characters); Retain(32L + 2L * characters); }
@@ -41,19 +66,21 @@ internal sealed class MissionPlacementBudget
         long maximumCharacters = value.Length + (fullPath && !Path.IsPathFullyQualified(value) ? 32768L : 8L);
         TextCopy(maximumCharacters); if (fullPath) TextCopy(maximumCharacters);
         string normalized = fullPath ? Path.GetFullPath(value) : value;
-        if (normalized.Length > maximumCharacters) throw Refuse();
+        if (normalized.Length > maximumCharacters) throw Refuse("A mission resource path expands beyond the length admitted for it.");
         return normalized.ToUpperInvariant();
     }
     private void Retain(long count)
     {
         Take();
-        if (count < 0 || count > maximumCloneBytes - CloneBytes) throw Refuse();
-        CloneBytes += count;
+        if (count < 0 || !original && count > maximumCloneBytes - CloneBytes)
+            throw Refuse($"Mission placements copy more than {Size(maximumCloneBytes)} of node data and labels. Reduce repeated vehicle and pickup placements or simplify their templates.");
+        if (original) OriginalBytes += count; else CloneBytes += count;
     }
-    private InvalidDataException Refuse()
+    private static string Size(long bytes) => bytes >= 1024 * 1024 && bytes % (1024 * 1024) == 0 ? $"{bytes / (1024 * 1024):N0} MiB" : $"{bytes:N0} bytes";
+    private InvalidDataException Refuse(string cause)
     {
-        Exhausted = true;
-        return new("Mission placement exceeds its construction work or metadata budget. Reduce repeated placements or simplify their templates.");
+        Exhausted = true; refusal ??= cause;
+        return new(refusal);
     }
     internal void Clone(GameNode node, int? childCount = null)
     {
@@ -65,31 +92,33 @@ internal sealed class MissionPlacementBudget
     private void Json(JsonNode? node, int depth)
     {
         Take();
-        if (depth > 256) throw Refuse();
-        Retain(128);
-        if (node == null) return;
+        if (depth > 256) throw Refuse("Mission node data nests deeper than 256 levels.");
+        if (node == null) return; // Only its property or element slot.
         // Count cold containers through their raw, already-owned element; enumeration of JsonObject/JsonArray
         // would first materialize every immediate child. Never serialize a graph just to estimate its clone.
         if (node is JsonObject or JsonArray)
         {
-            if (JsonData.UnderlyingElement == null) throw Refuse();
-            if (JsonData.UnderlyingElement(node) is { } raw) { Raw(raw, depth); return; }
+            if (JsonData.UnderlyingElement == null) throw Refuse(Unsupported);
+            if (JsonData.UnderlyingElement(node) is { } raw) { Retain(node is JsonObject ? ObjectBytes : ArrayBytes); Raw(raw, depth); return; }
         }
         switch (node)
         {
             case JsonObject obj:
-                foreach (var (key, value) in obj) { Name(key); Retain(2L * key.Length + 64); Json(value, depth + 1); }
+                Retain(ObjectBytes);
+                foreach (var (key, value) in obj) { Name(key); Retain(PropertyBytes); Json(value, depth + 1); }
                 break;
             case JsonArray array:
-                foreach (var value in array) Json(value, depth + 1);
+                Retain(ArrayBytes);
+                foreach (var value in array) { Retain(ElementBytes); Json(value, depth + 1); }
                 break;
-            case JsonValue value when value.TryGetValue(out JsonElement raw): Raw(raw, depth); break;
+            case JsonValue value when value.TryGetValue(out JsonElement raw): Retain(ScalarBytes); Raw(raw, depth); break;
             case JsonValue value when value.TryGetValue(out string? text):
-                Take(text?.Length ?? 0); Retain(2L * (text?.Length ?? 0)); break;
-            case JsonValue value when KnownScalar(value): break;
-            default: throw Refuse(); // Customized JsonValue serializers can retain arbitrary object graphs.
+                Take(text?.Length ?? 0); Retain(ScalarBytes + 2L * (text?.Length ?? 0)); break;
+            case JsonValue value when KnownScalar(value): Retain(ScalarBytes); break;
+            default: throw Refuse(Unsupported); // Customized JsonValue serializers can retain arbitrary object graphs.
         }
     }
+    private const string Unsupported = "Mission node data holds a value the preview cannot copy.";
     private void Raw(JsonElement element, int depth)
     {
         ReadOnlySpan<byte> bytes = JsonMarshal.GetRawUtf8Value(element);
@@ -99,7 +128,8 @@ internal sealed class MissionPlacementBudget
         while (reader.Read())
         {
             Take();
-            if (depth + reader.CurrentDepth > 256) throw Refuse();
+            if (depth + reader.CurrentDepth > 256) throw Refuse("Mission node data nests deeper than 256 levels.");
+            // Reading a cold copy materializes its values, so each token pays at least what a built value retains.
             Retain(128L + 2L * reader.ValueSpan.Length);
         }
     }
@@ -143,6 +173,18 @@ internal sealed class MissionPlacementState(GameScene scene, int originalCount, 
     }
     internal void Cloned(int start)
     { for (int i = start; i < scene.Nodes.Count; i++) Index(scene.Nodes[i]); }
+    /// <summary>A placement renamed an existing node: lookups of its old name find the next highest slot of that name.</summary>
+    internal void Renamed(int index, string old)
+    {
+        var node = scene.Nodes[index];
+        budget.Name(node.Name); usedNames.Add(node.Name);
+        if (node.Class != "none" && (!live.TryGetValue(node.Name, out int prior) || prior < index)) live[node.Name] = index;
+        budget.Name(old);
+        if (live.GetValueOrDefault(old, -1) != index) return;
+        budget.Take(scene.Nodes.Count); live.Remove(old);
+        for (int i = scene.Nodes.Count - 1; i >= 0; i--)
+            if (scene.Nodes[i].Class != "none" && scene.Nodes[i].Name == old) { live[old] = i; break; }
+    }
     internal int Live(string name) { budget.Name(name); return live.GetValueOrDefault(name, -1); }
     internal (int Root, int Count) Template(string name) { budget.Name(name); return templates.GetValueOrDefault(name, (-1, 0)); }
     internal bool UseName(string name) { budget.Name(name); return usedNames.Add(name); }
