@@ -1224,7 +1224,9 @@ public static class SourceObjectEdits
             }
             Dictionary<string, string> variables = new(StringComparer.Ordinal);
             ScriptConditions conditions = new();
-            List<string> directories = [];
+            // The build's search-path rule. Every named folder counts as present: a missing one holds no file, so the
+            // loads resolve as the build resolves them.
+            DirectorySearchList directories = new();
             // Each load: the file as LoadGameGen names it and the model directories then, resolved only when needed.
             List<(string Name, IReadOnlyList<string> Directories)> loads = [];
             IReadOnlyList<string> directoryView = [];
@@ -1271,15 +1273,15 @@ public static class SourceObjectEdits
                     switch (command)
                     {
                         case "SetModelDirectory":
-                            WorldDirectoryPaths.Add(directories, A(0), traceBudget.Work);
+                            directories.Add(A(0), traceBudget.Work, null);
                             break;
                         case "LoadGameGen":
                             // Loads keep the search order at their own instruction, but unchanged orders share one
                             // immutable view. Charge changed histories across all missions before copying them.
-                            if (!WorldDirectoryPaths.SameOrder(directories, directoryView, traceBudget.Work))
+                            if (!WorldDirectoryPaths.SameOrder(directories.Folders, directoryView, traceBudget.Work))
                             {
-                                traceBudget.ReserveSnapshot(directories.Count);
-                                directoryView = directories.ToArray();
+                                traceBudget.ReserveSnapshot(directories.Folders.Count);
+                                directoryView = directories.Folders.ToArray();
                             }
                             loads.Add((A(0), directoryView)); roots[A(1)] = loads.Count - 1; at = (false, loads.Count - 1, 0, true); break;
                         case "FindNode":
