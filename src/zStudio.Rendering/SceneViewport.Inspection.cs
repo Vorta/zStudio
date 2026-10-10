@@ -196,7 +196,7 @@ public sealed partial class SceneViewport
     }
     private void ClearInspection()
     {
-        inspectionMeshes.Clear(); inspectionPolygons.Clear(); tankPositions.Clear(); ++inspectionSerial;
+        inspectionMeshes.Clear(); inspectionPolygons.Clear(); ClearZonePainting(); tankPositions.Clear(); ++inspectionSerial;
         inspectionStamp = null; InspectionSourcePath = null;
         HoverInspection = SelectedInspection = null; inspectionPointer = null; InspectionChanged?.Invoke();
     }

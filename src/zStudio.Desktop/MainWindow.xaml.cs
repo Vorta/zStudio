@@ -782,15 +782,21 @@ public partial class MainWindow : Window
     {
         flyRequest++; flyCamera?.End();
         scene?.CancelNavigation(); animation?.Viewport.CancelNavigation(); motion?.Viewport.CancelNavigation();
-        if (resolvingClose) { e.Cancel = true; return; }
-        if (automationCloseRequested && (ViewModel.Documents.Any(d => d.IsDirty) || HasInspectionDraft || animation?.HasAutomationDrafts == true || propertiesWindow?.HasPendingDrafts == true || scene?.IsPickupDragging == true))
+        if (resolvingClose)
+        {
+            e.Cancel = true;
+            // Closing again while the exit waits for a rebuild cancels it (its edit is taken back); the exit then continues.
+            if (sourceWorkspaceBusy) { CancelSourceBuilds(); ViewModel.Status = "Cancelling the rebuild so the application can close…"; }
+            return;
+        }
+        if (automationCloseRequested && (ViewModel.Documents.Any(d => d.IsDirty) || HasZoneDraft || HasInspectionDraft || animation?.HasAutomationDrafts == true || propertiesWindow?.HasPendingDrafts == true || scene?.IsPickupDragging == true))
         {
             automationCloseRequested = false; e.Cancel = true;
             ViewModel.Status = "Close canceled: the workspace has new edits or unfinished input. Resolve them before closing.";
             return;
         }
         System.Windows.Input.Keyboard.ClearFocus();
-        if (!allowClose && (ViewModel.Documents.Any(d => d.IsDirty) || HasInspectionDraft || animation?.HasPendingDrafts == true || propertiesWindow?.HasPendingDrafts == true))
+        if (!allowClose && (ViewModel.Documents.Any(d => d.IsDirty) || HasZoneDraft || HasInspectionDraft || animation?.HasPendingDrafts == true || propertiesWindow?.HasPendingDrafts == true))
         {
             e.Cancel = true; resolvingClose = true;
             try

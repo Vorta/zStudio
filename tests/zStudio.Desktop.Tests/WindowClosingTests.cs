@@ -70,12 +70,16 @@ public sealed class WindowClosingTests
                     await SourceRecoveryMcpChecks.Run();
                     await SourceProjectReadMcpChecks.Run();
                     await SourceSaveMcpChecks.Run();
+                    await SourceTakeBackMcpChecks.Run();
                     await SourcePreviewChangeMcpChecks.Run();
                     Volatile.Write(ref phase, "terrain, map zones and world editing");
+                    await SourceZoneMcpChecks.Run();
                     await WorldCompareMcpChecks.Run();
                     await WorldCompareBoundsChecks.Run();
                     await WorldCompareBudgetChecks.Run();
                     await DemoWorldMcpChecks.Run();
+                    await LookupMcpChecks.Run();
+                    await SourceObjectPlanMcpChecks.Run();
                     Volatile.Write(ref phase, "navigation, lifecycle and content editing");
                     await ResponsiveNavigatorChecks.Run(app);
                     await WorldHighlightMcpChecks.Run();
@@ -101,6 +105,7 @@ public sealed class WindowClosingTests
                     await DraftResolutionMcpChecks.Run();
                     await AnimationMcpCancellationChecks.Run();
                     await ReloadChecks.Run();
+                    await DocumentPreparationChecks.Run();
                     Volatile.Write(ref phase, "compiled asset inventory");
                     await CompiledInventoryChecks.Run();
                 }

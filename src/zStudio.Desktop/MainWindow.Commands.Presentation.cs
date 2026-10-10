@@ -69,7 +69,7 @@ public partial class MainWindow
         Register(r,"properties_open","Open the reusable Properties window for an explicit edited asset or animation sequence/event; current pending drafts must be resolved first. Model records remain pinned by identity through replacement and undo/redo. Concurrent edits reject stale loads.",true,
             [..AssetParameters,P("sequence","string","Animation sequence GUID."),P("event","string","Animation event GUID.")],async (a,token)=>
         {
-            if(propertiesWindow?.HasPendingDrafts==true) throw new StudioCommandException("pending_drafts","Resolve Properties drafts before retargeting.");
+            RequireNoPropertiesDrafts("Resolve Properties drafts before retargeting.");
             var doc=TargetDocument(a); var asset=TargetAsset(doc,a);
             PropertiesWindow? opened;
             if(asset.Kind==Core.AssetKind.Animation)
@@ -88,19 +88,24 @@ public partial class MainWindow
         });
         Register(r,"properties_close","Close the Properties window after drafts have been explicitly resolved.",true,[],_=>
         {
-            if(propertiesWindow?.HasPendingDrafts==true) throw new StudioCommandException("pending_drafts","Resolve Properties drafts first.");
-            ++propertyRequest; propertiesWindow?.CloseResolved(); return Result(new { closed=true });
+            RequireNoPropertiesDrafts("Resolve Properties drafts first.");
+            ++propertyRequest; propertiesWindow?.Dismiss();
+            if(propertiesWindow != null) throw new StudioCommandException("pending_drafts","Properties stayed open: resolve its drafts first.");
+            return Result(new { closed=true });
         });
         Register(r,"properties_state","Read the pinned Properties window identity, content and current editable fields.",false,[],_ =>
-            Result(new { open=propertiesWindow != null, document=propertiesWindow?.Document?.SessionId, content=propertiesWindow?.CurrentJson, fields=((FieldEditor?)propertiesWindow?.ScriptFields ?? (FieldEditor?)propertiesWindow?.AnimationFields ?? (FieldEditor?)propertiesWindow?.PickupFields ?? propertiesWindow?.ResourceFields)?.DescribeAutomationFields() }));
+            Result(new { open=propertiesWindow != null, document=propertiesWindow?.Document?.SessionId, content=propertiesWindow?.CurrentJson, fields=((FieldEditor?)propertiesWindow?.ScriptFields ?? (FieldEditor?)propertiesWindow?.AnimationFields ?? (FieldEditor?)propertiesWindow?.PickupFields ?? (FieldEditor?)propertiesWindow?.ResourceFields ?? propertiesWindow?.SourceFields)?.DescribeAutomationFields() }));
         Register(r,"scene_properties","Inspect a scene node or open its Properties window, including editable mission pickups. Metadata is bounded to 512 JSON nodes/8192 text characters with inspection_truncated. MW3 actor labels use 128-character prefixes; source data and JSON exports remain intact.",true,
-            [PreviewParameter,P("node","integer","Scene node index.",true),P("open","boolean","Open the pinned Properties window.")],a=>
+            [PreviewParameter,P("node","integer","Scene node index.",true),P("open","boolean","Open the pinned Properties window.")],async (a, token)=>
         {
             var viewport=TargetViewport(a); int node=Int(a,"node"); var data=viewport.PreviewScene;
             if(data == null || !viewport.CanInspectNode(node)) throw new StudioCommandException("stale_record","Scene node unavailable.");
             if(Flag(a,"open"))
             {
-                RequireNoDrafts(); ++propertyRequest; var w=GetPropertiesWindow(); var actor=viewport.PickupAt(node);
+                RequireNoDrafts(); ++propertyRequest;
+                if(shownDocument is { SourceWorld: not null } sourceDoc && viewport.PickupAt(node) == null && SourceObjectNode(node) is int sourceNode && sourceDoc.SourceBuild?.Provenance.ContainsKey(sourceNode) == true)
+                { if (!await ShowSourceObjectPropertiesAsync(sourceDoc, sourceNode, token)) throw new StudioCommandException("context_changed", "Properties was superseded while loading."); return Result(new { data.Nodes[node].Index, data.Nodes[node].Name, Metadata = Core.JsonData.PreviewObject(data.Nodes[node].Metadata), source = DescribeSourceObject(sourceDoc, sourceNode).Json() }); }
+                var w=GetPropertiesWindow(); var actor=viewport.PickupAt(node);
                 bool opened=actor?.Pickup is { } pickup && shownDocument!.PickupEdits?.Find(pickup.Source) != null
                     ? w.SetPickup(shownDocument!,pickup.Source,data.Nodes[node].Name,data.Nodes[node].Metadata,SourcePickupMove(shownDocument!))
                     : w.SetReadOnly(shownDocument!,data.Nodes[node].Name,Core.JsonData.PreviewObject(data.Nodes[node].Metadata));

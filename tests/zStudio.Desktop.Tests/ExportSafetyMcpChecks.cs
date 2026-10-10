@@ -249,6 +249,38 @@ internal static class ExportSafetyMcpChecks
         Assert.Equal("original", selected["profile"]!.GetValue<string>());
         File.Delete(fixture.Path("gamegen/build-profiles/broken.json"));
         await job("source_profile", new(), "completed");
+        var m1 = Document((await job("source_world_open", new() { ["mission"] = "m1" }, "completed"))["document"]!);
+        var m2 = Document((await job("source_world_open", new() { ["mission"] = "m2" }, "completed"))["document"]!);
+        Assert.DoesNotContain(main.ViewModel.Problems, p => Changed(p, "m1") || Changed(p, "m2"));
+        // Copying the crate in m1 copies its lid, which FindNode lid then finds; m2 reads the same database and is now stale.
+        m1 = await Duplicate(m1, "crate", "crate2");
+        Assert.Contains(main.ViewModel.Problems, p => Changed(p, "m1") && p.Message.Contains("crate2/lid", StringComparison.Ordinal));
+        Assert.True(m2.SourceInputsChanged());
+
+        // Saved while another program holds the shown build's world file: the baseline is the world the document holds.
+        using (new FileStream(m1.SourceBuild!.WorldPath, FileMode.Open, FileAccess.Read, FileShare.None))
+            await job("save_document", new() { ["document"] = Id(m1), ["revision"] = m1.Revision }, "completed");
+        Assert.DoesNotContain(main.ViewModel.Problems, p => Changed(p, "m1") || Changed(p, "m2"));
+
+        // Another edit of the database keeps the project unsaved; m2 reloaded with it finds the saved copy's lid, which is no
+        // change since the save (m2 showed a build from before it, so nothing is compared until a build reads saved sources alone).
+        int ground = m1.PreviewDocument.Scene!.Nodes.First(n => n.Name == "ground" && m1.SourceBuild!.Provenance.ContainsKey(n.Index)).Index;
+        m1 = Document((await job("source_world_object_edit", new() { ["document"] = Id(m1), ["revision"] = m1.Revision, ["node"] = ground, ["position"] = new Dictionary<string, object?> { ["x"] = 5, ["y"] = 0, ["z"] = -5 } }, "completed"))["document"]!);
+        m2 = main.ViewModel.Documents.Single(d => d.SourceWorld?.Mission == "m2");
+        m2 = Document((await job("reload_document", new() { ["document"] = Id(m2), ["revision"] = m2.Revision }, "completed"))!);
+        Assert.DoesNotContain(main.ViewModel.Problems, p => Changed(p, "m2"));
+        // m1's next copy, of crate2, is compared with what was saved: its lid is found now, not crate2's.
+        m1 = await Duplicate(m1, "crate2", "crate3");
+        Assert.Contains(main.ViewModel.Problems, p => Changed(p, "m1") && p.Message.Contains("crate3/lid", StringComparison.Ordinal));
+
+        async Task<DocumentModel> Duplicate(DocumentModel doc, string source, string name)
+        {
+            int crate = doc.PreviewDocument.Scene!.Nodes.First(n => n.Name == source && doc.SourceBuild!.Provenance.ContainsKey(n.Index)).Index;
+            return Document((await job("source_world_object_edit", new() { ["document"] = Id(doc), ["revision"] = doc.Revision, ["node"] = crate, ["action"] = "duplicate", ["name"] = name }, "completed"))["document"]!);
+        }
+        bool Changed(StudioProblem p, string mission) => p.File == Path.Combine(fixture.Project, "gamegen", mission + ".gs")
+            && p.Message.Contains($"FindNode lid in gamegen/support/tex_fx{mission}.gw finds", StringComparison.Ordinal) && p.Message.Contains("when the world was opened or last saved", StringComparison.Ordinal);
+        DocumentModel Document(JsonNode state) => main.ViewModel.Documents.Single(d => d.SessionId.ToString() == state["id"]!.GetValue<string>());
     }
 
     private static string Id(DocumentModel d) => d.SessionId.ToString();

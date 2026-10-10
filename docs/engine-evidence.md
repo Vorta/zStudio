@@ -13,6 +13,8 @@ Addresses are retail. The zone probes are documented in the plan, under [How the
 
 ## Common rules
 
+The map zone source split is an editor/build representation, not a newly discovered retail format. The existing probe and cache evidence still governs export: complete object zone words, the independent altitude gate, ordered polygon zone bytes, inherited placement zones and distinct original model readings must survive rebuilding. `data/mN/meta/zones.json` associates those assignments with neutral geometry; logical asset paths and original reference spellings retain the cache distinctions described below. A shared physical glTF does not imply that every runtime reading shares one mutable compiled model.
+
 - **Errors are silent.** `zError::ReportOld` (0x404e80) is a single `ret` [BN]. Messages such as "GameZ node buffer is full" or "Database intersections array is full" never appear or reach a log. A failure shows only as its effect: a default texture, a missing object, a crash.
 - **Resource keys.** `zRdrGetNode` / `zRdrFindNode` (0x48cf70, 0x48cec0) [B] search depth-first through nested arrays. They return the item after the first string equal to the key anywhere, including strings inside values.
   - Of duplicate keys, the first wins.
@@ -48,7 +50,7 @@ Addresses are retail. The zone probes are documented in the plan, under [How the
   - Binding again takes the new node's name as the root name and looks every tracked node and node reference up again this way; the names themselves stay. A reference by the old root's name therefore finds the new node only when it has that name. 1999 and 1998 m5 start `under_water_exp` (root `watexp.flt`) at pipes' `destroyed` nodes, so its `watexp.flt` references find the world's `watexp.flt`, not the pipe's node [D].
   - The game binds again: a child animation started at a node (`ActivateRuntime` 0x45d930 [B]), even at the node it is bound to; a stop at a node (`StopAndCleanup` 0x45d570 [B], which turrets and vehicles call through `NodeActionCallback` 0x45d6b0 [B]) only at another node; and a root flagged 0x8000, which `LoadAndInstantiate` 0x45fb30 copies and binds to the copy (`EnsureCopiedRootTree` 0x45e6d0 [B]). No shipped entry has the flag [D].
   - What the whole world holds depends on when the lookup is made. As the mission loads (`LoadZbd`, the copies, the turrets' stops) it is the world file's nodes and the animations' own light, sound and copied nodes; AI vehicles and pickups are placed afterwards (`InitMissionGameplaySystems` 0x417a00: animations, turrets, `Player::InitMissionRuntimeFromWorldAndCamera`, then the pickups), so only lookups made while the mission runs find their copies. The preview resolves names as the game does at each of these points; the animations' own light and sound nodes are not scene nodes there.
-  - Vehicle code looks parts up differently.
+  - Vehicle code looks parts up differently (see [Vehicles](#vehicles)).
 - **The allocator** (`gwNodeNew` 0x4478c0 [BN], `FreeNodeToFreeList` 0x447a70 [B], `DestroyNodeRecursive` 0x451a60 [B]):
   - It is one free list for every node class, last in, first out. A freed slot keeps its old name.
   - `DeleteTree` frees post-order. Models (0x482080, 0x4820f0) and materials (0x480dc0) are also last in, first out.
@@ -149,6 +151,111 @@ Addresses are retail. The zone probes are documented in the plan, under [How the
   - Keep overhang into neighbouring cells under 1 unit.
   - Allow one CanModify layer at any point.
   - The plan's crater test means: active top-level ClipTo nodes with their own model, in the impact cell or the overflow list, tested in model space.
+
+## Runtime capacity
+
+- **Pools are fixed arrays with free lists.** Nothing grows during play.
+  - `initmN.gw` sizes only the first allocation: 16000/6000/5000 in every shipped script; the defaults are 8250 / 1750 / 2500 (0x451900, 0x475e70, 0x480ae0 [B]).
+  - The world file's own pool headers and free chains then replace them (0x455350, 0x481fa0, 0x4808c0 [B]).
+  - So the usable capacity is the exported file's free chain. Every shipped world stores 16000 nodes, 6000 models and 5000 materials [D].
+  - The engine has no capacity maximum except 32767 materials. zStudio's 65,536-node clamp is its own choice.
+- **What copies cost** (`CopyNodeDispatch` 0x452400, `CopyNodeDisplayInstance` 0x451b20 [B]):
+  - **Single-player vehicle clones:** nodes only, sharing the model.
+  - **Pickups:** nodes, plus a model per node that has one.
+  - **Effect instances and network vehicles:** nodes, models and materials.
+  - **Light, sound, animate, sequence, switch and world nodes:** never copied. `CopyObject3DNode` (0x452100 [B], `zClass/cls_util.c`) skips a child when `CopyNodeDispatch` returns null and continues copying its other children. Camera and LOD copying instead abort on a null child and leak the nodes already made. Studio rolls back a refused preview clone rather than reproducing that leak.
+- **Consumers.**
+  - **At load:**
+    - vehicle clones: 25–35 nodes each, 4,342 nodes for m6's 143 [D];
+    - pickups;
+    - one runtime node per animation entry, plus extra light and sound nodes;
+    - the projectile pool: Σ(trunc(range × rate / speed) + 1), plus 9; 455 nodes in every mission [D] (0x4b1190 [BN]);
+    - effects.
+  - **During play,** each kept until the mission unloads:
+    - effect instances at peak concurrency;
+    - extra concurrent animation instances, never freed;
+    - pickups dropped by killed vehicles (collected pickups are only deactivated);
+    - craters (1 node and 1 model each, and replacement models);
+    - material clones, which are never freed (`zDi::FreeContents` 0x482160 [B]).
+- **Running out is silent** [BN]:
+  - **Nodes:** `gwNodeNew` returns 0, and objects, effects and animation instances are skipped.
+  - **Models:** a model shortage also leaks the node already made for the copy.
+  - **Materials:** they fall back to the default white material.
+- **Other fixed tables:**
+  - **Texture directory:** 4,096 entries. Runtime appends are not bounds-checked (0x46d810 [B]), so overflowing it corrupts memory.
+  - **Model vertices:** `AddOrMergeVertex` (0x482720 [B]) merges a corner into a vertex within its epsilon and refuses a new one past 0.9 × 1,024, warning that the model approaches 1,024; no model of either release passes 921 [D]. Source builds refuse a mesh that would.
+  - **Lights:** 64 active per frame (0x487a30 [BN]).
+  - **Animation entries:** at most 254 light and 254 sound references each.
+  - **Cells:** 32,767 nodes each.
+  - **Craters:** 16 per cell.
+  - **Rendering queues:** 256 transparent polygons per frame; overflow is dropped.
+- **Shipped headroom after load** [D]:
+  - **Nodes:** the tightest pool is m6 with 5,091 free (32%); m1 has 7,595 and m8 14,342.
+  - **Models:** at least 3,970 free.
+  - **Materials:** at least 4,327 free.
+  - **Texture directory:** at least 3,283 entries free.
+- **Budget.** Required node capacity ≥ the sum of:
+  - the stored live nodes;
+  - the animation entries' nodes;
+  - the projectile pool, plus about 6 fixed nodes;
+  - the AI vehicle clones and pickup placements, minus the turret helpers freed at load;
+  - a reserve for effects, concurrent animations, drops and craters (cells × min(16, expected)).
+  - Models and materials follow the same pattern.
+- **For zStudio:**
+  - Validate the three free chains.
+  - Report load-time demand per pool as an error, and the reserve against headroom as a warning; the fallback is the shipped minimum above.
+  - Report the texture directory total against 4,096.
+  - Flag light, sound, animate, sequence and switch nodes inside vehicle and pickup templates.
+
+## Vehicles
+
+- **Lookups.**
+  - **Vehicle code** (`FindSubNodeByName` 0x452770 [BN]): only the vehicle's own subtree, the root first, then children last to first.
+  - **Animations** (`ResolveNodeByName` 0x45e5c0 [B]): first to last, then the whole world.
+  - A repeated role name can therefore resolve differently for each, and a missing part can bind a node elsewhere in the world. No shipped vehicle repeats a role name [D].
+- **Roles the code drives:**
+  - `rtracks` and `ltracks` must be separate textured models.
+    - Each scrolls its whole model along **V** at 1.72 × the side speed (forward speed ± yaw × 2.25) [BN 0x42704e]. The reconstruction's U is wrong.
+    - `rtracks`' first material switches its cycle frame by `track_switch` thresholds. An `rtracks` without a model crashes.
+  - `chassis` rotation is overwritten every tick with pitch and roll in track mode [BN].
+  - `turret` (yaw) and `gun` (pitch) have their whole rotation overwritten every tick (`UpdateGunAndTurretAimNodes` 0x43a4f0 [BN]). The pivots are their origins, and authored rotation is lost.
+- **Fire points.**
+  - They are `fpnt_c`, `fpnt_l` and `fpnt_r` under `gun`, used as offsets in the aim basis; any model on them is detached.
+  - Without `gun` or `turret`, shots leave from the root plus (0,1,0).
+  - The string `firepoint` does not exist in the executable; only turrets name fire points, through `ai.zrd`.
+- **Helpers.**
+  - `collide00`–`collide11` and `support00`–`support03` give only their local position, and are then deactivated (0x421ed0, 0x4220f0).
+  - Collide points are read only when `vehicle.zrd` has no `collision` list, and only from the first clone.
+  - Supports are read for every clone and override a `platform` list.
+  - Shipped numbering:
+    - collide 00–02 front, 03–05 right, 06–08 rear, 09–11 left;
+    - supports front-left, front-right, back-right, back-left.
+  - Every shipped helper is an untransformed direct child of `healthy` [D].
+  - `target` adds its local position without the vehicle's rotation.
+- **Mode parts:**
+  - **Track:** `chassis`, the tracks, `dust_l`/`dust_r`.
+  - **Amphibious:** `wake`, `splash_l`/`splash_r` [U].
+  - **Submarine:** `props` cycle speed and `caustic1` cycle.
+  - **Hover:** `shadow` only.
+  - **Morphs** are driven by the mode-change animations.
+- **Clones.**
+  - The template is the AI vehicle name up to its first `_` followed by a digit (0x423150 [BN]). So `ltank_2_05` spawns `ltank`, and the `*_2` templates are never used.
+  - Single-player clones share the template's model, so they share track scroll, morph and texture-cycle state. Only transforms and active flags are per copy.
+- **Animation lifecycle.**
+  - **Start:** `start_anims` runs once per created vehicle, as its own instance on that clone (0x420d10 [BN], `ActivateRuntime` 0x45d930 [B]).
+  - **Mode changes** never touch it.
+  - **Death** never stops it: the death sequences hide `healthy`, so a loop under `healthy` keeps running invisibly.
+  - **Stopping by name:** `STOP_ANIMATION` by name stops only the base entry, which is the first-spawned copy's instance (`zEffectAnim::Stop` 0x45c040 [BN]).
+  - **Respawn** never re-runs `start_anims`.
+  - **Saved games:** sibling instances are restored onto the base entry (0x461040 [U]). A constant spin survives this; timed loops may not.
+- **For zStudio (vehicle upgrades):**
+  - Require unique role names across the vehicle subtree, and textured `rtracks` and `ltracks` with the tread laid out along V.
+  - Give `turret`, `gun` and `chassis` identity rotation and the pivot at the origin.
+  - Make helpers geometry-free, unrotated direct children of `healthy`, numbered as shipped.
+  - Put `fpnt_*` under `gun`.
+  - Put spinning parts under `healthy`, keep loops constant-rate, and never stop a cloned vehicle's loop by name.
+  - Keep `props` as an empty pivot or its cycled model.
+  - Upgrading `ltank` changes every `ltank_*` placement.
 
 ## Animation runtime
 
@@ -251,7 +358,7 @@ These are the keys the game reads. Anything else in a file is ignored. Types are
   - **`attack_buddy`:** a flag; vehicles with the same network ID alert each other. `activate_buddy` is never read.
   - **`node_00`–`node_98`** are read in index order: an integer (never read), XYZ and three links. **A link to a missing node crashes at mission load** (0x403550 [B]). Shipped: 470 networks, none with a dangling link or a self-link [D].
 - **`aiv.zrd`** (0x41fe90 [BN]; only `aiv.zrd`, never `aiv_easy` or `aiv_hard`) is a list of name and record pairs: `name ( netId:int ( x y z :float ) yawDegrees:float )`.
-  - **Names:** at most 27 characters.
+  - **Names:** at most 27 characters; the template is derived as in [Vehicles](#vehicles).
   - **Lookup:** `CreateFromNamesAtPose` 0x421ab0 [B] finds the name, else copies the template, with `FindByTypeAndName` among all live nodes, the most recently created first, and uses what it finds as the vehicle whatever its class. A light or sound of that name would be placed as the vehicle; no shipped name collides [D].
   - **Spawning:** the entry spawns only when its template occurs in the selected `vehicle*.zrd`.
   - **The local player** is the first entry that spawns (`bft_00` in every shipped file).

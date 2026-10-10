@@ -115,8 +115,10 @@ public partial class MainWindow
         return doc;
     }
     /// <remarks>With <paramref name="committing"/>, drafts whose commit is running (and called this) do not count.</remarks>
-    private void RequireNoDrafts(DocumentModel? doc = null, bool committing = false, SceneInspectionCard? committingCard = null)
+    private void RequireNoDrafts(DocumentModel? doc = null, bool committing = false, SceneInspectionCard? committingCard = null, ZoneDraft? committingZones = null)
     {
+        if (HasZoneDraft && zoneDraft != committingZones && (doc == null || zoneDraft!.Document == doc))
+            throw new StudioCommandException("pending_drafts", "Apply or cancel the map zone draft before continuing.");
         // Resource/content edits elsewhere refresh the shown preview, whose scene-card draft would otherwise need a modal decision mid-request.
         if (HasInspectionDraft && inspectionDraft != committingCard && (doc == null || inspectionDraft!.DraftDocument == doc || doc != shownDocument && inspectionDraft.DraftDocument == shownDocument && (doc.ResourceEdits != null || doc.ContentEdits != null)))
             throw new StudioCommandException("pending_drafts", "Resolve the scene card draft explicitly before continuing.");
@@ -177,7 +179,9 @@ public partial class MainWindow
                 version = typeof(MainWindow).Assembly.GetName().Version?.ToString(), ViewModel.HasRoot, ViewModel.RootPath, Status = ViewModel.Status.Length <= 512 ? ViewModel.Status : Bounded(ViewModel.Status, 511), statusTruncated = ViewModel.Status.Length > 512, ViewModel.IsBusy,
                 documents = page.Documents.Select(d => DocumentState(d, includeContentDetails: false)).ToArray(), total = page.Total, offset = page.Offset, nextOffset = page.NextOffset, activeDocument = ViewModel.SelectedDocument?.SessionId,
                 preview = previewId, selectedAsset = shownAsset?.Id, animationTime = animation?.CurrentFrame?.Time, animationPlaying = animation?.IsPlaying,
-                pendingPropertiesDrafts = propertiesWindow?.HasPendingDrafts == true, pendingPreviewDrafts = animation?.HasAutomationDrafts == true, pendingSceneDrafts = HasInspectionDraft
+                pendingPropertiesDrafts = propertiesWindow?.HasPendingDrafts == true, pendingPreviewDrafts = animation?.HasAutomationDrafts == true, pendingSceneDrafts = HasInspectionDraft,
+                // A map zone draft with targets blocks other writes until source_zone_draft applies or cancels it.
+                pendingZoneDrafts = HasZoneDraft
             });
         });
         Register(registry, "capabilities", "Read all capability schemas. Unsupported formats remain read-only; MCP does not add binary patching.", false, [], _ => new(registry.Describe()));
@@ -194,7 +198,8 @@ public partial class MainWindow
         RegisterContentCommands(registry);
         RegisterSourceCommands(registry);
         RegisterSourceWorldCommands(registry);
-        RegisterSourceRecoveryCommands(registry);
+        RegisterSourceObjectCommands(registry);
+        RegisterSourceRecoveryCommands(registry); RegisterSourceZoneCommands(registry);
         RegisterWorldCompareCommands(registry);
         return registry;
     }
