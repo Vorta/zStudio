@@ -257,7 +257,10 @@ public static class TexturePackBuilder
             + $"more than the {FormatRegistry.MaximumDocumentBytes >> 20} MiB a pack file can hold. {advice}. The largest it stores: {string.Join(", ", largest)}.");
     }
 
-    /// <summary>Opaque when every alpha is 255; colour-keyed when alpha is only 0 or 255 (1555 on hardware keeps more colour); else an alpha plane.</summary>
+    /// <summary>
+    /// Opaque when every alpha is 255; colour-keyed when alpha is only 0 or 255 (Direct3D's 1555 keeps five bits a channel where
+    /// an alpha plane's 4444 keeps four, with the texels <see cref="KeyedTexel"/> stores); else an alpha plane.
+    /// </summary>
     public static TextureTransparency Classify(DecodedImage image)
     {
         bool translucent = false, transparent = false;
@@ -435,8 +438,9 @@ public static class TexturePackBuilder
                 for (int p = 0; p < image.Width * image.Height; p++)
                     if (image.Rgba[p * 4 + 3] >= (modes[i] == TextureTransparency.Keyed ? 128 : 1)) histogram[Rgb565(image.Rgba, p)]++;
             }
-            // Zero is the transparency key, but opaque black still needs a palette representative. Match the direct
-            // keyed encoder's nearest nonzero RGB565 black instead of dropping its entire histogram population.
+            // Zero is the transparency key, but opaque black still needs a palette representative: the nearest nonzero
+            // RGB565 black, instead of dropping its entire histogram population. The software renderer keys index 0, not a
+            // colour (retail 0x49bbf0), so no conversion of the entry turns it into a hole.
             histogram[0x0020] += histogram[0];
             histogram[0] = 0;
             var colors = TexturePackWriter.Quantize(histogram, 255, token);
@@ -464,6 +468,22 @@ public static class TexturePackBuilder
     internal static ushort Rgb565(byte[] rgba, int pixel) =>
         (ushort)(((rgba[pixel * 4] * 31 + 127) / 255 << 11) | ((rgba[pixel * 4 + 1] * 63 + 127) / 255 << 5) | ((rgba[pixel * 4 + 2] * 31 + 127) / 255));
 
+    /// <summary>
+    /// An opaque texel of a colour-keyed direct texture. The engine shows it through three conversions: on a 565 display
+    /// Direct3D uploads it as 1555 by <c>(s &amp; 0x1F) | ((s &gt;&gt; 1) &amp; 0x7FF0)</c> (ConvertImagePixelsForTexture,
+    /// retail 0x4aa70d, with the display's masks), which moves green's low bit into blue's high bit; a 555 display converts
+    /// every direct texel as it is read to <c>((s &gt;&gt; 1) &amp; 0x7FE0) | (s &amp; 0x1F)</c> (zVid_Image::ReadData, retail
+    /// 0x46ef05), dropping that bit; and the software renderer draws a nonzero texel as stored (retail 0x49b7e0). Green is
+    /// therefore stored at five bits with its low bit clear, which all three keep, and black as 0x0001, the least blue, which
+    /// none turns into the key 0 (0x0020 became blue 131 in 1555 and the key on a 555 display). Direct3D on a 555 display
+    /// shifts red and green as well, whatever is stored.
+    /// </summary>
+    internal static ushort KeyedTexel(byte[] rgba, int pixel)
+    {
+        int color = ((rgba[pixel * 4] * 31 + 127) / 255 << 11) | ((rgba[pixel * 4 + 1] * 31 + 127) / 255 << 6) | ((rgba[pixel * 4 + 2] * 31 + 127) / 255);
+        return (ushort)(color == 0 ? 0x0001 : color);
+    }
+
     private static void WriteImage(BinaryWriter w, DecodedImage image, TextureTransparency mode, int addressing, ushort[]? palette, CancellationToken token)
     {
         int count = image.Width * image.Height;
@@ -478,9 +498,7 @@ public static class TexturePackBuilder
             {
                 if ((p & 4095) == 0) token.ThrowIfCancellationRequested();
                 // Keyed textures store the key; alpha-plane textures keep the colour under any alpha.
-                ushort color = mode == TextureTransparency.Alpha || Opaque(p) ? Rgb565(image.Rgba, p) : (ushort)0;
-                // Opaque black would read as a hole in a keyed texture.
-                if (mode == TextureTransparency.Keyed && color == 0 && Opaque(p)) color = 0x0020;
+                ushort color = mode != TextureTransparency.Keyed ? Rgb565(image.Rgba, p) : Opaque(p) ? KeyedTexel(image.Rgba, p) : (ushort)0;
                 w.Write(color);
             }
         else
