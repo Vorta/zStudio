@@ -110,7 +110,7 @@ public partial class AnimationEditor
         // It must take precedence over recovery's replacement seek identity.
         if (operationToken.IsCancellationRequested) return;
         if (disposed) throw new StudioCommandException("context_changed", "Animation preview was replaced.");
-        if (previewOperationFailure != null) throw new StudioCommandException("preview_unavailable", previewOperationFailure);
+        if ((previewOperationFailure ?? renderFailure) is { } failure) throw new StudioCommandException("preview_unavailable", failure);
         if (seekGeneration != initialSeek && (seekOperationToken != operationToken || publishedSeekGeneration != seekGeneration))
             throw new StudioCommandException("context_changed", "The requested animation update was superseded by another seek.");
         if (lodGeneration != initialLod && (lodOperationToken != operationToken || publishedLodGeneration != lodGeneration) ||
@@ -120,7 +120,8 @@ public partial class AnimationEditor
     internal async Task TransportAsync(string action, double seconds = 0)
     {
         if (HasPendingDrafts) throw new StudioCommandException("pending_drafts", "Resolve unfinished preview input first.");
-        if (player == null || LoadingPanel.Visibility == Visibility.Visible) throw new StudioCommandException("not_ready", LoadingText.Text);
+        bool canRebuild = renderFailure != null && context != null && action is "seek" or "stop" or "previous" or "next";
+        if (player == null && !canRebuild || LoadingPanel.Visibility == Visibility.Visible) throw new StudioCommandException("not_ready", renderFailure ?? LoadingText.Text);
         previewOperationFailure = null;
         switch (action)
         {

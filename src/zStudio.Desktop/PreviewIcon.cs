@@ -31,7 +31,8 @@ public sealed class PreviewIcon : FrameworkElement
         ["Bounds"] = "M2,4 V2 H4 M6,2 H10 M12,2 H14 V4 M14,6 V9 M14,11 V13 H12 M10,13 H6 M4,13 H2 V11 M2,9 V6",
         ["Soils"] = "M1,5 L8,1 15,5 8,9 Z M1,8 L8,12 15,8 M1,11 L8,15 15,11",
         ["CanModify"] = "M1,9 H4 C5,14 11,14 12,9 H15 M8,1 V7 M5,4 L8,7 11,4",
-        ["ClipTo"] = "M2,1 V14 H15 M5,4 H13 V11 H5 Z M1,5 H3 M1,9 H3 M6,13 V15 M10,13 V15"
+        ["ClipTo"] = "M2,1 V14 H15 M5,4 H13 V11 H5 Z M1,5 H3 M1,9 H3 M6,13 V15 M10,13 V15",
+        ["Zones"] = "M1,1 H15 V15 H1 Z M1,7 C5,5 9,10 15,8 M7,1 C6,6 9,10 8,15"
     }.ToDictionary(p => p.Key, p => { Geometry g = Geometry.Parse(p.Value); g.Freeze(); return g; });
 
     protected override void OnRender(DrawingContext drawing)

@@ -23,15 +23,15 @@ public sealed partial class AnimationTests
         var (context, _) = GroundFixture(); var source = Pack(context.Package);
         var original = new AnimationPlayer(context, 0) { GroundPlaneEnabled = true };
         var raised = new AnimationPlayer(context, 0) { GroundPlaneEnabled = true, PreviewHeight = 40 };
-        Assert.Equal(40, raised.Frame().Nodes[0].Transform.M42 - original.Frame().Nodes[0].Transform.M42);
+        Assert.Equal(40, raised.Frame(TestContext.Current.CancellationToken).Nodes[0].Transform.M42 - original.Frame(TestContext.Current.CancellationToken).Nodes[0].Transform.M42);
         var duration = raised.MeasureDuration(TestContext.Current.CancellationToken);
         Assert.True(duration.IsFinite); Assert.True(duration.Seconds > original.MeasureDuration(TestContext.Current.CancellationToken).Seconds + 1);
         Assert.Equal(0, raised.Time);
         for (int i = 0; i < 600; i++) AssertGrounded(context, raised.Step(TestContext.Current.CancellationToken));
         Assert.True(raised.IsComplete);
-        var end = raised.Frame(); Assert.InRange(end.Nodes[0].Transform.M42, .999f, 1.001f);
+        var end = raised.Frame(TestContext.Current.CancellationToken); Assert.InRange(end.Nodes[0].Transform.M42, .999f, 1.001f);
         raised.EvaluateForTest(.5, true); Assert.Equal(end.Nodes, raised.EvaluateForTest(10, true).Nodes);
-        raised.Reset(); Assert.Equal(end.Nodes, raised.EvaluateForTest(10).Nodes);
+        raised.Reset(TestContext.Current.CancellationToken); Assert.Equal(end.Nodes, raised.EvaluateForTest(10).Nodes);
         Assert.Equal(source, Pack(context.Package));
     }
 
@@ -92,12 +92,12 @@ public sealed partial class AnimationTests
         var (context, _) = GroundFixture(); var source = Pack(context.Package);
         var baseline = new AnimationPlayer(context, 0) { GroundPlaneEnabled = true };
         var lowered = new AnimationPlayer(context, 0) { GroundPlaneEnabled = true, PreviewHeight = height };
-        Assert.Equal(height, lowered.Frame().Nodes[0].Transform.M42 - baseline.Frame().Nodes[0].Transform.M42);
+        Assert.Equal(height, lowered.Frame(TestContext.Current.CancellationToken).Nodes[0].Transform.M42 - baseline.Frame(TestContext.Current.CancellationToken).Nodes[0].Transform.M42);
         var duration = lowered.MeasureDuration(TestContext.Current.CancellationToken);
         Assert.True(duration.IsFinite); Assert.True(duration.Seconds < baseline.MeasureDuration(TestContext.Current.CancellationToken).Seconds);
         Assert.Equal(0,lowered.Time);
         for (int i = 0; i < 180; i++) AssertGrounded(context,lowered.Step(TestContext.Current.CancellationToken));
-        var end = lowered.Frame(); Assert.InRange(end.Nodes[0].Transform.M42,.999f,1.001f);
+        var end = lowered.Frame(TestContext.Current.CancellationToken); Assert.InRange(end.Nodes[0].Transform.M42,.999f,1.001f);
         lowered.EvaluateForTest(.5,true); Assert.Equal(end.Nodes,lowered.EvaluateForTest(3,true).Nodes);
         var ungrounded = new AnimationPlayer(context,0) { PreviewHeight = height }.EvaluateForTest(3);
         Assert.True(ungrounded.Nodes[0].Transform.M42 < 0);

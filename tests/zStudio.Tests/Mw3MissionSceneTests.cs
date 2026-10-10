@@ -117,6 +117,7 @@ public sealed class Mw3MissionSceneTests
         }
         Assert.NotEqual(mission.Actors[0].Root, mission.Actors[1].Root);
         Assert.NotEqual(mission.Actors[0].CoordinateSource, mission.Actors[1].CoordinateSource);
+        MissionSceneLoader.Invalidate(fixture.World); // Remap between two builds, not a reused layout.
         var again = await MissionSceneLoader.LoadAsync(fixture.World, fixture.Resolver, token: token);
         Assert.All(mission.Actors, actor => Assert.Equal(actor.Root, again.RemapNodeFrom(mission, actor.Root)));
         Assert.Equal("actor", fixture.World.Scene!.Nodes[1].Name);

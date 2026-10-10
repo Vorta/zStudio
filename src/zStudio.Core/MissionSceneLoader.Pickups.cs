@@ -17,15 +17,15 @@ public static partial class MissionSceneLoader
         return records;
     }
 
-    private static void PlacePickups(GameScene scene, List<int> sources, List<MissionActor> actors, HashSet<int> positioned,
+    internal static void PlacePickups(GameScene scene, List<int> sources, List<MissionActor> actors, HashSet<int> positioned,
         int worldRoot, string worldPath, int originalNodeCount, JsonNode? tree, MissionResourceSource resource, MissionLayoutSelection layout,
-        Func<int, string, int> cloneTree, List<string> diagnostics, CancellationToken token)
+        Func<int, string, int> cloneTree, BoundedDiagnostics diagnostics, CancellationToken token, MissionPlacementState placement, MissionPlacementBudget budget)
     {
         int[] suffixes = new int[40];
-        var usedNames = scene.Nodes.Select(n => n.Name).ToHashSet(StringComparer.Ordinal);
+        string? originalArchive = null; MissionResourceSource? normalizedSource = null;
         foreach (var node in scene.Nodes.Take(originalNodeCount))
         {
-            token.ThrowIfCancellationRequested();
+            budget.Name(node.Name);
             if (node.Class != "object3d" || node.Name.Length <= 5 || !node.Name.StartsWith("pu", StringComparison.Ordinal)
                 || !int.TryParse(node.Name.AsSpan(2), NumberStyles.None, CultureInfo.InvariantCulture, out int id) || id / 100 >= 40) continue;
             int typeIndex = id / 100; suffixes[typeIndex] = Math.Max(suffixes[typeIndex], id % 100 + 1);
@@ -36,48 +36,52 @@ public static partial class MissionSceneLoader
                 var pose = SceneBuilder.LocalTransform(node);
                 var rotation = new Vector3(node.Data["rotate"].Float("x"), node.Data["rotate"].Float("y"), node.Data["rotate"].Float("z"));
                 Add(node.Index, type, type.DefaultAmount, pose.Translation, rotation, 0,
-                    new(worldPath.ToUpperInvariant(), -1, "GAMEZ", node.Index), "GameZ placed pickup");
+                    new(originalArchive ??= budget.SourceIdentity(worldPath), -1, "GAMEZ", node.Index), "GameZ placed pickup");
             }
-            catch (InvalidDataException ex) { diagnostics.Add($"Mission pickup node #{node.Index} '{node.Name}': {ex.Message}"); }
+            catch (InvalidDataException ex) when (!budget.Exhausted) { diagnostics.Add($"Mission pickup node #{node.Index} '{node.Name}': {ex.Message}"); }
         }
         if (tree == null) { diagnostics.Add($"Mission pickups: {layout.PickupResource} is unavailable; pickup placements could not be recovered."); return; }
         var records = PickupRecords(tree);
-        if (worldRoot < 0) { diagnostics.Add("Mission pickups: missing world root; pickup instances could not be attached."); return; }
+        if (worldRoot < 0) { diagnostics.Add($"Mission pickups: missing world root; pickup instances could not be attached."); return; }
         for (int index = 0; index < records.Count; index++)
         {
-            token.ThrowIfCancellationRequested();
+            budget.Take();
             try
             {
                 if (records[index]?["children"] is not JsonArray row || row.Count != 5 || row[0].Text("type") != "string")
                     throw new InvalidDataException("Expected type, amount, XYZ position, XYZ rotation and respawn delay.");
                 string name = row[0].Text("value");
+                budget.Name(name);
                 var type = MissionPickupType.Catalog.FirstOrDefault(t => t.Name == name)
-                    ?? throw new InvalidDataException($"Unknown pickup type '{name}'.");
+                    ?? throw new InvalidDataException($"Unknown pickup type '{JsonData.ShownText(name, 192)}'.");
                 if (row[1].Text("type") != "int" || !int.TryParse(row[1]?["value"]?.ToString(), NumberStyles.Integer, CultureInfo.InvariantCulture, out int amount))
                     throw new InvalidDataException("Expected an integer pickup amount.");
                 Vector3 position = Vector(row[2]), rotation = Vector(row[3]); float delay = Number(row[4]);
-                var templates = scene.Nodes.Take(originalNodeCount).Where(n => n.Class == "object3d" && n.Name == type.TemplateName).ToArray();
-                if (templates.Length != 1) throw new InvalidDataException($"Missing or ambiguous template {type.TemplateName} ({templates.Length} matches).");
-                var template = templates[0];
+                var match = placement.Template(type.TemplateName);
+                if (match.Count != 1) throw new InvalidDataException($"Missing or ambiguous template {type.TemplateName} ({match.Count} matches).");
+                var template = scene.Nodes[match.Root];
                 RequireBvol(template.Index);
                 var scale = new Vector3(template.Data["scale"].Float("x", 1), template.Data["scale"].Float("y", 1), template.Data["scale"].Float("z", 1));
                 var matrix = Matrix4x4.CreateScale(scale) * Matrix4x4.CreateFromQuaternion(AnimationMath.FromEuler(rotation)) * Matrix4x4.CreateTranslation(position);
                 if (!float.IsFinite(matrix.GetDeterminant())) throw new InvalidDataException("Nonfinite pickup template scale/rotation.");
                 string instanceName;
-                do { instanceName = type.TemplateName + (suffixes[type.Index]++).ToString("D2", CultureInfo.InvariantCulture); } while (!usedNames.Add(instanceName));
+                do { budget.Name(type.TemplateName); instanceName = type.TemplateName + (suffixes[type.Index]++).ToString("D2", CultureInfo.InvariantCulture); } while (!placement.UseName(instanceName));
                 int root = cloneTree(template.Index, instanceName);
                 SetPose(scene, root, matrix); HideBvol(root);
                 scene.Nodes[root] = scene.Nodes[root] with { Parents = [worldRoot] };
-                scene.Nodes[worldRoot] = scene.Nodes[worldRoot] with { Children = [.. scene.Nodes[worldRoot].Children, root] };
+                placement.Attach(root, aiv: false);
+                normalizedSource ??= new(budget.SourceIdentity(resource.ArchivePath), resource.AssetIndex, budget.SourceIdentity(resource.ResourceName));
+                budget.TextCopy(layout.PickupResource.Length + name.Length + 64L);
                 Add(root, type, amount, position, rotation, delay,
-                    new(resource.ArchivePath.ToUpperInvariant(), resource.AssetIndex, resource.ResourceName.ToUpperInvariant(), index),
+                    new(normalizedSource.ArchivePath, normalizedSource.AssetIndex, normalizedSource.ResourceName, index),
                     $"{layout.PickupResource} #{index} · {layout.Difficulty} · {name}");
             }
-            catch (InvalidDataException ex) { diagnostics.Add($"Mission pickup {resource.ResourceName} #{index} in {resource.ArchivePath}: {ex.Message}"); }
+            catch (InvalidDataException ex) when (!budget.Exhausted) { diagnostics.Add($"Mission pickup {resource.ResourceName} #{index} in {resource.ArchivePath}: {ex.Message}"); }
         }
 
         int RequireBvol(int root)
         {
+            budget.Take(scene.Nodes[root].Children.Length);
             int child = scene.Nodes[root].Children.FirstOrDefault(c => c >= 0 && c < scene.Nodes.Count && scene.Nodes[c].Name == "bvol", -1);
             return child >= 0 ? child : throw new InvalidDataException("Missing required bvol child.");
         }
@@ -89,6 +93,7 @@ public static partial class MissionSceneLoader
         }
         void Add(int root, MissionPickupType type, int amount, Vector3 position, Vector3 rotation, float delay, MissionPickupSource source, string label)
         {
+            placement.Actor(root);
             var pickup = new MissionPickup(type.Index, type.Name, amount, amount == 0 ? type.DefaultAmount : amount, position, rotation, delay, source);
             positioned.Add(root); actors.Add(new(root, sources[root], scene.Nodes[root].Name, label, pickup));
             var metadata = scene.Nodes[root].Metadata;
