@@ -62,7 +62,8 @@ public sealed class WorldSourcePlacementTests
         var world = Shipped(3, "child", distinctChildren: true);
         world.Nodes.Single(n => n.Name == "child2").Name = "child1";
         var main = GameGenScriptText.Tokenize("NewWorld world\nSetModelDirectory ../data/first/models\nLoadGameGen model.flt root0\n"
-            + "SetModelDirectory ../data/second/models\nLoadGameGen model.flt root1\nSetModelDirectory ../data/first/models\nsource helper.gw\nGameZWriteZBDFile gamez.zbd\n");
+            // Another spelling of the first folder puts it before the second again (a listed folder keeps its place).
+            + "SetModelDirectory ../data/second/models\nLoadGameGen model.flt root1\nSetModelDirectory ..\\data\\first\\models\nsource helper.gw\nGameZWriteZBDFile gamez.zbd\n");
         var helper = GameGenScriptText.Tokenize("LoadGameGen model.flt root2\n");
         var outputs = WorldSources.Reconstruct([new(1, world)], n => n == "m1.gs" ? main : helper,
             (_, _) => null, new HashSet<string>(), _ => 0, [], Token);

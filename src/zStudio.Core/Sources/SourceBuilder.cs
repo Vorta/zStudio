@@ -296,11 +296,14 @@ public static partial class SourceBuilder
         internal long EffectInputBytes => effectDiscovery?.InputBytes ?? 0;
         internal int EffectFilesDecoded => effectDiscovery?.FilesDecoded ?? 0;
         internal long RetainedBytes { get; private set; }
-        /// <summary>Worlds and compiled animation packages share the run's retained-data limit, across every output.</summary>
+        /// <summary>
+        /// Worlds, compiled animation packages and the project paths the run looked up (every distinct path is kept to check
+        /// before publication, absent ones included) share the run's retained-data limit, across every output.
+        /// </summary>
         internal void Retain(long bytes)
         {
             if (bytes < 0 || bytes > maximumRetainedBytes - RetainedBytes)
-                throw new InvalidDataException($"The export's retained worlds and animations exceed {maximumRetainedBytes / (1024 * 1024):N0} MiB; export fewer missions together.");
+                throw new InvalidDataException($"The export's retained worlds, animations and looked-up project paths exceed {maximumRetainedBytes / (1024 * 1024):N0} MiB; export fewer missions together, or name fewer search folders and missing files in their scripts.");
             RetainedBytes += bytes;
         }
         private readonly Dictionary<string, (string Sha, FileStamp Stamp)> files = new(StringComparer.OrdinalIgnoreCase);
@@ -326,10 +329,54 @@ public static partial class SourceBuilder
                 }
             return (budget, new(added, budget, token));
         }
-        internal void Depend(string relative) { lock (dependencyGate) dependencies.Add(relative); }
+        /// <summary>
+        /// Records a path the run depends on. A new path is charged to <see cref="Retain"/>: its text, its dependency entry and
+        /// its probe or read entry, which the run keeps until publication.
+        /// </summary>
+        internal void Depend(string relative)
+        {
+            lock (dependencyGate)
+                if (dependencies.Add(relative)) Retain(160L + 2L * relative.Length);
+        }
         /// <summary>The disk files read or found by a search and their stamps (pending content is not included).</summary>
         internal IReadOnlyDictionary<string, FileStamp> Stamps() => probes.Where(p => p.Value != null).ToDictionary(p => p.Key, p => p.Value!, StringComparer.OrdinalIgnoreCase);
-        internal IReadOnlyList<string> Missing() => probes.Where(p => p.Value == null).Select(p => p.Key).ToArray();
+        /// <summary>Disk files and search folders absent when the run looked for them.</summary>
+        internal IReadOnlyList<string> Missing() => [.. probes.Where(p => p.Value == null).Select(p => p.Key), .. missingFolders];
+        private readonly HashSet<string> missingFolders = new(StringComparer.OrdinalIgnoreCase);
+        /// <summary>The search folders absent when the run looked for them: a file added below one can change what the build finds.</summary>
+        internal IReadOnlyList<string> MissingFolders() => [.. missingFolders];
+        private HashSet<string>? pendingFolders;
+        /// <summary>
+        /// Whether a folder a script names for a search path exists (see <see cref="DirectorySearchList"/>): on disk, or holding a
+        /// pending file. A folder found missing is kept with the missing files, so its appearance before publication refuses
+        /// the export, and a preview built without it is stale once a file is added below it.
+        /// </summary>
+        internal bool FolderExists(string relative)
+        {
+            SourceProject.RequireSource(relative);
+            // A name Windows cannot give a folder never exists, as _access reports it.
+            if (relative.AsSpan().IndexOfAny(InvalidFolderCharacters) >= 0) return false;
+            Depend(relative);
+            if (overlay != null)
+            {
+                if (pendingFolders == null)
+                {
+                    pendingFolders = new(StringComparer.OrdinalIgnoreCase);
+                    foreach (string pending in overlay.Keys)
+                        for (int slash = pending.LastIndexOf('/'); slash > 0; slash = pending.LastIndexOf('/', slash - 1))
+                            if (!pendingFolders.Add(pending[..slash])) break;
+                }
+                if (pendingFolders.Contains(relative)) return true;
+            }
+            string path = SourceProject.Resolve(root, relative);
+            SourceProject.RejectNestedLinks(root, relative);
+            bool present = SourceRead.DirectoryExists(path);
+            if (!present) missingFolders.Add(relative);
+            else if (missingFolders.Contains(relative)) throw Changed(relative, $"{relative} changed while exporting; export again.");
+            return present;
+        }
+        private static readonly System.Buffers.SearchValues<char> InvalidFolderCharacters = System.Buffers.SearchValues.Create(
+            [.. Enumerable.Range(0, 32).Select(c => (char)c), '<', '>', ':', '"', '|', '?', '*']);
         internal bool Exists(string relative)
         {
             SourceProject.RequireSource(relative);
@@ -469,6 +516,7 @@ public static partial class SourceBuilder
         private sealed class ProjectFiles(Snapshot snapshot, string root, IReadOnlyDictionary<string, byte[]>? overlay) : IProjectFiles
         {
             public bool Exists(string relative) => snapshot.Exists(relative);
+            public bool FolderExists(string relative) => snapshot.FolderExists(relative);
             public byte[] Read(string relative, CancellationToken token, ProjectReadLimits limits) { SourceProject.RequireSource(relative); if (overlay?.ContainsKey(relative) != true) SourceProject.RejectNestedLinks(root, relative); return snapshot.Read(relative, token, limits); }
         }
 
@@ -482,6 +530,14 @@ public static partial class SourceBuilder
                 SourceProject.RejectNestedLinks(root, relative);
                 if (stamp == null ? SourceRead.PathExists(path) : !SourceRead.FileExists(path) || FileStamp.Read(path) != stamp)
                     throw Changed(relative, $"{relative} changed while exporting; nothing was written.");
+            }
+            // A search folder that appeared would join the search paths the build skipped.
+            foreach (string folder in missingFolders)
+            {
+                token.ThrowIfCancellationRequested();
+                SourceProject.RejectNestedLinks(root, folder);
+                if (SourceRead.DirectoryExists(SourceProject.Resolve(root, folder)))
+                    throw Changed(folder, $"{folder} changed while exporting; nothing was written.");
             }
             foreach (var (relative, entry) in files)
             {
