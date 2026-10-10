@@ -1,6 +1,6 @@
 # Animation editing and preview
 
-The Bind root chooser indexes each actor root once and shows the first 500 matching scene nodes in scene order, retaining complete labels and node identities. Turret discovery and frame ancestry share the existing bounded animation work service; capacity failures stop preparation or playback with a diagnostic. Frame transforms preserve the original child-to-root multiplication order. Refused simulation-state preparation during reset or LOD change retains the accepted playback state. A renderer capacity refusal can instead make the preview unavailable, as described below.
+The Bind root chooser indexes each actor root once and shows the first 500 matching scene nodes in scene order, retaining complete labels and node identities. Turret discovery and frame ancestry share the existing bounded animation work service; capacity failures stop preparation or playback with a diagnostic. Frame transforms preserve the original child-to-root multiplication order. Refused simulation-state preparation during reset or LOD change retains the accepted playback state. A renderer capacity refusal can instead make the preview unavailable ([MCP contract](mcp.md): seek, change the map or LOD to recover).
 
 The animation editor edits existing entries in version-28 animation packs. It preserves original data and writes a separate, verified ZBD through **Save As**. It does not create or duplicate whole animation entries.
 
