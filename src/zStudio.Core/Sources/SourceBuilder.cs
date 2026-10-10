@@ -19,6 +19,11 @@ public sealed record SourceOutputPlan(string Path, string Family, IReadOnlyList<
     public bool FullSize { get; init; }
     /// <summary>What planning found about the output, reported with its build (an automatic pack too small for its textures).</summary>
     public IReadOnlyList<string> Notes { get; init; } = [];
+    /// <summary>
+    /// For a mission texture pack, the interface images image.zbd is built from: the game looks for a texture's numbered
+    /// mipmaps there after the mission's pack (see <see cref="Formats.TexturePackBuilder.NumberedMip"/>).
+    /// </summary>
+    public IReadOnlyList<string> Images { get; init; } = [];
 }
 /// <summary>Per-output result: built (and, for an export, written) or failed.</summary>
 public sealed record SourceExportResult(string Path, string Family, string Status, long Bytes, int Items, IReadOnlyList<string> Warnings, string? Error = null);
@@ -185,7 +190,7 @@ public static partial class SourceBuilder
                 bool promised = false, planned = false;
                 foreach (var pack in profile.TexturePacks.Where(pack => pack.Builds(name)))
                 {
-                    if (!pack.Automatic) { packs.Add(new($"{name}/{pack.File}", "textures", textures) { Pack = pack.Variant }); continue; }
+                    if (!pack.Automatic) { packs.Add(new($"{name}/{pack.File}", "textures", textures) { Pack = pack.Variant, Images = images }); continue; }
                     if (!automaticPacks) continue;
                     promised = true;
                     // The automatic pack is named for the texture memory the mission's textures need at full size.
@@ -194,7 +199,7 @@ public static partial class SourceBuilder
                     planned = true;
                     packs.Add(new($"{name}/{automatic.FileName}", "textures", textures)
                     {
-                        Pack = automatic, Automatic = true, FullSize = true,
+                        Pack = automatic, Automatic = true, FullSize = true, Images = images,
                         Notes = memory > budget
                             ? [$"The {name} textures need {(memory + (1 << 20) - 1) >> 20} MB of texture memory at full size, more than the {budget >> 20} MB the profile's automatic rtexture pack may hold; {automatic.FileName} holds them reduced to fit."] : [],
                     });
@@ -739,7 +744,7 @@ public static partial class SourceBuilder
     }
     /// <summary>Whether two plans of an output build it the same way: the same path, family, inputs (in order), pack and notes.</summary>
     internal static bool SamePlan(SourceOutputPlan a, SourceOutputPlan b) => a.Path == b.Path && a.Family == b.Family && a.Pack == b.Pack && a.Automatic == b.Automatic && a.FullSize == b.FullSize
-        && a.Inputs.SequenceEqual(b.Inputs, StringComparer.Ordinal) && a.Notes.SequenceEqual(b.Notes, StringComparer.Ordinal);
+        && a.Inputs.SequenceEqual(b.Inputs, StringComparer.Ordinal) && a.Notes.SequenceEqual(b.Notes, StringComparer.Ordinal) && a.Images.SequenceEqual(b.Images, StringComparer.Ordinal);
 
     /// <summary>
     /// Every lookup by name a mission makes as the game loads it (see <see cref="WorldLookups.Resolve"/>), against
@@ -1158,6 +1163,7 @@ public static partial class SourceBuilder
         List<PackSource> textures = [];
         var (inputs, addressing, warnings) = PackInputs(plan, snapshot, token);
         CheckCount(plan.Path, inputs.Count);
+        CheckImageMips(inputs, plan.Images, token);
         string mission = plan.Path.Split('/')[0];
         // Only the software renderer reads palettes; Direct3D packs are direct colour throughout.
         IReadOnlySet<string> direct = variant.Kind == TexturePackKind.Software ? snapshot.DirectTextures(mission, token) : new HashSet<string>();
@@ -1174,6 +1180,29 @@ public static partial class SourceBuilder
                 + (plan.Automatic ? "" : " Exporting this pack alone plans from the PNG headers of the mission's folders; an export of every output counts the textures as their build does and adds the larger automatic rtexture pack that holds them at full size."));
         }
         return new(built.Bytes, textures.Count, [.. plan.Notes, .. warnings, .. built.Warnings]);
+    }
+    /// <summary>
+    /// Refuses a mission pack texture whose first numbered mipmap (<see cref="TexturePackBuilder.NumberedMip"/>) only an
+    /// interface image provides: the game looks for it in the mission's pack, then in image.zbd (TexDirFindOrCreateByPath,
+    /// retail 0x46d900). A pair within the pack is the pack builder's to refuse.
+    /// </summary>
+    private static void CheckImageMips(List<(string Input, string Name)> inputs, IReadOnlyList<string> images, CancellationToken token)
+    {
+        if (images.Count == 0) return;
+        HashSet<string>? own = null; Dictionary<string, string>? interfaceImages = null;
+        foreach (var (input, name) in inputs)
+        {
+            token.ThrowIfCancellationRequested();
+            if (TexturePackBuilder.NumberedMip(name) is not { } mip) continue;
+            own ??= new(inputs.Select(i => i.Name), StringComparer.OrdinalIgnoreCase);
+            if (own.Contains(mip)) continue;
+            if (interfaceImages == null)
+            {
+                interfaceImages = new(StringComparer.OrdinalIgnoreCase);
+                foreach (string image in images) { token.ThrowIfCancellationRequested(); interfaceImages.TryAdd(Path.GetFileNameWithoutExtension(image), image); }
+            }
+            if (interfaceImages.TryGetValue(mip, out string? file)) throw TexturePackBuilder.NumberedMipConflict(name, Path.GetFileNameWithoutExtension(file), input, file);
+        }
     }
     /// <summary>
     /// A mission pack holds its texture folders and every texture its world uses from elsewhere: a model brought in
