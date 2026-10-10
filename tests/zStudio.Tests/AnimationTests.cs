@@ -92,6 +92,17 @@ public sealed partial class AnimationTests
         var frame = player.EvaluateForTest(.75); Assert.InRange(frame.Nodes[0].Transform.M41, 4.49f, 4.51f); Assert.True(frame.Nodes[0].Visible);
         Assert.True(player.EvaluateForTest(1.4).Nodes[0].Visible); var end = player.EvaluateForTest(1.6); Assert.False(end.Nodes[0].Visible);
         player.EvaluateForTest(.2, true); var replay = player.EvaluateForTest(1.6, true); Assert.Equal(end.Nodes, replay.Nodes); Assert.Equal(end.Trace, replay.Trace);
+        // A seek canceled inside a tick (here while the hide event is admitted) stops at a tick boundary that an
+        // uncanceled run reaches, so resuming the same player gives the same pose, dispatches and sequence states.
+        using var canceled = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        AnimationPlayer? interrupted = null;
+        interrupted = new(Context(package), 0, 1, false, TestContext.Current.CancellationToken, AnimationPlayer.MaximumRetainedStateBytes,
+            () => { if (interrupted?.Time > 1.4) canceled.Cancel(); return 0; });
+        Assert.ThrowsAny<OperationCanceledException>(() => interrupted.AdvanceTo(1.6, true, canceled.Token));
+        Assert.InRange(interrupted.Time, 1.4, 1.59);
+        var resumed = interrupted.EvaluateForTest(1.6, true);
+        Assert.Equal(end.Nodes, resumed.Nodes); Assert.Equal(end.Trace, resumed.Trace);
+        Assert.Equal(end.Sequences, resumed.Sequences); Assert.Equal(end.Diagnostics, resumed.Diagnostics);
     }
     [Fact]
     public void WaitingSequenceReleaseAndStopUseVerifiedStateValues()

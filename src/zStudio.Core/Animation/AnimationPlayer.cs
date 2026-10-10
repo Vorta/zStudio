@@ -149,9 +149,13 @@ public sealed partial class AnimationPlayer
     }
     private void Tick(CancellationToken token)
     {
-        using var binding = BeginBinding(token);
+        // Cancellation is observed only between ticks. Events, child activations and their lookups change the
+        // runtime state as a tick proceeds, and a reused player must stay at a state an uninterrupted run reaches.
+        // The dispatch limit and the binding allowance bound one tick's work instead.
+        token.ThrowIfCancellationRequested();
+        using var binding = BeginBinding(CancellationToken.None);
         ReleaseReplacedSequences();
-        token.ThrowIfCancellationRequested(); ticks++; dispatchBudget = 10000; screenColor = screenWave = Vector4.Zero;
+        ticks++; dispatchBudget = 10000; screenColor = screenWave = Vector4.Zero;
         foreach (var instance in instances.ToArray())
         {
             if (instance.Finished) continue;
@@ -187,6 +191,7 @@ public sealed partial class AnimationPlayer
         // Keep completed root geometry as the final pose, but release nested instances.
         if (instances.RemoveAll(i => i.Finished && i.Id != 1 && !instances.Any(p => p.Children.Values.Contains(i.Id))) > 0)
             InvalidateRetainedState();
+        // The tick is complete; canceling its optional checkpoint only leaves a later seek to replay from an earlier one.
         if (!measuringDuration && ticks % 60 == 0) SaveCheckpoint(token);
     }
     private void Run(Instance instance, Sequence state, float step = (float)StepSeconds)
