@@ -71,7 +71,7 @@ public partial class MainWindow
             plan = await Task.Run(() =>
             {
                 var planned = SourceBlender.PlanUpdate(workspace, checkout, export, force, token);
-                // Scripts that turn or scale a node whose own transform the export adds or removes, here or in other missions.
+                // Scripts that turn or scale a node whose rotation or scale the export changes (theirs replace it), here or in other missions.
                 if (planned.Changes.FirstOrDefault(c => c.Relative.Equals(checkout.Model, StringComparison.OrdinalIgnoreCase)) is { Content: { } content }
                     && workspace.Read(checkout.Model, token, Recoil.Zbd.Core.Gltf.GltfDocument.MaximumJsonBytes) is { } current
                     && SourceObjectEdits.ScriptTransformsReached(workspace, mission, checkout.Model, current, content, provenance, token) is { Count: > 0 } reached)
