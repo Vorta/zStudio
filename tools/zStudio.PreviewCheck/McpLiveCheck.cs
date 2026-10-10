@@ -73,7 +73,7 @@ internal static class McpLiveCheck
                 foreach (string label in new[] { "tank", "pickup" })
                 {
                     bool found = false;
-                    for (int offset = 0; !found; offset += 200)
+                    for (int offset = 0; !found;)
                     {
                         var nodes = await Call("scene_nodes", new { preview, offset, limit = 200 });
                         foreach (var node in nodes["items"]!.AsArray().Where(n => n?["actor"]?[label == "tank" ? "CoordinateSource" : "Pickup"] != null && n?["Metadata"]?["model_index"] != null))
@@ -88,6 +88,10 @@ internal static class McpLiveCheck
                             await EditSelected(label); found = true; break;
                         }
                         if (nodes["nextOffset"] == null) break;
+                        int next = nodes["nextOffset"]!.GetValue<int>();
+                        Equal(offset + nodes["items"]!.AsArray().Count, next, "scene page continuation");
+                        Equal(true, next > offset, "scene page progress");
+                        offset = next;
                     }
                     Equal(true, found, "rendered " + label + " was selectable and editable");
                 }
@@ -200,11 +204,15 @@ internal static class McpLiveCheck
             // Descendant meshes and spawned effects need not share their animation root's name.
             await Call("animation_options", new { preview, changes = new { map = false } });
             var animationCandidates = new List<JsonNode>();
-            for (int offset = 0; ; offset += 200)
+            for (int offset = 0; ;)
             {
                 var page = await Call("scene_nodes", new { preview, offset, limit = 200 });
                 animationCandidates.AddRange(page["items"]!.AsArray().Where(n => n?["Metadata"]?["model_index"] != null).Select(n => n!));
                 if (page["nextOffset"] == null) break;
+                int next = page["nextOffset"]!.GetValue<int>();
+                Equal(offset + page["items"]!.AsArray().Count, next, "animation scene page continuation");
+                Equal(true, next > offset, "animation scene page progress");
+                offset = next;
             }
             int animationRoot = (await Call("preview_state", new { preview }))["animation"]?["root"]?.GetValue<int>() ?? 0;
             bool selectedAnimation = false;

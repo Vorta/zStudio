@@ -2,6 +2,7 @@ using System.Buffers.Binary;
 using Recoil.Zbd.Core;
 using Recoil.Zbd.Core.Animation;
 using Recoil.Zbd.Core.Formats;
+using Recoil.Zbd.Core.Sources;
 using Xunit;
 
 namespace Recoil.Zbd.Tests;
@@ -10,23 +11,27 @@ namespace Recoil.Zbd.Tests;
 public sealed class AnimationWorldDiscoveryTests
 {
     [Fact]
-    public async Task Mw3AnimationSetupDoesNotExpandUnusedEffects()
+    public void TypedEffectInspectionKeepsFirstAttributesAndSharesNestedMapLimit()
     {
-        using var fixture = new Fixture(39, 27, 15);
-        var token = TestContext.Current.CancellationToken;
-        await AnimationPreviewContext.LoadAsync(fixture.Package, fixture.AnimationPath, fixture.Resolver, token: token);
-        var root = ZrdNode.Create(ZrdKind.Array) with { Children = [ZrdNode.Create(ZrdKind.String) with { Text = new string('x', 2_000_000) }] };
-        var resource = fixture.AddResource("effects.zrd", ZrdWriter.Write(root, token));
-        long before = GC.GetTotalAllocatedBytes(true);
-        var context = await AnimationPreviewContext.LoadAsync(fixture.Package, fixture.AnimationPath, fixture.Resolver, token: token);
-        long allocated = GC.GetTotalAllocatedBytes(true) - before;
-        Assert.Empty(context.Effects);
-        Assert.True(allocated < 1_000_000, $"Animation setup allocated {allocated:N0} bytes for unused effects.");
-        Assert.Equal(2_000_000, ((ZrdNode)resource.Assets[0].Content!).Children[0].Text.Length);
+        using var fixture = new Fixture(28, 15, 27);
+        var context = new AnimationPreviewContext { Package = fixture.Package, World = fixture.MatchingWorld };
+        context.ReadEffects(ZrdText.Parse("( model NAME ( first ) NAME ( later ) MAPS ( tex1 tex2 ) SPEED ( 3.5 ) LOOPING ( ON ) )", TestContext.Current.CancellationToken), TestContext.Current.CancellationToken);
+        var effect = Assert.Single(context.Effects).Value;
+        Assert.Equal("first", effect.Name); Assert.Equal("model", effect.ModelName);
+        Assert.Equal(["tex1", "tex2"], effect.Textures); Assert.Equal(3.5f, effect.Speed); Assert.True(effect.Loop);
+        Assert.Equal(-1, effect.RootNode);
+        var huge = ZrdText.Parse("( model NAME ( second ) MAPS ( tex ) )", TestContext.Current.CancellationToken).Children.Single();
+        var children = huge.Children.ToArray();
+        children[^1] = children[^1] with { Children = Enumerable.Repeat(ZrdNode.Create(ZrdKind.String) with { Text = "tex" }, 65535).ToArray() };
+        long before = GC.GetAllocatedBytesForCurrentThread();
+        Assert.Throws<InvalidDataException>(() => context.ReadEffects(huge with { Children = children }, TestContext.Current.CancellationToken));
+        Assert.InRange(GC.GetAllocatedBytesForCurrentThread() - before, 0, 65536);
+        Assert.Single(context.Effects);
     }
 
     [Theory]
     [InlineData(28, 15, 27)]
+    [InlineData(28, 13, 27)] // The August 1998 demo: version-28 animations with version-13 worlds.
     [InlineData(39, 27, 15)]
     public async Task AutoDiscoverySkipsTheOtherGamesWorld(int animationVersion, int worldVersion, int otherVersion)
     {
@@ -38,6 +43,7 @@ public sealed class AnimationWorldDiscoveryTests
 
     [Theory]
     [InlineData(28, 15, 27)]
+    [InlineData(28, 13, 27)] // The August 1998 demo: version-28 animations with version-13 worlds.
     [InlineData(39, 27, 15)]
     public async Task ExplicitSelectionAndMissingCompatibleWorldRetainTheirDiagnostics(int animationVersion, int worldVersion, int otherVersion)
     {
@@ -77,15 +83,6 @@ public sealed class AnimationWorldDiscoveryTests
             BinaryPrimitives.WriteUInt32LittleEndian(prefix, 0x08170616);
             BinaryPrimitives.WriteInt32LittleEndian(prefix.AsSpan(4), animationVersion);
             Package = new() { Prefix = prefix, Tail = [] };
-        }
-
-        public ZbdDocument AddResource(string name, byte[] bytes)
-        {
-            string path = Path.Combine(directory, "resources.zbd");
-            File.WriteAllBytes(path, ResourceEditingTests.Archive((name, bytes)));
-            var resource = FormatRegistry.Default.OpenBytes(path, File.ReadAllBytes(path), FileStamp.Read(path), TestContext.Current.CancellationToken);
-            Resolver.SetWorkspaceSnapshots(snapshotOwner, [OtherWorld, MatchingWorld, resource]);
-            return resource;
         }
 
         private static ZbdDocument World(string path, int version)

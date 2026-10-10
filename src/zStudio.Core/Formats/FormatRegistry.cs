@@ -39,9 +39,9 @@ public sealed class FormatRegistry
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         { return new(FormatFamily.Unknown, null, Recognition.Malformed, ex.Message); }
     }
-    /// <summary>zReader data: resources (<c>.zrd</c>).</summary>
+    /// <summary>zReader data: resources (<c>.zrd</c>) and source projects' animation definitions (<c>.zad</c>), the same syntax.</summary>
     private static bool IsZrdExtension(string extension) =>
-        extension.Equals(".zrd", StringComparison.OrdinalIgnoreCase);
+        extension.Equals(".zrd", StringComparison.OrdinalIgnoreCase) || extension.Equals(Animation.AnimationDefinitionSet.Extension, StringComparison.OrdinalIgnoreCase);
     public static FormatProbe Probe(ReadOnlySpan<byte> prefix, ReadOnlySpan<byte> trailer, long size, string extension = "")
     {
         uint magic = prefix.Length >= 4 ? BinaryPrimitives.ReadUInt32LittleEndian(prefix) : 0;

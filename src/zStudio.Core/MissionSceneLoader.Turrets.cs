@@ -7,56 +7,104 @@ public static partial class MissionSceneLoader
 {
     // Retail turret.cpp 0x437AC0 / 0x4367A0 calls 0x45D6B0 with the actual
     // turret root. That callback runs cleanup, not the destruction sequence.
-    private static void InitializeTurrets(GameScene scene, AnimationPreviewContext? context, JsonNode? ai,
-        List<string> diagnostics, HashSet<int> positioned, CancellationToken token)
+    internal static void InitializeTurrets(GameScene scene, AnimationPreviewContext? context, JsonNode? ai,
+        List<string> diagnostics, HashSet<int> positioned, CancellationToken token, AnimationBindingOperation? bindings = null)
     {
-        if (ai == null) { diagnostics.Add("Mission turrets: ai.zrd is unavailable; turret initialization could not be recovered."); return; }
-        var definitions = Records(ai).ToArray();
+        BoundedDiagnostics notes = new(diagnostics);
+        if (ai == null) { notes.Add($"Mission turrets: ai.zrd is unavailable; turret initialization could not be recovered."); return; }
+        if (context != null) bindings ??= new(context, token);
+        var definitions = Fields(ai);
         var turrets = definitions.FirstOrDefault(p => p.Name == "TURRET").Value;
         if (turrets == null) return;
-        if (context == null) { diagnostics.Add("Mission turrets: animation data is unavailable; stored turret states are retained."); return; }
+        if (context == null) { notes.Add($"Mission turrets: animation data is unavailable; stored turret states are retained."); return; }
+        var work = bindings!;
+        // Observe any prior same-count edit once at this phase boundary. Individual resets below
+        // change only poses/flags; rebuilding the loaded-world name map per turret multiplies work.
+        work.Invalidate();
         string defaultName = FirstString(definitions.FirstOrDefault(p => p.Name == "DESTROY_ANIM").Value);
-        AnimationEntry? Entry(string name) => name.Length == 0 ? null : context.Package.Entries.FirstOrDefault(e => e.Name == name);
+        AnimationEntry? Entry(string name)
+        {
+            work.Reserve(1L + name.Length);
+            if (name.Length == 0) return null; // The reserved empty entry is never a reset.
+            return work.EntryLookup().Find(name, token);
+        }
         var defaultEntry = Entry(defaultName);
         foreach (var (pattern, definition) in Records(turrets))
         {
-            token.ThrowIfCancellationRequested();
+            work.Reserve(1L + pattern.Length);
             int stars = pattern.Count(c => c == '*');
             if (stars is < 1 or > 5)
-            { diagnostics.Add($"Mission turrets: ai.zrd pattern '{pattern}' requires one to five numeric wildcards."); continue; }
-            var matches = scene.Nodes.Where(n => n.Class == "object3d" && NumericPatternMatches(pattern, n.Name))
-                .OrderBy(n => n.Name, StringComparer.Ordinal).ThenBy(n => n.Index).ToArray();
-            if (matches.Length == 0) continue; // Shared definitions can describe turrets absent from this map.
-            var fields = Records(definition).ToArray();
+            { notes.Add($"Mission turrets: ai.zrd pattern '{pattern}' requires one to five numeric wildcards."); continue; }
+            List<GameNode> matches = [];
+            int longest = 0;
+            foreach (var node in scene.Nodes)
+            {
+                // No-match patterns must spend work too, before scanning their authored characters.
+                work.Reserve(1L + (node.Class == "object3d" && pattern.Length == node.Name.Length ? pattern.Length : 0));
+                if (node.Class != "object3d" || !NumericPatternMatches(pattern, node.Name)) continue;
+                work.Reserve(16); matches.Add(node); longest = Math.Max(longest, node.Name.Length);
+            }
+            if (matches.Count == 0) continue; // Shared definitions can describe turrets absent from this map.
+            // Reserve conservative introsort comparisons and its two retained arrays before sorting.
+            int levels = System.Numerics.BitOperations.Log2((uint)matches.Count) + 1;
+            work.Reserve(16L * matches.Count + 4L * matches.Count * (levels + 1) * (longest + 1L));
+            var ordered = matches.OrderBy(n => n.Name, StringComparer.Ordinal).ThenBy(n => n.Index).ToArray();
+            work.Reserve(0);
+            var fields = Fields(definition);
             string explicitName = FirstString(fields.FirstOrDefault(p => p.Name == "DESTROY_ANIM").Value);
             var explicitEntry = Entry(explicitName);
             if (explicitName.Length > 0 && explicitEntry == null)
-                diagnostics.Add($"Mission turrets: ai.zrd '{pattern}' animation '{explicitName}' is unavailable; using the named/default reset when available.");
+                notes.Add($"Mission turrets: ai.zrd '{pattern}' animation '{explicitName}' is unavailable; using the named/default reset when available.");
             string effect = FirstString(fields.FirstOrDefault(p => p.Name == "EFFECT").Value);
-            string[] parts = Strings(fields.FirstOrDefault(p => p.Name == "PARTS").Value).ToArray();
+            List<string> parts = []; int partCount = 0;
+            ReadParts(fields.FirstOrDefault(p => p.Name == "PARTS").Value);
             // PARTS: barrel/firepoint; base/barrel/firepoint; or base/barrel/firepoint1/firepoint2.
-            var firePoints = parts.Length is >= 2 and <= 4 ? parts.Skip(parts.Length == 2 ? 1 : 2).ToArray() : [];
-            foreach (var turret in matches)
+            var firePoints = partCount is >= 2 and <= 4 ? parts.Skip(partCount == 2 ? 1 : 2).ToArray() : [];
+            foreach (var turret in ordered)
             {
                 token.ThrowIfCancellationRequested();
                 foreach (string helper in firePoints.Append(effect).Where(n => n.Length > 0))
                 {
-                    int node = context.FindBelow(turret.Index, helper);
+                    int node = work.First(turret.Index, helper, scene.Nodes.Count);
                     if (node >= 0) scene.Nodes[node].Metadata["flags"] = scene.Nodes[node].Metadata.UInt("flags") & ~4u;
                 }
                 var reset = explicitEntry ?? Entry(turret.Name) ?? defaultEntry;
                 if (reset == null)
-                { diagnostics.Add($"Mission turrets: ai.zrd '{pattern}', node #{turret.Index} '{turret.Name}' has no resolved reset animation; stored state retained."); continue; }
+                { notes.Add($"Mission turrets: ai.zrd '{pattern}', node #{turret.Index} '{turret.Name}' has no resolved reset animation; stored state retained."); continue; }
                 try
                 {
                     List<string> resetDiagnostics = [];
-                    positioned.UnionWith(AnimationPlayer.ApplyInitialization(context, [(reset, true, turret.Index)], resetDiagnostics, token));
-                    diagnostics.AddRange(resetDiagnostics.Select(d => $"Mission turret #{turret.Index} '{turret.Name}' ({reset.Name}): {d}"));
+                    positioned.UnionWith(AnimationPlayer.ApplyInitialization(context, [(reset, true, turret.Index)], resetDiagnostics, token, work, reuseTopology: true));
+                    foreach (string diagnostic in resetDiagnostics)
+                        notes.Add($"Mission turret #{turret.Index} '{turret.Name}' ({reset.Name}): {new BoundedDiagnostics.PreparedMessage(diagnostic)}");
                     turret.Metadata["preview_turret_pattern"] = pattern;
                     turret.Metadata["preview_turret_reset"] = reset.Name;
                 }
-                catch (InvalidDataException ex) { diagnostics.Add($"Mission turret #{turret.Index} '{turret.Name}', {reset.Name}: {ex.Message}"); }
+                catch (InvalidDataException ex) { notes.Add($"Mission turret #{turret.Index} '{turret.Name}', {reset.Name}: {ex.Message}"); }
             }
+
+            void ReadParts(JsonNode? value)
+            {
+                work.Reserve(1);
+                if (value.Text("type") == "string")
+                {
+                    if (partCount++ < 4) { work.Reserve(16); parts.Add(value.Text("value")); }
+                }
+                if (value?["children"] is JsonArray children)
+                    foreach (var child in children) ReadParts(child);
+            }
+        }
+
+        List<(string Name, JsonNode? Value)> Fields(JsonNode? value)
+        {
+            List<(string Name, JsonNode? Value)> result = [];
+            foreach (var record in Records(value))
+            {
+                token.ThrowIfCancellationRequested();
+                bindings?.Reserve(64L + record.Name.Length);
+                result.Add(record);
+            }
+            return result;
         }
     }
 

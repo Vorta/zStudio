@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.IO;
 using Recoil.Zbd.Core.Animation;
 using Recoil.Zbd.Desktop.Audio;
 
@@ -15,8 +16,12 @@ public sealed class AnimationAudio : IDisposable, IAsyncDisposable
     private readonly CancellationTokenSource lifetime = new();
     private readonly Func<IAnimationAudioOutput> createOutput;
     private readonly Func<ReadOnlyMemory<byte>, CancellationToken, PreparedSound> decode;
+    // All retained stereo float arrays, including tail capacity. The serialized worker additionally uses
+    // less than 4 MiB of decoder sample workspace (PreparedSound's rate-scaled read blocks).
+    internal const long MaximumPreparedBytes = 512L * 1024 * 1024;
+    private readonly long maximumPreparedBytes;
     // This cache and the output are owned by the preparation/disposal worker under preparationGate.
-    private Dictionary<ReadOnlyMemory<byte>, PreparedSound> cache = [];
+    private readonly Dictionary<ReadOnlyMemory<byte>, PreparedSound> cache = [];
     private IAnimationAudioOutput? output;
     private Dictionary<string, Binding> bank = new(StringComparer.Ordinal);
     private int preparationGeneration, outputGeneration;
@@ -32,56 +37,96 @@ public sealed class AnimationAudio : IDisposable, IAsyncDisposable
 
     public AnimationAudio() : this(() => new AnimationAudioOutput(), PreparedSound.Decode) { }
     internal AnimationAudio(Func<IAnimationAudioOutput> createOutput,
-        Func<ReadOnlyMemory<byte>, CancellationToken, PreparedSound>? decode = null)
-    { this.createOutput = createOutput; this.decode = decode ?? PreparedSound.Decode; }
+        Func<ReadOnlyMemory<byte>, CancellationToken, PreparedSound>? decode = null, long maximumPreparedBytes = MaximumPreparedBytes)
+    {
+        if (maximumPreparedBytes < 0 || maximumPreparedBytes > MaximumPreparedBytes) throw new ArgumentOutOfRangeException(nameof(maximumPreparedBytes));
+        this.createOutput = createOutput; this.decode = decode ?? PreparedSound.Decode; this.maximumPreparedBytes = maximumPreparedBytes;
+    }
 
     /// <param name="snapshot">A caller-owned frozen context; never the mutable edit package.</param>
     public async Task PrepareAsync(AnimationPreviewContext snapshot, int entryIndex, CancellationToken token = default)
     {
         ObjectDisposedException.ThrowIf(disposed, this);
-        Stop(); IsPrepared = false;
+        Stop(); IsPrepared = false; bank.Clear();
         int generation = ++preparationGeneration;
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(token, lifetime.Token);
-        var result = await Task.Run(async () =>
+        // Serialize through publication as well as decoding: a completed worker result still owns PCM.
+        await preparationGate.WaitAsync(linked.Token);
+        Preparation? result = null;
+        try
         {
-            await preparationGate.WaitAsync(linked.Token).ConfigureAwait(false);
-            try { return Prepare(snapshot, entryIndex, linked.Token); }
-            finally { preparationGate.Release(); }
-        }, linked.Token);
-        linked.Token.ThrowIfCancellationRequested();
-        if (disposed || generation != preparationGeneration) return;
-        bank = result.Bank; IsPrepared = result.Error == null;
-        foreach (string message in result.Diagnostics) Diagnostic?.Invoke(message);
-        if (result.Error != null) Fail(result.Error);
+            result = await Task.Run(() => Prepare(snapshot, entryIndex, linked.Token), linked.Token);
+            linked.Token.ThrowIfCancellationRequested();
+            if (disposed || generation != preparationGeneration) return;
+            bank = result.Bank; IsPrepared = result.Error == null;
+            foreach (string message in result.Diagnostics) Diagnostic?.Invoke(message);
+            if (result.Error != null) Fail(result.Error);
+        }
+        finally
+        {
+            if (result != null && !ReferenceEquals(result.Bank, bank)) result.Bank.Clear();
+            result = null;
+            preparationGate.Release();
+        }
     }
 
     private Preparation Prepare(AnimationPreviewContext snapshot, int entryIndex, CancellationToken token)
     {
         var dependencies = AnimationAudioDependencies.Collect(snapshot.Package, entryIndex, token);
         List<string> diagnostics = [.. dependencies.Diagnostics];
-        Dictionary<string, Binding> next = new(StringComparer.Ordinal);
-        Dictionary<ReadOnlyMemory<byte>, PreparedSound> retained = [];
+        Dictionary<string, AnimationSound> names = new(StringComparer.Ordinal);
+        Dictionary<ReadOnlyMemory<byte>, AnimationSound> requested = [];
         HashSet<ReadOnlyMemory<byte>> unavailable = [];
         foreach (string name in dependencies.Names.Order(StringComparer.Ordinal))
         {
             token.ThrowIfCancellationRequested();
             if (!snapshot.Sounds.TryGetValue(name, out var sound))
             { diagnostics.Add($"Audio preparation: unresolved sound '{name}'."); continue; }
-            if (unavailable.Contains(sound.Bytes)) continue;
+            names.Add(name, sound); requested.TryAdd(sound.Bytes, sound);
+        }
+        // Reset alone leaves queued/active voices alive until a device callback. Drain them on this worker,
+        // synchronized with an in-flight read, before evicting old PCM or admitting its replacement.
+        mixer.ReleaseStoppedSounds();
+        foreach (var bytes in cache.Keys.Where(bytes => !requested.ContainsKey(bytes)).ToArray()) cache.Remove(bytes);
+
+        long admitted = 0;
+        Dictionary<ReadOnlyMemory<byte>, long> capacities = [];
+        HashSet<PreparedSound> counted = [];
+        foreach (var (bytes, sound) in requested)
+        {
+            token.ThrowIfCancellationRequested();
             try
             {
-                if (!retained.TryGetValue(sound.Bytes, out var sample))
-                {
-                    if (!cache.TryGetValue(sound.Bytes, out sample)) sample = decode(sound.Bytes, token);
-                    retained.Add(sound.Bytes, sample);
-                }
-                next.Add(name, new(sample, sound.Loop));
+                long capacity = cache.TryGetValue(bytes, out var sample)
+                    ? counted.Add(sample) ? sample.RetainedBytes : 0
+                    : PreparedSound.RequiredBytes(bytes, token);
+                if (capacity > maximumPreparedBytes - admitted)
+                    return new(new(StringComparer.Ordinal), diagnostics,
+                        $"Reachable sounds exceed the {maximumPreparedBytes:N0}-byte decoded audio allowance. Use fewer or shorter sounds in this animation and its child/cleanup animations");
+                admitted += capacity; capacities.Add(bytes, capacity);
             }
             catch (Exception ex) when (ex is not OperationCanceledException and not OutOfMemoryException and not StackOverflowException)
-            { unavailable.Add(sound.Bytes); diagnostics.Add($"Audio preparation: '{name}' ({sound.FileName}) is unavailable: {ex.Message}"); }
+            { unavailable.Add(bytes); diagnostics.Add($"Audio preparation: '{sound.Name}' ({sound.FileName}) is unavailable: {ex.Message}"); }
+        }
+        // All unique buffers, warm and cold, have been admitted before the first decode. Aliases share PCM.
+        foreach (var (bytes, capacity) in capacities)
+        {
+            token.ThrowIfCancellationRequested();
+            if (cache.ContainsKey(bytes)) continue;
+            var sound = requested[bytes];
+            try
+            {
+                var sample = decode(bytes, token);
+                if (sample.RetainedBytes > capacity) throw new InvalidDataException("Decoded sound exceeds its reserved PCM capacity.");
+                cache.Add(bytes, sample);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException and not OutOfMemoryException and not StackOverflowException)
+            { unavailable.Add(bytes); diagnostics.Add($"Audio preparation: '{sound.Name}' ({sound.FileName}) is unavailable: {ex.Message}"); }
         }
         token.ThrowIfCancellationRequested();
-        cache = retained;
+        Dictionary<string, Binding> next = new(StringComparer.Ordinal);
+        foreach (var (name, sound) in names)
+            if (!unavailable.Contains(sound.Bytes) && cache.TryGetValue(sound.Bytes, out var sample)) next.Add(name, new(sample, sound.Loop));
         string? error = null;
         try
         {
@@ -148,7 +193,7 @@ public sealed class AnimationAudio : IDisposable, IAsyncDisposable
         disposal = Task.Run(async () =>
         {
             await preparationGate.WaitAsync().ConfigureAwait(false);
-            try { RetireOutput(); cache.Clear(); }
+            try { RetireOutput(); mixer.ReleaseStoppedSounds(); cache.Clear(); }
             finally { preparationGate.Release(); lifetime.Dispose(); }
         });
         return disposal;

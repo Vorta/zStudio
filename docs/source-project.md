@@ -6,15 +6,55 @@ Text `.zrd` files open in the shared ZRD viewer and editor (tree, Properties, `z
 
 ## Text formats
 
-### zReader resources (`.zrd`)
+### zReader resources (`.zrd`) and animation definitions (`.zad`)
 
-The original compiler's text syntax did not survive, and the retail engine only reads compiled data, so zStudio defines a lossless syntax. A file lists the children of its root array.
+The original compiler's text syntax did not survive, and the retail engine only reads compiled data, so zStudio defines a lossless syntax, the same for resources and animation definitions. A file lists the children of its root array.
 
 - `( … )` is an array. A key followed by its value array is written on one line: `GRAVITY ( -9.8 )`.
 - Integers are decimal 32-bit values: `42`, `-7`.
 - Floats always contain a decimal point or exponent (`2.0`, `-9.8`, `1E-45`). NaN payloads and infinities use raw bits: `f32:7FC00001`. Values round-trip bit-exactly, including `-0.0` and subnormals. The engine's `GetInt` rejects floats, so the distinction matters.
 - Strings are bare when they start with a letter or `_` and contain only letters, digits, `_`, `.` and `-`; otherwise they are quoted with `\"`, `\\` and `\xNN` escapes. Files are written as ASCII and read as Latin-1.
 - `#` starts a comment outside strings.
+
+### Keyframe scripts (`.zan`)
+
+The original scripts were Softimage "SI Animation Script" exports, compiled by a lost tool. Reconstruction writes them again in that format, and exports compile them as that tool did: the shipped keyframes of the 1998 and 1999 releases come back bit for bit (pad floats aside).
+
+```
+SI Animation Script
+FRAMES: 521
+OBJECTS: 1
+Warning, file version 3.7 is later than DKit release version 3
+Attempt to read: An error may occur...
+Frame: 1
+Object: copter01
+Scaling:     1.000000 1.000000 1.000000
+Rotation:    0.304886 -0.111792 -0.811317
+Translation: 570.880615 48.131424 168.158310
+Warning, file version 3.7 is later than DKit release version 3
+Attempt to read: An error may occur...
+Frame: 6
+...
+```
+
+Each frame block gives every object's scaling, rotation (radians about X, Y and Z, applied Z, then Y, then X; values beyond ±π are allowed) and translation; a definition's `NAME` picks the object. `Frame: n` is frame n − 1 at the definition's `SCRIPT_FRAME_RATE`, and frames may go back (the engine plays reversed segments as authored). The header, blank lines, `#` comment lines and the Softimage DKit messages are not keys; a frame repeated immediately adds nothing.
+
+The compiler turns consecutive frames into keyframe segments: a channel is kept in a segment when it changes (a position or scale component by more than 0.00001, a rotation by a half-angle above 0.00001 radians); the first and last segments keep every channel; a segment with no change is left out. Times are frame × the float of 1/rate; rotations go through the engine's own matrix, Euler and quaternion routines in single precision; rates are the change over the segment, with the spin taken from the engine's quaternion log and its fast square root.
+
+Reconstruction writes the frames the compiler kept, with grid frames on the script's step where every object stood still. Keyed values are the six-decimal values the stored floats came from, and rotations the Euler angles that compile to the stored quaternions. A channel that stops before its next key ends at the value its stored rate reaches; between such points the compiler recorded nothing, and the held frames take the next key's value (as surviving fragments of the original texts show). Scripts of the shipped files also get the DKit messages their exporter wrote: before every frame (after every frame in the `m5doexit.zan` of 20 May 1998), with the Softimage version of the script's stamp date (3.5001 before July 1997, 3.7 until 4 May 1998, then 3.71). A script with no stamp date holds only its frames. The exit scripts list their objects as `vtol1`, `lengine`, `rengine`, `cargodoor`, as the fragments show. Keyframes that no SI script reproduces exactly (two poses at one frame, a first segment that does not move every channel, a value no six-decimal number reads back as, a rotation whose angles take too long to find, or a script larger than a project reads) are written in zStudio's keyframe format instead, with a note. A track whose keyframes are not on the frame grid of its `SCRIPT_FRAME_RATE` is not reconstructed at all, with a note. Translations and scalings of negative zero are written `-0.000000`, which reads back as negative zero. Rotation angles are never written as negative zero: keyframes only such an angle reproduces are written in zStudio's format, with a note (none of the shipped ones need it).
+
+Fallback keyframe scripts allow 65,536 keys per object track and 262,144 keys across one file, within the 16 MiB source-text limit. Compilation shares an allowance of 1,048,576 retained fallback keys across its scripts, reserved before allocating each key. Reconstruction checks the writer's limits before appending tracks, then reparses and recompiles every fallback track to verify its meaningful keyframe values exactly. A fallback that cannot be represented is refused before reconstruction publishes the animation sources. These limits do not change SI compilation arithmetic. Both keyframe dialects read lines and tokens incrementally, observing cancellation during long scans. Each source is limited to 16 MiB and each significant token to 4,096 Latin-1 bytes; long comments and blank lines need no retained line arrays. Accepted object names remain complete, and writers enforce the same token limit before emission.
+
+zStudio's keyframe format lists a track per object; exports compile both formats:
+
+```
+OBJECT copter01
+FRAME 0 POSITION 1429.22 56.43 3107.5 VELOCITY 35.18 -8.75 -45.85 ROTATION 0.929 -0.128 -0.319 0.136 SPIN -0.003 0.130 0.020 SCALE 1 1 1 GROWTH 0 0 0
+FRAME 5 POSITION 1440.95 53.52 3092.22 ROTATION 0.941 -0.121 -0.279 0.148
+FRAME 2599
+```
+
+A key's channels start a segment that runs to the next key; the last key's frame ends the track. Frames count at the definition's `SCRIPT_FRAME_RATE` and may go back. POSITION and SCALE are XYZ, ROTATION a quaternion W X Y Z (not zero). A channel's rate may follow it: VELOCITY and GROWTH per second, SPIN as a rotation vector (half-angle radians per second). Without a rate, the channel moves steadily to its value at the next key that lists it, through any keys in between (their segments carry it on, since the engine holds a channel a segment does not key); with a rate, it moves only until the next key and then holds unless that key lists it. Two keys at the same frame are a cut, which jumps to the second value. A file without OBJECT lines is one track any node may use.
 
 ### Gamegen scripts (`.gs`, `.gw`)
 

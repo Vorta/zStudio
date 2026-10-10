@@ -26,7 +26,7 @@ public sealed partial class AnimationPlayer
                 if (context.Effects.TryGetValue(effectName, out var template) && template.RootNode >= 0)
                 {
                     if (effects.Count + instances.Count < MaximumInstances) effects.Add(new() { Id = ++nextId, Template = template, Position = OffsetPosition(instance, ev.I16(14), ev.Vector(16)) });
-                    else AddNote("Effect instance limit reached (256).");
+                    else { unavailableDuration = true; AddNote("Effect instance limit reached (256)."); }
                 }
                 else AddNote($"Unresolved effect template: {effectName}");
                 return 2;
@@ -212,8 +212,8 @@ public sealed partial class AnimationPlayer
         int slot = ev.I16(50);
         if (starting)
         {
-            string name = ev.Type == 19 ? ev.Text(16) : ev.Text(12, 20);
-            var target = AnimationAudioDependencies.ResolveChild(context.Package, ev);
+            string name = AnimationAudioDependencies.ChildName(ev);
+            var target = entryLookup.ResolveChild(ev);
             if (target == null) { unavailableDuration = true; AddNote($"Unresolved child animation: {name}"); return 2; }
             Vector3? position = null; int? bound = null;
             if (ev.Type == 19) position = OffsetPosition(parent, ev.I16(52), ev.Vector(56));
@@ -223,7 +223,7 @@ public sealed partial class AnimationPlayer
                 if ((flags & 9) != 0) position = OffsetPosition(parent, ev.I16(52), ev.Vector(56));
                 if (ev.I16(44) > 0 && NodeRef(parent, ev.I16(44)) is Node n) bound = n.Source;
             }
-            var child = AddInstance(target, position, bound);
+            var child = AddInstance(target, position, bound, started: true);
             if (child != null)
             {
                 sequence.Child = child.Id; if (slot >= 0) parent.Children[slot] = child.Id;

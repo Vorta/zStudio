@@ -10,6 +10,7 @@ internal sealed class AnimationMixer : ISampleProvider
     private readonly ConcurrentQueue<Command> commands = new();
     private readonly ConcurrentQueue<(int Generation, long Id)> ended = new();
     private readonly Voice?[] voices = new Voice[MaxVoices];
+    private readonly object renderGate = new();
     private int generation, renderGeneration = -1;
     private float volume = .5f;
     public WaveFormat WaveFormat { get; } = WaveFormat.CreateIeeeFloatWaveFormat(PreparedSound.SampleRate, 2);
@@ -22,6 +23,23 @@ internal sealed class AnimationMixer : ISampleProvider
     public bool TryTakeEnded(out (int Generation, long Id) completion) => ended.TryDequeue(out completion);
 
     public int Read(Span<float> buffer)
+    {
+        lock (renderGate) return ReadCore(buffer);
+    }
+    /// <summary>
+    /// Preparation workers release the previous bank only after the callback has stopped reading it.
+    /// UI Reset stays nonblocking; no native device operation happens here.
+    /// </summary>
+    internal void ReleaseStoppedSounds()
+    {
+        lock (renderGate)
+        {
+            while (commands.TryDequeue(out _)) { }
+            Array.Clear(voices);
+            while (ended.TryDequeue(out _)) { }
+        }
+    }
+    private int ReadCore(Span<float> buffer)
     {
         buffer.Clear();
         int current = SynchronizeGeneration();

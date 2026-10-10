@@ -131,8 +131,8 @@ public static partial class MissionAiNetworks
         List<AiNetwork> networks = []; int retained = 0; long omitted = 0;
         foreach (var (archive, asset, id) in inputs)
         {
-            token.ThrowIfCancellationRequested(); var bytes = archive.Slice(asset.Offset, asset.Length); AiNetwork network;
-            try { network = Decode(id, archive.Path, asset.Index, asset.Name, asset.Content as ZrdNode ?? ZrdDecoder.Read(bytes, token), token); }
+            token.ThrowIfCancellationRequested(); AiNetwork network;
+            try { network = Decode(id, archive.Path, asset.Index, asset.Name, ZrdDecoder.ReadAsset(archive, asset, token), token); }
             catch (InvalidDataException ex) { network = new(id, archive.Path, asset.Index, asset.Name, asset.Name, "", 10, [],
                 [new("Warning", $"AI network {archive.Path} / {asset.Name} #{asset.Index}: {ex.Message}", asset.Index, asset.Offset)]); }
             // Many (possibly identically named) members must not compose per-network caps into an unbounded snapshot.

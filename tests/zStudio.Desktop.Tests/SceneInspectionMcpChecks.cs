@@ -74,6 +74,7 @@ internal static class SceneInspectionMcpChecks
         ScenePlacement[] instances = [new(2, -1, "first", Matrix4x4.CreateScale(2, 3, 4) * baseTransform), new(3, -1, "second", Matrix4x4.CreateTranslation(8, 0, 0) * baseTransform)];
         var mesh = new MeshGeometryModel3D { Geometry = new HelixToolkit.SharpDX.MeshGeometry3D { Positions = new Vector3Collection([new(0, 0, 0), new(1, 0, 0), new(0, 1, 0)]), Indices = new IntCollection([0, 1, 2]) }, Instances = instances.Select(p => p.Transform).ToArray() };
         ((List<MeshGeometryModel3D>)typeof(SceneViewport).GetField("meshes", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(viewport)!).Add(mesh);
+        ((Dictionary<HelixToolkit.SharpDX.MeshGeometry3D, (Vector3 Min, Vector3 Max)>)typeof(SceneViewport).GetField("staticMeshBounds", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(viewport)!).Add((HelixToolkit.SharpDX.MeshGeometry3D)mesh.Geometry!, (Vector3.Zero, new(1, 1, 0)));
         foreach (string key in new[] { "placements", "visiblePlacements" })
             ((Dictionary<MeshGeometryModel3D, ScenePlacement[]>)typeof(SceneViewport).GetField(key, BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(viewport)!).Add(mesh, instances);
         typeof(SceneViewport).GetMethod("RegisterInspectionMesh", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(viewport, [mesh, -1, null, -1, -1]);

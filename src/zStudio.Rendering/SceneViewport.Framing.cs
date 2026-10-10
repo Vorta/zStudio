@@ -8,6 +8,8 @@ namespace Recoil.Zbd.Rendering;
 
 public sealed partial class SceneViewport
 {
+    internal Action<long>? StaticFramingMeasured { get; set; }
+
     /// <summary>Frame rendered geometry without changing source selection or animation time.</summary>
     public bool TryFrame(string target, int? node = null, bool manual = true)
     {
@@ -39,6 +41,7 @@ public sealed partial class SceneViewport
         }
         bool assetOnly = animationFrame != null && node == null && target != "all";
         Rect3D bounds = Rect3D.Empty;
+        long staticCorners = 0;
         if (!assetOnly && selectedRuntime == null)
             foreach (var mesh in meshes)
             {
@@ -47,9 +50,10 @@ public sealed partial class SceneViewport
                 {
                     if (IsHorizon(items[i].NodeIndex) || selected != null && !selected.Contains(items[i].NodeIndex)) continue;
                     var transform = ToWpf(mesh.Instances is { } instances && i < instances.Count ? instances[i] : items[i].Transform);
-                    transform.Append(mesh.Transform?.Value ?? Matrix3D.Identity); Include(mesh, transform);
+                    transform.Append(mesh.Transform?.Value ?? Matrix3D.Identity); IncludeStatic(mesh, transform);
                 }
             }
+        StaticFramingMeasured?.Invoke(staticCorners);
         if (animationFrame is { } frame)
             foreach (var pose in frame.Nodes)
             {
@@ -60,6 +64,23 @@ public sealed partial class SceneViewport
                         Include(item.Mesh, item.Mesh.Transform?.Value ?? Matrix3D.Identity);
             }
         return FrameBounds(bounds, manual);
+
+        void IncludeStatic(MeshGeometryModel3D mesh, Matrix3D transform)
+        {
+            if (mesh.Geometry is not MeshGeometry3D geometry || !staticMeshBounds.TryGetValue(geometry, out var local) || !float.IsFinite(local.Min.X)) return;
+            // A transformed local box can loosen the fit under rotation, but contains
+            // every static vertex without revisiting shared geometry per placement.
+            // Animated/morphed geometry below and clipped depth refinement stay exact.
+            for (int corner = 0; corner < 8; corner++)
+            {
+                staticCorners++;
+                var point = transform.Transform(new Point3D(
+                    (corner & 1) == 0 ? local.Min.X : local.Max.X,
+                    (corner & 2) == 0 ? local.Min.Y : local.Max.Y,
+                    (corner & 4) == 0 ? local.Min.Z : local.Max.Z));
+                if (double.IsFinite(point.X) && double.IsFinite(point.Y) && double.IsFinite(point.Z)) bounds.Union(point);
+            }
+        }
 
         void Include(MeshGeometryModel3D mesh, Matrix3D transform)
         {

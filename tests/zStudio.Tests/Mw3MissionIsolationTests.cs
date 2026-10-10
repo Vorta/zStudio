@@ -13,6 +13,45 @@ public sealed class Mw3MissionIsolationTests
     private static CancellationToken Token => TestContext.Current.CancellationToken;
 
     [Fact]
+    public async Task RepeatedActorMetadataRefusesTheWholeLoadBeforeItsSmallAllowanceIsExceeded()
+    {
+        using var fixture = new Mw3MissionFixture(Enumerable.Repeat("actor", 8).ToArray());
+        var original = fixture.World.Scene!;
+        int[] parents = Enumerable.Repeat(0, 128).ToArray();
+        original.Nodes[0] = original.Nodes[0] with { Children = Enumerable.Repeat(1, 128).ToArray() };
+        original.Nodes[1] = original.Nodes[1] with { Parents = parents };
+        original.Nodes[1].Metadata["parent_indices"] = JsonData.Integers(parents, Token);
+        string metadata = original.Nodes[1].Metadata.ToJsonString(), data = original.Nodes[1].Data.ToJsonString();
+        const long allowance = 96 * 1024;
+        MissionPlacementBudget budget = new(Token, maximumCloneBytes: allowance);
+        var error = await Assert.ThrowsAsync<InvalidDataException>(() => MissionSceneLoader.LoadMw3WithBudgetAsync(
+            fixture.World, fixture.Resolver, null, false, budget, Token));
+        Assert.Contains("work or metadata budget", error.Message, StringComparison.Ordinal);
+        Assert.True(budget.Exhausted); Assert.InRange(budget.CloneBytes, 1, allowance);
+        Assert.Equal(2, original.Nodes.Count); Assert.Equal(parents, original.Nodes[1].Parents);
+        Assert.Equal(metadata, original.Nodes[1].Metadata.ToJsonString()); Assert.Equal(data, original.Nodes[1].Data.ToJsonString());
+
+        // The identical small input succeeds with a fresh ordinary allowance, retaining each placement's provenance.
+        // Discovery and loading revisit the same archive, so one document's raw allowance is sufficient.
+        var mission = await MissionSceneLoader.LoadMw3WithBudgetAsync(fixture.World, fixture.Resolver, null, false,
+            new MissionPlacementBudget(Token), Token, new AssetReadBudget(maximumBytes: fixture.ReaderBytes.Length));
+        Assert.Equal(8, mission.Actors.Count); Assert.Equal(9, mission.Scene.Nodes.Count);
+        Assert.Equal(Enumerable.Range(1, 8), mission.Actors.Select(a => a.Root));
+        Assert.All(mission.Actors, a => Assert.Equal(1, a.SourceRoot));
+        Assert.Equal(Enumerable.Range(0, 8), mission.Actors.Select(a => a.CoordinateSource!.RecordIndex));
+        Assert.Equal(metadata, original.Nodes[1].Metadata.ToJsonString()); Assert.Equal(data, original.Nodes[1].Data.ToJsonString());
+        Assert.Equal(fixture.ReaderBytes, File.ReadAllBytes(fixture.ReaderPath));
+
+        // Another valid reader exceeds that allowance: an incomplete catalog must not publish a fallback.
+        File.WriteAllBytes(Path.Combine(fixture.Folder, "readerm2.zbd"), fixture.ReaderBytes);
+        AssetReadBudget reads = new(maximumBytes: fixture.ReaderBytes.Length);
+        await Assert.ThrowsAsync<InvalidDataException>(() => MissionSceneLoader.LoadMw3WithBudgetAsync(
+            fixture.World, fixture.Resolver, null, false, new MissionPlacementBudget(Token), Token, reads));
+        Assert.True(reads.Exhausted);
+        Assert.Equal(fixture.ReaderPath, fixture.Resolver.SelectedMission(fixture.World.Path), ignoreCase: true);
+    }
+
+    [Fact]
     public async Task UnreadableArchivesAreReportedWithoutHidingOtherMissions()
     {
         using var fixture = new Mw3MissionFixture("actor_01");
@@ -293,6 +332,22 @@ public sealed class Mw3MissionIsolationTests
                 var found = await MotionLibrary.LoadAsync(Path.Combine(root, "motion.zbd"), resolver, Token, skipped);
                 Assert.Equal(library, found.Path, ignoreCase: true);
                 Assert.Contains(skipped, s => s.StartsWith("other.zbd:", StringComparison.Ordinal));
+
+                // A warm library is still input to this operation; exhaustion cannot be swallowed as an unreadable file.
+                AssetReadBudget reads = new(maximumBytes: 0);
+                var limited = await Assert.ThrowsAsync<InvalidDataException>(() => MotionLibrary.LoadAsync(Path.Combine(root, "motion.zbd"), resolver,
+                    reads, new CompiledInventory(Token), Token));
+                Assert.True(reads.Exhausted); Assert.Contains("byte allowance", limited.Message, StringComparison.Ordinal);
+                await Assert.ThrowsAsync<CompiledInventoryCapacityException>(() => MotionLibrary.LoadAsync(Path.Combine(root, "motion.zbd"), resolver,
+                    new AssetReadBudget(), new CompiledInventory(1024 * 1024, 1, Token), Token));
+                var retried = await MotionLibrary.LoadAsync(Path.Combine(root, "motion.zbd"), resolver,
+                    new AssetReadBudget(), new CompiledInventory(Token), Token);
+                Assert.Equal(library, retried.Path, ignoreCase: true);
+
+                string second = Path.Combine(root, "second.zbd"); File.WriteAllBytes(second, File.ReadAllBytes(library));
+                var ambiguous = await Assert.ThrowsAsync<InvalidDataException>(() => MotionLibrary.LoadAsync(Path.Combine(root, "motion.zbd"), resolver, Token));
+                Assert.Contains("Multiple mech libraries", ambiguous.Message, StringComparison.Ordinal);
+                File.Delete(second); await resolver.InvalidateAsync([second], Token);
                 File.Delete(library); await resolver.InvalidateAsync([library], Token);
                 var error = await Assert.ThrowsAsync<InvalidDataException>(() => MotionLibrary.LoadAsync(Path.Combine(root, "motion.zbd"), resolver, Token));
                 Assert.Contains("could not be read", error.Message);

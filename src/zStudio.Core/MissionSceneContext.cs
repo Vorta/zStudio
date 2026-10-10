@@ -28,10 +28,22 @@ public sealed class MissionSceneContext
     public MissionLayoutSelection Layout { get; }
     public AiNetworkSnapshot AiNetworks { get; internal set; } = AiNetworkSnapshot.Empty;
     private readonly int originalNodeCount;
-    internal MissionSceneContext(GameScene scene, List<int> sources, List<MissionActor> actors, HashSet<int> dormant, IEnumerable<string> diagnostics, MissionLayoutSelection layout, int originalNodeCount)
+    private readonly MissionActorIndex actorIndex;
+    /// <summary>The unique authored actor occurrence owning this node, or null for absent/ambiguous ownership.</summary>
+    public MissionActor? ActorAt(int node) => actorIndex.At(node);
+
+    /// <summary>Prepare ownership for the actual preview topology, reusing this baseline's index only for its own scene.</summary>
+    public MissionActorIndex PrepareActorIndex(GameScene scene, CancellationToken token = default)
+    {
+        token.ThrowIfCancellationRequested();
+        return ReferenceEquals(scene, Scene) ? actorIndex : MissionActorIndex.Build(scene, Actors, token);
+    }
+
+    internal MissionSceneContext(GameScene scene, List<int> sources, List<MissionActor> actors, HashSet<int> dormant, IEnumerable<string> diagnostics, MissionLayoutSelection layout, int originalNodeCount, CancellationToken token = default)
     {
         Layout = layout; this.originalNodeCount = originalNodeCount;
         Scene = scene; SourceNodes = sources.AsReadOnly(); Actors = actors.AsReadOnly(); DormantRoots = dormant;
+        actorIndex = MissionActorIndex.Build(scene, Actors, token);
         Diagnostics = diagnostics.Distinct(StringComparer.Ordinal).ToArray(); Horizons = FindHorizons(scene);
     }
     /// <summary>Match an instance and its source node; never carry clone indices between layouts.</summary>
@@ -82,9 +94,26 @@ public sealed class MissionSceneContext
 
 public static partial class MissionSceneLoader
 {
-    private static readonly ConditionalWeakTable<ZbdDocument, ConcurrentDictionary<string, MissionSceneContext>> Cache = new();
-    internal static string[] ResourceFiles(string worldPath, AssetResolver resolver) => resolver.ResourceDirectories(worldPath)
-        .SelectMany(d => Directory.EnumerateFiles(d, "*.zbd").Order(StringComparer.OrdinalIgnoreCase)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+    /// <summary>A published context and the MW3 reader its load adopted as the selection, which a reuse adopts again.</summary>
+    private sealed record CachedContext(MissionSceneContext Context, string? AdoptedMission = null);
+    private static readonly ConditionalWeakTable<ZbdDocument, ConcurrentDictionary<string, CachedContext>> Cache = new();
+    private static void Publish(ConcurrentDictionary<string, CachedContext> cache, string key, CachedContext value)
+    {
+        if (cache.Count >= 4) cache.Clear();
+        cache[key] = value;
+    }
+    internal static string[] ResourceFiles(string worldPath, AssetResolver resolver, CancellationToken token = default, CompiledInventory? inventory = null, bool sort = true)
+    {
+        inventory ??= new(token);
+        List<string> files = []; HashSet<string> seen = new(StringComparer.OrdinalIgnoreCase);
+        foreach (string directory in resolver.ResourceDirectories(worldPath, inventory))
+            foreach (string path in inventory.Files(directory, sort))
+            {
+                inventory.Path(path.Length);
+                if (seen.Add(path)) { inventory.Rows(1); files.Add(path); }
+            }
+        inventory.Rows(files.Count); return files.ToArray();
+    }
     public static void Invalidate(ZbdDocument world) => Cache.Remove(world);
 
     /// <param name="mission">MW3 reader requested by the caller. Omitted, the resolver selection is captured before any await.</param>
@@ -93,13 +122,41 @@ public static partial class MissionSceneLoader
         string? mission = null, bool exactMission = false)
     {
         token.ThrowIfCancellationRequested();
-        if (world.Game == GameVariant.MechWarrior3) return await LoadMw3Async(world, resolver, mission ?? resolver.SelectedMission(world.Path), exactMission && mission != null, token).ConfigureAwait(false);
+        bool mw3 = world.Game == GameVariant.MechWarrior3;
+        string? requested = mw3 ? mission ?? resolver.SelectedMission(world.Path) : null;
+        bool exact = exactMission && mission != null;
+        // Discovery, admission and construction read and walk whole decoded documents, never on the caller's (UI)
+        // thread. An unchanged request reuses the context its first load admitted before reading anything.
+        return await Task.Run(() => mw3 ? LoadMw3CachedAsync(world, resolver, requested, exact, token)
+            : LoadRecoilAsync(world, resolver, new PreviewResourceBudget(), package, token, difficulty, shared: false), token).ConfigureAwait(false);
+    }
+
+    internal static async Task<MissionSceneContext> LoadWithResourcesAsync(ZbdDocument world, AssetResolver resolver, PreviewResourceBudget resourcesBudget,
+        AnimationPackage? package = null, CancellationToken token = default, MissionDifficulty difficulty = MissionDifficulty.Medium,
+        string? mission = null, bool exactMission = false)
+    {
+        token.ThrowIfCancellationRequested();
+        resourcesBudget.Retain(world, token);
+        if (world.Game == GameVariant.MechWarrior3) return await LoadMw3WithBudgetAsync(world, resolver, mission ?? resolver.SelectedMission(world.Path), exactMission && mission != null,
+            new MissionPlacementBudget(token), token, preview: resourcesBudget).ConfigureAwait(false);
+        return await LoadRecoilAsync(world, resolver, resourcesBudget, package, token, difficulty, shared: true).ConfigureAwait(false);
+    }
+
+    /// <param name="shared">The budget also admits the caller's later resources, so even a reused context first admits its dependencies.</param>
+    private static async Task<MissionSceneContext> LoadRecoilAsync(ZbdDocument world, AssetResolver resolver, PreviewResourceBudget resourcesBudget,
+        AnimationPackage? package, CancellationToken token, MissionDifficulty difficulty, bool shared)
+    {
+        token.ThrowIfCancellationRequested();
         var requested = MissionLayoutSelection.For(difficulty);
         string directory = Path.GetDirectoryName(world.Path)!;
-        var files = ResourceFiles(world.Path, resolver);
-        string key = difficulty + "|" + resolver.SnapshotRevision + "|" + string.Join('|', files.Select(p => p + FileStamp.Read(p))) + (package == null ? "" : Convert.ToHexString(SHA256.HashData(AnimationWriter.Write(package))));
+        CompiledInventory inventory = new(token);
+        var files = ResourceFiles(world.Path, resolver, token, inventory);
+        string key = difficulty + "|" + resolver.SnapshotRevision + "|" + inventory.Fingerprint(files) + (package == null ? "" : Convert.ToHexString(SHA256.HashData(AnimationWriter.Write(package, token))));
         var cache = Cache.GetOrCreateValue(world);
-        if (cache.TryGetValue(key, out var cached)) return cached;
+        // The key holds every input of the build (world identity, published snapshots, each file's stamp, difficulty
+        // and animations): a private load's context was admitted with exactly these, so reuse it before any read or walk.
+        if (!shared && cache.TryGetValue(key, out var reused)) return reused.Context;
+        if (!shared) resourcesBudget.Retain(world, token);
         List<string> diagnostics = []; Dictionary<string, (ZbdDocument Archive, AssetRecord Asset)> resources = new(StringComparer.OrdinalIgnoreCase);
         List<(ZbdDocument Archive, AssetRecord Asset)> aiResources = [];
         foreach (string file in files)
@@ -109,19 +166,26 @@ public static partial class MissionSceneLoader
             try
             {
                 if (package == null && family == FormatFamily.Animation && Path.GetDirectoryName(file)!.Equals(directory, StringComparison.OrdinalIgnoreCase))
-                    package = (await resolver.OpenCachedAsync(file, token).ConfigureAwait(false)).Animations;
+                    package = (await resourcesBudget.OpenAsync(file, resolver, token).ConfigureAwait(false)).Animations;
                 if (family != FormatFamily.Archive) continue;
-                var archive = await resolver.OpenCachedAsync(file, token).ConfigureAwait(false);
+                var archive = await resourcesBudget.OpenAsync(file, resolver, token).ConfigureAwait(false);
                 if (MissionSceneLoader.ParseError(archive) is { } parseError) diagnostics.Add($"Mission layout: {Path.GetFileName(file)}: {parseError}");
-                aiResources.AddRange(archive.Assets.Where(a => MissionAiNetworks.IsCandidate(a.Name)).Select(a => (archive, a)));
+                foreach (var asset in archive.Assets.Where(a => MissionAiNetworks.IsCandidate(a.Name)))
+                {
+                    resourcesBudget.Member(asset.Length, token); // Read hashes even an undecoded/malformed member.
+                    if (asset.Content is ZrdNode tree) resourcesBudget.Interpret(tree, token);
+                    aiResources.Add((archive, asset));
+                }
                 foreach (var asset in archive.Assets.Where(a => a.Name.ToLowerInvariant() is "aiv.zrd" or "aiv_easy.zrd" or "aiv_hard.zrd" or "vehicle.zrd" or "vehicle_easy.zrd" or "vehicle_hard.zrd" or "startanims.zrd" or "ai.zrd" or "puppies.zrd" or "puppies_easy.zrd" or "puppies_hard.zrd"))
                 {
                     resources.TryAdd(asset.Name, (archive, asset));
                 }
             }
-            catch (Exception ex) when (ex is InvalidDataException or IOException or UnauthorizedAccessException)
+            catch (Exception ex) when (!resourcesBudget.Exhausted && (ex is InvalidDataException or IOException or UnauthorizedAccessException))
             { diagnostics.Add($"Mission layout: {Path.GetFileName(file)}: {ex.Message}"); }
         }
+        // A cached scene must not bypass the shared load's admission of its current dependencies.
+        if (cache.TryGetValue(key, out var cached)) return cached.Context;
         string aivName = Select(requested.AivResource, "aiv.zrd"), vehicleName = Select(requested.VehicleResource, "vehicle.zrd");
         string pickupName = Select(requested.PickupResource, "puppies.zrd");
         var selection = new MissionLayoutSelection(difficulty, aivName, vehicleName, pickupName);
@@ -136,8 +200,7 @@ public static partial class MissionSceneLoader
             return context;
         }, token).ConfigureAwait(false);
         token.ThrowIfCancellationRequested();
-        if (cache.Count >= 4) cache.Clear();
-        cache[key] = result; return result;
+        Publish(cache, key, new(result)); return result;
 
         string Select(string name, string fallback)
         {
@@ -149,10 +212,19 @@ public static partial class MissionSceneLoader
             if (!resources.TryGetValue(name, out var resource)) return null;
             try
             {
-                var tree = ZrdDecoder.Decode(resource.Archive.Slice(resource.Asset.Offset, resource.Asset.Length), token);
+                var decoded = ZrdDecoder.ReadAsset(resource.Archive, resource.Asset, token);
+                resourcesBudget.Interpret(decoded, token);
+                var tree = decoded.ToJson(token);
                 if (name.StartsWith("puppies", StringComparison.Ordinal)) _ = PickupRecords(tree);
                 else if (name != "startanims.zrd") _ = Records(tree).ToArray();
                 return tree;
+            }
+            catch (InvalidDataException ex) when (!resourcesBudget.Exhausted && resource.Asset.Metadata["typed_decode_limited"]?.GetValue<bool>() == true)
+            {
+                // The archive deliberately kept this member raw. Do not decode it again or silently substitute a
+                // different difficulty's layout; the remaining preview stays available with an explicit omission.
+                diagnostics.Add($"Mission {difficulty}: {name} in {resource.Archive.Path}: {ex.Message}");
+                return null;
             }
             catch (InvalidDataException ex) { throw new InvalidDataException($"Mission {difficulty}: {name} in {resource.Archive.Path}: {ex.Message}", ex); }
         }
@@ -160,6 +232,12 @@ public static partial class MissionSceneLoader
 
     public static MissionSceneContext Build(ZbdDocument world, AnimationPackage? package, JsonNode? aiv, JsonNode? vehicles, JsonNode? starts, IEnumerable<string>? initialDiagnostics = null, CancellationToken token = default, MissionLayoutSelection? selection = null,
         JsonNode? ai = null, JsonNode? pickups = null, MissionResourceSource? pickupSource = null, MissionResourceSource? aivSource = null)
+        => BuildWithBudget(world, new MissionPlacementBudget(token), package, aiv, vehicles, starts, initialDiagnostics, token, selection, ai, pickups, pickupSource, aivSource);
+
+    internal static MissionSceneContext BuildWithBudget(ZbdDocument world, MissionPlacementBudget budget, AnimationPackage? package, JsonNode? aiv, JsonNode? vehicles, JsonNode? starts,
+        IEnumerable<string>? initialDiagnostics = null, CancellationToken token = default, MissionLayoutSelection? selection = null,
+        JsonNode? ai = null, JsonNode? pickups = null, MissionResourceSource? pickupSource = null, MissionResourceSource? aivSource = null,
+        long maximumBindingWork = AnimationBindingOperation.MaximumUnits)
     {
         selection ??= MissionLayoutSelection.For(MissionDifficulty.Medium);
         token.ThrowIfCancellationRequested();
@@ -167,60 +245,83 @@ public static partial class MissionSceneLoader
         GameScene scene = new(); scene.Models.AddRange(original.Models); scene.Materials.AddRange(original.Materials); scene.Textures.AddRange(original.Textures);
         foreach (var node in original.Nodes)
         {
-            token.ThrowIfCancellationRequested();
+            budget.Clone(node);
             scene.Nodes.Add(node with { Parents = [.. node.Parents], Children = [.. node.Children], Data = (JsonObject)node.Data.DeepClone(), Metadata = (JsonObject)node.Metadata.DeepClone() });
         }
         List<int> sources = original.Nodes.Select(n => n.Index).ToList(); List<MissionActor> actors = []; List<string> notes = initialDiagnostics?.ToList() ?? [];
         HashSet<int> positioned = [];
         var previewWorld = new ZbdDocument(world.Path, world.Stamp, world.Probe, world.Bytes) { Scene = scene };
-        AnimationPreviewContext? context = package == null ? null : new() { Package = package, World = previewWorld };
-        if (context != null) Initialize(true, []);
-        try { InitializeTurrets(scene, context, ai, notes, positioned, token); }
+        AnimationPreviewContext? context = package == null ? null : new() { Package = package, World = previewWorld, LoadedNodeCount = original.Nodes.Count };
+        AnimationBindingOperation? bindings = context == null ? null : new(context, token, maximumBindingWork);
+        HashSet<string> vehicleNames = new(StringComparer.Ordinal);
+        foreach (var record in Records(vehicles)) { budget.Name(record.Name); vehicleNames.Add(record.Name); }
+        // The load and the startup list share one first frame (AnimationPlayer.ApplyInitialization), which tests range-gated
+        // animations against the local player's spawn position.
+        string[] startup = context == null ? [] : Startup(starts, budget); HashSet<(int Entry, int Root)> running = [];
+        Vector3? player = context == null ? null : PlayerStart(aiv, vehicleNames, budget);
+        if (context != null) Initialize(true);
+        try { InitializeTurrets(scene, context, ai, notes, positioned, token, bindings); }
         catch (InvalidDataException ex) { notes.Add($"Mission turrets: ai.zrd initialization is incomplete: {ex.Message}"); }
         int worldRoot = scene.Nodes.FirstOrDefault(n => n.Class == "world")?.Index ?? -1;
-        var vehicleNames = Records(vehicles).Select(p => p.Name).ToHashSet(StringComparer.Ordinal);
+        MissionPlacementState placement = new(scene, original.Nodes.Count, worldRoot, budget); placement.Initialize();
+        BoundedDiagnostics placementNotes = new(notes);
+        MissionResourceSource? coordinateSource = null; string? actorLabel = null;
         if (vehicles == null) notes.Add($"Mission starting layout: {selection.VehicleResource} is unavailable; vehicle definitions could not be recovered.");
         if (aiv == null) notes.Add($"Mission starting layout: {selection.AivResource} is unavailable; vehicle spawn positions could not be recovered.");
         else if (worldRoot >= 0)
             foreach (var ((name, value), recordIndex) in Records(aiv).Select((record, index) => (record, index)))
             {
-                token.ThrowIfCancellationRequested();
+                budget.Name(name);
                 if (value?["children"] is not JsonArray data || data.Count != 3 || data[1]?["children"] is not JsonArray xyz) continue;
                 string templateName = VehicleTemplateName(name);
+                budget.Name(templateName);
                 if (!vehicleNames.Contains(templateName)) continue;
                 try
                 {
                     if (xyz.Count != 3) throw new InvalidDataException("Expected three spawn coordinates.");
-                    Vector3 position = new(Number(xyz[0]), Number(xyz[1]), Number(xyz[2])); float yaw = Number(data[2]) * MathF.PI / 180;
-                    int root = scene.Nodes.FirstOrDefault(n => n.Class == "object3d" && n.Name == name)?.Index ?? -1;
+                    Vector3 position = new(Number(xyz[0]), Number(xyz[1]), Number(xyz[2])); float heading = Number(data[2]);
+                    float yaw = (float)(heading * (Math.PI / 180));
+                    var pose = Matrix4x4.CreateRotationY(yaw) * Matrix4x4.CreateTranslation(position);
+                    ValidatePose(pose); // Refuse before a clone enters the live index or an existing root changes.
+                    // CreateFromNamesAtPose (0x421ab0) looks both names up among all live nodes, the most recently created first
+                    // (FindByTypeAndName, docs/engine-evidence.md), and uses what it finds as the vehicle whatever its class.
+                    int root = placement.Live(name);
                     if (root < 0)
                     {
-                        int template = scene.Nodes.FirstOrDefault(n => n.Class == "object3d" && n.Name == templateName)?.Index ?? -1;
-                        if (template < 0) throw new InvalidDataException($"Missing template {templateName}.");
+                        int template = placement.Live(templateName);
+                        if (template < 0) throw new InvalidDataException($"Missing template {JsonData.ShownText(templateName, 192)}.");
+                        if (scene.Nodes[template].Class != "object3d") throw new InvalidDataException($"The game copies the {JsonData.ShownText(scene.Nodes[template].Class, 64)} node {JsonData.ShownText(templateName, 192)} (#{template}) as this vehicle, which the preview does not show.");
                         root = CloneTree(template, name);
                     }
-                    SetPose(scene, root, Matrix4x4.CreateRotationY(yaw) * Matrix4x4.CreateTranslation(position));
+                    else if (scene.Nodes[root].Class != "object3d") throw new InvalidDataException($"The game places the {JsonData.ShownText(scene.Nodes[root].Class, 64)} node #{root} of this name as the vehicle, which the preview does not show.");
+                    SetPose(scene, root, pose);
                     scene.Nodes[root].Metadata["flags"] = scene.Nodes[root].Metadata.UInt("flags") | 4;
+                    budget.Take(scene.Nodes[root].Parents.Length);
                     if (!scene.Nodes[root].Parents.Contains(worldRoot)) scene.Nodes[root] = scene.Nodes[root] with { Parents = [worldRoot] };
-                    scene.Nodes[worldRoot] = scene.Nodes[worldRoot] with { Children = scene.Nodes[worldRoot].Children.Append(root).Distinct().ToArray() };
-                    positioned.Add(root); actors.Add(new(root, sources[root], name, $"{selection.AivResource} · {selection.Difficulty}", CoordinateSource: aivSource == null ? null :
-                        new(Path.GetFullPath(aivSource.ArchivePath).ToUpperInvariant(), aivSource.AssetIndex, aivSource.ResourceName.ToUpperInvariant(), recordIndex), PlacementPosition: position, PlacementRotation: new(0, Number(data[2]), 0)));
+                    placement.Attach(root, aiv: true); placement.Actor(root);
+                    if (actorLabel == null) { budget.TextCopy(selection.AivResource.Length + 32L); actorLabel = $"{selection.AivResource} · {selection.Difficulty}"; }
+                    positioned.Add(root); actors.Add(new(root, sources[root], name, actorLabel, CoordinateSource: CoordinateSource(recordIndex),
+                        PlacementPosition: position, PlacementRotation: new(0, heading, 0)));
                 }
-                catch (InvalidDataException ex) { notes.Add($"Mission actor {name}: {ex.Message}"); }
+                catch (InvalidDataException ex) when (!budget.Exhausted) { placementNotes.Add($"Mission actor {name}: {ex.Message}"); }
             }
         PlacePickups(scene, sources, actors, positioned, worldRoot, world.Path, original.Nodes.Count, pickups,
-            pickupSource ?? new(world.Path, -1, selection.PickupResource), selection, CloneTree, notes, token);
-        if (context != null)
-        {
-            string[] startup = Pairs(starts).Where(p => p.Name == "NEW_GAME_START").SelectMany(p => Strings(p.Value)).ToArray();
-            Initialize(false, startup);
-        }
+            pickupSource ?? new(world.Path, -1, selection.PickupResource), selection, CloneTree, placementNotes, token, placement, budget);
+        // Startup initialization traverses the scene, so publish the one accumulated adjacency before it runs.
+        placement.PublishChildren();
+        if (context != null) Initialize(false);
         HashSet<int> dormant = [];
         if (context != null)
+        {
+            // Startup and placement may have changed topology without changing its count. Dormant references
+            // belong to this same preparation allowance, including entries that skipped initialization entirely.
+            bindings!.Invalidate();
             foreach (var entry in package!.Entries)
+            {
+                bindings.Reserve(1);
                 foreach (var ev in entry.Sequences.SelectMany(s => s.Events))
                 {
-                    token.ThrowIfCancellationRequested();
+                    bindings.Reserve(1);
                     if (ev.Spec == null || ev.Bytes.Length < ev.Spec.Size) continue;
                     try
                     {
@@ -230,52 +331,99 @@ public static partial class MissionSceneLoader
                         else if (ev.Type == 7 && (ev.U32(12) & 1) == 0 && ev.I16(30) == 0)
                         { reference = ev.I16(28); position = ev.Vector(16); }
                         else continue;
-                        int root = context.ResolveNode(entry, reference);
+                        int boundRoot = bindings.Root(entry);
+                        int root = context.ResolveInstanceNode(entry, reference, boundRoot, context.Binding(entry, boundRoot, bindings), bindings);
                         if (root < 0 || positioned.Contains(root) || position.LengthSquared() < .0001f) continue;
                         var node = scene.Nodes[root];
+                        bindings.Reserve(32L + node.Parents.Length);
                         if (node.Class == "object3d" && node.Parents.Contains(worldRoot) && SceneBuilder.LocalTransform(node).Translation.LengthSquared() < .0001f)
                             dormant.Add(root);
                     }
                     catch (InvalidDataException ex) { notes.Add($"Mission placement {entry.Name}: {ex.Message}"); }
                 }
+            }
+        }
         foreach (int root in dormant)
         {
             scene.Nodes[root].Metadata["preview_pending_placement"] = true;
             notes.Add($"Mission preview approximation: {scene.Nodes[root].Name} is hidden until an animation supplies its world placement.");
         }
-        foreach (int root in positioned.Where(i => scene.Nodes[i].Class == "object3d" && !actors.Any(a => a.Root == i)))
-            if (scene.Nodes[root].Parents.Contains(worldRoot)) actors.Add(new(root, sources[root], scene.Nodes[root].Name, "Animation initialization"));
-        return new(scene, sources, actors, dormant, notes, selection, original.Nodes.Count);
-
-        void Initialize(bool cleanup, string[] startup)
+        foreach (int root in positioned)
         {
-            try { positioned.UnionWith(AnimationPlayer.ApplyInitialization(context!, cleanup, startup, notes, token)); }
+            budget.Take();
+            if (scene.Nodes[root].Class != "object3d" || placement.HasActor(root)) continue;
+            budget.Take(scene.Nodes[root].Parents.Length);
+            if (scene.Nodes[root].Parents.Contains(worldRoot)) { placement.Actor(root); actors.Add(new(root, sources[root], scene.Nodes[root].Name, "Animation initialization")); }
+        }
+        return new(scene, sources, actors, dormant, notes, selection, original.Nodes.Count, token);
+
+        MissionPickupSource? CoordinateSource(int recordIndex)
+        {
+            if (aivSource == null) return null;
+            // Resolve only for a successfully placed record, just as before. Each record keeps its own index,
+            // while immutable full path/member identities are normalized and retained once for this operation.
+            coordinateSource ??= new(budget.SourceIdentity(aivSource.ArchivePath, fullPath: true), aivSource.AssetIndex,
+                budget.SourceIdentity(aivSource.ResourceName));
+            return new(coordinateSource.ArchivePath, coordinateSource.AssetIndex, coordinateSource.ResourceName, recordIndex);
+        }
+
+        void Initialize(bool load)
+        {
+            try { positioned.UnionWith(AnimationPlayer.ApplyInitialization(context!, load, startup, notes, token, bindings, running, player)); }
             catch (InvalidDataException ex) { notes.Add($"Mission initialization is incomplete: {ex.Message}"); }
         }
 
         int CloneTree(int template, string name)
         {
-            Dictionary<int, int> map = []; HashSet<int> path = [];
+            // A later placement can copy the newest live descendant of an earlier clone. Only nodes made
+            // by this copy are out of bounds; original source ordinals continue through the sources map.
+            int before = scene.Nodes.Count;
+            Dictionary<int, int> map = []; HashSet<int> path = []; Dictionary<int, List<int>> parents = [];
             int Copy(int index, int depth)
             {
-                token.ThrowIfCancellationRequested();
+                budget.Take();
                 if (depth > 256 || !path.Add(index)) throw new InvalidDataException("Cyclic mission template hierarchy.");
                 try
                 {
                     if (map.TryGetValue(index, out int existing)) return existing;
-                    if (index < 0 || index >= original.Nodes.Count || scene.Nodes.Count >= 200000) throw new InvalidDataException("Invalid or excessive mission hierarchy.");
-                    var source = scene.Nodes[index]; int id = scene.Nodes.Count; map[index] = id; sources.Add(sources[index]);
+                    if (index < 0 || index >= before || scene.Nodes.Count >= 200000) throw new InvalidDataException("Invalid or excessive mission hierarchy.");
+                    var source = scene.Nodes[index];
+                    // CopyNodeDispatch never copies these classes (docs/engine-evidence.md, Runtime capacity).
+                    if (source.Class is "light" or "sound" or "animate" or "sequence" or "switch" or "world") return -1;
+                    var explicitChildren = placement.Children(source); budget.Clone(source, explicitChildren.Count);
+                    int id = scene.Nodes.Count; map[index] = id; sources.Add(sources[index]); parents.Add(id, []);
                     scene.Nodes.Add(source with { Index = id, Name = index == template ? name : source.Name, Parents = [], Children = [], Data = (JsonObject)source.Data.DeepClone(), Metadata = (JsonObject)source.Metadata.DeepClone() });
-                    var children = SceneBuilder.Children(source).Select(c => Copy(c, depth + 1)).ToArray();
-                    scene.Nodes[id] = scene.Nodes[id] with { Children = children };
-                    foreach (int child in children) scene.Nodes[child] = scene.Nodes[child] with { Parents = scene.Nodes[child].Parents.Append(id).ToArray() };
+                    List<int> children = [];
+                    // Clone admission already charged all raw children and partition JSON, before this iterator's
+                    // stable Distinct can allocate. Keep the shared child semantics (including malformed input).
+                    foreach (int originalChild in SceneBuilder.Children(source, explicitChildren))
+                    {
+                        budget.Take(); int child = Copy(originalChild, depth + 1);
+                        if (child < 0)
+                        {
+                            // CopyObject3DNode skips null dispatch results; Camera/LOD abort their copy.
+                            // Roll back our unpublished copy instead of emulating the engine's leaked nodes.
+                            if (source.Class == "object3d") continue;
+                            throw new InvalidDataException($"The game cannot copy a {source.Class} template with a noncopyable child.");
+                        }
+                        children.Add(child);
+                    }
+                    budget.Take(children.Count);
+                    scene.Nodes[id] = scene.Nodes[id] with { Children = children.ToArray() };
+                    // Add only after all descendants, matching the original reciprocal-parent occurrence order.
+                    foreach (int child in children) { budget.Take(); parents[child].Add(id); }
                     return id;
                 }
                 finally { path.Remove(index); }
             }
-            int before = scene.Nodes.Count;
-            try { return Copy(template, 0); }
+            try
+            {
+                int root = Copy(template, 0);
+                foreach (var (id, list) in parents) { budget.Take(list.Count); scene.Nodes[id] = scene.Nodes[id] with { Parents = list.ToArray() }; }
+                placement.Cloned(before); return root;
+            }
             catch { scene.Nodes.RemoveRange(before, scene.Nodes.Count - before); sources.RemoveRange(before, sources.Count - before); throw; }
+
         }
     }
     public static string VehicleTemplateName(string name)
@@ -285,25 +433,109 @@ public static partial class MissionSceneLoader
     }
     internal static void SetPose(GameScene scene, int index, Matrix4x4 m)
     {
-        if (!float.IsFinite(m.GetDeterminant()) || !float.IsFinite(m.M41) || !float.IsFinite(m.M42) || !float.IsFinite(m.M43)) throw new InvalidDataException("Nonfinite mission pose.");
+        ValidatePose(m);
         var data = scene.Nodes[index].Data; data["flags"] = data.UInt("flags") & ~8u;
         data["transform"] = new JsonArray(new[] { m.M11,m.M12,m.M13,m.M21,m.M22,m.M23,m.M31,m.M32,m.M33,m.M41,m.M42,m.M43 }.Select(v => (JsonNode?)JsonValue.Create(v)).ToArray());
         Matrix4x4.Decompose(m, out var scale, out var rotation, out _); var euler = AnimationMath.ToEuler(rotation);
         data["scale"] = Vector(scale); data["rotate"] = Vector(euler);
+        // Version 13 (the 1998 demos) also stores the translation of these components (Object3DTranslate's), beside the matrix.
+        if (data.ContainsKey("translate")) data["translate"] = Vector(m.Translation);
         static JsonObject Vector(Vector3 v) => new() { ["x"] = v.X, ["y"] = v.Y, ["z"] = v.Z };
+    }
+    private static void ValidatePose(Matrix4x4 m)
+    {
+        if (!float.IsFinite(m.GetDeterminant()) || !float.IsFinite(m.M41) || !float.IsFinite(m.M42) || !float.IsFinite(m.M43))
+            throw new InvalidDataException("Nonfinite mission pose.");
     }
     private static float Number(JsonNode? n)
     { float value = JsonData.Scalar(n?["value"], float.NaN); if (!float.IsFinite(value)) throw new InvalidDataException("Nonfinite or missing spawn coordinate/heading."); return value; }
-    private static IEnumerable<string> Strings(JsonNode? node)
+    /// <summary>
+    /// The local player's spawn position: <c>InitMissionRuntimeFromWorldAndCamera</c> (0x41fe90) makes the first vehicle it
+    /// creates, from the first AIV record whose template the vehicle resource defines, the local player, and stores its
+    /// position as the reference range-gated animations test (<c>SetConditionalRefPos</c> 0x458af0). Records whose spawn
+    /// the placement below refuses as malformed are skipped here too.
+    /// </summary>
+    private static Vector3? PlayerStart(JsonNode? aiv, HashSet<string> vehicles, MissionPlacementBudget budget)
     {
-        if (node.Text("type") == "string") yield return node.Text("value");
-        if (node?["children"] is JsonArray children) foreach (var child in children) foreach (string value in Strings(child)) yield return value;
+        foreach (var (name, value) in Records(aiv))
+        {
+            budget.Name(name);
+            if (value?["children"] is not JsonArray data || data.Count != 3 || data[1]?["children"] is not JsonArray xyz) continue;
+            string template = VehicleTemplateName(name);
+            budget.Name(template);
+            if (!vehicles.Contains(template) || xyz.Count != 3) continue;
+            try { Vector3 position = new(Number(xyz[0]), Number(xyz[1]), Number(xyz[2])); Number(data[2]); return position; }
+            catch (InvalidDataException) when (!budget.Exhausted) { }
+        }
+        return null;
     }
-    private static IEnumerable<(string Name, JsonNode? Value)> Pairs(JsonNode? node)
+    private static string[] Startup(JsonNode? node, MissionPlacementBudget budget)
     {
-        if (node?["children"] is not JsonArray children) yield break;
-        for (int i = 0; i + 1 < children.Count; i++) if (children[i].Text("type") == "string") yield return (children[i].Text("value"), children[i + 1]);
-        foreach (var child in children) foreach (var pair in Pairs(child)) yield return pair;
+        // Direct Build callers can supply cold JsonNode containers. Admit their possible materialization
+        // before reading children; the same conservative metadata allowance also covers the output below.
+        budget.JsonCopy(node);
+        budget.Storage(96);
+        List<string> startup = [];
+        foreach (var pair in Pairs(node, budget))
+            if (pair.Name == "NEW_GAME_START")
+                foreach (string name in Strings(pair.Value, budget))
+                {
+                    // References, not copied strings: list growth/old backing plus the final array may overlap.
+                    budget.Storage(32);
+                    startup.Add(name);
+                }
+        budget.Take(startup.Count);
+        return startup.ToArray();
+    }
+    private static IEnumerable<string> Strings(JsonNode? node, MissionPlacementBudget budget)
+    {
+        foreach (var item in StartupNodes(node, budget))
+            if (item.Text("type") == "string")
+            {
+                string value = item.Text("value"); budget.Name(value);
+                yield return value;
+            }
+    }
+    private static IEnumerable<(string Name, JsonNode? Value)> Pairs(JsonNode? node, MissionPlacementBudget budget)
+    {
+        // Preserve the existing pair preorder: all adjacent string/next-sibling pairs at this level,
+        // then its children in order. Nested key strings and repeated names are not silently removed.
+        foreach (var item in StartupNodes(node, budget))
+            if (item?["children"] is JsonArray children)
+                for (int i = 0; i + 1 < children.Count; i++)
+                {
+                    budget.Take();
+                    if (children[i].Text("type") != "string") continue;
+                    string name = children[i].Text("value"); budget.Name(name);
+                    yield return (name, children[i + 1]);
+                }
+    }
+    private static IEnumerable<JsonNode?> StartupNodes(JsonNode? node, MissionPlacementBudget budget)
+    {
+        // An explicit stack avoids forwarding every yielded leaf through every recursive ancestor.
+        // Each visit and stack allocation is charged to the whole Build, including repeated matches.
+        budget.Storage(64);
+        Stack<(JsonArray Children, int Next)> parents = new();
+        while (true)
+        {
+            budget.Take();
+            yield return node;
+            if (node?["children"] is JsonArray { Count: > 0 } children)
+            {
+                budget.Storage(64);
+                parents.Push((children, 1)); node = children[0];
+                continue;
+            }
+            bool found = false;
+            while (parents.TryPop(out var parent))
+            {
+                budget.Take();
+                if (parent.Next >= parent.Children.Count) continue;
+                parents.Push((parent.Children, parent.Next + 1)); node = parent.Children[parent.Next];
+                found = true; break;
+            }
+            if (!found) yield break;
+        }
     }
     private static IEnumerable<(string Name, JsonNode? Value)> Records(JsonNode? node)
     {

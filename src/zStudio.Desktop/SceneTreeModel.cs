@@ -12,7 +12,21 @@ internal sealed class SceneTreeState
     internal string[] SelectionPath { get; set; } = [];
 }
 
-internal sealed record SceneTreeIdentity(string Key, int SourceNode, string? Placement);
+internal sealed record SceneTreeIdentity(string Key, int SourceNode, string? Placement, string? ActorName = null)
+{
+    internal string? PlacementPreview()
+    {
+        if (Placement == null) return null;
+        if (ActorName == null) return Clip(Placement, 2048);
+        const string separator = " · ";
+        if (ActorName.Length >= 2048) return ActorName[..2048] + "…";
+        int room = 2048 - ActorName.Length;
+        if (room < separator.Length) return ActorName + separator[..room] + "…";
+        room -= separator.Length;
+        return ActorName + separator + Clip(Placement, room);
+    }
+    private static string Clip(string value, int maximum) => value.Length <= maximum ? value : value[..maximum] + "…";
+}
 
 internal sealed class SceneTreeModel
 {
@@ -109,7 +123,7 @@ public sealed class SceneTreeItem : INotifyPropertyChanged
         $"Tree parent: {(Parent?.Node is { } p ? Short(p.Name, 200) + " #" + p.Index : "none")} · {Kind}\n" +
         $"Stored parents: {string.Join(", ", node.Parents.Take(32))}{(node.Parents.Length > 32 ? " …" : "")}\n" +
         $"Source node: #{Owner.Identity(node.Index).SourceNode} · model: {node.ModelIndex?.ToString() ?? "none"}\n" +
-        Short(Owner.Source, 2048) + (Owner.Identity(node.Index).Placement is { } placement ? "\n" + Short(placement, 2048) : "") +
+        Short(Owner.Source, 2048) + (Owner.Identity(node.Index).PlacementPreview() is { } placement ? "\n" + placement : "") +
         (Problem == null ? "" : "\n" + Problem) : Kind == "unlinked" ? "Nodes outside the world roots, including disconnected cyclic components." : $"Invalid scene reference #{Index}.";
     private bool isExpanded, isSelected;
     private IReadOnlyList<SceneTreeItem>? children;

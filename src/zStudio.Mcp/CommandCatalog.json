@@ -1082,7 +1082,7 @@
   },
   {
     "Name": "zstudio_scene_options",
-    "Description": "Set static model/world options: lod(integer), difficulty(Easy/Medium/Hard; RECOIL only, MW3 uses missions), textures/wireframe/bounds/horizon(boolean), texturePack(path or empty for automatic), highlight(none/nonDefaultSoils/canModify/clipTo), aiNodes/aiThroughGeometry(boolean), aiNetwork(all or ID with aiSnapshot). Highlights and AI are Whole world only. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Description": "Set static model/world options: lod(integer), difficulty(Easy/Medium/Hard; RECOIL only, MW3 uses missions), textures/wireframe/bounds/horizon(boolean), texturePack(path or empty for automatic), highlight(none/nonDefaultSoils/canModify/clipTo/zones), aiNodes/aiThroughGeometry(boolean), aiNetwork(all or ID with aiSnapshot). Highlights and AI are Whole world only. Returns an operation ID; use zstudio_operation to await/read the result.",
     "Mutates": true,
     "Parameters": [
       {
@@ -1167,13 +1167,14 @@
           {
             "Name": "highlight",
             "Type": "string",
-            "Description": "Whole world only: solid yellow non-default soils, green CanModify or red ClipTo; none restores normal appearance.",
+            "Description": "Whole world only: solid yellow non-default soils, green CanModify, red ClipTo, or zones (each surface in its node zone\u0027s colour, grey for any); none restores normal appearance.",
             "Required": false,
             "Choices": [
               "none",
               "nonDefaultSoils",
               "canModify",
-              "clipTo"
+              "clipTo",
+              "zones"
             ],
             "Properties": null
           },

@@ -54,6 +54,8 @@ Edits, saves and Undo/Redo in other documents refresh the bound library without 
 
 Assembly binding indexes the selected member's node names once, with ordinal matching and duplicate-name protection. Binding runs off the UI thread and observes cancellation while indexing and binding tracks; superseded requests cannot replace the current selection, including when edits require rebinding during a pending load.
 
+If a renderer capacity limit refuses a motion frame, playback stops and the assembly binding clears with an unavailable notice. The authored clip and library remain available for choosing an assembly again. Preview state reports the bounded previewFailure reason; a successful assembly retry clears it. GUI and MCP use the same presentation result, so a refused seek or LOD change does not report success.
+
 Prepared LOD hierarchies are reused between frames; sampling runs off the UI thread with superseded results rejected. Motion preview supports up to 16,384 visible model placements per assembly. Larger authored libraries remain inspectable/exportable. Preview notices retain 256 bounded messages plus an omitted-count summary.
 
 Bindings to edited libraries retain the selected member UUID from the same snapshot as its geometry, including duplicated/imported members with no original-file index. Renaming, reordering, model replacement and Undo/Redo keep that member bound with camera/playback retained. Selecting another member replaces the binding identity only after a successful load. Deleting the selected member clears the binding instead of selecting another member at its former index.
