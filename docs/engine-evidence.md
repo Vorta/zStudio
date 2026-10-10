@@ -163,7 +163,7 @@ The map zone source split is an editor/build representation, not a newly discove
   - **Single-player vehicle clones:** nodes only, sharing the model.
   - **Pickups:** nodes, plus a model per node that has one.
   - **Effect instances and network vehicles:** nodes, models and materials.
-  - **Light, sound, animate, sequence, switch and world nodes:** never copied. `CopyObject3DNode` (0x452100 [B], `zClass/cls_util.c`) skips a child when `CopyNodeDispatch` returns null and continues copying its other children. Camera and LOD copying instead abort on a null child and leak the nodes already made. Studio rolls back a refused preview clone rather than reproducing that leak.
+  - **Light, sound, animate, sequence, switch and world nodes:** never copied. `CopyObject3DNode` (0x452100 [B], `zClass/cls_util.c`) skips a child when `CopyNodeDispatch` returns null and continues copying its other children. Camera and LOD copying instead return null on a null child, so their parent skips them in turn, and leak the nodes already made; the preview copies the same way without the leaked nodes. A node flagged 0x04000000 is returned itself, uncopied (see `aiv.zrd` under Resource schemas).
 - **Consumers.**
   - **At load:**
     - vehicle clones: 25–35 nodes each, 4,342 nodes for m6's 143 [D];
