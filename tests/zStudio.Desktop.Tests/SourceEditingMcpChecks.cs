@@ -1,0 +1,348 @@
+using System.IO;
+using System.IO.Pipes;
+using System.Reflection;
+using System.Text;
+using System.Text.Json.Nodes;
+using ModelContextProtocol.Client;
+using ModelContextProtocol.Protocol;
+using Recoil.Zbd.Core.Sources;
+using Recoil.Zbd.Desktop;
+using Recoil.Zbd.Mcp;
+using Recoil.Zbd.Tests;
+using Xunit;
+
+namespace Recoil.Zbd.Desktop.Tests;
+
+/// <summary>
+/// Source-world editing through the real named-pipe MCP connection: a pickup move that changes only the coordinate tokens
+/// of its text sources (with its difficulty counterpart), project-wide undo, a world object moved and flagged through its
+/// glTF node, the Blender round trip, and one save of every changed file.
+/// </summary>
+internal static class SourceEditingMcpChecks
+{
+    private const string Default = "# pickups\r\n(\r\n  ( HEMORTAR_AMMO 1 ( 12 8 -5 ) ( 0.0 0.0 0.0 ) 12.5 )   # hand-written\r\n  ( NANITE 50 ( 100.0 0.0 -100.0 ) ( 0.0 1.5707964 0.0 ) 30.0 )\r\n)\r\n";
+    private const string Easy = "(\r\n  ( NANITE 80 ( 100.0 0.0 -100.0 ) ( 0.0 1.5707964 0.0 ) 30.0 )\r\n  ( HEMORTAR_AMMO 5 ( 12 8 -5 ) ( 0.0 0.0 0.0 ) 12.5 )\r\n)\r\n";
+
+    internal static async Task Run()
+    {
+        using var fixture = new SourceWorldFixture();
+        fixture.Write("data/m1/zrdr/puppies.zrd", Default); fixture.Write("data/m1/zrdr/puppies_easy.zrd", Easy);
+        fixture.Write("data/m1/zrdr/net_01.zrd", "node_00 ( 12 ( 1.0 2.0 3.0 ) ( -7 -1 0 ) )\n");
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(120)); var token = deadline.Token;
+        var main = new MainWindow { Left = -12000, ShowInTaskbar = false }; main.Show();
+        try
+        {
+            await using var host = new LocalMcpHost(main.Commands, "test");
+            await using var pipe = new NamedPipeClientStream(".", host.Instance.Pipe, PipeDirection.InOut, PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly); await pipe.ConnectAsync(token);
+            await using var client = await McpClient.CreateAsync(new StreamClientTransport(pipe, pipe), cancellationToken: token);
+            // A save that stopped after committing (before cleaning up) is reported when the project first opens in a session.
+            var crashed = new SourcePublisher(fixture.Project) { Fault = (step, _) => { if (step == "cleanup") throw new SourcePublisher.Crash(); } };
+            Assert.Throws<SourcePublisher.Crash>(() => crashed.Publish([new("gamegen/crash_note.gs", null, Encoding.ASCII.GetBytes("# note" + Environment.NewLine))], "Crashed save", token));
+            await main.ViewModel.OpenRootAsync(fixture.Project, token);
+            for (int wait = 0; wait < 500 && !main.ViewModel.Problems.Any(p => p.Message.Contains("interrupted save", StringComparison.Ordinal)); wait++) await Task.Delay(10, token);
+            Assert.Contains(main.ViewModel.Problems, p => p.Message.Contains("interrupted save", StringComparison.Ordinal));
+            string crashId = (await Call("source_recovery", new()))["saves"]![0]!["id"]!.GetValue<string>();
+            await Job("source_recovery_resolve", new() { ["save"] = crashId, ["action"] = "complete" });
+            Assert.DoesNotContain(main.ViewModel.Problems, p => p.Message.Contains("interrupted save", StringComparison.Ordinal));
+            var doc = Document((await Job("source_world_open", new() { ["mission"] = "m1" }))["document"]!);
+            await Preview();
+
+            main.SourceEditPreparing = ct => Assert.False(main.Dispatcher.CheckAccess());
+
+            // Pickups of a source world are the built archive's; moving one changes the text sources it came from.
+            var pickups = await Job("pickups", new() { ["document"] = Id(doc) });
+            var ammo = pickups["items"]!.AsArray().First(p => p!["Type"]!.GetValue<string>() == "HEMORTAR_AMMO" && p["source"]!["ResourceName"]!.GetValue<string>() == "PUPPIES.ZRD")!;
+            await Call("pickup_lock", new() { ["document"] = Id(doc), ["revision"] = doc.Revision, ["locked"] = false });
+            // Exercise the actual placement planner after an external resource grows beyond its text allowance.
+            // A bounded stream writes valid whitespace padding; the planner must refuse before reading it all.
+            string resourcePath = fixture.Path("data/m1/zrdr/puppies.zrd");
+            DateTime resourceStamp = File.GetLastWriteTimeUtc(resourcePath);
+            var placementSource = doc.PickupEdits!.Records.First(r => r.Type == "HEMORTAR_AMMO" && r.Source.ResourceName == "PUPPIES.ZRD").Source;
+            var planner = typeof(MainWindow).GetMethod("PlanSourcePlacement", BindingFlags.Static | BindingFlags.NonPublic)!;
+            var placement = new Recoil.Zbd.Core.PlacementTransform(new(20.25f, 8, -5), System.Numerics.Vector3.Zero);
+            long beforeRevision = doc.SourceWorld!.Workspace.Revision;
+            try
+            {
+                await Task.Run(() =>
+                {
+                    using (FileStream padding = new(resourcePath, FileMode.Create, FileAccess.Write, FileShare.None))
+                    {
+                        padding.Write(Encoding.ASCII.GetBytes(Default));
+                        byte[] spaces = new byte[64 * 1024]; Array.Fill(spaces, (byte)' ');
+                        while (padding.Length <= SourceProject.MaximumSourceTextBytes)
+                        {
+                            token.ThrowIfCancellationRequested();
+                            padding.Write(spaces.AsSpan(0, (int)Math.Min(spaces.Length, SourceProject.MaximumSourceTextBytes + 1L - padding.Length)));
+                        }
+                    }
+                    byte[] beforeHash;
+                    using (var input = File.OpenRead(resourcePath)) beforeHash = System.Security.Cryptography.SHA256.HashData(input);
+                    long allocated = GC.GetAllocatedBytesForCurrentThread();
+                    var failure = Assert.Throws<TargetInvocationException>(() => planner.Invoke(null, [doc, doc.SourceWorld.Workspace, placementSource, placement, token]));
+                    allocated = GC.GetAllocatedBytesForCurrentThread() - allocated;
+                    var refused = Assert.IsType<InvalidDataException>(failure.InnerException);
+                    Assert.Contains("Resource text exceeds", refused.Message, StringComparison.Ordinal);
+                    Assert.True(allocated < 4 * 1024 * 1024, $"Placement refusal allocated {allocated:N0} bytes before its text limit.");
+                    Assert.Equal(SourceProject.MaximumSourceTextBytes + 1L, new FileInfo(resourcePath).Length);
+                    using (var input = File.OpenRead(resourcePath)) Assert.Equal(beforeHash, System.Security.Cryptography.SHA256.HashData(input));
+                }, token);
+                Assert.Equal(beforeRevision, doc.SourceWorld.Workspace.Revision);
+                Assert.Empty(doc.SourceWorld.Workspace.History);
+                Assert.False(doc.SourceWorld.Workspace.IsDirty);
+            }
+            finally
+            {
+                await File.WriteAllTextAsync(resourcePath, Default, Encoding.ASCII, CancellationToken.None);
+                File.SetLastWriteTimeUtc(resourcePath, resourceStamp);
+            }
+            Assert.False(await Task.Run(() => doc.SourceInputsChanged(token), token));
+            // Hold actual scene-card source preparation, then type newer GUI input: stale work must retain that draft.
+            var scene = (Recoil.Zbd.Rendering.SceneViewport)typeof(MainWindow).GetField("scene", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(main)!;
+            scene.SetAiOptions(true, true, null);
+            string cardPreview = ((Guid)typeof(MainWindow).GetField("previewId", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(main)!).ToString();
+            string target = "ai:" + scene.AiNetworks.Id + ":" + scene.AiNetworks.Networks[0].Nodes[0].Id;
+            await Call("scene_card", new() { ["preview"] = cardPreview, ["action"] = "select", ["target"] = target });
+            await Call("scene_card", new() { ["preview"] = cardPreview, ["action"] = "begin", ["document"] = Id(doc), ["revision"] = doc.Revision });
+            var card = (SceneInspectionCard)scene.InspectionContent!;
+            TaskCompletionSource preparing = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            using (var proceed = new SemaphoreSlim(0))
+            {
+                main.SourceEditPreparing = ct => { Assert.False(main.Dispatcher.CheckAccess()); preparing.TrySetResult(); Assert.True(proceed.Wait(TimeSpan.FromSeconds(20), ct)); };
+                var apply = Call("scene_card", new() { ["preview"] = cardPreview, ["action"] = "apply", ["document"] = Id(doc), ["revision"] = doc.Revision, ["token"] = card.DraftToken }, error: true);
+                try
+                {
+                    var first = await Task.WhenAny(preparing.Task, apply).WaitAsync(token);
+                    if (first == apply) Assert.Fail("Scene-card apply completed before reaching preparation: " + (await apply).ToJsonString());
+                    card.SetDraft(card.DraftToken, ["2", "3", "4"], null, null, null);
+                    proceed.Release();
+                    Assert.Contains("draft_conflict", (await apply).GetValue<string>());
+                    Assert.True(card.HasDraft); Assert.False(doc.SourceWorld!.Workspace.IsDirty); Assert.Empty(doc.SourceWorld.Workspace.History);
+                }
+                finally { proceed.Release(); }
+            }
+            main.SourceEditPreparing = ct => Assert.False(main.Dispatcher.CheckAccess());
+            await Call("scene_card", new() { ["preview"] = cardPreview, ["action"] = "cancel", ["document"] = Id(doc), ["revision"] = doc.Revision, ["token"] = card.DraftToken });
+            await Call("scene_card", new() { ["preview"] = cardPreview, ["action"] = "clear" });
+
+            var moved = Document(await Call("pickup_move", new() { ["document"] = Id(doc), ["revision"] = doc.Revision, ["source"] = ammo["source"]!.DeepClone(), ["x"] = 20.25, ["y"] = 8, ["z"] = -5 }));
+            Assert.True(doc.IsDisposed); Assert.False(moved.PickupsLocked);
+            var workspace = moved.SourceWorld!.Workspace;
+            Assert.Equal(["data/m1/zrdr/puppies.zrd", "data/m1/zrdr/puppies_easy.zrd"], workspace.DirtyFiles);
+            Assert.Equal(Default.Replace("( 12 8 -5 )", "( 20.25 8 -5 )"), Text(workspace.Read("data/m1/zrdr/puppies.zrd")));
+            Assert.Equal(Easy.Replace("( 12 8 -5 )", "( 20.25 8 -5 )"), Text(workspace.Read("data/m1/zrdr/puppies_easy.zrd")));
+            Assert.StartsWith("# pickups", await File.ReadAllTextAsync(fixture.Path("data/m1/zrdr/puppies.zrd"), token));
+            // The pending change is visible as a line diff of the working source against the disk.
+            var changes = await Call("source_changes", new() { ["file"] = "data/m1/zrdr/puppies.zrd" });
+            Assert.Equal(2, changes["workspace"]!["dirtyFileCount"]!.GetValue<int>());
+            var lines = changes["diff"]!["Lines"]!.AsArray().Select(l => l!["Kind"]!.GetValue<string>() + l["Text"]!.GetValue<string>()).ToArray();
+            Assert.Contains("-  ( HEMORTAR_AMMO 1 ( 12 8 -5 ) ( 0.0 0.0 0.0 ) 12.5 )   # hand-written", lines);
+            Assert.Contains("+  ( HEMORTAR_AMMO 1 ( 20.25 8 -5 ) ( 0.0 0.0 0.0 ) 12.5 )   # hand-written", lines);
+            // The rebuilt archive holds the new position for both difficulties.
+            var after = await Job("pickups", new() { ["document"] = Id(moved) });
+            Assert.All(after["items"]!.AsArray().Where(p => p!["Type"]!.GetValue<string>() == "HEMORTAR_AMMO"), p => Assert.Equal(20.25f, p!["OriginalPosition"]!["X"]!.GetValue<float>()));
+
+            // Properties commits a typed position through the same source edit: its own committing draft does not block it.
+            // (The fixture has no pickup models, so the pickup is opened in Properties as the scene's card opens it.)
+            var hidden = BindingFlags.Instance | BindingFlags.NonPublic;
+            var window = (PropertiesWindow)typeof(MainWindow).GetMethod("GetPropertiesWindow", hidden)!.Invoke(main, [])!;
+            var sourceMove = (Func<Recoil.Zbd.Core.MissionPickupSource, System.Numerics.Vector3, Task>?)typeof(MainWindow).GetMethod("SourcePickupMove", hidden)!.Invoke(main, [moved]);
+            var ammoSource = moved.PickupEdits!.Records.First(r => r.Type == "HEMORTAR_AMMO" && r.Source.ResourceName == "PUPPIES.ZRD").Source;
+            Assert.True(window.SetPickup(moved, ammoSource, "HEMORTAR_AMMO", new JsonObject(), sourceMove));
+            typeof(MainWindow).GetMethod("PresentProperties", BindingFlags.Static | BindingFlags.NonPublic)!.Invoke(null, [window, true]);
+            // Wait for the window's layout to finish, so its fields exist.
+            await main.Dispatcher.InvokeAsync(() => window.UpdateLayout(), System.Windows.Threading.DispatcherPriority.Loaded);
+            var pickupFields = main.OpenPropertiesWindow!.PickupFields!;
+            var x = Descendants(pickupFields).OfType<System.Windows.Controls.TextBox>().Single(t => System.Windows.Automation.AutomationProperties.GetName(t) == "Position X");
+            x.Text = "21.5";
+            x.RaiseEvent(new System.Windows.Input.KeyEventArgs(System.Windows.Input.Keyboard.PrimaryDevice, System.Windows.PresentationSource.FromVisual(x), Environment.TickCount, System.Windows.Input.Key.Enter) { RoutedEvent = System.Windows.Input.Keyboard.PreviewKeyDownEvent });
+            for (int wait = 0; wait < 1000 && !moved.IsDisposed; wait++) await Task.Delay(10, token);
+            Assert.True(moved.IsDisposed, "The Properties commit did not rebuild the world.");
+            Assert.Equal(Default.Replace("( 12 8 -5 )", "( 21.5 8 -5 )"), Text(workspace.Read("data/m1/zrdr/puppies.zrd")));
+            var typed = main.ViewModel.Documents.Single(d => d.SourceWorld != null);
+            await Preview();
+            for (int wait = 0; wait < 1000 && main.OpenPropertiesWindow?.Document != typed; wait++) await Task.Delay(10, token);
+            Assert.Same(typed, main.OpenPropertiesWindow?.Document);
+            Assert.NotNull(main.OpenPropertiesWindow!.PickupFields);
+            var pinned = main.OpenPropertiesWindow.CurrentJson!;
+            Assert.Equal(ammoSource.ResourceName, pinned["resource"]!.GetValue<string>());
+            Assert.Equal(ammoSource.RecordIndex, pinned["placement_record"]!.GetValue<int>());
+            Assert.Equal(Path.GetRelativePath(moved.SourceBuild!.Folder, ammoSource.ArchivePath),
+                Path.GetRelativePath(typed.SourceBuild!.Folder, pinned["source_archive"]!.GetValue<string>()));
+            Assert.Equal(21.5d, pinned["preview_world_position"]!["x"]!.GetValue<double>());
+            var undoButton = (System.Windows.Controls.Button)typeof(PropertiesWindow).GetField("undo", hidden)!.GetValue(main.OpenPropertiesWindow)!;
+            Assert.Equal(System.Windows.Visibility.Visible, undoButton.Visibility); Assert.True(undoButton.IsEnabled);
+            // The Properties command follows its pinned owner even when there is no active document.
+            main.ViewModel.SelectedDocument = null;
+            undoButton.RaiseEvent(new System.Windows.RoutedEventArgs(System.Windows.Controls.Button.ClickEvent));
+            for (int wait = 0; wait < 1000 && !typed.IsDisposed; wait++) await Task.Delay(10, token);
+            Assert.True(typed.IsDisposed, "Properties Undo did not rebuild its pinned source world.");
+            await ((Task)typeof(MainWindow).GetField("sourceWorldWork", hidden)!.GetValue(main)!).WaitAsync(token);
+            moved = main.ViewModel.Documents.Single(d => d.SourceWorld != null);
+            main.ViewModel.SelectedDocument = moved; await Preview();
+            Assert.Equal(Default.Replace("( 12 8 -5 )", "( 20.25 8 -5 )"), Text(workspace.Read("data/m1/zrdr/puppies.zrd")));
+            string restoredArchive = Path.Combine(moved.SourceBuild!.Folder, Path.GetRelativePath(typed.SourceBuild!.Folder, pinned["source_archive"]!.GetValue<string>()));
+            var undoneSource = moved.PickupEdits!.Records.Single(r => r.Source.ArchivePath.Equals(restoredArchive, StringComparison.OrdinalIgnoreCase)
+                && r.Source.ResourceName == ammoSource.ResourceName && r.Source.AssetIndex == ammoSource.AssetIndex && r.Source.RecordIndex == ammoSource.RecordIndex).Source;
+            window = (PropertiesWindow)typeof(MainWindow).GetMethod("GetPropertiesWindow", hidden)!.Invoke(main, [])!;
+            sourceMove = (Func<Recoil.Zbd.Core.MissionPickupSource, System.Numerics.Vector3, Task>?)typeof(MainWindow).GetMethod("SourcePickupMove", hidden)!.Invoke(main, [moved]);
+            Assert.True(window.SetPickup(moved, undoneSource, "HEMORTAR_AMMO", new JsonObject(), sourceMove));
+            typeof(MainWindow).GetMethod("PresentProperties", BindingFlags.Static | BindingFlags.NonPublic)!.Invoke(null, [window, true]);
+            var redoButton = (System.Windows.Controls.Button)typeof(PropertiesWindow).GetField("redo", hidden)!.GetValue(window)!;
+            Assert.Equal(System.Windows.Visibility.Visible, redoButton.Visibility); Assert.True(redoButton.IsEnabled);
+            // A Discard approval left from a close that did not happen (the world is still open) is forgotten when the next
+            // close decision starts, so it never skips that decision's prompt.
+            var approval = typeof(MainWindow).GetField("discardApprovedWorkspace", hidden)!;
+            approval.SetValue(main, (workspace, workspace.Revision));
+            main.ViewModel.CloseDecisionsStarting!();
+            Assert.Null(approval.GetValue(main));
+
+            // Undo is project-wide and restores the exact source bytes; redo brings the move back.
+            var undone = Document(await Call("undo_redo", new() { ["document"] = Id(moved), ["revision"] = moved.Revision, ["action"] = "undo" }));
+            Assert.False(undone.SourceWorld!.Workspace.IsDirty); Assert.Equal(Default, Text(workspace.Read("data/m1/zrdr/puppies.zrd")));
+            // Close decisions run one at a time (one can wait for a rebuild and its prompt pumps messages): a later one waits.
+            var decisions = (SemaphoreSlim)typeof(MainWindow).GetField("closeDecisions", hidden)!.GetValue(main)!;
+            await decisions.WaitAsync(token);
+            var waiting = (Task<bool>)typeof(MainWindow).GetMethod("ConfirmDocumentCloseAsync", hidden)!.Invoke(main, [undone])!;
+            await Task.Delay(50, token);
+            Assert.False(waiting.IsCompleted);
+            decisions.Release();
+            Assert.True(await waiting.WaitAsync(token));
+            Assert.False(undone.IsDisposed);
+            var redone = Document(await Call("undo_redo", new() { ["document"] = Id(undone), ["revision"] = undone.Revision, ["action"] = "redo" }));
+            await Preview();
+
+            // A world object: the database's ground knows its glTF node; moving and flagging it edit that node.
+            int ground = redone.PreviewDocument.Scene!.Nodes.First(n => n.Name == "ground").Index;
+            var described = await Call("source_world_object", new() { ["document"] = Id(redone), ["node"] = ground });
+            Assert.Equal("data/m1/models/m1.gltf", described["origin"]!["modelFile"]!.GetValue<string>());
+            Assert.True(described["origin"]!["database"]!.GetValue<bool>());
+            var placed = Document((await Job("source_world_object_edit", new() { ["document"] = Id(redone), ["revision"] = redone.Revision, ["node"] = ground, ["position"] = new Dictionary<string, object?> { ["x"] = 10, ["y"] = 0, ["z"] = -10 } }))["document"]!);
+            Assert.Contains("data/m1/models/m1.gltf", workspace.DirtyFiles);
+            int groundAfter = placed.PreviewDocument.Scene!.Nodes.First(n => n.Name == "ground").Index;
+            var position = (await Call("source_world_object", new() { ["document"] = Id(placed), ["node"] = groundAfter }))["object"]!["position"]!;
+            Assert.Equal([10f, 0f, -10f], new[] { "x", "y", "z" }.Select(c => position[c]!.GetValue<float>()));
+            var flagged = Document((await Job("source_world_object_edit", new() { ["document"] = Id(placed), ["revision"] = placed.Revision, ["node"] = groundAfter, ["flag"] = "0x10000", ["on"] = true }))["document"]!);
+            var flags = (await Call("source_world_object", new() { ["document"] = Id(flagged), ["node"] = groundAfter }))["editableFlags"]!.AsArray();
+            Assert.True(flags.Single(f => f!["bit"]!.GetValue<string>() == "0x10000")!["on"]!.GetValue<bool>());
+            var refused = await Job("source_world_object_edit", new() { ["document"] = Id(flagged), ["revision"] = flagged.Revision, ["node"] = groundAfter }, "failed");
+            Assert.Equal("invalid_argument", refused["code"]!.GetValue<string>());
+
+            // Blender: check the database out, "export" a changed copy into the outbox, and update from it.
+            var checkout = await Job("source_blender_checkout", new() { ["model"] = "data/m1/models/m1.gltf" });
+            string input = checkout["input"]!.GetValue<string>(), outbox = Path.Combine(checkout["outbox"]!.GetValue<string>(), "edit");
+            Assert.StartsWith(Path.Combine(fixture.Project, "zstudio", "export"), checkout["folder"]!.GetValue<string>());
+            Directory.CreateDirectory(Path.Combine(outbox, "textures"));
+            File.Copy(input, Path.Combine(outbox, "m1.gltf")); File.Copy(Path.Combine(Path.GetDirectoryName(input)!, "m1.bin"), Path.Combine(outbox, "m1.bin"));
+            byte[] rock = await File.ReadAllBytesAsync(Path.Combine(Path.GetDirectoryName(input)!, "textures", "rock.png"), token);
+            var image = Recoil.Zbd.Core.Export.PngDecoder.Decode(rock); image.Rgba[0] ^= 0xFF;
+            await File.WriteAllBytesAsync(Path.Combine(outbox, "textures", "rock.png"), Recoil.Zbd.Core.Export.PngEncoder.Encode(image), token);
+            var listed = await Call("source_blender_checkouts", new());
+            Assert.Equal("edit/m1.gltf", listed["checkouts"]![0]!["exports"]![0]!["path"]!.GetValue<string>());
+            // The manifest becomes read-only to replacement after planning succeeds, while the world rebuilds.
+            // Accepted edits must still report this failure to GUI Problems and the MCP operation result.
+            FileStream? manifestLock = null;
+            main.SourceBuildStep = _ => manifestLock ??= new FileStream(Path.Combine(checkout["folder"]!.GetValue<string>(), "manifest.json"), FileMode.Open, FileAccess.Read, FileShare.Read);
+            JsonNode updated;
+            try { updated = await Job("source_blender_update", new() { ["document"] = Id(flagged), ["revision"] = flagged.Revision, ["checkout"] = checkout["id"]!.GetValue<string>() }); }
+            finally { main.SourceBuildStep = null; manifestLock?.Dispose(); }
+            Assert.Contains(updated["notes"]!.AsArray(), n => n!.GetValue<string>().Contains("could not record", StringComparison.Ordinal));
+            Assert.Contains(main.ViewModel.Problems, p => p.Severity == "Warning" && p.Message.Contains("could not record", StringComparison.Ordinal));
+            Assert.Contains("data/m1/textures/rock.png", updated["files"]!.AsArray().Select(f => f!.GetValue<string>()));
+            Assert.Contains(updated["notes"]!.AsArray(), n => n!.GetValue<string>().Contains("rock.png", StringComparison.Ordinal));
+            var blended = Document(updated["document"]!);
+            Assert.Contains("data/m1/textures/rock.png", workspace.DirtyFiles);
+
+            // Fog the scripts never set is added after the instruction that created the world.
+            await Preview();
+            int world = blended.PreviewDocument.Scene!.Nodes.First(n => n.Name == "world").Index;
+            var worldState = await Call("source_world_object", new() { ["document"] = Id(blended), ["node"] = world });
+            Assert.Contains(worldState["propertyCommands"]!.AsArray(), c => c!["command"]!.GetValue<string>() == "WorldSetFogColor");
+            var fogged = Document((await Job("source_world_command", new() { ["document"] = Id(blended), ["revision"] = blended.Revision, ["node"] = world, ["command"] = "WorldSetFogColor", ["arguments"] = new[] { "0.5", "0.25", "0.125" } }))["document"]!);
+            Assert.Contains("NewWorld %worldName%\r\nWorldSetFogColor 0.5 0.25 0.125\r\n", Text(workspace.Read("gamegen/m1.gs")));
+            // The next change of the same setting edits that instruction in place.
+            int worldAfter = fogged.PreviewDocument.Scene!.Nodes.First(n => n.Name == "world").Index;
+            blended = Document((await Job("source_world_command", new() { ["document"] = Id(fogged), ["revision"] = fogged.Revision, ["node"] = worldAfter, ["command"] = "WorldSetFogColor", ["arguments"] = new[] { "1.0", "0.25", "0.125" } }))["document"]!);
+            Assert.Contains("WorldSetFogColor 1.0 0.25 0.125\r\n", Text(workspace.Read("gamegen/m1.gs")));
+            Assert.DoesNotContain("0.5 0.25 0.125", Text(workspace.Read("gamegen/m1.gs")));
+            // Copy the ground beside itself, move the copy under the original, then delete it: each edits the database's glTF.
+            await Preview();
+            int groundNow = blended.PreviewDocument.Scene!.Nodes.First(n => n.Name == "ground").Index;
+            var copied = await Job("source_world_object_edit", new() { ["document"] = Id(blended), ["revision"] = blended.Revision, ["node"] = groundNow, ["action"] = "duplicate", ["name"] = "ground_copy", ["position"] = new Dictionary<string, object?> { ["x"] = 10, ["y"] = 0, ["z"] = 40 } });
+            int copyNode = copied["copy"]!.GetValue<int>();
+            var withCopy = Document(copied["document"]!);
+            Assert.Equal(2, JsonNode.Parse(workspace.Read("data/m1/models/m1.gltf")!)!["nodes"]!.AsArray().Count);
+            await Preview();
+            int groundThen = withCopy.PreviewDocument.Scene!.Nodes.First(n => n.Name == "ground").Index;
+            var reparented = Document((await Job("source_world_object_edit", new() { ["document"] = Id(withCopy), ["revision"] = withCopy.Revision, ["node"] = copyNode, ["action"] = "parent", ["parent"] = groundThen }))["document"]!);
+            Assert.Equal("ground", (await Call("source_world_object", new() { ["document"] = Id(reparented), ["node"] = copyNode }))["object"]!["parent"]!.GetValue<string>());
+            blended = Document((await Job("source_world_object_edit", new() { ["document"] = Id(reparented), ["revision"] = reparented.Revision, ["node"] = copyNode, ["action"] = "delete" }))["document"]!);
+            Assert.Single(JsonNode.Parse(workspace.Read("data/m1/models/m1.gltf")!)!["nodes"]!.AsArray());
+            // Unsaved edits of other files do not block resolving an interrupted save; an unknown save is refused as such.
+            Assert.Equal("invalid_argument", (await Job("source_recovery_resolve", new() { ["save"] = "missing", ["action"] = "roll_back" }, "failed"))["code"]!.GetValue<string>());
+
+            // One save writes every changed file of the project together, and leaves no journal behind.
+            var saved = await Job("save_document", new() { ["document"] = Id(blended), ["revision"] = blended.Revision });
+            var written = saved["written"]!.AsArray().Select(w => w!.GetValue<string>()).ToArray();
+            // The buffer Blender wrote back unchanged is not a change.
+            Assert.Equal(["data/m1/models/m1.gltf", "data/m1/textures/rock.png", "data/m1/zrdr/puppies.zrd", "data/m1/zrdr/puppies_easy.zrd", "gamegen/m1.gs"], written.Order(StringComparer.Ordinal));
+            Assert.False(blended.IsDirty);
+            Assert.Equal(Default.Replace("( 12 8 -5 )", "( 20.25 8 -5 )"), await File.ReadAllTextAsync(fixture.Path("data/m1/zrdr/puppies.zrd"), Encoding.Latin1, token));
+            Assert.Empty(new SourcePublisher(fixture.Project).FindInterrupted(token));
+            // No save was interrupted; resolving an unknown one is refused.
+            Assert.Equal(0, (await Call("source_recovery", new()))["saveCount"]!.GetValue<int>());
+            Assert.Equal("invalid_argument", (await Job("source_recovery_resolve", new() { ["save"] = "missing", ["action"] = "roll_back" }, "failed"))["code"]!.GetValue<string>());
+
+            // Two worlds of one project: an undo in m1 takes back m2's edit, so m2's build is out of date until it is reloaded.
+            var second = Document((await Job("source_world_open", new() { ["mission"] = "m2" }))["document"]!);
+            await Preview();
+            int ground2 = second.PreviewDocument.Scene!.Nodes.First(n => n.Name == "ground").Index;
+            var edited2 = Document((await Job("source_world_object_edit", new() { ["document"] = Id(second), ["revision"] = second.Revision, ["node"] = ground2, ["position"] = new Dictionary<string, object?> { ["x"] = 5, ["y"] = 0, ["z"] = 5 } }))["document"]!);
+            Assert.Equal(["data/m2/models/m2.gltf"], workspace.DirtyFiles);
+            blended = Document(await Call("undo_redo", new() { ["document"] = Id(blended), ["revision"] = blended.Revision, ["action"] = "undo" }));
+            Assert.False(workspace.IsDirty);
+            var stale = await Job("source_world_object_edit", new() { ["document"] = Id(edited2), ["revision"] = edited2.Revision, ["node"] = ground2, ["flag"] = "0x10000", ["on"] = true }, "failed");
+            Assert.Equal("stale_document", stale["code"]!.GetValue<string>());
+            var reloaded = Document(await Job("reload_document", new() { ["document"] = Id(edited2), ["revision"] = edited2.Revision }));
+            await Call("close_document", new() { ["document"] = Id(reloaded), ["revision"] = reloaded.Revision });
+            await Call("close_document", new() { ["document"] = Id(blended), ["revision"] = blended.Revision });
+
+            async Task Preview()
+            {
+                var work = (Task)typeof(MainWindow).GetField("previewWork", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(main)!;
+                await work.WaitAsync(token);
+            }
+            static string Text(byte[]? bytes) => Encoding.Latin1.GetString(bytes!);
+            static IEnumerable<System.Windows.DependencyObject> Descendants(System.Windows.DependencyObject root)
+            {
+                for (int i = 0; i < System.Windows.Media.VisualTreeHelper.GetChildrenCount(root); i++)
+                {
+                    var child = System.Windows.Media.VisualTreeHelper.GetChild(root, i);
+                    yield return child;
+                    foreach (var below in Descendants(child)) yield return below;
+                }
+            }
+            DocumentModel Document(JsonNode state) => main.ViewModel.Documents.Single(d => d.SessionId.ToString() == (state["document"]?["id"] ?? state["id"])!.GetValue<string>());
+            static string Id(DocumentModel d) => d.SessionId.ToString();
+            async Task<JsonNode> Call(string name, Dictionary<string, object?> arguments, bool error = false)
+            {
+                var result = await client.CallToolAsync("zstudio_" + name, arguments, cancellationToken: token);
+                string text = string.Join(";", result.Content.OfType<TextContentBlock>().Select(c => c.Text));
+                Assert.True((result.IsError == true) == error, name + ": " + text);
+                return error ? JsonValue.Create(text)! : JsonNode.Parse(result.Content.OfType<TextContentBlock>().Single().Text)!;
+            }
+            async Task<JsonNode> Job(string name, Dictionary<string, object?> arguments, string expected = "completed")
+            {
+                var job = await Call(name, arguments);
+                if (job["id"] == null || job["State"] == null) return job;
+                string id = job["id"]!.GetValue<string>();
+                while (job["State"]!.GetValue<string>() is "queued" or "running") { await Task.Delay(10, token); job = await Call("operation", new() { ["id"] = id }); }
+                Assert.True(job["State"]!.GetValue<string>() == expected, name + ": " + job.ToJsonString()); return job["result"]!;
+            }
+        }
+        finally
+        {
+            foreach (var doc in main.ViewModel.Documents.ToArray()) main.ViewModel.CloseResolved(doc);
+            main.Close();
+        }
+    }
+}
