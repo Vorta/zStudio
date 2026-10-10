@@ -325,4 +325,40 @@ public sealed class WorldComparerEqualityTests
         foreach (bool shared in new[] { false, true })
             Assert.Empty(WorldComparer.CompareTree(Places(shared), Places(shared), token: Token).Differences);
     }
+
+    /// <summary>
+    /// world1 holding grp, an object or, with <paramref name="lod"/>, an LOD node in zone 3, with three parts each holding an
+    /// object dup; a camera no parent holds has part1 as its horizon.
+    /// </summary>
+    private static GameZWorld Group(bool lod)
+    {
+        GameZWorld world = new();
+        WorldNode Add(WorldNode node) { world.Nodes.Add(node); return node; }
+        WorldNode Object(string name) { WorldNode node = new(name, WorldNodeClass.Object3D) { Flags = WorldGltf.DefaultCarried }; node.SetPayloadInt(0, 0x28); return Add(node); }
+        static void Link(WorldNode parent, WorldNode child) { parent.Children.Add(child); child.Parents.Add(parent); }
+        var root = Add(new("world1", WorldNodeClass.World));
+        var grp = lod ? Add(new("grp", WorldNodeClass.Lod) { Flags = WorldGltf.DefaultCarried, Zone = 3 }) : Object("grp");
+        Link(root, grp);
+        var parts = Enumerable.Range(0, 3).Select(i => { var part = Object($"part{i}"); Link(grp, part); Link(part, Object("dup")); return part; }).ToList();
+        Add(new("cam", WorldNodeClass.Camera) { CameraWorld = root, CameraHorizon = parts[1] });
+        return world;
+    }
+
+    [Fact]
+    public void ANodeOfAnotherClassKeepsItsChildrenPaired()
+    {
+        // grp's class (and zone) differ, but what it holds is still matched and compared: the parts and their dups pair, so
+        // the camera's horizon names its counterpart and a lookup of dup finds the matching node.
+        var comparison = WorldComparer.CompareTree(Group(false), Group(true), token: Token);
+        var grp = Assert.Single(comparison.Roots[0].Children);
+        Assert.Equal(WorldComparisonStatus.Changed, grp.Status);
+        Assert.Equal(["class", "zone"], grp.Differences.Select(d => d.Field));
+        Assert.Equal(["part0", "part1", "part2"], grp.Children.Select(c => c.Name));
+        Assert.All(grp.Children.Append(comparison.Roots[1]).Concat(grp.Children.Select(p => Assert.Single(p.Children))), row => Assert.Equal(WorldComparisonStatus.Same, row.Status));
+        Assert.Equal(2, comparison.DifferenceCount);
+        Assert.Equal((8, 1, 0, 0), (comparison.Counts[WorldComparisonStatus.Same], comparison.Counts[WorldComparisonStatus.Changed],
+            comparison.Counts[WorldComparisonStatus.OnlyExpected], comparison.Counts[WorldComparisonStatus.OnlyActual]));
+        Assert.True(Assert.Single(comparison.Bindings).Same);
+        Assert.False(comparison.Truncated || comparison.PairingTruncated);
+    }
 }

@@ -370,19 +370,21 @@ public static class WorldComparer
             if (!again) Paired(a, b);
             var node = parent == null ? null : New(parent, a.Name, a, b);
             var childrenA = Children(a); var childrenB = Children(b);
+            // Children pair by their own names, contents, structure and position, whatever their parents' classes: a pair
+            // whose classes differ still merges what it holds. Members of a world (in either) compare their grid cells.
+            bool members = a.Class == WorldNodeClass.World || b.Class == WorldNodeClass.World;
             if (node == null)
             {
                 // Below the cut, each pair is matched once more (a node shared by several parents is not), so every node
                 // keeps its counterpart within a bounded amount of work.
-                if (again || a.Class != b.Class) return null;
+                if (again) return null;
                 if (depth > 256 || (unshown -= 1 + childrenA.Count) < 0) { pairingTruncated |= childrenA.Count > 0 && childrenB.Count > 0; return null; }
-                Match(null, childrenA, childrenB, a.Class == WorldNodeClass.World, depth + 1);
+                Match(null, childrenA, childrenB, members, depth + 1);
                 return null;
             }
             pending.Add((node, a, b, worldChild, false));
-            if (a.Class != b.Class) return node;
             if (depth > 256) { if (childrenA.Count + childrenB.Count > 0) truncated = node.Truncated = true; pairingTruncated |= childrenA.Count > 0 && childrenB.Count > 0; }
-            else Match(node, childrenA, childrenB, a.Class == WorldNodeClass.World, depth + 1);
+            else Match(node, childrenA, childrenB, members, depth + 1);
             return node;
         }
 
@@ -614,16 +616,19 @@ public static class WorldComparer
         /// <summary>
         /// Whether two nodes themselves are the same as a comparison sees them, in the order it lists what differs: class;
         /// flags, zone and grid cell (a world member's); in a comparison of two worlds, counterparts (the pair is not one to
-        /// one); the transform, or the class data with the nodes it names (stored pointers, slots and runtime counters
-        /// skipped); the model's retained values; the child encounter sequence. The primary world root's distinct members are
-        /// compared through the tree/areas, with overflow occurrences and order checked separately.
+        /// one); for nodes of one class, the transform, or the class data with the nodes it names (stored pointers, slots and
+        /// runtime counters skipped); the model's retained values; the child encounter sequence. The primary world root's
+        /// distinct members are compared through the tree/areas, with overflow occurrences and order checked separately.
         /// With <paramref name="found"/>, every difference is added to it; without, the first ends the check.
         /// </summary>
         public bool OwnSame(WorldNode a, WorldNode b, bool worldChild, bool root, Found? found)
         {
             bool same = true;
             if (a.Name != b.Name && Differs("name", a.Name, b.Name)) return false;
-            if (a.Class != b.Class) { Differs("class", a.Class, b.Class); return false; }
+            // Of another class, the class data has another layout and is not compared; what every node has (flags, zone,
+            // grid cell, counterparts, model, children) still is.
+            bool sameClass = a.Class == b.Class;
+            if (!sameClass && Differs("class", a.Class, b.Class)) return false;
             uint carried = WorldGltf.CarriedFlags;
             if ((a.Flags & carried) != (b.Flags & carried) && Differs("flags.carried", $"{a.Flags & carried:X8}", $"{b.Flags & carried:X8}")) return false;
             if ((a.Flags & ~carried) != (b.Flags & ~carried) && Differs("flags.derived", $"{a.Flags & ~carried:X8}", $"{b.Flags & ~carried:X8}")) return false;
@@ -638,7 +643,7 @@ public static class WorldComparer
                 var expectedOnes = Merged?.GetValueOrDefault(b); var actualOnes = Split?.GetValueOrDefault(a);
                 if (expectedOnes != null || actualOnes != null) Differs("counterparts", ReferenceList(expectedOnes ?? [a], true), ReferenceList(actualOnes ?? [b], false));
             }
-            if (a.Class == WorldNodeClass.Object3D)
+            if (sameClass && a.Class == WorldNodeClass.Object3D)
             {
                 var ma = WorldUpdate.LocalMatrix(a) ?? Matrix4x4.Identity; var mb = WorldUpdate.LocalMatrix(b) ?? Matrix4x4.Identity;
                 if (!Close(ma, mb) && Differs("matrix", new Shown(ma), new Shown(mb))) return false;
@@ -659,7 +664,7 @@ public static class WorldComparer
             if (!root && (a.Children.Count != b.Children.Count || found != null && !ReferencesSame(a.Children, b.Children))
                 && Differs("children", ReferenceList(a.Children, true), ReferenceList(b.Children, false))) return false;
             // Class data last: a world's many cells must not crowd out the fields above.
-            return (a.Class == WorldNodeClass.Object3D || ClassDataSame()) && same;
+            return (!sameClass || a.Class == WorldNodeClass.Object3D || ClassDataSame()) && same;
 
             // Records a difference; whether it ends the check.
             bool Differs(string field, object? x, object? y) { same = false; found?.Add(field, x, y); return found == null; }
