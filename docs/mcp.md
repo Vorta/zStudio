@@ -121,7 +121,7 @@ ZAR member CRUD and standalone/embedded ZRD structural editing have full shared 
 
 Standalone ZRD editing requires a complete bounded decode; malformed documents retain raw inspection with diagnostics and reject resource/save operations. Asset listings reflect current model replacements and appended records. Their `Offset`/`Length` describe the edited snapshot; nullable `sourceOffset`/`sourceLength` identify the original range for `source_bytes`. Pinned model Properties follows the same kind/index through replacement and undo/redo, and `properties_state` includes generated resource fields when a resource is pinned.
 
-Archive add/replace uses the same source-text admission as the GUI: recognized zReader text is limited to 16 MiB before the full payload is read, using the effective archive member name and shared structural probe. Refusals use the existing error results and accept no partial edit; command arguments, schemas and the discovery catalog are unchanged.
+Archive add/replace uses the same source-text admission as the GUI: recognized zReader text is limited to 16 MiB before the full payload is read, using the effective archive member name and shared structural probe. Refusals use the existing error results and accept no partial edit. `archive_edit` takes full paths only.
 
 
 ## Texture and prepared-script editing
