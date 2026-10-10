@@ -59,7 +59,10 @@ public sealed class WindowClosingTests
                     await MissionSelectionChecks.RunWithoutReaders();
                     await MissionSelectionChecks.RunDeletedReaderAtStartup();
                     await MissionOwnershipChecks.Run();
+                    Volatile.Write(ref phase, "source project, recovery and model workflows");
+                    await SourceProjectMcpChecks.Run();
                     Volatile.Write(ref phase, "terrain, map zones and world editing");
+                    await WorldCompareMcpChecks.Run();
                     await WorldCompareBoundsChecks.Run();
                     await WorldCompareBudgetChecks.Run();
                     await DemoWorldMcpChecks.Run();

@@ -20,17 +20,18 @@ public partial class MainWindow
         NavigationTabs.SelectedIndex = layout.BrowserTab; InspectorTabs.SelectedIndex = layout.InspectorTab; ToolTabs.SelectedIndex = layout.ToolTab;
         InitializeResponsiveNavigator();
         InitializeChrome(); ApplyDensity();
-        RecentMenu.Loaded += (_,_) =>
-        {
-            // Fluent's submenu-header template omits the shared checkbox gutter
-            // used by its leaf items (File contains the backup checkbox).
-            RecentMenu.ApplyTemplate();
-            if (RecentMenu.Template.FindName("MenuItemContent",RecentMenu) is Grid grid && grid.ColumnDefinitions[0].SharedSizeGroup != "MenuItemCheckBoxIconColumnGroup")
+        foreach (var submenu in new[] { RecentMenu,ExportSourceFileMenu })
+            submenu.Loaded += (_,_) =>
             {
-                foreach (UIElement child in grid.Children) Grid.SetColumn(child,Grid.GetColumn(child) + 1);
-                grid.ColumnDefinitions.Insert(0,new ColumnDefinition { Width = GridLength.Auto, SharedSizeGroup = "MenuItemCheckBoxIconColumnGroup" });
-            }
-        };
+                // Fluent's submenu-header template omits the shared checkbox gutter
+                // used by its leaf items (File contains the backup checkbox).
+                submenu.ApplyTemplate();
+                if (submenu.Template.FindName("MenuItemContent",submenu) is Grid grid && grid.ColumnDefinitions[0].SharedSizeGroup != "MenuItemCheckBoxIconColumnGroup")
+                {
+                    foreach (UIElement child in grid.Children) Grid.SetColumn(child,Grid.GetColumn(child) + 1);
+                    grid.ColumnDefinitions.Insert(0,new ColumnDefinition { Width = GridLength.Auto, SharedSizeGroup = "MenuItemCheckBoxIconColumnGroup" });
+                }
+            };
         foreach (var splitter in new[] { FilesSplitter,NavigatorSplitter,InspectorSplitter,ToolsSplitter })
             splitter.KeyUp += (_,e) => { if (e.Key is Key.Left or Key.Right or Key.Up or Key.Down) WorkspaceSplitterCompleted(splitter,new DragCompletedEventArgs(0,0,false)); };
         Loaded += (_, _) => ArrangeWorkspace();
@@ -66,8 +67,9 @@ public partial class MainWindow
         ReplaceModelsMenu.IsEnabled = doc?.ModelEdits != null || doc?.SelectedAsset?.Record.Content is Recoil.Zbd.Core.Formats.MechAssembly;
         WelcomeTitle.Text = ViewModel.HasRoot ? "Choose a file to inspect" : "Explore Recoil’s assets";
         WelcomeDescription.Text = ViewModel.HasRoot ? "Open a ZBD file from Files, or search for an asset across this folder." : "Textures, worlds, models, audio, scripts, and animation sequences — together in one workspace.";
-        WelcomeOpen.Visibility = ViewModel.HasRoot ? Visibility.Collapsed : Visibility.Visible;
-        WelcomeHelp.Text = ViewModel.HasRoot ? "Double-click a file or select it and press Enter.\nUse File → Open folder to change your ZBD root." : "Open the folder containing image.zbd and the mission directories.\nYou can also drop a folder or a ZBD file here.";
+        WelcomeChoices.Visibility = ViewModel.HasRoot ? Visibility.Collapsed : Visibility.Visible;
+        WelcomeHelp.Text = ViewModel.HasRoot ? "Double-click a file or select it and press Enter.\nUse File → Open folder to change your ZBD root." : "You can also drop a ZBD folder or file here.";
+        WelcomeHelp.Margin = new(0, ViewModel.HasRoot ? 24 : 8, 0, 0);
         AnimationMenu.IsEnabled = animation != null;
         CopyEventJsonMenu.IsEnabled = animation != null;
         foreach (var column in AssetGrid.Columns.Skip(1)) column.Visibility = doc?.AnimationEdits != null ? Visibility.Visible : Visibility.Collapsed;

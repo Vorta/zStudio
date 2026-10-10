@@ -158,6 +158,7 @@ public partial class MainWindow
         RegisterResourceCommands(registry);
         RegisterMotionCommands(registry); RegisterMissionCommands(registry); RegisterMechCommands(registry);
         RegisterContentCommands(registry);
+        RegisterSourceCommands(registry);
         RegisterWorldCompareCommands(registry);
         return registry;
     }
