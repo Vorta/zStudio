@@ -945,7 +945,7 @@ public sealed class GltfDocument
     /// <summary>
     /// Where a material's base-colour texture (its texture info) is sampled: the texture coordinate set it names (texCoord,
     /// 0 when absent) and the transform its KHR_texture_transform extension applies, as glTF states it: the coordinates are
-    /// scaled, rotated by <c>rotation</c> radians (u loses v·sin, v gains u·sin) and offset, and the extension's own texCoord
+    /// scaled, rotated by <c>rotation</c> radians (u gains v·sin, v loses u·sin) and offset, and the extension's own texCoord
     /// replaces the set. Unknown optional extensions are ignored; unsupported required extensions are refused by the
     /// document reader. A set or transform with invalid numeric values is refused here.
     /// </summary>
@@ -968,10 +968,11 @@ public sealed class GltfDocument
                 float rotation = 0;
                 if (t["rotation"] is { } r && !(TryNumber(r, out rotation, numeric) && float.IsFinite(rotation))) throw Malformed($"a {TextureTransform} rotation that is not a finite number");
                 if (t["texCoord"] is { } replaced) set = Set(replaced);
-                // u' = offset.u + cos·scale.u·u - sin·scale.v·v, v' = offset.v + sin·scale.u·u + cos·scale.v·v (translation ·
-                // rotation · scale), as Vector2.Transform applies a Matrix3x2.
+                // u' = offset.u + cos·scale.u·u + sin·scale.v·v, v' = offset.v - sin·scale.u·u + cos·scale.v·v (translation ·
+                // rotation · scale, the rotation being the Khronos column-major mat3(cos, -sin, 0, sin, cos, 0, 0, 0, 1), as the
+                // reference viewer and Blender apply it), as Vector2.Transform applies a Matrix3x2.
                 float cos = (float)Math.Cos(rotation), sin = (float)Math.Sin(rotation);
-                transform = new(cos * scale[0], sin * scale[0], -sin * scale[1], cos * scale[1], offset[0], offset[1]);
+                transform = new(cos * scale[0], -sin * scale[0], sin * scale[1], cos * scale[1], offset[0], offset[1]);
             }
         }
         return (set, transform);

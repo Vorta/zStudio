@@ -255,9 +255,10 @@ public sealed class GltfPngRound4Tests
     [Fact]
     public void TheBaseColourTextureTransformIsApplied()
     {
-        // KHR_texture_transform (gltfpack dequantizes texture coordinates with it; Blender writes a Mapping node as it): the
-        // Khronos' column-major GLSL example maps (1,0) to (0,1) for +pi/2. After scale and offset:
-        // u' = 0.5 - 3v, v' = 0.25 + 2u. Its texCoord replaces the texture info's.
+        // KHR_texture_transform (gltfpack dequantizes texture coordinates with it; Blender writes a Mapping node as it) scales,
+        // rotates and offsets the coordinates: u' = ox + cos·sx·u + sin·sy·v, v' = oy - sin·sx·u + cos·sy·v, as the Khronos
+        // column-major GLSL rotation mat3(cos, -sin, 0, sin, cos, 0, 0, 0, 1) gives. For +pi/2 after scale and offset:
+        // u' = 0.5 + 3v, v' = 0.25 - 2u. Its texCoord replaces the texture info's.
         Triangle file = new();
         file.Declare("extensionsUsed", "KHR_texture_transform");
         file.Attributes["TEXCOORD_0"] = file.TexCoords(9, 9, 9, 9, 9, 9);
@@ -269,10 +270,21 @@ public sealed class GltfPngRound4Tests
                 ["KHR_texture_transform"] = new JsonObject { ["offset"] = new JsonArray(0.5, 0.25), ["rotation"] = Math.PI / 2, ["scale"] = new JsonArray(2, 3), ["texCoord"] = 1 },
             },
         });
-        Vector2[] expected = [new(0.5f, 2.25f), new(-2.5f, 0.25f), new(-2.5f, 2.25f)];
-        var read = file.Read().TexCoords;
-        Assert.Equal(3, read.Count);
-        for (int i = 0; i < 3; i++) Assert.True(Vector2.Distance(expected[i], read[i]) < 1e-5f, $"Corner {i}: {read[i]}, expected {expected[i]}.");
+        Near([new(0.5f, -1.75f), new(3.5f, 0.25f), new(3.5f, -1.75f)], file.Read().TexCoords, 1e-5f);
+
+        // Blender 5.2 exports a Mapping node (location (0.1, 0.2), rotation 0.5, scale (2, 3)) as offset
+        // (0.1 - 3·sin 0.5, 0.8 - 3·cos 0.5), rotation 0.5 and scale (2, 3), and shows these corners at the glTF coordinates below.
+        Triangle blender = new();
+        blender.Declare("extensionsUsed", "KHR_texture_transform");
+        blender.Attributes["TEXCOORD_0"] = blender.TexCoords(1, 0, 0, 1, 1, 1);
+        blender.Textured(new JsonObject
+        {
+            ["extensions"] = new JsonObject
+            {
+                ["KHR_texture_transform"] = new JsonObject { ["offset"] = new JsonArray(0.1 - 3 * Math.Sin(0.5), 0.8 - 3 * Math.Cos(0.5)), ["rotation"] = 0.5, ["scale"] = new JsonArray(2, 3) },
+            },
+        });
+        Near([new(0.41689f, -2.79160f), new(0.1f, 0.8f), new(1.85517f, -0.15885f)], blender.Read().TexCoords, 1e-4f);
 
         // An offset alone moves the coordinates; a file may require the extension, which the reader implements.
         Triangle moved = new();
@@ -280,6 +292,12 @@ public sealed class GltfPngRound4Tests
         moved.Attributes["TEXCOORD_0"] = moved.TexCoords(1, 0, 0, 1, 1, 1);
         moved.Textured(new JsonObject { ["extensions"] = new JsonObject { ["KHR_texture_transform"] = new JsonObject { ["offset"] = new JsonArray(0.5, -1) } } });
         Assert.Equal([new(1.5f, -1), new(0.5f, 0), new(1.5f, 0)], moved.Read().TexCoords);
+
+        static void Near(Vector2[] expected, IReadOnlyList<Vector2> read, float tolerance)
+        {
+            Assert.Equal(expected.Length, read.Count);
+            for (int i = 0; i < expected.Length; i++) Assert.True(Vector2.Distance(expected[i], read[i]) < tolerance, $"Corner {i}: {read[i]}, expected {expected[i]}.");
+        }
     }
 
     [Theory]
