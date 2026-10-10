@@ -249,6 +249,15 @@ internal static class ExportSafetyMcpChecks
         Assert.Equal("original", selected["profile"]!.GetValue<string>());
         File.Delete(fixture.Path("gamegen/build-profiles/broken.json"));
         await job("source_profile", new(), "completed");
+
+        // The checkout returns an operation, which can be cancelled, and completes with the checkout.
+        var started = await call("source_blender_checkout", new() { ["model"] = "data/m1/models/m1.gltf" });
+        Assert.Equal(("source_blender_checkout", (bool?)true), (started["Name"]?.GetValue<string>(), started["Cancellable"]?.GetValue<bool>()));
+        var operation = started;
+        while (operation["State"]!.GetValue<string>() is "queued" or "running") { await Task.Delay(10, token); operation = await call("operation", new() { ["id"] = started["id"]!.GetValue<string>() }); }
+        Assert.Equal("completed", operation["State"]!.GetValue<string>());
+        Assert.StartsWith(Path.Combine(fixture.Project, "zstudio", "export"), operation["result"]!["folder"]!.GetValue<string>());
+
         var m1 = Document((await job("source_world_open", new() { ["mission"] = "m1" }, "completed"))["document"]!);
         var m2 = Document((await job("source_world_open", new() { ["mission"] = "m2" }, "completed"))["document"]!);
         Assert.DoesNotContain(main.ViewModel.Problems, p => Changed(p, "m1") || Changed(p, "m2"));

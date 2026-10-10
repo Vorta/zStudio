@@ -67,16 +67,20 @@ public sealed class WindowClosingTests
                     await SourceDefinitionPagingChecks.Run();
                     await SourceWorkspaceStateBoundsChecks.Run();
                     await FileResultBoundsMcpChecks.Run();
+                    await SourceEditingMcpChecks.Run();
                     await SourceRecoveryMcpChecks.Run();
                     await SourceProjectReadMcpChecks.Run();
+                    await SourceDecisionDialogChecks.Run();
                     await SourceSaveMcpChecks.Run();
                     await SourceModelDialogChecks.Run();
+                    await ScriptScanRound6McpChecks.Run();
                     await SourceTakeBackMcpChecks.Run();
                     await SourcePreviewChangeMcpChecks.Run();
                     Volatile.Write(ref phase, "terrain, map zones and world editing");
                     await SourceTerrainMcpChecks.Run();
                     await SourceZoneMcpChecks.Run();
                     await SourceTerrainReferenceCapacityChecks.Run();
+                    await SourceRootResourceGuardChecks.Run();
                     await SourceRound30PlanningChecks.Run();
                     await WorldCompareMcpChecks.Run();
                     await WorldCompareBoundsChecks.Run();
@@ -92,6 +96,7 @@ public sealed class WindowClosingTests
                     await ShutdownMcpChecks.Run(app);
                     await PropertiesMcpChecks.Run();
                     await OperationPublicationChecks.Run();
+                    await BlenderCheckoutLifetimeChecks.Run();
                     await AssetInspectionMcpChecks.Run();
                     await ModelReplacementMcpChecks.Run();
                     await SceneSnapshotChecks.Run();
