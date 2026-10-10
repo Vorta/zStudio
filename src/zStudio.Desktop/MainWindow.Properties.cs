@@ -40,9 +40,12 @@ public partial class MainWindow
         {
             SaveRequested = SaveCurrentAsync,
             UndoRequested = UndoDocument,
-            Editing = doc => { if (doc == shownDocument) animation?.Pause(); }
+            Editing = doc => { if (doc == shownDocument) animation?.Pause(); },
+            // Closing discards the zone draft (Closed below); it is decided first, so declining asks nothing more.
+            ResolveClosingDrafts = ResolveZoneDrafts,
         };
-        window.Closed += (_, _) => { if (propertiesWindow == window) { propertiesWindow = null; ++propertyRequest; } };
+        window.Closed += (_, _) => { if (propertiesWindow == window) { CancelZoneDraft(close: true); propertiesWindow = null; ++propertyRequest; } };
+        window.Retargeted += UpdateSourceInputBlock;
         propertiesWindow = window; return window;
     }
     private static void PresentProperties(PropertiesWindow window, bool accepted)
@@ -52,8 +55,17 @@ public partial class MainWindow
         if (window.WindowState == WindowState.Minimized) window.WindowState = WindowState.Normal;
         window.Activate();
     }
-    internal bool ResolvePropertiesDrafts(DocumentModel? doc = null) => ResolveInspectionDrafts(doc) && (propertiesWindow == null || doc != null && propertiesWindow.Document != doc || propertiesWindow.ResolvePendingDrafts());
-    internal async Task<bool> ResolvePropertiesDraftsAsync(DocumentModel? doc = null) => ResolveInspectionDrafts(doc) && (propertiesWindow == null || doc != null && propertiesWindow.Document != doc || await propertiesWindow.ResolvePendingDraftsAsync());
+    /// <summary>
+    /// Refuses (MCP, without a dialog) while Properties holds unfinished input or a map zone draft, which retargeting or
+    /// closing it would otherwise ask about or discard.
+    /// </summary>
+    private void RequireNoPropertiesDrafts(string message)
+    {
+        if (propertiesWindow?.HasPendingDrafts == true) throw new StudioCommandException("pending_drafts", message);
+        if (HasZoneDraft) throw new StudioCommandException("pending_drafts", "Apply or cancel the map zone draft before continuing.");
+    }
+    internal bool ResolvePropertiesDrafts(DocumentModel? doc = null) => ResolveZoneDrafts(doc) && ResolveInspectionDrafts(doc) && (propertiesWindow == null || doc != null && propertiesWindow.Document != doc || propertiesWindow.ResolvePendingDrafts());
+    internal async Task<bool> ResolvePropertiesDraftsAsync(DocumentModel? doc = null) => ResolveZoneDrafts(doc) && await ResolveInspectionDraftsAsync(doc) && (propertiesWindow == null || doc != null && propertiesWindow.Document != doc || await propertiesWindow.ResolvePendingDraftsAsync());
     private void UndoDocument(DocumentModel doc, bool redo)
     {
         doc = LiveDocument(doc);
@@ -108,8 +120,7 @@ public partial class MainWindow
             if (doc.IsDisposed || request != propertyRequest) return null;
             cancellation.Token.ThrowIfCancellationRequested();
             if (doc.Revision != revision) throw new StudioCommandException("revision_conflict", "The document changed while loading Properties. Open the current record again.");
-            if (automation && propertiesWindow?.HasPendingDrafts == true)
-                throw new StudioCommandException("pending_drafts", "Properties input changed while loading. Resolve drafts before retargeting.");
+            if (automation) RequireNoPropertiesDrafts("Properties input changed while loading. Resolve drafts before retargeting.");
             var window = GetPropertiesWindow(); bool accepted = window.SetAsset(doc, asset, json);
             PresentProperties(window, accepted);
             return accepted && request == propertyRequest && propertiesWindow == window && window.Document == doc ? window : null;
@@ -142,23 +153,28 @@ public partial class MainWindow
         if (selectedNode is int node && properties != null)
         {
             string name = (motion?.Viewport.PreviewScene ?? scene?.PreviewScene ?? doc.Document.Scene)?.Nodes.ElementAtOrDefault(node)?.Name ?? "Scene object";
+            // A source world's own objects (not placed copies) edit their sources.
+            if (doc.SourceWorld != null && scene?.PickupAt(node) == null && SourceObjectNode(node) is int sourceNode && doc.SourceBuild?.Provenance.ContainsKey(sourceNode) == true)
+            { await ShowSourceObjectPropertiesAsync(doc, sourceNode); return; }
             bool opened = scene?.PickupAt(node)?.Pickup is { } pickup && doc.PickupEdits?.Find(pickup.Source) != null
-                ? window.SetPickup(doc, pickup.Source, $"{name} · node #{node}", properties)
+                ? window.SetPickup(doc, pickup.Source, $"{name} · node #{node}", properties, SourcePickupMove(doc))
                 : window.SetReadOnly(doc, $"{name} · node #{node}", properties);
             PresentProperties(window, opened);
         }
         else if (doc.SelectedAsset is { } selected) await OpenAssetPropertiesAsync(doc, selected.Record);
         else PresentProperties(window, window.SetReadOnly(doc, "Archive", doc.Document.Metadata));
     }
-    private Task<PropertiesWindow?> OpenScenePropertiesAsync(DocumentModel doc, SceneTreeItem item, CancellationToken token = default, bool automation = false)
+    private async Task<PropertiesWindow?> OpenScenePropertiesAsync(DocumentModel doc, SceneTreeItem item, CancellationToken token = default, bool automation = false)
     {
         if (doc.IsDisposed || doc != sceneTreeDocument || item.Owner != sceneTree || item.Node is not { } node || item.Problem != null)
-            return Task.FromResult<PropertiesWindow?>(null);
+            return null;
         if (!item.Owner.IsPreview && doc.PreviewDocument.Assets.FirstOrDefault(a => a.Kind == AssetKind.Node && a.Index == node.Index) is { } asset)
-            return OpenAssetPropertiesAsync(doc, asset, token, automation);
+            return await OpenAssetPropertiesAsync(doc, asset, token, automation);
         ++propertyRequest;
+        if (doc.SourceWorld != null && doc.SourceBuild?.Provenance.ContainsKey(node.Index) == true)
+            return await ShowSourceObjectPropertiesAsync(doc, node.Index, token) ? propertiesWindow : null;
         var window = GetPropertiesWindow(); bool opened = window.SetReadOnly(doc, $"{node.Name} · node #{node.Index}", SceneTreeProperties(item));
-        PresentProperties(window, opened); return Task.FromResult<PropertiesWindow?>(opened ? window : null);
+        PresentProperties(window, opened); return opened ? window : null;
     }
     private void AssetContextTarget(object sender, MouseButtonEventArgs e)
     {

@@ -162,6 +162,7 @@ public partial class MainWindow
                 return other;
             }
             doc = new DocumentModel(built.World, session, built.Build, built.Revision);
+            sourceWorldModels.Add(doc, built.Model);
             session.SetLookupBaseline(built.Build, built.World.Bytes);
             ReportSourceBuild(session, built.Build);
             ViewModel.AddDocument(doc, true);
@@ -249,7 +250,7 @@ public partial class MainWindow
     {
         public void Report(SourceProgress value) { step(value); shown.Report(value); }
     }
-    private sealed record SourceWorldBuilt(ZbdDocument World, SourceWorldBuild Build, long Revision)
+    private sealed record SourceWorldBuilt(ZbdDocument World, SourceWorldBuild Build, long Revision, SourceWorldModelEntry Model)
     {
         /// <summary>The lookups that find another node than when the world was opened or last saved (see <see cref="LookupChangesAsync"/>).</summary>
         public IReadOnlyList<SourceLookupChange> LookupChanges { get; init; } = [];
@@ -282,10 +283,18 @@ public partial class MainWindow
             cancellation.Token.ThrowIfCancellationRequested();
             if (session.IsDisposed || session.Building != cancellation) throw new OperationCanceledException(cancellation.Token);
             if (world.Diagnostics.FirstOrDefault(d => d.Severity == "Error") is { } error) throw new InvalidDataException("The built world does not reopen: " + error.Message);
+            // Paired as part of the build, so closing the world, a workspace change or shutdown cancels it too.
+            var preparing = PreparingSourceWorldModel;
+            var model = await Task.Run(() =>
+            {
+                cancellation.Token.ThrowIfCancellationRequested();
+                preparing?.Invoke(cancellation.Token);
+                return PrepareSourceWorldModel(world, build, cancellation.Token);
+            }, cancellation.Token);
             cancellation.Token.ThrowIfCancellationRequested();
             if (session.IsDisposed || session.Building != cancellation || session.Workspace.ContentRevision != revision)
                 throw new OperationCanceledException(cancellation.Token);
-            SourceWorldBuilt result = new(world, build, revision);
+            SourceWorldBuilt result = new(world, build, revision, model);
             var changes = await LookupChangesAsync(session, result, cancellation.Token);
             cancellation.Token.ThrowIfCancellationRequested();
             if (session.IsDisposed || session.Building != cancellation || session.Workspace.ContentRevision != revision) throw new OperationCanceledException(cancellation.Token);
@@ -338,7 +347,7 @@ public partial class MainWindow
         {
             // Canceled with the build that asks (see BuildSourceWorldAsync), so closing or shutting down never waits for it.
             // The baseline's world is read once, for the first rebuild whose lookups may differ, and kept for the next ones.
-            return await Task.Run(() => baseline.Changes(() => GameZWorldReader.FromDocument(built.World, token), built.Build.Lookups, token, built.Build.Provenance), token);
+            return await Task.Run(() => baseline.Changes(() => built.Model.World, built.Build.Lookups, token, built.Build.Provenance), token);
         }
         // Only a report: a world that cannot be paired is not one, and must not take back the edit.
         catch (Exception ex) when (ex is not (OperationCanceledException or OutOfMemoryException)) { return []; }
@@ -370,8 +379,11 @@ public partial class MainWindow
     }
 
     /// <summary>Rebuilds the session's world and replaces the document showing it, keeping the camera.</summary>
+    /// <param name="verifyTargets">When set, every script instruction must act on the same nodes as in the shown build (see
+    /// <see cref="SourceObjectEdits.TargetChange"/>), compared through how the edit renumbered the scripts' lines: a copy or
+    /// move in a glTF file can change which node a lookup finds, and a move in the scripts what a later instruction reaches.</param>
     /// <param name="notes">The edit's notes on its reach, which the status and the replacement document keep.</param>
-    private async Task<DocumentModel> RebuildSourceWorldAsync(SourceWorldSession session, CancellationToken token, IReadOnlyList<SourceModelAddition>? additions = null, IReadOnlyList<string>? notes = null)
+    private async Task<DocumentModel> RebuildSourceWorldAsync(SourceWorldSession session, CancellationToken token, IReadOnlyList<SourceModelAddition>? additions = null, ScriptLineChanges? verifyTargets = null, IReadOnlyList<string>? notes = null)
     {
         // The build pairs its lookups too, so nothing can close the world between the checks below and the replacement.
         var built = await BuildSourceWorldAsync(session, token, additions);
@@ -383,6 +395,8 @@ public partial class MainWindow
             RequireNoDrafts(current, committing: true);
             if (additions is { Count: > 0 } && current.SourceBuild is { } previous && NewRejections(previous, built.Build) is { } rejection)
                 throw new StudioCommandException("build_failed", rejection);
+            if (verifyTargets is { } lines && current.SourceBuild is { } shown && SourceObjectEdits.TargetChange(shown, built.Build, lines) is { } retargeted)
+                throw new StudioCommandException("invalid_argument", retargeted);
         }
         catch { session.DeleteBuild(built.Build.Folder); throw; }
         SceneViewport.ViewPose? view = null;
@@ -390,6 +404,7 @@ public partial class MainWindow
             try { view = scene.CaptureView(); } catch (InvalidOperationException) { }
         IReadOnlyList<string> kept = [.. notes ?? []];
         var replacement = new DocumentModel(built.World, session, built.Build, built.Revision) { PickupsLocked = current.PickupsLocked, SourceEditNotes = kept };
+        sourceWorldModels.Add(replacement, built.Model);
         // A world that was stale when the project was saved takes the first build that reads only saved sources as its baseline.
         if (session.LookupBaselinePending && ReadsOnlySaved(session, built.Build)) session.SetLookupBaseline(built.Build, built.World.Bytes);
         ReportSourceBuild(session, built.Build, built.LookupChanges);
@@ -424,7 +439,7 @@ public partial class MainWindow
     /// world's build (<paramref name="fromBuild"/>: provenance, line numbers, archive layouts) are refused once a source the
     /// build read changed in the workspace, until the world is reloaded.
     /// </remarks>
-    private async Task<DocumentModel> EditSourceWorldAsync(DocumentModel doc, string action, Func<SourceWorkspace, Action?> apply, CancellationToken token, IReadOnlyList<SourceModelAddition>? additions = null, bool fromBuild = true, IReadOnlyList<string>? notes = null)
+    private async Task<DocumentModel> EditSourceWorldAsync(DocumentModel doc, string action, Func<SourceWorkspace, Action?> apply, CancellationToken token, IReadOnlyList<SourceModelAddition>? additions = null, bool fromBuild = true, Func<ScriptLineChanges?>? verifyTargets = null, IReadOnlyList<string>? notes = null)
     {
         var session = doc.SourceWorld ?? throw new StudioCommandException("unsupported", "This document is not a source world.");
         if (doc.IsDisposed || session.Owner != doc) throw new StudioCommandException("stale_document", "The world was rebuilt; read zstudio_state for its current document.");
@@ -446,7 +461,7 @@ public partial class MainWindow
         try
         {
             SetSourceRebuilding(session, true);
-            return await RebuildSourceWorldAsync(session, token, additions, notes);
+            return await RebuildSourceWorldAsync(session, token, additions, verifyTargets?.Invoke(), notes);
         }
         // The rebuilt world was never shown (failed, canceled, or its world closed meanwhile): the edit is taken back, so no
         // other world keeps an edit nothing was built with, and worlds built before it are current again. The status (the
@@ -481,18 +496,19 @@ public partial class MainWindow
     internal Action<CancellationToken>? SourceEditPreparing { get; set; }
     /// <summary>Read, decode and serialize on an isolated worker workspace; publish one checked transaction on the dispatcher.</summary>
     private async Task<DocumentModel> PrepareSourceWorldEditAsync(DocumentModel doc, string action, Func<SourceWorkspace, CancellationToken, SourceTransaction?> prepare,
-        CancellationToken token, IReadOnlyList<SourceModelAddition>? additions = null, bool fromBuild = true, IReadOnlyList<string>? notes = null, SceneInspectionCard? committingCard = null)
+        CancellationToken token, IReadOnlyList<SourceModelAddition>? additions = null, bool fromBuild = true, Func<ScriptLineChanges?>? verifyTargets = null, IReadOnlyList<string>? notes = null, SceneInspectionCard? committingCard = null, ZoneDraft? committingZones = null)
     {
         var session = doc.SourceWorld ?? throw new StudioCommandException("unsupported", "This document is not a source world.");
         if (doc.IsDisposed || session.Owner != doc) throw new StudioCommandException("stale_document", "The world was rebuilt or closed.");
         RequireSourceWorldIdle(session);
-        RequireNoDrafts(doc, committing: true, committingCard);
+        RequireNoDrafts(doc, committing: true, committingCard, committingZones);
         // Properties callbacks use the GUI helper with no explicit token. When invoked by a direct command,
         // its request must still cancel preparation before any edit is accepted.
         using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(token, directSourcePublication.Value?.Token ?? default,
             doc.Lifetime.Token, ViewModel.WorkspaceToken, shutdownToken);
         cancellation.Token.ThrowIfCancellationRequested();
         string? draftToken = committingCard?.DraftToken;
+        string? zoneToken = committingZones?.Token;
         long revision = session.Workspace.Revision;
         if (fromBuild && doc.SourceInputsChanged(verifyContent: false)) throw new StudioCommandException("stale_document", "Sources changed; reload the world before editing it.");
         if (operation != null) throw new StudioCommandException("busy", "An export, validation or source operation is already running.");
@@ -542,9 +558,18 @@ public partial class MainWindow
             catch (InvalidDataException ex) { throw new StudioCommandException("invalid_argument", ex.Message); }
             committingCard.CancelDraft(); UpdateDocumentCommands();
         }
+        if (committingZones != null)
+        {
+            if (RequireZoneDraft(doc, zoneToken) != committingZones) throw new StudioCommandException("stale_draft", "The zone draft changed during preparation.");
+            RequireNoDrafts(doc, committing: true, committingZones: committingZones);
+            try { session.Workspace.ValidatePreparedEdit(prepared, cancellation.Token, verification.Value); }
+            catch (SourceFileChangedException ex) { throw new StudioCommandException("external_change", ex.Message); }
+            catch (InvalidDataException ex) { throw new StudioCommandException("invalid_argument", ex.Message); }
+            committingZones.Accepting = true; CancelZoneDraft(close: true);
+        }
         // No dispatcher yield between releasing the preparation guard and accepting the checked edit.
         return await EditSourceWorldAsync(doc, action, w => w.AcceptPreparedEdit(prepared, cancellation.Token, verification.Value) is { } t ? () => w.Retract(t) : null,
-            cancellation.Token, additions, fromBuild, notes);
+            cancellation.Token, additions, fromBuild, verifyTargets, notes);
     }
 
     private Task<DocumentModel> AddSourceModelAsync(DocumentModel doc, SourceWorldAddition addition, CancellationToken token)
@@ -603,14 +628,14 @@ public partial class MainWindow
         string archive = Path.GetRelativePath(doc.SourceBuild!.Folder, source.ArchivePath);
         string? type = edits.Find(source)?.Type;
         var next = await MoveSourcePlacementAsync(doc, source, edits.Transform(source) with { Position = position }, CancellationToken.None);
-        if (original == null || next.IsDisposed || !(window is { ClosedByUser: false } && (propertiesWindow == null || propertiesWindow == window && (window.Document == null || window.Document == next)))) return;
+        if (original == null || next.IsDisposed || !FollowsProperties(window, next)) return;
         // Only scalar tokens changed: the archive's build-relative path, member slot/name and record index retain the
         // placement identity even when another difficulty contains an identical-looking pickup.
         try
         {
             using var reading = CancellationTokenSource.CreateLinkedTokenSource(next.Lifetime.Token, shutdownToken);
             var current = await next.GetPickupEditsAsync(ViewModel.Resolver!, reading.Token);
-            if (next.IsDisposed || !(window is { ClosedByUser: false } && (propertiesWindow == null || propertiesWindow == window && (window.Document == null || window.Document == next)))) return;
+            if (next.IsDisposed || !FollowsProperties(window, next)) return;
             string targetArchive = Path.GetFullPath(Path.Combine(next.SourceBuild!.Folder, archive));
             // The placement store canonicalizes archive paths for its record keys. Find the retained identity, then use
             // its actual key rather than synthesizing one with the build folder's display casing.

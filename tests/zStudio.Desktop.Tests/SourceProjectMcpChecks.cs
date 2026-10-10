@@ -36,7 +36,7 @@ internal static class SourceProjectMcpChecks
             Assert.Equal(Path.GetFullPath(Path.Combine(fixture.Root, "initialized")), Path.GetFullPath(main.ViewModel.RootPath!));
             var reopened = await Job("open_root", new() { ["path"] = Path.Combine(fixture.Root, "initialized"), ["project"] = true });
             Assert.Equal(Path.GetFullPath(Path.Combine(fixture.Root, "initialized")), Path.GetFullPath(reopened["RootPath"]!.GetValue<string>()));
-            Assert.Equal(["MCP integration…", "Compare worlds…", "-", "Export all ZBD files…", "Export ZBD file", "Check source project", "Resolve interrupted save…", "Build profile", "Open mission world", "Add model to world…", "-", "Validate source file on disk", "Reload current file", "Cancel export or validation"], ToolsMenu(main));
+            Assert.Equal(["MCP integration…", "Compare worlds…", "-", "Export all ZBD files…", "Export ZBD file", "Check source project", "Resolve interrupted save…", "Build profile", "Open mission world", "Add model to world…", "Edit map zones…", "-", "Validate source file on disk", "Reload current file", "Cancel export or validation"], ToolsMenu(main));
             await Job("open_root", new() { ["path"] = fixture.Corpus });
             Assert.Equal(["MCP integration…", "Compare worlds…", "-", "Validate source file on disk", "Reload current file", "Cancel export or validation"], ToolsMenu(main));
 

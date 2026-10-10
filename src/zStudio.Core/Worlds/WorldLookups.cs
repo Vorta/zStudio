@@ -282,6 +282,9 @@ public static class WorldLookups
     /// structure (<see cref="WorldComparer.CompareTree"/>), so slots and node order do not matter, and an indistinguishable copy
     /// counts as the same node. Lookups only one world makes are not changes.
     /// </summary>
+    /// <param name="sources">Where each world's nodes came from, by slot, for two builds of one source project: a node
+    /// moved to another parent has no counterpart by structure, and counts as the same node when it comes from the same
+    /// source (<see cref="SourceObjectEdits.SameSource"/>) and no other node was paired with the node found now.</param>
     public static IReadOnlyList<SourceLookupChange> Changes(GameZWorld before, IReadOnlyList<SourceLookup> a, GameZWorld after, IReadOnlyList<SourceLookup> b, CancellationToken token = default,
         (IReadOnlyDictionary<int, WorldNodeProvenance> Before, IReadOnlyDictionary<int, WorldNodeProvenance> After)? sources = null)
     {
@@ -293,6 +296,7 @@ public static class WorldLookups
         var comparison = WorldComparer.CompareTree(before, after, token: token);
         var counterpart = comparison.Counterparts; bool approximate = comparison.ApproximatePairing || comparison.PairingTruncated;
         var nodesBefore = Nodes(before); var nodesAfter = Nodes(after);
+        HashSet<WorldNode>? paired = null;
         List<SourceLookupChange> changes = [];
         foreach (var x in candidates)
         {
@@ -300,6 +304,9 @@ public static class WorldLookups
             WorldNode? p = nodesBefore.GetValueOrDefault(x.Slot), q = nodesAfter.GetValueOrDefault(y.Slot);
             bool @unchecked = false;
             bool same = p == null ? q == null : q != null && (ReferenceEquals(counterpart.GetValueOrDefault(p), q) || counterpart.GetValueOrDefault(p) is { } c && WorldComparer.Interchangeable(c, q, out @unchecked, 0, token));
+            if (!same && p != null && q != null && sources is { } s && !counterpart.ContainsKey(p) && !(paired ??= new(counterpart.Values, ReferenceEqualityComparer.Instance)).Contains(q)
+                && s.Before.TryGetValue(x.Slot, out var from) && s.After.TryGetValue(y.Slot, out var to) && SourceObjectEdits.SameSource(from, to))
+                same = true;
             if (!same) changes.Add(new(x, y) { Uncertain = approximate || @unchecked });
         }
         return changes;
