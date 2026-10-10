@@ -43,6 +43,45 @@ public sealed class WorldCommandAllocationTests
         var written = new WorldAssembler(new Files(script + "WorldPartition 1 -1\nNodeSetLighting on\nGameZWriteZBDFile again\n"), Token) { CommandAllocationLimit = needed };
         Assert.Equal(4, Assert.Single(written.Assemble("m1.gs").Nodes).Areas.Count);
     }
+    /// <summary>
+    /// LightNew (gwLightNew 0x452fd0) and the light setters as the engine stores them: a white point source at full intensity
+    /// with ranges 32 and 64; LightSetDirectional sets only its own flag (0x4532a0); the directed and point sources exclude
+    /// each other; LightSetActive is gwNodeSetActive (0x447c60), the node's flag 0x04; equal ranges become 10 apart
+    /// (gwLightSetRange 0x453400); colours are clamped to 0–1 (0x49b5a0). Offsets: 0 dirty, 4 enabled, 164 diffuse,
+    /// 168 ambient, 172 colour, 184 directional, 188 directed, 192 point, 196 saturated, 204 near, 208 far, 212 far², 216 1/(far−near).
+    /// </summary>
+    [Theory]
+    [InlineData("", "0=1 4=1 144:1 164:0 168:1 172:1 176:1 180:1 184=0 188=0 192=1 196=1 200=1 204:32 208:64 212:4096 216:0.03125", 0x0108011Cu)]
+    [InlineData("LightSetDirectional on\nLightSetDirectional off", "184=0 188=0 192=1", 0x0108011Cu)]
+    [InlineData("LightSetDirectional on\nLightSetDirectedSource", "184=1 188=1 192=0", 0x0108011Cu)]
+    [InlineData("LightSetDirectedSource\nLightSetPointSource", "184=0 188=0 192=1", 0x0108011Cu)]
+    [InlineData("LightSetActive off", "4=1", 0x01080118u)]
+    [InlineData("LightSetRanges 50 50", "204:50 208:60 212:3600 216:0.1", 0x0108011Cu)]
+    [InlineData("LightSetRanges 540 480", "204:480 208:540 212:291600 216:0.016666668", 0x0108011Cu)]
+    [InlineData("LightSetColor 2 -1 0.5\nLightSetDiffuse .55\nLightSetAmbient 3\nLightSetSaturated off", "172:1 176:0 180:0.5 164:0.55 168:3 196=0", 0x0108011Cu)]
+    public void LightCommandsStoreWhatTheEngineStores(string commands, string expected, uint flags)
+    {
+        var light = new WorldAssembler(new Files($"LightNew sun\n{commands}\nGameZWriteZBDFile out\n"), Token).Assemble("m1.gs").Nodes.Single(n => n.Name == "sun");
+        Assert.Equal(flags, light.Flags);
+        foreach (string field in expected.Split(' '))
+        {
+            int at = field.IndexOfAny([':', '=']), offset = int.Parse(field[..at]);
+            if (field[at] == '=') Assert.Equal(int.Parse(field[(at + 1)..]), light.PayloadInt(offset));
+            else Assert.Equal(float.Parse(field[(at + 1)..], System.Globalization.CultureInfo.InvariantCulture), light.PayloadFloat(offset));
+        }
+    }
+    /// <summary>
+    /// CameraSetWorld (gwCameraSetWorld 0x449dd0) keeps the camera's world when no world has the name; CameraSetHorizon and
+    /// CameraSetHorizonXZ find any node (FindByTypeAndName bucket 6, which gwNodeNew 0x4478c0 adds every node to).
+    /// </summary>
+    [Fact]
+    public void CameraLookupsFollowTheEngine()
+    {
+        var world = new WorldAssembler(new Files("NewWorld world\nLightNew sky\nNewCamera camera\nCameraSetWorld world\nCameraSetWorld missing\nCameraSetHorizon sky\nCameraSetHorizonXZ world\nGameZWriteZBDFile out\n"), Token).Assemble("m1.gs");
+        var camera = world.Nodes.Single(n => n.Class == WorldNodeClass.Camera);
+        Assert.Equal(("world", "sky", "world"), (camera.CameraWorld?.Name, camera.CameraHorizon?.Name, camera.CameraHorizonXZ?.Name));
+        Assert.NotEmpty(GameZWriter.Write(world, Token));
+    }
     [Fact]
     public void PartitionReservationAndCancellationPrecedeCellReplacement()
     {

@@ -63,8 +63,9 @@ public sealed class WorldNodeProvenance
     /// <summary>The glTF node's name in <see cref="ModelFile"/>, which an edit checks before changing node <see cref="ModelNode"/>.</summary>
     public string? ModelNodeName { get; internal set; }
     /// <summary>
-    /// Whether the glTF node had a transform of its own when built. Its matrix is then authored: script Object3DRotate and
-    /// Object3DScale are ignored, while Object3DTranslate still sets its translation (the matrix's last row).
+    /// Whether the glTF node had a transform of its own when built. Its matrix is then authored: a script Object3DTranslate
+    /// sets its translation (the matrix's last row), while an Object3DRotate or Object3DScale replaces it, as the engine does,
+    /// with the matrix of the rotation and scale the node stores (0 and 1 unless set) and that translation.
     /// </summary>
     public bool ModelTransformAuthored { get; internal set; }
     /// <summary>

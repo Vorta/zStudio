@@ -152,7 +152,7 @@ public sealed partial class WorldAssembler(IProjectFiles files, CancellationToke
             if (ScriptConditions.IsSet(command)) { if (args.Length > 0) variables[args[0]] = args.Length > 1 ? args[1] : ""; continue; }
             if (ScriptConditions.IsSource(command)) { if (args.Length > 0) Source(args[0], depth + 1); continue; }
             command = ScriptCommands.Core(command);
-            if (written) { Late(command, args); continue; }
+            if (written) { Late(command, args, relative, line.Number); continue; }
             instruction = new(relative, line.Number, command, raw, args);
             Executions[(relative, line.Number)] = Executions.GetValueOrDefault((relative, line.Number)) + 1;
             var target = current;
@@ -172,11 +172,21 @@ public sealed partial class WorldAssembler(IProjectFiles files, CancellationToke
     /// After the world is written, scripts (tex_fx) only register textures the mission pack must hold and set up the
     /// texture cycles, on the world as the game loads it.
     /// </summary>
-    private void Late(string command, string[] args)
+    private void Late(string command, string[] args, string script, int line)
     {
         if (ScriptTexture(command, args) is { } texture)
         {
-            string name = TextureStem(texture);
+            string name = TextureName(texture);
+            // The game registers these itself as the mission loads: TexDirSetBaseNameFromPath (0x46e380) copies the name
+            // unbounded into the entry's 20-byte field, whose load state (0x46d85a) then overwrites its 21st to 24th bytes (a
+            // longer name also the entry's next-variant pointer), and keeps a folder's separator at the start of the name.
+            // The game finds neither in its packs, nor an empty name.
+            int separator = texture.LastIndexOf('\\');
+            if (separator < 0) separator = texture.LastIndexOf('/');
+            if (separator >= 0 || name.Length is < 1 or > 19)
+                throw new InvalidDataException($"{script} line {line}: {command} {JsonData.ShownText(texture, 64)}: the game names this texture "
+                    + $"'{JsonData.ShownText(separator >= 0 ? texture[separator..].Split('.')[0] : name, 64)}', which it cannot find in the mission's packs. "
+                    + "Name the texture without a folder, in at most 19 characters before its first dot.");
             // The game adds these to the texture directory after the world's entries, so together they may not hold a pair it
             // chains as numbered mipmaps, with or without pack records (Formats.TexturePackBuilder.NumberedMip).
             if (Formats.TexturePackBuilder.NumberedMip(name) is { } mip && DirectoryName(mip) is { } chained) throw Formats.TexturePackBuilder.NumberedMipConflict(name, chained);
@@ -212,7 +222,7 @@ public sealed partial class WorldAssembler(IProjectFiles files, CancellationToke
             case "LensFlareTexture" or "CycleTextureSetMap" or "WriteTextureSetMap" or "TextureAdd":
                 if (ScriptTexture(command, args) is { } texture)
                 {
-                    string name = TextureStem(texture);
+                    string name = TextureName(texture);
                     // The directory only grows; a name registered by an earlier script command is already present.
                     if (!ScriptTextures.Contains(name))
                     {
@@ -257,33 +267,39 @@ public sealed partial class WorldAssembler(IProjectFiles files, CancellationToke
             case "DisplayResolution": if (current?.Class == WorldNodeClass.Display) { current.SetPayloadInt(8, (int)F(0)); current.SetPayloadInt(12, (int)F(1)); } break;
             case "DisplaySetClearColor": if (current?.Class == WorldNodeClass.Display) { current.SetPayloadFloat(16, F(0)); current.SetPayloadFloat(20, F(1)); current.SetPayloadFloat(24, F(2)); } break;
             case "NewCamera": NewCamera(A(0)); break;
-            case "CameraSetWorld": if (current?.Class == WorldNodeClass.Camera) current.CameraWorld = Name(Find(A(0), WorldNodeClass.World)); break;
+            // gwCameraSetWorld (0x449dd0) refuses a missing world (returns 5), so the camera keeps the one it has.
+            case "CameraSetWorld":
+                if (current?.Class != WorldNodeClass.Camera) break;
+                if (Find(A(0), WorldNodeClass.World) is { } cameraWorld) current.CameraWorld = Name(cameraWorld);
+                else diagnostics.Add($"{script}: CameraSetWorld {A(0)} found no world; the camera keeps its world.");
+                break;
             case "CameraSetWindow": if (current?.Class == WorldNodeClass.Camera) current.CameraWindow = Name(Find(A(0), WorldNodeClass.Window)); break;
-            case "CameraSetHorizon": if (current?.Class == WorldNodeClass.Camera) current.CameraHorizon = Name(Find(A(0), WorldNodeClass.Object3D)); break;
-            case "CameraSetHorizonXZ": if (current?.Class == WorldNodeClass.Camera) current.CameraHorizonXZ = Name(Find(A(0), WorldNodeClass.Object3D)); break;
+            // The interpreter finds a horizon with FindByTypeAndName(6, …), the list gwNodeNew (0x4478c0) adds every node to.
+            case "CameraSetHorizon": if (current?.Class == WorldNodeClass.Camera) current.CameraHorizon = Name(Find(A(0), null)); break;
+            case "CameraSetHorizonXZ": if (current?.Class == WorldNodeClass.Camera) current.CameraHorizonXZ = Name(Find(A(0), null)); break;
             case "CameraSetLODMultiplier": if (current?.Class == WorldNodeClass.Camera) { float m = F(0), squared = WorldNumbers.Finite(m * m), inverse = WorldNumbers.Finite(m == 0 ? 0 : 1 / squared); current.SetPayloadFloat(208, m); current.SetPayloadFloat(212, inverse); } break;
             case "CameraSetNearFarClip": if (current?.Class == WorldNodeClass.Camera) { current.SetPayloadFloat(176, F(0)); current.SetPayloadFloat(180, F(1)); current.SetPayloadInt(248, 1); } break;
             case "CameraSetFOV": if (current?.Class == WorldNodeClass.Camera) CameraFov(current, F(0), F(1)); break;
 
             case "LightNew": NewLight(A(0)); break;
-            case "LightSetColor": if (current?.Class == WorldNodeClass.Light) { current.SetPayloadFloat(172, F(0)); current.SetPayloadFloat(176, F(1)); current.SetPayloadFloat(180, F(2)); } break;
-            case "LightSetDiffuse": if (current?.Class == WorldNodeClass.Light) current.SetPayloadFloat(164, F(0)); break;
-            case "LightSetAmbient": if (current?.Class == WorldNodeClass.Light) current.SetPayloadFloat(168, F(0)); break;
-            case "LightSetRanges":
-                if (current?.Class == WorldNodeClass.Light)
-                {
-                    float near = Math.Min(F(0), F(1)), far = Math.Max(F(0), F(1));
-                    float squared = WorldNumbers.Finite(far * far), difference = WorldNumbers.Finite(far - near), inverse = WorldNumbers.Finite(far > near ? 1 / difference : 0);
-                    current.SetPayloadFloat(204, near); current.SetPayloadFloat(208, far); current.SetPayloadFloat(212, squared); current.SetPayloadFloat(216, inverse);
-                }
+            // The light setters (zClass/Light.c, retail 0x453200–0x453aa0) store their values and mark the light dirty (+0).
+            // gwLightSetSpecularColor (0x453aa0) clamps each channel to 0–1 (0x49b5a0, in place).
+            case "LightSetColor": Light(l => { l.SetPayloadFloat(172, Unit(F(0))); l.SetPayloadFloat(176, Unit(F(1))); l.SetPayloadFloat(180, Unit(F(2))); }); break;
+            case "LightSetDiffuse": Light(l => l.SetPayloadFloat(164, F(0))); break;
+            case "LightSetAmbient": Light(l => l.SetPayloadFloat(168, F(0))); break;
+            case "LightSetRanges": Light(l => LightRanges(l, F(0), F(1))); break;
+            case "LightSetOrientation": Light(l => { l.SetPayloadFloat(8, Radians(F(0))); l.SetPayloadFloat(12, Radians(F(1))); l.SetPayloadFloat(16, Radians(F(2))); }); break;
+            case "LightSetTranslate": Light(l => { l.SetPayloadFloat(20, F(0)); l.SetPayloadFloat(24, F(1)); l.SetPayloadFloat(28, F(2)); }); break;
+            // The directed (+188) and point (+192) sources exclude each other; LightSetDirectional (0x4532a0) sets only its own flag (+184).
+            case "LightSetDirectedSource": Light(l => { l.SetPayloadInt(188, 1); l.SetPayloadInt(192, 0); }); break;
+            case "LightSetPointSource": Light(l => { l.SetPayloadInt(188, 0); l.SetPayloadInt(192, 1); }); break;
+            case "LightSetDirectional": Light(l => l.SetPayloadInt(184, On(0) ? 1 : 0)); break;
+            case "LightSetSaturated": Light(l => l.SetPayloadInt(196, On(0) ? 1 : 0)); break;
+            // gwNodeSetActive (0x447c60): the node's active flag 0x04 (cameras, worlds, objects, levels of detail and lights).
+            case "LightSetActive":
+                if (current?.Class is WorldNodeClass.Camera or WorldNodeClass.World or WorldNodeClass.Object3D or WorldNodeClass.Lod or WorldNodeClass.Light)
+                    current.Flags = On(0) ? current.Flags | 0x04 : current.Flags & ~0x04u;
                 break;
-            case "LightSetOrientation": if (current?.Class == WorldNodeClass.Light) { current.SetPayloadFloat(8, Radians(F(0))); current.SetPayloadFloat(12, Radians(F(1))); current.SetPayloadFloat(16, Radians(F(2))); current.SetPayloadInt(0, 1); } break;
-            case "LightSetTranslate": if (current?.Class == WorldNodeClass.Light) { current.SetPayloadFloat(20, F(0)); current.SetPayloadFloat(24, F(1)); current.SetPayloadFloat(28, F(2)); current.SetPayloadInt(0, 1); } break;
-            case "LightSetDirectedSource": LightMode(188); break;
-            case "LightSetPointSource": LightMode(192); break;
-            case "LightSetDirectional": LightMode(184); break;
-            case "LightSetSaturated": if (current?.Class == WorldNodeClass.Light) current.SetPayloadInt(196, On(0) ? 1 : 0); break;
-            case "LightSetActive": if (current?.Class == WorldNodeClass.Light) current.SetPayloadInt(4, On(0) ? 1 : 0); break;
 
             case "FindNode": current = Find(A(0), null); if (current == null) diagnostics.Add($"{script}: FindNode {A(0)} found no node."); break;
             case "FindSubNode": current = current == null ? null : Lookups.FindSub(current, A(0)); if (current == null) diagnostics.Add($"{script}: FindSubNode {A(0)} found no node."); break;
@@ -297,9 +313,12 @@ public sealed partial class WorldAssembler(IProjectFiles files, CancellationToke
                 break;
             case "DeleteTree": if (Find(A(0), null) is { } tree) { Name(tree); DeleteTree(tree); } break;
             case "NewObject3D": Object3D(Create(A(0), WorldNodeClass.Object3D)); break;
-            case "Object3DTranslate": Trs(o => { o.SetPayloadFloat(0x54, F(0)); o.SetPayloadFloat(0x58, F(1)); o.SetPayloadFloat(0x5C, F(2)); }); break;
-            case "Object3DRotate": Trs(o => { o.SetPayloadFloat(0x18, Radians(F(0))); o.SetPayloadFloat(0x1C, Radians(F(1))); o.SetPayloadFloat(0x20, Radians(F(2))); }); break;
-            case "Object3DScale": Trs(o => { o.SetPayloadFloat(0x24, F(0)); o.SetPayloadFloat(0x28, F(1)); o.SetPayloadFloat(0x2C, F(2)); }); break;
+            // gwObject3DSetPosition (0x44e300) sets the matrix's translation and keeps an authored matrix (flag 0x10);
+            // gwObject3DSetRotation (0x44e030) and SetScale (0x44df00) drop it, so the update pass rebuilds the matrix from
+            // the stored rotation and scale (Finish).
+            case "Object3DTranslate": Transform(0x54, F(0), F(1), F(2), 0, dropsMatrix: false); break;
+            case "Object3DRotate": Transform(0x18, Radians(F(0)), Radians(F(1)), Radians(F(2)), 0, dropsMatrix: true); break;
+            case "Object3DScale": Transform(0x24, F(0), F(1), F(2), 1, dropsMatrix: true); break;
             case "SetAltitudeSurface": Flag(0x08, On(0)); break;
             case "SetIntersectSurface": Flag(0x10, On(0)); break;
             case "SetIntersectBBOX": Flag(0x20, On(0)); break;
@@ -325,19 +344,33 @@ public sealed partial class WorldAssembler(IProjectFiles files, CancellationToke
         // A node an instruction found by name to act on.
         WorldNode? Name(WorldNode? node) { if (node != null && instruction != null) Origin(node).Named.Add(instruction); return node; }
         void WorldSet(Action<WorldNode> action) { if (current?.Class == WorldNodeClass.World) action(current); else diagnostics.Add($"{script}: {command} needs a world node."); }
-        void LightMode(int offset)
-        {
-            if (current?.Class != WorldNodeClass.Light) return;
-            foreach (int o in new[] { 184, 188, 192 }) current.SetPayloadInt(o, o == offset ? 1 : 0);
-        }
+        void Light(Action<WorldNode> set) { if (current?.Class != WorldNodeClass.Light) return; set(current); current.SetPayloadInt(0, 1); }
         void Flag(uint bit, bool on) { if (current != null) current.Flags = on ? current.Flags | bit : current.Flags & ~bit; }
-        void Trs(Action<WorldNode> set)
+        // Three values at offset, then the flags: the identity flag 0x08 stays only while all three are the identity's, and
+        // the TRS dirty flag 0x01 rebuilds the matrix in the update pass unless it is authored (0x10).
+        void Transform(int offset, float x, float y, float z, float identity, bool dropsMatrix)
         {
             if (current?.Class != WorldNodeClass.Object3D) return;
-            set(current);
-            // The TRS dirty flag rebuilds the matrix in the update pass unless the matrix was authored.
-            current.SetPayloadInt(0, (current.PayloadInt(0) & ~0x08) | 0x01);
+            current.SetPayloadFloat(offset, x); current.SetPayloadFloat(offset + 4, y); current.SetPayloadFloat(offset + 8, z);
+            int flags = current.PayloadInt(0);
+            if (dropsMatrix) flags &= ~0x10;
+            if (x != identity || y != identity || z != identity) flags &= ~0x08;
+            current.SetPayloadInt(0, flags | 0x01);
         }
+    }
+
+    /// <summary>zRndrFogTargetColorStagedSetRgb01Clamped (retail 0x49b5a0): above 1 is 1, below 0 is 0.</summary>
+    private static float Unit(float value) => value > 1 ? 1 : value >= 0 ? value : 0;
+    /// <summary>
+    /// gwLightSetRange (retail 0x453400): the nearer and farther range; equal ranges become 10 apart. It caches the farther
+    /// squared and the inverse of their difference (computed in double precision, as the x87 code does).
+    /// </summary>
+    private static void LightRanges(WorldNode light, float a, float b)
+    {
+        float near = a < b ? a : b, far = a > b ? a : b;
+        if (a == b) far = WorldNumbers.Finite((float)(near + 10.0));
+        float squared = WorldNumbers.Finite((float)((double)far * far)), inverse = WorldNumbers.Finite((float)(1.0 / ((double)far - near)));
+        light.SetPayloadFloat(204, near); light.SetPayloadFloat(208, far); light.SetPayloadFloat(212, squared); light.SetPayloadFloat(216, inverse);
     }
 
     /// <summary>Recognized commands whose only effects are diagnostics or renderer/runtime global settings, not stored world data.
@@ -347,7 +380,8 @@ public sealed partial class WorldAssembler(IProjectFiles files, CancellationToke
         "echo", "Echo", "GetBFETolerance", "PerspectiveTexture", "PrintNodeCount", "PrintUsedNodes", "SetPaletteName",
         "SetPaletteShading", "SetPerspectiveAdaptiveCorrection", "SetPerspectiveTextureDeltaX", "SetInverseZTolerance",
         "SetPerspectiveTextureFarZ", "SetVertexShading", "Verbose"], StringComparer.Ordinal);
-    private static float Radians(float degrees) => degrees * (MathF.PI / 180f);
+    /// <summary>The interpreter's conversion (kDegreesToRadians, the double 0.01745329251994): one in eleven angles differs from a float π/180 in the last bit.</summary>
+    private static float Radians(float degrees) => (float)(degrees * 0.01745329251994);
     /// <summary>ParseFloatToken's atof: the longest leading decimal number (after spaces), 0 when there is none.</summary>
     internal static float Number(string text)
     {
@@ -355,7 +389,18 @@ public sealed partial class WorldAssembler(IProjectFiles files, CancellationToke
         return match.Success && double.TryParse(match.ValueSpan, NumberStyles.Float, CultureInfo.InvariantCulture, out double value) ? WorldNumbers.Finite((float)value) : 0;
     }
     [System.Text.RegularExpressions.GeneratedRegex(@"\A[ \t\n\v\f\r]*[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?")] private static partial System.Text.RegularExpressions.Regex LeadingNumber();
-    private static string TextureStem(string path) => Path.GetFileNameWithoutExtension(path.Replace('\\', '/')).ToLowerInvariant();
+    /// <summary>
+    /// The texture-directory name of a script's texture operand: TexDirFindOrAppendByPath (retail 0x46d810) names an entry
+    /// with TexDirSetBaseNameFromPath (0x46e380), which copies from the last backslash (or slash) and ends the name at its
+    /// first dot (SetPathExtension 0x46e2c0, strchr). Packs find textures ignoring case. The engine keeps the separator
+    /// itself at the start of the name; a world zStudio writes names its entries without it (see <see cref="Late"/>).
+    /// </summary>
+    internal static string TextureName(string operand)
+    {
+        string name = operand[(operand.LastIndexOfAny(['\\', '/']) + 1)..];
+        int dot = name.IndexOf('.');
+        return (dot < 0 ? name : name[..dot]).ToLowerInvariant();
+    }
     /// <summary>
     /// The texture a script command registers (zImage::TexDirFindOrAppendByPath of the interpreter's next token, retail
     /// DispatchCoreCommand 0x4C20A0): the first operand of <c>CycleTextureSetMap</c>, <c>WriteTextureSetMap</c> and
@@ -458,10 +503,14 @@ public sealed partial class WorldAssembler(IProjectFiles files, CancellationToke
     private void NewLight(string name)
     {
         var light = Create(name, WorldNodeClass.Light);
-        // gwLightNew: enabled, dirty, a small cached box and valid cached bounds.
+        // gwLightNew (retail 0x452fd0): a small cached box and valid cached bounds; dirty, enabled, facing +Y, a white point
+        // source at full intensity, ranges 32 and 64 with their square and inverse difference cached.
         light.Flags |= WorldUpdate.CachedBoundsFlag;
         light.CachedBounds = new(new(1, 1, -2), new(2, 2, -1));
-        light.SetPayloadInt(0, 1); light.SetPayloadInt(4, 1); light.SetPayloadFloat(144, 1); light.SetPayloadInt(196, 1); light.SetPayloadInt(200, 1);
+        light.SetPayloadInt(0, 1); light.SetPayloadInt(4, 1); light.SetPayloadFloat(144, 1);
+        light.SetPayloadFloat(168, 1); light.SetPayloadFloat(172, 1); light.SetPayloadFloat(176, 1); light.SetPayloadFloat(180, 1);
+        light.SetPayloadInt(192, 1); light.SetPayloadInt(196, 1); light.SetPayloadInt(200, 1);
+        light.SetPayloadFloat(204, 32); light.SetPayloadFloat(208, 64); light.SetPayloadFloat(212, 4096); light.SetPayloadFloat(216, 0.03125f);
     }
 
     /// <summary>FindByTypeAndName returns the most recently created live node with the name.</summary>

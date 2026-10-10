@@ -78,6 +78,34 @@ public sealed class WorldLoadCapacityTests
     }
 
     /// <summary>
+    /// Script transforms as the engine applies them (gwObject3DSetRotation 0x44e030, SetScale 0x44df00, SetPosition 0x44e300,
+    /// rebuilt in the update pass gwNodeUpdate 0x448cc0): rotation and scale drop a node's authored matrix, which is then
+    /// rebuilt from the stored rotation and scale (0 and 1 for a glTF node) and its translation; a position only replaces the
+    /// matrix's translation; each keeps the identity flag 0x08 while its values are the identity's.
+    /// </summary>
+    [Fact]
+    public void ScriptRotationAndScaleReplaceAnAuthoredMatrixWhileATranslationKeepsIt()
+    {
+        const string turn = "\"rotation\":[0,0.25881904,0,0.9659258]";
+        string model = $$"""{"asset":{"version":"2.0"},"scene":0,"scenes":[{"nodes":[0,1,2,3]}],"nodes":[{"name":"turned",{{turn}},"translation":[5,0,0]},{"name":"scaled",{{turn}},"translation":[0,0,7]},{"name":"moved",{{turn}},"translation":[5,0,0]},{"name":"plain"}]}""";
+        string script = "SetModelDirectory ../data/models\nLoadGameGen parts.gltf parts\nFindSubNode turned\nObject3DRotate 0 90 0\nFindNode parts\nFindSubNode scaled\nObject3DScale 2 2 2\n"
+            + "FindNode parts\nFindSubNode moved\nObject3DTranslate 1 2 3\nFindNode parts\nFindSubNode plain\nObject3DTranslate 0 0 0\nGameZWriteZBDFile gamez.zbd\n";
+        var world = new WorldAssembler(new Files(script, new() { ["data/models/parts.gltf"] = Encoding.ASCII.GetBytes(model) }), Token).Assemble("m1.gs");
+        WorldNode Node(string name) => world.Nodes.Single(n => n.Name == name);
+        Matrix4x4 Expected(Matrix4x4 basis, Vector3 translation) { basis.Translation = translation; return basis; }
+        void Placed(string name, int flags, Matrix4x4 expected)
+        {
+            Assert.Equal(flags, Node(name).PayloadInt(0));
+            var actual = WorldUpdate.LocalMatrix(Node(name)) ?? Matrix4x4.Identity;
+            for (int r = 0; r < 4; r++) for (int c = 0; c < 3; c++) Assert.Equal(expected[r, c], actual[r, c], 1e-5f);
+        }
+        Placed("turned", 0x20, Expected(Matrix4x4.CreateRotationY(MathF.PI / 2), new(5, 0, 0)));
+        Placed("scaled", 0x20, Expected(Matrix4x4.CreateScale(2), new(0, 0, 7)));
+        Placed("moved", 0x30, Expected(Matrix4x4.CreateRotationY(MathF.PI / 6), new(1, 2, 3)));
+        Placed("plain", 0x28, Matrix4x4.Identity);
+    }
+
+    /// <summary>
     /// Search-path probes and model bytes are one allowance for the whole build: repeated loads that try every folder, and
     /// loads that read a declared but unused buffer again, are refused once it is spent, before the next read.
     /// </summary>

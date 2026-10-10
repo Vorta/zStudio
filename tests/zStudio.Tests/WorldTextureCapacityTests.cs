@@ -36,6 +36,24 @@ public sealed class WorldTextureCapacityTests
         Assert.DoesNotContain(assembler.World.Textures, t => t.Name == "late_only");
     }
 
+    /// <summary>
+    /// A script's texture is named as the engine names it (TexDirSetBaseNameFromPath 0x46e380): up to the first dot. The game
+    /// registers the texture-effect scripts' textures itself, in a 20-byte name field it overruns and that keeps a folder's
+    /// separator, so a late name it could not find is refused, and so is one it would chain as a numbered mipmap.
+    /// </summary>
+    [Theory]
+    [InlineData("GameZWriteZBDFile gamez.zbd\nCycleTextureSetMap Fire.Anim.png", null)]
+    [InlineData("TextureAdd foo_2.png\nGameZWriteZBDFile gamez.zbd\nCycleTextureSetMap foo_1.x.png", "loads foo_2 as a smaller copy of foo_1")]
+    [InlineData("GameZWriteZBDFile gamez.zbd\nCycleTextureSetMap abcdefghijklmnopqrst.png", "at most 19 characters")]
+    [InlineData("GameZWriteZBDFile gamez.zbd\nTextureAdd ..\\data\\fire.png", "without a folder")]
+    public void ScriptTexturesTakeTheEngineNames(string commands, string? refusal)
+    {
+        var assembler = new WorldAssembler(new Files($"TextureAdd sky.v2.png\n{commands}\n"), Token);
+        if (refusal != null) { Assert.Contains(refusal, Assert.Throws<InvalidDataException>(() => assembler.Assemble("m1.gs")).Message); return; }
+        Assert.Equal("sky", Assert.Single(assembler.Assemble("m1.gs").Textures).Name);
+        Assert.Equal(["fire", "sky"], assembler.ScriptTextures.Order());
+    }
+
     [Fact]
     public void ScriptCanRegisterAndRepeatedlyReuseATextureImportedAtCapacity()
     {

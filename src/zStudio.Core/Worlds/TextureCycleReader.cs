@@ -102,5 +102,6 @@ internal sealed class TextureCycleReader(GameZWorld world, LookupWorkBudget look
         lookups.Reserve(1L + name.Length);
         return highest.GetValueOrDefault(name);
     }
-    private static string Stem(string path) => Path.GetFileNameWithoutExtension(path.Replace('\\', '/')).ToLowerInvariant();
+    /// <summary>The texture-directory name the engine gives a frame (<see cref="WorldAssembler.TextureName"/>).</summary>
+    private static string Stem(string path) => WorldAssembler.TextureName(path);
 }
