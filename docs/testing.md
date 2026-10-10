@@ -2,6 +2,38 @@
 
 Code reviews and review-fix cycles must follow [the adversarial review procedure](code-review.md). It requires a full PR coverage inventory, producer-to-consumer checks for data growth, mixed record-kind identity cases, a finding/evidence ledger and a final challenge pass after fixes. The test commands below validate specific behavior; a green suite does not establish review coverage of other changed paths.
 
+Rendered Desktop and live-preview checks need a Windows desktop session with working Direct3D 9Ex/D3DImage interoperability. A disconnected session can return `D3DERR_NOTAVAILABLE` before a preview is created, even when ordinary memory is available. Restore that session before running the rendered acceptance checks; do not turn this failure into a skipped or successful preview assertion. Window-size fixtures must fit the current monitor work area while still checking exact saved and restored sizes. Run UI checks serially and restore the user's settings afterward.
+
+CI runs test modules sequentially with `--max-parallel-test-modules 1` so Core allocation checks do not compete with the Desktop dispatcher and rendering checks. The Desktop chain retains its six-minute hang guard and reports its active phase on timeout; individual operations retain their own deadlines.
+
+## Minimal, must-have tests
+
+Keep the smallest test suite that protects essential supported behavior. A test is must-have when it provides necessary coverage of a core workflow, data integrity, a required GUI/MCP contract, or a consequential reproduced regression that existing coverage does not already catch. State that reason briefly when adding a test; test counts, hypothetical permutations and coverage percentages are not reasons.
+
+- Reuse an existing fixture and one representative case where possible. Add a boundary, control or failure case only when it distinguishes a real failure mode.
+- Avoid redundant tests, assertions that mirror implementation, exhaustive combinations, and elaborate test infrastructure for low-impact behavior. Documentation, trivial edits and reversible presentation changes usually need direct verification rather than new automated tests.
+- When review finds a defective test, assess necessity before repairing it. **Remove it if it is not must-have.** Record the removal briefly; do not replace it with another optional test.
+- Repair must-have tests and any actual production defect independently. Do not weaken required assertions or delete essential coverage merely to make CI pass.
+
+Review counterexamples guide investigation; they are not a requirement to commit a permanent test for every case. Missing optional coverage is not a review blocker. Apply these rules to future changes and tests encountered during review; do not perform an unrelated wholesale test deletion.
+
+## Corpus-gated tests
+
+Tests that need game data return early unless their variable is set, so `dotnet test --solution zStudio.slnx -c Release` runs without any. The retail datasets are never written: tests work in temporary folders.
+
+| Variable | Value | Enables |
+| --- | --- | --- |
+| `ZSTUDIO_CORPUS` | a RECOIL data folder (holding `interp.zbd`, `zrdr.zbd` and `m1\`), such as `zbd_1999` or `zbd_1998` | archive, world, animation, keyframe, AI and resource-editing corpus tests |
+| `ZSTUDIO_MW3_CORPUS` | a MechWarrior 3 `zbd` folder | MechWarrior 3 and AI valve tests |
+| `ZSTUDIO_CONTENT_CAPTURE`, `ZSTUDIO_INSPECTION_CAPTURE` | an output folder | screenshots from the Desktop content and inspection checks |
+
+A full local gate runs the solution with the 1999 and MechWarrior 3 data:
+
+```powershell
+$env:ZSTUDIO_CORPUS = 'zbd_1999'; $env:ZSTUDIO_MW3_CORPUS = '<MechWarrior 3>\zbd'
+dotnet test --solution zStudio.slnx -c Release
+```
+
 Blender-style navigation has synthetic gesture/keyboard, projection, framing, numeric-bound and named-pipe protocol coverage in the normal suite. Modifier sequences cover both press orders, left/right Shift/Ctrl, release and unsupported combinations, clearing prior-mode inertia, focus/capture cancellation and transitions from axis views. Pointer zoom checks cover screen anchoring in both projections, width clamps, empty-space direction/speed, surface crossing and drag/inertia. Run `dotnet run --project tools/zStudio.PreviewCheck -c Release -- --blender-navigation zbd_1999` (also `zbd_1998`) for rendered model/Whole world/animation pointer zoom and MCP parity, rendered-surface pan order, axis views, perspective/orthographic scale parity, presented-buffer idle stability, view-cube agreement, orthographic pickup handles, refresh/resize retention, playback and Follow camera transitions. Reports and PNGs stay under `%TEMP%/zstudio-blender-*`; the harness restores settings and verifies source hashes. It never moves or captures the physical mouse. Run UI checks serially. Physical gesture feel remains a manual check.
 
 Responsive Files has settings-migration coverage and real named-pipe/GUI checks in the normal suite: stable section indices, effective layout readback, breakpoint hysteresis, tree identity/selection/expansion/scroll, both native splitter handlers, independent preferred widths, opening Files into Assets, retained filters/search, unavailable-section rejection without partial mutation, presets/reset and pending pinned Properties drafts. Run `dotnet run --project tools/zStudio.PreviewCheck -c Release -- --responsive-files zbd_1999` for the 36 header cases plus world/Document scene transitions and 18 animation theme/density/width transitions. It checks left-to-right pane placement, a 600-DIP central column in split mode, retained Inspector/editor/frame/camera and playback. Images are owned-window PrintWindow captures under `%TEMP%/zstudio-gui-review-*`; this mode does not require unobscured desktop corner screenshots. Settings are restored. Run UI checks serially.

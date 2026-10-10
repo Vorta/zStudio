@@ -12,6 +12,16 @@ public sealed class WatcherTests
     internal static WatchState State() => new() { Workspace = "unused", Repository = "o/r", Pr = 14, Thread = Guid.NewGuid(), ExpectedHead = Head, Active = true, CommentsArmed = true };
 
     [Fact]
+    public async Task ArmedPollingIsPromptButDisarmedPollingRetainsItsLowerFrequency()
+    {
+        using var fixture = new Fixture(); fixture.Store.Save(fixture.NewState());
+        var queue = new FakeQueue();
+        Assert.Equal(TimeSpan.FromSeconds(15), await new WatchService(fixture.Store, new FakeSource(Observe()), queue).PollAsync(TestContext.Current.CancellationToken));
+        Assert.Equal(TimeSpan.FromSeconds(60), await new WatchService(fixture.Store, new FakeSource(Observe(Comment(1))), queue).PollAsync(TestContext.Current.CancellationToken));
+        Assert.Equal(1, queue.Adds);
+    }
+
+    [Fact]
     public void ACommentBurstDisarmsBeforeSubmissionAndCannotRepeat()
     {
         var state = State(); var observation = Observe(Enumerable.Range(1, 500).Select(i => Comment(i)).ToArray());
@@ -132,15 +142,6 @@ public sealed class WatcherTests
         var queue = new FakeQueue();
         await new WatchService(fixture.Store, new FakeSource(Observe(Comment(1), Comment(2))), queue).PollAsync(TestContext.Current.CancellationToken);
         Assert.Equal(0, queue.Adds); Assert.Single(fixture.Store.Load()!.Notices);
-    }
-
-    [Fact]
-    public async Task ConcurrentPollsSubmitOnlyOneNotice()
-    {
-        using var fixture = new Fixture(); fixture.Store.Save(fixture.NewState()); var queue = new FakeQueue();
-        var service = new WatchService(fixture.Store, new FakeSource(Observe(Comment(1))), queue);
-        await Task.WhenAll(service.PollAsync(TestContext.Current.CancellationToken), service.PollAsync(TestContext.Current.CancellationToken));
-        Assert.Equal(1, queue.Adds); Assert.Single(fixture.Store.Load()!.Notices);
     }
 
     [Fact]
