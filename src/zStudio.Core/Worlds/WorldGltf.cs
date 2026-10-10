@@ -1211,6 +1211,11 @@ public static partial class WorldGltf
         var existing = world.Textures.FirstOrDefault(t => t.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
         if (existing != null) return existing;
         if (world.Textures.Count >= 0x1000) throw new InvalidDataException("The texture directory holds at most 4,096 entries.");
+        // Directory entries the engine chains as numbered mipmaps, with or without pack records (TexturePackBuilder.NumberedMip).
+        if (TexturePackBuilder.NumberedMip(name) is { } mip && world.Textures.FirstOrDefault(t => t.Name.Equals(mip, StringComparison.OrdinalIgnoreCase)) is { } chained)
+            throw TexturePackBuilder.NumberedMipConflict(name, chained.Name);
+        if (TexturePackBuilder.NumberedMipOf(name) is { } first && world.Textures.FirstOrDefault(t => t.Name.Equals(first, StringComparison.OrdinalIgnoreCase)) is { } chaining)
+            throw TexturePackBuilder.NumberedMipConflict(chaining.Name, name);
         WorldTexture texture = new(name.ToLowerInvariant()); world.Textures.Add(texture); return texture;
     }
     /// <summary>The texture entry for a name within a load, with cached lookups for repeated material names.</summary>

@@ -3,6 +3,7 @@ using System.Text;
 using Recoil.Zbd.Core;
 using Recoil.Zbd.Core.Export;
 using Recoil.Zbd.Core.Formats;
+using Recoil.Zbd.Core.Worlds;
 using Xunit;
 
 namespace Recoil.Zbd.Tests;
@@ -134,9 +135,11 @@ public sealed class ContentEditingTests
     /// <summary>
     /// Must-have: a cut-out PNG (alpha only 0 or 255) is packed colour-keyed, and the engine shows those texels through three
     /// conversions; each must show the PNG's colours within one 5-bit step, its holes as the key and its black as opaque.
+    /// A 3D pack and a world's texture directory refuse two textures the engine would chain as numbered mipmaps, which
+    /// leaves one untextured or crashes the game as the mission loads.
     /// </summary>
     [Fact]
-    public void KeyedTexelsShowTheirColoursThroughEveryEngineConversion()
+    public void PackedTexturesShowTheirColoursAndStaySeparateTextures()
     {
         // Odd RGB565 greens over blue below 128, such as (200, 100, 40), gained 132 blue on upload; (0, 3, 0) and black stored
         // 0x0020, which a 555 display reads as the key.
@@ -175,6 +178,23 @@ public sealed class ContentEditingTests
                         $"{pack} texel {i}: ({rgba[i * 4]}, {rgba[i * 4 + 1]}, {rgba[i * 4 + 2]}) is shown as ({r}, {g}, {b}).");
             }
         }
+
+        // The engine loads rock_2 as a smaller copy of rock_1, whose first "_1" ends its name (BuildMipChain, retail
+        // 0x46e3e0), whichever comes first and ignoring case in packs; within one texture directory it needs no pack record
+        // (rock_2 loaded first is chained with an uninitialized image). A chain stops at its first missing number, a first
+        // "_1" that does not end the name starts none, and image.zbd's interface images (the retail camp_1 and camp_2) are
+        // not texture-directory entries.
+        PackTexture Named(string name, string key) => new(name, key, new(8, 8, rgba));
+        var hardware = TexturePackVariant.FromFileName("rtexture16.zbd")!;
+        foreach (var (first, second) in new[] { ("rock_1", "Rock_2"), ("rock_2", "rock_1") })
+        {
+            string refused = Assert.Throws<InvalidDataException>(() => TexturePackBuilder.Build([Named(first, "a"), Named(second, "b")], hardware, Token)).Message;
+            Assert.Contains("rock_1", refused, StringComparison.OrdinalIgnoreCase); Assert.Contains("rock_2", refused, StringComparison.OrdinalIgnoreCase);
+            GameZWorld world = new(); WorldGltf.Texture(world, first);
+            Assert.Throws<InvalidDataException>(() => WorldGltf.Texture(world, second)); Assert.Single(world.Textures);
+        }
+        Assert.Equal(4, TexturePackBuilder.Build([Named("x_1", "a"), Named("x_3", "b"), Named("y_1_1", "c"), Named("y_1_2", "d")], hardware, Token).Sizes.Count);
+        Assert.Equal(2, TexturePackBuilder.Build([Named("camp_1", "a"), Named("camp_2", "b")], TexturePackVariant.FromFileName("image.zbd")!, Token).Sizes.Count);
     }
     [Fact]
     public async Task VariantBatchUndoSaveAndOwnershipAreAtomic()

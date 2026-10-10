@@ -125,6 +125,9 @@ public static class TexturePackBuilder
             warnings.Add($"{duplicate.Key} appears {duplicate.Count()} times; the engine uses the first ({duplicate.First().SortKey}).");
         }
         bool threeD = variant.Kind != TexturePackKind.Interface;
+        // Every record of a mission pack is a texture its directory can name; image.zbd's interface images are drawn by
+        // name without the directory (the retail one holds camp_1 and camp_2).
+        if (threeD) CheckNumberedMips(ordered, token);
         var modes = new TextureTransparency[ordered.Length];
         bool Paletted(int i) => variant.Kind == TexturePackKind.Software && !ordered[i].Direct;
         long Cost(int i, int w, int h) => StoredBytes(w, h, Paletted(i), modes[i] == TextureTransparency.Alpha);
@@ -207,6 +210,52 @@ public static class TexturePackBuilder
         // Result consumers preview only the first few warnings. Keep an aggregate omission visible there too.
         if (messages.Remove(BoundedDiagnostics.OmissionNotice)) messages.Insert(0, BoundedDiagnostics.OmissionNotice);
         return new(bytes, stored, pages.Count, messages) { FullSizeBytes = fullSize, Reduced = reduced };
+    }
+
+    /// <summary>
+    /// The texture the engine loads as the first smaller copy (mipmap) of a texture named <paramref name="name"/>, or null:
+    /// the name with its first <c>_1</c>, when that ends it, made <c>_2</c>. TexDirLoadPendingEntries (retail 0x46de50)
+    /// calls BuildMipChain (0x46e3e0) for every texture-directory entry it loads, under both renderers. That finds the first
+    /// <c>_1</c> of the name (strstr, 0x46e41b) and stops unless it ends the name (0x46e42e), then steps its digit
+    /// (<c>_2</c>, <c>_3</c> …, 0x46e43e) while a texture of that name exists: a directory entry of exactly that name
+    /// (FindTexDirEntryByName 0x46d4d0, strcmp), else a record of the mission's pack and then of image.zbd, ignoring case
+    /// (TexDirFindOrCreateByPath 0x46d900). Each texture found is chained to the one before; a pending entry is marked
+    /// loaded (0x46e48f), so the loop never gives it a Direct3D texture of its own (0x46de72), and the software renderer
+    /// draws it on distant polygons of the first (zRndrTextureMipSelectVariantImage 0x499130). An entry already loaded is
+    /// chained with the image pointer of the step before, on the first step an uninitialized one (0x46e439), which the
+    /// division at 0x46e4b1 reads and the store at 0x46e4bd writes through.
+    /// </summary>
+    public static string? NumberedMip(string name)
+    {
+        int at = name.IndexOf("_1", StringComparison.Ordinal);
+        return at >= 0 && at == name.Length - 2 ? string.Concat(name.AsSpan(0, at), "_2") : null;
+    }
+    /// <summary>The texture whose first numbered mipmap (<see cref="NumberedMip"/>) <paramref name="name"/> is, or null.</summary>
+    public static string? NumberedMipOf(string name)
+    {
+        if (!name.EndsWith("_2", StringComparison.Ordinal)) return null;
+        string first = string.Concat(name.AsSpan(0, name.Length - 1), "1");
+        return NumberedMip(first) != null ? first : null;
+    }
+    /// <summary>The refusal of two textures the engine would chain (see <see cref="NumberedMip"/>), with their files when known.</summary>
+    public static InvalidDataException NumberedMipConflict(string first, string mip, string? firstFile = null, string? mipFile = null)
+    {
+        string a = JsonData.ShownText(first, 64), b = JsonData.ShownText(mip, 64);
+        static string File(string? file) => file == null ? "" : $" ({JsonData.ShownText(file, 192)})";
+        return new($"Textures {a}{File(firstFile)} and {b}{File(mipFile)} cannot be in one mission: the game loads {b} as a smaller copy of {a}, "
+            + $"whose name ends in its first \"_1\", so {b} can show untextured or crash the game as the mission loads, and software rendering "
+            + $"shows {b} on distant {a} surfaces. Rename one of them.");
+    }
+    /// <summary>Refuses a pack holding two textures the engine would chain as numbered mipmaps (<see cref="NumberedMip"/>).</summary>
+    private static void CheckNumberedMips(PackSource[] ordered, CancellationToken token)
+    {
+        Dictionary<string, PackSource> named = new(StringComparer.OrdinalIgnoreCase);
+        foreach (var t in ordered) named.TryAdd(t.Name, t);
+        foreach (var t in ordered)
+        {
+            token.ThrowIfCancellationRequested();
+            if (NumberedMip(t.Name) is { } mip && named.TryGetValue(mip, out var found)) throw NumberedMipConflict(t.Name, found.Name, t.File, found.File);
+        }
     }
 
     /// <summary>
