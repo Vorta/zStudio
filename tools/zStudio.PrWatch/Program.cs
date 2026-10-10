@@ -19,7 +19,7 @@ public static class Program
         for (int i = 1; i < args.Length; i++)
         {
             string key = args[i];
-            if (key is "--release-on-approval" or "--notify-test" or "--claude") { if (!options.TryAdd(key, "true")) throw new ArgumentException("Duplicate option."); }
+            if (key is "--release-on-approval" or "--notify-test" or "--delivery-check" or "--claude") { if (!options.TryAdd(key, "true")) throw new ArgumentException("Duplicate option."); }
             else if (key is "--workspace" or "--pr" or "--head" or "--codex" or "--gh" or "--thread" or "--notice" or "--snapshot")
             { if (++i == args.Length || !options.TryAdd(key, args[i])) throw new ArgumentException("Missing or duplicate option: " + key); }
             else throw new ArgumentException("Unknown option: " + key);
@@ -30,6 +30,9 @@ public static class Program
         if (!int.TryParse(Value("--pr"), out int pr) || pr <= 0) throw new ArgumentException("PR must be a positive integer.");
         // Claude Code has no conversation queue: its watch is a separate channel delivered by a foreground listener.
         bool claude = options.ContainsKey("--claude");
+        if (options.ContainsKey("--delivery-check") && (action != "status" || claude)) throw new ArgumentException("--delivery-check requires a Codex status command.");
+        if (action is "arm" or "resume" or "listen")
+            WatchLogic.ValidateChannel(claude, Environment.GetEnvironmentVariable("CODEX_THREAD_ID"));
         WatchStore store = new(workspace, pr, claude ? "claude" : null);
         if (action == "runtime")
         {
@@ -42,7 +45,19 @@ public static class Program
         if (action == "status")
         {
             JsonObject result;
-            using (await store.LockAsync("state", token)) result = JsonSerializer.SerializeToNode(Status(store.Load(), store), WatchStore.Json)!.AsObject();
+            WatchState? state;
+            using (await store.LockAsync("state", token)) { state = store.Load(); result = JsonSerializer.SerializeToNode(Status(state, store), WatchStore.Json)!.AsObject(); }
+            // Network/process diagnostics are opt-in and outside the state lock. Never consume or resend a notice.
+            if (options.ContainsKey("--delivery-check"))
+            {
+                if (state?.Outstanding is not { } notice) result["queueObservation"] = "no outstanding notice";
+                else
+                {
+                    result["queueObservationNotice"] = notice.Id.ToString("D");
+                    try { result["queueObservation"] = await new CodexQueue(CommandRunner.Executable("codex", options.GetValueOrDefault("--codex") ?? state.Codex), workspace).InspectAsync(state.Thread, notice, token); }
+                    catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException) { result["queueObservation"] = "unknown: " + WatchService.Short(ex.Message); }
+                }
+            }
             if (File.Exists(sibling.StatePath)) using (await sibling.LockAsync("state", token)) result["otherChannel"] = JsonSerializer.SerializeToNode(Status(sibling.Load(), sibling), WatchStore.Json);
             else result["otherChannel"] = JsonSerializer.SerializeToNode(Status(null, sibling), WatchStore.Json);
             Print(result);
@@ -219,13 +234,14 @@ public static class Program
     {
         if (state == null) return new { exists = false, path = store.StatePath };
         // Claude watches are delivered by a foreground listen command, not a detached worker.
-        bool alive = store.Channel != null || CommandRunner.Alive(state.WorkerPid, state.WorkerStartTicks);
+        bool alive = CommandRunner.Alive(state.WorkerPid, state.WorkerStartTicks);
         return new
         {
             exists = true, path = store.StatePath, channel = store.Channel ?? "codex", watch = state.Id, state.Repository, state.Pr, state.Thread, state.ExpectedHead, state.ObservedHead, state.Generation,
             state.Active, state.CommentsArmed, state.ApprovalEnabled, state.ReleaseAuthorized,
             workerAlive = alive, state.WorkerPid, state.Heartbeat, state.LastSuccess, state.LastError, state.FailureCount,
             outstanding = state.Outstanding, lastNotice = state.Notices.LastOrDefault(), handledComments = state.Handled.Count,
+            pollIntervalSeconds = state.Active ? (int?)(store.Channel == null && state.CommentsArmed ? 15 : 60) : null,
             warning = WatchLogic.StatusWarning(state, alive)
         };
     }

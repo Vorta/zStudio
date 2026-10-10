@@ -4,7 +4,7 @@ param(
     [Parameter(Mandatory)][ValidateRange(1,2147483647)][int]$Pr,
     [string]$Head, [string]$Codex, [string]$Gh, [string]$Thread,
     [string]$Notice, [string]$Snapshot,
-    [switch]$ReleaseOnApproval, [switch]$NotifyTest, [switch]$Claude
+    [switch]$ReleaseOnApproval, [switch]$NotifyTest, [switch]$DeliveryCheck, [switch]$Claude
 )
 $ErrorActionPreference = 'Stop'
 $workspace = Split-Path -Parent $PSScriptRoot
@@ -18,6 +18,7 @@ foreach ($pair in @(@('--head',$Head), @('--codex',$Codex), @('--gh',$Gh), @('--
 }
 if ($ReleaseOnApproval) { $watchArgs += '--release-on-approval' }
 if ($NotifyTest) { $watchArgs += '--notify-test' }
+if ($DeliveryCheck) { $watchArgs += '--delivery-check' }
 if ($Claude) { $watchArgs += '--claude' }
 $dll = Join-Path $PSScriptRoot 'zStudio.PrWatch/bin/Release/net10.0/Recoil.Zbd.PrWatch.dll'
 if ($Action -eq 'listen') {

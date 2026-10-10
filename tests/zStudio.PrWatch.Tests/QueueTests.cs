@@ -62,6 +62,25 @@ public sealed class QueueTests
         Assert.Equal(1, rpc.Lists); Assert.Equal(0, rpc.Calls);
     }
     private static CodexQueue Queue(FakeRpc rpc) => new("unused", "unused", _ => Task.FromResult<IQueueRpc>(rpc));
+    [Theory]
+    [InlineData(false)][InlineData(true)]
+    public async Task InspectionDistinguishesPendingFromAbsentWithoutMutating(bool pending)
+    {
+        var notice = new Notice { Message = "notice", Submission = "mine" };
+        var rpc = new FakeRpc { Rows = pending ? [Submission(notice)] : [Submission(new Notice { Message = "other" })] };
+        string observation = await Queue(rpc).InspectAsync(Guid.NewGuid(), notice, TestContext.Current.CancellationToken);
+        Assert.StartsWith(pending ? "pending" : "absent (not delivery proof)", observation);
+        Assert.Equal(1, rpc.Lists); Assert.Equal(0, rpc.Calls); Assert.True(rpc.Disposed);
+    }
+    [Fact]
+    public async Task InspectionDoesNotMistakeReplacedContentForTheNotice()
+    {
+        var notice = new Notice { Message = "notice", Submission = "mine" }; var row = Submission(notice);
+        row["input"]![0]!["text"] = "other";
+        var rpc = new FakeRpc { Rows = [row] };
+        await Assert.ThrowsAsync<IOException>(() => Queue(rpc).InspectAsync(Guid.NewGuid(), notice, TestContext.Current.CancellationToken));
+        Assert.Equal(0, rpc.Calls);
+    }
     private static JsonObject Submission(Notice notice) => new()
     { ["id"] = notice.Submission ?? "mine", ["clientUserMessageId"] = notice.Id.ToString("D"), ["input"] = new JsonArray(new JsonObject { ["type"] = "text", ["text"] = notice.Message, ["text_elements"] = new JsonArray() }) };
     private sealed class FakeRpc : IQueueRpc

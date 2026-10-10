@@ -31,10 +31,16 @@ Prioritize by user impact. Data loss, source corruption and blocked ordinary wor
 
 Searches help locate risks, but an empty search result is not evidence of correct behavior. Follow the values: a bounded endpoint can receive an unbounded object built much earlier, and a newly supported record can alter duplicate accounting performed before its parsing branch.
 
+## Keep tests minimal
+
+Follow the [minimal, must-have test policy](testing.md#minimal-must-have-tests). The risk table guides investigation, not an exhaustive permanent test matrix. Require only the smallest necessary coverage for essential behavior or a consequential regression; reuse existing tests and do not turn optional coverage suggestions into review blockers.
+
+When a finding concerns a test, first decide whether that test is must-have and record the reason briefly. **If it is not, remove the test rather than repair or expand it.** If it is must-have, fix it. Track any production defect it exposes separately: removing a nonessential test does not resolve that defect or justify weakening essential assertions. Test count and prior investment do not justify retaining a test.
+
 ## Fix, challenge and repeat
 
 1. For each finding, write the trigger, expected invariant, observed behavior, user consequence and P1/P2 severity rationale. Verify review claims against the actual implementation and dependency semantics; a review comment is a hypothesis, not proof.
-2. Reproduce the defect before changing production code when practical. If that is unsafe or unavailable, record the reason and provide the concrete failing path. Choose regressions with independent expected behavior, not assertions that mirror the new implementation.
+2. Reproduce the defect before changing production code when practical. If that is unsafe or unavailable, record the reason and provide the concrete failing path. Retain a permanent regression test only when it meets the must-have policy; use independent expected behavior, not assertions that mirror the new implementation.
 3. Make the fix through the shared parser, editing, preview and export services. Check sibling versions, commands, GUI consumers and related failure modes. Preserve full authored data for matching/export when only presentation should be bounded. Update typed contracts, discovery and MCP documentation when behavior changes.
 4. Recheck each fix, then perform a separate challenge pass over the full coverage inventory. Start from invariants and adversarial inputs rather than from the patch's explanation. Ask where the same assumption survives elsewhere, what happens before the guard, and what happens when two individually valid features interact.
 5. A newly found issue starts another fixing cycle. Any production change invalidates the prior clean conclusion for its dependencies and requires a final challenge pass after that change. Do not stop because a fixed number of rounds elapsed or because a large existing test suite is green.
