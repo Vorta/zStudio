@@ -1157,6 +1157,13 @@ public static partial class WorldGltf
         }
     }
 
+    /// <summary>Whether the material stores corner normals; no engine attributes means use the primitive's stream.</summary>
+    internal static bool? StoresNormals(GltfMaterial? source, string path)
+    {
+        var extras = source?.Extras?[Key] as JsonObject;
+        return extras == null ? null : extras["normals"] is { } n && Flag(n, "normals", path);
+    }
+
     /// <summary>
     /// The engine material and polygon attributes of a glTF material. <c>StoresNormals</c> is whether its polygons keep
     /// normals: from its engine values when it has them (<c>normals</c>), otherwise null (use the primitive's normals).
@@ -1170,7 +1177,7 @@ public static partial class WorldGltf
         int priority = extras?["priority"] is { } p ? (int)Integer(p, "priority", path, int.MinValue, int.MaxValue) : 0;
         bool backface = extras?["backface"] is { } b ? Flag(b, "backface", path) : source?.DoubleSided ?? false;
         uint zone = extras?["zone"] is { } z ? Hex(z, "zone", path) : DefaultPolygonZone;
-        bool? normals = extras == null ? null : extras["normals"] is { } n && Flag(n, "normals", path);
+        bool? normals = StoresNormals(source, path);
         WorldMaterial material = new();
         string? textureName = null;
         string? namedTexture = extras?["texture"] is { } t ? Text(t, "texture", path) : null;

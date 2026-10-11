@@ -17,7 +17,8 @@ namespace Recoil.Zbd.Core.Sources;
 /// node holding the same geometry at the same place), and triangles by position, in order within a material, a changed
 /// run between unchanged triangles position by position when both sides have as many. Corresponding nodes go back to the
 /// order they had (<see cref="RestoreOrder"/>) and corresponding polygons to the model's polygon order; a polygon all of
-/// whose triangles correspond, consecutively, gets its recorded boundary back and keeps its zone words in every map.
+/// whose triangles correspond, consecutively, gets its recorded boundary back when corner attributes permit, and keeps
+/// its zone words in every map, also when differing stored normals require separate pieces.
 /// A node Blender duplicated keeps what it copies (its engine name, marks and geometry, and its children's; <see cref="FindCopies"/>)
 /// and takes the zones and map references of the node it copies, as a copy made in the world editor does; a node moved
 /// to another parent where its name repeats is found the same way. Other faces and nodes take the model's own zones.
@@ -183,8 +184,8 @@ internal sealed partial class SourceBlenderZones
     /// <summary>
     /// Finds what each triangle of <paramref name="export"/> continues in the project's model, puts its polygons back in the
     /// model's polygon order and writes the recovered polygon boundaries into the export's JSON (<paramref name="root"/>). A
-    /// recovered polygon whose triangles name different copies of a corner (Blender splits a vertex by face normal) is made
-    /// to name one of them: <paramref name="buffer"/> gives a writable copy of a buffer (by index) for that and for the index
+    /// recovered polygon whose triangles name equivalent copies of a corner is made to name one of them; differing
+    /// stored normals keep the exported pieces. <paramref name="buffer"/> gives a writable copy of a buffer (by index) for that and for the index
     /// data of polygons that go back between another primitive's; <paramref name="replace"/> replaces a buffer that grows.
     /// </summary>
     internal void Carry(GltfDocument export, JsonObject root, Func<int, byte[]> buffer, Action<int, byte[]> replace)
@@ -1098,9 +1099,10 @@ internal sealed partial class SourceBlenderZones
         return result;
     }
 
-    /// <summary>Whether two vertices of a primitive differ at most in their normal (Blender's split of one vertex by face).</summary>
-    private static bool Same(GltfPrimitive primitive, int a, int b) =>
+    /// <summary>Whether replacing a split corner preserves every supported vertex attribute.</summary>
+    private bool Same(GltfPrimitive primitive, int a, int b) =>
         primitive.Positions[a] == primitive.Positions[b]
+        && (primitive.Normals.Count != primitive.Positions.Count || WorldGltf.StoresNormals(primitive.Material, model) == false || primitive.Normals[a] == primitive.Normals[b])
         && (primitive.TexCoords.Count != primitive.Positions.Count || primitive.TexCoords[a] == primitive.TexCoords[b])
         && primitive.Targets.All(t => t.Count != primitive.Positions.Count || t[a] == t[b]);
 

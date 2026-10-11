@@ -117,10 +117,42 @@ public sealed class SourceBlenderTests
         string exportPath = Path.Combine(checkout.Outbox, mirroredExport);
         var authored = GltfDocument.Read(File.ReadAllBytes(exportPath), uri => File.ReadAllBytes(Path.Combine(Path.GetDirectoryName(exportPath)!, Uri.UnescapeDataString(uri))), Token);
         Assert.Equal(Facing(authored.Roots[0].Mesh!), Facing(mirrored.Roots[0].Mesh!));
-        static string[] CornerNormals(GltfMesh mesh) => [.. mesh.Primitives.SelectMany(p => p.Indices.Select(i => $"{p.Positions[i]} {p.Normals[i]}")).Order(StringComparer.Ordinal)];
+        static string[] CornerNormals(GltfMesh mesh) => [.. mesh.Primitives.SelectMany(p => Enumerable.Range(0, p.Indices.Count / 3)
+            .Select(t => string.Join(";", p.Indices.Skip(t * 3).Take(3).Select(i => $"{p.Positions[i]} {p.Normals[i]}").Order(StringComparer.Ordinal)))).Order(StringComparer.Ordinal)];
         Assert.Equal(CornerNormals(authored.Roots[0].Mesh!), CornerNormals(mirrored.Roots[0].Mesh!));
         workspace.Undo(); Assert.Equal(first, Zones("m1", turret));
         workspace.Redo(); Assert.Equal(mirroredFirst, Zones("m1", turret));
+        workspace.Undo();
+
+        // Lifting one corner and shading flat splits the diagonal's normals. Recovering the old quad must not
+        // replace those authored normals; its two pieces still inherit the original word independently in each map.
+        string deformedExport = BlenderExport(checkout, "deformed", faces: groups =>
+        {
+            foreach (var face in groups[0].Faces) for (int c = 0; c < face.Length; c++)
+                if (face[c].Position == new Vector3(1, 0, -1)) face[c].Position.Y = 1;
+        }, nodes: document =>
+        {
+            foreach (var p in document.Roots[0].Mesh!.Primitives) p.Material!.Extras!["recoil"]!["normals"] = true;
+        }, shareVertices: true);
+        var deformedPlan = SourceBlender.PlanUpdate(workspace, SourceBlender.Find(fixture.Project, checkout.Id), deformedExport, token: Token);
+        Assert.Empty(deformedPlan.Notes);
+        Apply(workspace, deformedPlan);
+        string deformedPath = Path.Combine(checkout.Outbox, deformedExport);
+        var flat = GltfDocument.Read(File.ReadAllBytes(deformedPath), uri => File.ReadAllBytes(Path.Combine(Path.GetDirectoryName(deformedPath)!, Uri.UnescapeDataString(uri))), Token);
+        var accepted = WorldAssembler.ReadModel(workspace.Read(turret, Token)!, turret, (path, _) => workspace.Read(path, Token)!, Token);
+        Assert.Equal(Facing(flat.Roots[0].Mesh!), Facing(accepted.Roots[0].Mesh!));
+        Assert.Equal(CornerNormals(flat.Roots[0].Mesh!), CornerNormals(accepted.Roots[0].Mesh!));
+        var acceptedLayout = WorldGltf.ZoneLayout.Read(accepted, Token);
+        Assert.Equal(new[] { 3, 3 }, accepted.Roots[0].Mesh!.Primitives.SelectMany(p => acceptedLayout.Polygons[p]).Take(2).Select(p => p.Length));
+        foreach (var (mission, logical, expected) in new[] { ("m1", turret, 0xFFFF0101u), ("m2", other, 0xFF000A01u) })
+        {
+            Assert.True(SourceMapZones.Parse(workspace.Read($"data/{mission}/meta/zones.json", Token)!, Token).TryGetAsset(logical, out var asset));
+            WorldGltf.ValidateZoneProfile(accepted, asset.Profile, Token);
+            Assert.Equal(new[] { expected, expected }, asset.Profile.MeshPolygons[0].Take(2));
+        }
+        workspace.Undo(); Assert.Equal(first, Zones("m1", turret));
+        workspace.Redo();
+        Assert.Equal(CornerNormals(flat.Roots[0].Mesh!), CornerNormals(WorldAssembler.ReadModel(workspace.Read(turret, Token)!, turret, (path, _) => workspace.Read(path, Token)!, Token).Roots[0].Mesh!));
         workspace.Undo();
 
         static Dictionary<string, Vector3> Facing(GltfMesh mesh) => mesh.Primitives.SelectMany(p => Enumerable.Range(0, p.Indices.Count / 3).Select(t =>
