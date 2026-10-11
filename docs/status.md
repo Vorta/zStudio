@@ -1,5 +1,21 @@
 # Desktop implementation status
 
+## Source save consistency review fix (2026-10-11, PR #27)
+
+Source saves revalidate map-zone profiles against the geometry they describe, including changes another Studio
+instance saved after an edit was accepted. Dirty geometry uses current map ownership; dirty mission profiles use
+current geometry. Compatible pending edits are validated together through the shared source workspace and existing
+parsers, so GUI and MCP saves share the same protection. Failed checks preserve accepted edits for undo or retry.
+
+Existing dependencies remain held through publication, while absent dependencies are checked under the publisher
+lock and again before commit. A dependency arriving during publication causes the existing rollback to restore our
+writes while preserving that external file. This does not promise an atomic lock on the external filesystem namespace
+or change the existing crash-recovery protocol.
+
+The two existing regressions fail against the original implementation and pass after a forced restored build.
+Independent challenges cover both publication orders, conversion and creation, compatible edits, cancellation,
+history, reload/discard, dependency arrival, rollback and verified rebuilds.
+Validation: Release builds pass with zero warnings/errors; PR Core 2,448 and Desktop 177; final-stack Core 2,887, Desktop 188 and the 17-test original-1998 subset. All runs have zero skips. A fresh full review and current-head CI remain required before merge. No public release is planned.
 ## Terrain ownership and polygon review fixes (2026-10-11, PR #27)
 
 Conversion now checks every mission's map-zone ownership before returning for an absent local profile. It refuses
