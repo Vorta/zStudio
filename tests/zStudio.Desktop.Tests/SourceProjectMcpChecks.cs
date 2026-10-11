@@ -37,7 +37,26 @@ internal static class SourceProjectMcpChecks
             var reopened = await Job("open_root", new() { ["path"] = Path.Combine(fixture.Root, "initialized"), ["project"] = true });
             Assert.Equal(Path.GetFullPath(Path.Combine(fixture.Root, "initialized")), Path.GetFullPath(reopened["RootPath"]!.GetValue<string>()));
             Assert.Equal(["MCP integration…", "Compare worlds…", "-", "Export all ZBD files…", "Export ZBD file", "Check source project", "Build profile", "-", "Validate source file on disk", "Reload current file", "Cancel export or validation"], ToolsMenu(main));
-            await Job("open_root", new() { ["path"] = fixture.Corpus });
+            // Project preflight also precedes navigation: a slow folder check must not replace a newer clean root.
+            using (ManualResetEventSlim releaseProjectCheck = new())
+            {
+                TaskCompletionSource checkingProject = new(TaskCreationOptions.RunContinuationsAsynchronously);
+                main.SourceProjectChecking = ct =>
+                {
+                    Assert.False(main.Dispatcher.CheckAccess()); checkingProject.TrySetResult();
+                    Assert.True(releaseProjectCheck.Wait(TimeSpan.FromSeconds(20), ct));
+                };
+                var openingProject = Job("open_root", new() { ["path"] = Path.Combine(fixture.Root, "initialized"), ["project"] = true }, "failed");
+                await checkingProject.Task.WaitAsync(token);
+                TaskCompletionSource publishNewerRoot = new(TaskCreationOptions.RunContinuationsAsynchronously);
+                var newerOpening = await BeginHeldRoot(fixture.Corpus, publishNewerRoot);
+                releaseProjectCheck.Set();
+                try { Assert.Equal("context_changed", (await openingProject)["code"]!.GetValue<string>()); }
+                finally { publishNewerRoot.TrySetResult(); }
+                await newerOpening;
+                main.SourceProjectChecking = null;
+                Assert.Equal(Path.GetFullPath(fixture.Corpus), Path.GetFullPath(main.ViewModel.RootPath));
+            }
             Assert.Equal(["MCP integration…", "Compare worlds…", "-", "Validate source file on disk", "Reload current file", "Cancel export or validation"], ToolsMenu(main));
 
             var failed = await Job("source_export", new(), "failed"); Assert.Equal("no_project", failed["code"]!.GetValue<string>());
@@ -56,16 +75,20 @@ internal static class SourceProjectMcpChecks
             TaskCompletionSource publishReconstruction = new(TaskCreationOptions.RunContinuationsAsynchronously);
             main.SourceReconstructionFinishing = async () => { reconstructed.TrySetResult(); await publishReconstruction.Task.WaitAsync(token); };
             var supersededReconstruction = Job("source_reconstruct", new() { ["source"] = fixture.Corpus, ["destination"] = reconstructedElsewhere });
+            await reconstructed.Task.WaitAsync(token);
+            TaskCompletionSource publishReconstructionSuccessor = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            var reconstructionSuccessor = await BeginHeldRoot(newerRoot, publishReconstructionSuccessor);
+            publishReconstruction.TrySetResult();
+            JsonNode retainedProject;
             try
             {
-                await reconstructed.Task.WaitAsync(token);
-                await main.ViewModel.OpenRootAsync(newerRoot, token); // Shared GUI File/Open folder path.
+                retainedProject = await supersededReconstruction;
+                Assert.False(retainedProject["opened"]!.GetValue<bool>());
+                Assert.Equal("context_changed", retainedProject["openRefused"]!["code"]!.GetValue<string>());
             }
-            finally { publishReconstruction.TrySetResult(); }
-            var retainedProject = await supersededReconstruction;
+            finally { publishReconstructionSuccessor.TrySetResult(); }
+            await reconstructionSuccessor;
             main.SourceReconstructionFinishing = null;
-            Assert.False(retainedProject["opened"]!.GetValue<bool>());
-            Assert.Equal("context_changed", retainedProject["openRefused"]!["code"]!.GetValue<string>());
             Assert.Equal(Path.GetFullPath(reconstructedElsewhere), Path.GetFullPath(retainedProject["project"]!.GetValue<string>()));
             Assert.True(File.Exists(Path.Combine(reconstructedElsewhere, "data", "m1", "zrdr", "ai.zrd")));
             Assert.Equal(Path.GetFullPath(newerRoot), Path.GetFullPath(main.ViewModel.RootPath));
@@ -211,6 +234,25 @@ internal static class SourceProjectMcpChecks
                 string omission = $"Showing 64 of {warningCount} warnings; {warningCount - 64} more not shown.";
                 Assert.Contains(main.ViewModel.Problems, p => p.File == worldFixture.Project && p.Message.Contains(omission, StringComparison.Ordinal));
                 await Job("open_root", new() { ["path"] = elsewhere });
+            }
+            // Hold a newer GUI navigation before publication: WorkspaceGeneration is unchanged while the
+            // existing navigation generation already protects that pending request from older work.
+            async Task<Task> BeginHeldRoot(string path, TaskCompletionSource release)
+            {
+                var checkRoot = main.ViewModel.CheckRootExistsAsync;
+                TaskCompletionSource checking = new(TaskCreationOptions.RunContinuationsAsynchronously);
+                main.ViewModel.CheckRootExistsAsync = async (root, ct) =>
+                {
+                    checking.TrySetResult(); await release.Task.WaitAsync(ct);
+                    return await checkRoot(root, ct);
+                };
+                try
+                {
+                    var opening = main.ViewModel.OpenRootAsync(path, token);
+                    await checking.Task.WaitAsync(token);
+                    return opening;
+                }
+                finally { main.ViewModel.CheckRootExistsAsync = checkRoot; }
             }
             async Task<JsonNode> Call(string name, Dictionary<string, object?> arguments)
             {

@@ -45,6 +45,7 @@ public partial class MainWindow
         if (operation != null) throw new StudioCommandException("busy", "An export, validation or source operation is already running.");
         if (open) RequireRootPublication();
         long generation = ViewModel.WorkspaceGeneration;
+        long navigation = ViewModel.NavigationGeneration;
         var report = await ExtractSourceProjectAsync(source, destination, token);
         if (SourceReconstructionFinishing is { } finishing) await finishing();
         // The project is complete in its folder: a cancel arriving from now on cannot take it back, so the operation
@@ -54,6 +55,8 @@ public partial class MainWindow
         {
             if (open)
             {
+                if (navigation != ViewModel.NavigationGeneration)
+                    throw new StudioCommandException("context_changed", "A newer workspace navigation superseded opening the reconstructed project; it stays in its folder.");
                 RequireReconstructionPublication(); await ViewModel.OpenRootAsync(report.Project, token, RequireReconstructionPublication);
             }
         }
@@ -110,18 +113,23 @@ public partial class MainWindow
         return report;
     }
 
-    /// <summary>Refuses a folder that is not an initialized source project (one with data and gamegen folders), or that is a link or below one.</summary>
-    private static async Task RequireSourceProjectAsync(string path, CancellationToken token)
+    internal Action<CancellationToken>? SourceProjectChecking { get; set; }
+    /// <summary>Refuses an invalid source project or a check superseded by a newer workspace.</summary>
+    private async Task RequireSourceProjectAsync(string path, CancellationToken token)
     {
+        long navigation = ViewModel.NavigationGeneration;
         // Folder checks can block on unavailable network shares; keep them off the dispatcher.
         string? refusal = await Task.Run(() =>
         {
+            SourceProjectChecking?.Invoke(token);
             if (!SourceProject.IsProject(path)) return $"{path} is not a source project: it has no data and gamegen folders. Initialize one from the retail ZBD files first.";
             // As the workspace would refuse to edit it (and Initialize to write it): nothing may be written through a link.
             try { SourceProject.RejectLinkedProject(path); return null; }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return ex.Message; }
         }, token).WaitAsync(token);
         if (refusal != null) throw new StudioCommandException("not_project", refusal);
+        if (navigation != ViewModel.NavigationGeneration)
+            throw new StudioCommandException("context_changed", "The workspace changed while the source project folder was checked; open the project again if wanted.");
     }
     private void ShowReconstructionSummary(SourceReconstructionReport report)
     {
