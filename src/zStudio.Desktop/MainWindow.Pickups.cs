@@ -21,6 +21,7 @@ public partial class MainWindow
     }
     private void DetachPickupEditor()
     {
+        CloseParachutes();
         CancelAiPathDraft(); scene?.SetAiPathEditing(null);
         scene?.CancelPickupDrag();
         if (pickupDocument != null) pickupDocument.PickupEditsChanged -= PickupEditsChanged;
@@ -75,9 +76,24 @@ public partial class MainWindow
     { if (ViewModel.SelectedDocument is { } doc) await SaveCurrentAsync(doc); }
     private async void SaveCurrentAsClick(object sender, RoutedEventArgs e)
     { if (ViewModel.SelectedDocument is { } doc) await SaveCurrentAsync(doc, true); }
-    private Task<bool> SaveCurrentAsync(DocumentModel document, bool saveAs = false) => document.SourceWorld != null ? SaveSourceWorldDocumentAsync(document) : document.ContentEdits != null ? SaveContentDocumentAsync(document, saveAs) : document.ResourceEdits != null ? SaveResourceDocumentAsync(document, saveAs) : document.ModelEdits?.IsDirty == true || saveAs && document.ModelEdits?.HasModelImports == true
-        ? SaveModelDocumentAsync(document, saveAs) : document.PickupEdits is { } coordinates && (coordinates.Records.Count > 0 || coordinates.OtherCoordinates.Count > 0)
-        ? SavePickupsAsync(document, saveAs) : SaveAnimationAsync(document);
+    private async Task<bool> SaveCurrentAsync(DocumentModel document, bool saveAs = false)
+    {
+        // Coordinate inspection can attach a second session to any mission document. It must not
+        // replace the document's own save route, nor make a partial save count as a saved document.
+        bool saved = await (document.SourceWorld != null ? SaveSourceWorldDocumentAsync(document)
+            : document.ContentEdits != null ? SaveContentDocumentAsync(document, saveAs)
+            : document.ResourceEdits != null ? SaveResourceDocumentAsync(document, saveAs)
+            : document.AnimationEdits != null ? SaveAnimationAsync(document)
+            : document.ModelEdits?.IsDirty == true || saveAs && document.ModelEdits?.HasModelImports == true ? SaveModelDocumentAsync(document, saveAs)
+            : document.PickupEdits is { } coordinates && (coordinates.Records.Count > 0 || coordinates.OtherCoordinates.Count > 0) ? SavePickupsAsync(document, saveAs)
+            : SaveAnimationAsync(document));
+        if (!saved) return false;
+        document = LiveDocument(document);
+        if (document.SourceWorld == null && document.PickupEdits?.IsDirty == true && !await SavePickupsAsync(document, saveAs)) return false;
+        if (!LiveDocument(document).IsDirty) return true;
+        ViewModel.Status = "Some document changes remain unsaved.";
+        return false;
+    }
     private void BackupOnSaveChanged(object sender, RoutedEventArgs e)
     {
         if (!ready) return;

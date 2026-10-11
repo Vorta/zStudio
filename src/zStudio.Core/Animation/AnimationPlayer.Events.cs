@@ -93,7 +93,9 @@ public sealed partial class AnimationPlayer
                 node = NodeRef(instance, ev.I16(16)); if (node != null) { node.Variant = ev.I16(18); node.CycleStart = Time; } return 2;
             case 18: return Beam(instance, sequence, ev, ref remaining);
             case 19:
-            case 24: return Launch(instance, sequence, ev, starting);
+            case 24:
+                if (starting) vtolWindowEvent?.Invoke(instance, sequence, ev);
+                return Launch(instance, sequence, ev, starting);
             case 20:
             case 21:
                 node = NodeRef(instance, ev.I32(16));
@@ -113,6 +115,7 @@ public sealed partial class AnimationPlayer
             case 25:
             case 26:
             case 27:
+                if (ev.Type == 25 && starting) vtolWindowEvent?.Invoke(instance, sequence, ev);
                 foreach (var named in instances.Where(i => i.Entry.Name == ev.Text(12) && !i.Finished).ToArray())
                 {
                     if (ev.Type == 26) BeginCleanup(named);
@@ -147,7 +150,9 @@ public sealed partial class AnimationPlayer
                 if (sequence.Cursor >= sequence.Data.Events.Count) throw new InvalidDataException("Conditional branch has no End if.");
                 return 2;
             case 34: case 39: case 40: return 2;
-            case 35: AddNote($"Game callback {ev.I32(12)} is a trace marker; game code is not executed.", "Support", "Information"); return 2;
+            case 35:
+                vtolCallback?.Invoke(instance, sequence, ev);
+                AddNote($"Game callback {ev.I32(12)} is a trace marker; game code is not executed.", "Support", "Information"); return 2;
             case 36:
                 float duration = ev.F32(60); screenColor = new(Curve(ev, 12, sequence.EventElapsed, duration), Curve(ev, 24, sequence.EventElapsed, duration), Curve(ev, 48, sequence.EventElapsed, duration), Curve(ev, 36, sequence.EventElapsed, duration));
                 return Timed(sequence, duration, ref remaining);

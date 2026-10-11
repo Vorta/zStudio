@@ -306,7 +306,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
             : failed ? "Some files could not be fully indexed; search and related results are incomplete. See Problems. Files and direct opening remain available." : "";
         RefreshSearch(); Status = $"{Files.Count:N0} files · {index.Count:N0} indexed assets · {warnings} reader diagnostics" + (SearchIndexComplete ? "" : " · search index incomplete");
     }
-    public async Task<DocumentModel?> OpenFileAsync(string path, CancellationToken cancellationToken = default, Action? beforePublish = null, bool activate = true)
+    public async Task<DocumentModel?> OpenFileAsync(string path, CancellationToken cancellationToken = default, Action? beforePublish = null, bool activate = true, bool reportStatus = true)
     {
         cancellationToken.ThrowIfCancellationRequested();
         long generation = AdvanceNavigation();
@@ -315,7 +315,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         var existing = Documents.FirstOrDefault(d => d.Path.Equals(path, StringComparison.OrdinalIgnoreCase));
         if (existing != null) { ValidateNavigationPublication?.Invoke(false); beforePublish?.Invoke(); RequireCurrentNavigation(generation); if (activate) SelectedDocument = existing; return existing; }
         using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(workspace.Token, cancellationToken);
-        var token = cancellation.Token; Status = "Opening " + Path.GetFileName(path) + "…";
+        var token = cancellation.Token; if (reportStatus) Status = "Opening " + Path.GetFileName(path) + "…";
         try
         {
             var doc = await LoadDocumentAsync(path, token); token.ThrowIfCancellationRequested();
@@ -326,18 +326,18 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
             if (existing != null) { if (activate) SelectedDocument = existing; return existing; }
             DocumentModel model = new(prepared); model.AttachResolver(Resolver); Documents.Add(model); if (activate) SelectedDocument = model;
             foreach (var diagnostic in doc.Diagnostics) AddProblem(diagnostic.Message, diagnostic.Severity, path, diagnostic.AssetIndex, diagnostic.Offset);
-            Status = model.Description; return model;
+            if (reportStatus) Status = model.Description; return model;
         }
         catch (OperationCanceledException)
         {
-            if (!disposed && generation == navigationGeneration) Status = "Opening canceled; the current document was retained.";
+            if (reportStatus && !disposed && generation == navigationGeneration) Status = "Opening canceled; the current document was retained.";
             cancellationToken.ThrowIfCancellationRequested();
             if (beforePublish != null) throw new StudioCommandException("context_changed", "The workspace changed while opening the requested document.");
             return null;
         }
         catch (StudioCommandException ex)
-        { if (!disposed && generation == navigationGeneration) Status = ex.Message; throw; }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException) { RequireCurrentNavigation(generation); token.ThrowIfCancellationRequested(); AddProblem(ex.Message, "Error", path); Status = "Could not open file: " + ex.Message; return null; }
+        { if (reportStatus && !disposed && generation == navigationGeneration) Status = ex.Message; throw; }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException) { RequireCurrentNavigation(generation); token.ThrowIfCancellationRequested(); AddProblem(ex.Message, "Error", path); if (reportStatus) Status = "Could not open file: " + ex.Message; return null; }
         catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException)
         { RequireCurrentNavigation(generation); throw; }
     }

@@ -228,6 +228,7 @@ public partial class MainWindow
         UpdateDocumentCommands();
         ApplyTerrainBrush(scene);
         UpdateAiPathPanel();
+        UpdateParachutePanel();
     }
     /// <summary>
     /// Completes when no world of the project rebuilds (after a scene-card edit, undo, stroke, Properties or MCP edit) and no
@@ -508,12 +509,12 @@ public partial class MainWindow
     internal Action<CancellationToken>? SourceEditPreparing { get; set; }
     /// <summary>Read, decode and serialize on an isolated worker workspace; publish one checked transaction on the dispatcher.</summary>
     private async Task<DocumentModel> PrepareSourceWorldEditAsync(DocumentModel doc, string action, Func<SourceWorkspace, CancellationToken, SourceTransaction?> prepare,
-        CancellationToken token, IReadOnlyList<SourceModelAddition>? additions = null, bool fromBuild = true, Func<ScriptLineChanges?>? verifyTargets = null, IReadOnlyList<string>? notes = null, SceneInspectionCard? committingCard = null, ZoneDraft? committingZones = null, AiPathDraft? committingAiPath = null)
+        CancellationToken token, IReadOnlyList<SourceModelAddition>? additions = null, bool fromBuild = true, Func<ScriptLineChanges?>? verifyTargets = null, IReadOnlyList<string>? notes = null, SceneInspectionCard? committingCard = null, ZoneDraft? committingZones = null, AiPathDraft? committingAiPath = null, ParachuteDraft? committingParachute = null, Action<CancellationToken>? preparationStarted = null)
     {
         var session = SourceWorldOf(doc);
         if (doc.IsDisposed || session.Owner != doc) throw new StudioCommandException("stale_document", "The world was rebuilt or closed.");
         RequireSourceWorldIdle(session);
-        RequireNoDrafts(doc, committing: true, committingCard, committingZones, committingAiPath);
+        RequireNoDrafts(doc, committing: true, committingCard, committingZones, committingAiPath, committingParachute);
         // Properties callbacks use the GUI helper with no explicit token. When invoked by a direct command,
         // its request must still cancel preparation before any edit is accepted.
         using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(token, directSourcePublication.Value?.Token ?? default,
@@ -532,6 +533,7 @@ public partial class MainWindow
         ViewModel.Status = $"Preparing {action}…";
         try
         {
+            preparationStarted?.Invoke(cancellation.Token);
             await Task.Run(() =>
             {
                 void CheckSources()
@@ -559,6 +561,16 @@ public partial class MainWindow
             ReleaseUnusedSourceWorkspace();
         }
         if (session.Workspace.Revision != revision) throw new StudioCommandException("context_changed", "The source workspace changed while the edit was prepared; try again.");
+        if (committingParachute != null)
+        {
+            if (RequireParachuteDraft(committingParachute.Token) != committingParachute)
+                throw new StudioCommandException("stale_draft", "The Parachute draft changed during preparation.");
+            RequireNoDrafts(doc, committing: true, committingParachute: committingParachute);
+            try { session.Workspace.ValidatePreparedEdit(prepared, cancellation.Token, verification.Value); }
+            catch (SourceFileChangedException ex) { throw new StudioCommandException("external_change", ex.Message); }
+            catch (InvalidDataException ex) { throw new StudioCommandException("invalid_argument", ex.Message); }
+            ReleaseParachuteDraft(AiPathDraftLifetime.ReleasedForAcceptance);
+        }
         if (committingAiPath != null)
         {
             if (RequireAiPathDraft(committingAiPath.Token) != committingAiPath)
@@ -592,7 +604,7 @@ public partial class MainWindow
         // No dispatcher yield between releasing the preparation guard and accepting the checked edit.
         return await EditSourceWorldAsync(doc, action, w => w.AcceptPreparedEdit(prepared, cancellation.Token, verification.Value) is { } t ? () => w.Retract(t) : null,
             cancellation.Token, additions, fromBuild, verifyTargets, notes,
-            onRollback: committingAiPath == null ? null : () => committingAiPath.RolledBackRevision = doc.Revision);
+            onRollback: () => { if (committingAiPath != null) committingAiPath.RolledBackRevision = doc.Revision; if (committingParachute != null) committingParachute.RolledBackRevision = doc.Revision; });
     }
 
     private Task<DocumentModel> AddSourceModelAsync(DocumentModel doc, SourceWorldAddition addition, CancellationToken token)

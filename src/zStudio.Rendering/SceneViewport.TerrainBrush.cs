@@ -23,8 +23,8 @@ public sealed partial class SceneViewport
         get => terrainBrushActive;
         set
         {
-            if (value && (ZonePaintActive || AiPathEditingNetwork != null))
-                throw new InvalidOperationException("Finish zone painting or AI path editing before painting terrain.");
+            if (value && (ZonePaintActive || AiPathEditingNetwork != null || HasParachutePreview || IsParachutePointerMoving))
+                throw new InvalidOperationException("Finish zone, AI path or drop-window editing before painting terrain.");
             bool changed = terrainBrushActive != value;
             terrainBrushActive = value;
             if (!value) CancelTerrainStroke();

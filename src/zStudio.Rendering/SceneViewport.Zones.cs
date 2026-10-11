@@ -23,7 +23,7 @@ public sealed partial class SceneViewport
         get => zonePaintActive;
         set
         {
-            if (value && (IsFlyActive || IsPickupDragging || TerrainBrushActive || AiPathEditingNetwork != null))
+            if (value && (IsFlyActive || IsPickupDragging || TerrainBrushActive || AiPathEditingNetwork != null || HasParachutePreview || IsParachutePointerMoving))
                 throw new InvalidOperationException("Finish the active navigation or editing gesture before painting zones.");
             zonePaintActive = value;
             if (!value) CancelZoneGesture();

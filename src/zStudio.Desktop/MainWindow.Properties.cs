@@ -79,9 +79,11 @@ public partial class MainWindow
         if (doc.ResourceEdits != null) { resourceWork = UndoResourcesAsync(doc, redo); return; }
         if (doc.IsDisposed || !ResolvePropertiesDrafts(doc) || shownDocument == doc && animation?.ResolvePendingDrafts() == false) return;
         if (shownDocument == doc) { animation?.Pause(); scene?.CancelPickupDrag(); }
-        if (doc.ModelEdits != null || doc.PickupEdits != null)
+        // Auxiliary coordinate inspection/history must not shadow an animation document's own
+        // available steps. Coordinate history remains available when that primary direction is empty.
+        if (doc.AnimationEdits is { } edits && (redo ? edits.CanRedo : edits.CanUndo)) { if (redo) edits.Redo(); else edits.Undo(); }
+        else if (doc.ModelEdits != null || doc.PickupEdits != null)
         { bool model = doc.NextSceneEditIsModel(redo); doc.UndoScene(redo); if (model) modelRefreshWork = RefreshModelDependentsAsync(doc); }
-        else if (doc.AnimationEdits is { } edits) { if (redo) edits.Redo(); else edits.Undo(); }
         UpdateDocumentCommands();
     }
     internal PropertiesWindow? OpenAnimationProperties(DocumentModel doc, int entry, Guid sequence, Guid ev)

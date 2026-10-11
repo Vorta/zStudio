@@ -322,6 +322,20 @@
         "zstudio_ai_path"
       ],
       "note": "Shift adds and Ctrl toggles markers; empty-space rectangle selection shares depth/filter rules with ai_path box. Pointer transforms and numeric fields share one frozen selection-centre draft. Automation uses semantic positions/rectangles and never captures physical input."
+    },
+    {
+      "gui": "MainWindow.Parachutes:ParachuteKeyboard",
+      "tools": [
+        "zstudio_parachute"
+      ],
+      "note": "Enter confirms and Escape cancels the active Parachute draft; native controls retain their keyboard behavior. Escape also cancels an in-progress flight analysis."
+    },
+    {
+      "gui": "SceneViewport.Parachutes:HandleParachuteDown",
+      "tools": [
+        "zstudio_parachute"
+      ],
+      "note": "Exact window selection and path movement emit ordered segment/fraction identities. Preview moves all release markers of one window, preserving separate visits at path crossings. No MCP operation captures physical input."
     }
   ],
   "handlers": [
@@ -1337,6 +1351,27 @@
         "zstudio_ai_path"
       ],
       "note": "Numeric transform input and world axis update the shared frozen-selection draft, preserving incomplete input until explicit confirmation or cancellation."
+    },
+    {
+      "gui": "MainWindow.xaml:ParachuteActionClick",
+      "tools": [
+        "zstudio_parachute"
+      ],
+      "note": "Shared Parachute flight/window selection, numeric or pointer draft, explicit confirm/cancel and actual animation-owner history/save. Compiled saves create a verified new copy; source saves retain project ownership. A selected unavailable flight exposes analysisRefusal while other candidates remain selectable. Samples/releases use offset/limit without query."
+    },
+    {
+      "gui": "MainWindow.xaml:ParachuteSelectionChanged",
+      "tools": [
+        "zstudio_parachute"
+      ],
+      "note": "Shared Parachute flight/window selection, numeric or pointer draft, explicit confirm/cancel and actual animation-owner history/save. Compiled saves create a verified new copy; source saves retain project ownership."
+    },
+    {
+      "gui": "MainWindow.xaml:ParachuteInputChanged",
+      "tools": [
+        "zstudio_parachute"
+      ],
+      "note": "Shared Parachute flight/window selection, numeric or pointer draft, explicit confirm/cancel and actual animation-owner history/save. Compiled saves create a verified new copy; source saves retain project ownership."
     }
   ]
 }

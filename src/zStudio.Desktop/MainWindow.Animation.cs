@@ -9,6 +9,7 @@ namespace Recoil.Zbd.Desktop;
 
 public partial class MainWindow
 {
+    internal Func<SaveFileDialog, bool?>? ShowingAnimationSaveDialog { get; set; }
     private async void SaveAnimationClick(object sender, RoutedEventArgs e) { if (ViewModel.SelectedDocument is { } doc) await SaveAnimationAsync(doc); }
     private void UndoAnimationClick(object sender, RoutedEventArgs e) { scene?.CancelPickupDrag(); if (ViewModel.SelectedDocument is { } doc) UndoDocument(doc, false); }
     private void RedoAnimationClick(object sender, RoutedEventArgs e) { scene?.CancelPickupDrag(); if (ViewModel.SelectedDocument is { } doc) UndoDocument(doc, true); }
@@ -19,7 +20,7 @@ public partial class MainWindow
         System.Windows.Input.Keyboard.ClearFocus(); if (shownDocument == doc) animation?.Pause();
         SaveFileDialog dialog = new() { Title = "Save a new animation pack outside the source dataset", Filter = "Animation pack|*.zbd", DefaultExt = ".zbd", AddExtension = true, FileName = "anim-edited.zbd", OverwritePrompt = false,
             InitialDirectory = doc.LastSavedCopy == null ? Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments) : Path.GetDirectoryName(doc.LastSavedCopy)! };
-        if (dialog.ShowDialog(this) != true) return false;
+        if ((ShowingAnimationSaveDialog?.Invoke(dialog) ?? dialog.ShowDialog(this)) != true) return false;
         IsEnabled = false; if (propertiesWindow != null) propertiesWindow.IsEnabled = false;
         try
         {
@@ -96,6 +97,11 @@ public partial class MainWindow
             }
             if (!await SaveCurrentAsync(document)) return false;
             document = LiveDocument(document);
+            if (document.IsDirty)
+            {
+                ViewModel.Status = "Close canceled: some document changes remain unsaved.";
+                return false;
+            }
             return ApproveClose(document, document.Revision);
         }
     }

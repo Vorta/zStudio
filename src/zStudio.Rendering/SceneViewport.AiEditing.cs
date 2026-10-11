@@ -61,7 +61,7 @@ public sealed partial class SceneViewport
     private void RequireAiPathInteraction()
     {
         if (!InspectionSelectionEnabled) throw new InvalidOperationException("Unlock editing first.");
-        if (IsFlyActive || IsPickupDragging || HasTransformDraft || TerrainBrushActive || ZonePaintActive)
+        if (IsFlyActive || IsPickupDragging || HasTransformDraft || TerrainBrushActive || ZonePaintActive || HasParachutePreview || IsParachutePointerMoving)
             throw new InvalidOperationException("Finish the active navigation or editing operation before editing an AI path.");
     }
 

@@ -20,6 +20,7 @@ public partial class MainWindow
         AiEnabled.Tag = "Show authored AI node markers and directed connections.\n" + AiNetworkColors.Legend;
         AttachInspection(viewport);
         ConfigureAiPath(viewport);
+        ConfigureParachuteScene(viewport);
         viewport.AiNodeSelected += id =>
         {
             if (scene != viewport || id == null) return;
@@ -56,6 +57,7 @@ public partial class MainWindow
     private void ApplyAiOptions()
     {
         bool world = IsAiWorld; AiTools.Visibility = world ? Visibility.Visible : Visibility.Collapsed;
+        UpdateParachutePanel();
         if (!world) { AiLabel.Visibility = Visibility.Collapsed; UpdateAiPathPanel(); return; }
         var graph = scene!.AiNetworks;
         AiValves.Visibility = graph.ValveSources.Count == 0 ? Visibility.Collapsed : Visibility.Visible;

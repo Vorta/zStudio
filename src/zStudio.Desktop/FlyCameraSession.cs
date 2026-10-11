@@ -43,6 +43,7 @@ internal sealed class FlyCameraSession : IDisposable
         if (IsActive) return true;
         if (disposed || !window.IsActive || scene.PreviewScene == null || !scene.IsVisible || !scene.IsEnabled || scene.ActualWidth <= 0 || scene.ActualHeight <= 0)
         { error = "Open a model or Whole world preview before enabling Fly camera."; return false; }
+        if (!scene.CanStartFly(out error)) return false;
         try
         {
             scene.CancelPickupDrag();

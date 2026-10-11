@@ -28,7 +28,11 @@ public sealed partial class AnimationCompiler
         /// <summary>The first known engine load failure, retained independently of the diagnostic cap. Diagnostic
         /// compilation remains available to reconstruction; source builds must refuse to publish this result.</summary>
         public string? EngineRejection { get; init; }
+        // Captured only for source editing, from the actual expansion that produced each entry.
+        internal IReadOnlyList<SourceBinding>? SourceBindings { get; init; }
     }
+    internal sealed record SourceBinding(int EntryIndex, string File, int DefinitionOrdinal);
+    private List<SourceBinding>? sourceBindings;
 
     private readonly AnimationDefinitionSet definitions;
     private readonly AnimationRoots roots;
@@ -76,15 +80,17 @@ public sealed partial class AnimationCompiler
 
     internal static Result Compile(IProjectFiles files, string root, IReadOnlyCollection<string>? worldNodes, IReadOnlyCollection<string>? effects, long maximumBytes, CancellationToken token,
         long maximumExpansionWork = MaximumExpansionWork, long maximumKeyframeWork = AnimationCompileWork.MaximumUnits,
-        Action? keyframeWorkAdmitted = null)
+        Action? keyframeWorkAdmitted = null, bool captureSourceBindings = false)
     {
         var set = AnimationDefinitionSet.Load(files, root, token);
         AnimationCompiler compiler = new(set, worldNodes, effects, maximumBytes, token, maximumExpansionWork,
             new(token, maximumKeyframeWork, keyframeWorkAdmitted));
+        if (captureSourceBindings) compiler.sourceBindings = [];
         foreach (var w in set.Warnings) compiler.Warn(w);
         var package = compiler.Build();
         byte[] bytes = AnimationWriter.Write(package, token);
-        return new(bytes, AnimationPackage.Read(bytes, token), compiler.diagnostics.Messages, set.Files.Distinct(StringComparer.OrdinalIgnoreCase).ToArray()) { EngineRejection = compiler.engineRejection };
+        return new(bytes, AnimationPackage.Read(bytes, token), compiler.diagnostics.Messages, set.Files.Distinct(StringComparer.OrdinalIgnoreCase).ToArray())
+        { EngineRejection = compiler.engineRejection, SourceBindings = compiler.sourceBindings };
     }
 
     /// <summary>
@@ -219,6 +225,7 @@ public sealed partial class AnimationCompiler
                 ReserveDefinition(definition.Item);
                 try { entries.Add(new EntryBuilder(this, Indexed(definition), root, bindings, entries.Count).Build()); }
                 catch (InvalidDataException ex) when (!ex.Message.StartsWith(definition.File, StringComparison.Ordinal)) { throw definition.Item.Error($"{JsonData.ShownText(Name(definition.Item))}: {ex.Message}"); }
+                sourceBindings?.Add(new(entries.Count - 1, definition.File, definition.Ordinal));
             }
         }
         // Prefix: signature, version, no source stamps, then the global state (entry count, default gravity).

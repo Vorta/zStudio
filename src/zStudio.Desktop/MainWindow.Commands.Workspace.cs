@@ -205,7 +205,14 @@ public partial class MainWindow
                 if (d.AnimationEdits != null)
                 {
                     if (destination.Length == 0) throw new StudioCommandException("destination_required", "Animation Save As requires a new output path.");
-                    await SaveAnimationToPathAsync(d, destination, token); return Result(DocumentState(d));
+                    await SaveAnimationToPathAsync(d, destination, token);
+                    if (d.PickupEdits?.IsDirty == true)
+                    {
+                        var coordinateTargets = (a["destinations"] as JsonObject)?.ToDictionary(p => p.Key, p => p.Value?.GetValue<string>() ?? "", StringComparer.OrdinalIgnoreCase);
+                        var savedCoordinates = await SavePickupDestinationsAsync(d, coordinateTargets, Flag(a, "backup", ViewModel.Settings.CreateBackupOnSave), token);
+                        return Result(new { document = DocumentState(d), result = FileResultPreview.Saved(savedCoordinates.SavedPaths, savedCoordinates.Errors) });
+                    }
+                    return Result(DocumentState(d));
                 }
                 ModelSaveResult? models = null;
                 if (d.ModelEdits?.IsDirty == true || d.ModelEdits != null && a.ContainsKey("modelDirectory"))

@@ -115,8 +115,10 @@ public partial class MainWindow
         return doc;
     }
     /// <remarks>With <paramref name="committing"/>, drafts whose commit is running (and called this) do not count.</remarks>
-    private void RequireNoDrafts(DocumentModel? doc = null, bool committing = false, SceneInspectionCard? committingCard = null, ZoneDraft? committingZones = null, AiPathDraft? committingAiPath = null)
+    private void RequireNoDrafts(DocumentModel? doc = null, bool committing = false, SceneInspectionCard? committingCard = null, ZoneDraft? committingZones = null, AiPathDraft? committingAiPath = null, ParachuteDraft? committingParachute = null)
     {
+        if (parachuteDraft is { } drop && drop != committingParachute && (doc == null || doc == drop.Session.World || doc == drop.Session.Owner || doc.ResourceEdits != null || doc.ContentEdits != null))
+            throw new StudioCommandException("pending_drafts", "Confirm or cancel the Parachute move before continuing.");
         if (HasAiPathDraft && aiPathDraft != committingAiPath && (doc == null || aiPathDraft!.Document == doc || doc.ResourceEdits != null || doc.ContentEdits != null))
             throw new StudioCommandException("pending_drafts", "Confirm or cancel the AI path transform with ai_path before continuing.");
         if (HasZoneDraft && zoneDraft != committingZones && (doc == null || zoneDraft!.Document == doc))
@@ -191,6 +193,7 @@ public partial class MainWindow
         RegisterPreviewCommands(registry);
         RegisterAiCommands(registry);
         RegisterAiPathCommands(registry);
+        RegisterParachuteCommands(registry);
         RegisterValveCommands(registry);
         RegisterInspectionCommands(registry);
         RegisterSceneTreeCommand(registry);

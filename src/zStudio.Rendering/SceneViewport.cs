@@ -510,7 +510,7 @@ public sealed partial class SceneViewport : UserControl, IDisposable
         rotationVelocity = default; rotationPoint = null; cameraPoseDirty = true; authoredCameraPose = false;
         ClearAnimationResources();
         ClearWorldHighlights();
-        ClearAi();
+        ClearAi(); ClearParachutes();
         horizonNodes.Clear(); Mission = null; PreviewScene = null; InspectionNodes = null;
         sceneAlphaGroup = null;
         sceneMin = new(float.PositiveInfinity); sceneMax = new(float.NegativeInfinity);
