@@ -238,12 +238,48 @@ internal static class SourceEditingMcpChecks
             await File.WriteAllBytesAsync(Path.Combine(outbox, "textures", "rock.png"), Recoil.Zbd.Core.Export.PngEncoder.Encode(image), token);
             var listed = await Call("source_blender_checkouts", new());
             Assert.Equal("edit/m1.gltf", listed["checkouts"]![0]!["exports"]![0]!["path"]!.GetValue<string>());
+            // Consent must cover the content actually shown: an external PNG edit during the model-only
+            // question cannot be silently added to a forced retry. Exercise the GUI helper and MCP's explicit force.
+            flagged = Document((await Job("source_world_object_edit", new() { ["document"] = Id(flagged), ["revision"] = flagged.Revision,
+                ["node"] = flagged.PreviewDocument.Scene!.Nodes.First(n => n.Name == "ground").Index,
+                ["position"] = new Dictionary<string, object?> { ["x"] = 11, ["y"] = 0, ["z"] = -10 } }))["document"]!);
+            var conflict = await Job("source_blender_update", new() { ["document"] = Id(flagged), ["revision"] = flagged.Revision,
+                ["checkout"] = checkout["id"]!.GetValue<string>() }, "failed");
+            Assert.Equal("conflict", conflict["code"]!.GetValue<string>());
+            long beforeConsent = workspace.ContentRevision;
+            byte[] beforeModel = workspace.Read("data/m1/models/m1.gltf")!;
+            var externalImage = Recoil.Zbd.Core.Export.PngDecoder.Decode(rock);
+            externalImage.Rgba[0] = 0; externalImage.Rgba[2] = 255;
+            byte[] externalPng = Recoil.Zbd.Core.Export.PngEncoder.Encode(externalImage);
+            int questions = 0;
+            main.ConfirmBlenderUpdate = message =>
+            {
+                Assert.True(main.Dispatcher.CheckAccess());
+                Assert.Contains("data/m1/models/m1.gltf", message);
+                Assert.DoesNotContain("rock.png", message);
+                questions++;
+                File.WriteAllBytes(fixture.Path("data/m1/textures/rock.png"), externalPng);
+                return true;
+            };
+            try
+            {
+                var changed = await Assert.ThrowsAsync<Recoil.Zbd.Automation.StudioCommandException>(() =>
+                    main.UpdateFromBlenderWithConsentAsync(flagged, checkout["id"]!.GetValue<string>(), "edit/m1.gltf", token));
+                Assert.Equal("external_change", changed.Code);
+            }
+            finally { main.ConfirmBlenderUpdate = null; }
+            Assert.Equal(1, questions);
+            Assert.Equal(beforeConsent, workspace.ContentRevision);
+            Assert.Equal(beforeModel, workspace.Read("data/m1/models/m1.gltf"));
+            Assert.Same(flagged, main.ViewModel.SelectedDocument);
+            Assert.DoesNotContain("data/m1/textures/rock.png", workspace.DirtyFiles);
+            Assert.Equal(externalPng, File.ReadAllBytes(fixture.Path("data/m1/textures/rock.png")));
             // The manifest becomes read-only to replacement after planning succeeds, while the world rebuilds.
             // Accepted edits must still report this failure to GUI Problems and the MCP operation result.
             FileStream? manifestLock = null;
             main.SourceBuildStep = _ => manifestLock ??= new FileStream(Path.Combine(checkout["folder"]!.GetValue<string>(), "manifest.json"), FileMode.Open, FileAccess.Read, FileShare.Read);
             JsonNode updated;
-            try { updated = await Job("source_blender_update", new() { ["document"] = Id(flagged), ["revision"] = flagged.Revision, ["checkout"] = checkout["id"]!.GetValue<string>() }); }
+            try { updated = await Job("source_blender_update", new() { ["document"] = Id(flagged), ["revision"] = flagged.Revision, ["checkout"] = checkout["id"]!.GetValue<string>(), ["force"] = true }); }
             finally { main.SourceBuildStep = null; manifestLock?.Dispose(); }
             Assert.Contains(updated["notes"]!.AsArray(), n => n!.GetValue<string>().Contains("could not record", StringComparison.Ordinal));
             Assert.Contains(main.ViewModel.Problems, p => p.Severity == "Warning" && p.Message.Contains("could not record", StringComparison.Ordinal));

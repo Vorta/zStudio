@@ -58,7 +58,8 @@ public partial class MainWindow
     /// rebuilding <paramref name="doc"/>'s world. Files changed in the project since the checkout are replaced only with
     /// <paramref name="force"/> (code conflict otherwise). Returns the files the change actually wrote.
     /// </summary>
-    private async Task<(DocumentModel Document, BlenderUpdatePlan Plan, IReadOnlyList<string> Files)> UpdateFromBlenderAsync(DocumentModel doc, string checkoutId, string? export, bool force, CancellationToken token)
+    private async Task<(DocumentModel Document, BlenderUpdatePlan Plan, IReadOnlyList<string> Files)> UpdateFromBlenderAsync(DocumentModel doc, string checkoutId, string? export, bool force, CancellationToken token,
+        Func<BlenderConflictException, CancellationToken, bool>? confirmConflict = null)
     {
         var session = doc.SourceWorld ?? throw new StudioCommandException("unsupported", "Open a mission world of the source project to update it from Blender.");
         RequireSourceWorldIdle(session);
@@ -79,7 +80,8 @@ public partial class MainWindow
             // on this same prepared workspace through Apply, worker verification and acceptance.
             try
             {
-                plan = SourceBlender.PlanUpdate(workspace, checkout, export, force, ct);
+                plan = confirmConflict == null ? SourceBlender.PlanUpdate(workspace, checkout, export, force, ct)
+                    : SourceBlender.PlanUpdate(workspace, checkout, export, confirmConflict, ct);
                 // Scripts that turn or scale a node whose rotation or scale the export changes (theirs replace it), here or in other missions.
                 if (plan.Changes.FirstOrDefault(c => c.Relative.Equals(checkout.Model, StringComparison.OrdinalIgnoreCase)) is { Content: { } content }
                     && workspace.Read(checkout.Model, ct, Recoil.Zbd.Core.Gltf.GltfDocument.MaximumJsonBytes) is { } current
@@ -179,26 +181,40 @@ public partial class MainWindow
         var (checkout, export) = dialog.Chosen;
         // The world may also have closed while the export was chosen.
         if (doc.IsDisposed || !ViewModel.Documents.Contains(doc)) throw new StudioCommandException("context_changed", "The world was closed while the Blender export was chosen.");
-        (DocumentModel Document, BlenderUpdatePlan Plan, IReadOnlyList<string> Files) result;
-        var workspace = session.Workspace;
-        for (bool force = false; ;)
-        {
-            long revision = workspace.ContentRevision;
-            try { result = await UpdateFromBlenderAsync(doc, checkout.Id, export.Relative, force, shutdownToken); break; }
-            catch (StudioCommandException ex) when (ex.Code == "conflict")
-            {
-                if (MessageBox.Show(this, ex.Message + "\n\nUpdate anyway, accepting all of this?", "Update from Blender export", MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes) return;
-                if (ViewModel.SelectedDocument is not { SourceWorld: { } current } shown || current.Workspace != workspace) return;
-                doc = shown;
-                // Yes accepts the conflicts listed, of the project as it was planned. A change accepted since (one under way
-                // when the question opened, or made in Properties meanwhile) is not overwritten: the update is planned again,
-                // and asks again about whatever still conflicts.
-                force = workspace.ContentRevision == revision;
-            }
-        }
+        if (await UpdateFromBlenderWithConsentAsync(doc, checkout.Id, export.Relative, shutdownToken) is not { } result) return;
         int count = result.Files.Count;
         ViewModel.Status = count == 0 ? $"{checkout.Model} already matches the Blender export." : $"Updated {checkout.Model} from Blender: {count} file{(count == 1 ? "" : "s")} changed" + (result.Plan.Notes.Count > 0 ? $"; {result.Plan.Notes.Count} notes in Problems" : "");
     });
+
+    internal Func<string, bool>? ConfirmBlenderUpdate { get; set; }
+
+    /// <summary>GUI consent belongs to the sealed plan being shown, never to a later forced replan.</summary>
+    internal async Task<(DocumentModel Document, BlenderUpdatePlan Plan, IReadOnlyList<string> Files)?> UpdateFromBlenderWithConsentAsync(
+        DocumentModel doc, string checkoutId, string export, CancellationToken token)
+    {
+        bool declined = false;
+        var session = doc.SourceWorld;
+        bool Confirm(BlenderConflictException conflict, CancellationToken cancellation) => Dispatcher.Invoke(() =>
+        {
+            RequireCurrent();
+            bool accepted = ConfirmBlenderUpdate?.Invoke(conflict.Message) ?? MessageBox.Show(this,
+                conflict.Message + "\n\nUpdate anyway, accepting all of this?", "Update from Blender export",
+                MessageBoxButton.YesNo, MessageBoxImage.Warning) == MessageBoxResult.Yes;
+            RequireCurrent();
+            declined = !accepted;
+            return accepted;
+
+            void RequireCurrent()
+            {
+                cancellation.ThrowIfCancellationRequested();
+                if (doc.IsDisposed || ViewModel.SelectedDocument != doc || !ViewModel.Documents.Contains(doc)
+                    || doc.SourceWorld != session || sourceWorkspace != session?.Workspace)
+                    throw new StudioCommandException("context_changed", "The world changed while the Blender update was being confirmed; try again.");
+            }
+        }, System.Windows.Threading.DispatcherPriority.Normal, cancellation);
+        try { return await UpdateFromBlenderAsync(doc, checkoutId, export, false, token, Confirm); }
+        catch (OperationCanceledException) when (declined) { return null; }
+    }
 
     private void RegisterSourceBlenderCommands(StudioCommands r)
     {

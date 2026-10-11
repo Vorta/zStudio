@@ -456,8 +456,17 @@ public static partial class SourceBlender
     public static BlenderUpdatePlan PlanUpdate(SourceWorkspace workspace, BlenderCheckout checkout, string? export = null, bool force = false, CancellationToken token = default)
         => PlanUpdate(workspace, checkout, export, force, token, MaximumExportBytes, GltfDocument.MaximumJsonBytes);
 
+    /// <summary>
+    /// Ask about all conflicts of this sealed export before continuing the same plan. The callback runs on the caller's
+    /// thread; callers preparing on a worker must marshal their question. Declining cancels without changing sources.
+    /// Prepared workspace validation still rejects project inputs changed while the question was open.
+    /// </summary>
+    public static BlenderUpdatePlan PlanUpdate(SourceWorkspace workspace, BlenderCheckout checkout, string? export,
+        Func<BlenderConflictException, CancellationToken, bool> confirmConflict, CancellationToken token = default)
+        => PlanUpdate(workspace, checkout, export, false, token, MaximumExportBytes, GltfDocument.MaximumJsonBytes, confirmConflict);
+
     internal static BlenderUpdatePlan PlanUpdate(SourceWorkspace workspace, BlenderCheckout checkout, string? export, bool force, CancellationToken token,
-        long maximumExportBytes, int maximumJsonBytes = GltfDocument.MaximumJsonBytes)
+        long maximumExportBytes, int maximumJsonBytes = GltfDocument.MaximumJsonBytes, Func<BlenderConflictException, CancellationToken, bool>? confirmConflict = null)
     {
         CheckInputLimits(maximumExportBytes, maximumJsonBytes);
         using CopyFiles written = new();
@@ -465,7 +474,7 @@ public static partial class SourceBlender
         // guards. Desktop already supplies its prepared workspace and retains these reads through acceptance.
         // Standalone callers need the same first-read checks, including pending edits and absent profiles.
         var prepared = workspace.IsPrepared ? null : workspace.BeginPreparedEdit();
-        var plan = PlanUpdate(prepared?.Workspace ?? workspace, checkout, export, force, written, token, maximumExportBytes, maximumJsonBytes);
+        var plan = PlanUpdate(prepared?.Workspace ?? workspace, checkout, export, force, written, token, maximumExportBytes, maximumJsonBytes, confirmConflict);
         if (prepared != null)
         {
             workspace.ValidatePreparedEdit(prepared, token);
@@ -475,7 +484,7 @@ public static partial class SourceBlender
         return plan;
     }
     private static BlenderUpdatePlan PlanUpdate(SourceWorkspace workspace, BlenderCheckout checkout, string? export, bool force, CopyFiles written, CancellationToken token,
-        long maximumExportBytes, int maximumJsonBytes)
+        long maximumExportBytes, int maximumJsonBytes, Func<BlenderConflictException, CancellationToken, bool>? confirmConflict)
     {
         SourceProject.RejectLinks(checkout.Folder);
         var exports = Exports(checkout, token);
@@ -731,7 +740,12 @@ public static partial class SourceBlender
             if (shadows.Count > 0) reasons.Add($"The game finds a texture by its name, in each mission's texture folders in order: {shadowed}. Rename the image and its PNG file in Blender to a name no texture folder of those missions holds.");
             if (zonesLost.Count > 0) reasons.Add($"Map zones cannot follow faces the export replaced with new ones, nor nodes it replaced under another name: {lostZones}. Updating anyway gives the new faces and nodes the model's own zones (faces no zone, nodes their parent's), to be set again with Tools → Edit map zones in those maps; to keep the zones, reshape faces by moving their vertices rather than rebuilding them, and keep node names.");
             reasons.Add("Check the model out again, or update anyway to accept this.");
-            throw new BlenderConflictException([.. (attributesDropped ? conflicts.Prepend(model) : conflicts).Concat(shadows.Select(s => s.Texture)).Concat(zonesLost.Count > 0 ? zoneChanges.Select(z => z.Relative) : []).Distinct(StringComparer.OrdinalIgnoreCase)], string.Join(" ", reasons));
+            var conflict = new BlenderConflictException([.. (attributesDropped ? conflicts.Prepend(model) : conflicts).Concat(shadows.Select(s => s.Texture)).Concat(zonesLost.Count > 0 ? zoneChanges.Select(z => z.Relative) : []).Distinct(StringComparer.OrdinalIgnoreCase)], string.Join(" ", reasons));
+            if (confirmConflict == null) throw conflict;
+            token.ThrowIfCancellationRequested();
+            bool acceptedConflict = confirmConflict(conflict, token);
+            token.ThrowIfCancellationRequested();
+            if (!acceptedConflict) throw new OperationCanceledException("Updating from Blender was declined; no source was changed.", token);
         }
         if (conflicts.Count > 0) notes.Add($"Replaced changes made since the checkout in {string.Join(", ", conflicts.Take(8))}.");
         if (shadows.Count > 0) notes.Add($"Updated anyway, although the game finds textures by name: {shadowed}.");
