@@ -20,8 +20,8 @@ public sealed partial class SceneViewport
     public bool InspectionSelectionEnabled => !worldInspection || !pickupLocked;
     public string TransformMode { get; private set; } = "move";
     public bool HasTransformDraft => transformSource != null;
-    public bool TransformHandlesVisible => pickupManipulator?.Visibility == Visibility.Visible;
-    public bool SelectionBoundsVisible => selectionBox?.Visibility == Visibility.Visible;
+    public bool TransformHandlesVisible => !PresentationUiHidden && pickupManipulator?.Visibility == Visibility.Visible;
+    public bool SelectionBoundsVisible => !PresentationUiHidden && selectionBox?.Visibility == Visibility.Visible;
     public event Action<PlacementTransform>? TransformDraftChanged;
     private bool CanManipulate => InspectionSelectionEnabled && HasTransformDraft && transformValid &&
         SelectedInspection is { Active: true } selected && selected.Target == transformTarget;
@@ -78,7 +78,7 @@ public sealed partial class SceneViewport
         InspectionChanged?.Invoke();
     }
 
-    private Vector3 rotationAxis, rotationPrevious;
+    private Vector3 rotationAxis, rotationPrevious, rotationStartRadial;
     private Point rotationScreenStart;
     private System.Windows.Vector rotationScreenTangent;
     private double rotationScreenRadius;
@@ -102,11 +102,12 @@ public sealed partial class SceneViewport
         // Native ring transforms contain trig roundoff; the editor's axes are
         // exactly world X/Y/Z, including the vehicle's Y-only constraint.
         rotationAxis = Math.Abs(axis.X) > .5f ? Vector3.UnitX : Math.Abs(axis.Y) > .5f ? Vector3.UnitY : Vector3.UnitZ;
-        rotationAngle = 0; rotationScreenStart = point;
+        rotationAngle = rotationPresentationAngle = 0; rotationScreenStart = point;
         rotationPlane = RotationPoint(point, rotationAxis, transformDraft.Position, out rotationPrevious);
         var radial = hit - transformDraft.Position;
         if (!Finite(radial) || radial.LengthSquared() < 1e-10f) radial = Vector3.Cross(axis, axis.Y == 0 ? Vector3.UnitY : Vector3.UnitX);
-        var tangent = Vector3.Normalize(Vector3.Cross(rotationAxis, Vector3.Normalize(radial)));
+        rotationStartRadial = Vector3.Normalize(radial);
+        var tangent = Vector3.Normalize(Vector3.Cross(rotationAxis, rotationStartRadial));
         Point Project(Vector3 p) => viewport.Project(new Point3D(p.X, p.Y, p.Z));
         var segment = Project(hit + tangent * (float)pickupGizmoSize) - Project(hit);
         rotationScreenRadius = Math.Max(8, segment.Length); rotationScreenTangent = segment;
@@ -122,7 +123,7 @@ public sealed partial class SceneViewport
             if (!float.IsFinite(step)) return;
             rotationAngle += step; rotationPrevious = current;
         }
-        else rotationAngle = (float)(System.Windows.Vector.Multiply(point - rotationScreenStart, rotationScreenTangent) / rotationScreenRadius);
+        else rotationAngle = rotationPresentationAngle + (float)(System.Windows.Vector.Multiply(point - rotationScreenStart, rotationScreenTangent) / rotationScreenRadius);
         PublishTransformDrag(transformDragStart.RotateWorld(transformRotation, rotationAxis, rotationAngle));
     }
 

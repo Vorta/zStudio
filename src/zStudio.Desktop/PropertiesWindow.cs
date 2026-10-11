@@ -27,7 +27,7 @@ public sealed class PropertiesWindow : Window
     private long assetRefreshGeneration;
     internal Task AssetRefreshWork { get; private set; } = Task.CompletedTask;
     private string label = "";
-    private bool closingResolved, resolvingClose;
+    private bool closingResolved, resolvingClose, hasBeenShown;
     public DocumentModel? Document { get; private set; }
     public AnimationPropertiesEditor? AnimationFields { get; private set; }
     public PickupPropertiesEditor? PickupFields { get; private set; }
@@ -71,6 +71,7 @@ public sealed class PropertiesWindow : Window
         panel.Children.Add(body);
         undo.Click += (_, _) => RunUndo(false); redo.Click += (_, _) => RunUndo(true);
         PreviewKeyDown += OnKey;
+        Loaded += (_, _) => hasBeenShown = true;
         Closing += OnClosing;
         Closed += (_, _) => { RememberBounds(); Detach(); };
         ApplyAppearance();
@@ -222,6 +223,7 @@ public sealed class PropertiesWindow : Window
     }
     private async void OnKey(object sender, KeyEventArgs e)
     {
+        if (Owner is MainWindow main && main.PresentationKey(e)) return;
         bool ctrl = (Keyboard.Modifiers & ModifierKeys.Control) != 0;
         if (ctrl && e.Key == Key.S) { e.Handled = true; await SaveAsync((Keyboard.Modifiers & ModifierKeys.Shift) != 0); }
         else if (ctrl && e.Key is Key.Z or Key.Y && e.OriginalSource is not TextBoxBase)
@@ -260,6 +262,9 @@ public sealed class PropertiesWindow : Window
     internal void Dismiss() { ClosedByUser = true; CloseResolved(); }
     private void RememberBounds()
     {
+        // A Properties request made during Hide UI can pin a window without ever showing it.
+        // Its uninitialized HWND coordinates must not replace the last useful popup bounds.
+        if (!hasBeenShown) return;
         Rect bounds = WindowState == WindowState.Normal ? new(Left, Top, ActualWidth, ActualHeight) : RestoreBounds;
         var saved = preferences.Settings.GetWorkspace().PropertiesWindow;
         saved.Left = bounds.Left; saved.Top = bounds.Top; saved.Width = bounds.Width; saved.Height = bounds.Height; saved.Normalize();

@@ -93,6 +93,7 @@ public partial class MainWindow
             scene.NodeSelected += InspectNode;
             ConfigureAiScene(scene);
             ConfigurePickupScene(scene); ConfigureFlyScene(scene);
+            ApplyRetainedPresentation();
             SceneHost.Content = scene;
             ApplySceneOptions();
             if (asset.Kind == AssetKind.World) AttachPickupEditor(doc);
@@ -116,6 +117,7 @@ public partial class MainWindow
             if (mission != null) WorldDifficulty.ToolTip = mission.Layout.Description;
             ShowStaticPreviewProblems(doc, asset);
             EmptyPreview.Visibility = Visibility.Collapsed;
+            RefreshPresentation(previewSettled: true);
             RefreshSceneTree();
             if (selectedNode is int retainedNode) RevealSceneNode(retainedNode);
             previous.Dispose(); SynchronizeFly();

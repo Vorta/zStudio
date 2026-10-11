@@ -43,16 +43,16 @@ public sealed partial class SceneViewport
         get => inspectionContent;
         set
         {
-            if (inspectionContent != null) inspectionHost.Children.Remove(inspectionContent);
+            if (inspectionContent != null) presentationOverlays.Children.Remove(inspectionContent);
             inspectionContent = value;
             ReserveInspectionPanel(Rect.Empty);
-            if (value != null) inspectionHost.Children.Add(value);
+            if (value != null) presentationOverlays.Children.Add(value);
         }
     }
 
     private void ConfigureInspection()
     {
-        inspectionHost.Children.Add(viewport); Content = inspectionHost;
+        inspectionHost.Children.Add(viewport); inspectionHost.Children.Add(presentationOverlays); Content = inspectionHost;
         viewport.MouseMove += (_, e) => { inspectionPointer = e.GetPosition(viewport); viewport.InvalidateRender(); };
         viewport.MouseLeave += (_, _) => { inspectionPointer = null; HoverInspection = null; InspectionChanged?.Invoke(); };
     }

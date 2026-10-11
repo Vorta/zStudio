@@ -20,6 +20,14 @@ public sealed class MotionEditor : UserControl, IDisposable
     private readonly CancellationToken lifetime;
     private readonly Func<ZbdDocument, (ResourceEditSession Edits, ResourceSnapshot Snapshot)?> resolveLibrarySnapshot;
     private readonly DockPanel root = new();
+    private readonly ToolBar presentationToolbar = new();
+    private readonly DockPanel presentationTransport = new() { Margin = new(6) };
+    internal bool PresentationUiHidden { get; private set; }
+    internal void SetPresentationUiHidden(bool hidden)
+    {
+        PresentationUiHidden = hidden;
+        presentationToolbar.Visibility = presentationTransport.Visibility = support.Visibility = hidden ? Visibility.Collapsed : Visibility.Visible;
+    }
     private readonly ComboBox assembly = new() { MinWidth = 140, MaxWidth = 260, DisplayMemberPath = nameof(AssetRecord.Name) };
     private readonly ComboBox lod = new() { MinWidth = 80 };
     private readonly Slider seeker = new() { Minimum = 0, MinWidth = 40, Margin = new(8, 0, 8, 0) };
@@ -86,11 +94,11 @@ public sealed class MotionEditor : UserControl, IDisposable
         AutomationProperties.SetName(assembly, "Motion mech assembly"); AutomationProperties.SetName(lod, "Motion LOD");
         AutomationProperties.SetName(seeker, "Motion playhead"); AutomationProperties.SetName(play, "Motion play or pause");
         Content = root;
-        ToolBar toolbar = new(); DockPanel.SetDock(toolbar, Dock.Top); root.Children.Add(toolbar);
+        var toolbar = presentationToolbar; DockPanel.SetDock(toolbar, Dock.Top); root.Children.Add(toolbar);
         toolbar.Items.Add(lod); toolbar.Items.Add(assembly);
         Button frame = new() { Content = new PreviewIcon { Kind = "Frame", Width = 16, Height = 16 }, ToolTip = "Frame motion", MinWidth = 32 };
         AutomationProperties.SetName(frame, "Frame motion"); frame.Click += (_, _) => Viewport.FrameAll(); toolbar.Items.Add(frame);
-        DockPanel bottom = new() { Margin = new(6) }; DockPanel.SetDock(bottom, Dock.Bottom); root.Children.Add(bottom);
+        var bottom = presentationTransport; DockPanel.SetDock(bottom, Dock.Bottom); root.Children.Add(bottom);
         bottom.Children.Add(play); DockPanel.SetDock(time, Dock.Right); bottom.Children.Add(time); bottom.Children.Add(seeker);
         DockPanel.SetDock(support, Dock.Bottom); root.Children.Add(support); root.Children.Add(Viewport);
         play.Click += (_, _) => TogglePlayback();
@@ -153,6 +161,9 @@ public sealed class MotionEditor : UserControl, IDisposable
                 ct.ThrowIfCancellationRequested(); if (disposed || request != generation) return;
             }
             seconds = Math.Min(seconds, nextClip.LoopTime);
+            // Assembly loading can finish after Hide UI changed. Inherit the current override
+            // before the replacement is attached or can present its first frame.
+            replacement.SetPresentationUiHidden(PresentationUiHidden);
             var previous = Viewport; Viewport = replacement; replacement = null;
             root.Children.Remove(previous); root.Children.Add(Viewport); previous.Dispose();
             ++clipGeneration; selectedIdentity = identity; selectedMember = index; clip = nextClip; sampler = next;

@@ -336,9 +336,23 @@
         "zstudio_parachute"
       ],
       "note": "Exact window selection and path movement emit ordered segment/fraction identities. Preview moves all release markers of one window, preserving separate visits at path crossings. No MCP operation captures physical input."
+    },
+    {
+      "gui": "MainWindow.Presentation:PresentationKey",
+      "tools": [
+        "zstudio_presentation"
+      ],
+      "note": "Unmodified F11 and exact Ctrl+Shift+H route before Fly input from the workspace or owned Properties window. Repeats do not retoggle. Semantic presentation changes never capture physical input."
     }
   ],
   "handlers": [
+    {
+      "gui": "MainWindow.xaml:PresentationActionClick",
+      "tools": [
+        "zstudio_presentation"
+      ],
+      "note": "View Fullscreen and Hide UI share independent transient presentation flags. They preserve the retained preview, camera, playback, layout preferences and drafts; enabling requires a 3D preview and disabling remains available."
+    },
     {
       "gui": "AnimationEditor.xaml:AddSequenceClick",
       "tools": [

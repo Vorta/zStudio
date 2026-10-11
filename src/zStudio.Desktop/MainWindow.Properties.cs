@@ -44,13 +44,15 @@ public partial class MainWindow
             // Closing discards the zone draft (Closed below); it is decided first, so declining asks nothing more.
             ResolveClosingDrafts = ResolveZoneDrafts,
         };
-        window.Closed += (_, _) => { if (propertiesWindow == window) { CancelZoneDraft(close: true); propertiesWindow = null; ++propertyRequest; } };
+        window.Closed += (_, _) => { if (presentationProperties == window) presentationProperties = null; if (propertiesWindow == window) { CancelZoneDraft(close: true); propertiesWindow = null; ++propertyRequest; } };
         window.Retargeted += UpdateSourceInputBlock;
         propertiesWindow = window; return window;
     }
-    private static void PresentProperties(PropertiesWindow window, bool accepted)
+    private void PresentProperties(PropertiesWindow window, bool accepted)
     {
         if (!accepted) return;
+        using var lease = BeginLayoutChange();
+        if (presentationUiHidden) { presentationProperties = window; if (window.IsVisible) window.Hide(); return; }
         if (!window.IsVisible) window.Show();
         if (window.WindowState == WindowState.Minimized) window.WindowState = WindowState.Normal;
         window.Activate();

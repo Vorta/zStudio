@@ -35,7 +35,7 @@ public partial class MainWindow
         TitleArea.SizeChanged += (_, _) => ArrangeTitleCommands();
         AppMenu.SizeChanged += (_, _) => ArrangeTitleCommands();
         CaptionButtons.SizeChanged += (_, _) => ArrangeTitleCommands();
-        StateChanged += (_, _) => Dispatcher.BeginInvoke(DispatcherPriority.Loaded, UpdateCaptionBounds);
+        StateChanged += (_, _) => { Dispatcher.BeginInvoke(DispatcherPriority.Loaded, UpdateCaptionBounds); QueueFullscreenBounds(); };
         PreviewMouseMove += (_,e) => { if (captionMaximizePressed) SetMaximizeHover(new Rect(CaptionMaximize.RenderSize).Contains(e.GetPosition(CaptionMaximize))); };
         PreviewMouseLeftButtonUp += (_,e) =>
         {
@@ -49,9 +49,11 @@ public partial class MainWindow
     }
     private nint ChromeMessage(nint hwnd, int message, nint wParam, nint lParam, ref bool handled)
     {
+        if (presentationFullscreen && message == 0x0112 && ((long)wParam & 0xFFF0) == 0xF030)
+        { handled = true; return 0; } // SC_MAXIMIZE: fullscreen exits only through its own command.
         // Windows 11 discovers Snap Layouts from the real maximize hit region, even
         // though these full-height caption controls are drawn in WPF.
-        if (message == 0x0084 && CaptionMaximize.IsVisible)
+        if (message == 0x0084 && CaptionMaximize.IsVisible && !presentationFullscreen)
         {
             var point = new Point(unchecked((short)(long)lParam),unchecked((short)((long)lParam >> 16)));
             if (new Rect(CaptionMaximize.RenderSize).Contains(CaptionMaximize.PointFromScreen(point))) { handled = true; return 9; }
@@ -62,19 +64,20 @@ public partial class MainWindow
             if (wParam == 9) { var track = new MouseTracking { Size = Marshal.SizeOf<MouseTracking>(), Flags = 0x12, Window = hwnd }; TrackMouseEvent(ref track); }
         }
         if (message == 0x02A2 && !captionMaximizePressed) SetMaximizeHover(false);
-        if (message == 0x00A1 && wParam == 9)
+        if (message == 0x00A1 && wParam == 9 && !presentationFullscreen)
         {
             captionMaximizePressed = Mouse.Capture(this,CaptureMode.Element); SetMaximizeHover(true); handled = true; return 0;
         }
         if (message is 0x031A or 0x031E) ApplyCornerPreference(hwnd);
+        if (message is 0x02E0 or 0x007E or 0x001A) QueueFullscreenBounds();
         if (message is 0x02E0 or 0x031A or 0x031E or 0x001A or 0x0047) Dispatcher.BeginInvoke(DispatcherPriority.Loaded, UpdateCaptionBounds);
         return 0;
     }
-    private static void ApplyCornerPreference(nint handle)
+    private void ApplyCornerPreference(nint handle)
     {
         if (handle == 0 || !OperatingSystem.IsWindowsVersionAtLeast(10,0,22000)) return;
         const int windowCornerPreference = 33;
-        int round = 2;
+        int round = presentationFullscreen ? 1 : 2;
         // This is a compositor hint. Unsupported composition environments can
         // decline it without preventing startup; Windows owns maximized/Snap policy.
         _ = DwmSetWindowAttribute(handle,windowCornerPreference,ref round,sizeof(int));
@@ -97,6 +100,7 @@ public partial class MainWindow
     private void CaptionMinimizeClick(object sender,RoutedEventArgs e) => SystemCommands.MinimizeWindow(this);
     private void CaptionMaximizeClick(object sender,RoutedEventArgs e)
     {
+        if (presentationFullscreen) return;
         if (WindowState == WindowState.Maximized) SystemCommands.RestoreWindow(this); else SystemCommands.MaximizeWindow(this);
     }
     private void CaptionCloseClick(object sender,RoutedEventArgs e) => SystemCommands.CloseWindow(this);
@@ -112,7 +116,7 @@ public partial class MainWindow
     }
     private void UpdateMaximizedInsets(nint handle,DpiScale dpi)
     {
-        if (WindowState != WindowState.Maximized) { Shell.Margin = new Thickness(0); return; }
+        if (presentationFullscreen || WindowState != WindowState.Maximized) { Shell.Margin = new Thickness(0); return; }
         var monitor = new MonitorBounds { Size = Marshal.SizeOf<MonitorBounds>() }; var origin = new ScreenPoint();
         if (!GetMonitorInfo(MonitorFromWindow(handle,2),ref monitor) || !GetClientRect(handle,out var client) || !ClientToScreen(handle,ref origin)) return;
         Shell.Margin = new Thickness(Math.Max(0,monitor.Work.Left - origin.X) / dpi.DpiScaleX,
@@ -137,7 +141,7 @@ public partial class MainWindow
     [StructLayout(LayoutKind.Sequential)] private struct MouseTracking { public int Size; public uint Flags; public nint Window; public uint HoverTime; }
     [DllImport("user32.dll")] private static extern bool TrackMouseEvent(ref MouseTracking tracking);
     [DllImport("user32.dll")] private static extern nint MonitorFromWindow(nint hwnd,uint flags);
-    [DllImport("user32.dll",CharSet=CharSet.Auto)] private static extern bool GetMonitorInfo(nint monitor,ref MonitorBounds info);
+    [DllImport("user32.dll",CharSet=CharSet.Auto,SetLastError=true)] private static extern bool GetMonitorInfo(nint monitor,ref MonitorBounds info);
     [DllImport("user32.dll")] private static extern bool GetClientRect(nint hwnd,out CaptionBounds rect);
     [DllImport("user32.dll")] private static extern bool ClientToScreen(nint hwnd,ref ScreenPoint point);
     [DllImport("dwmapi.dll")] private static extern int DwmSetWindowAttribute(nint hwnd,int attribute,ref int value,int size);

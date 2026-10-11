@@ -208,6 +208,18 @@ public partial class AnimationEditor
             return (document.Document.Bytes.Slice((int)offset,(int)Math.Min(length,4096)),offset,length,"Original source bytes · " + owner + "\nPending edits are shown in Properties, not in this source-byte view.");
         return (ReadOnlyMemory<byte>.Empty,-1,0,"New record · " + owner + "\nThis record has no original source range. Copy its JSON to inspect current serialized fields.");
     }
-    internal void ShowInspectorReplacement(bool show) => ViewportArea.Visibility = show ? Visibility.Hidden : Visibility.Visible;
+    private bool inspectorReplacement;
+    internal bool PresentationUiHidden { get; private set; }
+    internal void SetPresentationUiHidden(bool hidden)
+    {
+        PresentationUiHidden = hidden;
+        ViewOptionsRow.Visibility = PlayerTransport.Visibility = hidden ? Visibility.Collapsed : Visibility.Visible;
+        ViewportArea.Visibility = !hidden && inspectorReplacement ? Visibility.Hidden : Visibility.Visible;
+    }
+    internal void ShowInspectorReplacement(bool show)
+    {
+        inspectorReplacement = show;
+        ViewportArea.Visibility = !PresentationUiHidden && show ? Visibility.Hidden : Visibility.Visible;
+    }
     internal FrameworkElement ViewportRegion => ViewportArea;
 }

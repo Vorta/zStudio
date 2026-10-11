@@ -228,7 +228,7 @@ internal static class SourceEditingMcpChecks
             var sourceMove = (Func<Recoil.Zbd.Core.MissionPickupSource, System.Numerics.Vector3, Task>?)typeof(MainWindow).GetMethod("SourcePickupMove", hidden)!.Invoke(main, [moved]);
             var ammoSource = moved.PickupEdits!.Records.First(r => r.Type == "HEMORTAR_AMMO" && r.Source.ResourceName == "PUPPIES.ZRD").Source;
             Assert.True(window.SetPickup(moved, ammoSource, "HEMORTAR_AMMO", new JsonObject(), sourceMove));
-            typeof(MainWindow).GetMethod("PresentProperties", BindingFlags.Static | BindingFlags.NonPublic)!.Invoke(null, [window, true]);
+            typeof(MainWindow).GetMethod("PresentProperties", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(main, [window, true]);
             // Wait for the window's layout to finish, so its fields exist.
             await main.Dispatcher.InvokeAsync(() => window.UpdateLayout(), System.Windows.Threading.DispatcherPriority.Loaded);
             var pickupFields = main.OpenPropertiesWindow!.PickupFields!;
@@ -266,7 +266,7 @@ internal static class SourceEditingMcpChecks
             window = (PropertiesWindow)typeof(MainWindow).GetMethod("GetPropertiesWindow", hidden)!.Invoke(main, [])!;
             sourceMove = (Func<Recoil.Zbd.Core.MissionPickupSource, System.Numerics.Vector3, Task>?)typeof(MainWindow).GetMethod("SourcePickupMove", hidden)!.Invoke(main, [moved]);
             Assert.True(window.SetPickup(moved, undoneSource, "HEMORTAR_AMMO", new JsonObject(), sourceMove));
-            typeof(MainWindow).GetMethod("PresentProperties", BindingFlags.Static | BindingFlags.NonPublic)!.Invoke(null, [window, true]);
+            typeof(MainWindow).GetMethod("PresentProperties", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(main, [window, true]);
             var redoButton = (System.Windows.Controls.Button)typeof(PropertiesWindow).GetField("redo", hidden)!.GetValue(window)!;
             Assert.Equal(System.Windows.Visibility.Visible, redoButton.Visibility); Assert.True(redoButton.IsEnabled);
             // A Discard approval left from a close that did not happen (the world is still open) is forgotten when the next

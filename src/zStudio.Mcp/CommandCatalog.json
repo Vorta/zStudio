@@ -1802,6 +1802,29 @@
     ]
   },
   {
+    "Name": "zstudio_presentation",
+    "Description": "Read or set independent temporary fullscreen and Hide UI modes for the current 3D preview. Preserves drafts, layout preferences, camera and playback. Enabling requires a 3D preview; disabling always works. Leaving 3D clears Hide UI and retains fullscreen. Neither mode is saved.",
+    "Mutates": true,
+    "Parameters": [
+      {
+        "Name": "fullscreen",
+        "Type": "boolean",
+        "Description": "Use the full current monitor without window borders.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "uiHidden",
+        "Type": "boolean",
+        "Description": "Temporarily hide workbench chrome and editor guides.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      }
+    ]
+  },
+  {
     "Name": "zstudio_workspace_view",
     "Description": "Read or set presentation preferences and read effective navigatorMode (hidden, tabbed, split). Supports theme, density, preset, pane visibility/dimensions and stable section indices, including detached Files. Does not commit drafts.",
     "Mutates": true,

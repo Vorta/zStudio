@@ -118,7 +118,7 @@ public sealed partial class SceneViewport
             Geometry = new LineGeometry3D { Positions = new Vector3Collection(points), Indices = indices },
             Color = System.Windows.Media.Colors.OrangeRed, Thickness = 2, IsHitTestVisible = false, DepthBias = -100,
         };
-        viewport.Items.Add(zoneOutline);
+        PresentationGuide(zoneOutline); viewport.Items.Add(zoneOutline);
     }
     private void ClearZonePainting()
     {

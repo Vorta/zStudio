@@ -78,7 +78,7 @@ public sealed partial class SceneViewport
             if (frozenPath[i].Position != frozenPath[i + 1].Position) moving = i;
             parachuteNextMoving[i] = moving;
         }
-        parachuteOverlay = new(); viewport.Items.Add(parachuteOverlay);
+        parachuteOverlay = new(); PresentationGuide(parachuteOverlay); viewport.Items.Add(parachuteOverlay);
         parachuteLine = new()
         {
             Geometry = new LineGeometry3D { Positions = new(parachutePath.Select(p => p.Position)),
@@ -166,6 +166,7 @@ public sealed partial class SceneViewport
             ?? throw new InvalidOperationException("Select a drop window before moving it.");
         CancelNavigation(); StopCameraMotion(); parachutePointerSegment = ParachuteSegment(window.Start);
         parachutePointerPhase = window.Start; parachutePointerDirection = 0;
+        parachutePointerOffset = default; parachutePresentationRebase = false;
         IsParachutePointerMoving = true; viewport.Focus();
     }
 
@@ -218,7 +219,7 @@ public sealed partial class SceneViewport
     }
     private bool HandleParachuteDown(Point point, MouseButtonEventArgs e)
     {
-        if (parachuteOverlay == null || !IsInsidePickupViewport(point)) return false;
+        if (PresentationUiHidden || parachuteOverlay == null || !IsInsidePickupViewport(point)) return false;
         if (e.ChangedButton is not (MouseButton.Left or MouseButton.Right)) return IsParachutePointerMoving;
         if (IsParachutePointerMoving)
         {
@@ -253,7 +254,16 @@ public sealed partial class SceneViewport
     /// <summary>Walk only adjoining segments from the selected phase. Equal-distance crossings keep the current visit.</summary>
     internal bool MoveParachutePointer(Point point)
     {
-        if (!IsParachutePointerMoving || !IsInsidePickupViewport(point)) return false;
+        if (!IsParachutePointerMoving) return false;
+        if (PresentationUiHidden) return true;
+        if (!IsInsidePickupViewport(point)) return false;
+        if (parachutePresentationRebase)
+        {
+            if (ProjectParachute(ParachutePosition(parachutePointerPhase), out var anchor))
+            { parachutePointerOffset = anchor - point; parachutePresentationRebase = false; }
+            return true;
+        }
+        point += parachutePointerOffset;
         (double Distance, double Fraction) Project(int index)
         {
             if (!ProjectParachute(parachutePath[index].Position, out var a) || !ProjectParachute(parachutePath[index + 1].Position, out var b)) return (double.PositiveInfinity, 0);

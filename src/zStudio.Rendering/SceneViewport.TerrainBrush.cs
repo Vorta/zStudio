@@ -103,7 +103,7 @@ public sealed partial class SceneViewport
         if (brushTrail == null)
         {
             brushTrail = new() { Color = System.Windows.Media.Colors.OrangeRed, Thickness = 3, IsHitTestVisible = false, IsDepthClipEnabled = false, DepthBias = -1000 };
-            viewport.Items.Add(brushTrail);
+            PresentationGuide(brushTrail); viewport.Items.Add(brushTrail);
         }
         brushTrail.Geometry = geometry;
     }

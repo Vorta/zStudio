@@ -125,12 +125,13 @@ public sealed partial class SceneViewport
         aiPathPointerUp = new((float)up.X, (float)up.Y, (float)up.Z);
         var nodes = AiNetworks.Networks.Single(n => n.Id == AiPathEditingNetwork).Nodes.Where(n => aiPathSelection.Contains(n.Id)).ToArray();
         var center = new Vector3((float)nodes.Average(n => (double)AiPosition(n).X), (float)nodes.Average(n => (double)AiPosition(n).Y), (float)nodes.Average(n => (double)AiPosition(n).Z));
-        aiPathPointerScale = AiScale(center, 1); aiPathPointerStart = Mouse.GetPosition(viewport); viewport.Focus();
+        aiPathPointerScale = AiScale(center, 1); aiPointerDelta = default; aiPresentationRebase = false;
+        aiPathPointerStart = Mouse.GetPosition(viewport); viewport.Focus();
     }
 
     private bool HandleAiPathDown(Point point, MouseButtonEventArgs e)
     {
-        if (AiPathEditingNetwork == null || !IsInsidePickupViewport(point)) return false;
+        if (PresentationUiHidden || AiPathEditingNetwork == null || !IsInsidePickupViewport(point)) return false;
         if (e.ChangedButton is not (MouseButton.Left or MouseButton.Right)) return IsAiPathPointerTransform;
         // Returning from a numeric field to the viewport restores modal keyboard commands,
         // even when the draft vetoes selection. This click does not accept a numeric draft.
@@ -154,7 +155,7 @@ public sealed partial class SceneViewport
             CancelNavigation(); aiPathBoxStart = point; aiPathBoxMode = mode;
             aiPathBox ??= new() { Stroke = Brushes.Gold, StrokeThickness = 1, Fill = new SolidColorBrush(Color.FromArgb(28, 255, 215, 0)),
                 HorizontalAlignment = HorizontalAlignment.Left, VerticalAlignment = VerticalAlignment.Top, IsHitTestVisible = false };
-            if (!inspectionHost.Children.Contains(aiPathBox)) inspectionHost.Children.Add(aiPathBox);
+            if (!presentationOverlays.Children.Contains(aiPathBox)) presentationOverlays.Children.Add(aiPathBox);
             aiPathBox.Width = aiPathBox.Height = 0; aiPathBox.Margin = new(point.X, point.Y, 0, 0); aiPathBox.Visibility = Visibility.Visible;
             viewport.CaptureMouse();
         }
@@ -163,9 +164,12 @@ public sealed partial class SceneViewport
 
     private bool HandleAiPathMove(Point point)
     {
+        if (PresentationUiHidden) return IsAiPathPointerTransform || aiPathBoxStart != null;
         if (aiPathPointerStart is { } origin)
         {
-            var delta = point - origin;
+            if (aiPresentationRebase)
+            { aiPathPointerStart = point - aiPointerDelta; aiPresentationRebase = false; return true; }
+            var delta = point - origin; aiPointerDelta = delta;
             var movement = (aiPathPointerRight * (float)delta.X - aiPathPointerUp * (float)delta.Y) * aiPathPointerScale;
             if (Finite(movement)) AiPathPointerMoved?.Invoke(movement, delta.X, delta.Y);
             return true;
