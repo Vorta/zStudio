@@ -45,7 +45,7 @@ public partial class MainWindow
         if (operation != null) throw new StudioCommandException("busy", "An export, validation or source operation is already running.");
         if (open) RequireRootPublication();
         long generation = ViewModel.WorkspaceGeneration;
-        long navigation = ViewModel.NavigationGeneration;
+        long navigation = open ? ViewModel.BeginNavigation(token) : ViewModel.NavigationGeneration;
         var report = await ExtractSourceProjectAsync(source, destination, token);
         if (SourceReconstructionFinishing is { } finishing) await finishing();
         // The project is complete in its folder: a cancel arriving from now on cannot take it back, so the operation
@@ -117,7 +117,7 @@ public partial class MainWindow
     /// <summary>Refuses an invalid source project or a check superseded by a newer workspace.</summary>
     private async Task RequireSourceProjectAsync(string path, CancellationToken token)
     {
-        long navigation = ViewModel.NavigationGeneration;
+        long navigation = ViewModel.BeginNavigation(token);
         // Folder checks can block on unavailable network shares; keep them off the dispatcher.
         string? refusal = await Task.Run(() =>
         {

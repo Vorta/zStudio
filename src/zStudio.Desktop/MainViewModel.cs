@@ -67,6 +67,14 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         if (disposed || generation != navigationGeneration)
             throw new StudioCommandException("context_changed", "A newer workspace navigation superseded this request.");
     }
+    /// <summary>Starts navigation before a caller's asynchronous preflight, using the same identity as root/file opens.</summary>
+    internal long BeginNavigation(CancellationToken token)
+    {
+        token.ThrowIfCancellationRequested();
+        long generation = ++navigationGeneration;
+        RequireCurrentNavigation(generation);
+        return generation;
+    }
     internal async Task EnsureRootForFileAsync(string path, bool forceRoot = false, CancellationToken cancellationToken = default, Action? beforePublish = null)
     {
         if (HasRoot && !forceRoot) return;

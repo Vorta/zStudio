@@ -38,7 +38,10 @@ internal static class SourceProjectMcpChecks
             Assert.Equal(Path.GetFullPath(Path.Combine(fixture.Root, "initialized")), Path.GetFullPath(reopened["RootPath"]!.GetValue<string>()));
             Assert.Equal(["MCP integration…", "Compare worlds…", "-", "Export all ZBD files…", "Export ZBD file", "Check source project", "Build profile", "-", "Validate source file on disk", "Reload current file", "Cancel export or validation"], ToolsMenu(main));
             // Project preflight also precedes navigation: a slow folder check must not replace a newer clean root.
+            // Cover both a pending VM root and another project preflight that has not reached the VM yet.
+            foreach (bool projectPreflight in new[] { false, true })
             using (ManualResetEventSlim releaseProjectCheck = new())
+            using (ManualResetEventSlim releaseNewProjectCheck = new())
             {
                 TaskCompletionSource checkingProject = new(TaskCreationOptions.RunContinuationsAsynchronously);
                 main.SourceProjectChecking = ct =>
@@ -49,14 +52,30 @@ internal static class SourceProjectMcpChecks
                 var openingProject = Job("open_root", new() { ["path"] = Path.Combine(fixture.Root, "initialized"), ["project"] = true }, "failed");
                 await checkingProject.Task.WaitAsync(token);
                 TaskCompletionSource publishNewerRoot = new(TaskCreationOptions.RunContinuationsAsynchronously);
-                var newerOpening = await BeginHeldRoot(fixture.Corpus, publishNewerRoot);
+                Task newerOpening;
+                string expectedRoot = projectPreflight ? Path.Combine(fixture.Root, "initialized") : fixture.Corpus;
+                if (projectPreflight)
+                {
+                    TaskCompletionSource checkingNewProject = new(TaskCreationOptions.RunContinuationsAsynchronously);
+                    main.SourceProjectChecking = ct => { checkingNewProject.TrySetResult(); Assert.True(releaseNewProjectCheck.Wait(TimeSpan.FromSeconds(20), ct)); };
+                    // The welcome Open handler uses this same preflight with no request token, then opens the root.
+                    newerOpening = OpenProjectFromGui();
+                    await checkingNewProject.Task.WaitAsync(token);
+                    async Task OpenProjectFromGui()
+                    {
+                        await (Task)typeof(MainWindow).GetMethod("RequireSourceProjectAsync", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(main, [expectedRoot, CancellationToken.None])!;
+                        await main.ViewModel.OpenRootAsync(expectedRoot, token);
+                    }
+                }
+                else newerOpening = await BeginHeldRoot(expectedRoot, publishNewerRoot);
                 releaseProjectCheck.Set();
                 try { Assert.Equal("context_changed", (await openingProject)["code"]!.GetValue<string>()); }
-                finally { publishNewerRoot.TrySetResult(); }
+                finally { publishNewerRoot.TrySetResult(); releaseNewProjectCheck.Set(); }
                 await newerOpening;
                 main.SourceProjectChecking = null;
-                Assert.Equal(Path.GetFullPath(fixture.Corpus), Path.GetFullPath(main.ViewModel.RootPath));
+                Assert.Equal(Path.GetFullPath(expectedRoot), Path.GetFullPath(main.ViewModel.RootPath));
             }
+            await Job("open_root", new() { ["path"] = fixture.Corpus });
             Assert.Equal(["MCP integration…", "Compare worlds…", "-", "Validate source file on disk", "Reload current file", "Cancel export or validation"], ToolsMenu(main));
 
             var failed = await Job("source_export", new(), "failed"); Assert.Equal("no_project", failed["code"]!.GetValue<string>());
