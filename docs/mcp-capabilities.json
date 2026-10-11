@@ -397,6 +397,11 @@
       "note": "Use the semantic tool with explicit identities and arguments."
     },
     {
+      "gui": "AnimationEditor.xaml:FaceOrientationChanged",
+      "tools": [ "zstudio_animation_options" ],
+      "note": "faceOrientation toggles winding-based blue fronts/red backs without editing data or playback."
+    },
+    {
       "gui": "AnimationEditor.xaml:GridChanged",
       "tools": [
         "zstudio_animation_options"

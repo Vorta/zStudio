@@ -68,6 +68,7 @@ public sealed partial class AnimationPreviewOptions : ObservableObject
     [ObservableProperty] private bool grid = true;
     [ObservableProperty] private bool collision = true;
     [ObservableProperty] private bool horizon = true;
+    [ObservableProperty] private bool faceOrientation;
     [ObservableProperty] private bool followCamera;
     [ObservableProperty] private bool effects = true;
 }

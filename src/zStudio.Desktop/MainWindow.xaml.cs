@@ -618,7 +618,7 @@ public partial class MainWindow : Window
     }
     private string? PreferredPack => (TexturePackCombo.SelectedItem as PackChoice)?.Path;
     private async void SceneSourceChanged(object sender, RoutedEventArgs e) { if (ready && !updating && SceneHost.Visibility == Visibility.Visible && ViewModel.SelectedDocument is { } doc && shownAsset != null) await ShowAsset(doc, shownAsset); }
-    private void ApplySceneOptions() { scene?.SetWireframe(Wireframe.IsChecked == true); scene?.SetTextured(TexturesEnabled.IsChecked == true); scene?.SetBounds(BoundsEnabled.IsChecked == true); ApplyWorldHighlight(); ApplyAiOptions(); }
+    private void ApplySceneOptions() { scene?.SetFaceOrientation(FaceOrientation.IsChecked == true); scene?.SetWireframe(Wireframe.IsChecked == true); scene?.SetTextured(TexturesEnabled.IsChecked == true); scene?.SetBounds(BoundsEnabled.IsChecked == true); ApplyWorldHighlight(); ApplyAiOptions(); }
     private void SceneOptionsChanged(object sender, RoutedEventArgs e) { if (ready) ApplySceneOptions(); }
     private void FrameSceneClick(object sender, RoutedEventArgs e) => RunCameraNavigation("frameAsset");
     private void IsolateClick(object sender, RoutedEventArgs e)

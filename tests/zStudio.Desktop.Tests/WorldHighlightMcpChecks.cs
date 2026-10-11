@@ -39,6 +39,17 @@ internal static class WorldHighlightMcpChecks
             await pipe.ConnectAsync(deadline.Token);
             await using var client = await McpClient.CreateAsync(new StreamClientTransport(pipe, pipe), cancellationToken: deadline.Token);
             Assert.Equal("none", (await State())["highlight"]!.GetValue<string>());
+            await Options(new() { ["wireframe"] = true, ["faceOrientation"] = true });
+            Assert.True((await State())["faceOrientation"]!.GetValue<bool>());
+            Assert.True(viewport.FaceOrientationEnabled);
+            Assert.True(((ToggleButton)main.FindName("Wireframe")).IsChecked);
+            ((ToggleButton)main.FindName("FaceOrientation")).IsChecked = false;
+            Assert.False((await State())["faceOrientation"]!.GetValue<bool>());
+            Assert.False(viewport.FaceOrientationEnabled);
+            Assert.True(((ToggleButton)main.FindName("Wireframe")).IsChecked);
+            await Options(new() { ["wireframe"] = false });
+            await Options(new() { ["faceOrientation"] = "blue" }, "invalid_argument");
+            Assert.Equal(pose, viewport.CaptureView()); Assert.Equal(0, doc.Revision);
             string[] modes = ["nonDefaultSoils", "canModify", "clipTo", "zones", "none"];
             for (int i = 0; i < modes.Length; i++)
             {

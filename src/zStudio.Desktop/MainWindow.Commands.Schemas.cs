@@ -6,7 +6,7 @@ public partial class MainWindow
 {
     private static StudioParameter AnimationChanges => new("changes", "object", "Animation options; only supplied values change.", true, Properties:
     [
-        .. new[] { "map", "grid", "collision", "horizon", "followCamera", "effects", "replay", "mute", "followLog", "autoRange", "fitTrace" }.Select(n => P(n,"boolean",n)),
+        .. new[] { "map", "faceOrientation", "grid", "collision", "horizon", "followCamera", "effects", "replay", "mute", "followLog", "autoRange", "fitTrace" }.Select(n => P(n,"boolean",n)),
         P("height","number","World Y offset from -999 to 999."), P("lod","integer","Authored LOD rank."), P("difficulty","string","Mission layout.",false,"Easy","Medium","Hard"),
         P("speed","number","0.25, 0.5, 1, 2 or 4."), P("volume","number","0–1."), P("phase","string","Playback phase.",false,"runtime","cleanup"),
         P("seed","integer","32-bit random seed."), P("condition","integer","0: stored/game-dependent, 1: true, 2: false."),
@@ -17,7 +17,7 @@ public partial class MainWindow
     ]);
     private static StudioParameter SceneChanges => new("changes", "object", "Static model/world options. Validate the entire batch before applying changes; publish highlights and AI options only after requested refreshes succeed.", true, Properties:
     [
-        .. new[] { "textures", "wireframe", "bounds", "horizon" }.Select(n => P(n,"boolean",n)),
+        .. new[] { "textures", "faceOrientation", "wireframe", "bounds", "horizon" }.Select(n => P(n,"boolean",n)),
         P("aiNodes", "boolean", "Whole world: show authored AI nodes and directed links."),
         P("aiThroughGeometry", "boolean", "Whole world: show AI through scene geometry; false enables depth occlusion."),
         P("aiNetwork", "string", "Whole world: all, or an AI network ID. A specific ID requires aiSnapshot."),

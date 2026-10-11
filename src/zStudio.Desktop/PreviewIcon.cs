@@ -27,6 +27,7 @@ public sealed class PreviewIcon : FrameworkElement
         ["Collision"] = "M6,3 A2,2 0 1 0 10,3 A2,2 0 1 0 6,3 M8,6 V10 M5.5,8 L8,10.5 10.5,8 M1,13 H15",
         ["Horizon"] = "M1,11 H15 M4,10 A4,4 0 0 1 12,10 M8,2 V3 M2,5 L3,6 M13,6 L14,5",
         ["Wireframe"] = "M2,5 L8,1 14,5 14,11 8,14 2,11 Z M2,5 L8,8 14,5 M8,8 V14 M8,1 L8,8 M2,5 L8,14 M14,5 L8,14",
+        ["FaceOrientation"] = "M1,12 L6,2 9,12 Z M10,3 L15,13 8,13 M4,8 L6,5 8,8 M6,5 V11",
         ["Textures"] = "M2,1 H14 V13 H2 Z M8,1 V13 M2,7 H14",
         ["Bounds"] = "M2,4 V2 H4 M6,2 H10 M12,2 H14 V4 M14,6 V9 M14,11 V13 H12 M10,13 H6 M4,13 H2 V11 M2,9 V6",
         ["Soils"] = "M1,5 L8,1 15,5 8,9 Z M1,8 L8,12 15,8 M1,11 L8,15 15,11",

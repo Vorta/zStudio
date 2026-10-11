@@ -47,6 +47,11 @@ internal static class AnimationMcpCancellationChecks
         try
         {
             await editor.SetPreviewOptionAsync("mute", JsonValue.Create(true)!);
+            await editor.SetPreviewOptionAsync("faceOrientation", JsonValue.Create(true)!);
+            Assert.True(editor.Options.FaceOrientation); Assert.True(editor.Viewport.FaceOrientationEnabled);
+            ((System.Windows.Controls.Primitives.ToggleButton)editor.FindName("ShowFaceOrientation")).IsChecked = false;
+            Assert.False(editor.Options.FaceOrientation); Assert.False(editor.Viewport.FaceOrientationEnabled);
+            Assert.Equal(0, doc.Revision); Assert.False(doc.IsDirty);
             using var request = new CancellationTokenSource();
             using (PreviewOperation.Begin(request.Token))
             {

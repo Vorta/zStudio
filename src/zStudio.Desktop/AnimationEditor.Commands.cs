@@ -71,6 +71,7 @@ public partial class AnimationEditor
             case "map": ShowLevel.IsChecked = value.GetValue<bool>(); break;
             case "horizon": ShowHorizon.IsChecked = value.GetValue<bool>(); break;
             case "grid": ShowGrid.IsChecked = value.GetValue<bool>(); break;
+            case "faceOrientation": ShowFaceOrientation.IsChecked = value.GetValue<bool>(); break;
             case "collision": GroundCollision.IsChecked = value.GetValue<bool>(); break;
             case "followCamera": FollowCamera.IsChecked = value.GetValue<bool>(); break;
             case "effects": Lighting.IsChecked = value.GetValue<bool>(); break;

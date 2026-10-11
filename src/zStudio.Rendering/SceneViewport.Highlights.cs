@@ -24,7 +24,7 @@ public sealed partial class SceneViewport
             int zone = mode == WorldHighlightMode.Zones ? surface.Zone : -1;
             if (!highlightMaterials.TryGetValue((surface.Normal, mode, zone), out var material))
             {
-                material = PreviewMaterials.Create(surface.Horizon);
+                material = PreviewMaterials.Create(surface.Horizon, orientation: faceOrientation);
                 float alpha = surface.Normal.DiffuseColor.Alpha;
                 var (r, g, b) = WorldSurfaceHighlights.ZoneColor(surface.Zone);
                 material.DiffuseColor = mode switch

@@ -24,6 +24,9 @@ public sealed partial class SceneViewport : UserControl, IDisposable
 {
     private readonly Viewport3DX viewport;
     private readonly List<MeshGeometryModel3D> meshes = [];
+    private readonly PreviewMaterials.OrientationState faceOrientation = new();
+    private bool wireframe;
+    public bool FaceOrientationEnabled => faceOrientation.Enabled;
     private readonly List<LineGeometryModel3D> bounds = [];
     private readonly Dictionary<MeshGeometryModel3D, ScenePlacement[]> placements = [];
     private readonly Dictionary<MeshGeometryModel3D, ScenePlacement[]> visiblePlacements = [];
@@ -280,7 +283,7 @@ public sealed partial class SceneViewport : UserControl, IDisposable
                 if (!materials.TryGetValue((part.MaterialIndex, group.Horizon, part.Colors.Length != 0), out var material))
                 {
                     JsonMaterial(scene, part.MaterialIndex, out Color4 color, out int textureIndex);
-                    material = PreviewMaterials.Create(group.Horizon, part.Colors.Length != 0); material.DiffuseColor = color; material.EnableUnLit = true;
+                    material = PreviewMaterials.Create(group.Horizon, part.Colors.Length != 0, faceOrientation); material.DiffuseColor = color; material.EnableUnLit = true;
                     material.VertexColorBlendingFactor = part.Colors.Length == 0 ? 0 : 1;
                     if (packet.Textures.TryGetValue(textureIndex, out var image))
                     {
@@ -310,6 +313,7 @@ public sealed partial class SceneViewport : UserControl, IDisposable
                         Material = material,
                         Instances = batch.Select(i => i.Transform).ToList(),
                         CullMode = CullMode.None,
+                        FillMode = wireframe && !faceOrientation.Enabled ? FillMode.Wireframe : FillMode.Solid,
                         IsThrowingShadow = false,
                         IsTransparent = transparent && !group.Horizon,
                         RenderOrder = group.Horizon ? 0 : 1,
@@ -450,7 +454,14 @@ public sealed partial class SceneViewport : UserControl, IDisposable
     {
         ZoomBy(wheelDelta / 120.0, position);
     }
-    public void SetWireframe(bool enabled) { foreach (var mesh in meshes) mesh.FillMode = enabled ? FillMode.Wireframe : FillMode.Solid; }
+    public void SetWireframe(bool enabled) { wireframe = enabled; foreach (var mesh in meshes) mesh.FillMode = enabled && !faceOrientation.Enabled ? FillMode.Wireframe : FillMode.Solid; }
+    /// <summary>Temporary winding visualization; authored materials and preview choices remain intact.</summary>
+    public void SetFaceOrientation(bool enabled)
+    {
+        faceOrientation.Enabled = enabled;
+        SetWireframe(wireframe);
+        viewport.InvalidateRender();
+    }
     public void SetTextured(bool enabled)
     {
         foreach (var (material, texture) in textureMaps)

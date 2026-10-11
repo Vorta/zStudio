@@ -9,5 +9,6 @@
     <PackageReference Include="HelixToolkit.Wpf.SharpDX" />
     <EmbeddedResource Include="GroundGrid.hlsl" />
     <EmbeddedResource Include="VertexTint.hlsl" />
+    <EmbeddedResource Include="FaceOrientation.hlsl" />
   </ItemGroup>
 </Project>

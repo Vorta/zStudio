@@ -15,6 +15,7 @@ internal static class Program
     [STAThread]
     private static int Main(string[] args)
     {
+        if (args.Length == 1 && args[0] == "--face-orientation") return FaceOrientationCheck.Run();
         if (args.Length == 1 && args[0] == "--inspection-fixture")
         {
             using var settings = new SettingsSnapshot();

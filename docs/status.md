@@ -1,3 +1,8 @@
+## Face orientation preview — issue #15 (2026-10-11)
+
+Model, Whole world and animation previews now offer winding-based blue fronts/red backs through the shared renderer. The temporary solid, unlit mode preserves authored data and existing textures, transparency, wireframe and world highlights; mirrored instances and new animation meshes inherit it. GUI controls and typed MCP options/readback share the same state, with regenerated discovery and capability mappings. Animation screen effects are hidden only while the mode is active.
+
+Release build has zero warnings/errors. The nonactivating rendered check passes static/animated winding, deliberately incorrect normals, mirrored transforms, depth in both submission orders, animation mesh replacement, world highlight changes and alpha restoration. Extended existing protocol/workspace checks cover GUI/MCP state and unchanged document revision. Full regression gates and independent adversarial review are in progress; no merge or release is claimed yet.
 ## Blender texture-assignment consent correction — local validation complete (2026-10-11)
 
 Newly assigned Blender images receive cross-mission texture-name conflict checks even when their PNG bytes already match a project file. The existing appearance decision runs before redundant writes are removed, so equal PNGs remain unwritten and need no overwrite consent. GUI and MCP share the correction, with unchanged commands, snapshots, history and verified-save policies.

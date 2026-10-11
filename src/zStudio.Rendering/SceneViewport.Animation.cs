@@ -286,7 +286,7 @@ public sealed partial class SceneViewport
     private AnimatedMesh CreateAnimationMesh(AnimationNodePose pose, MeshPart part)
     {
         bool horizon = IsHorizon(pose.SourceNode);
-        var material = PreviewMaterials.Create(horizon, part.Colors.Length != 0); material.EnableUnLit = true;
+        var material = PreviewMaterials.Create(horizon, part.Colors.Length != 0, faceOrientation); material.EnableUnLit = true;
         material.VertexColorBlendingFactor = part.Colors.Length == 0 ? 0 : 1;
         var mesh = new MeshGeometryModel3D { Geometry = Mesh(part), Material = material, CullMode = CullMode.None, IsThrowingShadow = false, RenderOrder = horizon ? 0 : 1, IsDepthClipEnabled = !horizon };
         try
