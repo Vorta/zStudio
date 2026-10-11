@@ -54,17 +54,18 @@ public sealed partial class SceneViewport
         PreviewMouseMove += (_, e) =>
         {
             if (InspectionContent is DependencyObject panel && IsInspectionInput(e.OriginalSource as DependencyObject, panel)) return;
+            if (HandleAiPathMove(e.GetPosition(viewport))) { e.Handled = true; return; }
             if (HandleZoneMove(e.GetPosition(viewport)) || HandleTerrainBrushMove(e.GetPosition(viewport))) { e.Handled = true; return; }
             if (HandlePickupPointerMove(e.GetPosition(viewport))) e.Handled = true;
             else HandleAiPointerMove(e.GetPosition(viewport));
         };
         PreviewMouseUp += (_, e) =>
         {
-            if (HandleZoneUp(e) || HandleTerrainBrushUp(e) || HandlePickupPointerUp(e.GetPosition(viewport), e)) e.Handled = true;
+            if (HandleAiPathUp(e.GetPosition(viewport), e) || HandleZoneUp(e) || HandleTerrainBrushUp(e) || HandlePickupPointerUp(e.GetPosition(viewport), e)) e.Handled = true;
         };
         MouseLeave += (_, _) => { CancelPickupDrag(); SetPickupHover(false); hoveredAiNode = null; PublishAiLabel(); };
-        viewport.LostMouseCapture += (_, _) => { if (IsPickupDragging) CancelPickupDrag(); CancelTerrainStroke(); CancelZoneGesture(); };
-        viewport.PreviewKeyDown += (_, e) => { if (e.Key == Key.Escape && (CancelPickupDrag() || CancelTerrainStroke() || CancelZoneGesture())) e.Handled = true; };
+        viewport.LostMouseCapture += (_, _) => { if (IsPickupDragging) CancelPickupDrag(); CancelTerrainStroke(); CancelZoneGesture(); CancelAiPathBox(); };
+        viewport.PreviewKeyDown += (_, e) => { if (e.Key == Key.Escape && (CancelAiPathBox() || CancelPickupDrag() || CancelTerrainStroke() || CancelZoneGesture())) e.Handled = true; };
     }
     internal bool HandleScenePointerDown(Point point, MouseButtonEventArgs e)
     {
@@ -73,8 +74,8 @@ public sealed partial class SceneViewport
         if (IsFlyActive || IsPickupDragging) return true;
         // The screen-space cube owns its clicks, even over scene geometry or
         // handles. Resolve it before the editing lock can consume a scene click.
-        if (e.ChangedButton == MouseButton.Left && NavigateCubeAt(point)) return true;
-        return HandleZoneDown(point, e) || HandleTerrainBrushDown(point, e) || HandlePickupPointerDown(point, e) || HandleInspectionClick(point, e) || HandleAiPointerDown(point, e);
+        if (!IsAiPathPointerTransform && aiPathBoxStart == null && e.ChangedButton == MouseButton.Left && NavigateCubeAt(point)) return true;
+        return HandleAiPathDown(point, e) || HandleZoneDown(point, e) || HandleTerrainBrushDown(point, e) || HandlePickupPointerDown(point, e) || HandleInspectionClick(point, e) || HandleAiPointerDown(point, e);
     }
     private void ConfigurePickups()
     {
@@ -141,7 +142,7 @@ public sealed partial class SceneViewport
     public void SetPickupLocked(bool locked)
     {
         worldInspection = true;
-        if (locked) { CancelPickupDrag(); EndTransformDraft(); }
+        if (locked) { SetAiPathEditing(null); CancelPickupDrag(); EndTransformDraft(); }
         pickupLocked = locked;
         if (locked)
         {

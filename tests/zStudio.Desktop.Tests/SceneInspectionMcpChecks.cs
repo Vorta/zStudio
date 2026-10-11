@@ -31,7 +31,8 @@ internal static class SceneInspectionMcpChecks
         using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(30));
         string root = Path.Combine(Path.GetTempPath(), "zstudio-inspection-test-" + Guid.NewGuid().ToString("N")); Directory.CreateDirectory(root);
         string archivePath = Path.Combine(root, "resources.zbd");
-        var value = A(S("node_00"), A(I(12), A(F(1), F(2), F(3)), A(I(-7), I(-1), I(0))), S("attack_strategy"), A(S("Head-on")));
+        var value = A(S("node_00"), A(I(12), A(F(1), F(2), F(3)), A(I(-7), I(-1), I(0))),
+            S("node_01"), A(I(13), A(F(5), F(2), F(7)), A(I(0), I(-1), I(-1))), S("attack_strategy"), A(S("Head-on")));
         var pickupRow = A(S("HEMORTAR_AMMO"), I(1), A(F(1), F(2), F(3)), A(F(.125f), F(.3f), F(-.2f)), F(12.5f));
         var members = new[] { ("net_01.zrd", ZrdWriter.Write(value)), ("puppies.zrd", ZrdWriter.Write(A(A(pickupRow)))) };
         using (var data = new MemoryStream())
@@ -350,6 +351,51 @@ internal static class SceneInspectionMcpChecks
             Assert.Equal(432, resetPanel["preferredHeight"]!.GetValue<double>());
             Assert.False(resetPanel["expanded"]!.GetValue<bool>());
 
+            // Must-have multi-node contract through the real MCP/visible workspace: guards, pinned mixed values,
+            // a non-mutating invalid/cancelled draft and one accepted history step for the entire selection.
+            string network = viewport.AiNetworks.Networks[0].Id;
+            string[] nodeIds = viewport.AiNetworks.Networks[0].Nodes.Select(n => n.Id).ToArray();
+            await PathAction("enter", new() { ["network"] = network }, "locked");
+            await Lock(false);
+            await PathAction("enter", new() { ["network"] = network });
+            await PathAction("select", new() { ["nodes"] = new JsonArray(nodeIds.Select(s => (JsonNode?)JsonValue.Create(s)).ToArray()) });
+            await PathAction("properties");
+            var pathProperties = main.OpenPropertiesWindow!;
+            Assert.Equal("Mixed", pathProperties.CurrentJson!["X"]!.GetValue<string>());
+            Assert.Equal(2f, pathProperties.CurrentJson!["Y"]!.GetValue<float>());
+            Assert.Equal("Mixed", pathProperties.CurrentJson!["Raw node value"]!.GetValue<string>());
+            await PathAction("select", new() { ["nodes"] = new JsonArray(nodeIds[0]), ["selection"] = "toggle" });
+            Assert.Single(viewport.SelectedAiPathNodes); Assert.Equal(2, pathProperties.CurrentJson!["Selected nodes"]!.GetValue<int>());
+            await PathAction("select", new() { ["nodes"] = new JsonArray(nodeIds[0]), ["selection"] = "add" });
+            pathProperties.Close();
+            long pathRevision = doc.Revision;
+            var pathBegun = await PathAction("begin", new() { ["mode"] = "move" });
+            string pathToken = pathBegun["path"]!["draft"]!["token"]!.GetValue<string>();
+            await Lock(true, "pending_drafts");
+            await PathAction("set", new() { ["token"] = "expired", ["input"] = new JsonArray("1", "0", "0") }, "stale_draft");
+            var invalidPath = await PathAction("set", new() { ["token"] = pathToken, ["input"] = new JsonArray("-", "0", "0") });
+            Assert.NotNull(invalidPath["path"]!["draft"]!["error"]);
+            await PathAction("confirm", new() { ["token"] = pathToken }, "invalid_argument");
+            await PathAction("cancel", new() { ["token"] = pathToken });
+            Assert.Equal(pathRevision, doc.Revision); Assert.False(doc.IsDirty);
+            pathBegun = await PathAction("begin", new() { ["mode"] = "move" });
+            pathToken = pathBegun["path"]!["draft"]!["token"]!.GetValue<string>();
+            await PathAction("set", new() { ["token"] = pathToken, ["axis"] = "x", ["input"] = new JsonArray("10", "99", "99") });
+            Assert.False(doc.IsDirty); Assert.Equal(new Vector3(1, 2, 3), edits.Position(edits.OtherCoordinates[0].Source));
+            await PathAction("confirm", new() { ["token"] = pathToken });
+            Assert.Equal(pathRevision + 1, doc.Revision); Assert.True(doc.IsDirty);
+            Assert.Equal([new Vector3(11, 2, 3), new Vector3(15, 2, 7)], edits.OtherCoordinates.Select(c => edits.Position(c.Source)));
+            await Call("undo_redo", new() { ["document"] = doc.SessionId.ToString(), ["revision"] = doc.Revision, ["action"] = "undo" });
+            Assert.False(doc.IsDirty); Assert.Equal(original, edits.EncodeArchive(archivePath));
+            Assert.Equal(original, File.ReadAllBytes(archivePath));
+
+            Task<JsonNode> PathAction(string action, JsonObject? args = null, string? error = null)
+            {
+                args ??= new(); args["preview"] = preview; args["snapshot"] = viewport.AiNetworks.Id;
+                args["document"] = doc.SessionId.ToString(); args["revision"] = doc.Revision; args["action"] = action;
+                return Call("ai_path", args, error);
+            }
+
             Task<JsonNode> Card(string action, JsonObject args, string? error = null) { args["preview"] = preview; args["action"] = action; return Call("scene_card", args, error); }
             Task<JsonNode> Lock(bool locked, string? error = null) => Call("pickup_lock", new() { ["document"] = doc.SessionId.ToString(), ["revision"] = doc.Revision, ["locked"] = locked }, error);
             Task<JsonNode> Edit(string action, JsonObject? args = null, string? error = null)
@@ -362,7 +408,7 @@ internal static class SceneInspectionMcpChecks
                 return json;
             }
         }
-        finally { (viewport.InspectionContent as SceneInspectionCard)?.CancelDraft(); while (edits.CanUndo) edits.Undo(); Set("scene", null); main.Close(); Directory.Delete(root, true); }
+        finally { Invoke("CancelAiPathDraft"); main.OpenPropertiesWindow?.Close(); (viewport.InspectionContent as SceneInspectionCard)?.CancelDraft(); while (edits.CanUndo) edits.Undo(); Set("scene", null); main.Close(); Directory.Delete(root, true); }
         object? Get(string name) => typeof(MainWindow).GetField(name, BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(main);
         void Set(string name, object? value) => typeof(MainWindow).GetField(name, BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(main, value);
         void Invoke(string name, params object[] args) => typeof(MainWindow).GetMethod(name, BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(main, args);

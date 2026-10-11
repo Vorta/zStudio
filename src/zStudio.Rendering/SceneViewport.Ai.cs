@@ -44,6 +44,7 @@ public sealed partial class SceneViewport
     public void SetAiNetworks(AiNetworkSnapshot snapshot)
     {
         if (AiNetworks.Id == snapshot.Id) return;
+        SetAiPathEditing(null);
         AiNetworks = snapshot; AiNetworkFilter = null; SelectedAiNode = null; hoveredAiNode = null; ValveFilter = null;
         RebuildAiOverlay();
     }
@@ -51,6 +52,7 @@ public sealed partial class SceneViewport
     {
         if (network != null && !AiNetworks.Networks.Any(n => n.Id == network)) throw new ArgumentException("AI network is unavailable.", nameof(network));
         if (AiVisible == visible && AiThroughGeometry == throughGeometry && AiNetworkFilter == network) return;
+        if (AiPathEditingNetwork != null && (!visible || network != null && network != AiPathEditingNetwork)) SetAiPathEditing(null);
         AiVisible = visible; AiThroughGeometry = throughGeometry; AiNetworkFilter = network;
         if (!visible || SelectedAiNode is { } id && AiNetworks.Find(id) is { } found && network != null && found.Network.Id != network)
             SelectAiNode(null);
@@ -58,7 +60,7 @@ public sealed partial class SceneViewport
     }
     public bool SelectAiNode(string? id)
     {
-        if (id != null && (!InspectionSelectionEnabled || IsPickupDragging || IsFlyActive)) return false;
+        if (id != null && (!InspectionSelectionEnabled || IsPickupDragging || IsFlyActive || AiPathEditingNetwork != null)) return false;
         if (id != null && (!AiVisible || AiNetworks.Find(id) is not { } found || AiNetworkFilter != null && found.Network.Id != AiNetworkFilter)) return false;
         if (id != null && CanChangeInspection?.Invoke() == false) return false;
         SelectedAiNode = id;
@@ -87,21 +89,22 @@ public sealed partial class SceneViewport
             var markers = AiMesh(AiOctahedron(), color);
             aiMarkers.Add((markers, nodes, 4));
             var byId = nodes.ToDictionary(n => n.Id);
-            List<(Vector3 Start, Vector3 End)> edges = [];
+            List<(AiNode Start, AiNode End)> edges = [];
             foreach (var node in nodes)
             foreach (string target in node.PreviewLinks.Where(l => l.Target != null).Select(l => l.Target!).Distinct())
             {
                 if (!byId.TryGetValue(target, out var end)) { AiRenderTruncated = true; continue; }
                 if (RenderedAiLinks == MaximumRenderedAiLinks) { AiRenderTruncated = true; break; }
-                edges.Add((node.Position, end.Position)); RenderedAiLinks++;
+                edges.Add((node, end)); RenderedAiLinks++;
             }
             var lines = AiMesh(BuildLinks(), color); aiLinks.Add(lines, BuildLinks);
             MeshGeometry3D BuildLinks()
             {
                 List<Vector3> positions = []; List<int> indices = [];
                 var pose = CaptureView(); Vector3 forward = Vector3.Normalize(new((float)pose.LookDirection.X, (float)pose.LookDirection.Y, (float)pose.LookDirection.Z));
-                foreach (var (start, end) in edges)
+                foreach (var (startNode, endNode) in edges)
                 {
+                    var start = AiPosition(startNode); var end = AiPosition(endNode);
                     if ((end - start).LengthSquared() < 1e-8f)
                     {
                         const int steps = 16; float radius = 3;
@@ -167,7 +170,7 @@ public sealed partial class SceneViewport
         var pose = CaptureView();
         if (aiMarkerPose == pose && aiMarkerWidth == viewport.ActualWidth && aiMarkerHeight == viewport.ActualHeight) return;
         aiMarkerPose = pose; aiMarkerWidth = viewport.ActualWidth; aiMarkerHeight = viewport.ActualHeight;
-        foreach (var (mesh, nodes, pixels) in aiMarkers) mesh.Instances = nodes.Select(n => Matrix4x4.CreateScale(AiScale(n.Position, pixels)) * Matrix4x4.CreateTranslation(n.Position)).ToArray();
+        foreach (var (mesh, nodes, pixels) in aiMarkers) mesh.Instances = nodes.Select(n => Matrix4x4.CreateScale(AiScale(AiPosition(n), pixels)) * Matrix4x4.CreateTranslation(AiPosition(n))).ToArray();
         foreach (var (mesh, build) in aiLinks) mesh.Geometry = build();
         RefreshAiSelection();
     }
@@ -175,9 +178,18 @@ public sealed partial class SceneViewport
     {
         if (aiSelectionMarker != null)
         {
-            var selected = SelectedAiNode == null ? null : AiNetworks.Find(SelectedAiNode);
-            aiSelectionMarker.Visibility = !InspectionSelectionEnabled || selected == null ? Visibility.Collapsed : Visibility.Visible;
-            if (selected is { } target) aiSelectionMarker.Instances = [Matrix4x4.CreateScale(AiScale(target.Node.Position, 5.5)) * Matrix4x4.CreateTranslation(target.Node.Position)];
+            if (AiPathEditingNetwork is { } network)
+            {
+                aiSelectionMarker.Visibility = InspectionSelectionEnabled && aiPathSelection.Count != 0 ? Visibility.Visible : Visibility.Collapsed;
+                aiSelectionMarker.Instances = AiNetworks.Networks.Single(n => n.Id == network).Nodes.Where(n => aiPathSelection.Contains(n.Id))
+                    .Select(n => Matrix4x4.CreateScale(AiScale(AiPosition(n), 5.5)) * Matrix4x4.CreateTranslation(AiPosition(n))).ToArray();
+            }
+            else
+            {
+                var selected = SelectedAiNode == null ? null : AiNetworks.Find(SelectedAiNode);
+                aiSelectionMarker.Visibility = !InspectionSelectionEnabled || selected == null ? Visibility.Collapsed : Visibility.Visible;
+                if (selected is { } target) aiSelectionMarker.Instances = [Matrix4x4.CreateScale(AiScale(target.Node.Position, 5.5)) * Matrix4x4.CreateTranslation(target.Node.Position)];
+            }
         }
         PublishAiLabel(); viewport.InvalidateRender();
     }
@@ -191,25 +203,37 @@ public sealed partial class SceneViewport
     internal string? PickAiNode(Point point)
     {
         if (!AiVisible || IsFlyActive || IsPickupDragging || !IsInsidePickupViewport(point) || viewport.RenderContext == null) return null;
-        var pose = CaptureView(); double nearest = 81, chosenDepth = double.PositiveInfinity; string? chosen = null;
+        double nearest = 81, chosenDepth = double.PositiveInfinity; string? chosen = null;
         // Only drawn markers are pickable; the complete graph stays selectable through inspection commands.
         foreach (var node in aiRendered)
         {
-            Point3D position = new(node.Position.X, node.Position.Y, node.Position.Z);
-            var forward = pose.LookDirection; forward.Normalize(); double depth = Vector3D.DotProduct(position - pose.Position, forward);
-            if (depth <= 0) continue;
-            var screen = viewport.Project(position); double distance = (point - screen).LengthSquared;
-            if (!double.IsFinite(distance) || distance > nearest || distance == nearest && depth >= chosenDepth) continue;
-            if (!AiThroughGeometry)
-            {
-                if (viewport.Camera is ProjectionCamera camera && (depth < camera.NearPlaneDistance || depth > camera.FarPlaneDistance)) continue;
-                // Check the marker's own pixel, not a nearby click ray that may hit another surface.
-                var hit = viewport.FindHits(screen)?.FirstOrDefault(h => h.ModelHit is MeshGeometryModel3D mesh && !mesh.IsTransparent && placements.ContainsKey(mesh) && !placements[mesh].Any(p => IsHorizon(p.NodeIndex)));
-                if (hit != null && Vector3D.DotProduct(new Point3D(hit.PointHit.X, hit.PointHit.Y, hit.PointHit.Z) - pose.Position, forward) < depth - AiScale(node.Position, 4)) continue;
-            }
+            if (AiPathEditingNetwork != null && !aiPathNetworkNodes.Contains(node.Id) ||
+                !TryProjectAiNode(node, out var screen, out var depth)) continue;
+            double distance = (point - screen).LengthSquared;
+            if (!double.IsFinite(distance) || distance > nearest || distance == nearest && depth >= chosenDepth || IsAiNodeOccluded(node, screen, depth)) continue;
             nearest = distance; chosenDepth = depth; chosen = node.Id;
         }
         return chosen;
+    }
+    private bool TryProjectAiNode(AiNode node, out Point screen, out double depth)
+    {
+        screen = default; depth = 0;
+        if (!AiVisible || viewport.RenderContext == null) return false;
+        var position = AiPosition(node); var pose = CaptureView(); var forward = pose.LookDirection; forward.Normalize();
+        Point3D point = new(position.X, position.Y, position.Z);
+        depth = Vector3D.DotProduct(point - pose.Position, forward);
+        if (!double.IsFinite(depth) || depth <= 0) return false;
+        screen = viewport.Project(point);
+        if (!double.IsFinite(screen.X) || !double.IsFinite(screen.Y) || !IsInsidePickupViewport(screen)) return false;
+        return AiThroughGeometry || viewport.Camera is not ProjectionCamera camera || depth >= camera.NearPlaneDistance && depth <= camera.FarPlaneDistance;
+    }
+    private bool IsAiNodeOccluded(AiNode node, Point screen, double depth)
+    {
+        if (AiThroughGeometry) return false;
+        var pose = CaptureView(); var forward = pose.LookDirection; forward.Normalize();
+        // Only eligible click/box candidates pay for a surface ray; distant markers do not.
+        var hit = viewport.FindHits(screen)?.FirstOrDefault(h => h.ModelHit is MeshGeometryModel3D mesh && !mesh.IsTransparent && placements.ContainsKey(mesh) && !placements[mesh].Any(p => IsHorizon(p.NodeIndex)));
+        return hit != null && Vector3D.DotProduct(new Point3D(hit.PointHit.X, hit.PointHit.Y, hit.PointHit.Z) - pose.Position, forward) < depth - AiScale(AiPosition(node), 4);
     }
     private bool HandleAiPointerDown(Point point, MouseButtonEventArgs e)
     {
@@ -236,6 +260,6 @@ public sealed partial class SceneViewport
     }
     private void ClearAi()
     {
-        ClearAiDrawables(); AiNetworks = AiNetworkSnapshot.Empty; SelectedAiNode = hoveredAiNode = null; AiNetworkFilter = null; PublishAiLabel();
+        SetAiPathEditing(null); ClearAiDrawables(); AiNetworks = AiNetworkSnapshot.Empty; SelectedAiNode = hoveredAiNode = null; AiNetworkFilter = null; PublishAiLabel();
     }
 }

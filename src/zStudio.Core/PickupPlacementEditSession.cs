@@ -224,7 +224,10 @@ public sealed partial class PickupPlacementEditSession
     {
         if (ReadOnlyReason is { } reason) throw new InvalidOperationException(reason);
         if (saving) throw new InvalidOperationException("Wait for the current save to finish.");
-        var after = PreviewTransform(source, transform);
+        return AcceptTransforms(PreviewTransform(source, transform));
+    }
+    private bool AcceptTransforms(IReadOnlyDictionary<MissionPickupSource, PlacementTransform> after)
+    {
         var before = after.Keys.ToDictionary(s => s, Transform, sourceComparer);
         if (after.All(p => p.Value == before[p.Key])) return false;
         string[] affected = after.Keys.Select(s => s.ArchivePath).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();

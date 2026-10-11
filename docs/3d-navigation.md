@@ -41,7 +41,7 @@ Manual navigation leaves animation Follow camera immediately, starting from the 
 
 Left-click selects scene geometry and retains pickup-axis editing. Middle-button gestures do not select nodes or move pickups. Right-drag camera bindings are removed. Camera gestures are blocked during pickup drags. Ordinary camera drag state is released on capture/focus loss, deactivation, preview replacement and shutdown.
 
-Fly remains an explicitly activated mode for models and Whole world. Entering it switches to perspective at the current pose, with the existing WASD, Space/C, mouse-look, wheel-speed and Escape controls. Texture navigation is separate. Blender editing shortcuts, camera roll, local-view mode and region zoom are not implemented.
+Fly remains an explicitly activated mode for models and Whole world. Entering it switches to perspective at the current pose, with the existing WASD, Space/C, mouse-look, wheel-speed and Escape controls. Texture navigation is separate. AI paths support [multi-node Edit mode and G/R/S transforms](ai-networks.md#edit-a-whole-path); exit that mode before Fly. Camera roll, local-view mode and region zoom are not implemented.
 
 ## MCP equivalents
 

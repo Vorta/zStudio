@@ -17,6 +17,8 @@ public sealed partial class SceneViewport
     public void SetFly(bool enabled)
     {
         if (IsFlyActive == enabled) return;
+        if (enabled && AiPathEditingNetwork != null)
+            throw new InvalidOperationException("Exit AI path Edit mode before starting Fly camera.");
         CancelPickupDrag(); SetPickupHover(false);
         StopNavigationMotion();
         rotationVelocity = default; rotationPoint = null; flyMovement = default; flyFrameTime = null;

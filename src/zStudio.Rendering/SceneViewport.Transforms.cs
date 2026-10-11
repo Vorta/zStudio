@@ -68,6 +68,7 @@ public sealed partial class SceneViewport
         if (changed.Id != AiNetworks.Id || !changed.Networks.SelectMany(n => n.Nodes).Select(n => n.Position).SequenceEqual(AiNetworks.Networks.SelectMany(n => n.Nodes).Select(n => n.Position)))
         {
             var selected = SelectedInspection?.AiNode;
+            if (changed.Id != AiNetworks.Id) SetAiPathEditing(null);
             AiNetworks = changed; RebuildAiOverlay();
             if (selected != null) SelectedInspection = InspectAi(selected);
         }

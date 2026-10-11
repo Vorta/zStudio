@@ -128,6 +128,39 @@ public sealed class SourcePlacementTests
     }
 
     [Fact]
+    public async Task AiPathBatchChangesOnlyCoordinateTokensAndSurvivesSourceSaveRebuild()
+    {
+        // Must-have source parity: the same batch preview writes source tokens, one undo and a verified rebuild.
+        using SourceWorldFixture fixture = new();
+        fixture.Write("data/m1/zrdr/puppies.zrd", Default); fixture.Write("data/m1/zrdr/puppies_easy.zrd", Easy);
+        const string relative = "data/m1/zrdr/net_01.zrd";
+        const string text = "( version ( 105 ) # Keep this network comment.\n node_00 ( 12 ( 1.0 2.0 3.0 ) ( 1 -1 -7 ) )\n node_01 ( 23 ( 3.0 2.0 3.0 ) ( 0 -1 -1 ) ) )";
+        fixture.Write(relative, text);
+        var (workspace, archive, session) = await BuildAsync(fixture);
+        session.AddCoordinates(archive.Assets.Select(a => (archive, a)), Token);
+        var selected = session.OtherCoordinates.ToDictionary(c => c.Source, c => c.OriginalPosition);
+        Assert.Equal(2, selected.Count);
+        var positions = AiPathTransforms.Scale(selected, new(2, 1, 1));
+        var writes = session.ScalarWrites(session.PreviewAiPositions(positions));
+        var changes = SourceResourceEdits.SourceChanges(session.ArchiveBytes(archive.Path),
+            writes.Select(w => new SourceResourceEdits.ScalarEdit(w.Offset, SourceResourceEdits.Float(w.Value))),
+            (r, limits) => workspace.Read(r, Token, limits), Token);
+        var change = Assert.Single(changes);
+        Assert.Equal(relative, change.Relative);
+        string expected = text.Replace("( 1.0 2.0 3.0 )", "( 0.0 2.0 3.0 )").Replace("( 3.0 2.0 3.0 )", "( 4.0 2.0 3.0 )");
+        Assert.Equal(expected, Encoding.Latin1.GetString(change.Content));
+        workspace.Apply("Scale AI path", changes.Select(c => (c.Relative, (byte[]?)c.Content)), Token);
+        workspace.Undo(); Assert.Equal(text, Encoding.Latin1.GetString(workspace.Read(relative, Token)!));
+        workspace.Redo(); workspace.Save(Token);
+        var (_, rebuilt, _) = await BuildAsync(fixture);
+        var network = Assert.Single(MissionAiNetworks.Read(rebuilt.Assets.Where(a => MissionAiNetworks.IsCandidate(a.Name)).Select(a => (rebuilt, a)), Token).Networks);
+        Assert.Equal([new Vector3(0, 2, 3), new Vector3(4, 2, 3)], network.Nodes.Select(n => n.Position));
+        Assert.Equal([12, 23], network.Nodes.Select(n => n.RawValue));
+        Assert.Equal([1, -1, -7], network.Nodes[0].Links.Select(l => l.TargetIndex));
+        Assert.Equal(expected, File.ReadAllText(fixture.Path(relative)));
+    }
+
+    [Fact]
     public async Task ASourceChangedSinceTheBuildIsRefused()
     {
         using SourceWorldFixture fixture = new();

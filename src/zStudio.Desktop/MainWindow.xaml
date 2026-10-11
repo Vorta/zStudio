@@ -174,6 +174,7 @@
   <ToggleButton x:Name="AiValveOverlay" Checked="AiValveOverlayChanged" Unchecked="AiValveOverlayChanged" Content="◇" ToolTip="Show valve outlines and dashed assignment edges; attack-strategy colors remain visible" AutomationProperties.Name="AI valve overlay"/>
   <ToggleButton x:Name="AiEnabled" Style="{StaticResource PreviewIconToggle}" IsChecked="False" Checked="AiOptionsChanged" Unchecked="AiOptionsChanged" AutomationProperties.Name="AI nodes" Tag="Show authored AI node markers and directed connections."><local:PreviewIcon Kind="AiNodes" IsChecked="{Binding IsChecked,RelativeSource={RelativeSource AncestorType=ToggleButton}}"/></ToggleButton>
   <ComboBox x:Name="AiNetworkCombo" Width="225" VerticalAlignment="Center" Visibility="Collapsed" SelectionChanged="AiOptionsChanged" AutomationProperties.Name="AI network" ToolTip="Filter authored AI networks. Duplicate names retain their source record identities."/>
+  <Button x:Name="AiPathEdit" Content="Edit path (Tab)" Click="AiPathActionClick" Tag="edit" ToolTip="Select an AI path, unlock editing, then enter multi-node Edit mode"/>
   <ToggleButton x:Name="AiThroughGeometry" Style="{StaticResource PreviewIconToggle}" IsChecked="True" Visibility="Collapsed" Checked="AiOptionsChanged" Unchecked="AiOptionsChanged" AutomationProperties.Name="Show AI through geometry" Tag="Disable to let scene geometry occlude AI nodes and connections."><local:PreviewIcon Kind="AiThrough" IsChecked="{Binding IsChecked,RelativeSource={RelativeSource AncestorType=ToggleButton}}"/></ToggleButton>
  </StackPanel>
  <ToggleButton x:Name="BackdropEnabled" Style="{StaticResource PreviewIconToggle}" IsChecked="False" Checked="SceneSourceChanged" Unchecked="SceneSourceChanged" AutomationProperties.Name="Horizon" Tag="Show the mission horizon."><local:PreviewIcon Kind="Horizon" IsChecked="{Binding IsChecked,RelativeSource={RelativeSource AncestorType=ToggleButton}}"/></ToggleButton>
@@ -188,6 +189,18 @@
          </Grid>
         </ScrollViewer>
         <ContentControl x:Name="SceneHost" Visibility="Collapsed" />
+        <Border x:Name="AiPathPanel" Panel.ZIndex="12" Visibility="Collapsed" HorizontalAlignment="Left" VerticalAlignment="Bottom" Margin="10" Padding="10" Width="370" CornerRadius="5" Background="{DynamicResource CardBackgroundFillColorDefaultBrush}" BorderBrush="{DynamicResource CardStrokeColorDefaultBrush}" BorderThickness="1">
+         <StackPanel>
+          <TextBlock x:Name="AiPathHeading" FontWeight="SemiBold"/>
+          <WrapPanel Margin="0,5"><Button Content="Move (G)" Tag="move" Click="AiPathActionClick"/><Button Content="Rotate (R)" Tag="rotate" Click="AiPathActionClick"/><Button Content="Scale (S)" Tag="scale" Click="AiPathActionClick"/><Button Content="Properties…" Tag="properties" Click="AiPathActionClick"/></WrapPanel>
+          <StackPanel x:Name="AiPathFields" Visibility="Collapsed">
+           <StackPanel Orientation="Horizontal"><TextBlock Text="World axis" VerticalAlignment="Center" Margin="0,0,8,0"/><ComboBox x:Name="AiPathAxis" Width="120" SelectedIndex="0" SelectionChanged="AiPathInputChanged" AutomationProperties.Name="AI path world axis"><ComboBoxItem Content="Unconstrained"/><ComboBoxItem Content="X"/><ComboBoxItem Content="Y"/><ComboBoxItem Content="Z"/></ComboBox></StackPanel>
+           <StackPanel Orientation="Horizontal" Margin="0,5"><Label Content="X"/><TextBox x:Name="AiPathX" Width="85" MaxLength="64" TextChanged="AiPathInputChanged" AutomationProperties.Name="AI path X or rotation degrees"/><Label Content="Y"/><TextBox x:Name="AiPathY" Width="85" MaxLength="64" TextChanged="AiPathInputChanged" AutomationProperties.Name="AI path Y"/><Label Content="Z"/><TextBox x:Name="AiPathZ" Width="85" MaxLength="64" TextChanged="AiPathInputChanged" AutomationProperties.Name="AI path Z"/></StackPanel>
+           <StackPanel Orientation="Horizontal"><Button Content="Confirm" Tag="confirm" Click="AiPathActionClick"/><Button Content="Cancel" Tag="cancel" Click="AiPathActionClick"/></StackPanel>
+          </StackPanel>
+          <TextBlock x:Name="AiPathValidation" TextWrapping="Wrap" MaxHeight="70" Margin="0,4,0,0"/>
+         </StackPanel>
+        </Border>
         <Border x:Name="FlyHint" Panel.ZIndex="10" Visibility="Collapsed" IsHitTestVisible="False" Background="#D920252C" CornerRadius="5" Padding="10,6" Margin="10" HorizontalAlignment="Left" VerticalAlignment="Top"><TextBlock x:Name="FlyHintText" Foreground="White" FontSize="12" TextWrapping="Wrap"/></Border>
         <Border x:Name="AiLabel" Panel.ZIndex="9" Visibility="Collapsed" IsHitTestVisible="False" Background="#E020252C" CornerRadius="5" Padding="10,6" Margin="10" HorizontalAlignment="Right" VerticalAlignment="Top" MaxWidth="460"><TextBlock x:Name="AiLabelText" Foreground="White" FontSize="12" TextTrimming="CharacterEllipsis"/></Border>
         <ContentControl x:Name="AnimationHost" Visibility="Collapsed" />
