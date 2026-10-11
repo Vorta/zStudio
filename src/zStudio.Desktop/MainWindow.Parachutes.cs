@@ -155,7 +155,7 @@ public partial class MainWindow
             }
             else
             {
-                owner = await ViewModel.OpenFileAsync(path, cancellation.Token, Current, activate: false)
+                owner = await ViewModel.OpenFileAsync(path, cancellation.Token, Current, activate: false, reportStatus: false)
                     ?? throw new StudioCommandException("open_failed", "Cannot open this world's animation archive.");
                 Current();
                 if (owner.AnimationEdits == null) throw new StudioCommandException("unsupported", "This world has no editable animation archive.");

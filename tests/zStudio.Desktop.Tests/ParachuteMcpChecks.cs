@@ -222,7 +222,24 @@ internal static class ParachuteMcpChecks
             await main.ViewModel.OpenRootAsync(compiled, token);
             world = Document(await Job("open_document", new() { ["path"] = Path.Combine(compiled, "m1", "gamez.zbd") }));
             await Preview();
-            state = (await PathAction("show"))["parachute"]!;
+            // The first compiled Show opens its companion before analysis; that subordinate load
+            // must not replace progress with the animation description or steal terminal status.
+            TaskCompletionSource compiledAnalyzing = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            using (var releaseCompiledAnalysis = new SemaphoreSlim(0))
+            {
+                main.ParachuteAnalysisPreparing = ct => { compiledAnalyzing.TrySetResult(); Assert.True(releaseCompiledAnalysis.Wait(TimeSpan.FromSeconds(20), ct)); };
+                var compiledShow = PathAction("show");
+                try
+                {
+                    var first = await Task.WhenAny(compiledAnalyzing.Task, compiledShow).WaitAsync(token);
+                    if (first == compiledShow) Assert.Fail("Compiled Show did not reach analysis: " + (await compiledShow).ToJsonString());
+                    Assert.Equal("Analyzing VTOL drop windows…", main.ViewModel.Status);
+                    releaseCompiledAnalysis.Release();
+                    state = (await compiledShow)["parachute"]!;
+                    Assert.StartsWith("VTOL drop windows ready:", main.ViewModel.Status);
+                }
+                finally { releaseCompiledAnalysis.Release(); main.ParachuteAnalysisPreparing = null; }
+            }
             var owner = main.ViewModel.Documents.Single(d => Id(d) == state["owner"]!.GetValue<string>());
             Assert.NotSame(world, owner); Assert.Same(world, main.ViewModel.SelectedDocument);
             Assert.EndsWith("anim.zbd", owner.Path, StringComparison.OrdinalIgnoreCase);
@@ -363,7 +380,7 @@ internal static class ParachuteMcpChecks
             state = (await PathAction("show"))["parachute"]!;
             Assert.True(state["visible"]!.GetValue<bool>()); Assert.Equal(2, state["candidates"]!.AsArray().Count);
             Assert.Contains("did not complete", state["analysisRefusal"]!.GetValue<string>());
-            Assert.NotEqual("Analyzing VTOL drop windows…", main.ViewModel.Status);
+            Assert.StartsWith("VTOL flight unavailable:", main.ViewModel.Status);
             Assert.Equal(0, state["sampleCount"]!.GetValue<int>()); Assert.Equal(0, state["releaseCount"]!.GetValue<int>());
             Assert.Null(state["selected"]); Assert.Null(state["windows"]);
             int failedEntry = state["entry"]!.GetValue<int>();
