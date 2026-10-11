@@ -120,21 +120,32 @@ public sealed class ImportRound10Tests
         var edited = JsonNode.Parse(workspace.Read(path, Token)!)!;
         var roots = edited["scenes"]![0]!["nodes"]!.AsArray().Select(n => edited["nodes"]![n!.GetValue<int>()]!["name"]!.GetValue<string>());
         Assert.Equal(["ground", "m1_terrain", "sky"], roots);
-        Assert.True(workspace.CanUndo); workspace.Undo(); Assert.False(workspace.IsDirty);
+        Assert.True(workspace.CanUndo);
 
         // A second mission can load this database and initialize its own zones through an ordinary zone edit.
         fixture.Write("gamegen/m2.gs", File.ReadAllText(fixture.Path("gamegen/m1.gs"))
             .Replace("..\\m1\\gamez.zbd", "..\\m2\\gamez.zbd", StringComparison.Ordinal));
-        Task<SourceWorldBuild> BuildM2(string label) => SourceWorlds.BuildPreviewAsync(fixture.Project, "m2",
-            Path.Combine(SourceWorlds.PreviewRoot(fixture.Project), label), token: Token);
+        Task<SourceWorldBuild> BuildM2(string label, SourceWorkspace? pending = null) => SourceWorlds.BuildPreviewAsync(fixture.Project, "m2",
+            Path.Combine(SourceWorlds.PreviewRoot(fixture.Project), label), pending?.Overlay(), token: Token);
         var m2 = await BuildM2("before-shared-zones");
         int ground = m2.Provenance.First(p => p.Value.ModelNodeName == "ground").Key;
         SourceWorkspace other = new(fixture.Project);
-        var zoneEdit = SourceZoneEdits.PlanAssignments(other, m2, [new(ground)], new(NodeZone: 7), false, Token);
-        other.Apply(zoneEdit.Label, zoneEdit.Changes.Select(c => (c.Relative, (byte[]?)c.Content)), Token);
+        var otherPrepared = other.BeginPreparedEdit();
+        var zoneEdit = SourceZoneEdits.PlanAssignments(otherPrepared.Workspace, m2, [new(ground)], new(NodeZone: 7), false, Token);
+        otherPrepared.Workspace.Apply(zoneEdit.Label, zoneEdit.Changes.Select(c => (c.Relative, (byte[]?)c.Content)), Token);
+        await BuildM2("prepared-shared-zones", otherPrepared.Workspace);
+        using (var verified = other.VerifyPreparedEdit(otherPrepared, Token))
+            other.AcceptPreparedEdit(otherPrepared, Token, verified);
         other.Save(Token);
         const string profile = "data/m2/meta/zones.json";
         byte[] zones = File.ReadAllBytes(fixture.Path(profile));
+        // Acceptance does not end the dependency: a second editor can initialize a profile before we save.
+        await Assert.ThrowsAsync<InvalidDataException>(() => workspace.SaveAsync(Token));
+        Assert.False(workspace.IsSaving); Assert.True(workspace.IsDirty); Assert.True(workspace.CanUndo);
+        Assert.Equal(original, File.ReadAllBytes(full));
+        Assert.False(File.Exists(fixture.Path(plan.Surfaces)));
+        Assert.Equal(zones, File.ReadAllBytes(fixture.Path(profile)));
+        workspace.Undo(); Assert.False(workspace.IsDirty);
         Assert.False(workspace.Exists("data/m1/meta/zones.json", Token));
         Assert.Throws<InvalidDataException>(() => SourceTerrainConversion.Plan(workspace, path,
             (new(StringComparer.Ordinal) { "ground" }, []), Token));
@@ -145,5 +156,21 @@ public sealed class ImportRound10Tests
         Assert.Equal(original, File.ReadAllBytes(full));
         Assert.Equal(zones, File.ReadAllBytes(fixture.Path(profile)));
         await BuildM2("after-refused-conversion");
+
+        // Reverse publication order: pending zones must not be saved after another editor converts their geometry.
+        other.Discard(); File.Delete(fixture.Path(profile));
+        var reverseBuild = await BuildM2("before-reverse-save");
+        var reverseZones = SourceZoneEdits.PlanAssignments(other, reverseBuild, [new(ground)], new(NodeZone: 7), false, Token);
+        other.Apply(reverseZones.Label, reverseZones.Changes.Select(c => (c.Relative, (byte[]?)c.Content)), Token);
+        SourceWorkspace converted = new(fixture.Project);
+        var conversion = converted.BeginPreparedEdit();
+        SourceTerrainConversion.Apply(conversion.Workspace, plan, Token);
+        using (var verified = converted.VerifyPreparedEdit(conversion, Token))
+            converted.AcceptPreparedEdit(conversion, Token, verified);
+        converted.Save(Token);
+        Assert.Throws<InvalidDataException>(() => other.Save(Token));
+        Assert.True(other.IsDirty); Assert.False(other.IsSaving);
+        Assert.False(File.Exists(fixture.Path(profile)));
+        await BuildM2("after-refused-zone-save");
     }
 }

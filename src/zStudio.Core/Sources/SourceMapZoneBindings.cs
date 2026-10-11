@@ -38,6 +38,7 @@ internal sealed class SourceMapZoneBindings
             }
             result.owners.Add(new(path, map, matches));
         }
+        workspace.TrackMapZoneGeometry(geometry);
         return result;
     }
 

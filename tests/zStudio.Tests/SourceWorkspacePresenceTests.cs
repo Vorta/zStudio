@@ -153,6 +153,19 @@ public sealed class SourceWorkspacePresenceTests : IDisposable
         Assert.Throws<InvalidOperationException>(() => workspace.AcceptPreparedEdit(prepared, Token, verified));
         Assert.NotNull(workspace.AcceptPreparedEdit(prepared, Token));
         workspace.Undo(); Assert.False(workspace.IsDirty);
+
+        // Check-only save dependencies remain premises until commit, including while files are staged.
+        byte[] before = File.ReadAllBytes(At(Target)), after = Encoding.UTF8.GetBytes("Quit 3\n");
+        SourcePublisher publisher = new(root)
+        {
+            Fault = (step, _) => { if (step == "commit") File.WriteAllText(At(Added), "external dependency"); }
+        };
+        Assert.Throws<SourceConflictException>(() => publisher.Publish(
+            [new(Target, before, after), new(Added, null, null)], "Check dependency", Token));
+        Assert.Equal(before, File.ReadAllBytes(At(Target)));
+        Assert.Equal("external dependency", File.ReadAllText(At(Added)));
+        File.Delete(At(Added)); publisher.Fault = null;
+        Assert.Equal([Target], publisher.Publish([new(Target, before, after), new(Added, null, null)], "Retry", Token).Written);
     }
 
     [Fact]
