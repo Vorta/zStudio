@@ -1,5 +1,23 @@
 # Desktop implementation status
 
+## Terrain ownership and polygon review fixes (2026-10-11, PR #27)
+
+Conversion now checks every mission's map-zone ownership before returning for an absent local profile. It refuses
+a database whose assignments belong to another mission, preserving ordinary unzoned conversion and the single
+local owner's remap. This prevents a successful conversion and save in one mission from invalidating another
+mission's zone topology. The existing conversion regression now creates the second profile through a real zone
+edit and verifies fresh planning and old-plan application refuse without changing source bytes or history.
+
+Shared terrain shape editing now treats all holes as exclusions regardless of their authored winding. Two
+overlapping footprint holes drawn in opposite directions retain their excluded overlap during normalization,
+painting, erasing and saved edits. Only copied hole paths are oriented; authored rings, clipping limits and
+compiler semantics remain unchanged. The existing shape regression checks area and compiler membership.
+
+Both original implementations fail their extended regressions; forced restored builds pass. Independent
+challenges cover cross-mission ownership and late bindings, shape semantics, failure recovery, undo and verified
+save/reopen. Validation: Release builds pass with zero warnings/errors; PR Core 2,448 and Desktop 177; final-stack Core 2,887, Desktop 188 and the 17-test original-1998 subset. A fresh full review and current-head CI remain required before merge. No public release is planned.
+
+
 ## Terrain review fixes (2026-10-11, PR #27)
 
 Terrain conversion rechecks every new model, buffer and recipe output when applying its plan. Files created by
