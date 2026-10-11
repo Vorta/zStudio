@@ -116,7 +116,7 @@ public partial class MainWindow
         var capturedProject = sourceWorkspace;
         using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(token, ViewModel.WorkspaceToken, shutdownToken);
         token = cancellation.Token;
-        token.ThrowIfCancellationRequested();
+        long navigation = ViewModel.BeginNavigation(token);
         mission = mission.Trim().ToLowerInvariant();
         IReadOnlyList<string> missions;
         try { missions = await ReadSourceWorldMissionsAsync(root, token); }
@@ -124,7 +124,7 @@ public partial class MainWindow
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { throw new StudioCommandException("io_failed", ex.Message); }
         // A same-path reopen is a different workspace too. Check before activating an existing document or
         // acquiring the source workspace, not only after building against whichever root is current then.
-        RequireSourceRead(root, workspace, token);
+        RequireOpening();
         // Another first opening may establish the shared project while this scan runs. Only an already captured
         // workspace has an identity to preserve; root/generation still reject a same-path reopen in either case.
         if (capturedProject != null && !ReferenceEquals(sourceWorkspace, capturedProject))
@@ -150,8 +150,9 @@ public partial class MainWindow
         DocumentModel? doc = null;
         try
         {
-            var built = await BuildSourceWorldAsync(session, token);
-            RequireSourceRead(root, workspace, token);
+            RequireOpening();
+            var built = await BuildSourceWorldAsync(session, token, navigation: navigation);
+            RequireOpening();
             if (!ReferenceEquals(sourceWorkspace, project)) throw new StudioCommandException("context_changed", "The source workspace changed while the world was building.");
             // Input may have arrived while the world built; publishing (or activating) a world would decide it.
             if (automation) RequireNoDrafts();
@@ -175,11 +176,19 @@ public partial class MainWindow
             if (doc == null) session.Dispose();
             else if (!ViewModel.Documents.Contains(doc)) doc.Dispose();
             // The status showed the build's progress.
-            if (ViewModel.WorkspaceGeneration == workspace && SourceProjectRoot == root && !shutdownToken.IsCancellationRequested)
+            if (ViewModel.WorkspaceGeneration == workspace && ViewModel.NavigationGeneration == navigation && SourceProjectRoot == root && !shutdownToken.IsCancellationRequested)
                 ViewModel.Status = Bounded($"The {mission} world did not open: {ex.Message}");
             throw;
         }
         finally { sourceWorldsOpening--; ReleaseUnusedSourceWorkspace(); }
+
+        void RequireOpening()
+        {
+            RequireSourceRead(root, workspace, token);
+            // A newer root or file can still be in preflight, before the workspace changes.
+            if (ViewModel.NavigationGeneration != navigation)
+                throw new StudioCommandException("context_changed", "A newer workspace navigation superseded this world opening.");
+        }
     }
     private int sourceWorldsOpening;
     /// <summary>
@@ -258,7 +267,7 @@ public partial class MainWindow
     /// Builds the workspace's current sources of the session's mission into a new private folder; a newer request supersedes
     /// this one. <paramref name="additions"/> are models just added, which the build checks it loaded.
     /// </summary>
-    private async Task<SourceWorldBuilt> BuildSourceWorldAsync(SourceWorldSession session, CancellationToken token, IReadOnlyList<SourceModelAddition>? additions = null)
+    private async Task<SourceWorldBuilt> BuildSourceWorldAsync(SourceWorldSession session, CancellationToken token, IReadOnlyList<SourceModelAddition>? additions = null, long? navigation = null)
     {
         // A world opened now would build with another world's edit before its rebuild verified it; a failed rebuild takes the
         // edit back and treats builds made before it as current.
@@ -273,7 +282,7 @@ public partial class MainWindow
             // The overlay and its revision are read together on the UI thread, where the workspace changes.
             long revision = session.Workspace.ContentRevision;
             var overlay = session.Workspace.Overlay();
-            IProgress<SourceProgress> progress = new Progress<SourceProgress>(p => { if (session.Building == cancellation && !cancellation.IsCancellationRequested) ViewModel.Status = $"Building the {session.Mission} world {p.Completed}/{p.Total}: {p.Item}"; });
+            IProgress<SourceProgress> progress = new Progress<SourceProgress>(p => { if (session.Building == cancellation && !cancellation.IsCancellationRequested && (navigation == null || ViewModel.NavigationGeneration == navigation)) ViewModel.Status = $"Building the {session.Mission} world {p.Completed}/{p.Total}: {p.Item}"; });
             if (SourceBuildStep is { } step) progress = new StepProgress(step, progress);
             var build = await Task.Run(() => session.BuildAsync(folder, overlay, progress, cancellation.Token, additions), cancellation.Token);
             cancellation.Token.ThrowIfCancellationRequested();

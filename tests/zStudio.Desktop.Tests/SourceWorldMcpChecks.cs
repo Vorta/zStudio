@@ -68,6 +68,31 @@ internal static class SourceWorldMcpChecks
             }
             finally { main.ReadSourceWorldMissionsAsync = readMissions; scanRelease.TrySetResult([]); }
 
+            // A newer root owns navigation as soon as its asynchronous preflight begins, before its
+            // WorkspaceGeneration changes. Protect both an existing activation and a newly built document.
+            await SupersededOpening(existing: true);
+            await SupersededOpening(existing: false);
+
+            // Two world requests also reserve their order before either mission scan finishes.
+            // Releasing the older scan first must not let it displace the newer request.
+            TaskCompletionSource<IReadOnlyList<string>> firstScan = new(TaskCreationOptions.RunContinuationsAsynchronously),
+                lastScan = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            int scans = 0;
+            main.ReadSourceWorldMissionsAsync = (_, _) => ++scans == 1 ? firstScan.Task : lastScan.Task;
+            try
+            {
+                var first = SourceTask<DocumentModel>("OpenSourceWorldAsync", "m1", token, false);
+                var last = SourceTask<DocumentModel>("OpenSourceWorldAsync", "m1", token, false);
+                Assert.Equal(2, scans);
+                firstScan.SetResult(["m1", "m2"]);
+                Assert.Equal("context_changed", (await Assert.ThrowsAsync<StudioCommandException>(() => first)).Code);
+                Assert.Empty(main.ViewModel.Documents);
+                lastScan.SetResult(["m1", "m2"]);
+                Assert.Same(await last, Assert.Single(main.ViewModel.Documents));
+            }
+            finally { main.ReadSourceWorldMissionsAsync = readMissions; firstScan.TrySetResult([]); lastScan.TrySetResult([]); }
+            await main.ViewModel.OpenRootAsync(fixture.Project, token);
+
             // Tools lists the project's worlds.
             typeof(MainWindow).GetMethod("ToolsMenuOpened", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(main, [main, new RoutedEventArgs(MenuItem.SubmenuOpenedEvent, main)]);
             var worlds = (MenuItem)main.FindName("SourceWorldMenu");
@@ -238,6 +263,48 @@ internal static class SourceWorldMcpChecks
             {
                 var work = (Task)typeof(MainWindow).GetField("previewWork", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(main)!;
                 await work.WaitAsync(token);
+            }
+            async Task SupersededOpening(bool existing)
+            {
+                if (existing)
+                {
+                    await Job("source_world_open", new() { ["mission"] = "m1" });
+                    main.ViewModel.SelectedDocument = null;
+                }
+                var checkRoot = main.ViewModel.CheckRootExistsAsync;
+                TaskCompletionSource entered = new(TaskCreationOptions.RunContinuationsAsynchronously),
+                    release = new(TaskCreationOptions.RunContinuationsAsynchronously),
+                    rootEntered = new(TaskCreationOptions.RunContinuationsAsynchronously);
+                TaskCompletionSource<bool> rootRelease = new(TaskCreationOptions.RunContinuationsAsynchronously);
+                if (existing) main.ReadSourceWorldMissionsAsync = async (_, ct) => { entered.TrySetResult(); await release.Task.WaitAsync(ct); return ["m1", "m2"]; };
+                else main.SourceBuildStep = p => { if (p.Item == "Built") { entered.TrySetResult(); release.Task.Wait(token); } };
+                main.ViewModel.CheckRootExistsAsync = (_, _) => { rootEntered.TrySetResult(); return rootRelease.Task; };
+                Task? newer = null;
+                try
+                {
+                    var opening = Job("source_world_open", new() { ["mission"] = "m1" }, "failed");
+                    await entered.Task.WaitAsync(token);
+                    long generation = main.ViewModel.WorkspaceGeneration;
+                    newer = main.ViewModel.OpenRootAsync(fixture.Project, token);
+                    await rootEntered.Task.WaitAsync(token);
+                    Assert.Equal(generation, main.ViewModel.WorkspaceGeneration);
+                    main.ViewModel.Status = "Newer root is checking";
+                    release.SetResult();
+                    Assert.Equal("context_changed", (await opening)["code"]!.GetValue<string>());
+                    Assert.Null(main.ViewModel.SelectedDocument);
+                    Assert.Equal(existing ? 1 : 0, main.ViewModel.Documents.Count);
+                    Assert.Equal("Newer root is checking", main.ViewModel.Status);
+                    rootRelease.SetResult(true); await newer;
+                    Assert.True(main.ViewModel.WorkspaceGeneration > generation);
+                    Assert.Empty(main.ViewModel.Documents);
+                }
+                finally
+                {
+                    main.ReadSourceWorldMissionsAsync = readMissions; main.SourceBuildStep = null;
+                    main.ViewModel.CheckRootExistsAsync = checkRoot;
+                    release.TrySetResult(); rootRelease.TrySetResult(true);
+                    if (newer != null) await newer;
+                }
             }
             // The GUI's own entry points, called on the dispatcher as its commands call them.
             Task<T> SourceTask<T>(string method, params object[] arguments)
