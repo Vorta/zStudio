@@ -139,6 +139,9 @@ public static class TerrainShapes
             foreach (var p in polygon.Outer) Check(p);
             PathsD outer = [Path(polygon.Outer)];
             PathsD holes = [.. polygon.Holes.Select(Path)];
+            // Every hole excludes its area, independently of the direction it was drawn. Equal winding keeps
+            // overlapping holes united under NonZero instead of canceling their shared exclusion.
+            foreach (var hole in holes) if (Clipper.Area(hole) < 0) hole.Reverse();
             CheckComplexity(outer.Concat(holes));
             var piece = holes.Count == 0 ? Clipper.Union(outer, [], FillRule.NonZero, Precision) : Clipper.Difference(outer, holes, FillRule.NonZero, Precision);
             if (all.Sum(p => (long)p.Count) + piece.Sum(p => (long)p.Count) > MaximumPoints) throw ComplexityError();

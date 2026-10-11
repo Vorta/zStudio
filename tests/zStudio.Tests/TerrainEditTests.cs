@@ -51,6 +51,16 @@ public sealed class TerrainEditTests
         var island = TerrainShapes.Paint(holed, [Square(12, 12, 4)], add: true);
         Assert.Equal(2, island.Count);
         Assert.Equal(816, TerrainShapes.SquareUnits(island), 3);
+        // Opposite directions for overlapping footprint holes must not paint their shared exclusion back in.
+        TerrainOutline[] footprints = [new(Square(0, 0, 30).Outer,
+            [Square(10, 10, 10).Outer, Square(15, 10, 10).Outer.Reverse().ToArray()])];
+        Assert.False(new TerrainCompiler.Outline(new(footprints)).Inside(new(17, 0, 15)));
+        Assert.Equal(750, TerrainShapes.SquareUnits(footprints), 3);
+        foreach (var cleaned in new[] { TerrainShapes.Normalize(footprints), TerrainShapes.Paint([], footprints, add: true) })
+        {
+            Assert.Equal(750, TerrainShapes.SquareUnits(cleaned), 3);
+            Assert.False(new TerrainCompiler.Outline(new(cleaned)).Inside(new(17, 0, 15)));
+        }
         // A brush stroke covers a capsule along its path.
         var stroke = TerrainShapes.Stroke([new(0, 0), new(100, 0)], 5);
         // Arcs are polygons, a little inside the true circle.
