@@ -1,11 +1,16 @@
 # Desktop implementation status
 
-## Source-project navigation review fixes (2026-10-11, PR #24)
+## Source-project review fixes (2026-10-11, PR #24)
 
 Source-project opening and optional opening after reconstruction now reserve navigation before their asynchronous
 folder checks or extraction. A newer GUI navigation takes precedence, including when it is still checking a folder
 or source project. The completed reconstruction remains available; the operation reports `opened: false` with
 `openRefused.code: context_changed`. Existing draft and unsaved-document checks remain in place.
+
+Export lookup-change diagnostics now compare repeated-name targets semantically even when their slots, name paths
+and structural hints match. Reordering copies with different ancestry or geometry produces the warning; unchanged
+or interchangeable copies remain quiet. Independent export mutations reproduce both previously missed cases,
+and the corrected exports report the changed target after reopening their outputs.
 
 Deterministic protocol regressions independently reject guards based only on a published workspace and navigation
 capture without request reservation. The restored guards pass pending-root and overlapping-project checks.
