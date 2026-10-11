@@ -11,6 +11,7 @@ using ModelContextProtocol.Protocol;
 using Recoil.Zbd.Core;
 using Recoil.Zbd.Core.Animation;
 using Recoil.Zbd.Core.Formats;
+using Recoil.Zbd.Automation;
 using Recoil.Zbd.Desktop;
 using Recoil.Zbd.Mcp;
 using Recoil.Zbd.Tests;
@@ -26,6 +27,7 @@ internal static class ParachuteMcpChecks
         using var fixture = new SourceWorldFixture();
         fixture.Write(VtolDropFixture.Root, VtolDropFixture.Definitions());
         fixture.Write("data/m1/zrdr/flight.zan", VtolDropFixture.MotionScript);
+        fixture.Write("data/m1/zrdr/puppies.zrd", "( ( HEMORTAR_AMMO 1 ( 0.0 0.0 0.0 ) ( 0.0 0.0 0.0 ) 1.0 ) )");
         using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(120));
         var token = deadline.Token;
         var main = new MainWindow { Left = -12000, ShowInTaskbar = false }; main.Show();
@@ -52,6 +54,25 @@ internal static class ParachuteMcpChecks
             Assert.Null(state["selected"]);
             await Unlock();
             await SelectFirstWindow();
+            TaskCompletionSource analyzing = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            using (var releaseAnalysis = new SemaphoreSlim(0))
+            {
+                main.ParachuteAnalysisPreparing = ct => { analyzing.TrySetResult(); Assert.True(releaseAnalysis.Wait(TimeSpan.FromSeconds(20), ct)); };
+                var analysis = PathAction("analyze", new() { ["entry"] = state["entry"]!.GetValue<int>() });
+                try
+                {
+                    var first = await Task.WhenAny(analyzing.Task, analysis).WaitAsync(token);
+                    if (first == analysis) Assert.Fail("Analysis did not reach its worker: " + (await analysis).ToJsonString());
+                    Assert.False(((UIElement)main.FindName("ParachutePanel")).IsEnabled);
+                    var refusal = Assert.Throws<TargetInvocationException>(() => typeof(MainWindow).GetMethod("BeginParachute", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(main, [false]));
+                    Assert.Equal("busy", Assert.IsType<StudioCommandException>(refusal.InnerException).Code);
+                    Assert.Null((await State())!["draft"]);
+                    releaseAnalysis.Release(); await analysis;
+                    Assert.True(((UIElement)main.FindName("ParachutePanel")).IsEnabled);
+                    Assert.Equal((await State())!["selected"]!.GetValue<Guid>(), Viewport().SelectedParachuteWindow);
+                }
+                finally { releaseAnalysis.Release(); main.ParachuteAnalysisPreparing = null; }
+            }
             state = (await PathAction("begin"))["parachute"]!;
             string draft = state["draft"]!["token"]!.GetValue<string>();
             await PathAction("set", new() { ["token"] = draft, ["start"] = 2 });
@@ -60,12 +81,21 @@ internal static class ParachuteMcpChecks
             TaskCompletionSource preparing = new(TaskCreationOptions.RunContinuationsAsynchronously);
             using (var release = new SemaphoreSlim(0))
             {
+                Viewport().SetParachutePointerMove(true);
                 main.SourceEditPreparing = ct => { preparing.TrySetResult(); Assert.True(release.Wait(TimeSpan.FromSeconds(20), ct)); };
                 var canceled = Job("parachute", await Arguments("confirm", new() { ["token"] = draft }), "failed");
                 try
                 {
                     var first = await Task.WhenAny(preparing.Task, canceled).WaitAsync(token);
                     if (first == canceled) Assert.Fail("Confirmation did not reach source preparation: " + (await canceled).ToJsonString());
+                    Assert.False(Viewport().IsParachutePointerMoving);
+                    // Already queued renderer/numeric callbacks cannot replace the accepted worker plan or its input.
+                    ((Action<int, double>)typeof(Recoil.Zbd.Rendering.SceneViewport).GetField("ParachuteMoveRequested", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(Viewport())!)(150, 0);
+                    ((TextBox)main.FindName("ParachuteStart")).Text = "3";
+                    var accepting = (await State())!["draft"]!;
+                    Assert.Equal("2", accepting["input"]!.GetValue<string>());
+                    Assert.Equal(2, accepting["start"]!.GetValue<float>());
+                    Assert.True(accepting["ready"]!.GetValue<bool>());
                     var automation = (AsyncLocal<bool>)typeof(MainWindow).GetField("automationRequest", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(main)!;
                     bool previous = automation.Value; automation.Value = true;
                     try
@@ -129,6 +159,10 @@ internal static class ParachuteMcpChecks
             Assert.EndsWith("anim.zbd", owner.Path, StringComparison.OrdinalIgnoreCase);
             byte[] original = File.ReadAllBytes(owner.Path);
             long revision = owner.Revision;
+            // Inspecting sibling coordinates is permitted on an animation owner; explicit animation controls must
+            // still use AnimationEdits rather than dispatching through its now-present coordinate session.
+            await Job("pickups", new() { ["document"] = Id(owner) });
+            Assert.NotEmpty(owner.PickupEdits!.Records);
             await Unlock();
             await SelectFirstWindow();
 
@@ -136,6 +170,19 @@ internal static class ParachuteMcpChecks
             Assert.Equal("revision_conflict", (await Job("parachute", staleOwner, "failed"))["code"]!.GetValue<string>());
             state = (await PathAction("begin"))["parachute"]!;
             draft = state["draft"]!["token"]!.GetValue<string>();
+            Assert.Equal("pending_drafts", Assert.Throws<StudioCommandException>(() => main.ViewModel.ValidateNavigationPublication!(false)).Code);
+            // A clean owner's unfinished transform participates in both normal close and delayed automation close.
+            var closeAutomation = (AsyncLocal<bool>)typeof(MainWindow).GetField("automationRequest", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(main)!;
+            bool oldAutomation = closeAutomation.Value; closeAutomation.Value = true;
+            try
+            {
+                main.Close(); Assert.True(main.IsLoaded);
+                await Until(() => !(bool)typeof(MainWindow).GetField("resolvingClose", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(main)!);
+                Assert.NotNull((await State())!["draft"]);
+                typeof(MainWindow).GetField("automationCloseRequested", BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(main, true);
+                main.Close(); Assert.True(main.IsLoaded); Assert.NotNull((await State())!["draft"]);
+            }
+            finally { closeAutomation.Value = oldAutomation; }
             Assert.Equal("pending_drafts", (await Job("parachute", await Arguments("hide"), "failed"))["code"]!.GetValue<string>());
             // GUI cancellation is the same draft, with no preliminary discard dialog or accepted edit.
             Click("cancel");
@@ -172,6 +219,7 @@ internal static class ParachuteMcpChecks
             Assert.Equal("not_ready", (await Job("parachute", oldArguments, "failed"))["code"]!.GetValue<string>());
 
             async Task Unlock() => await Call("pickup_lock", new() { ["document"] = Id(world), ["revision"] = world.Revision, ["locked"] = false });
+            Recoil.Zbd.Rendering.SceneViewport Viewport() => (Recoil.Zbd.Rendering.SceneViewport)((ContentControl)main.FindName("SceneHost")).Content;
             async Task SelectFirstWindow() => await PathAction("select", new() { ["window"] = (await State())!["windows"]![0]!["id"]!.GetValue<string>() });
             async Task<JsonNode?> State()
             {

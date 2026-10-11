@@ -42,6 +42,7 @@ public partial class MainWindow
         public CancellationTokenSource? Preparing;
         public Task Work = Task.CompletedTask;
         public int Generation;
+        public bool Accepting;
         public AiPathDraftLifetime Lifetime = AiPathDraftLifetime.Pending;
         public long? RolledBackRevision;
     }
@@ -50,17 +51,18 @@ public partial class MainWindow
     private CancellationTokenSource? parachuteLoading;
     private long parachuteGeneration;
     private bool synchronizingParachutes, acceptingParachute;
+    internal Action<CancellationToken>? ParachuteAnalysisPreparing { get; set; }
     private sealed record ParachuteChoice(int Entry, string Label) { public override string ToString() => Label; }
     private sealed record ParachuteWindowChoice(Guid Id, string Label) { public override string ToString() => Label; }
 
     private void ConfigureParachuteScene(SceneViewport viewport)
     {
-        viewport.ParachuteSelectionChanging = () => parachuteDraft == null && ResolvePropertiesDrafts();
+        viewport.ParachuteSelectionChanging = () => parachuteLoading == null && parachuteDraft == null && ResolvePropertiesDrafts();
         viewport.ParachuteWindowSelected += id =>
         { if (parachutes is { } state && state.Viewport == viewport) { state.Selected = id; UpdateParachutePanel(); } };
         viewport.ParachuteMoveRequested += (segment, fraction) =>
         {
-            if (parachuteDraft is not { } draft || draft.Session.Viewport != viewport) return;
+            if (parachuteDraft is not { Accepting: false } draft || draft.Session.Viewport != viewport) return;
             try
             {
                 var plan = VtolDropWindows.PlanMove(draft.Session.Analysis!, draft.Window.Id, segment, (float)fraction);
@@ -110,7 +112,7 @@ public partial class MainWindow
         if (edit)
         {
             if (state.World.PickupsLocked) throw new StudioCommandException("locked", "Unlock editing before moving drop windows.");
-            if (sourceWorkspaceBusy || state.World.SourceWorld?.IsRebuilding == true || state.Viewport.IsFlyActive || state.Viewport.IsPickupDragging ||
+            if (parachuteLoading != null || sourceWorkspaceBusy || state.World.SourceWorld?.IsRebuilding == true || state.Viewport.IsFlyActive || state.Viewport.IsPickupDragging ||
                 state.Viewport.AiPathEditingNetwork != null || state.Viewport.TerrainBrushActive || state.Viewport.ZonePaintActive)
                 throw new StudioCommandException("busy", "Finish the current editing or navigation operation first.");
         }
@@ -164,13 +166,15 @@ public partial class MainWindow
             if (candidate != null) state.Analysis = await Task.Run(() => VtolDropWindows.Analyze(context, candidate, cancellation.Token), cancellation.Token);
             Current();
             if (owner != null && (owner.IsDisposed || owner.Revision != ownerRevision)) throw new StudioCommandException("context_changed", "The animation owner changed during analysis.");
+            RequireParachutePublication(viewport);
             state.Selected = world.PickupsLocked ? null : state.Analysis?.Windows.FirstOrDefault()?.Id; parachutes = state;
             world.PropertyChanged += ParachuteDocumentChanged; world.Disposing += CloseParachutes;
             resolver.WorkspaceSnapshotsChanged += ParachuteResourcesChanged;
             if (owner != null) { owner.PropertyChanged += ParachuteDocumentChanged; owner.Disposing += CloseParachutes; }
+            if (parachuteLoading == cancellation) parachuteLoading = null;
             PublishParachuteOverlay(); UpdateParachutePanel();
         }
-        finally { if (parachuteLoading == cancellation) parachuteLoading = null; }
+        finally { if (parachuteLoading == cancellation) parachuteLoading = null; UpdateParachutePanel(); }
     }
     private async Task AnalyzeParachuteAsync(int entry, CancellationToken token)
     {
@@ -179,14 +183,24 @@ public partial class MainWindow
         long request = ++parachuteGeneration; parachuteLoading?.Cancel();
         using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(token, state.World.Lifetime.Token, state.Owner?.Lifetime.Token ?? default, shutdownToken);
         parachuteLoading = cancellation;
+        UpdateParachutePanel();
         try
         {
-            var result = await Task.Run(() => VtolDropWindows.Analyze(state.Context, candidate, cancellation.Token), cancellation.Token);
+            var result = await Task.Run(() => { ParachuteAnalysisPreparing?.Invoke(cancellation.Token); return VtolDropWindows.Analyze(state.Context, candidate, cancellation.Token); }, cancellation.Token);
             RequireParachutes(state.Id); cancellation.Token.ThrowIfCancellationRequested();
             if (request != parachuteGeneration) throw new StudioCommandException("context_changed", "A newer Parachute analysis superseded this request.");
+            RequireParachutePublication(state.Viewport);
+            if (parachuteLoading == cancellation) parachuteLoading = null;
             state.Analysis = result; state.Selected = state.World.PickupsLocked ? null : result.Windows.FirstOrDefault()?.Id; PublishParachuteOverlay(); UpdateParachutePanel();
         }
-        finally { if (parachuteLoading == cancellation) parachuteLoading = null; }
+        finally { if (parachuteLoading == cancellation) parachuteLoading = null; UpdateParachutePanel(); }
+    }
+    private void RequireParachutePublication(SceneViewport viewport)
+    {
+        RequireNoDrafts();
+        if (sourceWorkspaceBusy || viewport.IsFlyActive || viewport.IsPickupDragging || viewport.HasTransformDraft ||
+            viewport.AiPathEditingNetwork != null || viewport.TerrainBrushActive || viewport.ZonePaintActive)
+            throw new StudioCommandException("busy", "Finish the active editing or navigation operation before publishing drop windows.");
     }
     private void PublishParachuteOverlay()
     {
@@ -222,6 +236,7 @@ public partial class MainWindow
     }
     private void QueueParachutePreview(ParachuteDraft draft, bool debounce = false, CancellationToken token = default)
     {
+        RequireParachuteInput(draft);
         draft.Preparing?.Cancel(); draft.Preparing?.Dispose();
         draft.Preparing = CancellationTokenSource.CreateLinkedTokenSource(token, draft.Session.World.Lifetime.Token, draft.Session.Owner?.Lifetime.Token ?? default, shutdownToken);
         draft.Preview = null; draft.Plan = null; draft.Error = null;
@@ -248,6 +263,10 @@ public partial class MainWindow
             finally { if (parachuteDraft == draft && draft.Generation == generation) UpdateParachutePanel(); }
         }
     }
+    private static void RequireParachuteInput(ParachuteDraft draft)
+    {
+        if (draft.Accepting) throw new StudioCommandException("busy", "The drop-window move is being confirmed. Wait for it to finish or cancel it.");
+    }
     private void CancelParachuteDraft() => ReleaseParachuteDraft(AiPathDraftLifetime.Canceled);
     private void ReleaseParachuteDraft(AiPathDraftLifetime lifetime)
     {
@@ -264,12 +283,25 @@ public partial class MainWindow
     }
     private async Task<DocumentModel> ConfirmParachuteAsync(CancellationToken token)
     {
-        var draft = RequireParachuteDraft(); await draft.Work.WaitAsync(token); RequireParachuteDraft(draft.Token);
+        var draft = RequireParachuteDraft(); RequireParachuteInput(draft);
+        draft.Accepting = true;
+        draft.Session.Viewport.SetParachutePointerMove(false); UpdateParachutePanel();
+        try
+        {
+            await draft.Work.WaitAsync(token); RequireParachuteDraft(draft.Token);
+            RequireNoDrafts(committingParachute: draft);
+            if (draft.Plan == null || draft.Preview == null || draft.Error != null) throw new StudioCommandException("invalid_argument", draft.Error ?? "Wait for a valid preview.");
+            // The worker receives this immutable accepted plan, never a mutable GUI draft field.
+            return await ConfirmParachutePlanAsync(draft, draft.Plan, token);
+        }
+        finally { draft.Accepting = false; UpdateParachutePanel(); }
+    }
+    private async Task<DocumentModel> ConfirmParachutePlanAsync(ParachuteDraft draft, VtolDropMovePlan plan, CancellationToken token)
+    {
         RequireNoDrafts(committingParachute: draft);
-        if (draft.Plan == null || draft.Preview == null || draft.Error != null) throw new StudioCommandException("invalid_argument", draft.Error ?? "Wait for a valid preview.");
         var state = draft.Session; int entry = state.Analysis!.Candidate.EntryIndex;
         token.ThrowIfCancellationRequested();
-        if (draft.Plan.NewStart == draft.Window.Start)
+        if (plan.NewStart == draft.Window.Start)
         { ReleaseParachuteDraft(AiPathDraftLifetime.Completed); return state.Owner ?? state.World; }
         if (state.World.SourceWorld is { } source)
         {
@@ -277,7 +309,7 @@ public partial class MainWindow
             {
                 acceptingParachute = true;
                 var result = await PrepareSourceWorldEditAsync(state.World, "Moving VTOL drop window", (workspace, ct) =>
-                    workspace.Apply("Move VTOL drop window", SourceVtolDropEdits.Prepare(workspace, source.Mission, state.World.Document.Scene!.Nodes.Select(n => n.Name).ToArray(), state.Context.Package, draft.Plan, ct).Select(c => (c.Relative, (byte[]?)c.Content)), ct),
+                    workspace.Apply("Move VTOL drop window", SourceVtolDropEdits.Prepare(workspace, source.Mission, state.World.Document.Scene!.Nodes.Select(n => n.Name).ToArray(), state.Context.Package, plan, ct).Select(c => (c.Relative, (byte[]?)c.Content)), ct),
                     token, committingParachute: draft);
                 draft.Lifetime = AiPathDraftLifetime.Completed;
                 ViewModel.Status = "Drop window moved through its animation source. Open Parachute again in the rebuilt world to continue.";
@@ -300,7 +332,7 @@ public partial class MainWindow
         }
         var owner = state.Owner!;
         token.ThrowIfCancellationRequested(); acceptingParachute = true;
-        try { VtolDropWindows.Apply(owner.AnimationEdits!, draft.Plan); ReleaseParachuteDraft(AiPathDraftLifetime.Completed); CommitRunningJob(); }
+        try { VtolDropWindows.Apply(owner.AnimationEdits!, plan); ReleaseParachuteDraft(AiPathDraftLifetime.Completed); CommitRunningJob(); }
         finally { acceptingParachute = false; }
         try { await ShowParachutesAsync(CancellationToken.None, entry); }
         catch (Exception ex) when (ex is OperationCanceledException or StudioCommandException or IOException)
@@ -313,7 +345,13 @@ public partial class MainWindow
         if (state.World.SourceWorld != null) { await UndoSourceWorldAsync(state.World, redo, token); return; }
         int entry = state.Analysis?.Candidate.EntryIndex ?? -1; var owner = state.Owner!;
         acceptingParachute = true;
-        try { token.ThrowIfCancellationRequested(); UndoDocument(owner, redo); CommitRunningJob(); } finally { acceptingParachute = false; }
+        try
+        {
+            token.ThrowIfCancellationRequested();
+            if (redo) owner.AnimationEdits!.Redo(); else owner.AnimationEdits!.Undo();
+            UpdateDocumentCommands(); CommitRunningJob();
+        }
+        finally { acceptingParachute = false; }
         try { await ShowParachutesAsync(CancellationToken.None, entry >= 0 ? entry : null); }
         catch (Exception ex) when (ex is OperationCanceledException or StudioCommandException or IOException)
         { CloseParachutes(); ViewModel.Status = "Animation history changed; reopen Parachute to refresh: " + ex.Message; }
@@ -328,7 +366,12 @@ public partial class MainWindow
         else if (action == "confirm") await ConfirmParachuteAsync(CancellationToken.None);
         else if (action == "cancel") CancelParachuteDraft();
         else if (action is "undo" or "redo") await ParachuteHistoryAsync(action == "redo", CancellationToken.None);
-        else if (action == "save") { var state = RequireParachutes(); await SaveCurrentAsync(state.Owner ?? state.World); }
+        else if (action == "save")
+        {
+            var state = RequireParachutes();
+            if (state.Owner is { } owner) await SaveAnimationAsync(owner);
+            else await SaveSourceWorldDocumentAsync(state.World);
+        }
     });
     private async void ParachuteSelectionChanged(object sender, SelectionChangedEventArgs e)
     {
@@ -343,6 +386,7 @@ public partial class MainWindow
     private void ParachuteInputChanged(object sender, TextChangedEventArgs e)
     {
         if (synchronizingParachutes || parachuteDraft is not { } draft) return;
+        if (draft.Accepting) { UpdateParachutePanel(); return; }
         draft.Input = ParachuteStart.Text; draft.Session.Viewport.SetParachutePointerMove(false); QueueParachutePreview(draft, debounce: true); UpdateParachutePanel();
     }
     private bool ParachuteKeyboard(KeyEventArgs e)
@@ -363,7 +407,7 @@ public partial class MainWindow
             ParachuteButton.Visibility = IsAiWorld ? Visibility.Visible : Visibility.Collapsed;
             ParachutePanel.Visibility = parachutes == null ? Visibility.Collapsed : Visibility.Visible;
             if (parachutes is not { } state) return;
-            ParachutePanel.IsEnabled = !sourceWorkspaceBusy;
+            ParachutePanel.IsEnabled = !sourceWorkspaceBusy && parachuteLoading == null && parachuteDraft?.Accepting != true;
             ParachuteOwner.Text = state.Owner == null ? "Animation sources · project undo and save" : $"{state.Owner.Title} · animation undo and Save copy";
             ParachuteOwner.ToolTip = state.Owner?.Path ?? state.World.SourceWorld?.DefinitionsPath;
             ParachuteUndo.Content = state.Owner == null ? "Undo project" : "Undo animation";

@@ -78,7 +78,7 @@ public partial class MainWindow : Window
         {
             RequireAutomationMutationAvailable();
             if (closesDocuments) RequireNoDrafts();
-            else if (animation?.HasAutomationDrafts == true || HasInspectionDraft || HasAiPathDraft)
+            else if (animation?.HasAutomationDrafts == true || HasInspectionDraft || HasAiPathDraft || parachuteDraft != null)
                 throw new Recoil.Zbd.Automation.StudioCommandException("pending_drafts", "Resolve unfinished preview input before changing documents.");
         };
         ViewModel.ValidateReload = doc => { RequireAutomationMutationAvailable(); RequireNoDrafts(doc); };
@@ -792,14 +792,14 @@ public partial class MainWindow : Window
             if (sourceWorkspaceBusy) { CancelSourceBuilds(); ViewModel.Status = "Cancelling the rebuild so the application can close…"; }
             return;
         }
-        if (automationCloseRequested && (ViewModel.Documents.Any(d => d.IsDirty) || HasZoneDraft || HasInspectionDraft || HasAiPathDraft || animation?.HasAutomationDrafts == true || propertiesWindow?.HasPendingDrafts == true || scene?.IsPickupDragging == true))
+        if (automationCloseRequested && (ViewModel.Documents.Any(d => d.IsDirty) || HasZoneDraft || HasInspectionDraft || HasAiPathDraft || parachuteDraft != null || animation?.HasAutomationDrafts == true || propertiesWindow?.HasPendingDrafts == true || scene?.IsPickupDragging == true))
         {
             automationCloseRequested = false; e.Cancel = true;
             ViewModel.Status = "Close canceled: the workspace has new edits or unfinished input. Resolve them before closing.";
             return;
         }
         System.Windows.Input.Keyboard.ClearFocus();
-        if (!allowClose && (ViewModel.Documents.Any(d => d.IsDirty) || HasZoneDraft || HasInspectionDraft || HasAiPathDraft || animation?.HasPendingDrafts == true || propertiesWindow?.HasPendingDrafts == true))
+        if (!allowClose && (ViewModel.Documents.Any(d => d.IsDirty) || HasZoneDraft || HasInspectionDraft || HasAiPathDraft || parachuteDraft != null || animation?.HasPendingDrafts == true || propertiesWindow?.HasPendingDrafts == true))
         {
             e.Cancel = true; resolvingClose = true;
             try

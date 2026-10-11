@@ -18,6 +18,7 @@ public sealed partial class SceneViewport
 {
     public const int MaximumParachuteSamples = 216_001, MaximumParachuteWindows = 256, MaximumParachuteReleases = 4096;
     private ParachutePathPoint[] parachutePath = [];
+    private int[] parachuteNextMoving = [], parachutePreviousMoving = [];
     private ParachuteWindowOverlay[] parachuteWindows = [];
     private ParachuteWindowOverlay? parachutePreview;
     private TopMostGroup3D? parachuteOverlay;
@@ -26,6 +27,8 @@ public sealed partial class SceneViewport
     private ViewPose? parachuteMarkerPose;
     private double parachuteMarkerWidth, parachuteMarkerHeight;
     private int parachutePointerSegment;
+    private double parachutePointerPhase;
+    private int parachutePointerDirection;
     public Guid? SelectedParachuteWindow { get; private set; }
     public bool IsParachutePointerMoving { get; private set; }
     public bool HasParachutePreview => parachutePreview != null;
@@ -60,6 +63,21 @@ public sealed partial class SceneViewport
         var frozenPath = path.ToArray();
         var frozenWindows = windows.Select(w => w with { Releases = w.Releases.ToArray() }).ToArray();
         ClearParachutes(); parachutePath = frozenPath; parachuteWindows = frozenWindows;
+        // Stationary samples still carry distinct times. Cache only their adjoining moving segments,
+        // so crossing a long hover takes constant work without searching unrelated visits of the path.
+        parachuteNextMoving = new int[path.Count - 1]; parachutePreviousMoving = new int[path.Count - 1];
+        int moving = -1;
+        for (int i = 0; i < parachutePreviousMoving.Length; i++)
+        {
+            if (frozenPath[i].Position != frozenPath[i + 1].Position) moving = i;
+            parachutePreviousMoving[i] = moving;
+        }
+        moving = -1;
+        for (int i = parachuteNextMoving.Length - 1; i >= 0; i--)
+        {
+            if (frozenPath[i].Position != frozenPath[i + 1].Position) moving = i;
+            parachuteNextMoving[i] = moving;
+        }
         parachuteOverlay = new(); viewport.Items.Add(parachuteOverlay);
         parachuteLine = new()
         {
@@ -146,6 +164,7 @@ public sealed partial class SceneViewport
         var window = EffectiveParachuteWindows().FirstOrDefault(w => w.Id == SelectedParachuteWindow)
             ?? throw new InvalidOperationException("Select a drop window before moving it.");
         CancelNavigation(); StopCameraMotion(); parachutePointerSegment = ParachuteSegment(window.Start);
+        parachutePointerPhase = window.Start; parachutePointerDirection = 0;
         IsParachutePointerMoving = true; viewport.Focus();
     }
 
@@ -236,19 +255,36 @@ public sealed partial class SceneViewport
         (double Distance, double Fraction) Project(int index)
         {
             if (!ProjectParachute(parachutePath[index].Position, out var a) || !ProjectParachute(parachutePath[index + 1].Position, out var b)) return (double.PositiveInfinity, 0);
-            var edge = b - a; double fraction = edge.LengthSquared < 1e-10 ? 0 : Math.Clamp(System.Windows.Vector.Multiply(point - a, edge) / edge.LengthSquared, 0, 1);
+            var edge = b - a;
+            double fraction = edge.LengthSquared < 1e-10
+                ? Math.Clamp((parachutePointerPhase - parachutePath[index].Phase) / (parachutePath[index + 1].Phase - parachutePath[index].Phase), 0, 1)
+                : Math.Clamp(System.Windows.Vector.Multiply(point - a, edge) / edge.LengthSquared, 0, 1);
             return ((point - (a + edge * fraction)).LengthSquared, fraction);
         }
         int current = parachutePointerSegment; var best = Project(current);
-        // Each step strictly improves distance. This cannot teleport to a disconnected visit of a crossing.
+        // Strict distance descent can cross an adjoining run of identical world positions, but never
+        // skip a moving segment merely because its projection overlaps a different visit or is edge-on.
         for (int count = 0; count < Math.Min(parachutePath.Length, 1024); count++)
         {
-            int next = current; var candidate = best;
-            foreach (int adjacent in new[] { current - 1, current + 1 })
+            int next = current; var candidate = best; bool ambiguous = false;
+            foreach (int direction in new[] { -1, 1 })
             {
-                if (adjacent < 0 || adjacent >= parachutePath.Length - 1) continue;
+                int neighbor = current + direction;
+                if (neighbor < 0 || neighbor >= parachutePath.Length - 1) continue;
+                int adjacent = direction < 0 ? parachutePreviousMoving[neighbor] : parachuteNextMoving[neighbor];
+                if (adjacent < 0) continue;
                 var projected = Project(adjacent);
-                if (projected.Distance + 1e-8 < candidate.Distance) { next = adjacent; candidate = projected; }
+                if (projected.Distance + 1e-8 < candidate.Distance) { next = adjacent; candidate = projected; ambiguous = false; }
+                else if (next != current && Math.Abs(projected.Distance - candidate.Distance) <= 1e-8 && projected.Distance + 1e-8 < best.Distance)
+                {
+                    if (parachutePointerDirection == direction) { next = adjacent; candidate = projected; ambiguous = false; }
+                    else if (parachutePointerDirection != Math.Sign(next - current)) ambiguous = true;
+                }
+            }
+            if (ambiguous)
+            {
+                Information?.Invoke("Both flight phases leave this hover along the same screen path. Use the local start time to choose the intended phase.");
+                return true;
             }
             if (next == current) break;
             current = next; best = candidate;
@@ -259,14 +295,21 @@ public sealed partial class SceneViewport
             // A screen-space fraction is not a world-segment fraction under perspective projection.
             double fraction = best.Fraction;
             var pose = CaptureView();
-            if (pose.Projection != "orthographic")
+            if (pose.Projection != "orthographic" && ProjectParachute(parachutePath[current].Position, out var screenStart) &&
+                ProjectParachute(parachutePath[current + 1].Position, out var screenEnd) && (screenEnd - screenStart).LengthSquared >= 1e-10)
             {
                 var forward = pose.LookDirection; forward.Normalize();
                 double Depth(Vector3 p) => Vector3D.DotProduct(new Point3D(p.X, p.Y, p.Z) - pose.Position, forward);
                 double a = Depth(parachutePath[current].Position), b = Depth(parachutePath[current + 1].Position);
                 fraction = fraction / b / ((1 - fraction) / a + fraction / b);
             }
-            if (double.IsFinite(fraction)) ParachuteMoveRequested?.Invoke(current, Math.Clamp(fraction, 0, 1));
+            if (double.IsFinite(fraction))
+            {
+                fraction = Math.Clamp(fraction, 0, 1);
+                double phase = parachutePath[current].Phase + fraction * (parachutePath[current + 1].Phase - parachutePath[current].Phase);
+                if (Math.Abs(phase - parachutePointerPhase) > 1e-10) parachutePointerDirection = Math.Sign(phase - parachutePointerPhase);
+                parachutePointerPhase = phase; ParachuteMoveRequested?.Invoke(current, fraction);
+            }
         }
         return true;
     }
@@ -274,6 +317,7 @@ public sealed partial class SceneViewport
     private void ClearParachutes()
     {
         IsParachutePointerMoving = false; parachutePreview = null; parachutePath = []; parachuteWindows = [];
+        parachuteNextMoving = []; parachutePreviousMoving = [];
         SelectedParachuteWindow = null; parachuteMarkerPose = null;
         if (parachuteOverlay != null) { viewport.Items.Remove(parachuteOverlay); parachuteOverlay.Children.Clear(); parachuteOverlay.Dispose(); parachuteOverlay = null; }
         parachuteLine?.Dispose(); parachuteStarts?.Dispose(); parachuteReleases?.Dispose(); parachuteSelected?.Dispose();

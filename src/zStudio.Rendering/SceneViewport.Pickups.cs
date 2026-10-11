@@ -74,7 +74,7 @@ public sealed partial class SceneViewport
         if (IsFlyActive || IsPickupDragging) return true;
         // The screen-space cube owns its clicks, even over scene geometry or
         // handles. Resolve it before the editing lock can consume a scene click.
-        if (!IsAiPathPointerTransform && !IsParachutePointerMoving && !HasParachutePreview && aiPathBoxStart == null && e.ChangedButton == MouseButton.Left && NavigateCubeAt(point)) return true;
+        if (!IsAiPathPointerTransform && !IsParachutePointerMoving && aiPathBoxStart == null && e.ChangedButton == MouseButton.Left && NavigateCubeAt(point)) return true;
         return HandleParachuteDown(point, e) || HandleAiPathDown(point, e) || HandleZoneDown(point, e) || HandleTerrainBrushDown(point, e) || HandlePickupPointerDown(point, e) || HandleInspectionClick(point, e) || HandleAiPointerDown(point, e);
     }
     private void ConfigurePickups()

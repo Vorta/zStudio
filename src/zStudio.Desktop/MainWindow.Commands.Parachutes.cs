@@ -83,6 +83,7 @@ public partial class MainWindow
                 else if (action == "confirm") changed = await ConfirmParachuteAsync(token);
                 else
                 {
+                    RequireParachuteInput(draft);
                     bool time = a.ContainsKey("start"), segment = a.ContainsKey("segment"), fraction = a.ContainsKey("fraction");
                     if (time == segment || segment != fraction) throw new StudioCommandException("invalid_argument", "Supply start, or segment and fraction together.");
                     float start = time ? (float)Number(a, "start") : Recoil.Zbd.Core.Animation.VtolDropWindows.PlanMove(state.Analysis!, draft.Window.Id, Int(a, "segment"), (float)Number(a, "fraction")).NewStart;

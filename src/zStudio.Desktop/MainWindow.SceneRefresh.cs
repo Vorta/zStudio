@@ -73,7 +73,7 @@ public partial class MainWindow
             if (!OwnsRequest()) return null;
             await RefreshAssetInspectionAsync(doc, asset, token);
             if (!OwnsRequest()) return null;
-            if (doc.Revision != inspectionRevision || HasInspectionDraft || HasAiPathDraft)
+            if (doc.Revision != inspectionRevision || HasInspectionDraft || HasAiPathDraft || parachuteDraft != null)
                 throw new InvalidOperationException("Preview refresh retained the current scene because a new edit or position draft arrived.");
 
             var view = previous.CaptureView();
