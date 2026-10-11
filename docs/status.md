@@ -1,10 +1,16 @@
+## Blender review corrections — combined local validation complete (2026-10-11)
+
+The saved-paint, mirrored-face and confirmation fixes pass together on the PR and final version tree. Both Release builds have zero warnings or errors; both trees pass all 2,887 Core and 188 Desktop tests with original 1999 and MW3 data, and the final original-1998 source-project/terrain subset passes all 17 tests. The integrated PR independently passes the same Core/Desktop suites and all 75 PR-watch checks. No tests were skipped, and Desktop settings were restored exactly.
+
+Original-code mutation checks reproduce all three regressions; restored focused checks and separate challenges pass, including actual Blender edits and the GUI confirmation helper. These are local validation results. A fresh full-PR review and passing CI on the current head remain required before merge; no release or tag is part of this work.
+
 ## Blender saved texture correction — focused validation complete (2026-10-11)
 
 Blender texture updates now compare exported PNGs with the original digest in the checkout manifest. Saving a painted imported image no longer makes those new pixels appear unchanged. The existing newer-project texture regression now covers this ordinary image-save path, explicit conflict consent, Undo/Redo and verified Save/reopen. A forced original-code rebuild fails that regression; the restored build has zero warnings/errors and all 77 focused tests pass. Fresh headless Blender 5.2.2 import/paint/save/reload/export checks reproduce the omission before the fix and preserve the exact painted PNG after it. Separate controls retain repeated painted updates, unchanged exports over newer project pixels, absent input copies and byte-identical project textures. Full combined PR/final gates and independent review remain separate.
 
 ## Blender conflict confirmation — focused Core validation complete (2026-10-11)
 
-The GUI now confirms one sealed export against the same prepared project inputs used for acceptance. An external source edit while the question is open refuses the update instead of being silently added to a forced retry; a newer Blender export does not replace the already sealed content. MCP retains its explicit force decision and shared dependency verification. The Release build has zero warnings or errors, the 19 focused Blender tests pass, and a separate challenge covers source/export changes, decline, cancellation and concurrent pending edits. The actual GUI regression and original-code mutation runners are staged; their execution and combined full validation are pending.
+The GUI now confirms one sealed export against the same prepared project inputs used for acceptance. An external source edit while the question is open refuses the update instead of being silently added to a forced retry; a newer Blender export does not replace the already sealed content. MCP retains its explicit force decision and shared dependency verification. The Release build has zero warnings or errors, the 19 focused Blender tests pass, and a separate challenge covers source/export changes, decline, cancellation and concurrent pending edits. The actual GUI regression passes; restoring the original retry reproduces the missing external-change refusal. Separate checkout, undo and operation-publication GUI checks also pass.
 
 ## Mirrored Blender face correspondence — focused validation complete (2026-10-11)
 
