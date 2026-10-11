@@ -16,6 +16,8 @@ The path retains ordered sample and time identities. At a crossing, pointer move
 
 Other editing modes and Fly cannot overlap a move. Camera changes are blocked during pointer movement; a numeric draft allows ordinary camera inspection. Document changes, replacement and resource changes invalidate old analyses. Unfinished numeric input remains a draft until explicitly confirmed or canceled. A failed source rebuild rolls back the accepted source change and retains a still-wanted draft for retry; explicit cancellation does not restore it.
 
+While a new start is being analyzed or input is invalid, the viewport keeps the last valid draft preview. Invalid input shows its reason and disables Confirm. MCP samples/releases mirror that displayed preview; retrying valid input updates it, and Cancel restores the original markers.
+
 ## Ownership and saves
 
 In a compiled world, the actual companion `anim.zbd` document opens in Files while the world remains visible. The Parachute panel identifies that animation owner. Its Undo, Redo and Save controls target that document; the title-bar commands continue to target the displayed world. Animation Save produces a verified **new copy outside the source root**, using the existing animation Save As protection. It does not overwrite the original archive or automatically install the copy into a mission.

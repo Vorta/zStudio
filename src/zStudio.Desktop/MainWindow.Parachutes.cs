@@ -41,6 +41,8 @@ public partial class MainWindow
         public string? Error;
         public VtolDropMovePlan? Plan;
         public VtolDropSnapshot? Preview;
+        // Incomplete/rejected input invalidates acceptance but retains the last renderer publication.
+        public VtolDropSnapshot? DisplayedPreview;
         public CancellationTokenSource? Preparing;
         public Task Work = Task.CompletedTask;
         public int Generation;
@@ -181,7 +183,7 @@ public partial class MainWindow
             if (parachuteLoading == cancellation) parachuteLoading = null;
             PublishParachuteOverlay(); UpdateParachutePanel();
         }
-        catch (Exception ex) when (request != parachuteGeneration && ex is OperationCanceledException or StudioCommandException or IOException)
+        catch (Exception ex) when (request != parachuteGeneration && ex is OperationCanceledException or StudioCommandException or IOException or InvalidDataException)
         { throw new StudioCommandException("context_changed", "A newer Parachute request superseded this analysis."); }
         finally { if (parachuteLoading == cancellation) parachuteLoading = null; UpdateParachutePanel(); }
     }
@@ -203,7 +205,7 @@ public partial class MainWindow
             state.Entry = candidate.EntryIndex; (state.Analysis, state.AnalysisRefusal) = result;
             state.Selected = state.World.PickupsLocked ? null : state.Analysis?.Windows.FirstOrDefault()?.Id; PublishParachuteOverlay(); UpdateParachutePanel();
         }
-        catch (Exception ex) when (request != parachuteGeneration && ex is OperationCanceledException or StudioCommandException or IOException)
+        catch (Exception ex) when (request != parachuteGeneration && ex is OperationCanceledException or StudioCommandException or IOException or InvalidDataException)
         { throw new StudioCommandException("context_changed", "A newer Parachute request superseded this analysis."); }
         finally { if (parachuteLoading == cancellation) parachuteLoading = null; UpdateParachutePanel(); }
     }
@@ -242,7 +244,7 @@ public partial class MainWindow
         var state = RequireParachutes(edit: true); RequireNoDrafts();
         var window = state.Analysis?.Windows.FirstOrDefault(w => w.Id == state.Selected) ?? throw new StudioCommandException("selection_required", "Select a drop window.");
         if (!state.Viewport.SelectParachuteWindow(window.Id)) throw new StudioCommandException("busy", "Finish the current selection operation first.");
-        parachuteDraft = new(state, window) { Plan = VtolDropWindows.PlanMove(state.Analysis!, window.Id, window.Start), Preview = state.Analysis };
+        parachuteDraft = new(state, window) { Plan = VtolDropWindows.PlanMove(state.Analysis!, window.Id, window.Start), Preview = state.Analysis, DisplayedPreview = state.Analysis };
         state.Viewport.SetParachutePreview(window.Id, window.EffectiveStart, state.Analysis!.Releases.Where(r => r.WindowId == window.Id).Select(r => new ParachuteRelease(r.Time, r.Position, r.Conditional)).ToArray());
         state.Viewport.SetParachutePointerMove(pointer); UpdateParachutePanel();
     }
@@ -275,9 +277,10 @@ public partial class MainWindow
                 draft.Plan = plan; draft.Preview = preview;
                 draft.Session.Viewport.SetParachutePreview(draft.Window.Id, preview.Windows.Single(w => w.Id == draft.Window.Id).EffectiveStart,
                     preview.Releases.Where(r => r.WindowId == draft.Window.Id).Select(r => new ParachuteRelease(r.Time, r.Position, r.Conditional)).ToArray());
+                draft.DisplayedPreview = preview;
             }
             catch (OperationCanceledException) { if (draft.Generation == generation && parachuteDraft == draft) draft.Error = "Preview canceled; enter the start time again to retry."; }
-            catch (Exception ex) when (ex is ArgumentException or IOException or InvalidOperationException or StudioCommandException)
+            catch (Exception ex) when (ex is ArgumentException or IOException or InvalidDataException or InvalidOperationException or StudioCommandException)
             { if (draft.Generation == generation && parachuteDraft == draft) draft.Error = ex.Message; }
             finally { if (parachuteDraft == draft && draft.Generation == generation) UpdateParachutePanel(); }
         }
@@ -375,7 +378,7 @@ public partial class MainWindow
     {
         long? request = null;
         try { await ShowParachutesAsync(CancellationToken.None, entry, generation => request = generation); }
-        catch (Exception ex) when (ex is OperationCanceledException or StudioCommandException or IOException)
+        catch (Exception ex) when (ex is OperationCanceledException or StudioCommandException or IOException or InvalidDataException)
         {
             // The edit/history step already succeeded. Only its own refresh may clean up or report
             // a failure; a newer Show, draft, navigation or explicit close owns the workspace now.

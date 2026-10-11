@@ -75,7 +75,32 @@ internal static class ParachuteMcpChecks
             }
             state = (await PathAction("begin"))["parachute"]!;
             string draft = state["draft"]!["token"]!.GetValue<string>();
+            var baselineReleases = (await PathAction("releases"))["items"]!.ToJsonString();
             await PathAction("set", new() { ["token"] = draft, ["start"] = 2 });
+            var displayedReleases = (await PathAction("releases"))["items"]!.ToJsonString();
+            Assert.NotEqual(baselineReleases, displayedReleases);
+            var rendererPreview = (Recoil.Zbd.Rendering.ParachuteWindowOverlay)typeof(Recoil.Zbd.Rendering.SceneViewport)
+                .GetField("parachutePreview", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(Viewport())!;
+            double displayedFirstRelease = rendererPreview.Releases[0].Phase;
+            ((TextBox)main.FindName("ParachuteStart")).Text = "4";
+            await UntilAsync(async () => (await State())?["draft"]?["error"] != null);
+            state = (await State())!;
+            Assert.False(state["draft"]!["ready"]!.GetValue<bool>());
+            Assert.False(((Button)main.FindName("ParachuteConfirm")).IsEnabled);
+            Assert.Equal("4", state["draft"]!["input"]!.GetValue<string>());
+            Assert.Equal(state["draft"]!["error"]!.GetValue<string>(), ((TextBlock)main.FindName("ParachuteMessage")).Text);
+            Assert.Equal(displayedReleases, (await PathAction("releases"))["items"]!.ToJsonString());
+            Assert.Equal(displayedFirstRelease, ((Recoil.Zbd.Rendering.ParachuteWindowOverlay)typeof(Recoil.Zbd.Rendering.SceneViewport)
+                .GetField("parachutePreview", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(Viewport())!).Releases[0].Phase);
+            Assert.Equal("invalid_argument", (await Job("parachute", await Arguments("confirm", new() { ["token"] = draft }), "failed"))["code"]!.GetValue<string>());
+            ((TextBox)main.FindName("ParachuteStart")).Text = "-";
+            state = (await State())!;
+            Assert.False(state["draft"]!["ready"]!.GetValue<bool>());
+            Assert.Contains("finite", state["draft"]!["error"]!.GetValue<string>());
+            Assert.Equal(displayedReleases, (await PathAction("releases"))["items"]!.ToJsonString());
+            await PathAction("set", new() { ["token"] = draft, ["start"] = 2 });
+            Assert.True((await State())!["draft"]!["ready"]!.GetValue<bool>());
+            Assert.Equal(displayedReleases, (await PathAction("releases"))["items"]!.ToJsonString());
 
             // Escape while the source worker is held is an explicit discard, not a failed acceptance to restore.
             TaskCompletionSource preparing = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -109,6 +134,7 @@ internal static class ParachuteMcpChecks
                     release.Release();
                     Assert.Equal("no_draft", (await canceled)["code"]!.GetValue<string>());
                     Assert.Null((await State())!["draft"]);
+                    Assert.Equal(baselineReleases, (await PathAction("releases"))["items"]!.ToJsonString());
                     Assert.False(world.IsDirty); Assert.Empty(world.SourceWorld!.Workspace.History);
                 }
                 finally { release.Release(); main.SourceEditPreparing = null; }

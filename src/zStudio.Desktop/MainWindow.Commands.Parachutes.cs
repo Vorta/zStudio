@@ -45,7 +45,7 @@ public partial class MainWindow
                 if (a["ownerRevision"]?.GetValue<long>() != state.Owner.Revision) throw new StudioCommandException("revision_conflict", "Supply the current animation ownerRevision.");
             if (action is "samples" or "releases")
             {
-                var analysis = parachuteDraft?.Preview ?? state.Analysis;
+                var analysis = parachuteDraft?.DisplayedPreview ?? state.Analysis;
                 return action == "samples"
                     ? Page(analysis?.Samples.Select((p, i) => new { segment = i, time = p.Time, position = JsonData.Vector(p.Position) }) ?? [], a)
                     : Page(analysis?.Releases.Select(p => new { window = p.WindowId, time = p.Time, position = JsonData.Vector(p.Position), conditional = p.Conditional }) ?? [], a);
