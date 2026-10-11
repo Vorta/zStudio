@@ -576,11 +576,21 @@ public sealed class SourceBlenderTests
         Assert.DoesNotContain(plan.Changes, c => c.Relative == "data/m1/textures/rock.png");
         Apply(workspace, plan);
         Assert.Equal(newer, workspace.Read("data/m1/textures/rock.png", Token));
-        // A texture Blender did change, over a newer project version, is a conflict.
+        // Image > Save changes the imported PNG too. That mutable copy is not the checkout baseline:
+        // painting it and exporting the same pixels must still conflict with the newer project version.
         string outbox = Path.Combine(checkout.Outbox, "edit", "textures", "rock.png");
-        var painted = PngDecoder.Decode(File.ReadAllBytes(outbox), token: Token); painted.Rgba[4] ^= 0xFF; File.WriteAllBytes(outbox, PngEncoder.Encode(painted, Token));
+        var painted = PngDecoder.Decode(File.ReadAllBytes(outbox), token: Token); painted.Rgba[4] ^= 0xFF;
+        byte[] paintedBytes = PngEncoder.Encode(painted, Token);
+        File.WriteAllBytes(outbox, paintedBytes);
+        File.WriteAllBytes(Path.Combine(Path.GetDirectoryName(checkout.Input)!, "textures", "rock.png"), paintedBytes);
         workspace.Undo();
         Assert.Contains("data/m1/textures/rock.png", Assert.Throws<BlenderConflictException>(() => SourceBlender.PlanUpdate(workspace, checkout, "edit/m1.gltf", token: Token)).Files);
+        var forced = SourceBlender.PlanUpdate(workspace, checkout, "edit/m1.gltf", force: true, token: Token);
+        Apply(workspace, forced);
+        Assert.Equal(paintedBytes, workspace.Read("data/m1/textures/rock.png", Token));
+        workspace.Undo(); Assert.Equal(newer, workspace.Read("data/m1/textures/rock.png", Token));
+        workspace.Redo(); workspace.Save(Token);
+        Assert.Equal(paintedBytes, new SourceWorkspace(fixture.Project).Read("data/m1/textures/rock.png", Token));
         // An unreadable PNG is refused before anything changes.
         File.WriteAllBytes(outbox, [0x89, 0x50, 0x4E, 0x47, 1, 2, 3]);
         Assert.Contains("not a readable PNG", Assert.Throws<InvalidDataException>(() => SourceBlender.PlanUpdate(workspace, checkout, "edit/m1.gltf", force: true, token: Token)).Message);

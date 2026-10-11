@@ -448,7 +448,7 @@ public static partial class SourceBlender
     /// <summary>
     /// Seals the newest export (or <paramref name="export"/>, relative to the outbox), checks it and plans the project changes:
     /// the model's glTF (with buffer and texture references pointing into the project) and buffer, and each texture Blender
-    /// changed (new, or different from its checked-out copy). A texture other models also use changes for them too; the
+    /// changed (new, or different from its original checkout digest). A texture other models also use changes for them too; the
     /// notes say so. Files the export would replace must still be as checked out (or as an earlier update from this
     /// checkout left them): otherwise the update is refused with <see cref="BlenderConflictException"/>, unless
     /// <paramref name="force"/> replaces them anyway.
@@ -586,7 +586,12 @@ public static partial class SourceBlender
         // Textures: by engine name (the file name), found where the model's textures were or, for a new one, beside them.
         // (A checkout holds one file per name; the first of any repeated name in an older manifest counts.)
         Dictionary<string, string> original = new(StringComparer.OrdinalIgnoreCase);
-        foreach (var file in checkout.Files.Where(f => f.Checkout.StartsWith("input/textures/", StringComparison.OrdinalIgnoreCase))) original.TryAdd(Path.GetFileName(file.Project), file.Project);
+        Dictionary<string, string> originalHashes = new(StringComparer.OrdinalIgnoreCase);
+        foreach (var file in checkout.Files.Where(f => f.Checkout.StartsWith("input/textures/", StringComparison.OrdinalIgnoreCase)))
+        {
+            string name = Path.GetFileName(file.Project);
+            if (original.TryAdd(name, file.Project)) originalHashes.Add(name, file.Sha256);
+        }
         string textureFolder = original.Values.Select(p => Path.GetDirectoryName(p)!.Replace('\\', '/')).GroupBy(f => f, StringComparer.OrdinalIgnoreCase).OrderByDescending(g => g.Count()).Select(g => g.Key).FirstOrDefault()
             ?? DefaultTextureFolder(model);
         // A name is one project texture, so images of one name must be one picture: two different PNGs of one name (in
@@ -617,8 +622,8 @@ public static partial class SourceBlender
             _ = Transparency(unescaped);
             exported[name] = (unescaped, png);
             // Only what Blender changed: a checked-out texture it wrote back as it was stays as the project has it now.
-            string inputCopy = Path.Combine(checkout.Folder, "input", "textures", name);
-            if (original.ContainsKey(name) && File.Exists(inputCopy) && SourceProject.FileEquals(inputCopy, png, token)) continue;
+            // Image > Save can replace the imported PNG, so only the manifest records the original checkout bytes.
+            if (originalHashes.TryGetValue(name, out string? originalHash) && originalHash.Equals(SourceProject.Sha256(png), StringComparison.OrdinalIgnoreCase)) continue;
             // A texture the update writes needs a name a save can write (edit admission refuses it too, by its project path).
             if (SourceProject.IsDeviceName(name))
                 throw new InvalidDataException($"Texture {name}: Windows reserves the name '{Path.GetFileNameWithoutExtension(name)}' for a device, so the project cannot save {name}. Rename the image and its PNG file in Blender, then export again.");
