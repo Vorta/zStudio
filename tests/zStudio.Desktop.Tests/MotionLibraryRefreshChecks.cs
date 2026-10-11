@@ -3,6 +3,8 @@ using System.IO.Pipes;
 using System.Reflection;
 using System.Text.Json.Nodes;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
+using System.Windows.Data;
 using System.Windows.Threading;
 using ModelContextProtocol.Client;
 using ModelContextProtocol.Protocol;
@@ -38,8 +40,30 @@ internal static class MotionLibraryRefreshChecks
             await using var pipe = new NamedPipeClientStream(".", host.Instance.Pipe, PipeDirection.InOut, PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly); await pipe.ConnectAsync(token);
             await using var client = await McpClient.CreateAsync(new StreamClientTransport(pipe, pipe), cancellationToken: token);
             await Job("open_document", new() { ["path"] = path }); var doc = main.ViewModel.Documents.Single();
+            // Defer the grid's selection projection, as happens while its tab is unrealized/reparented. The command
+            // must initiate and await its own preview even when no SelectionChanged event can start that work.
+            var assetGrid = (DataGrid)main.FindName("AssetGrid");
+            var selectionBinding = BindingOperations.GetBindingBase(assetGrid, Selector.SelectedItemProperty)!;
+            BindingOperations.ClearBinding(assetGrid, Selector.SelectedItemProperty);
             await Job("select_asset", new() { ["document"] = doc.SessionId.ToString(), ["kind"] = "Motion", ["index"] = 1 });
             var editor = Assert.IsType<MotionEditor>(CurrentMotion()); Guid clip = doc.ResourceEdits!.Current.Members[1].Id; Assert.Equal(clip, editor.MemberId);
+            // Accept a real new snapshot before its normal preview-refresh orchestration runs. The same asset ID
+            // must not cause a reselect to trust the old record/clip while the grid is still disconnected.
+            var previousRecord = doc.PreviewDocument.Assets.Single(a => a.Kind == AssetKind.Motion);
+            doc.ResourceEdits.Accept(await doc.ResourceEdits.PrepareMotionAsync(clip, "timing", loopTime: 2.5f, token: token));
+            var currentRecord = doc.PreviewDocument.Assets.Single(a => a.Kind == AssetKind.Motion);
+            Assert.Equal(previousRecord.Id, currentRecord.Id); Assert.NotSame(previousRecord, currentRecord);
+            Assert.Equal(2, State()["loopSeconds"]!.GetValue<double>());
+            await Job("select_asset", new() { ["document"] = doc.SessionId.ToString(), ["kind"] = "Motion", ["index"] = 1 });
+            Assert.Same(editor, CurrentMotion()); Assert.Equal(2.5, State()["loopSeconds"]!.GetValue<double>());
+            Guid published = (Guid)typeof(MainWindow).GetField("previewId", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(main)!;
+            var publishedWork = (Task)typeof(MainWindow).GetField("previewWork", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(main)!;
+            BindingOperations.SetBinding(assetGrid, Selector.SelectedItemProperty, selectionBinding);
+            await main.Dispatcher.InvokeAsync(() => { }, DispatcherPriority.Background);
+            Assert.Same(doc.SelectedAsset, assetGrid.SelectedItem);
+            Assert.Same(editor, CurrentMotion());
+            Assert.Equal(published, (Guid)typeof(MainWindow).GetField("previewId", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(main)!);
+            Assert.Same(publishedWork, (Task)typeof(MainWindow).GetField("previewWork", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(main)!);
             await editor.SelectAssemblyAsync(3, token); Assert.Equal(3, editor.AssemblyMember);
 
             // A cleared or filtered Assets selection is not a request to switch the displayed motion, whether or

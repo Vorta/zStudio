@@ -208,8 +208,9 @@ internal static class McpWorkspaceChecks
                 while (shutdown == null) await Task.Delay(10, deadline.Token);
                 await shutdown.WaitAsync(deadline.Token);
                 job = await Call("operation", new() { ["id"] = id });
-                Assert.Equal("canceled", job["State"]!.GetValue<string>());
-                Assert.Equal(1, indexed); Assert.False(main.ViewModel.IsBusy);
+                // Published, the root stays open: the cancel stopped only indexing, which the completed result reports.
+                Assert.Equal("completed", job["State"]!.GetValue<string>()); Assert.False(job["result"]!["indexComplete"]!.GetValue<bool>());
+                Assert.Equal(1, indexed); Assert.False(main.ViewModel.IsBusy); Assert.Equal(Path.GetFullPath(root), main.ViewModel.RootPath);
                 var reopened = await main.ViewModel.OpenFileAsync(Path.Combine(root, "0.zbd"));
                 Assert.NotNull(reopened); main.ViewModel.CloseResolved(reopened);
                 main.ViewModel.PropertyChanged -= changed;

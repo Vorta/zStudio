@@ -1,9 +1,30 @@
 [
   {
     "Name": "zstudio_state",
-    "Description": "Read the visible workspace, document identities, revisions and current preview.",
+    "Description": "Read the visible workspace and page document identities/revisions, preserving complete paths. Offset defaults to 0; limit defaults to 64, maximum 64. Documents have a 1 MiB pre-projection metadata allowance, so a page may be shorter; follow nextOffset, with total and offset. A single unsupported oversized row returns too_large. Status is a 512-character preview with statusTruncated. Source document workspace summaries contain counts and undo/redo state; read source_changes for the shared dirty-file and history details. Global state contentEdits summaries return fileCount with empty files and filesTruncated; per-document command results preview at most 64 file paths/targets of 512 characters, with per-row PathTruncated/destinationTruncated.",
     "Mutates": false,
-    "Parameters": []
+    "Parameters": [
+      {
+        "Name": "offset",
+        "Type": "integer",
+        "Description": "Zero-based document offset; default 0.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": 0,
+        "Maximum": 2147483647
+      },
+      {
+        "Name": "limit",
+        "Type": "integer",
+        "Description": "Document page size 1\u201364; default 64. Follow nextOffset for shorter metadata-bounded pages.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": 1,
+        "Maximum": 64
+      }
+    ]
   },
   {
     "Name": "zstudio_capabilities",
@@ -13,7 +34,7 @@
   },
   {
     "Name": "zstudio_open_root",
-    "Description": "Open and index a ZBD root or source project in the visible workspace. Dirty documents must be explicitly saved or closed first. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Description": "Open and index a ZBD root or source project in the visible workspace. Dirty documents must be explicitly saved or closed first. indexComplete and indexNotice disclose partial asset indexing; Files and direct opening remain available when its retention limit is reached. Returns an operation ID; use zstudio_operation to await/read the result.",
     "Mutates": true,
     "Parameters": [
       {
@@ -36,7 +57,7 @@
   },
   {
     "Name": "zstudio_files",
-    "Description": "List recognized files in the current root.",
+    "Description": "List recognized files in the current root. Pages may contain fewer rows than limit to preserve complete file identities within the response budget; follow nextOffset.",
     "Mutates": false,
     "Parameters": [
       {
@@ -71,7 +92,7 @@
   },
   {
     "Name": "zstudio_search",
-    "Description": "Search indexed assets without altering GUI selection; names are not identities.",
+    "Description": "Search indexed assets without altering GUI selection; names are not identities. indexComplete and indexNotice disclose unfinished or limited indexing; total counts only indexed matches. Indexing retains at most 250,000 assets and 8,388,608 name characters. Files and direct opening remain available when indexing stops.",
     "Mutates": false,
     "Parameters": [
       {
@@ -106,7 +127,7 @@
   },
   {
     "Name": "zstudio_related",
-    "Description": "List related indexed assets for an explicit asset, retaining source identities.",
+    "Description": "List related indexed assets for an explicit asset, retaining source identities. truncated includes incomplete indexing; indexComplete and indexNotice disclose that state independently of page totals.",
     "Mutates": false,
     "Parameters": [
       {
@@ -390,7 +411,7 @@
   },
   {
     "Name": "zstudio_reload_document",
-    "Description": "Stage and reparse a clean document before replacing it, using the current model/resource Save As destination. An already-open destination, failure or pre-publication cancellation retains the document and preview. Dirty documents must first be saved or explicitly closed. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Description": "Stage and reparse a clean document before replacing it, using the current model/resource Save As destination. An already-open destination, failure or pre-publication cancellation retains the document and preview. Dirty documents must first be saved or explicitly closed. A source world instead rebuilds from the project\u0027s current sources and pending edits. External changes to any dirty workspace source cause a conflict, including scripts, models, resources and animation definitions (.zad). Returns an operation ID; use zstudio_operation to await/read the result.",
     "Mutates": true,
     "Parameters": [
       {
@@ -663,7 +684,7 @@
   },
   {
     "Name": "zstudio_operation",
-    "Description": "Read operation status/result. Poll at sensible intervals; cancel is available for exports, validation, source project operations and world comparisons.",
+    "Description": "Read operation status/result. Poll at sensible intervals; cancel is available for exports, validation, source project and source world operations and world comparisons.",
     "Mutates": true,
     "Parameters": [
       {
@@ -677,7 +698,7 @@
       {
         "Name": "cancel",
         "Type": "boolean",
-        "Description": "Request cancellation of an export, validation or source project operation, or world comparison.",
+        "Description": "Request cancellation of an export, validation, source project or source world operation, or world comparison.",
         "Required": false,
         "Choices": null,
         "Properties": null
@@ -3296,7 +3317,7 @@
   },
   {
     "Name": "zstudio_pickup_lock",
-    "Description": "Gate Whole world object cards, selection bounds and transform editing. Locking closes the card; unlock alone does not select an object. Source/tree inspection and hover remain available. Legacy command/state names are retained; new documents start locked. Pending drafts require explicit resolution.",
+    "Description": "Gate Whole world object cards, selection bounds and transform editing. Locking closes the card; unlock alone does not select an object. Source/tree inspection and hover remain available. Legacy command/state names are retained; new documents start locked, and a 1998 demo world (GameZ version 13) stays locked (unlocking it is refused as read_only). Pending drafts require explicit resolution.",
     "Mutates": true,
     "Parameters": [
       {
@@ -3329,7 +3350,7 @@
   },
   {
     "Name": "zstudio_pickup_move",
-    "Description": "Move a pickup to exact coordinates as one undoable operation, including unambiguous difficulty counterparts. Requires unlocked placements.",
+    "Description": "Move a pickup to exact coordinates as one undoable operation, including unambiguous difficulty counterparts. Requires unlocked placements. In a source world the move changes the coordinate tokens of the resource sources (data/mN/zrdr/puppies*.zrd), the world rebuilds and the result is the replacement document.",
     "Mutates": true,
     "Parameters": [
       {
@@ -5017,6 +5038,264 @@
         "Description": "Build profile whose texture packs are listed; default: the profile chosen in Tools \u2192 Build profile, else the project\u0027s default.",
         "Required": false,
         "Choices": null,
+        "Properties": null
+      }
+    ]
+  },
+  {
+    "Name": "zstudio_source_world_open",
+    "Description": "Open (or activate) a mission world of the open source project as its build script assembles it from the project\u0027s glTF models, textures, resources and animation definitions, including the project\u0027s unsaved edits. The world is built privately, as the export builds it, into the project\u0027s zstudio/cache/worlds folder (zStudio\u0027s derived data, which builds never read and which is removed when the world closes), and shown in Whole world. Edit it with zstudio_source_world_add_model, the placement commands (pickup_lock, pickup_move, scene_card), undo_redo and save_document, which change only the project\u0027s sources; every open world of the project shares one edit history and one save. Build problems are listed in problems. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Mutates": true,
+    "Parameters": [
+      {
+        "Name": "mission",
+        "Type": "string",
+        "Description": "Mission folder, for example m1 (see zstudio_source_status: outputs of family world).",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      }
+    ]
+  },
+  {
+    "Name": "zstudio_source_world_models",
+    "Description": "List physical glTF models and map-owned logical aliases of the open source project, including pending edits, paged and filtered by path. Large paths shorten the page without shortening paths; follow nextOffset. A project replacement during inspection returns context_changed; retry for the current project.",
+    "Mutates": false,
+    "Parameters": [
+      {
+        "Name": "offset",
+        "Type": "integer",
+        "Description": "Zero-based result offset.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": -2147483648,
+        "Maximum": 2147483647
+      },
+      {
+        "Name": "limit",
+        "Type": "integer",
+        "Description": "Page size, 1\u2013200; default 100.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": -2147483648,
+        "Maximum": 2147483647
+      },
+      {
+        "Name": "query",
+        "Type": "string",
+        "Description": "Case-insensitive name/path or displayed-text filter, applied before pagination.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      }
+    ]
+  },
+  {
+    "Name": "zstudio_source_world_definitions",
+    "Description": "List animation definition files that other missions list with an animation for a root name and this source world does not list yet, such as an enemy\u0027s destruction animations. Filter by path before paging; pages retain full paths and contain at most 64 files. Follow nextOffset to discover every matching file; an addition selects at most 64 files.",
+    "Mutates": false,
+    "Parameters": [
+      {
+        "Name": "document",
+        "Type": "string",
+        "Description": "Document lifetime ID from zstudio_state.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "name",
+        "Type": "string",
+        "Description": "Root node name, as the model\u0027s node would be named.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "offset",
+        "Type": "integer",
+        "Description": "Zero-based matching file offset; follow nextOffset.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": 0,
+        "Maximum": 2147483647
+      },
+      {
+        "Name": "limit",
+        "Type": "integer",
+        "Description": "Page size, 1\u201364; default 64.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": 1,
+        "Maximum": 64
+      },
+      {
+        "Name": "query",
+        "Type": "string",
+        "Description": "Case-insensitive path filter, applied before pagination.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      }
+    ]
+  },
+  {
+    "Name": "zstudio_source_world_add_model",
+    "Description": "Add a physical model or logical alias to a source world. A path already bound in the receiving mission uses that mission\u0027s geometry, references and zones; otherwise a unique donor closure is imported, and conflicting dependencies refuse the addition. Add it as one undoable change of the project\u0027s workspace: its folder\u0027s SetModelDirectory and a LoadGameGen line go before the line of gamegen/mN.gs that writes the world, with Object3DTranslate/Object3DRotate and AddChild under the world when placed. Without position the model is an unplaced root that resources such as aiv.zrd place copies of by name. Definition files are appended to data/mN/zrdr/anim.zad, keeping its comments and layout. The world rebuilds and the result is the replacement document; a change the world cannot be built with, or that makes another mission file fail or makes the game reject one (an animation bound to a node, attachment or effect this world lacks), returns build_failed and is taken back, as is one canceled before the replacement document is published to the workspace. Once published, the edit is accepted: the operation waits for its own preview transition, but later cancellation, navigation or preview failure does not retract it. Preview failures are reported in Problems. A stale world returns stale_document until reload_document. While a world of the project rebuilds, its other edits, undo_redo, save_document and reload_document return busy. Nothing is written until save_document. Completion definitionFiles previews keep at most 64 paths of 512 characters with definitionFileCount and definitionFilesTruncated; inputs and editing retain complete paths. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Mutates": true,
+    "Parameters": [
+      {
+        "Name": "document",
+        "Type": "string",
+        "Description": "Document lifetime ID from zstudio_state.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "revision",
+        "Type": "integer",
+        "Description": "Expected current document revision. Read before editing.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": 0,
+        "Maximum": 9223372036854775807
+      },
+      {
+        "Name": "model",
+        "Type": "string",
+        "Description": "Project path of the glTF model, as zstudio_source_world_models lists it (for example data/m2/models/bft/ltank.gltf).",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "name",
+        "Type": "string",
+        "Description": "Node name: 1\u201331 letters, digits, \u0027_\u0027, \u0027-\u0027 or \u0027.\u0027. Resources and animations find the model by it. A placed model\u0027s name must not also name a node inside the model, which AddChild would attach instead (build_failed).",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "position",
+        "Type": "object",
+        "Description": "Optional world position; omit for an unplaced root.",
+        "Required": false,
+        "Choices": null,
+        "Properties": [
+          {
+            "Name": "x",
+            "Type": "number",
+            "Description": "World X.",
+            "Required": true,
+            "Choices": null,
+            "Properties": null
+          },
+          {
+            "Name": "y",
+            "Type": "number",
+            "Description": "World Y.",
+            "Required": true,
+            "Choices": null,
+            "Properties": null
+          },
+          {
+            "Name": "z",
+            "Type": "number",
+            "Description": "World Z.",
+            "Required": true,
+            "Choices": null,
+            "Properties": null
+          }
+        ]
+      },
+      {
+        "Name": "heading",
+        "Type": "number",
+        "Description": "Rotation about Y in degrees (\u2212360 to 360) for a placed model; default 0.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "definitionFiles",
+        "Type": "array",
+        "Description": "Up to 64 definition files to list, chosen from any page of zstudio_source_world_definitions; omit to list all matching files (refused above 64), or pass [] to list none.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Items": {
+          "Name": "",
+          "Type": "string",
+          "Description": "Complete project path of a definition file (.zad), as discovery lists it.",
+          "Required": false,
+          "Choices": null,
+          "Properties": null
+        },
+        "MaxItems": 64
+      }
+    ]
+  },
+  {
+    "Name": "zstudio_source_changes",
+    "Description": "Describe the open source project\u0027s unsaved edits: the files save_document would write, the shared edit history (newest last, with undone steps marked) and, for one file, its working text beside the file on disk as a bounded line diff. Diff rows reserve the workspace envelope within a 2 MiB presentation allowance and use at most 1 MiB; Truncated discloses omitted rows while ChangedLines retains the full count (-1 when comparison is bounded). Each line keeps 400 characters plus an ellipsis with TextTruncated. Workspace and history path summaries keep 256 characters, with pathsTruncated flags; full source identities are retained internally and diff.File remains complete. A project, save or edit change during inspection returns context_changed; retry for the current revision.",
+    "Mutates": false,
+    "Parameters": [
+      {
+        "Name": "file",
+        "Type": "string",
+        "Description": "Optional project path (for example data/m1/zrdr/puppies.zrd) to diff against the disk.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "maxLines",
+        "Type": "integer",
+        "Description": "Diff lines to return; default 200.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": 1,
+        "Maximum": 2000
+      }
+    ]
+  },
+  {
+    "Name": "zstudio_source_recovery",
+    "Description": "List the open source project\u0027s interrupted saves (journals in zstudio/recovery): each with its files and whether each now holds the content from before the save, the content the save wrote, is missing, or was changed by another program. Returns at most 32 saves with 64 files each and total counts; file paths keep 256 characters with fileTruncated. The scan bounds all journal manifests and logs together to 64 MiB and 50,000 file rows. A committed journal only needs cleaning up. While an uncommitted one exists, the project cannot be saved. A project replacement during inspection returns context_changed; retry for the current project.",
+    "Mutates": false,
+    "Parameters": []
+  },
+  {
+    "Name": "zstudio_source_recovery_resolve",
+    "Description": "Resolve an interrupted save of the open source project: roll_back restores every file the save had replaced (a file changed by another program since is left alone and reported), complete finishes the save, and abandon keeps the files as they are and moves the journal (with any original it kept) to zstudio/recovery/abandoned. It runs off the UI thread with the workspace disabled as during a save. Cancelling stops it between two files, never during one: the journal records what it did, the save still needs a decision (any action resolves it from there), and a cancellation after files changed says which. Returns at most 64 changed paths and conflicts with total counts. Paths keep 256 characters, with pathsTruncated for changed paths and fileTruncated on conflicts. Refused while a world of the project opens or rebuilds, and while the project has unsaved edits of a file the save involves (undo them, or close the worlds discarding them). Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Mutates": true,
+    "Parameters": [
+      {
+        "Name": "save",
+        "Type": "string",
+        "Description": "Save id from zstudio_source_recovery.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "action",
+        "Type": "string",
+        "Description": "What to do.",
+        "Required": true,
+        "Choices": [
+          "roll_back",
+          "complete",
+          "abandon"
+        ],
         "Properties": null
       }
     ]

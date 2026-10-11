@@ -83,6 +83,33 @@ internal static class InspectionResultMcpChecks
             await using var pipe = new NamedPipeClientStream(".", host.Instance.Pipe, PipeDirection.InOut, PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
             await pipe.ConnectAsync(token);
             await using var client = await McpClient.CreateAsync(new StreamClientTransport(pipe, pipe), cancellationToken: token);
+            // Reuse the actual long-path inventory: even these small files must page before full identities
+            // expand during JSON escaping. Every recognized file remains reachable exactly once.
+            var expectedFiles = main.ViewModel.Files.ToArray();
+            foreach (int limit in new[] { 1, 200 })
+            {
+                List<string> seen = []; int? offset = 0;
+                do
+                {
+                    var page = await Call("files", Args(offset.Value, limit));
+                    Assert.Equal(expectedFiles.Length, page["total"]!.GetValue<int>());
+                    var items = page["items"]!.AsArray();
+                    if (limit == 200 && offset == 0) Assert.InRange(items.Count, 1, expectedFiles.Length - 1);
+                    foreach (var item in items)
+                    {
+                        var expected = expectedFiles[seen.Count];
+                        Assert.Equal(expected.Path, item!["Path"]!.GetValue<string>());
+                        Assert.Equal(expected.RelativePath, item["RelativePath"]!.GetValue<string>());
+                        Assert.Equal(expected.Name, item["Name"]!.GetValue<string>());
+                        Assert.Equal(expected.Probe.Description, item["Probe"]!["Description"]!.GetValue<string>());
+                        Assert.Equal(expected.Detail, item["Detail"]!.GetValue<string>());
+                        seen.Add(expected.Path);
+                    }
+                    offset = page["nextOffset"]?.GetValue<int>();
+                    if (seen.Count < expectedFiles.Length) Assert.Equal(seen.Count, offset);
+                } while (offset != null);
+                Assert.Equal(expectedFiles.Select(f => f.Path), seen);
+            }
             foreach (int? limit in new int?[] { 1, null, 200 })
             {
                 await AllPages("pickups", "items", "nextOffset", "total", count, limit,

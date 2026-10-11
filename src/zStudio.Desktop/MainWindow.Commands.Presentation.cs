@@ -102,7 +102,7 @@ public partial class MainWindow
             {
                 RequireNoDrafts(); ++propertyRequest; var w=GetPropertiesWindow(); var actor=viewport.PickupAt(node);
                 bool opened=actor?.Pickup is { } pickup && shownDocument!.PickupEdits?.Find(pickup.Source) != null
-                    ? w.SetPickup(shownDocument!,pickup.Source,data.Nodes[node].Name,data.Nodes[node].Metadata)
+                    ? w.SetPickup(shownDocument!,pickup.Source,data.Nodes[node].Name,data.Nodes[node].Metadata,SourcePickupMove(shownDocument!))
                     : w.SetReadOnly(shownDocument!,data.Nodes[node].Name,Core.JsonData.PreviewObject(data.Nodes[node].Metadata));
                 PresentProperties(w,opened);
             }

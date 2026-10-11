@@ -106,18 +106,15 @@ public static partial class SourceBuilder
             inventory.Rows(1, token); // Shared PrefixedInputs do not copy the underlying path strings.
             plans.Add(plan);
         }
-        static bool Zrd(string name) => name.EndsWith(".zrd", StringComparison.OrdinalIgnoreCase);
         // Common resources come from every zrdr folder under data/common (including multi_bft/zrdr).
-        var commonFiles = SourceProject.Files(root, "data/common", Zrd, added, token, inventory);
-        inventory.Rows(commonFiles.Count, token);
-        var common = commonFiles.Where(p => p.AsSpan().Contains("/zrdr/", StringComparison.OrdinalIgnoreCase)).ToArray();
-        if (common.Length > 0) AddPlan(new("zrdr.zbd", "archive", common));
+        var common = ResourceInputs(root, null, added, token, inventory);
+        if (common.Count > 0) AddPlan(new("zrdr.zbd", "archive", common));
         // The game opens a resource from the first mounted archive that holds its name, and zrdr.zbd stays ahead of the
         // mission's (docs/engine-evidence.md, Resource archives): a mission resource named like a common one is never read.
         Dictionary<string, string>? commonNames = null;
         IReadOnlyList<string> Shadowed(string mission, IReadOnlyList<string> resources)
         {
-            if (common.Length == 0) return [];
+            if (common.Count == 0) return [];
             if (commonNames == null)
             {
                 commonNames = new(StringComparer.OrdinalIgnoreCase);
@@ -175,7 +172,7 @@ public static partial class SourceBuilder
                 // A project without glTF models has no world to build (buffers alone are not models).
                 if (hasModels) AddPlan(new($"{name}/gamez.zbd", "world", new PrefixedInputs(entry, models)));
             }
-            var resources = SourceProject.Files(root, $"data/{name}/zrdr", Zrd, added, token, inventory);
+            var resources = ResourceInputs(root, name, added, token, inventory);
             if (resources.Count > 0) AddPlan(new($"{name}/zrdr.zbd", "archive", resources) { Notes = Shadowed(name, resources) });
             string definitions = AnimationRoot(name);
             if (SourceRead.FileExists(SourceProject.Resolve(root, definitions)) || pending?.ContainsPath(definitions, token) == true)
@@ -218,6 +215,17 @@ public static partial class SourceBuilder
     /// <summary>The root of a mission's animation definitions.</summary>
     internal static string AnimationRoot(string mission) => $"data/{mission}/zrdr/anim{Animation.AnimationDefinitionSet.Extension}";
     private static bool IsModelSource(string name) => name.EndsWith(".gltf", StringComparison.OrdinalIgnoreCase) || name.EndsWith(".glb", StringComparison.OrdinalIgnoreCase) || name.EndsWith(".bin", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>The source membership of the common archive, or one mission's archive, including pending new files.</summary>
+    internal static IReadOnlyList<string> ResourceInputs(string root, string? mission, IReadOnlyCollection<string>? added,
+        CancellationToken token, InventoryBudget inventory)
+    {
+        var files = SourceProject.Files(root, mission == null ? "data/common" : $"data/{mission}/zrdr",
+            name => name.EndsWith(".zrd", StringComparison.OrdinalIgnoreCase), added, token, inventory);
+        if (mission != null) return files;
+        inventory.Rows(files.Count, token);
+        return files.Where(p => p.AsSpan().Contains("/zrdr/", StringComparison.OrdinalIgnoreCase)).ToArray();
+    }
 
     /// <summary>
     /// Every project file read by one run. A file read by several outputs must have the same content each time, and no

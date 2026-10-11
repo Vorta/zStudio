@@ -6,8 +6,10 @@ namespace Recoil.Zbd.Desktop;
 internal sealed class FieldDraft(string value, Action<string> commit, Func<string, Task>? asyncCommit = null)
 {
     private Task<bool>? work;
+    private bool starting;
     public bool IsAsync => asyncCommit != null;
-    public bool IsCommitting => work is { IsCompleted: false };
+    /// <summary>Whether an asynchronous commit runs, including its synchronous start (before its first await).</summary>
+    public bool IsCommitting => starting || work is { IsCompleted: false };
     public string Committed { get; private set; } = value;
     public string Text { get; set; } = value;
     public string? Error { get; private set; }
@@ -17,14 +19,17 @@ internal sealed class FieldDraft(string value, Action<string> commit, Func<strin
         if (!IsPending) { Error = null; return true; }
         if (IsAsync) return false;
         try { commit(Text); Committed = Text; Error = null; return true; }
-        catch (Exception ex) when (ex is InvalidDataException or FormatException or OverflowException or ArgumentException or InvalidOperationException)
+        // A refusal of the edit (a stale map zone draft, for example) is shown at the field, as for asynchronous commits.
+        catch (Exception ex) when (ex is InvalidDataException or FormatException or OverflowException or ArgumentException or InvalidOperationException or Recoil.Zbd.Automation.StudioCommandException)
         { Error = ex.Message; return false; }
     }
     public Task<bool> CommitAsync()
     {
         if (!IsAsync) return Task.FromResult(Commit());
-        if (IsCommitting) return work!;
-        return work = Run();
+        if (IsCommitting) return work ?? Task.FromResult(false);
+        starting = true;
+        try { return work = Run(); }
+        finally { starting = false; }
         async Task<bool> Run()
         {
             if (!IsPending) { Error = null; return true; }

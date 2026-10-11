@@ -33,7 +33,10 @@ public sealed class PropertiesWindow : Window
     public PickupPropertiesEditor? PickupFields { get; private set; }
     public ResourcePropertiesEditor? ResourceFields { get; private set; }
     public ScriptPropertiesEditor? ScriptFields { get; private set; }
-    public bool HasPendingDrafts => AnimationFields?.HasPendingDrafts == true || PickupFields?.HasPendingDrafts == true || ResourceFields?.HasPendingDrafts == true || ScriptFields?.HasPendingDrafts == true;
+    public bool HasPendingDrafts => Editors.Any(e => e.HasPendingDrafts);
+    /// <summary>Pending input other than drafts being committed (an edit a draft's commit runs may proceed).</summary>
+    public bool HasUncommittedDrafts => Editors.Any(e => e.HasUncommittedDrafts);
+    private IEnumerable<FieldEditor> Editors => new FieldEditor?[] { AnimationFields, PickupFields, ResourceFields, ScriptFields }.OfType<FieldEditor>();
     public Func<DocumentModel, bool, Task<bool>>? SaveRequested { get; set; }
     public Action<DocumentModel, bool>? UndoRequested { get; set; }
     public Action<DocumentModel>? Editing { get; set; }
@@ -135,10 +138,10 @@ public sealed class PropertiesWindow : Window
         }
         catch (OperationCanceledException) when (doc.IsDisposed) { }
     }
-    public bool SetPickup(DocumentModel document, MissionPickupSource source, string title, JsonObject json)
+    public bool SetPickup(DocumentModel document, MissionPickupSource source, string title, JsonObject json, Func<MissionPickupSource, System.Numerics.Vector3, Task>? sourceMove = null)
     {
         if (!BeginTarget(document)) return false;
-        label = title; PickupFields = new(document, source, title, json);
+        label = title; PickupFields = new(document, source, title, json, sourceMove);
         PickupFields.Changed += Refresh; body.Content = PickupFields; Refresh(); return true;
     }
     public bool SetResource(DocumentModel document, ResourcePropertiesEditor fields)
@@ -155,6 +158,7 @@ public sealed class PropertiesWindow : Window
     {
         if (!ResolvePendingDrafts() || document.IsDisposed) return false;
         Detach(); Document = document;
+        Retargeted?.Invoke();
         document.Disposing += DocumentDisposing; document.PropertyChanged += DocumentChanged;
         if (document.AnimationEdits is { } edits) edits.Changed += Refresh;
         document.PickupEditsChanged += Refresh;
@@ -178,7 +182,13 @@ public sealed class PropertiesWindow : Window
     private void DocumentDisposing() => CloseResolved();
     private void DocumentChanged(object? sender, PropertyChangedEventArgs e) => Refresh();
     public bool ResolvePendingDrafts() => AnimationFields?.ResolvePendingDrafts() != false && PickupFields?.ResolvePendingDrafts() != false && ResourceFields?.ResolvePendingDrafts() != false && ScriptFields?.ResolvePendingDrafts() != false;
-    public async Task<bool> ResolvePendingDraftsAsync() => ScriptFields != null ? await ScriptFields.ResolvePendingDraftsAsync() : ResourceFields != null ? await ResourceFields.ResolvePendingDraftsAsync() : ResolvePendingDrafts();
+    public async Task<bool> ResolvePendingDraftsAsync()
+    {
+        // Each editor commits its drafts (awaiting asynchronous ones, such as a source world's pickup position) or asks.
+        foreach (var editor in Editors.ToArray())
+            if (!await editor.ResolvePendingDraftsAsync()) return false;
+        return true;
+    }
     private void Refresh()
     {
         if (Document is not { } doc) return;
@@ -189,9 +199,11 @@ public sealed class PropertiesWindow : Window
         heading.ToolTip = doc.Path + " → " + target;
         notice.Text = doc.IsStale ? "The source file changed on disk. These properties belong to the open document; reload to read the changed source."
             : doc.AnimationEdits != null || PickupFields != null || ResourceFields != null || ScriptFields != null ? "Edits update this document; Ctrl+S saves it to disk." : "Stored properties of the explicitly opened item.";
-        undo.IsEnabled = doc.AnimationEdits?.CanUndo == true || doc.CanUndoScene || doc.ResourceEdits?.CanUndo == true || doc.ContentEdits?.CanUndo == true;
-        redo.IsEnabled = doc.AnimationEdits?.CanRedo == true || doc.CanRedoScene || doc.ResourceEdits?.CanRedo == true || doc.ContentEdits?.CanRedo == true;
-        undo.Visibility = redo.Visibility = doc.AnimationEdits != null || doc.PickupEdits != null || doc.ModelEdits != null || doc.ResourceEdits != null || doc.ContentEdits != null ? Visibility.Visible : Visibility.Collapsed;
+        undo.IsEnabled = doc.SourceWorld is { } undoWorld ? undoWorld.Workspace.CanUndo
+            : doc.AnimationEdits?.CanUndo == true || doc.CanUndoScene || doc.ResourceEdits?.CanUndo == true || doc.ContentEdits?.CanUndo == true;
+        redo.IsEnabled = doc.SourceWorld is { } redoWorld ? redoWorld.Workspace.CanRedo
+            : doc.AnimationEdits?.CanRedo == true || doc.CanRedoScene || doc.ResourceEdits?.CanRedo == true || doc.ContentEdits?.CanRedo == true;
+        undo.Visibility = redo.Visibility = doc.SourceWorld != null || doc.AnimationEdits != null || doc.PickupEdits != null || doc.ModelEdits != null || doc.ResourceEdits != null || doc.ContentEdits != null ? Visibility.Visible : Visibility.Collapsed;
     }
     private async void RunUndo(bool isRedo)
     { if (Document is { } doc && await ResolvePendingDraftsAsync()) UndoRequested?.Invoke(doc, isRedo); }
@@ -210,19 +222,36 @@ public sealed class PropertiesWindow : Window
         { e.Handled = true; RunUndo(e.Key == Key.Y); }
         // Escape belongs to field drafts, not to window dismissal.
     }
+    /// <summary>The window was dismissed (X, Alt+F4, properties_close), rather than closed by its document's replacement.</summary>
+    internal bool ClosedByUser { get; private set; }
+    /// <summary>
+    /// Decides drafts the owner keeps for this window's content (a map zone draft, which closing discards) before any
+    /// close, explicit ones included; false keeps the window open.
+    /// </summary>
+    internal Func<DocumentModel?, bool>? ResolveClosingDrafts { get; set; }
     private void OnClosing(object? sender, CancelEventArgs e)
     {
+        // A close whose field drafts are being resolved asks nothing more until that finishes.
+        if (resolvingClose && !closingResolved) { e.Cancel = true; return; }
+        // Declining keeps the window as it was: it still follows edits and resolves its input on the next close.
+        if (ResolveClosingDrafts?.Invoke(Document) == false) { e.Cancel = true; closingResolved = ClosedByUser = false; return; }
+        if (!closingResolved) ClosedByUser = true;
         if (closingResolved || !HasPendingDrafts) return;
         e.Cancel = true;
-        if (resolvingClose) return;
         resolvingClose = true;
         Dispatcher.BeginInvoke(DispatcherPriority.Normal, new Action(async () =>
         {
-            try { if (await ResolvePendingDraftsAsync()) CloseResolved(); }
+            try { if (await ResolvePendingDraftsAsync()) CloseResolved(); else ClosedByUser = false; }
             finally { resolvingClose = false; }
         }));
     }
     internal void CloseResolved() { closingResolved = true; Close(); }
+    /// <summary>Whether the content takes no input (a source world rebuilding); set by the owner when that state or the target changes.</summary>
+    internal bool InputBlocked { set => body.IsEnabled = !value; }
+    /// <summary>Raised when the window shows another document.</summary>
+    internal event Action? Retargeted;
+    /// <summary>Closes by an explicit request (MCP properties_close): an edit in flight does not reopen it.</summary>
+    internal void Dismiss() { ClosedByUser = true; CloseResolved(); }
     private void RememberBounds()
     {
         Rect bounds = WindowState == WindowState.Normal ? new(Left, Top, ActualWidth, ActualHeight) : RestoreBounds;

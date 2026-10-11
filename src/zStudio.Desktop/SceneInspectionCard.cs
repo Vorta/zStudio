@@ -18,7 +18,9 @@ internal sealed partial class SceneInspectionCard : Grid
 {
     private readonly SceneViewport viewport;
     private readonly Func<SceneInspection, JsonObject> describe;
-    private readonly Action<SceneInspectionCard> begin, apply;
+    private readonly Action<SceneInspectionCard> begin;
+    /// <summary>Accepts the draft; returns the edit's remaining work when it runs on (a source world's), or null when it is done.</summary>
+    private readonly Func<SceneInspectionCard, Task?> apply;
     private readonly Border card;
     private readonly Border panel;
     private readonly TextBlock heading = new() { FontWeight = FontWeights.SemiBold, TextTrimming = TextTrimming.CharacterEllipsis, VerticalAlignment = VerticalAlignment.Center };
@@ -49,7 +51,7 @@ internal sealed partial class SceneInspectionCard : Grid
         transformMode, rotationAxes = rotationKind switch { PlacementRotationKind.EulerRadians => "XYZ", PlacementRotationKind.HeadingDegrees => "Y", _ => "none" },
         handlesVisible = viewport.TransformHandlesVisible, boundsVisible = viewport.SelectionBoundsVisible };
 
-    internal SceneInspectionCard(SceneViewport viewport, Func<SceneInspection, JsonObject> describe, Action<SceneInspectionCard> begin, Action<SceneInspectionCard> apply)
+    internal SceneInspectionCard(SceneViewport viewport, Func<SceneInspection, JsonObject> describe, Action<SceneInspectionCard> begin, Func<SceneInspectionCard, Task?> apply)
     {
         this.viewport = viewport; this.describe = describe; this.begin = begin; this.apply = apply;
         Background = null;
@@ -60,7 +62,7 @@ internal sealed partial class SceneInspectionCard : Grid
         DockPanel.SetDock(close, Dock.Right); title.Children.Add(close);
         var copyDetails = Button("⧉", "Copy selected node details", () => Try(() => Copy(null, true)));
         DockPanel.SetDock(copyDetails, Dock.Right); title.Children.Add(copyDetails);
-        edit = Button("✎", "Edit object transform", () => Try(() => { if (HasDraft) this.apply(this); else this.begin(this); }));
+        edit = Button("✎", "Edit object transform", () => Try(() => { if (HasDraft) Apply(); else this.begin(this); }));
         DockPanel.SetDock(edit, Dock.Right); title.Children.Add(edit);
         cancel = Button("↶", "Discard transform draft", CancelDraft); cancel.Visibility = Visibility.Hidden;
         DockPanel.SetDock(cancel, Dock.Right); title.Children.Add(cancel); title.Children.Add(heading);
@@ -130,14 +132,28 @@ internal sealed partial class SceneInspectionCard : Grid
         cancel.Visibility = Visibility.Hidden; edit.Content = "✎"; edit.ToolTip = "Edit object transform";
         System.Windows.Automation.AutomationProperties.SetName(edit, "Edit object transform"); error.Text = ""; error.Visibility = Visibility.Collapsed; Refresh();
     }
-    internal bool ResolvePending()
+    /// <summary>Asks about a pending draft; false while a Yes still applies it (see <see cref="ResolvePendingAsync"/>).</summary>
+    internal bool ResolvePending() { var resolving = ResolvePendingAsync(); return resolving.IsCompleted && resolving.GetAwaiter().GetResult(); }
+    /// <summary>
+    /// Asks about a pending draft: Yes applies it, No discards it, Cancel keeps editing. In a source world the edit changes the
+    /// sources and rebuilds the world, keeping the draft until its preparation succeeds, so a Yes completes with the outcome
+    /// of that apply rather than as a refusal.
+    /// </summary>
+    internal async Task<bool> ResolvePendingAsync()
     {
         if (!HasDraft) return true;
+        // A draft already being applied (✓, Enter or an earlier Yes) is not asked about again: the answer is that apply's outcome.
+        if (applying is { IsCompleted: false } running) { await running; return !HasDraft; }
         var answer = MessageBox.Show(Window.GetWindow(this), "Apply the pending position and rotation?\nYes: apply · No: discard · Cancel: keep editing", "Node transform draft", MessageBoxButton.YesNoCancel, MessageBoxImage.Question);
         if (answer == MessageBoxResult.Cancel) return false;
         if (answer == MessageBoxResult.No) { CancelDraft(); return true; }
-        Try(() => apply(this)); return !HasDraft;
+        Try(Apply);
+        if (applying is { IsCompleted: false } started) await started;
+        return !HasDraft;
     }
+    /// <summary>The GUI's apply of the draft whose work still runs (a source world's edit and rebuild).</summary>
+    private Task? applying;
+    private void Apply() { if (apply(this) is { IsCompleted: false } running) applying = running; }
     internal string Copy(string? field, bool clipboard)
     {
         if (Selection == null) throw new StudioCommandException("not_ready", "Select a node first.");
@@ -195,7 +211,7 @@ internal sealed partial class SceneInspectionCard : Grid
                         {
                             if (!HasDraft) return;
                             if (e.Key == Key.Escape) { CancelDraft(); e.Handled = true; }
-                            else if (e.Key == Key.Enter) { Try(() => this.apply(this)); e.Handled = true; }
+                            else if (e.Key == Key.Enter) { Try(Apply); e.Handled = true; }
                         };
                     }
                 values.Add(key, field); rows.Children.Insert(index, field);

@@ -35,7 +35,7 @@ internal static class SceneInspectionInputChecks
             if (extraDetail) info["Runtime detail"] = "A newly available field";
             if (item.AiNode != null) { info["Attack strategy"] = strategyText; info["Status"] = "Visible"; info["Edit scope"] = "This AI network node"; }
             return info;
-        }, _ => { }, _ => { });
+        }, _ => { }, _ => null);
         scene.InspectionContent = card;
         var window = new Window { Content = scene, Width = 900, Height = 600, Left = -12000, ShowInTaskbar = false };
         using var document = new DocumentModel(new ZbdDocument("fixture.zbd", new(0, DateTime.MinValue),
@@ -123,6 +123,13 @@ internal static class SceneInspectionInputChecks
 
             var authored = Descendants(card).OfType<SceneInspectionField>().Single(f => f.Binding == SceneInspectionBinding.AuthoredPosition);
             var input = authored.Inputs[0];
+            int textInputEvents = 0, textChanges = 0, addedCharacters = 0, removedCharacters = 0;
+            input.PreviewTextInput += (_, _) => textInputEvents++;
+            input.TextChanged += (_, e) =>
+            {
+                textChanges++;
+                foreach (var change in e.Changes) { addedCharacters += change.AddedLength; removedCharacters += change.RemovedLength; }
+            };
             typeof(SceneViewport).GetProperty(nameof(SceneViewport.HoverInspection))!.SetValue(scene, hoverItem); card.Refresh();
             var confirm = Descendants(card).OfType<Button>().Single(b => AutomationProperties.GetName(b) == "Edit object transform");
             var cancel = Descendants(card).OfType<Button>().Single(b => AutomationProperties.GetName(b) == "Discard transform draft");
@@ -176,10 +183,18 @@ internal static class SceneInspectionInputChecks
                     await Resize(-40, canceled: true);
                     Assert.Equal(draftToken, card.DraftToken); Assert.Equal(revision, document.Revision);
                     Assert.Equal("-", input.Text); Assert.Equal(0, input.SelectionStart); Assert.Equal(1, input.SelectionLength);
+                    textInputEvents = textChanges = addedCharacters = removedCharacters = 0;
                     Application.Current.ThemeMode = theme == ThemeMode.Dark ? ThemeMode.Light : ThemeMode.Dark;
                     await Idle();
+                    Assert.True(input.Text == "-" && input.SelectionStart == 0 && input.SelectionLength == 1,
+                        DraftDiagnostic("Theme replacement"));
                     Assert.All(authored.Inputs, c => Assert.True(c.Template.FindName("DeleteButton", c) is not UIElement clear || clear.Visibility == Visibility.Collapsed));
+                    textInputEvents = textChanges = addedCharacters = removedCharacters = 0;
                     Application.Current.ThemeMode = theme; await Idle();
+                    Assert.True(input.Text == "-" && input.SelectionStart == 0 && input.SelectionLength == 1,
+                        DraftDiagnostic("Restored theme"));
+                    // Record only lengths/counts, never unexpected text that may have come from native keyboard input.
+                    string DraftDiagnostic(string phase) => $"{phase} lost draft selection: theme={theme}, width={width}, scale={scale}, controlSize={controlSize}, selection={input.SelectionStart}/{input.SelectionLength}, focused={input.IsKeyboardFocused}, textLength={input.Text.Length}, expectedText={input.Text == "-"}, hasDraft={card.HasDraft}, sameDraft={draftToken == card.DraftToken}, textInputEvents={textInputEvents}, textChanges={textChanges}, added={addedCharacters}, removed={removedCharacters}.";
                     extraDetail = true; card.Refresh(); await Idle();
                     Assert.Equal("-", input.Text); Assert.Equal(0, input.SelectionStart); Assert.Equal(1, input.SelectionLength);
                     Assert.Equal(scrollOffset, scroll.VerticalOffset);

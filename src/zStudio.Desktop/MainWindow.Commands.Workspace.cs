@@ -51,7 +51,7 @@ public partial class MainWindow
 
     private void RegisterWorkspaceCommands(StudioCommands r)
     {
-        RegisterJob(r, "open_root", "Open and index a ZBD root or source project in the visible workspace. Dirty documents must be explicitly saved or closed first.",
+        RegisterJob(r, "open_root", "Open and index a ZBD root or source project in the visible workspace. Dirty documents must be explicitly saved or closed first. indexComplete and indexNotice disclose partial asset indexing; Files and direct opening remain available when its retention limit is reached.",
             [P("path", "string", "Absolute ZBD root or source project directory.", true),
              P("project", "boolean", "Require an initialized source project (a folder with data and gamegen), as the welcome screen's source project Open does; any other folder is refused with not_project. Default false.")], false, async (a, token) =>
         {
@@ -63,12 +63,24 @@ public partial class MainWindow
             long workspaceGeneration = ViewModel.WorkspaceGeneration + 1;
             await ViewModel.OpenRootAsync(path, token, RequireRootPublication);
             if (ViewModel.WorkspaceGeneration != workspaceGeneration || !ViewModel.RootPath.Equals(path,StringComparison.OrdinalIgnoreCase)) throw new StudioCommandException("context_changed","Workspace was replaced during indexing.");
-            UpdateRecent(); return Result(new { ViewModel.RootPath, ViewModel.Status, files = ViewModel.Files.Count });
+            // Published: a cancel (MCP shutdown) that stopped indexing leaves the root open, reported by indexComplete.
+            CommitRunningJob(); UpdateRecent(); return IndexCompleteness(Result(new { ViewModel.RootPath, ViewModel.Status, files = ViewModel.Files.Count }));
         });
-        Register(r, "files", "List recognized files in the current root.", false, PageParameters, a => Page(ViewModel.Files.Where(f => f.RelativePath.Contains(Text(a, "query"), StringComparison.OrdinalIgnoreCase)), a));
-        Register(r, "search", "Search indexed assets without altering GUI selection; names are not identities.", false, PageParameters, a => Page(ViewModel.SearchIndex(Text(a, "query")), a));
-        Register(r, "related", "List related indexed assets for an explicit asset, retaining source identities.", false, [.. AssetParameters, .. PageParameters], a =>
-        { var d = TargetDocument(a); return Page(FindRelated(TargetAsset(d, a), d), a, x => x.Name + " " + x.File); });
+        Register(r, "files", "List recognized files in the current root. Pages may contain fewer rows than limit to preserve complete file identities within the response budget; follow nextOffset.", false, PageParameters,
+            a => Page(ViewModel.Files.Where(f => f.RelativePath.Contains(Text(a, "query"), StringComparison.OrdinalIgnoreCase)), a,
+                // Name is no longer than Path; Detail repeats Probe.Description. Charge both computed fields
+                // before serialization invokes their getters, including worst-case JSON escaping.
+                maximumRowBytes: f => 512 + 2 * InspectionResultBudget.Text(f.Path) + InspectionResultBudget.Text(f.RelativePath) + 2 * InspectionResultBudget.Text(f.Probe.Description)));
+        Register(r, "search", "Search indexed assets without altering GUI selection; names are not identities. indexComplete and indexNotice disclose unfinished or limited indexing; total counts only indexed matches. Indexing retains at most 250,000 assets and 8,388,608 name characters. Files and direct opening remain available when indexing stops.", false, PageParameters,
+            (a, token) => Task.FromResult(IndexCompleteness(Page(ViewModel.SearchIndex(Text(a, "query"), token), a, maximumRowBytes: x => 256 + 12L * (x.Name.Length + (long)x.File.Length)))));
+        Register(r, "related", "List related indexed assets for an explicit asset, retaining source identities. truncated includes incomplete indexing; indexComplete and indexNotice disclose that state independently of page totals.", false, [.. AssetParameters, .. PageParameters], a =>
+        {
+            var d = TargetDocument(a); var related = FindRelated(TargetAsset(d, a), d);
+            var page = Page(related.Items, a, matches: (x, query) => x.Name.Contains(query, StringComparison.OrdinalIgnoreCase) || x.File.Contains(query, StringComparison.OrdinalIgnoreCase),
+                maximumRowBytes: x => 256 + 12L * (x.Name.Length + (long)x.File.Length));
+            page.Data.AsObject()["truncated"] = related.Truncated;
+            return IndexCompleteness(page);
+        });
         Register(r, "asset_filter", "Set the Assets list query and kind filter without changing the selected record.", true,
             [DocumentParameter, P("query", "string", "Name filter."), P("kind", "string", "Asset kind or All types.")], a =>
         {
@@ -99,7 +111,7 @@ public partial class MainWindow
         {
             RequireNoDrafts(); var doc = TargetDocument(a); var asset = TargetAsset(doc, a); ViewModel.SelectedDocument = doc;
             doc.Query = ""; doc.KindFilter = "All types"; doc.SelectedAsset = doc.Assets.Single(x => x.Record.Kind == asset.Kind && x.Index == asset.Index); SelectNavigatorSection(1);
-            await previewWork;
+            await EnsureAssetPreviewAsync(doc, asset);
             if (shownDocument != doc || shownAsset?.Id != asset.Id) throw new StudioCommandException("context_changed", "The user selected another preview.");
             if (EmptyPreview.Visibility == System.Windows.Visibility.Visible) throw new StudioCommandException("preview_unavailable",EmptyPreview.Text);
             return Result(new { document = DocumentState(doc), asset = asset.Id, ViewModel.Status });
@@ -119,18 +131,26 @@ public partial class MainWindow
         Register(r, "close_document", "Close a document. Explicit discard=true is required for unsaved edits; pending drafts are never discarded implicitly.", true,
             [DocumentParameter, RevisionParameter, P("discard", "boolean", "Explicitly discard this document's accepted unsaved edits.")], a =>
         {
-            var doc = TargetDocument(a, true); if (doc.IsDirty && !Flag(a, "discard")) throw new StudioCommandException("unsaved_changes", "Save or explicitly discard this document.");
+            var doc = TargetDocument(a, true);
+            if (doc.SourceWorld is { IsRebuilding: true }) throw new StudioCommandException("busy", "The world is rebuilding after an edit; close it when it is shown.");
+            if (doc.IsDirty && !OtherSourceWorldOpen(doc) && SourceWorldPending(doc)) throw new StudioCommandException("busy", "A world of this source project is opening or rebuilding; close this one when it is shown.");
+            if (doc.IsDirty && Flag(a, "discard") && doc.SourceWorld is { } discarded && !OtherSourceWorldOpen(doc)) discardApprovedWorkspace = (discarded.Workspace, discarded.Workspace.Revision);
+            // A source world's edits belong to its project; closing one of several open worlds keeps them.
+            if (doc.IsDirty && !Flag(a, "discard") && !OtherSourceWorldOpen(doc)) throw new StudioCommandException("unsaved_changes", doc.SourceWorld != null ? "Save or explicitly discard the source project's edits; this is its last open world." : "Save or explicitly discard this document.");
             ViewModel.CloseResolved(doc); return Result(new { closed = doc.SessionId });
         });
-        RegisterJob(r, "reload_document", "Stage and reparse a clean document before replacing it, using the current model/resource Save As destination. An already-open destination, failure or pre-publication cancellation retains the document and preview. Dirty documents must first be saved or explicitly closed.", [DocumentParameter, RevisionParameter], false, async (a, token) =>
+        RegisterJob(r, "reload_document", "Stage and reparse a clean document before replacing it, using the current model/resource Save As destination. An already-open destination, failure or pre-publication cancellation retains the document and preview. Dirty documents must first be saved or explicitly closed. A source world instead rebuilds from the project's current sources and pending edits. External changes to any dirty workspace source cause a conflict, including scripts, models, resources and animation definitions (.zad).", [DocumentParameter, RevisionParameter], false, async (a, token) =>
         {
-            var doc = TargetDocument(a, true); if (doc.IsDirty) throw new StudioCommandException("unsaved_changes", "Save or explicitly close with discard before reloading.");
+            var doc = TargetDocument(a, true); if (doc.IsDirty && doc.SourceWorld == null) throw new StudioCommandException("unsaved_changes", "Save or explicitly close with discard before reloading.");
             bool active = ViewModel.SelectedDocument == doc;
             var selected = ViewModel.SelectedDocument;
             long generation = ViewModel.NavigationGeneration + 1;
             try
             {
                 var next = await ViewModel.ReloadDocumentAsync(doc, doc.Revision, cancellationToken: token);
+                // Source rebuilding owns the publication boundary and its non-rollback preview completion.
+                // The original document's lifetime is already canceled; late request cancellation cannot retract it.
+                if (doc.SourceWorld != null) return Result(DocumentState(next));
                 if (active) await previewWork;
                 token.ThrowIfCancellationRequested();
                 if (next.IsDisposed || !ViewModel.Documents.Contains(next) || active && ViewModel.SelectedDocument != next)
@@ -146,7 +166,9 @@ public partial class MainWindow
         });
         Register(r, "undo_redo", "Undo or redo one accepted edit in the specified document.", true, [DocumentParameter, RevisionParameter, P("action", "string", "History direction.", true, "undo", "redo")], async (a, token) =>
         {
-            var d = TargetDocument(a, true); UndoDocument(d, Text(a, "action") == "redo"); if (d.ContentEdits != null) await contentWork.WaitAsync(token); else if (d.ResourceEdits != null) await resourceWork.WaitAsync(token); else if (d.ModelEdits != null) await modelRefreshWork.WaitAsync(token); return Result(DocumentState(d));
+            var d = TargetDocument(a, true);
+            if (d.SourceWorld != null) return Result(DocumentState(await UndoSourceWorldAsync(d, Text(a, "action") == "redo", token)));
+            UndoDocument(d, Text(a, "action") == "redo"); if (d.ContentEdits != null) await contentWork.WaitAsync(token); else if (d.ResourceEdits != null) await resourceWork.WaitAsync(token); else if (d.ModelEdits != null) await modelRefreshWork.WaitAsync(token); return Result(DocumentState(d));
         });
         RegisterJob(r, "save_document", "Verified save: animations require a NEW destination outside the source root; pickup/AI/tank coordinates save owning archives or explicit new destinations; model edits save all texture variants before GameZ; ZAR/ZRD, script and texture saves verify and atomically replace each working destination or create new Save As files. Batch results preview at most 64 saved/remaining paths and 32 errors, each at most 512 characters, with SavedPathCount/SavedPathsTruncated, RemainingPathCount/RemainingPathsTruncated and ErrorCount/ErrorsTruncated. Source saves return written with writtenCount/writtenTruncated under the same path bound. All files are still saved; truncated previews are not full path identities. Global state.contentEdits reports fileCount with empty files/filesTruncated; per-document command results preview affected paths and targets. Partial content/coordinate Save As retains every requested destination; ordinary Save retries unpublished copies without overwriting existing files.",
             [DocumentParameter, RevisionParameter, P("destination", "string", "Full path of a new single-file Save As (animation, ZAR/ZRD, script or texture pack). Omit to save working files."), P("modelDirectory", "string", "Full path of the model Save As directory; all GameZ/texture destinations must be new. Omit for verified save to the working files."), new("destinations", "object", "Mission coordinate or texture batch source path to new Save As path map; cover every affected file.", AdditionalProperties: new("", "string", "New Save As full path for this source archive.")), P("backup", "boolean", "Mission coordinate backup preference; defaults to app setting.")], false, async (a, token) =>
@@ -158,6 +180,15 @@ public partial class MainWindow
             IsEnabled = false; if (propertiesWindow != null) propertiesWindow.IsEnabled = false;
             try
             {
+                if (d.SourceWorld != null)
+                {
+                    if (a.ContainsKey("destination") || a.ContainsKey("destinations") || a.ContainsKey("modelDirectory")) throw new StudioCommandException("invalid_argument", "A source world saves to its project's sources; it has no Save As.");
+                    var written = await SaveSourceWorldAsync(d, token);
+                    // The files were replaced: the job completes with them, even when MCP stops (and cancels it) meanwhile.
+                    CommitRunningJob();
+                    var preview = FileResultPreview.Paths(written, written.Count);
+                    return Result(new { document = DocumentState(d), written = preview.Values, writtenCount = preview.Count, writtenTruncated = preview.Truncated });
+                }
                 if (d.ContentEdits != null)
                 {
                     var targets = (a["destinations"] as JsonObject)?.ToDictionary(p => p.Key, p => p.Value!.GetValue<string>(), StringComparer.OrdinalIgnoreCase);
@@ -200,6 +231,13 @@ public partial class MainWindow
         RegisterJob(r, "validate", "Validate the source archive on disk, not pending edits. Returns structured diagnostics.", [DocumentParameter], true, async (a, token) => Result(await ValidateDocumentSourceAsync(TargetDocument(a), token)));
         Register(r, "problems", "List file/operation problems with original severity and complete source context. Long or escaped rows shorten pages; follow nextOffset.", false, PageParameters, a => Page(ViewModel.Problems, a, p => p.Message + " " + p.File + " " + p.Severity + " " + p.Category, maximumRowBytes: InspectionResultBudget.Problem));
         RegisterOperationCommands(r);
+    }
+
+    private StudioResult IndexCompleteness(StudioResult result)
+    {
+        result.Data.AsObject()["indexComplete"] = ViewModel.SearchIndexComplete;
+        result.Data.AsObject()["indexNotice"] = ViewModel.SearchIndexNotice;
+        return result;
     }
     private void RequireRootPublication()
     {
