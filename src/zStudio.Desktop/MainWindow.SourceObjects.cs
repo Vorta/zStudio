@@ -372,6 +372,9 @@ public partial class MainWindow
     {
         token.ThrowIfCancellationRequested();
         var state = DescribeSourceObject(doc, node);
+        // A terrain piece is compiled from its recipe; Properties edits the recipe.
+        if (state.Origin.Terrain is { } recipe)
+            return await ShowTerrainPropertiesAsync(doc, recipe, state.Origin.TerrainSurface, $"Piece {state.Name}: surface {state.Origin.TerrainSurface}, cell {state.Origin.TerrainCell.Column}, {state.Origin.TerrainCell.Row}", null, token);
         var window = GetPropertiesWindow();
         SourceObjectPropertiesEditor fields = new(state,
             transform => FollowSourceObjectAsync(doc, node, state, () => MoveSourceObjectAsync(doc, node, transform, CancellationToken.None)),
@@ -476,7 +479,7 @@ public partial class MainWindow
                     if (moves)
                     {
                         // Omitted values come from the object copied (a part stands for the object that loaded it).
-                        var whole = SourceObjectTargetFor(d, node, (d.SourceWorld ?? throw new StudioCommandException("unsupported", "This document is not a source world.")).Workspace).Node;
+                        var whole = SourceObjectTargetFor(d, node, SourceWorldOf(d).Workspace).Node;
                         int wholeNode = SourceWorldModel(d).Slots.First(p => ReferenceEquals(p.Value, whole)).Key;
                         var current = DescribeSourceObject(d, wholeNode).Transform ?? throw new StudioCommandException("unsupported", "Only object nodes have a transform.");
                         placed = new(Vector(a, "position") ?? current.Position, Vector(a, "rotationDegrees") ?? Rounded(current.RotationDegrees), Vector(a, "scale") ?? Rounded(current.Scale));

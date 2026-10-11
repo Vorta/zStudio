@@ -36,6 +36,13 @@ public sealed class SourceMapZones
         return $"data/{mission}/meta/zones.json";
     }
 
+    internal static bool IsMissionPath(string relative)
+    {
+        string[] parts = SourceWorkspace.Normalize(relative).Split('/');
+        return parts.Length == 4 && SourceProject.MissionName().IsMatch(parts[1])
+            && relative.Equals(PathForMission(parts[1].ToLowerInvariant()), StringComparison.OrdinalIgnoreCase);
+    }
+
     public static SourceMapZones Parse(ReadOnlyMemory<byte> bytes, CancellationToken token = default)
     {
         token.ThrowIfCancellationRequested();

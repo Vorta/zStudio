@@ -18,6 +18,7 @@ internal static class PropertiesWindowChecks
     internal static async Task Run(Application app)
     {
         ComponentFieldChecks.Run();
+        await SourcePropertyInputChecks.Run();
         CheckKeyframeInspection();
         var main = new MainWindow { Left = -12000, ShowInTaskbar = false };
         main.Show();
@@ -54,7 +55,13 @@ internal static class PropertiesWindowChecks
             await Idle();
             Assert.Same(first, popup.Document); Assert.Same(form, popup.AnimationFields);
             Assert.True(form.HasPendingDrafts); Assert.False(first.IsDirty);
-            popup.Width = 700; popup.Height = 600; await Idle();
+            // Keep this persistence fixture inside the desktop's restore constraints.
+            var workArea = SystemParameters.WorkArea;
+            double savedWidth = Math.Min(700, Math.Floor(workArea.Width));
+            double savedHeight = Math.Min(600, Math.Floor(workArea.Height));
+            Assert.InRange(savedWidth, popup.MinWidth, workArea.Width);
+            Assert.InRange(savedHeight, popup.MinHeight, workArea.Height);
+            popup.Width = savedWidth; popup.Height = savedHeight; await Idle();
             Assert.Equal("-", delay.Text); Assert.Same(delay, Descendants(form).OfType<TextBox>().Single(t => AutomationProperties.GetName(t) == "Reset delay (s)"));
             var navigation = (TabControl)main.FindName("NavigationTabs"); var tools = (TabControl)main.FindName("ToolTabs");
             navigation.SelectedIndex = 2; tools.SelectedIndex = 5;
@@ -126,11 +133,13 @@ internal static class PropertiesWindowChecks
             reset.Text = "8"; Send(reset, Key.Enter); await Idle();
             popup.Close(); await Idle();
             Assert.Null(main.OpenPropertiesWindow); Assert.True(first.IsDirty);
+            Assert.Equal(savedWidth, main.ViewModel.Settings.GetWorkspace().PropertiesWindow.Width);
+            Assert.Equal(savedHeight, main.ViewModel.Settings.GetWorkspace().PropertiesWindow.Height);
             Assert.Equal(8f, first.AnimationEdits.Package.Entries[0].F32(164));
             first.AnimationEdits.Undo();
             main.OpenAnimationProperties(first, 0, Guid.Empty, Guid.Empty);
             var finalPopup = main.OpenPropertiesWindow!;
-            Assert.Equal(700, finalPopup.Width); Assert.Equal(600, finalPopup.Height);
+            Assert.Equal(savedWidth, finalPopup.Width); Assert.Equal(savedHeight, finalPopup.Height);
             await main.ViewModel.CloseAsync(first); await Idle();
             Assert.True(first.IsDisposed); Assert.Null(main.OpenPropertiesWindow); Assert.False(finalPopup.IsVisible);
 

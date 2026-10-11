@@ -35,7 +35,7 @@ public sealed class SourceFileChangedException(string message, IReadOnlyList<str
 /// </summary>
 public sealed class SourceWorkspace
 {
-    /// <summary>Saves several files together: each write names the bytes the file must have now (null: absent) and its new bytes (null: delete). Returns the files written.</summary>
+    /// <summary>Saves several files together: each entry names the bytes the file must have now (null: absent) and its new bytes (null: delete). Equal bytes are check-only dependencies, never writes. Returns the files written.</summary>
     public delegate IReadOnlyList<string> Saver(IReadOnlyList<(string Relative, byte[]? Expected, byte[]? Content)> writes, string description, CancellationToken token);
     private sealed record Baseline(byte[]? Bytes, FileStamp? Stamp)
     {
@@ -50,6 +50,9 @@ public sealed class SourceWorkspace
     private readonly Dictionary<string, byte[]?> working = new(StringComparer.OrdinalIgnoreCase);
     // Content arrays are immutable once accepted. Compute equality when content changes, not for presence/UI queries.
     private readonly HashSet<string> dirtyFiles = new(StringComparer.OrdinalIgnoreCase);
+    // Geometry inspected by the shared map-aware editing services. Keep this across history/save/reload:
+    // an undo or later edit must still agree with profiles another editor has since created or changed.
+    private readonly HashSet<string> mapZoneGeometry = new(StringComparer.OrdinalIgnoreCase);
     private readonly List<SourceTransaction> history = [];
     /// <summary>The files each content change touched, by the <see cref="ContentRevision"/> it produced.</summary>
     private readonly List<(long Revision, string[] Files)> changeLog = [];
@@ -198,6 +201,7 @@ public sealed class SourceWorkspace
             foreach (var pair in baselines) fork.baselines.Add(pair.Key, pair.Value);
             foreach (var pair in working) fork.working.Add(pair.Key, pair.Value);
             fork.dirtyFiles.UnionWith(dirtyFiles);
+            fork.mapZoneGeometry.UnionWith(mapZoneGeometry);
             fork.history.AddRange(history);
             fork.parentContent = RetainedContent().Distinct<byte[]>(ReferenceEqualityComparer.Instance).ToArray();
         }
@@ -210,7 +214,10 @@ public sealed class SourceWorkspace
         var transaction = ValidatePreparedEdit(prepared, token, verified);
         if (transaction == null) return null;
         lock (gate)
+        {
             foreach (var file in transaction.Files) baselines[file.Relative] = prepared.Workspace.baselines[file.Relative];
+            mapZoneGeometry.UnionWith(prepared.Workspace.mapZoneGeometry);
+        }
         return Commit(transaction.Label, transaction.Files);
     }
     /// <summary>Check a prepared edit before resolving its owning GUI draft; this does not publish it.</summary>
@@ -444,6 +451,7 @@ public sealed class SourceWorkspace
     public bool IsFileDirty(string relative) { lock (gate) return dirtyFiles.Contains(Normalize(relative)); }
     /// <summary>Files whose accepted content differs from the disk state the workspace last read or saved, in path order.</summary>
     public IReadOnlyList<string> DirtyFiles { get { lock (gate) return dirtyFiles.Order(StringComparer.OrdinalIgnoreCase).ToArray(); } }
+    internal void TrackMapZoneGeometry(string relative) { lock (gate) mapZoneGeometry.Add(Normalize(relative)); }
     public bool IsDirty { get { lock (gate) return dirtyFiles.Count != 0; } }
     /// <summary>The accepted content of every changed file, for builds to read instead of the disk.</summary>
     public IReadOnlyDictionary<string, byte[]> Overlay()
@@ -678,7 +686,8 @@ public sealed class SourceWorkspace
         finally { IsSaving = false; }
         return EndSave(pending, published);
     }
-    private sealed record PendingSave(IReadOnlyList<string> Dirty, (string Relative, byte[]? Expected, byte[]? Content)[] Writes);
+    private sealed record PendingSave(IReadOnlyList<string> Dirty, (string Relative, byte[]? Expected, byte[]? Content)[] Writes,
+        string[] Geometry, string[] Profiles, PreparedEdit? Validation);
     /// <summary>Takes the dirty files and marks the workspace saving; null when nothing is dirty.</summary>
     private PendingSave? BeginSave()
     {
@@ -686,17 +695,70 @@ public sealed class SourceWorkspace
         var dirty = DirtyFiles;
         if (dirty.Count == 0) return null;
         (string Relative, byte[]? Expected, byte[]? Content)[] writes;
-        lock (gate) writes = dirty.Select(f => (f, baselines[f].Bytes, working[f])).ToArray();
+        string[] geometry;
+        lock (gate)
+        {
+            writes = dirty.Select(f => (f, baselines[f].Bytes, working[f])).ToArray();
+            geometry = dirty.Where(mapZoneGeometry.Contains).ToArray();
+        }
+        string[] profiles = dirty.Where(SourceMapZones.IsMissionPath).ToArray();
+        var validation = geometry.Length == 0 && profiles.Length == 0 ? null : BeginPreparedEdit();
         IsSaving = true;
-        return new(dirty, writes);
+        return new(dirty, writes, geometry, profiles, validation);
     }
     /// <summary>Publishes a save's files and reads them back; touches no workspace state, so it may run on any thread.</summary>
     private (IReadOnlyList<string> Written, Baseline[] Saved) Write(PendingSave pending, CancellationToken token)
     {
-        var written = save(pending.Writes, $"Save {pending.Dirty.Count} source file{(pending.Dirty.Count == 1 ? "" : "s")}", token);
+        using var verified = VerifyMapZonesForSave(pending, token);
+        // Existing read-only inputs are held by verification. Absent inputs also need the publisher's checks
+        // under its project lock, so another Studio save cannot create a profile between verification and locking.
+        var checks = pending.Validation?.Workspace.preparedReads!
+            .Where(p => p.Value.Stamp == null && p.Value.Sha256 == null)
+            .Select(p => (p.Key, (byte[]?)null, (byte[]?)null)).ToArray() ?? [];
+        var written = save([.. pending.Writes, .. checks], $"Save {pending.Dirty.Count} source file{(pending.Dirty.Count == 1 ? "" : "s")}", token);
         // The files are on disk now; another program may already have replaced one, so each is read back with its stamp.
         Baseline[] saved = [.. pending.Writes.Select(w => Saved(w.Relative, w.Content))];
         return (written, saved);
+    }
+    private PreparedValidation? VerifyMapZonesForSave(PendingSave pending, CancellationToken token)
+    {
+        if (pending.Validation is not { } validation) return null;
+        var snapshot = validation.Workspace;
+        long remaining = 128L << 20;
+        foreach (string profile in pending.Profiles)
+        {
+            // The other save order matters too: a pending zone edit must not publish assignments for geometry
+            // another editor has changed since acceptance. Decode one geometry at a time, not a whole map scene.
+            var bytes = snapshot.Read(profile, token, Math.Min(remaining, SourceMapZones.MaximumBytes))
+                ?? throw new InvalidDataException($"{JsonData.ShownText(profile)} is unavailable for map zone validation.");
+            remaining -= bytes.Length;
+            var map = SourceMapZones.Parse(bytes, token);
+            foreach (var group in map.Assets.GroupBy(a => a.GeometryPath, StringComparer.OrdinalIgnoreCase))
+            {
+                var layout = WorldGltf.ZoneLayout.Read(ReadGeometry(group.Key), token);
+                foreach (var asset in group) WorldGltf.ValidateZoneProfile(layout, asset.Profile, group.Key, token);
+            }
+        }
+        foreach (string geometry in pending.Geometry)
+        {
+            token.ThrowIfCancellationRequested();
+            var bindings = SourceMapZoneBindings.Read(snapshot, geometry, null, token);
+            if (!bindings.Any) continue;
+            bindings.Validate(ReadGeometry(geometry), token);
+        }
+        // The publisher verifies and replaces these files. Holding their read handles would prevent replacement;
+        // hold only the other semantic inputs, with the existing prepared checks for absent profiles and buffers.
+        foreach (var write in pending.Writes)
+        {
+            snapshot.preparedReads!.Remove(write.Relative);
+            snapshot.preparedPresence!.Remove(write.Relative);
+        }
+        return VerifyPreparedEdit(validation, token);
+
+        Gltf.GltfDocument ReadGeometry(string geometry) => WorldAssembler.ReadModel(snapshot.Read(geometry, token, ProjectReadLimits.Model())
+            ?? throw new InvalidDataException($"{JsonData.ShownText(geometry)} is unavailable for map zone validation."), geometry,
+            (path, allowance) => snapshot.Read(path, token, ProjectReadLimits.Bytes(allowance))
+                ?? throw new InvalidDataException($"{JsonData.ShownText(geometry)}: buffer {JsonData.ShownText(path)} is unavailable."), token);
     }
     private IReadOnlyList<string> EndSave(PendingSave pending, (IReadOnlyList<string> Written, Baseline[] Saved) published)
     {
@@ -733,7 +795,7 @@ public sealed class SourceWorkspace
     {
         if (IsSaving) throw new InvalidOperationException("Wait for the save to finish.");
         var files = DirtyFiles;
-        lock (gate) { working.Clear(); dirtyFiles.Clear(); baselines.Clear(); history.Clear(); position = 0; displaced = null; }
+        lock (gate) { working.Clear(); dirtyFiles.Clear(); mapZoneGeometry.Clear(); baselines.Clear(); history.Clear(); position = 0; displaced = null; }
         return Publish("discard", "Discard", files);
     }
 

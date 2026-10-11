@@ -1,5 +1,56 @@
 # Desktop implementation status
 
+## Source save consistency review fix (2026-10-11, PR #27)
+
+Source saves revalidate map-zone profiles against the geometry they describe, including changes another Studio
+instance saved after an edit was accepted. Dirty geometry uses current map ownership; dirty mission profiles use
+current geometry. Compatible pending edits are validated together through the shared source workspace and existing
+parsers, so GUI and MCP saves share the same protection. Failed checks preserve accepted edits for undo or retry.
+
+Existing dependencies remain held through publication, while absent dependencies are checked under the publisher
+lock and again before commit. A dependency arriving during publication causes the existing rollback to restore our
+writes while preserving that external file. This does not promise an atomic lock on the external filesystem namespace
+or change the existing crash-recovery protocol.
+
+The two existing regressions fail against the original implementation and pass after a forced restored build.
+Independent challenges cover both publication orders, conversion and creation, compatible edits, cancellation,
+history, reload/discard, dependency arrival, rollback and verified rebuilds.
+Validation: Release builds pass with zero warnings/errors; PR Core 2,448 and Desktop 177; final-stack Core 2,887, Desktop 188 and the 17-test original-1998 subset. All runs have zero skips. A fresh full review and current-head CI remain required before merge. No public release is planned.
+## Terrain ownership and polygon review fixes (2026-10-11, PR #27)
+
+Conversion now checks every mission's map-zone ownership before returning for an absent local profile. It refuses
+a database whose assignments belong to another mission, preserving ordinary unzoned conversion and the single
+local owner's remap. This prevents a successful conversion and save in one mission from invalidating another
+mission's zone topology. The existing conversion regression now creates the second profile through a real zone
+edit and verifies fresh planning and old-plan application refuse without changing source bytes or history.
+
+Shared terrain shape editing now treats all holes as exclusions regardless of their authored winding. Two
+overlapping footprint holes drawn in opposite directions retain their excluded overlap during normalization,
+painting, erasing and saved edits. Only copied hole paths are oriented; authored rings, clipping limits and
+compiler semantics remain unchanged. The existing shape regression checks area and compiler membership.
+
+Both original implementations fail their extended regressions; forced restored builds pass. Independent
+challenges cover cross-mission ownership and late bindings, shape semantics, failure recovery, undo and verified
+save/reopen. Validation: Release builds pass with zero warnings/errors; PR Core 2,448 and Desktop 177; final-stack Core 2,887, Desktop 188 and the 17-test original-1998 subset. A fresh full review and current-head CI remain required before merge. No public release is planned.
+
+
+## Terrain review fixes (2026-10-11, PR #27)
+
+Terrain conversion rechecks every new model, buffer and recipe output when applying its plan. Files created by
+another editor while confirmation is open are refused, and prepared presence checks protect later publication.
+The existing conversion regression covers refusal without source/history changes and successful conversion/undo.
+
+The viewport terrain brush now requires a published preview with world coordinates. Unrelated model previews
+suspend painting while retaining the selected recipe, region and radius; Whole world and generated terrain
+previews resume it. Replacing the preview or changing brush settings cancels an unfinished stroke. The same
+eligibility check protects stroke acceptance; explicit MCP painting keeps its world-coordinate semantics.
+
+Both findings have independent reproductions and minimal regressions. The conversion's original-code mutation
+fails its refusal assertion, and the restored code passes 18 focused checks plus 36 publication/persistence
+challenges. Combined validation: Release builds with zero warnings/errors; PR Core 2,448 and Desktop 177; final Core 2,887 and Desktop 188.
+The original brush-authorization mutation fails after selecting an unrelated model; the restored focused Desktop check passes view transitions, stroke rejection/cancellation and accepted painting. The final 1998 subset passes 17 tests. Fresh full review and current-head CI remain required before merge. No public release is planned.
+
+
 ## Zone draft cancellation review fix (2026-10-11, PR #26)
 
 MCP can explicitly cancel a zone draft whose targets became stale after an edit in another open source world.

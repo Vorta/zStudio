@@ -157,7 +157,7 @@ public sealed partial class SourcePublisher
         }
 
         EventLog log = Prepare(directories, manifest, manifestBytes, changes, token);
-        try { Install(directories, manifest, changes, log); }
+        try { Install(directories, manifest, changes, checks, log); }
         finally { log.Dispose(); }
         // The save is committed: a failure to clean up only leaves a committed journal that the next save removes.
         try { Step("cleanup", -1); Discard(directories, id); }
@@ -195,7 +195,7 @@ public sealed partial class SourcePublisher
     }
 
     /// <summary>Moves each original aside and each new file into place, then commits; a failure undoes what was done, in reverse.</summary>
-    private void Install(DirectoryLease directories, JournalManifest manifest, Target[] changes, EventLog log)
+    private void Install(DirectoryLease directories, JournalManifest manifest, Target[] changes, Target[] checks, EventLog log)
     {
         string journal = JournalPath(manifest.SaveId), staging = StagingPath(manifest.SaveId);
         bool[] moved = new bool[changes.Length], installed = new bool[changes.Length];
@@ -235,7 +235,12 @@ public sealed partial class SourcePublisher
                 catch (IOException ex) when (Exists(directories, file.Path)) { throw CreatedDuringSave(file, ex); }
                 installed[i] = true; log.Append("installed", i);
             }
-            Step("commit", -1); committing = true; log.Append("committed", -1);
+            Step("commit", -1);
+            // A check-only dependency can appear or change while contents are staged. Refuse before the
+            // commit record so the existing rollback restores our writes without touching that dependency.
+            string[] conflicts = [.. checks.Where(t => !Look(directories, t.Path, CancellationToken.None, t.Expected).Is(t.Expected)).Select(t => t.Name)];
+            if (conflicts.Length > 0) throw ConflictingSources(conflicts);
+            committing = true; log.Append("committed", -1);
         }
         catch (Exception ex) when (ex is not Crash)
         {

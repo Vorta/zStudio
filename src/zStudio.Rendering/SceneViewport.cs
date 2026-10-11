@@ -489,6 +489,7 @@ public sealed partial class SceneViewport : UserControl, IDisposable
     }
     private void ClearMeshes()
     {
+        TerrainBrushActive = false; TerrainBrushWaiting = false;
         ClearInspection();
         CancelNavigation(); FramingSelection = null;
         orbitPivot = null; navigationReferenceDistance = null;

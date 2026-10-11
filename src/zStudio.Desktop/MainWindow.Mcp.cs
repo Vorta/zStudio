@@ -199,7 +199,7 @@ public partial class MainWindow
         RegisterSourceCommands(registry);
         RegisterSourceWorldCommands(registry);
         RegisterSourceObjectCommands(registry);
-        RegisterSourceRecoveryCommands(registry); RegisterSourceZoneCommands(registry);
+        RegisterSourceRecoveryCommands(registry); RegisterSourceTerrainCommands(registry); RegisterSourceZoneCommands(registry);
         RegisterWorldCompareCommands(registry);
         return registry;
     }
