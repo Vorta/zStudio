@@ -201,8 +201,15 @@ internal static class ParachuteMcpChecks
             Assert.False(world.IsDirty); Assert.True(owner.IsDirty); Assert.Same(world, main.ViewModel.SelectedDocument);
             Assert.Equal(2, FirstWindow(owner).Start);
             Assert.Equal(original, File.ReadAllBytes(owner.Path));
-            await PathAction("undo"); Assert.Equal(1, FirstWindow(owner).Start); Assert.False(owner.IsDirty);
+            await SupersedeRefresh("undo"); Assert.Equal(1, FirstWindow(owner).Start); Assert.False(owner.IsDirty);
+            state = (await PathAction("begin"))["parachute"]!;
+            draft = state["draft"]!["token"]!.GetValue<string>();
+            await PathAction("set", new() { ["token"] = draft, ["start"] = 2 });
+            await SupersedeRefresh("confirm", new() { ["token"] = draft }); Assert.Equal(2, FirstWindow(owner).Start);
+            await PathAction("undo"); Assert.Equal(1, FirstWindow(owner).Start);
             await PathAction("redo"); Assert.Equal(2, FirstWindow(owner).Start);
+            await SupersedeRefresh("show");
+            await SupersedeRefresh("analyze");
             string saved = Path.Combine(fixture.Root, "animation-copy.zbd");
             await PathAction("save", new() { ["destination"] = saved });
             var reopened = await FormatRegistry.Default.OpenAsync(saved, token);
@@ -218,6 +225,50 @@ internal static class ParachuteMcpChecks
             Assert.False((await State())!["visible"]!.GetValue<bool>());
             Assert.Equal("not_ready", (await Job("parachute", oldArguments, "failed"))["code"]!.GetValue<string>());
 
+            async Task SupersedeRefresh(string action, Dictionary<string, object?>? extra = null)
+            {
+                TaskCompletionSource refreshing = new(TaskCreationOptions.RunContinuationsAsynchronously);
+                using var releaseRefresh = new SemaphoreSlim(0);
+                // Hold the old worker even after supersession, so its canceled continuation runs only
+                // after the real GUI has published a newer session and begun its independent draft.
+                main.ParachuteAnalysisPreparing = _ => { refreshing.TrySetResult(); Assert.True(releaseRefresh.Wait(TimeSpan.FromSeconds(20))); };
+                // The accepted mutations use the real protocol job. Ordinary GUI analysis uses its
+                // existing ReportUi boundary so a stale cancellation cannot overwrite newer status.
+                Task accepted;
+                if (action is "show" or "analyze")
+                {
+                    int entry = (await State())!["entry"]!.GetValue<int>();
+                    Func<Task> work = () => (Task)typeof(MainWindow).GetMethod(action == "show" ? "ShowParachutesAsync" : "AnalyzeParachuteAsync", BindingFlags.Instance | BindingFlags.NonPublic)!
+                        .Invoke(main, action == "show" ? [CancellationToken.None, null, null] : [entry, CancellationToken.None])!;
+                    accepted = (Task)typeof(MainWindow).GetMethod("ReportUi", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(main, [work])!;
+                }
+                else accepted = PathAction(action, extra);
+                try
+                {
+                    var first = await Task.WhenAny(refreshing.Task, accepted).WaitAsync(token);
+                    if (first == accepted) { await accepted; Assert.Fail("The operation did not reach its analysis worker."); }
+                    main.ParachuteAnalysisPreparing = null;
+                    // Analyze retains its old panel until replacement; hide it before the GUI Show.
+                    if (action == "analyze") typeof(MainWindow).GetMethod("CloseParachutes", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(main, []);
+                    var show = (Button)main.FindName("ParachuteButton");
+                    Assert.True(show.IsEnabled); show.RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent, show));
+                    await UntilAsync(async () => (await State())?["visible"]?.GetValue<bool>() == true);
+                    Click("numeric");
+                    var newer = (await State())!;
+                    string snapshot = newer["snapshot"]!.GetValue<string>(), newerToken = newer["draft"]!["token"]!.GetValue<string>();
+                    string input = newer["draft"]!["input"]!.GetValue<string>();
+                    main.ViewModel.Status = "Newer Parachute draft retained";
+                    releaseRefresh.Release(); await accepted;
+                    var retained = (await State())!;
+                    Assert.True(retained["visible"]!.GetValue<bool>());
+                    Assert.Equal(snapshot, retained["snapshot"]!.GetValue<string>());
+                    Assert.Equal(newerToken, retained["draft"]!["token"]!.GetValue<string>());
+                    Assert.Equal(input, retained["draft"]!["input"]!.GetValue<string>());
+                    Assert.Equal("Newer Parachute draft retained", main.ViewModel.Status);
+                    Click("cancel");
+                }
+                finally { releaseRefresh.Release(); main.ParachuteAnalysisPreparing = null; }
+            }
             async Task Unlock() => await Call("pickup_lock", new() { ["document"] = Id(world), ["revision"] = world.Revision, ["locked"] = false });
             Recoil.Zbd.Rendering.SceneViewport Viewport() => (Recoil.Zbd.Rendering.SceneViewport)((ContentControl)main.FindName("SceneHost")).Content;
             async Task SelectFirstWindow() => await PathAction("select", new() { ["window"] = (await State())!["windows"]![0]!["id"]!.GetValue<string>() });

@@ -118,13 +118,14 @@ public partial class MainWindow
         }
         return state;
     }
-    private async Task ShowParachutesAsync(CancellationToken token, int? entry = null)
+    private async Task ShowParachutesAsync(CancellationToken token, int? entry = null, Action<long>? started = null)
     {
         RequireNoDrafts();
         if (!IsAiWorld || shownDocument is not { IsDisposed: false } world || ViewModel.Resolver is not { } resolver)
             throw new StudioCommandException("unsupported", "Open a Whole world to inspect VTOL drop windows.");
         CloseParachutes();
         var viewport = scene!; long request = ++parachuteGeneration, revision = world.Revision, resolverRevision = resolver.SnapshotRevision;
+        started?.Invoke(request);
         using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(token, world.Lifetime.Token, ViewModel.WorkspaceToken, shutdownToken);
         parachuteLoading = cancellation;
         ViewModel.Status = "Analyzing VTOL drop windows…";
@@ -163,7 +164,7 @@ public partial class MainWindow
             var state = new ParachuteSession(world, owner, viewport, context, discovery, resolver, resolverRevision);
             var candidate = entry is int index ? discovery.Candidates.FirstOrDefault(c => c.EntryIndex == index) : discovery.Candidates.FirstOrDefault();
             if (entry != null && candidate == null) throw new StudioCommandException("stale_record", "The requested flight program is unavailable.");
-            if (candidate != null) state.Analysis = await Task.Run(() => VtolDropWindows.Analyze(context, candidate, cancellation.Token), cancellation.Token);
+            if (candidate != null) state.Analysis = await Task.Run(() => { ParachuteAnalysisPreparing?.Invoke(cancellation.Token); return VtolDropWindows.Analyze(context, candidate, cancellation.Token); }, cancellation.Token);
             Current();
             if (owner != null && (owner.IsDisposed || owner.Revision != ownerRevision)) throw new StudioCommandException("context_changed", "The animation owner changed during analysis.");
             RequireParachutePublication(viewport);
@@ -174,6 +175,8 @@ public partial class MainWindow
             if (parachuteLoading == cancellation) parachuteLoading = null;
             PublishParachuteOverlay(); UpdateParachutePanel();
         }
+        catch (Exception ex) when (request != parachuteGeneration && ex is OperationCanceledException or StudioCommandException or IOException)
+        { throw new StudioCommandException("context_changed", "A newer Parachute request superseded this analysis."); }
         finally { if (parachuteLoading == cancellation) parachuteLoading = null; UpdateParachutePanel(); }
     }
     private async Task AnalyzeParachuteAsync(int entry, CancellationToken token)
@@ -187,12 +190,14 @@ public partial class MainWindow
         try
         {
             var result = await Task.Run(() => { ParachuteAnalysisPreparing?.Invoke(cancellation.Token); return VtolDropWindows.Analyze(state.Context, candidate, cancellation.Token); }, cancellation.Token);
-            RequireParachutes(state.Id); cancellation.Token.ThrowIfCancellationRequested();
             if (request != parachuteGeneration) throw new StudioCommandException("context_changed", "A newer Parachute analysis superseded this request.");
+            RequireParachutes(state.Id); cancellation.Token.ThrowIfCancellationRequested();
             RequireParachutePublication(state.Viewport);
             if (parachuteLoading == cancellation) parachuteLoading = null;
             state.Analysis = result; state.Selected = state.World.PickupsLocked ? null : result.Windows.FirstOrDefault()?.Id; PublishParachuteOverlay(); UpdateParachutePanel();
         }
+        catch (Exception ex) when (request != parachuteGeneration && ex is OperationCanceledException or StudioCommandException or IOException)
+        { throw new StudioCommandException("context_changed", "A newer Parachute request superseded this analysis."); }
         finally { if (parachuteLoading == cancellation) parachuteLoading = null; UpdateParachutePanel(); }
     }
     private void RequireParachutePublication(SceneViewport viewport)
@@ -334,9 +339,7 @@ public partial class MainWindow
         token.ThrowIfCancellationRequested(); acceptingParachute = true;
         try { VtolDropWindows.Apply(owner.AnimationEdits!, plan); ReleaseParachuteDraft(AiPathDraftLifetime.Completed); CommitRunningJob(); }
         finally { acceptingParachute = false; }
-        try { await ShowParachutesAsync(CancellationToken.None, entry); }
-        catch (Exception ex) when (ex is OperationCanceledException or StudioCommandException or IOException)
-        { CloseParachutes(); ViewModel.Status = "Drop-window move accepted; reopen Parachute to refresh: " + ex.Message; }
+        await RefreshAcceptedParachuteAsync(entry, "Drop-window move accepted; reopen Parachute to refresh: ");
         UpdateDocumentCommands(); return owner;
     }
     private async Task ParachuteHistoryAsync(bool redo, CancellationToken token)
@@ -352,9 +355,19 @@ public partial class MainWindow
             UpdateDocumentCommands(); CommitRunningJob();
         }
         finally { acceptingParachute = false; }
-        try { await ShowParachutesAsync(CancellationToken.None, entry >= 0 ? entry : null); }
+        await RefreshAcceptedParachuteAsync(entry >= 0 ? entry : null, "Animation history changed; reopen Parachute to refresh: ");
+    }
+    private async Task RefreshAcceptedParachuteAsync(int? entry, string failureMessage)
+    {
+        long? request = null;
+        try { await ShowParachutesAsync(CancellationToken.None, entry, generation => request = generation); }
         catch (Exception ex) when (ex is OperationCanceledException or StudioCommandException or IOException)
-        { CloseParachutes(); ViewModel.Status = "Animation history changed; reopen Parachute to refresh: " + ex.Message; }
+        {
+            // The edit/history step already succeeded. Only its own refresh may clean up or report
+            // a failure; a newer Show, draft, navigation or explicit close owns the workspace now.
+            if (request != null && request == parachuteGeneration)
+            { CloseParachutes(); ViewModel.Status = failureMessage + ex.Message; }
+        }
     }
     private async void ParachuteActionClick(object sender, RoutedEventArgs e) => await ReportUi(async () =>
     {

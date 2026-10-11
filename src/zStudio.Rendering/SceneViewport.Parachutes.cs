@@ -83,7 +83,8 @@ public sealed partial class SceneViewport
         {
             Geometry = new LineGeometry3D { Positions = new(parachutePath.Select(p => p.Position)),
                 Indices = new(Enumerable.Range(0, parachutePath.Length - 1).SelectMany(i => new[] { i, i + 1 })) },
-            Color = Colors.DeepSkyBlue, Thickness = 1.6, IsHitTestVisible = false
+            // The overlay does not enlarge authored scene depth bounds, just like its release markers.
+            Color = Colors.DeepSkyBlue, Thickness = 1.6, IsHitTestVisible = false, IsDepthClipEnabled = false
         };
         parachuteOverlay.Children.Add(parachuteLine);
         parachuteStarts = ParachuteMesh(new(0, .8f, 1, 1));
