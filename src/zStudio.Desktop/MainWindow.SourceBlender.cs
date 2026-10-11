@@ -62,34 +62,31 @@ public partial class MainWindow
     {
         var session = doc.SourceWorld ?? throw new StudioCommandException("unsupported", "Open a mission world of the source project to update it from Blender.");
         RequireSourceWorldIdle(session);
-        BlenderCheckout checkout; BlenderUpdatePlan plan;
+        BlenderCheckout checkout;
         try
         {
             checkout = SourceBlender.Find(session.Root, checkoutId);
-            var workspace = session.Workspace; string mission = session.Mission;
-            var provenance = doc.SourceBuild?.Provenance.Values.ToArray() ?? [];
-            plan = await Task.Run(() =>
-            {
-                var planned = SourceBlender.PlanUpdate(workspace, checkout, export, force, token);
-                // Scripts that turn or scale a node whose rotation or scale the export changes (theirs replace it), here or in other missions.
-                if (planned.Changes.FirstOrDefault(c => c.Relative.Equals(checkout.Model, StringComparison.OrdinalIgnoreCase)) is { Content: { } content }
-                    && workspace.Read(checkout.Model, token, Recoil.Zbd.Core.Gltf.GltfDocument.MaximumJsonBytes) is { } current
-                    && SourceObjectEdits.ScriptTransformsReached(workspace, mission, checkout.Model, current, content, provenance, token) is { Count: > 0 } reached)
-                    planned = planned with { Notes = [.. planned.Notes, .. reached] };
-                return planned;
-            }, token);
         }
-        catch (BlenderConflictException ex) { throw new StudioCommandException("conflict", ex.Message); }
         catch (InvalidDataException ex) { throw new StudioCommandException("invalid_argument", ex.Message); }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { throw new StudioCommandException("io_failed", ex.Message); }
+        string mission = session.Mission;
+        var provenance = doc.SourceBuild?.Provenance.Values.ToArray() ?? [];
+        BlenderUpdatePlan plan = null!;
         IReadOnlyList<string> written = [];
         var next = await PrepareSourceWorldEditAsync(doc, $"Updating {Path.GetFileName(checkout.Model)} from Blender", (workspace, ct) =>
         {
-            // The plan was made off the UI thread; nothing may have changed those files since.
-            var current = workspace.ReadEditHashes(plan.Expected.Keys, ct);
-            foreach (var (relative, sha) in plan.Expected)
-                if (current[relative] != sha)
-                    throw new InvalidDataException($"{relative} changed while the update was prepared; update again.");
+            // Capture pending edits on the dispatcher before planning, and retain every semantic read
+            // on this same prepared workspace through Apply, worker verification and acceptance.
+            try
+            {
+                plan = SourceBlender.PlanUpdate(workspace, checkout, export, force, ct);
+                // Scripts that turn or scale a node whose rotation or scale the export changes (theirs replace it), here or in other missions.
+                if (plan.Changes.FirstOrDefault(c => c.Relative.Equals(checkout.Model, StringComparison.OrdinalIgnoreCase)) is { Content: { } content }
+                    && workspace.Read(checkout.Model, ct, Recoil.Zbd.Core.Gltf.GltfDocument.MaximumJsonBytes) is { } current
+                    && SourceObjectEdits.ScriptTransformsReached(workspace, mission, checkout.Model, current, content, provenance, ct) is { Count: > 0 } reached)
+                    plan = plan with { Notes = [.. plan.Notes, .. reached] };
+            }
+            catch (BlenderConflictException ex) { throw new StudioCommandException("conflict", ex.Message); }
             if (workspace.Apply(plan.Label, plan.Changes.Select(c => (c.Relative, (byte[]?)c.Content)), ct) is not { } t) return null;
             written = [.. t.Files.Select(f => f.Relative)];
             return t;

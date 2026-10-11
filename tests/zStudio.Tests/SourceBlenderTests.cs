@@ -463,6 +463,59 @@ public sealed class SourceBlenderTests
         SourceWorkspace ordinary = new(fixture.Project);
         Apply(ordinary, acceptedForce); ordinary.Undo();
         Assert.Equal(originalBuffer, ordinary.Read(buffer, Token));
+
+        // Consequential race: the map is read before destination hashes. A later external zone edit
+        // must not become the expected hash for a replacement computed from the earlier assignments,
+        // even with force. The unchanged list only schedules that ordinary write at the read boundary.
+        using SourceWorldFixture racing = new();
+        SourceWorkspace owner = new(racing.Project);
+        const string profilePath = "data/m1/meta/zones.json";
+        var geometry = WorldAssembler.ReadModel(owner.Read(Model, Token)!, Model, (path, _) => owner.Read(path, Token)!, Token);
+        var profile = WorldGltf.CaptureZoneProfile(geometry, token: Token);
+        byte[] Map(uint zone) => new SourceMapZones([new(Model, Model,
+            profile with { Nodes = [.. profile.Nodes.Select(n => n with { Word = zone, Inherit = false })] }, [])]).Write(Token);
+        byte[] initialMap = Map(3), externalMap = Map(7);
+        racing.Write(profilePath, initialMap);
+        var racedCheckout = SourceBlender.Checkout(owner, Model, Token);
+        string moved = Export(racedCheckout, change: g => g["nodes"]![0]!["translation"] = new JsonArray(5f, 0f, 0f));
+        byte[] beforeModel = owner.Read(Model, Token)!;
+        foreach (bool force in new[] { false, true })
+        {
+            racing.Write(profilePath, initialMap);
+            var stamp = File.GetLastWriteTimeUtc(racing.Path(profilePath));
+            bool changed = false;
+            var interleaved = racedCheckout with { Files = new OnEnumeration<BlenderCheckoutFile>(racedCheckout.Files, () =>
+            {
+                if (changed) return;
+                changed = true;
+                racing.Write(profilePath, externalMap);
+                File.SetLastWriteTimeUtc(racing.Path(profilePath), stamp);
+            }) };
+            Assert.Contains(profilePath, Assert.Throws<SourceFileChangedException>(() =>
+                SourceBlender.PlanUpdate(owner, interleaved, moved, force, Token)).Files);
+            Assert.True(changed); Assert.Empty(owner.History);
+            Assert.Equal(externalMap, File.ReadAllBytes(racing.Path(profilePath)));
+            Assert.Equal(beforeModel, owner.Read(Model, Token));
+        }
+        // A fresh preparation preserves the external assignment, remains one undoable edit and saves it.
+        var retry = owner.BeginPreparedEdit();
+        var retried = SourceBlender.PlanUpdate(retry.Workspace, racedCheckout, moved, token: Token);
+        Apply(retry.Workspace, retried);
+        using (var verified = owner.VerifyPreparedEdit(retry, Token))
+            Assert.NotNull(owner.AcceptPreparedEdit(retry, Token, verified));
+        Assert.Single(owner.History);
+        Assert.All(SourceMapZones.Parse(owner.Read(profilePath, Token)!, Token).Assets.Single().Profile.Nodes, n => Assert.Equal(7u, n.Word));
+        owner.Undo(); Assert.Equal(beforeModel, owner.Read(Model, Token));
+        owner.Redo(); owner.Save(Token);
+        Assert.All(SourceMapZones.Parse(File.ReadAllBytes(racing.Path(profilePath)), Token).Assets.Single().Profile.Nodes, n => Assert.Equal(7u, n.Word));
+    }
+
+    private sealed class OnEnumeration<T>(IReadOnlyList<T> items, Action action) : IReadOnlyList<T>
+    {
+        public int Count => items.Count;
+        public T this[int index] => items[index];
+        public IEnumerator<T> GetEnumerator() { action(); return items.GetEnumerator(); }
+        System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() => GetEnumerator();
     }
 
     [Fact]

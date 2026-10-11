@@ -461,7 +461,16 @@ public static partial class SourceBlender
     {
         CheckInputLimits(maximumExportBytes, maximumJsonBytes);
         using CopyFiles written = new();
-        var plan = PlanUpdate(workspace, checkout, export, force, written, token, maximumExportBytes, maximumJsonBytes);
+        // A plan's transforms, ordering and map assignments must use the same bytes as its replacement
+        // guards. Desktop already supplies its prepared workspace and retains these reads through acceptance.
+        // Standalone callers need the same first-read checks, including pending edits and absent profiles.
+        var prepared = workspace.IsPrepared ? null : workspace.BeginPreparedEdit();
+        var plan = PlanUpdate(prepared?.Workspace ?? workspace, checkout, export, force, written, token, maximumExportBytes, maximumJsonBytes);
+        if (prepared != null)
+        {
+            workspace.ValidatePreparedEdit(prepared, token);
+            workspace.TrackMapZoneGeometry(checkout.Model);
+        }
         written.Keep();
         return plan;
     }
@@ -804,7 +813,6 @@ public static partial class SourceBlender
         if (textures.Count == 0) return shadows;
         string[] parts = model.Split('/');
         bool common = parts.Length > 2 && parts[1].Equals("common", StringComparison.OrdinalIgnoreCase);
-        SourceBuilder.Snapshot? snapshot = null;
         // Each file once, as the workspace holds it (pending additions and deletions included).
         Dictionary<string, bool> present = new(StringComparer.OrdinalIgnoreCase);
         bool Exists(string relative)
@@ -822,7 +830,11 @@ public static partial class SourceBlender
                 string folder = Path.GetDirectoryName(texture)!.Replace('\\', '/'), name = Path.GetFileName(texture);
                 // Only the mission's own folders and the shared ones can be among its texture folders.
                 if (!builds && !folder.StartsWith("data/common/", StringComparison.OrdinalIgnoreCase) && !folder.StartsWith($"data/{mission}/", StringComparison.OrdinalIgnoreCase)) continue;
-                folders ??= TextureSources.MissionFolders(mission, SourceBuilder.Multiplayer(workspace.Root, mission, snapshot ??= new(workspace.Root, workspace.Overlay(), inventoryToken: token), token));
+                if (folders == null)
+                {
+                    var script = workspace.Read($"{SourceProject.GameGenFolder}/support/load{mission}.gw", token, SourceProject.MaximumSourceTextBytes);
+                    folders = TextureSources.MissionFolders(mission, script != null && SourceBuilder.Multiplayer(script, token));
+                }
                 bool searched = folders.Contains(folder, StringComparer.OrdinalIgnoreCase);
                 if (!builds && !searched) continue;
                 int at = -1;
