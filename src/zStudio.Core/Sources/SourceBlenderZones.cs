@@ -853,6 +853,11 @@ internal sealed partial class SourceBlenderZones
                 if (reversed) mapped = WorldGltf.TurnedOver(mapped);
                 if (changes.Count > 0 && !patchable.ContainsKey(start.Primitive)) patchable[start.Primitive] = IndexTarget(root, originals[start.Primitive]) != null;
                 if (!whole || mapped.Length < 3 || changes.Count > 0 && !patchable[start.Primitive]) continue;
+                // Correspondence alone does not preserve a deformed surface: the old boundary can choose another
+                // diagonal after a corner moves. Keep historical unchanged boundaries, otherwise require the shared
+                // polygon triangulation to retain the authored triangles before publishing any corner rewrites.
+                if (chosen.Any(c => primitive.Positions[c.Key] != target.Positions[c.Value])
+                    && !KeepsTriangles(target, start.Index, count, mapped, changes, work)) continue;
                 if (!recovered.TryGetValue(start.Primitive, out var list)) recovered[start.Primitive] = list = [];
                 list.Add((start.Index, count, polygon, mapped));
                 if (!rewrites.TryGetValue(start.Primitive, out var patch)) rewrites[start.Primitive] = patch = [];
@@ -1097,6 +1102,29 @@ internal sealed partial class SourceBlenderZones
             if (!matched) return null;
         }
         return result;
+    }
+
+    /// <summary>Whether recovering an edited boundary preserves its surface in both polygon consumers.</summary>
+    private static bool KeepsTriangles(GltfPrimitive primitive, int first, int count, int[] corners, Dictionary<int, int> changes, PolygonWorkBudget work)
+    {
+        // Legacy numeric fan records can exceed the explicit boundary limit; retain their bounded pieces instead.
+        if (corners.Length > ModelBuilder.MaximumCorners) return false;
+        // Ear clipping and its inner scans are charged before allocation.
+        work.Charge(2L * corners.Length * corners.Length * corners.Length + count);
+        var points = corners.Select(c => primitive.Positions[c]).ToArray();
+        static (int, int, int) Key(int a, int b, int c) => a <= b && a <= c ? (a, b, c) : b <= c ? (b, c, a) : (c, a, b);
+        var recovered = WorldGltf.Triangulate(points)
+            .Where(t => !ModelBuilder.Straight(points[t.Item1], points[t.Item2], points[t.Item3]))
+            .Select(t => Key(corners[t.Item1], corners[t.Item2], corners[t.Item3])).Order().ToArray();
+        int At(int at) => changes.GetValueOrDefault(at, primitive.Indices[at]);
+        var authored = Enumerable.Range(first, count).Select(t => Key(At(t * 3), At(t * 3 + 1), At(t * 3 + 2))).Order().ToArray();
+        if (!recovered.SequenceEqual(authored)) return false;
+        // Coplanar polygons retain their established interpolation and boundary semantics. Only a nonplanar
+        // boundary can change the geometric surface merely by choosing a different preview diagonal.
+        if (ModelBuilder.Coplanar(points)) return true;
+        var rendered = GeometryBuilder.Triangulate(points);
+        var preview = Enumerable.Range(0, rendered.Length / 3).Select(t => Key(corners[rendered[t * 3]], corners[rendered[t * 3 + 1]], corners[rendered[t * 3 + 2]])).Order().ToArray();
+        return preview.SequenceEqual(authored);
     }
 
     /// <summary>Whether replacing a split corner preserves every supported vertex attribute.</summary>

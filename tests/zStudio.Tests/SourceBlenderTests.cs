@@ -155,6 +155,64 @@ public sealed class SourceBlenderTests
         Assert.Equal(CornerNormals(flat.Roots[0].Mesh!), CornerNormals(WorldAssembler.ReadModel(workspace.Read(turret, Token)!, turret, (path, _) => workspace.Read(path, Token)!, Token).Roots[0].Mesh!));
         workspace.Undo();
 
+        // Moving a smooth corner across the old diagonal still authors two valid triangles. Restoring the
+        // quad must not retessellate them in the compiler or preview, even when all shared normals agree.
+        string foldedExport = BlenderExport(checkout, "folded", faces: groups =>
+        {
+            foreach (var face in groups[0].Faces) for (int c = 0; c < face.Length; c++)
+                if (face[c].Position == new Vector3(1, 0, 0)) face[c].Position = new(0.25f, 0.5f, -0.375f);
+        }, nodes: document =>
+        {
+            foreach (var p in document.Roots[0].Mesh!.Primitives)
+            {
+                p.Material!.Extras!["recoil"]!["normals"] = true;
+                for (int i = 0; i < p.Normals.Count; i++) p.Normals[i] = Vector3.UnitY;
+            }
+        });
+        var foldedPlan = SourceBlender.PlanUpdate(workspace, SourceBlender.Find(fixture.Project, checkout.Id), foldedExport, token: Token);
+        Assert.Empty(foldedPlan.Notes);
+        var beforeFold = foldedPlan.Changes.Select(c => (c.Relative, workspace.Read(c.Relative, Token))).ToArray();
+        Apply(workspace, foldedPlan);
+        string foldedPath = Path.Combine(checkout.Outbox, foldedExport);
+        var folded = GltfDocument.Read(File.ReadAllBytes(foldedPath), uri => File.ReadAllBytes(Path.Combine(Path.GetDirectoryName(foldedPath)!, Uri.UnescapeDataString(uri))), Token);
+        var foldedModel = CompileHull(folded);
+        Assert.Equal(2, Surface(foldedModel).Length);
+        CheckFold();
+        workspace.Undo(); Assert.Equal(first, Zones("m1", turret));
+        workspace.Redo(); CheckFold();
+        workspace.Save(Token);
+        workspace = new(fixture.Project); CheckFold();
+        // Restore this test's original project for the independent edits below.
+        workspace.Apply("Restore before fold", beforeFold, Token);
+
+        void CheckFold()
+        {
+            var actual = WorldAssembler.ReadModel(workspace.Read(turret, Token)!, turret, (path, _) => workspace.Read(path, Token)!, Token);
+            var compiled = CompileHull(actual);
+            Assert.Equal(Surface(foldedModel), Surface(compiled));
+            foreach (var (mission, logical, expected) in new[] { ("m1", turret, 0xFFFF0101u), ("m2", other, 0xFF000A01u) })
+            {
+                Assert.True(SourceMapZones.Parse(workspace.Read($"data/{mission}/meta/zones.json", Token)!, Token).TryGetAsset(logical, out var asset));
+                WorldGltf.ValidateZoneProfile(actual, asset.Profile, Token);
+                Assert.Equal(new[] { expected, expected }, asset.Profile.MeshPolygons[0].Take(2));
+            }
+        }
+        static WorldModel CompileHull(GltfDocument document)
+        {
+            GltfDocument hullOnly = new(); hullOnly.Roots.Add(new() { Name = "hull", Mesh = document.Roots[0].Mesh });
+            return WorldGltf.Import(hullOnly, "hull.gltf", 255, new()
+            {
+                World = new(), Reference = (_, _) => throw new InvalidOperationException(), TextureName = (_, name, _) => name ?? "rock",
+            })[0].Model!;
+        }
+        // Isolate the edited unit panel from unrelated historical coplanar polygons whose diagonals are equivalent.
+        static string[] Surface(WorldModel model) => [.. model.Polygons.Where(p => p.Vertices.All(i => model.Vertices[i].X <= 1 && model.Vertices[i].Y < 1 && model.Vertices[i].Z >= -1)).SelectMany(p =>
+        {
+            var points = p.Vertices.Select(i => model.Vertices[i]).ToArray();
+            var indices = GeometryBuilder.Triangulate(points);
+            return Enumerable.Range(0, indices.Length / 3).Select(t => string.Join(";", indices.Skip(t * 3).Take(3).Select(i => points[i].ToString()).Order(StringComparer.Ordinal)));
+        }).Order(StringComparer.Ordinal)];
+
         static Dictionary<string, Vector3> Facing(GltfMesh mesh) => mesh.Primitives.SelectMany(p => Enumerable.Range(0, p.Indices.Count / 3).Select(t =>
         {
             var v = p.Indices.Skip(3 * t).Take(3).Select(i => p.Positions[i]).ToArray();
@@ -201,7 +259,9 @@ public sealed class SourceBlenderTests
         string[] Faces(string[] zones, bool lost = false) => [.. zones.Where(z => z.Contains('<')).Select(z => lost && z.Contains(paintCorner, StringComparison.Ordinal) ? "FFFFFF00" : z[(z.LastIndexOf(' ') + 1)..]).Order()];
         string[] Nodes(string[] zones) => [.. zones.Where(z => !z.Contains('<'))];
         string[] moved1 = Zones("m1", turret), moved2 = Zones("m2", other);
-        Assert.Equal(Faces(first, lost: true), Faces(moved1)); Assert.Equal(Faces(shared, lost: true), Faces(moved2));
+        // The moved quad now needs two pieces to retain its nonplanar exported surface; both keep its map's word.
+        Assert.Equal(Faces(first, lost: true).Append("FFFF0101").Order(), Faces(moved1));
+        Assert.Equal(Faces(shared, lost: true).Append("FF000A01").Order(), Faces(moved2));
         Assert.Equal(Nodes(first).Select(z => z.StartsWith("lamp ", StringComparison.Ordinal) ? z.Replace("Inherit = True", "Inherit = False") : z), Nodes(moved1));
         Assert.Equal(Nodes(shared), Nodes(moved2));
         workspace.Undo();

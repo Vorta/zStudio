@@ -1,3 +1,9 @@
+## Blender polygon-surface correction — focused validation complete (2026-10-11)
+
+Edited polygons retain the exported triangle pieces when restoring an old boundary would change their surface in the compiler or nonplanar preview. This also applies to mirrored nonplanar polygons; each piece keeps the original zone word independently in every map. Unchanged checkout geometry and established coplanar interpolation retain their historical behavior. GUI and MCP use the same recovery service, without new arguments or conflict decisions.
+
+Actual Blender low- and high-lift counterexamples now preserve both authored surfaces through prepared acceptance, history and Save/reopen. Separate challenges cover mirrored nonplanar geometry, unchanged nonplanar boundaries, planar mirrors with non-affine UVs, partial flips, flat and smooth shading, custom normals and morph data. A forced original-production rebuild fails the new preview-surface regression; the exactly restored Release build has zero warnings/errors and all 109 focused checks pass. Full PR/final Core/Desktop and original-1998 gates remain pending for this correction.
+
 ## Blender authored-normal correction — local validation complete (2026-10-11)
 
 Recovering a polygon now preserves differing corner normals that its material stores. Ordinary flat-shaded deformation keeps the exported triangle pieces and each map's original zone assignment; materials that intentionally omit stored normals retain their existing behavior. The matcher and compiler share the same material policy. Actual Blender reproduction, a forced original-code mutation and the corrected per-triangle regression verify the failure and correction; separate challenges cover shading, winding, material and UV splits, missing normals, history and Save/reopen.
