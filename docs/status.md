@@ -1,5 +1,22 @@
 # Desktop implementation status
 
+## Terrain review fixes (2026-10-11, PR #27)
+
+Terrain conversion rechecks every new model, buffer and recipe output when applying its plan. Files created by
+another editor while confirmation is open are refused, and prepared presence checks protect later publication.
+The existing conversion regression covers refusal without source/history changes and successful conversion/undo.
+
+The viewport terrain brush now requires a published preview with world coordinates. Unrelated model previews
+suspend painting while retaining the selected recipe, region and radius; Whole world and generated terrain
+previews resume it. Replacing the preview or changing brush settings cancels an unfinished stroke. The same
+eligibility check protects stroke acceptance; explicit MCP painting keeps its world-coordinate semantics.
+
+Both findings have independent reproductions and minimal regressions. The conversion's original-code mutation
+fails its refusal assertion, and the restored code passes 18 focused checks plus 36 publication/persistence
+challenges. Combined validation: Release builds with zero warnings/errors; PR Core 2,448 and Desktop 177; final Core 2,887 and Desktop 188.
+The original brush-authorization mutation fails after selecting an unrelated model; the restored focused Desktop check passes view transitions, stroke rejection/cancellation and accepted painting. The final 1998 subset passes 17 tests. Fresh full review and current-head CI remain required before merge. No public release is planned.
+
+
 ## Zone draft cancellation review fix (2026-10-11, PR #26)
 
 MCP can explicitly cancel a zone draft whose targets became stale after an edit in another open source world.
