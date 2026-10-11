@@ -14,13 +14,16 @@ namespace Recoil.Zbd.Desktop;
 
 public partial class MainWindow
 {
+    private enum AiPathDraftLifetime { Pending, ReleasedForAcceptance, Canceled, Completed }
     private sealed class AiPathDraft(DocumentModel document, SceneViewport viewport, string network,
         Dictionary<string, MissionPickupSource> sources, IReadOnlyDictionary<MissionPickupSource, Vector3> before, string mode)
     {
         public readonly DocumentModel Document = document;
         public readonly SceneViewport Viewport = viewport;
         public readonly string Snapshot = viewport.AiNetworks.Id, Network = network, Token = Guid.NewGuid().ToString();
-        public readonly long Revision = document.Revision;
+        public long Revision = document.Revision;
+        public AiPathDraftLifetime Lifetime;
+        public long? RolledBackRevision;
         public readonly Dictionary<string, MissionPickupSource> Sources = sources;
         public readonly IReadOnlyDictionary<MissionPickupSource, Vector3> Before = before;
         public IReadOnlyDictionary<MissionPickupSource, Vector3> After = before;
@@ -55,7 +58,7 @@ public partial class MainWindow
             }
             catch (Exception ex) when (ex is StudioCommandException or ArgumentException or InvalidOperationException) { ViewModel.Status = ex.Message; }
         };
-        viewport.AiPathTransformConfirmRequested += () => _ = RunUi(async () => { await ApplyAiPathAsync(CancellationToken.None); });
+        viewport.AiPathTransformConfirmRequested += () => _ = ReportUi(async () => { await ApplyAiPathAsync(CancellationToken.None); });
         viewport.AiPathTransformCancelRequested += CancelAiPathDraft;
     }
     private void RequireAiPathEditable()
@@ -157,13 +160,23 @@ public partial class MainWindow
                             (relative, limits) => workspace.Read(relative, ct, limits), ct).Select(c => (c.Relative, (byte[]?)c.Content)));
                     return workspace.Apply("Transform AI path nodes", changes, ct);
                 }, token, committingAiPath: draft);
+                draft.Lifetime = AiPathDraftLifetime.Completed;
                 ViewModel.Status = "AI path transformed. The rebuilt source world has left Edit mode; select its current path to continue.";
                 return next;
             }
             catch
             {
-                if (shownDocument == draft.Document && scene == draft.Viewport && !draft.Document.IsDisposed && draft.Document.Revision == draft.Revision && aiPathDraft == null)
-                { aiPathDraft = draft; scene.SetAiPathEditing(draft.Network, draft.Sources.Keys); PreviewAiPathDraft(); UpdateAiPathPanel(); }
+                // An explicit Escape/Cancel during preparation is final. Only the acceptance path releases
+                // a still-wanted draft; restore it after failed acceptance or a proven source transaction rollback.
+                if (draft.Lifetime == AiPathDraftLifetime.ReleasedForAcceptance && aiPathDraft == null &&
+                    shownDocument == draft.Document && scene == draft.Viewport && !draft.Document.IsDisposed &&
+                    draft.Document.SourceWorld?.Owner == draft.Document && scene.AiNetworks.Id == draft.Snapshot &&
+                    draft.Document.Revision == (draft.RolledBackRevision ?? draft.Revision) &&
+                    draft.Before.All(p => draft.Document.PickupEdits?.Coordinate(p.Key) is { Kind: "ai" } && draft.Document.PickupEdits.Position(p.Key) == p.Value))
+                {
+                    draft.Revision = draft.Document.Revision; draft.RolledBackRevision = null; draft.Lifetime = AiPathDraftLifetime.Pending;
+                    aiPathDraft = draft; scene.SetAiPathEditing(draft.Network, draft.Sources.Keys); PreviewAiPathDraft(); UpdateAiPathPanel();
+                }
                 throw;
             }
         }
@@ -174,8 +187,11 @@ public partial class MainWindow
         UpdateAiPathPanel(); UpdateDocumentCommands(); return draft.Document;
     }
     private void CancelAiPathDraft()
+        => ReleaseAiPathDraft(AiPathDraftLifetime.Canceled);
+    private void ReleaseAiPathDraft(AiPathDraftLifetime lifetime)
     {
         if (aiPathDraft is not { } draft) return;
+        draft.Lifetime = lifetime;
         aiPathDraft = null;
         if (scene == draft.Viewport) { scene.SetAiPathPointerTransform(false); scene.SetAiPathPreview(null); }
         UpdateAiPathPanel();
@@ -213,7 +229,7 @@ public partial class MainWindow
         }
         finally { synchronizingAiPath = false; }
     }
-    private async void AiPathActionClick(object sender, RoutedEventArgs e) => await RunUi(async () =>
+    private async void AiPathActionClick(object sender, RoutedEventArgs e) => await ReportUi(async () =>
     {
         string action = (sender as FrameworkElement)?.Tag as string ?? "edit";
         if (action == "edit") { if (scene?.AiPathEditingNetwork != null) { if (!ResolveAiPathDraft()) return; scene.SetAiPathEditing(null); } else EnterAiPath(); }
@@ -241,7 +257,7 @@ public partial class MainWindow
         if (e.Key != Key.Tab && scene?.AiPathEditingNetwork == null) return false;
         if (e.Key is not (Key.Tab or Key.G or Key.R or Key.S or Key.X or Key.Y or Key.Z or Key.Enter or Key.Escape)) return false;
         e.Handled = true; if (e.IsRepeat) return true;
-        _ = RunUi(async () =>
+        _ = ReportUi(async () =>
         {
             if (e.Key == Key.Tab) { if (scene!.AiPathEditingNetwork == null) EnterAiPath(); else if (ResolveAiPathDraft()) scene.SetAiPathEditing(null); }
             else if (e.Key == Key.Escape) { if (scene!.CancelAiPathBox()) return; if (HasAiPathDraft) CancelAiPathDraft(); else scene.SetAiPathEditing(null); }
@@ -258,6 +274,7 @@ public partial class MainWindow
         var graph = scene.AiNetworks;
         var nodes = scene.SelectedAiPathNodes.Select(id => graph.Find(id) ?? throw new StudioCommandException("stale_record", "Node unavailable.")).ToArray();
         if (nodes.Length == 0) throw new StudioCommandException("selection_required", "Select nodes before opening Properties.");
+        ++propertyRequest; // Supersede older asynchronous asset/property loads, as single-node Properties does.
         var first = nodes[0];
         JsonObject data = new()
         {

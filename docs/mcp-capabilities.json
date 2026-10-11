@@ -1328,13 +1328,15 @@
       "gui": "MainWindow.xaml:AiPathActionClick",
       "tools": [
         "zstudio_ai_path"
-      ]
+      ],
+      "note": "Edit mode, transform begin/confirm/cancel and pinned Properties use the same ai_path operations and draft/identity guards."
     },
     {
       "gui": "MainWindow.xaml:AiPathInputChanged",
       "tools": [
         "zstudio_ai_path"
-      ]
+      ],
+      "note": "Numeric transform input and world axis update the shared frozen-selection draft, preserving incomplete input until explicit confirmation or cancellation."
     }
   ]
 }

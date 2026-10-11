@@ -450,7 +450,7 @@ public partial class MainWindow
     /// world's build (<paramref name="fromBuild"/>: provenance, line numbers, archive layouts) are refused once a source the
     /// build read changed in the workspace, until the world is reloaded.
     /// </remarks>
-    private async Task<DocumentModel> EditSourceWorldAsync(DocumentModel doc, string action, Func<SourceWorkspace, Action?> apply, CancellationToken token, IReadOnlyList<SourceModelAddition>? additions = null, bool fromBuild = true, Func<ScriptLineChanges?>? verifyTargets = null, IReadOnlyList<string>? notes = null)
+    private async Task<DocumentModel> EditSourceWorldAsync(DocumentModel doc, string action, Func<SourceWorkspace, Action?> apply, CancellationToken token, IReadOnlyList<SourceModelAddition>? additions = null, bool fromBuild = true, Func<ScriptLineChanges?>? verifyTargets = null, IReadOnlyList<string>? notes = null, Action? onRollback = null)
     {
         var session = doc.SourceWorld ?? throw new StudioCommandException("unsupported", "This document is not a source world.");
         if (doc.IsDisposed || session.Owner != doc) throw new StudioCommandException("stale_document", "The world was rebuilt; read zstudio_state for its current document.");
@@ -490,6 +490,7 @@ public partial class MainWindow
             // The take-back changes the revision; a Discard chosen meanwhile still covers the workspace.
             finally { if (discardApproved) discardApprovedWorkspace = (session.Workspace, session.Workspace.Revision); }
             session.Workspace.ForgetChangesAfter(contentBefore);
+            onRollback?.Invoke(); // Only after both the transaction and its content revision were restored.
             StudioCommandException? reverted = ex is StudioCommandException { Code: not "context_changed" } failure
                 ? new(failure.Code, failure.Code == "build_failed" ? $"{action} was reverted because the world does not build with it: {failure.Message}" : $"{action} was reverted: {failure.Message}")
                 : null;
@@ -566,7 +567,7 @@ public partial class MainWindow
             try { session.Workspace.ValidatePreparedEdit(prepared, cancellation.Token, verification.Value); }
             catch (SourceFileChangedException ex) { throw new StudioCommandException("external_change", ex.Message); }
             catch (InvalidDataException ex) { throw new StudioCommandException("invalid_argument", ex.Message); }
-            CancelAiPathDraft(); scene?.SetAiPathEditing(null);
+            ReleaseAiPathDraft(AiPathDraftLifetime.ReleasedForAcceptance); scene?.SetAiPathEditing(null);
         }
         if (committingCard != null)
         {
@@ -590,7 +591,8 @@ public partial class MainWindow
         }
         // No dispatcher yield between releasing the preparation guard and accepting the checked edit.
         return await EditSourceWorldAsync(doc, action, w => w.AcceptPreparedEdit(prepared, cancellation.Token, verification.Value) is { } t ? () => w.Retract(t) : null,
-            cancellation.Token, additions, fromBuild, verifyTargets, notes);
+            cancellation.Token, additions, fromBuild, verifyTargets, notes,
+            onRollback: committingAiPath == null ? null : () => committingAiPath.RolledBackRevision = doc.Revision);
     }
 
     private Task<DocumentModel> AddSourceModelAsync(DocumentModel doc, SourceWorldAddition addition, CancellationToken token)

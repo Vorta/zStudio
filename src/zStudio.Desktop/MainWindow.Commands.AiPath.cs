@@ -9,7 +9,7 @@ public partial class MainWindow
 {
     private void RegisterAiPathCommands(StudioCommands registry)
     {
-        Register(registry, "ai_path", "Edit nodes in one authored AI path. Enter/exit Edit mode; replace/add/toggle a bounded selection or box-select visible nodes; begin a move/rotate/scale draft, set numeric input, then confirm one undo step or cancel. World XYZ constraints and selection-centre pivot match the GUI. Links and other fields are preserved. Source-world confirmation rebuilds through source tokens and returns the new document, exiting Edit mode. Selection and draft state are in preview_state.ai.path. Properties pins common values (mixed where different), without following later selection. No physical input is captured.", true,
+        RegisterJob(registry, "ai_path", "Edit nodes in one authored AI path. Enter/exit Edit mode; replace/add/toggle a bounded selection or box-select visible nodes; begin a move/rotate/scale draft, set numeric input, then confirm one undo step or cancel. World XYZ constraints and selection-centre pivot match the GUI. Links and other fields are preserved. Source-world confirmation rebuilds through source tokens and returns the new document, exiting Edit mode. Selection and draft state are in preview_state.ai.path. Properties pins common values (mixed where different), without following later selection. No physical input is captured.",
             [PreviewParameter, AiSnapshotParameter, DocumentParameter, RevisionParameter,
                 P("action", "string", "Path action.", true, "enter", "exit", "select", "box", "begin", "set", "confirm", "cancel", "properties"),
                 P("network", "string", "Network ID for enter; otherwise the selected marker or network filter is used."),
@@ -19,7 +19,7 @@ public partial class MainWindow
                 P("mode", "string", "Transform kind for begin.", false, "move", "rotate", "scale"),
                 P("axis", "string", "World constraint; all uses XYZ move/scale input and Y rotation. Pointer scale is uniform.", false, "all", "x", "y", "z"),
                 P("token", "string", "Current draft token for set/confirm/cancel."),
-                new("input", "array", "Three invariant numeric strings, at most 64 characters each. Move XYZ deltas; scale XYZ factors; rotation uses first value in degrees. Invalid/incomplete drafts remain visible and cannot be confirmed.", Items: new("", "string", "Numeric draft."), MinItems: 3, MaxItems: 3)], async (a, token) =>
+                new("input", "array", "Three invariant numeric strings, at most 64 characters each. Move XYZ deltas; scale XYZ factors; rotation uses first value in degrees. Invalid/incomplete drafts remain visible and cannot be confirmed.", Items: new("", "string", "Numeric draft."), MinItems: 3, MaxItems: 3)], true, async (a, token) =>
         {
             TargetAiGraph(a);
             var document = TargetDocument(a);

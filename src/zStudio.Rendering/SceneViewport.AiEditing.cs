@@ -132,6 +132,9 @@ public sealed partial class SceneViewport
     {
         if (AiPathEditingNetwork == null || !IsInsidePickupViewport(point)) return false;
         if (e.ChangedButton is not (MouseButton.Left or MouseButton.Right)) return IsAiPathPointerTransform;
+        // Returning from a numeric field to the viewport restores modal keyboard commands,
+        // even when the draft vetoes selection. This click does not accept a numeric draft.
+        viewport.Focus();
         if (IsAiPathPointerTransform)
         {
             if (e.ChangedButton == MouseButton.Left) AiPathTransformConfirmRequested?.Invoke(); else AiPathTransformCancelRequested?.Invoke();

@@ -31,13 +31,14 @@ public sealed partial class SceneViewport
 
     public bool BeginManualNavigation()
     {
-        if (IsFlyActive || IsPickupDragging) return false;
+        if (IsFlyActive || IsPickupDragging || IsAiPathPointerTransform) return false;
         ManualNavigationStarting?.Invoke();
         return true;
     }
     public void StopCameraMotion() { CancelNavigation(); StopNavigationMotion(); }
     public void PrepareAuthoredCamera()
     {
+        if (IsAiPathPointerTransform) return;
         StopCameraMotion(); ChangeProjection("perspective"); axisView = null; autoPerspective = false;
     }
     public void OrbitStep(double horizontalDegrees, double verticalDegrees)

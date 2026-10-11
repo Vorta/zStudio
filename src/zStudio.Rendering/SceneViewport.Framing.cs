@@ -14,7 +14,7 @@ public sealed partial class SceneViewport
     public bool TryFrame(string target, int? node = null, bool manual = true)
     {
         if (target is not ("all" or "asset" or "selected")) throw new ArgumentException("Unknown framing target.", nameof(target));
-        if (IsPickupDragging || IsFlyActive || viewport.Camera is not ProjectionCamera) return false;
+        if (IsPickupDragging || IsFlyActive || IsAiPathPointerTransform || viewport.Camera is not ProjectionCamera) return false;
         long? selectedRuntime = target == "selected" && node == null && FramingSelection == SelectedInspection?.Node
             ? SelectedInspection?.RuntimeInstance : null;
         if (selectedRuntime != null && InspectTarget(SelectedInspection!.Target)?.Active != true) return false;
