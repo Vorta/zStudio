@@ -157,44 +157,67 @@ public sealed class SourceBlenderTests
 
         // Moving a smooth corner across the old diagonal still authors two valid triangles. Restoring the
         // quad must not retessellate them in the compiler or preview, even when all shared normals agree.
-        string foldedExport = BlenderExport(checkout, "folded", faces: groups =>
+        foreach (bool shapeKey in new[] { false, true })
         {
-            foreach (var face in groups[0].Faces) for (int c = 0; c < face.Length; c++)
-                if (face[c].Position == new Vector3(1, 0, 0)) face[c].Position = new(0.25f, 0.5f, -0.375f);
-        }, nodes: document =>
-        {
-            foreach (var p in document.Roots[0].Mesh!.Primitives)
+            string foldedExport = BlenderExport(checkout, shapeKey ? "morphFold" : "folded", faces: groups =>
             {
-                p.Material!.Extras!["recoil"]!["normals"] = true;
-                for (int i = 0; i < p.Normals.Count; i++) p.Normals[i] = Vector3.UnitY;
+                foreach (var face in groups[0].Faces) for (int c = 0; c < face.Length; c++)
+                    if (!shapeKey && face[c].Position == new Vector3(1, 0, 0)) face[c].Position = new(0.25f, 0.5f, -0.375f);
+            }, nodes: document =>
+            {
+                foreach (var p in document.Roots[0].Mesh!.Primitives)
+                {
+                    p.Material!.Extras!["recoil"]!["normals"] = true;
+                    if (shapeKey) p.Targets.Add([.. p.Positions.Select(v => v == new Vector3(1, 0, 0) ? new Vector3(-0.75f, 0.5f, -0.375f) : Vector3.Zero)]);
+                    for (int i = 0; i < p.Normals.Count; i++) p.Normals[i] = Vector3.UnitY;
+                }
+            }, shareVertices: true);
+            var foldedPlan = SourceBlender.PlanUpdate(workspace, SourceBlender.Find(fixture.Project, checkout.Id), foldedExport, token: Token);
+            Assert.Empty(foldedPlan.Notes);
+            var beforeFold = foldedPlan.Changes.Select(c => (c.Relative, workspace.Read(c.Relative, Token))).ToArray();
+            Apply(workspace, foldedPlan);
+            string foldedPath = Path.Combine(checkout.Outbox, foldedExport);
+            var folded = GltfDocument.Read(File.ReadAllBytes(foldedPath), uri => File.ReadAllBytes(Path.Combine(Path.GetDirectoryName(foldedPath)!, Uri.UnescapeDataString(uri))), Token);
+            float[] weights = shapeKey ? [0, 0.5f, 1] : [0];
+            foreach (float weight in weights)
+            {
+                Assert.Equal(2, AuthoredSurface(weight).Length);
+                Assert.Equal(AuthoredSurface(weight), Surface(CompileHull(folded), weight));
             }
-        });
-        var foldedPlan = SourceBlender.PlanUpdate(workspace, SourceBlender.Find(fixture.Project, checkout.Id), foldedExport, token: Token);
-        Assert.Empty(foldedPlan.Notes);
-        var beforeFold = foldedPlan.Changes.Select(c => (c.Relative, workspace.Read(c.Relative, Token))).ToArray();
-        Apply(workspace, foldedPlan);
-        string foldedPath = Path.Combine(checkout.Outbox, foldedExport);
-        var folded = GltfDocument.Read(File.ReadAllBytes(foldedPath), uri => File.ReadAllBytes(Path.Combine(Path.GetDirectoryName(foldedPath)!, Uri.UnescapeDataString(uri))), Token);
-        var foldedModel = CompileHull(folded);
-        Assert.Equal(2, Surface(foldedModel).Length);
-        CheckFold();
-        workspace.Undo(); Assert.Equal(first, Zones("m1", turret));
-        workspace.Redo(); CheckFold();
-        workspace.Save(Token);
-        workspace = new(fixture.Project); CheckFold();
-        // Restore this test's original project for the independent edits below.
-        workspace.Apply("Restore before fold", beforeFold, Token);
-
-        void CheckFold()
-        {
-            var actual = WorldAssembler.ReadModel(workspace.Read(turret, Token)!, turret, (path, _) => workspace.Read(path, Token)!, Token);
-            var compiled = CompileHull(actual);
-            Assert.Equal(Surface(foldedModel), Surface(compiled));
-            foreach (var (mission, logical, expected) in new[] { ("m1", turret, 0xFFFF0101u), ("m2", other, 0xFF000A01u) })
+            if (shapeKey)
             {
-                Assert.True(SourceMapZones.Parse(workspace.Read($"data/{mission}/meta/zones.json", Token)!, Token).TryGetAsset(logical, out var asset));
-                WorldGltf.ValidateZoneProfile(actual, asset.Profile, Token);
-                Assert.Equal(new[] { expected, expected }, asset.Profile.MeshPolygons[0].Take(2));
+                // The raw untextured importer shares fan merging with recovery. It must not rejoin the folded target.
+                GltfMesh plain = new();
+                foreach (var p in folded.Roots[0].Mesh!.Primitives)
+                {
+                    GltfPrimitive untextured = new(); untextured.Positions.AddRange(p.Positions); untextured.Indices.AddRange(p.Indices); untextured.Targets.AddRange(p.Targets);
+                    plain.Primitives.Add(untextured);
+                }
+                GltfDocument raw = new(); raw.Roots.Add(new() { Mesh = plain });
+                foreach (float weight in weights) Assert.Equal(AuthoredSurface(weight), Surface(CompileHull(raw), weight));
+            }
+            string[] AuthoredSurface(float weight) => [.. folded.Roots[0].Mesh!.Primitives.SelectMany(p => Enumerable.Range(0, p.Indices.Count / 3)
+                .Select(t => p.Indices.Skip(t * 3).Take(3).ToArray()).Where(c => c.All(i => p.Positions[i].X <= 1 && p.Positions[i].Y < 1 && p.Positions[i].Z >= -1))
+                .Select(c => string.Join(";", c.Select(i => (p.Positions[i] + (p.Targets.Count > 0 ? p.Targets[0][i] * weight : Vector3.Zero)).ToString()).Order(StringComparer.Ordinal)))).Order(StringComparer.Ordinal)];
+            CheckFold();
+            workspace.Undo(); Assert.Equal(first, Zones("m1", turret));
+            workspace.Redo(); CheckFold();
+            workspace.Save(Token);
+            workspace = new(fixture.Project); CheckFold();
+            // Restore this test's original project for the independent edits below.
+            workspace.Apply("Restore before fold", beforeFold, Token);
+
+            void CheckFold()
+            {
+                var actual = WorldAssembler.ReadModel(workspace.Read(turret, Token)!, turret, (path, _) => workspace.Read(path, Token)!, Token);
+                var compiled = CompileHull(actual);
+                foreach (float weight in weights) Assert.Equal(AuthoredSurface(weight), Surface(compiled, weight));
+                foreach (var (mission, logical, expected) in new[] { ("m1", turret, 0xFFFF0101u), ("m2", other, 0xFF000A01u) })
+                {
+                    Assert.True(SourceMapZones.Parse(workspace.Read($"data/{mission}/meta/zones.json", Token)!, Token).TryGetAsset(logical, out var asset));
+                    WorldGltf.ValidateZoneProfile(actual, asset.Profile, Token);
+                    Assert.Equal(new[] { expected, expected }, asset.Profile.MeshPolygons[0].Take(2));
+                }
             }
         }
         static WorldModel CompileHull(GltfDocument document)
@@ -206,9 +229,9 @@ public sealed class SourceBlenderTests
             })[0].Model!;
         }
         // Isolate the edited unit panel from unrelated historical coplanar polygons whose diagonals are equivalent.
-        static string[] Surface(WorldModel model) => [.. model.Polygons.Where(p => p.Vertices.All(i => model.Vertices[i].X <= 1 && model.Vertices[i].Y < 1 && model.Vertices[i].Z >= -1)).SelectMany(p =>
+        static string[] Surface(WorldModel model, float weight = 0) => [.. model.Polygons.Where(p => p.Vertices.All(i => model.Vertices[i].X <= 1 && model.Vertices[i].Y < 1 && model.Vertices[i].Z >= -1)).SelectMany(p =>
         {
-            var points = p.Vertices.Select(i => model.Vertices[i]).ToArray();
+            var points = p.Vertices.Select(i => model.Vertices[i] + (model.Morphs.Count > i ? model.Morphs[i] * weight : Vector3.Zero)).ToArray();
             var indices = GeometryBuilder.Triangulate(points);
             return Enumerable.Range(0, indices.Length / 3).Select(t => string.Join(";", indices.Skip(t * 3).Take(3).Select(i => points[i].ToString()).Order(StringComparer.Ordinal)));
         }).Order(StringComparer.Ordinal)];

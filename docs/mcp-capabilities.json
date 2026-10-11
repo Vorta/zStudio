@@ -1259,7 +1259,7 @@
         "zstudio_source_blender_checkouts",
         "zstudio_source_blender_update"
       ],
-      "note": "Tools > Update from Blender export lists the project's checkouts and their exports off the UI thread (source_blender_checkouts lists them with offset/nextOffset and bounded nested previews that preserve returned paths) and opens the Update from Blender export dialog to choose the checkout and export (BlenderUpdateDialog:Controls); Update applies it as one undoable workspace change that rebuilds the world (source_blender_update with that checkout and export)."
+      "note": "Tools > Update from Blender export lists the project's checkouts and their exports off the UI thread (source_blender_checkouts lists them with offset/nextOffset and bounded nested previews that preserve returned paths) and opens the Update from Blender export dialog to choose the checkout and export (BlenderUpdateDialog:Controls); Update applies it as one undoable workspace change that rebuilds the world (source_blender_update with that checkout and export). Shared recovery includes shape-key deltas in surface preservation and carries each original map word onto retained triangle pieces; unchanged geometry and planar affine morphs retain eligible boundaries."
     },
     {
       "gui": "MainWindow.xaml:SourceRecoveryClick",

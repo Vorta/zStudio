@@ -1141,6 +1141,7 @@ public static partial class WorldGltf
         bool Extends(List<int> polygon, int c)
         {
             work.Charge(3L * (polygon.Count + 1));
+            if (!MorphPreservesSurface(primitive, [.. polygon, c], work)) return false;
             List<Vector3> points = [.. polygon.Select(i => p[i]), p[c]];
             if (!ModelBuilder.Coplanar(points)) return false;
             Vector3 normal = Vector3.Cross(p[polygon[1]] - p[polygon[0]], p[polygon[2]] - p[polygon[0]]);
@@ -1155,6 +1156,25 @@ public static partial class WorldGltf
             // The engine extrapolates corners past the first triangle affinely; keep only fans whose mapping is affine.
             return ModelBuilder.Affine(points, [.. polygon.Select(i => uv[i]), uv[c]], ModelBuilder.AffineTolerance / 4, work);
         }
+    }
+
+    /// <summary>The single supported shape key's delta, with an absent stream equivalent to zero.</summary>
+    internal static Vector3 MorphDelta(GltfPrimitive primitive, int corner) =>
+        primitive.Targets.Count > 0 && primitive.Targets[0].Count == primitive.Positions.Count ? primitive.Targets[0][corner] : Vector3.Zero;
+
+    /// <summary>Whether a shape key lets alternate polygon diagonals retain the same surface throughout interpolation.</summary>
+    internal static bool MorphPreservesSurface(GltfPrimitive primitive, IReadOnlyList<int> corners, PolygonWorkBudget work)
+    {
+        if (corners.Count <= 3 || primitive.Targets.Count == 0 || primitive.Targets[0].Count != primitive.Positions.Count) return true;
+        work.Charge(3L * corners.Count);
+        var deltas = primitive.Targets[0];
+        if (corners.All(c => deltas[c] == deltas[corners[0]])) return true;
+        var points = corners.Select(c => primitive.Positions[c]).ToArray();
+        // An affine deformation of a planar polygon remains an affine image at every weight. Reuse the compiler's
+        // coplanarity policy and exact-fit affine check; endpoint samples alone cannot establish this property.
+        return ModelBuilder.Coplanar(points)
+            && ModelBuilder.Affine(points, corners.Select(c => new Vector2(deltas[c].X, deltas[c].Y)).ToArray(), 0, work)
+            && ModelBuilder.Affine(points, corners.Select(c => new Vector2(deltas[c].Z, 0)).ToArray(), 0, work);
     }
 
     /// <summary>Whether the material stores corner normals; no engine attributes means use the primitive's stream.</summary>

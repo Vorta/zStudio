@@ -854,10 +854,12 @@ internal sealed partial class SourceBlenderZones
                 if (changes.Count > 0 && !patchable.ContainsKey(start.Primitive)) patchable[start.Primitive] = IndexTarget(root, originals[start.Primitive]) != null;
                 if (!whole || mapped.Length < 3 || changes.Count > 0 && !patchable[start.Primitive]) continue;
                 // Correspondence alone does not preserve a deformed surface: the old boundary can choose another
-                // diagonal after a corner moves. Keep historical unchanged boundaries, otherwise require the shared
-                // polygon triangulation to retain the authored triangles before publishing any corner rewrites.
-                if (chosen.Any(c => primitive.Positions[c.Key] != target.Positions[c.Value])
-                    && !KeepsTriangles(target, start.Index, count, mapped, changes, work)) continue;
+                // diagonal after a corner moves, including through a shape key. Keep historical unchanged geometry;
+                // edited morphs must preserve the surface throughout interpolation, not just at the base positions.
+                bool moved = chosen.Any(c => primitive.Positions[c.Key] != target.Positions[c.Value]);
+                bool morphed = chosen.Any(c => WorldGltf.MorphDelta(primitive, c.Key) != WorldGltf.MorphDelta(target, c.Value));
+                if ((moved || morphed) && (mapped.Length > ModelBuilder.MaximumCorners || !WorldGltf.MorphPreservesSurface(target, mapped, work)
+                    || moved && !KeepsTriangles(target, start.Index, count, mapped, changes, work))) continue;
                 if (!recovered.TryGetValue(start.Primitive, out var list)) recovered[start.Primitive] = list = [];
                 list.Add((start.Index, count, polygon, mapped));
                 if (!rewrites.TryGetValue(start.Primitive, out var patch)) rewrites[start.Primitive] = patch = [];
@@ -888,6 +890,7 @@ internal sealed partial class SourceBlenderZones
                 {
                     fans = new() { Material = primitive.Material };
                     fans.Positions.AddRange(primitive.Positions); fans.TexCoords.AddRange(primitive.TexCoords);
+                    fans.Targets.AddRange(primitive.Targets);
                 }
                 fans.Indices.Clear(); fans.Indices.AddRange(primitive.Indices.Skip(at * 3).Take((end - at) * 3));
                 foreach (var polygonCorners in WorldGltf.MergeFans(fans, WorldGltf.ZoneLayout.Textured(primitive), work))
