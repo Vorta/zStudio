@@ -1,3 +1,9 @@
+## Blender authored-normal correction — local validation complete (2026-10-11)
+
+Recovering a polygon now preserves differing corner normals that its material stores. Ordinary flat-shaded deformation keeps the exported triangle pieces and each map's original zone assignment; materials that intentionally omit stored normals retain their existing behavior. The matcher and compiler share the same material policy. Actual Blender reproduction, a forced original-code mutation and the corrected per-triangle regression verify the failure and correction; separate challenges cover shading, winding, material and UV splits, missing normals, history and Save/reopen.
+
+PR and final-tree Release builds have zero warnings or errors, with 2,887 Core and 188 Desktop tests passing on each using original 1999 and MW3 data. The final original-1998 subset passes 17 tests. The integrated PR independently passes 2,887 Core, 188 Desktop and 75 PR-watch checks. No tests were skipped; Desktop settings were restored exactly. These completed local gates precede another fresh full-PR review and current-head CI; no release or tag is part of the work.
+
 ## Blender review corrections — combined local validation complete (2026-10-11)
 
 The saved-paint, mirrored-face and confirmation fixes pass together on the PR and final version tree. Both Release builds have zero warnings or errors; both trees pass all 2,887 Core and 188 Desktop tests with original 1999 and MW3 data, and the final original-1998 source-project/terrain subset passes all 17 tests. The integrated PR independently passes the same Core/Desktop suites and all 75 PR-watch checks. No tests were skipped, and Desktop settings were restored exactly.
