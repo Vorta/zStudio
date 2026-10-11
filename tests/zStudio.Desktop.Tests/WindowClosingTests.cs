@@ -68,6 +68,7 @@ public sealed class WindowClosingTests
                     await SourceWorkspaceStateBoundsChecks.Run();
                     await FileResultBoundsMcpChecks.Run();
                     await SourceEditingMcpChecks.Run();
+                    await ParachuteMcpChecks.Run();
                     await SourceRecoveryMcpChecks.Run();
                     await SourceProjectReadMcpChecks.Run();
                     await SourceDecisionDialogChecks.Run();

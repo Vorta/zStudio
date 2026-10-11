@@ -54,7 +54,7 @@ public sealed partial class SceneViewport
         PreviewMouseMove += (_, e) =>
         {
             if (InspectionContent is DependencyObject panel && IsInspectionInput(e.OriginalSource as DependencyObject, panel)) return;
-            if (HandleAiPathMove(e.GetPosition(viewport))) { e.Handled = true; return; }
+            if (MoveParachutePointer(e.GetPosition(viewport)) || HandleAiPathMove(e.GetPosition(viewport))) { e.Handled = true; return; }
             if (HandleZoneMove(e.GetPosition(viewport)) || HandleTerrainBrushMove(e.GetPosition(viewport))) { e.Handled = true; return; }
             if (HandlePickupPointerMove(e.GetPosition(viewport))) e.Handled = true;
             else HandleAiPointerMove(e.GetPosition(viewport));
@@ -74,8 +74,8 @@ public sealed partial class SceneViewport
         if (IsFlyActive || IsPickupDragging) return true;
         // The screen-space cube owns its clicks, even over scene geometry or
         // handles. Resolve it before the editing lock can consume a scene click.
-        if (!IsAiPathPointerTransform && aiPathBoxStart == null && e.ChangedButton == MouseButton.Left && NavigateCubeAt(point)) return true;
-        return HandleAiPathDown(point, e) || HandleZoneDown(point, e) || HandleTerrainBrushDown(point, e) || HandlePickupPointerDown(point, e) || HandleInspectionClick(point, e) || HandleAiPointerDown(point, e);
+        if (!IsAiPathPointerTransform && !IsParachutePointerMoving && !HasParachutePreview && aiPathBoxStart == null && e.ChangedButton == MouseButton.Left && NavigateCubeAt(point)) return true;
+        return HandleParachuteDown(point, e) || HandleAiPathDown(point, e) || HandleZoneDown(point, e) || HandleTerrainBrushDown(point, e) || HandlePickupPointerDown(point, e) || HandleInspectionClick(point, e) || HandleAiPointerDown(point, e);
     }
     private void ConfigurePickups()
     {
@@ -142,7 +142,7 @@ public sealed partial class SceneViewport
     public void SetPickupLocked(bool locked)
     {
         worldInspection = true;
-        if (locked) { SetAiPathEditing(null); CancelPickupDrag(); EndTransformDraft(); }
+        if (locked) { ResetParachuteSelection(); SetAiPathEditing(null); CancelPickupDrag(); EndTransformDraft(); }
         pickupLocked = locked;
         if (locked)
         {

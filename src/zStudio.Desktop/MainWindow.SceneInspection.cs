@@ -27,10 +27,10 @@ public partial class MainWindow
         viewport.InspectionSelectionCleared += () => ClearSceneTreeSelection(viewport);
     }
     private bool ResolveInspectionDrafts(DocumentModel? doc = null)
-        => ResolveAiPathDraft(doc) && (!HasInspectionDraft || doc != null && inspectionDraft!.DraftDocument != doc || inspectionDraft!.ResolvePending());
+        => ResolveParachuteDraft(doc) && ResolveAiPathDraft(doc) && (!HasInspectionDraft || doc != null && inspectionDraft!.DraftDocument != doc || inspectionDraft!.ResolvePending());
     /// <summary>Like <see cref="ResolveInspectionDrafts"/>, but a Yes that applies a source world's draft completes with that apply (its rebuild).</summary>
     private async Task<bool> ResolveInspectionDraftsAsync(DocumentModel? doc = null)
-        => ResolveAiPathDraft(doc) && (!HasInspectionDraft || doc != null && inspectionDraft!.DraftDocument != doc || await inspectionDraft!.ResolvePendingAsync());
+        => ResolveParachuteDraft(doc) && ResolveAiPathDraft(doc) && (!HasInspectionDraft || doc != null && inspectionDraft!.DraftDocument != doc || await inspectionDraft!.ResolvePendingAsync());
 
     private MissionPickupSource? InspectionSource(SceneViewport viewport, SceneInspection inspection)
     {

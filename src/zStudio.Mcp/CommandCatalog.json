@@ -2410,6 +2410,170 @@
     ]
   },
   {
+    "Name": "zstudio_parachute",
+    "Description": "Inspect and relocate complete existing VTOL drop windows in a Whole world. Show analyzes the first supported flight; analyze selects an exact entry. Conditional release markers come from a frozen bounded runtime, never landing predictions. Select/begin/set/confirm/cancel share the GUI draft and one undo step. Set a local start time or exact path segment plus fraction to disambiguate crossings. Compiled edits belong to the returned animation owner; source edits use token-preserving project history and rebuild. Undo/redo/save explicitly target that owner. save requires a NEW destination for compiled animations; source saves retain their project destination. Samples/releases are paged; preview_state.parachute reports bounded state. No physical input is captured. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Mutates": true,
+    "Parameters": [
+      {
+        "Name": "preview",
+        "Type": "string",
+        "Description": "Current preview lifetime ID from zstudio_state.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "document",
+        "Type": "string",
+        "Description": "Document lifetime ID from zstudio_state.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "revision",
+        "Type": "integer",
+        "Description": "Expected current document revision. Read before editing.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": 0,
+        "Maximum": 9223372036854775807
+      },
+      {
+        "Name": "action",
+        "Type": "string",
+        "Description": "Operation.",
+        "Required": true,
+        "Choices": [
+          "show",
+          "hide",
+          "analyze",
+          "select",
+          "begin",
+          "set",
+          "confirm",
+          "cancel",
+          "undo",
+          "redo",
+          "save",
+          "samples",
+          "releases"
+        ],
+        "Properties": null
+      },
+      {
+        "Name": "snapshot",
+        "Type": "string",
+        "Description": "Current Parachute snapshot, required except show.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "ownerRevision",
+        "Type": "integer",
+        "Description": "Current animation owner revision for compiled begin/set/confirm/undo/redo/save.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": 0
+      },
+      {
+        "Name": "entry",
+        "Type": "integer",
+        "Description": "Exact discovered flight entry index for analyze.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": 0,
+        "Maximum": 32767
+      },
+      {
+        "Name": "window",
+        "Type": "string",
+        "Description": "Current drop-window UUID for select.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "token",
+        "Type": "string",
+        "Description": "Current draft token for set/confirm/cancel.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "start",
+        "Type": "number",
+        "Description": "Local cycle start seconds; mutually exclusive with segment/fraction.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "NumberMinimum": 0,
+        "NumberMaximum": 3600
+      },
+      {
+        "Name": "segment",
+        "Type": "integer",
+        "Description": "Path sample index, followed by index\u002B1; requires fraction.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": 0,
+        "Maximum": 216000
+      },
+      {
+        "Name": "fraction",
+        "Type": "number",
+        "Description": "Fraction along the identified segment; requires segment.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "NumberMinimum": 0,
+        "NumberMaximum": 1
+      },
+      {
+        "Name": "destination",
+        "Type": "string",
+        "Description": "New animation Save As file outside the source root, only for compiled save.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "offset",
+        "Type": "integer",
+        "Description": "Zero-based result offset.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": -2147483648,
+        "Maximum": 2147483647
+      },
+      {
+        "Name": "limit",
+        "Type": "integer",
+        "Description": "Page size, 1\u2013200; default 100.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": -2147483648,
+        "Maximum": 2147483647
+      },
+      {
+        "Name": "query",
+        "Type": "string",
+        "Description": "Case-insensitive name/path or displayed-text filter, applied before pagination.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      }
+    ]
+  },
+  {
     "Name": "zstudio_ai_valves",
     "Description": "Page authored MW3 valve records or exact-name references from an edited resource. Includes repeated triggers, compound definitions and node/edge/objective uses; no runtime state is inferred. Query filters record names or valve references before paging. Parameters and reference previews are bounded; zrd_nodes/export retains complete data. Returns an operation ID; use zstudio_operation to await/read the result.",
     "Mutates": true,

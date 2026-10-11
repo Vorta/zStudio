@@ -21,6 +21,7 @@ public partial class MainWindow
     }
     private void DetachPickupEditor()
     {
+        CloseParachutes();
         CancelAiPathDraft(); scene?.SetAiPathEditing(null);
         scene?.CancelPickupDrag();
         if (pickupDocument != null) pickupDocument.PickupEditsChanged -= PickupEditsChanged;

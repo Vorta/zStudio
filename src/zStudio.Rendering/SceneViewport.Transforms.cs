@@ -30,6 +30,7 @@ public sealed partial class SceneViewport
     {
         if (mode is not ("move" or "rotate") || mode == "rotate" && rotation == PlacementRotationKind.None)
             throw new ArgumentException("Unsupported transform mode.");
+        if (HasParachutePreview || IsParachutePointerMoving) throw new InvalidOperationException("Finish drop-window editing first.");
         if (!InspectionSelectionEnabled) throw new InvalidOperationException("Unlock editing first.");
         var pending = valid ? placementEdits?.PreviewTransform(source, value) : transformOverrides;
         bool changedMode = TransformMode != mode || transformRotation != rotation;

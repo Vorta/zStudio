@@ -755,6 +755,7 @@ public partial class MainWindow : Window
     private void Keyboard(object sender, KeyEventArgs e)
     {
         if (flyCamera?.HandleKey(e, true) == true) return;
+        if (ParachuteKeyboard(e)) return;
         if (AiPathKeyboard(e)) return;
         if (CameraKeyboard(e)) return;
         if ((e.Key == Key.Enter || e.SystemKey == Key.Enter) && System.Windows.Input.Keyboard.Modifiers == ModifierKeys.Alt) { e.Handled = true; OpenCurrentProperties(); return; }

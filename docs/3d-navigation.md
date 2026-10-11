@@ -61,3 +61,5 @@ Additional actions:
 NavigationReferenceDistance is the most recently sampled camera-to-surface distance, or the initial framing/pose distance until a hit is available. Perspective travel is `0.12 * max(reference distance, 0.01) * steps` game units. Inputs larger than one wheel step refresh the query between substeps of at most one step. This speed is independent of the orbit target and near/far clipping. Reversing zoom moves backward using the same pointed-surface rule. The 0.01-unit minimum reference allows crossing a surface instead of approaching it indefinitely.
 
 Invalid arguments are rejected before changing navigation/follow state. Camera mutations return `busy` during pickup drags; reads remain available. MCP uses semantic operations and never captures physical input. Discovery remains windowless.
+
+The Whole world Parachute button opens the [VTOL drop-window editor](parachute-editor.md). It follows ordered flight phases at path crossings; camera mutations pause during its pointer move, with a numeric start-time alternative.

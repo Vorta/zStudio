@@ -25,7 +25,7 @@ public sealed partial class SceneViewport
         : throw new InvalidOperationException("No projection camera.");
     public void RestoreView(ViewPose pose)
     {
-        if (IsAiPathPointerTransform) return;
+        if (IsAiPathPointerTransform || IsParachutePointerMoving) return;
         if (viewport.Camera is not ProjectionCamera previous) return;
         ProjectionCamera camera = pose.Projection == "orthographic"
             ? previous as NavigationOrthographicCamera ?? new NavigationOrthographicCamera()
@@ -96,7 +96,7 @@ public sealed partial class SceneViewport
                 RefreshHorizon();
                 cameraPoseDirty = false; authoredCameraPose = false;
             }
-            UpdatePickupGizmoSize(); UpdateClipPlanes(); UpdateAiMarkers(); RefreshInspection();
+            UpdatePickupGizmoSize(); UpdateClipPlanes(); UpdateAiMarkers(); UpdateParachuteMarkers(); RefreshInspection();
         }
         finally { preparingCamera = false; }
     }
@@ -139,7 +139,7 @@ public sealed partial class SceneViewport
     public void RotateBy(double horizontal, double vertical)
     {
         if (IsFlyActive) { LookFlyBy(horizontal, vertical); return; }
-        if (IsPickupDragging || IsAiPathPointerTransform || !viewport.IsRotationEnabled || horizontal == 0 && vertical == 0) return;
+        if (IsPickupDragging || IsAiPathPointerTransform || IsParachutePointerMoving || !viewport.IsRotationEnabled || horizontal == 0 && vertical == 0) return;
         ManualNavigationStarting?.Invoke();
         if (autoPerspective) ChangeProjection("perspective");
         string? previousAxis = axisView; axisView = null; autoPerspective = false;
