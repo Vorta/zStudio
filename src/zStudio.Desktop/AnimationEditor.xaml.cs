@@ -284,6 +284,12 @@ public partial class AnimationEditor : FieldEditor, IDisposable
     }
     internal void ToggleCameraFollow() => FollowCamera.IsChecked = FollowCamera.IsChecked != true;
     private void GridChanged(object sender, RoutedEventArgs e) { if (ready) viewport.SetGroundGrid(ShowGrid.IsChecked == true); }
+    private void FaceOrientationChanged(object sender, RoutedEventArgs e)
+    {
+        if (!ready) return;
+        viewport.SetFaceOrientation(ShowFaceOrientation.IsChecked == true);
+        Render();
+    }
     private void HeightKeyDown(object sender, KeyEventArgs e)
     {
         if (e.Key is Key.Enter or Key.Escape) { HeightEditingFinished(sender, e); e.Handled = true; }
@@ -362,9 +368,9 @@ public partial class AnimationEditor : FieldEditor, IDisposable
         AutomationProperties.SetName(TimeLabel, TimeLabel.ToolTip.ToString());
         Timeline.Frame = frame; Timeline.SelectedSequence = selectedSequence; Timeline.InvalidateVisual();
         var c = frame.ScreenColor;
-        ScreenOverlay.Background = Lighting.IsChecked == true ? new SolidColorBrush(Color.FromScRgb(Math.Clamp(c.W, 0, 1), Math.Clamp(c.X, 0, 1), Math.Clamp(c.Y, 0, 1), Math.Clamp(c.Z, 0, 1))) : Brushes.Transparent;
+        ScreenOverlay.Background = Lighting.IsChecked == true && !viewport.FaceOrientationEnabled ? new SolidColorBrush(Color.FromScRgb(Math.Clamp(c.W, 0, 1), Math.Clamp(c.X, 0, 1), Math.Clamp(c.Y, 0, 1), Math.Clamp(c.Z, 0, 1))) : Brushes.Transparent;
         WaveOverlay.Children.Clear();
-        if (Lighting.IsChecked == true && frame.ScreenWave.Z > 0)
+        if (Lighting.IsChecked == true && !viewport.FaceOrientationEnabled && frame.ScreenWave.Z > 0)
         {
             var wave = frame.ScreenWave; double radius = Math.Clamp(wave.Z, 0, 10000);
             Ellipse circle = new() { Width = radius * 2, Height = radius * 2, Stroke = Brushes.LightSkyBlue, StrokeThickness = Math.Clamp(Math.Abs(wave.W), 1, 12), Opacity = .55 };

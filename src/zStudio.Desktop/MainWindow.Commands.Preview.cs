@@ -69,6 +69,7 @@ public partial class MainWindow
                 texturePacks = packs["items"], texturePackCount = packs["total"], texturePackOffset = packs["offset"], texturePackNextOffset = packs["nextOffset"],
                 textured = animation != null ? true : SceneHost.Visibility == Visibility.Visible ? TexturesEnabled.IsChecked : null,
                 wireframe = animation != null ? false : SceneHost.Visibility == Visibility.Visible ? Wireframe.IsChecked : null,
+                faceOrientation = animation?.Viewport.FaceOrientationEnabled ?? (SceneHost.Visibility == Visibility.Visible ? scene?.FaceOrientationEnabled : null),
                 bounds = animation != null ? false : SceneHost.Visibility == Visibility.Visible ? BoundsEnabled.IsChecked : null,
                 highlight = animation == null && shownAsset?.Kind == AssetKind.World && SceneHost.Visibility == Visibility.Visible && scene != null ? WorldHighlightName(scene.HighlightMode) : null,
                 horizon = animation?.Options.Horizon ?? (SceneHost.Visibility == Visibility.Visible ? BackdropEnabled.IsChecked : null),
@@ -115,7 +116,7 @@ public partial class MainWindow
             }
             return Result(new { visible = "all" });
         });
-        RegisterJob(r, "scene_options", "Set static model/world options: lod(integer), difficulty(Easy/Medium/Hard; RECOIL only, MW3 uses missions), textures/wireframe/bounds/horizon(boolean), texturePack(path or empty for automatic), highlight(none/nonDefaultSoils/canModify/clipTo/zones), aiNodes/aiThroughGeometry(boolean), aiNetwork(all or ID with aiSnapshot). Highlights and AI are Whole world only.", [PreviewParameter,SceneChanges], false, async (a, token) =>
+        RegisterJob(r, "scene_options", "Set static model/world options: lod(integer), difficulty(Easy/Medium/Hard; RECOIL only, MW3 uses missions), textures/wireframe/faceOrientation/bounds/horizon(boolean), texturePack(path or empty for automatic), highlight(none/nonDefaultSoils/canModify/clipTo/zones), aiNodes/aiThroughGeometry(boolean), aiNetwork(all or ID with aiSnapshot). Highlights and AI are Whole world only.", [PreviewParameter,SceneChanges], false, async (a, token) =>
         {
             RequirePreview(a); RequireNoDrafts(shownDocument); if (animation != null || motion != null) throw new StudioCommandException("unsupported","Use animation_options or motion_preview.");
             TargetViewport(a); var doc = shownDocument!; var asset = shownAsset!;
@@ -157,6 +158,7 @@ public partial class MainWindow
                     // Publish the highlight only after every requested refresh succeeds.
                     case "highlight": break;
                     case "aiNodes": case "aiThroughGeometry": case "aiNetwork": case "aiSnapshot": break;
+                    case "faceOrientation": FaceOrientation.IsChecked = value!.GetValue<bool>(); ApplySceneOptions(); break;
                     case "textures": TexturesEnabled.IsChecked = value!.GetValue<bool>(); ApplySceneOptions(); break;
                     case "wireframe": Wireframe.IsChecked = value!.GetValue<bool>(); ApplySceneOptions(); break;
                     case "bounds": BoundsEnabled.IsChecked = value!.GetValue<bool>(); ApplySceneOptions(); break;
@@ -206,7 +208,7 @@ public partial class MainWindow
             if (changesAi) SetAiOptions(Flag(changes, "aiNodes", aiVisible), Flag(changes, "aiThroughGeometry", aiThroughGeometry), requestedAiNetwork);
             return Result(new { preview = previewId, ViewModel.Status });
         });
-        RegisterJob(r, "animation_options", "Set animation options: map/grid/collision/horizon/followCamera/effects/replay/mute/followLog(bool), height(-999..999), lod, difficulty(RECOIL only; MW3 uses missions), speed, volume, phase(runtime/cleanup), seed, condition(0/1/2), range/traceRange(seconds), autoRange/fitTrace(true), problemFilter(0..4), worldPath, root, activationOrigin/activationTarget(XYZ text or blank).", [PreviewParameter,AnimationChanges], false, async (a, _) =>
+        RegisterJob(r, "animation_options", "Set animation options: map/grid/collision/horizon/faceOrientation/followCamera/effects/replay/mute/followLog(bool), height(-999..999), lod, difficulty(RECOIL only; MW3 uses missions), speed, volume, phase(runtime/cleanup), seed, condition(0/1/2), range/traceRange(seconds), autoRange/fitTrace(true), problemFilter(0..4), worldPath, root, activationOrigin/activationTarget(XYZ text or blank).", [PreviewParameter,AnimationChanges], false, async (a, _) =>
         {
             var editor = TargetAnimation(a); RequireNoDrafts(shownDocument);
             var animationChanges = (JsonObject)a["changes"]!;
