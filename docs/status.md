@@ -1,12 +1,14 @@
 # Desktop implementation status
 
-## Reconstruction navigation review fix (2026-10-11, PR #24)
+## Source-project navigation review fixes (2026-10-11, PR #24)
 
-Reconstruction started through MCP no longer replaces a newer workspace opened through the GUI while the project
-is being written. The completed project remains available; the operation reports `opened: false` with
+Source-project opening and optional opening after reconstruction now reserve navigation before their asynchronous
+folder checks or extraction. A newer GUI navigation takes precedence, including when it is still checking a folder
+or source project. The completed reconstruction remains available; the operation reports `opened: false` with
 `openRefused.code: context_changed`. Existing draft and unsaved-document checks remain in place.
 
-The deterministic protocol regression fails with the publication guard removed and passes with it restored.
+Deterministic protocol regressions independently reject guards based only on a published workspace and navigation
+capture without request reservation. The restored guards pass pending-root and overlapping-project checks.
 The reviewed PR tree passed the Release build with zero warnings/errors, 1,773 Core tests and 169 Desktop tests.
 Both original RECOIL releases reconstructed successfully; all 19 rebuilt mission worlds and animation packages
 compared without semantic differences. These checks do not establish original-game compatibility. The remaining
