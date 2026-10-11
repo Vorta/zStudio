@@ -38,7 +38,7 @@ internal static class LinkedSourceProjectChecks
                 await using var host = new LocalMcpHost(main.Commands, "test");
                 await using var pipe = new NamedPipeClientStream(".", host.Instance.Pipe, PipeDirection.InOut, PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly); await pipe.ConnectAsync(token);
                 await using var client = await McpClient.CreateAsync(new StreamClientTransport(pipe, pipe), cancellationToken: token);
-                var require = typeof(MainWindow).GetMethod("RequireSourceProjectAsync", BindingFlags.Static | BindingFlags.NonPublic)!;
+                var require = typeof(MainWindow).GetMethod("RequireSourceProjectAsync", BindingFlags.Instance | BindingFlags.NonPublic)!;
 
                 foreach (string linked in new[] { direct, Path.Combine(above, "project") })
                 {
@@ -47,7 +47,7 @@ internal static class LinkedSourceProjectChecks
                     var refused = await Job("open_root", new() { ["path"] = linked, ["project"] = true }, "failed");
                     Assert.Equal("not_project", refused["code"]!.GetValue<string>());
                     Assert.Contains("is a link; source projects are opened only from regular folders", refused["message"]!.GetValue<string>());
-                    var gui = await Assert.ThrowsAsync<StudioCommandException>(() => (Task)require.Invoke(null, [linked, token])!);
+                    var gui = await Assert.ThrowsAsync<StudioCommandException>(() => (Task)require.Invoke(main, [linked, token])!);
                     Assert.Equal(("not_project", refused["message"]!.GetValue<string>()), (gui.Code, gui.Message));
                     Assert.Equal(before, main.ViewModel.RootPath);
 
