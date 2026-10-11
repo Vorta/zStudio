@@ -801,7 +801,7 @@ public static partial class SourceBlender
     /// folders, the first of each name in folder order (<see cref="TextureSources.MissionFolders"/>, as
     /// <see cref="SourceBuilder.MissionTextures"/> packs them), and the game finds a texture by name; a name no folder holds is
     /// taken from where the model's image points. So, for each texture and each mission that builds the model (a model of
-    /// <c>data/mN</c> in mN, one of <c>data/common</c> in every mission, and every mission whose map binds it, <paramref name="bound"/>,
+    /// <c>data/mN</c> in mN, one of <c>data/common</c> in every mission, every mission whose scripts load it and every mission whose map binds it, <paramref name="bound"/>,
     /// such as 1999 m6 loading m13's <c>wlpart</c> files): another file of the name found first is what the model shows there;
     /// and in each mission that searches the texture's folder, a new texture found before another file of its name takes the
     /// name from that file for every model of the mission that shows it.
@@ -813,6 +813,7 @@ public static partial class SourceBlender
         if (textures.Count == 0) return shadows;
         string[] parts = model.Split('/');
         bool common = parts.Length > 2 && parts[1].Equals("common", StringComparison.OrdinalIgnoreCase);
+        TextureModelUses uses = new(workspace, model, token);
         // Each file once, as the workspace holds it (pending additions and deletions included).
         Dictionary<string, bool> present = new(StringComparer.OrdinalIgnoreCase);
         bool Exists(string relative)
@@ -828,21 +829,26 @@ public static partial class SourceBlender
             {
                 token.ThrowIfCancellationRequested();
                 string folder = Path.GetDirectoryName(texture)!.Replace('\\', '/'), name = Path.GetFileName(texture);
-                // Only the mission's own folders and the shared ones can be among its texture folders.
-                if (!builds && !folder.StartsWith("data/common/", StringComparison.OrdinalIgnoreCase) && !folder.StartsWith($"data/{mission}/", StringComparison.OrdinalIgnoreCase)) continue;
+                // Another mission matters only when a PNG in one of its possible pack folders can take this name.
+                // The multiplayer classifier below chooses the actual folders and their order.
+                if (!builds && !folder.StartsWith("data/common/", StringComparison.OrdinalIgnoreCase) && !folder.StartsWith($"data/{mission}/", StringComparison.OrdinalIgnoreCase)
+                    && !TextureSources.MissionFolders(mission, false).Concat(TextureSources.MissionFolders(mission, true)).Any(f => Exists($"{f}/{name}"))) continue;
                 if (folders == null)
                 {
                     var script = workspace.Read($"{SourceProject.GameGenFolder}/support/load{mission}.gw", token, SourceProject.MaximumSourceTextBytes);
                     folders = TextureSources.MissionFolders(mission, script != null && SourceBuilder.Multiplayer(script, token));
                 }
                 bool searched = folders.Contains(folder, StringComparer.OrdinalIgnoreCase);
-                if (!builds && !searched) continue;
                 int at = -1;
                 for (int i = 0; i < folders.Count && at < 0; i++)
                     if (folders[i].Equals(folder, StringComparison.OrdinalIgnoreCase) || Exists($"{folders[i]}/{name}")) at = i;
                 if (at < 0) continue;
-                if (!folders[at].Equals(folder, StringComparison.OrdinalIgnoreCase)) { if (builds) shadows.Add(new(texture, mission, $"{folders[at]}/{name}", false)); }
-                else if (current[texture] == null)
+                if (!folders[at].Equals(folder, StringComparison.OrdinalIgnoreCase))
+                {
+                    // Inspect actual uses only when another texture would win. Same names in unrelated missions do not conflict.
+                    if (builds || uses.InMission(mission)) shadows.Add(new(texture, mission, $"{folders[at]}/{name}", false));
+                }
+                else if ((builds || searched) && current[texture] == null)
                     for (int i = at + 1; i < folders.Count; i++)
                         if (Exists($"{folders[i]}/{name}")) { shadows.Add(new(texture, mission, $"{folders[i]}/{name}", true)); break; }
             }

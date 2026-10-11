@@ -427,6 +427,20 @@ public sealed class SourceBlenderTests
         Assert.Null(plan.Expected["data/m1/textures/newrock.png"]);
         Assert.Contains(plan.Changes, change => change.Relative == "data/m1/textures/newrock.png" && change.Content.AsSpan().SequenceEqual(png));
         Assert.False(workspace.IsDirty);
+
+        // An ordinary shared-model load, without map-zone bindings, must still disclose the other mission's texture.
+        // An unrelated mission holding the same texture name is not by itself a conflict.
+        fixture.Write("data/m2/textures/newrock.png", PngEncoder.Encode(new DecodedImage(1, 1, [0, 0, 255, 255]), Token));
+        _ = SourceBlender.PlanUpdate(workspace, checkout, export, token: Token);
+        string script = File.ReadAllText(fixture.Path("gamegen/m2.gs"));
+        workspace.Apply("Share model", [("gamegen/m2.gs", Encoding.ASCII.GetBytes(script.Replace("GameZWriteZBDFile", "set shared m1.gltf\r\nsource support\\shared.gw\r\nGameZWriteZBDFile", StringComparison.Ordinal))),
+            ("gamegen/support/shared.gw", Encoding.ASCII.GetBytes("SetModelDirectory ..\\data\\m1\\models\r\nLoadGameGen %shared% shared_prop\r\n"))], Token);
+        var refusal = Assert.Throws<BlenderConflictException>(() => SourceBlender.PlanUpdate(workspace, checkout, export, token: Token));
+        Assert.Contains("m2 finds data/m2/textures/newrock.png first", refusal.Message, StringComparison.Ordinal);
+        var forced = SourceBlender.PlanUpdate(workspace, checkout, export, force: true, token: Token);
+        Assert.Contains(forced.Notes, note => note.Contains("m2 finds data/m2/textures/newrock.png first", StringComparison.Ordinal));
+        Assert.False(File.Exists(fixture.Path("data/m1/textures/newrock.png")));
+        Assert.Single(workspace.History);
     }
 
     [Theory]
