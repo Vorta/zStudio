@@ -54,6 +54,7 @@ public partial class MainWindow
     private ParachuteDraft? parachuteDraft;
     private CancellationTokenSource? parachuteLoading;
     private long parachuteGeneration;
+    private const string ParachuteAnalysisStatus = "Analyzing VTOL drop windows…";
     private bool synchronizingParachutes, acceptingParachute;
     internal Action<CancellationToken>? ParachuteAnalysisPreparing { get; set; }
     private sealed record ParachuteChoice(int Entry, string Label) { public override string ToString() => Label; }
@@ -96,6 +97,7 @@ public partial class MainWindow
     private void ParachuteDocumentChanged(object? sender, PropertyChangedEventArgs e)
     {
         if (acceptingParachute || parachutes is not { } state) return;
+        if (sender == state.World && e.PropertyName == nameof(DocumentModel.PickupsLocked)) { UpdateParachutePanel(); return; }
         if (state.World.Revision == state.WorldRevision && (state.Owner?.Revision ?? state.World.Revision) == state.OwnerRevision) return;
         CloseParachutes(); ViewModel.Status = "The Parachute owner changed. Open Parachute again to analyze its current animation.";
     }
@@ -132,7 +134,7 @@ public partial class MainWindow
         started?.Invoke(request);
         using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(token, world.Lifetime.Token, ViewModel.WorkspaceToken, shutdownToken);
         parachuteLoading = cancellation;
-        ViewModel.Status = "Analyzing VTOL drop windows…";
+        ViewModel.Status = ParachuteAnalysisStatus;
         void Current()
         {
             cancellation.Token.ThrowIfCancellationRequested();
@@ -182,9 +184,15 @@ public partial class MainWindow
             if (owner != null) { owner.PropertyChanged += ParachuteDocumentChanged; owner.Disposing += CloseParachutes; }
             if (parachuteLoading == cancellation) parachuteLoading = null;
             PublishParachuteOverlay(); UpdateParachutePanel();
+            CompleteParachuteStatus(request, world, viewport, ParachuteAnalysisResult(state));
         }
-        catch (Exception ex) when (request != parachuteGeneration && ex is OperationCanceledException or StudioCommandException or IOException or InvalidDataException)
+        catch (Exception ex) when (request != parachuteGeneration && ex is OperationCanceledException or StudioCommandException or IOException or InvalidDataException or UnauthorizedAccessException)
         { throw new StudioCommandException("context_changed", "A newer Parachute request superseded this analysis."); }
+        catch (Exception ex) when (ex is OperationCanceledException or StudioCommandException or IOException or InvalidDataException or UnauthorizedAccessException)
+        {
+            CompleteParachuteStatus(request, world, viewport, ParachuteAnalysisFailure(ex));
+            throw;
+        }
         finally { if (parachuteLoading == cancellation) parachuteLoading = null; UpdateParachutePanel(); }
     }
     private async Task AnalyzeParachuteAsync(int entry, CancellationToken token)
@@ -194,6 +202,7 @@ public partial class MainWindow
         long request = ++parachuteGeneration; parachuteLoading?.Cancel();
         using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(token, state.World.Lifetime.Token, state.Owner?.Lifetime.Token ?? default, shutdownToken);
         parachuteLoading = cancellation;
+        ViewModel.Status = ParachuteAnalysisStatus;
         UpdateParachutePanel();
         try
         {
@@ -204,11 +213,37 @@ public partial class MainWindow
             if (parachuteLoading == cancellation) parachuteLoading = null;
             state.Entry = candidate.EntryIndex; (state.Analysis, state.AnalysisRefusal) = result;
             state.Selected = state.World.PickupsLocked ? null : state.Analysis?.Windows.FirstOrDefault()?.Id; PublishParachuteOverlay(); UpdateParachutePanel();
+            CompleteParachuteStatus(request, state.World, state.Viewport, ParachuteAnalysisResult(state));
         }
-        catch (Exception ex) when (request != parachuteGeneration && ex is OperationCanceledException or StudioCommandException or IOException or InvalidDataException)
+        catch (Exception ex) when (request != parachuteGeneration && ex is OperationCanceledException or StudioCommandException or IOException or InvalidDataException or UnauthorizedAccessException)
         { throw new StudioCommandException("context_changed", "A newer Parachute request superseded this analysis."); }
+        catch (Exception ex) when (ex is OperationCanceledException or StudioCommandException or IOException or InvalidDataException or UnauthorizedAccessException)
+        {
+            CompleteParachuteStatus(request, state.World, state.Viewport, ParachuteAnalysisFailure(ex));
+            throw;
+        }
         finally { if (parachuteLoading == cancellation) parachuteLoading = null; UpdateParachutePanel(); }
     }
+    private void CompleteParachuteStatus(long request, DocumentModel world, SceneViewport viewport, string status, string? completedStatus = null)
+    {
+        if (request != parachuteGeneration || world.IsDisposed || shownDocument != world || ViewModel.SelectedDocument != world || scene != viewport ||
+            ViewModel.Status != ParachuteAnalysisStatus && (completedStatus == null || ViewModel.Status != completedStatus)) return;
+        // An independent status update owns the presentation now; completing our still-visible
+        // progress does not resolve or mutate any draft begun while the analysis was running.
+        ViewModel.Status = status;
+    }
+    private void HideParachutes()
+    {
+        if (parachutes is { } state)
+            CompleteParachuteStatus(parachuteGeneration, state.World, state.Viewport, "VTOL drop windows hidden.", ParachuteAnalysisResult(state));
+        CloseParachutes();
+    }
+    private static string ParachuteAnalysisResult(ParachuteSession state) => state.AnalysisRefusal is { } refusal
+        ? "VTOL flight unavailable: " + refusal
+        : state.Analysis is { } analysis ? $"VTOL drop windows ready: {analysis.Windows.Count} windows · {analysis.Releases.Count} eligible releases."
+        : "No supported VTOL drop-window flights found.";
+    private static string ParachuteAnalysisFailure(Exception error) => error is OperationCanceledException
+        ? "VTOL drop-window analysis canceled." : "VTOL drop-window analysis failed: " + Bounded(error.Message, 512);
     private (VtolDropSnapshot? Snapshot, string? Refusal) AnalyzeParachuteCandidate(AnimationPreviewContext context, VtolDropCandidate candidate, CancellationToken token)
     {
         ParachuteAnalysisPreparing?.Invoke(token);
@@ -377,19 +412,23 @@ public partial class MainWindow
     {
         long? request = null;
         try { await ShowParachutesAsync(CancellationToken.None, entry, generation => request = generation); }
-        catch (Exception ex) when (ex is OperationCanceledException or StudioCommandException or IOException or InvalidDataException)
+        catch (Exception ex) when (ex is OperationCanceledException or StudioCommandException or IOException or InvalidDataException or UnauthorizedAccessException)
         {
             // The edit/history step already succeeded. Only its own refresh may clean up or report
             // a failure; a newer Show, draft, navigation or explicit close owns the workspace now.
             if (request != null && request == parachuteGeneration)
-            { CloseParachutes(); ViewModel.Status = failureMessage + ex.Message; }
+            {
+                bool statusOwned = ViewModel.Status == ParachuteAnalysisStatus || ViewModel.Status == ParachuteAnalysisFailure(ex);
+                CloseParachutes();
+                if (statusOwned) ViewModel.Status = failureMessage + ex.Message;
+            }
         }
     }
     private async void ParachuteActionClick(object sender, RoutedEventArgs e) => await ReportUi(async () =>
     {
         string action = (sender as FrameworkElement)?.Tag as string ?? "show";
         if (action is not ("confirm" or "cancel") && !await ResolvePropertiesDraftsAsync()) return;
-        if (action == "show") { if (parachutes != null) CloseParachutes(); else await ShowParachutesAsync(CancellationToken.None); }
+        if (action == "show") { if (parachutes != null) HideParachutes(); else await ShowParachutesAsync(CancellationToken.None); }
         else if (action == "begin") BeginParachute(pointer: true);
         else if (action == "numeric") BeginParachute();
         else if (action == "confirm") await ConfirmParachuteAsync(CancellationToken.None);
@@ -407,9 +446,13 @@ public partial class MainWindow
         if (synchronizingParachutes || !ready || parachutes == null) return;
         await ReportUi(async () =>
         {
-            if (!await ResolvePropertiesDraftsAsync()) { UpdateParachutePanel(); return; }
-            if (sender == ParachuteFlights && ParachuteFlights.SelectedItem is ParachuteChoice flight) await AnalyzeParachuteAsync(flight.Entry, CancellationToken.None);
-            else if (ParachuteWindows.SelectedItem is ParachuteWindowChoice window) SelectParachute(window.Id);
+            try
+            {
+                if (!await ResolvePropertiesDraftsAsync()) return;
+                if (sender == ParachuteFlights && ParachuteFlights.SelectedItem is ParachuteChoice flight) await AnalyzeParachuteAsync(flight.Entry, CancellationToken.None);
+                else if (ParachuteWindows.SelectedItem is ParachuteWindowChoice window) SelectParachute(window.Id);
+            }
+            finally { UpdateParachutePanel(); }
         });
     }
     private void ParachuteInputChanged(object sender, TextChangedEventArgs e)
@@ -451,7 +494,8 @@ public partial class MainWindow
             ParachuteMoveButtons.Visibility = parachuteDraft == null ? Visibility.Visible : Visibility.Collapsed;
             var selectedWindow = state.Analysis?.Windows.FirstOrDefault(w => w.Id == state.Selected);
             ParachuteMoveButtons.IsEnabled = !state.World.PickupsLocked && selectedWindow is { MoveRefusal: null };
-            ParachuteFlights.IsEnabled = ParachuteWindows.IsEnabled = parachuteDraft == null;
+            ParachuteFlights.IsEnabled = parachuteDraft == null;
+            ParachuteWindows.IsEnabled = parachuteDraft == null && !state.World.PickupsLocked;
             ParachuteStart.Text = parachuteDraft?.Input ?? "";
             ParachuteConfirm.IsEnabled = parachuteDraft is { Plan: not null, Preview: not null, Error: null };
             ParachuteMessage.Text = parachuteDraft is { } d ? d.Error ?? (d.Preview == null ? "Analyzing proposed release positions…" : $"Start range {d.Window.MinimumStart:G6}–{d.Window.MaximumStart:G6} s. Confirm accepts one undo step.")

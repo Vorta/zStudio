@@ -54,13 +54,23 @@ internal static class ParachuteMcpChecks
             Assert.Equal(2, state["windows"]!.AsArray().Count);
             Assert.True(state["cycleSeconds"]!.GetValue<double>() >= 10);
             Assert.Null(state["selected"]);
-            await Unlock();
-            await SelectFirstWindow();
+            Assert.StartsWith("VTOL drop windows ready:", main.ViewModel.Status);
+            var windowsPicker = (ComboBox)main.FindName("ParachuteWindows");
+            Assert.False(windowsPicker.IsEnabled); Assert.Equal(-1, windowsPicker.SelectedIndex);
+            // Even a queued selection raised before admission changed must restore the semantic row.
+            windowsPicker.SelectedIndex = 0;
+            Assert.Equal(-1, windowsPicker.SelectedIndex); Assert.Null((await State())!["selected"]);
+            ((ToggleButton)main.FindName("EditingUnlocked")).IsChecked = true;
+            Assert.True(windowsPicker.IsEnabled); Assert.False(world.PickupsLocked);
+            windowsPicker.SelectedIndex = 0;
+            Assert.Equal((await State())!["selected"]!.GetValue<Guid>(), Viewport().SelectedParachuteWindow);
+            Assert.True(((FrameworkElement)main.FindName("ParachuteMoveButtons")).IsEnabled);
             TaskCompletionSource analyzing = new(TaskCreationOptions.RunContinuationsAsynchronously);
             using (var releaseAnalysis = new SemaphoreSlim(0))
             {
                 main.ParachuteAnalysisPreparing = ct => { analyzing.TrySetResult(); Assert.True(releaseAnalysis.Wait(TimeSpan.FromSeconds(20), ct)); };
-                var analysis = PathAction("analyze", new() { ["entry"] = state["entry"]!.GetValue<int>() });
+                var analysisJob = await Call("parachute", await Arguments("analyze", new() { ["entry"] = state["entry"]!.GetValue<int>() }));
+                var analysis = AwaitJob(analysisJob, "canceled");
                 try
                 {
                     var first = await Task.WhenAny(analyzing.Task, analysis).WaitAsync(token);
@@ -69,12 +79,26 @@ internal static class ParachuteMcpChecks
                     var refusal = Assert.Throws<TargetInvocationException>(() => typeof(MainWindow).GetMethod("BeginParachute", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(main, [false]));
                     Assert.Equal("busy", Assert.IsType<StudioCommandException>(refusal.InnerException).Code);
                     Assert.Null((await State())!["draft"]);
+                    Assert.Equal("Analyzing VTOL drop windows…", main.ViewModel.Status);
+                    await Call("operation", new() { ["id"] = analysisJob["id"]!.GetValue<string>(), ["cancel"] = true });
                     releaseAnalysis.Release(); await analysis;
+                    Assert.Equal("VTOL drop-window analysis canceled.", main.ViewModel.Status);
+                    main.ParachuteAnalysisPreparing = null;
+                    await PathAction("analyze", new() { ["entry"] = state["entry"]!.GetValue<int>() });
+                    Assert.StartsWith("VTOL drop windows ready:", main.ViewModel.Status);
                     Assert.True(((UIElement)main.FindName("ParachutePanel")).IsEnabled);
                     Assert.Equal((await State())!["selected"]!.GetValue<Guid>(), Viewport().SelectedParachuteWindow);
                 }
                 finally { releaseAnalysis.Release(); main.ParachuteAnalysisPreparing = null; }
             }
+            main.ParachuteAnalysisPreparing = _ => throw new IOException("Parachute analysis failure fixture");
+            try
+            {
+                await Job("parachute", await Arguments("analyze", new() { ["entry"] = state["entry"]!.GetValue<int>() }), "failed");
+                Assert.Equal("VTOL drop-window analysis failed: Parachute analysis failure fixture", main.ViewModel.Status);
+            }
+            finally { main.ParachuteAnalysisPreparing = null; }
+            await PathAction("analyze", new() { ["entry"] = state["entry"]!.GetValue<int>() });
             state = (await PathAction("begin"))["parachute"]!;
             string draft = state["draft"]!["token"]!.GetValue<string>();
             var baselineReleases = (await PathAction("releases"))["items"]!.ToJsonString();
@@ -339,6 +363,7 @@ internal static class ParachuteMcpChecks
             state = (await PathAction("show"))["parachute"]!;
             Assert.True(state["visible"]!.GetValue<bool>()); Assert.Equal(2, state["candidates"]!.AsArray().Count);
             Assert.Contains("did not complete", state["analysisRefusal"]!.GetValue<string>());
+            Assert.NotEqual("Analyzing VTOL drop windows…", main.ViewModel.Status);
             Assert.Equal(0, state["sampleCount"]!.GetValue<int>()); Assert.Equal(0, state["releaseCount"]!.GetValue<int>());
             Assert.Null(state["selected"]); Assert.Null(state["windows"]);
             int failedEntry = state["entry"]!.GetValue<int>();
@@ -347,12 +372,16 @@ internal static class ParachuteMcpChecks
             await UntilAsync(async () => (await State())?["entry"]?.GetValue<int>() != failedEntry && (await State())?["analysisRefusal"] == null);
             state = (await State())!;
             Assert.Equal(2, state["windows"]!.AsArray().Count); Assert.Equal(8, state["releaseCount"]!.GetValue<int>());
+            Assert.StartsWith("VTOL drop windows ready:", main.ViewModel.Status);
             await PathAction("analyze", new() { ["entry"] = failedEntry });
             state = (await State())!;
             Assert.NotNull(state["analysisRefusal"]); Assert.Equal(0, state["sampleCount"]!.GetValue<int>());
+            Assert.StartsWith("VTOL flight unavailable:", main.ViewModel.Status);
             Assert.Equal(0, state["releaseCount"]!.GetValue<int>()); Assert.Null(state["windows"]);
             var unsupportedQuery = await client.CallToolAsync("zstudio_parachute", await Arguments("samples", new() { ["query"] = "ignored" }), cancellationToken: token);
             Assert.True(unsupportedQuery.IsError);
+            await PathAction("hide");
+            Assert.Equal("VTOL drop windows hidden.", main.ViewModel.Status);
 
             async Task CloseOwnerWithSave()
             {
@@ -458,10 +487,14 @@ internal static class ParachuteMcpChecks
             async Task<JsonNode> Job(string name, Dictionary<string, object?> args, string expectedState = "completed")
             {
                 var job = await Call(name, args);
+                return await AwaitJob(job, expectedState);
+            }
+            async Task<JsonNode> AwaitJob(JsonNode job, string expectedState = "completed")
+            {
                 if (job["State"] == null) return job;
                 string id = job["id"]!.GetValue<string>();
                 while (job["State"]!.GetValue<string>() is "queued" or "running") { await Task.Delay(10, token); job = await Call("operation", new() { ["id"] = id }); }
-                Assert.True(job["State"]!.GetValue<string>() == expectedState, name + ": " + job.ToJsonString()); return job["result"]!;
+                Assert.True(job["State"]!.GetValue<string>() == expectedState, job.ToJsonString()); return job["result"]!;
             }
             DocumentModel Document(JsonNode json) => main.ViewModel.Documents.Single(d => Id(d) == (json["document"]?["id"] ?? json["id"])!.GetValue<string>());
             async Task Preview() => await ((Task)typeof(MainWindow).GetField("previewWork", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(main)!).WaitAsync(token);

@@ -52,7 +52,7 @@ public partial class MainWindow
             }
             if (action is not ("set" or "confirm" or "cancel")) RequireNoDrafts();
             DocumentModel? changed = null;
-            if (action == "hide") CloseParachutes();
+            if (action == "hide") HideParachutes();
             else if (action == "analyze")
             {
                 if (!a.ContainsKey("entry")) throw new StudioCommandException("invalid_argument", "Supply the flight entry index.");
