@@ -1,5 +1,17 @@
 # Desktop implementation status
 
+## Reconstruction navigation review fix (2026-10-11, PR #24)
+
+Reconstruction started through MCP no longer replaces a newer workspace opened through the GUI while the project
+is being written. The completed project remains available; the operation reports `opened: false` with
+`openRefused.code: context_changed`. Existing draft and unsaved-document checks remain in place.
+
+The deterministic protocol regression fails with the publication guard removed and passes with it restored.
+The reviewed PR tree passed the Release build with zero warnings/errors, 1,773 Core tests and 169 Desktop tests.
+Both original RECOIL releases reconstructed successfully; all 19 rebuilt mission worlds and animation packages
+compared without semantic differences. These checks do not establish original-game compatibility. The remaining
+stack review and portable refresh are still pending; no release is part of this work.
+
 ## The 1998 demos' worlds (GameZ version 13), read-only (2026-10-04, branch feat/world-editor)
 
 - **Why:** the user asked for version 13, the world format of the RECOIL demos built from 21 July to 12 August 1998, so the demos' worlds can be compared with the releases.
