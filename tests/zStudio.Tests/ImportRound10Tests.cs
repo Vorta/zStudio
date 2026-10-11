@@ -80,7 +80,7 @@ public sealed class ImportRound10Tests
     }
 
     [Fact]
-    public void TerrainConversionPreservesImplicitRootsAndRefusesNewOutputs()
+    public async Task TerrainConversionPreservesImplicitRootsAndRefusesConflictingOutputsOrOwners()
     {
         using SourceWorldFixture fixture = new(); fixture.WriteTerrainDatabase();
         const string path = "data/m1/models/m1.gltf";
@@ -121,5 +121,29 @@ public sealed class ImportRound10Tests
         var roots = edited["scenes"]![0]!["nodes"]!.AsArray().Select(n => edited["nodes"]![n!.GetValue<int>()]!["name"]!.GetValue<string>());
         Assert.Equal(["ground", "m1_terrain", "sky"], roots);
         Assert.True(workspace.CanUndo); workspace.Undo(); Assert.False(workspace.IsDirty);
+
+        // A second mission can load this database and initialize its own zones through an ordinary zone edit.
+        fixture.Write("gamegen/m2.gs", File.ReadAllText(fixture.Path("gamegen/m1.gs"))
+            .Replace("..\\m1\\gamez.zbd", "..\\m2\\gamez.zbd", StringComparison.Ordinal));
+        Task<SourceWorldBuild> BuildM2(string label) => SourceWorlds.BuildPreviewAsync(fixture.Project, "m2",
+            Path.Combine(SourceWorlds.PreviewRoot(fixture.Project), label), token: Token);
+        var m2 = await BuildM2("before-shared-zones");
+        int ground = m2.Provenance.First(p => p.Value.ModelNodeName == "ground").Key;
+        SourceWorkspace other = new(fixture.Project);
+        var zoneEdit = SourceZoneEdits.PlanAssignments(other, m2, [new(ground)], new(NodeZone: 7), false, Token);
+        other.Apply(zoneEdit.Label, zoneEdit.Changes.Select(c => (c.Relative, (byte[]?)c.Content)), Token);
+        other.Save(Token);
+        const string profile = "data/m2/meta/zones.json";
+        byte[] zones = File.ReadAllBytes(fixture.Path(profile));
+        Assert.False(workspace.Exists("data/m1/meta/zones.json", Token));
+        Assert.Throws<InvalidDataException>(() => SourceTerrainConversion.Plan(workspace, path,
+            (new(StringComparer.Ordinal) { "ground" }, []), Token));
+        var conflicting = workspace.BeginPreparedEdit();
+        Assert.Throws<InvalidDataException>(() => SourceTerrainConversion.Apply(conflicting.Workspace, plan, Token));
+        Assert.False(conflicting.Workspace.IsDirty);
+        Assert.False(workspace.IsDirty); Assert.False(workspace.CanUndo);
+        Assert.Equal(original, File.ReadAllBytes(full));
+        Assert.Equal(zones, File.ReadAllBytes(fixture.Path(profile)));
+        await BuildM2("after-refused-conversion");
     }
 }

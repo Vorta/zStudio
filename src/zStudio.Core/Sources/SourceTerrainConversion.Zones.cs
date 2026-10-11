@@ -39,16 +39,22 @@ public static partial class SourceTerrainConversion
         internal static ConversionZones? Read(SourceWorkspace workspace, string database, JsonObject root,
             GltfDocument doc, CancellationToken token)
         {
+            // Conversion rewrites only the database's local map profile. Discover every owner before an
+            // absent local profile can hide assignments in another mission that the topology change would invalidate.
+            var owners = SourceMapZoneBindings.Read(workspace, database, doc, token);
+            owners.RequireSingleTerrainOwner(database);
             string[] parts = SourceWorkspace.Normalize(database).Split('/');
-            if (parts.Length < 3 || !SourceProject.MissionName().IsMatch(parts[1])) return null;
-            string path = SourceMapZones.PathForMission(parts[1]);
+            string? path = parts.Length >= 3 && SourceProject.MissionName().IsMatch(parts[1])
+                ? SourceMapZones.PathForMission(parts[1]) : null;
+            if (owners.Assets.Any(owner => !string.Equals(owner.Map, path, StringComparison.OrdinalIgnoreCase)))
+                throw new InvalidDataException("This database geometry has map zone assignments owned by another mission. Give the mission an independently owned database before converting it to terrain.");
+            if (path == null) return null;
             if (workspace.Read(path, token, SourceMapZones.MaximumBytes) is not { } bytes) return null;
             var map = SourceMapZones.Parse(bytes, token);
             var bindings = map.Assets.Where(a => a.GeometryPath.Equals(database, StringComparison.OrdinalIgnoreCase)).Take(2).ToArray();
             if (bindings.Length == 0) return null;
             if (bindings.Length > 1 || !bindings[0].LogicalPath.Equals(database, StringComparison.OrdinalIgnoreCase))
                 throw new InvalidDataException("This database geometry has multiple logical zone bindings. Convert an independently owned mission database.");
-            SourceMapZoneBindings.Read(workspace, database, doc, token).RequireSingleTerrainOwner(database);
             return new(path, map, bindings[0], root, doc, token);
         }
 
