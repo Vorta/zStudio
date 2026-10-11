@@ -1,5 +1,18 @@
 # Desktop implementation status
 
+## Source-world review fixes (2026-10-11, PR #25)
+
+Source-world opening now reserves navigation before discovery and building. A newer pending folder, project, file
+or world request takes precedence; obsolete openings cannot activate an old world or replace the newer status.
+Source-world builds also retain common and mission resource membership. Newly added difficulty variants or common
+resources invalidate old bindings before an edit is accepted, including resources created during preparation.
+Membership checks share the archive planner's bounded discovery and run on the worker, not the UI dispatcher.
+
+Both corrections have independent reproductions, failing mutations and passing restored checks. The combined PR
+passed Release builds with zero warnings/errors, 1,913 Core tests and 176 Desktop tests. The final stack passed
+2,887 Core tests, 188 Desktop tests and the 17-test 1998 subset. These are successive serial module runs with the
+1999/MW3 regression corpora, plus the separate 1998 gate. Fresh full review, current-head CI and the remaining
+stack merges are still pending. The portable build will be refreshed after the final merge; no release is planned.
 ## Source-project review fixes (2026-10-11, PR #24)
 
 Source-project opening and optional opening after reconstruction now reserve navigation before their asynchronous
