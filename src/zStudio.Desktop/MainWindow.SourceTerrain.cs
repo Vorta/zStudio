@@ -293,6 +293,7 @@ public partial class MainWindow
             if (scene?.IsZonePainting == true) throw new StudioCommandException("busy", "Finish or cancel the zone stroke before painting terrain.");
             if (scene?.ZonePaintActive == true) scene.ZonePaintActive = false;
         }
+        if (terrainBrush != brush) scene?.CancelTerrainStroke();
         terrainBrush = brush;
         ApplyTerrainBrush(scene);
         ViewModel.Status = brush == null ? "Terrain brush off." : $"{(brush.Add ? "Painting" : "Erasing")} {brush.Region}: drag over the terrain.";

@@ -318,7 +318,14 @@ internal static class SourceTerrainMcpChecks
             var worldAsset = doc.SelectedAsset!.Record;
             var modelAsset = doc.Assets.First(a => a.Record.Kind == Recoil.Zbd.Core.AssetKind.Model &&
                 !doc.SourceBuild!.Provenance.Any(p => p.Value.Terrain != null && doc.PreviewDocument.Scene!.Nodes[p.Key].ModelIndex == a.Index));
-            typeof(SceneViewport).GetField("brushStroke", BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(view, new List<Vector3> { new(250, 0, 250) });
+            var heldStroke = typeof(SceneViewport).GetField("brushStroke", BindingFlags.Instance | BindingFlags.NonPublic)!;
+            heldStroke.SetValue(view, new List<Vector3> { new(250, 0, 250) });
+            var selectedBrush = (TerrainBrushState)brush.GetValue(main)!;
+            var changeBrush = typeof(MainWindow).GetMethod("SetTerrainBrush", BindingFlags.Instance | BindingFlags.NonPublic)!;
+            changeBrush.Invoke(main, [selectedBrush with { Radius = selectedBrush.Radius + 1 }]);
+            Assert.False(view.IsTerrainStroking);
+            changeBrush.Invoke(main, [selectedBrush]);
+            heldStroke.SetValue(view, new List<Vector3> { new(250, 0, 250) });
             await Job("select_asset", new() { ["document"] = Id(doc), ["kind"] = "Model", ["index"] = modelAsset.Index });
             Assert.False(view.TerrainBrushActive);
             Assert.False(view.IsTerrainStroking);
