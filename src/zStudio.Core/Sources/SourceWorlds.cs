@@ -34,6 +34,21 @@ public sealed record SourceWorldBuild(string Mission, string Folder, string Worl
         file.Length > folder.Length && file[folder.Length] == '/' && file.StartsWith(folder, StringComparison.OrdinalIgnoreCase)));
     /// <summary>Content identities of disk inputs actually read; length/timestamp equality alone is insufficient.</summary>
     public IReadOnlyDictionary<string, string> InputHashes { get; init; } = new Dictionary<string, string>();
+    /// <summary>The planned resource archive members, including an empty inventory when neither archive existed.</summary>
+    public IReadOnlyList<string>? ResourceInputs { get; init; }
+    /// <summary>
+    /// A new resource can replace a difficulty fallback or shadow a mission member without changing any file the build
+    /// read. Compare membership through the same bounded discovery as the archive plan, including unsaved new sources.
+    /// </summary>
+    public bool ResourceInputsChanged(SourceWorkspace workspace, CancellationToken token = default)
+    {
+        if (ResourceInputs == null) return false;
+        var added = workspace.Overlay().Keys.ToArray();
+        InventoryBudget inventory = new();
+        var common = SourceBuilder.ResourceInputs(workspace.Root, null, added, token, inventory);
+        var mission = SourceBuilder.ResourceInputs(workspace.Root, Mission, added, token, inventory);
+        return !ResourceInputs.SequenceEqual(common.Concat(mission), StringComparer.OrdinalIgnoreCase);
+    }
     /// <summary>Every lookup by name the mission makes as the game loads it, with the node it finds in this build.</summary>
     public IReadOnlyList<SourceLookup> Lookups { get; init; } = [];
     /// <summary>Where each node of the built world came from, by its slot in the world file (the scene's node index).</summary>
@@ -556,7 +571,9 @@ public static partial class SourceWorlds
             CheckPreviewPlanUnchanged(root, mission, snapshot, selected, token);
             snapshot.CheckUnchanged(token);
         }, token).ConfigureAwait(false);
-        return new(mission, destination, SourceProject.Resolve(destination, $"{mission}/gamez.zbd"), results, snapshot.Stamps()) { Dependencies = snapshot.Dependencies(), MissingInputs = snapshot.Missing(), MissingFolders = snapshot.MissingFolders(), InputHashes = snapshot.Hashes(), Lookups = lookups, Provenance = provenance, Freed = freed, Executions = assembled.Executions, WriteInstruction = assembled.WriteInstruction };
+        var resources = new[] { "zrdr.zbd", $"{mission}/zrdr.zbd" }
+            .SelectMany(path => selected.FirstOrDefault(p => p.Path.Equals(path, StringComparison.OrdinalIgnoreCase))?.Inputs ?? []).ToArray();
+        return new(mission, destination, SourceProject.Resolve(destination, $"{mission}/gamez.zbd"), results, snapshot.Stamps()) { Dependencies = snapshot.Dependencies(), MissingInputs = snapshot.Missing(), MissingFolders = snapshot.MissingFolders(), InputHashes = snapshot.Hashes(), ResourceInputs = resources, Lookups = lookups, Provenance = provenance, Freed = freed, Executions = assembled.Executions, WriteInstruction = assembled.WriteInstruction };
     }
 
     /// <summary>

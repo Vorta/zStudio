@@ -98,6 +98,36 @@ public sealed class SourcePlacementTests
     }
 
     [Fact]
+    public async Task ResourceMembershipInvalidatesFallbacksIncludingPendingAndCommonSources()
+    {
+        using SourceWorldFixture fixture = new();
+        SourceWorkspace workspace = new(fixture.Project);
+        using SourcePreviewCache cache = new(fixture.Project);
+        // Neither archive exists yet: a later mission or common resource must still invalidate this preview.
+        var empty = await cache.BuildAsync("m1", cache.NextFolder(), workspace.Overlay(), token: Token);
+        Assert.NotNull(empty.ResourceInputs); Assert.Empty(empty.ResourceInputs);
+        Assert.False(empty.ResourceInputsChanged(workspace, Token));
+        const string normal = "data/m1/zrdr/puppies.zrd", easy = "data/m1/zrdr/puppies_easy.zrd";
+        fixture.Write(normal, Default);
+        Assert.True(empty.ResourceInputsChanged(workspace, Token));
+        var built = await cache.BuildAsync("m1", cache.NextFolder(), workspace.Overlay(), token: Token);
+        Assert.False(built.ResourceInputsChanged(workspace, Token));
+        workspace.Apply("Add Easy", [(easy, Encoding.Latin1.GetBytes(Easy))], Token);
+        Assert.True(built.ResourceInputsChanged(workspace, Token));
+        workspace.Undo(); Assert.False(built.ResourceInputsChanged(workspace, Token));
+        workspace.Redo();
+        var pending = await cache.BuildAsync("m1", cache.NextFolder(), workspace.Overlay(), token: Token);
+        Assert.False(pending.ResourceInputsChanged(workspace, Token));
+        workspace.Save(Token); Assert.False(pending.ResourceInputsChanged(workspace, Token));
+        File.Delete(fixture.Path(easy)); Assert.True(pending.ResourceInputsChanged(workspace, Token));
+        fixture.Write(easy, Easy); Assert.False(pending.ResourceInputsChanged(workspace, Token));
+        fixture.Write("data/common/multi_bft/zrdr/puppies.zrd", Default);
+        Assert.True(pending.ResourceInputsChanged(workspace, Token));
+        using var canceled = new CancellationTokenSource(); canceled.Cancel();
+        Assert.Throws<OperationCanceledException>(() => pending.ResourceInputsChanged(workspace, canceled.Token));
+    }
+
+    [Fact]
     public async Task ASourceChangedSinceTheBuildIsRefused()
     {
         using SourceWorldFixture fixture = new();

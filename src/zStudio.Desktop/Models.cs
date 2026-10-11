@@ -95,6 +95,8 @@ public sealed partial class DocumentModel : ObservableObject, IDisposable
         var changed = world.Workspace.ChangedSince(SourceRevision);
         if (changed.Count > 0 && build.Dependencies.Any(changed.Contains)) return true;
         if (changed.Count > 0 && build.AddsToMissingFolder(changed)) return true;
+        // Directory discovery, like content hashing, belongs to the worker checks before and after edit preparation.
+        if (verifyContent && build.ResourceInputsChanged(world.Workspace, token)) return true;
         if (world.Workspace.ExternalChanges(token, verifyContent, build.Dependencies).Count > 0) return true;
         if (build.MissingInputs.Any(relative => System.IO.Path.Exists(Recoil.Zbd.Core.Sources.SourceProject.Resolve(world.Root, relative)))) return true;
         foreach (var (relative, stamp) in build.Inputs)

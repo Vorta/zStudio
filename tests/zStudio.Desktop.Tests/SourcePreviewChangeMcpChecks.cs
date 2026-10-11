@@ -5,6 +5,8 @@ using System.Text.Json.Nodes;
 using ModelContextProtocol.Client;
 using ModelContextProtocol.Protocol;
 using Recoil.Zbd.Core.Sources;
+using Recoil.Zbd.Core;
+using Recoil.Zbd.Automation;
 using Recoil.Zbd.Desktop;
 using Recoil.Zbd.Mcp;
 using Recoil.Zbd.Tests;
@@ -22,6 +24,9 @@ internal static class SourcePreviewChangeMcpChecks
     internal static async Task Run()
     {
         using var fixture = new SourceWorldFixture();
+        const string puppies = "( ( NANITE 50 ( 100.0 0.0 -100.0 ) ( 0.0 0.0 0.0 ) 30.0 ) )";
+        const string easy = "data/m1/zrdr/puppies_easy.zrd";
+        fixture.Write("data/m1/zrdr/puppies.zrd", puppies);
         using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(90)); var token = deadline.Token;
         var main = new MainWindow { Left = -12000, ShowInTaskbar = false }; main.Show();
         try
@@ -49,6 +54,30 @@ internal static class SourcePreviewChangeMcpChecks
             await Preview();
             Assert.False(doc.SourceInputsChanged());
             var workspace = doc.SourceWorld!.Workspace;
+
+            // Adding a difficulty source replaces the shown fallback, without changing any input the build read.
+            // The actual Properties placement callback and MCP edits must refuse that old binding before accepting edits.
+            var placements = await doc.GetPickupEditsAsync(main.ViewModel.Resolver!, token);
+            var source = placements.Records.First(r => r.Type == "NANITE").Source;
+            var move = (Func<MissionPickupSource, System.Numerics.Vector3, Task>)typeof(MainWindow)
+                .GetMethod("SourcePickupMove", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(main, [doc])!;
+            fixture.Write(easy, puppies);
+            Assert.True(doc.SourceInputsChanged());
+            Assert.Equal("stale_document", (await Assert.ThrowsAsync<StudioCommandException>(() => move(source, new(125, 0, -100)))).Code);
+            var stale = await Job("source_world_add_model", new() { ["document"] = Id(doc), ["revision"] = doc.Revision, ["model"] = fixture.Tank, ["name"] = "tank", ["definitionFiles"] = Array.Empty<string>() }, "failed");
+            Assert.Equal("stale_document", stale["code"]!.GetValue<string>());
+            Assert.False(workspace.IsDirty); Assert.False(workspace.CanUndo);
+            Assert.Equal(puppies, await File.ReadAllTextAsync(fixture.Path("data/m1/zrdr/puppies.zrd"), token));
+            File.Delete(fixture.Path(easy)); Assert.False(doc.SourceInputsChanged());
+            // A file appearing after the initial check is caught by the worker's post-preparation check too.
+            main.SourceEditPreparing = _ => fixture.Write(easy, puppies);
+            try
+            {
+                stale = await Job("source_world_add_model", new() { ["document"] = Id(doc), ["revision"] = doc.Revision, ["model"] = fixture.Tank, ["name"] = "tank", ["definitionFiles"] = Array.Empty<string>() }, "failed");
+                Assert.Equal("stale_document", stale["code"]!.GetValue<string>());
+                Assert.False(workspace.IsDirty); Assert.False(workspace.CanUndo);
+            }
+            finally { main.SourceEditPreparing = null; File.Delete(fixture.Path(easy)); }
 
             // An edit whose rebuild sees the model change is taken back: the shown world and the workspace stay as they were.
             touches = 1;
@@ -88,6 +117,7 @@ internal static class SourcePreviewChangeMcpChecks
         finally
         {
             main.SourceBuildStep = null;
+            main.SourceEditPreparing = null;
             foreach (var doc in main.ViewModel.Documents.ToArray()) main.ViewModel.CloseResolved(doc);
             main.Close();
         }
