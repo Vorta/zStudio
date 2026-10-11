@@ -38,6 +38,7 @@ internal static class BlenderCheckoutLifetimeChecks
                     await Checkout(main, original, replacement, protocol, mcp, transition, token);
                 await Listing(main, original, replacement, protocol, mcp, token);
             }
+            await ModelIdentity(main, original, protocol, token);
         }
         finally
         {
@@ -49,6 +50,44 @@ internal static class BlenderCheckoutLifetimeChecks
     }
 
     private sealed record Checkpoint(SourceWorkspace Workspace, CancellationToken Token, BlenderCheckout? Copy);
+
+    // A repeated helper line is not a model identity: checking out the second load must never copy the first model.
+    private static async Task ModelIdentity(MainWindow main, SourceWorldFixture fixture, Protocol protocol, CancellationToken token)
+    {
+        fixture.Write("gamegen/helper.gs", "LoadGameGen %file%.flt %instance%\n");
+        fixture.Write("gamegen/m1.gs", File.ReadAllText(fixture.Path("gamegen/m1.gs")).Replace("# no vehicles", """
+            set file first
+            set instance first_root
+            source helper.gs
+            set file second
+            set instance second_root
+            source helper.gs
+            LoadGameGen empty.flt empty_root
+            """, StringComparison.Ordinal));
+        fixture.Write("data/m1/models/first.gltf", """{"asset":{"version":"2.0"},"nodes":[{"name":"first_child"}],"scenes":[{"nodes":[0]}],"scene":0}""");
+        fixture.Write("data/m1/models/second.gltf", """{"asset":{"version":"2.0"},"nodes":[{"name":"second_child"}],"scenes":[{"nodes":[0]}],"scene":0}""");
+        fixture.Write("data/m1/models/empty.gltf", """{"asset":{"version":"2.0"},"nodes":[],"scenes":[{"nodes":[]}],"scene":0}""");
+        await main.ViewModel.OpenRootAsync(fixture.Project, token);
+        await protocol.Finish(await protocol.Call("source_world_open", new() { ["mission"] = "m1" }), "completed");
+        var doc = main.ViewModel.Documents.Single(d => d.SourceWorld != null);
+        var nodes = doc.PreviewDocument.Scene!.Nodes;
+        int first = nodes.Single(n => n.Name == "first_root").Index, second = nodes.Single(n => n.Name == "second_root").Index;
+        Assert.Equal(doc.SourceBuild!.Provenance[first].Created!.Script, doc.SourceBuild.Provenance[second].Created!.Script);
+        Assert.Equal(doc.SourceBuild.Provenance[first].Created!.Line, doc.SourceBuild.Provenance[second].Created!.Line);
+        foreach (var (name, model) in new[] { ("first_root", "first"), ("second_root", "second"), ("second_child", "second"), ("empty_root", "empty") })
+        {
+            int node = nodes.Single(n => n.Name == name).Index;
+            string expected = $"data/m1/models/{model}.gltf";
+            var checkout = await protocol.Finish(await protocol.Call("source_blender_checkout", new() { ["document"] = doc.SessionId.ToString(), ["node"] = node }), "completed");
+            Assert.Equal(expected, checkout["model"]!.GetValue<string>());
+            // The GUI's selector and the real node-based MCP operation share the stored load identity.
+            Assert.Equal(expected, typeof(MainWindow).GetMethod("SourceObjectModel", Private)!.Invoke(main, [doc, node]));
+            var input = JsonNode.Parse(File.ReadAllText(checkout["input"]!.GetValue<string>()))!;
+            if (model == "empty") Assert.Empty(input["nodes"]!.AsArray());
+            else Assert.Equal(model + "_child", input["nodes"]![0]!["name"]!.GetValue<string>());
+        }
+        main.ViewModel.CloseResolved(doc);
+    }
 
     private static async Task Checkout(MainWindow main, SourceWorldFixture original, SourceWorldFixture replacement,
         Protocol protocol, bool mcp, Transition transition, CancellationToken token)

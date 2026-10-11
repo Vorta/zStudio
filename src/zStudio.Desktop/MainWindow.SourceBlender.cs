@@ -18,9 +18,9 @@ public partial class MainWindow
     private string? SourceObjectModel(DocumentModel doc, int node)
     {
         var origin = DescribeSourceObject(doc, node).Origin;
-        if (origin.ModelFile != null) return origin.ModelFile;
-        // A load's root: the model the LoadGameGen read is the file of its children.
-        return doc.SourceBuild!.Provenance.Values.FirstOrDefault(p => p.Load != null && origin.Created != null && p.Load.Script == origin.Created.Script && p.Load.Line == origin.Created.Line && p.ModelFile != null)?.ModelFile;
+        // A helper script can load different models from the same line; the root records its own resolved file,
+        // including when that model has an empty scene. Imported nodes keep their own model-file identity.
+        return origin.ModelFile ?? origin.LoadedFile;
     }
 
     internal Func<SourceWorkspace, string, CancellationToken, BlenderCheckout> CheckoutSourceModel { get; set; } = SourceBlender.Checkout;
