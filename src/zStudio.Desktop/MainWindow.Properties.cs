@@ -143,6 +143,7 @@ public partial class MainWindow
         if (DocumentSceneTree.IsKeyboardFocusWithin && sceneTree?.Selected is { Node: not null, Problem: null } selectedRow)
         { await OpenScenePropertiesAsync(doc, selectedRow); return; }
         if (inspectedSceneSource is { } item) { await OpenScenePropertiesAsync(doc, item); return; }
+        if (IsAiWorld && scene?.AiPathEditingNetwork != null) { await OpenAiPathPropertiesAsync(); return; }
         if (IsAiWorld && scene?.SelectedAiNode is { } aiNode) { await OpenAiPropertiesAsync(aiNode, false); return; }
         if (animation is { } editor)
         {

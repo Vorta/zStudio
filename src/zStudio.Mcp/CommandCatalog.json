@@ -2244,6 +2244,172 @@
     ]
   },
   {
+    "Name": "zstudio_ai_path",
+    "Description": "Edit nodes in one authored AI path. Enter/exit Edit mode; replace/add/toggle a bounded selection or box-select visible nodes; begin a move/rotate/scale draft, set numeric input, then confirm one undo step or cancel. World XYZ constraints and selection-centre pivot match the GUI. Links and other fields are preserved. Source-world confirmation rebuilds through source tokens and returns the new document, exiting Edit mode. Selection and draft state are in preview_state.ai.path. Properties pins common values (mixed where different), without following later selection. No physical input is captured. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Mutates": true,
+    "Parameters": [
+      {
+        "Name": "preview",
+        "Type": "string",
+        "Description": "Current preview lifetime ID from zstudio_state.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "snapshot",
+        "Type": "string",
+        "Description": "AI graph snapshot from preview_state.ai. Handles apply only to this snapshot.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "document",
+        "Type": "string",
+        "Description": "Document lifetime ID from zstudio_state.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "revision",
+        "Type": "integer",
+        "Description": "Expected current document revision. Read before editing.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": 0,
+        "Maximum": 9223372036854775807
+      },
+      {
+        "Name": "action",
+        "Type": "string",
+        "Description": "Path action.",
+        "Required": true,
+        "Choices": [
+          "enter",
+          "exit",
+          "select",
+          "box",
+          "begin",
+          "set",
+          "confirm",
+          "cancel",
+          "properties"
+        ],
+        "Properties": null
+      },
+      {
+        "Name": "network",
+        "Type": "string",
+        "Description": "Network ID for enter; otherwise the selected marker or network filter is used.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "nodes",
+        "Type": "array",
+        "Description": "Node IDs from this network. Empty replace clears selection.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Items": {
+          "Name": "",
+          "Type": "string",
+          "Description": "Snapshot-scoped node ID.",
+          "Required": false,
+          "Choices": null,
+          "Properties": null
+        },
+        "MaxItems": 16384
+      },
+      {
+        "Name": "selection",
+        "Type": "string",
+        "Description": "Selection combination; default replace.",
+        "Required": false,
+        "Choices": [
+          "replace",
+          "add",
+          "toggle"
+        ],
+        "Properties": null
+      },
+      {
+        "Name": "rectangle",
+        "Type": "array",
+        "Description": "Viewport DIP [left,top,width,height] within its bounds; uses the same depth/visibility rules as GUI box selection.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Items": {
+          "Name": "",
+          "Type": "number",
+          "Description": "Coordinate or size.",
+          "Required": false,
+          "Choices": null,
+          "Properties": null,
+          "NumberMinimum": 0
+        },
+        "MinItems": 4,
+        "MaxItems": 4
+      },
+      {
+        "Name": "mode",
+        "Type": "string",
+        "Description": "Transform kind for begin.",
+        "Required": false,
+        "Choices": [
+          "move",
+          "rotate",
+          "scale"
+        ],
+        "Properties": null
+      },
+      {
+        "Name": "axis",
+        "Type": "string",
+        "Description": "World constraint; all uses XYZ move/scale input and Y rotation. Pointer scale is uniform.",
+        "Required": false,
+        "Choices": [
+          "all",
+          "x",
+          "y",
+          "z"
+        ],
+        "Properties": null
+      },
+      {
+        "Name": "token",
+        "Type": "string",
+        "Description": "Current draft token for set/confirm/cancel.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "input",
+        "Type": "array",
+        "Description": "Three invariant numeric strings, at most 64 characters each. Move XYZ deltas; scale XYZ factors; rotation uses first value in degrees. Invalid/incomplete drafts remain visible and cannot be confirmed.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Items": {
+          "Name": "",
+          "Type": "string",
+          "Description": "Numeric draft.",
+          "Required": false,
+          "Choices": null,
+          "Properties": null
+        },
+        "MinItems": 3,
+        "MaxItems": 3
+      }
+    ]
+  },
+  {
     "Name": "zstudio_ai_valves",
     "Description": "Page authored MW3 valve records or exact-name references from an edited resource. Includes repeated triggers, compound definitions and node/edge/objective uses; no runtime state is inferred. Query filters record names or valve references before paging. Parameters and reference previews are bounded; zrd_nodes/export retains complete data. Returns an operation ID; use zstudio_operation to await/read the result.",
     "Mutates": true,

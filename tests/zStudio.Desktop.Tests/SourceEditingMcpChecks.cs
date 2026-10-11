@@ -27,7 +27,8 @@ internal static class SourceEditingMcpChecks
     {
         using var fixture = new SourceWorldFixture();
         fixture.Write("data/m1/zrdr/puppies.zrd", Default); fixture.Write("data/m1/zrdr/puppies_easy.zrd", Easy);
-        fixture.Write("data/m1/zrdr/net_01.zrd", "node_00 ( 12 ( 1.0 2.0 3.0 ) ( -7 -1 0 ) )\n");
+        const string aiSource = "node_00 ( 12 ( 1.0 2.0 3.0 ) ( -7 -1 0 ) )\nnode_01 ( 23 ( 5.0 2.0 7.0 ) ( 0 -1 -1 ) )\n";
+        fixture.Write("data/m1/zrdr/net_01.zrd", aiSource);
         using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(120)); var token = deadline.Token;
         var main = new MainWindow { Left = -12000, ShowInTaskbar = false }; main.Show();
         try
@@ -123,6 +124,85 @@ internal static class SourceEditingMcpChecks
             main.SourceEditPreparing = ct => Assert.False(main.Dispatcher.CheckAccess());
             await Call("scene_card", new() { ["preview"] = cardPreview, ["action"] = "cancel", ["document"] = Id(doc), ["revision"] = doc.Revision, ["token"] = card.DraftToken });
             await Call("scene_card", new() { ["preview"] = cardPreview, ["action"] = "clear" });
+
+            // AI path confirmation uses the actual source preparation/rebuild pipeline, retaining both node edits
+            // as one source history step. Its new document is returned and stale preview/edit identities expire.
+            var pathArgs = PathArguments("enter"); pathArgs["network"] = scene.AiNetworks.Networks[0].Id;
+            await Job("ai_path", pathArgs);
+            pathArgs = PathArguments("select"); pathArgs["nodes"] = scene.AiNetworks.Networks[0].Nodes.Select(n => n.Id).ToArray();
+            await Job("ai_path", pathArgs);
+            pathArgs = PathArguments("begin"); pathArgs["mode"] = "move";
+            var pathDraft = await Job("ai_path", pathArgs);
+            string pathToken = pathDraft["path"]!["draft"]!["token"]!.GetValue<string>();
+            pathArgs = PathArguments("set"); pathArgs["token"] = pathToken; pathArgs["input"] = new[] { "10", "0", "0" };
+            await Job("ai_path", pathArgs);
+            Assert.False(doc.SourceWorld!.Workspace.IsDirty);
+
+            // Escape during source preparation explicitly discards the draft. The failed confirmation must
+            // not resurrect it when the held worker returns. No physical input or unattended dialog is used.
+            TaskCompletionSource pathPreparing = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            using (var releasePath = new SemaphoreSlim(0))
+            {
+                main.SourceEditPreparing = ct => { pathPreparing.TrySetResult(); Assert.True(releasePath.Wait(TimeSpan.FromSeconds(20), ct)); };
+                pathArgs = PathArguments("confirm"); pathArgs["token"] = pathToken;
+                var canceledPath = Job("ai_path", pathArgs, "failed");
+                try
+                {
+                    await pathPreparing.Task.WaitAsync(token);
+                    var automation = (AsyncLocal<bool>)typeof(MainWindow).GetField("automationRequest", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(main)!;
+                    bool previousAutomation = automation.Value; automation.Value = true;
+                    try
+                    {
+                        System.Windows.Input.Keyboard.ClearFocus();
+                        scene.RaiseEvent(new System.Windows.Input.KeyEventArgs(System.Windows.Input.Keyboard.PrimaryDevice,
+                            System.Windows.PresentationSource.FromVisual(main), Environment.TickCount, System.Windows.Input.Key.Escape)
+                            { RoutedEvent = System.Windows.Input.Keyboard.PreviewKeyDownEvent });
+                    }
+                    finally { automation.Value = previousAutomation; }
+                    releasePath.Release();
+                    Assert.Equal("no_draft", (await canceledPath)["code"]!.GetValue<string>());
+                    Assert.Null((await Call("preview_state", new() { ["preview"] = cardPreview }))["ai"]!["path"]!["draft"]);
+                    Assert.False(doc.IsDirty); Assert.Empty(doc.SourceWorld.Workspace.History);
+                }
+                finally { releasePath.Release(); main.SourceEditPreparing = ct => Assert.False(main.Dispatcher.CheckAccess()); }
+            }
+
+            pathArgs = PathArguments("begin"); pathArgs["mode"] = "move";
+            pathDraft = await Job("ai_path", pathArgs); pathToken = pathDraft["path"]!["draft"]!["token"]!.GetValue<string>();
+            pathArgs = PathArguments("set"); pathArgs["token"] = pathToken; pathArgs["input"] = new[] { "10", "0", "0" };
+            await Job("ai_path", pathArgs);
+            long beforeFailedPathRevision = doc.Revision;
+            var prepareWorldModel = main.PreparingSourceWorldModel;
+            main.PreparingSourceWorldModel = _ => throw new InvalidDataException("AI path rebuild failure fixture");
+            try
+            {
+                pathArgs = PathArguments("confirm"); pathArgs["token"] = pathToken;
+                Assert.Equal("build_failed", (await Job("ai_path", pathArgs, "failed"))["code"]!.GetValue<string>());
+                Assert.False(doc.IsDisposed); Assert.False(doc.IsDirty); Assert.True(doc.Revision > beforeFailedPathRevision);
+                Assert.Empty(doc.SourceWorld.Workspace.History);
+                var restored = (await Call("preview_state", new() { ["preview"] = cardPreview }))["ai"]!["path"]!["draft"]!;
+                Assert.Equal(pathToken, restored["token"]!.GetValue<string>());
+                Assert.Equal(doc.Revision, restored["revision"]!.GetValue<long>());
+                Assert.Equal("10", restored["input"]![0]!.GetValue<string>());
+                Assert.Equal(aiSource, Text(doc.SourceWorld.Workspace.Read("data/m1/zrdr/net_01.zrd")));
+            }
+            finally { main.PreparingSourceWorldModel = prepareWorldModel; }
+            // The same restored token can be confirmed again against the proven rollback's new revision.
+            pathArgs = PathArguments("confirm"); pathArgs["token"] = pathToken;
+            var sourcePathResult = await Job("ai_path", pathArgs);
+            var transformedPath = Document(sourcePathResult["document"]!);
+            Assert.True(doc.IsDisposed); Assert.False(sourcePathResult["path"]!["editing"]!.GetValue<bool>());
+            string editedAi = aiSource.Replace("( 1.0 2.0 3.0 )", "( 11.0 2.0 3.0 )").Replace("( 5.0 2.0 7.0 )", "( 15.0 2.0 7.0 )");
+            Assert.Equal(editedAi, Text(transformedPath.SourceWorld!.Workspace.Read("data/m1/zrdr/net_01.zrd")));
+            Assert.Single(transformedPath.SourceWorld.Workspace.History);
+            Assert.Equal(aiSource, File.ReadAllText(fixture.Path("data/m1/zrdr/net_01.zrd")));
+            await Preview();
+            doc = Document(await Call("undo_redo", new() { ["document"] = Id(transformedPath), ["revision"] = transformedPath.Revision, ["action"] = "undo" }));
+            await Preview();
+            Assert.False(doc.IsDirty); Assert.Equal(aiSource, Text(doc.SourceWorld!.Workspace.Read("data/m1/zrdr/net_01.zrd")));
+            // Subsequent editing must use the rebuilt document's source identities.
+            pickups = await Job("pickups", new() { ["document"] = Id(doc) });
+            ammo = pickups["items"]!.AsArray().First(p => p!["Type"]!.GetValue<string>() == "HEMORTAR_AMMO" && p["source"]!["ResourceName"]!.GetValue<string>() == "PUPPIES.ZRD")!;
 
             var moved = Document(await Call("pickup_move", new() { ["document"] = Id(doc), ["revision"] = doc.Revision, ["source"] = ammo["source"]!.DeepClone(), ["x"] = 20.25, ["y"] = 8, ["z"] = -5 }));
             Assert.True(doc.IsDisposed); Assert.False(moved.PickupsLocked);
@@ -347,6 +427,11 @@ internal static class SourceEditingMcpChecks
                 var work = (Task)typeof(MainWindow).GetField("previewWork", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(main)!;
                 await work.WaitAsync(token);
             }
+            Dictionary<string, object?> PathArguments(string action) => new()
+            {
+                ["preview"] = cardPreview, ["snapshot"] = scene.AiNetworks.Id,
+                ["document"] = Id(doc), ["revision"] = doc.Revision, ["action"] = action
+            };
             static string Text(byte[]? bytes) => Encoding.Latin1.GetString(bytes!);
             static IEnumerable<System.Windows.DependencyObject> Descendants(System.Windows.DependencyObject root)
             {
@@ -377,6 +462,7 @@ internal static class SourceEditingMcpChecks
         }
         finally
         {
+            typeof(MainWindow).GetMethod("CancelAiPathDraft", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(main, []);
             foreach (var doc in main.ViewModel.Documents.ToArray()) main.ViewModel.CloseResolved(doc);
             main.Close();
         }

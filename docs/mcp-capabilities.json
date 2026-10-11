@@ -255,12 +255,18 @@
     },
     {
       "gui": "ZonePropertiesEditor:Fields",
-      "tools": ["zstudio_source_zones", "zstudio_source_zone_draft"],
+      "tools": [
+        "zstudio_source_zones",
+        "zstudio_source_zone_draft"
+      ],
       "note": "Map zone catalog, object gate and exact polygon assignments share the source zone service. Draft begin/set/add/apply/cancel/label use the pinned source world, revision and draft token; shared logical placements require explicit sharedScope. Cancel with the current document revision and owned draft token also discards targets made stale by another source edit; editing those stale targets remains refused. Native zone Properties fields and actions are exposed through these dedicated zone commands. Applying accepts one undoable manifest edit; Save uses the existing verified source workspace save."
     },
     {
       "gui": "SceneViewport.Zones:Strokes",
-      "tools": ["zstudio_source_zones", "zstudio_source_zone_draft"],
+      "tools": [
+        "zstudio_source_zones",
+        "zstudio_source_zone_draft"
+      ],
       "note": "Explicit face/object brush strokes collect exact scene-node and source polygon identities (a picked built face is recorded as the source polygon it comes from, the index source_zones inspection returns), bounded to 4096 targets. Release adds targets to the shared draft; Apply remains explicit. MCP add supplies those identities without capturing physical input; paint only toggles the visible brush. The targets add takes are the brush's and Add selected surface or object's: one exact scene node and, for faces, source polygon per hit, accepted by the same draft check, so any face or object a view shows can be targeted and add's explicit polygon indices need no other GUI control. Terrain recipe painting retains source_terrain_edit semantics."
     },
     {
@@ -302,6 +308,20 @@
         "zstudio_source_terrain_create"
       ],
       "note": "The Create terrain dialog's checked meshes (filtered and paged 64 at a time, at most 256 chosen) are source_terrain_create's surfaces, and its Recipe field (starting at the file's name.terrain.json) is its recipe: another path lets a second mission's terrain use the same surfaces file, or a terrain be created again while an unused recipe keeps the default name. A name not ending in .terrain.json is refused in the dialog; a path outside the data folder or one that exists is refused by the shared creation, as for MCP. Cancel creates nothing."
+    },
+    {
+      "gui": "MainWindow.AiPath:AiPathKeyboard",
+      "tools": [
+        "zstudio_ai_path"
+      ],
+      "note": "Tab enters/exits one-network Edit mode; G/R/S start move/rotate/scale drafts, X/Y/Z constrain world axes, Enter confirms one undo step, Escape cancels the gesture/draft. Native text/control shortcuts remain native."
+    },
+    {
+      "gui": "SceneViewport.AiEditing:HandleAiPathDown",
+      "tools": [
+        "zstudio_ai_path"
+      ],
+      "note": "Shift adds and Ctrl toggles markers; empty-space rectangle selection shares depth/filter rules with ai_path box. Pointer transforms and numeric fields share one frozen selection-centre draft. Automation uses semantic positions/rectangles and never captures physical input."
     }
   ],
   "handlers": [
@@ -398,7 +418,9 @@
     },
     {
       "gui": "AnimationEditor.xaml:FaceOrientationChanged",
-      "tools": [ "zstudio_animation_options" ],
+      "tools": [
+        "zstudio_animation_options"
+      ],
       "note": "faceOrientation toggles winding-based blue fronts/red backs without editing data or playback."
     },
     {
@@ -1283,7 +1305,9 @@
     },
     {
       "gui": "MainWindow.xaml:EditZonesClick",
-      "tools": ["zstudio_source_zone_draft"],
+      "tools": [
+        "zstudio_source_zone_draft"
+      ],
       "note": "Open the pinned source-world zone editor using action begin."
     },
     {
@@ -1299,6 +1323,20 @@
         "zstudio_world_compare"
       ],
       "note": "Tools → Compare worlds… opens the one Compare worlds window; world_compare opens the same window and compares two files given by full path."
+    },
+    {
+      "gui": "MainWindow.xaml:AiPathActionClick",
+      "tools": [
+        "zstudio_ai_path"
+      ],
+      "note": "Edit mode, transform begin/confirm/cancel and pinned Properties use the same ai_path operations and draft/identity guards."
+    },
+    {
+      "gui": "MainWindow.xaml:AiPathInputChanged",
+      "tools": [
+        "zstudio_ai_path"
+      ],
+      "note": "Numeric transform input and world axis update the shared frozen-selection draft, preserving incomplete input until explicit confirmation or cancellation."
     }
   ]
 }

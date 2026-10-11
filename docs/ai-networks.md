@@ -34,6 +34,16 @@ The **AI nodes** tooltip includes this key. Colors do not depend on network iden
 
 Visibility and depth choices last for the application session. Filtering and selection survive LOD, difficulty, texture and horizon refreshes when the graph is unchanged. Changed resource graphs clear the affected selection/filter. Properties retains its original snapshot and is marked stale when its source changes; reopen the node to inspect current data. It is owned by the map document and closes with that document.
 
+## Edit a whole path
+
+In a compiled or source-project Whole world, unlock editing, select a node or choose one network, then click **Edit path** (or press **Tab** with the viewport focused). Click nodes to replace the selection, Shift-click to add, Ctrl-click to toggle, or drag a rectangle from empty space. Box selection obeys the same visibility and depth setting as clicks. Only this network participates; record identities, not names, identify its nodes.
+
+Use **G**, **R** or **S** to move, rotate or scale the selection with the pointer. **X**, **Y** and **Z** constrain the transform to a world axis. Rotation and scaling use the selection centre; unconstrained rotation uses world Y. Enter or left-click confirms one undo step; Escape or right-click cancels. The panel also offers numeric transforms and explicit **Confirm**/**Cancel**, without pointer input. Move fields are XYZ deltas, scale fields are XYZ factors, and rotation uses the first field as degrees. A constrained transform leaves other axes unchanged. Text fields and native controls retain their own shortcuts.
+
+The preview is a draft until confirmed. Navigation, save, undo and other edits require explicit draft resolution. Links, node integers, record order and all non-coordinate fields remain intact. Compiled worlds use the existing verified owning-archive save; protected retail sources still require Save As. Source worlds change only the relevant text tokens through the shared project workspace and rebuild after confirmation. The rebuilt source world exits Edit mode explicitly; select its current path to continue. Edit mode and drafts are not saved preferences.
+
+**Properties** pins the selected identities. One node keeps its full inspection; multiple nodes show their shared fields, with **Mixed** for differing values. Later selection does not retarget that window. The first 256 IDs are shown with counts and an omission flag; the transform retains the complete selection, up to 16,384 nodes.
+
 ## Interpretation and limits
 
 The reader uses shared ZAR/ZRD services and current workspace resource snapshots, including unsaved edits. It discovers `net_NN.zrd` members in the mission resource search paths and preserves every source record independently. This is an authored-resource visualization, not a report of active AI agents or runtime lookup precedence.
@@ -74,6 +84,8 @@ The whole option batch is validated before changing controls. AI settings publis
 Pages have at most 200 records. Handles are snapshot-scoped; rediscover after stale-snapshot/record/preview errors. Discovery never enables visualization or captures input.
 
 Network rows, node rows, node selection and pinned Properties include `attack_strategy`: `{ value, status, key, characters, truncated, color }`. `status` is `stored`, `missing` or `invalid`; `key` is one of the six prefixes or `unknown`; `color` is the network's `#RRGGBB` color (the selected white marker does not change it). Absent/invalid values and character counts are null. Values retain at most 1024 original characters plus a truncation marker. `scene_inspect.attackStrategy` and `hoverAttackStrategy` return the same metadata for the queried/selected and hovered AI nodes, or null for non-AI targets. The readable card row uses the existing 2048-character presentation bound. Network results preview 8 diagnostic messages of 128 characters each, retaining severity/source offsets and reporting `diagnosticCount`/`diagnosticsTruncated`. These limits also keep a full 200-row page bounded when authored strings require JSON escaping. Existing input schemas and tool names are unchanged.
+
+`zstudio_ai_path` returns a cancellable operation handle (poll `zstudio_operation`) and provides enter/exit, replace/add/toggle selection, viewport rectangle selection, begin/set/confirm/cancel transforms and pinned Properties. Every request supplies the preview, graph snapshot, document and revision; draft changes also supply its token. `preview_state.ai.path` reports mode, selected IDs/count/omission, numeric input, pivot and validation errors. Source confirmation returns the replacement document. It never captures physical input or writes game files directly.
 
 ## Verification
 

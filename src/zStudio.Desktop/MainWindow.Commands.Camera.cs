@@ -30,6 +30,8 @@ public partial class MainWindow
             var viewport = TargetViewport(a); string action = Text(a, "action"); var pose = viewport.CaptureView();
             if (action != "read" && viewport.IsPickupDragging)
                 throw new StudioCommandException("busy", "A pickup drag is in progress. Finish or cancel the drag before changing the camera.");
+            if (action != "read" && viewport.IsAiPathPointerTransform)
+                throw new StudioCommandException("busy", "An AI path pointer transform is in progress. Confirm or cancel it before changing the camera.");
             // Complete argument validation before changing Fly, Follow camera, projection, or inertia.
             SceneViewport.ViewPose? explicitPose = null;
             System.Windows.Point? screenPoint = null;

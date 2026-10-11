@@ -37,12 +37,14 @@ public sealed partial class SceneViewport
     /// <summary>Explicit card/source deselection, distinct from renderer replacement.</summary>
     public event Action? InspectionSelectionCleared;
     public Func<bool>? CanChangeInspection { get; set; }
+    private UIElement? inspectionContent;
     public UIElement? InspectionContent
     {
-        get => inspectionHost.Children.Count > 1 ? inspectionHost.Children[1] : null;
+        get => inspectionContent;
         set
         {
-            while (inspectionHost.Children.Count > 1) inspectionHost.Children.RemoveAt(1);
+            if (inspectionContent != null) inspectionHost.Children.Remove(inspectionContent);
+            inspectionContent = value;
             ReserveInspectionPanel(Rect.Empty);
             if (value != null) inspectionHost.Children.Add(value);
         }

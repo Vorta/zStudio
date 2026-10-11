@@ -35,7 +35,7 @@ public partial class MainWindow
             if (e.OriginalSource != viewMenu && e.OriginalSource != cameraNavigationMenu) return;
             cameraNavigationMenu.Visibility = ViewModel.HasRoot ? Visibility.Visible : Visibility.Collapsed;
             var active = ActiveNavigationViewport;
-            cameraNavigationMenu.IsEnabled = active != null && !active.IsPickupDragging && !active.IsFlyActive;
+            cameraNavigationMenu.IsEnabled = active != null && !active.IsPickupDragging && !active.IsFlyActive && !active.IsAiPathPointerTransform;
             foreach (MenuItem item in cameraNavigationMenu.Items)
             {
                 string action = (string)item.Tag;
@@ -52,7 +52,7 @@ public partial class MainWindow
     internal bool RunCameraNavigation(string action, Point? zoomPoint = null)
     {
         var active = ActiveNavigationViewport;
-        if (active == null || active.IsPickupDragging || active.IsFlyActive) return false;
+        if (active == null || active.IsPickupDragging || active.IsFlyActive || active.IsAiPathPointerTransform) return false;
         switch (action)
         {
             case "front": case "back": case "left": case "right": case "top": case "bottom": active.SetAxisView(action); break;
@@ -107,6 +107,7 @@ public partial class MainWindow
             || !active.IsKeyboardFocusWithin && !active.IsMouseOver) return false;
         string? action = CameraKeyAction(e.Key, System.Windows.Input.Keyboard.Modifiers);
         if (action == null) return false;
+        if (active.IsAiPathPointerTransform) { e.Handled = true; return true; }
         if (e.IsRepeat && !(action.StartsWith("orbit", StringComparison.Ordinal) || action.StartsWith("pan", StringComparison.Ordinal) || action.StartsWith("zoom", StringComparison.Ordinal)))
         { e.Handled = true; return true; }
         Point? zoomPoint = action is "zoomIn" or "zoomOut" && active.IsMouseOver ? Mouse.GetPosition((FrameworkElement)active.Content) : null;

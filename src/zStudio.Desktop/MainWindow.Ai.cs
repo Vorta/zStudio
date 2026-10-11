@@ -19,6 +19,7 @@ public partial class MainWindow
     {
         AiEnabled.Tag = "Show authored AI node markers and directed connections.\n" + AiNetworkColors.Legend;
         AttachInspection(viewport);
+        ConfigureAiPath(viewport);
         viewport.AiNodeSelected += id =>
         {
             if (scene != viewport || id == null) return;
@@ -29,6 +30,8 @@ public partial class MainWindow
         };
         viewport.AiPropertiesRequested += async () =>
         {
+            if (scene == viewport && viewport.AiPathEditingNetwork != null)
+            { await RunUi(OpenAiPathPropertiesAsync); return; }
             if (scene != viewport || viewport.SelectedAiNode is not { } id) return;
             try { await OpenAiPropertiesAsync(id, false); }
             catch (StudioCommandException ex) { ViewModel.Status = ex.Message; }
@@ -53,7 +56,7 @@ public partial class MainWindow
     private void ApplyAiOptions()
     {
         bool world = IsAiWorld; AiTools.Visibility = world ? Visibility.Visible : Visibility.Collapsed;
-        if (!world) { AiLabel.Visibility = Visibility.Collapsed; return; }
+        if (!world) { AiLabel.Visibility = Visibility.Collapsed; UpdateAiPathPanel(); return; }
         var graph = scene!.AiNetworks;
         AiValves.Visibility = graph.ValveSources.Count == 0 ? Visibility.Collapsed : Visibility.Visible;
         AiValveOverlay.Visibility = AiValves.Visibility;
@@ -79,6 +82,7 @@ public partial class MainWindow
         }
         finally { synchronizingAi = false; }
         scene.SetAiOptions(aiVisible, aiThroughGeometry, aiNetworkFilter);
+        UpdateAiPathPanel();
         if (aiVisible && scene.AiRenderTruncated)
         {
             string limit = $"The AI overlay draws {scene.RenderedAiNodes:N0} nodes and {scene.RenderedAiLinks:N0} links (limits {SceneViewport.MaximumRenderedAiNodes:N0} and {SceneViewport.MaximumRenderedAiLinks:N0}). Filter a network, or inspect the complete graph through AI node Properties or ai_nodes.";
@@ -95,6 +99,7 @@ public partial class MainWindow
     {
         snapshot = scene!.AiNetworks.Id, visible = scene.AiVisible, throughGeometry = scene.AiThroughGeometry,
         network = scene.AiNetworkFilter ?? "all", selectedNode = scene.SelectedAiNode,
+        path = AiPathState(),
         valveOverlay = scene.ValveOverlayVisible, valveFilter = ValveFilterText(), valveFilterCharacters = scene.ValveFilter?.Length ?? 0, valveFilterTruncated = scene.ValveFilter?.Length > 256,
         networks = scene.AiNetworks.Networks.Count, nodes = scene.AiNetworks.Networks.Sum(n => n.Nodes.Count),
         links = scene.AiNetworks.Networks.Sum(n => n.Nodes.Sum(p => p.PreviewLinks.Count(l => l.Target != null))),

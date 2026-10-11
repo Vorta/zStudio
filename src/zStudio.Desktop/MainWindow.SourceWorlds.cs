@@ -227,6 +227,7 @@ public partial class MainWindow
         else { var done = sourceRebuild; sourceRebuild = null; done?.TrySetResult(); }
         UpdateDocumentCommands();
         ApplyTerrainBrush(scene);
+        UpdateAiPathPanel();
     }
     /// <summary>
     /// Completes when no world of the project rebuilds (after a scene-card edit, undo, stroke, Properties or MCP edit) and no
@@ -449,7 +450,7 @@ public partial class MainWindow
     /// world's build (<paramref name="fromBuild"/>: provenance, line numbers, archive layouts) are refused once a source the
     /// build read changed in the workspace, until the world is reloaded.
     /// </remarks>
-    private async Task<DocumentModel> EditSourceWorldAsync(DocumentModel doc, string action, Func<SourceWorkspace, Action?> apply, CancellationToken token, IReadOnlyList<SourceModelAddition>? additions = null, bool fromBuild = true, Func<ScriptLineChanges?>? verifyTargets = null, IReadOnlyList<string>? notes = null)
+    private async Task<DocumentModel> EditSourceWorldAsync(DocumentModel doc, string action, Func<SourceWorkspace, Action?> apply, CancellationToken token, IReadOnlyList<SourceModelAddition>? additions = null, bool fromBuild = true, Func<ScriptLineChanges?>? verifyTargets = null, IReadOnlyList<string>? notes = null, Action? onRollback = null)
     {
         var session = doc.SourceWorld ?? throw new StudioCommandException("unsupported", "This document is not a source world.");
         if (doc.IsDisposed || session.Owner != doc) throw new StudioCommandException("stale_document", "The world was rebuilt; read zstudio_state for its current document.");
@@ -489,6 +490,7 @@ public partial class MainWindow
             // The take-back changes the revision; a Discard chosen meanwhile still covers the workspace.
             finally { if (discardApproved) discardApprovedWorkspace = (session.Workspace, session.Workspace.Revision); }
             session.Workspace.ForgetChangesAfter(contentBefore);
+            onRollback?.Invoke(); // Only after both the transaction and its content revision were restored.
             StudioCommandException? reverted = ex is StudioCommandException { Code: not "context_changed" } failure
                 ? new(failure.Code, failure.Code == "build_failed" ? $"{action} was reverted because the world does not build with it: {failure.Message}" : $"{action} was reverted: {failure.Message}")
                 : null;
@@ -506,12 +508,12 @@ public partial class MainWindow
     internal Action<CancellationToken>? SourceEditPreparing { get; set; }
     /// <summary>Read, decode and serialize on an isolated worker workspace; publish one checked transaction on the dispatcher.</summary>
     private async Task<DocumentModel> PrepareSourceWorldEditAsync(DocumentModel doc, string action, Func<SourceWorkspace, CancellationToken, SourceTransaction?> prepare,
-        CancellationToken token, IReadOnlyList<SourceModelAddition>? additions = null, bool fromBuild = true, Func<ScriptLineChanges?>? verifyTargets = null, IReadOnlyList<string>? notes = null, SceneInspectionCard? committingCard = null, ZoneDraft? committingZones = null)
+        CancellationToken token, IReadOnlyList<SourceModelAddition>? additions = null, bool fromBuild = true, Func<ScriptLineChanges?>? verifyTargets = null, IReadOnlyList<string>? notes = null, SceneInspectionCard? committingCard = null, ZoneDraft? committingZones = null, AiPathDraft? committingAiPath = null)
     {
         var session = SourceWorldOf(doc);
         if (doc.IsDisposed || session.Owner != doc) throw new StudioCommandException("stale_document", "The world was rebuilt or closed.");
         RequireSourceWorldIdle(session);
-        RequireNoDrafts(doc, committing: true, committingCard, committingZones);
+        RequireNoDrafts(doc, committing: true, committingCard, committingZones, committingAiPath);
         // Properties callbacks use the GUI helper with no explicit token. When invoked by a direct command,
         // its request must still cancel preparation before any edit is accepted.
         using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(token, directSourcePublication.Value?.Token ?? default,
@@ -557,6 +559,16 @@ public partial class MainWindow
             ReleaseUnusedSourceWorkspace();
         }
         if (session.Workspace.Revision != revision) throw new StudioCommandException("context_changed", "The source workspace changed while the edit was prepared; try again.");
+        if (committingAiPath != null)
+        {
+            if (RequireAiPathDraft(committingAiPath.Token) != committingAiPath)
+                throw new StudioCommandException("stale_draft", "The AI path draft changed during preparation.");
+            RequireNoDrafts(doc, committing: true, committingAiPath: committingAiPath);
+            try { session.Workspace.ValidatePreparedEdit(prepared, cancellation.Token, verification.Value); }
+            catch (SourceFileChangedException ex) { throw new StudioCommandException("external_change", ex.Message); }
+            catch (InvalidDataException ex) { throw new StudioCommandException("invalid_argument", ex.Message); }
+            ReleaseAiPathDraft(AiPathDraftLifetime.ReleasedForAcceptance); scene?.SetAiPathEditing(null);
+        }
         if (committingCard != null)
         {
             committingCard.RequireDraft(draftToken!);
@@ -579,7 +591,8 @@ public partial class MainWindow
         }
         // No dispatcher yield between releasing the preparation guard and accepting the checked edit.
         return await EditSourceWorldAsync(doc, action, w => w.AcceptPreparedEdit(prepared, cancellation.Token, verification.Value) is { } t ? () => w.Retract(t) : null,
-            cancellation.Token, additions, fromBuild, verifyTargets, notes);
+            cancellation.Token, additions, fromBuild, verifyTargets, notes,
+            onRollback: committingAiPath == null ? null : () => committingAiPath.RolledBackRevision = doc.Revision);
     }
 
     private Task<DocumentModel> AddSourceModelAsync(DocumentModel doc, SourceWorldAddition addition, CancellationToken token)

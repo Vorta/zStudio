@@ -9,6 +9,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Automation;
+using System.Windows.Input;
 using System.Windows.Threading;
 using System.Windows.Media;
 using ModelContextProtocol.Client;
@@ -31,7 +32,8 @@ internal static class SceneInspectionMcpChecks
         using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(30));
         string root = Path.Combine(Path.GetTempPath(), "zstudio-inspection-test-" + Guid.NewGuid().ToString("N")); Directory.CreateDirectory(root);
         string archivePath = Path.Combine(root, "resources.zbd");
-        var value = A(S("node_00"), A(I(12), A(F(1), F(2), F(3)), A(I(-7), I(-1), I(0))), S("attack_strategy"), A(S("Head-on")));
+        var value = A(S("node_00"), A(I(12), A(F(1), F(2), F(3)), A(I(-7), I(-1), I(0))),
+            S("node_01"), A(I(13), A(F(5), F(2), F(7)), A(I(0), I(-1), I(-1))), S("attack_strategy"), A(S("Head-on")));
         var pickupRow = A(S("HEMORTAR_AMMO"), I(1), A(F(1), F(2), F(3)), A(F(.125f), F(.3f), F(-.2f)), F(12.5f));
         var members = new[] { ("net_01.zrd", ZrdWriter.Write(value)), ("puppies.zrd", ZrdWriter.Write(A(A(pickupRow)))) };
         using (var data = new MemoryStream())
@@ -350,6 +352,94 @@ internal static class SceneInspectionMcpChecks
             Assert.Equal(432, resetPanel["preferredHeight"]!.GetValue<double>());
             Assert.False(resetPanel["expanded"]!.GetValue<bool>());
 
+            // Must-have multi-node contract through the real MCP/visible workspace: guards, pinned mixed values,
+            // a non-mutating invalid/cancelled draft and one accepted history step for the entire selection.
+            string network = viewport.AiNetworks.Networks[0].Id;
+            string[] nodeIds = viewport.AiNetworks.Networks[0].Nodes.Select(n => n.Id).ToArray();
+            await PathAction("enter", new() { ["network"] = network }, "locked");
+            await Lock(false);
+            await PathAction("enter", new() { ["network"] = network });
+            await PathAction("select", new() { ["nodes"] = new JsonArray(nodeIds.Select(s => (JsonNode?)JsonValue.Create(s)).ToArray()) });
+            // A pending earlier asset decode must not overwrite the later pinned multi-node selection.
+            var assetLoader = main.LoadAssetPropertiesAsync;
+            TaskCompletionSource loadingProperties = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            TaskCompletionSource<JsonObject> releaseProperties = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            main.LoadAssetPropertiesAsync = (_, _, _) => { loadingProperties.TrySetResult(); return releaseProperties.Task; };
+            var olderProperties = main.OpenAssetPropertiesAsync(doc, asset, deadline.Token, automation: true);
+            await loadingProperties.Task.WaitAsync(deadline.Token);
+            await PathAction("properties");
+            releaseProperties.SetResult(new() { ["older"] = true });
+            Assert.Null(await olderProperties);
+            main.LoadAssetPropertiesAsync = assetLoader;
+            var pathProperties = main.OpenPropertiesWindow!;
+            Assert.Equal("Mixed", pathProperties.CurrentJson!["X"]!.GetValue<string>());
+            Assert.Equal(2f, pathProperties.CurrentJson!["Y"]!.GetValue<float>());
+            Assert.Equal("Mixed", pathProperties.CurrentJson!["Raw node value"]!.GetValue<string>());
+            await PathAction("select", new() { ["nodes"] = new JsonArray(nodeIds[0]), ["selection"] = "toggle" });
+            Assert.Single(viewport.SelectedAiPathNodes); Assert.Equal(2, pathProperties.CurrentJson!["Selected nodes"]!.GetValue<int>());
+            await PathAction("select", new() { ["nodes"] = new JsonArray(nodeIds[0]), ["selection"] = "add" });
+            pathProperties.Close();
+            long pathRevision = doc.Revision;
+            var pathBegun = await PathAction("begin", new() { ["mode"] = "move" });
+            string pathToken = pathBegun["path"]!["draft"]!["token"]!.GetValue<string>();
+            viewport.SetAiPathPointerTransform(true); var pointerPose = viewport.CaptureView();
+            await Call("camera", new() { ["preview"] = preview, ["action"] = "read" });
+            foreach (string cameraAction in new[] { "set", "move", "rotate", "frame", "pan", "zoom", "dolly", "view", "projection" })
+            {
+                JsonObject cameraArgs = new() { ["preview"] = preview, ["action"] = cameraAction };
+                if (cameraAction == "set") { cameraArgs["position"] = new JsonArray(0, 0, 20); cameraArgs["look"] = new JsonArray(0, 0, -20); }
+                if (cameraAction == "view") cameraArgs["view"] = "right";
+                if (cameraAction == "projection") cameraArgs["projection"] = "orthographic";
+                await Call("camera", cameraArgs, "busy");
+            }
+            Assert.False(main.RunCameraNavigation("right")); Assert.Equal(pointerPose, viewport.CaptureView());
+            await Lock(true, "pending_drafts");
+            await PathAction("set", new() { ["token"] = "expired", ["input"] = new JsonArray("1", "0", "0") }, "stale_draft");
+            var invalidPath = await PathAction("set", new() { ["token"] = pathToken, ["input"] = new JsonArray("-", "0", "0") });
+            Assert.NotNull(invalidPath["path"]!["draft"]!["error"]);
+            await PathAction("confirm", new() { ["token"] = pathToken }, "invalid_argument");
+            await PathAction("cancel", new() { ["token"] = pathToken });
+            Assert.Equal(pathRevision, doc.Revision); Assert.False(doc.IsDirty);
+            pathBegun = await PathAction("begin", new() { ["mode"] = "move" });
+            pathToken = pathBegun["path"]!["draft"]!["token"]!.GetValue<string>();
+            await PathAction("set", new() { ["token"] = pathToken, ["input"] = new JsonArray("10", "99", "99") });
+            Assert.False(doc.IsDirty); Assert.Equal(new Vector3(1, 2, 3), edits.Position(edits.OtherCoordinates[0].Source));
+            // Exercise the wired GUI key/button paths. Suppress modal prompts so the former generic draft
+            // resolver fails assertions instead of leaving an unattended discard dialog open.
+            var automation = (AsyncLocal<bool>)Get("automationRequest")!; bool wasAutomation = automation.Value;
+            automation.Value = true;
+            try
+            {
+                var pathX = (TextBox)main.FindName("AiPathX"); main.UpdateLayout();
+                Assert.True(pathX.Focus()); Assert.True(pathX.IsKeyboardFocusWithin);
+                Assert.True(viewport.HandleScenePointerDown(new Point(30, 30), new MouseButtonEventArgs(Mouse.PrimaryDevice, Environment.TickCount, MouseButton.Left)));
+                Assert.False(pathX.IsKeyboardFocusWithin); Assert.True(viewport.IsKeyboardFocusWithin);
+                Assert.False(viewport.IsAiPathPointerTransform); Assert.Equal(pathRevision, doc.Revision);
+                viewport.RaiseEvent(new KeyEventArgs(Keyboard.PrimaryDevice, PresentationSource.FromVisual(main), Environment.TickCount, Key.X)
+                    { RoutedEvent = Keyboard.PreviewKeyDownEvent });
+                Assert.Equal(1, ((ComboBox)main.FindName("AiPathAxis")).SelectedIndex);
+                var confirmPath = Descendants((DependencyObject)main.FindName("AiPathPanel")).OfType<Button>().Single(b => Equals(b.Tag, "confirm"));
+                confirmPath.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            }
+            finally { automation.Value = wasAutomation; }
+            Assert.Equal(pathRevision + 1, doc.Revision); Assert.True(doc.IsDirty);
+            Assert.Equal([new Vector3(11, 2, 3), new Vector3(15, 2, 7)], edits.OtherCoordinates.Select(c => edits.Position(c.Source)));
+            await Call("undo_redo", new() { ["document"] = doc.SessionId.ToString(), ["revision"] = doc.Revision, ["action"] = "undo" });
+            Assert.False(doc.IsDirty); Assert.Equal(original, edits.EncodeArchive(archivePath));
+            Assert.Equal(original, File.ReadAllBytes(archivePath));
+
+            async Task<JsonNode> PathAction(string action, JsonObject? args = null, string? error = null)
+            {
+                args ??= new(); args["preview"] = preview; args["snapshot"] = viewport.AiNetworks.Id;
+                args["document"] = doc.SessionId.ToString(); args["revision"] = doc.Revision; args["action"] = action;
+                var job = await Call("ai_path", args); string id = job["id"]!.GetValue<string>();
+                while (job["State"]!.GetValue<string>() is "queued" or "running")
+                { await Task.Delay(5, deadline.Token); job = await Call("operation", new() { ["id"] = id }); }
+                Assert.Equal(error == null ? "completed" : "failed", job["State"]!.GetValue<string>());
+                var result = job["result"]!; if (error != null) Assert.Equal(error, result["code"]!.GetValue<string>());
+                return result;
+            }
+
             Task<JsonNode> Card(string action, JsonObject args, string? error = null) { args["preview"] = preview; args["action"] = action; return Call("scene_card", args, error); }
             Task<JsonNode> Lock(bool locked, string? error = null) => Call("pickup_lock", new() { ["document"] = doc.SessionId.ToString(), ["revision"] = doc.Revision, ["locked"] = locked }, error);
             Task<JsonNode> Edit(string action, JsonObject? args = null, string? error = null)
@@ -362,12 +452,17 @@ internal static class SceneInspectionMcpChecks
                 return json;
             }
         }
-        finally { (viewport.InspectionContent as SceneInspectionCard)?.CancelDraft(); while (edits.CanUndo) edits.Undo(); Set("scene", null); main.Close(); Directory.Delete(root, true); }
+        finally { Invoke("CancelAiPathDraft"); main.OpenPropertiesWindow?.Close(); (viewport.InspectionContent as SceneInspectionCard)?.CancelDraft(); while (edits.CanUndo) edits.Undo(); Set("scene", null); main.Close(); Directory.Delete(root, true); }
         object? Get(string name) => typeof(MainWindow).GetField(name, BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(main);
         void Set(string name, object? value) => typeof(MainWindow).GetField(name, BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(main, value);
         void Invoke(string name, params object[] args) => typeof(MainWindow).GetMethod(name, BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(main, args);
     }
     private static ZrdNode A(params ZrdNode[] children) => ZrdNode.Create(ZrdKind.Array) with { Children = children };
+    private static IEnumerable<DependencyObject> Descendants(DependencyObject parent)
+    {
+        foreach (var child in LogicalTreeHelper.GetChildren(parent).OfType<DependencyObject>())
+        { yield return child; foreach (var nested in Descendants(child)) yield return nested; }
+    }
     private static IEnumerable<SceneInspectionField> Fields(DependencyObject parent)
     {
         for (int i = 0; i < VisualTreeHelper.GetChildrenCount(parent); i++)

@@ -31,13 +31,14 @@ public sealed partial class SceneViewport
 
     public bool BeginManualNavigation()
     {
-        if (IsFlyActive || IsPickupDragging) return false;
+        if (IsFlyActive || IsPickupDragging || IsAiPathPointerTransform) return false;
         ManualNavigationStarting?.Invoke();
         return true;
     }
     public void StopCameraMotion() { CancelNavigation(); StopNavigationMotion(); }
     public void PrepareAuthoredCamera()
     {
+        if (IsAiPathPointerTransform) return;
         StopCameraMotion(); ChangeProjection("perspective"); axisView = null; autoPerspective = false;
     }
     public void OrbitStep(double horizontalDegrees, double verticalDegrees)
@@ -243,7 +244,7 @@ public sealed partial class SceneViewport
         // Parent tunneling precedes Helix's class-level hit testing and view-cube handler.
         PreviewMouseDown += (_, e) =>
         {
-            if (e.Handled || IsFlyActive || IsPickupDragging ||
+            if (e.Handled || IsFlyActive || IsPickupDragging || IsAiPathPointerTransform || aiPathBoxStart != null ||
                 InspectionContent is DependencyObject panel && IsInspectionInput(e.OriginalSource as DependencyObject, panel)) return;
             var gesture = Gesture(e.ChangedButton, Keyboard.Modifiers);
             if (gesture == NavigationGesture.None) return;
@@ -267,7 +268,7 @@ public sealed partial class SceneViewport
         {
             // The card is a sibling of the render surface. Let its native controls
             // process the wheel before any camera motion or inertia is started.
-            if (e.Handled || IsFlyActive ||
+            if (e.Handled || IsFlyActive || IsAiPathPointerTransform || aiPathBoxStart != null ||
                 InspectionContent is DependencyObject panel && IsInspectionInput(e.OriginalSource as DependencyObject, panel)) return;
             if (!IsPickupDragging)
             {

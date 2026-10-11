@@ -78,7 +78,7 @@ public partial class MainWindow : Window
         {
             RequireAutomationMutationAvailable();
             if (closesDocuments) RequireNoDrafts();
-            else if (animation?.HasAutomationDrafts == true || HasInspectionDraft)
+            else if (animation?.HasAutomationDrafts == true || HasInspectionDraft || HasAiPathDraft)
                 throw new Recoil.Zbd.Automation.StudioCommandException("pending_drafts", "Resolve unfinished preview input before changing documents.");
         };
         ViewModel.ValidateReload = doc => { RequireAutomationMutationAvailable(); RequireNoDrafts(doc); };
@@ -755,6 +755,7 @@ public partial class MainWindow : Window
     private void Keyboard(object sender, KeyEventArgs e)
     {
         if (flyCamera?.HandleKey(e, true) == true) return;
+        if (AiPathKeyboard(e)) return;
         if (CameraKeyboard(e)) return;
         if ((e.Key == Key.Enter || e.SystemKey == Key.Enter) && System.Windows.Input.Keyboard.Modifiers == ModifierKeys.Alt) { e.Handled = true; OpenCurrentProperties(); return; }
         if (e.Key == Key.Escape && (scene?.CancelPickupDrag() == true || scene?.CancelTerrainStroke() == true)) { e.Handled = true; return; }
@@ -790,14 +791,14 @@ public partial class MainWindow : Window
             if (sourceWorkspaceBusy) { CancelSourceBuilds(); ViewModel.Status = "Cancelling the rebuild so the application can close…"; }
             return;
         }
-        if (automationCloseRequested && (ViewModel.Documents.Any(d => d.IsDirty) || HasZoneDraft || HasInspectionDraft || animation?.HasAutomationDrafts == true || propertiesWindow?.HasPendingDrafts == true || scene?.IsPickupDragging == true))
+        if (automationCloseRequested && (ViewModel.Documents.Any(d => d.IsDirty) || HasZoneDraft || HasInspectionDraft || HasAiPathDraft || animation?.HasAutomationDrafts == true || propertiesWindow?.HasPendingDrafts == true || scene?.IsPickupDragging == true))
         {
             automationCloseRequested = false; e.Cancel = true;
             ViewModel.Status = "Close canceled: the workspace has new edits or unfinished input. Resolve them before closing.";
             return;
         }
         System.Windows.Input.Keyboard.ClearFocus();
-        if (!allowClose && (ViewModel.Documents.Any(d => d.IsDirty) || HasZoneDraft || HasInspectionDraft || animation?.HasPendingDrafts == true || propertiesWindow?.HasPendingDrafts == true))
+        if (!allowClose && (ViewModel.Documents.Any(d => d.IsDirty) || HasZoneDraft || HasInspectionDraft || HasAiPathDraft || animation?.HasPendingDrafts == true || propertiesWindow?.HasPendingDrafts == true))
         {
             e.Cancel = true; resolvingClose = true;
             try
