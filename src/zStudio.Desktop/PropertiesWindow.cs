@@ -33,14 +33,15 @@ public sealed class PropertiesWindow : Window
     public PickupPropertiesEditor? PickupFields { get; private set; }
     public ResourcePropertiesEditor? ResourceFields { get; private set; }
     public ScriptPropertiesEditor? ScriptFields { get; private set; }
+    internal SourcePropertiesEditor? SourceFields { get; private set; }
     public bool HasPendingDrafts => Editors.Any(e => e.HasPendingDrafts);
     /// <summary>Pending input other than drafts being committed (an edit a draft's commit runs may proceed).</summary>
     public bool HasUncommittedDrafts => Editors.Any(e => e.HasUncommittedDrafts);
-    private IEnumerable<FieldEditor> Editors => new FieldEditor?[] { AnimationFields, PickupFields, ResourceFields, ScriptFields }.OfType<FieldEditor>();
+    private IEnumerable<FieldEditor> Editors => new FieldEditor?[] { AnimationFields, PickupFields, ResourceFields, ScriptFields, SourceFields }.OfType<FieldEditor>();
     public Func<DocumentModel, bool, Task<bool>>? SaveRequested { get; set; }
     public Action<DocumentModel, bool>? UndoRequested { get; set; }
     public Action<DocumentModel>? Editing { get; set; }
-    public JsonObject? CurrentJson => ScriptFields?.Json ?? ResourceFields?.Json ?? AnimationFields?.Json ?? PickupFields?.Json ?? snapshot;
+    public JsonObject? CurrentJson => ScriptFields?.Json ?? ResourceFields?.Json ?? AnimationFields?.Json ?? PickupFields?.Json ?? SourceFields?.Json ?? snapshot;
 
     public PropertiesWindow(Window owner, MainViewModel preferences)
     {
@@ -144,6 +145,11 @@ public sealed class PropertiesWindow : Window
         label = title; PickupFields = new(document, source, title, json, sourceMove);
         PickupFields.Changed += Refresh; body.Content = PickupFields; Refresh(); return true;
     }
+    internal bool SetSourceObject(DocumentModel document, SourcePropertiesEditor fields)
+    {
+        if (!BeginTarget(document)) { fields.Dispose(); return false; }
+        label = fields.Title; SourceFields = fields; fields.Changed += Refresh; body.Content = fields; Refresh(); return true;
+    }
     public bool SetResource(DocumentModel document, ResourcePropertiesEditor fields)
     {
         if (!BeginTarget(document)) return false;
@@ -176,12 +182,12 @@ public sealed class PropertiesWindow : Window
             doc.ModelEditsChanged -= ModelAssetsChanged;
             doc.ContentEditsChanged -= ModelAssetsChanged;
         }
-        AnimationFields?.Dispose(); PickupFields?.Dispose(); ResourceFields?.Dispose(); ScriptFields?.Dispose(); ScriptFields = null;
+        AnimationFields?.Dispose(); PickupFields?.Dispose(); ResourceFields?.Dispose(); ScriptFields?.Dispose(); SourceFields?.Dispose(); ScriptFields = null; SourceFields = null;
         AnimationFields = null; PickupFields = null; ResourceFields = null; Document = null; snapshot = null; body.Content = null; readOnlyAsset = null; ++assetRefreshGeneration;
     }
     private void DocumentDisposing() => CloseResolved();
     private void DocumentChanged(object? sender, PropertyChangedEventArgs e) => Refresh();
-    public bool ResolvePendingDrafts() => AnimationFields?.ResolvePendingDrafts() != false && PickupFields?.ResolvePendingDrafts() != false && ResourceFields?.ResolvePendingDrafts() != false && ScriptFields?.ResolvePendingDrafts() != false;
+    public bool ResolvePendingDrafts() => AnimationFields?.ResolvePendingDrafts() != false && PickupFields?.ResolvePendingDrafts() != false && ResourceFields?.ResolvePendingDrafts() != false && ScriptFields?.ResolvePendingDrafts() != false && SourceFields?.ResolvePendingDrafts() != false;
     public async Task<bool> ResolvePendingDraftsAsync()
     {
         // Each editor commits its drafts (awaiting asynchronous ones, such as a source world's pickup position) or asks.

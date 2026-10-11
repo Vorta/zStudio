@@ -17,6 +17,14 @@ public partial class MainWindow
     private void InitializeWorkspace()
     {
         var layout = Layout;
+        // A source project's workspace lives while any of its worlds is open; its last close decides its edits.
+        ViewModel.Documents.CollectionChanged += (_, e) =>
+        {
+            foreach (var added in e.NewItems?.OfType<DocumentModel>() ?? []) added.BeforeResourceEdit = RefuseResourceEditOfWorkspaceFile;
+            if (e.Action is not System.Collections.Specialized.NotifyCollectionChangedAction.Add) ReleaseUnusedSourceWorkspace();
+            // An approval waits for a release deferred by a rebuild or an opening; the release clears it.
+            if (!ViewModel.Documents.Any(d => d.SourceWorld != null) && sourceWorkspace == null) discardApprovedWorkspace = null;
+        };
         NavigationTabs.SelectedIndex = layout.BrowserTab; InspectorTabs.SelectedIndex = layout.InspectorTab; ToolTabs.SelectedIndex = layout.ToolTab;
         InitializeResponsiveNavigator();
         InitializeChrome(); ApplyDensity();

@@ -156,5 +156,5 @@ public partial class MainWindow
             return Result(DocumentState(live));
         });
     }
-    private FieldEditor? DraftOwner(string target) => target == "preview" ? animation : (FieldEditor?)propertiesWindow?.ScriptFields ?? (FieldEditor?)propertiesWindow?.ResourceFields ?? (FieldEditor?)propertiesWindow?.AnimationFields ?? propertiesWindow?.PickupFields;
+    private FieldEditor? DraftOwner(string target) => target == "preview" ? animation : (FieldEditor?)propertiesWindow?.ScriptFields ?? (FieldEditor?)propertiesWindow?.ResourceFields ?? (FieldEditor?)propertiesWindow?.AnimationFields ?? (FieldEditor?)propertiesWindow?.PickupFields ?? propertiesWindow?.SourceFields;
 }

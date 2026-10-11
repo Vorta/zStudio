@@ -1,5 +1,18 @@
 # Desktop implementation status
 
+## Zone draft cancellation review fix (2026-10-11, PR #26)
+
+MCP can explicitly cancel a zone draft whose targets became stale after an edit in another open source world.
+Cancellation still requires its live owner, current document revision and current draft token, an idle source
+workspace and resolved native input. Editing or applying stale targets remains refused. Begin can open a fresh
+draft after cancellation. The existing named-pipe zone check now covers this two-world recovery and its guards.
+The original failure was reproduced through the production guards with real shared workspace revisions.
+Validation: Release builds with zero warnings/errors; PR Core 2,102 and Desktop 176; final stack Core 2,887,
+Desktop 188 and the 17-test 1998 subset. The original cancellation-guard mutation fails the extended protocol
+check; the restored check passes through successful cancellation and a fresh draft. A separate 38-assertion
+challenge covers ownership, tokens, rebuild exclusion and document lifetime. A fresh full review and current-head
+CI remain required before merge. No public release or portable refresh is part of this local fix.
+
 ## Source-world review fixes (2026-10-11, PR #25)
 
 Source-world opening now reserves navigation before discovery and building. A newer pending folder, project, file
