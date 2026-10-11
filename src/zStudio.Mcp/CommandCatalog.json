@@ -2411,7 +2411,7 @@
   },
   {
     "Name": "zstudio_parachute",
-    "Description": "Inspect and relocate complete existing VTOL drop windows in a Whole world. Show analyzes the first supported flight; analyze selects an exact entry. Conditional release markers come from a frozen bounded runtime, never landing predictions. Select/begin/set/confirm/cancel share the GUI draft and one undo step. Set a local start time or exact path segment plus fraction to disambiguate crossings. Compiled edits belong to the returned animation owner; source edits use token-preserving project history and rebuild. Undo/redo/save explicitly target that owner. save requires a NEW destination for compiled animations; source saves retain their project destination. Samples/releases are paged; preview_state.parachute reports bounded state. No physical input is captured. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Description": "Inspect and relocate complete existing VTOL drop windows in a Whole world. Show analyzes the first discovered flight; unavailable flights retain the candidate list, entry and analysisRefusal without a partial path. Analyze selects an exact entry. Conditional release markers come from a frozen bounded runtime, never landing predictions. Select/begin/set/confirm/cancel share the GUI draft and one undo step. Set a local start time or exact path segment plus fraction to disambiguate crossings. Compiled edits belong to the returned animation owner; source edits use token-preserving project history and rebuild. Undo/redo/save explicitly target that owner. save requires a NEW destination for compiled animations; source saves retain their project destination. Samples/releases support offset/limit pagination without query; preview_state.parachute reports bounded state. No physical input is captured. Returns an operation ID; use zstudio_operation to await/read the result.",
     "Mutates": true,
     "Parameters": [
       {
@@ -2562,14 +2562,6 @@
         "Properties": null,
         "Minimum": -2147483648,
         "Maximum": 2147483647
-      },
-      {
-        "Name": "query",
-        "Type": "string",
-        "Description": "Case-insensitive name/path or displayed-text filter, applied before pagination.",
-        "Required": false,
-        "Choices": null,
-        "Properties": null
       }
     ]
   },

@@ -207,7 +207,8 @@ public sealed partial class SceneViewport
         var up = Vector3D.CrossProduct(right, forward);
         var offset = new Point3D(position.X, position.Y, position.Z) - camera.Position;
         double depth = Vector3D.DotProduct(offset, forward);
-        if (depth <= 0) return false;
+        // Orthographic overlay geometry remains visible on either side of the eye plane when depth clipping is disabled.
+        if (camera is not OrthographicCamera && depth <= 0) return false;
         var projection = camera.CreateProjectionMatrix(Aspect);
         double divisor = camera is OrthographicCamera ? 1 : depth;
         double x = Vector3D.DotProduct(offset, right) * projection.M11 / divisor;

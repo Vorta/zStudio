@@ -2,7 +2,7 @@
 
 Open a mission in **Whole world**, then choose **Parachute** above the viewport. The flight selector identifies an animation entry and its bound root. The blue line shows one complete flight cycle; start markers identify existing drop windows, and release markers show eligible callback positions. These are authored release positions, not parachute landing predictions. Range conditions and other game state still determine whether an item is released in the game.
 
-Analysis uses an independent, frozen instance of the existing animation runtime. It does not move the visible player, play audio, alter the mission's starting scene or change source data. A root without a visible mesh is sampled at its own transform, including its parents. Unsupported programs and exhausted analysis limits report why the flight cannot be analyzed; an incomplete path is never presented as complete.
+Analysis uses an independent, frozen instance of the existing animation runtime. It does not move the visible player, play audio, alter the mission's starting scene or change source data. A root without a visible mesh is sampled at its own transform, including its parents. Unsupported programs and exhausted analysis limits report why the flight cannot be analyzed; an incomplete path is never presented as complete. A flight that cannot be analyzed keeps its refusal message and the flight selector available, so another discovered flight can still be opened.
 
 ## Move a window
 
@@ -20,6 +20,8 @@ Other editing modes and Fly cannot overlap a move. Camera changes are blocked du
 
 In a compiled world, the actual companion `anim.zbd` document opens in Files while the world remains visible. The Parachute panel identifies that animation owner. Its Undo, Redo and Save controls target that document; the title-bar commands continue to target the displayed world. Animation Save produces a verified **new copy outside the source root**, using the existing animation Save As protection. It does not overwrite the original archive or automatically install the copy into a mission.
 
+If mission-coordinate inspection attaches a coordinate edit session to the animation document, ordinary document Save still writes the animation copy and also saves any modified coordinates. Save-and-close keeps the document open if any changes remain unsaved. Ordinary Undo/Redo use the animation's available steps first, then coordinate history when the animation has no step in that direction. The dedicated Parachute history controls always target animation history.
+
 In a source-project world, the edit changes one `START_TIME` scalar in the owning `.zad` definition. Existing compiler provenance and a complete before/after compilation verify that only the selected threshold changed. A shared definition that would also alter other entries cannot be edited independently through this panel. Acceptance uses the existing project transaction, world rebuild, rollback and undo. Save writes the project's sources; cached `anim.zbd` files are never edited. A successful rebuild closes the old analysis; reopen Parachute in the replacement world to continue.
 
 ## MCP parity
@@ -28,7 +30,7 @@ In a source-project world, the edit changes one `START_TIME` scalar in the ownin
 
 - `show`, `hide`, `analyze` and `select` open/close the overlay and choose exact entry/window identities.
 - `begin`, `set`, `confirm` and `cancel` operate on the shared GUI draft. `set` takes either `start` seconds or `segment` plus `fraction`.
-- `samples` and `releases` page the ordered path and eligible release positions. `preview_state.parachute` gives bounded summary, identity and draft state.
+- `samples` and `releases` page the ordered path and eligible release positions using `offset` and `limit`; they have no text-query filter. `preview_state.parachute` gives bounded summary, identity and draft state, including `analysisRefusal` for an unavailable selected flight.
 - `undo`, `redo` and `save` target the explicitly identified owner. Compiled `save` requires `destination`; source `save` rejects a destination and saves the source project.
 
 Discovery remains windowless. These are workspace operations and use the existing opt-in transport and visible workspace; no command captures physical input.

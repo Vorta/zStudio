@@ -1357,7 +1357,7 @@
       "tools": [
         "zstudio_parachute"
       ],
-      "note": "Shared Parachute flight/window selection, numeric or pointer draft, explicit confirm/cancel and actual animation-owner history/save. Compiled saves create a verified new copy; source saves retain project ownership."
+      "note": "Shared Parachute flight/window selection, numeric or pointer draft, explicit confirm/cancel and actual animation-owner history/save. Compiled saves create a verified new copy; source saves retain project ownership. A selected unavailable flight exposes analysisRefusal while other candidates remain selectable. Samples/releases use offset/limit without query."
     },
     {
       "gui": "MainWindow.xaml:ParachuteSelectionChanged",

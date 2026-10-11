@@ -28,6 +28,8 @@ public partial class MainWindow
         public readonly long ResolverRevision = resolverRevision;
         public readonly string Id = Guid.NewGuid().ToString();
         public VtolDropSnapshot? Analysis;
+        public int? Entry;
+        public string? AnalysisRefusal;
         public Guid? Selected;
     }
     private sealed class ParachuteDraft(ParachuteSession session, VtolDropWindow window)
@@ -164,7 +166,11 @@ public partial class MainWindow
             var state = new ParachuteSession(world, owner, viewport, context, discovery, resolver, resolverRevision);
             var candidate = entry is int index ? discovery.Candidates.FirstOrDefault(c => c.EntryIndex == index) : discovery.Candidates.FirstOrDefault();
             if (entry != null && candidate == null) throw new StudioCommandException("stale_record", "The requested flight program is unavailable.");
-            if (candidate != null) state.Analysis = await Task.Run(() => { ParachuteAnalysisPreparing?.Invoke(cancellation.Token); return VtolDropWindows.Analyze(context, candidate, cancellation.Token); }, cancellation.Token);
+            if (candidate != null)
+            {
+                state.Entry = candidate.EntryIndex;
+                (state.Analysis, state.AnalysisRefusal) = await Task.Run(() => AnalyzeParachuteCandidate(context, candidate, cancellation.Token), cancellation.Token);
+            }
             Current();
             if (owner != null && (owner.IsDisposed || owner.Revision != ownerRevision)) throw new StudioCommandException("context_changed", "The animation owner changed during analysis.");
             RequireParachutePublication(viewport);
@@ -189,16 +195,23 @@ public partial class MainWindow
         UpdateParachutePanel();
         try
         {
-            var result = await Task.Run(() => { ParachuteAnalysisPreparing?.Invoke(cancellation.Token); return VtolDropWindows.Analyze(state.Context, candidate, cancellation.Token); }, cancellation.Token);
+            var result = await Task.Run(() => AnalyzeParachuteCandidate(state.Context, candidate, cancellation.Token), cancellation.Token);
             if (request != parachuteGeneration) throw new StudioCommandException("context_changed", "A newer Parachute analysis superseded this request.");
             RequireParachutes(state.Id); cancellation.Token.ThrowIfCancellationRequested();
             RequireParachutePublication(state.Viewport);
             if (parachuteLoading == cancellation) parachuteLoading = null;
-            state.Analysis = result; state.Selected = state.World.PickupsLocked ? null : result.Windows.FirstOrDefault()?.Id; PublishParachuteOverlay(); UpdateParachutePanel();
+            state.Entry = candidate.EntryIndex; (state.Analysis, state.AnalysisRefusal) = result;
+            state.Selected = state.World.PickupsLocked ? null : state.Analysis?.Windows.FirstOrDefault()?.Id; PublishParachuteOverlay(); UpdateParachutePanel();
         }
         catch (Exception ex) when (request != parachuteGeneration && ex is OperationCanceledException or StudioCommandException or IOException)
         { throw new StudioCommandException("context_changed", "A newer Parachute request superseded this analysis."); }
         finally { if (parachuteLoading == cancellation) parachuteLoading = null; UpdateParachutePanel(); }
+    }
+    private (VtolDropSnapshot? Snapshot, string? Refusal) AnalyzeParachuteCandidate(AnimationPreviewContext context, VtolDropCandidate candidate, CancellationToken token)
+    {
+        ParachuteAnalysisPreparing?.Invoke(token);
+        try { return (VtolDropWindows.Analyze(context, candidate, token), null); }
+        catch (InvalidDataException ex) { token.ThrowIfCancellationRequested(); return (null, Bounded(ex.Message, 512)); }
     }
     private void RequireParachutePublication(SceneViewport viewport)
     {
@@ -209,7 +222,8 @@ public partial class MainWindow
     }
     private void PublishParachuteOverlay()
     {
-        if (parachutes is not { Analysis: { } analysis } state) return;
+        if (parachutes is not { } state) return;
+        if (state.Analysis is not { } analysis) { state.Viewport.SetParachuteOverlay([], []); return; }
         Guid? selected = state.Selected;
         state.Viewport.SetParachuteOverlay(analysis.Samples.Select(p => new ParachutePathPoint(p.Time, p.Position)).ToArray(),
             analysis.Windows.Select(w => new ParachuteWindowOverlay(w.Id, w.EffectiveStart,
@@ -346,7 +360,7 @@ public partial class MainWindow
     {
         var state = RequireParachutes(); RequireNoDrafts();
         if (state.World.SourceWorld != null) { await UndoSourceWorldAsync(state.World, redo, token); return; }
-        int entry = state.Analysis?.Candidate.EntryIndex ?? -1; var owner = state.Owner!;
+        int entry = state.Entry ?? -1; var owner = state.Owner!;
         acceptingParachute = true;
         try
         {
@@ -428,7 +442,7 @@ public partial class MainWindow
             ParachuteUndo.IsEnabled = state.Owner?.AnimationEdits?.CanUndo ?? state.World.SourceWorld?.Workspace.CanUndo == true;
             ParachuteRedo.IsEnabled = state.Owner?.AnimationEdits?.CanRedo ?? state.World.SourceWorld?.Workspace.CanRedo == true;
             ParachuteFlights.ItemsSource = state.Discovery.Candidates.Select(c => new ParachuteChoice(c.EntryIndex, $"#{c.EntryIndex} {ShortAiText(c.Name)} · {ShortAiText(c.RootName)}")).ToArray();
-            ParachuteFlights.SelectedItem = ParachuteFlights.Items.Cast<ParachuteChoice>().FirstOrDefault(c => c.Entry == state.Analysis?.Candidate.EntryIndex);
+            ParachuteFlights.SelectedItem = ParachuteFlights.Items.Cast<ParachuteChoice>().FirstOrDefault(c => c.Entry == state.Entry);
             ParachuteWindows.ItemsSource = state.Analysis?.Windows.Select((w, i) => new ParachuteWindowChoice(w.Id, $"{i + 1}: {w.Start:G6} s · {w.Duration:G6} s window")).ToArray() ?? [];
             ParachuteWindows.SelectedItem = ParachuteWindows.Items.Cast<ParachuteWindowChoice>().FirstOrDefault(w => w.Id == state.Selected);
             ParachuteDraftPanel.Visibility = parachuteDraft == null ? Visibility.Collapsed : Visibility.Visible;
@@ -439,7 +453,7 @@ public partial class MainWindow
             ParachuteStart.Text = parachuteDraft?.Input ?? "";
             ParachuteConfirm.IsEnabled = parachuteDraft is { Plan: not null, Preview: not null, Error: null };
             ParachuteMessage.Text = parachuteDraft is { } d ? d.Error ?? (d.Preview == null ? "Analyzing proposed release positions…" : $"Start range {d.Window.MinimumStart:G6}–{d.Window.MaximumStart:G6} s. Confirm accepts one undo step.")
-                : selectedWindow?.MoveRefusal ?? (state.Analysis is { } a ? $"{a.CycleSeconds:G6} s cycle · {a.Releases.Count} eligible releases. Conditions still apply; markers are not landing predictions."
+                : state.AnalysisRefusal ?? selectedWindow?.MoveRefusal ?? (state.Analysis is { } a ? $"{a.CycleSeconds:G6} s cycle · {a.Releases.Count} eligible releases. Conditions still apply; markers are not landing predictions."
                 : state.Discovery.Diagnostics.Count == 0 ? "No supported callback-911 flight programs in this mission." : string.Join("\n", state.Discovery.Diagnostics.Take(3).Select(s => Bounded(s, 300))));
         }
         finally { synchronizingParachutes = false; }

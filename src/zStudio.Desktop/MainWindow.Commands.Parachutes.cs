@@ -12,7 +12,7 @@ public partial class MainWindow
         visible = true, snapshot = s.Id, world = s.World.SessionId, revision = s.World.Revision,
         owner = (s.Owner ?? s.World).SessionId, ownerRevision = (s.Owner ?? s.World).Revision,
         ownerPath = s.Owner?.Path ?? s.World.SourceWorld?.DefinitionsPath, dirty = (s.Owner ?? s.World).IsDirty,
-        source = s.Owner == null, selected = s.Selected, entry = s.Analysis?.Candidate.EntryIndex,
+        source = s.Owner == null, selected = s.Selected, entry = s.Entry, analysisRefusal = s.AnalysisRefusal,
         cycleSeconds = s.Analysis?.CycleSeconds, rootNode = s.Analysis?.RootNode,
         candidates = s.Discovery.Candidates.Select(c => new { entry = c.EntryIndex, name = c.Name, root = c.RootName, windows = c.Windows.Count }).ToArray(),
         diagnostics = s.Discovery.Diagnostics.Take(16).Select(d => Bounded(d, 512)).ToArray(), diagnosticCount = s.Discovery.Diagnostics.Count,
@@ -22,7 +22,7 @@ public partial class MainWindow
     };
     private void RegisterParachuteCommands(StudioCommands registry)
     {
-        RegisterJob(registry, "parachute", "Inspect and relocate complete existing VTOL drop windows in a Whole world. Show analyzes the first supported flight; analyze selects an exact entry. Conditional release markers come from a frozen bounded runtime, never landing predictions. Select/begin/set/confirm/cancel share the GUI draft and one undo step. Set a local start time or exact path segment plus fraction to disambiguate crossings. Compiled edits belong to the returned animation owner; source edits use token-preserving project history and rebuild. Undo/redo/save explicitly target that owner. save requires a NEW destination for compiled animations; source saves retain their project destination. Samples/releases are paged; preview_state.parachute reports bounded state. No physical input is captured.",
+        RegisterJob(registry, "parachute", "Inspect and relocate complete existing VTOL drop windows in a Whole world. Show analyzes the first discovered flight; unavailable flights retain the candidate list, entry and analysisRefusal without a partial path. Analyze selects an exact entry. Conditional release markers come from a frozen bounded runtime, never landing predictions. Select/begin/set/confirm/cancel share the GUI draft and one undo step. Set a local start time or exact path segment plus fraction to disambiguate crossings. Compiled edits belong to the returned animation owner; source edits use token-preserving project history and rebuild. Undo/redo/save explicitly target that owner. save requires a NEW destination for compiled animations; source saves retain their project destination. Samples/releases support offset/limit pagination without query; preview_state.parachute reports bounded state. No physical input is captured.",
             [PreviewParameter, DocumentParameter, RevisionParameter,
                 P("action", "string", "Operation.", true, "show", "hide", "analyze", "select", "begin", "set", "confirm", "cancel", "undo", "redo", "save", "samples", "releases"),
                 P("snapshot", "string", "Current Parachute snapshot, required except show."),
@@ -32,7 +32,7 @@ public partial class MainWindow
                 new("start", "number", "Local cycle start seconds; mutually exclusive with segment/fraction.", NumberMinimum: 0, NumberMaximum: 3600),
                 new("segment", "integer", "Path sample index, followed by index+1; requires fraction.", Minimum: 0, Maximum: 216000),
                 new("fraction", "number", "Fraction along the identified segment; requires segment.", NumberMinimum: 0, NumberMaximum: 1),
-                P("destination", "string", "New animation Save As file outside the source root, only for compiled save."), ..PageParameters], true, async (a, token) =>
+                P("destination", "string", "New animation Save As file outside the source root, only for compiled save."), ..PageParameters.Where(p => p.Name != "query")], true, async (a, token) =>
         {
             RequirePreview(a); var world = TargetDocument(a);
             if (world != shownDocument || a["revision"]!.GetValue<long>() != world.Revision)

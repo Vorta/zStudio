@@ -208,8 +208,22 @@ internal static class ParachuteMcpChecks
             await SupersedeRefresh("confirm", new() { ["token"] = draft }); Assert.Equal(2, FirstWindow(owner).Start);
             await PathAction("undo"); Assert.Equal(1, FirstWindow(owner).Start);
             await PathAction("redo"); Assert.Equal(2, FirstWindow(owner).Start);
+            await Call("undo_redo", new() { ["document"] = Id(owner), ["revision"] = owner.Revision, ["action"] = "undo" });
+            Assert.Equal(1, FirstWindow(owner).Start);
+            await Call("undo_redo", new() { ["document"] = Id(owner), ["revision"] = owner.Revision, ["action"] = "redo" });
+            Assert.Equal(2, FirstWindow(owner).Start);
+            await PathAction("show");
             await SupersedeRefresh("show");
             await SupersedeRefresh("analyze");
+            // The ordinary Files close path must reach animation Save As even after pickup inspection.
+            // Canceling that destination picker keeps the accepted animation edit and document alive.
+            int animationSavePrompts = 0;
+            main.ShowingAnimationSaveDialog = _ => { animationSavePrompts++; return false; };
+            try { await CloseOwnerWithSave(); }
+            finally { main.ShowingAnimationSaveDialog = null; }
+            Assert.Equal(1, animationSavePrompts);
+            Assert.False(owner.IsDisposed); Assert.True(owner.AnimationEdits!.IsDirty);
+            Assert.Null(owner.ApprovedCloseRevision); Assert.Equal(original, File.ReadAllBytes(owner.Path));
             string saved = Path.Combine(fixture.Root, "animation-copy.zbd");
             await PathAction("save", new() { ["destination"] = saved });
             var reopened = await FormatRegistry.Default.OpenAsync(saved, token);
@@ -224,6 +238,98 @@ internal static class ParachuteMcpChecks
             owner.AnimationEdits!.Apply(1, "Change owner", e => e.SetFloat(164, e.F32(164) + 1));
             Assert.False((await State())!["visible"]!.GetValue<bool>());
             Assert.Equal("not_ready", (await Job("parachute", oldArguments, "failed"))["code"]!.GetValue<string>());
+
+            // A document can hold accepted animation and coordinate edits together. Save-and-close
+            // must persist both, rather than approving disposal after only one session was saved.
+            await Job("pickups", new() { ["document"] = Id(owner) });
+            await Call("pickup_lock", new() { ["document"] = Id(owner), ["revision"] = owner.Revision, ["locked"] = false });
+            var placement = owner.PickupEdits!.Records[0];
+            var position = owner.PickupEdits.Position(placement.Source);
+            var coordinateSource = new Dictionary<string, object?> { ["ArchivePath"] = placement.Source.ArchivePath, ["AssetIndex"] = placement.Source.AssetIndex,
+                ["ResourceName"] = placement.Source.ResourceName, ["RecordIndex"] = placement.Source.RecordIndex };
+            await Call("pickup_move", new() { ["document"] = Id(owner), ["revision"] = owner.Revision, ["source"] = coordinateSource,
+                ["x"] = position.X + 7, ["y"] = position.Y, ["z"] = position.Z });
+            Assert.True(owner.AnimationEdits.IsDirty); Assert.True(owner.PickupEdits.IsDirty);
+            string mixedCopy = Path.Combine(fixture.Root, "mixed-animation-copy.zbd");
+            await Job("save_document", new() { ["document"] = Id(owner), ["revision"] = owner.Revision, ["destination"] = mixedCopy });
+            Assert.False(owner.IsDirty); Assert.True(File.Exists(mixedCopy));
+            // Repeat through the normal GUI close decision, which must save both sessions too.
+            owner.AnimationEdits.Apply(1, "Change owner before close", e => e.SetFloat(164, e.F32(164) + 1));
+            await Call("pickup_move", new() { ["document"] = Id(owner), ["revision"] = owner.Revision, ["source"] = coordinateSource,
+                ["x"] = position.X + 8, ["y"] = position.Y, ["z"] = position.Z });
+            string closedCopy = Path.Combine(fixture.Root, "closed-animation-copy.zbd");
+            byte[] expectedAnimation = AnimationWriter.Write(owner.AnimationEdits.Package);
+            var savedCoordinates = owner.PickupEdits;
+            // Animation is the owner's primary history; coordinate steps remain reachable after
+            // that requested direction is exhausted, for both undo and redo.
+            while (owner.AnimationEdits.CanUndo)
+                await Call("undo_redo", new() { ["document"] = Id(owner), ["revision"] = owner.Revision, ["action"] = "undo" });
+            Assert.Equal(position.X + 8, savedCoordinates.Position(placement.Source).X);
+            await Call("undo_redo", new() { ["document"] = Id(owner), ["revision"] = owner.Revision, ["action"] = "undo" });
+            Assert.Equal(position.X + 7, savedCoordinates.Position(placement.Source).X);
+            while (owner.AnimationEdits.CanRedo)
+                await Call("undo_redo", new() { ["document"] = Id(owner), ["revision"] = owner.Revision, ["action"] = "redo" });
+            await Call("undo_redo", new() { ["document"] = Id(owner), ["revision"] = owner.Revision, ["action"] = "redo" });
+            Assert.Equal(position.X + 8, savedCoordinates.Position(placement.Source).X);
+            Assert.Equal(expectedAnimation, AnimationWriter.Write(owner.AnimationEdits.Package));
+            main.ShowingAnimationSaveDialog = dialog => { dialog.FileName = closedCopy; return true; };
+            try { await CloseOwnerWithSave(); }
+            finally { main.ShowingAnimationSaveDialog = null; }
+            Assert.True(owner.IsDisposed); Assert.False(savedCoordinates.IsDirty);
+            Assert.Equal(expectedAnimation, File.ReadAllBytes(closedCopy));
+            var reopenedCoordinates = await PickupPlacementEditSession.LoadAsync(world.Path, main.ViewModel.Resolver!, token);
+            Assert.Equal(position.X + 8, reopenedCoordinates.Position(placement.Source).X);
+
+            // An ordinary source timing edit can make one discovered flight unavailable without
+            // invalidating a healthy sibling. The picker must remain available, with no partial path.
+            foreach (var document in main.ViewModel.Documents.ToArray()) main.ViewModel.CloseResolved(document);
+            var flights = VtolDropFixture.Files();
+            flights.Content[VtolDropFixture.Root] = Encoding.ASCII.GetBytes("ANIMATION_DEFINITIONS ( ANIMATION_LIST ( ANIMATION_DEFINITION_FILE ( short.zad ) ANIMATION_DEFINITION_FILE ( good.zad ) ) )");
+            flights.Content["data/m1/zrdr/short.zad"] = Encoding.Latin1.GetBytes(VtolDropFixture.Definitions().Replace("delivery", "short_flight").Replace("callback", "short_callback").Replace("SCRIPT_FRAME_RATE ( 10 )", "SCRIPT_FRAME_RATE ( 100 )"));
+            flights.Content["data/m1/zrdr/good.zad"] = Encoding.Latin1.GetBytes(VtolDropFixture.Definitions().Replace("delivery", "good_flight").Replace("callback", "good_callback"));
+            File.WriteAllBytes(Path.Combine(compiled, "m1", "anim.zbd"), AnimationWriter.Write(VtolDropFixture.Compile(flights, token).Package));
+            await main.ViewModel.OpenRootAsync(compiled, token);
+            world = Document(await Job("open_document", new() { ["path"] = Path.Combine(compiled, "m1", "gamez.zbd") }));
+            await Preview();
+            state = (await PathAction("show"))["parachute"]!;
+            Assert.True(state["visible"]!.GetValue<bool>()); Assert.Equal(2, state["candidates"]!.AsArray().Count);
+            Assert.Contains("did not complete", state["analysisRefusal"]!.GetValue<string>());
+            Assert.Equal(0, state["sampleCount"]!.GetValue<int>()); Assert.Equal(0, state["releaseCount"]!.GetValue<int>());
+            Assert.Null(state["selected"]); Assert.Null(state["windows"]);
+            int failedEntry = state["entry"]!.GetValue<int>();
+            var picker = (ComboBox)main.FindName("ParachuteFlights");
+            Assert.True(picker.IsEnabled); picker.SelectedIndex = 1;
+            await UntilAsync(async () => (await State())?["entry"]?.GetValue<int>() != failedEntry && (await State())?["analysisRefusal"] == null);
+            state = (await State())!;
+            Assert.Equal(2, state["windows"]!.AsArray().Count); Assert.Equal(8, state["releaseCount"]!.GetValue<int>());
+            await PathAction("analyze", new() { ["entry"] = failedEntry });
+            state = (await State())!;
+            Assert.NotNull(state["analysisRefusal"]); Assert.Equal(0, state["sampleCount"]!.GetValue<int>());
+            Assert.Equal(0, state["releaseCount"]!.GetValue<int>()); Assert.Null(state["windows"]);
+            var unsupportedQuery = await client.CallToolAsync("zstudio_parachute", await Arguments("samples", new() { ["query"] = "ignored" }), cancellationToken: token);
+            Assert.True(unsupportedQuery.IsError);
+
+            async Task CloseOwnerWithSave()
+            {
+                Exception? dialogFailure = null;
+                var timer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(10) };
+                timer.Tick += (_, _) =>
+                {
+                    var dialog = main.OwnedWindows.Cast<Window>().SingleOrDefault(w => w.Title == "Unsaved changes");
+                    if (dialog == null) return;
+                    try
+                    {
+                        token.ThrowIfCancellationRequested();
+                        var buttons = ((Grid)dialog.Content).Children.OfType<WrapPanel>().Single();
+                        buttons.Children.OfType<Button>().Single(b => b.Content as string is "Save" or "Save As…")
+                            .RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
+                    }
+                    catch (Exception ex) { dialogFailure = ex; dialog.Close(); }
+                };
+                timer.Start();
+                try { await main.ViewModel.CloseAsync(owner); if (dialogFailure != null) throw dialogFailure; }
+                finally { timer.Stop(); }
+            }
 
             async Task SupersedeRefresh(string action, Dictionary<string, object?>? extra = null)
             {
