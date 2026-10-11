@@ -1151,6 +1151,11 @@ public static partial class SourceBuilder
             if (!File.Exists(path)) return false;
             bytes = SourceRead.All(path, SourceProject.MaximumSourceTextBytes, token);
         }
+        return Multiplayer(bytes, token);
+    }
+
+    internal static bool Multiplayer(byte[] bytes, CancellationToken token)
+    {
         foreach (var line in GameGenScriptText.TokenizeCancellable(GameGenScriptText.Decode(bytes, token), token))
             foreach (string operand in line)
             {

@@ -1141,6 +1141,7 @@ public static partial class WorldGltf
         bool Extends(List<int> polygon, int c)
         {
             work.Charge(3L * (polygon.Count + 1));
+            if (!MorphPreservesSurface(primitive, [.. polygon, c], work)) return false;
             List<Vector3> points = [.. polygon.Select(i => p[i]), p[c]];
             if (!ModelBuilder.Coplanar(points)) return false;
             Vector3 normal = Vector3.Cross(p[polygon[1]] - p[polygon[0]], p[polygon[2]] - p[polygon[0]]);
@@ -1157,6 +1158,32 @@ public static partial class WorldGltf
         }
     }
 
+    /// <summary>The single supported shape key's delta, with an absent stream equivalent to zero.</summary>
+    internal static Vector3 MorphDelta(GltfPrimitive primitive, int corner) =>
+        primitive.Targets.Count > 0 && primitive.Targets[0].Count == primitive.Positions.Count ? primitive.Targets[0][corner] : Vector3.Zero;
+
+    /// <summary>Whether a shape key lets alternate polygon diagonals retain the same surface throughout interpolation.</summary>
+    internal static bool MorphPreservesSurface(GltfPrimitive primitive, IReadOnlyList<int> corners, PolygonWorkBudget work)
+    {
+        if (corners.Count <= 3 || primitive.Targets.Count == 0 || primitive.Targets[0].Count != primitive.Positions.Count) return true;
+        work.Charge(3L * corners.Count);
+        var deltas = primitive.Targets[0];
+        if (corners.All(c => deltas[c] == deltas[corners[0]])) return true;
+        var points = corners.Select(c => primitive.Positions[c]).ToArray();
+        // An affine deformation of a planar polygon remains an affine image at every weight. Reuse the compiler's
+        // coplanarity policy and exact-fit affine check; endpoint samples alone cannot establish this property.
+        return ModelBuilder.Coplanar(points)
+            && ModelBuilder.Affine(points, corners.Select(c => new Vector2(deltas[c].X, deltas[c].Y)).ToArray(), 0, work)
+            && ModelBuilder.Affine(points, corners.Select(c => new Vector2(deltas[c].Z, 0)).ToArray(), 0, work);
+    }
+
+    /// <summary>Whether the material stores corner normals; no engine attributes means use the primitive's stream.</summary>
+    internal static bool? StoresNormals(GltfMaterial? source, string path)
+    {
+        var extras = source?.Extras?[Key] as JsonObject;
+        return extras == null ? null : extras["normals"] is { } n && Flag(n, "normals", path);
+    }
+
     /// <summary>
     /// The engine material and polygon attributes of a glTF material. <c>StoresNormals</c> is whether its polygons keep
     /// normals: from its engine values when it has them (<c>normals</c>), otherwise null (use the primitive's normals).
@@ -1170,7 +1197,7 @@ public static partial class WorldGltf
         int priority = extras?["priority"] is { } p ? (int)Integer(p, "priority", path, int.MinValue, int.MaxValue) : 0;
         bool backface = extras?["backface"] is { } b ? Flag(b, "backface", path) : source?.DoubleSided ?? false;
         uint zone = extras?["zone"] is { } z ? Hex(z, "zone", path) : DefaultPolygonZone;
-        bool? normals = extras == null ? null : extras["normals"] is { } n && Flag(n, "normals", path);
+        bool? normals = StoresNormals(source, path);
         WorldMaterial material = new();
         string? textureName = null;
         string? namedTexture = extras?["texture"] is { } t ? Text(t, "texture", path) : null;

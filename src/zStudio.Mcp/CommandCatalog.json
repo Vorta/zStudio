@@ -5562,6 +5562,105 @@
     ]
   },
   {
+    "Name": "zstudio_source_blender_checkout",
+    "Description": "Check a project model out for Blender: its glTF, buffers and textures are copied into the project\u0027s zstudio/export/\u003Cid\u003E/input folder as a self-contained glTF to import in Blender. Export the edited model as glTF Separate (.gltf \u002B .bin \u002B textures, Custom Properties on) into the checkout\u0027s outbox, then call source_blender_update. Give the model path, or a source world document and scene node to check out the model that object comes from. Cancelling removes the partial copy. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Mutates": true,
+    "Parameters": [
+      {
+        "Name": "model",
+        "Type": "string",
+        "Description": "Project path of a .gltf model, for example data/m2/models/bft/ltank.gltf.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "document",
+        "Type": "string",
+        "Description": "Document lifetime ID from zstudio_state.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "node",
+        "Type": "integer",
+        "Description": "Scene node of the document whose model to check out.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": 0,
+        "Maximum": 2147483647
+      }
+    ]
+  },
+  {
+    "Name": "zstudio_source_blender_checkouts",
+    "Description": "List the open source project\u0027s Blender checkouts (newest first) with the exports found in each outbox (newest first). Returns at most 32 checkouts, 64 files and 16 exports each, with total counts. Large paths shorten pages and nested lists without shortening paths; follow nextOffset. The listing runs off the UI thread and observes cancellation; more than 250,000 entries or 64 MiB of manifests together is refused with io_failed.",
+    "Mutates": false,
+    "Parameters": [
+      {
+        "Name": "offset",
+        "Type": "integer",
+        "Description": "Zero-based checkout offset; default 0. Follow nextOffset to continue.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": 0,
+        "Maximum": 2147483647
+      }
+    ]
+  },
+  {
+    "Name": "zstudio_source_blender_update",
+    "Description": "Update a checked-out model from what Blender exported into its outbox, as one undoable change of the project\u0027s workspace: the export is sealed (copied while checking it is complete), read as a build reads models, and becomes the model\u0027s glTF and buffer, with each texture PNG Blender added or changed; a texture other models use changes for them too (reported in notes). A material\u0027s recorded colour, opacity and back faces follow the base colour, alpha and Backface Culling changed in Blender. Files changed in the project since the checkout (other edits, or another update), existing project files the checkout did not hold (another model\u0027s texture of the same name), a texture whose name a mission\u0027s build finds first in another texture folder or that would take the name from another file there (the game finds textures by name), an export without the model\u0027s engine attributes (Blender\u0027s Custom Properties off), and faces or nodes with map zones that the export rebuilt or renamed (their zones cannot follow; force gives them the model\u0027s own) are not applied unless force is true: the command fails with code conflict, naming all of them at once. Every map that binds the model keeps its zones for the faces and nodes that still correspond (its zones.json changes with the model) and the faces keep their polygon boundaries. Nodes and polygons that correspond keep the order the model had (Blender lists children by name and triangles by material; the order decides node slots, and so which of several nodes of one name a lookup finds, and the polygons\u0027 draw order); new nodes and nodes moved to another parent follow that parent\u0027s other children, unnamed nodes stay unnamed, and a node renamed in Blender takes the new name (notes list the renames, which can change what scripts and animations find by name). The source world rebuilds and the result is its replacement document; an export the world cannot be built with is taken back. files lists the files the change wrote. Nothing is written until save_document. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Mutates": true,
+    "Parameters": [
+      {
+        "Name": "document",
+        "Type": "string",
+        "Description": "Document lifetime ID from zstudio_state.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "revision",
+        "Type": "integer",
+        "Description": "Expected current document revision. Read before editing.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": 0,
+        "Maximum": 9223372036854775807
+      },
+      {
+        "Name": "checkout",
+        "Type": "string",
+        "Description": "Checkout id from source_blender_checkout or source_blender_checkouts.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "export",
+        "Type": "string",
+        "Description": "Export path relative to the outbox; default the newest.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "force",
+        "Type": "boolean",
+        "Description": "Apply despite a conflict (files changed since the checkout or outside it, or dropped engine attributes); default false.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      }
+    ]
+  },
+  {
     "Name": "zstudio_source_recovery",
     "Description": "List the open source project\u0027s interrupted saves (journals in zstudio/recovery): each with its files and whether each now holds the content from before the save, the content the save wrote, is missing, or was changed by another program. Returns at most 32 saves with 64 files each and total counts; file paths keep 256 characters with fileTruncated. The scan bounds all journal manifests and logs together to 64 MiB and 50,000 file rows. A committed journal only needs cleaning up. While an uncommitted one exists, the project cannot be saved. A project replacement during inspection returns context_changed; retry for the current project.",
     "Mutates": false,

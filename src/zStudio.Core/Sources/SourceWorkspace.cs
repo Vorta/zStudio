@@ -44,6 +44,7 @@ public sealed class SourceWorkspace
     }
     private Dictionary<string, Baseline>? preparedReads;
     private Dictionary<string, bool>? preparedPresence;
+    internal bool IsPrepared => preparedReads != null;
     /// <summary>Each touched file as it was on disk when first read or last saved.</summary>
     private readonly Dictionary<string, Baseline> baselines = new(StringComparer.OrdinalIgnoreCase);
     /// <summary>Each touched file's accepted content; equal to its baseline when it is not dirty.</summary>

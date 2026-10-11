@@ -32,8 +32,82 @@ internal static class FileResultBoundsMcpChecks
             await pipe.ConnectAsync(token);
             await using var client = await McpClient.CreateAsync(new StreamClientTransport(pipe, pipe), cancellationToken: token);
             CheckDocumentPages();
+            await SourceSave();
             await ModelAndContentSaves();
 
+            async Task SourceSave()
+            {
+                using var fixture = new SourceWorldFixture();
+                string folder = "data/" + new string('&', 190);
+                string original = "{\"asset\":{\"version\":\"2.0\"},\"nodes\":[{\"name\":\"external\"}],\"scenes\":[{\"nodes\":[0]}],\"scene\":0}";
+                fixture.Write($"{folder}/model0.gltf", original);
+                byte[] sentinel = await File.ReadAllBytesAsync(fixture.Path("gamegen/m1.gs"), token);
+                try
+                {
+                    await Job("open_root", new() { ["path"] = fixture.Project, ["project"] = true });
+                    await Job("source_world_open", new() { ["mission"] = "m1" });
+                    {
+                        var checkout = await Job("source_blender_checkout", new() { ["model"] = $"{folder}/model0.gltf" });
+                        string outbox = checkout["outbox"]!.GetValue<string>();
+                        var gltf = JsonNode.Parse(original)!;
+                        JsonArray buffers = [];
+                        for (int i = 0; i < 65; i++)
+                        {
+                            string name = $"buffer{i}.bin";
+                            await File.WriteAllBytesAsync(Path.Combine(outbox, name), new byte[] { 0, (byte)i, 1, 2 }, token);
+                            buffers.Add(new JsonObject { ["uri"] = name, ["byteLength"] = 4 });
+                        }
+                        gltf["buffers"] = buffers;
+                        await File.WriteAllTextAsync(Path.Combine(outbox, "model0.gltf"), gltf.ToJsonString(), token);
+                        var doc = main.ViewModel.Documents.Single(d => d.SourceWorld != null);
+                        await Job("source_blender_update", new() { ["document"] = doc.SessionId.ToString(), ["revision"] = doc.Revision, ["checkout"] = checkout["id"]!.GetValue<string>() });
+                    }
+                    var edited = main.ViewModel.Documents.Single(d => d.SourceWorld != null);
+                    var sourceState = await Call("state", new() { ["limit"] = 1 });
+                    Assert.True(sourceState["documents"]![0]!.ToJsonString().Length <= StateDocumentPage.MaximumRowBytes(edited));
+                    var workspace = edited.SourceWorld!.Workspace;
+                    var expected = workspace.DirtyFiles.ToDictionary(p => p, p => workspace.Read(p, token) ?? throw new InvalidDataException("A fixture update unexpectedly deleted a file."));
+                    Assert.Equal(66, expected.Count);
+                    Assert.Equal(sentinel, await File.ReadAllBytesAsync(fixture.Path("gamegen/m1.gs"), token));
+                    Assert.Equal(original, File.ReadAllText(fixture.Path($"{folder}/model0.gltf")));
+                    // The same admitted producer must also have a usable refusal when another program creates
+                    // the pending buffers. Both Core reload and the actual MCP job retain history and identities.
+                    string[] conflicts = [.. expected.Keys.Where(p => p.EndsWith(".bin", StringComparison.Ordinal))];
+                    byte[] external = [9, 8, 7, 6];
+                    long revision = workspace.Revision;
+                    var history = workspace.History.ToArray();
+                    foreach (string path in conflicts) await File.WriteAllBytesAsync(fixture.Path(path), external, token);
+                    try
+                    {
+                        var failure = await Assert.ThrowsAsync<SourceFileChangedException>(() => workspace.ReloadAsync(token));
+                        Assert.Equal(conflicts.Order(StringComparer.Ordinal), failure.Files.Order(StringComparer.Ordinal));
+                        Assert.True(failure.Message.Length < 4096); Assert.Contains("more not shown", failure.Message);
+                        var refused = await Job("reload_document", new() { ["document"] = edited.SessionId.ToString(), ["revision"] = edited.Revision }, "failed");
+                        Assert.Equal("unsaved_changes", refused["code"]!.GetValue<string>());
+                        Assert.True(Encoding.UTF8.GetByteCount(refused.ToJsonString()) < 32 * 1024);
+                        Assert.Contains("more not shown", refused.ToJsonString());
+                        Assert.Equal(revision, workspace.Revision); Assert.Equal(history, workspace.History);
+                        Assert.Same(edited, main.ViewModel.Documents.Single(d => d.SourceWorld != null));
+                        foreach (string path in conflicts)
+                        {
+                            Assert.Equal(expected[path], workspace.Read(path, token));
+                            Assert.Equal(external, await File.ReadAllBytesAsync(fixture.Path(path), token));
+                        }
+                    }
+                    finally { foreach (string path in conflicts) File.Delete(fixture.Path(path)); }
+                    var saved = await Job("save_document", new() { ["document"] = edited.SessionId.ToString(), ["revision"] = edited.Revision });
+                    Assert.Equal(66, saved["writtenCount"]!.GetValue<int>());
+                    Assert.True(saved["writtenTruncated"]!.GetValue<bool>()); Assert.Equal(64, saved["written"]!.AsArray().Count);
+                    Assert.False(workspace.IsDirty);
+                    foreach (var (path, bytes) in expected) Assert.Equal(bytes, await File.ReadAllBytesAsync(fixture.Path(path), token));
+                    Assert.Equal(sentinel, await File.ReadAllBytesAsync(fixture.Path("gamegen/m1.gs"), token));
+                    await VerifyRetained(saved);
+                    // A completed ordinary small save preserves its complete path list and clears truncation.
+                    var empty = await Job("save_document", new() { ["document"] = edited.SessionId.ToString(), ["revision"] = edited.Revision });
+                    Assert.Equal(0, empty["writtenCount"]!.GetValue<int>()); Assert.False(empty["writtenTruncated"]!.GetValue<bool>());
+                }
+                finally { CloseDocuments(); }
+            }
 
             async Task ModelAndContentSaves()
             {
