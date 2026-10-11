@@ -334,7 +334,6 @@ public partial class MainWindow
                     workspace.Apply("Move VTOL drop window", SourceVtolDropEdits.Prepare(workspace, source.Mission, state.World.Document.Scene!.Nodes.Select(n => n.Name).ToArray(), state.Context.Package, plan, ct).Select(c => (c.Relative, (byte[]?)c.Content)), ct),
                     token, committingParachute: draft);
                 draft.Lifetime = AiPathDraftLifetime.Completed;
-                ViewModel.Status = "Drop window moved through its animation source. Open Parachute again in the rebuilt world to continue.";
                 return result;
             }
             catch

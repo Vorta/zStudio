@@ -14,11 +14,19 @@ public sealed partial class SceneViewport
     public double FlySpeed { get; private set; } = 100;
     public event Action? FlyStateChanged;
 
+    /// <summary>Checks editing conflicts without changing focus, input capture or scene state.</summary>
+    public bool CanStartFly(out string? error)
+    {
+        error = AiPathEditingNetwork != null || HasParachutePreview || IsParachutePointerMoving
+            ? "Finish AI path or drop-window editing before starting Fly camera." : null;
+        return error == null;
+    }
+
     public void SetFly(bool enabled)
     {
         if (IsFlyActive == enabled) return;
-        if (enabled && (AiPathEditingNetwork != null || HasParachutePreview || IsParachutePointerMoving))
-            throw new InvalidOperationException("Finish AI path or drop-window editing before starting Fly camera.");
+        if (enabled && !CanStartFly(out string? error))
+            throw new InvalidOperationException(error);
         CancelPickupDrag(); SetPickupHover(false);
         StopNavigationMotion();
         rotationVelocity = default; rotationPoint = null; flyMovement = default; flyFrameTime = null;

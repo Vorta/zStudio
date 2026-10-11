@@ -41,6 +41,8 @@ internal static class ParachuteMcpChecks
             await main.ViewModel.OpenRootAsync(fixture.Project, token);
             var world = Document((await Job("source_world_open", new() { ["mission"] = "m1" }))["document"]!);
             await Preview();
+            var otherSource = await main.ViewModel.OpenFileAsync(fixture.Path("data/m1/zrdr/gates.zad"), token, activate: false);
+            Assert.NotNull(otherSource);
             // Keep an independent compiled baseline before source confirmation replaces/removes the preview build.
             string compiled = Path.Combine(fixture.Root, "compiled");
             foreach (string path in Directory.EnumerateFiles(world.SourceBuild!.Folder, "*", SearchOption.AllDirectories))
@@ -162,8 +164,25 @@ internal static class ParachuteMcpChecks
             finally { main.PreparingSourceWorldModel = prepareModel; }
             // Retry uses the same restored intent/token and the proven rollback's current document revision.
             var before = world;
-            var moved = await PathAction("confirm", new() { ["token"] = draft });
-            world = Document(moved["document"]!); await Preview();
+            TaskCompletionSource presenting = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            TaskCompletionSource<string[]> releasePresentation = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            var discover = main.DiscoverTexturePacksAsync;
+            main.DiscoverTexturePacksAsync = (_, _, _) => { presenting.TrySetResult(); return releasePresentation.Task; };
+            try
+            {
+                var accepted = PathAction("confirm", new() { ["token"] = draft });
+                var first = await Task.WhenAny(presenting.Task, accepted).WaitAsync(token);
+                if (first == accepted) { await accepted; Assert.Fail("Source confirmation did not reach replacement presentation."); }
+                main.DiscoverTexturePacksAsync = discover;
+                main.ViewModel.SelectedDocument = otherSource; await Preview();
+                main.ViewModel.Status = "Newer source-document status retained";
+                releasePresentation.TrySetResult([]);
+                world = Document((await accepted)["document"]!);
+                Assert.Same(otherSource, main.ViewModel.SelectedDocument);
+                Assert.Equal("Newer source-document status retained", main.ViewModel.Status);
+            }
+            finally { main.DiscoverTexturePacksAsync = discover; releasePresentation.TrySetResult([]); }
+            main.ViewModel.SelectedDocument = world; await Preview();
             Assert.True(before.IsDisposed);
             string expected = VtolDropFixture.Definitions().Replace("SEQUENCE_OFFSET 1", "SEQUENCE_OFFSET 2.0", StringComparison.Ordinal);
             Assert.Equal(expected, Encoding.Latin1.GetString(world.SourceWorld!.Workspace.Read(VtolDropFixture.Root)!));
