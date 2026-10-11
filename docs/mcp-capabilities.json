@@ -241,7 +241,7 @@
     {
       "gui": "ZonePropertiesEditor:Fields",
       "tools": ["zstudio_source_zones", "zstudio_source_zone_draft"],
-      "note": "Map zone catalog, object gate and exact polygon assignments share the source zone service. Draft begin/set/add/apply/cancel/label use the pinned source world, revision and draft token; shared logical placements require explicit sharedScope. Native zone Properties fields and actions are exposed through these dedicated zone commands. Applying accepts one undoable manifest edit; Save uses the existing verified source workspace save."
+      "note": "Map zone catalog, object gate and exact polygon assignments share the source zone service. Draft begin/set/add/apply/cancel/label use the pinned source world, revision and draft token; shared logical placements require explicit sharedScope. Cancel with the current document revision and owned draft token also discards targets made stale by another source edit; editing those stale targets remains refused. Native zone Properties fields and actions are exposed through these dedicated zone commands. Applying accepts one undoable manifest edit; Save uses the existing verified source workspace save."
     },
     {
       "gui": "SceneViewport.Zones:Strokes",

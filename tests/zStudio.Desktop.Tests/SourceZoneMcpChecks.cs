@@ -241,6 +241,51 @@ internal static class SourceZoneMcpChecks
             Assert.Contains(doc.PreviewDocument.Scene!.Nodes, n => n.Name == aliasRoot);
             Assert.Null((await Call("source_zones", new() { ["document"] = doc.SessionId.ToString() }))["draft"]);
 
+            // Another open mission may edit the shared workspace while this world's zone targets are pending.
+            // Those targets become stale for editing, but their current owner/token must still allow explicit discard.
+            other = Document((await Job("source_world_open", new() { ["mission"] = "m2" }))["document"]!);
+            await Job("source_world_open", new() { ["mission"] = "m1" });
+            state = await Job("source_zone_draft", Args("begin"));
+            string beforeAdd = state["draft"]!["draftToken"]!.GetValue<string>();
+            node = doc.SourceBuild!.Provenance.First(p => p.Value.ModelNodeName == "flat_a").Key;
+            add = Args("add"); add["draftToken"] = beforeAdd; add["targets"] = new[] { new { node, polygon = 0 } };
+            state = await Job("source_zone_draft", add);
+            string ownedToken = state["draft"]!["draftToken"]!.GetValue<string>();
+            long beforeOtherEdit = doc.Revision;
+            other = Document((await Job("source_world_command", new()
+            {
+                ["document"] = other.SessionId.ToString(), ["revision"] = other.Revision,
+                ["node"] = other.PreviewDocument.Scene!.Nodes.Single(n => n.Name == "world").Index,
+                ["command"] = "WorldSetFogColor", ["arguments"] = new[] { "0.2", "0.3", "0.4" }
+            }))["document"]!);
+            Assert.True(doc.Revision > beforeOtherEdit);
+            foreach (string action in new[] { "set", "add", "paint", "apply", "label" })
+            {
+                var staleEdit = Args(action); staleEdit["draftToken"] = ownedToken;
+                Assert.Equal("stale_draft", (await Job("source_zone_draft", staleEdit, "failed"))["code"]!.GetValue<string>());
+            }
+            var discard = Args("cancel"); discard["draftToken"] = ownedToken; discard["revision"] = beforeOtherEdit;
+            Assert.Equal("revision_conflict", (await Job("source_zone_draft", discard, "failed"))["code"]!.GetValue<string>());
+            discard = Args("cancel"); discard["draftToken"] = beforeAdd;
+            Assert.Equal("stale_draft", (await Job("source_zone_draft", discard, "failed"))["code"]!.GetValue<string>());
+            discard["document"] = other.SessionId.ToString(); discard["revision"] = other.Revision; discard["draftToken"] = ownedToken;
+            Assert.Equal("stale_draft", (await Job("source_zone_draft", discard, "failed"))["code"]!.GetValue<string>());
+            Assert.Equal(1, (await Call("source_zones", new() { ["document"] = doc.SessionId.ToString() }))["draft"]!["targetCount"]!.GetValue<int>());
+            discard = Args("cancel"); discard["draftToken"] = ownedToken;
+            var staleFields = Assert.IsType<ZonePropertiesEditor>(main.OpenPropertiesWindow!.SourceFields);
+            main.OpenPropertiesWindow.UpdateLayout();
+            Descendants(staleFields).OfType<System.Windows.Controls.TextBox>().Single(t => System.Windows.Automation.AutomationProperties.GetName(t) == "Zone IDs").Text = "3";
+            Assert.Equal("pending_drafts", (await Job("source_zone_draft", discard, "failed"))["code"]!.GetValue<string>());
+            await staleFields.ResolveAutomationDraftsAsync(staleFields.DraftToken, false);
+            var workspaceBeforeDiscard = doc.SourceWorld!.Workspace.Read("gamegen/m2.gs", token);
+            state = await Job("source_zone_draft", discard);
+            Assert.Equal(0, state["draft"]!["targetCount"]!.GetValue<int>());
+            Assert.False((await Call("state", new()))["pendingZoneDrafts"]!.GetValue<bool>());
+            Assert.Equal(workspaceBeforeDiscard, doc.SourceWorld.Workspace.Read("gamegen/m2.gs", token));
+            state = await Job("source_zone_draft", Args("begin"));
+            Assert.Equal(doc.Revision, state["draft"]!["revision"]!.GetValue<long>());
+            await Call("properties_close", new());
+
             Dictionary<string, object?> Args(string action) => new() { ["document"] = doc.SessionId.ToString(), ["revision"] = doc.Revision, ["action"] = action };
             DocumentModel Document(JsonNode value) => main.ViewModel.Documents.Single(d => d.SessionId.ToString() == value["id"]!.GetValue<string>());
             async Task<JsonNode> Call(string name, Dictionary<string, object?> args, string? error = null)

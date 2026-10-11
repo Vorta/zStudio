@@ -5659,7 +5659,7 @@
   },
   {
     "Name": "zstudio_source_zone_draft",
-    "Description": "Open, edit, paint or apply the shared zone draft. begin opens Properties; set configures faces/objects, ordered zones, gate and shared scope; add supplies exact node/polygon targets; paint toggles the explicit GUI brush; apply accepts one undoable edit; cancel discards. Every action after begin requires the current draftToken. Geometry is unchanged by zone-only edits. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Description": "Open, edit, paint or apply the shared zone draft. begin opens Properties; set configures faces/objects, ordered zones, gate and shared scope; add supplies exact node/polygon targets; paint toggles the explicit GUI brush; apply accepts one undoable edit; cancel discards, including targets made stale by another source edit. Every action after begin requires the current draftToken and current document revision. Geometry is unchanged by zone-only edits. Returns an operation ID; use zstudio_operation to await/read the result.",
     "Mutates": true,
     "Parameters": [
       {

@@ -39,12 +39,19 @@ public partial class MainWindow
     };
     private ZoneDraft RequireZoneDraft(DocumentModel document, string? expected = null)
     {
+        var draft = RequireOwnedZoneDraft(document, expected);
+        if (draft.Revision != document.Revision || draft.WorkspaceRevision != document.SourceWorld!.Workspace.ContentRevision)
+            throw new StudioCommandException("stale_draft", "The zone draft or source world changed. Read the current zone state before retrying.");
+        return draft;
+    }
+    private ZoneDraft RequireOwnedZoneDraft(DocumentModel document, string? expected)
+    {
         var draft = zoneDraft;
         if (draft == null || draft.Document != document || document.IsDisposed || document.SourceWorld?.Owner != document)
             throw new StudioCommandException("stale_draft", "Open a zone draft for the current source world.");
         // Targets collected while a world rebuilds would hold its replacement and take the edit back (see OpenZoneEditorAsync).
         RequireSourceWorldIdle(document.SourceWorld);
-        if (draft.Revision != document.Revision || draft.WorkspaceRevision != document.SourceWorld.Workspace.ContentRevision || expected != null && expected != draft.Token)
+        if (expected != null && expected != draft.Token)
             throw new StudioCommandException("stale_draft", "The zone draft or source world changed. Read the current zone state before retrying.");
         return draft;
     }
@@ -273,7 +280,7 @@ public partial class MainWindow
                 if (document.IsDisposed || session.Owner != document || revision != session.Workspace.ContentRevision) throw new StudioCommandException("context_changed", "The source world changed during zone inspection.");
                 return Result(new { document = document.SessionId, revision = document.Revision, catalog = values.Item1, inspection = values.Item2, draft = zoneDraft?.Document == document ? ZoneDraftState() : null });
             });
-        RegisterJob(registry, "source_zone_draft", "Open, edit, paint or apply the shared zone draft. begin opens Properties; set configures faces/objects, ordered zones, gate and shared scope; add supplies exact node/polygon targets; paint toggles the explicit GUI brush; apply accepts one undoable edit; cancel discards. Every action after begin requires the current draftToken. Geometry is unchanged by zone-only edits.",
+        RegisterJob(registry, "source_zone_draft", "Open, edit, paint or apply the shared zone draft. begin opens Properties; set configures faces/objects, ordered zones, gate and shared scope; add supplies exact node/polygon targets; paint toggles the explicit GUI brush; apply accepts one undoable edit; cancel discards, including targets made stale by another source edit. Every action after begin requires the current draftToken and current document revision. Geometry is unchanged by zone-only edits.",
             [DocumentParameter, RevisionParameter, P("action", "string", "Draft operation.", true, "begin", "set", "add", "paint", "apply", "cancel", "label"),
              P("draftToken", "string", "Current draft token from source_zones."), P("faces", "boolean", "True for polygon faces, false for object zones."),
              new("zones", "array", "Zero to three ordered face zone IDs; objects accept one ID or an empty list to keep their current zone; 255 means Any.", Items: new("", "integer", "Zone ID.", Minimum: 0, Maximum: 255), MaxItems: 3),
@@ -288,7 +295,8 @@ public partial class MainWindow
                 if (action == "begin") { RequireNoDrafts(document); await OpenZoneEditorAsync(document, token, automation: true); }
                 else
                 {
-                    var draft = RequireZoneDraft(document, Text(args, "draftToken"));
+                    // Discard needs the current owner/token, but does not use targets from the old build.
+                    var draft = action == "cancel" ? RequireOwnedZoneDraft(document, Text(args, "draftToken")) : RequireZoneDraft(document, Text(args, "draftToken"));
                     // These actions show the zone editor in Properties again, which would commit or ask about unfinished input
                     // of whatever Properties shows now (it may have been retargeted while the draft had no targets).
                     if (action is "set" or "add" or "paint" or "cancel") RequireNoDrafts(committingZones: draft);
