@@ -167,6 +167,8 @@ internal static class ParachuteMcpChecks
                 finally { release.Release(); main.SourceEditPreparing = null; }
             }
 
+            await CheckGuiDiscard(navigate: false);
+            await CheckGuiDiscard(navigate: true);
             state = (await PathAction("begin"))["parachute"]!;
             draft = state["draft"]!["token"]!.GetValue<string>();
             await PathAction("set", new() { ["token"] = draft, ["start"] = 2 });
@@ -174,14 +176,15 @@ internal static class ParachuteMcpChecks
             using (var release = new SemaphoreSlim(0))
             {
                 main.SourceEditPreparing = ct => { preparingCancel.TrySetResult(); Assert.True(release.Wait(TimeSpan.FromSeconds(20), ct)); };
-                var canceled = Job("parachute", await Arguments("confirm", new() { ["token"] = draft }), "canceled");
+                int problems = main.ViewModel.Problems.Count;
+                Click("confirm");
                 try
                 {
-                    var first = await Task.WhenAny(preparingCancel.Task, canceled).WaitAsync(token);
-                    if (first == canceled) Assert.Fail("Confirmation did not reach cancel preparation: " + (await canceled).ToJsonString());
+                    await preparingCancel.Task.WaitAsync(token);
                     ((MenuItem)main.FindName("CancelOperationItem")).RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
-                    await canceled;
+                    await GuiConfirmFinished();
                     Assert.Equal("VTOL drop-window move canceled.", main.ViewModel.Status);
+                    Assert.Equal(problems, main.ViewModel.Problems.Count);
                     Assert.Equal(draft, (await State())!["draft"]!["token"]!.GetValue<string>());
                     Assert.Equal("2", (await State())!["draft"]!["input"]!.GetValue<string>());
                     Assert.False(world.IsDirty); Assert.Empty(world.SourceWorld!.Workspace.History);
@@ -196,6 +199,11 @@ internal static class ParachuteMcpChecks
                 Assert.Equal("VTOL drop-window move failed: Parachute source preparation failure fixture", main.ViewModel.Status);
                 Assert.Equal(draft, (await State())!["draft"]!["token"]!.GetValue<string>());
                 Assert.False(world.IsDirty); Assert.Empty(world.SourceWorld!.Workspace.History);
+                int problems = main.ViewModel.Problems.Count;
+                Click("confirm"); await GuiConfirmFinished();
+                Assert.Equal("Parachute source preparation failure fixture", main.ViewModel.Status);
+                Assert.Equal(problems + 1, main.ViewModel.Problems.Count);
+                Assert.Contains(main.ViewModel.Problems, p => p.Message == "Parachute source preparation failure fixture");
             }
             finally { main.SourceEditPreparing = null; }
             long revisionBeforeFailure = world.Revision;
@@ -495,6 +503,54 @@ internal static class ParachuteMcpChecks
                     Click("cancel");
                 }
                 finally { releaseRefresh.Release(); main.ParachuteAnalysisPreparing = null; }
+            }
+            bool Confirming() => (bool)typeof(MainWindow).GetField("acceptingParachute", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(main)!;
+            async Task GuiConfirmFinished()
+            {
+                await Until(() => !Confirming());
+                // The semantic operation clears its flag before its outer GUI continuation reports
+                // or suppresses errors. Drain that continuation before asserting visible effects.
+                await System.Windows.Threading.Dispatcher.Yield(System.Windows.Threading.DispatcherPriority.ApplicationIdle);
+            }
+            async Task CheckGuiDiscard(bool navigate)
+            {
+                var pending = (await PathAction("begin"))["parachute"]!["draft"]!["token"]!.GetValue<string>();
+                await PathAction("set", new() { ["token"] = pending, ["start"] = 2 });
+                TaskCompletionSource preparingGui = new(TaskCreationOptions.RunContinuationsAsynchronously);
+                using var release = new SemaphoreSlim(0);
+                main.SourceEditPreparing = ct => { preparingGui.TrySetResult(); Assert.True(release.Wait(TimeSpan.FromSeconds(20), ct)); };
+                int problems = main.ViewModel.Problems.Count, toolTab = ((TabControl)main.FindName("ToolTabs")).SelectedIndex;
+                Click("confirm");
+                try
+                {
+                    await preparingGui.Task.WaitAsync(token);
+                    System.Windows.Input.Keyboard.ClearFocus();
+                    Viewport().RaiseEvent(new System.Windows.Input.KeyEventArgs(System.Windows.Input.Keyboard.PrimaryDevice,
+                        PresentationSource.FromVisual(main), Environment.TickCount, System.Windows.Input.Key.Escape)
+                        { RoutedEvent = System.Windows.Input.Keyboard.PreviewKeyDownEvent });
+                    if (navigate)
+                    {
+                        main.ViewModel.SelectedDocument = otherSource;
+                        await Until(() => ReferenceEquals(typeof(MainWindow).GetField("shownDocument", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(main), otherSource));
+                        await Preview();
+                        // Navigation replaces its preview diagnostics; compare only additions made
+                        // by the old confirmation after the newer context has taken ownership.
+                        problems = main.ViewModel.Problems.Count;
+                        main.ViewModel.Status = "Newer GUI source navigation retained";
+                    }
+                    release.Release(); await GuiConfirmFinished();
+                    Assert.Equal(navigate ? "Newer GUI source navigation retained" : "VTOL drop-window move canceled.", main.ViewModel.Status);
+                    Assert.Equal(problems, main.ViewModel.Problems.Count);
+                    if (!navigate) Assert.Equal(toolTab, ((TabControl)main.FindName("ToolTabs")).SelectedIndex);
+                    Assert.False(world.IsDirty); Assert.Empty(world.SourceWorld!.Workspace.History);
+                    if (navigate)
+                    {
+                        main.ViewModel.SelectedDocument = world; await Preview();
+                        await PathAction("show"); await SelectFirstWindow();
+                    }
+                    Assert.Null((await State())!["draft"]);
+                }
+                finally { release.Release(); main.SourceEditPreparing = null; }
             }
             async Task Unlock() => await Call("pickup_lock", new() { ["document"] = Id(world), ["revision"] = world.Revision, ["locked"] = false });
             Recoil.Zbd.Rendering.SceneViewport Viewport() => (Recoil.Zbd.Rendering.SceneViewport)((ContentControl)main.FindName("SceneHost")).Content;

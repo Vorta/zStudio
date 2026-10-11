@@ -77,7 +77,7 @@ public partial class MainWindow
             catch (Exception ex) when (ex is ArgumentException or InvalidDataException or InvalidOperationException)
             { draft.Error = ex.Message; UpdateParachutePanel(); }
         };
-        viewport.ParachuteConfirmRequested += () => _ = ReportUi(async () => { await ConfirmParachuteAsync(CancellationToken.None); });
+        viewport.ParachuteConfirmRequested += () => _ = ReportUi(ConfirmParachuteFromGuiAsync);
         viewport.ParachuteCancelRequested += CancelParachuteDraft;
     }
 
@@ -338,6 +338,22 @@ public partial class MainWindow
         if (MessageBox.Show(this, "Discard the pending drop-window move? Choose No to return to Confirm.", "Parachute draft", MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes) return false;
         CancelParachuteDraft(); return true;
     }
+    private async Task ConfirmParachuteFromGuiAsync()
+    {
+        var draft = parachuteDraft; var state = draft?.Session; long generation = parachuteGeneration;
+        try { await ConfirmParachuteAsync(CancellationToken.None); }
+        catch (Exception ex) when (draft != null && state != null && ex is OperationCanceledException or StudioCommandException or IOException or InvalidDataException or UnauthorizedAccessException)
+        {
+            // GUI cancellation/supersession is already reflected by the owning operation or newer
+            // workspace. Do not let ReportUi turn it into a new error, status or Problems navigation.
+            bool superseded = generation != parachuteGeneration || parachutes != state || shownDocument != state.World ||
+                ViewModel.SelectedDocument != state.World || scene != state.Viewport || state.World.IsDisposed || state.Owner?.IsDisposed == true;
+            bool canceledDraft = draft.Lifetime == AiPathDraftLifetime.Canceled &&
+                (ex is OperationCanceledException || ex is StudioCommandException { Code: "no_draft" or "stale_draft" });
+            if (superseded || canceledDraft || ex is OperationCanceledException && ViewModel.Status == "VTOL drop-window move canceled.") return;
+            throw;
+        }
+    }
     private async Task<DocumentModel> ConfirmParachuteAsync(CancellationToken token)
     {
         var draft = RequireParachuteDraft(); RequireParachuteInput(draft);
@@ -441,7 +457,7 @@ public partial class MainWindow
         if (action == "show") { if (parachutes != null) HideParachutes(); else await ShowParachutesAsync(CancellationToken.None); }
         else if (action == "begin") BeginParachute(pointer: true);
         else if (action == "numeric") BeginParachute();
-        else if (action == "confirm") await ConfirmParachuteAsync(CancellationToken.None);
+        else if (action == "confirm") await ConfirmParachuteFromGuiAsync();
         else if (action == "cancel") CancelParachuteDraft();
         else if (action is "undo" or "redo") await ParachuteHistoryAsync(action == "redo", CancellationToken.None);
         else if (action == "save")
@@ -478,7 +494,7 @@ public partial class MainWindow
         { if (e.Key != Key.Escape || parachuteLoading == null) return false; parachuteLoading.Cancel(); e.Handled = true; return true; }
         if (e.Key == Key.Escape) { e.Handled = true; CancelParachuteDraft(); return true; }
         if (e.Key != Key.Enter) return false;
-        e.Handled = true; if (!e.IsRepeat) _ = ReportUi(async () => { await ConfirmParachuteAsync(CancellationToken.None); }); return true;
+        e.Handled = true; if (!e.IsRepeat) _ = ReportUi(ConfirmParachuteFromGuiAsync); return true;
     }
     private void UpdateParachutePanel()
     {
