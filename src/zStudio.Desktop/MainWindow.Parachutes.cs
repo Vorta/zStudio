@@ -362,16 +362,18 @@ public partial class MainWindow
         { ReleaseParachuteDraft(AiPathDraftLifetime.Completed); return state.Owner ?? state.World; }
         if (state.World.SourceWorld is { } source)
         {
+            long generation = parachuteGeneration;
+            CancellationToken? preparationToken = null;
             try
             {
                 acceptingParachute = true;
                 var result = await PrepareSourceWorldEditAsync(state.World, "Moving VTOL drop window", (workspace, ct) =>
                     workspace.Apply("Move VTOL drop window", SourceVtolDropEdits.Prepare(workspace, source.Mission, state.World.Document.Scene!.Nodes.Select(n => n.Name).ToArray(), state.Context.Package, plan, ct).Select(c => (c.Relative, (byte[]?)c.Content)), ct),
-                    token, committingParachute: draft);
+                    token, committingParachute: draft, preparationStarted: owned => preparationToken = owned);
                 draft.Lifetime = AiPathDraftLifetime.Completed;
                 return result;
             }
-            catch
+            catch (Exception ex)
             {
                 if (draft.Lifetime == AiPathDraftLifetime.ReleasedForAcceptance && parachuteDraft == null && parachutes == state && shownDocument == state.World && scene == state.Viewport &&
                     !state.World.IsDisposed && source.Owner == state.World && ViewModel.Resolver?.SnapshotRevision == state.ResolverRevision && state.World.Revision == (draft.RolledBackRevision ?? state.WorldRevision))
@@ -382,6 +384,14 @@ public partial class MainWindow
                         preview.Releases.Where(r => r.WindowId == draft.Window.Id).Select(r => new ParachuteRelease(r.Time, r.Position, r.Conditional)).ToArray());
                     UpdateParachutePanel();
                 }
+                if (preparationToken is { } owned && operation == null && generation == parachuteGeneration && parachutes == state &&
+                    shownDocument == state.World && ViewModel.SelectedDocument == state.World && scene == state.Viewport &&
+                    !state.World.IsDisposed && source.Owner == state.World &&
+                    (ViewModel.Status == "Preparing Moving VTOL drop window…" || owned.IsCancellationRequested && ViewModel.Status == "Canceling current operation…") &&
+                    ex is OperationCanceledException or StudioCommandException or IOException or InvalidDataException or UnauthorizedAccessException)
+                    ViewModel.Status = draft.Lifetime == AiPathDraftLifetime.Canceled || owned.IsCancellationRequested || ex is OperationCanceledException
+                        ? "VTOL drop-window move canceled."
+                        : "VTOL drop-window move failed: " + Bounded(ex.Message, 512);
                 throw;
             }
             finally { acceptingParachute = false; }

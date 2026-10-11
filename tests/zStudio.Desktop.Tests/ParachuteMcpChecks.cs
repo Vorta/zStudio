@@ -159,6 +159,7 @@ internal static class ParachuteMcpChecks
                     finally { automation.Value = previous; }
                     release.Release();
                     Assert.Equal("no_draft", (await canceled)["code"]!.GetValue<string>());
+                    Assert.Equal("VTOL drop-window move canceled.", main.ViewModel.Status);
                     Assert.Null((await State())!["draft"]);
                     Assert.Equal(baselineReleases, (await PathAction("releases"))["items"]!.ToJsonString());
                     Assert.False(world.IsDirty); Assert.Empty(world.SourceWorld!.Workspace.History);
@@ -169,6 +170,34 @@ internal static class ParachuteMcpChecks
             state = (await PathAction("begin"))["parachute"]!;
             draft = state["draft"]!["token"]!.GetValue<string>();
             await PathAction("set", new() { ["token"] = draft, ["start"] = 2 });
+            TaskCompletionSource preparingCancel = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            using (var release = new SemaphoreSlim(0))
+            {
+                main.SourceEditPreparing = ct => { preparingCancel.TrySetResult(); Assert.True(release.Wait(TimeSpan.FromSeconds(20), ct)); };
+                var canceled = Job("parachute", await Arguments("confirm", new() { ["token"] = draft }), "canceled");
+                try
+                {
+                    var first = await Task.WhenAny(preparingCancel.Task, canceled).WaitAsync(token);
+                    if (first == canceled) Assert.Fail("Confirmation did not reach cancel preparation: " + (await canceled).ToJsonString());
+                    ((MenuItem)main.FindName("CancelOperationItem")).RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
+                    await canceled;
+                    Assert.Equal("VTOL drop-window move canceled.", main.ViewModel.Status);
+                    Assert.Equal(draft, (await State())!["draft"]!["token"]!.GetValue<string>());
+                    Assert.Equal("2", (await State())!["draft"]!["input"]!.GetValue<string>());
+                    Assert.False(world.IsDirty); Assert.Empty(world.SourceWorld!.Workspace.History);
+                }
+                finally { release.Release(); main.SourceEditPreparing = null; }
+            }
+            main.SourceEditPreparing = _ => throw new IOException("Parachute source preparation failure fixture");
+            try
+            {
+                var failed = await Job("parachute", await Arguments("confirm", new() { ["token"] = draft }), "failed");
+                Assert.Equal("io_failed", failed["code"]!.GetValue<string>());
+                Assert.Equal("VTOL drop-window move failed: Parachute source preparation failure fixture", main.ViewModel.Status);
+                Assert.Equal(draft, (await State())!["draft"]!["token"]!.GetValue<string>());
+                Assert.False(world.IsDirty); Assert.Empty(world.SourceWorld!.Workspace.History);
+            }
+            finally { main.SourceEditPreparing = null; }
             long revisionBeforeFailure = world.Revision;
             var prepareModel = main.PreparingSourceWorldModel;
             main.PreparingSourceWorldModel = _ => throw new InvalidDataException("Parachute rebuild failure fixture");
@@ -176,6 +205,7 @@ internal static class ParachuteMcpChecks
             {
                 var failed = await Job("parachute", await Arguments("confirm", new() { ["token"] = draft }), "failed");
                 Assert.Equal("build_failed", failed["code"]!.GetValue<string>());
+                Assert.Contains("was reverted", main.ViewModel.Status);
                 Assert.False(world.IsDisposed); Assert.False(world.IsDirty); Assert.True(world.Revision > revisionBeforeFailure);
                 Assert.Empty(world.SourceWorld!.Workspace.History);
                 state = (await State())!;
