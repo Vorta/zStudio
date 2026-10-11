@@ -7,8 +7,11 @@ Cancellation still requires its live owner, current document revision and curren
 workspace and resolved native input. Editing or applying stale targets remains refused. Begin can open a fresh
 draft after cancellation. The existing named-pipe zone check now covers this two-world recovery and its guards.
 The original failure was reproduced through the production guards with real shared workspace revisions.
-Release builds passed with zero warnings/errors and the 1999/MW3 Core gate passed 2,102 tests. Protocol mutation,
-Desktop and final-stack validation are pending; no public release or portable refresh is part of this local fix.
+Validation: Release builds with zero warnings/errors; PR Core 2,102 and Desktop 176; final stack Core 2,887,
+Desktop 188 and the 17-test 1998 subset. The original cancellation-guard mutation fails the extended protocol
+check; the restored check passes through successful cancellation and a fresh draft. A separate 38-assertion
+challenge covers ownership, tokens, rebuild exclusion and document lifetime. A fresh full review and current-head
+CI remain required before merge. No public release or portable refresh is part of this local fix.
 
 ## Source-world review fixes (2026-10-11, PR #25)
 
