@@ -709,12 +709,12 @@ public static partial class SourceBlender
         // What the update replaces must be as the checkout (or an earlier update from it) left it.
         var accepted = checkout.Files.Concat(checkout.Applied).GroupBy(f => f.Project, StringComparer.OrdinalIgnoreCase).ToDictionary(g => g.Key, g => g.Select(f => f.Sha256).ToHashSet(StringComparer.OrdinalIgnoreCase), StringComparer.OrdinalIgnoreCase);
         var currentHashes = workspace.ReadEditHashes(changes.Select(change => change.Item1).Concat(zoneChanges.Select(change => change.Relative)), token);
-        // Compare existing textures by digest, not by allocating their old payloads. A byte-identical
-        // texture is not a replacement/conflict, including when it was not in the original checkout.
-        changes.RemoveAll(change => changedTextures.Contains(change.Item1) && currentHashes[change.Item1] == SourceProject.Sha256(change.Item2));
-        // The build finds a texture by name: what the update writes must be the file its name finds, and a new one must not
-        // take the name from another file other models show.
+        // The build finds a texture by name: a changed or newly assigned image needs shadow inspection even when its PNG
+        // already matches the project. Keep the export's candidate order before removing redundant writes.
         var shadows = TextureShadows(workspace, model, [.. changes.Select(change => change.Item1).Where(changedTextures.Contains)], currentHashes, new HashSet<string>(bindings.Missions, StringComparer.OrdinalIgnoreCase), token);
+        // Compare existing textures by digest, not by allocating their old payloads. A byte-identical
+        // texture needs no replacement/overwrite consent, including when it was not in the original checkout.
+        changes.RemoveAll(change => changedTextures.Contains(change.Item1) && currentHashes[change.Item1] == SourceProject.Sha256(change.Item2));
         Dictionary<string, string?> expected = new(StringComparer.OrdinalIgnoreCase);
         List<string> conflicts = [];
         foreach (var (relative, _) in changes)
@@ -807,7 +807,7 @@ public static partial class SourceBlender
         }
     }
 
-    /// <summary>A texture the update writes that is not what its name finds in a mission (<see cref="TextureShadows"/>).</summary>
+    /// <summary>A changed or newly assigned texture that is not what its name finds in a mission (<see cref="TextureShadows"/>).</summary>
     private readonly record struct TextureShadow(string Texture, string Mission, string Other, bool Hides)
     {
         public string Reason => Hides
@@ -816,7 +816,7 @@ public static partial class SourceBlender
     }
 
     /// <summary>
-    /// Where a texture the update writes would not be what its name finds. A mission's pack holds the PNGs of its texture
+    /// Where a changed or newly assigned texture would not be what its name finds. A mission's pack holds the PNGs of its texture
     /// folders, the first of each name in folder order (<see cref="TextureSources.MissionFolders"/>, as
     /// <see cref="SourceBuilder.MissionTextures"/> packs them), and the game finds a texture by name; a name no folder holds is
     /// taken from where the model's image points. So, for each texture and each mission that builds the model (a model of

@@ -581,6 +581,27 @@ public sealed class SourceBlenderTests
         Assert.Contains(forced.Notes, note => note.Contains("m2 finds data/m2/textures/newrock.png first", StringComparison.Ordinal));
         Assert.False(File.Exists(fixture.Path("data/m1/textures/newrock.png")));
         Assert.Single(workspace.History);
+
+        // Assigning an existing, identical PNG still changes the model's appearance in a consuming mission.
+        // It needs the shadow decision, but neither an overwrite decision nor a redundant PNG write.
+        fixture.Write("data/m1/textures/newrock.png", png);
+        workspace.Undo(); // With no shared-model load, m2's same-name texture is unrelated.
+        var identical = SourceBlender.PlanUpdate(workspace, checkout, export, token: Token);
+        Assert.DoesNotContain(identical.Changes, change => change.Relative == "data/m1/textures/newrock.png");
+        workspace.Redo();
+        refusal = Assert.Throws<BlenderConflictException>(() => SourceBlender.PlanUpdate(workspace, checkout, export, token: Token));
+        Assert.Contains("m2 finds data/m2/textures/newrock.png first", refusal.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("replace or recreate", refusal.Message, StringComparison.Ordinal);
+        var prepared = workspace.BeginPreparedEdit();
+        identical = SourceBlender.PlanUpdate(prepared.Workspace, checkout, export, force: true, token: Token);
+        Assert.Contains(identical.Notes, note => note.Contains("m2 finds data/m2/textures/newrock.png first", StringComparison.Ordinal));
+        Assert.DoesNotContain(identical.Changes, change => change.Relative == "data/m1/textures/newrock.png");
+        Assert.False(identical.Expected.ContainsKey("data/m1/textures/newrock.png"));
+        Apply(prepared.Workspace, identical);
+        using (var verified = workspace.VerifyPreparedEdit(prepared, Token))
+            Assert.NotNull(workspace.AcceptPreparedEdit(prepared, Token, verified));
+        workspace.Save(Token);
+        Assert.Equal(png, File.ReadAllBytes(fixture.Path("data/m1/textures/newrock.png")));
     }
 
     [Theory]
