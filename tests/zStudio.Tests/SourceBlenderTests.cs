@@ -98,6 +98,31 @@ public sealed class SourceBlenderTests
             }
         workspace.Undo();
 
+        // Apply Scale after mirroring also moves the corners. Equal incident-face classes (including a quad's
+        // interchangeable diagonal endpoints) must preserve face identity, boundaries and both maps' words.
+        string[] mirroredFirst = Zones("m1", turret, mirrorHull: true), mirroredShared = Zones("m2", other, mirrorHull: true);
+        string mirroredExport = BlenderExport(checkout, "mirrored", faces: groups =>
+        {
+            foreach (var group in groups) foreach (var face in group.Faces)
+            {
+                Array.Reverse(face);
+                for (int c = 0; c < face.Length; c++) face[c].Position.X = -face[c].Position.X;
+            }
+        }, shareVertices: true);
+        var mirror = SourceBlender.PlanUpdate(workspace, SourceBlender.Find(fixture.Project, checkout.Id), mirroredExport, token: Token);
+        Assert.Empty(mirror.Notes);
+        Apply(workspace, mirror);
+        Assert.Equal(mirroredFirst, Zones("m1", turret)); Assert.Equal(mirroredShared, Zones("m2", other));
+        var mirrored = WorldAssembler.ReadModel(workspace.Read(turret, Token)!, turret, (path, _) => workspace.Read(path, Token)!, Token);
+        string exportPath = Path.Combine(checkout.Outbox, mirroredExport);
+        var authored = GltfDocument.Read(File.ReadAllBytes(exportPath), uri => File.ReadAllBytes(Path.Combine(Path.GetDirectoryName(exportPath)!, Uri.UnescapeDataString(uri))), Token);
+        Assert.Equal(Facing(authored.Roots[0].Mesh!), Facing(mirrored.Roots[0].Mesh!));
+        static string[] CornerNormals(GltfMesh mesh) => [.. mesh.Primitives.SelectMany(p => p.Indices.Select(i => $"{p.Positions[i]} {p.Normals[i]}")).Order(StringComparer.Ordinal)];
+        Assert.Equal(CornerNormals(authored.Roots[0].Mesh!), CornerNormals(mirrored.Roots[0].Mesh!));
+        workspace.Undo(); Assert.Equal(first, Zones("m1", turret));
+        workspace.Redo(); Assert.Equal(mirroredFirst, Zones("m1", turret));
+        workspace.Undo();
+
         static Dictionary<string, Vector3> Facing(GltfMesh mesh) => mesh.Primitives.SelectMany(p => Enumerable.Range(0, p.Indices.Count / 3).Select(t =>
         {
             var v = p.Indices.Skip(3 * t).Take(3).Select(i => p.Positions[i]).ToArray();
@@ -161,7 +186,7 @@ public sealed class SourceBlenderTests
         Assert.Equal(first.Where(z => !z.EndsWith("FFFF0101", StringComparison.Ordinal)), after.Where(z => !z.EndsWith("FFFFFF00", StringComparison.Ordinal)));
 
         // Each node's assignment by name, and each polygon's word by its corner positions.
-        string[] Zones(string mission, string logical)
+        string[] Zones(string mission, string logical, bool mirrorHull = false)
         {
             var document = WorldAssembler.ReadModel(workspace.Read(turret, Token)!, turret, (path, _) => workspace.Read(path, Token)!, Token);
             Assert.True(SourceMapZones.Parse(workspace.Read($"data/{mission}/meta/zones.json", Token)!, Token).TryGetAsset(logical, out var asset));
@@ -173,7 +198,7 @@ public sealed class SourceBlenderTests
                 int q = 0;
                 foreach (var primitive in layout.Meshes[m].Primitives)
                     foreach (var polygon in layout.Polygons[primitive])
-                        result.Add(string.Join(";", polygon.Select(c => primitive.Positions[c].ToString()).Order(StringComparer.Ordinal)) + " " + asset.Profile.MeshPolygons[m][q++].ToString("X8"));
+                        result.Add(string.Join(";", polygon.Select(c => primitive.Positions[c]).Select(p => (mirrorHull && m == 0 ? new Vector3(-p.X, p.Y, p.Z) : p).ToString()).Order(StringComparer.Ordinal)) + " " + asset.Profile.MeshPolygons[m][q++].ToString("X8"));
             }
             return [.. result.Order(StringComparer.Ordinal)];
         }

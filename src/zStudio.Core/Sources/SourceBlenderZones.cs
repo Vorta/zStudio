@@ -729,6 +729,13 @@ internal sealed partial class SourceBlenderZones
                 else { while (gaps.Count <= numbered + gap) gaps.Add([]); gaps[numbered + gap].Add((n, o)); }
             }
         }
+        // Complete-mesh uniqueness is required by both corner-order fallbacks. A consumed coincident face must not
+        // make its twin unambiguous, including the back-to-back triangles Blender drops on import.
+        work.Charge(old.Count + next.Sum(l => (long)l.Count));
+        var uniqueOld = old.GroupBy(t => Unordered(t.Key)).Where(g => g.Count() == 1 && Nondegenerate(g.Key)).ToDictionary(g => g.Key, g => g.First());
+        var uniqueNext = next.SelectMany(l => l).GroupBy(t => Unordered(t.Key)).Where(g => g.Count() == 1 && Nondegenerate(g.Key)).ToDictionary(g => g.Key, g => g.First());
+        Dictionary<(int Primitive, int Index), (int A, int B, int C)> cornerOrders = [];
+
         // A changed run counts as the same faces only if every vertex it uses stays one project vertex, and none of its project
         // triangles is taken (unchanged in a later primitive, or by an earlier run): each pairs with one export triangle at most.
         foreach (var gap in gaps)
@@ -744,7 +751,37 @@ internal sealed partial class SourceBlenderZones
                     if ((vertices.TryGetValue(key, out var known) || tentative.TryGetValue(key, out known)) && known != value) consistent = false;
                     else tentative[key] = value;
                 }
-            if (!consistent || gap.Any(p => used.Contains((p.Old.Primitive, p.Old.Index)))) continue;
+            if (gap.Any(p => used.Contains((p.Old.Primitive, p.Old.Index)))) continue;
+            if (!consistent)
+            {
+                // Applying a mirrored scale (or flipping moved faces) reverses the corners too. The already paired
+                // triangles can still establish their corners by complete incident-triangle sets. Equal sets may
+                // describe several symmetric corners, such as a quad's diagonal endpoints: any bijection within
+                // that class gives the same triangle sets, not a choice between different face identities.
+                if (gap.Any(p => !uniqueOld.ContainsKey(Unordered(p.Old.Key)) || !uniqueNext.ContainsKey(Unordered(p.New.Key)))) continue;
+                var positions = IncidentCorners(gap, work);
+                if (positions == null) continue;
+                tentative.Clear();
+                List<(Triangle Old, (int A, int B, int C) Order)> orders = [];
+                consistent = true;
+                foreach (var (n, o) in gap)
+                {
+                    int At(Vector3 position) => position == o.Key.A ? 0 : position == o.Key.B ? 1 : 2;
+                    var order = (At(positions[n.Key.A]), At(positions[n.Key.B]), At(positions[n.Key.C]));
+                    orders.Add((o, order));
+                    for (int c = 0; c < 3 && consistent; c++)
+                    {
+                        var key = (n.Primitive, mesh.Primitives[n.Primitive].Indices[n.Index * 3 + c]);
+                        int corner = c == 0 ? order.Item1 : c == 1 ? order.Item2 : order.Item3;
+                        var value = (o.Primitive, source.Primitives[o.Primitive].Indices[o.Index * 3 + corner]);
+                        if ((vertices.TryGetValue(key, out var known) || tentative.TryGetValue(key, out known))
+                            && source.Primitives[known.Item1].Positions[known.Item2] != source.Primitives[value.Item1].Positions[value.Item2]) consistent = false;
+                        else tentative[key] = value;
+                    }
+                }
+                if (!consistent) continue;
+                foreach (var (o, order) in orders) cornerOrders[(o.Primitive, o.Index)] = order;
+            }
             foreach (var (n, o) in gap) Bind(n, o);
             foreach (var (key, value) in tentative) vertices.TryAdd(key, value);
         }
@@ -756,13 +793,9 @@ internal sealed partial class SourceBlenderZones
         // Flip Normals changes corner order, not face identity. Only an exact position set unique in BOTH complete
         // meshes supplies this extra correspondence: consuming a coincident face must not make its twin unambiguous.
         // Remember the permutation for polygon recovery; the exported winding and normals remain authored.
-        work.Charge(old.Count + next.Sum(l => (long)l.Count));
-        var uniqueOld = old.GroupBy(t => Unordered(t.Key)).Where(g => g.Count() == 1 && Nondegenerate(g.Key)).ToDictionary(g => g.Key, g => g.First());
-        Dictionary<(int Primitive, int Index), (int A, int B, int C)> cornerOrders = [];
-        foreach (var group in next.SelectMany(l => l).GroupBy(t => Unordered(t.Key)).Where(g => g.Count() == 1))
+        foreach (var (key, n) in uniqueNext)
         {
-            var n = group.First();
-            if (paired.ContainsKey((n.Primitive, n.Index)) || !uniqueOld.TryGetValue(group.Key, out var o)
+            if (paired.ContainsKey((n.Primitive, n.Index)) || !uniqueOld.TryGetValue(key, out var o)
                 || used.Contains((o.Primitive, o.Index)) || dropped.ContainsKey((o.Primitive, o.Index))) continue;
             int At(Vector3 position) => position == o.Key.A ? 0 : position == o.Key.B ? 1 : 2;
             cornerOrders[(o.Primitive, o.Index)] = (At(n.Key.A), At(n.Key.B), At(n.Key.C));
@@ -1029,6 +1062,41 @@ internal sealed partial class SourceBlenderZones
     }
     private static bool Nondegenerate(Key key) => key.A != key.B && key.B != key.C && key.A != key.C
         && Vector3.Cross(key.B - key.A, key.C - key.A) != Vector3.Zero;
+
+    /// <summary>Corner correspondence within an already paired run, ignoring splits for normals and UVs.</summary>
+    private static Dictionary<Vector3, Vector3>? IncidentCorners(List<(Triangle New, Triangle Old)> gap, PolygonWorkBudget work)
+    {
+        // At most three candidates share the first incident triangle. Comparing their complete occurrence lists
+        // therefore stays linear in the run's corners, even at a vertex shared by many triangles.
+        work.Charge(32L * gap.Count);
+        Dictionary<Vector3, List<int>> before = [], after = [];
+        static void Add(Dictionary<Vector3, List<int>> target, Vector3 position, int triangle)
+        {
+            if (!target.TryGetValue(position, out var incidents)) target[position] = incidents = [];
+            incidents.Add(triangle);
+        }
+        for (int t = 0; t < gap.Count; t++)
+        {
+            var (n, o) = gap[t];
+            Add(before, o.Key.A, t); Add(before, o.Key.B, t); Add(before, o.Key.C, t);
+            Add(after, n.Key.A, t); Add(after, n.Key.B, t); Add(after, n.Key.C, t);
+        }
+        if (before.Count != after.Count) return null;
+        Dictionary<Vector3, Vector3> result = []; HashSet<Vector3> used = [];
+        foreach (var (position, incidents) in after)
+        {
+            work.CheckCancellation();
+            var first = gap[incidents[0]].Old.Key;
+            bool matched = false;
+            foreach (var candidate in new[] { first.A, first.B, first.C })
+            {
+                if (used.Contains(candidate) || !incidents.SequenceEqual(before[candidate])) continue;
+                result[position] = candidate; used.Add(candidate); matched = true; break;
+            }
+            if (!matched) return null;
+        }
+        return result;
+    }
 
     /// <summary>Whether two vertices of a primitive differ at most in their normal (Blender's split of one vertex by face).</summary>
     private static bool Same(GltfPrimitive primitive, int a, int b) =>
