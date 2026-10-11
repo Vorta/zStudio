@@ -80,7 +80,7 @@ public sealed class ImportRound10Tests
     }
 
     [Fact]
-    public void TerrainConversionPreservesImplicitRootsWithoutAScene()
+    public void TerrainConversionPreservesImplicitRootsAndRefusesNewOutputs()
     {
         using SourceWorldFixture fixture = new(); fixture.WriteTerrainDatabase();
         const string path = "data/m1/models/m1.gltf";
@@ -90,7 +90,33 @@ public sealed class ImportRound10Tests
         SourceWorkspace workspace = new(fixture.Project);
         var plan = SourceTerrainConversion.Plan(workspace, path, (new(StringComparer.Ordinal) { "ground" }, []), Token);
         Assert.True(plan.Converted > 0);
-        SourceTerrainConversion.Apply(workspace, plan, Token);
+        byte[] original = File.ReadAllBytes(full);
+        // An external export during conversion confirmation must never become an overwrite baseline.
+        foreach (string output in new[] { plan.Surfaces, plan.Surfaces[..^".gltf".Length] + ".bin" }.Concat(plan.Recipes))
+        {
+            fixture.Write(output, original);
+            var blocked = workspace.BeginPreparedEdit();
+            Assert.Contains("already exists", Assert.Throws<InvalidDataException>(() =>
+                SourceTerrainConversion.Apply(blocked.Workspace, plan, Token)).Message);
+            Assert.False(blocked.Workspace.IsDirty);
+            Assert.False(workspace.CanUndo);
+            Assert.Equal(original, File.ReadAllBytes(fixture.Path(output)));
+            Assert.Equal(original, File.ReadAllBytes(full));
+            File.Delete(fixture.Path(output));
+        }
+        // A later appearance must also prevent prepared publication.
+        var late = workspace.BeginPreparedEdit();
+        SourceTerrainConversion.Apply(late.Workspace, plan, Token);
+        fixture.Write(plan.Surfaces, original);
+        Assert.Throws<SourceFileChangedException>(() => workspace.VerifyPreparedEdit(late, Token));
+        Assert.False(workspace.IsDirty);
+        Assert.Equal(original, File.ReadAllBytes(fixture.Path(plan.Surfaces)));
+        File.Delete(fixture.Path(plan.Surfaces));
+
+        var prepared = workspace.BeginPreparedEdit();
+        SourceTerrainConversion.Apply(prepared.Workspace, plan, Token);
+        using (var verified = workspace.VerifyPreparedEdit(prepared, Token))
+            Assert.NotNull(workspace.AcceptPreparedEdit(prepared, Token, verified));
         var edited = JsonNode.Parse(workspace.Read(path, Token)!)!;
         var roots = edited["scenes"]![0]!["nodes"]!.AsArray().Select(n => edited["nodes"]![n!.GetValue<int>()]!["name"]!.GetValue<string>());
         Assert.Equal(["ground", "m1_terrain", "sky"], roots);

@@ -415,6 +415,12 @@ public static partial class SourceTerrainConversion
     internal static SourceTransaction Apply(SourceWorkspace workspace, TerrainConversionPlan plan, TerrainConversionSerializationBudget.Limits limits, CancellationToken token)
     {
         if (plan.Groups.Count == 0) throw new InvalidDataException("No piece of the mission database can become terrain.");
+        string binary = plan.Surfaces[(plan.Surfaces.LastIndexOf('/') + 1)..^".gltf".Length] + ".bin";
+        string folder = plan.Surfaces[..plan.Surfaces.LastIndexOf('/')];
+        // Confirmation can stay open while another editor creates an output. Recheck every new path on
+        // the prepared workspace so its absence is also protected through preparation and publication.
+        foreach (string output in new[] { plan.Surfaces, $"{folder}/{binary}" }.Concat(plan.Recipes))
+            if (workspace.Exists(output, token)) throw new InvalidDataException($"{output} already exists; plan the conversion again.");
         var (root, doc) = Read(workspace, plan.Database, token);
         var zones = ConversionZones.Read(workspace, plan.Database, root, doc, token);
         var byIndex = doc.AllNodes().Where(n => n.Index >= 0).ToDictionary(n => n.Index);
@@ -432,11 +438,9 @@ public static partial class SourceTerrainConversion
             surfaces.Roots.Add(new GltfNode { Name = group.Id, Mesh = mesh,
                 Extras = group.Appearance == null ? null : new JsonObject { [WorldGltf.Key] = new JsonObject { ["appearance"] = group.Appearance.DeepClone() } } });
         }
-        string binary = plan.Surfaces[(plan.Surfaces.LastIndexOf('/') + 1)..^".gltf".Length] + ".bin";
         var (json, bin) = surfaces.Write(binary, token);
         _ = GltfDocument.Read(json, uri => uri == binary ? bin
             : throw new InvalidDataException($"{plan.Surfaces}: unexpected buffer {JsonData.ShownText(uri)}."), token);
-        string folder = plan.Surfaces[..plan.Surfaces.LastIndexOf('/')];
         // Each uninterrupted sibling run gets a normal recipe: adding or renaming its surfaces later needs no
         // hidden selector in the database. All recipes share the one generated surfaces model and zone profile.
         List<(string, byte[]?)> changes = [(plan.Surfaces, json), ($"{folder}/{binary}", bin)];
@@ -448,7 +452,6 @@ public static partial class SourceTerrainConversion
         {
             token.ThrowIfCancellationRequested();
             string path = plan.RecipeForRun(run.Key);
-            if (workspace.Exists(path, token)) throw new InvalidDataException($"{path} already exists; plan the conversion again.");
             TerrainRecipe recipe = new(TerrainRecipe.CurrentCompiler,
                 [.. run.Select(g => new TerrainSurface(g.Id, SourceTerrain.RelativePath(path, plan.Surfaces), g.Id,
                     new() { Flags = g.Flags & WorldGltf.CarriedFlags, NodeZone = g.Zone == 0xFF ? TerrainAttributes.AnyZone : g.Zone }))],
