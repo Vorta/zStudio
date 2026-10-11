@@ -67,6 +67,14 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         if (disposed || generation != navigationGeneration)
             throw new StudioCommandException("context_changed", "A newer workspace navigation superseded this request.");
     }
+    /// <summary>Starts navigation before a caller's asynchronous preflight, using the same identity as root/file opens.</summary>
+    internal long BeginNavigation(CancellationToken token)
+    {
+        token.ThrowIfCancellationRequested();
+        long generation = ++navigationGeneration;
+        RequireCurrentNavigation(generation);
+        return generation;
+    }
     internal async Task EnsureRootForFileAsync(string path, bool forceRoot = false, CancellationToken cancellationToken = default, Action? beforePublish = null)
     {
         if (HasRoot && !forceRoot) return;
@@ -104,6 +112,8 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     public Func<DocumentModel, Task<bool>>? ConfirmDiscardAsync { get; set; }
     internal Action<bool>? ValidateNavigationPublication { get; set; }
     private CancellationTokenSource workspace = new();
+    /// <summary>Canceled when the workspace root is replaced; long operations owned by a workspace link to it.</summary>
+    internal CancellationToken WorkspaceToken => workspace.Token;
     private readonly List<SearchHit> index = [];
     [ObservableProperty] private string rootPath = "Open a ZBD folder to start exploring";
     [ObservableProperty] private string status = "Ready";

@@ -13,14 +13,22 @@
   },
   {
     "Name": "zstudio_open_root",
-    "Description": "Open and index a ZBD root in the visible workspace. Dirty documents must be explicitly saved or closed first. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Description": "Open and index a ZBD root or source project in the visible workspace. Dirty documents must be explicitly saved or closed first. Returns an operation ID; use zstudio_operation to await/read the result.",
     "Mutates": true,
     "Parameters": [
       {
         "Name": "path",
         "Type": "string",
-        "Description": "Absolute ZBD root directory.",
+        "Description": "Absolute ZBD root or source project directory.",
         "Required": true,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "project",
+        "Type": "boolean",
+        "Description": "Require an initialized source project (a folder with data and gamegen), as the welcome screen\u0027s source project Open does; any other folder is refused with not_project. Default false.",
+        "Required": false,
         "Choices": null,
         "Properties": null
       }
@@ -655,7 +663,7 @@
   },
   {
     "Name": "zstudio_operation",
-    "Description": "Read operation status/result. Poll at sensible intervals; cancel is available for exports, validation and world comparisons.",
+    "Description": "Read operation status/result. Poll at sensible intervals; cancel is available for exports, validation, source project operations and world comparisons.",
     "Mutates": true,
     "Parameters": [
       {
@@ -669,7 +677,7 @@
       {
         "Name": "cancel",
         "Type": "boolean",
-        "Description": "Request cancellation of an export, validation or world comparison.",
+        "Description": "Request cancellation of an export, validation or source project operation, or world comparison.",
         "Required": false,
         "Choices": null,
         "Properties": null
@@ -4869,6 +4877,144 @@
         "Name": "propertyAction",
         "Type": "string",
         "Description": "Generated action ID for invoke.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      }
+    ]
+  },
+  {
+    "Name": "zstudio_source_reconstruct",
+    "Description": "Reconstruct a RECOIL source project (data/ and gamegen/ in the original build layout, without zStudio metadata) from a shipped data folder into a new or empty folder. Only the original shipped files can be unpacked (their resource archives carry the animation definitions); exported files are refused. Resources become text .zrd files in their recorded folders and animation definitions .zad files beside them (pickup.zrd keeps its pickup data, its animation goes to pickup.zad), prepared scripts become .gs/.gw text, each sound keeps its best-quality WAV and each texture its best-quality PNG, mission worlds become glTF models loaded by the build scripts, and animations keep their definitions with .zan keyframe scripts; files it does not reconstruct are listed. Optionally opens the project as the workspace root; dirty documents must be resolved first. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Mutates": true,
+    "Parameters": [
+      {
+        "Name": "source",
+        "Type": "string",
+        "Description": "Full path of the shipped game data folder (for example the folder containing interp.zbd and m1\\).",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "destination",
+        "Type": "string",
+        "Description": "Full path of a new or empty project folder outside the source folder.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "open",
+        "Type": "boolean",
+        "Description": "Open the project as the workspace root afterwards; default true.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      }
+    ]
+  },
+  {
+    "Name": "zstudio_source_export",
+    "Description": "Build game files of the open source project from its files on disk. Without destination, only check that they build. With destination (outside the project), stage, re-parse and then write the selected outputs, or nothing if any fails; existing game files are replaced only with overwrite, and restored if publication fails. Outputs work in the game but are not byte-identical to the shipped files. Unsaved edits to project files must be resolved first. The result lists the lookups by name the built missions make as the game loads them (texture-effect FindNode, animation roots, attach nodes outside their root, node and tracked-node names inside animations that fall back to the whole world, the first node of each activation prerequisite path) whose name several nodes share, with the node the game finds (lookups, at most 256), and those that find another node than in the destination files the export replaced (lookupChanges, also in notes). Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Mutates": true,
+    "Parameters": [
+      {
+        "Name": "destination",
+        "Type": "string",
+        "Description": "Optional output folder (a full path); omit to check without writing.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "outputs",
+        "Type": "array",
+        "Description": "Optional game files to build, as listed by zstudio_source_status (for example m1/zrdr.zbd); omitted builds all.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Items": {
+          "Name": "",
+          "Type": "string",
+          "Description": "Game file path.",
+          "Required": false,
+          "Choices": null,
+          "Properties": null
+        },
+        "MinItems": 1,
+        "MaxItems": 256
+      },
+      {
+        "Name": "overwrite",
+        "Type": "boolean",
+        "Description": "Replace game files that already exist in destination; default false.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "profile",
+        "Type": "string",
+        "Description": "Build profile (zstudio_source_status lists them): which texture packs to build, with what budgets and largest texture side. Default: the profile checked in Tools \u2192 Build profile (source_status selected), which is the project\u0027s default unless the user chose another.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      }
+    ]
+  },
+  {
+    "Name": "zstudio_source_profile",
+    "Description": "Choose the open source project\u0027s shared Tools \u003E Build profile selection for subsequent GUI and MCP checks/exports. Omit profile to restore the project default. source_status lists valid profiles. Invalid choices leave the selection unchanged. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Mutates": true,
+    "Parameters": [
+      {
+        "Name": "profile",
+        "Type": "string",
+        "Description": "Profile name; omit to restore the project\u0027s default.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      }
+    ]
+  },
+  {
+    "Name": "zstudio_source_status",
+    "Description": "Describe the open source project: its build profiles (the default marked; built-in original and modern plus gamegen/build-profiles/*.json) and the game files it can build with the chosen profile, with family and source inputs (16 previewed at 512 characters), paged and filtered by path. Large previews shorten pages; follow nextOffset. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Mutates": true,
+    "Parameters": [
+      {
+        "Name": "offset",
+        "Type": "integer",
+        "Description": "Zero-based result offset.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": -2147483648,
+        "Maximum": 2147483647
+      },
+      {
+        "Name": "limit",
+        "Type": "integer",
+        "Description": "Page size, 1\u2013200; default 100.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": -2147483648,
+        "Maximum": 2147483647
+      },
+      {
+        "Name": "query",
+        "Type": "string",
+        "Description": "Case-insensitive name/path or displayed-text filter, applied before pagination.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "profile",
+        "Type": "string",
+        "Description": "Build profile whose texture packs are listed; default: the profile chosen in Tools \u2192 Build profile, else the project\u0027s default.",
         "Required": false,
         "Choices": null,
         "Properties": null
