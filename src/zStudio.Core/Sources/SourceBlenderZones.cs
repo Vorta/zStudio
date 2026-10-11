@@ -9,7 +9,7 @@ namespace Recoil.Zbd.Core.Sources;
 
 /// <summary>
 /// Carries a model's order and the map zone assignments of shared geometry through a Blender round trip. Blender keeps
-/// every triangle with its corners in order (but one of a primitive's triangles that use the same three vertices, which
+/// every unchanged triangle with its corners in order (but one of a primitive's triangles that use the same three vertices, which
 /// go back on the vertices of the one kept), but lists a mesh's triangles by material (the materials in the order they
 /// first appear, the triangles of each in their order), drops the polygon boundaries a primitive records, splits vertices
 /// by normal and lists children (and the file's roots) by name. So nodes correspond by engine name (a name the file uses
@@ -753,6 +753,25 @@ internal sealed partial class SourceBlenderZones
         foreach (var group in next.SelectMany(l => l).Where(t => !paired.ContainsKey((t.Primitive, t.Index))).GroupBy(t => t.Key).Where(g => g.Count() == 1))
             if (leftOld.TryGetValue(group.Key, out var o)) { Bind(group.First(), o); Corners(group.First(), o); }
 
+        // Flip Normals changes corner order, not face identity. Only an exact position set unique in BOTH complete
+        // meshes supplies this extra correspondence: consuming a coincident face must not make its twin unambiguous.
+        // Remember the permutation for polygon recovery; the exported winding and normals remain authored.
+        work.Charge(old.Count + next.Sum(l => (long)l.Count));
+        var uniqueOld = old.GroupBy(t => Unordered(t.Key)).Where(g => g.Count() == 1 && Nondegenerate(g.Key)).ToDictionary(g => g.Key, g => g.First());
+        Dictionary<(int Primitive, int Index), (int A, int B, int C)> cornerOrders = [];
+        foreach (var group in next.SelectMany(l => l).GroupBy(t => Unordered(t.Key)).Where(g => g.Count() == 1))
+        {
+            var n = group.First();
+            if (paired.ContainsKey((n.Primitive, n.Index)) || !uniqueOld.TryGetValue(group.Key, out var o)
+                || used.Contains((o.Primitive, o.Index)) || dropped.ContainsKey((o.Primitive, o.Index))) continue;
+            int At(Vector3 position) => position == o.Key.A ? 0 : position == o.Key.B ? 1 : 2;
+            cornerOrders[(o.Primitive, o.Index)] = (At(n.Key.A), At(n.Key.B), At(n.Key.C));
+            Bind(n, o);
+        }
+        int Corner(int primitive, int triangle, int corner) => cornerOrders.TryGetValue((primitive, triangle), out var order)
+            ? corner switch { 0 => order.A, 1 => order.B, _ => order.C } : corner;
+        bool Reversed(int primitive, int triangle) => Corner(primitive, triangle, 1) == (Corner(primitive, triangle, 0) + 2) % 3;
+
         var jsonPrimitives = root["meshes"]?[meshIndex]?["primitives"] as JsonArray;
         var originals = new JsonObject[mesh.Primitives.Count];
         for (int j = 0; j < originals.Length; j++)
@@ -780,15 +799,16 @@ internal sealed partial class SourceBlenderZones
                 work.Charge(count);
                 if (!reverse.TryGetValue((p, first), out var start)) continue;
                 var target = mesh.Primitives[start.Primitive];
-                bool whole = true;
-                for (int k = 1; k < count && whole; k++) whole = reverse.TryGetValue((p, first + k), out var at) && at == (start.Primitive, start.Index + k);
+                bool whole = true, reversed = Reversed(p, first);
+                for (int k = 1; k < count && whole; k++) whole = reverse.TryGetValue((p, first + k), out var at)
+                    && at == (start.Primitive, start.Index + k) && Reversed(p, first + k) == reversed;
                 if (!whole) continue;
                 // One export vertex per project corner: the first the triangles name; the others must be copies of it.
                 Dictionary<int, int> chosen = []; Dictionary<int, int> changes = [];
                 for (int k = 0; k < count && whole; k++)
                     for (int c = 0; c < 3 && whole; c++)
                     {
-                        int from = primitive.Indices[(first + k) * 3 + c], at = (start.Index + k) * 3 + c, to = target.Indices[at];
+                        int from = primitive.Indices[(first + k) * 3 + Corner(p, first + k, c)], at = (start.Index + k) * 3 + c, to = target.Indices[at];
                         if (!chosen.TryAdd(from, to) && chosen[from] != to)
                         {
                             if (Same(target, chosen[from], to)) changes[at] = chosen[from];
@@ -796,6 +816,7 @@ internal sealed partial class SourceBlenderZones
                         }
                     }
                 int[] mapped = [.. corners[q].Where(chosen.ContainsKey).Select(c => chosen[c])];
+                if (reversed) mapped = WorldGltf.TurnedOver(mapped);
                 if (changes.Count > 0 && !patchable.ContainsKey(start.Primitive)) patchable[start.Primitive] = IndexTarget(root, originals[start.Primitive]) != null;
                 if (!whole || mapped.Length < 3 || changes.Count > 0 && !patchable[start.Primitive]) continue;
                 if (!recovered.TryGetValue(start.Primitive, out var list)) recovered[start.Primitive] = list = [];
@@ -996,6 +1017,18 @@ internal sealed partial class SourceBlenderZones
         Vector3 At(int c) { var v = primitive.Positions[primitive.Indices[triangle * 3 + c]]; return new(v.X + 0f, v.Y + 0f, v.Z + 0f); }
         return new(At(0), At(1), At(2));
     }
+
+    private static Key Unordered(Key key)
+    {
+        static int Compare(Vector3 a, Vector3 b) => a.X != b.X ? a.X.CompareTo(b.X) : a.Y != b.Y ? a.Y.CompareTo(b.Y) : a.Z.CompareTo(b.Z);
+        var (a, b, c) = key;
+        if (Compare(a, b) > 0) (a, b) = (b, a);
+        if (Compare(b, c) > 0) (b, c) = (c, b);
+        if (Compare(a, b) > 0) (a, b) = (b, a);
+        return new(a, b, c);
+    }
+    private static bool Nondegenerate(Key key) => key.A != key.B && key.B != key.C && key.A != key.C
+        && Vector3.Cross(key.B - key.A, key.C - key.A) != Vector3.Zero;
 
     /// <summary>Whether two vertices of a primitive differ at most in their normal (Blender's split of one vertex by face).</summary>
     private static bool Same(GltfPrimitive primitive, int a, int b) =>

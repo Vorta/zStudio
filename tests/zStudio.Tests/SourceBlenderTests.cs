@@ -77,6 +77,33 @@ public sealed class SourceBlenderTests
         Assert.Equal(shape, Shape());
         Assert.DoesNotContain("Node_", Encoding.UTF8.GetString(workspace.Read(turret, Token)!), StringComparison.Ordinal);
 
+        // Flip Normals keeps each face and its zones. Real Blender shares equal position/UV/normal vertices;
+        // splitting every triangle hid the reversed shared-corner correspondence failure.
+        var beforeFlip = WorldAssembler.ReadModel(workspace.Read(turret, Token)!, turret, (path, _) => workspace.Read(path, Token)!, Token);
+        var flip = SourceBlender.PlanUpdate(workspace, SourceBlender.Find(fixture.Project, checkout.Id), BlenderExport(checkout, "flipped",
+            faces: groups => { foreach (var group in groups) foreach (var face in group.Faces) Array.Reverse(face); }, shareVertices: true), token: Token);
+        Assert.Empty(flip.Notes);
+        Apply(workspace, flip);
+        Assert.Equal(first, Zones("m1", turret)); Assert.Equal(shared, Zones("m2", other));
+        var afterFlip = WorldAssembler.ReadModel(workspace.Read(turret, Token)!, turret, (path, _) => workspace.Read(path, Token)!, Token);
+        var previousFaces = Facing(beforeFlip.Roots[0].Mesh!);
+        var flippedFaces = Facing(afterFlip.Roots[0].Mesh!);
+        Assert.Equal(previousFaces.Keys.Order(), flippedFaces.Keys.Order());
+        foreach (var (positions, normal) in previousFaces) Assert.Equal(-normal, flippedFaces[positions]);
+        foreach (var p in afterFlip.Roots[0].Mesh!.Primitives)
+            for (int t = 0; t < p.Indices.Count; t += 3)
+            {
+                var normal = Vector3.Normalize(Vector3.Cross(p.Positions[p.Indices[t + 1]] - p.Positions[p.Indices[t]], p.Positions[p.Indices[t + 2]] - p.Positions[p.Indices[t]]));
+                for (int c = 0; c < 3; c++) Assert.Equal(normal, p.Normals[p.Indices[t + c]]);
+            }
+        workspace.Undo();
+
+        static Dictionary<string, Vector3> Facing(GltfMesh mesh) => mesh.Primitives.SelectMany(p => Enumerable.Range(0, p.Indices.Count / 3).Select(t =>
+        {
+            var v = p.Indices.Skip(3 * t).Take(3).Select(i => p.Positions[i]).ToArray();
+            return (Key: string.Join(";", v.Select(x => x.ToString()).Order(StringComparer.Ordinal)), Normal: Vector3.Normalize(Vector3.Cross(v[1] - v[0], v[2] - v[0])));
+        })).ToDictionary(t => t.Key, t => t.Normal);
+
         string copied = BlenderExport(checkout, "copied", nodes: export =>
         {
             var original = export.Roots[0].Children.Single(n => n.Name == "post");
@@ -171,7 +198,7 @@ public sealed class SourceBlenderTests
     /// edits that mesh's faces by material and <paramref name="nodes"/> the exported nodes.
     /// </summary>
     private static string BlenderExport(BlenderCheckout checkout, string folder, bool poke = false,
-        Action<List<(GltfMaterial? Material, bool Textured, List<(Vector3 Position, Vector2 Uv)[]> Faces)>>? faces = null, Action<GltfDocument>? nodes = null)
+        Action<List<(GltfMaterial? Material, bool Textured, List<(Vector3 Position, Vector2 Uv)[]> Faces)>>? faces = null, Action<GltfDocument>? nodes = null, bool shareVertices = false)
     {
         string input = Path.GetDirectoryName(checkout.Input)!, outbox = Path.Combine(checkout.Outbox, folder), name = Path.GetFileNameWithoutExtension(checkout.Input);
         var source = GltfDocument.Read(File.ReadAllBytes(checkout.Input), uri => File.ReadAllBytes(Path.Combine(input, Uri.UnescapeDataString(uri))), Token);
@@ -221,7 +248,7 @@ public sealed class SourceBlenderTests
             foreach (var child in node.Children.OrderBy(c => names[c], StringComparer.Ordinal)) copy.Children.Add(Copy(child));
             return copy;
         }
-        static GltfMesh Blend(GltfMesh mesh, Action<List<(GltfMaterial? Material, bool Textured, List<(Vector3 Position, Vector2 Uv)[]> Faces)>>? change)
+        GltfMesh Blend(GltfMesh mesh, Action<List<(GltfMaterial? Material, bool Textured, List<(Vector3 Position, Vector2 Uv)[]> Faces)>>? change)
         {
             // Import keeps one of a primitive's triangles that use the same three vertices.
             static IEnumerable<int> Kept(GltfPrimitive p)
@@ -237,11 +264,14 @@ public sealed class SourceBlenderTests
             foreach (var (material, textured, faces) in groups)
             {
                 GltfPrimitive primitive = new() { Material = material };
+                Dictionary<(Vector3 Position, Vector2 Uv, Vector3 Normal), int> shared = [];
                 foreach (var face in faces)
                 {
                     var normal = Vector3.Normalize(Vector3.Cross(face[1].Position - face[0].Position, face[2].Position - face[0].Position));
                     foreach (var (position, uv) in face)
                     {
+                        if (shareVertices && shared.TryGetValue((position, uv, normal), out int index)) { primitive.Indices.Add(index); continue; }
+                        shared.TryAdd((position, uv, normal), primitive.Positions.Count);
                         primitive.Indices.Add(primitive.Positions.Count); primitive.Positions.Add(position); primitive.Normals.Add(normal);
                         if (textured) primitive.TexCoords.Add(uv);
                     }
