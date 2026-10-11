@@ -2,6 +2,7 @@ using System.IO;
 using System.Numerics;
 using System.Text.Json.Nodes;
 using Recoil.Zbd.Automation;
+using Recoil.Zbd.Core;
 using Recoil.Zbd.Core.Sources;
 using Recoil.Zbd.Core.Terrain;
 using Recoil.Zbd.Rendering;
@@ -296,13 +297,43 @@ public partial class MainWindow
         ApplyTerrainBrush(scene);
         ViewModel.Status = brush == null ? "Terrain brush off." : $"{(brush.Add ? "Painting" : "Erasing")} {brush.Region}: drag over the terrain.";
     }
-    /// <summary>Whether a world shows pieces of the brush's recipe (another mission of the project does not).</summary>
+    /// <summary>Whether the selected preview retains the world coordinates the brush's recipe uses.</summary>
     private static bool BrushPaints(DocumentModel? doc, TerrainBrushState? brush) => brush != null && doc?.SourceWorld != null &&
-        doc.SourceBuild?.Provenance.Values.Any(p => string.Equals(p.Terrain, brush.Recipe, StringComparison.OrdinalIgnoreCase)) == true;
+        doc.SourceBuild?.Provenance.Values.Any(p => string.Equals(p.Terrain, brush.Recipe, StringComparison.OrdinalIgnoreCase)) == true &&
+        TerrainBrushCoordinates(doc, doc.SelectedAsset?.Record);
+    private static bool TerrainBrushCoordinates(DocumentModel doc, AssetRecord? asset)
+    {
+        if (asset?.Kind == AssetKind.World) return true;
+        if (asset == null || doc.PreviewDocument.Scene is not { } data || doc.SourceBuild is not { } build) return false;
+        int? root = SceneLods.PreviewRoot(data, asset);
+        if (root == null && asset.Kind == AssetKind.Model)
+        {
+            // Raw models have no placement. Only a uniquely owned generated terrain model already stores
+            // world-coordinate vertices; ordinary models (even in this document) need their instance transforms.
+            var owners = data.Nodes.Where(n => n.ModelIndex == asset.Index).Take(2).ToArray();
+            if (owners.Length != 1) return false;
+            root = owners[0].Index;
+        }
+        if (root is not int index || !build.Provenance.TryGetValue(index, out var origin) || origin.Terrain == null) return false;
+        // Terrain is emitted as identity roots. Refuse ambiguous/transformed ancestry rather than treating
+        // a subtree's coordinates as world coordinates if another source operation changes that placement.
+        HashSet<int> seen = [];
+        while (index >= 0 && index < data.Nodes.Count && seen.Count < 256 && seen.Add(index))
+        {
+            var node = data.Nodes[index];
+            if (!SceneBuilder.LocalTransform(node).IsIdentity || node.Parents.Length > 1) return false;
+            if (node.Parents.Length == 0) return true;
+            index = node.Parents[0];
+        }
+        return false;
+    }
+    private bool TerrainBrushApplies(SceneViewport? viewport, TerrainBrushState? brush) => viewport != null && ReferenceEquals(viewport, scene) &&
+        HasPublishedStaticScene && shownDocument == ViewModel.SelectedDocument && shownAsset?.Id == shownDocument?.SelectedAsset?.Record.Id &&
+        BrushPaints(shownDocument, brush);
     private void ApplyTerrainBrush(SceneViewport? viewport)
     {
         if (viewport == null) return;
-        bool on = BrushPaints(ViewModel.SelectedDocument, terrainBrush);
+        bool on = TerrainBrushApplies(viewport, terrainBrush);
         viewport.TerrainBrushRadius = terrainBrush?.Radius ?? 8;
         viewport.TerrainBrushWaiting = sourceWorkspaceBusy;
         viewport.TerrainBrushActive = on;
@@ -310,13 +341,14 @@ public partial class MainWindow
     private void ConfigureTerrainScene(SceneViewport viewport)
     {
         ApplyTerrainBrush(viewport);
-        viewport.TerrainStrokeCompleted += stroke => _ = PaintStrokeAsync(stroke);
+        viewport.TerrainStrokeCompleted += stroke => { if (ReferenceEquals(viewport, scene)) _ = PaintStrokeAsync(stroke); };
     }
     /// <summary>A viewport stroke: the brush's region gains (or loses) the area the brush covered, as one change.</summary>
     private async Task PaintStrokeAsync(IReadOnlyList<Vector3> stroke)
     {
         if (terrainBrush is not { } brush || ViewModel.SelectedDocument is not { SourceWorld: not null } doc) return;
-        if (!BrushPaints(doc, brush)) { ViewModel.Status = $"This world has no pieces of {brush.Recipe}; the brush paints the world built from it."; return; }
+        if (!TerrainBrushApplies(scene, brush) || sourceWorkspaceBusy)
+        { ViewModel.Status = "The terrain brush paints the published Whole world or a generated terrain piece; return to that preview before painting."; return; }
         // Properties closes with the replaced document; when it showed this recipe, it shows it again for the rebuilt world.
         var window = propertiesWindow;
         var shown = window?.SourceFields as TerrainPropertiesEditor;

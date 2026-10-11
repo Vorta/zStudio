@@ -382,6 +382,7 @@ public partial class MainWindow : Window
                 if (pendingSourceView is { } rebuilt && rebuilt.Document == doc) { pendingSourceView = null; scene.RestoreView(rebuilt.View); }
                 var shownOptions = ReadStaticSceneOptions();
                 publishedStaticOptions = shownOptions with { Difficulty = mission is { Layout.DifficultyApplies: true } ? mission.Layout.Difficulty : ViewModel.Difficulty, Mission = mission?.Layout.MissionArchive ?? shownOptions.Mission };
+                ApplyTerrainBrush(scene);
                 if (mission != null) ViewModel.AdoptMissionFallback(doc.Path, mission.Layout);
                 if (asset.Kind == AssetKind.World) AttachPickupEditor(doc);
                 if (mission != null)

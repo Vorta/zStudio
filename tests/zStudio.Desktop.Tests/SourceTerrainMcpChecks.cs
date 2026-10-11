@@ -313,6 +313,30 @@ internal static class SourceTerrainMcpChecks
             await fields.InvokeAutomationActionAsync(erase);
             Assert.False(((TerrainBrushState)brush.GetValue(main)!).Add);
             Assert.True(view.TerrainBrushActive); Assert.False(view.ZonePaintActive);
+            // Inspecting an unrelated raw model uses model-local coordinates. Retain the brush choice,
+            // but never consume that preview's input or accept its coordinates as a terrain stroke.
+            var worldAsset = doc.SelectedAsset!.Record;
+            var modelAsset = doc.Assets.First(a => a.Record.Kind == Recoil.Zbd.Core.AssetKind.Model &&
+                !doc.SourceBuild!.Provenance.Any(p => p.Value.Terrain != null && doc.PreviewDocument.Scene!.Nodes[p.Key].ModelIndex == a.Index));
+            typeof(SceneViewport).GetField("brushStroke", BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(view, new List<Vector3> { new(250, 0, 250) });
+            await Job("select_asset", new() { ["document"] = Id(doc), ["kind"] = "Model", ["index"] = modelAsset.Index });
+            Assert.False(view.TerrainBrushActive);
+            Assert.False(view.IsTerrainStroking);
+            Assert.NotNull(brush.GetValue(main));
+            long beforeWrongView = workspace.ContentRevision;
+            var paintStroke = typeof(MainWindow).GetMethod("PaintStrokeAsync", BindingFlags.Instance | BindingFlags.NonPublic)!;
+            await (Task)paintStroke.Invoke(main, [new List<Vector3> { new(250, 0, 250) }])!;
+            Assert.Equal(beforeWrongView, workspace.ContentRevision);
+            Assert.False(doc.IsDisposed);
+            // Compiler-generated terrain keeps world coordinates in both its node and raw model preview.
+            int terrainModel = doc.PreviewDocument.Scene!.Nodes[piece].ModelIndex!.Value;
+            await Job("select_asset", new() { ["document"] = Id(doc), ["kind"] = "Model", ["index"] = terrainModel });
+            Assert.True(view.TerrainBrushActive);
+            var terrainAsset = doc.Assets.Single(a => a.Record.Content is Recoil.Zbd.Core.GameNode n && n.Index == piece);
+            await Job("select_asset", new() { ["document"] = Id(doc), ["kind"] = terrainAsset.Record.Kind.ToString(), ["index"] = terrainAsset.Index });
+            Assert.True(view.TerrainBrushActive);
+            await Job("select_asset", new() { ["document"] = Id(doc), ["kind"] = worldAsset.Kind.ToString(), ["index"] = worldAsset.Index });
+            Assert.True(view.TerrainBrushActive);
             var paint = (Task)typeof(MainWindow).GetMethod("PaintStrokeAsync", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(main, [new List<Vector3> { new(240, 0, 250), new(260, 0, 250) }])!;
             await paint;
             var erased = SourceTerrain.Read(workspace, Recipe);
