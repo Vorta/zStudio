@@ -31,6 +31,8 @@ public partial class MainWindow
         : total == 1 ? $"\n1 {noun.TrimEnd('s')} is listed in Problems." : $"\n{total} {noun} are listed in Problems.";
     /// <summary>Test hook: runs after an export or check finishes and before its result is published to the workspace.</summary>
     internal Func<Task>? SourceExportFinishing { get; set; }
+    /// <summary>Test hook: pauses a completed reconstruction before its optional workspace publication.</summary>
+    internal Func<Task>? SourceReconstructionFinishing { get; set; }
     private long sourceMenuGeneration;
 
     /// <summary>
@@ -42,7 +44,9 @@ public partial class MainWindow
     {
         if (operation != null) throw new StudioCommandException("busy", "An export, validation or source operation is already running.");
         if (open) RequireRootPublication();
+        long generation = ViewModel.WorkspaceGeneration;
         var report = await ExtractSourceProjectAsync(source, destination, token);
+        if (SourceReconstructionFinishing is { } finishing) await finishing();
         // The project is complete in its folder: a cancel arriving from now on cannot take it back, so the operation
         // completes and names it (opened, or with the reason it was not).
         CommitRunningJob();
@@ -50,7 +54,7 @@ public partial class MainWindow
         {
             if (open)
             {
-                RequireRootPublication(); await ViewModel.OpenRootAsync(report.Project, token, RequireRootPublication);
+                RequireReconstructionPublication(); await ViewModel.OpenRootAsync(report.Project, token, RequireReconstructionPublication);
             }
         }
         catch (StudioCommandException refusal) { return (report, refusal); }
@@ -59,6 +63,13 @@ public partial class MainWindow
         { return (report, new StudioCommandException("canceled", "The operation was canceled before the project was opened; it stays in its folder.")); }
         finally { ListReconstructionNotes(report); }
         return (report, null);
+
+        void RequireReconstructionPublication()
+        {
+            if (generation != ViewModel.WorkspaceGeneration)
+                throw new StudioCommandException("context_changed", "The workspace changed while the project was reconstructed; it stays in its folder and can be opened separately.");
+            RequireRootPublication();
+        }
     }
     // Opening a root clears Problems, so a reconstruction's notes are listed once its project is open (or has failed to open).
     private void ListReconstructionNotes(SourceReconstructionReport report)

@@ -48,6 +48,28 @@ internal static class SourceProjectMcpChecks
             Assert.Contains("full paths", relative["message"]!.GetValue<string>());
             Assert.False(Directory.Exists(Path.Combine(AppContext.BaseDirectory, "project")));
 
+            // Consequential navigation race: a completed reconstruction must report its files without replacing
+            // a clean workspace the user opened while it was running. Hold the publication boundary explicitly.
+            string reconstructedElsewhere = Path.Combine(fixture.Root, "superseded-project");
+            string newerRoot = Path.Combine(fixture.Root, "newer-root"); Directory.CreateDirectory(newerRoot);
+            TaskCompletionSource reconstructed = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            TaskCompletionSource publishReconstruction = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            main.SourceReconstructionFinishing = async () => { reconstructed.TrySetResult(); await publishReconstruction.Task.WaitAsync(token); };
+            var supersededReconstruction = Job("source_reconstruct", new() { ["source"] = fixture.Corpus, ["destination"] = reconstructedElsewhere });
+            try
+            {
+                await reconstructed.Task.WaitAsync(token);
+                await main.ViewModel.OpenRootAsync(newerRoot, token); // Shared GUI File/Open folder path.
+            }
+            finally { publishReconstruction.TrySetResult(); }
+            var retainedProject = await supersededReconstruction;
+            main.SourceReconstructionFinishing = null;
+            Assert.False(retainedProject["opened"]!.GetValue<bool>());
+            Assert.Equal("context_changed", retainedProject["openRefused"]!["code"]!.GetValue<string>());
+            Assert.Equal(Path.GetFullPath(reconstructedElsewhere), Path.GetFullPath(retainedProject["project"]!.GetValue<string>()));
+            Assert.True(File.Exists(Path.Combine(reconstructedElsewhere, "data", "m1", "zrdr", "ai.zrd")));
+            Assert.Equal(Path.GetFullPath(newerRoot), Path.GetFullPath(main.ViewModel.RootPath));
+
             var built = await Job("source_reconstruct", new() { ["source"] = fixture.Corpus, ["destination"] = fixture.Project });
             Assert.True(built["opened"]!.GetValue<bool>());
             Assert.Equal(1, built["families"]!["scripts"]!.GetValue<int>()); Assert.Equal(3, built["families"]!["sounds"]!.GetValue<int>());
