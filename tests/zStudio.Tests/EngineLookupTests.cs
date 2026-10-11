@@ -227,8 +227,11 @@ public sealed class EngineLookupTests
         (string, string)[] findNodes = [("gamegen/support/tex_fxm1.gw", "wall")];
         var first = Walls(10, 30); byte[] bytes = GameZWriter.Write(first, Token);
         var baseline = new SourceLookupBaseline(bytes, WorldLookups.Resolve("m1", first, null, findNodes, Token));
-        // Nothing may differ: the world is not read.
-        Assert.Empty(baseline.Changes(() => throw new InvalidOperationException(), WorldLookups.Resolve("m1", Walls(10, 30), null, findNodes, Token), Token));
+        // An unchanged unambiguous lookup needs no world read. Repeated names must be paired even when their hints match.
+        var unique = Walls(10);
+        var unambiguous = new SourceLookupBaseline(GameZWriter.Write(unique, Token), WorldLookups.Resolve("m1", unique, null, findNodes, Token));
+        Assert.Empty(unambiguous.Changes(() => throw new InvalidOperationException(), WorldLookups.Resolve("m1", Walls(10), null, findNodes, Token), Token));
+        Assert.Empty(baseline.Changes(() => Walls(10, 30), WorldLookups.Resolve("m1", Walls(10, 30), null, findNodes, Token), Token));
         // Each edit that adds a newer wall is reported against the same baseline world, read once: the bytes are not read again.
         for (int i = 0; i < 2; i++)
         {

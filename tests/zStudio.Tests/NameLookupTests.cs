@@ -203,6 +203,62 @@ public sealed class NameLookupTests
         fixture.WritePartDatabase(secondGround: true);
         var worldOnly = await SourceBuilder.ExportAsync(fixture.Project, destination, ["m1/gamez.zbd"], overwrite: true, token: Token);
         Assert.Contains(worldOnly.LookupChanges, c => c.After.Kind == SourceLookup.AnimationRoot && c.After.Name == "ground");
+
+        // Consequential regression: neither equal slot/path/local transform nor equal polygon counts establish identity.
+        // Ordinary glTF edits can reverse doors under translated buildings, or different-size doors under one parent.
+        foreach (bool nested in new[] { true, false })
+        {
+            using SourceWorldFixture copies = new();
+            copies.Write("gamegen/m1_zbd.gs", "FindNode door\nQuit\n");
+            string target = Path.Combine(copies.Root, "game"), worldPath = Path.Combine(target, "m1/gamez.zbd");
+            void WriteCopies(bool reverse, bool move = false)
+            {
+                List<WorldNode> roots = [];
+                foreach (int i in reverse ? new[] { 1, 0 } : new[] { 0, 1 })
+                {
+                    ModelBuilder model = new(); float height = nested ? 8 : 8 + i * 4;
+                    model.Add(new([new(0, 0, 0), new(4, 0, 0), new(4, height, 0), new(0, height, 0)], [], [], [], new WorldMaterial()));
+                    WorldNode door = new("door", WorldNodeClass.Object3D) { Flags = WorldGltf.DefaultCarried, Model = model.Finish() };
+                    WorldNode root = nested ? new("building", WorldNodeClass.Object3D) { Flags = WorldGltf.DefaultCarried } : door;
+                    if (nested) { root.Children.Add(door); door.Parents.Add(root); }
+                    root.SetPayloadInt(0, 0x20);
+                    float x = (nested ? 10 + i * 90 : 0) + (move && i == 0 ? 1 : 0);
+                    float[] matrix = [1, 0, 0, 0, 1, 0, 0, 0, 1, x, 0, 0];
+                    for (int n = 0; n < matrix.Length; n++) root.SetPayloadFloat(0x30 + n * 4, matrix[n]);
+                    roots.Add(root);
+                }
+                var (json, bin) = WorldGltf.Export(roots, 0xFF, new() { Texture = t => (t.Name + ".png", 0) }).Write("m1.bin");
+                copies.Write("data/m1/models/m1.gltf", json); copies.Write("data/m1/models/m1.bin", bin);
+            }
+            WriteCopies(false);
+            await SourceBuilder.ExportAsync(copies.Project, target, ["m1/gamez.zbd"], token: Token);
+            byte[] original = File.ReadAllBytes(worldPath);
+            var before = GameZWorldReader.FromDocument(FormatRegistry.Default.OpenBytes("gamez.zbd", original, token: Token), Token);
+            WriteCopies(true);
+            var replaced = await SourceBuilder.ExportAsync(copies.Project, target, ["m1/gamez.zbd"], overwrite: true, token: Token);
+            var after = GameZWorldReader.FromDocument(await FormatRegistry.Default.OpenAsync(worldPath, Token), Token);
+            var switched = Assert.Single(replaced.LookupChanges);
+            Assert.Equal((switched.Before.Slot, switched.Before.Found), (switched.After.Slot, switched.After.Found));
+            Assert.Contains(WorldLookups.Describe(switched, " in the files this export replaced"), replaced.Notes);
+
+            // The shared admission applies to every binding kind, including the lazy source-edit baseline.
+            var package = new AnimationPackage { Prefix = [], Tail = [] };
+            var attachment = Entry(2, "missing"); attachment.SetText(68, "door");
+            var prerequisite = Entry(4, "missing"); var condition = new AnimationRecord(new byte[48]);
+            condition.Bytes[4] = 3; condition.SetText(12, "door", 28); prerequisite.References[6].Add(condition);
+            package.Entries.AddRange([Entry(0, ""), Entry(1, "door"), attachment, Entry(3, "missing", 0, "door"), prerequisite]);
+            (string, string)[] finds = [("gamegen/m1_zbd.gs", "door")];
+            var a = WorldLookups.Resolve("m1", before, package, finds, Token);
+            var b = WorldLookups.Resolve("m1", after, package, finds, Token);
+            var baseline = new SourceLookupBaseline(original, a);
+            Assert.Equal(5, baseline.Changes(() => after, b, Token).Select(c => c.After.Kind).Distinct().Count());
+            Assert.Empty(WorldLookups.Changes(after, b, after, b, Token));
+
+            // Moving the same selected copy (or its parent) is an edit, not a lookup switching to another instance.
+            WriteCopies(true, move: true);
+            var moved = await SourceBuilder.ExportAsync(copies.Project, target, ["m1/gamez.zbd"], overwrite: true, token: Token);
+            Assert.Empty(moved.LookupChanges);
+        }
     }
 
     /// <summary>A world with two ramps (the second placed elsewhere, or not) and a door, in slot order <paramref name="order"/>.</summary>
@@ -258,7 +314,8 @@ public sealed class NameLookupTests
         Assert.All(changes, c => Assert.Equal("ramp", c.After.Name));
         Assert.Contains("FindNode ramp in gamegen/support/tex_fxm1.gw finds world1/ramp (slot 2) instead of world1/ramp (slot 2)", WorldLookups.Describe(changes.First(c => c.After.Kind == SourceLookup.TextureEffect)));
         // The same order finds the same nodes; identical copies count as the same node.
-        Assert.False(WorldLookups.Differ(a, WorldLookups.Resolve("m1", World(true, "a", "b", "door"), package, findNodes, Token)));
+        var unchanged = World(true, "a", "b", "door");
+        Assert.Empty(WorldLookups.Changes(before, a, unchanged, WorldLookups.Resolve("m1", unchanged, package, findNodes, Token), Token));
         var copies = World(false, "a", "b", "door"); var swapped = World(false, "b", "a", "door");
         Assert.Empty(WorldLookups.Changes(copies, WorldLookups.Resolve("m1", copies, package, findNodes, Token), swapped, WorldLookups.Resolve("m1", swapped, package, findNodes, Token), Token));
     }

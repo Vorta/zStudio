@@ -188,6 +188,8 @@ Motion scene enumeration, tree navigation, selection, Properties and camera node
 
 Source project checks and exports share the same refusal behavior through GUI and `source_export`: embedded images, conflicting texture addressing, malformed unselected glTF hierarchies, and failed world dependencies cannot become successful texture-only exports. These are validation and snapshot fixes to existing commands; tool arguments are unchanged. The current discovery catalog contains 88 tools.
 
+Export `lookupChanges` and the GUI Problems warnings compare repeated-name targets semantically even when their slots, name paths and structural hints match. Reordering copies under different parents or with different geometry can change a binding; moving the same matched copy or leaving indistinguishable copies unchanged does not. This uses the existing result fields and command schemas.
+
 Source export and world preparation use the shared content-verified snapshot: same-length external rewrites with preserved timestamps invalidate read inputs. Source export notes identify stale texture packs omitted from the actual output selection. Shared glTF import refuses implicit metallic materials and out-of-range base colors; PNG import enforces palette rules for its color type and bit depth. Tool arguments and the command catalog are unchanged.
 
 World comparison includes additional detached World nodes and their descendants in the same tree shown by the GUI.

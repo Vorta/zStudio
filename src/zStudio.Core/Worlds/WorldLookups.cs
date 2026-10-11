@@ -58,10 +58,13 @@ public sealed record SourceLookup(string Mission, string Kind, string Name, stri
     /// <summary>Of the animation entries named <see cref="Source"/>, which one makes the lookup (0 for the first): names are not unique.</summary>
     internal int Occurrence { get; init; }
     internal (string Kind, string Source, int Occurrence, string Name) Key => (Kind, Source, Occurrence, Name);
-    /// <summary>The found node's structure, children's names and transform: two nodes that share a path and a slot number but differ show it.</summary>
+    /// <summary>A hint from the found node's structure, children's names and local transform; equal hints do not establish identity.</summary>
     internal string? Fingerprint { get; init; }
-    /// <summary>Whether another lookup may find another node: its slot, path, candidates or found node's fingerprint differ.</summary>
-    internal bool MayDiffer(SourceLookup other) => Slot != other.Slot || Found != other.Found || Candidates != other.Candidates || Fingerprint != other.Fingerprint;
+    /// <summary>
+    /// Whether another lookup needs semantic comparison. Repeated names always do: the same slot, path and structural
+    /// fingerprint can belong to another instance (different ancestry or geometry). The fingerprint is only a pairing hint.
+    /// </summary>
+    internal bool MayDiffer(SourceLookup other) => Ambiguous || other.Ambiguous || Slot != other.Slot || Found != other.Found || Candidates != other.Candidates || Fingerprint != other.Fingerprint;
 }
 
 /// <summary>A lookup that finds another node than it did before.</summary>
@@ -268,8 +271,8 @@ public static class WorldLookups
     }
 
     /// <summary>
-    /// Whether any lookup both lists make might find another node: its slot, path or number of candidates differs. When not,
-    /// <see cref="Changes"/> has nothing to report and the worlds need not be read.
+    /// Whether any lookup both lists make needs semantic comparison: a name repeats, or its slot, path, number of
+    /// candidates or structural hint differs. Otherwise <see cref="Changes"/> has nothing to report and the worlds need not be read.
     /// </summary>
     public static bool Differ(IReadOnlyList<SourceLookup> a, IReadOnlyList<SourceLookup> b)
     {
@@ -286,7 +289,7 @@ public static class WorldLookups
         (IReadOnlyDictionary<int, WorldNodeProvenance> Before, IReadOnlyDictionary<int, WorldNodeProvenance> After)? sources = null)
     {
         var later = b.GroupBy(l => l.Key).ToDictionary(g => g.Key, g => g.First());
-        // Without any difference in what the lookups find (slot, path and candidates), nothing changed and no pairing is needed.
+        // Repeated names need pairing even when their slots, paths and structural hints are unchanged.
         var candidates = a.Where(x => later.TryGetValue(x.Key, out var y) && x.MayDiffer(y)).ToList();
         if (candidates.Count == 0) return [];
         // Every node's counterpart, including those of places too many for the comparison's tree.
