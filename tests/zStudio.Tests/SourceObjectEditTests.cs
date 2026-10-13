@@ -104,18 +104,102 @@ public sealed class SourceObjectEditTests
         // CanModify on the database ground: the glTF node's carried flags.
         var plan = SourceObjectEdits.PlanFlag(workspace, world.Nodes.Single(n => n.Name == "ground"), ground, build.Executions, 0x10000, true, Token);
         var recoil = JsonNode.Parse(plan.Changes.Single().Content)!["nodes"]![0]!["extras"]!["recoil"]!;
-        Assert.Equal($"0x{WorldGltf.DefaultCarried | 0x10000:X8}", recoil["flags"]!.GetValue<string>());
+        Assert.Equal("canModify", recoil["declient"]!.GetValue<string>());
+        Assert.Null(recoil["flags"]);
         workspace.Apply(plan.Label, plan.Changes.Select(c => (c.Relative, (byte[]?)c.Content)), Token);
         var (_, flagged) = await BuildAsync(fixture, workspace);
         Assert.NotEqual(0u, flagged.Nodes.Single(n => n.Name == "ground").Flags & 0x10000);
-        // Clearing it again restores the default, so the extras entry goes away.
+        // Switching mode clears the previous bit atomically; undo restores it, without changing the zone gate.
         var (b2, w2) = await BuildAsync(fixture, workspace);
-        var clear = SourceObjectEdits.PlanFlag(workspace, w2.Nodes.Single(n => n.Name == "ground"), b2.Provenance[Slot(w2, "ground")], b2.Executions, 0x10000, false, Token);
-        Assert.Null(JsonNode.Parse(clear.Changes.Single().Content)!["nodes"]![0]!["extras"]!["recoil"]!["flags"]);
+        var clip = SourceObjectEdits.PlanFlag(workspace, w2.Nodes.Single(n => n.Name == "ground"), b2.Provenance[Slot(w2, "ground")], b2.Executions, 0x20000, true, Token);
+        workspace.Apply(clip.Label, clip.Changes.Select(c => (c.Relative, (byte[]?)c.Content)), Token);
+        var (b3, w3) = await BuildAsync(fixture, workspace);
+        Assert.Equal(0x20000u, w3.Nodes.Single(n => n.Name == "ground").Flags & 0x30000u);
+        workspace.Undo();
+        var (_, undone) = await BuildAsync(fixture, workspace);
+        Assert.Equal(0x10000u, undone.Nodes.Single(n => n.Name == "ground").Flags & 0x30000u);
+        workspace.Redo();
+        var clear = SourceObjectEdits.PlanFlag(workspace, w3.Nodes.Single(n => n.Name == "ground"), b3.Provenance[Slot(w3, "ground")], b3.Executions, 0x20000, false, Token);
+        var cleared = JsonNode.Parse(clear.Changes.Single().Content)!["nodes"]![0]!["extras"]!["recoil"]!.AsObject();
+        Assert.False(cleared.ContainsKey("declient")); Assert.False(cleared.ContainsKey("flags"));
+        Assert.Equal(WorldGltf.DefaultCarried, WorldGltf.StoredNodeFlags(cleared));
+        workspace.Apply(clear.Label, clear.Changes.Select(c => (c.Relative, (byte[]?)c.Content)), Token);
+        workspace.Save(Token);
+        var (_, reopened) = await BuildAsync(fixture, new(fixture.Project));
+        Assert.Equal(0u, reopened.Nodes.Single(n => n.Name == "ground").Flags & 0x30000u);
         // A flag of a script-created node is set by a new instruction after the one that created it.
         var tank = build.Provenance[Slot(world, "tank")];
         var scripted = SourceObjectEdits.PlanFlag(workspace, world.Nodes.Single(n => n.Name == "tank"), tank, build.Executions, 0x10, false, Token);
         Assert.Contains("LoadGameGen tank.flt tank\r\nSetIntersectSurface off\r\n", Encoding.Latin1.GetString(scripted.Changes.Single().Content));
+    }
+
+    [Fact]
+    public async Task DeclientModeTransitionsReconcileModelAndScriptWriters()
+    {
+        // Editing only the final writer used to leave the opposite bit active in the model or re-enabled by the script.
+        foreach (bool toModify in new[] { true, false })
+        {
+            using SourceWorldFixture fixture = new();
+            const string model = "data/m2/models/m2.gltf", script = "gamegen/m2.gs";
+            var json = JsonNode.Parse(File.ReadAllBytes(fixture.Path(model)))!;
+            json["nodes"]![0]!["extras"]![WorldGltf.Key]!["declient"] = toModify ? "clipTo" : "canModify";
+            fixture.Write(model, json.ToJsonString());
+            fixture.Write(script, File.ReadAllText(fixture.Path(script)).Replace("GameZWriteZBDFile",
+                $"FindNode ground\r\nNodeSetCanModify {(toModify ? "off" : "on")}\r\nGameZWriteZBDFile", StringComparison.Ordinal));
+            SourceWorkspace workspace = new(fixture.Project);
+            var (build, world) = await BuildAsync(fixture, workspace);
+            var ground = world.Nodes.Single(n => n.Name == "ground");
+            var plan = SourceObjectEdits.PlanFlag(workspace, ground, build.Provenance[Slot(world, "ground")], build.Executions,
+                toModify ? 0x10000u : 0x20000u, true, Token, "m2", null, world, build.WriteInstruction);
+            workspace.Apply(plan.Label, plan.Changes.Select(c => (c.Relative, (byte[]?)c.Content)), Token);
+            var (_, after) = await BuildAsync(fixture, workspace);
+            Assert.Equal(toModify ? 0x10000u : 0x20000u, after.Nodes.Single(n => n.Name == "ground").Flags & 0x30000u);
+            workspace.Undo();
+            var (_, undone) = await BuildAsync(fixture, workspace);
+            Assert.Equal(ground.Flags & 0x30000u, undone.Nodes.Single(n => n.Name == "ground").Flags & 0x30000u);
+            workspace.Redo(); workspace.Save(Token);
+            var (_, saved) = await BuildAsync(fixture, new(fixture.Project));
+            Assert.Equal(toModify ? 0x10000u : 0x20000u, saved.Nodes.Single(n => n.Name == "ground").Flags & 0x30000u);
+        }
+    }
+
+    [Fact]
+    public async Task SharedClipToEditRefusesAnotherMissionsCanModifyWithoutChangingSourcesOrHistory()
+    {
+        using SourceWorldFixture fixture = new();
+        const string firstScript = "gamegen/m1.gs", secondScript = "gamegen/m2.gs";
+        fixture.Write(firstScript, File.ReadAllText(fixture.Path(firstScript)).Replace("GameZWriteZBDFile",
+            "SetModelDirectory ..\\data\\m2\\models\\bft\r\nLoadGameGen tank.flt shared_tank\r\nGameZWriteZBDFile", StringComparison.Ordinal));
+        string second = File.ReadAllText(fixture.Path(secondScript)).Replace("GameZWriteZBDFile",
+            "FindNode hull\r\nNodeSetCanModify on\r\nGameZWriteZBDFile", StringComparison.Ordinal);
+        fixture.Write(secondScript, second);
+        byte[] modelBefore = File.ReadAllBytes(fixture.Path(fixture.Tank));
+        byte[] firstBefore = File.ReadAllBytes(fixture.Path(firstScript));
+        SourceWorkspace workspace = new(fixture.Project);
+        var (build, world) = await BuildAsync(fixture, workspace, "m1");
+        SourceEditPlan Plan()
+        {
+            var hull = world.Nodes.Single(n => n.Name == "hull");
+            return SourceObjectEdits.PlanFlag(workspace, hull, build.Provenance[Slot(world, "hull")], build.Executions,
+                0x20000, true, Token, "m1", null, world, build.WriteInstruction);
+        }
+        var error = Assert.Throws<InvalidDataException>(() => Plan());
+        Assert.Contains("m2", error.Message);
+        Assert.False(workspace.IsDirty); Assert.Equal(0, workspace.Revision); Assert.Equal(0, workspace.UndoCount);
+        Assert.Equal(modelBefore, workspace.Read(fixture.Tank, Token)); Assert.Equal(firstBefore, workspace.Read(firstScript, Token));
+        Assert.Equal(second, Encoding.ASCII.GetString(workspace.Read(secondScript, Token)!));
+
+        // Once that mission explicitly leaves CanModify off, the exact same shared edit can be prepared and saved.
+        workspace.Apply("Clear competing mode", [(secondScript, (byte[]?)Encoding.ASCII.GetBytes(second.Replace("NodeSetCanModify on", "NodeSetCanModify off", StringComparison.Ordinal)))], Token);
+        var allowed = Plan();
+        workspace.Apply(allowed.Label, allowed.Changes.Select(c => (c.Relative, (byte[]?)c.Content)), Token);
+        foreach (string mission in new[] { "m1", "m2" })
+        {
+            var (_, after) = await BuildAsync(fixture, workspace, mission);
+            Assert.Equal(0x20000u, after.Nodes.Single(n => n.Name == "hull").Flags & 0x30000u);
+        }
+        workspace.Save(Token);
+        Assert.False(workspace.IsDirty);
     }
 
     [Fact]

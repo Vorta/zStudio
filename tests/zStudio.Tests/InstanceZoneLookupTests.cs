@@ -30,15 +30,20 @@ public sealed class InstanceZoneLookupTests
         Assert.Equal(101, lookup.Used - cold); // One charged query each; no per-mark rescan.
         Assert.InRange(cold, 100, 10000);
 
-        // Any node's zone from what loads it, by map file and logical model: a node of a database loaded once is known; copies
-        // that differ (a part referenced from several zones) and other maps' loads are not.
-        const string map = "data/m1/meta/zones.json", logical = "data/m1/models/m1_01.gltf";
+        // A source node is identified by its physical owner and exact reference occurrence. Cached copies
+        // that differ remain ambiguous; another placement of the same physical model remains independent.
+        const string owner = "data/m1/models/m1.gltf", model = "m.gltf";
         foreach (var (node, zone) in new[] { (4, 0xFFFFFF05u), (4, 5u), (6, 5u), (6, 0xFFu) })
-            source.Add(new("copy", WorldNodeClass.Object3D) { Zone = zone }, new() { ModelFile = "m.gltf", ZoneManifest = map, LogicalModelFile = logical, ModelNode = node });
+            source.Add(new("copy", WorldNodeClass.Object3D) { Zone = zone }, new()
+            { ModelFile = model, ZoneOwnerPath = owner, ZoneOwnerReferences = [2, 3], ModelNode = node });
+        source.Add(new("other placement", WorldNodeClass.Object3D) { Zone = 9 }, new()
+        { ModelFile = model, ZoneOwnerPath = owner, ZoneOwnerReferences = [2, 4], ModelNode = 4 });
         var nodes = new SourceObjectEdits.InstanceZoneLookup(source, "m.gltf", Token);
-        Assert.Equal(5u, nodes.FindNode("DATA/m1/meta/zones.json", logical, 4));
-        Assert.Null(nodes.FindNode(map, logical, 6));
-        Assert.Null(nodes.FindNode("data/m2/meta/zones.json", logical, 4));
+        Assert.Equal(5u, nodes.FindNode("DATA/m1/models/m1.gltf", "M.GLTF", [2, 3], 4));
+        Assert.Null(nodes.FindNode(owner, model, [2, 3], 6));
+        Assert.Equal(9u, nodes.FindNode(owner, model, [2, 4], 4));
+        Assert.Null(nodes.FindNode(owner, model, [], 4));
+        Assert.Null(nodes.FindNode("data/m2/models/m2.gltf", model, [2, 3], 4));
         void Add(string file, int mark, uint zone) => source.Add(new("node", WorldNodeClass.Object3D) { Zone = zone },
             new() { ModelFile = file, Instance = new(mark) });
     }

@@ -46,10 +46,14 @@ public sealed class WorldNodeProvenance
 {
     /// <summary>The project path of the glTF file the node was imported from, or null for a node a script created.</summary>
     public string? ModelFile { get; internal set; }
-    /// <summary>The map's logical model asset, which can alias <see cref="ModelFile"/> with another zone profile.</summary>
+    /// <summary>The physical model identity used by the loader, retained alongside its source path.</summary>
     public string? LogicalModelFile { get; internal set; }
-    /// <summary>The authoritative map zone source, when this node was imported with a map profile.</summary>
+    /// <summary>Legacy sidecar provenance; current embedded source builds leave this null.</summary>
     public string? ZoneManifest { get; internal set; }
+    /// <summary>The physical glTF whose reference occurrence owns these editable assignments.</summary>
+    public string? ZoneOwnerPath { get; internal set; }
+    /// <summary>Physical node indices through the owner's reference hierarchy; empty for its own defaults.</summary>
+    public IReadOnlyList<int> ZoneOwnerReferences { get; internal set; } = [];
     /// <summary>Node and mesh ordinals in the profile's validated source layout; distinct from compiled slots.</summary>
     public int ZoneNode { get; internal set; } = -1;
     public int ZoneMesh { get; internal set; } = -1;
@@ -79,6 +83,25 @@ public sealed class WorldNodeProvenance
     /// node whichever copy comes first.
     /// </summary>
     public InstancePlace? Instance { get; internal set; }
+    /// <summary>
+    /// Whether this node lies in a shared source instance, including an instance in a referencing file. An external
+    /// file begins a new local instance namespace, but its content still belongs to the shared placement that loaded
+    /// it. Keep that scope separate from <see cref="Instance"/>, which identifies a definition in <see cref="ModelFile"/>.
+    /// </summary>
+    public bool SharedPlacement
+    {
+        get
+        {
+            int depth = 0;
+            for (WorldNodeProvenance? at = this; at != null; at = at.ReferencedBy)
+            {
+                if (++depth > Gltf.GltfDocument.MaximumDepth + 1)
+                    throw new InvalidDataException("The source provenance exceeds the supported reference depth; rebuild the world before editing it.");
+                if (at.Instance != null) return true;
+            }
+            return false;
+        }
+    }
     /// <summary>The LoadGameGen that read the node's file.</summary>
     public SourceInstruction? Load { get; internal set; }
     /// <summary>

@@ -39,13 +39,15 @@ public static partial class WorldGltf
         {
             if (nodes[i] is not JsonObject node || Mark(((node["extras"] as JsonObject)?[Key] as JsonObject)?["instance"]) is not { } mark) continue;
             if (!shared.TryGetValue(mark, out var first)) { shared[mark] = zones[i].Zone; continue; }
-            if (first is { } zone && zones[i].Zone != zone && StatedZone((node["extras"] as JsonObject)?[Key]) == null && Engine(node) is { } copy) { copy["zone"] = (int)zone; stated = true; }
+            if (first is { } zone && zones[i].Zone != zone && StatedZone((node["extras"] as JsonObject)?[Key]) == null && Engine(node) is { } copy)
+            { WriteNodeZoneValue(copy, ReadNodeZoneValue(copy, DefaultZone, "the source node") & ~255u | zone); stated = true; }
         }
         if (stated) zones = FileZones(nodes, parents);
         for (int i = 0; i < nodes.Count; i++)
         {
             if (nodes[i] is not JsonObject node || StatedZone((node["extras"] as JsonObject)?[Key]) != null || Engine(node) is not { } engine) continue;
-            if (zones[i].Zone is { } zone) engine["zone"] = (int)zone; else engine[ZoneFromLoad] = true;
+            if (zones[i].Zone is { } zone) WriteNodeZoneValue(engine, ReadNodeZoneValue(engine, DefaultZone, "the source node") & ~255u | zone);
+            else engine[ZoneFromLoad] = true;
         }
     }
 
@@ -70,10 +72,11 @@ public static partial class WorldGltf
             bool marked = engine.Remove(ZoneFromLoad);
             if (StatedZone(engine) is { } own)
             {
-                if (own == passed && engine["zone"] != null && engine["zoneWord"] == null) engine.Remove("zone");
+                if (own == passed && engine["zone"] != null && engine["zoneWord"] == null && engine["zonePadding"] == null)
+                engine.Remove("zone");
             }
             else if (marked && passed is { } zone && !marks[owner])
-                throw new InvalidDataException($"{path}: {JsonData.ShownText(EngineName(node))} took its zone from what loads the file; under {JsonData.ShownText(EngineName((JsonObject)nodes[parents[i]]!))} it would take zone {zone} instead. Give it a zone of its own (custom property recoil → zone, 255 for any zone) or move it back.");
+                throw new InvalidDataException($"{path}: {JsonData.ShownText(EngineName(node))} took its zone from what loads the file; under {JsonData.ShownText(EngineName((JsonObject)nodes[parents[i]]!))} it would take zone {zone} instead. Give it a zone of its own (custom property recoil → zone, 'any' for any zone) or move it back.");
             // A node that had no engine values gets none.
             if (engine.Count == 0 && node["extras"] is JsonObject extras) { extras.Remove(Key); if (extras.Count == 0) node.Remove("extras"); }
         }
@@ -268,7 +271,8 @@ public static partial class WorldGltf
     private static bool SameValues(GltfNode a, GltfNode b)
     {
         JsonObject? x = a.Extras?[Key] as JsonObject, y = b.Extras?[Key] as JsonObject;
-        if (x == null || y == null) return x == null && y == null;
+        if (StoredNodeFlags(x) != StoredNodeFlags(y)) return false;
+        if (x == null || y == null) return (x ?? y)?.All(p => Ignored(p.Key)) != false;
         int compared = 0;
         foreach (var (name, value) in x)
         {
@@ -279,7 +283,7 @@ public static partial class WorldGltf
             if (!JsonNode.DeepEquals(value, other)) return false;
         }
         return compared == y.Count(p => !Ignored(p.Key));
-        static bool Ignored(string key) => key is "zone" or "instance" or "name" or ZoneFromLoad;
+        static bool Ignored(string key) => key is "zone" or "instance" or "name" or ZoneFromLoad || NodeFlagFields.Contains(key);
     }
     private static bool SameMatrix(Matrix4x4 a, Matrix4x4 b)
     {

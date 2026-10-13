@@ -2,6 +2,13 @@
 
 Version numbers follow `MAJOR.MINOR.PATCH`; the 0.x series is under active development. Release tags and downloadable archives use the same version.
 
+## 0.8.5 — 2026-10-13
+
+- Reconstruct original model-file ownership as linked glTF sources, retaining uncertain map parts inside their owning file and keeping game attributes and placement-specific assignments in glTF. Existing sidecar-based source projects require fresh extraction from the original ZBD files.
+- Make the source-project Blender round-trip unavailable pending the reference-aware Blender plugin.
+- Store glTF object zones as numeric IDs 0–254, `"any"` or `"inherit"`, and polygon zones as ordered numeric ID arrays. Object `zone: 255` and the obsolete inheritance booleans are refused. Altitude gates and opaque byte preservation stay separate; existing packed hexadecimal assignments remain readable. Inherited-zone inspection reports the selected placement's effective source zone after parent edits.
+- Replace packed glTF node flags with readable names. Omitted Boolean flags mean false and output contains only true flags; `declient` holds only `"canModify"` or `"clipTo"`, with omitted/null meaning neither. Load-root attributes share `loadRoot`, and independent altitude gates use `altitudeZoneCheck`. Source format 4 requires fresh extraction of earlier source projects. Unresolved upper node bits are normalized to zero in source builds; direct binary preservation is unchanged. GUI and MCP crater-mode edits switch modes atomically and refuse changes that the source cannot express safely.
+
 ## 0.8.4 — 2026-10-13
 
 - Inspect triangle winding with **Face orientation**: blue fronts and red backs in model, Whole world and animation previews, including mirrored and animated transforms. The temporary rendering override restores existing material options when disabled and shares GUI/MCP state without editing source data (#15).

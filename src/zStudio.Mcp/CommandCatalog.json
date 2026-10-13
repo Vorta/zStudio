@@ -5881,7 +5881,7 @@
       {
         "Name": "flag",
         "Type": "string",
-        "Description": "Node flag to set or clear.",
+        "Description": "Node flag to set or clear. Enabling CanModify (0x10000) or ClipTo (0x20000) clears the other mode atomically; a source that cannot express that change is refused.",
         "Required": false,
         "Choices": [
           "0x8",
@@ -5890,14 +5890,15 @@
           "0x40",
           "0x80",
           "0x10000",
-          "0x20000"
+          "0x20000",
+          "0x800000"
         ],
         "Properties": null
       },
       {
         "Name": "on",
         "Type": "boolean",
-        "Description": "Whether the flag is set; required with flag.",
+        "Description": "Whether the flag is set; required with flag. Clearing the selected crater mode leaves neither mode. For a glTF-owned mode this removes declient; a script-owned setting changes its instruction.",
         "Required": false,
         "Choices": null,
         "Properties": null
@@ -5924,7 +5925,7 @@
   },
   {
     "Name": "zstudio_source_blender_checkout",
-    "Description": "Check a project model out for Blender: its glTF, buffers and textures are copied into the project\u0027s zstudio/export/\u003Cid\u003E/input folder as a self-contained glTF to import in Blender. Export the edited model as glTF Separate (.gltf \u002B .bin \u002B textures, Custom Properties on) into the checkout\u0027s outbox, then call source_blender_update. Give the model path, or a source world document and scene node to check out the model that object comes from. Cancelling removes the partial copy. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Description": "Source-project Blender checkout and update are unavailable until the reference-aware Blender plugin is available. Ordinary Blender glTF import/export does not preserve the project\u0027s linked model hierarchy and embedded game attributes. Returns an operation ID; use zstudio_operation to await/read the result.",
     "Mutates": true,
     "Parameters": [
       {
@@ -5974,7 +5975,7 @@
   },
   {
     "Name": "zstudio_source_blender_update",
-    "Description": "Update a checked-out model from what Blender exported into its outbox, as one undoable change of the project\u0027s workspace: the export is sealed (copied while checking it is complete), read as a build reads models, and becomes the model\u0027s glTF and buffer, with each texture PNG Blender added or changed; a texture other models use changes for them too (reported in notes). A material\u0027s recorded colour, opacity and back faces follow the base colour, alpha and Backface Culling changed in Blender. Files changed in the project since the checkout (other edits, or another update), existing project files the checkout did not hold (another model\u0027s texture of the same name), a texture whose name a mission\u0027s build finds first in another texture folder or that would take the name from another file there (the game finds textures by name), an export without the model\u0027s engine attributes (Blender\u0027s Custom Properties off), and faces or nodes with map zones that the export rebuilt or renamed (their zones cannot follow; force gives them the model\u0027s own) are not applied unless force is true: the command fails with code conflict, naming all of them at once. Every map that binds the model keeps its zones for the faces and nodes that still correspond (its zones.json changes with the model) and the faces keep their polygon boundaries. Nodes and polygons that correspond keep the order the model had (Blender lists children by name and triangles by material; the order decides node slots, and so which of several nodes of one name a lookup finds, and the polygons\u0027 draw order); new nodes and nodes moved to another parent follow that parent\u0027s other children, unnamed nodes stay unnamed, and a node renamed in Blender takes the new name (notes list the renames, which can change what scripts and animations find by name). The source world rebuilds and the result is its replacement document; an export the world cannot be built with is taken back. files lists the files the change wrote. Nothing is written until save_document. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Description": "Source-project Blender checkout and update are unavailable until the reference-aware Blender plugin is available. Ordinary Blender glTF import/export does not preserve the project\u0027s linked model hierarchy and embedded game attributes. Returns an operation ID; use zstudio_operation to await/read the result.",
     "Mutates": true,
     "Parameters": [
       {
@@ -6448,7 +6449,7 @@
   },
   {
     "Name": "zstudio_source_zones",
-    "Description": "Inspect the map zone catalog and pinned draft. Zone assignments live in data/mN/meta/zones.json; model geometry is shared. Optional exact targets return a bounded profile/scope page.",
+    "Description": "Inspect the map zone catalog and pinned draft. Zone assignments live in their owning glTF nodes, polygons or reference placements. Catalog and inspection report the master and owning source paths. Optional exact targets return a bounded assignment/scope page.",
     "Mutates": false,
     "Parameters": [
       {
@@ -6511,7 +6512,7 @@
   },
   {
     "Name": "zstudio_source_zone_draft",
-    "Description": "Open, edit, paint or apply the shared zone draft. begin opens Properties; set configures faces/objects, ordered zones, gate and shared scope; add supplies exact node/polygon targets; paint toggles the explicit GUI brush; apply accepts one undoable edit; cancel discards, including targets made stale by another source edit. Every action after begin requires the current draftToken and current document revision. Geometry is unchanged by zone-only edits. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Description": "Open, edit, paint or apply the shared zone draft. begin opens Properties; set configures faces/objects, ordered zones, gate and shared scope; add supplies exact node/polygon targets; paint toggles the explicit GUI brush; apply accepts one undoable edit; cancel discards, including targets made stale by another source edit. Every action after begin requires the current draftToken and current document revision. Zone-only edits update owning glTF metadata without changing geometry buffers. Returns an operation ID; use zstudio_operation to await/read the result.",
     "Mutates": true,
     "Parameters": [
       {
@@ -6616,7 +6617,7 @@
       {
         "Name": "sharedScope",
         "Type": "boolean",
-        "Description": "Explicitly permit every use of selected logical model/mesh in this map.",
+        "Description": "Explicitly permit other placements and missions that inherit the selected source assignment. Inspect source_zones for the affected sources and missions first.",
         "Required": false,
         "Choices": null,
         "Properties": null

@@ -48,6 +48,7 @@ public sealed class BlenderConflictException(IReadOnlyList<string> files, string
 public static partial class SourceBlender
 {
     public const string ExportFolder = "zstudio/export";
+    public const string UnavailableMessage = "Source-project Blender checkout and update are unavailable until the reference-aware Blender plugin is available. Ordinary Blender glTF import/export does not preserve the project's linked model hierarchy and embedded game attributes.";
     private const string ManifestName = "manifest.json";
     private const long MaximumExportBytes = 512L * 1024 * 1024;
     private const long MaximumManifestBytes = 64L * 1024 * 1024;
@@ -126,7 +127,7 @@ public static partial class SourceBlender
     /// workspace's unsaved edits, the disk for the rest), and a file another program changes before the copy is complete
     /// refuses the checkout with <see cref="SourceFileChangedException"/>. The project's file is not changed.
     /// </summary>
-    public static BlenderCheckout Checkout(SourceWorkspace workspace, string model, CancellationToken token = default) => Checkout(workspace, model, token, null);
+    public static BlenderCheckout Checkout(SourceWorkspace workspace, string model, CancellationToken token = default) => throw new NotSupportedException(UnavailableMessage);
     /// <summary>As <see cref="Checkout(SourceWorkspace, string, CancellationToken)"/>; <paramref name="read"/> is told each project file the checkout has read (tests change files there).</summary>
     internal static BlenderCheckout Checkout(SourceWorkspace workspace, string model, CancellationToken token, Action<string>? read,
         int maximumManifestBytes = MaximumCheckoutManifestBytes, long maximumScriptCacheBytes = MaximumScriptCacheBytes,
@@ -454,7 +455,7 @@ public static partial class SourceBlender
     /// <paramref name="force"/> replaces them anyway.
     /// </summary>
     public static BlenderUpdatePlan PlanUpdate(SourceWorkspace workspace, BlenderCheckout checkout, string? export = null, bool force = false, CancellationToken token = default)
-        => PlanUpdate(workspace, checkout, export, force, token, MaximumExportBytes, GltfDocument.MaximumJsonBytes);
+        => throw new NotSupportedException(UnavailableMessage);
 
     /// <summary>
     /// Ask about all conflicts of this sealed export before continuing the same plan. The callback runs on the caller's
@@ -463,7 +464,7 @@ public static partial class SourceBlender
     /// </summary>
     public static BlenderUpdatePlan PlanUpdate(SourceWorkspace workspace, BlenderCheckout checkout, string? export,
         Func<BlenderConflictException, CancellationToken, bool> confirmConflict, CancellationToken token = default)
-        => PlanUpdate(workspace, checkout, export, false, token, MaximumExportBytes, GltfDocument.MaximumJsonBytes, confirmConflict);
+        => throw new NotSupportedException(UnavailableMessage);
 
     internal static BlenderUpdatePlan PlanUpdate(SourceWorkspace workspace, BlenderCheckout checkout, string? export, bool force, CancellationToken token,
         long maximumExportBytes, int maximumJsonBytes = GltfDocument.MaximumJsonBytes, Func<BlenderConflictException, CancellationToken, bool>? confirmConflict = null)

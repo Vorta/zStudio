@@ -137,23 +137,4 @@ public sealed class ImportRound13Tests
         y.Zone = x.Zone;
         Assert.True(WorldComparer.Interchangeable(a, b, token: Token));
     }
-
-    [Fact]
-    public void LargeAppliedUpdateRecordsAllFilesAndRepeatedUpdates()
-    {
-        using SourceWorldFixture fixture = new();
-        var checkout = SourceBlender.Checkout(new SourceWorkspace(fixture.Project), "data/m1/models/m1.gltf", Token);
-        var changes = Enumerable.Range(0, 4096).Select(i => ($"data/m1/textures/t{i}.png", new byte[] { 1 })).ToList();
-        changes.Add((checkout.Model, [2])); changes.Add(("data/m1/models/m1.bin", [3]));
-        SourceBlender.RecordApplied(checkout, new("many", changes, [], checkout.Folder));
-        var read = SourceBlender.Find(fixture.Project, checkout.Id);
-        Assert.Equal(changes.Count, read.Applied.Count);
-        Assert.All(changes, change => Assert.Contains(read.Applied, state => state.Project == change.Item1 && state.Sha256 == SourceProject.Sha256(change.Item2)));
-        SourceBlender.RecordApplied(read, new("same", changes, [], checkout.Folder));
-        Assert.Equal(changes.Count, SourceBlender.Find(fixture.Project, checkout.Id).Applied.Count);
-        SourceBlender.RecordApplied(read, new("next", [(checkout.Model, new byte[] { 4 })], [], checkout.Folder));
-        read = SourceBlender.Find(fixture.Project, checkout.Id);
-        Assert.Contains(read.Applied, state => state.Project == checkout.Model && state.Sha256 == SourceProject.Sha256([4]));
-        Assert.Contains(read.Applied, state => state.Project == checkout.Model && state.Sha256 == SourceProject.Sha256([2]));
-    }
 }

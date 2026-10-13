@@ -12,7 +12,7 @@ public sealed class ImportRound23NodeRemovalTests
     public void BulkDeletionKeepsNodeObjectsAndRenumbersEveryReferenceInOnePass()
     {
         var root = JsonNode.Parse("""
-            {"nodes":[{"name":"a","children":[1,2]},{"name":"remove","children":[3]},
+            {"nodes":[{"name":"a","children":[1,2],"extras":{"recoil":{"inlineSource":{"id":"part","count":1}}}},{"name":"remove","children":[3]},
               {"name":"keep"},{"name":"descendant"},{"name":"last"}],
              "scenes":[{"nodes":[0,4]},{"nodes":[1,2,4]}],
              "animations":[{"channels":[{"target":{"node":4,"path":"translation"}}]}],
@@ -22,10 +22,36 @@ public sealed class ImportRound23NodeRemovalTests
         GltfNodeEdits.Remove(root, new[] { 1, 3 }, Token);
         Assert.Same(nodes, root["nodes"]); Assert.Same(keep, nodes[1]); Assert.Same(last, nodes[2]);
         Assert.Equal("[1]", nodes[0]!["children"]!.ToJsonString());
+        Assert.Equal(0, nodes[0]!["extras"]!["recoil"]!["inlineSource"]!["count"]!.GetValue<int>());
         Assert.Equal("[0,2]", root["scenes"]![0]!["nodes"]!.ToJsonString());
         Assert.Equal("[1,2]", root["scenes"]![1]!["nodes"]!.ToJsonString());
         Assert.Equal(2, (int)root["animations"]![0]!["channels"]![0]!["target"]!["node"]!);
         Assert.Equal("[0,1,2]", root["skins"]![0]!["joints"]!.ToJsonString());
+    }
+
+    [Theory]
+    [InlineData("copy-prefix")]
+    [InlineData("copy-suffix")]
+    [InlineData("move")]
+    public void InlineSourceMembershipFollowsTheEditedPrefix(string edit)
+    {
+        var root = JsonNode.Parse("""
+            {"nodes":[{"name":"holder","children":[1,2,3],"extras":{"recoil":{"inlineSource":{"id":"part","count":2}}}},
+              {"name":"a"},{"name":"b"},{"name":"own"},
+              {"name":"destination","children":[5],"extras":{"recoil":{"inlineSource":{"id":"other","count":1}}}},
+              {"name":"c"}],"scenes":[{"nodes":[0,4]}],"scene":0}
+            """)!.AsObject();
+        if (edit == "move") GltfNodeEdits.Reparent(root, 1, 4, token: Token);
+        else GltfNodeEdits.Duplicate(root, edit == "copy-prefix" ? 1 : 3, "copy");
+        string[] Prefix(int index)
+        {
+            var owner = root["nodes"]![index]!;
+            int count = owner["extras"]!["recoil"]!["inlineSource"]!["count"]!.GetValue<int>();
+            return owner["children"]!.AsArray().Take(count).Select(n => root["nodes"]![n!.GetValue<int>()]!["name"]!.GetValue<string>()).ToArray();
+        }
+        Assert.Equal(edit == "move" ? ["b"] : edit == "copy-prefix" ? ["a", "copy", "b"] : new[] { "a", "b" }, Prefix(0));
+        Assert.Equal(new[] { "c" }, Prefix(4));
+        if (edit == "move") Assert.Equal(1, root["nodes"]![4]!["children"]![1]!.GetValue<int>());
     }
 
     [Fact]

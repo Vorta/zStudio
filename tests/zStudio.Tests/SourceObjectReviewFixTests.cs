@@ -4,6 +4,7 @@ using System.Text;
 using System.Text.Json.Nodes;
 using Recoil.Zbd.Core;
 using Recoil.Zbd.Core.Formats;
+using Recoil.Zbd.Core.Gltf;
 using Recoil.Zbd.Core.Sources;
 using Recoil.Zbd.Core.Worlds;
 using Xunit;
@@ -18,6 +19,79 @@ namespace Recoil.Zbd.Tests;
 public sealed class SourceObjectReviewFixTests
 {
     private static CancellationToken Token => TestContext.Current.CancellationToken;
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task PromotingAnInstanceKeepsItsPaintedReferenceAssignmentsThroughSave(bool move)
+    {
+        using SourceWorldFixture fixture = new(); fixture.WriteSharedDatabase();
+        const string database = "data/m1/models/m1.gltf", model = "data/m1/models/leaf.gltf";
+        byte[] source = File.ReadAllBytes(fixture.Path(database));
+        var root = JsonNode.Parse(source)!.AsObject();
+        var document = WorldAssembler.ReadModel(source, database, (path, _) => File.ReadAllBytes(fixture.Path(path)), Token);
+        GltfDocument leaf = new();
+        leaf.Roots.Add(new() { Name = "leaf", Mesh = document.AllNodes().First(n => n.Name == "gate").Mesh });
+        var written = leaf.Write("leaf.bin", Token);
+        fixture.Write(model, written.Json); fixture.Write("data/m1/models/leaf.bin", written.Binary);
+        foreach (var node in root["nodes"]!.AsArray().Where(n => n?["name"]?.GetValue<string>() == "gate"))
+        {
+            node!.AsObject().Remove("mesh");
+            node["extras"] ??= new JsonObject(); node["extras"]![WorldGltf.Key] ??= new JsonObject();
+            node["extras"]![WorldGltf.Key]!["ref"] = "leaf.gltf";
+            node["extras"]![WorldGltf.Key]!["overwrite"] = true;
+        }
+        fixture.Write(database, root.ToJsonString());
+        SourceWorkspace workspace = new(fixture.Project);
+        var (build, world) = await BuildAsync(fixture, workspace);
+        int slot = GameZWriter.NodeSlots(world, Token)[world.Nodes.Single(n => n.Name == "leaf")];
+        Assert.True(SourceZoneEdits.Inspect(workspace, build, [new(slot)], token: Token).RequiresSharedScope);
+        Assert.Throws<InvalidDataException>(() => SourceZoneEdits.PlanAssignments(workspace, build, [new(slot)], new(NodeZone: 77), false, Token));
+        var paint = SourceZoneEdits.PlanAssignments(workspace, build, [new(slot)], new(NodeZone: 77, Gate: false), true, Token);
+        Assert.NotNull(workspace.Apply(paint.Label, paint.Changes.Select(c => (c.Relative, (byte[]?)c.Content)), Token));
+        (build, world) = await BuildAsync(fixture, workspace);
+        Assert.Equal(77u, Zone(world.Nodes.Single(n => n.Name == "leaf")));
+        int gateSlot = GameZWriter.NodeSlots(world, Token)[world.Nodes.Single(n => n.Name == "gate")];
+        var gatePaint = SourceZoneEdits.PlanAssignments(workspace, build, [new(gateSlot)], new(NodeZone: 11, Gate: false), true, Token);
+        Assert.NotNull(workspace.Apply(gatePaint.Label, gatePaint.Changes.Select(c => (c.Relative, (byte[]?)c.Content)), Token));
+        (build, world) = await BuildAsync(fixture, workspace);
+        var assignments = Profile(); var scopes = Scopes();
+        var gate = world.Nodes.Single(n => n.Name == "gate");
+        Apply(workspace, SourceObjectEdits.PlanFlag(workspace, gate, Origin(build, world, gate), build.Executions,
+            0x10000, (gate.Flags & 0x10000) == 0, Token));
+        (build, world) = await BuildAsync(fixture, workspace);
+        gate = world.Nodes.Single(n => n.Name == "gate");
+        var shown = ObjectTransform.Of(gate);
+        Apply(workspace, SourceObjectEdits.PlanTransform(workspace, "gate", Origin(build, world, gate), build.Executions,
+            shown with { Position = shown.Position + new Vector3(1, 0, 0) }, Token, current: shown));
+        (build, world) = await BuildAsync(fixture, workspace);
+        Assert.Equal(assignments.Nodes, Profile().Nodes);
+        Assert.Equal(assignments.MeshPolygons.SelectMany(x => x), Profile().MeshPolygons.SelectMany(x => x));
+        Assert.Equal(scopes, Scopes());
+        Assert.Equal(77u, Zone(world.Nodes.Single(n => n.Name == "leaf")));
+        Assert.Equal(11u, Zone(world.Nodes.Single(n => n.Name == "gate")));
+        Assert.All(JsonNode.Parse(workspace.Read(database, Token)!)!["nodes"]!.AsArray().Where(n => n?["name"]?.GetValue<string>() == "gate"),
+            n => Assert.True(n!["extras"]![WorldGltf.Key]!["overwrite"]!.GetValue<bool>()));
+        var target = Target(workspace, build, world, "sgate1");
+        Apply(workspace, move ? SourceObjectEdits.PlanReparent(target, world.Nodes.Single(n => n.Name == "sgate2"), Token)
+            : SourceObjectEdits.PlanDelete(target, Token));
+        (_, var promoted) = await BuildAsync(fixture, workspace);
+        Assert.Equal(77u, Zone(promoted.Nodes.Single(n => n.Name == "leaf")));
+        workspace.Undo();
+        (_, var undone) = await BuildAsync(fixture, workspace);
+        Assert.Contains(undone.Nodes, n => n.Name == "sgate1");
+        Assert.Equal(77u, Zone(undone.Nodes.Single(n => n.Name == "leaf")));
+        workspace.Redo(); workspace.Save(Token);
+        (_, var reopened) = await BuildAsync(fixture, new(fixture.Project));
+        Assert.Equal(77u, Zone(reopened.Nodes.Single(n => n.Name == "leaf")));
+        Assert.Equal(written.Json, File.ReadAllBytes(fixture.Path(model)));
+        Assert.Equal(written.Binary, File.ReadAllBytes(fixture.Path("data/m1/models/leaf.bin")));
+
+        WorldZoneProfile Profile() => WorldGltf.CaptureZoneProfile(WorldAssembler.ReadModel(workspace.Read(database, Token)!, database,
+            (path, _) => workspace.Read(path, Token)!, Token), token: Token);
+        string?[] Scopes() => JsonNode.Parse(workspace.Read(database, Token)!)!["nodes"]!.AsArray()
+            .Select(n => n?["extras"]?[WorldGltf.Key]?["zoneOverrides"]?.ToJsonString()).ToArray();
+    }
 
     private static async Task<(SourceWorldBuild Build, GameZWorld World)> BuildAsync(SourceWorldFixture fixture, SourceWorkspace workspace, string mission = "m1")
     {
@@ -120,7 +194,7 @@ public sealed class SourceObjectReviewFixTests
         Assert.Equal(3u, Zone(after.Nodes.Single(n => n.Name == "gate")));
         // Every copy states it, so the copies stay alike.
         var file = JsonNode.Parse(workspace.Read("data/m1/models/m1.gltf", Token)!)!;
-        Assert.All(file["nodes"]!.AsArray().Where(n => n!["name"]!.GetValue<string>() == "holder"), h => Assert.Equal(3, h!["extras"]![WorldGltf.Key]!["zone"]!.GetValue<int>()));
+        Assert.All(file["nodes"]!.AsArray().Where(n => n!["name"]!.GetValue<string>() == "holder"), h => Assert.Equal(3u, WorldGltf.StatedZone(h!["extras"]![WorldGltf.Key])));
         workspace.Undo();
 
         // Without sgate1 the build reads sgate2's copy: the same.

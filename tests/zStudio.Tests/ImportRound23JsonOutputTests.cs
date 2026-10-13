@@ -25,32 +25,4 @@ public sealed class ImportRound23JsonOutputTests
         byte[] compact = GltfJson.Write(root, false, Token);
         Assert.True(JsonNode.DeepEquals(root, JsonNode.Parse(compact))); // Unknown metadata remains intact.
     }
-
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public void BlenderRefusesReaderSizedInputWhoseEditedSerializationExceedsTheReaderLimit(bool update)
-    {
-        using SourceWorldFixture fixture = new();
-        byte[] input = NestedMetadata(350_000);
-        Assert.True(input.Length < 1024 * 1024);
-        Assert.Single(GltfDocument.Read(input, _ => throw new InvalidOperationException(), Token).Roots);
-        SourceWorkspace workspace = new(fixture.Project);
-        if (!update)
-        {
-            fixture.Write(Model, input);
-            Assert.Throws<InvalidDataException>(() => SourceBlender.Checkout(workspace, Model, Token));
-            Assert.Empty(SourceBlender.Checkouts(fixture.Project, Token));
-        }
-        else
-        {
-            fixture.Write(Model, "{\"asset\":{\"version\":\"2.0\"},\"nodes\":[{\"name\":\"object\"}]}");
-            var checkout = SourceBlender.Checkout(workspace, Model, Token);
-            File.WriteAllBytes(Path.Combine(checkout.Outbox, "edited.gltf"), input);
-            Assert.Throws<InvalidDataException>(() => SourceBlender.PlanUpdate(workspace, checkout, "edited.gltf", token: Token));
-            Assert.Empty(workspace.Overlay());
-            Assert.False(Directory.Exists(Path.Combine(checkout.Folder, "sealed"))
-                && Directory.EnumerateDirectories(Path.Combine(checkout.Folder, "sealed")).Any());
-        }
-    }
 }

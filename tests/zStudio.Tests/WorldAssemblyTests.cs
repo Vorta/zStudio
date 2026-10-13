@@ -158,7 +158,7 @@ public sealed class WorldAssemblyTests
         string crateJson = Encoding.UTF8.GetString(outputs.Single(o => o.Path == "data/common/models/crate.gltf").Bytes);
         Assert.Contains("\"alphaMode\": \"BLEND\"", crateJson); Assert.DoesNotContain("~hidden", crateJson);
         Assert.Contains("\"alphaMode\": \"BLEND\"", Encoding.UTF8.GetString(outputs.Single(o => o.Path == "data/m1/models/m1.gltf").Bytes));
-        Assert.Equal(["data/common/models/crate.bin", "data/common/models/crate.gltf", "data/m1/meta/zones.json", "data/m1/models/m1.bin", "data/m1/models/m1.gltf"], outputs.Select(o => o.Path).Order(StringComparer.Ordinal));
+        Assert.Equal(["data/common/models/crate.bin", "data/common/models/crate.gltf", "data/m1/models/m1.bin", "data/m1/models/m1.gltf"], outputs.Select(o => o.Path).Order(StringComparer.Ordinal));
         MemoryFiles rebuilt = new(new(StringComparer.Ordinal) { ["gamegen/m1.gs"] = project.Files["gamegen/m1.gs"], ["data/m1/textures/rock.png"] = [0] });
         foreach (var output in outputs) rebuilt.Files[output.Path] = output.Bytes;
         WorldAssembler again = new(rebuilt, Token);
@@ -215,8 +215,7 @@ public sealed class WorldAssemblyTests
             (_, _) => null, new HashSet<string>(), _ => 0, notes, Token);
         Assert.Empty(notes);
         Assert.Equal(["data/common/effects/models/spark.gltf", "data/common/models/tank.gltf", "data/m1/models/m1.gltf", "data/m2/models/m2.gltf", "data/m3/models/bft/tank.gltf", "data/m3/models/m3.gltf"],
-            outputs.Where(o => o.Path.EndsWith("/meta/zones.json", StringComparison.Ordinal))
-                .SelectMany(o => SourceMapZones.Parse(o.Bytes, Token).Assets).Select(a => a.LogicalPath)
+            outputs.Where(o => o.Path.EndsWith(".gltf", StringComparison.Ordinal)).Select(o => o.Path)
                 .Distinct(StringComparer.OrdinalIgnoreCase).Order(StringComparer.Ordinal));
         MemoryFiles rebuilt = new(files.Where(f => f.Key.StartsWith("gamegen/", StringComparison.Ordinal)).ToDictionary(f => f.Key, f => f.Value, StringComparer.Ordinal));
         foreach (var output in outputs) rebuilt.Files[output.Path] = output.Bytes;

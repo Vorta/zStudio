@@ -25,7 +25,7 @@ internal sealed class SourceMissionModels
     }
 
     internal SourceMapZoneAsset? Asset(string logical) => Map?.TryGetAsset(logical, out var asset) == true ? asset : null;
-    internal string Geometry(string logical) => Asset(logical)?.GeometryPath ?? logical;
+    internal string Geometry(string logical) => logical;
     internal string? Reference(string logical, int node) => references.TryGetValue(logical, out var nodes) ? nodes.GetValueOrDefault(node) : null;
 
     internal static string? EffectiveReference(JsonObject? extras, string? binding)
@@ -52,10 +52,6 @@ internal sealed class SourceMissionModels
 
     internal bool Exists(string logical, Func<string, bool> exists)
     {
-        if (Asset(logical) is not { } asset) return exists(logical);
-        // A missing backing file is a broken binding, not permission to search another directory.
-        if (!logical.Equals(asset.GeometryPath, StringComparison.OrdinalIgnoreCase) && exists(logical))
-            throw new InvalidDataException($"{JsonData.ShownText(logical)} exists both as a map zone alias and as a physical model. Remove the conflicting alias or rename the model before building.");
-        return true;
+        return exists(logical);
     }
 }

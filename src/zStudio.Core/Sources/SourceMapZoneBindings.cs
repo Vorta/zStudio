@@ -7,36 +7,108 @@ namespace Recoil.Zbd.Core.Sources;
 /// <summary>Prepared companion edits for every map that owns assignments on a physical geometry file.</summary>
 internal sealed class SourceMapZoneBindings
 {
-    private sealed record Owner(string Path, SourceMapZones Map, IReadOnlyList<SourceMapZoneAsset> Assets);
+    private sealed record Owner(string Path, IReadOnlyList<SourceMapZoneAsset> Assets, SourceEmbeddedZones.Entry Entry, bool OwnsProfile);
+    private SourceEmbeddedZones embedded = null!;
+    private string geometry = "";
+    private bool referenced;
     private readonly List<Owner> owners = [];
     internal bool Any => owners.Count != 0;
+    internal static void ValidateOwned(SourceWorkspace workspace, string ownerPath, CancellationToken token)
+    {
+        _ = new SourceEmbeddedZones(workspace, token).Closure(ownerPath);
+    }
+
+    private void RemapNestedReferences(SourceEmbeddedZones.Entry entry, IReadOnlyDictionary<int, int> origins, CancellationToken token)
+    {
+        if (entry.ReferenceChain.Count == 0) return;
+        if (embedded.OwnedOverride(entry) is not { } scope || scope["references"] is not JsonObject references) return;
+        JsonObject remapped = [];
+        Dictionary<JsonNode, int> sizes = new(ReferenceEqualityComparer.Instance);
+        long retained = 0;
+        foreach (var (current, original) in origins)
+        {
+            token.ThrowIfCancellationRequested();
+            if (original >= 0 && references[original.ToString(System.Globalization.CultureInfo.InvariantCulture)] is { } assignment)
+            {
+                if (!sizes.TryGetValue(assignment, out int size)) sizes.Add(assignment, size = GltfJson.Write(assignment, false, token).Length);
+                if (size > GltfDocument.MaximumMetadataBytes - retained)
+                    throw new InvalidDataException("Copying these reference assignments exceeds the source metadata allowance.");
+                retained += size;
+                remapped[current.ToString(System.Globalization.CultureInfo.InvariantCulture)] = assignment.DeepClone();
+            }
+        }
+        scope["references"] = remapped;
+        embedded.MarkChanged(entry.OwnerPath);
+    }
     internal void RequireSingleTerrainOwner(string database)
     {
-        if (owners.Count > 1 || owners.Any(o => o.Assets.Count != 1 || !o.Assets[0].LogicalPath.Equals(database, StringComparison.OrdinalIgnoreCase)))
+        if (referenced || owners.Count > 1 || owners.Any(o => o.Assets.Count != 1 || !o.Assets[0].LogicalPath.Equals(database, StringComparison.OrdinalIgnoreCase)))
             throw new InvalidDataException("This database geometry is shared by several map bindings. Give the mission an independently owned database before changing its terrain recipes.");
     }
 
     internal static SourceMapZoneBindings Read(SourceWorkspace workspace, string geometry, GltfDocument? original, CancellationToken token)
     {
-        SourceMapZoneBindings result = new(); long remaining = 128L << 20;
-        WorldGltf.ZoneLayout? layout = null;
         geometry = SourceWorkspace.Normalize(geometry);
-        foreach (string mission in SourceProject.MissionFolders(workspace.Root, token))
+        SourceMapZoneBindings result = new() { embedded = new(workspace, token), geometry = geometry };
+        WorldGltf.ZoneLayout? layout = null;
+        var pending = workspace.Overlay();
+        Dictionary<string, List<(string Owner, int Node)>> incoming = new(StringComparer.OrdinalIgnoreCase);
+        long metadataBytes = 0, edges = 0;
+        foreach (string folder in new[] { SourceProject.DataFolder, SourceProject.GameGenFolder })
+        foreach (string path in SourceProject.Files(workspace.Root, folder,
+            n => n.EndsWith(".gltf", StringComparison.OrdinalIgnoreCase) || n.EndsWith(".glb", StringComparison.OrdinalIgnoreCase), pending.Keys.ToArray(), token))
+        {
+            if (!workspace.Exists(path, token)) continue;
+            var bytes = workspace.Read(path, token, ProjectReadLimits.Model().WithMaximum((512L << 20) - metadataBytes))
+                ?? throw new InvalidDataException("A source model disappeared while its references were inspected.");
+            metadataBytes += bytes.LongLength;
+            // Discover only hierarchy/metadata here. Unrelated models need not have decodable geometry or buffers.
+            var hierarchy = GltfDocument.ReadHierarchy(bytes, token);
+            foreach (var node in hierarchy.AllNodes())
+            {
+                token.ThrowIfCancellationRequested();
+                if ((node.Extras?[WorldGltf.Key] as JsonObject)?["ref"] is not { } value) continue;
+                if (value is not JsonValue text || !text.TryGetValue<string>(out var uri))
+                    throw new InvalidDataException($"{path}: a model reference must contain a relative path.");
+                if (++edges > SourceMapZones.MaximumTargets) throw new InvalidDataException("The source reference graph exceeds its inspection allowance.");
+                string referenced = WorldAssembler.Relative(path, uri);
+                if (!incoming.TryGetValue(referenced, out var parents)) incoming.Add(referenced, parents = []);
+                parents.Add((path, node.Index));
+            }
+        }
+        HashSet<string> seen = new(StringComparer.OrdinalIgnoreCase), active = new(StringComparer.OrdinalIgnoreCase);
+        result.referenced = incoming.ContainsKey(geometry);
+        long occurrences = 0;
+        Visit(geometry, []);
+        void Visit(string owner, int[] chain)
         {
             token.ThrowIfCancellationRequested();
-            string path = SourceMapZones.PathForMission(mission.ToLowerInvariant());
-            var bytes = workspace.Read(path, token, Math.Min(remaining, SourceMapZones.MaximumBytes));
-            if (bytes == null) continue;
-            remaining -= bytes.Length;
-            var map = SourceMapZones.Parse(bytes, token);
-            var matches = map.Assets.Where(a => a.GeometryPath.Equals(geometry, StringComparison.OrdinalIgnoreCase)).ToArray();
-            if (matches.Length == 0) continue;
-            if (original != null)
+            if (chain.Length > GltfDocument.MaximumDepth || ++occurrences > SourceMapZones.MaximumTargets)
+                throw new InvalidDataException("The source reference occurrences exceed their inspection allowance.");
+            if (!active.Add(owner)) throw new InvalidDataException("The edited model participates in a cyclic reference hierarchy.");
+            var entry = result.embedded.Resolve(owner, chain, geometry);
+            var owned = result.embedded.OwnedOverride(entry);
+            if ((chain.Length == 0 || owned != null) && seen.Add(entry.Key))
             {
-                layout ??= WorldGltf.ZoneLayout.Read(original, token);
-                foreach (var asset in matches) WorldGltf.ValidateZoneProfile(layout, asset.Profile, geometry, token);
+                if (original != null)
+                {
+                    layout ??= WorldGltf.ZoneLayout.Read(original, token);
+                    WorldGltf.ValidateZoneProfile(layout, entry.Profile, geometry, token);
+                }
+                var source = result.embedded.File(geometry).Document;
+                List<SourceMapZoneReference> refs = []; int ordinal = 0;
+                foreach (var node in source.AllNodes())
+                {
+                    if ((node.Extras?[WorldGltf.Key] as JsonObject)?["ref"] is JsonValue value && value.TryGetValue<string>(out var uri))
+                        refs.Add(new(ordinal, WorldAssembler.Relative(geometry, uri), uri));
+                    ordinal++;
+                }
+                SourceMapZoneAsset asset = new(geometry, geometry, entry.Profile, refs) { OwnerReferenceChain = entry.ReferenceChain };
+                result.owners.Add(new(entry.OwnerPath, [asset], entry, chain.Length == 0 || owned?["fingerprint"] != null));
             }
-            result.owners.Add(new(path, map, matches));
+            if (incoming.TryGetValue(owner, out var parents))
+                foreach (var parent in parents) Visit(parent.Owner, [parent.Node, .. chain]);
+            active.Remove(owner);
         }
         workspace.TrackMapZoneGeometry(geometry);
         return result;
@@ -52,7 +124,7 @@ internal sealed class SourceMapZoneBindings
 
     /// <summary>The logical assets of every map that bind this geometry, with the map file that holds each.</summary>
     internal IEnumerable<(string Map, SourceMapZoneAsset Asset)> Assets => owners.SelectMany(o => o.Assets.Select(a => (o.Path, a)));
-    /// <summary>The missions whose maps bind this geometry, which their builds load (<c>data/mN/meta/zones.json</c>: mN).</summary>
+    /// <summary>The mission folders containing physical sources that own assignments on this geometry.</summary>
     internal IEnumerable<string> Missions => owners.Select(o => o.Path.Split('/')[1]);
 
     /// <param name="loadZone">
@@ -61,7 +133,7 @@ internal sealed class SourceMapZoneBindings
     /// </param>
     internal IReadOnlyList<(string Relative, byte[] Content)> Remap(GltfDocument before, GltfDocument after,
         JsonObject root, IReadOnlyDictionary<JsonNode, int> originalObjects, IReadOnlyDictionary<int, int> copies,
-        CancellationToken token, IReadOnlySet<int>? newTerrainMarkers = null, Func<string, string, int, uint?>? loadZone = null)
+        CancellationToken token, IReadOnlySet<int>? newTerrainMarkers = null, Func<string, string, IReadOnlyList<int>, int, uint?>? loadZone = null)
     {
         if (!Any) return [];
         var jsonNodes = (JsonArray)root["nodes"]!;
@@ -75,7 +147,10 @@ internal sealed class SourceMapZoneBindings
                 origins.Add(node.Index, -1);
             else throw new InvalidDataException("The geometry edit introduced a node without an exact zone identity.");
         }
-        return Remap(before, after, origins, token, loadZone: loadZone);
+        embedded.ReplaceFile(geometry, root, after);
+        return Remap(before, after, origins, token, loadZone: loadZone,
+            preservePromoted: promoted => GltfNodeEdits.PreservePromotedReferenceOverrides(before, after, root, promoted, token))
+            .Where(c => !c.Relative.Equals(geometry, StringComparison.OrdinalIgnoreCase)).ToArray();
     }
 
     /// <summary>
@@ -87,7 +162,8 @@ internal sealed class SourceMapZoneBindings
     /// </summary>
     internal IReadOnlyList<(string Relative, byte[] Content)> Remap(GltfDocument before, GltfDocument after, IReadOnlyDictionary<int, int> origins,
         CancellationToken token, Func<GltfNode, WorldNodeZone>? added = null, Func<SourceMapZoneAsset, GltfMesh, IReadOnlyList<uint>>? meshWords = null,
-        Func<string, string, int, uint?>? loadZone = null)
+        Func<string, string, IReadOnlyList<int>, int, uint?>? loadZone = null,
+        Action<IReadOnlyDictionary<int, int>>? preservePromoted = null)
     {
         if (!Any) return [];
         var layout = WorldGltf.ZoneLayout.Read(after, token);
@@ -107,7 +183,6 @@ internal sealed class SourceMapZoneBindings
             newOrdinals.TryAdd(newNodes[i].Index, i);
             if (Mark(newNodes[i]) is { } mark) newInstances.TryAdd(mark, newNodes[i].Index);
         }
-        List<(string, byte[])> changes = [];
         Dictionary<long, int> changedInstances = [];
         HashSet<long> firstInstances = [];
         foreach (var node in newNodes)
@@ -170,8 +245,18 @@ internal sealed class SourceMapZoneBindings
                 yield return (child, (name, occurrence));
             }
         }
+        preservePromoted?.Invoke(promotedOrigins);
+        IReadOnlyDictionary<int, int> referenceOrigins = promotedOrigins.Count == 0 ? origins
+            : origins.ToDictionary(pair => pair.Key, pair => promotedOrigins.GetValueOrDefault(pair.Key, pair.Value));
         foreach (var owner in owners)
         {
+            // A references-only container owns the nested assignments, not the effective profile
+            // inherited from the referenced file. Preserve that inheritance while reindexing its keys.
+            if (!owner.OwnsProfile)
+            {
+                RemapNestedReferences(owner.Entry, referenceOrigins, token);
+                continue;
+            }
             Dictionary<string, SourceMapZoneAsset> replacements = new(StringComparer.OrdinalIgnoreCase);
             foreach (var asset in owner.Assets)
             {
@@ -227,9 +312,9 @@ internal sealed class SourceMapZoneBindings
                 {
                     uint? had = Given(start), gets = Gets(node);
                     if (had == null && gets == null) return zone;
-                    uint kept = had ?? asset.Profile.LoadRoot?.Word & 255 ?? loadZone?.Invoke(owner.Path, asset.LogicalPath, start)
+                    uint kept = had ?? asset.Profile.LoadRoot?.Word & 255 ?? loadZone?.Invoke(owner.Path, asset.LogicalPath, asset.OwnerReferenceChain, start)
                         ?? WorldGltf.StatedZone(node.Extras?[WorldGltf.Key])
-                        ?? throw new InvalidDataException($"{asset.GeometryPath}: {JsonData.ShownText(WorldGltf.EngineName(node))} takes its zone from each load of {Path.GetFileName(asset.LogicalPath)} in {owner.Path}, where its new parents would give it zone {gets} instead. Give it a zone of its own first (in Blender, custom property recoil → zone, 255 for any zone; or an object zone with Tools → Edit map zones in that map), or leave it under its old parents.");
+                        ?? throw new InvalidDataException($"{asset.GeometryPath}: {JsonData.ShownText(WorldGltf.EngineName(node))} takes its zone from each load of {Path.GetFileName(asset.LogicalPath)} in {owner.Path}, where its new parents would give it zone {gets} instead. Give it a zone of its own first (in the source glTF's extras.recoil.zone, using \"any\" for any zone; or an object zone with Tools → Edit map zones in that map), or leave it under its old parents.");
                     return zone with { Word = zone.Word & ~255u | kept, Inherit = false };
                 }
                 // The zone the node's old parents gave it (start is the node), or null when it came from the load.
@@ -260,9 +345,11 @@ internal sealed class SourceMapZoneBindings
                     return null;
                 }
             }
-            changes.Add((owner.Path, new SourceMapZones(owner.Map.Assets.Select(a => replacements.GetValueOrDefault(a.LogicalPath) ?? a).ToArray(), owner.Map.Labels).Write(token)));
+            var updated = replacements[owner.Assets[0].LogicalPath];
+            embedded.Set(owner.Entry, updated.Profile, after);
+            RemapNestedReferences(owner.Entry, referenceOrigins, token);
         }
-        return changes;
+        return embedded.Changes();
 
         static long? Mark(GltfNode node) => (node.Extras?[WorldGltf.Key] as JsonObject)?["instance"] is { } value &&
             GltfInteger.TryInt64(value, out long mark) && mark > 0 ? mark : null;

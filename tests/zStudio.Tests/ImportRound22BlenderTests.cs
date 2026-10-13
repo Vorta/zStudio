@@ -41,25 +41,6 @@ public sealed class ImportRound22BlenderTests
     }
 
     [Fact]
-    public void RefusedNestedExportRemovesOnlyItsCreatedSealedGeneration()
-    {
-        using SourceWorldFixture fixture = new();
-        ModelWithBuffers(fixture, 4);
-        SourceWorkspace workspace = new(fixture.Project);
-        var checkout = SourceBlender.Checkout(workspace, Model, Token);
-        string exported = Path.Combine(checkout.Outbox, "nested", "deeper");
-        Directory.CreateDirectory(exported);
-        foreach (string file in Directory.GetFiles(Path.Combine(checkout.Folder, "input")))
-            File.Copy(file, Path.Combine(exported, Path.GetFileName(file)));
-        // Parsing reads and seals the model and all four buffers before discovering this model has no nodes.
-        Assert.Contains("no nodes", Assert.Throws<InvalidDataException>(() =>
-            SourceBlender.PlanUpdate(workspace, checkout, "nested/deeper/m1.gltf", token: Token)).Message);
-        Assert.Empty(Directory.GetFileSystemEntries(Path.Combine(checkout.Folder, "sealed")));
-        Assert.Equal(5, Directory.GetFiles(exported).Length);
-        Assert.Equal(checkout.Id, SourceBlender.Find(fixture.Project, checkout.Id).Id);
-    }
-
-    [Fact]
     public void MissionScriptCacheLimitRefusesTheCheckoutInsteadOfSkippingTheMission()
     {
         using SourceWorldFixture fixture = new();

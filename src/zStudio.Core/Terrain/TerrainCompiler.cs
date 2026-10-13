@@ -118,6 +118,8 @@ public static class TerrainCompiler
         public State Apply(TerrainAttributes a)
         {
             uint carried = a.Flags ?? Carried;
+            if ((carried & ~WorldGltf.CarriedFlags) != 0 || (carried & 0x30000u) == 0x30000u)
+                throw new InvalidDataException("Terrain flags must contain only supported authored flags, with at most one of CanModify and ClipTo.");
             if (a.Collision is { } collision) carried = collision ? carried | 0x10 : carried & ~0x10u;
             if (a.Standable is { } standable) carried = standable ? carried | 0x08 : carried & ~0x08u;
             if (a.NodeGate is { } gate) carried = gate ? carried | 0x01000000 : carried & ~0x01000000u;

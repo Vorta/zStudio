@@ -153,22 +153,6 @@ public sealed class ImportRound11Tests
         Assert.Contains("edge modes", Assert.Throws<InvalidDataException>(() => WorldGltf.ValidateSupported(model, "model.gltf")).Message);
     }
 
-    [Theory]
-    [InlineData(false)][InlineData(true)]
-    public void BlenderCheckoutUsesTheSameMaterialPreflight(bool embedded)
-    {
-        using SourceWorldFixture fixture = new();
-        const string path = "data/m1/models/m1.gltf";
-        var doc = embedded ? Model(new GltfMaterial { ImageUri = "../textures/rock.png" })
-            : Model(new() { ImageUri = "../textures/rock.png", ClampS = true }, new() { ImageUri = "../textures/rock.png" });
-        var (json, bin) = doc.Write("m1.bin", TestContext.Current.CancellationToken); var root = JsonNode.Parse(json)!;
-        if (embedded) root["images"]![0]!["uri"] = "data:image/png;base64,AA==";
-        fixture.Write(path, root.ToJsonString()); fixture.Write("data/m1/models/m1.bin", bin);
-        SourceWorkspace workspace = new(fixture.Project);
-        Assert.Contains(embedded ? "embedded image" : "edge modes", Assert.Throws<InvalidDataException>(() => SourceBlender.Checkout(workspace, path, Token)).Message);
-        Assert.False(workspace.IsDirty); Assert.Empty(SourceBlender.Checkouts(fixture.Project, Token));
-    }
-
     [Fact]
     public async Task DifferentLoadsCannotAssignDifferentModesToTheSameTexture()
     {

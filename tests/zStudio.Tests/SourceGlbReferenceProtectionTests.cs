@@ -37,8 +37,8 @@ public sealed class SourceGlbReferenceProtectionTests
 
     [Theory]
     [InlineData(0)] // Existing physical GLB reference.
-    [InlineData(1)] // A direct logical alias has no physical file.
-    [InlineData(2)] // A neutral holder resolves its reference through the manifest.
+    [InlineData(1)] // A second physical file has equal geometry but a distinct source identity.
+    [InlineData(2)] // An ordinary glTF holder references the original physical model.
     public void OtherMissionTransformProtectionFollowsTheSameGlbReference(int binding)
     {
         using SourceWorldFixture fixture = new();
@@ -48,38 +48,32 @@ public sealed class SourceGlbReferenceProtectionTests
         if (binding != 0)
         {
             var tank = GltfDocument.Read(File.ReadAllBytes(fixture.Path(fixture.Tank)), uri => File.ReadAllBytes(fixture.Path(WorldAssembler.Relative(fixture.Tank, uri))), Token);
-            List<SourceMapZoneAsset> assets = [new(alias, fixture.Tank, WorldGltf.CaptureZoneProfile(tank, token: Token), [])];
+            var (json, bin) = tank.Write("alias.bin", Token);
+            fixture.Write(alias, json); fixture.Write("data/m2/models/bft/alias.bin", bin);
             folder = "data/m2/models/bft"; model = "alias.gltf";
             if (binding == 2)
             {
-                var neutral = JsonNode.Parse(Reference("../../m1/models/m1.gltf"))!;
-                var engine = (JsonObject)neutral["nodes"]![0]!["extras"]![WorldGltf.Key]!;
-                engine.Remove("ref"); engine[WorldGltf.ZoneReference] = true;
-                fixture.Write(bridge, neutral.ToJsonString());
-                var holder = GltfDocument.Read(File.ReadAllBytes(fixture.Path(bridge)), _ => throw new InvalidDataException(), Token);
-                assets.Add(new(bridge, bridge, WorldGltf.CaptureZoneProfile(holder, token: Token), [new(0, alias, "../../m2/models/bft/./alias.gltf")]));
+                fixture.Write(bridge, Reference("../../m2/models/bft/./tank.gltf"));
                 folder = "data/common/models"; model = "bridge.gltf";
             }
-            fixture.Write(SourceMapZones.PathForMission("m2"), new SourceMapZones(assets).Write(Token));
         }
         fixture.Write("gamegen/m2.gs", $"NewWorld world\nSetModelDirectory ../{folder}\nLoadGameGen {model} copy\nFindNode copy\nFindSubNode hull\nObject3DRotate 0 1 0\nGameZWriteZBDFile world.zbd\n");
         WorldAssembler assembler = new(new SourceWorlds.DiskFiles(fixture.Project, null), Token);
         Assert.Single(assembler.Assemble("m2.gs").Nodes, n => n.Name == "hull");
         SourceWorkspace workspace = new(fixture.Project);
 
-        var hit = SourceObjectEdits.TransformElsewhere(workspace, "m1", new() { ModelFile = fixture.Tank }, "hull", Token);
+        var hit = SourceObjectEdits.TransformElsewhere(workspace, "m1", new() { ModelFile = binding == 1 ? alias : fixture.Tank }, "hull", Token);
         Assert.NotNull(hit);
         Assert.Equal("m2", hit.Value.Mission);
         Assert.True(hit.Value.Certain);
         Assert.Equal("Object3DRotate", hit.Value.Instruction.Command);
         Assert.False(workspace.IsDirty);
+        if (binding == 1)
+            Assert.Null(SourceObjectEdits.TransformElsewhere(workspace, "m1", new() { ModelFile = fixture.Tank }, "hull", Token));
         if (binding == 2)
         {
             // A pending retarget away from the edited geometry must remove the protection; undo restores it.
-            const string ground = "data/m1/models/m1.gltf";
-            var map = SourceMapZones.Parse(workspace.Read(SourceMapZones.PathForMission("m2"), Token)!, Token);
-            var changed = map.Assets.Select(a => a.LogicalPath == bridge ? a with { References = [new(0, ground, "../../m1/models/m1.gltf")] } : a).ToArray();
-            workspace.Apply("Retarget bridge", [(SourceMapZones.PathForMission("m2"), new SourceMapZones(changed).Write(Token))], Token);
+            workspace.Apply("Retarget bridge", [(bridge, Encoding.UTF8.GetBytes(Reference("../../m1/models/m1.gltf")))], Token);
             Assert.Null(SourceObjectEdits.TransformElsewhere(workspace, "m1", new() { ModelFile = fixture.Tank }, "hull", Token));
             workspace.Undo();
             Assert.NotNull(SourceObjectEdits.TransformElsewhere(workspace, "m1", new() { ModelFile = fixture.Tank }, "hull", Token));

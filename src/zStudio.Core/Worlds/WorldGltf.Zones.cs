@@ -61,28 +61,34 @@ public static partial class WorldGltf
     /// </summary>
     public static WorldZoneProfile CaptureZoneProfile(GltfDocument document, uint parentZone = DefaultZone,
         WorldNodeZone? loadRoot = null, CancellationToken token = default)
+        => CaptureZoneProfile(document, ZoneLayout.Read(document, token), parentZone, loadRoot, token);
+
+    private static WorldZoneProfile CaptureZoneProfile(GltfDocument document, ZoneLayout layout, uint parentZone,
+        WorldNodeZone? loadRoot, CancellationToken token)
     {
-        var layout = ZoneLayout.Read(document, token);
+        loadRoot ??= EmbeddedLoadRoot(document);
         Dictionary<GltfNode, WorldNodeZone> assigned = new(ReferenceEqualityComparer.Instance);
-        Dictionary<long, WorldNodeZone> instances = [];
-        Stack<(GltfNode Node, uint Parent)> pending = [];
-        for (int i = document.Roots.Count - 1; i >= 0; i--) pending.Push((document.Roots[i], parentZone & 0xFF));
+        Dictionary<(GltfNode? Scope, long Number), WorldNodeZone> instances = [];
+        Stack<(GltfNode Node, uint Parent, GltfNode? Scope)> pending = [];
+        for (int i = document.Roots.Count - 1; i >= 0; i--) pending.Push((document.Roots[i], (loadRoot?.Word ?? parentZone) & 0xFF, null));
         while (pending.TryPop(out var entry))
         {
             token.ThrowIfCancellationRequested();
             if (assigned.ContainsKey(entry.Node)) continue;
-            var extras = entry.Node.Extras?[Key];
-            uint? word = extras?["zoneWord"] is { } w ? Hex(w, "zoneWord", "the model") : null;
-            uint low = extras?["zone"] is { } z ? (uint)Integer(z, "zone", "the model") & 0xFF : word is { } full ? full & 0xFF : entry.Parent;
-            uint flags = extras?["flags"] is { } f ? Hex(f, "flags", "the model") : DefaultCarried;
-            WorldNodeZone zone = new(word is { } whole ? whole & ~0xFFu | low : low, (flags & ZoneGate) != 0, extras?["zone"] == null && word == null);
+            // Terrain may select one mesh from a document containing unrelated editor extras.
+            // Ordinary model import validates every node's engine object before reaching this path.
+            var extras = entry.Node.Extras?[Key] as System.Text.Json.Nodes.JsonObject;
+            uint word = ReadNodeZoneValue(extras, entry.Parent, "the model");
+            uint flags = StoredNodeFlags(extras);
+            WorldNodeZone zone = new(word, (flags & ZoneGate) != 0, NodeZoneIsInherited(extras, "the model"));
             if (extras?["instance"] is { } instance)
             {
                 long number = Integer(instance, "instance", "the model", 1, int.MaxValue);
-                if (!instances.TryAdd(number, zone)) zone = instances[number];
+                if (!instances.TryAdd((entry.Scope, number), zone)) zone = instances[(entry.Scope, number)];
             }
             assigned.Add(entry.Node, zone);
-            for (int i = entry.Node.Children.Count - 1; i >= 0; i--) pending.Push((entry.Node.Children[i], zone.Word & 0xFF));
+            var inline = extras == null ? null : InlineSource(entry.Node, "the model");
+            for (int i = entry.Node.Children.Count - 1; i >= 0; i--) pending.Push((entry.Node.Children[i], zone.Word & 0xFF, inline is { } section && i < section.Count ? entry.Node : entry.Scope));
         }
         List<IReadOnlyList<uint>> meshes = [];
         foreach (var mesh in layout.Meshes)
@@ -91,8 +97,18 @@ public static partial class WorldGltf
             foreach (var primitive in mesh.Primitives)
             {
                 token.ThrowIfCancellationRequested();
-                uint word = primitive.Material?.Extras?[Key]?["zone"] is { } z ? Hex(z, "zone", "the model") : DefaultPolygonZone;
-                foreach (var polygon in layout.Polygons[primitive]) words.Add(word);
+                uint word = ReadPolygonZoneValue(primitive.Material?.Extras?[Key], "the model");
+                if (primitive.Extras?[Key]?["polygonZones"] is { } stored)
+                {
+                    var values = (System.Text.Json.Nodes.JsonObject)primitive.Extras[Key]!;
+                    words.AddRange(ReadPolygonZoneValues(values, layout.Polygons[primitive].Count, "the model", token));
+                }
+                else
+                {
+                    if (primitive.Extras?[Key]?["polygonZonePadding"] != null || primitive.Extras?[Key]?["polygonZoneRaw"] != null)
+                        throw new InvalidDataException("Polygon zone padding requires its polygonZones assignments.");
+                    foreach (var polygon in layout.Polygons[primitive]) words.Add(word);
+                }
             }
             meshes.Add(words.ToArray());
         }
@@ -106,7 +122,7 @@ public static partial class WorldGltf
     internal static void ValidateZoneProfile(ZoneLayout layout, WorldZoneProfile profile, string path, CancellationToken token)
     {
         if (!string.Equals(profile.Fingerprint, layout.Fingerprint, StringComparison.Ordinal))
-            throw new InvalidDataException($"{path}: geometry topology no longer matches its map zone assignments. Bring geometry edits in through Edit in Blender and Update from Blender export, which carry the zones, or restore the file.");
+            throw new InvalidDataException($"{path}: geometry topology no longer matches its map zone assignments. Restore the source hierarchy or re-extract the original ZBD files; a reference-aware Blender plugin is required for external geometry edits.");
         if (profile.Nodes.Count != layout.Nodes.Count || profile.MeshPolygons.Count != layout.Meshes.Count)
             throw new InvalidDataException($"{path}: map zone assignments do not cover the model's nodes and meshes.");
         for (int i = 0; i < layout.Nodes.Count; i++)
@@ -135,16 +151,22 @@ public static partial class WorldGltf
 
     private static BoundZones? BindZones(GltfDocument document, string path, ImportContext context)
     {
-        if (context.ZoneBindings.TryGetValue((path, document), out var known)) return known;
-        if (context.ZoneProfile?.Invoke(path, document) is not { } profile)
+        _ = SourceSceneValues(document, path);
+        if (context.EmbeddedZoneScopes.Count > 0)
+            foreach (var scope in context.EmbeddedZoneScopes.Peek().Overrides)
+                if (!context.ValidatedZoneScopes.Contains((document, scope)))
+                {
+                    ValidateZoneOverrideScope(document, scope, context.Token);
+                    context.ValidatedZoneScopes.Add((document, scope));
+                }
+        var placement = context.EmbeddedZoneScopes.Count > 0 ? context.EmbeddedZoneScopes.Peek().Overrides.FirstOrDefault(s => s["fingerprint"] != null) : null;
+        bool cached = placement == null;
+        if (cached && context.ZoneBindings.TryGetValue((path, document), out var known)) return known;
+        if (placement != null && context.EmbeddedZoneBindings.TryGetValue((document, placement), out var placed)) return placed;
+        var supplied = context.ZoneProfile?.Invoke(path, document);
+        bool embedded = HasEmbeddedZones(document);
+        if (placement == null && supplied == null && !embedded)
         {
-            // Legacy documents keep their inline assignments. Neutral reference holders cannot lose their bindings.
-            foreach (var node in document.AllNodes())
-            {
-                context.Token.ThrowIfCancellationRequested();
-                if ((node.Extras?[Key] as System.Text.Json.Nodes.JsonObject)?[ZoneReference] != null)
-                    throw new InvalidDataException($"{path}: this model needs its map zone manifest before it can be imported.");
-            }
             context.ZoneBindings.Add((path, document), null);
             return null;
         }
@@ -153,6 +175,8 @@ public static partial class WorldGltf
             layout = ZoneLayout.Read(document, context.Token, context.PolygonWork);
             context.ZoneLayouts.Add(document, layout);
         }
+        var profile = placement != null ? ReadZoneOverride(placement, context.Token)
+            : supplied ?? CaptureZoneProfile(document, layout, DefaultZone, null, context.Token);
         ValidateZoneProfile(layout, profile, path, context.Token);
         context.PolygonWork.Charge(layout.Nodes.Count + profile.MeshPolygons.Sum(m => (long)m.Count));
         Dictionary<GltfNode, string> references = new(ReferenceEqualityComparer.Instance);
@@ -160,7 +184,7 @@ public static partial class WorldGltf
         {
             context.Token.ThrowIfCancellationRequested();
             var node = layout.Nodes[i];
-            if (node.Extras?[Key]?[ZoneReference] is not { } marker) continue;
+            if ((node.Extras?[Key] as System.Text.Json.Nodes.JsonObject)?[ZoneReference] is not { } marker) continue;
             if (!Flag(marker, ZoneReference, path) || node.Extras?[Key]?["ref"] != null)
                 throw new InvalidDataException($"{path}: neutral reference {i} has conflicting or invalid reference fields.");
             string uri = context.AssetReference?.Invoke(path, i)
@@ -175,7 +199,8 @@ public static partial class WorldGltf
         for (int i = 0; i < layout.Nodes.Count; i++)
         {
             var assigned = profile.Nodes[i] ?? throw new InvalidDataException($"{path}: a node zone assignment is absent.");
-            identity.Number(assigned.Word); identity.Number(assigned.Gate ? 1u : 0u); identity.Number(assigned.Inherit ? 1u : 0u);
+            identity.Number(assigned.Inherit ? assigned.Word & ~255u : assigned.Word);
+            identity.Number(assigned.Gate ? 1u : 0u); identity.Number(assigned.Inherit ? 1u : 0u);
             bound.Nodes.Add(layout.Nodes[i], assigned);
         }
         for (int i = 0; i < layout.Meshes.Count; i++)
@@ -187,7 +212,8 @@ public static partial class WorldGltf
         foreach (var (primitive, polygons) in layout.Polygons) bound.Polygons.Add(primitive, polygons);
         foreach (var (node, uri) in references) { bound.References.Add(node, uri); identity.Text(uri); }
         bound.Identity = identity.Finish();
-        context.ZoneBindings.Add((path, document), bound);
+        if (cached) context.ZoneBindings.Add((path, document), bound);
+        else context.EmbeddedZoneBindings.Add((document, placement!), bound);
         return bound;
     }
 
@@ -235,10 +261,10 @@ public static partial class WorldGltf
             {
                 work.Charge(1L + node.Children.Count);
                 hash.Text(EngineName(node));
-                var engine = node.Extras?[Key];
+                var engine = node.Extras?[Key] as System.Text.Json.Nodes.JsonObject;
                 hash.Text(engine?["class"]?.ToString() ?? "object3d");
                 hash.Text(engine?["instance"]?.ToString() ?? "");
-                hash.Number(engine?[ZoneReference] == null ? 0u : 1u);
+                hash.Number(engine?[ZoneReference] == null && engine?["ref"] == null ? 0u : 1u);
                 hash.Number(node.Mesh == null ? uint.MaxValue : (uint)meshes[node.Mesh]);
                 hash.Number((uint)node.Children.Count);
                 foreach (var child in node.Children) hash.Number((uint)nodes[child]);
@@ -264,10 +290,10 @@ public static partial class WorldGltf
                         if (index < 0 || index >= primitive.Positions.Count) throw new InvalidDataException("The map zone layout contains an invalid vertex index.");
                         hash.Number((uint)index);
                     }
-                    bool recorded = primitive.Extras?[Key]?["polygons"] != null;
+                    bool recorded = (primitive.Extras?[Key] as System.Text.Json.Nodes.JsonObject)?["polygons"] != null;
                     List<int> counts = [];
                     var polygons = WorldGltf.Polygons(primitive, Textured(primitive), work, recorded, counts);
-                    result.Polygons.Add(primitive, polygons); result.Triangles.Add(primitive, counts);
+                    result.Polygons.TryAdd(primitive, polygons); result.Triangles.TryAdd(primitive, counts);
                     hash.Number((uint)polygons.Count);
                     foreach (var polygon in polygons)
                     {

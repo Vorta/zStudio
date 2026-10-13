@@ -282,7 +282,7 @@ public partial class MainWindow
             var planned = plan(SourceObjectTargetFor(doc, node, workspace), ct);
             additions.AddRange(planned.Additions); notes.AddRange(planned.Notes);
             bool gltfOnly = planned.Changes.Any(c => c.Relative.EndsWith(".gltf", StringComparison.OrdinalIgnoreCase)) &&
-                planned.Changes.All(c => c.Relative.EndsWith(".gltf", StringComparison.OrdinalIgnoreCase) || c.Relative.EndsWith("/meta/zones.json", StringComparison.OrdinalIgnoreCase));
+                planned.Changes.All(c => c.Relative.EndsWith(".gltf", StringComparison.OrdinalIgnoreCase) || c.Relative.EndsWith(".glb", StringComparison.OrdinalIgnoreCase));
             verify = planned.Lines ?? (keepsNodes && gltfOnly ? ScriptLineChanges.None : null);
             return workspace.Apply(planned.Label, planned.Changes.Select(c => (c.Relative, (byte[]?)c.Content)), ct);
         }, token, additions, verifyTargets: () => verify, notes: notes);
@@ -461,8 +461,8 @@ public partial class MainWindow
              new("position", "object", "New local position (or the copy's).", Properties: [P("x", "number", "X.", true), P("y", "number", "Y.", true), P("z", "number", "Z.", true)]),
              new("rotationDegrees", "object", "New local rotation in degrees (about Y, then X, then Z, as Object3DRotate).", Properties: [P("x", "number", "X.", true), P("y", "number", "Y.", true), P("z", "number", "Z.", true)]),
              new("scale", "object", "New local scale.", Properties: [P("x", "number", "X.", true), P("y", "number", "Y.", true), P("z", "number", "Z.", true)]),
-             P("flag", "string", "Node flag to set or clear.", false, SourceObjectPropertiesEditor.EditableFlags.Select(f => $"0x{f.Bit:X}").ToArray()),
-             P("on", "boolean", "Whether the flag is set; required with flag."),
+             P("flag", "string", "Node flag to set or clear. Enabling CanModify (0x10000) or ClipTo (0x20000) clears the other mode atomically; a source that cannot express that change is refused.", false, SourceObjectPropertiesEditor.EditableFlags.Select(f => $"0x{f.Bit:X}").ToArray()),
+             P("on", "boolean", "Whether the flag is set; required with flag. Clearing the selected crater mode leaves neither mode. For a glTF-owned mode this removes declient; a script-owned setting changes its instruction."),
              new("name", "string", "The copy's node name (duplicate): 1–32 printable characters without spaces, commas, quotes or # % ;, used by no node of the world."),
              new("parent", "integer", "The new parent's scene node index (parent); -1 or the world's node makes it a root of the world (a node of a part of the mission database: a root of the part).", Minimum: -1, Maximum: int.MaxValue)], true,
             async (a, token) =>

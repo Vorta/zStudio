@@ -70,12 +70,45 @@ public sealed class WorldGltfTests
     }
 
     [Fact]
+    public void NamedFlagsPreserveEnabledAttributesAndOmitFalseAndNullDefaults()
+    {
+        // Source import must explicitly clear engine constructor defaults; otherwise an ordinary unmarked node gains
+        // collision/altitude behavior that its source did not author.
+        const string empty = """{"asset":{"version":"2.0"},"scenes":[{"nodes":[0]}],"nodes":[{"name":"plain"}]}""";
+        Assert.Equal(0u, Import(empty, new(), out _).Single().Flags & WorldGltf.CarriedFlags);
+        JsonObject values = new() { ["altitudeSurface"] = false, ["declient"] = null, ["zone"] = 7 };
+        Assert.Equal(0u, WorldGltf.StoredNodeFlags(values));
+        WorldGltf.WriteNodeFlags(values, 0);
+        Assert.Equal("{\"zone\":7}", values.ToJsonString());
+
+        const uint enabled = 0x018100F8u;
+        WorldGltf.WriteNodeFlags(values, enabled | 0x70000000u);
+        Assert.Equal(enabled, WorldGltf.StoredNodeFlags(values));
+        Assert.Equal("canModify", values["declient"]!.GetValue<string>());
+        Assert.Null(values["flags"]); Assert.Equal(7, values["zone"]!.GetValue<int>());
+        foreach (var field in new[] { "altitudeSurface", "intersectSurface", "intersectBounds", "proximity", "landmark", "overwrite", "altitudeZoneCheck" })
+            Assert.True(values[field]!.GetValue<bool>());
+        WorldGltf.WriteNodeFlags(values, 0x20000);
+        Assert.Equal("{\"zone\":7,\"declient\":\"clipTo\"}", values.ToJsonString());
+        Assert.Throws<InvalidDataException>(() => WorldGltf.WriteNodeFlags(new(), 0x30000));
+
+        var document = GltfDocument.Read(Encoding.UTF8.GetBytes(empty), _ => [], Token);
+        JsonObject scene = new() { ["sourceFormat"] = 4, ["loadRoot"] = new JsonObject { ["zone"] = "any", ["proximity"] = true } };
+        document.SceneExtras = new() { [WorldGltf.Key] = scene };
+        Assert.Equal(0x40u, WorldGltf.RootFlags(document));
+        scene["rootFlags"] = null;
+        Assert.Throws<InvalidDataException>(() => WorldGltf.Import(document, "old.gltf", 0xFF, Context(new())));
+        scene.Remove("rootFlags"); scene["sourceFormat"] = 3;
+        Assert.Throws<InvalidDataException>(() => WorldGltf.Import(document, "old.gltf", 0xFF, Context(new())));
+    }
+
+    [Fact]
     public void BlenderStyleFilesImport()
     {
         // Blender writes TRS, renames duplicate objects with .NNN and keeps custom properties as extras.
         var json = """
         {"asset":{"version":"2.0","generator":"Khronos glTF Blender I/O"},"scene":0,"scenes":[{"nodes":[0]}],
-         "nodes":[{"name":"crate.001","translation":[1,2,3],"rotation":[0,0.7071068,0,0.7071068],"scale":[2,2,2],"mesh":0,"extras":{"recoil":{"flags":"0x01000098"}}}],
+         "nodes":[{"name":"crate.001","translation":[1,2,3],"rotation":[0,0.7071068,0,0.7071068],"scale":[2,2,2],"mesh":0,"extras":{"recoil":{"altitudeSurface":true,"intersectSurface":true,"landmark":true,"altitudeZoneCheck":true}}}],
          "meshes":[{"primitives":[{"attributes":{"POSITION":0},"indices":1,"material":0}]}],
          "materials":[{"name":"paint","pbrMetallicRoughness":{"metallicFactor":0,"baseColorFactor":[1,0.5,0,1]}}],
          "accessors":[{"bufferView":0,"componentType":5126,"count":3,"type":"VEC3"},{"bufferView":1,"componentType":5121,"count":3,"type":"SCALAR"}],
@@ -102,16 +135,16 @@ public sealed class WorldGltfTests
         Vector3[] positions = [new(0, 0, 0), new(0, 0, 1), new(1, 0, 1), new(1, 0, 0)];
         static Vector3 Normal(Vector3 p) => Vector3.Normalize(new(p.X - 0.5f, 2, p.Z - 0.5f));
         float[] data = [.. positions.SelectMany(p => new[] { p.X, p.Y, p.Z }), .. positions.Select(Normal).SelectMany(n => new[] { n.X, n.Y, n.Z }), .. positions.SelectMany(p => new[] { p.X, p.Z })];
-        string json = $$"""
+        string json = $$$$"""
         {"asset":{"version":"2.0"},"scene":0,"scenes":[{"nodes":[0,2]}],
-         "nodes":[{"name":"mirror","rotation":[1,0,0,0],"scale":[-1,-1,-1],"children":[1]},{"name":"floor","mesh":0},{"name":"plain","translation":[2,0,0],"mesh":0}],
+         "nodes":[{"name":"mirror","rotation":[1,0,0,0],"scale":[-1,-1,-1],"children":[1],"extras":{"recoil":{"altitudeSurface":true}}},{"name":"floor","mesh":0,"extras":{"recoil":{"altitudeSurface":true}}},{"name":"plain","translation":[2,0,0],"mesh":0,"extras":{"recoil":{"altitudeSurface":true}}}],
          "meshes":[{"primitives":[{"attributes":{"POSITION":0,"NORMAL":1,"TEXCOORD_0":2},"indices":3,"material":0}]}],
          "materials":[{"name":"rock","pbrMetallicRoughness":{"metallicFactor":0,"baseColorTexture":{"index":0} } }],
          "textures":[{"source":0}],"images":[{"uri":"rock.png"}],
          "accessors":[{"bufferView":0,"componentType":5126,"count":4,"type":"VEC3"},{"bufferView":1,"componentType":5126,"count":4,"type":"VEC3"},
                       {"bufferView":2,"componentType":5126,"count":4,"type":"VEC2"},{"bufferView":3,"componentType":5121,"count":6,"type":"SCALAR"}],
          "bufferViews":[{"buffer":0,"byteLength":48},{"buffer":0,"byteOffset":48,"byteLength":48},{"buffer":0,"byteOffset":96,"byteLength":32},{"buffer":0,"byteOffset":128,"byteLength":6}],
-         "buffers":[{"byteLength":134,"uri":"{{DataUri(data, [0, 1, 2, 0, 2, 3])}}"}]}
+         "buffers":[{"byteLength":134,"uri":"{{{{DataUri(data, [0, 1, 2, 0, 2, 3])}}}}"}]}
         """;
         // The engine's altitude probe takes a polygon only with an upward winding of its transformed corners.
         static int Hits(WorldNode node, float x)
@@ -292,6 +325,11 @@ public sealed class WorldGltfTests
     [Theory]
     [InlineData("""{"recoil":{"flags":"0x1FFFFFFFFF"}}""")]
     [InlineData("""{"recoil":{"flags":7}}""")]
+    [InlineData("""{"recoil":{"flags":null}}""")]
+    [InlineData("""{"recoil":{"altitudeSurface":null}}""")]
+    [InlineData("""{"recoil":{"intersectSurface":1}}""")]
+    [InlineData("""{"recoil":{"declient":"none"}}""")]
+    [InlineData("""{"recoil":{"declient":"both"}}""")]
     [InlineData("""{"recoil":{"zone":"far"}}""")]
     [InlineData("""{"recoil":{"class":"lod","lod":[1, null, 3]}}""")]
     [InlineData("""{"recoil":{"class":"lod","lod":[1.5]}}""")]

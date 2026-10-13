@@ -21,8 +21,8 @@ public readonly record struct SurfaceKey(WorldMaterial Material, int Priority, b
 public static partial class WorldGltf
 {
     public const string Key = "recoil";
-    /// <summary>Node flag bits a source carries: surface tests, landmark, crater/clip, overwrite, variant gate and game bits. The rest are derived.</summary>
-    public const uint CarriedFlags = 0x08 | 0x10 | 0x20 | 0x40 | 0x80 | 0x10000 | 0x20000 | 0x800000 | 0x01000000 | 0x70000000;
+    /// <summary>Known authored node flag bits represented by readable source properties. Other bits are derived or normalized.</summary>
+    public const uint CarriedFlags = 0x08 | 0x10 | 0x20 | 0x40 | 0x80 | 0x10000 | 0x20000 | 0x800000 | 0x01000000;
     /// <summary>What the original loader gave a plain node: altitude and intersection surfaces and the variant gate.</summary>
     public const uint DefaultCarried = 0x01000018;
     public const uint DefaultZone = 0xFF, DefaultPolygonZone = 0xFFFFFF00, DefaultModelFlags = 0x3;
@@ -37,6 +37,7 @@ public static partial class WorldGltf
     /// <summary>How an exporter names textures and refers to external parts.</summary>
     public sealed class ExportContext
     {
+        internal int NextInstance { get; set; }
         /// <summary>The image URI (relative to the glTF file) and the clamp word for a texture.</summary>
         public required Func<WorldTexture, (string Uri, int Addressing)> Texture { get; init; }
         /// <summary>For a node that is an external reference, the referenced file's URI; its children from that file are then not written.</summary>
@@ -46,6 +47,9 @@ public static partial class WorldGltf
         /// the file being written: a reference with records of its own (a mission database's part), written as its children.
         /// </summary>
         public Func<WorldNode, IReadOnlyCollection<WorldNode>?> Content { get; init; } = _ => null;
+        /// <summary>An inferred load section with an unrecoverable filename, retained inside this document.</summary>
+        public Func<WorldNode, string?> InlineSource { get; init; } = _ => null;
+        internal Func<WorldNode, IReadOnlyCollection<WorldNode>?> InlineContent { get; init; } = _ => null;
         /// <summary>Nodes that are groups of a mission database (written with <c>extras.recoil.group</c>; see <see cref="IsGroup"/>).</summary>
         public Func<WorldNode, bool> Group { get; init; } = _ => false;
         /// <summary>Clear the runtime state of point entries (elapsed time, packed state, heap words, flare runtime values) to compare content.</summary>
@@ -74,12 +78,20 @@ public static partial class WorldGltf
     /// inherit. <paramref name="loadRoot"/> is the node a script load creates for the file: its flags come from the file.
     /// </summary>
     public static GltfDocument Export(IReadOnlyList<WorldNode> roots, uint parentZone, ExportContext context, WorldNode? loadRoot = null)
+        => ExportDocument(roots, parentZone, context, loadRoot, context.Mirrored);
+
+    private static GltfDocument ExportDocument(IReadOnlyList<WorldNode> roots, uint parentZone, ExportContext context, WorldNode? loadRoot, bool parentMirrored)
     {
         GltfDocument doc = new();
-        uint rootFlags = loadRoot == null ? DefaultCarried : loadRoot.Flags & CarriedFlags;
-        if (context.Zones != null) rootFlags &= ~ZoneGate;
-        if (loadRoot != null && rootFlags != DefaultCarried)
-            doc.SceneExtras = new() { [Key] = new JsonObject { ["rootFlags"] = $"0x{rootFlags:X8}" } };
+        JsonObject scene = new() { ["sourceFormat"] = 4 };
+        doc.SceneExtras = new() { [Key] = scene };
+        if (loadRoot != null)
+        {
+            JsonObject rootValues = [];
+            WriteNodeFlags(rootValues, context.Zones != null ? loadRoot.Flags & ~ZoneGate : loadRoot.Flags);
+            if (context.Zones == null) WriteNodeZoneValue(rootValues, loadRoot.Zone);
+            scene["loadRoot"] = rootValues;
+        }
         // Count how often each node is reached: a node under several parents is written under each (glTF nodes have
         // one parent) and marked so that import joins the copies again.
         Dictionary<WorldNode, int> reached = new(ReferenceEqualityComparer.Instance); HashSet<WorldNode> path = new(ReferenceEqualityComparer.Instance);
@@ -107,13 +119,13 @@ public static partial class WorldGltf
             foreach (var child in OwnChildren(node, context)) Count(child, mirrored, identity && seen == 0);
             path.Remove(node);
         }
-        foreach (var root in roots) Count(root, context.Mirrored);
+        foreach (var root in roots) Count(root, parentMirrored);
         ExportState state = new()
         {
             Duplicates = new(reached.Keys.GroupBy(n => n.Name, StringComparer.Ordinal).Where(g => g.Count() > 1).Select(g => g.Key), StringComparer.Ordinal),
             Shared = new(reached.Where(r => r.Value > 1).Select(r => r.Key), ReferenceEqualityComparer.Instance),
         };
-        foreach (var root in roots) doc.Roots.Add(ExportNode(root, parentZone, context, state, context.Mirrored));
+        foreach (var root in roots) doc.Roots.Add(ExportNode(root, parentZone, context, state, parentMirrored));
         return doc;
     }
     /// <summary>The largest hierarchy an export writes, counting every copy of a shared node.</summary>
@@ -189,7 +201,7 @@ public static partial class WorldGltf
         // Every copy of a shared node carries its instance number; the first copy in the file is the one imported.
         if (state.Shared.Contains(node))
         {
-            if (!state.Instances.TryGetValue(node, out int instance)) state.Instances[node] = instance = state.Instances.Count + 1;
+            if (!state.Instances.TryGetValue(node, out int instance)) state.Instances[node] = instance = ++context.NextInstance;
             extras["instance"] = instance;
         }
         uint carried = node.Flags & CarriedFlags;
@@ -198,12 +210,11 @@ public static partial class WorldGltf
             zoneExport.Nodes.Add(result, new(node.Zone, (node.Flags & ZoneGate) != 0, node.Zone == (parentZone & 255u)));
             carried &= ~ZoneGate;
         }
-        if (carried != DefaultCarried) extras["flags"] = $"0x{carried:X8}";
+        WriteNodeFlags(extras, carried);
         uint zone = node.Zone & 0xFF;
         if (context.Zones == null)
         {
-            if (zone != parentZone) extras["zone"] = (int)zone;
-            if ((node.Zone & ~0xFFu) != 0) extras["zoneWord"] = $"0x{node.Zone:X8}";
+            if (zone != parentZone || (node.Zone & ~0xFFu) != 0) WriteNodeZoneValue(extras, node.Zone);
         }
         if (node.Class == WorldNodeClass.Lod)
         {
@@ -238,7 +249,15 @@ public static partial class WorldGltf
             if (context.Zones is { } zones) { extras[ZoneReference] = true; zones.References.Add(result, uri); }
             else extras["ref"] = uri;
         }
-        foreach (var child in OwnChildren(node, context)) result.Children.Add(ExportNode(child, zone, context, state, mirrored));
+        if (context.InlineSource(node) is { } inline)
+        {
+            var content = (context.InlineContent(node) ?? context.Content(node))?.ToArray() ?? [];
+            extras[InlineSourceField] = new JsonObject { ["id"] = inline, ["count"] = content.Length };
+            result.Children.AddRange(ExportDocument(content, zone, context, null, mirrored).Roots);
+            HashSet<WorldNode> embedded = new(context.Content(node) ?? content, ReferenceEqualityComparer.Instance);
+            foreach (var child in node.Children.Where(c => !embedded.Contains(c))) result.Children.Add(ExportNode(child, zone, context, state, mirrored));
+        }
+        else foreach (var child in OwnChildren(node, context)) result.Children.Add(ExportNode(child, zone, context, state, mirrored));
         if (extras.Count > 0) result.Extras = new() { [Key] = extras };
         return result;
     }
@@ -246,6 +265,13 @@ public static partial class WorldGltf
     /// <summary>The children written in the file itself: all for a node, those not from the referenced file for a reference.</summary>
     private static IEnumerable<WorldNode> OwnChildren(WorldNode node, ExportContext context)
     {
+        if (context.InlineSource(node) != null)
+        {
+            if (context.ReferenceChildren.TryGetValue(node, out var known)) return known;
+            var inline = (context.InlineContent(node) ?? context.Content(node))?.ToArray() ?? [];
+            HashSet<WorldNode> embeddedMembers = new(context.Content(node) ?? inline, ReferenceEqualityComparer.Instance);
+            return context.ReferenceChildren[node] = [.. inline, .. node.Children.Where(child => !embeddedMembers.Contains(child))];
+        }
         if (context.Reference(node) == null) return node.Children;
         if (context.ReferenceChildren.TryGetValue(node, out var children)) return children;
         var content = context.Content(node);
@@ -377,7 +403,7 @@ public static partial class WorldGltf
         if (m.PackedColor != (m.Texture != null ? 0x7FFF : 0)) extras["packedColor"] = $"0x{m.PackedColor:X4}";
         if (key.Priority != 0) { extras["priority"] = key.Priority; name += $"~p{key.Priority}"; }
         if (key.ShowBackFace) { extras["backface"] = true; name += "~b"; }
-        if (key.Zone != DefaultPolygonZone) { extras["zone"] = $"0x{key.Zone:X8}"; name += $"~z{key.Zone:X8}"; }
+        if (key.Zone != DefaultPolygonZone) { WritePolygonZoneValue(extras, key.Zone); name += $"~z{key.Zone:X8}"; }
         if (key.Normals) extras["normals"] = true; else name += "~flat";
         string unique = name;
         if (!context.MaterialNames.Add(unique))
@@ -468,7 +494,10 @@ public static partial class WorldGltf
         /// <summary>The authored reference URI for a neutral reference holder, by logical path and emitted node ordinal.</summary>
         public Func<string, int, string?>? AssetReference { get; init; }
         internal Dictionary<(string Path, GltfDocument Document), BoundZones?> ZoneBindings { get; } = [];
+        internal Dictionary<(GltfDocument Document, JsonObject Profile), BoundZones> EmbeddedZoneBindings { get; } = [];
+        internal HashSet<(GltfDocument Document, JsonObject Scope)> ValidatedZoneScopes { get; } = [];
         internal Dictionary<GltfDocument, ZoneLayout> ZoneLayouts { get; } = new(ReferenceEqualityComparer.Instance);
+        internal Stack<EmbeddedZoneScope> EmbeddedZoneScopes { get; } = new();
         internal BoundedDiagnostics Diagnostics { get; init; } = new();
         public List<string> Warnings => Diagnostics.Snapshot();
         /// <summary>
@@ -476,6 +505,8 @@ public static partial class WorldGltf
         /// copy) and, for a shared node or a node inside one, its place there.
         /// </summary>
         public Action<WorldNode, string, GltfNode, InstancePlace?>? NodeImported { get; init; }
+        internal Dictionary<WorldNode, string> InlineSourceKeys { get; } = new(ReferenceEqualityComparer.Instance);
+        internal Dictionary<WorldNode, IReadOnlyList<WorldNode>> InlineSourceContents { get; } = new(ReferenceEqualityComparer.Instance);
         /// <summary>While a referenced file is imported, the node that references it (the innermost, for nested references).</summary>
         public WorldNode? Referencing => referencing.Count > 0 ? referencing[^1] : null;
         internal readonly List<WorldNode> referencing = [];
@@ -574,7 +605,7 @@ public static partial class WorldGltf
     /// <summary>Shared build/Blender preflight: refuse model semantics GameZ cannot represent before accepting sources.</summary>
     internal static void ValidateSupported(GltfDocument doc, string path, ImportContext? context = null)
     {
-        _ = EngineValues(doc.SceneExtras, path);
+        _ = RootFlags(doc);
         HashSet<GltfMesh> meshes = [];
         HashSet<GltfMaterial> materials = [];
         Dictionary<string, int> addressing = new(StringComparer.OrdinalIgnoreCase);
@@ -582,6 +613,8 @@ public static partial class WorldGltf
         {
             context?.Token.ThrowIfCancellationRequested();
             _ = ValidatedEngineName(node, path);
+            _ = StoredNodeFlags(EngineValues(node.Extras, path));
+            _ = InlineSourceKey(node, path);
             if (EngineValues(node.Extras, path)?["class"] is { } kind && Text(kind, "class", path) == "lod"
                 && node.Matrix is { IsIdentity: false })
                 throw new InvalidDataException($"{path}: LOD node {JsonData.ShownText(EngineName(node))} has a transform the game cannot store. Move its objects or place the LOD below a transformed object instead.");
@@ -761,6 +794,7 @@ public static partial class WorldGltf
                 NumericOperand(engine[field], field, path);
             if (engine["flags"] is { } flags) _ = MaterialWord(flags, "flags", path);
             if (engine["packedColor"] is { } packed) _ = MaterialWord(packed, "packedColor", path);
+            _ = ReadPolygonZoneValue(engine, path);
             foreach (string field in new[] { "fields", "color" })
                 if (engine.TryGetPropertyValue(field, out var value))
                 {
@@ -806,6 +840,7 @@ public static partial class WorldGltf
             // inherit other zones or omit the first record's children. Editor updates validate agreement separately.
             context.Validated.Add(doc);
         }
+        using var zoneScope = EnterEmbeddedZones(context, path);
         var zones = BindZones(doc, path, context);
         if (zones != null) reading += "\u001E" + zones.Identity;
         if (!context.Loading.TryAdd((path, doc), true)) throw new InvalidDataException($"{path} references itself.");
@@ -856,14 +891,13 @@ public static partial class WorldGltf
         WorldNode node = new(name, lod ? WorldNodeClass.Lod : WorldNodeClass.Object3D);
         if (instance is { } first) { instances[first] = node; place = new(first); }
         context.NodeImported?.Invoke(node, path, source, place);
-        uint carried = extras?["flags"] is { } flags ? Hex(flags, "flags", path) & CarriedFlags : DefaultCarried;
+        uint carried = StoredNodeFlags(extras);
         node.Flags = (lod ? 0x0108001Cu : 0x0308001Cu) & ~CarriedFlags | carried;
         node.BoundsFlags = 4;
-        // A node's zone is the low byte of its zone word: zone states it (also over the word's), and it is what the node's
-        // children inherit, so a word without a zone of its own passes its low byte on (see StatedZone).
-        uint? word = extras?["zoneWord"] is { } w ? Hex(w, "zoneWord", path) : null;
-        uint zone = extras?["zone"] is { } z ? (uint)Integer(z, "zone", path) & 0xFF : word is { } stated ? stated & 0xFF : parentZone;
-        node.Zone = word is { } full ? full & ~0xFFu | zone : zone;
+        // Zone IDs are bytes; opaque stored padding is preserved separately and never inherited by children.
+        node.Zone = ReadNodeZoneValue(extras, parentZone, path);
+        if (NodeZoneIsInherited(extras, path)) node.Zone = node.Zone & ~255u | parentZone & 255u;
+        uint zone = node.Zone & 0xFF;
         if (zones != null)
         {
             var assigned = zones.Nodes[source];
@@ -901,13 +935,15 @@ public static partial class WorldGltf
         {
             var (doc, referencedPath) = context.Reference(uri, path);
             context.referencing.Add(node);
+            using var refZones = PushZoneOverrides(context, source, doc, referencedPath, path);
             try { foreach (var child in Import(doc, referencedPath, Reading(reading, uri), zone, context, depth + 1, mirrored)) Link(child); }
             finally { context.referencing.RemoveAt(context.referencing.Count - 1); }
         }
+        int inlineCount = ImportInlineSource(source, node, path, reading, zone, context, depth, mirrored, zones, terrainGroups, Link);
         // Inside a shared node each child's place is its name and how many earlier siblings have it (see InstancePlace).
         Dictionary<string, int>? named = place == null ? null : new(StringComparer.Ordinal);
         bool terrainChildren = terrainGroups && IsTransparentTerrainGroup(source, path);
-        for (int i = 0; i < source.Children.Count; i++)
+        for (int i = inlineCount; i < source.Children.Count; i++)
         {
             // Database groups disappear when their members attach to the world. Expanding a recipe in place
             // preserves that attachment order; ordinary objects and referenced files cannot host markers.
@@ -1196,7 +1232,7 @@ public static partial class WorldGltf
         var extras = source?.Extras?[Key] as JsonObject;
         int priority = extras?["priority"] is { } p ? (int)Integer(p, "priority", path, int.MinValue, int.MaxValue) : 0;
         bool backface = extras?["backface"] is { } b ? Flag(b, "backface", path) : source?.DoubleSided ?? false;
-        uint zone = extras?["zone"] is { } z ? Hex(z, "zone", path) : DefaultPolygonZone;
+        uint zone = ReadPolygonZoneValue(extras, path);
         bool? normals = StoresNormals(source, path);
         WorldMaterial material = new();
         string? textureName = null;
@@ -1344,19 +1380,20 @@ public static partial class WorldGltf
             && extras?["model"] == null && extras?["appearance"] == null && extras?["instance"] == null
             && extras?["ref"] == null && extras?[ZoneReference] == null && extras?["class"] == null;
     }
-    /// <summary>The flags a load root takes from its file (scene extras), or null for the loader's default.</summary>
-    public static uint? RootFlags(GltfDocument doc) => (doc.SceneExtras?[Key] as JsonObject)?["rootFlags"] is { } flags ? Hex(flags, "rootFlags", "the scene") & CarriedFlags : null;
+    /// <summary>The authored flags a load root takes from its scene; omitted properties are false.</summary>
+    public static uint? RootFlags(GltfDocument doc) => StoredNodeFlags(SourceSceneValues(doc, "the scene")?["loadRoot"] as JsonObject);
     /// <summary>
-    /// The zone a node's engine values (<c>extras.recoil</c>) state, which its children inherit: its <c>zone</c>, else its
-    /// <c>zoneWord</c>'s low byte. Null when they state none (the node takes its parent's) or hold a value import refuses.
+    /// The numeric zone a node states for itself and its children. Legacy packed words remain readable.
+    /// Null when the node inherits its parent's zone or holds a value import refuses.
     /// </summary>
     public static uint? StatedZone(JsonNode? engine)
     {
         if (engine is not JsonObject values) return null;
-        if (values["zone"] is { } zone)
-            return GltfInteger.TryInt64(zone, out long value) ? (uint)value & 0xFF : null;
-        return values["zoneWord"] is JsonValue word && word.TryGetValue(out string? text)
-            && uint.TryParse(text.StartsWith("0x", StringComparison.OrdinalIgnoreCase) ? text[2..] : text, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out uint full) ? full & 0xFF : null;
+        try
+        {
+            return NodeZoneIsInherited(values, "the source node") ? null : ReadNodeZoneValue(values, DefaultZone, "the source node") & 0xFF;
+        }
+        catch (InvalidDataException) { return null; }
     }
 
     // Engine values in extras. Editors may rewrite their types (Blender stores a list mixing whole and fractional numbers

@@ -6,10 +6,13 @@ using Recoil.Zbd.Core.Worlds;
 namespace Recoil.Zbd.Core.Sources;
 
 public sealed record SourceMapZoneReference(int Node, string Asset, string Spelling);
-public sealed record SourceMapZoneAsset(string LogicalPath, string GeometryPath, WorldZoneProfile Profile, IReadOnlyList<SourceMapZoneReference> References);
+public sealed record SourceMapZoneAsset(string LogicalPath, string GeometryPath, WorldZoneProfile Profile, IReadOnlyList<SourceMapZoneReference> References)
+{
+    public IReadOnlyList<int> OwnerReferenceChain { get; init; } = [];
+}
 public sealed record SourceMapZoneLabel(byte Id, string Label);
 
-/// <summary>Authoritative per-map zone assignments and logical model identities, independent of shared geometry.</summary>
+/// <summary>Bounded profile records used by source tooling. The version-one codec is retained for legacy identification and tests; current projects embed assignments in glTF.</summary>
 public sealed class SourceMapZones
 {
     public const int Version = 1, MaximumBytes = 32 << 20, MaximumAssets = 16_384;

@@ -262,6 +262,7 @@ public sealed class SourceWorkspace
         if (!SourceProject.IsProject(Root)) throw new InvalidDataException("This folder is not a source project (it needs data and gamegen folders).");
         // Every later check of a file starts below Root; a linked root or ancestor would let edits and saves leave the folder.
         SourceProject.RejectLinkedProject(Root);
+        SourceProject.RequireCurrentFormat(Root);
         save = saver ?? new Saver((writes, description, token) => new SourcePublisher(Root).Publish(writes.Select(w => new SourceFileWrite(w.Relative, w.Expected, w.Content)).ToArray(), description, token).Written);
     }
 
@@ -437,6 +438,7 @@ public sealed class SourceWorkspace
         token.ThrowIfCancellationRequested();
         string path = SourceProject.Resolve(Root, relative);
         SourceProject.RejectLinkedProject(Root);
+        SourceProject.RequireCurrentFormat(Root);
         SourceProject.RejectNestedLinks(Root, relative);
         token.ThrowIfCancellationRequested();
         return SourceRead.FileExists(path);
@@ -702,7 +704,10 @@ public sealed class SourceWorkspace
             writes = dirty.Select(f => (f, baselines[f].Bytes, working[f])).ToArray();
             geometry = dirty.Where(mapZoneGeometry.Contains).ToArray();
         }
-        string[] profiles = dirty.Where(SourceMapZones.IsMissionPath).ToArray();
+        // Any glTF can own attributes for its referenced placements. Save verifies both directions:
+        // the edited file's outgoing assignments and other files' assignments on edited geometry.
+        string[] profiles = dirty.Where(f => f.EndsWith(".gltf", StringComparison.OrdinalIgnoreCase) ||
+            f.EndsWith(".glb", StringComparison.OrdinalIgnoreCase)).ToArray();
         var validation = geometry.Length == 0 && profiles.Length == 0 ? null : BeginPreparedEdit();
         IsSaving = true;
         return new(dirty, writes, geometry, profiles, validation);
@@ -725,20 +730,11 @@ public sealed class SourceWorkspace
     {
         if (pending.Validation is not { } validation) return null;
         var snapshot = validation.Workspace;
-        long remaining = 128L << 20;
         foreach (string profile in pending.Profiles)
         {
             // The other save order matters too: a pending zone edit must not publish assignments for geometry
             // another editor has changed since acceptance. Decode one geometry at a time, not a whole map scene.
-            var bytes = snapshot.Read(profile, token, Math.Min(remaining, SourceMapZones.MaximumBytes))
-                ?? throw new InvalidDataException($"{JsonData.ShownText(profile)} is unavailable for map zone validation.");
-            remaining -= bytes.Length;
-            var map = SourceMapZones.Parse(bytes, token);
-            foreach (var group in map.Assets.GroupBy(a => a.GeometryPath, StringComparer.OrdinalIgnoreCase))
-            {
-                var layout = WorldGltf.ZoneLayout.Read(ReadGeometry(group.Key), token);
-                foreach (var asset in group) WorldGltf.ValidateZoneProfile(layout, asset.Profile, group.Key, token);
-            }
+            if (snapshot.Exists(profile, token)) SourceMapZoneBindings.ValidateOwned(snapshot, profile, token);
         }
         foreach (string geometry in pending.Geometry)
         {

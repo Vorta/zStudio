@@ -67,17 +67,10 @@ public static class SourceTerrain
         recipePath = Checked(recipePath ?? model[..model.LastIndexOf('.')] + TerrainRecipe.Extension);
         if (!recipePath.EndsWith(TerrainRecipe.Extension, StringComparison.OrdinalIgnoreCase)) throw new InvalidDataException($"A recipe's name ends with {TerrainRecipe.Extension}.");
         if (workspace.Exists(recipePath, token)) throw new InvalidDataException($"{recipePath} already exists.");
-        SourceMapZoneAsset? surfaceBinding = null;
-        string[] databaseParts = database.Split('/');
-        if (databaseParts.Length > 2 && SourceProject.MissionName().IsMatch(databaseParts[1]) &&
-            workspace.Read(SourceMapZones.PathForMission(databaseParts[1]), token, SourceMapZones.MaximumBytes) is { } zoneBytes)
-        {
-            var map = SourceMapZones.Parse(zoneBytes, token);
-            if (map.TryGetAsset(model, out var binding)) surfaceBinding = binding;
-        }
-        var doc = ReadModel(workspace, surfaceBinding?.GeometryPath ?? model, token, maximumModelJsonBytes, maximumModelBufferBytes);
+        var doc = ReadModel(workspace, model, token, maximumModelJsonBytes, maximumModelBufferBytes);
         List<TerrainSurface> surfaces = [];
-        TerrainPlacementIndex placements = new(doc, placementBudget ?? new(token), surfaceBinding?.Profile);
+        TerrainPlacementIndex placements = new(doc, placementBudget ?? new(token),
+            WorldGltf.HasEmbeddedZones(doc) ? WorldGltf.CaptureZoneProfile(doc, token: token) : null);
         foreach (string name in nodes)
         {
             token.ThrowIfCancellationRequested();
@@ -113,8 +106,12 @@ public static class SourceTerrain
         byte[] marked = GltfJson.Write(root, indented: false, token);
         var updated = WorldAssembler.ReadModel(marked, database, (path, remaining) => workspace.Read(path, token, ProjectReadLimits.Bytes(remaining))
             ?? throw new InvalidDataException($"{database}: buffer {JsonData.ShownText(path)} is unavailable."), token);
-        List<(string Relative, byte[] Content)> changes = [(recipePath, recipe.Write()), (database, marked)];
+        List<(string Relative, byte[] Content)> changes = [(recipePath, recipe.Write())];
         changes.AddRange(bindings.Remap(original, updated, root, originalObjects, new Dictionary<int, int>(), token, new HashSet<int> { nodeList.Count - 1 }));
+        marked = GltfJson.Write(root, indented: false, token);
+        if (marked.Length > MaximumDatabaseJsonBytes)
+            throw new InvalidDataException("The database with its terrain marker exceeds its editable JSON limit.");
+        changes.Add((database, marked));
         return workspace.Apply($"Create terrain {stem}", changes.Select(c => (c.Relative, (byte[]?)c.Content)), token) ?? throw new InvalidDataException("Creating the terrain changed nothing.");
     }
 
@@ -141,7 +138,7 @@ public static class SourceTerrain
         return candidate;
     }
     /// <summary>
-    /// A surface node's attributes as an object of the file has them: its flags when not the default, and its zone (its
+    /// A surface node's attributes as an object of the file has them: its decoded flags (omitted flags are false), and its zone (its
     /// own, else its parents', as the importer inherits it) when it has one; a node without a zone keeps auto.
     /// </summary>
     private static TerrainAttributes NodeDefaults(TerrainPlacementIndex.Placement placement) => new()
@@ -153,14 +150,7 @@ public static class SourceTerrain
     internal static HashSet<string> Referenced(SourceWorkspace workspace, string file, CancellationToken token,
         int maximumFiles = SourceProject.MaximumFiles, long maximumInputBytes = FormatRegistry.MaximumDocumentBytes)
     {
-        string[] parts = SourceWorkspace.Normalize(file).Split('/');
-        SourceMapZones? zones = null;
-        if (parts.Length > 2 && SourceProject.MissionName().IsMatch(parts[1]))
-        {
-            var bytes = workspace.Read(SourceMapZones.PathForMission(parts[1].ToLowerInvariant()), token, Math.Min(maximumInputBytes, SourceMapZones.MaximumBytes));
-            if (bytes != null) { maximumInputBytes -= bytes.Length; zones = SourceMapZones.Parse(bytes, token); }
-        }
-        return Referenced(file, (path, limits) => workspace.Read(path, token, limits), token, maximumFiles, maximumInputBytes, zones: zones);
+        return Referenced(file, (path, limits) => workspace.Read(path, token, limits), token, maximumFiles, maximumInputBytes);
     }
 
     internal static HashSet<string> Referenced(string file, Func<string, ProjectReadLimits, byte[]?> readFile, CancellationToken token,
@@ -187,17 +177,6 @@ public static class SourceTerrain
             token.ThrowIfCancellationRequested();
             if (!read.Add(current)) continue;
             string geometry = current;
-            if (zones?.TryGetAsset(current, out var assignment) == true)
-            {
-                geometry = assignment.GeometryPath;
-                foreach (var binding in assignment.References)
-                {
-                    Reserve(1L + binding.Asset.Length);
-                    AddReference(binding.Asset);
-                    if (zones.TryGetAsset(binding.Asset, out var target) && !target.GeometryPath.Equals(binding.Asset, StringComparison.OrdinalIgnoreCase))
-                        AddReference(target.GeometryPath, visit: false);
-                }
-            }
             // Keep the whole-file cap, including GLB BIN/unknown chunks. Typed admission also precedes
             // prepared dependency hashing; a post-read count or an untyped cached read is too late.
             var limits = ProjectReadLimits.Model(Math.Min(MaximumDatabaseJsonBytes, maximumInputBytes - inputBytes), MaximumDatabaseJsonBytes);
@@ -232,13 +211,12 @@ public static class SourceTerrain
                     Reserve(4L * (current.Length + JsonMarshal.GetRawUtf8Value(reference).Length + 1));
                     string uri = reference.GetString()!;
                     string target;
-                    try { target = WorldAssembler.Relative(current, uri); } catch (InvalidDataException) { continue; }
+                    target = WorldAssembler.Relative(current, uri);
                     AddReference(target);
                 }
                 else if (node.TryGetProperty("extras", out var holder) && holder.ValueKind == JsonValueKind.Object &&
-                    holder.TryGetProperty(WorldGltf.Key, out var values) && values.ValueKind == JsonValueKind.Object && values.TryGetProperty(WorldGltf.ZoneReference, out _) &&
-                    zones?.TryGetAsset(current, out _) != true)
-                    throw new InvalidDataException("The database needs its map zone reference bindings before terrain creation.");
+                    holder.TryGetProperty(WorldGltf.Key, out var values) && values.ValueKind == JsonValueKind.Object && values.TryGetProperty(WorldGltf.ZoneReference, out _))
+                    throw new InvalidDataException("This database uses obsolete external reference bindings. Extract a fresh source project from the original ZBD files.");
             }
         }
         token.ThrowIfCancellationRequested();

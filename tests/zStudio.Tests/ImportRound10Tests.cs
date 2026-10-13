@@ -122,8 +122,14 @@ public sealed class ImportRound10Tests
         Assert.Equal(["ground", "m1_terrain", "sky"], roots);
         Assert.True(workspace.CanUndo);
 
-        // A second mission can load this database and initialize its own zones through an ordinary zone edit.
+        // A second master references this database and owns its placement overrides in that reference node.
+        const string profile = "data/m2/models/m1.gltf";
+        fixture.Write(profile, """
+            {"asset":{"version":"2.0"},"nodes":[{"name":"shared_database","extras":{"recoil":{"class":"group","ref":"../../m1/models/m1.gltf"}}}],"scenes":[{"nodes":[0]}],"scene":0}
+            """);
+        byte[] referenceSource = File.ReadAllBytes(fixture.Path(profile));
         fixture.Write("gamegen/m2.gs", File.ReadAllText(fixture.Path("gamegen/m1.gs"))
+            .Replace("SetModelDirectory ..\\data\\m1\\models", "SetModelDirectory ..\\data\\m2\\models", StringComparison.Ordinal)
             .Replace("..\\m1\\gamez.zbd", "..\\m2\\gamez.zbd", StringComparison.Ordinal));
         Task<SourceWorldBuild> BuildM2(string label, SourceWorkspace? pending = null) => SourceWorlds.BuildPreviewAsync(fixture.Project, "m2",
             Path.Combine(SourceWorlds.PreviewRoot(fixture.Project), label), pending?.Overlay(), token: Token);
@@ -137,7 +143,6 @@ public sealed class ImportRound10Tests
         using (var verified = other.VerifyPreparedEdit(otherPrepared, Token))
             other.AcceptPreparedEdit(otherPrepared, Token, verified);
         other.Save(Token);
-        const string profile = "data/m2/meta/zones.json";
         byte[] zones = File.ReadAllBytes(fixture.Path(profile));
         // Acceptance does not end the dependency: a second editor can initialize a profile before we save.
         await Assert.ThrowsAsync<InvalidDataException>(() => workspace.SaveAsync(Token));
@@ -157,10 +162,19 @@ public sealed class ImportRound10Tests
         Assert.Equal(zones, File.ReadAllBytes(fixture.Path(profile)));
         await BuildM2("after-refused-conversion");
 
-        // Reverse publication order: pending zones must not be saved after another editor converts their geometry.
-        other.Discard(); File.Delete(fixture.Path(profile));
+        // Even without overrides, converting a referenced file would put terrain outside a master's roots.
+        other.Discard(); fixture.Write(profile, referenceSource);
+        Assert.Throws<InvalidDataException>(() => SourceTerrainConversion.Plan(new SourceWorkspace(fixture.Project), path,
+            (new(StringComparer.Ordinal) { "ground" }, []), Token));
+
+        // Reverse publication order on a direct master: pending inline zones must not overwrite a later conversion.
+        fixture.Write(profile, """{"asset":{"version":"2.0"},"nodes":[],"scenes":[{"nodes":[]}],"scene":0}""");
+        fixture.Write("gamegen/m2.gs", File.ReadAllText(fixture.Path("gamegen/m1.gs"))
+            .Replace("..\\m1\\gamez.zbd", "..\\m2\\gamez.zbd", StringComparison.Ordinal));
+        other = new(fixture.Project);
         var reverseBuild = await BuildM2("before-reverse-save");
-        var reverseZones = SourceZoneEdits.PlanAssignments(other, reverseBuild, [new(ground)], new(NodeZone: 7), false, Token);
+        ground = reverseBuild.Provenance.First(p => p.Value.ModelNodeName == "ground").Key;
+        var reverseZones = SourceZoneEdits.PlanAssignments(other, reverseBuild, [new(ground)], new(NodeZone: 7), true, Token);
         other.Apply(reverseZones.Label, reverseZones.Changes.Select(c => (c.Relative, (byte[]?)c.Content)), Token);
         SourceWorkspace converted = new(fixture.Project);
         var conversion = converted.BeginPreparedEdit();
@@ -168,9 +182,9 @@ public sealed class ImportRound10Tests
         using (var verified = converted.VerifyPreparedEdit(conversion, Token))
             converted.AcceptPreparedEdit(conversion, Token, verified);
         converted.Save(Token);
-        Assert.Throws<InvalidDataException>(() => other.Save(Token));
+        Assert.ThrowsAny<IOException>(() => other.Save(Token));
         Assert.True(other.IsDirty); Assert.False(other.IsSaving);
-        Assert.False(File.Exists(fixture.Path(profile)));
+        Assert.NotEqual(original, File.ReadAllBytes(full));
         await BuildM2("after-refused-zone-save");
     }
 }

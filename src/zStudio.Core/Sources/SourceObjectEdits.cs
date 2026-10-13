@@ -359,41 +359,67 @@ public static class SourceObjectEdits
         // The interpreter's flag commands set bits of any current node, but only an object's flags mean anything here.
         if (!HasFlags(node.Class)) throw new InvalidDataException($"{nodeName} is a {node.Class} node; only objects have flags to set here.");
         if (System.Numerics.BitOperations.PopCount(bit) != 1 || (bit & WorldGltf.CarriedFlags) == 0) throw new InvalidDataException($"0x{bit:X} is not one node flag a source can set.");
-        if (bit == WorldGltf.ZoneGate && origin.ZoneManifest != null)
+        if (bit == WorldGltf.ZoneGate && origin.ZoneOwnerPath != null)
             throw new InvalidDataException("This object's altitude-probe gate belongs to its map zone assignments. Use the map zone editor to choose its shared scope and change the gate.");
         string label = $"{(on ? "Set" : "Clear")} flag 0x{bit:X} of {nodeName}";
         // The built node has the value its sources give it (the engine update leaves these bits alone): asked again, nothing
         // changes, rather than a line repeating it.
-        if (((node.Flags & bit) != 0) == on) return new(label, [], nodeName, []);
+        if (((WorldGltf.SetNodeFlag(node.Flags, bit, on) ^ node.Flags) & WorldGltf.CarriedFlags) == 0) return new(label, [], nodeName, []);
+        // The source mode is exclusive, although the original script command sets only CanModify.
+        // Prepare both provenance-aware changes before returning one atomic workspace transaction.
+        SourceEditPlan? clearOther = null;
+        if (on && (bit is 0x10000u or 0x20000u) && (node.Flags & (0x30000u ^ bit)) != 0)
+        {
+            if (origin.ModelFile == null)
+                throw new InvalidDataException($"{nodeName}'s crater mode cannot switch: no script command clears ClipTo or sets it. Edit the model source that owns the mode first.");
+            if (bit == 0x10000u && origin.Writers.ContainsKey("NodeSetCanModify"))
+                clearOther = GltfEdit(workspace, origin, label, gltf =>
+                {
+                    if (gltf["extras"] is not JsonObject extras) gltf["extras"] = extras = new();
+                    if (extras[WorldGltf.Key] is not JsonObject recoil) extras[WorldGltf.Key] = recoil = new();
+                    WorldGltf.WriteNodeFlags(recoil, WorldGltf.SetNodeFlag(WorldGltf.StoredNodeFlags(recoil), 0x20000u, false));
+                }, token);
+            else if (bit == 0x20000u && origin.Writers.ContainsKey("NodeSetCanModify"))
+                clearOther = PlanFlag(workspace, node, origin, executions, 0x10000u, false, token, mission, copies, world, write);
+        }
+        SourceEditPlan Finish(SourceEditPlan plan)
+        {
+            if (clearOther != null)
+            {
+                if (clearOther.Changes.Select(c => c.Relative).Intersect(plan.Changes.Select(c => c.Relative), StringComparer.OrdinalIgnoreCase).Any())
+                    throw new InvalidDataException("The crater-mode edits overlap in one source file; change the source instructions directly.");
+                plan = new(label, [.. clearOther.Changes, .. plan.Changes], $"{clearOther.Target}; {plan.Target}", [.. clearOther.Notes, .. plan.Notes]);
+            }
+            if (on && bit == 0x20000u && origin.ModelFile is { } model)
+                SourceDeclientEdits.Validate(workspace, model, plan, inspection, token);
+            return plan;
+        }
         string value = on ? "on" : "off";
         if (FlagCommands.TryGetValue(bit, out string? command) && origin.Writers.TryGetValue(command, out var writer))
         {
             // A flag command sets one bit of the current node, so a later one decides it: set in a script other missions run
             // too (weapons.gw's templates), this mission sets it again before writing its world.
-            if (InThisMission(workspace, nodeName, label, [writer.Script], [[command, value]], executions, token, mission, world, write, inspection) is { } mine) return mine;
+            if (InThisMission(workspace, nodeName, label, [writer.Script], [[command, value]], executions, token, mission, world, write, inspection) is { } mine) return Finish(mine);
             ScriptEdit edit = new(workspace, writer.Script, executions, token, mission, inspection);
             edit.Replace(writer, new() { [1] = value });
-            return new(label, edit.Changes(), $"{writer.Script} line {writer.Line}", edit.Notes);
+            return Finish(new(label, edit.Changes(), $"{writer.Script} line {writer.Line}", edit.Notes));
         }
         if (origin.ModelFile != null)
         {
             // The file's node changes in every copy and load of it; one whose script sets the flag keeps the value it sets.
             List<string> kept = [.. (copies ?? []).Where(c => !ReferenceEquals(c, origin)).Select(c => command != null && c.Writers.TryGetValue(command, out var w) ? w : null).OfType<SourceInstruction>()
                 .Take(1).Select(w => $"{w.Script} line {w.Line} ({w.Command}) sets this flag on another {(origin.Database ? "copy" : "load")} of {nodeName}, which keeps the value it sets.")];
-            return GltfEdit(workspace, origin, label, node =>
+            return Finish(GltfEdit(workspace, origin, label, node =>
             {
                 var extras = node["extras"] as JsonObject ?? (JsonObject)(node["extras"] = new JsonObject());
                 var recoil = extras[WorldGltf.Key] as JsonObject ?? (JsonObject)(extras[WorldGltf.Key] = new JsonObject());
-                // As the importer reads it: hexadecimal, with or without 0x.
-                uint carried = recoil["flags"] is JsonValue text && text.TryGetValue<string>(out var hex)
-                    && uint.TryParse(hex.StartsWith("0x", StringComparison.OrdinalIgnoreCase) ? hex.AsSpan(2) : hex.AsSpan(), NumberStyles.HexNumber, CultureInfo.InvariantCulture, out uint parsed) ? parsed & WorldGltf.CarriedFlags : WorldGltf.DefaultCarried;
-                carried = on ? carried | bit : carried & ~bit;
-                if (carried == WorldGltf.DefaultCarried) recoil.Remove("flags"); else recoil["flags"] = $"0x{carried:X8}";
-            }, token, kept);
+                uint carried = WorldGltf.StoredNodeFlags(recoil);
+                WorldGltf.WriteNodeFlags(recoil, WorldGltf.SetNodeFlag(carried, bit, on));
+            }, token, kept));
         }
         if (command == null) throw new InvalidDataException($"No script command sets flag 0x{bit:X}; {nodeName} was created by a script.");
         var anchor = origin.Created ?? throw new InvalidDataException($"{nodeName} was neither loaded from a model nor created by a script instruction.");
-        return Insert(workspace, nodeName, anchor, [command, value], label, executions, token, mission, world, write, inspection);
+        return Finish(Insert(workspace, nodeName, anchor, [command, value], label, executions, token, mission, world, write, inspection));
     }
     /// <summary>
     /// Whether a source can set flag <paramref name="bit"/> of the node of class <paramref name="nodeClass"/> that
@@ -401,7 +427,7 @@ public static class SourceObjectEdits
     /// carries each, a script sets those a command sets.
     /// </summary>
     public static bool FlagSettable(WorldNodeClass nodeClass, WorldNodeProvenance origin, uint bit) =>
-        HasFlags(nodeClass) && origin.Terrain == null && !(bit == WorldGltf.ZoneGate && origin.ZoneManifest != null) && System.Numerics.BitOperations.PopCount(bit) == 1 && (bit & WorldGltf.CarriedFlags) != 0 && (origin.ModelFile != null || FlagCommands.ContainsKey(bit));
+        HasFlags(nodeClass) && origin.Terrain == null && !(bit == WorldGltf.ZoneGate && origin.ZoneOwnerPath != null) && System.Numerics.BitOperations.PopCount(bit) == 1 && (bit & WorldGltf.CarriedFlags) != 0 && (origin.ModelFile != null || FlagCommands.ContainsKey(bit));
     private static bool HasFlags(WorldNodeClass nodeClass) => nodeClass is WorldNodeClass.Object3D or WorldNodeClass.Lod;
 
     /// <summary>
@@ -639,7 +665,12 @@ public static class SourceObjectEdits
                     token.ThrowIfCancellationRequested();
                     var copied = (JsonObject)root["nodes"]![copy]!;
                     if (local is { } m) GltfNodeEdits.SetLocal(copied, m);
-                    if (flags) ((JsonObject)copied["extras"]![WorldGltf.Key]!)["flags"] = $"0x{node.Flags & WorldGltf.CarriedFlags:X8}";
+                    if (flags)
+                    {
+                        if (copied["extras"] is not JsonObject extras) copied["extras"] = extras = new();
+                        if (extras[WorldGltf.Key] is not JsonObject recoil) extras[WorldGltf.Key] = recoil = new();
+                        WorldGltf.WriteNodeFlags(recoil, node.Flags);
+                    }
                 }
                 // A shared node inside the copy is a new one, read from its own first copy: it keeps the zone of the one it copies,
                 // which the original's holder may have given it from elsewhere in the file.
@@ -1445,13 +1476,31 @@ public static class SourceObjectEdits
         {
             var nodes = (JsonArray)document["nodes"]!;
             var node = (JsonObject)nodes[copies[0]]!;
+            uint priorFlags = WorldGltf.StoredNodeFlags((node["extras"] as JsonObject)?[WorldGltf.Key] as JsonObject);
             change(node);
-            var after = Own(node);
+            var after = Own(node, omitZones: true);
+            uint changedFlags = WorldGltf.StoredNodeFlags((node["extras"] as JsonObject)?[WorldGltf.Key] as JsonObject);
+            bool changedGate = ((priorFlags ^ changedFlags) & WorldGltf.ZoneGate) != 0;
             foreach (int c in copies.Skip(1))
             {
                 var copy = (JsonObject)nodes[c]!;
+                var zones = (copy["extras"] as JsonObject)?[WorldGltf.Key] as JsonObject;
+                uint copyFlags = WorldGltf.StoredNodeFlags(zones);
                 foreach (string key in copy.Select(p => p.Key).Where(k => k is not ("children" or "name")).ToList()) copy.Remove(key);
                 foreach (var (key, value) in after) copy[key] = value?.DeepClone();
+                // Instance copies intentionally retain independent stored assignments. Ordinary property
+                // edits affect their shared definition without replacing inactive reference overrides.
+                if (copy["extras"] is not JsonObject extras) copy["extras"] = extras = new();
+                if (extras[WorldGltf.Key] is not JsonObject engine) extras[WorldGltf.Key] = engine = new();
+                foreach (string key in NodeZoneFields)
+                {
+                    if (zones?[key] is { } value) engine[key] = value.DeepClone();
+                    else engine.Remove(key);
+                }
+                uint flags = changedGate ? changedFlags : (changedFlags & ~WorldGltf.ZoneGate) | (copyFlags & WorldGltf.ZoneGate);
+                WorldGltf.WriteNodeFlags(engine, flags);
+                if (engine.Count == 0) extras.Remove(WorldGltf.Key);
+                if (extras.Count == 0) copy.Remove("extras");
             }
         }, token, notes ?? []);
     /// <summary>Whether a glTF node carries an instance mark (it is one of the copies of a node the file places under several parents).</summary>
@@ -1466,15 +1515,30 @@ public static class SourceObjectEdits
         if (depth > GltfDocument.MaximumDepth) throw new InvalidDataException("The node hierarchy is cyclic or too deep.");
         if (!(seen ??= []).Add(index)) throw new InvalidDataException($"glTF node {index} is reached twice in the node hierarchy (listed as a child more than once, or as its own descendant); a node may have only one parent.");
         var node = (JsonObject)nodes[index]!;
-        var shape = Own(node);
+        var shape = Own(node, compare: true);
         shape["children"] = new JsonArray([.. (node["children"] as JsonArray ?? []).Select(c => (JsonNode?)Shape(nodes, GltfInteger.Int32(c), depth + 1, seen))]);
         return shape;
     }
     /// <summary>A glTF node's own values: all but its children (indices within its copy) and its name (an editor may suffix a copy's).</summary>
-    private static JsonObject Own(JsonObject node)
+    private static readonly string[] NodeZoneFields = ["zone", "zoneWord", "zonePadding", "zoneOverrides"];
+    private static JsonObject Own(JsonObject node, bool compare = false, bool omitZones = false)
     {
         JsonObject own = [];
-        foreach (var (key, value) in node) if (key is not ("children" or "name")) own[key] = value?.DeepClone();
+        foreach (var (key, value) in node)
+        {
+            if (key is "children" or "name") continue;
+            if ((!compare && !omitZones) || key != "extras" || value is not JsonObject extras || extras[WorldGltf.Key] is not JsonObject engine)
+            { own[key] = value?.DeepClone(); continue; }
+            JsonObject copiedExtras = [], copiedEngine = [];
+            foreach (var (extra, content) in extras)
+                if (extra != WorldGltf.Key) copiedExtras[extra] = content?.DeepClone();
+            foreach (var (field, content) in engine)
+                if (!WorldGltf.NodeFlagFields.Contains(field) && !NodeZoneFields.Contains(field)) copiedEngine[field] = content?.DeepClone();
+            uint flags = WorldGltf.StoredNodeFlags(engine);
+            WorldGltf.WriteNodeFlags(copiedEngine, compare ? flags & ~WorldGltf.ZoneGate : flags);
+            if (copiedEngine.Count > 0) copiedExtras[WorldGltf.Key] = copiedEngine;
+            if (copiedExtras.Count > 0) own[key] = copiedExtras;
+        }
         return own;
     }
     /// <summary>
@@ -1491,7 +1555,7 @@ public static class SourceObjectEdits
     /// (see <see cref="InstanceZoneLookup.FindNode"/>), which the map files binding the file keep the same way.
     /// </remarks>
     private static SourceEditPlan GltfFile(SourceWorkspace workspace, WorldNodeProvenance origin, string label, Action<JsonObject, IReadOnlyList<int>, GltfNodeEdits.Hierarchy> change, CancellationToken token, IReadOnlyList<string> notes, bool everyCopy = true,
-        Func<long, uint?>? loadZone = null, Func<string, string, int, uint?>? nodeZone = null)
+        Func<long, uint?>? loadZone = null, Func<string, string, IReadOnlyList<int>, int, uint?>? nodeZone = null)
     {
         string file = origin.ModelFile!;
         byte[] bytes = workspace.Read(file, token, GltfDocument.MaximumJsonBytes) ?? throw new InvalidDataException($"{file} no longer exists.");
@@ -1520,7 +1584,7 @@ public static class SourceObjectEdits
         // The build reads the first copy: another that differs would keep values (or parts) nobody sees, and its nodes would
         // not stand for the first's.
         if (copies.Count > 1 && Shape(nodes, copies[0], 0) is var shape && copies.Skip(1).Any(c => !JsonNode.DeepEquals(Shape(nodes, c, 0), shape)))
-            throw new InvalidDataException($"The copies of {shown} in the instance {file} places under several parents differ; make them alike in Blender first.");
+            throw new InvalidDataException($"The copies of {shown} in the instance {file} places under several parents differ in geometry or non-zone attributes; make those values agree in the source glTF first.");
         var zones = GltfNodeEdits.InstanceZones(document, token).ToDictionary(z => z.Mark, z => z.Zone);
         change(document, copies, hierarchy);
         hierarchy.Invalidate(); // Even value-only edits can invalidate cached local transforms.
@@ -1537,8 +1601,9 @@ public static class SourceObjectEdits
         if (copies.Count > 1) all.Add($"{file} holds {shown} in an instance it places under several parents: the change applies to each of its {copies.Count} copies.");
         if (!origin.Database) all.Add($"{file} is a model file: the change applies wherever it is loaded.");
         else if (origin.Part) all.Add($"{file} is a part of the mission database: the change applies to every copy of it the database references.");
-        List<(string Relative, byte[] Content)> changes = [(file, content)];
+        List<(string Relative, byte[] Content)> changes = [];
         changes.AddRange(zoneBindings.Remap(checkedSource, updated, document, originalObjects, hierarchy.CopiedNodes, token, loadZone: nodeZone));
+        changes.Add((file, GltfJson.Write(document, indented, token)));
         return new(label, changes, $"{file} node {origin.ModelNode}", all);
     }
     /// <summary>
@@ -1611,25 +1676,24 @@ public static class SourceObjectEdits
             return zones.GetValueOrDefault(mark);
         }
 
-        private Dictionary<(string Manifest, string Logical, int Node), uint?>? nodes;
+        private Dictionary<(string Owner, string Model, string References, int Node), uint?>? nodes;
         /// <summary>
-        /// The zone the build gave node <paramref name="node"/> of the logical model <paramref name="logical"/> of the file, as
-        /// the map file <paramref name="manifest"/> binds it, when every copy the world holds got the same.
+        /// The zone the build gave a source node through this exact reference occurrence, when every cached copy agrees.
         /// </summary>
-        internal uint? FindNode(string manifest, string logical, int node)
+        internal uint? FindNode(string owner, string model, IReadOnlyList<int> references, int node)
         {
             Reserve(1);
             if (nodes == null)
             {
-                Dictionary<(string, string, int), uint?> collected = [];
+                Dictionary<(string, string, string, int), uint?> collected = [];
                 foreach (var (built, origin) in provenance)
                 {
                     Reserve(1);
-                    if (origin.Terrain != null || origin.ModelFile is not { } source || origin.ZoneManifest is not { } map || origin.LogicalModelFile is not { } model) continue;
+                    if (origin.Terrain != null || origin.ModelFile is not { } source || origin.ZoneOwnerPath is not { } map) continue;
                     Reserve(1L + Math.Min(source.Length, file.Length));
                     if (!string.Equals(source, file, StringComparison.OrdinalIgnoreCase)) continue;
-                    Reserve(64L + map.Length + model.Length); // Normalized key, hash lookup, retained row and dictionary growth.
-                    var key = (map.ToLowerInvariant(), model.ToLowerInvariant(), origin.ModelNode);
+                    Reserve(64L + map.Length + source.Length + 12L * origin.ZoneOwnerReferences.Count);
+                    var key = (map.ToLowerInvariant(), source.ToLowerInvariant(), string.Join('/', origin.ZoneOwnerReferences), origin.ModelNode);
                     uint zone = built.Zone & 0xFF;
                     if (collected.TryGetValue(key, out uint? previous))
                     { if (previous != zone) collected[key] = null; }
@@ -1638,8 +1702,8 @@ public static class SourceObjectEdits
                 token.ThrowIfCancellationRequested();
                 nodes = collected; // A canceled/refused partial map is never reused.
             }
-            Reserve(1L + manifest.Length + logical.Length);
-            return nodes.GetValueOrDefault((manifest.ToLowerInvariant(), logical.ToLowerInvariant(), node));
+            Reserve(1L + owner.Length + model.Length + 12L * references.Count);
+            return nodes.GetValueOrDefault((owner.ToLowerInvariant(), model.ToLowerInvariant(), string.Join('/', references), node));
         }
     }
     private static JsonArray Array(params float[] values) => new(values.Select(v => (JsonNode?)JsonValue.Create(v)).ToArray());

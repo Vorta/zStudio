@@ -645,7 +645,7 @@ public sealed partial class WorldAssembler(IProjectFiles files, CancellationToke
         }
         var (doc, documentPath) = Load(path);
         if (WorldGltf.RootFlags(doc) is { } rootFlags) root.Flags = (root.Flags & ~WorldGltf.CarriedFlags) | rootFlags;
-        if (ZoneAsset(path)?.Profile.LoadRoot is { } rootZone)
+        if (WorldGltf.EmbeddedLoadRoot(doc) is { } rootZone)
         {
             root.Zone = rootZone.Word;
             root.Flags = rootZone.Gate ? root.Flags | 0x01000000u : root.Flags & ~0x01000000u;
@@ -653,7 +653,7 @@ public sealed partial class WorldAssembler(IProjectFiles files, CancellationToke
         bool database = pendingWorld != null; var load = instruction;
         Origin(root).LoadedFile = GeometryPath(documentPath);
         Origin(root).LogicalLoadedFile = documentPath;
-        Origin(root).ZoneManifest = ZoneAsset(documentPath) != null ? zoneManifest : null;
+        Origin(root).ZoneOwnerPath = documentPath;
         Origin(root).ImportedZoneWord = root.Zone;
         Origin(root).ImportedZoneGate = (root.Flags & WorldGltf.ZoneGate) != 0;
         HashSet<WorldNode> groups = new(ReferenceEqualityComparer.Instance);
@@ -665,8 +665,6 @@ public sealed partial class WorldAssembler(IProjectFiles files, CancellationToke
         context = new()
         {
             World = World, Diagnostics = diagnostics, LinkWork = Lookups, Created = 1, // Reserve the not-yet-allocated load root too.
-            ZoneProfile = (file, _) => ZoneAsset(file)?.Profile,
-            AssetReference = ZoneReference,
             NodeImported = (node, file, source, place) =>
             {
                 imported.Add(node);
@@ -674,11 +672,12 @@ public sealed partial class WorldAssembler(IProjectFiles files, CancellationToke
                 var origin = Origin(node); origin.ModelFile = GeometryPath(file); origin.LogicalModelFile = file; origin.ModelNode = source.Index; origin.ModelNodeName = source.Name; origin.ModelTransformAuthored = source.Matrix is { } m && !m.IsIdentity; origin.Load = load;
                 var layout = ZoneLayout(documents[GeometryPath(file)].Item1)[source];
                 int zoneNode = layout.Node;
-                origin.ZoneManifest = ZoneAsset(file) != null ? zoneManifest : null;
+                var zoneScope = context.EmbeddedZoneScopes.Peek();
+                origin.ZoneOwnerPath = zoneScope.OwnerPath; origin.ZoneOwnerReferences = zoneScope.References;
                 origin.ZoneNode = zoneNode; origin.ZoneMesh = layout.Mesh;
                 origin.Instance = place;
                 // The database's nodes: of its file and of its parts, the files its groups reference.
-                bool part = parts.Contains(file);
+                bool part = parts.Contains(file) || context.Referencing is { } holder && context.InlineSourceKeys.ContainsKey(holder);
                 origin.Database = database && (part || string.Equals(file, documentPath, StringComparison.OrdinalIgnoreCase));
                 origin.Part = database && part;
                 string? uri = SourceMissionModels.EffectiveReference(source.Extras, ZoneReference(file, zoneNode));
@@ -722,7 +721,8 @@ public sealed partial class WorldAssembler(IProjectFiles files, CancellationToke
         // Each node's content once: the loader asks for it several times per node (the load's children no longer change).
         Dictionary<WorldNode, List<WorldNode>> contents = new(ReferenceEqualityComparer.Instance);
         List<WorldNode> Content(WorldNode node) => contents.TryGetValue(node, out var found) ? found
-            : contents[node] = [.. node.Children.Where(c => !string.Equals(FileOf(c), FileOf(node), StringComparison.OrdinalIgnoreCase))];
+            : contents[node] = context.InlineSourceContents.TryGetValue(node, out var inlineContent) ? [.. inlineContent]
+                : [.. node.Children.Where(c => !string.Equals(FileOf(c), FileOf(node), StringComparison.OrdinalIgnoreCase))];
         // The loader made a model when it read the node from its file (a cache's load or the file's own records), so the
         // load's models are in that order, as the world stores them.
         Dictionary<WorldModel, int> read = new(ReferenceEqualityComparer.Instance);
@@ -732,10 +732,11 @@ public sealed partial class WorldAssembler(IProjectFiles files, CancellationToke
             OriginalLoader.Load(root, nodes, nodes, new()
             {
                 Allocate = Allocate, Free = Free, Content = Content,
-                File = node => $"{FileOf(node)}|{(referenceText.TryGetValue(node, out var text) ? text : FileOf(Content(node)[0]))}",
+                File = node => context.InlineSourceKeys.TryGetValue(node, out var inlineKey) ? inlineKey
+                    : $"{FileOf(node)}|{(referenceText.TryGetValue(node, out var text) ? text : FileOf(Content(node)[0]))}",
                 Read = node => { if (node.Model != null) read.TryAdd(node.Model, read.Count); },
                 // A reference to a file without nodes is cached and copied like any other.
-                IsReference = referenceText.ContainsKey, Token = token,
+                IsReference = node => referenceText.ContainsKey(node) || context.InlineSourceKeys.ContainsKey(node), Token = token,
             });
         }
         finally
@@ -820,6 +821,8 @@ public sealed partial class WorldAssembler(IProjectFiles files, CancellationToke
     /// <summary>A URI relative to <paramref name="from"/>, as a project path that stays inside the project.</summary>
     internal static string Relative(string from, string uri)
     {
+        if (from.Length > 4096 || uri.Length is 0 or > 4096)
+            throw new InvalidDataException("A source reference must be a nonempty relative path of at most 4,096 characters.");
         if (uri.Contains(':') || uri.StartsWith('/') || uri.StartsWith('\\')) throw new InvalidDataException($"'{JsonData.ShownText(uri)}' is not a relative reference.");
         List<string> parts = [.. Path.GetDirectoryName(from)!.Replace('\\', '/').Split('/', StringSplitOptions.RemoveEmptyEntries)];
         foreach (string part in uri.Replace('\\', '/').Split('/'))
@@ -854,6 +857,12 @@ public sealed partial class WorldAssembler(IProjectFiles files, CancellationToke
     /// <summary>GameZWriteZBDFile: the engine's update pass, then the world as the file stores it.</summary>
     private void Finish()
     {
+        foreach (var node in World.Nodes)
+        {
+            token.ThrowIfCancellationRequested();
+            WorldGltf.ValidateDeclient(node.Flags, $"Node {JsonData.ShownText(node.Name)}");
+            node.Flags &= ~WorldGltf.UnusedNodeFlags;
+        }
         written = true;
         foreach (var node in World.Nodes.Where(n => n.Class == WorldNodeClass.Object3D))
         {

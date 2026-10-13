@@ -93,6 +93,7 @@ public static partial class SourceBuilder
         inventory ??= snapshot?.Inventory ?? new();
         profile ??= BuildProfiles.Modern;
         if (!SourceProject.IsProject(root)) throw new InvalidDataException("This folder is not a source project (it needs data and gamegen folders).");
+        SourceProject.RequireCurrentFormat(root, token);
         PendingInventory? pending = added == null ? null : PendingInventory.Capture(added, inventory, token);
         added = pending;
         List<SourceOutputPlan> plans = [];

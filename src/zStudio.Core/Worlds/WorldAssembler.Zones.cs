@@ -5,8 +5,6 @@ namespace Recoil.Zbd.Core.Worlds;
 
 public sealed partial class WorldAssembler
 {
-    private SourceMissionModels? missionModels;
-    private string? zoneManifest;
     private readonly Dictionary<GltfDocument, Dictionary<GltfNode, (int Node, int Mesh)>> zoneLayouts = new(ReferenceEqualityComparer.Instance);
 
     private void ReadMapZones(string script)
@@ -14,25 +12,17 @@ public sealed partial class WorldAssembler
         string mission = Path.GetFileNameWithoutExtension(script.Replace('\\', '/')).ToLowerInvariant();
         if (!SourceProject.MissionName().IsMatch(mission)) return;
         string path = SourceMapZones.PathForMission(mission);
-        // The missing-file probe participates in the same source snapshot as every other build input.
-        if (!Exists(path)) return;
-        missionModels = new(SourceMapZones.Parse(files.Read(path, token, ProjectReadLimits.Bytes(SourceMapZones.MaximumBytes)), token), token);
-        zoneManifest = path;
-        ModelFiles.Add(path);
+        if (Exists(path)) throw new InvalidDataException("This source project uses external zone metadata. Re-extract the original ZBD files with zStudio 0.8.5 before opening or building it.");
     }
 
-    private SourceMapZoneAsset? ZoneAsset(string logical)
-        => missionModels?.Asset(logical);
-
-    private string GeometryPath(string logical) => missionModels?.Geometry(logical) ?? logical;
+    private static string GeometryPath(string logical) => logical;
 
     private bool ModelExists(string logical)
     {
-        return missionModels?.Exists(logical, Exists) ?? Exists(logical);
+        return Exists(logical);
     }
 
-    private string? ZoneReference(string logical, int node)
-        => missionModels?.Reference(logical, node);
+    private static string? ZoneReference(string logical, int node) => null;
 
     private Dictionary<GltfNode, (int Node, int Mesh)> ZoneLayout(GltfDocument document)
     {

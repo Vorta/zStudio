@@ -46,22 +46,22 @@ internal static class FileResultBoundsMcpChecks
                 {
                     await Job("open_root", new() { ["path"] = fixture.Project, ["project"] = true });
                     await Job("source_world_open", new() { ["mission"] = "m1" });
+                    // Seed an ordinary multi-file source transaction; the save/result contract is independent
+                    // of Blender, whose checkout/update workflow is unavailable for linked source projects.
+                    var sourceDocument = main.ViewModel.Documents.Single(d => d.SourceWorld != null);
+                    var sourceWorkspace = sourceDocument.SourceWorld!.Workspace;
+                    List<(string Relative, byte[]? Content)> changes = [];
+                    var gltf = JsonNode.Parse(original)!;
+                    JsonArray buffers = [];
+                    for (int i = 0; i < 65; i++)
                     {
-                        var checkout = await Job("source_blender_checkout", new() { ["model"] = $"{folder}/model0.gltf" });
-                        string outbox = checkout["outbox"]!.GetValue<string>();
-                        var gltf = JsonNode.Parse(original)!;
-                        JsonArray buffers = [];
-                        for (int i = 0; i < 65; i++)
-                        {
-                            string name = $"buffer{i}.bin";
-                            await File.WriteAllBytesAsync(Path.Combine(outbox, name), new byte[] { 0, (byte)i, 1, 2 }, token);
-                            buffers.Add(new JsonObject { ["uri"] = name, ["byteLength"] = 4 });
-                        }
-                        gltf["buffers"] = buffers;
-                        await File.WriteAllTextAsync(Path.Combine(outbox, "model0.gltf"), gltf.ToJsonString(), token);
-                        var doc = main.ViewModel.Documents.Single(d => d.SourceWorld != null);
-                        await Job("source_blender_update", new() { ["document"] = doc.SessionId.ToString(), ["revision"] = doc.Revision, ["checkout"] = checkout["id"]!.GetValue<string>() });
+                        string name = $"buffer{i}.bin";
+                        changes.Add(($"{folder}/{name}", new byte[] { 0, (byte)i, 1, 2 }));
+                        buffers.Add(new JsonObject { ["uri"] = name, ["byteLength"] = 4 });
                     }
+                    gltf["buffers"] = buffers;
+                    changes.Add(($"{folder}/model0.gltf", Encoding.UTF8.GetBytes(gltf.ToJsonString())));
+                    sourceWorkspace.Apply("Multi-file source edit", changes, token);
                     var edited = main.ViewModel.Documents.Single(d => d.SourceWorld != null);
                     var sourceState = await Call("state", new() { ["limit"] = 1 });
                     Assert.True(sourceState["documents"]![0]!.ToJsonString().Length <= StateDocumentPage.MaximumRowBytes(edited));

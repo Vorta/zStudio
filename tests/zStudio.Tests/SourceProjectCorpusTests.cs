@@ -3,6 +3,7 @@ using Recoil.Zbd.Core.Animation;
 using Recoil.Zbd.Core.Formats;
 using Recoil.Zbd.Core.Sources;
 using Recoil.Zbd.Core.Worlds;
+using System.Text.Json.Nodes;
 using Xunit;
 
 namespace Recoil.Zbd.Tests;
@@ -22,13 +23,24 @@ public sealed class SourceProjectCorpusTests
             var report = await SourceExtractor.ExtractAsync(corpus, project, token: Token);
             if (Directory.Exists(Path.Combine(corpus, "m3")))
             {
-                var zones = SourceMapZones.Parse(await File.ReadAllBytesAsync(Path.Combine(project, "data/m3/meta/zones.json"), Token), Token);
-                Assert.True(zones.TryGetAsset("data/m3/models/lturret.gltf", out var first));
-                Assert.True(zones.TryGetAsset("data/m3/models/lturret_2.gltf", out var second));
-                Assert.Equal(first.GeometryPath, second.GeometryPath);
-                Assert.False(first.Profile.MeshPolygons.SelectMany(p => p).SequenceEqual(second.Profile.MeshPolygons.SelectMany(p => p)));
-                Assert.True(File.Exists(SourceProject.Resolve(project, first.GeometryPath)));
+                // Distinct readings of the same original FLT keep one physical source and reference-local attributes.
+                // Distinct original files remain physical even when their geometry happens to match.
+                Assert.True(File.Exists(Path.Combine(project, "data/m3/models/lturret.gltf")));
+                Assert.True(File.Exists(Path.Combine(project, "data/m3/models/pturret.gltf")));
                 Assert.False(File.Exists(Path.Combine(project, "data/m3/models/lturret_2.gltf")));
+            }
+            Assert.Empty(Directory.GetFiles(Path.Combine(project, "data"), "zones.json", SearchOption.AllDirectories));
+            foreach (string model in Directory.GetFiles(Path.Combine(project, "data"), "*.gltf", SearchOption.AllDirectories))
+            {
+                string relative = SourceProject.Relative(project, model);
+                Assert.False(System.Text.RegularExpressions.Regex.IsMatch(Path.GetFileName(model), @"^m\d+_\d+\.gltf$"), relative);
+                var gltf = JsonNode.Parse(await File.ReadAllBytesAsync(model, Token))!;
+                foreach (var node in gltf["nodes"]?.AsArray() ?? [])
+                {
+                    Assert.Null(node?["extras"]?["recoil"]?["zoneReference"]);
+                    if (node?["extras"]?["recoil"]?["ref"] is { } reference)
+                        Assert.True(File.Exists(SourceProject.Resolve(project, WorldAssembler.Relative(relative, reference.GetValue<string>()))), relative + " -> " + reference);
+                }
             }
             // Animation definitions shipped in another version than the animations were compiled from are rebuilt from
             // them; nothing else is noted. Definitions that name a sequence twice compile as shipped (the last name).
@@ -36,7 +48,8 @@ public sealed class SourceProjectCorpusTests
             // A mission database is noted when its rebuilt world does not give every node its shipped slot (the original
             // tool attached some records elsewhere, or its files are not all known); these missions' databases are exact.
             const string Database = ": the mission database ";
-            Assert.All(report.Notes, n => Assert.True(n.EndsWith(Rebuilt, StringComparison.Ordinal) || n.Contains(Database, StringComparison.Ordinal), n));
+            const string Inline = "inferred load sections are unrecoverable; their content and cache boundaries remain embedded in the mission master glTF.";
+            Assert.All(report.Notes, n => Assert.True(n.EndsWith(Rebuilt, StringComparison.Ordinal) || n.Contains(Database, StringComparison.Ordinal) || n.EndsWith(Inline, StringComparison.Ordinal), n));
             var inexact = report.Notes.Where(n => n.Contains(Database, StringComparison.Ordinal)).Select(n => n[..n.IndexOf(':')]).ToHashSet();
             string[] exact = ["m1", "m2", "m3", "m4", "m5", "m6", "m7", "m8", "m9", "m10", "m11", "m12", "m13"];
             foreach (string mission in exact)

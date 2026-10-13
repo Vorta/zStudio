@@ -28,25 +28,13 @@ internal static class SourceDecisionDialogChecks
             fixture.Write(model, empty);
             await owner.ViewModel.OpenRootAsync(fixture.Project, token);
             await Job("source_world_open", new() { ["mission"] = "m1" });
-            var checkout = await Job("source_blender_checkout", new() { ["model"] = model });
-            string outbox = checkout["outbox"]!.GetValue<string>();
-            JsonArray buffers = [];
-            for (int i = 0; i < 5; i++)
-            {
-                string name = $"buffer{i}.bin"; await File.WriteAllBytesAsync(Path.Combine(outbox, name), new byte[] { 1, 2, 3, 4 }, token);
-                buffers.Add(new JsonObject { ["uri"] = name, ["byteLength"] = 4 });
-            }
-            var exported = JsonNode.Parse(empty)!; exported["buffers"] = buffers;
-            await File.WriteAllTextAsync(Path.Combine(outbox, "model.gltf"), exported.ToJsonString(), token);
             var document = owner.ViewModel.Documents.Single();
-            await Job("source_blender_update", new() { ["document"] = document.SessionId.ToString(), ["revision"] = document.Revision, ["checkout"] = checkout["id"]!.GetValue<string>() });
-            document = owner.ViewModel.Documents.Single();
             var workspace = document.SourceWorld!.Workspace;
+            List<(string Relative, byte[]? Content)> changes = [(model, System.Text.Encoding.UTF8.GetBytes(empty + "\n"))];
+            for (int i = 0; i < 5; i++)
+                changes.Add(($"data/{Nested(5)}/buffer{i}.bin", new byte[] { 1, 2, 3, 4 }));
+            workspace.Apply("Long source paths", changes, token);
             Assert.Equal(6, workspace.DirtyFiles.Count); Assert.All(workspace.DirtyFiles, path => Assert.True(path.Length > 950));
-            // An older export beside it: Update from Blender export offers both as source_blender_checkouts lists them, the newest chosen.
-            string older = Path.Combine(outbox, "older", "model.gltf"); Directory.CreateDirectory(Path.GetDirectoryName(older)!);
-            await File.WriteAllTextAsync(older, empty, token); File.SetLastWriteTimeUtc(older, new DateTime(2020, 1, 1, 0, 0, 0, DateTimeKind.Utc));
-            var exports = SourceBlender.CheckoutExports(fixture.Project, token);
 
             string terrainPath = "data/" + Nested(21) + "/surface.gltf";
             ModelBuilder builder = new();
@@ -77,17 +65,6 @@ internal static class SourceDecisionDialogChecks
                     Assert.True(ButtonOf(terrainDialog, "Create").IsEnabled);
                 });
                 terrainDialog.Close();
-
-                var blender = new BlenderUpdateDialog(exports, available) { Owner = owner };
-                await Check(blender, available, () =>
-                {
-                    var choices = Descendants(blender).OfType<RadioButton>().ToArray();
-                    Assert.Equal(2, choices.Length);
-                    Assert.Equal((checkout["id"]!.GetValue<string>(), "model.gltf"), (blender.Chosen.Checkout.Id, blender.Chosen.Export.Relative));
-                    choices.Single(c => c.IsChecked != true).IsChecked = true;
-                    Assert.Equal("older/model.gltf", blender.Chosen.Export.Relative);
-                });
-                blender.Close();
 
                 TaskCompletionSource<SourceReconstructionReport> finished = new(TaskCreationOptions.RunContinuationsAsynchronously);
                 TaskCompletionSource started = new(TaskCreationOptions.RunContinuationsAsynchronously);

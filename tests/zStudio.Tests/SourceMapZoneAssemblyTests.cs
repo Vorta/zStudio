@@ -50,8 +50,23 @@ public sealed class SourceMapZoneAssemblyTests
         => new(WorldGltf.LayoutFingerprint(doc, Token), [new(node, false)],
             [(IReadOnlyList<uint>)new uint[] { 0xFFFFFF01, zone }], new(0x11223305, true));
 
-    private static void Manifest(Files files, string mission, params SourceMapZoneAsset[] assets)
-        => files.Content[SourceMapZones.PathForMission(mission)] = new SourceMapZones(assets).Write(Token);
+    private static void StoreProfile(Files files, string path, GltfDocument document, WorldZoneProfile profile)
+    {
+        WorldGltf.EmbedZones(document, profile, token: Token);
+        Store(files, path, document);
+    }
+
+    private static GltfDocument References(params (string Uri, uint Zone, WorldZoneProfile? Override)[] references)
+    {
+        GltfDocument document = new();
+        foreach (var (uri, zone, profile) in references)
+        {
+            JsonObject values = new() { ["ref"] = uri, ["zone"] = zone == 255 ? JsonValue.Create("any") : JsonValue.Create(zone) };
+            if (profile != null) values["zoneOverrides"] = WorldGltf.WriteZoneOverride(profile, Token);
+            document.Roots.Add(new() { Name = "placement" + document.Roots.Count, Extras = new() { [WorldGltf.Key] = values } });
+        }
+        return document;
+    }
 
     private static WorldAssembler Assemble(Files files, string loads, string mission = "m1")
     {
@@ -61,11 +76,12 @@ public sealed class SourceMapZoneAssemblyTests
     }
 
     [Fact]
-    public void DirectLogicalAliasesShareOnlyPhysicalGeometryAndKeepExactMixedAssignments()
+    public void DistinctPhysicalFilesKeepExactMixedAssignments()
     {
-        Files files = new(); var doc = Model(); Store(files, Geometry, doc);
-        Manifest(files, "m1", new SourceMapZoneAsset(First, Geometry, Profile(doc, 0xFFFF0001), []), new(Second, Geometry, Profile(doc, 0xFFFF0101), []));
-        byte[] original = files.Content[Geometry].ToArray();
+        Files files = new(); var firstDocument = Model(); var secondDocument = Model();
+        StoreProfile(files, First, firstDocument, Profile(firstDocument, 0xFFFF0001));
+        StoreProfile(files, Second, secondDocument, Profile(secondDocument, 0xFFFF0101));
+        byte[] original = files.Content[First].ToArray();
         var assembler = Assemble(files, "LoadGameGen turret.flt first\nLoadGameGen turret_2.flt second");
         var first = Assert.Single(assembler.LoadedRoots[0].Children); var second = Assert.Single(assembler.LoadedRoots[1].Children);
         Assert.Equal(new uint[] { 0xFFFFFF01, 0xFFFF0001 }, first.Model!.Polygons.Select(p => p.Zone));
@@ -74,10 +90,11 @@ public sealed class SourceMapZoneAssemblyTests
         Assert.Equal(0xAABBCC03u, first.Zone); Assert.Equal(0u, first.Flags & WorldGltf.ZoneGate);
         Assert.Equal(0x11223305u, assembler.LoadedRoots[0].Zone);
         var origin = assembler.Provenance[second];
-        Assert.Equal(Geometry, origin.ModelFile); Assert.Equal(Second, origin.LogicalModelFile);
-        Assert.Equal("data/m1/meta/zones.json", origin.ZoneManifest); Assert.Equal(0, origin.ZoneNode); Assert.Equal(0, origin.ZoneMesh);
-        Assert.DoesNotContain(First, files.Reads); Assert.DoesNotContain(Second, files.Reads);
-        Assert.Equal(original, files.Content[Geometry]);
+        Assert.Equal(Second, origin.ModelFile); Assert.Equal(Second, origin.LogicalModelFile);
+        Assert.Equal(Second, origin.ZoneOwnerPath); Assert.Empty(origin.ZoneOwnerReferences);
+        Assert.Null(origin.ZoneManifest); Assert.Equal(0, origin.ZoneNode); Assert.Equal(0, origin.ZoneMesh);
+        Assert.Contains(First, files.Reads); Assert.Contains(Second, files.Reads);
+        Assert.Equal(original, files.Content[First]);
     }
 
     [Fact]
@@ -85,8 +102,7 @@ public sealed class SourceMapZoneAssemblyTests
     {
         Files files = new(); var doc = Model();
         doc.Roots[0].Mesh!.Primitives[0].Positions[2] = new(2, 0, 0);
-        Store(files, Geometry, doc);
-        Manifest(files, "m1", new SourceMapZoneAsset(First, Geometry, Profile(doc, 0xFFFF0701), []));
+        StoreProfile(files, First, doc, Profile(doc, 0xFFFF0701));
         var assembler = Assemble(files, "LoadGameGen turret.gltf root");
         var node = Assert.Single(assembler.LoadedRoots[0].Children);
         Assert.Equal(0xFFFF0701u, Assert.Single(node.Model!.Polygons).Zone);
@@ -96,16 +112,11 @@ public sealed class SourceMapZoneAssemblyTests
     [Fact]
     public void NestedReferencesRetainSameReadingAndSecondPathModelSharing()
     {
-        Files files = new(); var model = Model(); Store(files, Geometry, model);
+        Files files = new(); var first = Model(); var second = Model();
+        StoreProfile(files, First, first, Profile(first, 0xFFFF0001));
+        StoreProfile(files, Second, second, Profile(second, 0xFFFF0101));
         const string holder = "data/m1/models/holder.gltf";
-        GltfDocument document = new();
-        foreach (string name in new[] { "one", "two", "three", "four" })
-            document.Roots.Add(new() { Name = name, Extras = new() { [WorldGltf.Key] = new JsonObject { [WorldGltf.ZoneReference] = true } } });
-        Store(files, holder, document);
-        WorldZoneProfile holding = new(WorldGltf.LayoutFingerprint(document, Token),
-            Enumerable.Repeat(new WorldNodeZone(255, true), 4).ToArray(), []);
-        Manifest(files, "m1", new SourceMapZoneAsset(First, Geometry, Profile(model, 0xFFFF0001), []), new(Second, Geometry, Profile(model, 0xFFFF0101), []),
-            new(holder, holder, holding, [new(0, First, "turret.gltf"), new(1, First, "turret.gltf"), new(2, First, "./turret.gltf"), new(3, Second, "turret_2.gltf")]));
+        Store(files, holder, References(("turret.gltf", 255, null), ("turret.gltf", 255, null), ("./turret.gltf", 255, null), ("turret_2.gltf", 255, null)));
         var assembler = Assemble(files, "LoadGameGen holder.flt root");
         var children = assembler.LoadedRoots[0].Children.Select(n => Assert.Single(n.Children)).ToArray();
         Assert.Equal(4, children.Length);
@@ -113,31 +124,18 @@ public sealed class SourceMapZoneAssemblyTests
         Assert.NotSame(children[0].Model, children[2].Model);
         Assert.NotSame(children[2].Model, children[3].Model);
         Assert.Equal(0xFFFF0101u, children[3].Model!.Polygons[1].Zone);
-        Assert.Single(files.Reads, p => p == Geometry);
-        Assert.All(children, n => Assert.Equal(Geometry, assembler.Provenance[n].ModelFile));
+        Assert.Single(files.Reads, p => p == First);
+        Assert.All(children[..3], n => Assert.Equal(First, assembler.Provenance[n].ModelFile));
+        Assert.Equal(Second, assembler.Provenance[children[3]].ModelFile);
     }
 
     [Fact]
-    public void APhysicalFileCannotBeSilentlyHiddenByAnotherGeometryAlias()
+    public void OnePhysicalFileKeepsInheritedNodeZonesAtDifferentPlacements()
     {
-        Files files = new(); var doc = Model(); Store(files, Geometry, doc); Store(files, First, doc);
-        Manifest(files, "m1", new SourceMapZoneAsset(First, Geometry, Profile(doc, 0xFFFF0001), []));
-        Assert.Contains("both as a map zone alias", Assert.Throws<InvalidDataException>(() => Assemble(files, "LoadGameGen turret.flt root")).Message);
-    }
-
-    [Fact]
-    public void OneLogicalFileKeepsInheritedNodeZonesAtDifferentPlacements()
-    {
-        Files files = new(); var model = Model(); Store(files, Geometry, model);
+        Files files = new(); var model = Model();
+        StoreProfile(files, First, model, Profile(model, 0xFFFF0001) with { Nodes = [new(0, true, Inherit: true)], LoadRoot = null });
         const string holder = "data/m1/models/holder.gltf";
-        GltfDocument document = new();
-        foreach (string name in new[] { "zone2", "zone3" })
-            document.Roots.Add(new() { Name = name, Extras = new() { [WorldGltf.Key] = new JsonObject { [WorldGltf.ZoneReference] = true } } });
-        Store(files, holder, document);
-        var inherited = Profile(model, 0xFFFF0001) with { Nodes = [new(0, true, Inherit: true)] };
-        WorldZoneProfile holding = new(WorldGltf.LayoutFingerprint(document, Token), [new(2, true), new(3, true)], []);
-        Manifest(files, "m1", new(First, Geometry, inherited, []), new(holder, holder, holding,
-            [new(0, First, "turret.gltf"), new(1, First, "turret.gltf")]));
+        Store(files, holder, References(("turret.gltf", 2, null), ("turret.gltf", 3, null)));
         var assembler = Assemble(files, "LoadGameGen holder.flt root");
         var children = assembler.LoadedRoots[0].Children.Select(n => Assert.Single(n.Children)).ToArray();
         Assert.Equal(new uint[] { 2, 3 }, children.Select(n => n.Zone));
@@ -145,44 +143,50 @@ public sealed class SourceMapZoneAssemblyTests
     }
 
     [Fact]
-    public void MissingBackingGeometryRefusesInsteadOfFallingThroughModelDirectories()
+    public void MissingReferencedFileRefusesInsteadOfFallingThroughModelDirectories()
     {
         Files files = new(); var doc = Model(); Store(files, "data/fallback/turret.gltf", doc);
-        Manifest(files, "m1", new SourceMapZoneAsset(First, Geometry, Profile(doc, 0xFFFF0001), []));
-        Assert.Contains("does not exist", Assert.Throws<InvalidDataException>(() => Assemble(files,
-            // Another spelling of the mission's folder (listed first) searches it before the fallback again.
-            "SetModelDirectory ../data/fallback\nSetModelDirectory ..\\data\\m1\\models\nLoadGameGen turret.flt root")).Message);
+        Store(files, "data/m1/models/holder.gltf", References(("turret.gltf", 255, null)));
+        Assert.Throws<InvalidDataException>(() => Assemble(files,
+            "SetModelDirectory ../data/fallback\nSetModelDirectory ../data/m1/models\nLoadGameGen holder.flt root"));
         Assert.DoesNotContain("data/fallback/turret.gltf", files.Reads);
     }
 
     [Fact]
-    public void GeometryDeformationKeepsAssignmentsButChangedConnectivityRefuses()
+    public void GeometryDeformationKeepsPlacementAssignmentsButChangedConnectivityRefuses()
     {
         Files files = new(); var doc = Model();
-        Manifest(files, "m1", new SourceMapZoneAsset(First, Geometry, Profile(doc, 0xFFFF0001), []));
-        doc.Roots[0].Mesh!.Primitives[0].Positions[1] = new(2, 0, 0); Store(files, Geometry, doc);
-        var accepted = Assemble(files, "LoadGameGen turret.flt root");
-        Assert.Equal(0xFFFF0001u, Assert.Single(accepted.LoadedRoots[0].Children).Model!.Polygons[1].Zone);
+        var profile = Profile(doc, 0xFFFF0001);
+        Store(files, "data/m1/models/holder.gltf", References(("turret.gltf", 255, profile)));
+        doc.Roots[0].Mesh!.Primitives[0].Positions[1] = new(2, 0, 0); Store(files, First, doc);
+        var accepted = Assemble(files, "LoadGameGen holder.flt root");
+        Assert.Equal(0xFFFF0001u, Assert.Single(Assert.Single(accepted.LoadedRoots[0].Children).Children).Model!.Polygons[1].Zone);
         doc.Roots[0].Mesh!.Primitives[0].Indices[1] = 2;
-        doc.Roots[0].Mesh!.Primitives[0].Indices[2] = 1; Store(files, Geometry, doc);
-        Assert.Contains("topology", Assert.Throws<InvalidDataException>(() => Assemble(files, "LoadGameGen turret.flt root")).Message);
+        doc.Roots[0].Mesh!.Primitives[0].Indices[2] = 1; Store(files, First, doc);
+        Assert.Contains("topology", Assert.Throws<InvalidDataException>(() => Assemble(files, "LoadGameGen holder.flt root")).Message);
     }
 
     [Fact]
-    public void DifferentMapsHaveIndependentProfilesForTheSamePhysicalFile()
+    public void DifferentMapsHaveIndependentPlacementProfilesForTheSamePhysicalFile()
     {
-        Files files = new(); var doc = Model(); Store(files, Geometry, doc);
-        const string other = "data/m2/models/turret.gltf";
-        Manifest(files, "m1", new SourceMapZoneAsset(First, Geometry, Profile(doc, 0xFF020102), []));
-        Manifest(files, "m2", new SourceMapZoneAsset(other, Geometry, Profile(doc, 0xFF010202), []));
-        var first = Assemble(files, "LoadGameGen turret.flt root");
-        var second = Assemble(files, "LoadGameGen turret.flt root", "m2");
-        Assert.Equal(0xFF020102u, Assert.Single(first.LoadedRoots[0].Children).Model!.Polygons[1].Zone);
-        Assert.Equal(0xFF010202u, Assert.Single(second.LoadedRoots[0].Children).Model!.Polygons[1].Zone);
+        Files files = new(); var doc = Model(); StoreProfile(files, Geometry, doc, Profile(doc, 0xFFFF0701));
+        byte[] original = files.Content[Geometry].ToArray();
+        Store(files, "data/m1/models/m1.gltf", References(("../../common/models/turret.gltf", 255, Profile(doc, 0xFF020102))));
+        Store(files, "data/m2/models/m2.gltf", References(("../../common/models/turret.gltf", 255, Profile(doc, 0xFF010202))));
+        var first = Assemble(files, "LoadGameGen m1.flt root");
+        var second = Assemble(files, "LoadGameGen m2.flt root", "m2");
+        var firstNode = Assert.Single(Assert.Single(first.LoadedRoots[0].Children).Children);
+        var secondNode = Assert.Single(Assert.Single(second.LoadedRoots[0].Children).Children);
+        Assert.Equal(0xFF020102u, firstNode.Model!.Polygons[1].Zone);
+        Assert.Equal(0xFF010202u, secondNode.Model!.Polygons[1].Zone);
+        Assert.Equal("data/m1/models/m1.gltf", first.Provenance[firstNode].ZoneOwnerPath);
+        Assert.Equal("data/m2/models/m2.gltf", second.Provenance[secondNode].ZoneOwnerPath);
+        Assert.Equal(new[] { 0 }, first.Provenance[firstNode].ZoneOwnerReferences);
+        Assert.Equal(original, files.Content[Geometry]);
     }
 
     [Fact]
-    public void LegacyLoadingRecordsAbsentManifestWithoutChangingItsInlineZone()
+    public void InlineLoadingDoesNotRequireSidecarOrVersionMarker()
     {
         Files files = new(); var doc = Model();
         doc.Roots[0].Extras = new() { [WorldGltf.Key] = new JsonObject { ["zone"] = 7 } }; Store(files, First, doc);
@@ -190,7 +194,7 @@ public sealed class SourceMapZoneAssemblyTests
         var node = Assert.Single(assembler.LoadedRoots[0].Children);
         Assert.Equal(7u, node.Zone); Assert.Null(assembler.Provenance[node].ZoneManifest);
         Assert.Equal(0, assembler.Provenance[node].ZoneNode);
-        Assert.Contains("data/m1/meta/zones.json", files.Probes);
+        Assert.Equal(First, assembler.Provenance[node].ZoneOwnerPath);
         Assert.DoesNotContain("data/m1/meta/zones.json", files.Content.Keys);
     }
 }

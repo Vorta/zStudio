@@ -27,10 +27,11 @@ public sealed class WorldSourceReferenceBudgetTests
     [Fact]
     public void SeparateMissionTraversalsShareOneAllowance()
     {
-        Assert.NotEmpty(Reconstruct([new(1, ShippedDiamond(3))], maximum: 30));
-        var error = Assert.Throws<InvalidDataException>(() => Reconstruct([new(1, ShippedDiamond(3)), new(2, ShippedDiamond(3))], maximum: 30));
+        // Includes the additional ordinal traversal that attaches placement attributes to embedded references.
+        Assert.NotEmpty(Reconstruct([new(1, ShippedDiamond(3))], maximum: 60));
+        var error = Assert.Throws<InvalidDataException>(() => Reconstruct([new(1, ShippedDiamond(3)), new(2, ShippedDiamond(3))], maximum: 60));
         Assert.Contains("reference traversal allowance", error.Message);
-        Assert.NotEmpty(Reconstruct([new(1, ShippedDiamond(3))], maximum: 30));
+        Assert.NotEmpty(Reconstruct([new(1, ShippedDiamond(3))], maximum: 60));
     }
 
     private static List<WorldSources.Output> Reconstruct(IReadOnlyList<WorldSources.MissionWorld> missions, long maximum = WorldSources.MaximumReferenceVisits)

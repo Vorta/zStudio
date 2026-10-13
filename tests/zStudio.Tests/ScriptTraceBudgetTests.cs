@@ -158,16 +158,6 @@ public sealed class ScriptTraceBudgetTests
     }
 
     [Fact]
-    public void CheckoutPropagatesDirectoryWorkRefusalBeforePublishingFiles()
-    {
-        using SourceWorldFixture fixture = new();
-        fixture.Write("gamegen/m1.gs", "SetModelDirectory " + string.Join(';', Enumerable.Range(0, 32_000).Select(i => $"../data/d{i}")));
-        var error = Assert.Throws<InvalidDataException>(() => SourceBlender.Checkout(new(fixture.Project), "data/m1/models/m1.gltf", Token));
-        Assert.Contains("directory search-path work", error.Message);
-        Assert.False(Directory.Exists(fixture.Path(SourceBlender.ExportFolder)));
-    }
-
-    [Fact]
     public void MissingScriptNotesBoundOperandsBeforeFormattingAcrossMissionTraces()
     {
         // Keep the diagnostic-cap fixture below the separate executed-operand work allowance. Each operand still

@@ -33,12 +33,20 @@ public static partial class WorldGltf
         {
             context.Token.ThrowIfCancellationRequested();
             var (doc, path) = context.Reference(surface.Model, recipePath);
-            var zones = BindZones(doc, path, context);
             if (!context.TerrainPlacements(doc).TryGet(surface.Node, out var placement, out bool ambiguous))
                 throw new InvalidDataException($"{recipePath}: surface {surface.Id} names node {surface.Node}, which {path} has {(ambiguous ? "more than one" : "no")} of.");
             var (node, world, inheritedAppearance, _, _, _) = placement;
             CheckTerrainAppearance(node, inheritedAppearance, path);
             var mesh = node.Mesh ?? throw new InvalidDataException($"{recipePath}: surface {surface.Id} ({surface.Node} in {path}) has no mesh.");
+            foreach (var primitive in mesh.Primitives)
+            {
+                long corners = TerrainInputCornerBound(primitive);
+                if (corners > maximumInputCorners - inputCorners)
+                    throw new InvalidDataException($"{recipePath}: terrain input exceeds its {maximumInputCorners:N0}-corner geometry limit; reduce the surfaces or mesh detail.");
+                inputCorners += corners;
+            }
+            // Embedded profiles recover polygon boundaries, so input admission must precede binding too.
+            var zones = BindZones(doc, path, context);
             ValidateMesh(mesh, path, context);
             var values = mesh.Extras?[Key] as JsonObject;
             if (values?["points"] is JsonArray { Count: > 0 }) throw new InvalidDataException($"{recipePath}: surface {surface.Id} ({surface.Node} in {path}) has point entries (lens flares), which terrain pieces cannot share; keep it an object.");
@@ -54,12 +62,6 @@ public static partial class WorldGltf
             int zonePolygon = 0;
             foreach (var primitive in mesh.Primitives)
             {
-                // Charge the triangle stream and any extra recorded polygon corners before Polygons builds its lists.
-                // Each surface is charged, even when several nodes share the same mesh.
-                long corners = TerrainInputCornerBound(primitive);
-                if (corners > maximumInputCorners - inputCorners)
-                    throw new InvalidDataException($"{recipePath}: terrain input exceeds its {maximumInputCorners:N0}-corner geometry limit; reduce the surfaces or mesh detail.");
-                inputCorners += corners;
                 var (material, priority, backface, zone, stores) = ImportMaterial(primitive.Material, path, context);
                 bool storesNormals = stores ?? primitive.Normals.Count == primitive.Positions.Count;
                 bool normals = primitive.Normals.Count == primitive.Positions.Count, uvs = primitive.TexCoords.Count == primitive.Positions.Count;

@@ -11,6 +11,7 @@ using ModelContextProtocol.Client;
 using ModelContextProtocol.Protocol;
 using Recoil.Zbd.Automation;
 using Recoil.Zbd.Core.Sources;
+using Recoil.Zbd.Core.Worlds;
 using Recoil.Zbd.Desktop;
 using Recoil.Zbd.Mcp;
 using Recoil.Zbd.Rendering;
@@ -35,8 +36,9 @@ internal static class SourceZoneMcpChecks
             await main.ViewModel.OpenRootAsync(fixture.Project, token);
             var other = Document((await Job("source_world_open", new() { ["mission"] = "m2" }))["document"]!);
             var doc = Document((await Job("source_world_open", new() { ["mission"] = "m1" }))["document"]!);
-            const string manifest = "data/m1/meta/zones.json", geometry = "data/m1/models/m1.gltf";
+            const string geometry = "data/m1/models/m1.gltf", buffer = "data/m1/models/m1.bin";
             byte[] original = File.ReadAllBytes(fixture.Path(geometry));
+            byte[] originalBuffer = File.ReadAllBytes(fixture.Path(buffer));
             int node = doc.SourceBuild!.Provenance.Single(p => p.Value.ModelNodeName == "flat_a").Key;
             // Use the actual rendered hit tester, without synthesizing input or capturing the mouse.
             // The upper face overlaps flat_a in XZ: a zone stroke must not select the hidden lower face.
@@ -63,6 +65,19 @@ internal static class SourceZoneMcpChecks
             var lower = view.ProbeInspection(viewport.Project(new Point3D(205, 0, 305)));
             Assert.NotNull(lower); Assert.Equal(node, lower.Node); Assert.Equal(0, lower.Polygon);
             view.ShowZoneTargets([]);
+            var scope = (await Call("source_zones", new()
+            {
+                ["document"] = doc.SessionId.ToString(), ["targets"] = new[] { new { node, polygon = 0 } }
+            }))["inspection"]!;
+            Assert.Equal(geometry, scope["MasterPath"]!.GetValue<string>());
+            Assert.Contains(geometry, scope["SourcePaths"]!.AsArray().Select(p => p!.GetValue<string>()));
+            var exactTarget = Assert.Single(scope["Targets"]!.AsArray())!["Target"]!;
+            Assert.Equal(geometry, exactTarget["OwnerPath"]!.GetValue<string>());
+            Assert.Empty(exactTarget["OwnerReferences"]!.AsArray());
+            Assert.Contains("m1", scope["AffectedMissions"]!.AsArray().Select(p => p!.GetValue<string>()));
+            Assert.True(scope["AffectedMissionCount"]!.GetValue<int>() >= 1);
+            Assert.Contains(geometry, scope["AffectedSources"]!.AsArray().Select(p => p!.GetValue<string>()));
+            Assert.True(scope["AffectedSourceCount"]!.GetValue<int>() >= 1);
             // A clean editor may retarget; selected faces must survive a refused cross-document begin.
             var otherBegin = new Dictionary<string, object?> { ["document"] = other.SessionId.ToString(), ["revision"] = other.Revision, ["action"] = "begin" };
             await Job("source_zone_draft", otherBegin);
@@ -150,43 +165,47 @@ internal static class SourceZoneMcpChecks
                 apply = Args("apply"); apply["draftToken"] = retained["draft"]!["draftToken"]!.GetValue<string>();
             }
             state = await Job("source_zone_draft", apply); doc = Document(state["document"]!);
-            Assert.Equal(new[] { manifest }, doc.SourceWorld!.Workspace.DirtyFiles);
+            Assert.Equal(new[] { geometry }, doc.SourceWorld!.Workspace.DirtyFiles);
             Assert.Equal(original, File.ReadAllBytes(fixture.Path(geometry)));
-            var map = SourceMapZones.Parse(doc.SourceWorld.Workspace.Read(manifest, token)!, token);
-            Assert.Contains(0xFFFF0702u, map.Assets.SelectMany(a => a.Profile.MeshPolygons).SelectMany(p => p));
+            Assert.Contains(GameZWorldReader.FromDocument(doc.PreviewDocument, token).Models.SelectMany(m => m.Polygons), p => p.Zone == 0xFFFF0702u);
             var inspector = await Call("source_zones", new() { ["document"] = doc.SessionId.ToString() });
-            Assert.True(inspector["catalog"]!["Exists"]!.GetValue<bool>());
+            Assert.Equal(geometry, inspector["catalog"]!["MasterPath"]!.GetValue<string>());
+            Assert.Null(inspector["catalog"]!["Manifest"]);
             Assert.IsType<ZonePropertiesEditor>(main.OpenPropertiesWindow!.SourceFields);
             draft = inspector["draft"]!["draftToken"]!.GetValue<string>();
             var name = Args("label"); name["draftToken"] = draft; name["zoneId"] = 7; name["label"] = "Upper platform";
             state = await Job("source_zone_draft", name); doc = Document(state["document"]!);
-            Assert.Equal("Upper platform", SourceMapZones.Parse(doc.SourceWorld!.Workspace.Read(manifest, token)!, token).Label(7));
+            Assert.Equal("Upper platform", SourceZoneEdits.Catalog(doc.SourceWorld!.Workspace, "m1", token).Labels.Single(l => l.Id == 7).Label);
             // A rejected selector must not change the ID used by the subsequent name commit.
             var zoneFields = Assert.IsType<ZonePropertiesEditor>(main.OpenPropertiesWindow!.SourceFields);
             main.OpenPropertiesWindow.UpdateLayout();
             var inputs = Descendants(zoneFields).OfType<System.Windows.Controls.TextBox>().ToArray();
             var nameId = inputs.Single(t => System.Windows.Automation.AutomationProperties.GetName(t) == "Name zone ID");
             var zoneName = inputs.Single(t => System.Windows.Automation.AutomationProperties.GetName(t) == "Zone name");
-            byte[] beforeName = doc.SourceWorld.Workspace.Read(manifest, token)!;
-            string zeroName = SourceMapZones.Parse(beforeName, token).Label(0);
+            byte[] beforeName = doc.SourceWorld.Workspace.Read(geometry, token)!;
+            string? zeroName = SourceZoneEdits.Catalog(doc.SourceWorld.Workspace, "m1", token).Labels.FirstOrDefault(l => l.Id == 0)?.Label;
             nameId.Text = "5";
             await zoneFields.ResolveAutomationDraftsAsync(zoneFields.DraftToken, true);
             nameId.Text = "999";
             var rejected = await Assert.ThrowsAsync<StudioCommandException>(() => zoneFields.ResolveAutomationDraftsAsync(zoneFields.DraftToken, true));
             Assert.Equal("invalid_draft", rejected.Code);
             Assert.True(zoneFields.HasPendingDrafts);
-            Assert.Equal(beforeName, doc.SourceWorld.Workspace.Read(manifest, token));
+            Assert.Equal(beforeName, doc.SourceWorld.Workspace.Read(geometry, token));
             // MCP discard shares FieldDraft.Discard/Display with the native Escape handler.
             await zoneFields.ResolveAutomationDraftsAsync(zoneFields.DraftToken, false);
             Assert.Equal("5", nameId.Text); Assert.False(zoneFields.HasPendingDrafts);
             zoneName.Text = "Zone five";
             await zoneFields.ResolveAutomationDraftsAsync(zoneFields.DraftToken, true);
             doc = main.OpenPropertiesWindow!.Document!;
-            var namedMap = SourceMapZones.Parse(doc.SourceWorld!.Workspace.Read(manifest, token)!, token);
-            Assert.Equal("Zone five", namedMap.Label(5)); Assert.Equal(zeroName, namedMap.Label(0));
+            var namedMap = SourceZoneEdits.Catalog(doc.SourceWorld!.Workspace, "m1", token);
+            Assert.Equal("Zone five", namedMap.Labels.Single(l => l.Id == 5).Label);
+            Assert.Equal(zeroName, namedMap.Labels.FirstOrDefault(l => l.Id == 0)?.Label);
             await Job("save_document", new() { ["document"] = doc.SessionId.ToString(), ["revision"] = doc.Revision });
-            Assert.Equal("Upper platform", SourceMapZones.Parse(File.ReadAllBytes(fixture.Path(manifest)), token).Label(7));
-            Assert.Equal(original, File.ReadAllBytes(fixture.Path(geometry)));
+            SourceWorkspace reopened = new(fixture.Project);
+            Assert.Equal("Upper platform", SourceZoneEdits.Catalog(reopened, "m1", token).Labels.Single(l => l.Id == 7).Label);
+            Assert.NotEqual(original, File.ReadAllBytes(fixture.Path(geometry)));
+            Assert.Equal(originalBuffer, File.ReadAllBytes(fixture.Path(buffer)));
+            Assert.False(File.Exists(fixture.Path("data/m1/meta/zones.json")));
             // Input arriving while a world builds is not decided by showing the built world either.
             await Call("close_document", new() { ["document"] = other.SessionId.ToString(), ["revision"] = other.Revision });
             var shownZones = Assert.IsType<ZonePropertiesEditor>(main.OpenPropertiesWindow!.SourceFields);
@@ -198,13 +217,10 @@ internal static class SourceZoneMcpChecks
             Assert.Same(doc, main.ViewModel.SelectedDocument); Assert.DoesNotContain(main.ViewModel.Documents, d => d.SourceWorld?.Mission == "m2");
             await shownZones.ResolveAutomationDraftsAsync(shownZones.DraftToken, false);
 
-            // A manifest-only model identity must be discoverable, addable and undoable through the shared workspace.
+            // A physical model file must be discoverable, addable and undoable through the shared workspace.
             const string alias = "data/m1/models/alias.gltf", aliasRoot = "alias_copy", script = "gamegen/m1.gs";
-            var savedMap = SourceMapZones.Parse(File.ReadAllBytes(fixture.Path(manifest)), token);
-            var binding = savedMap.Assets.Single(a => a.LogicalPath == geometry);
-            Assert.Empty(binding.References);
-            fixture.Write(manifest, new SourceMapZones([.. savedMap.Assets, binding with { LogicalPath = alias }], savedMap.Labels).Write(token));
-            Assert.False(File.Exists(fixture.Path(alias)));
+            fixture.Write(alias, File.ReadAllBytes(fixture.Path(geometry)));
+            Assert.True(File.Exists(fixture.Path(alias)));
             doc = Document(await Job("reload_document", new() { ["document"] = doc.SessionId.ToString(), ["revision"] = doc.Revision }));
             var models = await Call("source_world_models", new() { ["query"] = alias });
             Assert.Equal(alias, Assert.Single(models["items"]!.AsArray())!["path"]!.GetValue<string>());
@@ -221,7 +237,7 @@ internal static class SourceZoneMcpChecks
             Assert.DoesNotContain(doc.PreviewDocument.Scene!.Nodes, n => n.Name == aliasRoot);
             Assert.Equal(leavesBefore, doc.PreviewDocument.Scene.Nodes.Count(n => n.Name == "flat_a"));
             Assert.Equal(scriptBefore, doc.SourceWorld!.Workspace.Read(script, token));
-            Assert.False(doc.SourceWorld.Workspace.IsDirty); Assert.False(File.Exists(fixture.Path(alias)));
+            Assert.False(doc.SourceWorld.Workspace.IsDirty); Assert.True(File.Exists(fixture.Path(alias)));
             // While a GUI edit (Redo) rebuilds the world, a zone draft waits: one started then would be unresolved when the
             // rebuilt world replaces this one, and the edit would be taken back.
             TaskCompletionSource rebuilding = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -282,9 +298,34 @@ internal static class SourceZoneMcpChecks
             Assert.Equal(0, state["draft"]!["targetCount"]!.GetValue<int>());
             Assert.False((await Call("state", new()))["pendingZoneDrafts"]!.GetValue<bool>());
             Assert.Equal(workspaceBeforeDiscard, doc.SourceWorld.Workspace.Read("gamegen/m2.gs", token));
+            // Every preview includes interp.zbd, so even m2.gs is a recorded input of m1.
+            // Discard remains possible on this stale world; a new editor requires its reload.
+            Assert.Contains("gamegen/m2.gs", doc.SourceBuild!.Dependencies);
+            Assert.Equal("stale_document", (await Job("source_zone_draft", Args("begin"), "failed"))["code"]!.GetValue<string>());
+            doc = Document(await Job("reload_document", new() { ["document"] = doc.SessionId.ToString(), ["revision"] = doc.Revision }));
             state = await Job("source_zone_draft", Args("begin"));
             Assert.Equal(doc.Revision, state["draft"]!["revision"]!.GetValue<long>());
             await Call("properties_close", new());
+
+            // Editing a model this mission never reads does not stale its exact targets.
+            Assert.DoesNotContain(fixture.Tank, doc.SourceBuild!.Dependencies);
+            byte[] unrelated = doc.SourceWorld!.Workspace.Read(fixture.Tank, token)!;
+            doc.SourceWorld.Workspace.Apply("Edit unrelated model", [(fixture.Tank, (byte[]?)[.. unrelated, (byte)'\n'])], token);
+            node = doc.SourceBuild!.Provenance.First(p => p.Value.ModelNodeName == "flat_a").Key;
+            var exactRead = new Dictionary<string, object?>
+            { ["document"] = doc.SessionId.ToString(), ["targets"] = new[] { new { node } } };
+            await Call("source_zones", exactRead);
+            // A shared-workspace dependency edit increments the document revision but retains
+            // its old build until reload. Neither inspection nor the GUI/MCP editor may use it.
+            var changedGeometry = JsonNode.Parse(doc.SourceWorld!.Workspace.Read(geometry, token)!)!.AsObject();
+            var changedNode = changedGeometry["nodes"]!.AsArray().First(n => n?["name"]?.GetValue<string>() == "flat_a")!;
+            changedNode["extras"] ??= new JsonObject(); changedNode["extras"]!["recoil"] ??= new JsonObject();
+            changedNode["extras"]!["recoil"]!["zone"] = 123;
+            doc.SourceWorld.Workspace.Apply("Change shared zone source", [(geometry, (byte[]?)Encoding.UTF8.GetBytes(changedGeometry.ToJsonString()))], token);
+            Assert.True(doc.SourceInputsChanged(verifyContent: false));
+            await Call("source_zones", new() { ["document"] = doc.SessionId.ToString() });
+            await Call("source_zones", exactRead, "stale_document");
+            Assert.Equal("stale_document", (await Job("source_zone_draft", Args("begin"), "failed"))["code"]!.GetValue<string>());
 
             Dictionary<string, object?> Args(string action) => new() { ["document"] = doc.SessionId.ToString(), ["revision"] = doc.Revision, ["action"] = action };
             DocumentModel Document(JsonNode value) => main.ViewModel.Documents.Single(d => d.SessionId.ToString() == value["id"]!.GetValue<string>());
