@@ -155,7 +155,7 @@ public sealed class SourceZoneEditTests
             const string leaf = "data/m1/models/lidm.gltf";
             var child = JsonNode.Parse(File.ReadAllBytes(fixture.Path(leaf)))!.AsObject();
             var values = Values(child["nodes"]!.AsArray().Single(n => n?["name"]?.GetValue<string>() == "lid")!);
-            values["zone"] = 99; values["zoneInherited"] = true; values["zonePadding"] = new JsonArray(18, 52, 86);
+            values["zone"] = "inherit"; values["zonePadding"] = new JsonArray(18, 52, 86);
             fixture.Write(leaf, child.ToJsonString());
         }
         else Values(master["nodes"]!.AsArray().Single(n => n?["name"]?.GetValue<string>() == "lid")!).Remove("zone");

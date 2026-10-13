@@ -120,16 +120,29 @@ public sealed class SourceMapZonesTests
         var files = outputs.ToDictionary(o => o.Path, o => o.Bytes, StringComparer.OrdinalIgnoreCase);
         string physical = Assert.Single(outputs, o => Path.GetFileName(o.Path) == "lturret.gltf").Path;
         string assembly = Assert.Single(outputs, o => Path.GetFileName(o.Path) == "assembly.gltf").Path;
-        GltfDocument Read(string path) => GltfDocument.Read(files[path], uri => files[WorldAssembler.Relative(path, uri)], Token);
+        Dictionary<string, GltfDocument> parsed = new(StringComparer.OrdinalIgnoreCase);
+        GltfDocument Read(string path) => parsed.TryGetValue(path, out var document) ? document
+            : parsed[path] = GltfDocument.Read(files[path], uri => files[WorldAssembler.Relative(path, uri)], Token);
         var shared = Read(physical);
         var defaults = WorldGltf.CaptureZoneProfile(shared, token: Token);
-        var references = Read(assembly).AllNodes().Where(n => n.Extras?[WorldGltf.Key]?["ref"] != null).ToArray();
+        var master = Read(assembly);
+        var references = master.AllNodes().Where(n => n.Extras?[WorldGltf.Key]?["ref"] != null).ToArray();
         Assert.Equal(2, references.Length);
         Assert.All(references, n => Assert.Equal(physical, WorldAssembler.Relative(assembly, n.Extras![WorldGltf.Key]!["ref"]!.GetValue<string>())));
         var profiles = references.Select(n => n.Extras![WorldGltf.Key]!["zoneOverrides"] is JsonObject value
             ? WorldGltf.ReadZoneOverride(value, Token) : defaults).ToArray();
         Assert.Equal(new uint[] { 0xFFFF0001, 0xFFFF0101 }, profiles.SelectMany(p => p.MeshPolygons.SelectMany(words => words)).Order());
-        Assert.Equal(new uint[] { 0, 1 }, profiles.Select(p => Assert.Single(p.Nodes).Word).Order());
+        // The first placement inherits its parent; the other explicitly overrides its ID.
+        // Resolve the actual hierarchy, since a standalone inherited profile has no parent ID.
+        Assert.True(Assert.Single(profiles[0].Nodes).Inherit);
+        Assert.False(Assert.Single(profiles[1].Nodes).Inherit);
+        WorldGltf.ImportContext context = new()
+        {
+            World = new(), Token = Token, TextureName = (uri, name, _) => name ?? uri,
+            Reference = (uri, from) => { string path = WorldAssembler.Relative(from, uri); return (Read(path), path); },
+        };
+        var imported = WorldGltf.Import(master, assembly, WorldGltf.EmbeddedLoadRoot(master)!.Word & 255u, context);
+        Assert.Equal(new uint[] { 0, 1 }, WorldAssembler.Subtree(imported).Where(n => n.Name == "turret").Select(n => n.Zone).Order());
         Assert.Equal(2, outputs.Count(o => o.Path.EndsWith(".gltf", StringComparison.Ordinal)));
     }
 }

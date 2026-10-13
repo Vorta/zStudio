@@ -61,7 +61,7 @@ public sealed class SourceMapZoneAssemblyTests
         GltfDocument document = new();
         foreach (var (uri, zone, profile) in references)
         {
-            JsonObject values = new() { ["ref"] = uri, ["zone"] = zone };
+            JsonObject values = new() { ["ref"] = uri, ["zone"] = zone == 255 ? JsonValue.Create("any") : JsonValue.Create(zone) };
             if (profile != null) values["zoneOverrides"] = WorldGltf.WriteZoneOverride(profile, Token);
             document.Roots.Add(new() { Name = "placement" + document.Roots.Count, Extras = new() { [WorldGltf.Key] = values } });
         }

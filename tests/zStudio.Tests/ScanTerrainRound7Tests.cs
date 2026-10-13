@@ -343,7 +343,7 @@ public sealed class ScanTerrainRound7Tests
         JsonArray tree = [new JsonObject { ["name"] = "a", ["mesh"] = 0, ["children"] = new JsonArray(1, 2) }, new JsonObject { ["name"] = "b" }, new JsonObject { ["name"] = "c", ["mesh"] = 1 }];
         Assert.Equal("{\"mesh\":0,\"children\":[{\"children\":[]},{\"mesh\":1,\"children\":[]}]}", SourceObjectEdits.Shape(tree, 0, 0).ToJsonString());
         JsonArray copies = [new JsonObject { ["mesh"] = 0 }, new JsonObject { ["mesh"] = 0,
-            ["extras"] = new JsonObject { [WorldGltf.Key] = new JsonObject { ["zoneWord"] = "0xAABBCC4D", ["zoneInherited"] = false,
+            ["extras"] = new JsonObject { [WorldGltf.Key] = new JsonObject { ["zone"] = 77, ["zonePadding"] = new JsonArray(204, 187, 170),
                 ["flags"] = $"0x{WorldGltf.DefaultCarried & ~WorldGltf.ZoneGate:X8}" } } }];
         Assert.True(JsonNode.DeepEquals(SourceObjectEdits.Shape(copies, 0, 0), SourceObjectEdits.Shape(copies, 1, 0)));
         foreach (uint bit in new[] { 0x10000u, 0x04000000u })

@@ -331,7 +331,7 @@ public sealed class WorldReviewRegressionTests
         Assert.Throws<InvalidDataException>(() => GltfNodeEdits.Reparent(root, 0, 1, token: Token));
         Assert.Equal(before, root.ToJsonString());
         GltfNodeEdits.Reparent(root, 0, 1, 255, Token);
-        Assert.Equal(255, root["nodes"]![0]!["extras"]!["recoil"]!["zone"]!.GetValue<int>());
+        Assert.Equal("any", root["nodes"]![0]!["extras"]!["recoil"]!["zone"]!.GetValue<string>());
     }
 
     [Fact]

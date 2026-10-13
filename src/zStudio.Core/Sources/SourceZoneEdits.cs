@@ -84,7 +84,7 @@ public static class SourceZoneEdits
             {
                 if (!context.InheritedZones.TryGetValue((Key(target), target.Index), out var effective) || effective == null)
                     throw Bad("The selected inherited assignment has no single imported zone baseline. Rebuild the world and inspect its placements separately.");
-                // A profile retains the stored ID even when inheritance makes another ID effective.
+                // A file profile cannot resolve an inherited ID supplied by an outer placement.
                 // Use the selected occurrence's immutable import baseline, not a runtime node or
                 // the referenced file's default parent, while retaining its own opaque bytes.
                 word = word & ~255u | effective.Value;

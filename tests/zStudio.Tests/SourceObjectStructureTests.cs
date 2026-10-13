@@ -1032,7 +1032,7 @@ public sealed class SourceObjectStructureTests
         var root = JsonNode.Parse("""
             { "scene": 0, "scenes": [ { "nodes": [0, 2, 4] } ], "nodes": [
               { "name": "g", "children": [1], "extras": { "recoil": { "zone": 0 } } },
-              { "name": "o", "children": [3], "extras": { "recoil": { "zone": 9, "zoneInherited": true, "zonePadding": [18, 52, 86] } } },
+              { "name": "o", "children": [3], "extras": { "recoil": { "zone": "inherit", "zonePadding": [18, 52, 86] } } },
               { "name": "r", "extras": { "recoil": { "zone": 3 } } },
               { "name": "c" },
               { "name": "w" },
@@ -1043,7 +1043,6 @@ public sealed class SourceObjectStructureTests
         // To the top it would take the database's 0xFF: it keeps zone 0, and so does its child.
         GltfNodeEdits.Reparent(root, 1, null, token: Token);
         Assert.Equal(0, Zone(1)); Assert.Null(Zone(3));
-        Assert.Null(root["nodes"]![1]!["extras"]!["recoil"]!["zoneInherited"]);
         Assert.Equal(0x56341200u, WorldGltf.ReadNodeZoneValue(root["nodes"]![1]!["extras"]!["recoil"], 255, "test"));
         // A later move must treat the materialized zone as explicit, while retaining its opaque bytes.
         GltfNodeEdits.Reparent(root, 1, 2, token: Token);
@@ -1051,7 +1050,7 @@ public sealed class SourceObjectStructureTests
         Assert.Equal(0x56341200u, WorldGltf.ReadNodeZoneValue(root["nodes"]![1]!["extras"]!["recoil"], 255, "test"));
         // A root that took its zone from outside the file keeps the built one under a node with another zone.
         GltfNodeEdits.Reparent(root, 4, 2, 0xFF, Token);
-        Assert.Equal(0xFF, Zone(4));
+        Assert.Equal("any", root["nodes"]![4]!["extras"]!["recoil"]!["zone"]!.GetValue<string>());
         // Without the built zone (a part whose copies take different ones), a move that would replace it is refused.
         Assert.Throws<InvalidDataException>(() => GltfNodeEdits.Reparent(root, 5, 2, token: Token));
         // A node with a zone of its own keeps it unchanged.

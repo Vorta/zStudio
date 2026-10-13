@@ -234,20 +234,21 @@ public static partial class WorldGltf
     private static string ZoneHex(uint value) => "0x" + value.ToString("X8", CultureInfo.InvariantCulture);
     private static JsonObject WriteEmbeddedNode(WorldNodeZone node)
     {
-        JsonObject result = new() { ["gate"] = node.Gate, ["inherit"] = node.Inherit };
-        WriteNodeZoneValue(result, node.Word); return result;
+        JsonObject result = new() { ["gate"] = node.Gate };
+        WriteNodeZoneValue(result, node.Word, node.Inherit); return result;
     }
     private static WorldNodeZone ReadEmbeddedNode(JsonNode? node)
     {
         if (node is not JsonObject value) throw new InvalidDataException("A source node zone must be an object.");
+        bool inherited = NodeZoneIsInherited(value, "the source zone");
         if (value["zone"] == null && value["word"] == null && value["zoneWord"] == null)
-            throw new InvalidDataException("A source node zone needs its numeric zone ID.");
+            throw new InvalidDataException("A source node zone needs a numeric zone ID, \"any\" or \"inherit\".");
         return new(ReadNodeZoneValue(value, DefaultZone, "the source zone"), Flag(value["gate"]!, "gate", "the source zone"),
-            value["inherit"] is { } inherited && Flag(inherited, "inherit", "the source zone"));
+            inherited);
     }
     private static void PutNodeZone(JsonObject values, WorldNodeZone zone)
     {
-        WriteNodeZoneValue(values, zone.Word); values["zoneInherited"] = zone.Inherit;
+        WriteNodeZoneValue(values, zone.Word, zone.Inherit);
         uint flags = values["flags"] is { } previous ? Hex(previous, "flags", "the source node") : DefaultCarried;
         values["flags"] = ZoneHex(zone.Gate ? flags | ZoneGate : flags & ~ZoneGate);
     }

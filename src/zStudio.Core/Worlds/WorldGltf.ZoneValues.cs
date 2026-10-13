@@ -7,31 +7,49 @@ namespace Recoil.Zbd.Core.Worlds;
 public static partial class WorldGltf
 {
     /// <summary>The editable node ID is separate from the three uninterpreted bytes stored after it.</summary>
-    internal static void WriteNodeZoneValue(JsonObject values, uint word)
+    internal static void WriteNodeZoneValue(JsonObject values, uint word, bool inherit = false)
     {
-        values.Remove("zoneWord"); values.Remove("word");
-        values["zone"] = (int)(word & 0xFF);
+        values.Remove("zoneWord"); values.Remove("word"); values.Remove("zoneInherited"); values.Remove("inherit");
+        values["zone"] = inherit ? JsonValue.Create("inherit") : (word & 0xFF) == 255 ? JsonValue.Create("any") : JsonValue.Create((int)(word & 0xFF));
         if ((word >> 8) != 0) values["zonePadding"] = ZoneBytes(word, 1, 3);
         else values.Remove("zonePadding");
     }
 
     internal static uint ReadNodeZoneValue(JsonNode? values, uint parent, string path)
     {
+        bool inherited = NodeZoneIsInherited(values, path);
+        if (inherited && (values?["zoneWord"] != null || values?["word"] != null))
+            throw new InvalidDataException($"{path}: an inherited zone conflicts with a legacy packed zone field; remove the packed field.");
         uint? legacy = values?["zoneWord"] is { } old ? Hex(old, "zoneWord", path)
             : values?["word"] is { } oldWord ? Hex(oldWord, "word", path) : null;
-        uint zone = values?["zone"] is { } id ? (uint)Integer(id, "zone", path, 0, 255) : (legacy ?? parent) & 0xFF;
+        uint zone = inherited ? parent & 0xFF : values?["zone"] is { } id
+            ? id is JsonValue stated && stated.TryGetValue<string>(out var text) && text == "any" ? 255u : (uint)Integer(id, "zone", path, 0, 254)
+            : legacy.GetValueOrDefault() & 0xFF;
         uint padding = legacy.GetValueOrDefault() & 0xFFFFFF00;
         if (values?["zonePadding"] is { } stored)
         {
-            if (values?["zone"] == null) throw new InvalidDataException($"{path}: zonePadding requires an explicit zone ID.");
+            if (values?["zone"] == null) throw new InvalidDataException($"{path}: zonePadding requires a numeric zone ID, \"any\" or \"inherit\".");
             padding = ReadZoneBytes(stored, 1, 3, "zonePadding", path);
         }
         return padding | zone;
     }
 
-    internal static bool NodeZoneIsInherited(JsonNode? values, string path) =>
-        values?["zoneInherited"] is { } inherited ? Flag(inherited, "zoneInherited", path)
-        : values?["zone"] == null && values?["zoneWord"] == null;
+    internal static bool NodeZoneIsInherited(JsonNode? values, string path)
+    {
+        if (values is JsonObject fields && (fields.ContainsKey("zoneInherited") || fields.ContainsKey("inherit")))
+            throw new InvalidDataException($"{path}: zoneInherited and inherit are obsolete; remove them and set zone to a numeric ID, \"any\" or \"inherit\".");
+        if (values?["zone"] is not { } zone) return values?["zoneWord"] == null && values?["word"] == null;
+        NumericOperand(zone, "zone", path);
+        if (zone is JsonValue value && value.TryGetValue<string>(out var text))
+        {
+            if (text == "inherit") return true;
+            if (text == "any") return false;
+            throw new InvalidDataException($"{path}: zone must be a numeric ID from 0 to 254, \"any\" or \"inherit\".");
+        }
+        if (Integer(zone, "zone", path, 0, 255) == 255)
+            throw new InvalidDataException($"{path}: numeric zone 255 is obsolete; use zone: \"any\" instead.");
+        return false;
+    }
 
     /// <summary>Material defaults use the same count-free IDs as individual polygons.</summary>
     internal static void WritePolygonZoneValue(JsonObject values, uint word)

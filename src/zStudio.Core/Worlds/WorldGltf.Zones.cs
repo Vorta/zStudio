@@ -66,10 +66,11 @@ public static partial class WorldGltf
     private static WorldZoneProfile CaptureZoneProfile(GltfDocument document, ZoneLayout layout, uint parentZone,
         WorldNodeZone? loadRoot, CancellationToken token)
     {
+        loadRoot ??= EmbeddedLoadRoot(document);
         Dictionary<GltfNode, WorldNodeZone> assigned = new(ReferenceEqualityComparer.Instance);
         Dictionary<(GltfNode? Scope, long Number), WorldNodeZone> instances = [];
         Stack<(GltfNode Node, uint Parent, GltfNode? Scope)> pending = [];
-        for (int i = document.Roots.Count - 1; i >= 0; i--) pending.Push((document.Roots[i], parentZone & 0xFF, null));
+        for (int i = document.Roots.Count - 1; i >= 0; i--) pending.Push((document.Roots[i], (loadRoot?.Word ?? parentZone) & 0xFF, null));
         while (pending.TryPop(out var entry))
         {
             token.ThrowIfCancellationRequested();
@@ -109,7 +110,7 @@ public static partial class WorldGltf
             }
             meshes.Add(words.ToArray());
         }
-        return new(layout.Fingerprint, layout.Nodes.Select(n => assigned[n]).ToArray(), meshes, loadRoot ?? EmbeddedLoadRoot(document));
+        return new(layout.Fingerprint, layout.Nodes.Select(n => assigned[n]).ToArray(), meshes, loadRoot);
     }
 
     /// <summary>Validates topology and complete assignment counts without creating or changing a world.</summary>
@@ -197,7 +198,8 @@ public static partial class WorldGltf
         for (int i = 0; i < layout.Nodes.Count; i++)
         {
             var assigned = profile.Nodes[i] ?? throw new InvalidDataException($"{path}: a node zone assignment is absent.");
-            identity.Number(assigned.Word); identity.Number(assigned.Gate ? 1u : 0u); identity.Number(assigned.Inherit ? 1u : 0u);
+            identity.Number(assigned.Inherit ? assigned.Word & ~255u : assigned.Word);
+            identity.Number(assigned.Gate ? 1u : 0u); identity.Number(assigned.Inherit ? 1u : 0u);
             bound.Nodes.Add(layout.Nodes[i], assigned);
         }
         for (int i = 0; i < layout.Meshes.Count; i++)

@@ -314,7 +314,7 @@ internal sealed class SourceMapZoneBindings
                     if (had == null && gets == null) return zone;
                     uint kept = had ?? asset.Profile.LoadRoot?.Word & 255 ?? loadZone?.Invoke(owner.Path, asset.LogicalPath, asset.OwnerReferenceChain, start)
                         ?? WorldGltf.StatedZone(node.Extras?[WorldGltf.Key])
-                        ?? throw new InvalidDataException($"{asset.GeometryPath}: {JsonData.ShownText(WorldGltf.EngineName(node))} takes its zone from each load of {Path.GetFileName(asset.LogicalPath)} in {owner.Path}, where its new parents would give it zone {gets} instead. Give it a zone of its own first (in Blender, custom property recoil → zone, 255 for any zone; or an object zone with Tools → Edit map zones in that map), or leave it under its old parents.");
+                        ?? throw new InvalidDataException($"{asset.GeometryPath}: {JsonData.ShownText(WorldGltf.EngineName(node))} takes its zone from each load of {Path.GetFileName(asset.LogicalPath)} in {owner.Path}, where its new parents would give it zone {gets} instead. Give it a zone of its own first (in the source glTF's extras.recoil.zone, using \"any\" for any zone; or an object zone with Tools → Edit map zones in that map), or leave it under its old parents.");
                     return zone with { Word = zone.Word & ~255u | kept, Inherit = false };
                 }
                 // The zone the node's old parents gave it (start is the node), or null when it came from the load.

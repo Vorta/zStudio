@@ -25,8 +25,8 @@ public sealed class TerrainConversionTests
         byte[] bytes = File.ReadAllBytes(fixture.Path(database));
         var document = WorldAssembler.ReadModel(bytes, database, (path, _) => File.ReadAllBytes(fixture.Path(path)), Token);
         var profile = WorldGltf.CaptureZoneProfile(document, token: Token);
-        // Both direct leaves and a group inherit the actual load root. The group's stored high bits survive,
-        // but its inherited low byte is 5, not the stale 3 in its authored word.
+        // Both direct leaves and a group inherit the actual load root. The group's opaque bytes survive,
+        // while the inherited ID resolves to 5 and has no stored cached low byte.
         var sourceNodes = document.AllNodes().ToArray();
         profile = profile with { LoadRoot = new(5, true), Nodes = profile.Nodes.Select((zone, i) =>
             sourceNodes[i].Name == "g1" ? new WorldNodeZone(0x00010003, zone.Gate, true)
@@ -46,7 +46,7 @@ public sealed class TerrainConversionTests
         var retainedDocument = WorldAssembler.ReadModel(workspace.Read(database, Token)!, database, (path, _) => workspace.Read(path, Token)!, Token);
         var retained = WorldGltf.CaptureZoneProfile(retainedDocument, token: Token);
         Assert.Equal(profile.LoadRoot, retained.LoadRoot);
-        if (grouped) Assert.Contains(retained.Nodes, n => n.Word == 0x00010003 && n.Inherit);
+        if (grouped) Assert.Contains(retained.Nodes, n => n.Word == 0x00010005 && n.Inherit);
         var after = await SourceWorlds.BuildPreviewAsync(fixture.Project, "m1", Path.Combine(SourceWorlds.PreviewRoot(fixture.Project), "converted"), workspace.Overlay(), token: Token);
         var a = await Nodes(before, p => p.Database && p.ModelFile == database && plan.Groups.Any(g => g.Nodes.Contains(p.ModelNode)));
         var b = await Nodes(after, p => plan.Recipes.Contains(p.Terrain));

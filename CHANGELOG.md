@@ -6,7 +6,7 @@ Version numbers follow `MAJOR.MINOR.PATCH`; the 0.x series is under active devel
 
 - Reconstruct original model-file ownership as linked glTF sources, retaining uncertain map parts inside their owning file and keeping game attributes and placement-specific assignments in glTF. Existing sidecar-based source projects require fresh extraction from the original ZBD files.
 - Make the source-project Blender round-trip unavailable pending the reference-aware Blender plugin.
-- Store glTF object zones as numeric IDs and polygon zones as ordered ID arrays, with inheritance, altitude gates and opaque byte preservation kept separate. Existing packed hexadecimal assignments remain readable. Inherited-zone inspection now reports the selected placement's effective source zone after parent edits.
+- Store glTF object zones as numeric IDs 0–254, `"any"` or `"inherit"`, and polygon zones as ordered numeric ID arrays. Object `zone: 255` and the obsolete inheritance booleans are refused. Altitude gates and opaque byte preservation stay separate; existing packed hexadecimal assignments remain readable. Inherited-zone inspection reports the selected placement's effective source zone after parent edits.
 
 ## 0.8.4 — 2026-10-13
 

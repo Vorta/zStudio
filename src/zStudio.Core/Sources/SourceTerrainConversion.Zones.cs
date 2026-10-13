@@ -58,7 +58,6 @@ public static partial class SourceTerrainConversion
                 uint flags = Flags(extras);
                 extras["flags"] = $"0x{(zone.Gate ? flags | WorldGltf.ZoneGate : flags & ~WorldGltf.ZoneGate):X8}";
                 WorldGltf.WriteNodeZoneValue(extras, effective);
-                extras.Remove("zoneInherited");
                 foreach (var child in node.Children) Apply(child, effective & 255u);
             }
         }

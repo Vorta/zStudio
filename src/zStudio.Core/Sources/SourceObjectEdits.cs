@@ -1489,7 +1489,7 @@ public static class SourceObjectEdits
         return shape;
     }
     /// <summary>A glTF node's own values: all but its children (indices within its copy) and its name (an editor may suffix a copy's).</summary>
-    private static readonly string[] NodeZoneFields = ["zone", "zoneWord", "zonePadding", "zoneInherited", "zoneOverrides"];
+    private static readonly string[] NodeZoneFields = ["zone", "zoneWord", "zonePadding", "zoneOverrides"];
     private static JsonObject Own(JsonObject node, bool compare = false, bool omitZones = false)
     {
         JsonObject own = [];

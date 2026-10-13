@@ -40,13 +40,13 @@ public static partial class WorldGltf
             if (nodes[i] is not JsonObject node || Mark(((node["extras"] as JsonObject)?[Key] as JsonObject)?["instance"]) is not { } mark) continue;
             if (!shared.TryGetValue(mark, out var first)) { shared[mark] = zones[i].Zone; continue; }
             if (first is { } zone && zones[i].Zone != zone && StatedZone((node["extras"] as JsonObject)?[Key]) == null && Engine(node) is { } copy)
-            { copy["zone"] = (int)zone; copy.Remove("zoneInherited"); stated = true; }
+            { WriteNodeZoneValue(copy, ReadNodeZoneValue(copy, DefaultZone, "the source node") & ~255u | zone); stated = true; }
         }
         if (stated) zones = FileZones(nodes, parents);
         for (int i = 0; i < nodes.Count; i++)
         {
             if (nodes[i] is not JsonObject node || StatedZone((node["extras"] as JsonObject)?[Key]) != null || Engine(node) is not { } engine) continue;
-            if (zones[i].Zone is { } zone) { engine["zone"] = (int)zone; engine.Remove("zoneInherited"); }
+            if (zones[i].Zone is { } zone) WriteNodeZoneValue(engine, ReadNodeZoneValue(engine, DefaultZone, "the source node") & ~255u | zone);
             else engine[ZoneFromLoad] = true;
         }
     }
@@ -73,10 +73,10 @@ public static partial class WorldGltf
             if (StatedZone(engine) is { } own)
             {
                 if (own == passed && engine["zone"] != null && engine["zoneWord"] == null && engine["zonePadding"] == null)
-                { engine.Remove("zone"); engine.Remove("zoneInherited"); }
+                engine.Remove("zone");
             }
             else if (marked && passed is { } zone && !marks[owner])
-                throw new InvalidDataException($"{path}: {JsonData.ShownText(EngineName(node))} took its zone from what loads the file; under {JsonData.ShownText(EngineName((JsonObject)nodes[parents[i]]!))} it would take zone {zone} instead. Give it a zone of its own (custom property recoil → zone, 255 for any zone) or move it back.");
+                throw new InvalidDataException($"{path}: {JsonData.ShownText(EngineName(node))} took its zone from what loads the file; under {JsonData.ShownText(EngineName((JsonObject)nodes[parents[i]]!))} it would take zone {zone} instead. Give it a zone of its own (custom property recoil → zone, 'any' for any zone) or move it back.");
             // A node that had no engine values gets none.
             if (engine.Count == 0 && node["extras"] is JsonObject extras) { extras.Remove(Key); if (extras.Count == 0) node.Remove("extras"); }
         }

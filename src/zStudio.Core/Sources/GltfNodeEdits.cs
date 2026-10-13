@@ -514,7 +514,6 @@ public static class GltfNodeEdits
     {
         uint stored = WorldGltf.ReadNodeZoneValue(engine, 255, "the source node");
         WorldGltf.WriteNodeZoneValue(engine, (stored & ~255u) | (zone & 255u));
-        engine.Remove("zoneInherited");
     }
     /// <summary>
     /// A node's local transform as the reader composes it (matrix, or scale · rotation · translation; identity when it states

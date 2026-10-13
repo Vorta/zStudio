@@ -545,7 +545,12 @@ internal static partial class WorldSources
             var profile = Profile(actual); var original = Profile(baseline);
             if (profile.Fingerprint != original.Fingerprint)
                 throw new InvalidDataException($"{actual.Stem}.flt: placement attributes cannot be associated with the original file's polygon identities.");
-            bool same = profile.Nodes.SequenceEqual(original.Nodes) && profile.MeshPolygons.Count == original.MeshPolygons.Count
+            // An inherited node has no authored ID: each placement supplies that byte. Its
+            // padding and gate still belong to the source and must participate in comparison.
+            bool same = profile.Nodes.Count == original.Nodes.Count && profile.Nodes.Zip(original.Nodes).All(p =>
+                p.First.Gate == p.Second.Gate && p.First.Inherit == p.Second.Inherit
+                && (p.First.Inherit ? (p.First.Word & ~255u) == (p.Second.Word & ~255u) : p.First.Word == p.Second.Word))
+                && profile.MeshPolygons.Count == original.MeshPolygons.Count
                 && profile.MeshPolygons.Zip(original.MeshPolygons).All(p => p.First.SequenceEqual(p.Second));
             JsonObject children = [];
             var baselineReferences = ProfileReferences(baseline);

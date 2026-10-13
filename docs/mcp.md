@@ -294,7 +294,7 @@ Terrain conversion preserves database encounter order with an ordinary recipe fo
 
 Map zones use two shared-workspace commands; the complete registry currently exposes 110 tools:
 
-GUI and MCP zone edits share the same source serializer: glTF stores numeric object `zone` IDs and ordered polygon ID arrays (`polygonZones`), with inheritance, altitude gates and opaque padding kept separate. The MCP arguments already use numeric IDs and arrays, so this file-format change adds no command or protocol schema. Apply, undo and verified save operate on the same embedded attributes through either interface.
+GUI and MCP zone edits share the same source serializer: glTF stores object `zone` as a numeric ID 0–254, `"any"` or `"inherit"`, and polygon assignments as ordered numeric ID arrays (`polygonZones`). Object `zone: 255` and obsolete inheritance booleans are refused. Altitude gates and opaque padding stay separate. MCP arguments continue to use numeric IDs and arrays, including 255 for any zone; the shared serializer writes the corresponding object string. This file-format change adds no command or protocol schema. Apply, undo and verified save operate on the same embedded attributes through either interface.
 
 Exact-target inspection and opening the zone editor return `stale_document` when dependencies have changed since the world was built; reload that world before using its node or polygon identities. Catalog-only reads remain available, as does cancelling a stale draft. Changes outside the world's recorded build dependencies do not require a reload. These dependencies include scripts compiled into the common interpreter archive, even when a script's commands affect another mission.
 
