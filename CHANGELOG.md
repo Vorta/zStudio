@@ -2,6 +2,11 @@
 
 Version numbers follow `MAJOR.MINOR.PATCH`; the 0.x series is under active development. Release tags and downloadable archives use the same version.
 
+## Unreleased
+
+- Bundle the RECOIL Blender 5.2 LTS extension: linked glTF collections, named node flags, zones, placement-specific polygon assignments, shared-model editing and validated graph export.
+- Restore source-project Blender checkout/update through a windowless shared-format helper, with complete graph provenance, cross-world zone preservation, conflict guards, undo and verified saves. Expose installation details and the same checkout/update service through MCP.
+
 ## 0.8.5 — 2026-10-13
 
 - Reconstruct original model-file ownership as linked glTF sources, retaining uncertain map parts inside their owning file and keeping game attributes and placement-specific assignments in glTF. Existing sidecar-based source projects require fresh extraction from the original ZBD files.

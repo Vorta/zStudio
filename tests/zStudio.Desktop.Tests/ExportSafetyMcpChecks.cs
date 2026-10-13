@@ -265,32 +265,65 @@ internal static class ExportSafetyMcpChecks
         File.Delete(fixture.Path("gamegen/build-profiles/broken.json"));
         await job("source_profile", new(), "completed");
 
-        // Checkout and update are unavailable until the reference-aware plugin can preserve the new hierarchy.
-        var started = await call("source_blender_checkout", new() { ["model"] = "data/m1/models/m1.gltf" });
-        Assert.Equal(("source_blender_checkout", (bool?)true), (started["Name"]?.GetValue<string>(), started["Cancellable"]?.GetValue<bool>()));
-        var operation = started;
-        while (operation["State"]!.GetValue<string>() is "queued" or "running") { await Task.Delay(10, token); operation = await call("operation", new() { ["id"] = started["id"]!.GetValue<string>() }); }
-        Assert.Equal("failed", operation["State"]!.GetValue<string>());
-        Assert.Equal(SourceBlender.UnavailableMessage, operation["result"]!["message"]!.GetValue<string>());
-        var refusedUpdate = await call("source_blender_update", new() { ["document"] = Guid.NewGuid().ToString(), ["revision"] = 0, ["checkout"] = "old" });
-        while (refusedUpdate["State"]!.GetValue<string>() is "queued" or "running")
-        {
-            await Task.Delay(10, token);
-            refusedUpdate = await call("operation", new() { ["id"] = refusedUpdate["id"]!.GetValue<string>() });
-        }
-        Assert.Equal("failed", refusedUpdate["State"]!.GetValue<string>());
-        Assert.Equal(SourceBlender.UnavailableMessage, refusedUpdate["result"]!["message"]!.GetValue<string>());
-        Assert.False(Directory.Exists(Path.Combine(fixture.Project, "zstudio", "export")));
-        foreach (string name in new[] { "EditInBlenderMenu", "UpdateFromBlenderMenu" })
-        {
-            var menu = (MenuItem)main.FindName(name);
-            Assert.False(menu.IsEnabled);
-            Assert.Equal(SourceBlender.UnavailableMessage, menu.ToolTip);
-            Assert.True(ToolTipService.GetShowOnDisabled(menu));
-        }
-
+        // The real shared command creates a graph checkout without changing source history.
+        var checkout = await job("source_blender_checkout", new() { ["model"] = "data/m1/models/m1.gltf" }, "completed");
+        Assert.Equal(2, checkout["version"]!.GetValue<int>());
+        Assert.True(File.Exists(checkout["input"]!.GetValue<string>()));
+        var extension = await call("source_blender_extension", new());
+        Assert.Equal("5.2.0", extension["blenderMin"]!.GetValue<string>());
+        var listedCheckouts = await call("source_blender_checkouts", new());
+        Assert.Equal(1, listedCheckouts["checkoutCount"]!.GetValue<int>());
         var m1 = Document((await job("source_world_open", new() { ["mission"] = "m1" }, "completed"))["document"]!);
         var m2 = Document((await job("source_world_open", new() { ["mission"] = "m2" }, "completed"))["document"]!);
+        var checkedOut = SourceBlender.Find(fixture.Project, checkout["id"]!.GetValue<string>());
+        string blenderSession = Path.Combine(fixture.Root, "blender-session");
+        SourceBlender.PrepareBlenderImport(Path.Combine(checkedOut.Folder, "input"), checkedOut.Model, blenderSession, token);
+        var manifest = JsonNode.Parse(File.ReadAllBytes(Path.Combine(blenderSession, "session.json")))!;
+        JsonArray exportedModels = [];
+        foreach (var entry in manifest["models"]!.AsArray())
+        {
+            string path = entry!["path"]!.GetValue<string>();
+            string input = Path.Combine(blenderSession, "input", path);
+            var json = JsonNode.Parse(File.ReadAllBytes(input))!;
+            foreach (string kind in new[] { "nodes", "meshes", "materials" })
+                foreach (var item in json[kind] as JsonArray ?? []) item!["extras"]!["recoil"] ??= new JsonObject();
+            json["scenes"]![0]!["extras"] ??= new JsonObject();
+            json["scenes"]![0]!["extras"]!["recoil"] ??= new JsonObject();
+            var metadata = JsonNode.Parse(File.ReadAllBytes(Path.Combine(blenderSession, entry["metadata"]!.GetValue<string>())))!;
+            foreach (var mesh in metadata["meshes"]!.AsArray())
+            {
+                int index = mesh!["index"]!.GetValue<int>(), polygon = 0, face = 0, primitive = 0;
+                foreach (var item in mesh["primitives"]!.AsArray())
+                {
+                    JsonArray origins = [], zones = [], faces = [];
+                    foreach (var count in item!["triangles"]!.AsArray())
+                    {
+                        for (int i = 0; i < count!.GetValue<int>(); i++)
+                        { origins.Add(polygon); zones.Add(mesh["zones"]!["polygonZones"]![polygon]!.DeepClone()); faces.Add(++face); }
+                        polygon++;
+                    }
+                    var primitiveJson = json["meshes"]![index]!["primitives"]![primitive++]!;
+                    primitiveJson["extras"] ??= new JsonObject();
+                    primitiveJson["extras"]!["zstudio_blender"] =
+                        new JsonObject { ["origins"] = origins, ["zones"] = zones, ["faces"] = faces };
+                }
+            }
+            if (path == checkedOut.Model)
+            {
+                json["scenes"]![0]!["extras"] ??= new JsonObject();
+                json["scenes"]![0]!["extras"]!["recoil"] ??= new JsonObject();
+                json["scenes"]![0]!["extras"]!["recoil"]!["loadRoot"] ??= new JsonObject { ["zone"] = "any" };
+                json["scenes"]![0]!["extras"]!["recoil"]!["loadRoot"]!["landmark"] = true;
+            }
+            File.WriteAllText(input, json.ToJsonString()); exportedModels.Add(new JsonObject { ["path"] = path });
+        }
+        string edits = Path.Combine(blenderSession, "input", "edit.json");
+        File.WriteAllText(edits, new JsonObject { ["protocol"] = 1, ["session"] = blenderSession, ["models"] = exportedModels }.ToJsonString());
+        SourceBlender.PrepareBlenderExport(edits, checkedOut.Outbox, token);
+        byte[] beforeBlender = File.ReadAllBytes(fixture.Path(checkedOut.Model));
+        m1 = Document((await job("source_blender_update", new() { ["document"] = Id(m1), ["revision"] = m1.Revision, ["checkout"] = checkedOut.Id }, "completed"))["document"]!);
+        Assert.True(m1.IsDirty); Assert.Equal(beforeBlender, File.ReadAllBytes(fixture.Path(checkedOut.Model)));
+        m1 = Document(await call("undo_redo", new() { ["document"] = Id(m1), ["revision"] = m1.Revision, ["action"] = "undo" }));
         Assert.DoesNotContain(main.ViewModel.Problems, p => Changed(p, "m1") || Changed(p, "m2"));
         // Copying the crate in m1 copies its lid, which FindNode lid then finds; m2 reads the same database and is now stale.
         m1 = await Duplicate(m1, "crate", "crate2");

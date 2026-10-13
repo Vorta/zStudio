@@ -5924,8 +5924,14 @@
     ]
   },
   {
+    "Name": "zstudio_source_blender_extension",
+    "Description": "Locate the bundled Blender 5.2 LTS RECOIL extension and its compatible windowless helper. Does not install it or enable automation.",
+    "Mutates": false,
+    "Parameters": []
+  },
+  {
     "Name": "zstudio_source_blender_checkout",
-    "Description": "Source-project Blender checkout and update are unavailable until the reference-aware Blender plugin is available. Ordinary Blender glTF import/export does not preserve the project\u0027s linked model hierarchy and embedded game attributes. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Description": "Create a reference-aware Blender checkout of a source glTF and its complete dependency graph, from the current shared workspace. Requires the bundled RECOIL Blender extension. The project remains unchanged. Returns an operation ID; use zstudio_operation to await/read the result.",
     "Mutates": true,
     "Parameters": [
       {
@@ -5975,7 +5981,7 @@
   },
   {
     "Name": "zstudio_source_blender_update",
-    "Description": "Source-project Blender checkout and update are unavailable until the reference-aware Blender plugin is available. Ordinary Blender glTF import/export does not preserve the project\u0027s linked model hierarchy and embedded game attributes. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Description": "Validate and accept one completed RECOIL Blender graph export as a shared, undoable source transaction. All linked files and placement assignments are validated before publication. Older flattened checkouts are refused. Returns an operation ID; use zstudio_operation to await/read the result.",
     "Mutates": true,
     "Parameters": [
       {
@@ -6015,7 +6021,7 @@
       {
         "Name": "force",
         "Type": "boolean",
-        "Description": "Apply despite a conflict (files changed since the checkout or outside it, or dropped engine attributes); default false.",
+        "Description": "Apply despite a reported external-file or shared-texture conflict; default false. Invalid or missing required metadata can never be forced.",
         "Required": false,
         "Choices": null,
         "Properties": null

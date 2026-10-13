@@ -37,3 +37,12 @@ jobs:
         run: dotnet test --solution zStudio.slnx -c Release --no-build --max-parallel-test-modules 1
       - name: Validate portable packaging
         run: ./tools/publish.ps1
+      - name: Validate RECOIL Blender round trip
+        run: |
+          $archive = Join-Path $env:RUNNER_TEMP 'blender-5.2.2-windows-x64.zip'
+          Invoke-WebRequest 'https://download.blender.org/release/Blender5.2/blender-5.2.2-windows-x64.zip' -OutFile $archive
+          if ((Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash -ne '3849D17A682CBA006075AAA3F3597ECB5C9C30EC31035B2E092C53E40679B535') { throw 'Blender archive checksum mismatch' }
+          Expand-Archive -LiteralPath $archive -DestinationPath (Join-Path $env:RUNNER_TEMP 'blender')
+          $env:ZSTUDIO_BLENDER = Join-Path $env:RUNNER_TEMP 'blender/blender-5.2.2-windows-x64/blender.exe'
+          $env:ZSTUDIO_BLENDER_HELPER = Join-Path $env:GITHUB_WORKSPACE 'artifacts/zStudio-win-x64/zStudio.exe'
+          dotnet test tests/zStudio.Tests -c Release --no-build --filter 'FullyQualifiedName~BlenderGraphTests.InstalledBlenderRoundTrip'

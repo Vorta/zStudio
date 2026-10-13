@@ -8,6 +8,13 @@ public partial class App : Application
     public bool ProcessCommandLine { get; init; } = true;
     private async void OnStartup(object sender, StartupEventArgs e)
     {
+        if (ProcessCommandLine && e.Args.FirstOrDefault() == "--blender-helper")
+        {
+            ShutdownMode = ShutdownMode.OnExplicitShutdown;
+            if (e.Args.Length != 1) { Shutdown(2); return; }
+            int result = await Task.Run(() => Recoil.Zbd.Core.Sources.BlenderBridge.RunAsync(Console.OpenStandardInput(), Console.OpenStandardOutput()));
+            Shutdown(result); return;
+        }
         if (ProcessCommandLine && e.Args.FirstOrDefault() == "--mcp")
         {
             ShutdownMode = ShutdownMode.OnExplicitShutdown;

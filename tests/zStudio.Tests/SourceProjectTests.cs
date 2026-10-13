@@ -15,15 +15,14 @@ public sealed class SourceProjectTests
     private static WaveFormat Format(byte[] wave) => WaveConverter.Format(wave);
 
     [Fact]
-    public void OldMapSidecarsAndBlenderRoundTripsRefuseWithoutWriting()
+    public void OldMapSidecarsAndFlattenedBlenderUpdatesRefuseWithoutWriting()
     {
         using SourceWorldFixture fixture = new();
         var workspace = new SourceWorkspace(fixture.Project);
-        Assert.Equal(SourceBlender.UnavailableMessage, Assert.Throws<NotSupportedException>(() => SourceBlender.Checkout(workspace, fixture.Tank, Token)).Message);
         var checkout = new BlenderCheckout("old", Path.Combine(fixture.Project, "zstudio", "export", "old"), fixture.Tank, DateTime.UtcNow, []);
-        Assert.Equal(SourceBlender.UnavailableMessage, Assert.Throws<NotSupportedException>(() => SourceBlender.PlanUpdate(workspace, checkout, token: Token)).Message);
+        Assert.Contains("predates", Assert.Throws<InvalidDataException>(() => SourceBlender.PlanUpdate(workspace, checkout, token: Token)).Message);
         bool prompted = false;
-        Assert.Throws<NotSupportedException>(() => SourceBlender.PlanUpdate(workspace, checkout, null, (_, _) => { prompted = true; return true; }, Token));
+        Assert.Throws<InvalidDataException>(() => SourceBlender.PlanUpdate(workspace, checkout, null, (_, _) => { prompted = true; return true; }, Token));
         Assert.False(prompted);
         Assert.False(Directory.Exists(Path.Combine(fixture.Project, "zstudio")));
         // Even an empty old sidecar denotes unsupported storage. Similar unrelated JSON is not a version marker.

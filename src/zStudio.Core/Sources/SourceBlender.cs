@@ -11,11 +11,12 @@ namespace Recoil.Zbd.Core.Sources;
 /// <summary>A model checked out for Blender: its folder under <c>zstudio/export</c> and the project files it was copied from.</summary>
 public sealed record BlenderCheckout(string Id, string Folder, string Model, DateTime CreatedUtc, IReadOnlyList<BlenderCheckoutFile> Files)
 {
+    public int Version { get; init; } = 1;
     /// <summary>Files updates from this checkout wrote (project path and SHA-256): states the project may hold without an edit since the checkout.</summary>
     public IReadOnlyList<BlenderCheckoutFile> Applied { get; init; } = [];
     /// <summary>The copy of the model Blender imports.</summary>
-    public string Input => Path.Combine(Folder, "input", Path.GetFileName(Model));
-    /// <summary>Where Blender exports go; each export is one glTF file (with its buffers and textures) anywhere below it.</summary>
+    public string Input => Path.Combine(Folder, "input", Version >= 2 ? Model : Path.GetFileName(Model));
+    /// <summary>Graph generations are completed by a receipt below this outbox; legacy checkouts list individual glTF files.</summary>
     public string Outbox => Path.Combine(Folder, "outbox");
 }
 /// <summary>A project file a checkout copied: its project path, its path in the checkout and its SHA-256 then.</summary>
@@ -48,7 +49,6 @@ public sealed class BlenderConflictException(IReadOnlyList<string> files, string
 public static partial class SourceBlender
 {
     public const string ExportFolder = "zstudio/export";
-    public const string UnavailableMessage = "Source-project Blender checkout and update are unavailable until the reference-aware Blender plugin is available. Ordinary Blender glTF import/export does not preserve the project's linked model hierarchy and embedded game attributes.";
     private const string ManifestName = "manifest.json";
     private const long MaximumExportBytes = 512L * 1024 * 1024;
     private const long MaximumManifestBytes = 64L * 1024 * 1024;
@@ -127,7 +127,7 @@ public static partial class SourceBlender
     /// workspace's unsaved edits, the disk for the rest), and a file another program changes before the copy is complete
     /// refuses the checkout with <see cref="SourceFileChangedException"/>. The project's file is not changed.
     /// </summary>
-    public static BlenderCheckout Checkout(SourceWorkspace workspace, string model, CancellationToken token = default) => throw new NotSupportedException(UnavailableMessage);
+    public static BlenderCheckout Checkout(SourceWorkspace workspace, string model, CancellationToken token = default) => CheckoutGraph(workspace, model, token);
     /// <summary>As <see cref="Checkout(SourceWorkspace, string, CancellationToken)"/>; <paramref name="read"/> is told each project file the checkout has read (tests change files there).</summary>
     internal static BlenderCheckout Checkout(SourceWorkspace workspace, string model, CancellationToken token, Action<string>? read,
         int maximumManifestBytes = MaximumCheckoutManifestBytes, long maximumScriptCacheBytes = MaximumScriptCacheBytes,
@@ -373,7 +373,7 @@ public static partial class SourceBlender
             string model = manifest["model"]!.GetValue<string>();
             // These fields identify Windows paths, not arbitrary text. Bound them before path composition or presentation.
             if (model.Length > 32767 || Path.GetFileName(model).Length > 255 || files.Concat(applied).Any(f => f.Project.Length > 32767 || f.Checkout.Length > 32767 || f.Sha256.Length > 64)) return null;
-            return new(id, folder, model, DateTime.Parse(manifest["created"]!.GetValue<string>(), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind), files) { Applied = applied };
+            return new(id, folder, model, DateTime.Parse(manifest["created"]!.GetValue<string>(), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind), files) { Applied = applied, Version = manifest["version"]?.GetValue<int>() ?? 1 };
         }
         catch (Exception ex) when (ex is JsonException or InvalidOperationException or FormatException or NullReferenceException) { return null; }
     }
@@ -393,7 +393,8 @@ public static partial class SourceBlender
         // Folders count too: a tree of empty folders costs as much to walk as one of files.
         foreach (var entry in SourceProject.Entries(outbox, budget, recurse: true, skip: FileAttributes.ReparsePoint, ignoreInaccessible: true))
         {
-            if (entry is FileInfo file && (file.Extension.Equals(".gltf", StringComparison.OrdinalIgnoreCase) || file.Extension.Equals(".glb", StringComparison.OrdinalIgnoreCase)))
+            if (entry is FileInfo file && (checkout.Version >= 2 ? file.Name.Equals(GraphManifest, StringComparison.OrdinalIgnoreCase) :
+                file.Extension.Equals(".gltf", StringComparison.OrdinalIgnoreCase) || file.Extension.Equals(".glb", StringComparison.OrdinalIgnoreCase)))
                 exports.Add(new(file.FullName, Path.GetRelativePath(outbox, file.FullName).Replace('\\', '/'), file.LastWriteTimeUtc, file.Length));
         }
         budget.Rows(exports.Count);
@@ -455,7 +456,7 @@ public static partial class SourceBlender
     /// <paramref name="force"/> replaces them anyway.
     /// </summary>
     public static BlenderUpdatePlan PlanUpdate(SourceWorkspace workspace, BlenderCheckout checkout, string? export = null, bool force = false, CancellationToken token = default)
-        => throw new NotSupportedException(UnavailableMessage);
+        => PlanGraphUpdate(workspace, checkout, export, force, null, token);
 
     /// <summary>
     /// Ask about all conflicts of this sealed export before continuing the same plan. The callback runs on the caller's
@@ -464,7 +465,7 @@ public static partial class SourceBlender
     /// </summary>
     public static BlenderUpdatePlan PlanUpdate(SourceWorkspace workspace, BlenderCheckout checkout, string? export,
         Func<BlenderConflictException, CancellationToken, bool> confirmConflict, CancellationToken token = default)
-        => throw new NotSupportedException(UnavailableMessage);
+        => PlanGraphUpdate(workspace, checkout, export, false, confirmConflict, token);
 
     internal static BlenderUpdatePlan PlanUpdate(SourceWorkspace workspace, BlenderCheckout checkout, string? export, bool force, CancellationToken token,
         long maximumExportBytes, int maximumJsonBytes = GltfDocument.MaximumJsonBytes, Func<BlenderConflictException, CancellationToken, bool>? confirmConflict = null)

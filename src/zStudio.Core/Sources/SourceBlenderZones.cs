@@ -1108,7 +1108,7 @@ internal sealed partial class SourceBlenderZones
     }
 
     /// <summary>Whether recovering an edited boundary preserves its surface in both polygon consumers.</summary>
-    private static bool KeepsTriangles(GltfPrimitive primitive, int first, int count, int[] corners, Dictionary<int, int> changes, PolygonWorkBudget work)
+    internal static bool KeepsTriangles(GltfPrimitive primitive, int first, int count, int[] corners, Dictionary<int, int> changes, PolygonWorkBudget work)
     {
         // Legacy numeric fan records can exceed the explicit boundary limit; retain their bounded pieces instead.
         if (corners.Length > ModelBuilder.MaximumCorners) return false;
