@@ -26,20 +26,20 @@ public sealed class SaveDialogRound7Tests : IDisposable
     private string At(string relative) => Path.Combine(root, relative.Replace('/', Path.DirectorySeparatorChar));
     private void Write(string relative, string text) { Directory.CreateDirectory(Path.GetDirectoryName(At(relative))!); File.WriteAllText(At(relative), text, Encoding.Latin1); }
     private static byte[] Bytes(string text) => Encoding.Latin1.GetBytes(text);
-    private static IReadOnlyList<string> Publish(string project, IReadOnlyList<(string Relative, byte[]? Expected, byte[]? Content)> writes, string description, CancellationToken token) =>
-        new SourcePublisher(project).Publish([.. writes.Select(w => new SourceFileWrite(w.Relative, w.Expected, w.Content))], description, token).Written;
+    private static IReadOnlyList<string> Publish(string project, IReadOnlyList<(string Relative, byte[]? Expected, byte[]? Content)> writes, string description, CancellationToken token, Func<CancellationToken, SourcePublishValidation> validation) =>
+        new SourcePublisher(project).Publish([.. writes.Select(w => new SourceFileWrite(w.Relative, w.Expected, w.Content))], description, token, validation).Written;
 
     [Fact]
     public void SaveAsyncPublishesOffTheEditingThreadAndRefusesChangesUntilItEnds()
     {
         using SemaphoreSlim entered = new(0), proceed = new(0);
         int? publisherThread = null;
-        SourceWorkspace workspace = new(root, (writes, description, token) =>
+        SourceWorkspace workspace = new(root, (writes, description, token, validation) =>
         {
             publisherThread = Environment.CurrentManagedThreadId; entered.Release();
             // A save that blocked its caller never lets the test release it: fail instead of hanging.
             if (!proceed.Wait(TimeSpan.FromSeconds(10), token)) throw new TimeoutException("The save blocked the thread that started it.");
-            return Publish(root, writes, description, token);
+            return Publish(root, writes, description, token, validation);
         });
         List<(string Kind, int Thread)> changes = [];
         workspace.Changed += c => changes.Add((c.Kind, Environment.CurrentManagedThreadId));
@@ -82,7 +82,7 @@ public sealed class SaveDialogRound7Tests : IDisposable
     public async Task SaveAsyncCanceledOrFailedKeepsTheEditsUnsavedAndEditable()
     {
         bool fail = false;
-        SourceWorkspace workspace = new(root, (writes, description, token) => fail ? throw new IOException("The disk is full.") : Publish(root, writes, description, token));
+        SourceWorkspace workspace = new(root, (writes, description, token, validation) => fail ? throw new IOException("The disk is full.") : Publish(root, writes, description, token, validation));
         workspace.Apply("Edit script", [(Script, Bytes("edited\r\n"))], Token);
 
         // Canceled before publication: nothing is written.

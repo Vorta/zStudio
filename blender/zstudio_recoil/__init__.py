@@ -94,7 +94,7 @@ def asset_collection(data, path):
 
 def bind_objects(collection):
     seen_objects, seen_meshes, mesh_ids = set(), {}, {}
-    for obj in collection.objects:
+    for obj in source_objects(collection):
         if obj.get("zs_reference_helper"):
             continue
         if "zs_file" not in obj:
@@ -124,6 +124,53 @@ def bind_objects(collection):
                 mesh["zs_file"] = collection["zs_path"]
 
 
+def source_objects(collection):
+    """Outliner folders organize one file; collection instances remain references."""
+    if any(c.get("zs_path") for c in collection.children_recursive):
+        raise ValueError("Use a collection reference instead of nesting a physical source collection")
+    return list(collection.all_objects)
+
+
+def validate_reference_displays(data, collection):
+    """Every displayed reference must be represented by its source holder exactly once."""
+    from .placement import target_path
+    from mathutils import Matrix
+    objects = source_objects(collection)
+    object_set = set(objects)
+    helpers = {}
+    for obj in objects:
+        if obj.get("zs_reference_helper"):
+            helpers.setdefault(obj.parent, []).append(obj)
+    def fail():
+        raise ValueError("A RECOIL reference display was changed. Restore its collection instancing and target; mesh references need exactly one unmodified helper parented to their holder. Undo helper edits (or reimport), and move the reference holder instead")
+    for parent, children in helpers.items():
+        if parent not in object_set or parent.get("zs_reference_helper") or parent.type != 'MESH' or not parent.recoil.reference:
+            fail()
+    identity = Matrix.Identity(4)
+    for obj in objects:
+        if obj.get("zs_reference_helper"):
+            continue
+        if not obj.recoil.reference:
+            if obj.instance_type != 'NONE':
+                fail()
+            continue
+        target = asset_collection(data, target_path(data, obj))
+        if obj.type == 'EMPTY':
+            if obj.instance_type != 'COLLECTION' or obj.instance_collection != target or obj in helpers:
+                fail()
+        elif obj.type == 'MESH':
+            children = helpers.get(obj, [])
+            if obj.instance_type != 'NONE' or len(children) != 1:
+                fail()
+            helper = children[0]
+            if helper.type != 'EMPTY' or helper.instance_type != 'COLLECTION' or helper.instance_collection != target \
+                    or helper.parent_type != 'OBJECT' or helper.matrix_basis != identity or helper.matrix_parent_inverse != identity \
+                    or helper.constraints or helper.modifiers or helper.animation_data or helper.children:
+                fail()
+        else:
+            fail()
+
+
 def effective_zone(obj, context):
     current = obj
     while current:
@@ -146,6 +193,7 @@ def mesh_signature(mesh):
     for polygon in mesh.polygons:
         h.update(repr((tuple(polygon.vertices), polygon.material_index, polygon.use_smooth)).encode())
     for uv in mesh.uv_layers:
+        h.update(repr((uv.name, uv.active_render)).encode())
         for corner in uv.data:
             h.update(repr(tuple(corner.uv)).encode())
     for normal in mesh.corner_normals:
@@ -153,21 +201,68 @@ def mesh_signature(mesh):
     for material in mesh.materials:
         h.update(repr((material.name_full, material.get("zs_origin"), material.get("zs_recoil")) if material else None).encode())
     if mesh.shape_keys:
+        h.update(repr((mesh.shape_keys.use_relative, mesh.shape_keys.eval_time)).encode())
+        key_indices = {key: i for i, key in enumerate(mesh.shape_keys.key_blocks)}
         for block in mesh.shape_keys.key_blocks:
-            h.update(repr((block.name, block.value)).encode())
+            h.update(repr((block.name, block.value, block.mute, block.vertex_group, block.interpolation,
+                           block.frame, key_indices.get(block.relative_key))).encode())
             for vertex in block.data:
                 h.update(repr(tuple(vertex.co)).encode())
     return h.hexdigest()
 
 
-def material_signature(material):
+def material_signature(material, cache=None):
     import hashlib
+    from array import array
+    cache = {} if cache is None else cache
+    if material in cache:
+        return cache[material]
     h = hashlib.sha256()
-    h.update(repr((tuple(material.diffuse_color), material.use_backface_culling, material.surface_render_method)).encode())
-    if material.node_tree:
-        for node in material.node_tree.nodes:
+    # Inspect authored shading state rather than a list of particular node types.
+    # Node position, selection and other Shader Editor presentation are not edits.
+    node_ui = {'name', 'label', 'location', 'location_absolute', 'width', 'height', 'dimensions', 'select', 'hide',
+               'show_options', 'show_preview', 'show_texture', 'use_custom_color', 'color', 'parent'}
+    def authored_state(value, ignored=(), ancestors=()):
+        identity = value.as_pointer()
+        if identity in ancestors:
+            return
+        for prop in value.bl_rna.properties:
+            key = prop.identifier
+            if key in ignored or key == 'rna_type' or key.startswith('bl_'):
+                continue
+            if prop.type in {'POINTER', 'COLLECTION'}:
+                current = getattr(value, key)
+                if prop.type == 'COLLECTION':
+                    h.update(repr((key, len(current))).encode())
+                    for item in current:
+                        authored_state(item, ancestors=ancestors + (identity,))
+                elif isinstance(current, bpy.types.ID):
+                    h.update(repr((key, current.bl_rna.identifier, current.name_full,
+                                   current.library.filepath if current.library else '')).encode())
+                elif current is not None:
+                    h.update(key.encode())
+                    authored_state(current, ancestors=ancestors + (identity,))
+            elif not prop.is_readonly:
+                current = getattr(value, key)
+                if getattr(prop, 'is_array', False):
+                    current = tuple(current)
+                elif prop.type == 'ENUM' and prop.is_enum_flag:
+                    current = sorted(current)
+                h.update(repr((key, current)).encode())
+    authored_state(material, {'name', 'use_fake_user', 'use_extra_user', 'tag', 'node_tree',
+                              'preview', 'asset_data', 'animation_data', 'library', 'library_weak_reference',
+                              'override_library', 'original', 'texture_paint_images', 'texture_paint_slots',
+                              'paint_active_slot', 'paint_clone_slot', 'preview_render_type', 'use_preview_world'})
+    h.update(material.get("zs_recoil", "{}").encode())
+    visited = set()
+    def tree_signature(tree):
+        if tree in visited:
+            return
+        visited.add(tree)
+        for node in tree.nodes:
             h.update(node.bl_idname.encode())
-            for socket in node.inputs:
+            authored_state(node, node_ui | {'inputs', 'outputs', 'internal_links', 'image', 'node_tree'})
+            for socket in list(node.inputs) + list(node.outputs):
                 value = getattr(socket, "default_value", None)
                 try:
                     value = tuple(value)
@@ -176,10 +271,22 @@ def material_signature(material):
                 h.update(repr((socket.identifier, value, socket.is_linked)).encode())
             if getattr(node, "image", None):
                 image = node.image
-                h.update(repr((image.name, image.filepath, tuple(image.size), image.is_dirty)).encode())
-        for link in material.node_tree.links:
-            h.update(repr((link.from_node.name, link.from_socket.identifier, link.to_node.name, link.to_socket.identifier)).encode())
-    return h.hexdigest()
+                if image not in cache:
+                    pixels = array('f', [0]) * len(image.pixels)
+                    image.pixels.foreach_get(pixels)
+                    cache[image] = hashlib.sha256(memoryview(pixels)).hexdigest()
+                h.update(repr((tuple(image.size), image.colorspace_settings.name, image.alpha_mode,
+                               image.source, bpy.path.abspath(image.filepath), image.get("zs_source_path"), cache[image])).encode())
+            if getattr(node, "node_tree", None):
+                tree_signature(node.node_tree)
+        node_indices = {node: i for i, node in enumerate(tree.nodes)}
+        for link in tree.links:
+            h.update(repr((node_indices[link.from_node], link.from_socket.identifier, node_indices[link.to_node],
+                           link.to_socket.identifier, link.is_muted)).encode())
+    if material.node_tree:
+        tree_signature(material.node_tree)
+    cache[material] = h.hexdigest()
+    return cache[material]
 
 
 def material_surface(material):
@@ -397,13 +504,14 @@ class RECOIL_OT_import(bpy.types.Operator, ImportHelper):
             for image in bpy.data.images:
                 if image.filepath and Path(bpy.path.abspath(image.filepath)).is_relative_to(session_path.parent):
                     image.pack()
+            signatures = {}
             for collection in created:
                 for obj in collection.objects:
                     if obj.type == "MESH":
                         obj.data["zs_signature"] = mesh_signature(obj.data)
                         for material in obj.data.materials:
                             if material:
-                                material["zs_signature"] = material_signature(material)
+                                material["zs_signature"] = material_signature(material, signatures)
                                 material["zs_surface"] = json.dumps(material_surface(material))
                                 material["zs_original_recoil"] = material.get("zs_recoil", "{}")
             root = asset_collection(data, data["root"])
@@ -475,11 +583,8 @@ class RECOIL_OT_return(bpy.types.Operator):
         current = context.scene
         context.window.scene = target
         if "zs_placement" in current:
-            for obj in list(current.objects):
-                mesh = obj.data if obj.type == "MESH" else None
-                bpy.data.objects.remove(obj, do_unlink=True)
-                if mesh and mesh.users == 0:
-                    bpy.data.meshes.remove(mesh)
+            from .placement import discard_workspace
+            discard_workspace(current)
         bpy.data.scenes.remove(current)
         return {"FINISHED"}
 
@@ -537,6 +642,19 @@ class RECOIL_OT_advanced(bpy.types.Operator):
                                ("APPEARANCE", "Object Appearance", "Alpha override, visibility and software colour")])
     value: StringProperty(name="Other values (JSON)")
 
+    @classmethod
+    def poll(cls, context):
+        if 'zs_placement' in context.scene or context.object and context.object.get('zs_zone_proxy'):
+            cls.poll_message_set("Advanced RECOIL properties require Edit Shared Model; placement workspaces edit only zones")
+            return False
+        return context.object is not None
+
+    def check_context(self, context):
+        if not self.poll(context):
+            self.report({'ERROR'}, "Advanced RECOIL properties require Edit Shared Model; placement workspaces edit only zones")
+            return False
+        return True
+
     def owner(self, context):
         obj = context.object
         if obj and obj.get("zs_reference_helper"):
@@ -547,6 +665,8 @@ class RECOIL_OT_advanced(bpy.types.Operator):
         return range(9, 16) if self.target == "MATERIAL" else [i for i in range(32) if self.target != "APPEARANCE" or not (1 << i) & 0x39]
 
     def execute(self, context):
+        if not self.check_context(context):
+            return {'CANCELLED'}
         try:
             values = json.loads(self.value)
             if not isinstance(values, dict):
@@ -567,6 +687,8 @@ class RECOIL_OT_advanced(bpy.types.Operator):
             return {"CANCELLED"}
 
     def invoke(self, context, event):
+        if not self.check_context(context):
+            return {'CANCELLED'}
         owner = self.owner(context)
         if owner is None:
             return {"CANCELLED"}
@@ -629,7 +751,7 @@ class RECOIL_PT_properties(bpy.types.Panel):
         obj = context.object
         if obj and obj.get("zs_reference_helper"):
             obj = obj.parent
-        if obj and any(c.get("zs_session") == context.scene.get("zs_session") for c in obj.users_collection) or obj and obj.get("zs_zone_proxy"):
+        if obj and (obj.get("zs_zone_proxy") or any(c.get("zs_session") == context.scene.get("zs_session") and obj.name in c.all_objects for c in bpy.data.collections)):
             layout.label(text="Shared file: " + obj.get("zs_file", context.scene["zs_active_file"]))
             if placement:
                 layout.prop(obj.recoil, "zone_kind")

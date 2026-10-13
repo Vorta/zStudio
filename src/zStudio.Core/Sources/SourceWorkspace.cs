@@ -35,8 +35,11 @@ public sealed class SourceFileChangedException(string message, IReadOnlyList<str
 /// </summary>
 public sealed class SourceWorkspace
 {
-    /// <summary>Saves several files together: each entry names the bytes the file must have now (null: absent) and its new bytes (null: delete). Equal bytes are check-only dependencies, never writes. Returns the files written.</summary>
-    public delegate IReadOnlyList<string> Saver(IReadOnlyList<(string Relative, byte[]? Expected, byte[]? Content)> writes, string description, CancellationToken token);
+    /// <summary>Saves several files together: each entry names the bytes the file must have now (null: absent) and its new bytes (null: delete).
+    /// Equal bytes are check-only dependencies, never writes. Forward validation to SourcePublisher.Publish so semantic
+    /// inputs are verified under its project lock and held through publication. Returns the files written.</summary>
+    public delegate IReadOnlyList<string> Saver(IReadOnlyList<(string Relative, byte[]? Expected, byte[]? Content)> writes, string description,
+        CancellationToken token, Func<CancellationToken, SourcePublishValidation> validation);
     private sealed record Baseline(byte[]? Bytes, FileStamp? Stamp)
     {
         // Prepared reads retain this digest when dropping the content buffer.
@@ -54,6 +57,8 @@ public sealed class SourceWorkspace
     // Geometry inspected by the shared map-aware editing services. Keep this across history/save/reload:
     // an undo or later edit must still agree with profiles another editor has since created or changed.
     private readonly HashSet<string> mapZoneGeometry = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, IReadOnlyDictionary<string, string>> mapZoneOwners = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, IReadOnlyDictionary<string, SourceMapZoneBindings.GeometrySource>> mapZoneSources = new(StringComparer.OrdinalIgnoreCase);
     private readonly List<SourceTransaction> history = [];
     /// <summary>The files each content change touched, by the <see cref="ContentRevision"/> it produced.</summary>
     private readonly List<(long Revision, string[] Files)> changeLog = [];
@@ -195,7 +200,7 @@ public sealed class SourceWorkspace
     public PreparedEdit BeginPreparedEdit()
     {
         if (IsSaving) throw new InvalidOperationException("Wait for the save to finish.");
-        var fork = new SourceWorkspace(Root, (_, _, _) => throw new InvalidOperationException("A prepared edit cannot save."), maximumRetainedBytes)
+        var fork = new SourceWorkspace(Root, (_, _, _, _) => throw new InvalidOperationException("A prepared edit cannot save."), maximumRetainedBytes)
         { preparedReads = new(StringComparer.OrdinalIgnoreCase), preparedPresence = new(StringComparer.OrdinalIgnoreCase), nextId = nextId, position = position };
         lock (gate)
         {
@@ -203,6 +208,8 @@ public sealed class SourceWorkspace
             foreach (var pair in working) fork.working.Add(pair.Key, pair.Value);
             fork.dirtyFiles.UnionWith(dirtyFiles);
             fork.mapZoneGeometry.UnionWith(mapZoneGeometry);
+            foreach (var pair in mapZoneOwners) fork.mapZoneOwners.Add(pair.Key, pair.Value);
+            foreach (var pair in mapZoneSources) fork.mapZoneSources.Add(pair.Key, pair.Value);
             fork.history.AddRange(history);
             fork.parentContent = RetainedContent().Distinct<byte[]>(ReferenceEqualityComparer.Instance).ToArray();
         }
@@ -218,6 +225,8 @@ public sealed class SourceWorkspace
         {
             foreach (var file in transaction.Files) baselines[file.Relative] = prepared.Workspace.baselines[file.Relative];
             mapZoneGeometry.UnionWith(prepared.Workspace.mapZoneGeometry);
+            foreach (var pair in prepared.Workspace.mapZoneOwners) mapZoneOwners[pair.Key] = pair.Value;
+            foreach (var pair in prepared.Workspace.mapZoneSources) mapZoneSources[pair.Key] = pair.Value;
         }
         return Commit(transaction.Label, transaction.Files);
     }
@@ -263,7 +272,7 @@ public sealed class SourceWorkspace
         // Every later check of a file starts below Root; a linked root or ancestor would let edits and saves leave the folder.
         SourceProject.RejectLinkedProject(Root);
         SourceProject.RequireCurrentFormat(Root);
-        save = saver ?? new Saver((writes, description, token) => new SourcePublisher(Root).Publish(writes.Select(w => new SourceFileWrite(w.Relative, w.Expected, w.Content)).ToArray(), description, token).Written);
+        save = saver ?? new Saver((writes, description, token, validation) => new SourcePublisher(Root).Publish(writes.Select(w => new SourceFileWrite(w.Relative, w.Expected, w.Content)).ToArray(), description, token, validation).Written);
     }
 
     /// <summary>A project-relative path with forward slashes, as builds and history key files.</summary>
@@ -455,6 +464,91 @@ public sealed class SourceWorkspace
     /// <summary>Files whose accepted content differs from the disk state the workspace last read or saved, in path order.</summary>
     public IReadOnlyList<string> DirtyFiles { get { lock (gate) return dirtyFiles.Order(StringComparer.OrdinalIgnoreCase).ToArray(); } }
     internal void TrackMapZoneGeometry(string relative) { lock (gate) mapZoneGeometry.Add(Normalize(relative)); }
+    internal byte[]? ReadMapZoneSource(string relative, bool disk, long maximum, CancellationToken token)
+    {
+        var limits = ProjectReadLimits.Model().WithMaximum(maximum);
+        return disk ? ReadDisk(relative, limits.MaximumBytes, token, limits.CheckPrefix).Bytes : Read(relative, token, limits);
+    }
+    internal byte[]? ReadMapZoneBuffer(string relative, bool disk, long maximum, CancellationToken token) => disk
+        ? ReadDisk(relative, Math.Min(maximum, Formats.FormatRegistry.MaximumDocumentBytes), token).Bytes
+        : Read(relative, token, ProjectReadLimits.Bytes(maximum));
+    internal void TrackMapZoneSources(IReadOnlyCollection<string> owners, IReadOnlyList<(string Relative, byte[] Content)> proposed, CancellationToken token)
+    {
+        var replacements = proposed.ToDictionary(p => p.Relative, p => p.Content, StringComparer.OrdinalIgnoreCase);
+        string[] assigned = owners.Where(p => replacements.TryGetValue(p, out var content)
+            && SourceMapZoneBindings.AssignmentChanges(Read(p, token, ProjectReadLimits.Model()), content, token)).ToArray();
+        var closures = SourceMapZoneBindings.SourceClosures(this, assigned, proposed, token);
+        var sources = SourceMapZoneBindings.GeometryIdentities(this, closures.Values.SelectMany(p => p), true, token, replacements);
+        Dictionary<string, IReadOnlyDictionary<string, SourceMapZoneBindings.GeometrySource>> captured = new(StringComparer.OrdinalIgnoreCase);
+        foreach (var (owner, dependencies) in closures)
+        {
+            var next = dependencies.ToDictionary(p => p, p => sources[p], StringComparer.OrdinalIgnoreCase);
+            if (IsFileDirty(owner) && mapZoneSources.TryGetValue(owner, out var expected))
+            {
+                foreach (string path in next.Keys.ToArray())
+                    if (expected.TryGetValue(path, out var previous))
+                    {
+                        var source = next[path];
+                        RequireSameGeometry(path, previous, source, allowNewBuffers: true);
+                        var buffers = new Dictionary<string, string?>(source.Buffers, StringComparer.OrdinalIgnoreCase);
+                        foreach (var buffer in previous.Buffers) buffers.TryAdd(buffer.Key, buffer.Value);
+                        next[path] = source with { Buffers = buffers };
+                    }
+                foreach (var pair in expected) next.TryAdd(pair.Key, pair.Value);
+            }
+            captured.Add(owner, next);
+        }
+        CheckZoneSourceSize(mapZoneSources.Where(p => !captured.ContainsKey(p.Key)).Concat(captured));
+        foreach (var pair in captured) mapZoneSources[pair.Key] = pair.Value;
+    }
+    private static void CheckZoneSourceSize(IEnumerable<KeyValuePair<string, IReadOnlyDictionary<string, SourceMapZoneBindings.GeometrySource>>> owners)
+    {
+        long remaining = Gltf.GltfDocument.MaximumMetadataBytes;
+        HashSet<SourceMapZoneBindings.GeometrySource> seen = new(ReferenceEqualityComparer.Instance);
+        foreach (var owner in owners)
+        {
+            Charge(96L + owner.Key.Length * 2L);
+            foreach (var (path, source) in owner.Value)
+            {
+                Charge(96L + path.Length * 2L);
+                if (!seen.Add(source)) continue;
+                Charge(96L + 64 * 2L);
+                foreach (var buffer in source.Buffers) Charge(96L + (buffer.Key.Length + 64) * 2L);
+            }
+        }
+        void Charge(long bytes)
+        {
+            if (bytes > remaining) throw new InvalidDataException("Retained map geometry dependencies exceed their metadata allowance; reopen the project before editing more source graphs.");
+            remaining -= bytes;
+        }
+    }
+    private static void RequireSameGeometry(string path, SourceMapZoneBindings.GeometrySource expected, SourceMapZoneBindings.GeometrySource current, bool allowNewBuffers = false)
+    {
+        if (expected.Identity != current.Identity || current.Buffers.Any(p => expected.Buffers.TryGetValue(p.Key, out var previous) ? previous != p.Value : !allowNewBuffers))
+            throw new SourceFileChangedException($"Geometry used by pending map assignments changed outside this edit: {JsonData.ShownText(path, 256)}. Reopen the project and redo the assignment against its current geometry.", [path]);
+    }
+    internal void TrackMapZoneOwners(IReadOnlyCollection<string> geometries, CancellationToken token)
+    {
+        var incoming = SourceMapZoneBindings.IncomingOwners(this, geometries, true, token);
+        foreach (var (geometry, owners) in incoming)
+        {
+            if (IsFileDirty(geometry) && mapZoneOwners.TryGetValue(geometry, out var expected)) RequireSameOwners(geometry, expected, owners);
+            mapZoneOwners[geometry] = owners;
+        }
+    }
+    internal void CopyMapZoneOwnersFrom(SourceWorkspace prepared, IReadOnlyCollection<string> geometries)
+    {
+        foreach (string geometry in geometries)
+        {
+            if (prepared.mapZoneOwners.TryGetValue(geometry, out var owners)) mapZoneOwners[geometry] = owners;
+            if (prepared.mapZoneSources.TryGetValue(geometry, out var sources)) mapZoneSources[geometry] = sources;
+        }
+    }
+    private static void RequireSameOwners(string geometry, IReadOnlyDictionary<string, string> expected, IReadOnlyDictionary<string, string> current)
+    {
+        if (expected.Count != current.Count || expected.Any(p => !current.TryGetValue(p.Key, out string? digest) || digest != p.Value))
+            throw new SourceFileChangedException($"Placement assignments referencing {JsonData.ShownText(geometry, 256)} changed outside this edit. Reload the project and update from Blender again before saving.", [geometry]);
+    }
     public bool IsDirty { get { lock (gate) return dirtyFiles.Count != 0; } }
     /// <summary>The accepted content of every changed file, for builds to read instead of the disk.</summary>
     public IReadOnlyDictionary<string, byte[]> Overlay()
@@ -537,10 +631,25 @@ public sealed class SourceWorkspace
         if (!CanUndo) throw new InvalidOperationException("Nothing to undo.");
         var transaction = history[position - 1];
         Guard(transaction);
-        // Builds read the overlay in place of the disk and cannot see a file go away: a created file that was saved stays.
-        if (transaction.Files.FirstOrDefault(f => f.Before == null && BaselineOf(f.Relative).Bytes != null) is { } created)
-            throw new NotSupportedException($"{created.Relative} was created by {transaction.Label} and saved since; undoing it would delete the file, which the workspace does not do. Delete it by hand.");
-        lock (gate) { foreach (var file in transaction.Files) SetWorking(file.Relative, file.Before); position--; displaced = null; }
+        // Builds cannot hide saved files. Ordinary created sources therefore still prevent undo,
+        // but an immutable content-addressed glTF buffer can remain as an unused dependency.
+        // Restoring the owning glTF restores its original buffer references without deleting it.
+        Dictionary<string, byte[]> retained = new(StringComparer.OrdinalIgnoreCase);
+        foreach (var file in transaction.Files.Where(f => f.Before == null))
+        {
+            var baseline = BaselineOf(file.Relative);
+            if (baseline.Bytes == null) continue;
+            string stem = Path.GetFileNameWithoutExtension(file.Relative);
+            bool contentAddressed = Path.GetExtension(file.Relative).Equals(".bin", StringComparison.OrdinalIgnoreCase)
+                && stem.Length > 65 && stem[^65] == '.' && stem[^64..].Equals(baseline.Sha256, StringComparison.OrdinalIgnoreCase)
+                && Same(file.After, baseline.Bytes);
+            if (!contentAddressed)
+                throw new NotSupportedException($"{file.Relative} was created by {transaction.Label} and saved since; undoing it would delete the file, which the workspace does not do. Delete it by hand.");
+            if (!Matches(file.Relative, baseline))
+                throw new SourceFileChangedException("A saved geometry buffer changed outside the workspace; reload the project before undoing.", [file.Relative]);
+            retained.Add(file.Relative, baseline.Bytes);
+        }
+        lock (gate) { foreach (var file in transaction.Files) SetWorking(file.Relative, retained.TryGetValue(file.Relative, out var bytes) ? bytes : file.Before); position--; displaced = null; }
         return Publish("undo", transaction.Label, transaction.Files.Select(f => f.Relative));
     }
     public SourceWorkspaceChange Redo()
@@ -690,7 +799,11 @@ public sealed class SourceWorkspace
         return EndSave(pending, published);
     }
     private sealed record PendingSave(IReadOnlyList<string> Dirty, (string Relative, byte[]? Expected, byte[]? Content)[] Writes,
-        string[] Geometry, string[] Profiles, PreparedEdit? Validation);
+        string[] Geometry, string[] Profiles, PreparedEdit? Validation)
+    {
+        internal Dictionary<string, IReadOnlyDictionary<string, string>>? OwnersAfter { get; set; }
+        internal Dictionary<string, IReadOnlyDictionary<string, SourceMapZoneBindings.GeometrySource>>? SourcesAfter { get; set; }
+    }
     /// <summary>Takes the dirty files and marks the workspace saving; null when nothing is dirty.</summary>
     private PendingSave? BeginSave()
     {
@@ -715,21 +828,72 @@ public sealed class SourceWorkspace
     /// <summary>Publishes a save's files and reads them back; touches no workspace state, so it may run on any thread.</summary>
     private (IReadOnlyList<string> Written, Baseline[] Saved) Write(PendingSave pending, CancellationToken token)
     {
-        using var verified = VerifyMapZonesForSave(pending, token);
-        // Existing read-only inputs are held by verification. Absent inputs also need the publisher's checks
-        // under its project lock, so another Studio save cannot create a profile between verification and locking.
-        var checks = pending.Validation?.Workspace.preparedReads!
-            .Where(p => p.Value.Stamp == null && p.Value.Sha256 == null)
-            .Select(p => (p.Key, (byte[]?)null, (byte[]?)null)).ToArray() ?? [];
-        var written = save([.. pending.Writes, .. checks], $"Save {pending.Dirty.Count} source file{(pending.Dirty.Count == 1 ? "" : "s")}", token);
+        bool validated = false;
+        var written = save(pending.Writes, $"Save {pending.Dirty.Count} source file{(pending.Dirty.Count == 1 ? "" : "s")}", token, Validate);
+        if (!validated) throw new InvalidOperationException("The source saver did not run publication validation; the workspace remains unsaved.");
         // The files are on disk now; another program may already have replaced one, so each is read back with its stamp.
         Baseline[] saved = [.. pending.Writes.Select(w => Saved(w.Relative, w.Content))];
         return (written, saved);
+
+        SourcePublishValidation Validate(CancellationToken validationToken)
+        {
+            if (validated) throw new InvalidOperationException("A source save can be validated only once.");
+            var verified = VerifyMapZonesForSave(pending, validationToken);
+            try
+            {
+                // Read-only inputs stay held; absent dependencies use the publisher's checks through commit.
+                var checks = pending.Validation?.Workspace.preparedReads!
+                    .Where(p => p.Value.Stamp == null && p.Value.Sha256 == null)
+                    .Select(p => new SourceFileWrite(p.Key, null, null)).ToArray() ?? [];
+                validated = true;
+                return new(verified, checks);
+            }
+            catch { verified?.Dispose(); throw; }
+        }
     }
     private PreparedValidation? VerifyMapZonesForSave(PendingSave pending, CancellationToken token)
     {
         if (pending.Validation is not { } validation) return null;
         var snapshot = validation.Workspace;
+        string[] sourceOwners = pending.Writes.Where(p => snapshot.mapZoneSources.ContainsKey(p.Relative)
+            && SourceMapZoneBindings.AssignmentChanges(p.Expected, p.Content, token)).Select(p => p.Relative).ToArray();
+        var closures = SourceMapZoneBindings.SourceClosures(snapshot, sourceOwners, [], token);
+        var future = pending.Writes.Where(p => p.Content != null).ToDictionary(p => p.Relative, p => p.Content!, StringComparer.OrdinalIgnoreCase);
+        var sourceNow = SourceMapZoneBindings.GeometryIdentities(snapshot, closures.Values.SelectMany(p => p), true, token, future);
+        foreach (var (owner, dependencies) in closures)
+        foreach (string path in dependencies)
+        {
+            if (!snapshot.mapZoneSources[owner].TryGetValue(path, out var expected))
+                throw new SourceFileChangedException("The pending map assignments have a new geometry dependency; replan the edit before saving.", [owner, path]);
+            RequireSameGeometry(path, expected, sourceNow[path]);
+        }
+        var sourceAfter = SourceMapZoneBindings.GeometryIdentities(snapshot, snapshot.mapZoneSources.Values.SelectMany(p => p.Keys), false, token);
+        var writtenInputs = pending.Dirty.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        Dictionary<SourceMapZoneBindings.GeometrySource, SourceMapZoneBindings.GeometrySource> refreshed = new(ReferenceEqualityComparer.Instance);
+        pending.SourcesAfter = new(StringComparer.OrdinalIgnoreCase);
+        foreach (var (owner, previousSources) in snapshot.mapZoneSources)
+        {
+            Dictionary<string, SourceMapZoneBindings.GeometrySource> next = new(StringComparer.OrdinalIgnoreCase);
+            foreach (var (path, previous) in previousSources)
+            {
+                var current = sourceAfter[path];
+                if (!writtenInputs.Contains(path) && !current.Buffers.Keys.Any(writtenInputs.Contains)) { next[path] = previous; continue; }
+                if (!refreshed.TryGetValue(previous, out var replacement))
+                {
+                    var buffers = new Dictionary<string, string?>(previous.Buffers, StringComparer.OrdinalIgnoreCase);
+                    foreach (var buffer in current.Buffers)
+                        if (writtenInputs.Contains(buffer.Key)) buffers[buffer.Key] = buffer.Value;
+                    refreshed.Add(previous, replacement = new(writtenInputs.Contains(path) ? current.Identity : previous.Identity, buffers));
+                }
+                next[path] = replacement;
+            }
+            pending.SourcesAfter.Add(owner, next);
+        }
+        CheckZoneSourceSize(pending.SourcesAfter);
+        string[] guarded = pending.Geometry.Where(snapshot.mapZoneOwners.ContainsKey).ToArray();
+        var incoming = SourceMapZoneBindings.IncomingOwners(snapshot, guarded, true, token);
+        foreach (var (geometry, owners) in incoming) RequireSameOwners(geometry, snapshot.mapZoneOwners[geometry], owners);
+        pending.OwnersAfter = SourceMapZoneBindings.IncomingOwners(snapshot, snapshot.mapZoneOwners.Keys.ToArray(), false, token);
         foreach (string profile in pending.Profiles)
         {
             // The other save order matters too: a pending zone edit must not publish assignments for geometry
@@ -760,12 +924,31 @@ public sealed class SourceWorkspace
     private IReadOnlyList<string> EndSave(PendingSave pending, (IReadOnlyList<string> Written, Baseline[] Saved) published)
     {
         lock (gate)
+        {
             for (int i = 0; i < pending.Writes.Length; i++)
             {
                 string relative = pending.Writes[i].Relative;
                 baselines[relative] = published.Saved[i];
                 SetWorking(relative, working[relative]);
             }
+            if (pending.OwnersAfter is { } snapshots)
+            {
+                var savedOwners = pending.Dirty.Select(p => p.ToUpperInvariant() + "|").ToArray();
+                foreach (var (geometry, after) in snapshots)
+                {
+                    if (pending.Geometry.Contains(geometry, StringComparer.OrdinalIgnoreCase)) { mapZoneOwners[geometry] = after; continue; }
+                    // An owner-only save acknowledges only assignments this workspace actually wrote.
+                    // Never bless another program's new/changed owner during an unrelated save.
+                    var updated = new Dictionary<string, string>(mapZoneOwners[geometry], StringComparer.OrdinalIgnoreCase);
+                    bool Written(string key) => savedOwners.Any(prefix => key.StartsWith(prefix, StringComparison.OrdinalIgnoreCase));
+                    foreach (string key in updated.Keys.Where(Written).ToArray()) updated.Remove(key);
+                    foreach (var pair in after.Where(p => Written(p.Key))) updated[pair.Key] = pair.Value;
+                    mapZoneOwners[geometry] = updated;
+                }
+            }
+            if (pending.SourcesAfter is { } identities)
+                foreach (var pair in identities) mapZoneSources[pair.Key] = pair.Value;
+        }
         Publish("save", "Save", pending.Dirty);
         return published.Written;
     }
@@ -792,7 +975,7 @@ public sealed class SourceWorkspace
     {
         if (IsSaving) throw new InvalidOperationException("Wait for the save to finish.");
         var files = DirtyFiles;
-        lock (gate) { working.Clear(); dirtyFiles.Clear(); mapZoneGeometry.Clear(); baselines.Clear(); history.Clear(); position = 0; displaced = null; }
+        lock (gate) { working.Clear(); dirtyFiles.Clear(); mapZoneGeometry.Clear(); mapZoneOwners.Clear(); mapZoneSources.Clear(); baselines.Clear(); history.Clear(); position = 0; displaced = null; }
         return Publish("discard", "Discard", files);
     }
 

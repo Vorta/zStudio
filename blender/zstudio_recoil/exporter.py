@@ -32,7 +32,7 @@ class glTF2ExportUserExtension:
     def gather_mesh_hook(self, mesh, blender_mesh, obj, vertex_groups, modifiers, materials, settings):
         if api()._exporting is not None:
             mesh.extras = {"recoil": json.loads(blender_mesh.get("zs_recoil", "{}")),
-                           "zstudio_editor_id": blender_mesh["zs_uid"] + (obj["zs_uid"] if obj and obj.modifiers else ""),
+                           "zstudio_editor_id": blender_mesh.get("zs_export_uid", blender_mesh["zs_uid"] + (obj["zs_uid"] if obj and obj.modifiers else "")),
                            "zstudio_blender": int(blender_mesh.get("zs_origin", -1)) if blender_mesh.get("zs_file") == api()._exporting["zs_path"] else -1}
 
     def gather_material_hook(self, material, blender_material, settings):
@@ -134,7 +134,7 @@ class RECOIL_OT_export(bpy.types.Operator):
         previous_object = context.object
         previous_mode = previous_object.mode if previous_object else "OBJECT"
         staging_scene = None
-        instances = []
+        staged_objects, staged_meshes = [], []
         try:
             _, data = api().session(context)
             if any(s.get("zs_session") == data["id"] and "zs_placement" in s for s in bpy.data.scenes):
@@ -147,38 +147,57 @@ class RECOIL_OT_export(bpy.types.Operator):
             scratch = Path(tempfile.mkdtemp(prefix="zstudio-blender-export-"))
             payload = {"protocol": bridge.PROTOCOL, "session": data["folder"], "models": []}
             for item in data["models"]:
-                api().bind_objects(api().asset_collection(data, item["path"]))
+                collection = api().asset_collection(data, item["path"])
+                if any(value != 0 for value in collection.instance_offset):
+                    raise ValueError("Physical source collection '" + item["path"] + "' has a nonzero instance origin. Reset its Instance Offset to zero and move its objects or reference holders instead")
+                api().bind_objects(collection)
+                api().validate_reference_displays(data, collection)
+            owned = {obj for item in data["models"] for obj in api().source_objects(api().asset_collection(data, item["path"]))}
+            for scene in bpy.data.scenes:
+                if scene.get("zs_session") == data["id"] and any(obj not in owned for obj in scene.objects):
+                    raise ValueError("Objects outside a physical source collection cannot be exported. Move them into the intended source collection")
             assignments = placement_assignments(data)
+            signatures = {}
             for item in data["models"]:
                 collection = api().asset_collection(data, item["path"])
                 api().bind_objects(collection)
                 staging_scene = bpy.data.scenes.new("RECOIL export staging")
                 context.window.scene = staging_scene
                 geometry_changed = bool(collection.get("zs_force_geometry"))
-                for obj in collection.objects:
+                copies, mesh_copies = {}, {}
+                for obj in api().source_objects(collection):
                     if obj.get("zs_reference_helper"):
                         continue
-                    if obj.instance_type == "COLLECTION":
-                        if not obj.recoil.reference:
-                            raise ValueError("A collection instance lost its RECOIL reference")
-                        from .placement import target_path
-                        if obj.instance_collection != api().asset_collection(data, target_path(data, obj)):
-                            raise ValueError("The visible collection and stored source reference disagree; restore the collection reference")
-                        instances.append(obj)
-                        obj.instance_type = "NONE"
-                    staging_scene.collection.objects.link(obj)
-                    obj.select_set(True)
+                    copied = obj.copy()
+                    staged_objects.append(copied)
+                    copies[obj] = copied
+                    copied.instance_type = "NONE"
+                    copied.hide_viewport = copied.hide_render = copied.hide_select = False
+                    staging_scene.collection.objects.link(copied)
                     if obj.type == "MESH":
                         api().ensure_face_ids(obj.data)
-                        partition_faces(assignments.get((item["path"], obj.data["zs_uid"]), []), obj.data)
+                        object_material = any(s.link == "OBJECT" for s in obj.material_slots)
+                        separate_mesh = object_material or bool(obj.modifiers)
+                        mesh_key = (obj.data, obj if separate_mesh else None)
+                        if mesh_key not in mesh_copies:
+                            mesh_copies[mesh_key] = obj.data.copy()
+                            mesh_copies[mesh_key]["zs_export_uid"] = obj.data["zs_uid"] + (obj["zs_uid"] if separate_mesh else "")
+                            staged_meshes.append(mesh_copies[mesh_key])
+                            partition_faces(assignments.get((item["path"], obj.data["zs_uid"]), []), mesh_copies[mesh_key])
+                        copied.data = mesh_copies[mesh_key]
                         geometry_changed |= api().mesh_signature(obj.data) != obj.data.get("zs_signature", "") or bool(obj.modifiers)
-                        geometry_changed |= any(m and api().material_signature(m) != m.get("zs_signature", "") for m in obj.data.materials)
+                        geometry_changed |= any(s.link == "OBJECT" or (s.material and api().material_signature(s.material, signatures) != s.material.get("zs_signature", "")) for s in obj.material_slots)
                         if obj.modifiers and obj.data.shape_keys:
                             raise ValueError("Apply modifiers explicitly before exporting a mesh with shape keys")
+                for original, copied in copies.items():
+                    if original.parent and original.parent not in copies:
+                        raise ValueError("An object is parented outside its physical source file")
+                    copied.parent = copies.get(original.parent)
+                context.view_layer.update()
                 path = bridge.contained(scratch, item["path"])
                 path.parent.mkdir(parents=True, exist_ok=True)
                 api()._exporting = collection
-                result = bpy.ops.export_scene.gltf(filepath=str(path), export_format="GLTF_SEPARATE", use_selection=True,
+                result = bpy.ops.export_scene.gltf(filepath=str(path), export_format="GLTF_SEPARATE", use_selection=False,
                     use_active_scene=True, export_extras=False, export_attributes=True, export_yup=True,
                     export_animations=False, export_skins=False, export_cameras=False, export_lights=False,
                     export_morph_normal=False, export_morph_tangent=False,
@@ -187,9 +206,12 @@ class RECOIL_OT_export(bpy.types.Operator):
                 if "FINISHED" not in result:
                     raise ValueError("Blender could not export " + item["path"])
                 annotate_polygons(path)
-                for obj in instances:
-                    obj.instance_type = "COLLECTION"
-                instances.clear()
+                for obj in staged_objects:
+                    bpy.data.objects.remove(obj, do_unlink=True)
+                staged_objects.clear()
+                for mesh in staged_meshes:
+                    bpy.data.meshes.remove(mesh)
+                staged_meshes.clear()
                 payload["models"].append(dict(path=item["path"], geometryChanged=geometry_changed))
                 context.window.scene = previous
                 bpy.data.scenes.remove(staging_scene); staging_scene = None
@@ -202,8 +224,10 @@ class RECOIL_OT_export(bpy.types.Operator):
             return {"CANCELLED"}
         finally:
             api()._exporting = None
-            for obj in instances:
-                obj.instance_type = "COLLECTION"
+            for obj in staged_objects:
+                bpy.data.objects.remove(obj, do_unlink=True)
+            for mesh in staged_meshes:
+                bpy.data.meshes.remove(mesh)
             context.window.scene = previous
             if staging_scene:
                 bpy.data.scenes.remove(staging_scene)
@@ -228,12 +252,12 @@ def placement_assignments(data):
     collections = {item["path"]: api().asset_collection(data, item["path"]) for item in data["models"]}
     for item in data["models"]:
         owner_collection = collections[item["path"]]
-        for owner in owner_collection.objects:
+        for owner in api().source_objects(owner_collection):
             for edit in json.loads(owner.get("zs_placements", "[]")):
                 target = target_path(data, owner)
                 for origin in edit["chain"]:
                     nested = collections[target]
-                    holders = [o for o in nested.objects if o.get("zs_uid") == origin]
+                    holders = [o for o in api().source_objects(nested) if o.get("zs_uid") == origin]
                     if len(holders) != 1:
                         raise ValueError("An edited reference was duplicated or removed; reopen its placement zones")
                     target = target_path(data, holders[0])

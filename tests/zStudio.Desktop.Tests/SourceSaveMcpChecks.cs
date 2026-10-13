@@ -33,7 +33,7 @@ internal static class SourceSaveMcpChecks
         bool hold = false; bool? onUiThread = null;
         // The project's saves use the real publisher; a held one stops as it starts replacing its second file, after the first
         // was replaced (past the point where cancellation is honoured).
-        main.SourceSaver = (writes, description, t) => new SourcePublisher(fixture.Project)
+        main.SourceSaver = (writes, description, t, validation) => new SourcePublisher(fixture.Project)
         {
             Fault = (step, index) =>
             {
@@ -42,7 +42,7 @@ internal static class SourceSaveMcpChecks
                 // A save on the UI thread blocks the test that would release it: fail instead of hanging.
                 if (!proceed.Wait(TimeSpan.FromSeconds(20))) throw new TimeoutException("The held save was never released.");
             },
-        }.Publish([.. writes.Select(w => new SourceFileWrite(w.Relative, w.Expected, w.Content))], description, t).Written;
+        }.Publish([.. writes.Select(w => new SourceFileWrite(w.Relative, w.Expected, w.Content))], description, t, validation).Written;
         main.Show();
         try
         {

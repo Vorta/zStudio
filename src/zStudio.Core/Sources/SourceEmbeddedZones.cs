@@ -286,21 +286,27 @@ internal sealed class SourceEmbeddedZones(SourceWorkspace workspace, Cancellatio
         foreach (string path in changed.Order(StringComparer.OrdinalIgnoreCase))
         {
             token.ThrowIfCancellationRequested(); var model = File(path);
-            byte[] json = GltfJson.Write(model.Root, model.Bytes.AsSpan(0, Math.Min(model.Bytes.Length, 4096)).Contains((byte)'\n'), token);
-            byte[] output = json;
-            if (model.Bytes.AsSpan().StartsWith("glTF"u8))
-            {
-                int originalJson = BinaryPrimitives.ReadInt32LittleEndian(model.Bytes.AsSpan(12));
-                int padded = checked((json.Length + 3) & ~3), tail = 20 + originalJson;
-                output = new byte[checked(20 + padded + model.Bytes.Length - tail)];
-                model.Bytes.AsSpan(0, 20).CopyTo(output); BinaryPrimitives.WriteInt32LittleEndian(output.AsSpan(8), output.Length);
-                BinaryPrimitives.WriteInt32LittleEndian(output.AsSpan(12), padded); output.AsSpan(20, padded).Fill((byte)' ');
-                json.CopyTo(output.AsSpan(20)); model.Bytes.AsSpan(tail).CopyTo(output.AsSpan(20 + padded));
-            }
+            byte[] output = Repack(model.Bytes, model.Root, token);
             if (!output.AsSpan().SequenceEqual(model.Bytes)) result.Add((path, output));
         }
+        workspace.TrackMapZoneSources(result.Select(c => c.Relative).ToArray(), result, token);
         return result;
     }
+    /// <summary>Replace only the JSON of a validated source container, retaining every GLB payload chunk.</summary>
+    internal static byte[] Repack(ReadOnlySpan<byte> original, JsonObject root, CancellationToken token)
+    {
+        _ = GltfDocument.ContainerJson(original, token, out _);
+        byte[] json = GltfJson.Write(root, original[..Math.Min(original.Length, 4096)].Contains((byte)'\n'), token);
+        if (!original.StartsWith("glTF"u8)) return json;
+        int originalJson = BinaryPrimitives.ReadInt32LittleEndian(original[12..]);
+        int padded = checked((json.Length + 3) & ~3), tail = 20 + originalJson;
+        byte[] output = new byte[checked(20 + padded + original.Length - tail)];
+        original[..20].CopyTo(output); BinaryPrimitives.WriteInt32LittleEndian(output.AsSpan(8), output.Length);
+        BinaryPrimitives.WriteInt32LittleEndian(output.AsSpan(12), padded); output.AsSpan(20, padded).Fill((byte)' ');
+        json.CopyTo(output.AsSpan(20)); original[tail..].CopyTo(output.AsSpan(20 + padded));
+        return output;
+    }
+
     private static JsonObject Object(JsonObject parent, string name)
     {
         if (parent[name] == null) parent[name] = new JsonObject();

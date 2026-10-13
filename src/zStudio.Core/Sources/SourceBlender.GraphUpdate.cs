@@ -53,13 +53,16 @@ public static partial class SourceBlender
         List<string> notes = [];
         // Source files outside this checkout may own placement profiles on an edited shared model.
         long inspected = 0;
+        static bool ModelPath(string path) => path.EndsWith(".gltf", StringComparison.OrdinalIgnoreCase) || path.EndsWith(".glb", StringComparison.OrdinalIgnoreCase);
         foreach (string folder in new[] { SourceProject.DataFolder, SourceProject.GameGenFolder })
-        foreach (string owner in SourceProject.Files(view.Root, folder, p => p.EndsWith(".gltf", StringComparison.OrdinalIgnoreCase), view.Overlay().Keys.ToArray(), token))
+        foreach (string owner in SourceProject.Files(view.Root, folder, ModelPath, view.Overlay().Keys.ToArray(), token))
         {
             if (roots.ContainsKey(owner) || !view.Exists(owner, token)) continue;
             byte[] bytes = view.Read(owner, token, ProjectReadLimits.Model().WithMaximum(MaximumExportBytes - inspected))!;
             inspected += bytes.Length;
-            var json = Parse(bytes, owner, token); bool changed = false;
+            var json = JsonNode.Parse(GltfDocument.ContainerJson(bytes, token, out _), documentOptions: new() { MaxDepth = 64 }) as JsonObject
+                ?? throw new InvalidDataException("A source model is not a JSON object.");
+            bool changed = false;
             foreach (var node in json["nodes"] as JsonArray ?? [])
             {
                 if (node?["extras"]?[WorldGltf.Key] is not JsonObject values || values["ref"] is not JsonValue reference || values["zoneOverrides"] is not JsonObject scope) continue;
@@ -67,7 +70,7 @@ public static partial class SourceBlender
                 RemapExternal(scope, WorldAssembler.Relative(owner, reference.GetValue<string>()), 0);
                 changed |= !JsonNode.DeepEquals(beforeScope, scope);
             }
-            if (changed) { changes[owner] = GltfJson.Write(json, true, token); notes.Add("Preserved placement assignments in " + JsonData.ShownText(owner, 512)); }
+            if (changed) { changes[owner] = SourceEmbeddedZones.Repack(bytes, json, token); notes.Add("Preserved placement assignments in " + JsonData.ShownText(owner, 512)); }
         }
         void RemapExternal(JsonObject scope, string target, int depth)
         {
@@ -81,7 +84,8 @@ public static partial class SourceBlender
             if (scope["references"] is not JsonObject nested) return;
             var bytes = view.Read(target, token, ProjectReadLimits.Model().WithMaximum(MaximumExportBytes - inspected)) ?? throw new InvalidDataException("A placement reference is missing.");
             inspected += bytes.Length;
-            var json = Parse(bytes, target, token);
+            var json = JsonNode.Parse(GltfDocument.ContainerJson(bytes, token, out _), documentOptions: new() { MaxDepth = 64 }) as JsonObject
+                ?? throw new InvalidDataException("A placement model is not a JSON object.");
             foreach (var (key, value) in nested)
             {
                 if (!int.TryParse(key, CultureInfo.InvariantCulture, out int index) || json["nodes"] is not JsonArray nodes || index < 0 || index >= nodes.Count || value is not JsonObject child)
@@ -99,7 +103,18 @@ public static partial class SourceBlender
             view.CheckEditable(path); string hash = SourceProject.Sha256(changes[path]); string? current = hashes[path];
             if (current == hash) { changes.Remove(path); continue; }
             expected[path] = current;
-            if (exported.Files.ContainsKey(path) && (accepted.TryGetValue(path, out var states) ? current == null || !states.Contains(current) : current != null)) conflicts.Add(path);
+            if (exported.Files.ContainsKey(path))
+            {
+                bool known = accepted.TryGetValue(path, out var states);
+                // Undo before Save removes newly created buffers from the overlay. Their original
+                // state was absence, so restoring this exact previously accepted immutable payload
+                // is safe. Missing original sources and changed existing content still conflict.
+                string suffix = "." + hash + ".bin";
+                bool restoredBuffer = current == null && !original.Files.ContainsKey(path) && known && states!.Contains(hash)
+                    && Path.GetFileName(path).Length > suffix.Length && path.EndsWith(suffix, StringComparison.OrdinalIgnoreCase);
+                bool conflict = current == null ? known && !restoredBuffer : !known || !states!.Contains(current);
+                if (conflict) conflicts.Add(path);
+            }
         }
         List<TextureShadow> shadows = [];
         foreach (string model in original.Models.Keys)
@@ -121,7 +136,7 @@ public static partial class SourceBlender
         }
         foreach (string model in original.Models.Keys.Where(changes.ContainsKey)) notes.Add("Shared source updated: " + JsonData.ShownText(model, 512));
         var proposed = changes.Select(p => (Relative: p.Key, Content: p.Value)).ToArray();
-        var changedModels = changes.Keys.Where(p => p.EndsWith(".gltf", StringComparison.OrdinalIgnoreCase)).ToArray();
+        var changedModels = changes.Keys.Where(ModelPath).ToArray();
         if (changedModels.Length > 0)
             SourceDeclientEdits.ValidateModels(view, changedModels, new("Update Blender graph", proposed, checkout.Model, notes), new(view, token), "Blender graph update", token);
         using CopyFiles written = new();
@@ -130,7 +145,17 @@ public static partial class SourceBlender
         written.Write(Path.Combine(sealedFolder, GraphManifest), receiptBytes);
         var planned = proposed;
         _ = AppliedManifest(checkout, planned);
+        view.TrackMapZoneOwners(changedModels, token);
+        view.TrackMapZoneSources(changedModels, proposed, token);
         if (prepared != null) workspace.ValidatePreparedEdit(prepared, token);
+        // Save must rediscover placement owners added after planning, also after Undo/Redo.
+        // Prepared callers transfer this tracking on acceptance; standalone callers retain it here.
+        foreach (string model in changedModels)
+        {
+            view.TrackMapZoneGeometry(model);
+            if (prepared != null) workspace.TrackMapZoneGeometry(model);
+        }
+        if (prepared != null) workspace.CopyMapZoneOwnersFrom(view, changedModels);
         written.Keep();
         return new("Update RECOIL graph from Blender", planned, notes, sealedFolder) { Expected = expected };
     }
