@@ -57,9 +57,14 @@ internal static class PresentationMcpChecks
             await main.ViewModel.OpenRootAsync(folder, token);
             var world = (await main.ViewModel.OpenFileAsync(worldPath, token))!;
             await Preview();
+            // A raw model preview intentionally has no placement identity. Zone painting needs
+            // the fixture's actual scene node, just as it does in a Whole world preview.
+            world.SelectedAsset = world.Assets.First(a => a.Record.Kind == Recoil.Zbd.Core.AssetKind.Node);
+            await Preview();
             var viewport = Assert.IsType<SceneViewport>(((ContentControl)main.FindName("SceneHost")).Content);
             State(await Present(), false, false, true);
             await CameraSettled(viewport);
+            PresentationRendererChecks.CheckSurfaceStrokes(viewport);
             var view = viewport.CaptureView();
             string layout = JsonSerializer.Serialize(main.ViewModel.Settings.GetWorkspace());
             var hwnd = new WindowInteropHelper(main).Handle;

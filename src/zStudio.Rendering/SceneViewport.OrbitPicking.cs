@@ -57,9 +57,13 @@ public sealed partial class SceneViewport
 
     /// <summary>Current-camera ray, available before rendering and over empty space.</summary>
     internal bool TryNavigationRay(Point point, out Point3D origin, out Vector3D direction)
+        => TryCameraRay(point, out origin, out direction, true);
+
+    private bool TryCameraRay(Point point, out Point3D origin, out Vector3D direction, bool requireInside)
     {
         origin = default; direction = default;
-        if (!IsNavigationPointInside(point) || viewport.Camera is not ProjectionCamera camera) return false;
+        if (!double.IsFinite(point.X) || !double.IsFinite(point.Y) || viewport.ActualWidth <= 0 || viewport.ActualHeight <= 0 ||
+            requireInside && !IsNavigationPointInside(point) || viewport.Camera is not ProjectionCamera camera) return false;
         // FindHits/UnProject uses the previous render context's camera matrices.
         // Use the current pose without forcing a render or controller tick.
         var projection = camera.CreateProjectionMatrix(Aspect);

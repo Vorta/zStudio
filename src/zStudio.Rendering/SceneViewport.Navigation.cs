@@ -15,6 +15,8 @@ public sealed partial class SceneViewport
     private NavigationGesture navigationGesture;
     private Vector navigationVelocity;
     private Point? zoomScreenPoint;
+    private Point? zoomRayCoordinates;
+    private bool applyingZoomInertia;
     private Point? pendingOrbitPoint;
     private Window? navigationWindow;
     private double Aspect => Math.Max(1, viewport.ActualWidth) / Math.Max(1, viewport.ActualHeight);
@@ -116,8 +118,18 @@ public sealed partial class SceneViewport
         if (!BeginManualNavigation() || !viewport.IsZoomEnabled || viewport.Camera is not ProjectionCamera camera) return;
         steps = Math.Clamp(steps, -100, 100);
         if (steps == 0 || !double.IsFinite(steps)) return;
-        zoomScreenPoint = ClampNavigationPoint(screenPoint ?? new Point(viewport.ActualWidth / 2, viewport.ActualHeight / 2));
-        bool hasRay = TryNavigationRay(zoomScreenPoint.Value, out var rayOrigin, out var rayDirection);
+        var projection = camera.CreateProjectionMatrix(Aspect);
+        double rayScale = camera is OrthographicCamera orthographicRay ? orthographicRay.Width : 1;
+        bool retainRay = applyingZoomInertia && zoomRayCoordinates != null;
+        zoomScreenPoint = retainRay && zoomRayCoordinates is { } anchor
+            ? new((anchor.X * rayScale * projection.M11 + 1) * viewport.ActualWidth / 2, (1 - anchor.Y * rayScale * projection.M22) * viewport.ActualHeight / 2)
+            : ClampNavigationPoint(screenPoint ?? new Point(viewport.ActualWidth / 2, viewport.ActualHeight / 2));
+        // Inertia retains its camera-relative ray through a presentation resize, even if that
+        // ray moves beyond a narrower viewport. New input still uses ordinary bounded points.
+        bool hasRay = TryCameraRay(zoomScreenPoint.Value, out var rayOrigin, out var rayDirection, !retainRay);
+        if (hasRay && !retainRay)
+            zoomRayCoordinates = new((2 * zoomScreenPoint.Value.X / viewport.ActualWidth - 1) / projection.M11 / rayScale,
+                (1 - 2 * zoomScreenPoint.Value.Y / viewport.ActualHeight) / projection.M22 / rayScale);
         double factor = Math.Exp(-steps * .12);
         if (camera is OrthographicCamera orthographic)
         {
@@ -177,7 +189,9 @@ public sealed partial class SceneViewport
     private void AdvanceNavigationInertia(double seconds)
     {
         if (rotationPoint != null || !viewport.IsInertiaEnabled || navigationVelocity.LengthSquared <= 1) return;
-        ApplyNavigationDelta(navigationGesture, navigationVelocity * seconds);
+        applyingZoomInertia = navigationGesture == NavigationGesture.Zoom;
+        try { ApplyNavigationDelta(navigationGesture, navigationVelocity * seconds); }
+        finally { applyingZoomInertia = false; }
         // CameraChanged is deliberately suppressed during frame preparation.
         // Refresh camera-dependent horizons/billboards for inertial motion too.
         cameraPoseDirty = true;
@@ -188,6 +202,7 @@ public sealed partial class SceneViewport
     {
         if (gesture == NavigationGesture.None || !BeginManualNavigation()) return;
         StopNavigationMotion(); navigationGesture = gesture;
+        navigationPresentationRebase = false;
         pendingOrbitPoint = gesture == NavigationGesture.Orbit ? position : null;
         if (gesture == NavigationGesture.Zoom) zoomScreenPoint = position;
         rotationPoint = position; rotationInputTick = Stopwatch.GetTimestamp();
@@ -195,6 +210,7 @@ public sealed partial class SceneViewport
     internal void UpdateNavigationModifiers(ModifierKeys modifiers, Point position)
     {
         if (rotationPoint == null) return;
+        if (navigationPresentationRebase && IsNavigationPointInside(position)) RebaseNavigationAnchor(position);
         var gesture = Gesture(MouseButton.Middle, modifiers);
         if (gesture == navigationGesture) return;
         navigationGesture = gesture;
@@ -212,6 +228,15 @@ public sealed partial class SceneViewport
     }
     internal void MoveNavigationDrag(Point current, ModifierKeys? modifiers = null)
     {
+        // Fullscreen/chrome layout changes move the viewport under a stationary pointer.
+        // Keep the active gesture and already chosen world pivot, but measure further motion
+        // from the first usable position in the new viewport instead of the old local origin.
+        if (navigationPresentationRebase)
+        {
+            if (IsNavigationPointInside(current)) RebaseNavigationAnchor(current);
+            if (modifiers is { } newHeld) UpdateNavigationModifiers(newHeld, current);
+            return;
+        }
         if (modifiers is { } held) UpdateNavigationModifiers(held, current);
         if (rotationPoint is not { } previous) return;
         var delta = current - previous;
@@ -226,14 +251,25 @@ public sealed partial class SceneViewport
         if (navigationGesture == NavigationGesture.Orbit) rotationVelocity = delta / seconds;
         else if (navigationGesture != NavigationGesture.None) navigationVelocity = delta / seconds;
     }
+    private void RebaseNavigationAnchor(Point position)
+    {
+        navigationPresentationRebase = false;
+        // Rebasing is not movement: keep the last real input time so releasing after
+        // an idle/layout interval cannot revive stale inertia.
+        rotationPoint = position;
+        if (pendingOrbitPoint != null) pendingOrbitPoint = position;
+        if (navigationGesture == NavigationGesture.Zoom) zoomScreenPoint = ClampNavigationPoint(position);
+    }
     internal void EndNavigationDrag()
     {
         if (Stopwatch.GetElapsedTime(rotationInputTick).TotalSeconds > .15 || !viewport.IsInertiaEnabled)
         { rotationVelocity = default; navigationVelocity = default; }
+        navigationPresentationRebase = false;
         rotationPoint = null; pendingOrbitPoint = null; viewport.InvalidateRender();
     }
     public void CancelNavigation()
     {
+        navigationPresentationRebase = false;
         rotationVelocity = default; navigationVelocity = default; rotationPoint = null;
         zoomScreenPoint = null; pendingOrbitPoint = null;
         if (viewport.IsMouseCaptured && !IsPickupDragging && !IsFlyActive) viewport.ReleaseMouseCapture();

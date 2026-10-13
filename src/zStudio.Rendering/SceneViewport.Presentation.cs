@@ -35,7 +35,8 @@ public sealed partial class SceneViewport
     private void PresentationGuide(Element3D guide) => BindingOperations.SetBinding(guide, Element3D.IsRenderingProperty,
         new Binding(nameof(PresentationGuidesVisible)) { Source = this, Mode = BindingMode.OneWay });
 
-    private bool aiPresentationRebase, parachutePresentationRebase, pickupPresentationRebase;
+    private bool aiPresentationRebase, parachutePresentationRebase, pickupPresentationRebase, navigationPresentationRebase;
+    private bool brushPresentationSuspended, zonePresentationSuspended, aiBoxPresentationRebase;
     private Vector aiPointerDelta;
     private Vector parachutePointerOffset;
     private bool pickupPresentationConstraint;
@@ -46,6 +47,10 @@ public sealed partial class SceneViewport
         aiPresentationRebase = IsAiPathPointerTransform;
         parachutePresentationRebase = IsParachutePointerMoving;
         pickupPresentationRebase = IsPickupDragging;
+        navigationPresentationRebase = rotationPoint != null;
+        brushPresentationSuspended = IsTerrainStroking;
+        zonePresentationSuspended = IsZonePainting;
+        aiBoxPresentationRebase = aiPathBoxStart != null;
     }
 
     private bool RebasePickupPointer(Point point)

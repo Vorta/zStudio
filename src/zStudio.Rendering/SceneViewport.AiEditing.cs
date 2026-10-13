@@ -14,6 +14,7 @@ public sealed partial class SceneViewport
     private readonly HashSet<string> aiPathNetworkNodes = [];
     private readonly Dictionary<string, Vector3> aiPathPreview = [];
     private Point? aiPathBoxStart, aiPathPointerStart;
+    private Point? aiPathBoxLast, aiPathBoxScreenStart;
     private string aiPathBoxMode = "replace";
     private Rectangle? aiPathBox;
     private Vector3 aiPathPointerRight, aiPathPointerUp;
@@ -152,7 +153,8 @@ public sealed partial class SceneViewport
             SetAiPathSelection([id], mode);
         else
         {
-            CancelNavigation(); aiPathBoxStart = point; aiPathBoxMode = mode;
+            CancelNavigation(); aiPathBoxStart = aiPathBoxLast = point; aiBoxPresentationRebase = false; aiPathBoxMode = mode;
+            aiPathBoxScreenStart = PresentationSource.FromVisual(viewport) == null ? null : viewport.PointToScreen(point);
             aiPathBox ??= new() { Stroke = Brushes.Gold, StrokeThickness = 1, Fill = new SolidColorBrush(Color.FromArgb(28, 255, 215, 0)),
                 HorizontalAlignment = HorizontalAlignment.Left, VerticalAlignment = VerticalAlignment.Top, IsHitTestVisible = false };
             if (!presentationOverlays.Children.Contains(aiPathBox)) presentationOverlays.Children.Add(aiPathBox);
@@ -175,6 +177,8 @@ public sealed partial class SceneViewport
             return true;
         }
         if (aiPathBoxStart is not { } start || aiPathBox == null) return false;
+        RebaseAiPathBox(point);
+        start = aiPathBoxStart!.Value; aiPathBoxLast = point;
         var rectangle = AiPathRectangle(start, point);
         aiPathBox.Margin = new(rectangle.X, rectangle.Y, 0, 0); aiPathBox.Width = rectangle.Width; aiPathBox.Height = rectangle.Height; return true;
     }
@@ -188,14 +192,34 @@ public sealed partial class SceneViewport
     private bool HandleAiPathUp(Point point, MouseButtonEventArgs e)
     {
         if (aiPathBoxStart is not { } start || e.ChangedButton != MouseButton.Left) return false;
+        RebaseAiPathBox(point); start = aiPathBoxStart!.Value;
         var rectangle = AiPathRectangle(start, point); string mode = aiPathBoxMode; CancelAiPathBox();
         SelectAiPathBox(rectangle, mode); return true;
+    }
+
+    private void RebaseAiPathBox(Point point)
+    {
+        if (aiPathBoxStart is not { } start) return;
+        // The first post-layout event may already contain real movement, or may be the
+        // release itself. Retain the physical press point rather than inferring its shift
+        // from the latest pointer delta; PointFromScreen also handles a DPI transition.
+        if (aiPathBoxScreenStart is { } screen && PresentationSource.FromVisual(viewport) != null)
+        {
+            aiPathBoxStart = viewport.PointFromScreen(screen);
+            aiBoxPresentationRebase = false; aiPathBoxLast = point; return;
+        }
+        if (!aiBoxPresentationRebase) return;
+        aiBoxPresentationRebase = false;
+        // The last endpoint and the start move together when the viewport's local origin
+        // changes. The physical selection rectangle must not grow across that layout shift.
+        aiPathBoxStart = start + (point - (aiPathBoxLast ?? start));
+        aiPathBoxLast = point;
     }
 
     public bool CancelAiPathBox()
     {
         if (aiPathBoxStart == null) return false;
-        aiPathBoxStart = null;
+        aiPathBoxStart = aiPathBoxLast = aiPathBoxScreenStart = null; aiBoxPresentationRebase = false;
         if (aiPathBox != null) aiPathBox.Visibility = Visibility.Collapsed;
         if (viewport.IsMouseCaptured) viewport.ReleaseMouseCapture();
         return true;

@@ -24,6 +24,54 @@ internal static class PresentationRendererChecks
         Layout(900, 600);
         scene.RestoreView(new(new(0, 0, 100), new(0, 0, -100), new(0, 1, 0), 60));
         var pose = scene.CaptureView();
+        foreach (var (gesture, modifiers) in new[]
+        {
+            (SceneViewport.NavigationGesture.Orbit, ModifierKeys.None),
+            (SceneViewport.NavigationGesture.Pan, ModifierKeys.Shift),
+            (SceneViewport.NavigationGesture.Zoom, ModifierKeys.Control),
+            (SceneViewport.NavigationGesture.Dolly, ModifierKeys.Control | ModifierKeys.Shift)
+        })
+        {
+            scene.RestoreView(pose);
+            scene.BeginNavigationDrag(gesture, new(150, 150));
+            scene.MoveNavigationDrag(new(155, 155), modifiers);
+            var moved = scene.CaptureView();
+            scene.SetPresentationUiHidden(true); Layout(1100, 700);
+            scene.MoveNavigationDrag(new(1500, 900), modifiers);
+            Assert.Equal(moved, scene.CaptureView());
+            scene.MoveNavigationDrag(new(350, 250), modifiers); // Same physical point after the viewport origin moved.
+            Assert.Equal(moved, scene.CaptureView());
+            scene.MoveNavigationDrag(new(353, 254), modifiers);
+            Assert.NotEqual(moved, scene.CaptureView());
+            scene.SetPresentationUiHidden(false); Layout(900, 600);
+            var restored = scene.CaptureView();
+            scene.NavigationModifierKey(Key.LeftShift, ModifierKeys.Shift, new(153, 154));
+            Assert.Equal(restored, scene.CaptureView());
+            scene.MoveNavigationDrag(new(153, 154), ModifierKeys.Shift);
+            Assert.Equal(restored, scene.CaptureView());
+            scene.MoveNavigationDrag(new(155, 156), ModifierKeys.Shift);
+            Assert.NotEqual(restored, scene.CaptureView());
+            scene.CancelNavigation();
+        }
+        scene.RestoreView(pose);
+        foreach (string projection in new[] { "perspective", "orthographic" })
+        {
+            var startingPose = projection == "orthographic" ? pose with { Projection = projection, OrthographicWidth = 100 } : pose;
+            SceneViewport.ViewPose Inertia(bool resize)
+            {
+                scene.CancelNavigation(); scene.SetPresentationUiHidden(false); Layout(900, 600); scene.RestoreView(startingPose);
+                scene.ZoomBy(1, new(150, 100));
+                Set("navigationGesture", SceneViewport.NavigationGesture.Zoom); Set("navigationVelocity", new Vector(0, 80));
+                if (resize) { scene.SetPresentationUiHidden(true); Layout(1200, 250); }
+                Call("AdvanceNavigationInertia", .02);
+                return scene.CaptureView();
+            }
+            var baseline = Inertia(false); var resized = Inertia(true);
+            Assert.True((baseline.Position - resized.Position).Length < 1e-7);
+            Assert.True((baseline.LookDirection - resized.LookDirection).Length < 1e-7);
+            Assert.Equal(baseline.OrthographicWidth, resized.OrthographicWidth);
+        }
+        scene.CancelNavigation(); scene.SetPresentationUiHidden(false); Layout(900, 600); scene.RestoreView(pose);
         AiNode node = new("presentation-node", 0, 0, Vector3.Zero, 0, []);
         scene.SetAiNetworks(new("presentation", [new("network", "fixture", 0, "net_01.zrd", "path", "standard", 0, [node], [])]));
         scene.SetAiOptions(true, true, null);
@@ -55,6 +103,13 @@ internal static class PresentationRendererChecks
         Call("HandleAiPathMove", new Point(803, 598));
         Assert.Equal(new Vector3(13, -3, 0), moves[^1].Move);
         scene.SetAiPathPointerTransform(false);
+        var marquee = new System.Windows.Shapes.Rectangle();
+        Set("aiPathBox", marquee); Set("aiPathBoxStart", new Point(100, 100)); Set("aiPathBoxLast", new Point(200, 200));
+        Call("RebasePresentationPointers");
+        Call("HandleAiPathMove", new Point(400, 300));
+        Assert.Equal(new Thickness(300, 200, 0, 0), marquee.Margin);
+        Assert.Equal(100, marquee.Width); Assert.Equal(100, marquee.Height);
+        scene.CancelAiPathBox();
         Set("aiPathBoxStart", new Point(100, 100));
         scene.SetPresentationUiHidden(true);
         Assert.NotNull(typeof(SceneViewport).GetField("aiPathBoxStart", Private)!.GetValue(scene));
@@ -115,5 +170,54 @@ internal static class PresentationRendererChecks
         void Set(string name, object value) => typeof(SceneViewport).GetField(name, Private)!.SetValue(scene, value);
         object? Call(string name, params object[] values) => typeof(SceneViewport).GetMethod(name, Private)!.Invoke(scene, values);
         void Layout(double width, double height) { scene.Measure(new(width, height)); scene.Arrange(new(0, 0, width, height)); scene.UpdateLayout(); }
+    }
+
+    internal static void CheckSurfaceStrokes(SceneViewport scene)
+    {
+        var surface = (Viewport3DX)scene.RenderSurface;
+        // Interior points of the existing ModelFixture triangle, tested against the actual rendered surface.
+        Point first = surface.Project(new Point3D(0, .4, .02)), next = surface.Project(new Point3D(0, 1.4, .07));
+        Assert.True(scene.TryNavigationSurface(first, out var firstHit));
+        Assert.True(scene.TryNavigationSurface(next, out _));
+        var zoneHit = Assert.IsType<SceneInspection>(scene.ProbeInspection(next));
+        Assert.True(zoneHit.Active); Assert.True(zoneHit.Node >= 0);
+        Assert.Null(zoneHit.RuntimeInstance); Assert.NotNull(zoneHit.Polygon);
+        var position = new Vector3((float)firstHit.X, (float)firstHit.Y, (float)firstHit.Z);
+        float radius = scene.TerrainBrushRadius; scene.TerrainBrushRadius = .1f;
+        int brushCompletions = 0, zoneCompletions = 0;
+        scene.TerrainStrokeCompleted += BrushCompleted; scene.ZoneStrokeCompleted += ZoneCompleted;
+        try
+        {
+            var ordinary = new List<Vector3> { position }; Set("brushStroke", ordinary);
+            scene.HandleTerrainBrushMove(next); Assert.Equal(2, ordinary.Count); scene.CancelTerrainStroke();
+            var retained = new List<Vector3> { position }; Set("brushStroke", retained);
+            Call("RebasePresentationPointers"); Call("RebasePresentationPointers");
+            scene.HandleTerrainBrushMove(next); scene.HandleTerrainBrushMove(first);
+            Assert.Single(retained); Assert.Equal(0, brushCompletions);
+            Assert.True(scene.HandleTerrainBrushUp(Release())); Assert.Equal(1, brushCompletions);
+            Assert.False(scene.HandleTerrainBrushUp(Release())); Assert.Equal(1, brushCompletions);
+            ordinary = [position]; Set("brushStroke", ordinary);
+            scene.HandleTerrainBrushMove(next); Assert.Equal(2, ordinary.Count); scene.CancelTerrainStroke();
+
+            HashSet<ZonePaintTarget> normalTargets = []; Set("zoneGesture", normalTargets);
+            Call("HandleZoneMove", next); Assert.Equal(new(zoneHit.Node, zoneHit.Polygon), Assert.Single(normalTargets)); scene.CancelZoneGesture();
+            HashSet<ZonePaintTarget> frozenTargets = []; Set("zoneGesture", frozenTargets);
+            Call("RebasePresentationPointers"); Call("RebasePresentationPointers");
+            Call("HandleZoneMove", next); Assert.Empty(frozenTargets); Assert.Equal(0, zoneCompletions);
+            Assert.True((bool)Call("HandleZoneUp", Release())!); Assert.Equal(1, zoneCompletions);
+            Assert.False((bool)Call("HandleZoneUp", Release())!); Assert.Equal(1, zoneCompletions);
+            normalTargets = []; Set("zoneGesture", normalTargets);
+            Call("HandleZoneMove", next); Assert.Single(normalTargets);
+        }
+        finally
+        {
+            scene.CancelTerrainStroke(); scene.CancelZoneGesture(); scene.TerrainBrushRadius = radius;
+            scene.TerrainStrokeCompleted -= BrushCompleted; scene.ZoneStrokeCompleted -= ZoneCompleted;
+        }
+        void BrushCompleted(IReadOnlyList<Vector3> points) { brushCompletions++; Assert.Single(points); Assert.Equal(position, points[0]); }
+        void ZoneCompleted(IReadOnlyList<ZonePaintTarget> targets) { zoneCompletions++; Assert.Empty(targets); }
+        void Set(string name, object value) => typeof(SceneViewport).GetField(name, Private)!.SetValue(scene, value);
+        object? Call(string name, params object[] values) => typeof(SceneViewport).GetMethod(name, Private)!.Invoke(scene, values);
+        static MouseButtonEventArgs Release() => new(Mouse.PrimaryDevice, 0, MouseButton.Left);
     }
 }
