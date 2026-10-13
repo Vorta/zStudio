@@ -39,13 +39,15 @@ public static partial class WorldGltf
         {
             if (nodes[i] is not JsonObject node || Mark(((node["extras"] as JsonObject)?[Key] as JsonObject)?["instance"]) is not { } mark) continue;
             if (!shared.TryGetValue(mark, out var first)) { shared[mark] = zones[i].Zone; continue; }
-            if (first is { } zone && zones[i].Zone != zone && StatedZone((node["extras"] as JsonObject)?[Key]) == null && Engine(node) is { } copy) { copy["zone"] = (int)zone; stated = true; }
+            if (first is { } zone && zones[i].Zone != zone && StatedZone((node["extras"] as JsonObject)?[Key]) == null && Engine(node) is { } copy)
+            { copy["zone"] = (int)zone; copy.Remove("zoneInherited"); stated = true; }
         }
         if (stated) zones = FileZones(nodes, parents);
         for (int i = 0; i < nodes.Count; i++)
         {
             if (nodes[i] is not JsonObject node || StatedZone((node["extras"] as JsonObject)?[Key]) != null || Engine(node) is not { } engine) continue;
-            if (zones[i].Zone is { } zone) engine["zone"] = (int)zone; else engine[ZoneFromLoad] = true;
+            if (zones[i].Zone is { } zone) { engine["zone"] = (int)zone; engine.Remove("zoneInherited"); }
+            else engine[ZoneFromLoad] = true;
         }
     }
 
@@ -70,7 +72,8 @@ public static partial class WorldGltf
             bool marked = engine.Remove(ZoneFromLoad);
             if (StatedZone(engine) is { } own)
             {
-                if (own == passed && engine["zone"] != null && engine["zoneWord"] == null) engine.Remove("zone");
+                if (own == passed && engine["zone"] != null && engine["zoneWord"] == null && engine["zonePadding"] == null)
+                { engine.Remove("zone"); engine.Remove("zoneInherited"); }
             }
             else if (marked && passed is { } zone && !marks[owner])
                 throw new InvalidDataException($"{path}: {JsonData.ShownText(EngineName(node))} took its zone from what loads the file; under {JsonData.ShownText(EngineName((JsonObject)nodes[parents[i]]!))} it would take zone {zone} instead. Give it a zone of its own (custom property recoil → zone, 255 for any zone) or move it back.");

@@ -124,7 +124,7 @@ public sealed class SourceObjectStructureTests
         Assert.DoesNotContain(plan.Changes, change => change.Relative == c);
         Apply(workspace, plan);
         var middleJson = JsonNode.Parse(workspace.Read(b, Token)!)!.AsObject();
-        middleJson["nodes"]![1]!["extras"]![WorldGltf.Key]!["zoneOverrides"]!["nodes"]![0]!["word"] = "0x00000009";
+        middleJson["nodes"]![1]!["extras"]![WorldGltf.Key]!["zoneOverrides"]!["nodes"]![0]!["zone"] = 9;
         workspace.Apply("Change inherited assignment", [(b, GltfJson.Write(middleJson, false, Token))], Token);
         Assert.Equal(9u, new SourceEmbeddedZones(workspace, Token).Resolve(c, [0, 1], a).Profile.Nodes[0].Word);
 
@@ -171,7 +171,7 @@ public sealed class SourceObjectStructureTests
                 node["extras"] ??= new JsonObject(); node["extras"]![WorldGltf.Key] ??= new JsonObject();
                 node["extras"]![WorldGltf.Key]!["zone"] = name == "sgate1" ? 20 : 60;
             }
-            else { fields?.Remove("zone"); fields?.Remove("zoneWord"); }
+            else { fields?.Remove("zone"); fields?.Remove("zoneWord"); fields?.Remove("zonePadding"); }
         }
         byte[] bytes = Recoil.Zbd.Core.Gltf.GltfJson.Write(json, false, Token);
         var document = WorldAssembler.ReadModel(bytes, database, (path, _) => File.ReadAllBytes(fixture.Path(path)), Token);
@@ -1032,7 +1032,7 @@ public sealed class SourceObjectStructureTests
         var root = JsonNode.Parse("""
             { "scene": 0, "scenes": [ { "nodes": [0, 2, 4] } ], "nodes": [
               { "name": "g", "children": [1], "extras": { "recoil": { "zone": 0 } } },
-              { "name": "o", "children": [3] },
+              { "name": "o", "children": [3], "extras": { "recoil": { "zone": 9, "zoneInherited": true, "zonePadding": [18, 52, 86] } } },
               { "name": "r", "extras": { "recoil": { "zone": 3 } } },
               { "name": "c" },
               { "name": "w" },
@@ -1043,6 +1043,12 @@ public sealed class SourceObjectStructureTests
         // To the top it would take the database's 0xFF: it keeps zone 0, and so does its child.
         GltfNodeEdits.Reparent(root, 1, null, token: Token);
         Assert.Equal(0, Zone(1)); Assert.Null(Zone(3));
+        Assert.Null(root["nodes"]![1]!["extras"]!["recoil"]!["zoneInherited"]);
+        Assert.Equal(0x56341200u, WorldGltf.ReadNodeZoneValue(root["nodes"]![1]!["extras"]!["recoil"], 255, "test"));
+        // A later move must treat the materialized zone as explicit, while retaining its opaque bytes.
+        GltfNodeEdits.Reparent(root, 1, 2, token: Token);
+        Assert.Equal(0, Zone(1));
+        Assert.Equal(0x56341200u, WorldGltf.ReadNodeZoneValue(root["nodes"]![1]!["extras"]!["recoil"], 255, "test"));
         // A root that took its zone from outside the file keeps the built one under a node with another zone.
         GltfNodeEdits.Reparent(root, 4, 2, 0xFF, Token);
         Assert.Equal(0xFF, Zone(4));

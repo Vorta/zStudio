@@ -121,7 +121,12 @@ internal sealed class SourceEmbeddedZones(SourceWorkspace workspace, Cancellatio
         {
             long targets = (assigned["nodes"] as JsonArray)?.Count ?? 0;
             if (assigned["meshes"] is JsonArray meshes)
-                foreach (var mesh in meshes) { token.ThrowIfCancellationRequested(); targets += (mesh as JsonArray)?.Count ?? 0; }
+                foreach (var mesh in meshes)
+                {
+                    token.ThrowIfCancellationRequested();
+                    targets += mesh is JsonObject values ? (values["polygonZones"] as JsonArray)?.Count ?? 0
+                        : (mesh as JsonArray)?.Count ?? 0;
+                }
             ReserveProfile(targets);
             overrides.Add(assigned, profile = WorldGltf.ReadZoneOverride(assigned, token));
         }

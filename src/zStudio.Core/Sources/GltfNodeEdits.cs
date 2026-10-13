@@ -435,7 +435,7 @@ public static class GltfNodeEdits
             // From outside the file, the zone is the built node's; without one (copies that differ), it cannot be kept.
             var extras = preparedExtras = (JsonObject?)(moved["extras"] as JsonObject)?.DeepClone() ?? new();
             if (extras[WorldGltf.Key] is not JsonObject engine) extras[WorldGltf.Key] = engine = new JsonObject();
-            engine["zone"] = (int)(keep & 0xFF);
+            SetExplicitZone(engine, keep);
         }
         hierarchy.Check();
         hierarchy.Invalidate();
@@ -509,6 +509,13 @@ public static class GltfNodeEdits
 
     /// <summary>The zone a node states (its zone, or its zone word's low byte), which its children inherit.</summary>
     private static uint? OwnZone(JsonObject node) => WorldGltf.StatedZone((node["extras"] as JsonObject)?[WorldGltf.Key]);
+
+    private static void SetExplicitZone(JsonObject engine, uint zone)
+    {
+        uint stored = WorldGltf.ReadNodeZoneValue(engine, 255, "the source node");
+        WorldGltf.WriteNodeZoneValue(engine, (stored & ~255u) | (zone & 255u));
+        engine.Remove("zoneInherited");
+    }
     /// <summary>
     /// A node's local transform as the reader composes it (matrix, or scale · rotation · translation; identity when it states
     /// none). A malformed transform is refused as the reader refuses it (<see cref="GltfDocument.LocalTransform"/>).
@@ -646,7 +653,7 @@ public static class GltfNodeEdits
                     foreach (var copy in copies[mark])
                     {
                         token.ThrowIfCancellationRequested();
-                        copy["zone"] = (int)(keep & 0xFF);
+                        SetExplicitZone(copy, keep);
                     }
                     zone = keep & 0xFF;
                 }
@@ -660,7 +667,7 @@ public static class GltfNodeEdits
     {
         foreach (var node in Nodes(root).OfType<JsonObject>())
             if ((node["extras"] as JsonObject)?[WorldGltf.Key] is JsonObject engine && Instance(engine["instance"]) == mark)
-                engine["zone"] = (int)(zone & 0xFF);
+                SetExplicitZone(engine, zone);
     }
     /// <summary>The roots import reads, in its order: the default scene's nodes, or without scenes every node no node lists as a child.</summary>
     private static IEnumerable<int> ImportRoots(JsonObject root, JsonArray nodes)

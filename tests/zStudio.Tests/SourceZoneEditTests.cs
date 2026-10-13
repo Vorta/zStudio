@@ -134,6 +134,68 @@ public sealed class SourceZoneEditTests
         Assert.Equal(new WorldNodeZone(255, true), WorldGltf.EmbeddedLoadRoot(reopened));
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void InheritedNodeInspectionUsesItsPlacementAfterParentEdits(bool referenced)
+    {
+        using SourceWorldFixture fixture = new();
+        if (referenced) fixture.WriteReferencingDatabase(); else fixture.WriteNestedDatabase();
+        var master = JsonNode.Parse(File.ReadAllBytes(fixture.Path(Master)))!.AsObject();
+        JsonObject Values(JsonNode node)
+        {
+            node["extras"] ??= new JsonObject();
+            node["extras"]![WorldGltf.Key] ??= new JsonObject();
+            return node["extras"]![WorldGltf.Key]!.AsObject();
+        }
+        var crate = master["nodes"]!.AsArray().Single(n => n?["name"]?.GetValue<string>() == "crate")!;
+        Values(crate)["zone"] = 3;
+        if (referenced)
+        {
+            const string leaf = "data/m1/models/lidm.gltf";
+            var child = JsonNode.Parse(File.ReadAllBytes(fixture.Path(leaf)))!.AsObject();
+            var values = Values(child["nodes"]!.AsArray().Single(n => n?["name"]?.GetValue<string>() == "lid")!);
+            values["zone"] = 99; values["zoneInherited"] = true; values["zonePadding"] = new JsonArray(18, 52, 86);
+            fixture.Write(leaf, child.ToJsonString());
+        }
+        else Values(master["nodes"]!.AsArray().Single(n => n?["name"]?.GetValue<string>() == "lid")!).Remove("zone");
+        fixture.Write(Master, master.ToJsonString());
+        SourceWorkspace workspace = new(fixture.Project);
+        (SourceWorldBuild Build, SourceZoneSelection Parent, SourceZoneSelection Child) Rebuild()
+        {
+            WorldAssembler assembler = new(new SourceWorlds.DiskFiles(fixture.Project, workspace.Overlay()), Token);
+            assembler.Assemble("m1.gs");
+            var slots = GameZWriter.NodeSlots(assembler.World, Token);
+            SourceWorldBuild build = new("m1", "", "", [], new Dictionary<string, FileStamp>())
+            { Provenance = assembler.Provenance.Where(p => slots.ContainsKey(p.Key)).ToDictionary(p => slots[p.Key], p => p.Value) };
+            return (build, new(slots[assembler.World.Nodes.Single(n => n.Name == "crate")]), new(slots[assembler.World.Nodes.Single(n => n.Name == "lid")]));
+        }
+        void Apply(SourceWorldBuild build, SourceZoneSelection selected, SourceZoneAssignment assignment)
+        {
+            var plan = SourceZoneEdits.PlanAssignments(workspace, build, [selected], assignment, true, Token);
+            workspace.Apply(plan.Label, plan.Changes.Select(c => (c.Relative, (byte[]?)c.Content)), Token);
+        }
+        uint padding = referenced ? 0x56341200u : 0;
+        var before = Rebuild();
+        Assert.Equal(padding | 3u, Assert.Single(SourceZoneEdits.Inspect(workspace, before.Build, [before.Child], token: Token).Targets).Word);
+        Apply(before.Build, before.Parent, new(NodeZone: 7));
+        var changed = Rebuild();
+        Assert.Equal(padding | 7u, Assert.Single(SourceZoneEdits.Inspect(workspace, changed.Build, [changed.Child], token: Token).Targets).Word);
+        // A gate-only edit must keep inheritance and the node's own opaque bytes.
+        Apply(changed.Build, changed.Child, new(Gate: false));
+        var gated = Rebuild();
+        Apply(gated.Build, gated.Parent, new(NodeZone: 9));
+        var moved = Rebuild();
+        var inspected = Assert.Single(SourceZoneEdits.Inspect(workspace, moved.Build, [moved.Child], token: Token).Targets);
+        Assert.Equal(padding | 9u, inspected.Word); Assert.False(inspected.Gate);
+        // Explicit painting then stops inheritance without discarding the opaque bytes.
+        Apply(moved.Build, moved.Child, new(NodeZone: 11));
+        var painted = Rebuild();
+        Apply(painted.Build, painted.Parent, new(NodeZone: 15));
+        var final = Rebuild();
+        Assert.Equal(padding | 11u, Assert.Single(SourceZoneEdits.Inspect(workspace, final.Build, [final.Child], token: Token).Targets).Word);
+    }
+
     [Fact]
     public void ReferenceDescendantsOfSharedInstancesRequireConsentWithoutChangingTheirLocalIdentity()
     {

@@ -69,14 +69,14 @@ public static partial class WorldGltf
             {
                 token.ThrowIfCancellationRequested();
                 primitive.Extras ??= [];
-                JsonArray words = [];
-                foreach (var polygon in layout.Polygons[primitive]) words.Add(ZoneHex(profile.MeshPolygons[i][offset++]));
-                EmbeddedValues(primitive.Extras)["polygonZones"] = words;
+                uint[] words = new uint[layout.Polygons[primitive].Count];
+                for (int j = 0; j < words.Length; j++) words[j] = profile.MeshPolygons[i][offset++];
+                WritePolygonZoneValues(EmbeddedValues(primitive.Extras), words, token);
             }
         }
         document.SceneExtras ??= [];
         var scene = EmbeddedValues(document.SceneExtras);
-        scene["sourceFormat"] = 2;
+        scene["sourceFormat"] = 3;
         if (profile.LoadRoot is { } root) scene["loadRoot"] = WriteEmbeddedNode(root);
         else scene.Remove("loadRoot");
     }
@@ -109,9 +109,9 @@ public static partial class WorldGltf
             for (int j = 0; j < primitives.Count; j++)
             {
                 var stored = primitives[j] as JsonObject ?? throw new InvalidDataException("The source primitive is invalid.");
-                JsonArray words = [];
-                foreach (var polygon in layout.Polygons[layout.Meshes[i].Primitives[j]]) words.Add(ZoneHex(profile.MeshPolygons[i][offset++]));
-                EmbeddedValues(EnsureObject(stored, "extras"))["polygonZones"] = words;
+                uint[] words = new uint[layout.Polygons[layout.Meshes[i].Primitives[j]].Count];
+                for (int k = 0; k < words.Length; k++) words[k] = profile.MeshPolygons[i][offset++];
+                WritePolygonZoneValues(EmbeddedValues(EnsureObject(stored, "extras")), words, token);
             }
         }
         var scenes = root["scenes"] as JsonArray;
@@ -125,7 +125,7 @@ public static partial class WorldGltf
         int sceneIndex = root["scene"] is { } selected ? checked((int)Integer(selected, "scene", "the source model", 0, int.MaxValue)) : 0;
         if (sceneIndex >= scenes.Count || scenes[sceneIndex] is not JsonObject scene) throw new InvalidDataException("The source scene is invalid.");
         var values = EmbeddedValues(EnsureObject(scene, "extras"));
-        values["sourceFormat"] = 2;
+        values["sourceFormat"] = 3;
         if (profile.LoadRoot is { } loadRoot) values["loadRoot"] = WriteEmbeddedNode(loadRoot);
         else values.Remove("loadRoot");
     }
@@ -138,9 +138,8 @@ public static partial class WorldGltf
         foreach (var node in profile.Nodes) { token.ThrowIfCancellationRequested(); nodes.Add(WriteEmbeddedNode(node)); }
         foreach (var mesh in profile.MeshPolygons)
         {
-            JsonArray words = [];
-            foreach (uint word in mesh) { token.ThrowIfCancellationRequested(); words.Add(ZoneHex(word)); }
-            meshes.Add(words);
+            JsonObject values = [];
+            WritePolygonZoneValues(values, mesh, token); meshes.Add(values);
         }
         JsonObject result = new() { ["fingerprint"] = profile.Fingerprint, ["nodes"] = nodes, ["meshes"] = meshes };
         if (profile.LoadRoot is { } root) result["loadRoot"] = WriteEmbeddedNode(root);
@@ -159,10 +158,16 @@ public static partial class WorldGltf
         foreach (var mesh in meshes)
         {
             token.ThrowIfCancellationRequested();
-            if (mesh is not JsonArray words || (count += words.Count) > GltfDocument.MaximumDecodedElements)
+            var words = mesh as JsonArray ?? (mesh as JsonObject)?["polygonZones"] as JsonArray;
+            if (words == null || (count += words.Count) > GltfDocument.MaximumDecodedElements)
                 throw new InvalidDataException("The reference zone override exceeds its polygon allowance.");
-            uint[] values = new uint[words.Count];
-            for (int i = 0; i < words.Count; i++) { token.ThrowIfCancellationRequested(); values[i] = Hex(words[i]!, "polygonZones", "the reference"); }
+            uint[] values;
+            if (mesh is JsonObject fields) values = ReadPolygonZoneValues(fields, words.Count, "the reference", token);
+            else
+            {
+                values = new uint[words.Count];
+                for (int i = 0; i < words.Count; i++) { token.ThrowIfCancellationRequested(); values[i] = Hex(words[i], "polygonZones", "the reference"); }
+            }
             meshValues.Add(values);
         }
         return new(hash, nodeValues, meshValues, value["loadRoot"] is { } root ? ReadEmbeddedLoadRoot(root) : null);
@@ -206,11 +211,15 @@ public static partial class WorldGltf
         if (profile.Nodes.Count > GltfDocument.MaximumNodes || profile.MeshPolygons.Count > GltfDocument.MaximumNodes
             || profile.Fingerprint.Length != 64 || profile.Fingerprint.Any(c => !Uri.IsHexDigit(c)) || profile.LoadRoot is { Inherit: true })
             throw new InvalidDataException("The source zone profile has invalid layout metadata.");
-        long bytes = 256L + 96L * profile.Nodes.Count;
+        long bytes = 256L + 128L * profile.Nodes.Count;
         foreach (var mesh in profile.MeshPolygons)
         {
-            token.ThrowIfCancellationRequested(); bytes += 4L + 14L * mesh.Count;
-            if (bytes > GltfDocument.MaximumMetadataBytes) throw new InvalidDataException("The source zone attributes exceed their metadata allowance.");
+            token.ThrowIfCancellationRequested(); bytes += 64;
+            foreach (uint word in mesh)
+            {
+                token.ThrowIfCancellationRequested(); bytes += PolygonZoneMetadataBytes(word);
+                if (bytes > GltfDocument.MaximumMetadataBytes) throw new InvalidDataException("The source zone attributes exceed their metadata allowance.");
+            }
         }
         if (bytes > GltfDocument.MaximumMetadataBytes) throw new InvalidDataException("The source zone attributes exceed their metadata allowance.");
     }
@@ -223,17 +232,22 @@ public static partial class WorldGltf
         JsonObject created = []; parent[key] = created; return created;
     }
     private static string ZoneHex(uint value) => "0x" + value.ToString("X8", CultureInfo.InvariantCulture);
-    private static JsonObject WriteEmbeddedNode(WorldNodeZone node) => new()
-        { ["word"] = ZoneHex(node.Word), ["gate"] = node.Gate, ["inherit"] = node.Inherit };
+    private static JsonObject WriteEmbeddedNode(WorldNodeZone node)
+    {
+        JsonObject result = new() { ["gate"] = node.Gate, ["inherit"] = node.Inherit };
+        WriteNodeZoneValue(result, node.Word); return result;
+    }
     private static WorldNodeZone ReadEmbeddedNode(JsonNode? node)
     {
         if (node is not JsonObject value) throw new InvalidDataException("A source node zone must be an object.");
-        return new(Hex(value["word"]!, "word", "the source zone"), Flag(value["gate"]!, "gate", "the source zone"),
+        if (value["zone"] == null && value["word"] == null && value["zoneWord"] == null)
+            throw new InvalidDataException("A source node zone needs its numeric zone ID.");
+        return new(ReadNodeZoneValue(value, DefaultZone, "the source zone"), Flag(value["gate"]!, "gate", "the source zone"),
             value["inherit"] is { } inherited && Flag(inherited, "inherit", "the source zone"));
     }
     private static void PutNodeZone(JsonObject values, WorldNodeZone zone)
     {
-        values.Remove("zone"); values["zoneWord"] = ZoneHex(zone.Word); values["zoneInherited"] = zone.Inherit;
+        WriteNodeZoneValue(values, zone.Word); values["zoneInherited"] = zone.Inherit;
         uint flags = values["flags"] is { } previous ? Hex(previous, "flags", "the source node") : DefaultCarried;
         values["flags"] = ZoneHex(zone.Gate ? flags | ZoneGate : flags & ~ZoneGate);
     }

@@ -329,7 +329,7 @@ public static partial class SourceTerrainConversion
                 : mesh.ValuesReason is { } byValues ? byValues
                 : references.Names.Contains(name) ? "named by a script, resource or animation"
                 : MatchingPattern(name) is { } pattern ? $"matched by the wildcard {pattern}"
-                : extras?["zoneWord"] is JsonValue word && word.ToString() is var w && zone is var z && !w.Equals($"0x{(uint)z:X}", StringComparison.OrdinalIgnoreCase) && !w.Equals($"0x{(uint)z:X8}", StringComparison.OrdinalIgnoreCase) ? "has a zone word beyond its zone"
+                : (WorldGltf.ReadNodeZoneValue(extras, (uint)zone, database) & ~255u) != 0 ? "has opaque bytes beside its zone ID"
                 : null;
             if (reason != null) { kept.Add(new(name, reason)); continuing = false; continue; }
             if (mesh!.ValuesNumber is not int number)

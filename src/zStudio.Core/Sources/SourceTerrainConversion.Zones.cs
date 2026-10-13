@@ -57,9 +57,8 @@ public static partial class SourceTerrainConversion
                     node.Extras[WorldGltf.Key] = extras = new();
                 uint flags = Flags(extras);
                 extras["flags"] = $"0x{(zone.Gate ? flags | WorldGltf.ZoneGate : flags & ~WorldGltf.ZoneGate):X8}";
-                extras.Remove("zone"); extras.Remove("zoneWord");
-                extras["zone"] = (int)(effective & 255);
-                if ((effective & ~255u) != 0) extras["zoneWord"] = $"0x{effective:X8}";
+                WorldGltf.WriteNodeZoneValue(extras, effective);
+                extras.Remove("zoneInherited");
                 foreach (var child in node.Children) Apply(child, effective & 255u);
             }
         }

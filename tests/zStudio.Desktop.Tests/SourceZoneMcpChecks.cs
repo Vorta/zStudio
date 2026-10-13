@@ -298,9 +298,34 @@ internal static class SourceZoneMcpChecks
             Assert.Equal(0, state["draft"]!["targetCount"]!.GetValue<int>());
             Assert.False((await Call("state", new()))["pendingZoneDrafts"]!.GetValue<bool>());
             Assert.Equal(workspaceBeforeDiscard, doc.SourceWorld.Workspace.Read("gamegen/m2.gs", token));
+            // Every preview includes interp.zbd, so even m2.gs is a recorded input of m1.
+            // Discard remains possible on this stale world; a new editor requires its reload.
+            Assert.Contains("gamegen/m2.gs", doc.SourceBuild!.Dependencies);
+            Assert.Equal("stale_document", (await Job("source_zone_draft", Args("begin"), "failed"))["code"]!.GetValue<string>());
+            doc = Document(await Job("reload_document", new() { ["document"] = doc.SessionId.ToString(), ["revision"] = doc.Revision }));
             state = await Job("source_zone_draft", Args("begin"));
             Assert.Equal(doc.Revision, state["draft"]!["revision"]!.GetValue<long>());
             await Call("properties_close", new());
+
+            // Editing a model this mission never reads does not stale its exact targets.
+            Assert.DoesNotContain(fixture.Tank, doc.SourceBuild!.Dependencies);
+            byte[] unrelated = doc.SourceWorld!.Workspace.Read(fixture.Tank, token)!;
+            doc.SourceWorld.Workspace.Apply("Edit unrelated model", [(fixture.Tank, (byte[]?)[.. unrelated, (byte)'\n'])], token);
+            node = doc.SourceBuild!.Provenance.First(p => p.Value.ModelNodeName == "flat_a").Key;
+            var exactRead = new Dictionary<string, object?>
+            { ["document"] = doc.SessionId.ToString(), ["targets"] = new[] { new { node } } };
+            await Call("source_zones", exactRead);
+            // A shared-workspace dependency edit increments the document revision but retains
+            // its old build until reload. Neither inspection nor the GUI/MCP editor may use it.
+            var changedGeometry = JsonNode.Parse(doc.SourceWorld!.Workspace.Read(geometry, token)!)!.AsObject();
+            var changedNode = changedGeometry["nodes"]!.AsArray().First(n => n?["name"]?.GetValue<string>() == "flat_a")!;
+            changedNode["extras"] ??= new JsonObject(); changedNode["extras"]!["recoil"] ??= new JsonObject();
+            changedNode["extras"]!["recoil"]!["zone"] = 123;
+            doc.SourceWorld.Workspace.Apply("Change shared zone source", [(geometry, (byte[]?)Encoding.UTF8.GetBytes(changedGeometry.ToJsonString()))], token);
+            Assert.True(doc.SourceInputsChanged(verifyContent: false));
+            await Call("source_zones", new() { ["document"] = doc.SessionId.ToString() });
+            await Call("source_zones", exactRead, "stale_document");
+            Assert.Equal("stale_document", (await Job("source_zone_draft", Args("begin"), "failed"))["code"]!.GetValue<string>());
 
             Dictionary<string, object?> Args(string action) => new() { ["document"] = doc.SessionId.ToString(), ["revision"] = doc.Revision, ["action"] = action };
             DocumentModel Document(JsonNode value) => main.ViewModel.Documents.Single(d => d.SessionId.ToString() == value["id"]!.GetValue<string>());

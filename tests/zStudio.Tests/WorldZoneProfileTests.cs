@@ -169,6 +169,61 @@ public sealed class WorldZoneProfileTests
     }
 
     [Fact]
+    public void EmbeddedZoneIdsRemainEditableWhileUninterpretedBytesAndPlacementAssignmentsSurvive()
+    {
+        uint[] words = [0xFFFFFF00, 0xFFFF0301, 0xFF070302, 0x03020103, 0x04050301, 0x11223304];
+        var exported = Export(Source(words));
+        var profile = exported.Profile with { LoadRoot = new(0xABCD0009, false) };
+        WorldGltf.EmbedZones(exported.Geometry, profile, token: Token);
+        var document = RoundTrip(exported.Geometry);
+        var node = (JsonObject)document.Roots[0].Extras![WorldGltf.Key]!;
+        Assert.Equal(7, node["zone"]!.GetValue<int>());
+        Assert.Null(node["zoneWord"]);
+        Assert.Equal(new[] { 0, 205, 171 }, ((JsonArray)node["zonePadding"]!).Select(n => n!.GetValue<int>()));
+        var primitive = (JsonObject)document.Roots[0].Mesh!.Primitives[0].Extras![WorldGltf.Key]!;
+        var zones = (JsonArray)primitive["polygonZones"]!;
+        Assert.Empty((JsonArray)zones[0]!);
+        Assert.Equal(new[] { 3 }, ((JsonArray)zones[1]!).Select(n => n!.GetValue<int>()));
+        Assert.Equal(new[] { 3, 7 }, ((JsonArray)zones[2]!).Select(n => n!.GetValue<int>()));
+        Assert.Equal(new[] { 1, 2, 3 }, ((JsonArray)zones[3]!).Select(n => n!.GetValue<int>()));
+        Assert.Equal(new[] { 5, 4 }, ((JsonArray)primitive["polygonZonePadding"]!["4"]!).Select(n => n!.GetValue<int>()));
+        Assert.Null(zones[5]);
+        Assert.Equal(new[] { 4, 51, 34, 17 }, ((JsonArray)primitive["polygonZoneRaw"]!["5"]!).Select(n => n!.GetValue<int>()));
+        var captured = WorldGltf.CaptureZoneProfile(document, token: Token);
+        Assert.Equal(profile.Nodes, captured.Nodes);
+        Assert.Equal(profile.LoadRoot, captured.LoadRoot);
+        Assert.Equal(words, Assert.Single(captured.MeshPolygons));
+        var overrides = WorldGltf.WriteZoneOverride(profile, Token);
+        Assert.Equal(7, overrides["nodes"]![0]!["zone"]!.GetValue<int>());
+        Assert.Equal(new[] { 3, 7 }, ((JsonArray)overrides["meshes"]![0]!["polygonZones"]![2]!).Select(n => n!.GetValue<int>()));
+        var placed = WorldGltf.ReadZoneOverride(overrides, Token);
+        Assert.Equal(profile.Nodes, placed.Nodes); Assert.Equal(profile.LoadRoot, placed.LoadRoot);
+        Assert.Equal(words, Assert.Single(placed.MeshPolygons));
+
+        node["zone"] = 13;
+        ((JsonArray)zones[4]!)[0] = 13;
+        var edited = WorldGltf.CaptureZoneProfile(document, token: Token);
+        Assert.Equal(0xABCD000Du, Assert.Single(edited.Nodes).Word);
+        Assert.Equal(0x04050D01u, Assert.Single(edited.MeshPolygons)[4]);
+        var (json, binary) = document.Write("shared.bin", Token);
+        var stored = (JsonObject)JsonNode.Parse(json)!;
+        WorldGltf.PatchEmbeddedZones(stored, document, edited, Token);
+        var reopened = GltfDocument.Read(System.Text.Encoding.UTF8.GetBytes(stored.ToJsonString()), _ => binary, Token);
+        Assert.Equal(edited.Nodes, WorldGltf.CaptureZoneProfile(reopened, token: Token).Nodes);
+        Assert.Equal(edited.MeshPolygons[0], WorldGltf.CaptureZoneProfile(reopened, token: Token).MeshPolygons[0]);
+
+        node["zoneInherited"] = true;
+        Assert.True(Assert.Single(WorldGltf.CaptureZoneProfile(document, token: Token).Nodes).Inherit);
+        node["zone"] = 256;
+        Assert.Throws<InvalidDataException>(() => WorldGltf.CaptureZoneProfile(document, token: Token));
+        node["zone"] = 13;
+        zones[4] = new JsonArray(3, 7);
+        Assert.Throws<InvalidDataException>(() => WorldGltf.CaptureZoneProfile(document, token: Token));
+        zones[4] = new JsonArray(256);
+        Assert.Throws<InvalidDataException>(() => WorldGltf.CaptureZoneProfile(document, token: Token));
+    }
+
+    [Fact]
     public void SkippedDegeneratePolygonDoesNotShiftEmittedZoneAssignments()
     {
         var node = Source(FirstWords); var model = node.Model!;

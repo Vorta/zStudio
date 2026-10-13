@@ -91,6 +91,11 @@ internal sealed class TerrainPlacementIndex
             var extras = node.Extras?[WorldGltf.Key] as JsonObject;
             budget.Text(node.Name.Length);
             budget.Scalar(extras?["name"]); budget.Scalar(extras?["zone"]); budget.Scalar(extras?["zoneWord"]); budget.Scalar(extras?["flags"]);
+            if (extras?["zonePadding"] is JsonArray padding)
+            {
+                if (padding.Count != 3) throw new InvalidDataException("Node zone padding must contain exactly three bytes.");
+                foreach (var value in padding) { budget.Take(); budget.Scalar(value); }
+            }
             string name = WorldGltf.EngineName(node);
             uint? ownZone = WorldGltf.StatedZone(extras);
             uint? flags = extras?["flags"] is JsonValue f && f.TryGetValue(out string? hex)

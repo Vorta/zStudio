@@ -209,8 +209,7 @@ public static partial class WorldGltf
         uint zone = node.Zone & 0xFF;
         if (context.Zones == null)
         {
-            if (zone != parentZone) extras["zone"] = (int)zone;
-            if ((node.Zone & ~0xFFu) != 0) extras["zoneWord"] = $"0x{node.Zone:X8}";
+            if (zone != parentZone || (node.Zone & ~0xFFu) != 0) WriteNodeZoneValue(extras, node.Zone);
         }
         if (node.Class == WorldNodeClass.Lod)
         {
@@ -399,7 +398,7 @@ public static partial class WorldGltf
         if (m.PackedColor != (m.Texture != null ? 0x7FFF : 0)) extras["packedColor"] = $"0x{m.PackedColor:X4}";
         if (key.Priority != 0) { extras["priority"] = key.Priority; name += $"~p{key.Priority}"; }
         if (key.ShowBackFace) { extras["backface"] = true; name += "~b"; }
-        if (key.Zone != DefaultPolygonZone) { extras["zone"] = $"0x{key.Zone:X8}"; name += $"~z{key.Zone:X8}"; }
+        if (key.Zone != DefaultPolygonZone) { WritePolygonZoneValue(extras, key.Zone); name += $"~z{key.Zone:X8}"; }
         if (key.Normals) extras["normals"] = true; else name += "~flat";
         string unique = name;
         if (!context.MaterialNames.Add(unique))
@@ -789,6 +788,7 @@ public static partial class WorldGltf
                 NumericOperand(engine[field], field, path);
             if (engine["flags"] is { } flags) _ = MaterialWord(flags, "flags", path);
             if (engine["packedColor"] is { } packed) _ = MaterialWord(packed, "packedColor", path);
+            _ = ReadPolygonZoneValue(engine, path);
             foreach (string field in new[] { "fields", "color" })
                 if (engine.TryGetPropertyValue(field, out var value))
                 {
@@ -888,11 +888,10 @@ public static partial class WorldGltf
         uint carried = extras?["flags"] is { } flags ? Hex(flags, "flags", path) & CarriedFlags : DefaultCarried;
         node.Flags = (lod ? 0x0108001Cu : 0x0308001Cu) & ~CarriedFlags | carried;
         node.BoundsFlags = 4;
-        // A node's zone is the low byte of its zone word: zone states it (also over the word's), and it is what the node's
-        // children inherit, so a word without a zone of its own passes its low byte on (see StatedZone).
-        uint? word = extras?["zoneWord"] is { } w ? Hex(w, "zoneWord", path) : null;
-        uint zone = extras?["zone"] is { } z ? (uint)Integer(z, "zone", path) & 0xFF : word is { } stated ? stated & 0xFF : parentZone;
-        node.Zone = word is { } full ? full & ~0xFFu | zone : zone;
+        // Zone IDs are bytes; opaque stored padding is preserved separately and never inherited by children.
+        node.Zone = ReadNodeZoneValue(extras, parentZone, path);
+        if (NodeZoneIsInherited(extras, path)) node.Zone = node.Zone & ~255u | parentZone & 255u;
+        uint zone = node.Zone & 0xFF;
         if (zones != null)
         {
             var assigned = zones.Nodes[source];
@@ -1227,7 +1226,7 @@ public static partial class WorldGltf
         var extras = source?.Extras?[Key] as JsonObject;
         int priority = extras?["priority"] is { } p ? (int)Integer(p, "priority", path, int.MinValue, int.MaxValue) : 0;
         bool backface = extras?["backface"] is { } b ? Flag(b, "backface", path) : source?.DoubleSided ?? false;
-        uint zone = extras?["zone"] is { } z ? Hex(z, "zone", path) : DefaultPolygonZone;
+        uint zone = ReadPolygonZoneValue(extras, path);
         bool? normals = StoresNormals(source, path);
         WorldMaterial material = new();
         string? textureName = null;
@@ -1378,17 +1377,17 @@ public static partial class WorldGltf
     /// <summary>The flags a load root takes from its file (scene extras), or null for the loader's default.</summary>
     public static uint? RootFlags(GltfDocument doc) => (doc.SceneExtras?[Key] as JsonObject)?["rootFlags"] is { } flags ? Hex(flags, "rootFlags", "the scene") & CarriedFlags : null;
     /// <summary>
-    /// The zone a node's engine values (<c>extras.recoil</c>) state, which its children inherit: its <c>zone</c>, else its
-    /// <c>zoneWord</c>'s low byte. Null when they state none (the node takes its parent's) or hold a value import refuses.
+    /// The numeric zone a node states for itself and its children. Legacy packed words remain readable.
+    /// Null when the node inherits its parent's zone or holds a value import refuses.
     /// </summary>
     public static uint? StatedZone(JsonNode? engine)
     {
         if (engine is not JsonObject values) return null;
-        if (values["zone"] is { } zone)
-            return GltfInteger.TryInt64(zone, out long value) ? (uint)value & 0xFF : null;
-        if (values["zoneInherited"] is JsonValue inherited && inherited.TryGetValue<bool>(out bool fromParent) && fromParent) return null;
-        return values["zoneWord"] is JsonValue word && word.TryGetValue(out string? text)
-            && uint.TryParse(text.StartsWith("0x", StringComparison.OrdinalIgnoreCase) ? text[2..] : text, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out uint full) ? full & 0xFF : null;
+        try
+        {
+            return NodeZoneIsInherited(values, "the source node") ? null : ReadNodeZoneValue(values, DefaultZone, "the source node") & 0xFF;
+        }
+        catch (InvalidDataException) { return null; }
     }
 
     // Engine values in extras. Editors may rewrite their types (Blender stores a list mixing whole and fractional numbers

@@ -75,10 +75,9 @@ public static partial class WorldGltf
             token.ThrowIfCancellationRequested();
             if (assigned.ContainsKey(entry.Node)) continue;
             var extras = entry.Node.Extras?[Key];
-            uint? word = extras?["zoneWord"] is { } w ? Hex(w, "zoneWord", "the model") : null;
-            uint low = extras?["zone"] is { } z ? (uint)Integer(z, "zone", "the model") & 0xFF : word is { } full ? full & 0xFF : entry.Parent;
+            uint word = ReadNodeZoneValue(extras, entry.Parent, "the model");
             uint flags = extras?["flags"] is { } f ? Hex(f, "flags", "the model") : DefaultCarried;
-            WorldNodeZone zone = new(word is { } whole ? whole & ~0xFFu | low : low, (flags & ZoneGate) != 0, extras?["zone"] == null && (extras?["zoneInherited"] is { } inherited ? Flag(inherited, "zoneInherited", "the model") : word == null));
+            WorldNodeZone zone = new(word, (flags & ZoneGate) != 0, NodeZoneIsInherited(extras, "the model"));
             if (extras?["instance"] is { } instance)
             {
                 long number = Integer(instance, "instance", "the model", 1, int.MaxValue);
@@ -95,14 +94,18 @@ public static partial class WorldGltf
             foreach (var primitive in mesh.Primitives)
             {
                 token.ThrowIfCancellationRequested();
-                uint word = primitive.Material?.Extras?[Key]?["zone"] is { } z ? Hex(z, "zone", "the model") : DefaultPolygonZone;
+                uint word = ReadPolygonZoneValue(primitive.Material?.Extras?[Key], "the model");
                 if (primitive.Extras?[Key]?["polygonZones"] is { } stored)
                 {
-                    if (stored is not System.Text.Json.Nodes.JsonArray assignedWords || assignedWords.Count != layout.Polygons[primitive].Count)
-                        throw new InvalidDataException("The inline polygon zone assignments do not match the polygon boundaries.");
-                    foreach (var assignedWord in assignedWords) { token.ThrowIfCancellationRequested(); words.Add(Hex(assignedWord!, "polygonZones", "the model")); }
+                    var values = (System.Text.Json.Nodes.JsonObject)primitive.Extras[Key]!;
+                    words.AddRange(ReadPolygonZoneValues(values, layout.Polygons[primitive].Count, "the model", token));
                 }
-                else foreach (var polygon in layout.Polygons[primitive]) words.Add(word);
+                else
+                {
+                    if (primitive.Extras?[Key]?["polygonZonePadding"] != null || primitive.Extras?[Key]?["polygonZoneRaw"] != null)
+                        throw new InvalidDataException("Polygon zone padding requires its polygonZones assignments.");
+                    foreach (var polygon in layout.Polygons[primitive]) words.Add(word);
+                }
             }
             meshes.Add(words.ToArray());
         }
@@ -146,7 +149,7 @@ public static partial class WorldGltf
     private static BoundZones? BindZones(GltfDocument document, string path, ImportContext context)
     {
         if ((document.SceneExtras?[Key] as System.Text.Json.Nodes.JsonObject)?["sourceFormat"] is { } sourceFormat)
-            _ = Integer(sourceFormat, "sourceFormat", path, 2, 2);
+            _ = Integer(sourceFormat, "sourceFormat", path, 2, 3);
         if (context.EmbeddedZoneScopes.Count > 0)
             foreach (var scope in context.EmbeddedZoneScopes.Peek().Overrides)
                 if (!context.ValidatedZoneScopes.Contains((document, scope)))

@@ -79,7 +79,17 @@ public static class SourceZoneEdits
         {
             var profile = context.Assets[Key(target)].Profile;
             var node = Node(profile, target);
-            return new SourceZoneTargetState(target, node?.Word ?? profile.MeshPolygons[target.Index][target.Polygon], node?.Gate,
+            uint word = node?.Word ?? profile.MeshPolygons[target.Index][target.Polygon];
+            if (node is { Inherit: true } && target.Kind == SourceZoneTargetKind.Node)
+            {
+                if (!context.InheritedZones.TryGetValue((Key(target), target.Index), out var effective) || effective == null)
+                    throw Bad("The selected inherited assignment has no single imported zone baseline. Rebuild the world and inspect its placements separately.");
+                // A profile retains the stored ID even when inheritance makes another ID effective.
+                // Use the selected occurrence's immutable import baseline, not a runtime node or
+                // the referenced file's default parent, while retaining its own opaque bytes.
+                word = word & ~255u | effective.Value;
+            }
+            return new SourceZoneTargetState(target, word, node?.Gate,
                 context.Scope(target).Count);
         }).ToArray();
         return new(context.Path, context.Assets.Values.Select(e => e.OwnerPath).Distinct(StringComparer.OrdinalIgnoreCase).ToArray(), states, context.Targets.Count, offset,
@@ -247,6 +257,7 @@ public static class SourceZoneEdits
         internal SourceEmbeddedZones Sources { get; } = sources;
         internal Dictionary<string, SourceEmbeddedZones.Entry> Assets { get; } = new(StringComparer.OrdinalIgnoreCase);
         internal List<SourceZoneTarget> Targets { get; } = [];
+        internal Dictionary<(string Key, int Index), uint?> InheritedZones { get; } = [];
         internal Dictionary<string, Dictionary<(SourceZoneTargetKind Kind, int Index), List<int>>> Scopes { get; } = new(StringComparer.OrdinalIgnoreCase);
         internal SortedSet<int> Affected { get; } = [];
         internal bool SharedInstance { get; set; }
@@ -309,6 +320,13 @@ public static class SourceZoneEdits
             {
                 if (origin.ZoneNode < 0 || origin.ZoneNode >= asset.Profile.Nodes.Count) throw Bad("The selected object has no exact source node profile.");
                 target = new(model, SourceZoneTargetKind.Node, origin.ZoneNode, OwnerPath: asset.OwnerPath, OwnerReferences: asset.ReferenceChain);
+                if (asset.Profile.Nodes[origin.ZoneNode].Inherit)
+                {
+                    uint? effective = origin.ImportedZoneWord is { } imported ? imported & 255u : null;
+                    var identity = (key, origin.ZoneNode);
+                    if (!context.InheritedZones.TryAdd(identity, effective) && context.InheritedZones[identity] != effective)
+                        context.InheritedZones[identity] = null;
+                }
             }
             if (targets.Add((key, target.Kind, target.Index, target.Polygon))) context.Targets.Add(target);
         }
