@@ -1,3 +1,7 @@
+## Release 0.8.5 preparation — 2026-10-13
+
+Version 0.8.5 is being prepared for release with the user's authorization. Fresh review cycles over the complete change, release-preparation validation and passing CI on the current PR head remain required before squash merge. The release tag and public assets will be created and verified only after merge; the release has not yet been published. The local-only and unreleased statements in the milestones below describe their earlier checkpoints.
+
 ## Readable source flags — local validation complete (2026-10-13)
 
 Source format 4 replaces packed node flags with named Boolean attributes (omitted means false; writers emit true only) and optional `declient` (`canModify` or `clipTo`; omitted/null means neither). Load-root attributes share one object, and placement altitude gates use `altitudeZoneCheck`. Earlier marked formats and packed node fields require fresh reconstruction. Source builds normalize the unresolved upper bits to zero; direct binary preservation remains unchanged.

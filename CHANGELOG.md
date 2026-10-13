@@ -2,7 +2,7 @@
 
 Version numbers follow `MAJOR.MINOR.PATCH`; the 0.x series is under active development. Release tags and downloadable archives use the same version.
 
-## 0.8.5 — unreleased
+## 0.8.5 — 2026-10-13
 
 - Reconstruct original model-file ownership as linked glTF sources, retaining uncertain map parts inside their owning file and keeping game attributes and placement-specific assignments in glTF. Existing sidecar-based source projects require fresh extraction from the original ZBD files.
 - Make the source-project Blender round-trip unavailable pending the reference-aware Blender plugin.
