@@ -236,7 +236,8 @@ public sealed class LoaderReviewFixTests
             outputs.Select(o => o.Path).Where(p => p.EndsWith(".gltf", StringComparison.Ordinal)).Order(StringComparer.Ordinal));
         // The rod's file is the unchanged one; the build gives every copy that rod, and the script marks the second again.
         var rodNode = System.Text.Json.Nodes.JsonNode.Parse(outputs.Single(o => o.Path == "data/m1/models/r.gltf").Bytes)!["nodes"]!.AsArray().Single(n => (string?)n!["name"] == "rod")!;
-        Assert.Equal("0x01000018", (string?)rodNode["extras"]?[WorldGltf.Key]?["flags"]);
+        Assert.Equal(0x01000018u, WorldGltf.StoredNodeFlags(rodNode["extras"]![WorldGltf.Key]!.AsObject()));
+        Assert.Null(rodNode["extras"]![WorldGltf.Key]!["flags"]);
         var rebuilt = Rebuild(files, outputs, 1);
         Assert.Equal(Slots(shipped(1)), Slots(rebuilt));
         Assert.Empty(WorldComparer.Compare(shipped(1), rebuilt));

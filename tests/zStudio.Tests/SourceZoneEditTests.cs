@@ -93,8 +93,8 @@ public sealed class SourceZoneEditTests
         var json = JsonNode.Parse(File.ReadAllBytes(fixture.Path(fixture.Tank)))!.AsObject();
         var scene = json["scenes"]![0]!;
         scene["extras"] ??= new JsonObject(); scene["extras"]![WorldGltf.Key] ??= new JsonObject();
-        scene["extras"]![WorldGltf.Key]!["rootFlags"] = "0x70800058";
-        Assert.Null(scene["extras"]![WorldGltf.Key]!["loadRoot"]);
+        scene["extras"]![WorldGltf.Key]!["loadRoot"] = new JsonObject { ["zone"] = "any", ["altitudeSurface"] = true,
+            ["intersectSurface"] = true, ["proximity"] = true, ["overwrite"] = true };
         fixture.Write(fixture.Tank, json.ToJsonString());
         string script = File.ReadAllText(fixture.Path("gamegen/m2.gs"));
         fixture.Write("gamegen/m2.gs", script.Replace("GameZWriteZBDFile", "LoadGameGen tank.flt tank_again\r\nGameZWriteZBDFile", StringComparison.Ordinal));
@@ -123,7 +123,10 @@ public sealed class SourceZoneEditTests
         workspace.Apply(plan.Label, plan.Changes.Select(c => (c.Relative, (byte[]?)c.Content)), Token);
         Assert.Equal([fixture.Tank], workspace.DirtyFiles);
         var changed = JsonNode.Parse(workspace.Read(fixture.Tank, Token)!)!;
-        Assert.Equal("0x70800058", changed["scenes"]![0]!["extras"]![WorldGltf.Key]!["rootFlags"]!.GetValue<string>());
+        var loadRoot = changed["scenes"]![0]!["extras"]![WorldGltf.Key]!["loadRoot"]!.AsObject();
+        Assert.Equal(0x01800058u, WorldGltf.StoredNodeFlags(loadRoot));
+        Assert.True(loadRoot["overwrite"]!.GetValue<bool>());
+        Assert.Null(changed["scenes"]![0]!["extras"]![WorldGltf.Key]!["rootFlags"]);
         Assert.Equal(buffer, workspace.Read("data/m2/models/bft/tank.bin", Token));
         Assert.All(Build().World.Nodes.Where(n => n.Name is "tank" or "tank_again"), n =>
         { Assert.Equal(255u, n.Zone); Assert.NotEqual(0u, n.Flags & WorldGltf.ZoneGate); });

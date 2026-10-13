@@ -75,9 +75,11 @@ public static partial class WorldGltf
         {
             token.ThrowIfCancellationRequested();
             if (assigned.ContainsKey(entry.Node)) continue;
-            var extras = entry.Node.Extras?[Key];
+            // Terrain may select one mesh from a document containing unrelated editor extras.
+            // Ordinary model import validates every node's engine object before reaching this path.
+            var extras = entry.Node.Extras?[Key] as System.Text.Json.Nodes.JsonObject;
             uint word = ReadNodeZoneValue(extras, entry.Parent, "the model");
-            uint flags = extras?["flags"] is { } f ? Hex(f, "flags", "the model") : DefaultCarried;
+            uint flags = StoredNodeFlags(extras);
             WorldNodeZone zone = new(word, (flags & ZoneGate) != 0, NodeZoneIsInherited(extras, "the model"));
             if (extras?["instance"] is { } instance)
             {
@@ -85,7 +87,7 @@ public static partial class WorldGltf
                 if (!instances.TryAdd((entry.Scope, number), zone)) zone = instances[(entry.Scope, number)];
             }
             assigned.Add(entry.Node, zone);
-            var inline = InlineSource(entry.Node, "the model");
+            var inline = extras == null ? null : InlineSource(entry.Node, "the model");
             for (int i = entry.Node.Children.Count - 1; i >= 0; i--) pending.Push((entry.Node.Children[i], zone.Word & 0xFF, inline is { } section && i < section.Count ? entry.Node : entry.Scope));
         }
         List<IReadOnlyList<uint>> meshes = [];
@@ -149,8 +151,7 @@ public static partial class WorldGltf
 
     private static BoundZones? BindZones(GltfDocument document, string path, ImportContext context)
     {
-        if ((document.SceneExtras?[Key] as System.Text.Json.Nodes.JsonObject)?["sourceFormat"] is { } sourceFormat)
-            _ = Integer(sourceFormat, "sourceFormat", path, 2, 3);
+        _ = SourceSceneValues(document, path);
         if (context.EmbeddedZoneScopes.Count > 0)
             foreach (var scope in context.EmbeddedZoneScopes.Peek().Overrides)
                 if (!context.ValidatedZoneScopes.Contains((document, scope)))
@@ -183,7 +184,7 @@ public static partial class WorldGltf
         {
             context.Token.ThrowIfCancellationRequested();
             var node = layout.Nodes[i];
-            if (node.Extras?[Key]?[ZoneReference] is not { } marker) continue;
+            if ((node.Extras?[Key] as System.Text.Json.Nodes.JsonObject)?[ZoneReference] is not { } marker) continue;
             if (!Flag(marker, ZoneReference, path) || node.Extras?[Key]?["ref"] != null)
                 throw new InvalidDataException($"{path}: neutral reference {i} has conflicting or invalid reference fields.");
             string uri = context.AssetReference?.Invoke(path, i)
@@ -260,7 +261,7 @@ public static partial class WorldGltf
             {
                 work.Charge(1L + node.Children.Count);
                 hash.Text(EngineName(node));
-                var engine = node.Extras?[Key];
+                var engine = node.Extras?[Key] as System.Text.Json.Nodes.JsonObject;
                 hash.Text(engine?["class"]?.ToString() ?? "object3d");
                 hash.Text(engine?["instance"]?.ToString() ?? "");
                 hash.Number(engine?[ZoneReference] == null && engine?["ref"] == null ? 0u : 1u);

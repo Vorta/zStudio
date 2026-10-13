@@ -38,7 +38,9 @@ public sealed class WorldSourcePlacementTests
         var outputs = WorldSources.Reconstruct([new(1, world)], _ => script, (_, _) => null, new HashSet<string>(), _ => 0, [], Token);
         long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
         // The old restart-at-two loop alone grew quadratically: the complete operation exceeded 575 MiB.
-        Assert.True(allocated < 192L << 20, $"Distinct-version placement allocated {allocated:N0} bytes.");
+        // Readable source attributes add fixed per-version objects/JSON: allow 8 KiB per version (25 MiB here)
+        // beyond the former 192 MiB bound, retaining the guard against the original quadratic suffix search.
+        Assert.True(allocated < (192L << 20) + count * 8192L, $"Distinct-version placement allocated {allocated:N0} bytes.");
         Assert.Equal(count * 2, outputs.Count);
         Assert.Equal(count * 2, outputs.Select(o => o.Path).Distinct(StringComparer.OrdinalIgnoreCase).Count());
         Assert.Contains(outputs, o => o.Path == "data/m1/models/model.gltf");

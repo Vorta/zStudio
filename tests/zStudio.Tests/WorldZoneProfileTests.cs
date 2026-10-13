@@ -80,7 +80,7 @@ public sealed class WorldZoneProfileTests
         Assert.Equal(SecondWords, b.Model!.Polygons.Select(p => p.Zone));
         Assert.Equal(0xABCD0007u, a.Zone); Assert.Equal(0xFE000009u, b.Zone);
         Assert.NotEqual(0u, a.Flags & WorldGltf.ZoneGate); Assert.Equal(0u, b.Flags & WorldGltf.ZoneGate);
-        Assert.Equal(0x70000000u, b.Flags & 0x70000000u);
+        Assert.Equal(0u, b.Flags & 0x70000000u); // Source builds normalize the unresolved upper bits.
         Assert.Same(a.Model.Polygons[0].Material, b.Model.Polygons[0].Material);
         a.Model.Polygons[0].Zone = 0;
         Assert.Equal(0xFFFFFF01u, b.Model.Polygons[0].Zone);

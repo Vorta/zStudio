@@ -32,6 +32,20 @@ The source glTF attribute representation is an editor/build choice, not a newly 
   - A float where an integer belongs reads as a huge integer: `8.0` becomes 1090519040.
   - A missing item or a wrong shape dereferences garbage. zStudio treats every one of these as an error, not as tolerated input.
 
+## Source node flags and unresolved upper bits
+
+The readable source flags map to altitude surface (`0x08`), intersection surface (`0x10`), intersection bounds (`0x20`), proximity (`0x40`), landmark (`0x80`), CanModify (`0x10000`), ClipTo (`0x20000`), overwrite (`0x800000`) and the independent altitude zone check (`0x01000000`). glTF exposes the crater bits as one optional `declient` mode and refuses both together. This restriction is a source-authoring decision: the retail crater path gives ClipTo precedence if both are present, as documented under [Craters and quicksand](#craters-and-quicksand). Likewise, glTF's omitted Boolean flags mean false even where native node creation has enabled defaults; reconstruction writes the supported enabled flags explicitly.
+
+The follow-up investigation of bits 28–30 (`0x70000000`, 2026-10-13) found:
+
+- **Live retail nodes:** none of 54,017 live nodes across all 19 worlds of the two retail releases has these bits set [D]. A separate check of nine dated demo worlds, containing 25,885 live nodes, also found none.
+- **Retained deleted M6 records:** bit 28 is present in 134 of 282 retained free slots in 1998 and 136 of 287 in 1999 [D]. These are named remnants in the allocated node table, not live scene nodes. The original child/parent arrays were freed; slot allocation and deletion order allow partial hierarchy inference, not recovery of every original link or missing ancestor.
+- **Counterparts:** every marked remnant has one live counterpart with the same name and stored bounds, zone word and other checked node fields. All those counterparts are direct world children in ordinary grid cells, with bit 28 clear. The remaining flag differences are either bit 28 alone or bit 28 plus the derived model-bounds bit `0x200` [D]. No unmarked remnant matched a live world child by name and node bounds in the same check. This supports a build-time world-membership or promotion marker, but does not establish its original name or exact lifecycle [U].
+- **Code evidence:** `CopyNodeBaseData` (retail 0x451BD0, mask operation at 0x451E54) copies the group `0x70000000` [BN]. The investigation did not identify an individual runtime setter or test of these bits. That absence is not proof that every historical tool ignored them.
+- **Large objects:** the editor resource string about coloring large-object regions blue does not establish an upper-bit mapping. The examined runtime's large-model list is the world's spatial overflow list; all 325 retail overflow entries have the upper bits clear, including its 235 landmarks [D]. The exact editor handler for that color command remains unidentified.
+
+Source format 4 therefore fixes these three bits to **zero**, at the user's request, and exposes no glTF field or sidecar for retaining them. This is a deliberate normalization for reconstructed glTF sources and their builds, not a recovered meaning for those bits. Direct binary parsing and saving retain their existing preservation behavior. The [source-project format](source-project.md#worlds-and-models) describes the named fields and false-by-default encoding.
+
 ## Name lookups and node slot order
 
 - **The node list runs highest slot first.**

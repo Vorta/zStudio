@@ -56,6 +56,7 @@ internal sealed class SourceObjectPropertiesEditor : SourcePropertiesEditor
     [
         (0x08, "Standable (altitude surface)"), (0x10, "Collision (intersection surface)"), (0x20, "Collide by bounding box"),
         (0x40, "Proximity"), (0x80, "Landmark (never culled)"), (0x10000, "Craters allowed (CanModify)"), (0x20000, "No craters (ClipTo)"),
+        (0x800000, "Overwrite"),
     ];
     private readonly SourceObjectState state;
     private readonly Func<ObjectTransform, Task> transform;
@@ -133,7 +134,8 @@ internal sealed class SourceObjectPropertiesEditor : SourcePropertiesEditor
             bool on = (state.Flags & bit) != 0;
             // A script object's flag no script command sets (ClipTo) is shown, not offered.
             if (!SourceObjectEdits.FlagSettable(state.NodeClass, state.Origin, bit)) { ReadOnlyText(form, $"{label}: {(on ? "on" : "off")} (no script command sets it)"); continue; }
-            Input(form, label, on ? "on" : "off", _ => throw new InvalidOperationException("Use the asynchronous edit."), hint: "on or off",
+            Input(form, label, on ? "on" : "off", _ => throw new InvalidOperationException("Use the asynchronous edit."),
+                hint: (bit & 0x30000) != 0 ? "on or off; turning this on clears the other crater mode" : "on or off",
                 asyncCommit: async text =>
                 {
                     bool value = FlagValue(text);

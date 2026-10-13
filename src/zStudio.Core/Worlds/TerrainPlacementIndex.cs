@@ -90,7 +90,8 @@ internal sealed class TerrainPlacementIndex
                 throw new InvalidDataException("The terrain source node hierarchy is cyclic or too deep.");
             var extras = node.Extras?[WorldGltf.Key] as JsonObject;
             budget.Text(node.Name.Length);
-            budget.Scalar(extras?["name"]); budget.Scalar(extras?["zone"]); budget.Scalar(extras?["zoneWord"]); budget.Scalar(extras?["flags"]);
+            budget.Scalar(extras?["name"]); budget.Scalar(extras?["zone"]); budget.Scalar(extras?["zoneWord"]);
+            foreach (string field in WorldGltf.NodeFlagFields) budget.Scalar(extras?[field]);
             if (extras?["zonePadding"] is JsonArray padding)
             {
                 if (padding.Count != 3) throw new InvalidDataException("Node zone padding must contain exactly three bytes.");
@@ -98,17 +99,12 @@ internal sealed class TerrainPlacementIndex
             }
             string name = WorldGltf.EngineName(node);
             uint? ownZone = WorldGltf.StatedZone(extras);
-            uint? flags = extras?["flags"] is JsonValue f && f.TryGetValue(out string? hex)
-                && uint.TryParse(hex.StartsWith("0x", StringComparison.OrdinalIgnoreCase) ? hex.AsSpan(2) : hex.AsSpan(),
-                    System.Globalization.NumberStyles.HexNumber, System.Globalization.CultureInfo.InvariantCulture, out uint parsed)
-                && (parsed & WorldGltf.CarriedFlags) != WorldGltf.DefaultCarried ? parsed & WorldGltf.CarriedFlags : null;
+            uint flags = WorldGltf.StoredNodeFlags(extras);
             if (assigned != null)
             {
                 var zone = assigned[node];
                 ownZone = zone.Inherit ? null : zone.Word & 255;
-                uint carried = flags ?? WorldGltf.DefaultCarried;
-                carried = zone.Gate ? carried | WorldGltf.ZoneGate : carried & ~WorldGltf.ZoneGate;
-                flags = carried == WorldGltf.DefaultCarried ? null : carried;
+                flags = zone.Gate ? flags | WorldGltf.ZoneGate : flags & ~WorldGltf.ZoneGate;
             }
             Placement placement = new(node, (node.Matrix ?? Matrix4x4.Identity) * parent, inheritedAppearance,
                 ownZone ?? inheritedZone, ownZone != null || explicitZone, flags);

@@ -110,7 +110,8 @@ internal sealed class SourceWorldFixture : IDisposable
     }
     private void Model(string folder, string stem, string textures, WorldNode root)
     {
-        var (json, bin) = WorldGltf.Export([root], 0xFF, new() { Texture = t => ($"{textures}/{t.Name}.png", 0) }).Write(stem + ".bin");
+        // These authored fixture loads participate in altitude/collision probing at their load root as well as their mesh.
+        var (json, bin) = WorldGltf.Export([root], 0xFF, new() { Texture = t => ($"{textures}/{t.Name}.png", 0) }, loadRoot: Node(stem + ".flt")).Write(stem + ".bin");
         Write($"{folder}/{stem}.bin", bin); Write($"{folder}/{stem}.gltf", json);
     }
     /// <summary>

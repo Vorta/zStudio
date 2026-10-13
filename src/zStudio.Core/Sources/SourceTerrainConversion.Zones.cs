@@ -56,7 +56,7 @@ public static partial class SourceTerrainConversion
                 if (node.Extras[WorldGltf.Key] is not JsonObject extras)
                     node.Extras[WorldGltf.Key] = extras = new();
                 uint flags = Flags(extras);
-                extras["flags"] = $"0x{(zone.Gate ? flags | WorldGltf.ZoneGate : flags & ~WorldGltf.ZoneGate):X8}";
+                WorldGltf.WriteNodeFlags(extras, WorldGltf.SetNodeFlag(flags, WorldGltf.ZoneGate, zone.Gate));
                 WorldGltf.WriteNodeZoneValue(extras, effective);
                 foreach (var child in node.Children) Apply(child, effective & 255u);
             }

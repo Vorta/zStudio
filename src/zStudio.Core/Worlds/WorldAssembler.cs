@@ -857,6 +857,12 @@ public sealed partial class WorldAssembler(IProjectFiles files, CancellationToke
     /// <summary>GameZWriteZBDFile: the engine's update pass, then the world as the file stores it.</summary>
     private void Finish()
     {
+        foreach (var node in World.Nodes)
+        {
+            token.ThrowIfCancellationRequested();
+            WorldGltf.ValidateDeclient(node.Flags, $"Node {JsonData.ShownText(node.Name)}");
+            node.Flags &= ~WorldGltf.UnusedNodeFlags;
+        }
         written = true;
         foreach (var node in World.Nodes.Where(n => n.Class == WorldNodeClass.Object3D))
         {

@@ -566,9 +566,7 @@ public static partial class SourceTerrainConversion
         }
         return (root, doc);
     }
-    private static uint Flags(JsonObject? extras) =>
-        extras?["flags"] is JsonValue v && v.TryGetValue(out string? hex)
-            && uint.TryParse(hex.StartsWith("0x", StringComparison.OrdinalIgnoreCase) ? hex.AsSpan(2) : hex.AsSpan(), System.Globalization.NumberStyles.HexNumber, System.Globalization.CultureInfo.InvariantCulture, out uint flags) ? flags & WorldGltf.CarriedFlags : WorldGltf.DefaultCarried;
+    private static uint Flags(JsonObject? extras) => WorldGltf.StoredNodeFlags(extras);
     /// <summary>A node's zone as the importer reads it (<see cref="WorldGltf.StatedZone"/>); without one, <paramref name="inherited"/>.</summary>
     private static int Zone(JsonObject? extras, int inherited = 0xFF) => WorldGltf.StatedZone(extras) is { } zone ? (int)zone : inherited;
     /// <summary>

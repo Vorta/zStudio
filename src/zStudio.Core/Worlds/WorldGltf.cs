@@ -21,8 +21,8 @@ public readonly record struct SurfaceKey(WorldMaterial Material, int Priority, b
 public static partial class WorldGltf
 {
     public const string Key = "recoil";
-    /// <summary>Node flag bits a source carries: surface tests, landmark, crater/clip, overwrite, variant gate and game bits. The rest are derived.</summary>
-    public const uint CarriedFlags = 0x08 | 0x10 | 0x20 | 0x40 | 0x80 | 0x10000 | 0x20000 | 0x800000 | 0x01000000 | 0x70000000;
+    /// <summary>Known authored node flag bits represented by readable source properties. Other bits are derived or normalized.</summary>
+    public const uint CarriedFlags = 0x08 | 0x10 | 0x20 | 0x40 | 0x80 | 0x10000 | 0x20000 | 0x800000 | 0x01000000;
     /// <summary>What the original loader gave a plain node: altitude and intersection surfaces and the variant gate.</summary>
     public const uint DefaultCarried = 0x01000018;
     public const uint DefaultZone = 0xFF, DefaultPolygonZone = 0xFFFFFF00, DefaultModelFlags = 0x3;
@@ -83,10 +83,15 @@ public static partial class WorldGltf
     private static GltfDocument ExportDocument(IReadOnlyList<WorldNode> roots, uint parentZone, ExportContext context, WorldNode? loadRoot, bool parentMirrored)
     {
         GltfDocument doc = new();
-        uint rootFlags = loadRoot == null ? DefaultCarried : loadRoot.Flags & CarriedFlags;
-        if (context.Zones != null) rootFlags &= ~ZoneGate;
-        if (loadRoot != null && rootFlags != DefaultCarried)
-            doc.SceneExtras = new() { [Key] = new JsonObject { ["rootFlags"] = $"0x{rootFlags:X8}" } };
+        JsonObject scene = new() { ["sourceFormat"] = 4 };
+        doc.SceneExtras = new() { [Key] = scene };
+        if (loadRoot != null)
+        {
+            JsonObject rootValues = [];
+            WriteNodeFlags(rootValues, context.Zones != null ? loadRoot.Flags & ~ZoneGate : loadRoot.Flags);
+            if (context.Zones == null) WriteNodeZoneValue(rootValues, loadRoot.Zone);
+            scene["loadRoot"] = rootValues;
+        }
         // Count how often each node is reached: a node under several parents is written under each (glTF nodes have
         // one parent) and marked so that import joins the copies again.
         Dictionary<WorldNode, int> reached = new(ReferenceEqualityComparer.Instance); HashSet<WorldNode> path = new(ReferenceEqualityComparer.Instance);
@@ -205,7 +210,7 @@ public static partial class WorldGltf
             zoneExport.Nodes.Add(result, new(node.Zone, (node.Flags & ZoneGate) != 0, node.Zone == (parentZone & 255u)));
             carried &= ~ZoneGate;
         }
-        if (carried != DefaultCarried) extras["flags"] = $"0x{carried:X8}";
+        WriteNodeFlags(extras, carried);
         uint zone = node.Zone & 0xFF;
         if (context.Zones == null)
         {
@@ -600,7 +605,7 @@ public static partial class WorldGltf
     /// <summary>Shared build/Blender preflight: refuse model semantics GameZ cannot represent before accepting sources.</summary>
     internal static void ValidateSupported(GltfDocument doc, string path, ImportContext? context = null)
     {
-        _ = EngineValues(doc.SceneExtras, path);
+        _ = RootFlags(doc);
         HashSet<GltfMesh> meshes = [];
         HashSet<GltfMaterial> materials = [];
         Dictionary<string, int> addressing = new(StringComparer.OrdinalIgnoreCase);
@@ -608,6 +613,7 @@ public static partial class WorldGltf
         {
             context?.Token.ThrowIfCancellationRequested();
             _ = ValidatedEngineName(node, path);
+            _ = StoredNodeFlags(EngineValues(node.Extras, path));
             _ = InlineSourceKey(node, path);
             if (EngineValues(node.Extras, path)?["class"] is { } kind && Text(kind, "class", path) == "lod"
                 && node.Matrix is { IsIdentity: false })
@@ -885,7 +891,7 @@ public static partial class WorldGltf
         WorldNode node = new(name, lod ? WorldNodeClass.Lod : WorldNodeClass.Object3D);
         if (instance is { } first) { instances[first] = node; place = new(first); }
         context.NodeImported?.Invoke(node, path, source, place);
-        uint carried = extras?["flags"] is { } flags ? Hex(flags, "flags", path) & CarriedFlags : DefaultCarried;
+        uint carried = StoredNodeFlags(extras);
         node.Flags = (lod ? 0x0108001Cu : 0x0308001Cu) & ~CarriedFlags | carried;
         node.BoundsFlags = 4;
         // Zone IDs are bytes; opaque stored padding is preserved separately and never inherited by children.
@@ -1374,8 +1380,8 @@ public static partial class WorldGltf
             && extras?["model"] == null && extras?["appearance"] == null && extras?["instance"] == null
             && extras?["ref"] == null && extras?[ZoneReference] == null && extras?["class"] == null;
     }
-    /// <summary>The flags a load root takes from its file (scene extras), or null for the loader's default.</summary>
-    public static uint? RootFlags(GltfDocument doc) => (doc.SceneExtras?[Key] as JsonObject)?["rootFlags"] is { } flags ? Hex(flags, "rootFlags", "the scene") & CarriedFlags : null;
+    /// <summary>The authored flags a load root takes from its scene; omitted properties are false.</summary>
+    public static uint? RootFlags(GltfDocument doc) => StoredNodeFlags(SourceSceneValues(doc, "the scene")?["loadRoot"] as JsonObject);
     /// <summary>
     /// The numeric zone a node states for itself and its children. Legacy packed words remain readable.
     /// Null when the node inherits its parent's zone or holds a value import refuses.

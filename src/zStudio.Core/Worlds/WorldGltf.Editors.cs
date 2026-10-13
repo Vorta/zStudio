@@ -271,7 +271,8 @@ public static partial class WorldGltf
     private static bool SameValues(GltfNode a, GltfNode b)
     {
         JsonObject? x = a.Extras?[Key] as JsonObject, y = b.Extras?[Key] as JsonObject;
-        if (x == null || y == null) return x == null && y == null;
+        if (StoredNodeFlags(x) != StoredNodeFlags(y)) return false;
+        if (x == null || y == null) return (x ?? y)?.All(p => Ignored(p.Key)) != false;
         int compared = 0;
         foreach (var (name, value) in x)
         {
@@ -282,7 +283,7 @@ public static partial class WorldGltf
             if (!JsonNode.DeepEquals(value, other)) return false;
         }
         return compared == y.Count(p => !Ignored(p.Key));
-        static bool Ignored(string key) => key is "zone" or "instance" or "name" or ZoneFromLoad;
+        static bool Ignored(string key) => key is "zone" or "instance" or "name" or ZoneFromLoad || NodeFlagFields.Contains(key);
     }
     private static bool SameMatrix(Matrix4x4 a, Matrix4x4 b)
     {

@@ -94,10 +94,11 @@ public sealed class TerrainAttributeAdmissionTests
     [Fact]
     public void EscapedWordsFlagsAndNullPatchesKeepTheirMeaning()
     {
+        const uint supported = WorldGltf.CarriedFlags & ~0x20000u;
         var baseline = new TerrainAttributes { Zones = new([4]), Soil = 5, Collision = true, Flags = 0x10 };
         var expected = baseline with { Zones = null, NodeZone = TerrainAttributes.AutoZone, NodeGate = false, Standable = true,
-            Craters = TerrainCraters.Ignored, Soil = 3, Priority = 255, Flags = WorldGltf.CarriedFlags };
-        string source = "{\"zones\":null,\"nodeZone\":\"\\u0061uto\",\"nodeGate\":false,\"standable\":true,\"craters\":\"ignored\",\"soil\":\"quicksand\",\"priority\":255,\"flags\":\"0X" + WorldGltf.CarriedFlags.ToString("X8") + "\"}";
+            Craters = TerrainCraters.Ignored, Soil = 3, Priority = 255, Flags = supported };
+        string source = "{\"zones\":null,\"nodeZone\":\"\\u0061uto\",\"nodeGate\":false,\"standable\":true,\"craters\":\"ignored\",\"soil\":\"quicksand\",\"priority\":255,\"flags\":\"0X" + supported.ToString("X8") + "\"}";
         var cold = JsonNode.Parse(source)!;
         Assert.Equal(expected, TerrainAttributes.FromJson(cold, "patch", baseline));
         Assert.Equal(expected, TerrainAttributes.FromJson(cold, "patch", baseline)); // Already materialized path.
@@ -109,9 +110,9 @@ public sealed class TerrainAttributeAdmissionTests
         Assert.Equal(8u, TerrainAttributes.FromJson(new JsonObject { ["flags"] = exact }, "flags").Flags);
         Assert.Equal(8u, TerrainAttributes.FromJson(JsonNode.Parse(JsonSerializer.Serialize(new { flags = exact })), "flags").Flags);
         Assert.Throws<InvalidDataException>(() => TerrainAttributes.FromJson(new JsonObject { ["flags"] = exact + " " }, "flags"));
-        foreach (string invalid in new[] { "0x1", "0xFFFFFFFF", "0x100000000", "0x", "10", "0xZZ" })
+        foreach (string invalid in new[] { "0x1", "0x00030000", "0xFFFFFFFF", "0x100000000", "0x", "10", "0xZZ" })
             Assert.Throws<InvalidDataException>(() => TerrainAttributes.FromJson(new JsonObject { ["flags"] = invalid }, "flags"));
-        var flagsOnly = new TerrainAttributes { Flags = WorldGltf.CarriedFlags };
+        var flagsOnly = new TerrainAttributes { Flags = supported };
         Assert.Equal(flagsOnly, TerrainAttributes.FromJson(flagsOnly.ToJson(), "flags"));
     }
 

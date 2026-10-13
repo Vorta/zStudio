@@ -56,7 +56,7 @@ public sealed class ImportRound22TerrainTests
         var small = Context(Document(triangles: 1), Recipe());
         Assert.Throws<InvalidDataException>(() => Import(small, 0)); // warm the refusal path
         var document = Document(triangles: 100_000);
-        if (embedded) document.SceneExtras = new() { [WorldGltf.Key] = new System.Text.Json.Nodes.JsonObject { ["sourceFormat"] = 2 } };
+        if (embedded) document.SceneExtras = new() { [WorldGltf.Key] = new System.Text.Json.Nodes.JsonObject { ["sourceFormat"] = 4 } };
         var large = Context(document, Recipe());
         long before = GC.GetAllocatedBytesForCurrentThread();
         Assert.Contains("terrain input", Assert.Throws<InvalidDataException>(() => Import(large, 0)).Message);

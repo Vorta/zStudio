@@ -97,8 +97,55 @@ internal static class SourceObjectPlanMcpChecks
             static IEnumerable<string> Bits(JsonNode state) => state["editableFlags"]!.AsArray().Select(f => f!["bit"]!.GetValue<string>());
             Assert.Empty(Bits(await Call("source_world_object", new() { ["document"] = Id(doc), ["node"] = world })));
             Assert.Contains("0x20000", Bits(await Call("source_world_object", new() { ["document"] = Id(doc), ["node"] = Nodes(doc, "crate").First() })));
+
+            // The actual Properties callback and MCP share one exclusive crater-mode edit. Both copies
+            // of this definition follow it, and a mode switch is one undoable operation.
+            await SetProperty("Craters allowed (CanModify)", "on");
+            await AssertModes(0x10000);
+            int history = doc.SourceWorld!.Workspace.UndoCount;
+            doc = Document((await Job("source_world_object_edit", new()
+            {
+                ["document"] = Id(doc), ["revision"] = doc.Revision, ["node"] = CurrentPost(),
+                ["flag"] = "0x20000", ["on"] = true
+            }))["document"]!);
+            Assert.Equal(history + 1, doc.SourceWorld!.Workspace.UndoCount);
+            await AssertModes(0x20000);
+            doc = Document(await Call("undo_redo", new() { ["document"] = Id(doc), ["revision"] = doc.Revision, ["action"] = "undo" }));
+            await AssertModes(0x10000);
+            doc = Document(await Call("undo_redo", new() { ["document"] = Id(doc), ["revision"] = doc.Revision, ["action"] = "redo" }));
+            await AssertModes(0x20000);
+            await SetProperty("No craters (ClipTo)", "off");
+            await AssertModes(0);
+            await SetProperty("Overwrite", "on");
+            var overwritten = (await Call("source_world_object", new() { ["document"] = Id(doc), ["node"] = CurrentPost() }))["editableFlags"]!.AsArray();
+            Assert.True(overwritten.Single(f => f!["bit"]!.GetValue<string>() == "0x800000")!["on"]!.GetValue<bool>());
             // Saved, so closing asks nothing.
             await Job("save_document", new() { ["document"] = Id(doc), ["revision"] = doc.Revision });
+            var saved = JsonNode.Parse(File.ReadAllBytes(fixture.Path("data/m1/models/" + part)))!;
+            var attributes = saved["nodes"]!.AsArray().Single(n => n?["name"]?.GetValue<string>() == "post")!["extras"]!["recoil"]!.AsObject();
+            Assert.False(attributes.ContainsKey("declient"));
+            Assert.False(attributes.ContainsKey("flags"));
+            Assert.True(attributes["overwrite"]!.GetValue<bool>());
+
+            int CurrentPost() => Nodes(doc, "post").Single(p => Key(doc, p) == keys[1]);
+            async Task SetProperty(string label, string value)
+            {
+                Assert.True(await (Task<bool>)show.Invoke(main, [doc, CurrentPost(), token])!);
+                var editor = Assert.IsType<SourceObjectPropertiesEditor>(main.OpenPropertiesWindow!.SourceFields);
+                var description = System.Text.Json.JsonSerializer.SerializeToNode(editor.DescribeAutomationFields())!;
+                string id = description["fields"]!.AsArray().Single(f => f!["Label"]!.GetValue<string>() == label)!["Id"]!.GetValue<string>();
+                await editor.WriteAutomationFieldAsync(id, value);
+                doc = main.OpenPropertiesWindow!.Document!;
+            }
+            async Task AssertModes(uint expected)
+            {
+                foreach (int node in Nodes(doc, "post"))
+                {
+                    var flags = (await Call("source_world_object", new() { ["document"] = Id(doc), ["node"] = node }))["editableFlags"]!.AsArray();
+                    Assert.Equal((expected & 0x10000) != 0, flags.Single(f => f!["bit"]!.GetValue<string>() == "0x10000")!["on"]!.GetValue<bool>());
+                    Assert.Equal((expected & 0x20000) != 0, flags.Single(f => f!["bit"]!.GetValue<string>() == "0x20000")!["on"]!.GetValue<bool>());
+                }
+            }
 
             List<int> Nodes(DocumentModel d, string name) => [.. d.PreviewDocument.Scene!.Nodes.Where(n => n.Name == name && d.SourceBuild!.Provenance.ContainsKey(n.Index)).Select(n => n.Index)];
             static string Key(DocumentModel d, int node) => SourceObjectEdits.CopyKey(d.SourceBuild!.Provenance[node]);

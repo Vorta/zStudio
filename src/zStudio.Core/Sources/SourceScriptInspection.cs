@@ -19,7 +19,7 @@ internal sealed class SourceScriptInspection(SourceWorkspace workspace, Cancella
     {
         token.ThrowIfCancellationRequested();
         return worlds ??= SourceProject.Files(workspace.Root, SourceProject.GameGenFolder,
-            n => System.Text.RegularExpressions.Regex.IsMatch(n, @"\Am\d+\.gs\z", System.Text.RegularExpressions.RegexOptions.IgnoreCase), token: token)
+            n => System.Text.RegularExpressions.Regex.IsMatch(n, @"\Am\d+\.gs\z", System.Text.RegularExpressions.RegexOptions.IgnoreCase), workspace.Overlay().Keys.ToArray(), token: token)
             .Where(p => p.Count(c => c == '/') == 1).ToArray();
     }
 

@@ -235,7 +235,7 @@ public sealed class TerrainConversionTests
         var over = Named("flat_over");
         var overExtras = over["extras"] as JsonObject ?? (JsonObject)(over["extras"] = new JsonObject());
         var recoil = overExtras[WorldGltf.Key] as JsonObject ?? (JsonObject)(overExtras[WorldGltf.Key] = new JsonObject());
-        recoil["flags"] = $"{WorldGltf.DefaultCarried | 0x20:x8}";
+        recoil["intersectBounds"] = true;
         // A zone written as a whole float reads as the importer reads it.
         var a = Named("flat_a");
         ((JsonObject)a["extras"]![WorldGltf.Key]!)["zone"] = "THREE";

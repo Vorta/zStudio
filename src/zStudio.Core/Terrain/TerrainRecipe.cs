@@ -247,8 +247,8 @@ public sealed record TerrainAttributes
             {
                 null => null,
                 JsonValue v when v.TryGetValue(out string? hex) && hex.StartsWith("0x", StringComparison.OrdinalIgnoreCase) && uint.TryParse(hex.AsSpan(2), System.Globalization.NumberStyles.HexNumber, System.Globalization.CultureInfo.InvariantCulture, out uint word)
-                    && (word & ~Worlds.WorldGltf.CarriedFlags) == 0 => word,
-                _ => throw Error("flags is a hexadecimal word (\"0x…\") of the carried node flags"),
+                    && (word & ~Worlds.WorldGltf.CarriedFlags) == 0 && (word & 0x30000u) != 0x30000u => word,
+                _ => throw Error("flags is a hexadecimal word (\"0x…\") of the supported carried node flags, with at most one of CanModify and ClipTo"),
             }
         };
         return a;

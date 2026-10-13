@@ -586,6 +586,11 @@ internal static partial class WorldSources
             token.ThrowIfCancellationRequested();
             if (!written.Add(path)) return;
             unit = physicalUnits[path];
+            // A script-edited load root cannot contribute its final flags to the model: the script
+            // applies those edits again when building. Reconstruct the native pre-script defaults
+            // explicitly, including for reference-only copies. Source-format omission now means false.
+            loadRoot ??= new WorldNode("", WorldNodeClass.Object3D)
+            { Flags = WorldGltf.DefaultCarried, Zone = WorldGltf.DefaultZone };
             var zoned = WorldGltf.ExportZoned(unit.Content, unit.Zone, new()
             {
                 Token = token,

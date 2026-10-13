@@ -364,35 +364,62 @@ public static class SourceObjectEdits
         string label = $"{(on ? "Set" : "Clear")} flag 0x{bit:X} of {nodeName}";
         // The built node has the value its sources give it (the engine update leaves these bits alone): asked again, nothing
         // changes, rather than a line repeating it.
-        if (((node.Flags & bit) != 0) == on) return new(label, [], nodeName, []);
+        if (((WorldGltf.SetNodeFlag(node.Flags, bit, on) ^ node.Flags) & WorldGltf.CarriedFlags) == 0) return new(label, [], nodeName, []);
+        // The source mode is exclusive, although the original script command sets only CanModify.
+        // Prepare both provenance-aware changes before returning one atomic workspace transaction.
+        SourceEditPlan? clearOther = null;
+        if (on && (bit is 0x10000u or 0x20000u) && (node.Flags & (0x30000u ^ bit)) != 0)
+        {
+            if (origin.ModelFile == null)
+                throw new InvalidDataException($"{nodeName}'s crater mode cannot switch: no script command clears ClipTo or sets it. Edit the model source that owns the mode first.");
+            if (bit == 0x10000u && origin.Writers.ContainsKey("NodeSetCanModify"))
+                clearOther = GltfEdit(workspace, origin, label, gltf =>
+                {
+                    if (gltf["extras"] is not JsonObject extras) gltf["extras"] = extras = new();
+                    if (extras[WorldGltf.Key] is not JsonObject recoil) extras[WorldGltf.Key] = recoil = new();
+                    WorldGltf.WriteNodeFlags(recoil, WorldGltf.SetNodeFlag(WorldGltf.StoredNodeFlags(recoil), 0x20000u, false));
+                }, token);
+            else if (bit == 0x20000u && origin.Writers.ContainsKey("NodeSetCanModify"))
+                clearOther = PlanFlag(workspace, node, origin, executions, 0x10000u, false, token, mission, copies, world, write);
+        }
+        SourceEditPlan Finish(SourceEditPlan plan)
+        {
+            if (clearOther != null)
+            {
+                if (clearOther.Changes.Select(c => c.Relative).Intersect(plan.Changes.Select(c => c.Relative), StringComparer.OrdinalIgnoreCase).Any())
+                    throw new InvalidDataException("The crater-mode edits overlap in one source file; change the source instructions directly.");
+                plan = new(label, [.. clearOther.Changes, .. plan.Changes], $"{clearOther.Target}; {plan.Target}", [.. clearOther.Notes, .. plan.Notes]);
+            }
+            if (on && bit == 0x20000u && origin.ModelFile is { } model)
+                SourceDeclientEdits.Validate(workspace, model, plan, inspection, token);
+            return plan;
+        }
         string value = on ? "on" : "off";
         if (FlagCommands.TryGetValue(bit, out string? command) && origin.Writers.TryGetValue(command, out var writer))
         {
             // A flag command sets one bit of the current node, so a later one decides it: set in a script other missions run
             // too (weapons.gw's templates), this mission sets it again before writing its world.
-            if (InThisMission(workspace, nodeName, label, [writer.Script], [[command, value]], executions, token, mission, world, write, inspection) is { } mine) return mine;
+            if (InThisMission(workspace, nodeName, label, [writer.Script], [[command, value]], executions, token, mission, world, write, inspection) is { } mine) return Finish(mine);
             ScriptEdit edit = new(workspace, writer.Script, executions, token, mission, inspection);
             edit.Replace(writer, new() { [1] = value });
-            return new(label, edit.Changes(), $"{writer.Script} line {writer.Line}", edit.Notes);
+            return Finish(new(label, edit.Changes(), $"{writer.Script} line {writer.Line}", edit.Notes));
         }
         if (origin.ModelFile != null)
         {
             // The file's node changes in every copy and load of it; one whose script sets the flag keeps the value it sets.
             List<string> kept = [.. (copies ?? []).Where(c => !ReferenceEquals(c, origin)).Select(c => command != null && c.Writers.TryGetValue(command, out var w) ? w : null).OfType<SourceInstruction>()
                 .Take(1).Select(w => $"{w.Script} line {w.Line} ({w.Command}) sets this flag on another {(origin.Database ? "copy" : "load")} of {nodeName}, which keeps the value it sets.")];
-            return GltfEdit(workspace, origin, label, node =>
+            return Finish(GltfEdit(workspace, origin, label, node =>
             {
                 var extras = node["extras"] as JsonObject ?? (JsonObject)(node["extras"] = new JsonObject());
                 var recoil = extras[WorldGltf.Key] as JsonObject ?? (JsonObject)(extras[WorldGltf.Key] = new JsonObject());
-                // As the importer reads it: hexadecimal, with or without 0x.
                 uint carried = WorldGltf.StoredNodeFlags(recoil);
-                carried = on ? carried | bit : carried & ~bit;
-                if (carried == WorldGltf.DefaultCarried) recoil.Remove("flags"); else recoil["flags"] = $"0x{carried:X8}";
-            }, token, kept);
+                WorldGltf.WriteNodeFlags(recoil, WorldGltf.SetNodeFlag(carried, bit, on));
+            }, token, kept));
         }
         if (command == null) throw new InvalidDataException($"No script command sets flag 0x{bit:X}; {nodeName} was created by a script.");
         var anchor = origin.Created ?? throw new InvalidDataException($"{nodeName} was neither loaded from a model nor created by a script instruction.");
-        return Insert(workspace, nodeName, anchor, [command, value], label, executions, token, mission, world, write, inspection);
+        return Finish(Insert(workspace, nodeName, anchor, [command, value], label, executions, token, mission, world, write, inspection));
     }
     /// <summary>
     /// Whether a source can set flag <paramref name="bit"/> of the node of class <paramref name="nodeClass"/> that
@@ -638,7 +665,12 @@ public static class SourceObjectEdits
                     token.ThrowIfCancellationRequested();
                     var copied = (JsonObject)root["nodes"]![copy]!;
                     if (local is { } m) GltfNodeEdits.SetLocal(copied, m);
-                    if (flags) ((JsonObject)copied["extras"]![WorldGltf.Key]!)["flags"] = $"0x{node.Flags & WorldGltf.CarriedFlags:X8}";
+                    if (flags)
+                    {
+                        if (copied["extras"] is not JsonObject extras) copied["extras"] = extras = new();
+                        if (extras[WorldGltf.Key] is not JsonObject recoil) extras[WorldGltf.Key] = recoil = new();
+                        WorldGltf.WriteNodeFlags(recoil, node.Flags);
+                    }
                 }
                 // A shared node inside the copy is a new one, read from its own first copy: it keeps the zone of the one it copies,
                 // which the original's holder may have given it from elsewhere in the file.
@@ -1466,8 +1498,7 @@ public static class SourceObjectEdits
                     else engine.Remove(key);
                 }
                 uint flags = changedGate ? changedFlags : (changedFlags & ~WorldGltf.ZoneGate) | (copyFlags & WorldGltf.ZoneGate);
-                if (flags == WorldGltf.DefaultCarried && zones?["flags"] == null) engine.Remove("flags");
-                else engine["flags"] = $"0x{flags:X8}";
+                WorldGltf.WriteNodeFlags(engine, flags);
                 if (engine.Count == 0) extras.Remove(WorldGltf.Key);
                 if (extras.Count == 0) copy.Remove("extras");
             }
@@ -1502,13 +1533,9 @@ public static class SourceObjectEdits
             foreach (var (extra, content) in extras)
                 if (extra != WorldGltf.Key) copiedExtras[extra] = content?.DeepClone();
             foreach (var (field, content) in engine)
-                if (field != "flags" && !NodeZoneFields.Contains(field)) copiedEngine[field] = content?.DeepClone();
-            if (compare)
-            {
-                uint flags = WorldGltf.StoredNodeFlags(engine) & ~WorldGltf.ZoneGate;
-                if (flags != (WorldGltf.DefaultCarried & ~WorldGltf.ZoneGate)) copiedEngine["flags"] = $"0x{flags:X8}";
-            }
-            else if (engine["flags"] is { } flags) copiedEngine["flags"] = flags.DeepClone();
+                if (!WorldGltf.NodeFlagFields.Contains(field) && !NodeZoneFields.Contains(field)) copiedEngine[field] = content?.DeepClone();
+            uint flags = WorldGltf.StoredNodeFlags(engine);
+            WorldGltf.WriteNodeFlags(copiedEngine, compare ? flags & ~WorldGltf.ZoneGate : flags);
             if (copiedEngine.Count > 0) copiedExtras[WorldGltf.Key] = copiedEngine;
             if (copiedExtras.Count > 0) own[key] = copiedExtras;
         }

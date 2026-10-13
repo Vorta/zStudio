@@ -138,7 +138,7 @@ public static class SourceTerrain
         return candidate;
     }
     /// <summary>
-    /// A surface node's attributes as an object of the file has them: its flags when not the default, and its zone (its
+    /// A surface node's attributes as an object of the file has them: its decoded flags (omitted flags are false), and its zone (its
     /// own, else its parents', as the importer inherits it) when it has one; a node without a zone keeps auto.
     /// </summary>
     private static TerrainAttributes NodeDefaults(TerrainPlacementIndex.Placement placement) => new()

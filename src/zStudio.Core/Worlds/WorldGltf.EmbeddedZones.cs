@@ -6,10 +6,6 @@ namespace Recoil.Zbd.Core.Worlds;
 
 public static partial class WorldGltf
 {
-    /// <summary>The complete authored node flags, including unknown bits retained by property editing.</summary>
-    internal static uint StoredNodeFlags(JsonObject? values) =>
-        values?["flags"] is { } flags ? Hex(flags, "flags", "the source node") : DefaultCarried;
-
     internal static bool HasEmbeddedZones(GltfDocument document) =>
         document.SceneExtras?[Key] is JsonObject scene && scene["sourceFormat"] != null
         || document.AllNodes().Any(node => (node.Extras?[Key] as JsonObject)?["zoneInherited"] != null
@@ -76,9 +72,8 @@ public static partial class WorldGltf
         }
         document.SceneExtras ??= [];
         var scene = EmbeddedValues(document.SceneExtras);
-        scene["sourceFormat"] = 3;
-        if (profile.LoadRoot is { } root) scene["loadRoot"] = WriteEmbeddedNode(root);
-        else scene.Remove("loadRoot");
+        scene["sourceFormat"] = 4;
+        PutLoadRootZone(scene, profile.LoadRoot);
     }
 
     /// <summary>Updates JSON attributes only; buffer URIs, accessors, vertex bytes and unrelated extras remain intact.</summary>
@@ -125,9 +120,8 @@ public static partial class WorldGltf
         int sceneIndex = root["scene"] is { } selected ? checked((int)Integer(selected, "scene", "the source model", 0, int.MaxValue)) : 0;
         if (sceneIndex >= scenes.Count || scenes[sceneIndex] is not JsonObject scene) throw new InvalidDataException("The source scene is invalid.");
         var values = EmbeddedValues(EnsureObject(scene, "extras"));
-        values["sourceFormat"] = 3;
-        if (profile.LoadRoot is { } loadRoot) values["loadRoot"] = WriteEmbeddedNode(loadRoot);
-        else values.Remove("loadRoot");
+        values["sourceFormat"] = 4;
+        PutLoadRootZone(values, profile.LoadRoot);
     }
 
     /// <summary>A placement override belongs to its reference node, and is checked against the referenced topology.</summary>
@@ -186,7 +180,7 @@ public static partial class WorldGltf
         if (scope["references"] == null) return;
         if (scope["references"] is not JsonObject references || references.Count > GltfDocument.MaximumNodes)
             throw new InvalidDataException("Nested reference zone overrides must be a bounded object.");
-        var nodes = document.AllNodes().Where(n => n.Extras?[Key]?["ref"] != null).Select(n => n.Index).ToHashSet();
+        var nodes = document.AllNodes().Where(n => (n.Extras?[Key] as JsonObject)?["ref"] != null).Select(n => n.Index).ToHashSet();
         foreach (var property in references)
         {
             token.ThrowIfCancellationRequested();
@@ -197,10 +191,13 @@ public static partial class WorldGltf
     }
 
     public static WorldNodeZone? EmbeddedLoadRoot(GltfDocument document) =>
-        document.SceneExtras?[Key]?["loadRoot"] is { } value ? ReadEmbeddedLoadRoot(value) : null;
+        SourceSceneValues(document, "the scene")?["loadRoot"] is { } value ? ReadEmbeddedLoadRoot(value) : null;
 
     private static WorldNodeZone ReadEmbeddedLoadRoot(JsonNode value)
     {
+        // A load root may carry flags alone; its missing zone is the engine's unconstrained root zone.
+        if (value is JsonObject fields && !fields.ContainsKey("zone") && !fields.ContainsKey("word") && !fields.ContainsKey("zoneWord"))
+            return new(ReadNodeZoneValue(fields, DefaultZone, "the source load root"), (StoredNodeFlags(fields) & ZoneGate) != 0);
         var root = ReadEmbeddedNode(value);
         if (root.Inherit) throw new InvalidDataException("A source load-root zone cannot inherit from a model parent.");
         return root;
@@ -234,7 +231,8 @@ public static partial class WorldGltf
     private static string ZoneHex(uint value) => "0x" + value.ToString("X8", CultureInfo.InvariantCulture);
     private static JsonObject WriteEmbeddedNode(WorldNodeZone node)
     {
-        JsonObject result = new() { ["gate"] = node.Gate };
+        JsonObject result = [];
+        if (node.Gate) result["altitudeZoneCheck"] = true;
         WriteNodeZoneValue(result, node.Word, node.Inherit); return result;
     }
     private static WorldNodeZone ReadEmbeddedNode(JsonNode? node)
@@ -243,13 +241,24 @@ public static partial class WorldGltf
         bool inherited = NodeZoneIsInherited(value, "the source zone");
         if (value["zone"] == null && value["word"] == null && value["zoneWord"] == null)
             throw new InvalidDataException("A source node zone needs a numeric zone ID, \"any\" or \"inherit\".");
-        return new(ReadNodeZoneValue(value, DefaultZone, "the source zone"), Flag(value["gate"]!, "gate", "the source zone"),
+        return new(ReadNodeZoneValue(value, DefaultZone, "the source zone"), (StoredNodeFlags(value) & ZoneGate) != 0,
             inherited);
     }
     private static void PutNodeZone(JsonObject values, WorldNodeZone zone)
     {
         WriteNodeZoneValue(values, zone.Word, zone.Inherit);
-        uint flags = values["flags"] is { } previous ? Hex(previous, "flags", "the source node") : DefaultCarried;
-        values["flags"] = ZoneHex(zone.Gate ? flags | ZoneGate : flags & ~ZoneGate);
+        uint flags = StoredNodeFlags(values);
+        WriteNodeFlags(values, zone.Gate ? flags | ZoneGate : flags & ~ZoneGate);
+    }
+
+    private static void PutLoadRootZone(JsonObject scene, WorldNodeZone? zone)
+    {
+        if (zone is { } value) PutNodeZone(EnsureObject(scene, "loadRoot"), value);
+        else if (scene["loadRoot"] is JsonObject root)
+        {
+            // Zone-only edits must retain the independently authored load-root flags.
+            foreach (string key in new[] { "zone", "zonePadding", "zoneWord", "word" }) root.Remove(key);
+            if (root.Count == 0) scene.Remove("loadRoot");
+        }
     }
 }

@@ -1,4 +1,10 @@
-## Source reconstruction 0.8.5 — local validation complete (2026-10-13)
+## Readable source flags — local validation complete (2026-10-13)
+
+Source format 4 replaces packed node flags with named Boolean attributes (omitted means false; writers emit true only) and optional `declient` (`canModify` or `clipTo`; omitted/null means neither). Load-root attributes share one object, and placement altitude gates use `altitudeZoneCheck`. Earlier marked formats and packed node fields require fresh reconstruction. Source builds normalize the unresolved upper bits to zero; direct binary preservation remains unchanged.
+
+The final Release build has zero warnings or errors. All 2,864 Core tests pass with original 1999 and MW3 data, all 188 Desktop/protocol tests pass on a private Windows desktop with settings restored, and all four original-1998 reconstruction/export and terrain checks pass. None were skipped; 163 focused checks also pass. Integration checks found and fixed missing explicitly reconstructed load-root defaults and a shared crater-mode edit that could conflict with another mission's script. The latter validates affected worlds against proposed files before accepting the edit. Three fresh reviewers examined the full change from its actual branch base and completed separate challenge passes, with no actionable P1/P2 remaining. Version 0.8.5 remains local and unreleased; earlier milestones below predate this follow-up.
+
+## Source reconstruction 0.8.5 — prior local validation complete (2026-10-13)
 
 Source glTF stores object `zone` as an ID from 0–254, `"any"` or `"inherit"`. Numeric object 255 and the obsolete inheritance booleans are refused. Polygon ID arrays remain numeric, including 255 for any zone. Altitude gates and opaque-byte preservation stay separate; legacy packed input remains readable. Inherited-node inspection reports the selected occurrence's effective imported zone; exact inspection and GUI/MCP zone-editor opening refuse stale source builds until reload. Catalog-only reads and stale-draft cancellation remain available.
 

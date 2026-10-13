@@ -39,7 +39,7 @@ public sealed class SourceObjectReviewFixTests
             node!.AsObject().Remove("mesh");
             node["extras"] ??= new JsonObject(); node["extras"]![WorldGltf.Key] ??= new JsonObject();
             node["extras"]![WorldGltf.Key]!["ref"] = "leaf.gltf";
-            node["extras"]![WorldGltf.Key]!["flags"] = $"0x{WorldGltf.DefaultCarried | 0x04000000u:X8}";
+            node["extras"]![WorldGltf.Key]!["overwrite"] = true;
         }
         fixture.Write(database, root.ToJsonString());
         SourceWorkspace workspace = new(fixture.Project);
@@ -71,7 +71,7 @@ public sealed class SourceObjectReviewFixTests
         Assert.Equal(77u, Zone(world.Nodes.Single(n => n.Name == "leaf")));
         Assert.Equal(11u, Zone(world.Nodes.Single(n => n.Name == "gate")));
         Assert.All(JsonNode.Parse(workspace.Read(database, Token)!)!["nodes"]!.AsArray().Where(n => n?["name"]?.GetValue<string>() == "gate"),
-            n => Assert.NotEqual(0u, WorldGltf.StoredNodeFlags(n!["extras"]![WorldGltf.Key]!.AsObject()) & 0x04000000u));
+            n => Assert.True(n!["extras"]![WorldGltf.Key]!["overwrite"]!.GetValue<bool>()));
         var target = Target(workspace, build, world, "sgate1");
         Apply(workspace, move ? SourceObjectEdits.PlanReparent(target, world.Nodes.Single(n => n.Name == "sgate2"), Token)
             : SourceObjectEdits.PlanDelete(target, Token));

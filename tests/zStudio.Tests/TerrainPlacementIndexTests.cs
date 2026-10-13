@@ -117,7 +117,8 @@ public sealed class TerrainPlacementIndexTests
         var source = Document(0, 1); var leaf = source.Roots[0]; leaf.Name = "surface.007";
         leaf.Matrix = Matrix4x4.CreateTranslation(0, 1, 0);
         const uint carried = WorldGltf.DefaultCarried | 0x10000;
-        leaf.Extras = new() { ["recoil"] = new JsonObject { ["flags"] = $"0x{carried:X8}" } };
+        leaf.Extras = new() { ["recoil"] = new JsonObject { ["altitudeSurface"] = true, ["intersectSurface"] = true,
+            ["altitudeZoneCheck"] = true, ["declient"] = "canModify" } };
         GltfNode parent = new() { Name = "parent", Matrix = Matrix4x4.CreateTranslation(0, 2, 0),
             Extras = new() { ["recoil"] = new JsonObject { ["zone"] = 3 } } };
         parent.Children.Add(leaf); source.Roots.Clear(); source.Roots.Add(parent); Write(fixture, source);
@@ -139,26 +140,6 @@ public sealed class TerrainPlacementIndexTests
     }
 
     [Fact]
-    public void RepeatedSelectionsDecodeCarriedFlagsOnceBeforeDuplicateRefusal()
-    {
-        using SourceWorldFixture fixture = new();
-        var source = Document(0, 1);
-        source.Roots[0].Extras = new() { ["recoil"] = new JsonObject { ["flags"] = new string('x', 1_000_000) } };
-        Write(fixture, source);
-        SourceWorkspace workspace = new(fixture.Project);
-        string[] names = Enumerable.Repeat("s000", TerrainRecipe.MaximumSurfaces).ToArray();
-        long start = GC.GetAllocatedBytesForCurrentThread();
-        var refusal = Assert.Throws<InvalidDataException>(() => SourceTerrain.Create(workspace, Database, Model, names, token: Token));
-        Assert.Contains("for two surfaces", refusal.Message);
-        // The source is parsed once; the old per-selection cold scalar decode alone copied about 512 MiB.
-        Assert.InRange(GC.GetAllocatedBytesForCurrentThread() - start, 0, 64L * 1024 * 1024);
-        Assert.False(workspace.IsDirty); Assert.Equal(0, workspace.Revision);
-        SourceTerrain.Create(workspace, Database, Model, ["s000"], token: Token);
-        Assert.Null(Assert.Single(SourceTerrain.Read(workspace, "data/m1/models/surfaces.terrain.json", Token).Surfaces).Defaults.Flags);
-        workspace.Undo(); Assert.False(workspace.IsDirty);
-    }
-
-    [Fact]
     public void CreationCanCancelInsideItsInitialPlacementAndInheritedZoneScan()
     {
         using SourceWorldFixture fixture = new(); Write(fixture, Document(4000, 1));
@@ -177,7 +158,7 @@ public sealed class TerrainPlacementIndexTests
     [Theory]
     [InlineData("raw")]
     [InlineData("name")]
-    [InlineData("flags")]
+    [InlineData("declient")]
     public void NameTextIsChargedBeforeSuffixCopyOrColdJsonStringDecode(string field)
     {
         var source = Document(0, 1); var node = source.Roots[0];

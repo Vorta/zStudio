@@ -206,7 +206,7 @@ public sealed class ScanTerrainRound7Tests
         Assert.True(allocated < Bound, $"Planning allocated {allocated:N0} bytes.");
         var surface = Assert.Single(plan.Groups);
         Assert.Equal(1000, surface.Nodes.Count);
-        Assert.Equal("zany_01000018_m" + SourceProject.Sha256(Encoding.UTF8.GetBytes(values.ToJsonString()))[..6], surface.Id);
+        Assert.Equal("zany_00000000_m" + SourceProject.Sha256(Encoding.UTF8.GetBytes(values.ToJsonString()))[..6], surface.Id);
         Assert.True(JsonNode.DeepEquals(values, surface.ModelValues));
     }
 
@@ -302,15 +302,17 @@ public sealed class ScanTerrainRound7Tests
         long allocated = Allocation(() => WorldGltf.CheckInstances(doc, "big.gltf"));
         Assert.True(allocated < 64L * 1024 * 1024, $"Comparing allocated {allocated:N0} bytes.");
         // Values that differ are still found, a missing one as null, as before.
-        var differing = Copies(2, i => new() { ["instance"] = 1, ["flags"] = i == 0 ? "0x1" : "0x2" }, _ => null);
+        var differing = Copies(2, i => new() { ["instance"] = 1, ["landmark"] = i == 0 }, _ => null);
         Assert.Contains("differ in the engine values of", Assert.Throws<InvalidDataException>(() => WorldGltf.CheckInstances(differing, "x.gltf")).Message);
-        var extra = Copies(2, i => i == 0 ? new() { ["instance"] = 1 } : new() { ["instance"] = 1, ["flags"] = "0x2" }, _ => null);
+        var extra = Copies(2, i => i == 0 ? new() { ["instance"] = 1 } : new() { ["instance"] = 1, ["landmark"] = true }, _ => null);
         Assert.Contains("differ in the engine values of", Assert.Throws<InvalidDataException>(() => WorldGltf.CheckInstances(extra, "x.gltf")).Message);
-        var fewer = Copies(2, i => i == 1 ? new() { ["instance"] = 1 } : new() { ["instance"] = 1, ["flags"] = "0x2" }, _ => null);
+        var fewer = Copies(2, i => i == 1 ? new() { ["instance"] = 1 } : new() { ["instance"] = 1, ["landmark"] = true }, _ => null);
         Assert.Contains("differ in the engine values of", Assert.Throws<InvalidDataException>(() => WorldGltf.CheckInstances(fewer, "x.gltf")).Message);
         // What copies may write differently is left out, and a value missing from the other compares as null (as DeepEquals does).
         WorldGltf.CheckInstances(Copies(2, i => new() { ["instance"] = 1, ["name"] = "copy", [WorldGltf.ZoneFromLoad] = i == 0 }, _ => null), "x.gltf");
         WorldGltf.CheckInstances(Copies(2, i => i == 0 ? new() { ["instance"] = 1, ["a"] = null } : new() { ["instance"] = 1, ["b"] = null }, _ => null), "x.gltf");
+        WorldGltf.CheckInstances(Copies(2, i => i == 0 ? new() { ["instance"] = 1, ["landmark"] = false, ["declient"] = null }
+            : new() { ["instance"] = 1 }, _ => null), "x.gltf");
     }
 
     [Fact]
@@ -344,12 +346,13 @@ public sealed class ScanTerrainRound7Tests
         Assert.Equal("{\"mesh\":0,\"children\":[{\"children\":[]},{\"mesh\":1,\"children\":[]}]}", SourceObjectEdits.Shape(tree, 0, 0).ToJsonString());
         JsonArray copies = [new JsonObject { ["mesh"] = 0 }, new JsonObject { ["mesh"] = 0,
             ["extras"] = new JsonObject { [WorldGltf.Key] = new JsonObject { ["zone"] = 77, ["zonePadding"] = new JsonArray(204, 187, 170),
-                ["flags"] = $"0x{WorldGltf.DefaultCarried & ~WorldGltf.ZoneGate:X8}" } } }];
+                ["altitudeZoneCheck"] = true } } }];
         Assert.True(JsonNode.DeepEquals(SourceObjectEdits.Shape(copies, 0, 0), SourceObjectEdits.Shape(copies, 1, 0)));
-        foreach (uint bit in new[] { 0x10000u, 0x04000000u })
+        foreach (string field in new[] { "declient", "overwrite" })
         {
-            copies[1]!["extras"]![WorldGltf.Key]!["flags"] = $"0x{WorldGltf.DefaultCarried | bit:X8}";
+            copies[1]!["extras"]![WorldGltf.Key]![field] = field == "declient" ? JsonValue.Create("canModify") : JsonValue.Create(true);
             Assert.False(JsonNode.DeepEquals(SourceObjectEdits.Shape(copies, 0, 0), SourceObjectEdits.Shape(copies, 1, 0)));
+            copies[1]!["extras"]![WorldGltf.Key]!.AsObject().Remove(field);
         }
         copies[1]!.AsObject().Remove("extras"); copies[1]!["mesh"] = 1;
         Assert.False(JsonNode.DeepEquals(SourceObjectEdits.Shape(copies, 0, 0), SourceObjectEdits.Shape(copies, 1, 0)));

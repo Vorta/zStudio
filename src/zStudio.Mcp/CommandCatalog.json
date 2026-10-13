@@ -5881,7 +5881,7 @@
       {
         "Name": "flag",
         "Type": "string",
-        "Description": "Node flag to set or clear.",
+        "Description": "Node flag to set or clear. Enabling CanModify (0x10000) or ClipTo (0x20000) clears the other mode atomically; a source that cannot express that change is refused.",
         "Required": false,
         "Choices": [
           "0x8",
@@ -5890,14 +5890,15 @@
           "0x40",
           "0x80",
           "0x10000",
-          "0x20000"
+          "0x20000",
+          "0x800000"
         ],
         "Properties": null
       },
       {
         "Name": "on",
         "Type": "boolean",
-        "Description": "Whether the flag is set; required with flag.",
+        "Description": "Whether the flag is set; required with flag. Clearing the selected crater mode leaves neither mode. For a glTF-owned mode this removes declient; a script-owned setting changes its instruction.",
         "Required": false,
         "Choices": null,
         "Properties": null
