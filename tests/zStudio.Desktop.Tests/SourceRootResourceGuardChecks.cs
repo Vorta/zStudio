@@ -63,52 +63,6 @@ internal static partial class SourceRootResourceGuardChecks
             foreach (var doc in main.ViewModel.Documents.ToArray()) main.ViewModel.CloseResolved(doc);
             main.Close();
         }
-        await StaleCheckoutPreservesReplacement(token);
-    }
-
-    private static async Task StaleCheckoutPreservesReplacement(CancellationToken token)
-    {
-        using SourceWorldFixture original = new(), replacement = new();
-        using TestAlias alias = TestAlias.Create(original.Project);
-        var main = new MainWindow { Left = -12000, ShowInTaskbar = false }; main.Show();
-        using var proceed = new SemaphoreSlim(0);
-        TaskCompletionSource<BlenderCheckout> written = new(TaskCreationOptions.RunContinuationsAsynchronously);
-        try
-        {
-            await main.ViewModel.OpenRootAsync(alias.Root, token);
-            var workspace = (SourceWorkspace)typeof(MainWindow).GetMethod("SourceWorkspaceFor", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(main, [alias.Root])!;
-            main.CheckoutSourceModel = (w, model, ct) =>
-            {
-                try
-                {
-                    var checkout = SourceBlender.Checkout(w, model, ct);
-                    written.TrySetResult(checkout);
-                    Assert.True(proceed.Wait(TimeSpan.FromSeconds(20), ct));
-                    return checkout;
-                }
-                catch (Exception ex) { written.TrySetException(ex); throw; }
-            };
-            var pending = (Task<BlenderCheckout>)typeof(MainWindow).GetMethod("CheckoutForBlenderAsync", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(main, [original.Tank, token])!;
-            var checkout = await written.Task.WaitAsync(token);
-            string relative = Path.GetRelativePath(alias.Root, checkout.Folder);
-            string actualCheckout = Path.Combine(original.Project, relative);
-            byte[] manifest = File.ReadAllBytes(Path.Combine(actualCheckout, "manifest.json"));
-            workspace.Apply("Change while checkout finishes", [("gamegen/m1.gs", Encoding.ASCII.GetBytes("Quit\n"))], token);
-            string foreignFolder = Path.Combine(replacement.Project, relative);
-            Directory.CreateDirectory(foreignFolder);
-            string sentinel = Path.Combine(foreignFolder, "unrelated.txt");
-            File.WriteAllText(sentinel, "external replacement survives");
-            alias.Remap(replacement.Project);
-            proceed.Release();
-            var refusal = await Assert.ThrowsAsync<StudioCommandException>(async () => { await pending; });
-            Assert.Equal("context_changed", refusal.Code);
-            Assert.Contains("checkout completed", refusal.Message);
-            Assert.Contains("recorded path", refusal.Message);
-            Assert.Equal("external replacement survives", File.ReadAllText(sentinel));
-            Assert.Equal(manifest, File.ReadAllBytes(Path.Combine(actualCheckout, "manifest.json")));
-            Assert.True(File.Exists(Path.Combine(actualCheckout, "input", Path.GetFileName(original.Tank))));
-        }
-        finally { proceed.Release(); main.Close(); }
     }
 
     // Uses an unused per-session DOS drive alias; cleanup removes only this fixture's exact mapping.
@@ -136,13 +90,6 @@ internal static partial class SourceRootResourceGuardChecks
             if (currentTarget == null) return;
             if (!DefineDosDevice(0x1 | 0x2 | 0x4 | 0x8, drive, currentTarget)) throw new Win32Exception(Marshal.GetLastPInvokeError());
             currentTarget = null;
-        }
-        public void Remap(string directory)
-        {
-            Dispose();
-            string next = @"\??\" + directory;
-            if (!DefineDosDevice(0x1 | 0x8, drive, next)) throw new Win32Exception(Marshal.GetLastPInvokeError());
-            currentTarget = next;
         }
         [DllImport("kernel32.dll", EntryPoint = "QueryDosDeviceW", CharSet = CharSet.Unicode, SetLastError = true)]
         private static extern uint QueryDosDevice(string device, [Out] char[] buffer, uint length);

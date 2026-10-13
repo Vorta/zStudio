@@ -87,7 +87,7 @@ public static partial class SourceWorlds
     /// <summary>Missions whose world the project builds (those with a gamegen/mN.gs script), in number order.</summary>
     public static IReadOnlyList<string> Missions(string root, CancellationToken token = default) => SourceBuilder.Plan(root, automaticPacks: false, token: token).Where(p => p.Family == "world").Select(p => p.Path.Split('/')[0]).ToArray();
 
-    /// <summary>Physical models and map-owned logical aliases a script can load, in full path order.</summary>
+    /// <summary>Physical models a script can load, in full path order.</summary>
     public static IReadOnlyList<SourceModelChoice> Models(string root, CancellationToken token = default)
         => Models(new SourceWorkspace(root), token);
 
@@ -97,7 +97,7 @@ public static partial class SourceWorlds
         if (!SourceProject.IsProject(root)) throw new InvalidDataException("This folder is not a source project (it needs data and gamegen folders).");
         var pending = workspace.Overlay();
         HashSet<string> paths = new(StringComparer.OrdinalIgnoreCase);
-        long characters = 0, remaining = 128L << 20;
+        long characters = 0;
         void Add(string path)
         {
             token.ThrowIfCancellationRequested();
@@ -111,15 +111,6 @@ public static partial class SourceWorlds
             n => n.EndsWith(".gltf", StringComparison.OrdinalIgnoreCase) || n.EndsWith(".glb", StringComparison.OrdinalIgnoreCase),
             pending.Keys.ToArray(), token))
             if (workspace.Exists(path, token)) Add(path);
-        foreach (string mission in SourceProject.MissionFolders(root, token))
-        {
-            byte[]? bytes = workspace.Read(SourceMapZones.PathForMission(mission.ToLowerInvariant()), token, Math.Min(remaining, SourceMapZones.MaximumBytes));
-            if (bytes == null) continue;
-            remaining -= bytes.Length;
-            var bindings = new SourceMissionModels(SourceMapZones.Parse(bytes, token), token);
-            foreach (var asset in bindings.Map!.Assets)
-                if (bindings.Exists(asset.LogicalPath, p => workspace.Exists(p, token)) && workspace.Exists(asset.GeometryPath, token)) Add(asset.LogicalPath);
-        }
         return paths.Order(StringComparer.OrdinalIgnoreCase)
             .Select(p => new SourceModelChoice(p, Path.GetDirectoryName(p)!.Replace('\\', '/'), Path.GetFileNameWithoutExtension(p))).ToArray();
     }
@@ -134,16 +125,7 @@ public static partial class SourceWorlds
     public static void Validate(SourceWorkspace workspace, string? mission, SourceModelAddition addition, CancellationToken token = default)
     {
         ValidateTokens(addition);
-        var map = AdditionMap(workspace, mission, addition.Model, token, out _);
-        ValidateBinding(workspace, addition.Model, map, token);
-    }
-
-    private static void ValidateBinding(SourceWorkspace workspace, string logical, SourceMapZones? map, CancellationToken token)
-    {
-        var bindings = new SourceMissionModels(map, token);
-        string model = SourceWorkspace.Normalize(logical);
-        if (!bindings.Exists(model, p => workspace.Exists(p, token)) || !workspace.Exists(bindings.Geometry(model), token))
-            throw new InvalidDataException($"The model {JsonData.ShownText(model)} or its backing geometry does not exist.");
+        ValidateModelClosure(workspace, addition.Model, token);
     }
 
     /// <summary>Cheap token/value validation for dialog input; workspace binding checks run in the prepared edit.</summary>
@@ -627,12 +609,10 @@ public static partial class SourceWorlds
         if (!MissionName().IsMatch(mission)) throw new InvalidDataException($"'{mission}' is not a mission folder name.");
         mission = mission.ToLowerInvariant();
         ValidateTokens(addition.Model);
-        var map = AdditionMap(workspace, mission, addition.Model.Model, token, out bool changedZones);
-        ValidateBinding(workspace, addition.Model.Model, map, token);
+        ValidateModelClosure(workspace, addition.Model.Model, token);
         string scriptPath = SourceBuilder.WorldScript(mission), definitionsPath = SourceBuilder.AnimationRoot(mission);
         byte[] script = workspace.Read(scriptPath, token, ProjectReadLimits.Text(maximumSourceBytes)) ?? throw new InvalidDataException($"The project has no world script {scriptPath}.");
         List<(string, byte[]?)> changes = [(scriptPath, InsertIntoScript(script, [addition.Model], scriptPath, token))];
-        if (changedZones) changes.Add((SourceMapZones.PathForMission(mission), map!.Write(token)));
         if (addition.DefinitionFiles.Count > 0)
         {
             foreach (string file in addition.DefinitionFiles)

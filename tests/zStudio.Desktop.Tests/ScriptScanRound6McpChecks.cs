@@ -1,9 +1,6 @@
 using System.IO;
 using System.IO.Pipes;
-using System.Reflection;
 using System.Text.Json.Nodes;
-using System.Windows;
-using System.Windows.Controls;
 using ModelContextProtocol.Client;
 using ModelContextProtocol.Protocol;
 using Recoil.Zbd.Desktop;
@@ -14,8 +11,7 @@ using Xunit;
 namespace Recoil.Zbd.Desktop.Tests;
 
 /// <summary>
-/// The Blender checkout listing through the real named-pipe MCP connection and the GUI's Update from Blender export: both
-/// list the checkouts and their outboxes with one bounded, cancellable scan off the UI thread, and a zstudio/export folder
+/// The retained Blender checkout listing through the real named-pipe MCP connection lists checkouts and their outboxes with one bounded, cancellable scan off the UI thread, and a zstudio/export folder
 /// beyond the scan's budget is refused (io_failed, and the reason in the status) rather than listed in part.
 /// </summary>
 internal static class ScriptScanRound6McpChecks
@@ -39,14 +35,6 @@ internal static class ScriptScanRound6McpChecks
             string refused = (await Call("source_blender_checkouts", new(), error: true)).GetValue<string>();
             Assert.Contains("io_failed", refused, StringComparison.Ordinal);
             Assert.Contains("zstudio/export holds more than 250,000 files and folders", refused, StringComparison.Ordinal);
-            // The GUI's Update from Blender export lists the same way, and says why instead of finding no export. (Reporting it
-            // shows the Problems tab, a saved preference the later checks' windows start with: it is put back.)
-            var layout = main.ViewModel.Settings.GetWorkspace(); var (toolsVisible, toolTab) = (layout.ToolsVisible, layout.ToolTab);
-            main.ViewModel.Status = "";
-            typeof(MainWindow).GetMethod("UpdateFromBlenderClick", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(main, [main, new RoutedEventArgs()]);
-            for (int wait = 0; wait < 500 && !main.ViewModel.Status.Contains("zstudio/export holds more than", StringComparison.Ordinal); wait++) await Task.Delay(10, token);
-            Assert.Contains("zstudio/export holds more than 250,000 files and folders", main.ViewModel.Status, StringComparison.Ordinal);
-            ((TabControl)main.FindName("ToolTabs")).SelectedIndex = toolTab; layout.ToolsVisible = toolsVisible; layout.ToolTab = toolTab;
             Directory.Delete(crowded, true);
 
             // Checkouts and their exports (newest first, nested folders included), each outbox scanned once.

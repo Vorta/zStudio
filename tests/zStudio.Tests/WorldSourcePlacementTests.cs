@@ -39,8 +39,8 @@ public sealed class WorldSourcePlacementTests
         long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
         // The old restart-at-two loop alone grew quadratically: the complete operation exceeded 575 MiB.
         Assert.True(allocated < 192L << 20, $"Distinct-version placement allocated {allocated:N0} bytes.");
-        Assert.Equal(count * 2 + 1, outputs.Count);
-        Assert.Equal(count * 2 + 1, outputs.Select(o => o.Path).Distinct(StringComparer.OrdinalIgnoreCase).Count());
+        Assert.Equal(count * 2, outputs.Count);
+        Assert.Equal(count * 2, outputs.Select(o => o.Path).Distinct(StringComparer.OrdinalIgnoreCase).Count());
         Assert.Contains(outputs, o => o.Path == "data/m1/models/model.gltf");
         Assert.Contains(outputs, o => o.Path == "data/m1/models/model_3200.gltf");
     }
@@ -87,7 +87,7 @@ public sealed class WorldSourcePlacementTests
         // trace/decomposition/glTF work; this tests total allocation, not machine-dependent execution time.
         Assert.True(allocated < 128L << 20, $"Repeated-load reconstruction allocated {allocated:N0} bytes.");
         Assert.Empty(notes);
-        Assert.Equal(["data/m1/meta/zones.json", "data/m1/models/model.bin", "data/m1/models/model.gltf"], outputs.Select(o => o.Path).Order(StringComparer.Ordinal));
+        Assert.Equal(["data/m1/models/model.bin", "data/m1/models/model.gltf"], outputs.Select(o => o.Path).Order(StringComparer.Ordinal));
         Assert.Contains("\"asset\"", Encoding.UTF8.GetString(outputs.Single(o => o.Path.EndsWith(".gltf", StringComparison.Ordinal)).Bytes));
     }
 
@@ -116,7 +116,6 @@ public sealed class WorldSourcePlacementTests
     }
 
     private static string[] LogicalPaths(IReadOnlyList<WorldSources.Output> outputs) => outputs
-        .Where(o => o.Path.EndsWith("/meta/zones.json", StringComparison.Ordinal))
-        .SelectMany(o => SourceMapZones.Parse(o.Bytes, Token).Assets).Select(a => a.LogicalPath)
+        .Where(o => o.Path.EndsWith(".gltf", StringComparison.Ordinal)).Select(o => o.Path)
         .Distinct(StringComparer.OrdinalIgnoreCase).Order(StringComparer.Ordinal).ToArray();
 }

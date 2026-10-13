@@ -278,7 +278,7 @@ public static class GltfNodeEdits
             appended.Add(copy);
         }
 
-        List<(JsonObject Owner, string Property, JsonArray Nodes)> rewrittenLists = [];
+        List<(JsonObject Owner, string Property, JsonArray Nodes, int? InlineCount)> rewrittenLists = [];
         for (int i = 0; i < count; i++)
         {
             Visit();
@@ -294,6 +294,8 @@ public static class GltfNodeEdits
         void Rewrite(JsonObject owner, JsonArray list, bool scene)
         {
             JsonArray? rewritten = null;
+            int? inlineCount = scene ? null : InlineCount(owner, list.Count);
+            int rewrittenInline = inlineCount ?? 0;
             for (int at = 0; at < list.Count; at++)
             {
                 Visit();
@@ -307,16 +309,24 @@ public static class GltfNodeEdits
                 }
                 if (rewritten == null) continue;
                 rewritten.Add(list[at]!.DeepClone());
-                if (insert) rewritten.Add(beside[original]);
+                if (insert)
+                {
+                    rewritten.Add(beside[original]);
+                    if (at < inlineCount) rewrittenInline++;
+                }
             }
-            if (rewritten != null) rewrittenLists.Add((owner, scene ? "nodes" : "children", rewritten));
+            if (rewritten != null) rewrittenLists.Add((owner, scene ? "nodes" : "children", rewritten, inlineCount == null ? null : rewrittenInline));
         }
 
         Visit();
         // No cancellation or fallible input validation after this boundary. The caller edits a private candidate too,
         // but the helper itself leaves both the supplied DOM and shared marker map intact on preparation refusal.
         foreach (var copy in appended) nodes.Add(copy);
-        foreach (var (owner, property, rewritten) in rewrittenLists) owner[property] = rewritten;
+        foreach (var (owner, property, rewritten, inlineCount) in rewrittenLists)
+        {
+            owner[property] = rewritten;
+            if (inlineCount is int prefixCount) SetInlineCount(owner, prefixCount);
+        }
         if (instances != null) foreach (var pair in reserved) instances[pair.Key] = pair.Value;
         if (copiedNodes != null) foreach (var pair in copies) copiedNodes.Add(pair.Value, pair.Key);
         return tops;
@@ -369,12 +379,20 @@ public static class GltfNodeEdits
             if (scene["nodes"] is JsonArray || ReferenceEquals(scene, chosen)) lists.Add((scene, "nodes", replacement));
         }
         if (oldParent == parent && (parent != null || sceneRoot)) return;
+        RequireUnsplitInstances(hierarchy, index, parent);
+        int? remainingInline = null;
         if (oldParent is int from)
+        {
+            var originalChildren = (JsonArray)nodes[from]!["children"]!;
+            if (InlineCount((JsonObject)nodes[from]!, originalChildren.Count) is int count)
+                remainingInline = count - (originalChildren.Take(count).Any(value => hierarchy.Integer(value) == index) ? 1 : 0);
             lists.Add(((JsonObject)nodes[from]!, "children", new JsonArray(((JsonArray)nodes[from]!["children"]!)
                 .Where(value => hierarchy.Integer(value) != index).Select(value => value?.DeepClone()).ToArray())));
+        }
         if (parent is int into)
         {
             var replacement = (JsonArray?)nodes[into]!["children"]?.DeepClone() ?? [];
+            _ = InlineCount((JsonObject)nodes[into]!, replacement.Count);
             replacement.Add(index); lists.Add(((JsonObject)nodes[into]!, "children", replacement));
         }
         Matrix4x4 world = hierarchy.World(index), parentWorld = parent is int np ? hierarchy.World(np) : Matrix4x4.Identity;
@@ -427,11 +445,56 @@ public static class GltfNodeEdits
             if (key == "children" && list.Count == 0) owner.Remove(key);
             else owner[key] = list;
         }
+        if (remainingInline is int kept && oldParent is int previous) SetInlineCount((JsonObject)nodes[previous]!, kept);
         if (preparedExtras != null) moved["extras"] = preparedExtras;
         foreach (string key in new[] { "matrix", "translation", "rotation", "scale" })
         {
             moved.Remove(key);
             if (preparedLocal.Remove(key, out var value)) moved[key] = value;
+        }
+    }
+    // Inline prefixes have their own instance dictionary. Moving only part of a shared definition across that boundary
+    // would turn one instance into independent objects with the same serialized mark, which subsequent edits must not
+    // treat as aliases. A whole cohort can move together; nested inline prefixes keep their own dictionary wherever
+    // their holder moves. Appending to an inline holder adds an ordinary suffix child, in the holder's outer dictionary.
+    private static void RequireUnsplitInstances(Hierarchy hierarchy, int index, int? parent)
+    {
+        int Namespace(int node)
+        {
+            for (int depth = 0; hierarchy.Parent(node) is int ancestor; node = ancestor, depth++)
+            {
+                hierarchy.Check();
+                if (depth > GltfDocument.MaximumDepth) throw new InvalidDataException("The node hierarchy is cyclic or too deep.");
+                var children = hierarchy.Children(ancestor);
+                if (InlineCount((JsonObject)hierarchy.Nodes[ancestor]!, children.Count) is int count)
+                    for (int child = 0; child < count; child++)
+                    {
+                        hierarchy.Check();
+                        if (children[child] == node) return ancestor;
+                    }
+            }
+            return -1;
+        }
+        if (Namespace(index) == (parent is int destination ? Namespace(destination) : -1)) return;
+        HashSet<int> affected = [];
+        HashSet<long> marks = [];
+        Stack<int> pending = new([index]);
+        long? Mark(int node) => hierarchy.Instance(hierarchy.Nodes[node]?["extras"]?[WorldGltf.Key]?["instance"]);
+        while (pending.TryPop(out int node))
+        {
+            hierarchy.Check();
+            if (!affected.Add(node)) continue;
+            if (Mark(node) is long mark) marks.Add(mark);
+            var children = hierarchy.Children(node);
+            int prefix = InlineCount((JsonObject)hierarchy.Nodes[node]!, children.Count) ?? 0;
+            for (int child = prefix; child < children.Count; child++) { hierarchy.Check(); pending.Push(children[child]); }
+        }
+        if (marks.Count == 0) return;
+        for (int node = 0; node < hierarchy.Nodes.Count; node++)
+        {
+            hierarchy.Check();
+            if (!affected.Contains(node) && Mark(node) is long mark && marks.Contains(mark))
+                throw new InvalidDataException("This move would split a shared instance across an inferred source-file boundary. Move all of its holders together, or choose a parent within the same source section.");
         }
     }
     /// <summary>
@@ -617,6 +680,59 @@ public static class GltfNodeEdits
     private static JsonArray Nodes(JsonObject root) =>
         root["nodes"] as JsonArray is { } nodes && nodes.All(n => n is JsonObject) ? nodes : throw new InvalidDataException("The file has no valid node list.");
     private static IEnumerable<int> Children(JsonArray nodes, int i) => (nodes[i]!["children"] as JsonArray ?? []).Select(c => GltfInteger.Int32(c) is int k && k >= 0 && k < nodes.Count ? k : throw new InvalidDataException($"Node {i} lists an invalid child."));
+
+    /// <summary>The cached inline section occupies the authored prefix, not an arbitrary number of remaining children.</summary>
+    internal static int? InlineCount(JsonObject node, int children)
+    {
+        if (node["extras"] is not JsonObject extras || extras[WorldGltf.Key] is not JsonObject values || values["inlineSource"] == null) return null;
+        if (values["inlineSource"] is not JsonObject section) throw new InvalidDataException("An inline source must be an object.");
+        int count = GltfInteger.Int32(section["count"], "inline source count");
+        if (count < 0 || count > children) throw new InvalidDataException("The inline source count exceeds its child list.");
+        return count;
+    }
+    internal static void SetInlineCount(JsonObject node, int count) => node["extras"]![WorldGltf.Key]!["inlineSource"]!["count"] = count;
+
+    /// <summary>Promoting a cached instance retains the first definition's reference-local assignments, including nested scopes.</summary>
+    internal static void PreservePromotedReferenceOverrides(GltfDocument before, GltfDocument after, JsonObject root,
+        IReadOnlyDictionary<int, int> promotedOrigins, CancellationToken token)
+    {
+        if (promotedOrigins.Count == 0) return;
+        var previous = before.AllNodes().Distinct().ToDictionary(n => n.Index);
+        var current = after.AllNodes().Distinct().ToDictionary(n => n.Index);
+        var nodes = Nodes(root);
+        Dictionary<JsonNode, int> sizes = new(ReferenceEqualityComparer.Instance);
+        long retained = 0;
+        foreach (var (index, original) in promotedOrigins)
+        {
+            token.ThrowIfCancellationRequested();
+            var oldValues = previous[original].Extras?[WorldGltf.Key] as JsonObject;
+            var nowValues = current[index].Extras?[WorldGltf.Key] as JsonObject;
+            string? oldReference = oldValues?["ref"]?.GetValue<string>();
+            string? newReference = nowValues?["ref"]?.GetValue<string>();
+            if (oldReference == null && newReference == null) continue;
+            if (!string.Equals(oldReference, newReference, StringComparison.Ordinal))
+                throw new InvalidDataException("The promoted instance references a different model from its first definition; its reference assignments cannot be preserved safely.");
+            var assignment = oldValues?["zoneOverrides"];
+            if (JsonNode.DeepEquals(assignment, nowValues?["zoneOverrides"])) continue;
+            if (nodes[index] is not JsonObject stored) throw new InvalidDataException("The promoted reference has no source node.");
+            if (assignment != null)
+            {
+                if (!sizes.TryGetValue(assignment, out int size)) sizes.Add(assignment, size = GltfJson.Write(assignment, false, token).Length);
+                if (size > (GltfDocument.MaximumMetadataBytes - retained) / 2)
+                    throw new InvalidDataException("Preserving promoted reference assignments exceeds the model metadata allowance.");
+                retained += 2L * size;
+            }
+            if (stored["extras"] is not JsonObject extras) stored["extras"] = extras = new();
+            if (extras[WorldGltf.Key] is not JsonObject values) extras[WorldGltf.Key] = values = new();
+            if (assignment == null) values.Remove("zoneOverrides");
+            else values["zoneOverrides"] = assignment.DeepClone();
+            // The companion profile remapper continues inspecting this same parsed candidate.
+            current[index].Extras ??= new();
+            if (current[index].Extras![WorldGltf.Key] is not JsonObject parsed) current[index].Extras![WorldGltf.Key] = parsed = new();
+            if (assignment == null) parsed.Remove("zoneOverrides");
+            else parsed["zoneOverrides"] = assignment.DeepClone();
+        }
+    }
     /// <summary>Node <paramref name="index"/> and every node below it in the file.</summary>
     public static IReadOnlySet<int> Descendants(JsonObject root, int index, CancellationToken token = default) => new Hierarchy(root, token).Descendants(index);
     /// <summary>Applies a node renumbering (−1: removed) to every node reference of the file.</summary>
@@ -627,6 +743,8 @@ public static class GltfNodeEdits
             token.ThrowIfCancellationRequested();
             if (node!["children"] is JsonArray children)
             {
+                if (InlineCount((JsonObject)node, children.Count) is int count)
+                    SetInlineCount((JsonObject)node, children.Take(count).Count(c => map[GltfInteger.Int32(c)] >= 0));
                 var retained = children.Select(c => map[GltfInteger.Int32(c)]).Where(i => i >= 0).Select(i => (JsonNode?)JsonValue.Create(i)).ToArray();
                 if (retained.Length == 0) ((JsonObject)node).Remove("children");
                 else node["children"] = new JsonArray(retained);

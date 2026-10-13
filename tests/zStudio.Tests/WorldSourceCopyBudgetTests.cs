@@ -24,20 +24,18 @@ public sealed class WorldSourceCopyBudgetTests
         Assert.Contains("model placement", refused.Message);
 
         var outputs = Reconstruct(input, script);
-        var zones = SourceMapZones.Parse(outputs.Single(o => o.Path == "data/m1/meta/zones.json").Bytes, Token);
-        Assert.Equal(4 * 7, zones.Assets.Count);
-        Assert.Equal(7 * 2 + 1, outputs.Count); // Four logical folder copies share seven physical geometries.
+        Assert.Equal(4 * 7 * 2, outputs.Count); // Every original folder identity retains its own physical sources.
         Assert.Equal(outputs.Count, outputs.Select(o => o.Path).Distinct(StringComparer.OrdinalIgnoreCase).Count());
         for (int folder = 0; folder < 4; folder++)
         {
             string directory = $"data/f{folder:00}";
-            Assert.True(zones.TryGetAsset(directory + "/model.gltf", out var model));
-            Assert.Equal("r0.gltf", Assert.Single(model.References).Spelling);
+            var model = JsonNode.Parse(outputs.Single(o => o.Path == directory + "/model.gltf").Bytes)!;
+            Assert.Equal("r0.gltf", (string?)model["nodes"]![0]!["extras"]!["recoil"]!["ref"]);
             for (int reference = 0; reference < 6; reference++)
             {
-                Assert.True(zones.TryGetAsset($"{directory}/r{reference}.gltf", out var asset));
-                if (reference < 5) Assert.Equal($"r{reference + 1}.gltf", Assert.Single(asset.References).Spelling);
-                else Assert.Empty(JsonNode.Parse(outputs.Single(o => o.Path == asset.GeometryPath).Bytes)!["nodes"]!.AsArray());
+                var asset = JsonNode.Parse(outputs.Single(o => o.Path == $"{directory}/r{reference}.gltf").Bytes)!;
+                if (reference < 5) Assert.Equal($"r{reference + 1}.gltf", (string?)asset["nodes"]![0]!["extras"]!["recoil"]!["ref"]);
+                else Assert.Empty(asset["nodes"]!.AsArray());
             }
         }
         Assert.Equal(originalRows, script.Select(row => row.ToArray()).ToArray());
@@ -55,7 +53,7 @@ public sealed class WorldSourceCopyBudgetTests
         var script = Script(2, folder);
         var outputs = Reconstruct(input, script);
         // Both equal loads in the same folder reuse model.gltf; repeated incoming references reuse r0..r2.
-        Assert.Equal(9, outputs.Count);
+        Assert.Equal(8, outputs.Count);
         Assert.All(outputs.Where(o => !o.Path.EndsWith("/meta/zones.json", StringComparison.Ordinal)), o => Assert.StartsWith(folder + "/", o.Path));
         Assert.Contains(outputs, o => o.Path == folder + "/r2.gltf");
         Assert.Equal(outputs.Select(o => o.Path), Reconstruct(input, script).Select(o => o.Path));
@@ -78,12 +76,29 @@ public sealed class WorldSourceCopyBudgetTests
             + "SetTextureDirectory ../data/first/textures\nLoadGameGen a.flt load1\nGameZWriteZBDFile world.zbd\n");
         var outputs = WorldSources.Reconstruct([new(1, Read(bytes))], _ => script, (_, _) => null,
             new HashSet<string>(["data/first/textures/rock.png", "data/second/textures/rock.png"]), _ => 0, [], Token);
-        Assert.Equal(5, outputs.Count); // Two logical loads share geometry; the reference and map zones remain separate.
-        var zones = SourceMapZones.Parse(outputs.Single(o => o.Path == "data/m1/meta/zones.json").Bytes, Token);
-        Assert.Equal(3, zones.Assets.Count);
+        Assert.Equal(6, outputs.Count); // The distinct authored a.flt and z.flt each retain a physical glTF.
         var reference = JsonNode.Parse(outputs.Single(o => o.Path == "data/models/r0.gltf").Bytes)!;
         // Script order is z then a; the established Path-ordered FIFO makes a's context authoritative.
         Assert.Equal("../first/textures/rock.png", (string?)reference["images"]![0]!["uri"]);
+    }
+
+    [Fact]
+    public void ZoneOnlyReadingsKeepOneOriginalFileAndPlacementOverrides()
+    {
+        GameZWorld world = new(); world.Nodes.Add(new("world", WorldNodeClass.World));
+        var load = Node("load0"); world.Nodes.Add(load);
+        foreach (uint zone in new uint[] { 1, 2 })
+        {
+            var reference = Node("original.flt"); var shape = Node("shape"); shape.Zone = zone;
+            Link(load, reference); Link(reference, shape); world.Nodes.AddRange([reference, shape]);
+        }
+        var outputs = Reconstruct(GameZWriter.Write(world, Token), Script(1));
+        Assert.Equal(["data/f00/model.gltf", "data/f00/original.gltf"],
+            outputs.Where(o => o.Path.EndsWith(".gltf", StringComparison.Ordinal)).Select(o => o.Path).Order(StringComparer.Ordinal));
+        var master = JsonNode.Parse(outputs.Single(o => o.Path == "data/f00/model.gltf").Bytes)!;
+        var references = master["nodes"]!.AsArray().Select(n => n!["extras"]!["recoil"]!).ToArray();
+        Assert.All(references, n => Assert.Equal("original.gltf", (string?)n["ref"]));
+        Assert.Single(references, n => n["zoneOverrides"] != null);
     }
 
     [Fact]

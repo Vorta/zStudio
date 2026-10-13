@@ -108,10 +108,10 @@ public sealed class SourceObjectEditTests
         workspace.Apply(plan.Label, plan.Changes.Select(c => (c.Relative, (byte[]?)c.Content)), Token);
         var (_, flagged) = await BuildAsync(fixture, workspace);
         Assert.NotEqual(0u, flagged.Nodes.Single(n => n.Name == "ground").Flags & 0x10000);
-        // Clearing it again restores the default, so the extras entry goes away.
+        // Clearing it again restores the default carried flags, including the independently stored zone gate.
         var (b2, w2) = await BuildAsync(fixture, workspace);
         var clear = SourceObjectEdits.PlanFlag(workspace, w2.Nodes.Single(n => n.Name == "ground"), b2.Provenance[Slot(w2, "ground")], b2.Executions, 0x10000, false, Token);
-        Assert.Null(JsonNode.Parse(clear.Changes.Single().Content)!["nodes"]![0]!["extras"]!["recoil"]!["flags"]);
+        Assert.Equal($"0x{WorldGltf.DefaultCarried:X8}", JsonNode.Parse(clear.Changes.Single().Content)!["nodes"]![0]!["extras"]!["recoil"]!["flags"]!.GetValue<string>());
         // A flag of a script-created node is set by a new instruction after the one that created it.
         var tank = build.Provenance[Slot(world, "tank")];
         var scripted = SourceObjectEdits.PlanFlag(workspace, world.Nodes.Single(n => n.Name == "tank"), tank, build.Executions, 0x10, false, Token);

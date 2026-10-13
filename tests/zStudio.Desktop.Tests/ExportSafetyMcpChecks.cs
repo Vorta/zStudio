@@ -31,6 +31,21 @@ internal static class ExportSafetyMcpChecks
             await using var pipe = new NamedPipeClientStream(".", host.Instance.Pipe, PipeDirection.InOut, PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly); await pipe.ConnectAsync(token);
             await using var client = await McpClient.CreateAsync(new StreamClientTransport(pipe, pipe), cancellationToken: token);
             await LateCancelChecks(main, token);
+            using (SourceWorldFixture legacy = new())
+            {
+                legacy.Write("data/m1/meta/zones.json", "{}");
+                string priorRoot = main.ViewModel.RootPath;
+                Assert.Equal(SourceProject.LegacyFormatMessage, (await Assert.ThrowsAsync<InvalidDataException>(() => main.ViewModel.OpenRootAsync(legacy.Project, token))).Message);
+                Assert.Equal(priorRoot, main.ViewModel.RootPath);
+                foreach (bool project in new[] { false, true })
+                {
+                    var refusal = await Job("open_root", new() { ["path"] = legacy.Project, ["project"] = project }, "failed");
+                    Assert.Equal(SourceProject.LegacyFormatMessage, refusal["message"]!.GetValue<string>());
+                    Assert.Equal(priorRoot, main.ViewModel.RootPath);
+                }
+                Assert.Equal("{}", File.ReadAllText(legacy.Path("data/m1/meta/zones.json")));
+                Assert.False(Directory.Exists(Path.Combine(legacy.Project, "zstudio")));
+            }
             await RelativePathChecks(main, Job, token);
             await SourceResourceOperationChecks.Run(main, Job, token);
             await ExportChoiceContextChecks(main, token);
@@ -250,13 +265,29 @@ internal static class ExportSafetyMcpChecks
         File.Delete(fixture.Path("gamegen/build-profiles/broken.json"));
         await job("source_profile", new(), "completed");
 
-        // The checkout returns an operation, which can be cancelled, and completes with the checkout.
+        // Checkout and update are unavailable until the reference-aware plugin can preserve the new hierarchy.
         var started = await call("source_blender_checkout", new() { ["model"] = "data/m1/models/m1.gltf" });
         Assert.Equal(("source_blender_checkout", (bool?)true), (started["Name"]?.GetValue<string>(), started["Cancellable"]?.GetValue<bool>()));
         var operation = started;
         while (operation["State"]!.GetValue<string>() is "queued" or "running") { await Task.Delay(10, token); operation = await call("operation", new() { ["id"] = started["id"]!.GetValue<string>() }); }
-        Assert.Equal("completed", operation["State"]!.GetValue<string>());
-        Assert.StartsWith(Path.Combine(fixture.Project, "zstudio", "export"), operation["result"]!["folder"]!.GetValue<string>());
+        Assert.Equal("failed", operation["State"]!.GetValue<string>());
+        Assert.Equal(SourceBlender.UnavailableMessage, operation["result"]!["message"]!.GetValue<string>());
+        var refusedUpdate = await call("source_blender_update", new() { ["document"] = Guid.NewGuid().ToString(), ["revision"] = 0, ["checkout"] = "old" });
+        while (refusedUpdate["State"]!.GetValue<string>() is "queued" or "running")
+        {
+            await Task.Delay(10, token);
+            refusedUpdate = await call("operation", new() { ["id"] = refusedUpdate["id"]!.GetValue<string>() });
+        }
+        Assert.Equal("failed", refusedUpdate["State"]!.GetValue<string>());
+        Assert.Equal(SourceBlender.UnavailableMessage, refusedUpdate["result"]!["message"]!.GetValue<string>());
+        Assert.False(Directory.Exists(Path.Combine(fixture.Project, "zstudio", "export")));
+        foreach (string name in new[] { "EditInBlenderMenu", "UpdateFromBlenderMenu" })
+        {
+            var menu = (MenuItem)main.FindName(name);
+            Assert.False(menu.IsEnabled);
+            Assert.Equal(SourceBlender.UnavailableMessage, menu.ToolTip);
+            Assert.True(ToolTipService.GetShowOnDisabled(menu));
+        }
 
         var m1 = Document((await job("source_world_open", new() { ["mission"] = "m1" }, "completed"))["document"]!);
         var m2 = Document((await job("source_world_open", new() { ["mission"] = "m2" }, "completed"))["document"]!);

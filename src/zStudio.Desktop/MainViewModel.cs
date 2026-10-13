@@ -6,6 +6,7 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using Recoil.Zbd.Automation;
 using Recoil.Zbd.Core;
 using Recoil.Zbd.Core.Formats;
+using Recoil.Zbd.Core.Sources;
 
 namespace Recoil.Zbd.Desktop;
 
@@ -180,7 +181,14 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         bool exists;
         using (var preflight = CancellationTokenSource.CreateLinkedTokenSource(workspace.Token, cancellationToken))
         {
-            try { exists = await CheckRootExistsAsync(root, preflight.Token); }
+            try
+            {
+                exists = await CheckRootExistsAsync(root, preflight.Token);
+                if (exists) await Task.Run(() =>
+                {
+                    if (SourceProject.IsProject(root)) SourceProject.RequireCurrentFormat(root, preflight.Token);
+                }, preflight.Token).WaitAsync(preflight.Token);
+            }
             catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
             { throw new StudioCommandException("context_changed", "The workspace changed while checking the requested folder."); }
         }

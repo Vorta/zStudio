@@ -17,10 +17,10 @@ public sealed class TerrainConversionTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task NeutralGeometryConversionKeepsMapAssignmentsAndUndo(bool grouped)
+    public async Task EmbeddedGeometryConversionKeepsAssignmentsAndUndo(bool grouped)
     {
         using SourceWorldFixture fixture = new(); fixture.WriteTerrainDatabase(grouped);
-        const string database = "data/m1/models/m1.gltf", manifest = "data/m1/meta/zones.json";
+        const string database = "data/m1/models/m1.gltf";
         SourceWorkspace workspace = new(fixture.Project);
         byte[] bytes = File.ReadAllBytes(fixture.Path(database));
         var document = WorldAssembler.ReadModel(bytes, database, (path, _) => File.ReadAllBytes(fixture.Path(path)), Token);
@@ -33,27 +33,18 @@ public sealed class TerrainConversionTests
             : sourceNodes[i].Name.StartsWith("flat_", StringComparison.Ordinal) ? zone with { Inherit = true }
             : zone).ToArray() };
         var json = JsonNode.Parse(bytes)!.AsObject();
-        foreach (var node in json["nodes"]!.AsArray())
-        {
-            if (node?["extras"]?["recoil"] is not JsonObject values) continue;
-            values.Remove("zone"); values.Remove("zoneWord");
-            if (values["flags"] is { } flags)
-                values["flags"] = $"0x{(Convert.ToUInt32(flags.GetValue<string>()[2..], 16) & ~WorldGltf.ZoneGate):X8}";
-        }
-        foreach (var material in json["materials"]!.AsArray())
-            (material?["extras"]?["recoil"] as JsonObject)?.Remove("zone");
+        WorldGltf.PatchEmbeddedZones(json, document, profile, Token);
         fixture.Write(database, json.ToJsonString());
-        Directory.CreateDirectory(Path.GetDirectoryName(fixture.Path(manifest))!);
-        File.WriteAllBytes(fixture.Path(manifest), new SourceMapZones([new(database, database, profile, [])]).Write(Token));
+        byte[] original = File.ReadAllBytes(fixture.Path(database));
         workspace = new(fixture.Project);
         var before = await SourceWorlds.BuildPreviewAsync(fixture.Project, "m1", Path.Combine(SourceWorlds.PreviewRoot(fixture.Project), "original"), workspace.Overlay(), token: Token);
         var plan = SourceTerrainConversion.Plan(workspace, database, SourceTerrainConversion.References(workspace, before.Dependencies, "gamegen/m1.gs", Token), Token);
         Assert.Equal(3, plan.Converted); Assert.All(plan.Groups, g => Assert.Equal(5, g.Zone));
         SourceTerrainConversion.Apply(workspace, plan, Token);
-        Assert.Contains(manifest, workspace.DirtyFiles);
-        var map = SourceMapZones.Parse(workspace.Read(manifest, Token)!, Token);
-        Assert.Contains(map.Assets, a => a.LogicalPath == plan.Surfaces);
-        var retained = Assert.Single(map.Assets, a => a.LogicalPath == database).Profile;
+        Assert.Contains(database, workspace.DirtyFiles);
+        Assert.Contains(plan.Surfaces, workspace.DirtyFiles);
+        var retainedDocument = WorldAssembler.ReadModel(workspace.Read(database, Token)!, database, (path, _) => workspace.Read(path, Token)!, Token);
+        var retained = WorldGltf.CaptureZoneProfile(retainedDocument, token: Token);
         Assert.Equal(profile.LoadRoot, retained.LoadRoot);
         if (grouped) Assert.Contains(retained.Nodes, n => n.Word == 0x00010003 && n.Inherit);
         var after = await SourceWorlds.BuildPreviewAsync(fixture.Project, "m1", Path.Combine(SourceWorlds.PreviewRoot(fixture.Project), "converted"), workspace.Overlay(), token: Token);
@@ -64,7 +55,30 @@ public sealed class TerrainConversionTests
         var report = TerrainProbe.Compare(a, b, 2, Token);
         AssertCompared(report); Assert.True(report.Hits > 0); Assert.Equal(0, report.Mismatches);
         workspace.Undo(); Assert.False(workspace.IsDirty);
-        Assert.Single(SourceMapZones.Parse(workspace.Read(manifest, Token)!, Token).Assets);
+        Assert.Equal(original, workspace.Read(database, Token));
+    }
+
+    [Fact]
+    public async Task InferredFileSectionsStayObjectsWhileMasterOwnedSiblingsCanBecomeTerrain()
+    {
+        using SourceWorldFixture fixture = new(); fixture.WriteTerrainDatabase(grouped: true);
+        const string database = "data/m1/models/m1.gltf";
+        var json = JsonNode.Parse(File.ReadAllBytes(fixture.Path(database)))!.AsObject();
+        var sourceGroup = json["nodes"]!.AsArray().Single(n => n!["name"]!.GetValue<string>() == "g1")!;
+        sourceGroup["extras"]![WorldGltf.Key]!["inlineSource"] = new JsonObject { ["id"] = "section", ["count"] = 2 };
+        fixture.Write(database, json.ToJsonString());
+        SourceWorkspace workspace = new(fixture.Project);
+        var plan = SourceTerrainConversion.Plan(workspace, database, (new(StringComparer.Ordinal) { "ground" }, []), Token);
+        Assert.Equal(1, plan.Converted);
+        Assert.Equal(2, plan.Kept.Count(k => k.Reason == "inside an inferred source-file section"));
+        SourceTerrainConversion.Apply(workspace, plan, Token);
+        var converted = JsonNode.Parse(workspace.Read(database, Token)!)!.AsObject();
+        var group = converted["nodes"]!.AsArray().Single(n => n!["name"]!.GetValue<string>() == "g1")!;
+        Assert.Equal(2, group["extras"]![WorldGltf.Key]!["inlineSource"]!["count"]!.GetValue<int>());
+        Assert.Equal(new[] { "flat_a", "flat_b" }, group["children"]!.AsArray().Take(2)
+            .Select(n => converted["nodes"]![n!.GetValue<int>()]!["name"]!.GetValue<string>()));
+        var built = await SourceWorlds.BuildPreviewAsync(fixture.Project, "m1", Path.Combine(SourceWorlds.PreviewRoot(fixture.Project), "inline-terrain"), workspace.Overlay(), token: Token);
+        Assert.Null(built.Outputs.FirstOrDefault(o => o.Error != null)?.Error);
     }
 
     [Fact]

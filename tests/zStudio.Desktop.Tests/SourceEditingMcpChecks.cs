@@ -16,7 +16,7 @@ namespace Recoil.Zbd.Desktop.Tests;
 /// <summary>
 /// Source-world editing through the real named-pipe MCP connection: a pickup move that changes only the coordinate tokens
 /// of its text sources (with its difficulty counterpart), project-wide undo, a world object moved and flagged through its
-/// glTF node, the Blender round trip, and one save of every changed file.
+/// glTF node, and one save of every changed file.
 /// </summary>
 internal static class SourceEditingMcpChecks
 {
@@ -307,83 +307,24 @@ internal static class SourceEditingMcpChecks
             var refused = await Job("source_world_object_edit", new() { ["document"] = Id(flagged), ["revision"] = flagged.Revision, ["node"] = groundAfter }, "failed");
             Assert.Equal("invalid_argument", refused["code"]!.GetValue<string>());
 
-            // Blender: check the database out, "export" a changed copy into the outbox, and update from it.
-            var checkout = await Job("source_blender_checkout", new() { ["model"] = "data/m1/models/m1.gltf" });
-            string input = checkout["input"]!.GetValue<string>(), outbox = Path.Combine(checkout["outbox"]!.GetValue<string>(), "edit");
-            Assert.StartsWith(Path.Combine(fixture.Project, "zstudio", "export"), checkout["folder"]!.GetValue<string>());
-            Directory.CreateDirectory(Path.Combine(outbox, "textures"));
-            File.Copy(input, Path.Combine(outbox, "m1.gltf")); File.Copy(Path.Combine(Path.GetDirectoryName(input)!, "m1.bin"), Path.Combine(outbox, "m1.bin"));
-            byte[] rock = await File.ReadAllBytesAsync(Path.Combine(Path.GetDirectoryName(input)!, "textures", "rock.png"), token);
-            var image = Recoil.Zbd.Core.Export.PngDecoder.Decode(rock); image.Rgba[0] ^= 0xFF;
-            await File.WriteAllBytesAsync(Path.Combine(outbox, "textures", "rock.png"), Recoil.Zbd.Core.Export.PngEncoder.Encode(image), token);
-            var listed = await Call("source_blender_checkouts", new());
-            Assert.Equal("edit/m1.gltf", listed["checkouts"]![0]!["exports"]![0]!["path"]!.GetValue<string>());
-            // Consent must cover the content actually shown: an external PNG edit during the model-only
-            // question cannot be silently added to a forced retry. Exercise the GUI helper and MCP's explicit force.
-            flagged = Document((await Job("source_world_object_edit", new() { ["document"] = Id(flagged), ["revision"] = flagged.Revision,
-                ["node"] = flagged.PreviewDocument.Scene!.Nodes.First(n => n.Name == "ground").Index,
-                ["position"] = new Dictionary<string, object?> { ["x"] = 11, ["y"] = 0, ["z"] = -10 } }))["document"]!);
-            var conflict = await Job("source_blender_update", new() { ["document"] = Id(flagged), ["revision"] = flagged.Revision,
-                ["checkout"] = checkout["id"]!.GetValue<string>() }, "failed");
-            Assert.Equal("conflict", conflict["code"]!.GetValue<string>());
-            long beforeConsent = workspace.ContentRevision;
-            byte[] beforeModel = workspace.Read("data/m1/models/m1.gltf")!;
-            var externalImage = Recoil.Zbd.Core.Export.PngDecoder.Decode(rock);
-            externalImage.Rgba[0] = 0; externalImage.Rgba[2] = 255;
-            byte[] externalPng = Recoil.Zbd.Core.Export.PngEncoder.Encode(externalImage);
-            int questions = 0;
-            main.ConfirmBlenderUpdate = message =>
-            {
-                Assert.True(main.Dispatcher.CheckAccess());
-                Assert.Contains("data/m1/models/m1.gltf", message);
-                Assert.DoesNotContain("rock.png", message);
-                questions++;
-                File.WriteAllBytes(fixture.Path("data/m1/textures/rock.png"), externalPng);
-                return true;
-            };
-            try
-            {
-                var changed = await Assert.ThrowsAsync<Recoil.Zbd.Automation.StudioCommandException>(() =>
-                    main.UpdateFromBlenderWithConsentAsync(flagged, checkout["id"]!.GetValue<string>(), "edit/m1.gltf", token));
-                Assert.Equal("external_change", changed.Code);
-            }
-            finally { main.ConfirmBlenderUpdate = null; }
-            Assert.Equal(1, questions);
-            Assert.Equal(beforeConsent, workspace.ContentRevision);
-            Assert.Equal(beforeModel, workspace.Read("data/m1/models/m1.gltf"));
-            Assert.Same(flagged, main.ViewModel.SelectedDocument);
-            Assert.DoesNotContain("data/m1/textures/rock.png", workspace.DirtyFiles);
-            Assert.Equal(externalPng, File.ReadAllBytes(fixture.Path("data/m1/textures/rock.png")));
-            // The manifest becomes read-only to replacement after planning succeeds, while the world rebuilds.
-            // Accepted edits must still report this failure to GUI Problems and the MCP operation result.
-            FileStream? manifestLock = null;
-            main.SourceBuildStep = _ => manifestLock ??= new FileStream(Path.Combine(checkout["folder"]!.GetValue<string>(), "manifest.json"), FileMode.Open, FileAccess.Read, FileShare.Read);
-            JsonNode updated;
-            try { updated = await Job("source_blender_update", new() { ["document"] = Id(flagged), ["revision"] = flagged.Revision, ["checkout"] = checkout["id"]!.GetValue<string>(), ["force"] = true }); }
-            finally { main.SourceBuildStep = null; manifestLock?.Dispose(); }
-            Assert.Contains(updated["notes"]!.AsArray(), n => n!.GetValue<string>().Contains("could not record", StringComparison.Ordinal));
-            Assert.Contains(main.ViewModel.Problems, p => p.Severity == "Warning" && p.Message.Contains("could not record", StringComparison.Ordinal));
-            Assert.Contains("data/m1/textures/rock.png", updated["files"]!.AsArray().Select(f => f!.GetValue<string>()));
-            Assert.Contains(updated["notes"]!.AsArray(), n => n!.GetValue<string>().Contains("rock.png", StringComparison.Ordinal));
-            var blended = Document(updated["document"]!);
-            Assert.Contains("data/m1/textures/rock.png", workspace.DirtyFiles);
+            var editedWorld = flagged;
 
             // Fog the scripts never set is added after the instruction that created the world.
             await Preview();
-            int world = blended.PreviewDocument.Scene!.Nodes.First(n => n.Name == "world").Index;
-            var worldState = await Call("source_world_object", new() { ["document"] = Id(blended), ["node"] = world });
+            int world = editedWorld.PreviewDocument.Scene!.Nodes.First(n => n.Name == "world").Index;
+            var worldState = await Call("source_world_object", new() { ["document"] = Id(editedWorld), ["node"] = world });
             Assert.Contains(worldState["propertyCommands"]!.AsArray(), c => c!["command"]!.GetValue<string>() == "WorldSetFogColor");
-            var fogged = Document((await Job("source_world_command", new() { ["document"] = Id(blended), ["revision"] = blended.Revision, ["node"] = world, ["command"] = "WorldSetFogColor", ["arguments"] = new[] { "0.5", "0.25", "0.125" } }))["document"]!);
+            var fogged = Document((await Job("source_world_command", new() { ["document"] = Id(editedWorld), ["revision"] = editedWorld.Revision, ["node"] = world, ["command"] = "WorldSetFogColor", ["arguments"] = new[] { "0.5", "0.25", "0.125" } }))["document"]!);
             Assert.Contains("NewWorld %worldName%\r\nWorldSetFogColor 0.5 0.25 0.125\r\n", Text(workspace.Read("gamegen/m1.gs")));
             // The next change of the same setting edits that instruction in place.
             int worldAfter = fogged.PreviewDocument.Scene!.Nodes.First(n => n.Name == "world").Index;
-            blended = Document((await Job("source_world_command", new() { ["document"] = Id(fogged), ["revision"] = fogged.Revision, ["node"] = worldAfter, ["command"] = "WorldSetFogColor", ["arguments"] = new[] { "1.0", "0.25", "0.125" } }))["document"]!);
+            editedWorld = Document((await Job("source_world_command", new() { ["document"] = Id(fogged), ["revision"] = fogged.Revision, ["node"] = worldAfter, ["command"] = "WorldSetFogColor", ["arguments"] = new[] { "1.0", "0.25", "0.125" } }))["document"]!);
             Assert.Contains("WorldSetFogColor 1.0 0.25 0.125\r\n", Text(workspace.Read("gamegen/m1.gs")));
             Assert.DoesNotContain("0.5 0.25 0.125", Text(workspace.Read("gamegen/m1.gs")));
             // Copy the ground beside itself, move the copy under the original, then delete it: each edits the database's glTF.
             await Preview();
-            int groundNow = blended.PreviewDocument.Scene!.Nodes.First(n => n.Name == "ground").Index;
-            var copied = await Job("source_world_object_edit", new() { ["document"] = Id(blended), ["revision"] = blended.Revision, ["node"] = groundNow, ["action"] = "duplicate", ["name"] = "ground_copy", ["position"] = new Dictionary<string, object?> { ["x"] = 10, ["y"] = 0, ["z"] = 40 } });
+            int groundNow = editedWorld.PreviewDocument.Scene!.Nodes.First(n => n.Name == "ground").Index;
+            var copied = await Job("source_world_object_edit", new() { ["document"] = Id(editedWorld), ["revision"] = editedWorld.Revision, ["node"] = groundNow, ["action"] = "duplicate", ["name"] = "ground_copy", ["position"] = new Dictionary<string, object?> { ["x"] = 10, ["y"] = 0, ["z"] = 40 } });
             int copyNode = copied["copy"]!.GetValue<int>();
             var withCopy = Document(copied["document"]!);
             Assert.Equal(2, JsonNode.Parse(workspace.Read("data/m1/models/m1.gltf")!)!["nodes"]!.AsArray().Count);
@@ -391,17 +332,16 @@ internal static class SourceEditingMcpChecks
             int groundThen = withCopy.PreviewDocument.Scene!.Nodes.First(n => n.Name == "ground").Index;
             var reparented = Document((await Job("source_world_object_edit", new() { ["document"] = Id(withCopy), ["revision"] = withCopy.Revision, ["node"] = copyNode, ["action"] = "parent", ["parent"] = groundThen }))["document"]!);
             Assert.Equal("ground", (await Call("source_world_object", new() { ["document"] = Id(reparented), ["node"] = copyNode }))["object"]!["parent"]!.GetValue<string>());
-            blended = Document((await Job("source_world_object_edit", new() { ["document"] = Id(reparented), ["revision"] = reparented.Revision, ["node"] = copyNode, ["action"] = "delete" }))["document"]!);
+            editedWorld = Document((await Job("source_world_object_edit", new() { ["document"] = Id(reparented), ["revision"] = reparented.Revision, ["node"] = copyNode, ["action"] = "delete" }))["document"]!);
             Assert.Single(JsonNode.Parse(workspace.Read("data/m1/models/m1.gltf")!)!["nodes"]!.AsArray());
             // Unsaved edits of other files do not block resolving an interrupted save; an unknown save is refused as such.
             Assert.Equal("invalid_argument", (await Job("source_recovery_resolve", new() { ["save"] = "missing", ["action"] = "roll_back" }, "failed"))["code"]!.GetValue<string>());
 
             // One save writes every changed file of the project together, and leaves no journal behind.
-            var saved = await Job("save_document", new() { ["document"] = Id(blended), ["revision"] = blended.Revision });
+            var saved = await Job("save_document", new() { ["document"] = Id(editedWorld), ["revision"] = editedWorld.Revision });
             var written = saved["written"]!.AsArray().Select(w => w!.GetValue<string>()).ToArray();
-            // The buffer Blender wrote back unchanged is not a change.
-            Assert.Equal(["data/m1/models/m1.gltf", "data/m1/textures/rock.png", "data/m1/zrdr/puppies.zrd", "data/m1/zrdr/puppies_easy.zrd", "gamegen/m1.gs"], written.Order(StringComparer.Ordinal));
-            Assert.False(blended.IsDirty);
+            Assert.Equal(["data/m1/models/m1.gltf", "data/m1/zrdr/puppies.zrd", "data/m1/zrdr/puppies_easy.zrd", "gamegen/m1.gs"], written.Order(StringComparer.Ordinal));
+            Assert.False(editedWorld.IsDirty);
             Assert.Equal(Default.Replace("( 12 8 -5 )", "( 20.25 8 -5 )"), await File.ReadAllTextAsync(fixture.Path("data/m1/zrdr/puppies.zrd"), Encoding.Latin1, token));
             Assert.Empty(new SourcePublisher(fixture.Project).FindInterrupted(token));
             // No save was interrupted; resolving an unknown one is refused.
@@ -414,13 +354,13 @@ internal static class SourceEditingMcpChecks
             int ground2 = second.PreviewDocument.Scene!.Nodes.First(n => n.Name == "ground").Index;
             var edited2 = Document((await Job("source_world_object_edit", new() { ["document"] = Id(second), ["revision"] = second.Revision, ["node"] = ground2, ["position"] = new Dictionary<string, object?> { ["x"] = 5, ["y"] = 0, ["z"] = 5 } }))["document"]!);
             Assert.Equal(["data/m2/models/m2.gltf"], workspace.DirtyFiles);
-            blended = Document(await Call("undo_redo", new() { ["document"] = Id(blended), ["revision"] = blended.Revision, ["action"] = "undo" }));
+            editedWorld = Document(await Call("undo_redo", new() { ["document"] = Id(editedWorld), ["revision"] = editedWorld.Revision, ["action"] = "undo" }));
             Assert.False(workspace.IsDirty);
             var stale = await Job("source_world_object_edit", new() { ["document"] = Id(edited2), ["revision"] = edited2.Revision, ["node"] = ground2, ["flag"] = "0x10000", ["on"] = true }, "failed");
             Assert.Equal("stale_document", stale["code"]!.GetValue<string>());
             var reloaded = Document(await Job("reload_document", new() { ["document"] = Id(edited2), ["revision"] = edited2.Revision }));
             await Call("close_document", new() { ["document"] = Id(reloaded), ["revision"] = reloaded.Revision });
-            await Call("close_document", new() { ["document"] = Id(blended), ["revision"] = blended.Revision });
+            await Call("close_document", new() { ["document"] = Id(editedWorld), ["revision"] = editedWorld.Revision });
 
             async Task Preview()
             {

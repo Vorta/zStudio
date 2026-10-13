@@ -106,7 +106,7 @@ public sealed class ReconstructionInferenceTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public void CopiesOfOnePartAreOneFileWhateverTheirGroupsKeptOfTheirNames(bool edited)
+    public void CopiesOfOneUnknownPartShareAnInlineCacheWhateverTheirGroupsKeptOfTheirNames(bool edited)
     {
         // A database referencing one part twice; the part's group holds a crate and a post. A load after the deletion takes
         // the slots of the second copy's group (its name is lost), while the first copy's group keeps its name. When
@@ -123,10 +123,13 @@ public sealed class ReconstructionInferenceTests
         Gltf(files, "data/m1/models", "lamp", [Node("base", Quad(1, 0)), Node("bulb", Quad(1, 2))]);
 
         var (outputs, notes, shipped) = Reconstruct(files, 1);
-        Assert.Empty(notes);
-        // The inference cached both copies as one part, so they reference one file and the build caches it once.
+        Assert.Single(notes, n => n.Contains("inferred load sections are unrecoverable", StringComparison.Ordinal));
+        // One inferred cache identity remains inline, without claiming an invented original file.
         string[] parts = [.. outputs.Select(o => o.Path).Where(p => p.StartsWith("data/m1/models/m1_", StringComparison.Ordinal) && p.EndsWith(".gltf", StringComparison.Ordinal))];
-        Assert.Equal(["data/m1/models/m1_01.gltf"], parts);
+        Assert.Empty(parts);
+        var master = System.Text.Json.Nodes.JsonNode.Parse(outputs.Single(o => o.Path == "data/m1/models/m1.gltf").Bytes)!;
+        var inline = master["nodes"]!.AsArray().Select(n => (string?)n?["extras"]?["recoil"]?["inlineSource"]?["id"]).OfType<string>().ToArray();
+        Assert.Equal(2, inline.Length); Assert.Equal(inline[0], inline[1]);
         var rebuilt = Rebuild(files, outputs, 1);
         Assert.Equal(Slots(shipped(1)), Slots(rebuilt));
         Assert.Empty(WorldComparer.Compare(shipped(1), rebuilt));
@@ -158,11 +161,11 @@ public sealed class ReconstructionInferenceTests
         }
         var (outputs, notes, shipped) = Reconstruct(files, 1, 2);
         Assert.Empty(notes);
-        string[] References(int mission, string path) => SourceMapZones.Parse(outputs.Single(o => o.Path == $"data/m{mission}/meta/zones.json").Bytes, Token)
-            .Assets.Single(a => a.LogicalPath == path).References.Select(r => r.Spelling).ToArray();
-        Assert.Contains("./r.gltf", References(1, "data/m1/models/x.gltf"));
-        Assert.DoesNotContain("./r.gltf", References(2, "data/m2/models/x.gltf"));
-        Assert.DoesNotContain("./r.gltf", References(1, "data/common/models/x.gltf"));
+        string[] References(string path) => System.Text.Json.Nodes.JsonNode.Parse(outputs.Single(o => o.Path == path).Bytes)!["nodes"]!.AsArray()
+            .Select(n => (string?)n?["extras"]?["recoil"]?["ref"]).OfType<string>().ToArray();
+        Assert.Contains("./r.gltf", References("data/m1/models/x.gltf"));
+        Assert.DoesNotContain("./r.gltf", References("data/m2/models/x.gltf"));
+        Assert.DoesNotContain("./r.gltf", References("data/common/models/x.gltf"));
         for (int m = 1; m <= 2; m++) Assert.Equal(Slots(shipped(m)), Slots(Rebuild(files, outputs, m)));
     }
 
@@ -184,8 +187,8 @@ public sealed class ReconstructionInferenceTests
 
         var (outputs, notes, shipped) = Reconstruct(files, 1);
         Assert.Empty(notes);
-        var f = SourceMapZones.Parse(outputs.Single(o => o.Path == "data/m1/meta/zones.json").Bytes, Token).Assets.Single(a => a.LogicalPath == "data/m1/models/f.gltf");
-        Assert.Equal(2, f.References.Count(r => r.Spelling == "./r.gltf"));
+        var f = System.Text.Json.Nodes.JsonNode.Parse(outputs.Single(o => o.Path == "data/m1/models/f.gltf").Bytes)!;
+        Assert.Equal(2, f["nodes"]!.AsArray().Count(n => (string?)n?["extras"]?["recoil"]?["ref"] == "./r.gltf"));
         var rebuilt = Rebuild(files, outputs, 1);
         Assert.Equal(Slots(shipped(1)), Slots(rebuilt));
         Assert.Equal(ModelUsers(shipped(1)), ModelUsers(rebuilt));

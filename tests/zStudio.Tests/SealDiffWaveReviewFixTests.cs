@@ -17,7 +17,6 @@ namespace Recoil.Zbd.Tests;
 public sealed class SealDiffWaveReviewFixTests
 {
     private static CancellationToken Token => TestContext.Current.CancellationToken;
-    private const string Model = "data/m1/models/m1.gltf";
 
     private static long Allocated(Action action)
     {
@@ -26,7 +25,7 @@ public sealed class SealDiffWaveReviewFixTests
         return GC.GetAllocatedBytesForCurrentThread() - before;
     }
 
-    // ---- Sealing a Blender export ----
+    // ---- Comparing source files ----
 
     [Fact]
     public void AFileIsComparedWithItsCopyInBlocks()
@@ -54,33 +53,6 @@ public sealed class SealDiffWaveReviewFixTests
             Assert.False(SourceProject.FileEquals(empty, [0], Token));
         }
         finally { Directory.Delete(folder, true); }
-    }
-
-    [Fact]
-    public void AnExportIsSealedHoldingEachFileOnce()
-    {
-        using SourceWorldFixture fixture = new();
-        SourceWorkspace workspace = new(fixture.Project);
-        var checkout = SourceBlender.Checkout(workspace, Model, Token);
-        // Blender exported the model with a second, large buffer.
-        const int size = 48 << 20;
-        string input = Path.GetDirectoryName(checkout.Input)!, outbox = Path.Combine(checkout.Outbox, "edit");
-        Directory.CreateDirectory(Path.Combine(outbox, "textures"));
-        var json = JsonNode.Parse(File.ReadAllText(checkout.Input))!.AsObject();
-        json["buffers"]!.AsArray().Add(new JsonObject { ["uri"] = "big.bin", ["byteLength"] = size });
-        File.WriteAllText(Path.Combine(outbox, "m1.gltf"), json.ToJsonString());
-        File.Copy(Path.Combine(input, "m1.bin"), Path.Combine(outbox, "m1.bin"));
-        File.Copy(Path.Combine(input, "textures", "rock.png"), Path.Combine(outbox, "textures", "rock.png"));
-        byte[] big = new byte[size]; new Random(3).NextBytes(big);
-        File.WriteAllBytes(Path.Combine(outbox, "big.bin"), big);
-
-        BlenderUpdatePlan? plan = null;
-        long allocated = Allocated(() => plan = SourceBlender.PlanUpdate(workspace, checkout, "edit/m1.gltf", token: Token));
-        // The buffer is read once and held once: the second read that checks it was not still being written compares blocks.
-        var buffer = plan!.Changes.Single(c => c.Relative == "data/m1/models/m1.1.bin").Content;
-        Assert.Equal(big, buffer);
-        Assert.True(allocated < size + size / 4, $"Sealing a {size:N0}-byte buffer allocated {allocated:N0} bytes.");
-        Assert.Equal(big, File.ReadAllBytes(Path.Combine(plan.Sealed, "edit", "big.bin")));
     }
 
     // ---- Source diffs ----

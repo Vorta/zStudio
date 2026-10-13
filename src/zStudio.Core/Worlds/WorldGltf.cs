@@ -37,6 +37,7 @@ public static partial class WorldGltf
     /// <summary>How an exporter names textures and refers to external parts.</summary>
     public sealed class ExportContext
     {
+        internal int NextInstance { get; set; }
         /// <summary>The image URI (relative to the glTF file) and the clamp word for a texture.</summary>
         public required Func<WorldTexture, (string Uri, int Addressing)> Texture { get; init; }
         /// <summary>For a node that is an external reference, the referenced file's URI; its children from that file are then not written.</summary>
@@ -46,6 +47,9 @@ public static partial class WorldGltf
         /// the file being written: a reference with records of its own (a mission database's part), written as its children.
         /// </summary>
         public Func<WorldNode, IReadOnlyCollection<WorldNode>?> Content { get; init; } = _ => null;
+        /// <summary>An inferred load section with an unrecoverable filename, retained inside this document.</summary>
+        public Func<WorldNode, string?> InlineSource { get; init; } = _ => null;
+        internal Func<WorldNode, IReadOnlyCollection<WorldNode>?> InlineContent { get; init; } = _ => null;
         /// <summary>Nodes that are groups of a mission database (written with <c>extras.recoil.group</c>; see <see cref="IsGroup"/>).</summary>
         public Func<WorldNode, bool> Group { get; init; } = _ => false;
         /// <summary>Clear the runtime state of point entries (elapsed time, packed state, heap words, flare runtime values) to compare content.</summary>
@@ -74,6 +78,9 @@ public static partial class WorldGltf
     /// inherit. <paramref name="loadRoot"/> is the node a script load creates for the file: its flags come from the file.
     /// </summary>
     public static GltfDocument Export(IReadOnlyList<WorldNode> roots, uint parentZone, ExportContext context, WorldNode? loadRoot = null)
+        => ExportDocument(roots, parentZone, context, loadRoot, context.Mirrored);
+
+    private static GltfDocument ExportDocument(IReadOnlyList<WorldNode> roots, uint parentZone, ExportContext context, WorldNode? loadRoot, bool parentMirrored)
     {
         GltfDocument doc = new();
         uint rootFlags = loadRoot == null ? DefaultCarried : loadRoot.Flags & CarriedFlags;
@@ -107,13 +114,13 @@ public static partial class WorldGltf
             foreach (var child in OwnChildren(node, context)) Count(child, mirrored, identity && seen == 0);
             path.Remove(node);
         }
-        foreach (var root in roots) Count(root, context.Mirrored);
+        foreach (var root in roots) Count(root, parentMirrored);
         ExportState state = new()
         {
             Duplicates = new(reached.Keys.GroupBy(n => n.Name, StringComparer.Ordinal).Where(g => g.Count() > 1).Select(g => g.Key), StringComparer.Ordinal),
             Shared = new(reached.Where(r => r.Value > 1).Select(r => r.Key), ReferenceEqualityComparer.Instance),
         };
-        foreach (var root in roots) doc.Roots.Add(ExportNode(root, parentZone, context, state, context.Mirrored));
+        foreach (var root in roots) doc.Roots.Add(ExportNode(root, parentZone, context, state, parentMirrored));
         return doc;
     }
     /// <summary>The largest hierarchy an export writes, counting every copy of a shared node.</summary>
@@ -189,7 +196,7 @@ public static partial class WorldGltf
         // Every copy of a shared node carries its instance number; the first copy in the file is the one imported.
         if (state.Shared.Contains(node))
         {
-            if (!state.Instances.TryGetValue(node, out int instance)) state.Instances[node] = instance = state.Instances.Count + 1;
+            if (!state.Instances.TryGetValue(node, out int instance)) state.Instances[node] = instance = ++context.NextInstance;
             extras["instance"] = instance;
         }
         uint carried = node.Flags & CarriedFlags;
@@ -238,7 +245,15 @@ public static partial class WorldGltf
             if (context.Zones is { } zones) { extras[ZoneReference] = true; zones.References.Add(result, uri); }
             else extras["ref"] = uri;
         }
-        foreach (var child in OwnChildren(node, context)) result.Children.Add(ExportNode(child, zone, context, state, mirrored));
+        if (context.InlineSource(node) is { } inline)
+        {
+            var content = (context.InlineContent(node) ?? context.Content(node))?.ToArray() ?? [];
+            extras[InlineSourceField] = new JsonObject { ["id"] = inline, ["count"] = content.Length };
+            result.Children.AddRange(ExportDocument(content, zone, context, null, mirrored).Roots);
+            HashSet<WorldNode> embedded = new(context.Content(node) ?? content, ReferenceEqualityComparer.Instance);
+            foreach (var child in node.Children.Where(c => !embedded.Contains(c))) result.Children.Add(ExportNode(child, zone, context, state, mirrored));
+        }
+        else foreach (var child in OwnChildren(node, context)) result.Children.Add(ExportNode(child, zone, context, state, mirrored));
         if (extras.Count > 0) result.Extras = new() { [Key] = extras };
         return result;
     }
@@ -246,6 +261,13 @@ public static partial class WorldGltf
     /// <summary>The children written in the file itself: all for a node, those not from the referenced file for a reference.</summary>
     private static IEnumerable<WorldNode> OwnChildren(WorldNode node, ExportContext context)
     {
+        if (context.InlineSource(node) != null)
+        {
+            if (context.ReferenceChildren.TryGetValue(node, out var known)) return known;
+            var inline = (context.InlineContent(node) ?? context.Content(node))?.ToArray() ?? [];
+            HashSet<WorldNode> embeddedMembers = new(context.Content(node) ?? inline, ReferenceEqualityComparer.Instance);
+            return context.ReferenceChildren[node] = [.. inline, .. node.Children.Where(child => !embeddedMembers.Contains(child))];
+        }
         if (context.Reference(node) == null) return node.Children;
         if (context.ReferenceChildren.TryGetValue(node, out var children)) return children;
         var content = context.Content(node);
@@ -468,7 +490,10 @@ public static partial class WorldGltf
         /// <summary>The authored reference URI for a neutral reference holder, by logical path and emitted node ordinal.</summary>
         public Func<string, int, string?>? AssetReference { get; init; }
         internal Dictionary<(string Path, GltfDocument Document), BoundZones?> ZoneBindings { get; } = [];
+        internal Dictionary<(GltfDocument Document, JsonObject Profile), BoundZones> EmbeddedZoneBindings { get; } = [];
+        internal HashSet<(GltfDocument Document, JsonObject Scope)> ValidatedZoneScopes { get; } = [];
         internal Dictionary<GltfDocument, ZoneLayout> ZoneLayouts { get; } = new(ReferenceEqualityComparer.Instance);
+        internal Stack<EmbeddedZoneScope> EmbeddedZoneScopes { get; } = new();
         internal BoundedDiagnostics Diagnostics { get; init; } = new();
         public List<string> Warnings => Diagnostics.Snapshot();
         /// <summary>
@@ -476,6 +501,8 @@ public static partial class WorldGltf
         /// copy) and, for a shared node or a node inside one, its place there.
         /// </summary>
         public Action<WorldNode, string, GltfNode, InstancePlace?>? NodeImported { get; init; }
+        internal Dictionary<WorldNode, string> InlineSourceKeys { get; } = new(ReferenceEqualityComparer.Instance);
+        internal Dictionary<WorldNode, IReadOnlyList<WorldNode>> InlineSourceContents { get; } = new(ReferenceEqualityComparer.Instance);
         /// <summary>While a referenced file is imported, the node that references it (the innermost, for nested references).</summary>
         public WorldNode? Referencing => referencing.Count > 0 ? referencing[^1] : null;
         internal readonly List<WorldNode> referencing = [];
@@ -582,6 +609,7 @@ public static partial class WorldGltf
         {
             context?.Token.ThrowIfCancellationRequested();
             _ = ValidatedEngineName(node, path);
+            _ = InlineSourceKey(node, path);
             if (EngineValues(node.Extras, path)?["class"] is { } kind && Text(kind, "class", path) == "lod"
                 && node.Matrix is { IsIdentity: false })
                 throw new InvalidDataException($"{path}: LOD node {JsonData.ShownText(EngineName(node))} has a transform the game cannot store. Move its objects or place the LOD below a transformed object instead.");
@@ -806,6 +834,7 @@ public static partial class WorldGltf
             // inherit other zones or omit the first record's children. Editor updates validate agreement separately.
             context.Validated.Add(doc);
         }
+        using var zoneScope = EnterEmbeddedZones(context, path);
         var zones = BindZones(doc, path, context);
         if (zones != null) reading += "\u001E" + zones.Identity;
         if (!context.Loading.TryAdd((path, doc), true)) throw new InvalidDataException($"{path} references itself.");
@@ -901,13 +930,15 @@ public static partial class WorldGltf
         {
             var (doc, referencedPath) = context.Reference(uri, path);
             context.referencing.Add(node);
+            using var refZones = PushZoneOverrides(context, source, doc, referencedPath, path);
             try { foreach (var child in Import(doc, referencedPath, Reading(reading, uri), zone, context, depth + 1, mirrored)) Link(child); }
             finally { context.referencing.RemoveAt(context.referencing.Count - 1); }
         }
+        int inlineCount = ImportInlineSource(source, node, path, reading, zone, context, depth, mirrored, zones, terrainGroups, Link);
         // Inside a shared node each child's place is its name and how many earlier siblings have it (see InstancePlace).
         Dictionary<string, int>? named = place == null ? null : new(StringComparer.Ordinal);
         bool terrainChildren = terrainGroups && IsTransparentTerrainGroup(source, path);
-        for (int i = 0; i < source.Children.Count; i++)
+        for (int i = inlineCount; i < source.Children.Count; i++)
         {
             // Database groups disappear when their members attach to the world. Expanding a recipe in place
             // preserves that attachment order; ordinary objects and referenced files cannot host markers.
@@ -1355,6 +1386,7 @@ public static partial class WorldGltf
         if (engine is not JsonObject values) return null;
         if (values["zone"] is { } zone)
             return GltfInteger.TryInt64(zone, out long value) ? (uint)value & 0xFF : null;
+        if (values["zoneInherited"] is JsonValue inherited && inherited.TryGetValue<bool>(out bool fromParent) && fromParent) return null;
         return values["zoneWord"] is JsonValue word && word.TryGetValue(out string? text)
             && uint.TryParse(text.StartsWith("0x", StringComparison.OrdinalIgnoreCase) ? text[2..] : text, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out uint full) ? full & 0xFF : null;
     }

@@ -51,6 +51,8 @@ internal static partial class DatabaseRecords
     /// </summary>
     internal sealed record Records(IReadOnlyList<WorldNode> Roots, IReadOnlySet<WorldNode> Groups, IReadOnlyDictionary<WorldNode, IReadOnlyList<WorldNode>> Parts, IReadOnlyDictionary<WorldNode, int> SecondPaths)
     {
+        /// <summary>Inferred cache identities whose original source filenames are not recoverable.</summary>
+        public IReadOnlyDictionary<WorldNode, string> InlineSources { get; init; } = new Dictionary<WorldNode, string>(ReferenceEqualityComparer.Instance);
         /// <summary>
         /// References in model files (read by later loads or referenced by the database) that named their file by another
         /// path than the file's other references to it (so the build cached it again): the model file's name, the
@@ -492,8 +494,8 @@ internal static partial class DatabaseRecords
 
     /// <summary>
     /// The records of the parts model. Deleted nodes keep the names their freed slots still hold, else <c>groupN</c>; a
-    /// reference to a part is named for the mission database and its part, <c>mN_NN.flt</c> (the files' names are lost),
-    /// with the same name for references the replay cached as one: copies of one cache, one file.
+    /// unnamed part keeps an explicit inline cache identity. A reconstructed filename would claim evidence the
+    /// shipped world no longer contains; the content stays inside its owning glTF instead.
     /// </summary>
     private static Records FromParts(Parts parts, GameZWorld world, string mission)
     {
@@ -505,14 +507,16 @@ internal static partial class DatabaseRecords
         Dictionary<WorldNode, string> keys = new(ReferenceEqualityComparer.Instance);
         foreach (var (node, _) in made) if (parts.Content.ContainsKey(node)) keys[node] = parts.CacheKey(node);
         Dictionary<string, string> partNames = [];
+        Dictionary<WorldNode, string> inlineSources = new(ReferenceEqualityComparer.Instance);
         HashSet<WorldNode> groups = new(ReferenceEqualityComparer.Instance);
         foreach (var (node, at) in made)
         {
             groups.Add(node);
             if (keys.TryGetValue(node, out var key))
             {
-                if (!partNames.TryGetValue(key, out var name)) partNames[key] = name = $"{mission}_{partNames.Count + 1:D2}.flt";
-                node.Name = name;
+                if (!partNames.TryGetValue(key, out var name)) partNames[key] = name = $"part:{partNames.Count + 1}";
+                inlineSources[node] = name;
+                node.Name = $"group{++groupCount}";
             }
             else node.Name = freedSlots.TryGetValue(at, out var bytes) && NameOf(bytes) is { Length: > 0 } kept ? kept : $"group{++groupCount}";
             // A deleted record: an object3d with no geometry and no transform, carrying the default flags.
@@ -520,7 +524,7 @@ internal static partial class DatabaseRecords
         }
         return new([.. parts.Root.Children], groups,
             parts.Content.ToDictionary<KeyValuePair<WorldNode, List<WorldNode>>, WorldNode, IReadOnlyList<WorldNode>>(p => p.Key, p => p.Value, ReferenceEqualityComparer.Instance),
-            new Dictionary<WorldNode, int>(parts.SecondPaths, ReferenceEqualityComparer.Instance));
+            new Dictionary<WorldNode, int>(parts.SecondPaths, ReferenceEqualityComparer.Instance)) { InlineSources = inlineSources };
     }
 
     /// <summary>

@@ -76,17 +76,7 @@ internal sealed class SourceScriptInspection(SourceWorkspace workspace, Cancella
     {
         ReserveWork(mission.Length + 1L);
         if (missions.TryGetValue(mission, out var known)) return known;
-        string path = SourceMapZones.PathForMission(mission);
-        try
-        {
-            byte[]? content = workspace.Read(path, token, Math.Min(SourceMapZones.MaximumBytes, maximumBytes - bytes));
-            if (content == null) return missions[mission] = new(null, token);
-            Reserve(ref bytes, content.LongLength, maximumBytes, "script and map input");
-            ReserveWork(content.LongLength);
-            return missions[mission] = new(SourceMapZones.Parse(content, token), token);
-        }
-        catch (Exception ex) when (ex is not SourceFileChangedException && ex is IOException or InvalidDataException or UnauthorizedAccessException)
-        { throw new IOException($"Cannot inspect the other mission's model bindings: {JsonData.ShownText(path)} could not be read. Restore access or repair the map, then retry the edit.", ex); }
+        return missions[mission] = new(null, token);
     }
 
     internal GameGenScriptSyntax ParseEdit(string text)

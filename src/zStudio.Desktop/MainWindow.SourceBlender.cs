@@ -14,6 +14,8 @@ namespace Recoil.Zbd.Desktop;
 /// </summary>
 public partial class MainWindow
 {
+    private static void RequireSourceBlenderAvailable() => throw new StudioCommandException("unsupported", SourceBlender.UnavailableMessage);
+
     /// <summary>The model a source world's object comes from: its own glTF node, or the file its script loaded.</summary>
     private string? SourceObjectModel(DocumentModel doc, int node)
     {
@@ -26,6 +28,7 @@ public partial class MainWindow
     internal Func<SourceWorkspace, string, CancellationToken, BlenderCheckout> CheckoutSourceModel { get; set; } = SourceBlender.Checkout;
     private async Task<BlenderCheckout> CheckoutForBlenderAsync(string model, CancellationToken token)
     {
+        RequireSourceBlenderAvailable();
         string root = SourceProjectRoot ?? throw new StudioCommandException("no_project", "Open a source project (a folder with data and gamegen) first.");
         var workspace = SourceWorkspaceFor(root);
         if (sourceWorkspaceBusy) throw new StudioCommandException("busy", "A world of this source project is rebuilding after an edit; check the model out once it is shown.");
@@ -61,6 +64,7 @@ public partial class MainWindow
     private async Task<(DocumentModel Document, BlenderUpdatePlan Plan, IReadOnlyList<string> Files)> UpdateFromBlenderAsync(DocumentModel doc, string checkoutId, string? export, bool force, CancellationToken token,
         Func<BlenderConflictException, CancellationToken, bool>? confirmConflict = null)
     {
+        RequireSourceBlenderAvailable();
         var session = doc.SourceWorld ?? throw new StudioCommandException("unsupported", "Open a mission world of the source project to update it from Blender.");
         RequireSourceWorldIdle(session);
         BlenderCheckout checkout;
@@ -155,6 +159,7 @@ public partial class MainWindow
     /// <summary>GUI: Edit in Blender for the object selected in a source world (its model), then show the checkout folder.</summary>
     private void EditInBlenderClick(object sender, RoutedEventArgs e) => _ = RunUi(async () =>
     {
+        RequireSourceBlenderAvailable();
         if (ViewModel.SelectedDocument is not { SourceWorld: not null } doc) throw new StudioCommandException("unsupported", "Open a mission world of the source project and select an object first.");
         if (selectedNode is not int node || SourceObjectNode(node) is not int sourceNode) throw new StudioCommandException("not_ready", "Select an object of the world first.");
         string model = SourceObjectModel(doc, sourceNode) ?? throw new StudioCommandException("unsupported", "The selected object was not loaded from a model file.");
@@ -170,6 +175,7 @@ public partial class MainWindow
     /// </summary>
     private void UpdateFromBlenderClick(object sender, RoutedEventArgs e) => _ = RunUi(async () =>
     {
+        RequireSourceBlenderAvailable();
         if (ViewModel.SelectedDocument is not { SourceWorld: { } session } doc) throw new StudioCommandException("unsupported", "Open a mission world of the source project first.");
         var listed = await CheckoutExportsAsync(session.Root, shutdownToken);
         // The world may have closed while the checkouts were listed.
@@ -219,9 +225,10 @@ public partial class MainWindow
     private void RegisterSourceBlenderCommands(StudioCommands r)
     {
         // A job like the other long source operations: the copy and the texture decoding run off the UI thread, and can be cancelled.
-        RegisterJob(r, "source_blender_checkout", "Check a project model out for Blender: its glTF, buffers and textures are copied into the project's zstudio/export/<id>/input folder as a self-contained glTF to import in Blender. Export the edited model as glTF Separate (.gltf + .bin + textures, Custom Properties on) into the checkout's outbox, then call source_blender_update. Give the model path, or a source world document and scene node to check out the model that object comes from. Cancelling removes the partial copy.",
+        RegisterJob(r, "source_blender_checkout", SourceBlender.UnavailableMessage,
             [P("model", "string", "Project path of a .gltf model, for example data/m2/models/bft/ltank.gltf."), DocumentParameter with { Required = false }, new("node", "integer", "Scene node of the document whose model to check out.", Minimum: 0, Maximum: int.MaxValue)], true, async (a, token) =>
         {
+            RequireSourceBlenderAvailable();
             string model;
             if (a["model"] != null) { if (a["node"] != null) throw new StudioCommandException("invalid_argument", "Give a model or a node, not both."); model = Text(a, "model"); }
             else
@@ -242,11 +249,12 @@ public partial class MainWindow
             var listed = await CheckoutExportsAsync(root, token);
             return CheckoutPage(listed, Int(a, "offset"));
         });
-        RegisterJob(r, "source_blender_update", "Update a checked-out model from what Blender exported into its outbox, as one undoable change of the project's workspace: the export is sealed (copied while checking it is complete), read as a build reads models, and becomes the model's glTF and buffer, with each texture PNG Blender added or changed; a texture other models use changes for them too (reported in notes). A material's recorded colour, opacity and back faces follow the base colour, alpha and Backface Culling changed in Blender. Files changed in the project since the checkout (other edits, or another update), existing project files the checkout did not hold (another model's texture of the same name), a texture whose name a mission's build finds first in another texture folder or that would take the name from another file there (the game finds textures by name), an export without the model's engine attributes (Blender's Custom Properties off), and faces or nodes with map zones that the export rebuilt or renamed (their zones cannot follow; force gives them the model's own) are not applied unless force is true: the command fails with code conflict, naming all of them at once. Every map that binds the model keeps its zones for the faces and nodes that still correspond (its zones.json changes with the model) and the faces keep their polygon boundaries. Nodes and polygons that correspond keep the order the model had (Blender lists children by name and triangles by material; the order decides node slots, and so which of several nodes of one name a lookup finds, and the polygons' draw order); new nodes and nodes moved to another parent follow that parent's other children, unnamed nodes stay unnamed, and a node renamed in Blender takes the new name (notes list the renames, which can change what scripts and animations find by name). The source world rebuilds and the result is its replacement document; an export the world cannot be built with is taken back. files lists the files the change wrote. Nothing is written until save_document.",
+        RegisterJob(r, "source_blender_update", SourceBlender.UnavailableMessage,
             [DocumentParameter, RevisionParameter, P("checkout", "string", "Checkout id from source_blender_checkout or source_blender_checkouts.", true), P("export", "string", "Export path relative to the outbox; default the newest."),
              P("force", "boolean", "Apply despite a conflict (files changed since the checkout or outside it, or dropped engine attributes); default false.")], true,
             async (a, token) =>
             {
+                RequireSourceBlenderAvailable();
                 var d = TargetDocument(a, true);
                 var (next, plan, files) = await UpdateFromBlenderAsync(d, Text(a, "checkout"), a["export"] == null ? null : Text(a, "export"), Flag(a, "force"), token);
                 long characters = 0;

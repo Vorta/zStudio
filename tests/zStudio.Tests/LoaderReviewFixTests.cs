@@ -205,17 +205,17 @@ public sealed class LoaderReviewFixTests
         Gltf(files, "data/m1/models", "lamp", [Node("base", Quad(1, 0)), later, Node("bulb", Quad(1, 2))], Refs((later, "empty.gltf")));
 
         var (outputs, notes, shipped) = Reconstruct(files, 1);
-        Assert.True(notes.Count == 0, string.Join(" | ", notes));
+        Assert.All(notes, n => Assert.Contains("inferred load sections are unrecoverable", n));
         // Every reference names the file again, so the rebuilt world caches it where the shipped one did.
         Assert.Contains(outputs, o => o.Path == "data/m1/models/empty.gltf");
         foreach (string file in new[] { "early", "m1", "lamp" })
-            Assert.Contains(SourceMapZones.Parse(outputs.Single(o => o.Path == "data/m1/meta/zones.json").Bytes, Token).Assets
-                .Single(a => a.LogicalPath == $"data/m1/models/{file}.gltf").References, r => r.Spelling == "empty.gltf");
+            Assert.Contains(System.Text.Json.Nodes.JsonNode.Parse(outputs.Single(o => o.Path == $"data/m1/models/{file}.gltf").Bytes)!["nodes"]!.AsArray(),
+                n => (string?)n?["extras"]?["recoil"]?["ref"] == "empty.gltf");
         Assert.Equal(Slots(shipped(1)), Slots(Rebuild(files, outputs, 1)));
     }
 
     [Fact]
-    public void APartsFileIsWrittenFromItsFirstCopyAndTheOtherCopiesMakeNoFiles()
+    public void AnInlinePartUsesItsFirstCopyAndLaterScriptEditsMakeNoFiles()
     {
         // m1's database copies one part twice; the part references r.flt (a rod). After the load the script marks the
         // newest rod, the second copy's, a landmark (FindNode finds the newest node of a name), so the copies' r.flt
@@ -231,84 +231,15 @@ public sealed class LoaderReviewFixTests
         Gltf(files, "data/m1/models", "lamp", [Node("base", Quad(1, 0)), Node("bulb", Quad(1, 2))]);
 
         var (outputs, notes, shipped) = Reconstruct(files, 1);
-        Assert.True(notes.Count == 0, string.Join(" | ", notes));
-        Assert.Equal(["data/m1/models/lamp.gltf", "data/m1/models/m1.gltf", "data/m1/models/m1_01.gltf", "data/m1/models/r.gltf"],
+        Assert.All(notes, n => Assert.Contains("inferred load sections are unrecoverable", n));
+        Assert.Equal(["data/m1/models/lamp.gltf", "data/m1/models/m1.gltf", "data/m1/models/r.gltf"],
             outputs.Select(o => o.Path).Where(p => p.EndsWith(".gltf", StringComparison.Ordinal)).Order(StringComparer.Ordinal));
         // The rod's file is the unchanged one; the build gives every copy that rod, and the script marks the second again.
         var rodNode = System.Text.Json.Nodes.JsonNode.Parse(outputs.Single(o => o.Path == "data/m1/models/r.gltf").Bytes)!["nodes"]!.AsArray().Single(n => (string?)n!["name"] == "rod")!;
-        Assert.Equal("0x00000018", (string?)rodNode["extras"]?[WorldGltf.Key]?["flags"]);
-        Assert.True(SourceMapZones.Parse(outputs.Single(o => o.Path == "data/m1/meta/zones.json").Bytes, Token).Assets
-            .Single(a => a.LogicalPath == "data/m1/models/r.gltf").Profile.Nodes[0].Gate);
+        Assert.Equal("0x01000018", (string?)rodNode["extras"]?[WorldGltf.Key]?["flags"]);
         var rebuilt = Rebuild(files, outputs, 1);
         Assert.Equal(Slots(shipped(1)), Slots(rebuilt));
         Assert.Empty(WorldComparer.Compare(shipped(1), rebuilt));
-    }
-
-    // ------------------------------------------------------------ Blender checkouts
-
-    [Fact]
-    public void ACheckoutHidesTheVolumeOnlyOfTheFileTheBuildLoadsAsAPickup()
-    {
-        // Two models named pu012 with a collision volume: m1's build loads the one its script's model folder holds as the
-        // pickup; the one in data/common/models, which m1 does not search, no build loads.
-        using SourceWorldFixture fixture = new();
-        var (json, bin) = WorldGltf.Export([Node("box", Quad(1, 0)), Node("bvol", Quad(2, 0))], 0xFF, new() { Texture = _ => ("", 0) }).Write("pu012.bin", TestContext.Current.CancellationToken);
-        foreach (string folder in new[] { "data/m1/models", "data/common/models" }) { fixture.Write($"{folder}/pu012.gltf", json); fixture.Write($"{folder}/pu012.bin", bin); }
-        string script = File.ReadAllText(fixture.Path("gamegen/m1.gs"));
-        fixture.Write("gamegen/m1.gs", script.Replace("# no vehicles", "LoadGameGen pu012.flt pu012", StringComparison.Ordinal));
-        SourceWorkspace workspace = new(fixture.Project);
-        bool Hidden(string model) => File.ReadAllText(SourceBlender.Checkout(workspace, model, Token).Input).Contains("~hidden", StringComparison.Ordinal);
-        Assert.True(Hidden("data/m1/models/pu012.gltf"));
-        Assert.False(Hidden("data/common/models/pu012.gltf"));
-        // Searching data/common/models first, the same load finds the other file.
-        fixture.Write("gamegen/m1.gs", script.Replace("# no vehicles", "SetModelDirectory ..\\data\\common\\models\r\nLoadGameGen pu012.flt pu012", StringComparison.Ordinal));
-        Assert.False(Hidden("data/m1/models/pu012.gltf"));
-        Assert.True(Hidden("data/common/models/pu012.gltf"));
-        // A mission with an invalid include depth loads nothing. An exhausted operation-wide allowance must instead
-        // refuse checkout: skipping that mission would continue with an incomplete pickup classification.
-        fixture.Write("gamegen/m1.gs", script.Replace("# no vehicles", "source m1.gs\r\nLoadGameGen pu012.flt pu012", StringComparison.Ordinal));
-        Assert.False(Hidden("data/m1/models/pu012.gltf"));
-        for (int i = 1; i <= 8; i++) fixture.Write($"gamegen/l{i}.gw", i < 8 ? string.Concat(Enumerable.Repeat($"source l{i + 1}.gw\r\n", 16)) : "set x 1\r\n");
-        fixture.Write("gamegen/m1.gs", script.Replace("# no vehicles", "LoadGameGen pu012.flt pu012\r\nsource l1.gw", StringComparison.Ordinal));
-        string[] beforeCheckouts = Directory.GetDirectories(fixture.Path(SourceBlender.ExportFolder)).Order(StringComparer.Ordinal).ToArray();
-        byte[] beforeModel = File.ReadAllBytes(fixture.Path("data/m1/models/pu012.gltf"));
-        // Eight scripts sourcing the next sixteen times exceed the operand allowance before a million instructions.
-        var error = Assert.Throws<InvalidDataException>(() => Hidden("data/m1/models/pu012.gltf"));
-        Assert.Contains("aggregate executed operand storage or text work limit", error.Message);
-        Assert.Equal(beforeCheckouts, Directory.GetDirectories(fixture.Path(SourceBlender.ExportFolder)).Order(StringComparer.Ordinal));
-        Assert.Equal(beforeModel, File.ReadAllBytes(fixture.Path("data/m1/models/pu012.gltf")));
-        Assert.False(workspace.IsDirty);
-    }
-
-    [Fact]
-    public void ASharedNodesCopiesUnderParentsOfOtherZonesComeBackFromBlenderAsTheBuildReadsThem()
-    {
-        // A hand-written file: a shared node (instance 1) with a leaf, once under a zone-3 parent and once under a zone-5
-        // parent, stating no zone of its own. Import takes the shared node from its first copy, so it is in zone 3; the
-        // checkout states that zone on both copies, and an unchanged Blender export is accepted (the copies agree).
-        using SourceWorldFixture fixture = new();
-        const string Model = "data/m1/models/shared.gltf";
-        fixture.Write(Model, """
-            {"asset":{"version":"2.0"},"scene":0,"scenes":[{"nodes":[0,1]}],"nodes":[
-              {"name":"p3","children":[2],"extras":{"recoil":{"zone":3}}},
-              {"name":"p5","children":[3],"extras":{"recoil":{"zone":5}}},
-              {"name":"s","children":[4],"extras":{"recoil":{"instance":1}}},
-              {"name":"s","children":[5],"extras":{"recoil":{"instance":1}}},
-              {"name":"leaf"},{"name":"leaf"}]}
-            """);
-        SourceWorkspace workspace = new(fixture.Project);
-        var checkout = SourceBlender.Checkout(workspace, Model, Token);
-        var nodes = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(checkout.Input))!["nodes"]!.AsArray();
-        Assert.Equal([3, 3, 3, 3], new[] { 2, 3, 4, 5 }.Select(i => (int)nodes[i]!["extras"]!["recoil"]!["zone"]!));
-        // Blender's export of the unchanged copy.
-        string outbox = Path.Combine(checkout.Outbox, "export");
-        Directory.CreateDirectory(outbox);
-        File.Copy(checkout.Input, Path.Combine(outbox, "shared.gltf"));
-        var plan = SourceBlender.PlanUpdate(workspace, checkout, "export/shared.gltf", token: Token);
-        var written = System.Text.Json.Nodes.JsonNode.Parse(plan.Changes.Single(c => c.Relative == Model).Content)!["nodes"]!.AsArray();
-        // The first copy inherits its zone again; the second keeps the one the build gives it.
-        Assert.Null(written[2]!["extras"]?["recoil"]?["zone"]);
-        Assert.Equal(3, (int)written[3]!["extras"]!["recoil"]!["zone"]!);
     }
 
     /// <summary>m1's database: ground, a part of <paramref name="objects"/> objects, and a hut with a door and a window; a lamp loads after it.</summary>

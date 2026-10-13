@@ -20,9 +20,9 @@ internal sealed class ZonePropertiesEditor : SourcePropertiesEditor
         StackPanel form = new() { Margin = new(12) };
         Content = new ScrollViewer { Content = form, VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
         Label(form, "Map zones", true);
-        ReadOnlyText(form, catalog.Manifest);
+        ReadOnlyText(form, catalog.MasterPath);
         Label(form, "Paint exact visible faces or objects, up to 4,096 targets per draft. Strokes stay in a draft until Apply; one Apply is one undoable edit.");
-        Label(form, "Faces sharing one logical model use the same assignment. Shared scope must be chosen explicitly when other placements are affected.");
+        Label(form, "Assignments belong to the selected source or reference placement. Shared source defaults may affect other placements and missions. Apply with Shared scope set to no first to check whether broader permission is needed.");
         Input(form, "Target", state["faces"]!.GetValue<bool>() ? "faces" : "objects", text =>
         {
             if (text is not ("faces" or "objects")) throw new FormatException("Enter faces or objects.");
@@ -36,7 +36,7 @@ internal sealed class ZonePropertiesEditor : SourcePropertiesEditor
             hint: "separate object altitude-probe gate; keep leaves it unchanged");
         Input(form, "Shared scope", state["sharedScope"]!.GetValue<bool>() ? "yes" : "no", text =>
             actions.SharedScope(text switch { "yes" => true, "no" => false, _ => throw new FormatException("Enter yes or no.") }),
-            hint: "yes permits all uses of the selected logical asset/mesh in this map");
+            hint: "yes permits all placements and missions that inherit this source assignment");
         ReadOnlyText(form, $"{state["targetCount"]} selected targets · release finishes a stroke; it does not apply it");
         if (state["outlineLimited"]?.GetValue<bool>() == true)
             Label(form, "Only part of the selection outline is shown because it exceeds 200,000 points. Apply still edits every selected target.");

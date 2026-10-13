@@ -282,7 +282,7 @@ public partial class MainWindow
             var planned = plan(SourceObjectTargetFor(doc, node, workspace), ct);
             additions.AddRange(planned.Additions); notes.AddRange(planned.Notes);
             bool gltfOnly = planned.Changes.Any(c => c.Relative.EndsWith(".gltf", StringComparison.OrdinalIgnoreCase)) &&
-                planned.Changes.All(c => c.Relative.EndsWith(".gltf", StringComparison.OrdinalIgnoreCase) || c.Relative.EndsWith("/meta/zones.json", StringComparison.OrdinalIgnoreCase));
+                planned.Changes.All(c => c.Relative.EndsWith(".gltf", StringComparison.OrdinalIgnoreCase) || c.Relative.EndsWith(".glb", StringComparison.OrdinalIgnoreCase));
             verify = planned.Lines ?? (keepsNodes && gltfOnly ? ScriptLineChanges.None : null);
             return workspace.Apply(planned.Label, planned.Changes.Select(c => (c.Relative, (byte[]?)c.Content)), ct);
         }, token, additions, verifyTargets: () => verify, notes: notes);

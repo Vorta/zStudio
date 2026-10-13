@@ -2,6 +2,11 @@
 
 Version numbers follow `MAJOR.MINOR.PATCH`; the 0.x series is under active development. Release tags and downloadable archives use the same version.
 
+## 0.8.5 — unreleased
+
+- Reconstruct original model-file ownership as linked glTF sources, retaining uncertain map parts inside their owning file and keeping game attributes and placement-specific assignments in glTF. Existing sidecar-based source projects require fresh extraction from the original ZBD files.
+- Make the source-project Blender round-trip unavailable pending the reference-aware Blender plugin.
+
 ## 0.8.4 — 2026-10-13
 
 - Inspect triangle winding with **Face orientation**: blue fronts and red backs in model, Whole world and animation previews, including mirrored and animated transforms. The temporary rendering override restores existing material options when disabled and shares GUI/MCP state without editing source data (#15).

@@ -15,6 +15,29 @@ public sealed class SourceProjectTests
     private static WaveFormat Format(byte[] wave) => WaveConverter.Format(wave);
 
     [Fact]
+    public void OldMapSidecarsAndBlenderRoundTripsRefuseWithoutWriting()
+    {
+        using SourceWorldFixture fixture = new();
+        var workspace = new SourceWorkspace(fixture.Project);
+        Assert.Equal(SourceBlender.UnavailableMessage, Assert.Throws<NotSupportedException>(() => SourceBlender.Checkout(workspace, fixture.Tank, Token)).Message);
+        var checkout = new BlenderCheckout("old", Path.Combine(fixture.Project, "zstudio", "export", "old"), fixture.Tank, DateTime.UtcNow, []);
+        Assert.Equal(SourceBlender.UnavailableMessage, Assert.Throws<NotSupportedException>(() => SourceBlender.PlanUpdate(workspace, checkout, token: Token)).Message);
+        bool prompted = false;
+        Assert.Throws<NotSupportedException>(() => SourceBlender.PlanUpdate(workspace, checkout, null, (_, _) => { prompted = true; return true; }, Token));
+        Assert.False(prompted);
+        Assert.False(Directory.Exists(Path.Combine(fixture.Project, "zstudio")));
+        // Even an empty old sidecar denotes unsupported storage. Similar unrelated JSON is not a version marker.
+        fixture.Write("data/m1/notes/zones.json", "{}");
+        SourceProject.RequireCurrentFormat(fixture.Project, Token);
+        fixture.Write("data/m1/meta/zones.json", "{}");
+        var before = Directory.GetFiles(fixture.Project, "*", SearchOption.AllDirectories).ToDictionary(p => p, File.ReadAllBytes);
+        Assert.Equal(SourceProject.LegacyFormatMessage, Assert.Throws<InvalidDataException>(() => new SourceWorkspace(fixture.Project)).Message);
+        Assert.Equal(SourceProject.LegacyFormatMessage, Assert.Throws<InvalidDataException>(() => SourceBuilder.Plan(fixture.Project, token: Token)).Message);
+        Assert.Equal(before.Keys.Order(), Directory.GetFiles(fixture.Project, "*", SearchOption.AllDirectories).Order());
+        foreach (var pair in before) Assert.Equal(pair.Value, File.ReadAllBytes(pair.Key));
+    }
+
+    [Fact]
     public async Task ReconstructionWritesTheOriginalLayoutWithoutMetadata()
     {
         using var fixture = new SourceFixture();

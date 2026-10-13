@@ -13,16 +13,19 @@ public sealed class SourceTerrainTests
     private static CancellationToken Token => TestContext.Current.CancellationToken;
 
     [Fact]
-    public void CreatingTerrainUsesMapOwnedNodeDefaultsWithoutChangingGeometry()
+    public void CreatingTerrainUsesEmbeddedNodeDefaultsWithoutChangingGeometry()
     {
         using var fixture = Fixture();
         const string model = "data/m1/models/coast.gltf", recipe = "data/m1/models/new.terrain.json";
-        SourceWorkspace workspace = new(fixture.Project);
-        byte[] original = workspace.Read(model, Token)!;
-        var doc = WorldAssembler.ReadModel(original, model, (path, _) => workspace.Read(path, Token)!, Token);
+        byte[] original = File.ReadAllBytes(fixture.Path(model));
+        var doc = WorldAssembler.ReadModel(original, model, (path, _) => File.ReadAllBytes(fixture.Path(path)), Token);
         var captured = WorldGltf.CaptureZoneProfile(doc, token: Token);
         var profile = captured with { Nodes = [new(0xAABBCC07, false)] };
-        fixture.Write("data/m1/meta/zones.json", new SourceMapZones([new(model, model, profile, [])]).Write(Token));
+        var json = JsonNode.Parse(original)!.AsObject();
+        WorldGltf.PatchEmbeddedZones(json, doc, profile, Token);
+        fixture.Write(model, json.ToJsonString());
+        SourceWorkspace workspace = new(fixture.Project);
+        original = workspace.Read(model, Token)!;
         SourceTerrain.Create(workspace, "data/m1/models/m1.gltf", model, ["land"], recipe, Token);
         var defaults = Assert.Single(SourceTerrain.Read(workspace, recipe, Token).Surfaces).Defaults;
         Assert.Equal(7, defaults.NodeZone);

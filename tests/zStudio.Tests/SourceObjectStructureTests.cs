@@ -1,9 +1,11 @@
 using System.IO;
+using System.Buffers.Binary;
 using System.Numerics;
 using System.Text;
 using System.Text.Json.Nodes;
 using Recoil.Zbd.Core;
 using Recoil.Zbd.Core.Formats;
+using Recoil.Zbd.Core.Gltf;
 using Recoil.Zbd.Core.Sources;
 using Recoil.Zbd.Core.Worlds;
 using Xunit;
@@ -35,8 +37,10 @@ public sealed class SourceObjectStructureTests
     private static string Text(SourceWorkspace workspace, string path) => Encoding.Latin1.GetString(workspace.Read(path, Token)!);
     private static WorldNode WorldNode(GameZWorld world) => world.Nodes.Single(n => n.Class == WorldNodeClass.World);
 
-    [Fact]
-    public async Task CopyAndDeleteRemapEveryMapProfileWithTheGeometry()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task CopyAndDeleteRemapEmbeddedReferenceProfilesWithTheGeometry(bool gamegenGlb)
     {
         using SourceWorldFixture fixture = new(); fixture.WriteTerrainDatabase();
         const string database = "data/m1/models/m1.gltf";
@@ -44,21 +48,50 @@ public sealed class SourceObjectStructureTests
             (path, _) => File.ReadAllBytes(fixture.Path(path)), Token);
         var profile = WorldGltf.CaptureZoneProfile(document, token: Token);
         var other = profile with { MeshPolygons = profile.MeshPolygons.Select(p => (IReadOnlyList<uint>)p.Select(_ => 0xFFFF0201u).ToArray()).ToArray() };
-        foreach (var (mission, values) in new[] { ("m1", profile), ("m2", other) })
+        var json = JsonNode.Parse(File.ReadAllBytes(fixture.Path(database)))!.AsObject();
+        WorldGltf.PatchEmbeddedZones(json, document, profile, Token);
+        fixture.Write(database, json.ToJsonString());
+        const string otherMaster = "data/m2/models/m2.gltf";
+        string owner = gamegenGlb ? "gamegen/bridge.glb" : otherMaster;
+        Recoil.Zbd.Core.Gltf.GltfDocument holder = new();
+        holder.Roots.Add(new() { Extras = new JsonObject { [WorldGltf.Key] = new JsonObject
+            { ["ref"] = gamegenGlb ? "../data/m1/models/m1.gltf" : "../../m1/models/m1.gltf", ["zoneOverrides"] = WorldGltf.WriteZoneOverride(other, Token) } } });
+        byte[] ownerBytes = holder.Write("m2.bin", Token).Json;
+        if (gamegenGlb)
         {
-            string path = fixture.Path(SourceMapZones.PathForMission(mission)); Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-            File.WriteAllBytes(path, new SourceMapZones([new(database, database, values, [])]).Write(Token));
+            // Preserve even unused binary chunks when the companion assignment is in a GLB.
+            int padded = (ownerBytes.Length + 3) & ~3;
+            byte[] container = new byte[20 + padded + 12];
+            BinaryPrimitives.WriteUInt32LittleEndian(container, 0x46546C67);
+            BinaryPrimitives.WriteInt32LittleEndian(container.AsSpan(4), 2);
+            BinaryPrimitives.WriteInt32LittleEndian(container.AsSpan(8), container.Length);
+            BinaryPrimitives.WriteInt32LittleEndian(container.AsSpan(12), padded);
+            BinaryPrimitives.WriteUInt32LittleEndian(container.AsSpan(16), 0x4E4F534A);
+            container.AsSpan(20, padded).Fill(32); ownerBytes.CopyTo(container, 20);
+            BinaryPrimitives.WriteInt32LittleEndian(container.AsSpan(20 + padded), 4);
+            BinaryPrimitives.WriteUInt32LittleEndian(container.AsSpan(24 + padded), 0x004E4942);
+            container.AsSpan(28 + padded, 4).Fill(73);
+            ownerBytes = container;
+            GltfDocument master = new();
+            master.Roots.Add(new() { Extras = new JsonObject { [WorldGltf.Key] = new JsonObject { ["ref"] = "../../../gamegen/bridge.glb" } } });
+            fixture.Write(otherMaster, master.Write("unused.bin", Token).Json);
         }
+        fixture.Write(owner, ownerBytes);
         SourceWorkspace workspace = new(fixture.Project);
         var (build, world) = await BuildAsync(fixture, workspace, "m1");
         var plan = SourceObjectEdits.PlanDuplicate(Target(workspace, "m1", build, world, "flat_a"), "new_ground", null, Token);
-        Assert.Equal(3, plan.Changes.Count);
+        Assert.Equal(2, plan.Changes.Count);
         Apply(workspace, plan);
         var (_, copied) = await BuildAsync(fixture, workspace, "m1");
         Assert.Equal(copied.Nodes.Single(n => n.Name == "flat_a").Zone, copied.Nodes.Single(n => n.Name == "new_ground").Zone);
         Assert.Equal(copied.Nodes.Single(n => n.Name == "flat_a").Model!.Polygons.Select(p => p.Zone), copied.Nodes.Single(n => n.Name == "new_ground").Model!.Polygons.Select(p => p.Zone));
-        var map2 = SourceMapZones.Parse(workspace.Read(SourceMapZones.PathForMission("m2"), Token)!, Token);
-        Assert.All(map2.Assets[0].Profile.MeshPolygons.SelectMany(x => x), word => Assert.Equal(0xFFFF0201u, word));
+        var changedOwner = workspace.Read(owner, Token)!;
+        var map2 = JsonNode.Parse(GltfDocument.ContainerJson(changedOwner, Token, out _))!.AsObject();
+        if (gamegenGlb) Assert.Equal(ownerBytes[^12..], changedOwner[^12..]);
+        var overrideProfile = WorldGltf.ReadZoneOverride(map2["nodes"]![0]!["extras"]![WorldGltf.Key]!["zoneOverrides"]!.AsObject(), Token);
+        Assert.All(overrideProfile.MeshPolygons.SelectMany(x => x), word => Assert.Equal(0xFFFF0201u, word));
+        var (_, otherCopied) = await BuildAsync(fixture, workspace, "m2");
+        Assert.Contains(otherCopied.Nodes, n => n.Name == "new_ground");
         workspace.Undo(); Assert.False(workspace.IsDirty);
         Apply(workspace, SourceObjectEdits.PlanDelete(Target(workspace, "m1", build, world, "flat_a"), Token));
         var (_, deleted) = await BuildAsync(fixture, workspace, "m1");
@@ -67,13 +100,67 @@ public sealed class SourceObjectStructureTests
         workspace.Undo(); Assert.False(workspace.IsDirty);
     }
 
+    [Fact]
+    public void CompanionRemappingPreservesInheritedProfilesAndReferencesOnlyScopes()
+    {
+        using SourceWorldFixture fixture = new();
+        const string a = "data/m1/models/a.gltf", b = "data/m1/models/b.gltf", c = "data/m1/models/c.gltf";
+        GltfDocument leaf = new(); leaf.Roots.Add(new() { Name = "leaf" });
+        var leafProfile = WorldGltf.CaptureZoneProfile(leaf, token: Token) with { Nodes = [new(3, true)] };
+        WorldGltf.EmbedZones(leaf, leafProfile, token: Token);
+        fixture.Write(a, leaf.Write("unused.bin", Token).Json);
+        GltfDocument middle = new();
+        middle.Roots.Add(new() { Name = "removed" });
+        middle.Roots.Add(new() { Name = "a_ref", Extras = new() { [WorldGltf.Key] = new JsonObject
+            { ["ref"] = "a.gltf", ["zoneOverrides"] = WorldGltf.WriteZoneOverride(leafProfile with { Nodes = [new(7, true)] }, Token) } } });
+        var middleProfile = WorldGltf.CaptureZoneProfile(middle, token: Token) with { Nodes = [new(11, true), new(11, true)] };
+        WorldGltf.EmbedZones(middle, middleProfile, token: Token);
+        fixture.Write(b, middle.Write("unused.bin", Token).Json);
+        GltfDocument outer = new(); outer.Roots.Add(new() { Name = "b_ref", Extras = new() { [WorldGltf.Key] = new JsonObject { ["ref"] = "b.gltf" } } });
+        fixture.Write(c, outer.Write("unused.bin", Token).Json);
+        SourceWorkspace workspace = new(fixture.Project);
+        var plan = SourceObjectEdits.PlanTransform(workspace, "leaf", new() { ModelFile = a, ModelNode = 0, ModelNodeName = "leaf", ZoneOwnerPath = c, ZoneOwnerReferences = [0, 1] },
+            new Dictionary<(string Script, int Line), int>(), new(new(1, 0, 0), Vector3.Zero, Vector3.One), Token);
+        Assert.DoesNotContain(plan.Changes, change => change.Relative == c);
+        Apply(workspace, plan);
+        var middleJson = JsonNode.Parse(workspace.Read(b, Token)!)!.AsObject();
+        middleJson["nodes"]![1]!["extras"]![WorldGltf.Key]!["zoneOverrides"]!["nodes"]![0]!["word"] = "0x00000009";
+        workspace.Apply("Change inherited assignment", [(b, GltfJson.Write(middleJson, false, Token))], Token);
+        Assert.Equal(9u, new SourceEmbeddedZones(workspace, Token).Resolve(c, [0, 1], a).Profile.Nodes[0].Word);
+
+        // An outer occurrence owns only a nested leaf assignment. Reindex that key without
+        // capturing the middle model's defaults as a new outer profile.
+        var outerJson = JsonNode.Parse(workspace.Read(c, Token)!)!.AsObject();
+        outerJson["nodes"]![0]!["extras"]![WorldGltf.Key]!["zoneOverrides"] = new JsonObject { ["references"] = new JsonObject
+            { ["1"] = WorldGltf.WriteZoneOverride(leafProfile with { Nodes = [new(77, true)] }, Token) } };
+        workspace.Apply("Author nested assignment", [(c, GltfJson.Write(outerJson, false, Token))], Token);
+        var before = WorldAssembler.ReadModel(workspace.Read(b, Token)!, b, (path, _) => workspace.Read(path, Token)!, Token);
+        var bindings = SourceMapZoneBindings.Read(workspace, b, before, Token);
+        var nodes = middleJson["nodes"]!.AsArray();
+        Dictionary<JsonNode, int> originalObjects = new(ReferenceEqualityComparer.Instance) { [nodes[0]!] = 0, [nodes[1]!] = 1 };
+        nodes.RemoveAt(0);
+        middleJson["scenes"]![0]!["nodes"] = new JsonArray(0);
+        var after = WorldAssembler.ReadModel(GltfJson.Write(middleJson, false, Token), b, (path, _) => workspace.Read(path, Token)!, Token);
+        var companions = bindings.Remap(before, after, middleJson, originalObjects, new Dictionary<int, int>(), Token);
+        workspace.Apply("Remove unused middle root", companions.Select(change => (change.Relative, (byte[]?)change.Content))
+            .Append((b, GltfJson.Write(middleJson, false, Token))), Token);
+        var scope = JsonNode.Parse(workspace.Read(c, Token)!)!["nodes"]![0]!["extras"]![WorldGltf.Key]!["zoneOverrides"]!;
+        Assert.Null(scope["fingerprint"]); Assert.Null(scope["references"]!["1"]);
+        Assert.Equal(77u, new SourceEmbeddedZones(workspace, Token).Resolve(c, [0, 0], a).Profile.Nodes[0].Word);
+        var helper = new SourceEmbeddedZones(workspace, Token);
+        var own = helper.Resolve(b, [], b);
+        helper.Set(own, own.Profile with { Nodes = [new(13, true)] });
+        workspace.Apply("Change inherited middle defaults", helper.Changes().Select(change => (change.Relative, (byte[]?)change.Content)), Token);
+        Assert.Equal(13u, new SourceEmbeddedZones(workspace, Token).Resolve(c, [0], b).Profile.Nodes[0].Word);
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
     public async Task RemovingFirstNeutralInstanceHolderKeepsItsInheritedZone(bool editedChild)
     {
         using SourceWorldFixture fixture = new(); fixture.WriteSharedDatabase();
-        const string database = "data/m1/models/m1.gltf", manifest = "data/m1/meta/zones.json";
+        const string database = "data/m1/models/m1.gltf";
         var json = JsonNode.Parse(File.ReadAllBytes(fixture.Path(database)))!.AsObject();
         foreach (var node in json["nodes"]!.AsArray())
         {
@@ -99,14 +186,8 @@ public sealed class SourceObjectStructureTests
             assignments[firstGate] = new(77, false);
             profile = profile with { Nodes = assignments };
         }
-        foreach (var node in json["nodes"]!.AsArray())
-        {
-            if (node?["extras"]?[WorldGltf.Key] is not JsonObject fields) continue;
-            fields.Remove("zone"); fields.Remove("zoneWord");
-        }
+        WorldGltf.PatchEmbeddedZones(json, document, profile, Token);
         fixture.Write(database, json.ToJsonString());
-        Directory.CreateDirectory(Path.GetDirectoryName(fixture.Path(manifest))!);
-        File.WriteAllBytes(fixture.Path(manifest), new SourceMapZones([new(database, database, profile, [])]).Write(Token));
         SourceWorkspace workspace = new(fixture.Project);
         var (build, world) = await BuildAsync(fixture, workspace, "m1");
         Assert.Equal(editedChild ? 77u : 20u, world.Nodes.Single(n => n.Name == "gate").Zone);
@@ -914,14 +995,12 @@ public sealed class SourceObjectStructureTests
         fixture.WriteTerrainDatabase();
         if (mapZones)
         {
-            // As reconstructed: the map file holds the database's zones, with no load-root zone, and the glTF none.
+            // As reconstructed: the glTF carries explicit inheritance and complete zone words.
             const string database = "data/m1/models/m1.gltf";
             var document = WorldAssembler.ReadModel(File.ReadAllBytes(fixture.Path(database)), database, (path, _) => File.ReadAllBytes(fixture.Path(path)), Token);
             var json = JsonNode.Parse(File.ReadAllBytes(fixture.Path(database)))!.AsObject();
-            foreach (var node in json["nodes"]!.AsArray())
-                if (node?["extras"]?[WorldGltf.Key] is JsonObject fields) { fields.Remove("zone"); fields.Remove("zoneWord"); }
+            WorldGltf.PatchEmbeddedZones(json, document, WorldGltf.CaptureZoneProfile(document, token: Token), Token);
             fixture.Write(database, json.ToJsonString());
-            fixture.Write(SourceMapZones.PathForMission("m1"), new SourceMapZones([new(database, database, WorldGltf.CaptureZoneProfile(document, token: Token), [])]).Write(Token));
         }
         SourceWorkspace workspace = new(fixture.Project);
         var (build, world) = await BuildAsync(fixture, workspace, "m1");

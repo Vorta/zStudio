@@ -8,29 +8,27 @@ public static partial class SourceTerrainConversion
 {
     private sealed class ConversionZones
     {
-        private readonly string path;
-        private readonly SourceMapZones map;
-        private readonly SourceMapZoneAsset asset;
+        private readonly WorldZoneProfile originalProfile;
         private readonly Dictionary<JsonNode, int> originalNodes = new(ReferenceEqualityComparer.Instance);
         private readonly Dictionary<GltfMesh, IReadOnlyList<uint>> meshWords = new(ReferenceEqualityComparer.Instance);
         private readonly Dictionary<int, IReadOnlyList<uint>> rawMeshWords = [];
         private readonly Dictionary<GltfNode, WorldNodeZone> nodeWords = new(ReferenceEqualityComparer.Instance);
 
-        private ConversionZones(string path, SourceMapZones map, SourceMapZoneAsset asset,
+        private ConversionZones(WorldZoneProfile profile,
             JsonObject root, GltfDocument doc, CancellationToken token)
         {
-            this.path = path; this.map = map; this.asset = asset;
-            WorldGltf.ValidateZoneProfile(doc, asset.Profile, token);
+            originalProfile = profile;
+            WorldGltf.ValidateZoneProfile(doc, originalProfile, token);
             var jsonNodes = (JsonArray)root["nodes"]!;
             foreach (var node in doc.AllNodes())
             {
                 token.ThrowIfCancellationRequested();
                 if (nodeWords.ContainsKey(node)) continue;
                 int ordinal = nodeWords.Count;
-                nodeWords.Add(node, asset.Profile.Nodes[ordinal]);
+                nodeWords.Add(node, originalProfile.Nodes[ordinal]);
                 originalNodes.Add(jsonNodes[node.Index]!, ordinal);
                 if (node.Mesh is not { } mesh || meshWords.ContainsKey(mesh)) continue;
-                var words = asset.Profile.MeshPolygons[meshWords.Count];
+                var words = originalProfile.MeshPolygons[meshWords.Count];
                 meshWords.Add(mesh, words);
                 rawMeshWords.Add(GltfInteger.Int32(jsonNodes[node.Index]!["mesh"]), words);
             }
@@ -39,29 +37,16 @@ public static partial class SourceTerrainConversion
         internal static ConversionZones? Read(SourceWorkspace workspace, string database, JsonObject root,
             GltfDocument doc, CancellationToken token)
         {
-            // Conversion rewrites only the database's local map profile. Discover every owner before an
-            // absent local profile can hide assignments in another mission that the topology change would invalidate.
+            // Conversion changes topology. Refuse when other placements own overrides that it cannot preserve.
             var owners = SourceMapZoneBindings.Read(workspace, database, doc, token);
             owners.RequireSingleTerrainOwner(database);
-            string[] parts = SourceWorkspace.Normalize(database).Split('/');
-            string? path = parts.Length >= 3 && SourceProject.MissionName().IsMatch(parts[1])
-                ? SourceMapZones.PathForMission(parts[1]) : null;
-            if (owners.Assets.Any(owner => !string.Equals(owner.Map, path, StringComparison.OrdinalIgnoreCase)))
-                throw new InvalidDataException("This database geometry has map zone assignments owned by another mission. Give the mission an independently owned database before converting it to terrain.");
-            if (path == null) return null;
-            if (workspace.Read(path, token, SourceMapZones.MaximumBytes) is not { } bytes) return null;
-            var map = SourceMapZones.Parse(bytes, token);
-            var bindings = map.Assets.Where(a => a.GeometryPath.Equals(database, StringComparison.OrdinalIgnoreCase)).Take(2).ToArray();
-            if (bindings.Length == 0) return null;
-            if (bindings.Length > 1 || !bindings[0].LogicalPath.Equals(database, StringComparison.OrdinalIgnoreCase))
-                throw new InvalidDataException("This database geometry has multiple logical zone bindings. Convert an independently owned mission database.");
-            return new(path, map, bindings[0], root, doc, token);
+            return new(WorldGltf.CaptureZoneProfile(doc, token: token), root, doc, token);
         }
 
-        // Only the parsed planning view gains effective node fields. The authored glTF stays neutral.
+        // Only the parsed planning view gains effective inherited node fields.
         internal void ApplyPlanningValues(GltfDocument doc, CancellationToken token)
         {
-            foreach (var node in doc.Roots) Apply(node, asset.Profile.LoadRoot?.Word & 255u ?? 255u);
+            foreach (var node in doc.Roots) Apply(node, originalProfile.LoadRoot?.Word & 255u ?? 255u);
             void Apply(GltfNode node, uint inherited)
             {
                 token.ThrowIfCancellationRequested();
@@ -79,7 +64,7 @@ public static partial class SourceTerrainConversion
             }
         }
 
-        internal (string, byte[]?) Update(JsonObject root, GltfDocument database, string surfacePath,
+        internal void Update(JsonObject root, GltfDocument database,
             GltfDocument surfaces, IReadOnlyList<TerrainConversionSurface> groups,
             IReadOnlyDictionary<int, GltfNode> originals, CancellationToken token)
         {
@@ -105,26 +90,22 @@ public static partial class SourceTerrainConversion
             List<WorldNodeZone> nodes = []; List<IReadOnlyList<uint>> meshes = [];
             HashSet<GltfNode> seen = new(ReferenceEqualityComparer.Instance);
             HashSet<GltfMesh> seenMeshes = new(ReferenceEqualityComparer.Instance);
-            Dictionary<int, int> renumbered = [];
             foreach (var node in database.AllNodes())
             {
                 token.ThrowIfCancellationRequested();
                 if (!seen.Add(node)) continue;
                 if (originalNodes.TryGetValue(jsonNodes[node.Index]!, out int old))
                 {
-                    renumbered.Add(old, nodes.Count); nodes.Add(asset.Profile.Nodes[old]);
+                    nodes.Add(originalProfile.Nodes[old]);
                 }
                 else nodes.Add(new(255, false, true)); // The new terrain marker has no stored object zone.
                 if (node.Mesh is { } mesh && seenMeshes.Add(mesh))
                     meshes.Add(rawMeshWords[GltfInteger.Int32(jsonNodes[node.Index]!["mesh"])]);
             }
-            var profile = new WorldZoneProfile(WorldGltf.LayoutFingerprint(database, token), nodes, meshes, asset.Profile.LoadRoot);
+            var profile = new WorldZoneProfile(WorldGltf.LayoutFingerprint(database, token), nodes, meshes, originalProfile.LoadRoot);
             WorldGltf.ValidateZoneProfile(database, profile, token);
-            var references = asset.References.Where(r => renumbered.ContainsKey(r.Node)).Select(r => r with { Node = renumbered[r.Node] }).ToArray();
-            List<SourceMapZoneAsset> assets = [];
-            foreach (var entry in map.Assets) assets.Add(ReferenceEquals(entry, asset) ? entry with { Profile = profile, References = references } : entry);
-            assets.Add(new(surfacePath, surfacePath, surfaceProfile, []));
-            return (path, new SourceMapZones(assets, map.Labels).Write(token));
+            WorldGltf.PatchEmbeddedZones(root, database, profile, token);
+            WorldGltf.EmbedZones(surfaces, surfaceProfile, token: token);
         }
     }
 }

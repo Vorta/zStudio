@@ -124,8 +124,8 @@ public partial class MainWindow
             SourceProjectChecking?.Invoke(token);
             if (!SourceProject.IsProject(path)) return $"{path} is not a source project: it has no data and gamegen folders. Initialize one from the retail ZBD files first.";
             // As the workspace would refuse to edit it (and Initialize to write it): nothing may be written through a link.
-            try { SourceProject.RejectLinkedProject(path); return null; }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return ex.Message; }
+            try { SourceProject.RejectLinkedProject(path); SourceProject.RequireCurrentFormat(path, token); return null; }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException) { return ex.Message; }
         }, token).WaitAsync(token);
         if (refusal != null) throw new StudioCommandException("not_project", refusal);
         if (navigation != ViewModel.NavigationGeneration)
@@ -454,8 +454,11 @@ public partial class MainWindow
         string? root = SourceProjectRoot;
         SourceMenuSeparator.Visibility = ExportSourceMenu.Visibility = ExportSourceFileMenu.Visibility = CheckSourceMenu.Visibility = SourceProfileMenu.Visibility = SourceWorldMenu.Visibility = AddSourceModelMenu.Visibility =
             EditInBlenderMenu.Visibility = UpdateFromBlenderMenu.Visibility = CreateTerrainMenu.Visibility = ConvertTerrainMenu.Visibility = EditZonesMenu.Visibility = SourceRecoveryMenu.Visibility = root != null ? Visibility.Visible : Visibility.Collapsed;
-        AddSourceModelMenu.IsEnabled = UpdateFromBlenderMenu.IsEnabled = CreateTerrainMenu.IsEnabled = ConvertTerrainMenu.IsEnabled = EditZonesMenu.IsEnabled = ViewModel.SelectedDocument?.SourceWorld is { IsRebuilding: false } && !sourceWorkspaceBusy;
-        EditInBlenderMenu.IsEnabled = ViewModel.SelectedDocument?.SourceWorld != null && selectedNode != null;
+        AddSourceModelMenu.IsEnabled = CreateTerrainMenu.IsEnabled = ConvertTerrainMenu.IsEnabled = EditZonesMenu.IsEnabled = ViewModel.SelectedDocument?.SourceWorld is { IsRebuilding: false } && !sourceWorkspaceBusy;
+        EditInBlenderMenu.IsEnabled = UpdateFromBlenderMenu.IsEnabled = false;
+        EditInBlenderMenu.ToolTip = UpdateFromBlenderMenu.ToolTip = SourceBlender.UnavailableMessage;
+        ToolTipService.SetShowOnDisabled(EditInBlenderMenu, true);
+        ToolTipService.SetShowOnDisabled(UpdateFromBlenderMenu, true);
         if (root != null) { _ = FillExportSourceFileMenuAsync(root); _ = FillSourceWorldMenuAsync(root); _ = FillSourceProfileMenuAsync(root); }
     }
     /// <summary>Lists the project's build profiles; the checked one is what exports and checks build until another is chosen.</summary>

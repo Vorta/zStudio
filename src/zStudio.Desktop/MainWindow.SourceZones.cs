@@ -271,7 +271,7 @@ public partial class MainWindow
 
     private void RegisterSourceZoneCommands(StudioCommands registry)
     {
-        Register(registry, "source_zones", "Inspect the map zone catalog and pinned draft. Zone assignments live in data/mN/meta/zones.json; model geometry is shared. Optional exact targets return a bounded profile/scope page.", false,
+        Register(registry, "source_zones", "Inspect the map zone catalog and pinned draft. Zone assignments live in their owning glTF nodes, polygons or reference placements. Catalog and inspection report the master and owning source paths. Optional exact targets return a bounded assignment/scope page.", false,
             [DocumentParameter, ZoneTargetsParameter(), new("offset", "integer", "Target page offset.", Minimum: 0, Maximum: int.MaxValue)], async (args, token) =>
             {
                 var document = TargetDocument(args); var session = SourceWorldOf(document); long revision = session.Workspace.ContentRevision;
@@ -283,13 +283,13 @@ public partial class MainWindow
                 if (document.IsDisposed || session.Owner != document || revision != session.Workspace.ContentRevision) throw new StudioCommandException("context_changed", "The source world changed during zone inspection.");
                 return Result(new { document = document.SessionId, revision = document.Revision, catalog = values.Item1, inspection = values.Item2, draft = zoneDraft?.Document == document ? ZoneDraftState() : null });
             });
-        RegisterJob(registry, "source_zone_draft", "Open, edit, paint or apply the shared zone draft. begin opens Properties; set configures faces/objects, ordered zones, gate and shared scope; add supplies exact node/polygon targets; paint toggles the explicit GUI brush; apply accepts one undoable edit; cancel discards, including targets made stale by another source edit. Every action after begin requires the current draftToken and current document revision. Geometry is unchanged by zone-only edits.",
+        RegisterJob(registry, "source_zone_draft", "Open, edit, paint or apply the shared zone draft. begin opens Properties; set configures faces/objects, ordered zones, gate and shared scope; add supplies exact node/polygon targets; paint toggles the explicit GUI brush; apply accepts one undoable edit; cancel discards, including targets made stale by another source edit. Every action after begin requires the current draftToken and current document revision. Zone-only edits update owning glTF metadata without changing geometry buffers.",
             [DocumentParameter, RevisionParameter, P("action", "string", "Draft operation.", true, "begin", "set", "add", "paint", "apply", "cancel", "label"),
              P("draftToken", "string", "Current draft token from source_zones."), P("faces", "boolean", "True for polygon faces, false for object zones."),
              new("zones", "array", "Zero to three ordered face zone IDs; objects accept one ID or an empty list to keep their current zone; 255 means Any.", Items: new("", "integer", "Zone ID.", Minimum: 0, Maximum: 255), MaxItems: 3),
              P("gate", "string", "Object altitude-probe gate: keep retains each object's value; on/off explicitly set it.", false, "keep", "on", "off"),
              new("zoneId", "integer", "Zone ID to name with action label.", Minimum: 0, Maximum: 255), new("label", "string", "Zone name of 1–256 characters for action label; 255 must remain Any."),
-             P("sharedScope", "boolean", "Explicitly permit every use of selected logical model/mesh in this map."), ZoneTargetsParameter()], true,
+             P("sharedScope", "boolean", "Explicitly permit other placements and missions that inherit the selected source assignment. Inspect source_zones for the affected sources and missions first."), ZoneTargetsParameter()], true,
             async (args, token) =>
             {
                 var document = TargetDocument(args);

@@ -1,4 +1,6 @@
 using System.Text;
+using System.Text.Json.Nodes;
+using Recoil.Zbd.Core.Gltf;
 using Recoil.Zbd.Core;
 using Recoil.Zbd.Core.Formats;
 using Recoil.Zbd.Core.Sources;
@@ -13,8 +15,7 @@ public sealed class SourceMapZonesTests
     private static readonly string Fingerprint = new('a', 64);
     private static WorldZoneProfile Profile => new(Fingerprint, [new(0xAABBCC07, true)],
         [new uint[] { 0xFFFF0001, 0xFFFF0101, 0x03010203, 0x12345600, 0xFFFFFF01 }], new(0xFF0102FF, false));
-    private static SourceMapZoneAsset Asset(string path = "data/m3/models/turret.gltf") => new(path,
-        "data/m3/models/turret.gltf", Profile, []);
+    private static SourceMapZoneAsset Asset(string path = "data/m3/models/turret.gltf") => new(path, path, Profile, []);
 
     [Fact]
     public void LoadRootCannotClaimIgnoredInheritance()
@@ -29,7 +30,7 @@ public sealed class SourceMapZonesTests
     }
 
     [Fact]
-    public void CodecPreservesFullWordsCountZeroOrderPaddingGateAndLogicalAliases()
+    public void CodecPreservesFullWordsCountZeroOrderPaddingGateAndPhysicalReferences()
     {
         var owner = Asset("data/m3/models/map.gltf") with
         {
@@ -38,13 +39,12 @@ public sealed class SourceMapZonesTests
         SourceMapZones zones = new([owner, Asset("data/m3/models/turret_2.gltf")], [new(7, "Water \"edge\""), new(255, "Any")]);
         var bytes = zones.Write(Token); var read = SourceMapZones.Parse(bytes, Token);
         Assert.Equal(bytes, read.Write(Token));
-        Assert.True(read.TryGetAsset("DATA/M3/MODELS/TURRET_2.GLTF", out var alias));
-        Assert.Equal("data/m3/models/turret.gltf", alias.GeometryPath);
-        Assert.Equal(Profile.Nodes, alias.Profile.Nodes); Assert.Equal(Profile.LoadRoot, alias.Profile.LoadRoot);
-        Assert.Equal(Profile.MeshPolygons[0], alias.Profile.MeshPolygons[0]);
+        Assert.True(read.TryGetAsset("DATA/M3/MODELS/TURRET_2.GLTF", out var asset));
+        Assert.Equal("data/m3/models/turret_2.gltf", asset.GeometryPath);
+        Assert.Equal(Profile.Nodes, asset.Profile.Nodes); Assert.Equal(Profile.LoadRoot, asset.Profile.LoadRoot);
+        Assert.Equal(Profile.MeshPolygons[0], asset.Profile.MeshPolygons[0]);
         Assert.Equal("./turret_2.gltf", read.Assets[0].References[0].Spelling);
         Assert.Equal("Water \"edge\"", read.Label(7)); Assert.Equal("Zone 8", read.Label(8)); Assert.Equal("Any", read.Label(255));
-        Assert.Equal("data/m3/meta/zones.json", SourceMapZones.PathForMission("m3"));
     }
 
     [Fact]
@@ -96,7 +96,7 @@ public sealed class SourceMapZonesTests
     }
 
     [Fact]
-    public void ReconstructionSharesZoneOnlyGeometryAndKeepsDistinctLogicalReferenceProfiles()
+    public void ReconstructionReferencesOneOriginalFileWithIndependentEmbeddedPlacementProfiles()
     {
         GameZWorld world = new();
         WorldNode root = new("loaded", WorldNodeClass.Object3D), map = new("world", WorldNodeClass.World);
@@ -116,16 +116,20 @@ public sealed class SourceMapZonesTests
         var shipped = GameZWorldReader.FromDocument(FormatRegistry.Default.OpenBytes("gamez.zbd", bytes, token: Token), Token);
         var script = GameGenScriptText.Tokenize("NewWorld world\nSetModelDirectory ../data/m3/models\nLoadGameGen assembly.flt loaded\nGameZWriteZBDFile gamez.zbd\n");
         var outputs = WorldSources.Reconstruct([new(3, shipped)], _ => script, (_, _) => null, new HashSet<string>(), _ => 0, [], Token);
-        var zones = SourceMapZones.Parse(outputs.Single(o => o.Path == "data/m3/meta/zones.json").Bytes, Token);
-        var turrets = zones.Assets.Where(a => Path.GetFileName(a.LogicalPath).StartsWith("lturret", StringComparison.Ordinal)).ToArray();
-        Assert.Equal(2, turrets.Length); Assert.Single(turrets.Select(a => a.GeometryPath).Distinct());
-        Assert.Equal(new uint[] { 0xFFFF0001, 0xFFFF0101 }, turrets.SelectMany(a => a.Profile.MeshPolygons.SelectMany(p => p)).Order());
-        Assert.Equal(new uint[] { 0, 1 }, turrets.Select(a => a.Profile.Nodes.Single().Word).Order());
-        Assert.Single(outputs, o => o.Path == turrets[0].GeometryPath);
-        Assert.DoesNotContain(outputs, o => o.Path == turrets.Single(a => a.LogicalPath != a.GeometryPath).LogicalPath);
-        var assembly = zones.Assets.Single(a => a.LogicalPath.EndsWith("assembly.gltf", StringComparison.Ordinal));
-        Assert.Equal(2, assembly.References.Count);
-        Assert.Equal(turrets.Select(a => a.LogicalPath).Order(), assembly.References.Select(r => r.Asset).Order());
-        Assert.All(assembly.References, r => Assert.Equal(r.Asset, WorldAssembler.Relative(assembly.LogicalPath, r.Spelling)));
+        Assert.DoesNotContain(outputs, o => o.Path.EndsWith("/meta/zones.json", StringComparison.Ordinal));
+        var files = outputs.ToDictionary(o => o.Path, o => o.Bytes, StringComparer.OrdinalIgnoreCase);
+        string physical = Assert.Single(outputs, o => Path.GetFileName(o.Path) == "lturret.gltf").Path;
+        string assembly = Assert.Single(outputs, o => Path.GetFileName(o.Path) == "assembly.gltf").Path;
+        GltfDocument Read(string path) => GltfDocument.Read(files[path], uri => files[WorldAssembler.Relative(path, uri)], Token);
+        var shared = Read(physical);
+        var defaults = WorldGltf.CaptureZoneProfile(shared, token: Token);
+        var references = Read(assembly).AllNodes().Where(n => n.Extras?[WorldGltf.Key]?["ref"] != null).ToArray();
+        Assert.Equal(2, references.Length);
+        Assert.All(references, n => Assert.Equal(physical, WorldAssembler.Relative(assembly, n.Extras![WorldGltf.Key]!["ref"]!.GetValue<string>())));
+        var profiles = references.Select(n => n.Extras![WorldGltf.Key]!["zoneOverrides"] is JsonObject value
+            ? WorldGltf.ReadZoneOverride(value, Token) : defaults).ToArray();
+        Assert.Equal(new uint[] { 0xFFFF0001, 0xFFFF0101 }, profiles.SelectMany(p => p.MeshPolygons.SelectMany(words => words)).Order());
+        Assert.Equal(new uint[] { 0, 1 }, profiles.Select(p => Assert.Single(p.Nodes).Word).Order());
+        Assert.Equal(2, outputs.Count(o => o.Path.EndsWith(".gltf", StringComparison.Ordinal)));
     }
 }

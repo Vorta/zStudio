@@ -249,6 +249,8 @@ public sealed class PackGltfRound5Tests
         Assert.True(Assert.Throws<InvalidDataException>(() => TerrainRecipe.Parse(Encoding.UTF8.GetBytes(unknown), "m1.terrain.json")).Message.Length < 400);
 
         string uri = "C:" + new string('x', 1 << 20);
-        Assert.Equal($"'{uri[..64]}…' is not a relative reference.", Assert.Throws<InvalidDataException>(() => WorldAssembler.Relative("data/m1/a.gltf", uri)).Message);
+        var referenceRefusal = Assert.Throws<InvalidDataException>(() => WorldAssembler.Relative("data/m1/a.gltf", uri));
+        Assert.Contains("relative path", referenceRefusal.Message);
+        Assert.True(referenceRefusal.Message.Length < 200);
     }
 }

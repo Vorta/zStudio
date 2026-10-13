@@ -388,10 +388,19 @@ public static partial class SourceTerrainConversion
 
         // The database's objects: its roots and, in their place, what its groups hold (a part's reference holds the
         // database's own records; the part's objects are in its file), with the zone each inherits (the roots' 0xFF).
-        IEnumerable<(GltfNode? Node, int Zone)> Members(IEnumerable<GltfNode> nodes, int inherited)
+        IEnumerable<(GltfNode? Node, int Zone)> Members(IEnumerable<GltfNode> nodes, int inherited, int? inlineCount = null)
         {
+            int sibling = 0;
             foreach (var node in nodes)
             {
+                if (sibling < inlineCount)
+                {
+                    sibling++;
+                    kept.Add(new(WorldGltf.EngineName(node), "inside an inferred source-file section"));
+                    yield return (null, inherited);
+                    continue;
+                }
+                if (sibling++ == inlineCount) yield return (null, inherited);
                 if (!WorldGltf.IsGroup(node, database)) { yield return (node, inherited); continue; }
                 yield return (null, inherited); // A new parent is a new run, even when adjacent leaves match.
                 var extras = node.Extras?[WorldGltf.Key] as JsonObject;
@@ -402,7 +411,7 @@ public static partial class SourceTerrainConversion
                 { kept.Add(new(WorldGltf.EngineName(node), "a part of the mission database in a file of its own")); continue; }
                 if (!WorldGltf.IsTransparentTerrainGroup(node, database))
                 { kept.Add(new(WorldGltf.EngineName(node), "a database group with geometry, transform or appearance")); continue; }
-                foreach (var member in Members(node.Children, Zone(extras, inherited))) yield return member;
+                foreach (var member in Members(node.Children, Zone(extras, inherited), GltfNodeEdits.InlineCount((JsonObject)root["nodes"]![node.Index]!, node.Children.Count))) yield return member;
                 yield return (null, inherited);
             }
         }
@@ -433,17 +442,25 @@ public static partial class SourceTerrainConversion
             foreach (int index in group.Nodes)
             {
                 if (!byIndex.TryGetValue(index, out var node) || node.Mesh == null) throw new InvalidDataException($"{plan.Database} changed since the conversion was planned.");
-                mesh.Primitives.AddRange(node.Mesh.Primitives);
+                // Each emitted occurrence owns its polygon attributes. Sharing a primitive object here
+                // would let embedding one surface's assignments overwrite another occurrence's words.
+                foreach (var primitive in node.Mesh.Primitives)
+                {
+                    GltfPrimitive copy = new() { Material = primitive.Material,
+                        TextureCoordinateSet = primitive.TextureCoordinateSet,
+                        Extras = (JsonObject?)primitive.Extras?.DeepClone() };
+                    copy.Positions.AddRange(primitive.Positions); copy.Normals.AddRange(primitive.Normals);
+                    copy.TexCoords.AddRange(primitive.TexCoords); copy.Indices.AddRange(primitive.Indices);
+                    foreach (var target in primitive.Targets) copy.Targets.Add([.. target]);
+                    mesh.Primitives.Add(copy);
+                }
             }
             surfaces.Roots.Add(new GltfNode { Name = group.Id, Mesh = mesh,
                 Extras = group.Appearance == null ? null : new JsonObject { [WorldGltf.Key] = new JsonObject { ["appearance"] = group.Appearance.DeepClone() } } });
         }
-        var (json, bin) = surfaces.Write(binary, token);
-        _ = GltfDocument.Read(json, uri => uri == binary ? bin
-            : throw new InvalidDataException($"{plan.Surfaces}: unexpected buffer {JsonData.ShownText(uri)}."), token);
         // Each uninterrupted sibling run gets a normal recipe: adding or renaming its surfaces later needs no
         // hidden selector in the database. All recipes share the one generated surfaces model and zone profile.
-        List<(string, byte[]?)> changes = [(plan.Surfaces, json), ($"{folder}/{binary}", bin)];
+        List<(string, byte[]?)> changes = [];
         Dictionary<int, int> nodeRuns = [];
         foreach (var group in plan.Groups)
             foreach (int index in group.Nodes)
@@ -473,8 +490,16 @@ public static partial class SourceTerrainConversion
             throw new InvalidDataException("The converted database exceeds its editable JSON limit. Convert a smaller database.");
         var updated = WorldAssembler.ReadModel(database, plan.Database, (path, remaining) => workspace.Read(path, token, ProjectReadLimits.Bytes(remaining))
             ?? throw new InvalidDataException($"{plan.Database}: buffer {JsonData.ShownText(path)} is unavailable."), token);
+        zones?.Update(root, updated, surfaces, plan.Groups, byIndex, token);
+        database = GltfJson.Write(root, indented: false, token);
+        if (database.Length > SourceTerrain.MaximumDatabaseJsonBytes)
+            throw new InvalidDataException("The converted database exceeds its editable JSON limit. Convert a smaller database.");
+        var (json, bin) = surfaces.Write(binary, token);
+        _ = GltfDocument.Read(json, uri => uri == binary ? bin
+            : throw new InvalidDataException($"{plan.Surfaces}: unexpected buffer {JsonData.ShownText(uri)}."), token);
         changes.Add((plan.Database, database));
-        if (zones != null) changes.Add(zones.Update(root, updated, plan.Surfaces, surfaces, plan.Groups, byIndex, token));
+        changes.Add((plan.Surfaces, json));
+        changes.Add(($"{folder}/{binary}", bin));
         return workspace.Apply($"Convert {Path.GetFileName(plan.Database)} to editable terrain",
             changes, token)
             ?? throw new InvalidDataException("The conversion changed nothing.");
@@ -482,12 +507,15 @@ public static partial class SourceTerrainConversion
         void Rewrite(JsonObject owner, string property, IReadOnlyList<GltfNode> siblings, bool allowed)
         {
             JsonArray rewritten = []; int? previousRun = null;
+            int? inlineCount = property == "children" ? GltfNodeEdits.InlineCount(owner, siblings.Count) : null;
+            int rewrittenInline = 0, sibling = 0;
             foreach (var node in siblings)
             {
                 token.ThrowIfCancellationRequested();
+                bool inInline = sibling++ < inlineCount;
                 if (nodeRuns.TryGetValue(node.Index, out int run))
                 {
-                    if (!allowed) throw new InvalidDataException("Terrain pieces must be roots or children of transparent database groups.");
+                    if (!allowed || inInline) throw new InvalidDataException("Terrain pieces must be master-owned roots or children of transparent database groups, outside inferred source-file sections.");
                     encountered.Add(node.Index);
                     if (previousRun != run)
                     {
@@ -497,6 +525,7 @@ public static partial class SourceTerrainConversion
                         // recipe identity stays in the URI when a long/non-Latin-1 basename needs a display name.
                         if (!WorldGltf.IsEngineName(stem)) stem = $"terrain_{run + 1}";
                         rewritten.Add(nodes.Count);
+                        if (inInline) rewrittenInline++;
                         nodes.Add(new JsonObject { ["name"] = stem, ["extras"] = new JsonObject { [WorldGltf.Key] = new JsonObject { ["terrain"] = SourceTerrain.RelativePath(plan.Database, path) } } });
                     }
                     previousRun = run;
@@ -504,11 +533,13 @@ public static partial class SourceTerrainConversion
                 else
                 {
                     previousRun = null; rewritten.Add(node.Index);
+                    if (inInline) rewrittenInline++;
                     if (node.Children.Count > 0)
-                        Rewrite((JsonObject)nodes[node.Index]!, "children", node.Children, allowed && WorldGltf.IsTransparentTerrainGroup(node, plan.Database));
+                        Rewrite((JsonObject)nodes[node.Index]!, "children", node.Children, allowed && !inInline && WorldGltf.IsTransparentTerrainGroup(node, plan.Database));
                 }
             }
             owner[property] = rewritten;
+            if (inlineCount != null) GltfNodeEdits.SetInlineCount(owner, rewrittenInline);
         }
     }
 
