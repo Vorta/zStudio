@@ -13,7 +13,6 @@ public partial class MainWindow
     private bool arrangingWorkspace, navigatorCollapsed, navigatorTemporary, inspectorTemporary, toolsMaximized;
     private string previousPreset = "Edit";
     private DocumentModel? commandDocument;
-    internal bool IsChangingLayout { get; private set; }
     private void InitializeWorkspace()
     {
         var layout = Layout;
@@ -65,6 +64,7 @@ public partial class MainWindow
     }
     private void UpdateDocumentCommands()
     {
+        RefreshPresentation();
         UpdateSourceInputBlock();
         RefreshSceneTree();
         var doc = ViewModel.SelectedDocument;
@@ -179,9 +179,20 @@ public partial class MainWindow
     private void ArrangeWorkspace()
     {
         if (!ready || arrangingWorkspace || Workbench.ActualWidth <= 0) return;
-        arrangingWorkspace = IsChangingLayout = true;
+        arrangingWorkspace = true;
+        using var lease = BeginLayoutChange();
         try
         {
+            RefreshPresentation();
+            if (presentationUiHidden)
+            {
+                NavigatorHost.Visibility = NavigatorSplitter.Visibility = InspectorHost.Visibility = InspectorSplitter.Visibility = BottomTools.Visibility = ToolsSplitter.Visibility = Visibility.Collapsed;
+                FilesColumn.Width = NavigatorSplitterColumn.Width = PropertiesColumn.Width = PropertiesSplitterColumn.Width = new(0);
+                ToolsRow.Height = ToolsSplitterRow.Height = new(0);
+                animation?.ShowInspectorReplacement(false);
+                Workspace.Visibility = Visibility.Visible;
+                return;
+            }
             var layout = Layout; bool focus = layout.Preset == "Focus preview";
             double width = Workbench.ActualWidth;
             // Keep both side panes when the center still has a usable width.
@@ -227,7 +238,6 @@ public partial class MainWindow
         finally
         {
             arrangingWorkspace = false;
-            Dispatcher.BeginInvoke(DispatcherPriority.Background, () => IsChangingLayout = false);
         }
     }
     private void WorkspaceSplitterCompleted(object sender, DragCompletedEventArgs e)
@@ -278,13 +288,12 @@ public partial class MainWindow
     private void DensityClick(object sender, RoutedEventArgs e) { Layout.Density = ((MenuItem)sender).Header.ToString()!; ApplyDensity(); }
     private void ApplyDensity()
     {
-        IsChangingLayout = true;
+        using var lease = BeginLayoutChange();
         propertiesWindow?.ApplyAppearance();
         FontSize = Layout.Density == "Comfortable" ? 15 : 13;
         Resources["PreviewControlSize"] = Layout.Density == "Comfortable" ? 40d : 32d;
         Resources["PreviewIconSize"] = Layout.Density == "Comfortable" ? 20d : 16d;
         Resources["WorkspaceControlPadding"] = Layout.Density == "Comfortable" ? new Thickness(12, 8, 12, 8) : new Thickness(8, 4, 8, 4);
-        Dispatcher.BeginInvoke(DispatcherPriority.Background, () => IsChangingLayout = false);
     }
     private void InspectorSelectionChanged(object sender, SelectionChangedEventArgs e) { if (ready && e.Source == InspectorTabs) SaveWorkspacePreferences(); }
     private void ToolSelectionChanged(object sender, SelectionChangedEventArgs e) { if (ready && e.Source == ToolTabs) SaveWorkspacePreferences(); }

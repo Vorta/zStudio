@@ -22,7 +22,7 @@ public sealed partial class SceneViewport
 
     private HitTestResult? PickPickupHandle(Point point)
     {
-        if (!CanManipulate ||
+        if (PresentationUiHidden || !CanManipulate ||
             pickupManipulator?.Visibility != Visibility.Visible || viewport.Camera is not HelixToolkit.Wpf.SharpDX.ProjectionCamera camera ||
             !IsInsidePickupViewport(point)) return null;
         var origin = transformDraft.Position;
@@ -94,13 +94,22 @@ public sealed partial class SceneViewport
 
     internal bool HandlePickupPointerMove(Point point)
     {
+        if (PresentationUiHidden) return IsPickupDragging;
         if (IsFlyActive) return true;
         if (IsPickupDragging && activePickupHandle?.ModelHit is MeshGeometryModel3D arrow)
         {
             // Captured input can arrive outside without MouseLeave. Check after the handle
             // starts; CaptureMouse can synchronously resend an earlier pointer position.
-            if (!IsInsidePickupViewport(point)) { CancelPickupDrag(); return true; }
+            if (!IsInsidePickupViewport(point))
+            {
+                // A smaller presentation viewport can leave the stationary pointer outside.
+                // Wait for its first usable anchor; ordinary later pointer departure still cancels.
+                if (!pickupPresentationRebase) CancelPickupDrag();
+                return true;
+            }
+            if (RebasePickupPointer(point)) return true;
             if (TransformMode == "rotate") MoveRotationPointer(point);
+            else if (pickupPresentationConstraint) MovePresentationPickup(point);
             else arrow.RaiseEvent(new MouseMove3DEventArgs(arrow, activePickupHandle, point, viewport));
             return true;
         }
@@ -113,7 +122,7 @@ public sealed partial class SceneViewport
     {
         if (IsFlyActive) return true;
         if (!IsPickupDragging || e.ChangedButton != MouseButton.Left) return false;
-        if (!IsInsidePickupViewport(point)) { CancelPickupDrag(); return true; }
+        if (!PresentationUiHidden && !IsInsidePickupViewport(point)) { CancelPickupDrag(); return true; }
         if (TransformMode == "move" && activePickupHandle?.ModelHit is MeshGeometryModel3D arrow)
             arrow.RaiseEvent(new MouseUp3DEventArgs(arrow, activePickupHandle, point, viewport, e));
         activePickupHandle = null; IsPickupDragging = false;

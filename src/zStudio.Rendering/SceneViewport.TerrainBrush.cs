@@ -59,6 +59,7 @@ public sealed partial class SceneViewport
         if (TryNavigationSurface(point, out var hit))
         {
             brushStroke = [new((float)hit.X, (float)hit.Y, (float)hit.Z)];
+            brushPresentationSuspended = false;
             viewport.CaptureMouse(); viewport.Focus(); ShowTrail();
         }
         // A click off the scene does nothing, but never selects while painting.
@@ -67,6 +68,9 @@ public sealed partial class SceneViewport
     internal bool HandleTerrainBrushMove(Point point)
     {
         if (brushStroke == null) return false;
+        // A layout change puts another surface under the same physical pointer. Keep the
+        // existing continuous stroke until release/Escape; a new stroke uses the new layout.
+        if (brushPresentationSuspended || PresentationUiHidden) return true;
         if (TryNavigationSurface(point, out var hit))
         {
             Vector3 p = new((float)hit.X, (float)hit.Y, (float)hit.Z);
@@ -78,7 +82,7 @@ public sealed partial class SceneViewport
     internal bool HandleTerrainBrushUp(MouseButtonEventArgs e)
     {
         if (brushStroke == null || e.ChangedButton != MouseButton.Left) return brushStroke != null;
-        var stroke = brushStroke; brushStroke = null;
+        var stroke = brushStroke; brushStroke = null; brushPresentationSuspended = false;
         viewport.ReleaseMouseCapture(); HideTrail();
         TerrainStrokeCompleted?.Invoke(stroke);
         return true;
@@ -87,7 +91,7 @@ public sealed partial class SceneViewport
     public bool CancelTerrainStroke()
     {
         if (brushStroke == null) return false;
-        brushStroke = null; HideTrail();
+        brushStroke = null; brushPresentationSuspended = false; HideTrail();
         if (viewport.IsMouseCaptured) viewport.ReleaseMouseCapture();
         return true;
     }
@@ -103,7 +107,7 @@ public sealed partial class SceneViewport
         if (brushTrail == null)
         {
             brushTrail = new() { Color = System.Windows.Media.Colors.OrangeRed, Thickness = 3, IsHitTestVisible = false, IsDepthClipEnabled = false, DepthBias = -1000 };
-            viewport.Items.Add(brushTrail);
+            PresentationGuide(brushTrail); viewport.Items.Add(brushTrail);
         }
         brushTrail.Geometry = geometry;
     }

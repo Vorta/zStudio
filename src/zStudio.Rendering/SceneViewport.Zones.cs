@@ -36,12 +36,13 @@ public sealed partial class SceneViewport
     private bool HandleZoneDown(Point point, MouseButtonEventArgs e)
     {
         if (!zonePaintActive || e.ChangedButton != MouseButton.Left || IsFlyActive || IsPickupDragging) return false;
-        zoneGesture = [];
+        zoneGesture = []; zonePresentationSuspended = false;
         AddZoneHit(point); viewport.CaptureMouse(); viewport.Focus(); return true;
     }
     private bool HandleZoneMove(Point point)
     {
         if (zoneGesture == null) return false;
+        if (zonePresentationSuspended || PresentationUiHidden) return true;
         AddZoneHit(point); return true;
     }
     private void AddZoneHit(Point point)
@@ -57,14 +58,14 @@ public sealed partial class SceneViewport
     private bool HandleZoneUp(MouseButtonEventArgs e)
     {
         if (zoneGesture == null || e.ChangedButton != MouseButton.Left) return false;
-        var completed = zoneGesture.ToArray(); zoneGesture = null;
+        var completed = zoneGesture.ToArray(); zoneGesture = null; zonePresentationSuspended = false;
         viewport.ReleaseMouseCapture();
         ZoneStrokeCompleted?.Invoke(completed); return true;
     }
     public bool CancelZoneGesture()
     {
         if (zoneGesture == null) return false;
-        zoneGesture = null;
+        zoneGesture = null; zonePresentationSuspended = false;
         if (viewport.IsMouseCaptured) viewport.ReleaseMouseCapture();
         ShowZoneTargets([]); return true;
     }
@@ -118,7 +119,7 @@ public sealed partial class SceneViewport
             Geometry = new LineGeometry3D { Positions = new Vector3Collection(points), Indices = indices },
             Color = System.Windows.Media.Colors.OrangeRed, Thickness = 2, IsHitTestVisible = false, DepthBias = -100,
         };
-        viewport.Items.Add(zoneOutline);
+        PresentationGuide(zoneOutline); viewport.Items.Add(zoneOutline);
     }
     private void ClearZonePainting()
     {

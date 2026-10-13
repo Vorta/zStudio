@@ -10,6 +10,12 @@ public partial class MainWindow
     private bool automationCloseRequested;
     private void RegisterWorkspacePresentation(StudioCommands r)
     {
+        Register(r,"presentation","Read or set independent temporary fullscreen and Hide UI modes for the current 3D preview. Preserves drafts, layout preferences, camera and playback. Enabling requires a 3D preview; disabling always works. Leaving 3D clears Hide UI and retains fullscreen. Neither mode is saved.",true,
+            [P("fullscreen","boolean","Use the full current monitor without window borders."),P("uiHidden","boolean","Temporarily hide workbench chrome and editor guides.")],a=>
+        {
+            var state = SetPresentation(a["fullscreen"]?.GetValue<bool>(), a["uiHidden"]?.GetValue<bool>());
+            return Result(new { fullscreen=state.Fullscreen, uiHidden=state.UiHidden, available=state.Available });
+        });
         Register(r,"workspace_view","Read or set presentation preferences and read effective navigatorMode (hidden, tabbed, split). Supports theme, density, preset, pane visibility/dimensions and stable section indices, including detached Files. Does not commit drafts.",true,
             [WorkspaceChanges],a=>
         {
@@ -60,7 +66,9 @@ public partial class MainWindow
             {
                 case "activate": Activate(); break;
                 case "minimize": WindowState=WindowState.Minimized; break;
-                case "maximize": WindowState=WindowState.Maximized; break;
+                case "maximize":
+                    if (PresentationState.Fullscreen) throw new StudioCommandException("busy","Exit fullscreen before maximizing the window.");
+                    WindowState=WindowState.Maximized; break;
                 case "restore": WindowState=WindowState.Normal; break;
                 case "close": RequireNoDrafts(); if(ViewModel.Documents.Any(d=>d.IsDirty)) throw new StudioCommandException("unsaved_changes","Save or explicitly close dirty documents first."); _=CloseAfterResponseAsync(); break;
             }
@@ -82,7 +90,7 @@ public partial class MainWindow
             }
             else opened = await OpenAssetPropertiesAsync(doc,asset,token,automation: true);
             token.ThrowIfCancellationRequested();
-            if (opened == null || propertiesWindow != opened || opened.Document != doc || !opened.IsVisible)
+            if (opened == null || propertiesWindow != opened || opened.Document != doc || !IsPropertiesPresented(opened))
                 throw new StudioCommandException("context_changed", "The requested Properties target was not published.");
             return Result(new { document=doc.SessionId,asset=asset.Id,title=opened.Title,properties=opened.CurrentJson });
         });

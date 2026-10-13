@@ -45,6 +45,7 @@ public sealed class WindowClosingTests
                     await Check([], 0, closes: true);
                     Volatile.Write(ref phase, "Properties, inspection and mission workspace");
                     await PropertiesWindowChecks.Run(app);
+                    await PresentationMcpChecks.Run(app);
                     await McpWorkspaceChecks.Run(app);
                     await SceneInspectionInputChecks.Run();
                     await SceneInspectionMcpChecks.Run();

@@ -472,10 +472,10 @@ public partial class AnimationEditor : FieldEditor, IDisposable
     private async void PreviewOptionChanged(object sender, SelectionChangedEventArgs e) => await (optionWork = PreviewOptionChangedAsync(sender, e));
     private async Task PreviewOptionChangedAsync(object sender, SelectionChangedEventArgs e) { if (ready && !changing) { resetSimulation = true; await SeekAsync(0); } }
     private async void SeedChanged(object sender, RoutedEventArgs e) => await (optionWork = SeedChangedAsync(sender, e));
-    private async Task SeedChangedAsync(object sender, RoutedEventArgs e) { if (!ready) return; if (!int.TryParse(Seed.Text, out int seed)) { Note("Seed must be a 32-bit integer."); Seed.Text = "1"; seed = 1; } if (appliedSeed == seed) return; appliedSeed = seed; resetSimulation = true; await SeekAsync(0); }
+    private async Task SeedChangedAsync(object sender, RoutedEventArgs e) { if (!ready || e.RoutedEvent == LostFocusEvent && !CanCommitFocus(Seed)) return; if (!int.TryParse(Seed.Text, out int seed)) { Note("Seed must be a 32-bit integer."); Seed.Text = "1"; seed = 1; } if (appliedSeed == seed) return; appliedSeed = seed; resetSimulation = true; await SeekAsync(0); }
     private void RangeChanged(object sender, RoutedEventArgs e)
     {
-        if (!ready) return;
+        if (!ready || e.RoutedEvent == LostFocusEvent && !CanCommitFocus(EndTime)) return;
         if (!double.TryParse(EndTime.Text, CultureInfo.InvariantCulture, out double end) || !double.IsFinite(end) || end < AnimationPlayer.StepSeconds || end > 3600) { EndTime.Text = SeekSlider.Maximum.ToString(CultureInfo.InvariantCulture); Note("Range must be between 1/60 second and 3600 seconds."); return; }
         if (Math.Abs(end - SeekSlider.Maximum) < AnimationPlayer.StepSeconds / 2) return;
         customRange = true; ApplyRange(Math.Ceiling(end * 60) / 60); _ = SeekAsync(frame?.Time ?? 0);
