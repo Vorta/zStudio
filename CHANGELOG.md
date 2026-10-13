@@ -2,7 +2,12 @@
 
 Version numbers follow `MAJOR.MINOR.PATCH`; the 0.x series is under active development. Release tags and downloadable archives use the same version.
 
-## 0.8.0 — unreleased
+## 0.8.4 — 2026-10-13
+
+- Inspect triangle winding with **Face orientation**: blue fronts and red backs in model, Whole world and animation previews, including mirrored and animated transforms. The temporary rendering override restores existing material options when disabled and shares GUI/MCP state without editing source data (#15).
+- Edit whole AI paths in compiled and source worlds with multi-selection, box selection, G/R/S drafts, world-axis constraints, common-field Properties, one-step undo and verified saves (#16).
+- Analyze and relocate existing VTOL drop windows along their flight paths through shared GUI/MCP drafts. Retain duration, cadence and neighboring releases; refuse ambiguous or dependent moves. Compiled animation Save As and source-token edits retain their existing protections (#30).
+- Use **F11 fullscreen** and independent **Ctrl+Shift+H Hide UI** across existing 3D previews, preserving camera, playback, selections, drafts, pane preferences and ordinary window placement. Both modes are temporary and share typed MCP controls; layout changes preserve gesture state without becoming unintended edits (#31).
 
 - Reconstruct a Recoil source project from shipped data, in the original layout and without zStudio metadata: ZAR resources become text `.zrd` files in the folders recorded by their compiler, `interp.zbd` becomes the original `gamegen\*.gs`/`support\*.gw` build scripts with their modification times, each sound keeps its best-quality WAV in `data\common\sounds`, each texture its best-quality variant as a PNG, mission worlds become glTF models loaded by the build scripts, and animations keep their definitions with their keyframes as `.zan` scripts.
 - Build every game file from a source project: texture packs from the PNGs (adding `rtexture8`/`rtexture16` and `texture8`/`texturemax` for full quality on modern cards), `image.zbd`, each mission world by running its build script with the engine's interpreter and update rules, and each `anim.zbd` compiled from its definitions against that world. A model loaded from another mission's folder brings its materials, and its textures join the mission's packs. On the retail data, every world rebuilds with the shipped nodes, placements, models and textures, and every animation entry recompiles unchanged. Exports are verified by meaning; reconstruction accepts only the original shipped files, and subsequent changes are exported from the source project.
