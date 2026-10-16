@@ -1,11 +1,11 @@
 using System.Numerics;
 using System.Windows.Media.Media3D;
 using HelixToolkit;
-using Recoil.Zbd.Rendering;
+using zStudio.Rendering;
 using Xunit;
 using MeshGeometry3D = HelixToolkit.SharpDX.MeshGeometry3D;
 
-namespace Recoil.Zbd.Desktop.Tests;
+namespace zStudio.Desktop.Tests;
 
 public sealed class VisibleDepthRangeTests
 {

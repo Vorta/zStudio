@@ -10,13 +10,13 @@ using System.Windows.Media;
 using System.Windows.Threading;
 using ModelContextProtocol.Client;
 using ModelContextProtocol.Protocol;
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Core.Animation;
-using Recoil.Zbd.Desktop;
-using Recoil.Zbd.Mcp;
+using zStudio.Core;
+using zStudio.Core.Animation;
+using zStudio.Desktop;
+using zStudio.Mcp;
 using Xunit;
 
-namespace Recoil.Zbd.Desktop.Tests;
+namespace zStudio.Desktop.Tests;
 
 internal static class ResponsiveNavigatorChecks
 {
@@ -126,7 +126,7 @@ internal static class ResponsiveNavigatorChecks
             var package = new AnimationPackage { Prefix = new byte[72], Tail = [] };
             package.Entries.Add(new(new byte[308],0,0));
             var documentScene = new GameScene(); documentScene.Nodes.Add(new(0,"root","world",null,[],[],new(),new()));
-            using var propertiesDoc = new DocumentModel(new ZbdDocument(Path.Combine(root,"properties.zbd"),new(0,DateTime.MinValue),
+            using var propertiesDoc = new DocumentModel(new AssetDocument(Path.Combine(root,"properties.zbd"),new(0,DateTime.MinValue),
                 new(FormatFamily.Animation,28,Recognition.Supported,"fixture"),ReadOnlyMemory<byte>.Empty) { Animations = package, Scene = documentScene });
             main.ViewModel.Documents.Add(propertiesDoc);
             main.ViewModel.SelectedDocument = propertiesDoc; await Idle();

@@ -1,28 +1,19 @@
-using Recoil.Zbd.Core.Gltf;
-using Recoil.Zbd.Core.Sources;
+using zStudio.Core.Gltf;
+using zStudio.Core.Sources;
 
-namespace Recoil.Zbd.Core.Worlds;
+namespace zStudio.Core.Worlds;
 
 public sealed partial class WorldAssembler
 {
     private readonly Dictionary<GltfDocument, Dictionary<GltfNode, (int Node, int Mesh)>> zoneLayouts = new(ReferenceEqualityComparer.Instance);
 
-    private void ReadMapZones(string script)
+    private void RejectExternalZoneMetadata(string script)
     {
         string mission = Path.GetFileNameWithoutExtension(script.Replace('\\', '/')).ToLowerInvariant();
         if (!SourceProject.MissionName().IsMatch(mission)) return;
-        string path = SourceMapZones.PathForMission(mission);
-        if (Exists(path)) throw new InvalidDataException("This source project uses external zone metadata. Re-extract the original ZBD files with zStudio 0.8.5 before opening or building it.");
+        string path = $"data/{mission}/meta/zones.json";
+        if (Exists(path)) throw new InvalidDataException("This source project uses external zone metadata. Re-extract the original ZBD files with zStudio before opening or building it.");
     }
-
-    private static string GeometryPath(string logical) => logical;
-
-    private bool ModelExists(string logical)
-    {
-        return Exists(logical);
-    }
-
-    private static string? ZoneReference(string logical, int node) => null;
 
     private Dictionary<GltfNode, (int Node, int Mesh)> ZoneLayout(GltfDocument document)
     {

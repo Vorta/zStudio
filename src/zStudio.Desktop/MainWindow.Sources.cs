@@ -3,16 +3,16 @@ using System.Text.Json.Nodes;
 using System.Windows;
 using System.Windows.Controls;
 using Microsoft.Win32;
-using Recoil.Zbd.Automation;
-using Recoil.Zbd.Core.Worlds;
-using Recoil.Zbd.Core.Sources;
+using zStudio.Automation;
+using zStudio.Core.Worlds;
+using zStudio.Core.Sources;
 
-namespace Recoil.Zbd.Desktop;
+namespace zStudio.Desktop;
 
 public partial class MainWindow
 {
     /// <summary>The open root when it is a source project (it has data and gamegen folders).</summary>
-    private string? SourceProjectRoot => ViewModel.HasRoot && SourceProject.IsProject(ViewModel.RootPath) ? ViewModel.RootPath : null;
+    private string? SourceProjectRoot => ViewModel.HasRoot && ViewModel.IsSourceProject ? ViewModel.RootPath : null;
     private static string Bounded(string text, int maximum = 1024) => text.Length <= maximum ? text : text[..maximum] + "…";
     private static string GameFiles(int count) => count == 1 ? "1 game file" : $"{count} game files";
     private const int SourceWarningsShown = 64;
@@ -218,7 +218,7 @@ public partial class MainWindow
             throw new StudioCommandException("invalid_argument", "Give the destination as a full path, such as D:\\Recoil\\game.");
         RequireNoDrafts();
         // Exports read source files from disk, so pending edits to them must be saved or discarded first. A source
-        // world shows a private build in the project's zstudio/cache/worlds, but its pending edits belong to the project's scripts.
+        // world evaluates its source workspace in memory; pending edits belong to the owning project files.
         string project = Path.TrimEndingDirectorySeparator(Path.GetFullPath(root)), prefix = Path.EndsInDirectorySeparator(project) ? project : project + Path.DirectorySeparatorChar;
         if (ViewModel.Documents.FirstOrDefault(d => d.IsDirty && (d.SourceWorld is { } world ? world.Root.Equals(project, StringComparison.OrdinalIgnoreCase)
             : Path.GetFullPath(d.Path).StartsWith(prefix, StringComparison.OrdinalIgnoreCase))) is { } dirty)
@@ -454,7 +454,7 @@ public partial class MainWindow
         string? root = SourceProjectRoot;
         SourceMenuSeparator.Visibility = ExportSourceMenu.Visibility = ExportSourceFileMenu.Visibility = CheckSourceMenu.Visibility = SourceProfileMenu.Visibility = SourceWorldMenu.Visibility = AddSourceModelMenu.Visibility =
             EditInBlenderMenu.Visibility = UpdateFromBlenderMenu.Visibility = CreateTerrainMenu.Visibility = ConvertTerrainMenu.Visibility = EditZonesMenu.Visibility = SourceRecoveryMenu.Visibility = root != null ? Visibility.Visible : Visibility.Collapsed;
-        AddSourceModelMenu.IsEnabled = CreateTerrainMenu.IsEnabled = ConvertTerrainMenu.IsEnabled = EditZonesMenu.IsEnabled = ViewModel.SelectedDocument?.SourceWorld is { IsRebuilding: false } && !sourceWorkspaceBusy;
+        CreateTerrainMenu.IsEnabled = ConvertTerrainMenu.IsEnabled = EditZonesMenu.IsEnabled = ViewModel.SelectedDocument?.SourceWorld is { IsRebuilding: false } && !sourceWorkspaceBusy;
         EditInBlenderMenu.IsEnabled = root != null && !sourceWorkspaceBusy;
         UpdateFromBlenderMenu.IsEnabled = ViewModel.SelectedDocument?.SourceWorld is { IsRebuilding: false } && !sourceWorkspaceBusy;
         EditInBlenderMenu.ToolTip = "Choose a source model or master map and check out its complete graph for the RECOIL Blender extension";

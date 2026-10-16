@@ -1,12 +1,12 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Runtime.InteropServices;
-using Recoil.Zbd.Core.Formats;
-using Recoil.Zbd.Core.Gltf;
-using Recoil.Zbd.Core.Terrain;
-using Recoil.Zbd.Core.Worlds;
+using zStudio.Core.Formats;
+using zStudio.Core.Gltf;
+using zStudio.Core.Terrain;
+using zStudio.Core.Worlds;
 
-namespace Recoil.Zbd.Core.Sources;
+namespace zStudio.Core.Sources;
 
 /// <summary>
 /// Terrain recipes of a source project, edited through its workspace: listing them, changing one as an undoable change,
@@ -155,8 +155,7 @@ public static class SourceTerrain
 
     internal static HashSet<string> Referenced(string file, Func<string, ProjectReadLimits, byte[]?> readFile, CancellationToken token,
         int maximumFiles = SourceProject.MaximumFiles, long maximumInputBytes = FormatRegistry.MaximumDocumentBytes,
-        int maximumNodes = GltfDocument.MaximumNodes, long maximumWork = LookupWorkBudget.MaximumUnits, Action<long>? reserved = null,
-        SourceMapZones? zones = null)
+        int maximumNodes = GltfDocument.MaximumNodes, long maximumWork = LookupWorkBudget.MaximumUnits, Action<long>? reserved = null)
     {
         if (maximumInputBytes < 0 || maximumInputBytes > FormatRegistry.MaximumDocumentBytes) throw new ArgumentOutOfRangeException(nameof(maximumInputBytes));
         file = WorldAssembler.Relative("reference.gltf", SourceWorkspace.Normalize(file));

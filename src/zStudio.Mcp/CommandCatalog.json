@@ -411,7 +411,7 @@
   },
   {
     "Name": "zstudio_reload_document",
-    "Description": "Stage and reparse a clean document before replacing it, using the current model/resource Save As destination. An already-open destination, failure or pre-publication cancellation retains the document and preview. Dirty documents must first be saved or explicitly closed. A source world instead rebuilds from the project\u0027s current sources and pending edits. External changes to any dirty workspace source cause a conflict, including scripts, models, resources and animation definitions (.zad). Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Description": "Stage and reparse a clean document before replacing it, using the current model/resource Save As destination. An already-open destination, failure or pre-publication cancellation retains the document and preview. Dirty documents must first be saved or explicitly closed. A source world instead evaluates the project\u0027s current sources and pending edits directly in memory, without creating archives. External changes to any dirty workspace source cause a conflict, including scripts, models, resources and animation definitions (.zad). Returns an operation ID; use zstudio_operation to await/read the result.",
     "Mutates": true,
     "Parameters": [
       {
@@ -472,7 +472,7 @@
   },
   {
     "Name": "zstudio_save_document",
-    "Description": "Verified save: animations require a NEW destination outside the source root; pickup/AI/tank coordinates save owning archives or explicit new destinations; model edits save all texture variants before GameZ; ZAR/ZRD, script and texture saves verify and atomically replace each working destination or create new Save As files. Batch results preview at most 64 saved/remaining paths and 32 errors, each at most 512 characters, with SavedPathCount/SavedPathsTruncated, RemainingPathCount/RemainingPathsTruncated and ErrorCount/ErrorsTruncated. Source saves return written with writtenCount/writtenTruncated under the same path bound. All files are still saved; truncated previews are not full path identities. Global state.contentEdits reports fileCount with empty files/filesTruncated; per-document command results preview affected paths and targets. Partial content/coordinate Save As retains every requested destination; ordinary Save retries unpublished copies without overwriting existing files. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Description": "Verified save: source worlds save every accepted project change to its owning glTF, script, ZRD or animation-definition source, creating no archives; animations require a NEW destination outside the source root; pickup/AI/tank coordinates save owning archives or explicit new destinations; model edits save all texture variants before GameZ; ZAR/ZRD, script and texture saves verify and atomically replace each working destination or create new Save As files. Batch results preview at most 64 saved/remaining paths and 32 errors, each at most 512 characters, with SavedPathCount/SavedPathsTruncated, RemainingPathCount/RemainingPathsTruncated and ErrorCount/ErrorsTruncated. Source saves return written with writtenCount/writtenTruncated under the same path bound. All files are still saved; truncated previews are not full path identities. Global state.contentEdits reports fileCount with empty files/filesTruncated; per-document command results preview affected paths and targets. Partial content/coordinate Save As retains every requested destination; ordinary Save retries unpublished copies without overwriting existing files. Returns an operation ID; use zstudio_operation to await/read the result.",
     "Mutates": true,
     "Parameters": [
       {
@@ -634,7 +634,7 @@
   },
   {
     "Name": "zstudio_validate",
-    "Description": "Validate the source archive on disk, not pending edits. Returns structured diagnostics. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Description": "Validate on-disk data, not pending edits: evaluate a source world directly from its project or validate a compiled archive. Creates no game archives. Returns structured diagnostics. Returns an operation ID; use zstudio_operation to await/read the result.",
     "Mutates": true,
     "Parameters": [
       {
@@ -768,7 +768,7 @@
   },
   {
     "Name": "zstudio_preview_state",
-    "Description": "Read active preview options, camera and playback state. texturePacks retains full choice names and paths on a bounded page (offset/limit, default 100, maximum 200); follow texturePackNextOffset and texturePackCount. Long or escaped paths shorten the page.",
+    "Description": "Read active preview options, camera and playback state. reloading is true while a replacement presentation loads over the frozen previous scene; viewport commands answer not_ready until it is published. Source edits evaluate in memory without archives; ordinary transform updates retain the viewport. objectTransformPreviewNode identifies an object currently drawn with a provisional transform while its source change is evaluated. texturePacks retains full choice names and paths on a bounded page (offset/limit, default 100, maximum 200); follow texturePackNextOffset and texturePackCount. Long or escaped paths shorten the page.",
     "Mutates": false,
     "Parameters": [
       {
@@ -1020,11 +1020,11 @@
       {
         "Name": "node",
         "Type": "integer",
-        "Description": "Optional source node identity to frame, including visible descendants/runtime instances.",
+        "Description": "Optional scene node or signed selectionOwner from scene_tree to frame in this preview, including visible descendants/runtime instances.",
         "Required": false,
         "Choices": null,
         "Properties": null,
-        "Minimum": 0,
+        "Minimum": -2147483648,
         "Maximum": 2147483647
       }
     ]
@@ -1074,7 +1074,7 @@
   },
   {
     "Name": "zstudio_scene_selection",
-    "Description": "Select/inspect a scene node with bounded metadata and inspection_truncated. Isolate includes its descendants; isolate and show_all are available only in static model/Whole world previews, matching the GUI.",
+    "Description": "Select/inspect a scene node with bounded metadata and inspection_truncated. Isolate includes its descendants; isolate and show_all are available only in static model/Whole world previews, matching the GUI. show_all also shows what scene_tree hide hid.",
     "Mutates": true,
     "Parameters": [
       {
@@ -1111,7 +1111,7 @@
   },
   {
     "Name": "zstudio_scene_options",
-    "Description": "Set static model/world options: lod(integer), difficulty(Easy/Medium/Hard; RECOIL only, MW3 uses missions), textures/wireframe/faceOrientation/bounds/horizon(boolean), texturePack(path or empty for automatic), highlight(none/nonDefaultSoils/canModify/clipTo/zones), aiNodes/aiThroughGeometry(boolean), aiNetwork(all or ID with aiSnapshot). Highlights and AI are Whole world only. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Description": "Set static model/world options: lod(integer), difficulty(Easy/Medium/Hard; RECOIL only, MW3 uses missions), textures/wireframe/faceOrientation/bounds/horizon(boolean), texturePack(path or empty for automatic), highlight(none/nonDefaultSoils/canModify/clipTo/canModifyAndClipTo/zones), aiNodes/aiThroughGeometry(boolean), aiNetwork(all or ID with aiSnapshot). Highlights and AI are Whole world only. Returns an operation ID; use zstudio_operation to await/read the result.",
     "Mutates": true,
     "Parameters": [
       {
@@ -1204,13 +1204,14 @@
           {
             "Name": "highlight",
             "Type": "string",
-            "Description": "Whole world only: solid yellow non-default soils, green CanModify, red ClipTo, or zones (each surface in its node zone\u0027s colour, grey for any); none restores normal appearance.",
+            "Description": "Whole world only: 50% colour overlays for yellow non-default soils, green CanModify, red ClipTo, combined CanModify/ClipTo (red wins overlap), or node zones (grey for any); none restores normal appearance.",
             "Required": false,
             "Choices": [
               "none",
               "nonDefaultSoils",
               "canModify",
               "clipTo",
+              "canModifyAndClipTo",
               "zones"
             ],
             "Properties": null
@@ -1826,7 +1827,7 @@
   },
   {
     "Name": "zstudio_workspace_view",
-    "Description": "Read or set presentation preferences and read effective navigatorMode (hidden, tabbed, split). Supports theme, density, preset, pane visibility/dimensions and stable section indices, including detached Files. Does not commit drafts.",
+    "Description": "Read or set presentation preferences and read effective navigatorMode (hidden, tabbed, split). In a source map, navigator/inspector and navigatorWidth/inspectorWidth show, hide and size its World outliner (left) and docked Properties pane (right) for the session, without overwriting compiled-explorer preferences; propertiesDocked pops Properties out into the floating card or docks it. Supports theme, density, preset, pane visibility/dimensions and stable section indices, including detached Files. Does not commit drafts.",
     "Mutates": true,
     "Parameters": [
       {
@@ -1918,6 +1919,14 @@
               "Debug",
               "Focus preview"
             ],
+            "Properties": null
+          },
+          {
+            "Name": "propertiesDocked",
+            "Type": "boolean",
+            "Description": "Source maps: true docks Properties as the right pane; false pops it out into the card floating over the view.",
+            "Required": false,
+            "Choices": null,
             "Properties": null
           },
           {
@@ -2079,7 +2088,7 @@
   },
   {
     "Name": "zstudio_scene_properties",
-    "Description": "Inspect a scene node or open its Properties window, including editable mission pickups. Metadata is bounded to 512 JSON nodes/8192 text characters with inspection_truncated. MW3 actor labels use 128-character prefixes; source data and JSON exports remain intact.",
+    "Description": "Inspect a scene object, focus its source-world floating editor, or open the shared Properties window in other viewers, including editable mission pickups. Source-map parts resolve to their complete selection owner; synthetic reference groups return Index=null and a signed selectionOwner with read-only properties. Physical mesh/polygon inspection remains available through inspection commands. Metadata is bounded to 512 JSON nodes/8192 text characters with inspection_truncated. MW3 actor labels use 128-character prefixes; source data and JSON exports remain intact.",
     "Mutates": true,
     "Parameters": [
       {
@@ -2093,7 +2102,7 @@
       {
         "Name": "node",
         "Type": "integer",
-        "Description": "Scene node index.",
+        "Description": "Scene node index or signed selectionOwner from scene_tree in this preview.",
         "Required": true,
         "Choices": null,
         "Properties": null,
@@ -2103,7 +2112,7 @@
       {
         "Name": "open",
         "Type": "boolean",
-        "Description": "Open the pinned Properties window.",
+        "Description": "Focus the source-object panel, or open Properties for other viewers.",
         "Required": false,
         "Choices": null,
         "Properties": null
@@ -2268,7 +2277,7 @@
   },
   {
     "Name": "zstudio_ai_path",
-    "Description": "Edit nodes in one authored AI path. Enter/exit Edit mode; replace/add/toggle a bounded selection or box-select visible nodes; begin a move/rotate/scale draft, set numeric input, then confirm one undo step or cancel. World XYZ constraints and selection-centre pivot match the GUI. Links and other fields are preserved. Source-world confirmation rebuilds through source tokens and returns the new document, exiting Edit mode. Selection and draft state are in preview_state.ai.path. Properties pins common values (mixed where different), without following later selection. No physical input is captured. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Description": "Edit nodes in one authored AI path. Enter/exit Edit mode; replace/add/toggle a bounded selection or box-select visible nodes; begin a move/rotate/scale draft, set numeric input, then confirm one undo step or cancel. World XYZ constraints and selection-centre pivot match the GUI. Links and other fields are preserved. Source-world confirmation updates source tokens in memory, evaluates the scene and returns the accepted document/revision, exiting Edit mode. Save writes the owning ZRD sources; no archives are created. Selection and draft state are in preview_state.ai.path. Properties pins common values (mixed where different), without following later selection. No physical input is captured. Returns an operation ID; use zstudio_operation to await/read the result.",
     "Mutates": true,
     "Parameters": [
       {
@@ -2434,7 +2443,7 @@
   },
   {
     "Name": "zstudio_parachute",
-    "Description": "Inspect and relocate complete existing VTOL drop windows in a Whole world. Show analyzes the first discovered flight; unavailable flights retain the candidate list, entry and analysisRefusal without a partial path. Analyze selects an exact entry. Conditional release markers come from a frozen bounded runtime, never landing predictions. Select/begin/set/confirm/cancel share the GUI draft and one undo step. Set a local start time or exact path segment plus fraction to disambiguate crossings. Compiled edits belong to the returned animation owner; source edits use token-preserving project history and rebuild. Undo/redo/save explicitly target that owner. save requires a NEW destination for compiled animations; source saves retain their project destination. Samples/releases support offset/limit pagination without query; preview_state.parachute reports bounded state. No physical input is captured. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Description": "Inspect and relocate complete existing VTOL drop windows in a Whole world. Show analyzes the first discovered flight; unavailable flights retain the candidate list, entry and analysisRefusal without a partial path. Analyze selects an exact entry. Conditional release markers come from a frozen bounded runtime, never landing predictions. Select/begin/set/confirm/cancel share the GUI draft and one undo step. Set a local start time or exact path segment plus fraction to disambiguate crossings. Compiled edits belong to the returned animation owner; source edits use token-preserving project history and in-memory scene evaluation. Source Apply creates no archives and Save writes the owning animation definitions. Undo/redo/save explicitly target that owner. save requires a NEW destination for compiled animations; source saves retain their project destination. Samples/releases support offset/limit pagination without query; preview_state.parachute reports bounded state. No physical input is captured. Returns an operation ID; use zstudio_operation to await/read the result.",
     "Mutates": true,
     "Parameters": [
       {
@@ -2860,7 +2869,7 @@
   },
   {
     "Name": "zstudio_scene_inspect",
-    "Description": "Read independent hover/selection information from the fixed top-right inspection panel, or query an explicit viewport point/target without moving the mouse. The permanent hover readout clears its coordinates over empty space. Coordinates distinguish triangle hits, object origins and authored placement positions. AI results include attackStrategy/hoverAttackStrategy with stored value, status, key, character count, truncation and network RGB hex color. Panel state includes preferred/effective heights, viewport limits and expanded state.",
+    "Description": "Read independent hover/selection information from the fixed top-right inspection panel (a source map docks it as the Properties pane, with the hover readout as the surface chip over the view), or query an explicit viewport point/target without moving the mouse. Parent(s) describes the selected object or authored source-tree occurrence; Surface node and Surface parent(s) separately describe a clicked internal mesh. glTF node indices and compiled source slots are distinct. The permanent hover readout clears its coordinates over empty space. Coordinates distinguish triangle hits, object origins and authored placement positions. Zone is the selected object\u0027s built zone ID (Any is 255), as Inherit (ID) when its source node inherits it, with its altitude zone check; Surface zone and Polygon zones separately describe a clicked internal mesh and its polygon (an empty polygon set has no zones). In source worlds, Zone source names the glTF node, reference placement, ancestor or load root that supplied it. AI results include attackStrategy/hoverAttackStrategy with stored value, status, key, character count, truncation and network RGB hex color. Panel state includes preferred/effective heights, viewport limits, expanded state and whether a source map docks it as the Properties pane. In a source map, recentSelections lists the empty pane\u0027s Recently selected objects (newest first) with the node scene_tree select takes for each (null when it is no longer in the world).",
     "Mutates": false,
     "Parameters": [
       {
@@ -2902,7 +2911,7 @@
   },
   {
     "Name": "zstudio_scene_card",
-    "Description": "Expand/clear selected-object details below the permanent top-right hover readout, copy fields, or begin/set/apply/cancel the shared position/rotation draft. Whole world selection requires unlocked editing. Move and supported Rotate controls and handles appear only during an edit draft; unsupported Rotate stays hidden; transforms preview until apply creates one undo step. Edit actions require document/revision; set/apply/cancel require the current draft token. Copy optionally writes the clipboard.",
+    "Description": "Expand/clear selected-object details below the permanent top-right hover readout, copy fields, or begin/set/apply/cancel the shared draft. Source objects expose local transform, name, model, flags and command fields in this panel, editable at once: the first change opens the draft (begin only checks an edit could start); set takes fields and/or transformMode (move/rotate handles, move arrows along the object\u0027s own axes, or none), Apply accepts one atomic source transaction and cancel is the footer\u0027s Revert. Placements start their draft with begin, a GUI field change or showing handles. Source worlds have no editing lock; compiled Whole world selection and all viewport manipulation require unlocked editing. Move and supported Rotate toggles in the transform header show or hide their handles; unsupported Rotate stays hidden; Apply and Revert (footer) are enabled only once a draft changes something; transforms preview until apply creates one undo step. Edit actions require document/revision; set/apply/cancel require the current draft token. Copy optionally writes the clipboard.",
     "Mutates": true,
     "Parameters": [
       {
@@ -2967,6 +2976,14 @@
         "Name": "clipboard",
         "Type": "boolean",
         "Description": "Write copy text to clipboard; default false.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "sharedScope",
+        "Type": "boolean",
+        "Description": "Apply: consent to change every use of a shared source zone assignment (default false refuses with shared_scope).",
         "Required": false,
         "Choices": null,
         "Properties": null
@@ -3042,13 +3059,49 @@
         "Properties": null
       },
       {
+        "Name": "fields",
+        "Type": "array",
+        "Description": "Source-object draft fields; strings retain incomplete input until Apply. Field keys come from scene_inspect.draft.content.fields.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Items": {
+          "Name": "",
+          "Type": "object",
+          "Description": "Source field",
+          "Required": false,
+          "Choices": null,
+          "Properties": [
+            {
+              "Name": "field",
+              "Type": "string",
+              "Description": "Field key",
+              "Required": true,
+              "Choices": null,
+              "Properties": null
+            },
+            {
+              "Name": "value",
+              "Type": "string",
+              "Description": "Draft input, at most 4096 characters",
+              "Required": true,
+              "Choices": null,
+              "Properties": null
+            }
+          ]
+        },
+        "MinItems": 1,
+        "MaxItems": 32
+      },
+      {
         "Name": "transformMode",
         "Type": "string",
-        "Description": "Draft handle mode; rotate requires supported axes.",
+        "Description": "Handles shown, as the transform header\u0027s toggles: move, rotate (requires supported axes) or none to hide them.",
         "Required": false,
         "Choices": [
           "move",
-          "rotate"
+          "rotate",
+          "none"
         ],
         "Properties": null
       }
@@ -3056,7 +3109,7 @@
   },
   {
     "Name": "zstudio_scene_tree",
-    "Description": "Read the Document scene hierarchy, including stable preview placements, shared/partition references and disconnected nodes. Read returns roots or a row\u0027s direct children, optionally filtered before paging. Expand/collapse/reveal only change tree presentation; select shares scene inspection and draft guards. Runtime parenting is not represented.",
+    "Description": "Read the Document scene hierarchy, including stable preview placements, shared/partition references and disconnected nodes. Source maps show the authored glTF hierarchy, including groups removed by compilation, under the world root; objects later passes add follow as top-level pass rows (pass aiv: units the AIV resource places for the selected difficulty; puppies: its pickups; anim: objects startup animations place or hide until placed), each listing its objects. animations lists the mission animations bound to an object by name (at most eight, then an ellipsis). sourceFile/gltfNode identify authored nodes, sourceOccurrence identifies a tree path, and compiledNode is an optional built slot. selectionOwner for source_map_parts is a signed current-preview identity; source-only authored groups have node=null and selectionOwner=null and support read-only row inspection. properties focuses the source-object card, or opens pinned Properties in other viewers. Read returns roots or a row\u0027s direct children, optionally filtered before paging; in a source map, search and/or types read the whole hierarchy as a flat list of matches with their parent paths, as the outliner\u0027s search box and type filters do. Source map rows carry category (world, group, geometry, object, node), zone and hidden. Expand/collapse/reveal only change tree presentation; hide/show hide a row\u0027s object (a removed group: what it holds) in the view only, like the outliner\u0027s eye; select shares scene inspection and draft guards. Runtime parenting is not represented.",
     "Mutates": true,
     "Parameters": [
       {
@@ -3070,7 +3123,7 @@
       {
         "Name": "action",
         "Type": "string",
-        "Description": "Tree action; default read. Properties opens the same pinned window as the row context menu.",
+        "Description": "Tree action; default read. Properties focuses the source-object card; other viewers open the same pinned window as the row context menu. hide/show (source maps) change only what the view draws.",
         "Required": false,
         "Choices": [
           "read",
@@ -3078,8 +3131,26 @@
           "collapse",
           "reveal",
           "select",
-          "properties"
+          "properties",
+          "hide",
+          "show"
         ],
+        "Properties": null
+      },
+      {
+        "Name": "search",
+        "Type": "string",
+        "Description": "Source maps: case-insensitive name search across the whole hierarchy (read without row); results are flat rows with path.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "types",
+        "Type": "string",
+        "Description": "Source maps: comma-separated categories the flat read includes (group, geometry, object, node); default all.",
+        "Required": false,
+        "Choices": null,
         "Properties": null
       },
       {
@@ -3109,11 +3180,11 @@
       {
         "Name": "node",
         "Type": "integer",
-        "Description": "Scene node index for reveal/select/properties instead of row.",
+        "Description": "Scene node index or signed selectionOwner for reveal/select/properties instead of row, scoped to the current hierarchy.",
         "Required": false,
         "Choices": null,
         "Properties": null,
-        "Minimum": 0,
+        "Minimum": -2147483648,
         "Maximum": 2147483647
       },
       {
@@ -3140,6 +3211,141 @@
         "Name": "query",
         "Type": "string",
         "Description": "Case-insensitive name/path or displayed-text filter, applied before pagination.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      }
+    ]
+  },
+  {
+    "Name": "zstudio_source_map_parts",
+    "Description": "Read a referenced map object\u0027s editor-only part hierarchy. Children are paged. Names are bounded to 256 characters. Visible is the part\u0027s own gate; effectiveVisible also includes ancestors, LOD and mission placement. No source flags are changed.",
+    "Mutates": false,
+    "Parameters": [
+      {
+        "Name": "preview",
+        "Type": "string",
+        "Description": "Current preview lifetime ID from zstudio_state.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "owner",
+        "Type": "integer",
+        "Description": "Selection owner from scene_tree; negative IDs denote source-only reference groups.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": -2147483648,
+        "Maximum": 2147483647
+      },
+      {
+        "Name": "parent",
+        "Type": "integer",
+        "Description": "Part whose direct children to list; omit for roots.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": -2147483648,
+        "Maximum": 2147483647
+      },
+      {
+        "Name": "offset",
+        "Type": "integer",
+        "Description": "Zero-based result offset.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": -2147483648,
+        "Maximum": 2147483647
+      },
+      {
+        "Name": "limit",
+        "Type": "integer",
+        "Description": "Page size, 1\u2013200; default 100.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": -2147483648,
+        "Maximum": 2147483647
+      },
+      {
+        "Name": "query",
+        "Type": "string",
+        "Description": "Case-insensitive name/path or displayed-text filter, applied before pagination.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      }
+    ]
+  },
+  {
+    "Name": "zstudio_source_map_parts_visibility",
+    "Description": "Set one referenced-object part\u0027s preview visibility or reset that object\u0027s part overrides. Rebuilds the preview asynchronously while retaining the current scene on failure. Editor-only: no source edit, dirty state or undo entry. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Mutates": true,
+    "Parameters": [
+      {
+        "Name": "preview",
+        "Type": "string",
+        "Description": "Current preview lifetime ID from zstudio_state.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "document",
+        "Type": "string",
+        "Description": "Document lifetime ID from zstudio_state.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "revision",
+        "Type": "integer",
+        "Description": "Expected current document revision. Read before editing.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": 0,
+        "Maximum": 9223372036854775807
+      },
+      {
+        "Name": "owner",
+        "Type": "integer",
+        "Description": "Selection owner from scene_tree.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": -2147483648,
+        "Maximum": 2147483647
+      },
+      {
+        "Name": "action",
+        "Type": "string",
+        "Description": "Visibility action.",
+        "Required": true,
+        "Choices": [
+          "set",
+          "reset"
+        ],
+        "Properties": null
+      },
+      {
+        "Name": "part",
+        "Type": "integer",
+        "Description": "Physical part ID from source_map_parts; required for set.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": -2147483648,
+        "Maximum": 2147483647
+      },
+      {
+        "Name": "visible",
+        "Type": "boolean",
+        "Description": "Part gate; required for set.",
         "Required": false,
         "Choices": null,
         "Properties": null
@@ -3677,8 +3883,8 @@
     ]
   },
   {
-    "Name": "zstudio_pickup_lock",
-    "Description": "Gate Whole world object cards, selection bounds and transform editing. Locking closes the card; unlock alone does not select an object. Source/tree inspection and hover remain available. Legacy command/state names are retained; new documents start locked, and a 1998 demo world (GameZ version 13) stays locked (unlocking it is refused as read_only). Pending drafts require explicit resolution.",
+    "Name": "zstudio_scene_lock",
+    "Description": "Gate compiled Whole world object cards, selection bounds and transform editing (source worlds have no lock and refuse this as unsupported). Locking closes the card; unlock alone does not select an object. Source/tree inspection and hover remain available. EditingLocked reports the shared lock; new documents start locked, and a 1998 demo world (GameZ version 13) stays locked (unlocking it is refused as read_only). Pending drafts require explicit resolution.",
     "Mutates": true,
     "Parameters": [
       {
@@ -3711,7 +3917,7 @@
   },
   {
     "Name": "zstudio_pickup_move",
-    "Description": "Move a pickup to exact coordinates as one undoable operation, including unambiguous difficulty counterparts. Requires unlocked placements. In a source world the move changes the coordinate tokens of the resource sources (data/mN/zrdr/puppies*.zrd), the world rebuilds and the result is the replacement document.",
+    "Description": "Move a pickup to exact coordinates as one undoable operation, including unambiguous difficulty counterparts. Requires unlocked placements. In a source world the move accepts changed coordinate tokens of the resource sources (data/mN/zrdr/puppies*.zrd) in memory and updates the scene. The result is the accepted document/revision. Save writes the sources; no archives are created.",
     "Mutates": true,
     "Parameters": [
       {
@@ -3870,7 +4076,7 @@
   },
   {
     "Name": "zstudio_model_bundle_export",
-    "Description": "Export all authored models under a node or an animation root as assembled and local OBJ/MTL/PNG files with stable indices, transforms and source fingerprint. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Description": "Export all authored models under a node or an animation root as assembled and local OBJ/MTL/PNG files with stable indices and transforms. Source worlds fingerprint accepted mission/dependency content; compiled worlds use the archive SHA-256. Returns an operation ID; use zstudio_operation to await/read the result.",
     "Mutates": true,
     "Parameters": [
       {
@@ -5404,14 +5610,49 @@
     ]
   },
   {
+    "Name": "zstudio_source_world_list",
+    "Description": "List source-project map folders with matching gamegen entry scripts, in numeric order. Broken or missing map assets do not hide a map; opening reports its evaluation problems.",
+    "Mutates": false,
+    "Parameters": [
+      {
+        "Name": "offset",
+        "Type": "integer",
+        "Description": "Zero-based result offset.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": -2147483648,
+        "Maximum": 2147483647
+      },
+      {
+        "Name": "limit",
+        "Type": "integer",
+        "Description": "Page size, 1\u2013200; default 100.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": -2147483648,
+        "Maximum": 2147483647
+      },
+      {
+        "Name": "query",
+        "Type": "string",
+        "Description": "Case-insensitive name/path or displayed-text filter, applied before pagination.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      }
+    ]
+  },
+  {
     "Name": "zstudio_source_world_open",
-    "Description": "Open (or activate) a mission world of the open source project as its build script assembles it from the project\u0027s glTF models, textures, resources and animation definitions, including the project\u0027s unsaved edits. The world is built privately, as the export builds it, into the project\u0027s zstudio/cache/worlds folder (zStudio\u0027s derived data, which builds never read and which is removed when the world closes), and shown in Whole world. Edit it with zstudio_source_world_add_model, the placement commands (pickup_lock, pickup_move, scene_card), undo_redo and save_document, which change only the project\u0027s sources; every open world of the project shares one edit history and one save. Build problems are listed in problems. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Description": "Open or activate one source-project map by evaluating its gamegen entry script, glTF references, textures, resources and animation definitions directly in memory. A different clean map is replaced only after evaluation succeeds; dirty maps require save_document or explicit close_document discard first, and unfinished drafts refuse navigation. Opening, editing, undo_redo and save_document create no ZBD archives. Apply accepts in-memory source edits; save_document writes the owning project sources. Only export creates game archives. Evaluation problems are listed in problems. Returns an operation ID; use zstudio_operation to await/read the result.",
     "Mutates": true,
     "Parameters": [
       {
         "Name": "mission",
         "Type": "string",
-        "Description": "Mission folder, for example m1 (see zstudio_source_status: outputs of family world).",
+        "Description": "Mission folder from source_world_list, for example m1. Only one map remains open; save or explicitly close a dirty map before changing maps.",
         "Required": true,
         "Choices": null,
         "Properties": null
@@ -5506,7 +5747,7 @@
   },
   {
     "Name": "zstudio_source_world_add_model",
-    "Description": "Add a physical model or logical alias to a source world. A path already bound in the receiving mission uses that mission\u0027s geometry, references and zones; otherwise a unique donor closure is imported, and conflicting dependencies refuse the addition. Add it as one undoable change of the project\u0027s workspace: its folder\u0027s SetModelDirectory and a LoadGameGen line go before the line of gamegen/mN.gs that writes the world, with Object3DTranslate/Object3DRotate and AddChild under the world when placed. Without position the model is an unplaced root that resources such as aiv.zrd place copies of by name. Definition files are appended to data/mN/zrdr/anim.zad, keeping its comments and layout. The world rebuilds and the result is the replacement document; a change the world cannot be built with, or that makes another mission file fail or makes the game reject one (an animation bound to a node, attachment or effect this world lacks), returns build_failed and is taken back, as is one canceled before the replacement document is published to the workspace. Once published, the edit is accepted: the operation waits for its own preview transition, but later cancellation, navigation or preview failure does not retract it. Preview failures are reported in Problems. A stale world returns stale_document until reload_document. While a world of the project rebuilds, its other edits, undo_redo, save_document and reload_document return busy. Nothing is written until save_document. Completion definitionFiles previews keep at most 64 paths of 512 characters with definitionFileCount and definitionFilesTruncated; inputs and editing retain complete paths. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Description": "Add a physical model or logical alias to a source world. A path already bound in the receiving mission uses that mission\u0027s geometry, references and zones; otherwise a unique donor closure is imported, and conflicting dependencies refuse the addition. Add it as one undoable change of the project\u0027s workspace: its folder\u0027s SetModelDirectory and a LoadGameGen line go before the line of gamegen/mN.gs that writes the world, with Object3DTranslate/Object3DRotate and AddChild under the world when placed. Without position the model is an unplaced root that resources such as aiv.zrd place copies of by name. Definition files are appended to data/mN/zrdr/anim.zad, keeping its comments and layout. The world and its dependencies are evaluated in memory before acceptance; the result identifies the accepted document and revision. Structural changes may replace the presentation. An invalid source graph or animation binding is refused, and cancellation before acceptance leaves the workspace unchanged. Once published, the edit is accepted: the operation waits for its own preview transition, but later cancellation, navigation or preview failure does not retract it. Preview failures are reported in Problems. A stale world returns stale_document until reload_document. While a world of the project is evaluating, its other edits, undo_redo, save_document and reload_document return busy. Save_document writes the owning project sources; only export creates game archives. Completion definitionFiles previews keep at most 64 paths of 512 characters with definitionFileCount and definitionFilesTruncated; inputs and editing retain complete paths. Returns an operation ID; use zstudio_operation to await/read the result.",
     "Mutates": true,
     "Parameters": [
       {
@@ -5630,7 +5871,7 @@
   },
   {
     "Name": "zstudio_source_world_object",
-    "Description": "Describe a world object of a source world: its name, class, local transform (position, rotation in degrees about Y then X then Z, scale), node flags, and where it came from \u2014 the glTF file and node it was imported from (origin.part marks a part of the mission database, a file it references and copies wherever it does), or the script instruction that created it \u2014 with the instruction that last set each property and how often it ran. Node indices are those of zstudio_scene_nodes for the shown world. Inspection previews bound script/model paths to 256 characters and tokens to 128, with truncation flags; edits still target document and node identities.",
+    "Description": "Describe a world object of a source world: its name, class, the glTF model a mission database object references (model), local transform (position, rotation in degrees about Y then X then Z, scale), node flags, its built zone (an ID or any) with altitude_zone_check, zone_inherited when its source node inherits the zone, and zone_source (the node, reference placement, ancestor or load root that supplied it), and where it came from \u2014 the glTF file and node it was imported from (origin.part marks a part of the mission database, a file it references and copies wherever it does), or the script instruction that created it \u2014 with the instruction that last set each property and how often it ran. Node indices are those of zstudio_scene_nodes for the shown world. Inspection previews bound script/model paths to 256 characters and tokens to 128, with truncation flags; edits still target document and node identities.",
     "Mutates": false,
     "Parameters": [
       {
@@ -5655,7 +5896,7 @@
   },
   {
     "Name": "zstudio_source_world_command",
-    "Description": "Set a property a script command makes on a node of a source world (fog of the world, a light\u0027s color, ranges or orientation, a camera\u0027s clip or field of view) as one undoable change of the project\u0027s workspace: the instruction that last set it changes, or a new one follows the instruction that created the node. zstudio_source_world_object lists the commands that fit the node and the arguments each set one has. The world rebuilds and the result is the replacement document. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Description": "Set a property a script command makes on a node of a source world (fog of the world, a light\u0027s color, ranges or orientation, a camera\u0027s clip or field of view) as one undoable change of the project\u0027s workspace: the instruction that last set it changes, or a new one follows the instruction that created the node. zstudio_source_world_object lists the commands that fit the node and the arguments each set one has. The scene is evaluated in memory and the result is the accepted document/revision. Save writes the owning sources; no archives are created. Returns an operation ID; use zstudio_operation to await/read the result.",
     "Mutates": true,
     "Parameters": [
       {
@@ -5734,7 +5975,7 @@
   },
   {
     "Name": "zstudio_source_world_object_edit",
-    "Description": "Edit a world object of a source world as one undoable change of the project\u0027s workspace: move, rotate or scale it, set or clear one of its node flags, copy it, delete it, or move it under another parent. The edit changes the source that placed the object: the transform or extras of its glTF node (the mission database or one of its parts, which every copy of the part uses, or a model file, which every load of it uses), or the script instruction that set the value (refused when it ran more than once or takes the value from a macro); a value nothing set yet is added as an instruction after the one that created the object. Copying, deleting and re-parenting apply to the whole object: a node of a model a script loaded stands for that load (zstudio_source_world_object names it). A mission database object is copied, deleted or moved in its glTF file; a script\u0027s object is deleted by turning its instructions into comments, copied by loading it again before the world is written, and moved by attaching it there. The world rebuilds and the result is the replacement document (with the copy\u0027s node index); a change the world cannot be built with is taken back. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Description": "Edit a world object of a source world as one undoable change of the project\u0027s workspace: move, rotate or scale it, set or clear one of its node flags, copy it, delete it, move it under another parent, rename a mission database object (rename; a group or reference holder the build removes, shown only in the source tree, is renamed by sourceFile and gltfNode instead of node; refused while a script finds it by name, or while one of the mission\u0027s animations is bound to its name, such as destroy_turret, whose NAME list binds to the first listed name the world has, until the new name is added to that list), or make one reference another glTF model (model: the reference it or its one referencing child holds, keeping name, place, flags and zone; the placement\u0027s zone overrides for the previous model are removed). The edit changes the source that placed the object: the transform or extras of its glTF node (the mission database or one of its parts, which every copy of the part uses, or a model file, which every load of it uses), or the script instruction that set the value (refused when it ran more than once or takes the value from a macro); a value nothing set yet is added as an instruction after the one that created the object. Copying, deleting and re-parenting apply to the whole object: a node of a model a script loaded stands for that load (zstudio_source_world_object names it). A mission database object is copied, deleted or moved in its glTF file; a script\u0027s object is deleted by turning its instructions into comments, copied by loading it again before the world is written, and moved by attaching it there. The scene is evaluated in memory and the result is the accepted document/revision (with the copy\u0027s node index); a change that cannot be evaluated is refused. Save writes the owning sources; no archives are created. Returns an operation ID; use zstudio_operation to await/read the result.",
     "Mutates": true,
     "Parameters": [
       {
@@ -5758,8 +5999,26 @@
       {
         "Name": "node",
         "Type": "integer",
-        "Description": "Scene node index.",
-        "Required": true,
+        "Description": "Scene node index. Omit it to rename a source-only node (sourceFile with gltfNode).",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": 0,
+        "Maximum": 2147483647
+      },
+      {
+        "Name": "sourceFile",
+        "Type": "string",
+        "Description": "rename without node: the project path of the glTF file holding a source-only node, as scene_tree\u0027s sourceFile gives it (a group or reference holder the build removes, so the game never uses its name).",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "gltfNode",
+        "Type": "integer",
+        "Description": "rename without node: that node\u0027s glTF index (scene_tree\u0027s gltfNode).",
+        "Required": false,
         "Choices": null,
         "Properties": null,
         "Minimum": 0,
@@ -5775,7 +6034,9 @@
           "flag",
           "duplicate",
           "delete",
-          "parent"
+          "parent",
+          "rename",
+          "model"
         ],
         "Properties": null
       },
@@ -5906,7 +6167,15 @@
       {
         "Name": "name",
         "Type": "string",
-        "Description": "The copy\u0027s node name (duplicate): 1\u201332 printable characters without spaces, commas, quotes or # % ;, used by no node of the world.",
+        "Description": "The copy\u0027s node name (duplicate) or the object\u0027s new name (rename): 1\u201332 printable characters without spaces, commas, quotes or # % ;, used by no node of the world.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "model",
+        "Type": "string",
+        "Description": "Project path of a .gltf model under data/ the object should reference (model), as zstudio_source_world_models lists it, for example data/m1/models/sonictur.gltf.",
         "Required": false,
         "Choices": null,
         "Properties": null
@@ -6104,7 +6373,7 @@
   },
   {
     "Name": "zstudio_source_terrain_edit",
-    "Description": "Edit a terrain recipe of the open source world\u0027s project as one undoable change of the workspace; the world rebuilds and the result is the replacement document. Actions: set_defaults (attributes; surface for a surface\u0027s defaults), add_region (region, optional surfaces, attributes, index; it starts empty unless wholeSurfaces), update_region (region; any of name, surfaces, attributes, wholeSurfaces), remove_region, move_region (region, index), paint (region, mode paint or erase, and a stroke: path of [x, z] points with radius, or polygons). Attributes patch the layer: a key with a value sets it, a key with null removes the override so the layers before show through, absent keys stay. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Description": "Edit a terrain recipe of the open source world\u0027s project as one undoable change of the workspace; the scene is evaluated in memory and the result is the accepted document/revision. Save writes the recipe; no archives are created. Actions: set_defaults (attributes; surface for a surface\u0027s defaults), add_region (region, optional surfaces, attributes, index; it starts empty unless wholeSurfaces), update_region (region; any of name, surfaces, attributes, wholeSurfaces), remove_region, move_region (region, index), paint (region, mode paint or erase, and a stroke: path of [x, z] points with radius, or polygons). Attributes patch the layer: a key with a value sets it, a key with null removes the override so the layers before show through, absent keys stay. Returns an operation ID; use zstudio_operation to await/read the result.",
     "Mutates": true,
     "Parameters": [
       {
@@ -6355,7 +6624,7 @@
   },
   {
     "Name": "zstudio_source_terrain_convert",
-    "Description": "Convert to editable terrain: the open source world\u0027s mission database pieces (untransformed mesh roots no script, resource or animation names, except landmarks) become surfaces of new terrain recipes beside the database, preserving encounter order around retained objects, as one undoable change. Without apply, report the plan: surfaces, pieces, a bounded recipes summary of full paths with total/omitted counts, and the objects kept with reasons. plan.recipe is the first recipe. With apply, convert, rebuild, and compare the altitude probe over all converted recipes before and after (heights, polygon zones, soils, node flags and zones) on a grid of the given spacing. The returned recipeListing identifies the replacement document for the read-only source_terrain inventory; follow that tool\u0027s nextOffset to inspect every recipe without applying again. The probe reports complete=false and a limitation if its index or polygon work budget is exceeded; the conversion remains applied. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Description": "Convert to editable terrain: the open source world\u0027s mission database pieces (untransformed mesh roots no script, resource or animation names, except landmarks) become surfaces of new terrain recipes beside the database, preserving encounter order around retained objects, as one undoable change. Without apply, report the plan: surfaces, pieces, a bounded recipes summary of full paths with total/omitted counts, and the objects kept with reasons. plan.recipe is the first recipe. With apply, convert, evaluate in memory, and compare the altitude probe over all converted recipes before and after (heights, polygon zones, soils, node flags and zones) on a grid of the given spacing. The returned recipeListing identifies the replacement document for the read-only source_terrain inventory; follow that tool\u0027s nextOffset to inspect every recipe without applying again. The probe reports complete=false and a limitation if its index or polygon work budget is exceeded; the conversion remains applied. Returns an operation ID; use zstudio_operation to await/read the result.",
     "Mutates": true,
     "Parameters": [
       {
@@ -6396,7 +6665,7 @@
   },
   {
     "Name": "zstudio_source_terrain_create",
-    "Description": "Create a terrain recipe for surfaces of a glTF file in the open source world\u0027s project (surfaces: node names, each with a mesh, in a file of their own \u2014 not the mission database) and add a marker for it at the end of the mission database\u0027s roots, as one undoable change; the world rebuilds with the compiled pieces. The recipe goes beside the file (name.terrain.json) unless recipe names another path ending in .terrain.json. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Description": "Create a terrain recipe for surfaces of a glTF file in the open source world\u0027s project (surfaces: node names, each with a mesh, in a file of their own \u2014 not the mission database) and add a marker for it at the end of the mission database\u0027s roots, as one undoable change; the source scene evaluates the pieces in memory without creating archives. The recipe goes beside the file (name.terrain.json) unless recipe names another path ending in .terrain.json. Returns an operation ID; use zstudio_operation to await/read the result.",
     "Mutates": true,
     "Parameters": [
       {

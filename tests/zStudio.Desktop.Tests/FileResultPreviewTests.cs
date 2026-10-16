@@ -1,8 +1,8 @@
 using System.Text.Json;
-using Recoil.Zbd.Desktop;
+using zStudio.Desktop;
 using Xunit;
 
-namespace Recoil.Zbd.Desktop.Tests;
+namespace zStudio.Desktop.Tests;
 
 public sealed class FileResultPreviewTests
 {

@@ -6,7 +6,7 @@ using HelixToolkit.Maths;
 using HelixToolkit.SharpDX;
 using HelixToolkit.Wpf.SharpDX;
 
-namespace Recoil.Zbd.Rendering;
+namespace zStudio.Rendering;
 
 public sealed record ZonePaintTarget(int Node, int? Polygon);
 

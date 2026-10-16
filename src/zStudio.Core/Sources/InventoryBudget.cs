@@ -1,4 +1,4 @@
-namespace Recoil.Zbd.Core.Sources;
+namespace zStudio.Core.Sources;
 
 /// <summary>
 /// One operation's path materialization, including repeated scans. Units conservatively cover four UTF-16

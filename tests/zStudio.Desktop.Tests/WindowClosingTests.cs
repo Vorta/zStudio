@@ -3,12 +3,12 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
 using System.Windows.Threading;
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Core.Animation;
-using Recoil.Zbd.Desktop;
+using zStudio.Core;
+using zStudio.Core.Animation;
+using zStudio.Desktop;
 using Xunit;
 
-namespace Recoil.Zbd.Desktop.Tests;
+namespace zStudio.Desktop.Tests;
 
 public sealed class WindowClosingTests
 {
@@ -20,7 +20,7 @@ public sealed class WindowClosingTests
         string phase = "window close lifecycle";
         Thread thread = new(() =>
         {
-            string settings = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "RecoilZbdStudio", "settings.json");
+            string settings = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "zStudio", "settings.json");
             byte[]? previousSettings = File.Exists(settings) ? File.ReadAllBytes(settings) : null;
             // Match the Fluent theme used by the production application.
 #pragma warning disable WPF0001
@@ -28,7 +28,7 @@ public sealed class WindowClosingTests
 #pragma warning restore WPF0001
             // These are the only application resources needed by the shell. No game data,
             // rendering or production unhandled-error dialog is involved in this fixture.
-            app.Resources.MergedDictionaries.Add(new ResourceDictionary { Source = new Uri("/Recoil.Zbd.Studio;component/PreviewStyles.xaml", UriKind.Relative) });
+            app.Resources.MergedDictionaries.Add(new ResourceDictionary { Source = new Uri("/zStudio.Desktop;component/PreviewStyles.xaml", UriKind.Relative) });
             app.Resources["BoolVisibility"] = new BooleanToVisibilityConverter();
             app.Resources["Checker"] = Brushes.Transparent;
             Exception? failure = null;
@@ -234,7 +234,7 @@ public sealed class WindowClosingTests
         var package = new AnimationPackage { Prefix = new byte[72], Tail = [] };
         var entry = new AnimationEntry(new byte[308], 0, 0);
         package.Entries.Add(entry);
-        var document = new DocumentModel(new ZbdDocument(Path.Combine(Path.GetTempPath(), $"close-fixture-{index}.zbd"),
+        var document = new DocumentModel(new AssetDocument(Path.Combine(Path.GetTempPath(), $"close-fixture-{index}.zbd"),
             new(0, DateTime.MinValue), new(FormatFamily.Animation, 28, Recognition.Supported, "Close fixture"), ReadOnlyMemory<byte>.Empty)
         { Animations = package });
         document.AnimationEdits!.Apply(0, "Change reset delay", e => e.SetFloat(164, 1));

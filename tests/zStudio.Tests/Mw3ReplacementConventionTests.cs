@@ -2,12 +2,12 @@ using System.Buffers.Binary;
 using System.Numerics;
 using System.Security.Cryptography;
 using System.Text;
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Core.Export;
-using Recoil.Zbd.Core.Formats;
+using zStudio.Core;
+using zStudio.Core.Export;
+using zStudio.Core.Formats;
 using Xunit;
 
-namespace Recoil.Zbd.Tests;
+namespace zStudio.Tests;
 
 /// <summary>
 /// Version-27 replacement records follow authored corpus conventions. These values are not engine-verified;
@@ -130,7 +130,7 @@ public sealed class Mw3ReplacementConventionTests
         [new(0, 1), new(1, 1), new(1, 0), new(0, 0)], [0, 1, 2, 0, 2, 3]);
 
     /// <summary>Priority, field24 (v27 only) and zone words of every stored polygon header in one model.</summary>
-    internal static List<(uint Priority, uint Field24, uint Zone)> PolygonHeaders(ZbdDocument doc, int modelIndex)
+    internal static List<(uint Priority, uint Field24, uint Zone)> PolygonHeaders(AssetDocument doc, int modelIndex)
     {
         var model = doc.Scene!.Models[modelIndex]; bool v27 = doc.Game == GameVariant.MechWarrior3; int size = v27 ? 36 : 28;
         long start = model.Metadata["source_data_offset"]?.GetValue<long>() ?? doc.Assets.Single(a => a.Kind == AssetKind.Model && a.Index == modelIndex).Offset;

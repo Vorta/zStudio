@@ -1,11 +1,11 @@
 using System.IO;
 using System.Text;
-using Recoil.Zbd.Core.Export;
-using Recoil.Zbd.Core.Formats;
-using Recoil.Zbd.Core.Sources;
+using zStudio.Core.Export;
+using zStudio.Core.Formats;
+using zStudio.Core.Sources;
 using Xunit;
 
-namespace Recoil.Zbd.Tests;
+namespace zStudio.Tests;
 
 /// <summary>
 /// Review fixes for reconstruction and export inputs: a reconstruction refuses files that together need more memory than it
@@ -96,17 +96,11 @@ public sealed class ReconstructionPlanningReviewFixTests
         Assert.Equal("failed", failed.Status);
         Assert.Contains(deep, failed.Error, StringComparison.Ordinal);
 
-        // A path that fits is recorded whole, and an edit of the built member goes back to exactly that file.
+        // Export records a path that fits in full, without redirecting it to another source.
         string destination = Path.Combine(fixture.Root, "game");
         await SourceBuilder.ExportAsync(fixture.Project, destination, ["zrdr.zbd"], token: Token);
-        byte[] archive = await File.ReadAllBytesAsync(Path.Combine(destination, "zrdr.zbd"), Token);
-        var member = Assert.Single(ArchiveSources.Read(archive));
-        var two = Assert.Single(Nodes(ZrdDecoder.Read(member.Payload, Token)), n => n.Kind == ZrdKind.Float && BitConverter.UInt32BitsToSingle(n.Bits) == 2f);
-        var change = Assert.Single(SourceResourceEdits.SourceChanges(archive, [new(member.Offset + two.SourceOffset, SourceResourceEdits.Float(7.5f))], (r, limits) => SourceRead.All(fixture.Path(r), limits, Token), Token));
-        Assert.Equal(shared, change.Relative);
-        Assert.Contains("7.5", Encoding.Latin1.GetString(change.Content), StringComparison.Ordinal);
-
-        static IEnumerable<ZrdNode> Nodes(ZrdNode node) => node.Children.SelectMany(Nodes).Prepend(node);
+        var member = Assert.Single(ArchiveSources.Read(await File.ReadAllBytesAsync(Path.Combine(destination, "zrdr.zbd"), Token)));
+        Assert.Equal(shared, member.SourceField!.Replace('\\', '/'));
     }
 
     [Fact]

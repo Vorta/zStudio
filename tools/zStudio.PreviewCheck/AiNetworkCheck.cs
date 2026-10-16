@@ -10,10 +10,10 @@ using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Media.Media3D;
 using HelixToolkit.Wpf.SharpDX;
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Core.Formats;
-using Recoil.Zbd.Desktop;
-using Recoil.Zbd.Rendering;
+using zStudio.Core;
+using zStudio.Core.Formats;
+using zStudio.Desktop;
+using zStudio.Rendering;
 
 internal static class AiNetworkCheck
 {
@@ -21,7 +21,7 @@ internal static class AiNetworkCheck
     {
         root = Path.GetFullPath(root);
         string output = Path.Combine(Path.GetTempPath(), "zstudio-ai-" + Guid.NewGuid().ToString("N")); Directory.CreateDirectory(output);
-        string settings = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "RecoilZbdStudio", "settings.json");
+        string settings = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "zStudio", "settings.json");
         byte[]? savedSettings = File.Exists(settings) ? File.ReadAllBytes(settings) : null;
         var app = new App { ProcessCommandLine = false, ShutdownMode = ShutdownMode.OnExplicitShutdown }; app.InitializeComponent();
         int exit = 0;
@@ -111,7 +111,7 @@ internal static class AiNetworkCheck
                 data.Models.Add(new(i, [new(-20,-20,z),new(20,-20,z),new(20,20,z),new(-20,20,z)], [], [], [new(0,0,[0,1,2,3],[],[],[])], []));
                 data.Nodes.Add(new(i + 1, "wall", "object3d", i, [0], [], new() { ["flags"] = 4 }, new() { ["transform"] = new JsonArray(1,0,0,0,1,0,0,0,1,0,0,0) }));
             }
-            var doc = new ZbdDocument(Path.Combine(output, "gamez.zbd"), new(0, DateTime.MinValue), new(FormatFamily.GameZ,15,Recognition.Supported,"fixture"), ReadOnlyMemory<byte>.Empty) { Scene = data };
+            var doc = new AssetDocument(Path.Combine(output, "gamez.zbd"), new(0, DateTime.MinValue), new(FormatFamily.GameZ,15,Recognition.Supported,"fixture"), ReadOnlyMemory<byte>.Empty) { Scene = data };
             var asset = doc.Add(AssetKind.World, 0, "Whole world", 0, 0);
             await scene.ShowAsync(doc, asset, resolver, null, 0, default, mission: MissionSceneLoader.Build(doc, null, null, null, null));
             var view = (Viewport3DX)scene.RenderSurface; view.ShowCoordinateSystem = view.ShowViewCube = view.IsInertiaEnabled = false;
@@ -143,7 +143,7 @@ internal static class AiNetworkCheck
             foreach (var wall in walls) wall.IsTransparent = false;
             scene.SetAiOptions(false, false, null); await Task.Delay(100);
             Require(original.SequenceEqual(Pixels(Presented(view))), "Disabling AI did not restore the scene");
-            scene.SetPickupLocked(false);
+            scene.SetEditingLocked(false);
             (string Label, AiAttackStrategy Strategy, string Hex)[] strategyCases =
             [
                 ("head", AiAttackStrategy.Stored("Head-on"), "#FFA640"), ("circle", AiAttackStrategy.Stored("cIrClE"), "#33D9FF"),

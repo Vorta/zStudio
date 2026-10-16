@@ -1,17 +1,17 @@
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Core.Animation;
-using Recoil.Zbd.Core.Formats;
-using Recoil.Zbd.Core.Sources;
+using zStudio.Core;
+using zStudio.Core.Animation;
+using zStudio.Core.Formats;
+using zStudio.Core.Sources;
 using Xunit;
 
-namespace Recoil.Zbd.Tests;
+namespace zStudio.Tests;
 
 public sealed class SourceProjectTests
 {
     private static CancellationToken Token => TestContext.Current.CancellationToken;
     private static readonly string[] AllOutputs = ["zrdr.zbd", "interp.zbd", "soundsh.zbd", "soundsm.zbd", "soundsl.zbd", "m1/zrdr.zbd"];
-    private static ZbdDocument Open(string path) => FormatRegistry.Default.OpenBytes(path, File.ReadAllBytes(path), token: Token);
-    private static byte[] Member(ZbdDocument doc, string name) { var asset = doc.Assets.Single(a => a.Name == name); return doc.Slice(asset.Offset, asset.Length).ToArray(); }
+    private static AssetDocument Open(string path) => FormatRegistry.Default.OpenBytes(path, File.ReadAllBytes(path), token: Token);
+    private static byte[] Member(AssetDocument doc, string name) { var asset = doc.Assets.Single(a => a.Name == name); return doc.Slice(asset.Offset, asset.Length).ToArray(); }
     private static WaveFormat Format(byte[] wave) => WaveConverter.Format(wave);
 
     [Fact]
@@ -19,8 +19,8 @@ public sealed class SourceProjectTests
     {
         using SourceWorldFixture fixture = new();
         var workspace = new SourceWorkspace(fixture.Project);
-        var checkout = new BlenderCheckout("old", Path.Combine(fixture.Project, "zstudio", "export", "old"), fixture.Tank, DateTime.UtcNow, []);
-        Assert.Contains("predates", Assert.Throws<InvalidDataException>(() => SourceBlender.PlanUpdate(workspace, checkout, token: Token)).Message);
+        var checkout = new BlenderCheckout("old", Path.Combine(fixture.Project, "zstudio", "export", "old"), fixture.Tank, DateTime.UtcNow, []) { Version = 1 };
+        Assert.Contains("Create a new checkout", Assert.Throws<InvalidDataException>(() => SourceBlender.PlanUpdate(workspace, checkout, token: Token)).Message);
         bool prompted = false;
         Assert.Throws<InvalidDataException>(() => SourceBlender.PlanUpdate(workspace, checkout, null, (_, _) => { prompted = true; return true; }, Token));
         Assert.False(prompted);
@@ -287,7 +287,7 @@ public sealed class SourceProjectTests
         fixture.Write("data/common/paint/paint.png", image);
         string exported = Path.Combine(fixture.Root, "zbd");
         await SourceBuilder.ExportAsync(fixture.Project, exported, ["m2/gamez.zbd", "m2/rtexture16.zbd", "m2/texture2.zbd"], token: Token);
-        var world = Recoil.Zbd.Core.Worlds.GameZWorldReader.FromDocument(Open(Path.Combine(exported, "m2", "gamez.zbd")), Token);
+        var world = zStudio.Core.Worlds.GameZWorldReader.FromDocument(Open(Path.Combine(exported, "m2", "gamez.zbd")), Token);
         Assert.Contains(world.Textures, t => t.Name == "paint"); Assert.DoesNotContain(world.Textures, t => t.Name == "camo");
         foreach (string pack in new[] { "rtexture16.zbd", "texture2.zbd" })
         {

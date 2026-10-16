@@ -3,10 +3,10 @@ using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Security.Cryptography;
 using System.Text.Json.Nodes;
-using Recoil.Zbd.Core.Animation;
-using Recoil.Zbd.Core.Formats;
+using zStudio.Core.Animation;
+using zStudio.Core.Formats;
 
-namespace Recoil.Zbd.Core;
+namespace zStudio.Core;
 
 public sealed record MissionActor(int Root, int SourceRoot, string Name, string PlacementSource, MissionPickup? Pickup = null, MissionPickupSource? CoordinateSource = null, Vector3? PlacementPosition = null, Vector3? PlacementRotation = null)
 {
@@ -17,13 +17,18 @@ public sealed record MissionActor(int Root, int SourceRoot, string Name, string 
 public sealed record HorizonBinding(int Root, bool FollowHeight);
 
 /// <summary>A published, read-only preview baseline. Its nodes never alias serialized node data.</summary>
-public sealed class MissionSceneContext
+public sealed partial class MissionSceneContext
 {
     public GameScene Scene { get; }
     public IReadOnlyList<int> SourceNodes { get; }
     public IReadOnlyList<MissionActor> Actors { get; }
     public IReadOnlyList<HorizonBinding> Horizons { get; }
     public IReadOnlySet<int> DormantRoots { get; }
+    /// <summary>
+    /// The mission's animations by the node each binds to by name (at most eight names per node, then "…"):
+    /// the objects the animations act on, for presentation. Empty without animation definitions.
+    /// </summary>
+    public IReadOnlyDictionary<int, IReadOnlyList<string>> AnimationRoots { get; init; } = new Dictionary<int, IReadOnlyList<string>>();
     public IReadOnlyList<string> Diagnostics { get; }
     public MissionLayoutSelection Layout { get; }
     public AiNetworkSnapshot AiNetworks { get; internal set; } = AiNetworkSnapshot.Empty;
@@ -96,7 +101,7 @@ public static partial class MissionSceneLoader
 {
     /// <summary>A published context and the MW3 reader its load adopted as the selection, which a reuse adopts again.</summary>
     private sealed record CachedContext(MissionSceneContext Context, string? AdoptedMission = null);
-    private static readonly ConditionalWeakTable<ZbdDocument, ConcurrentDictionary<string, CachedContext>> Cache = new();
+    private static readonly ConditionalWeakTable<AssetDocument, ConcurrentDictionary<string, CachedContext>> Cache = new();
     private static void Publish(ConcurrentDictionary<string, CachedContext> cache, string key, CachedContext value)
     {
         if (cache.Count >= 4) cache.Clear();
@@ -114,13 +119,21 @@ public static partial class MissionSceneLoader
             }
         inventory.Rows(files.Count); return files.ToArray();
     }
-    public static void Invalidate(ZbdDocument world) => Cache.Remove(world);
+    public static void Invalidate(AssetDocument world) => Cache.Remove(world);
 
     /// <param name="mission">MW3 reader requested by the caller. Omitted, the resolver selection is captured before any await.</param>
     /// <param name="exactMission">Fail when the requested MW3 reader is unavailable instead of reporting a fallback.</param>
-    public static async Task<MissionSceneContext> LoadAsync(ZbdDocument world, AssetResolver resolver, AnimationPackage? package = null, CancellationToken token = default, MissionDifficulty difficulty = MissionDifficulty.Medium,
+    public static Task<MissionSceneContext> LoadAsync(ISceneDocument world, AssetResolver resolver, AnimationPackage? package = null, CancellationToken token = default, MissionDifficulty difficulty = MissionDifficulty.Medium,
+        string? mission = null, bool exactMission = false)
+        => world is Sources.SourceSceneSnapshot source
+            ? Task.Run(() => source.MissionScene(difficulty, token), token)
+            : world is AssetDocument compiled ? LoadAsync(compiled, resolver, package, token, difficulty, mission, exactMission)
+            : throw new InvalidDataException("This scene has no mission source provider.");
+
+    public static async Task<MissionSceneContext> LoadAsync(AssetDocument world, AssetResolver resolver, AnimationPackage? package = null, CancellationToken token = default, MissionDifficulty difficulty = MissionDifficulty.Medium,
         string? mission = null, bool exactMission = false)
     {
+        if (world is Sources.SourceSceneSnapshot source) return await Task.Run(() => source.MissionScene(difficulty, token), token).ConfigureAwait(false);
         token.ThrowIfCancellationRequested();
         bool mw3 = world.Game == GameVariant.MechWarrior3;
         string? requested = mw3 ? mission ?? resolver.SelectedMission(world.Path) : null;
@@ -131,7 +144,7 @@ public static partial class MissionSceneLoader
             : LoadRecoilAsync(world, resolver, new PreviewResourceBudget(), package, token, difficulty, shared: false), token).ConfigureAwait(false);
     }
 
-    internal static async Task<MissionSceneContext> LoadWithResourcesAsync(ZbdDocument world, AssetResolver resolver, PreviewResourceBudget resourcesBudget,
+    internal static async Task<MissionSceneContext> LoadWithResourcesAsync(AssetDocument world, AssetResolver resolver, PreviewResourceBudget resourcesBudget,
         AnimationPackage? package = null, CancellationToken token = default, MissionDifficulty difficulty = MissionDifficulty.Medium,
         string? mission = null, bool exactMission = false)
     {
@@ -143,7 +156,7 @@ public static partial class MissionSceneLoader
     }
 
     /// <param name="shared">The budget also admits the caller's later resources, so even a reused context first admits its dependencies.</param>
-    private static async Task<MissionSceneContext> LoadRecoilAsync(ZbdDocument world, AssetResolver resolver, PreviewResourceBudget resourcesBudget,
+    private static async Task<MissionSceneContext> LoadRecoilAsync(AssetDocument world, AssetResolver resolver, PreviewResourceBudget resourcesBudget,
         AnimationPackage? package, CancellationToken token, MissionDifficulty difficulty, bool shared)
     {
         token.ThrowIfCancellationRequested();
@@ -157,8 +170,8 @@ public static partial class MissionSceneLoader
         // and animations): a private load's context was admitted with exactly these, so reuse it before any read or walk.
         if (!shared && cache.TryGetValue(key, out var reused)) return reused.Context;
         if (!shared) resourcesBudget.Retain(world, token);
-        List<string> diagnostics = []; Dictionary<string, (ZbdDocument Archive, AssetRecord Asset)> resources = new(StringComparer.OrdinalIgnoreCase);
-        List<(ZbdDocument Archive, AssetRecord Asset)> aiResources = [];
+        List<string> diagnostics = []; Dictionary<string, (AssetDocument Archive, AssetRecord Asset)> resources = new(StringComparer.OrdinalIgnoreCase);
+        List<(AssetDocument Archive, AssetRecord Asset)> aiResources = [];
         foreach (string file in files)
         {
             token.ThrowIfCancellationRequested();
@@ -230,11 +243,11 @@ public static partial class MissionSceneLoader
         }
     }
 
-    public static MissionSceneContext Build(ZbdDocument world, AnimationPackage? package, JsonNode? aiv, JsonNode? vehicles, JsonNode? starts, IEnumerable<string>? initialDiagnostics = null, CancellationToken token = default, MissionLayoutSelection? selection = null,
+    public static MissionSceneContext Build(ISceneDocument world, AnimationPackage? package, JsonNode? aiv, JsonNode? vehicles, JsonNode? starts, IEnumerable<string>? initialDiagnostics = null, CancellationToken token = default, MissionLayoutSelection? selection = null,
         JsonNode? ai = null, JsonNode? pickups = null, MissionResourceSource? pickupSource = null, MissionResourceSource? aivSource = null)
         => BuildWithBudget(world, new MissionPlacementBudget(token), package, aiv, vehicles, starts, initialDiagnostics, token, selection, ai, pickups, pickupSource, aivSource);
 
-    internal static MissionSceneContext BuildWithBudget(ZbdDocument world, MissionPlacementBudget budget, AnimationPackage? package, JsonNode? aiv, JsonNode? vehicles, JsonNode? starts,
+    internal static MissionSceneContext BuildWithBudget(ISceneDocument world, MissionPlacementBudget budget, AnimationPackage? package, JsonNode? aiv, JsonNode? vehicles, JsonNode? starts,
         IEnumerable<string>? initialDiagnostics = null, CancellationToken token = default, MissionLayoutSelection? selection = null,
         JsonNode? ai = null, JsonNode? pickups = null, MissionResourceSource? pickupSource = null, MissionResourceSource? aivSource = null,
         long? maximumBindingWork = null)
@@ -250,8 +263,8 @@ public static partial class MissionSceneLoader
         }
         List<int> sources = original.Nodes.Select(n => n.Index).ToList(); List<MissionActor> actors = []; List<string> notes = initialDiagnostics?.ToList() ?? [];
         HashSet<int> positioned = [];
-        var previewWorld = new ZbdDocument(world.Path, world.Stamp, world.Probe, world.Bytes) { Scene = scene };
-        AnimationPreviewContext? context = package == null ? null : new() { Package = package, World = previewWorld, LoadedNodeCount = original.Nodes.Count };
+        var previewWorld = new SceneDocument(world.Path, scene, world.Game);
+        AnimationPreviewContext? context = package == null ? null : new() { Package = package, World = previewWorld, LoadedNodeCount = original.Nodes.Count, InitializationTransforms = new() };
         // One allowance for every phase, scaled with the world's own nodes (AnimationBindingOperation.Allowance) like the copy above.
         AnimationBindingOperation? bindings = context == null ? null : new(context, token, maximumBindingWork);
         HashSet<string> vehicleNames = new(StringComparer.Ordinal);
@@ -341,8 +354,11 @@ public static partial class MissionSceneLoader
                         if (root < 0 || positioned.Contains(root) || position.LengthSquared() < .0001f) continue;
                         var node = scene.Nodes[root];
                         bindings.Reserve(32L + node.Parents.Length);
-                        if (node.Class == "object3d" && node.Parents.Contains(worldRoot) && SceneBuilder.LocalTransform(node).Translation.LengthSquared() < .0001f)
-                            dormant.Add(root);
+                        if (node.Class == "object3d" && node.Parents.Contains(worldRoot))
+                        {
+                            context.InitializationTransforms?.Reads.Add(root);
+                            if (SceneBuilder.LocalTransform(node).Translation.LengthSquared() < .0001f) dormant.Add(root);
+                        }
                     }
                     catch (InvalidDataException ex) { notes.Add($"Mission placement {entry.Name}: {ex.Message}"); }
                 }
@@ -360,7 +376,26 @@ public static partial class MissionSceneLoader
             budget.Take(scene.Nodes[root].Parents.Length);
             if (scene.Nodes[root].Parents.Contains(worldRoot)) { placement.Actor(root); actors.Add(new(root, sources[root], scene.Nodes[root].Name, "Animation initialization")); }
         }
-        return new(scene, sources, actors, dormant, notes, selection, original.Nodes.Count, token);
+        Dictionary<int, IReadOnlyList<string>> animationRoots = [];
+        if (context != null)
+            foreach (var entry in package!.Entries)
+            {
+                bindings!.Reserve(1);
+                // Entry 0 is the reserved empty entry, which binds nothing.
+                if (entry.Index == 0 || string.IsNullOrEmpty(entry.Name)) continue;
+                try
+                {
+                    int root = bindings.Root(entry);
+                    if (root < 0 || root >= scene.Nodes.Count) continue;
+                    if (!animationRoots.TryGetValue(root, out var names)) animationRoots[root] = names = new List<string>();
+                    var list = (List<string>)names;
+                    if (list.Count < 8) { budget.Name(entry.Name); list.Add(entry.Name); }
+                    else if (list.Count == 8) list.Add("…"); // More than eight: the list says so.
+                }
+                catch (InvalidDataException) when (!budget.Exhausted) { }
+            }
+        return new(scene, sources, actors, dormant, notes, selection, original.Nodes.Count, token)
+        { InitializationTransforms = context?.InitializationTransforms ?? new(), AnimationRoots = animationRoots };
 
         MissionPickupSource? CoordinateSource(int recordIndex)
         {

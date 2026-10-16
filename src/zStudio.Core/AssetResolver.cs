@@ -1,9 +1,9 @@
 using System.Text.RegularExpressions;
-using Recoil.Zbd.Core.Formats;
+using zStudio.Core.Formats;
 
-namespace Recoil.Zbd.Core;
+namespace zStudio.Core;
 
-public sealed record ResolvedTexture(ZbdDocument Document, AssetRecord Asset, bool Ambiguous);
+public sealed record ResolvedTexture(AssetDocument Document, AssetRecord Asset, bool Ambiguous);
 public sealed class AssetResolver : IDisposable
 {
     internal const long MaximumCachedBytes = 512L * 1024 * 1024;
@@ -33,18 +33,18 @@ public sealed class AssetResolver : IDisposable
         }
     }
     private readonly SemaphoreSlim gate = new(1, 1);
-    private readonly Dictionary<string, (ZbdDocument Document, long Used)> cache = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, (AssetDocument Document, long Used)> cache = new(StringComparer.OrdinalIgnoreCase);
     private long clock;
     private readonly object snapshotGate = new();
-    private readonly Dictionary<Guid, ZbdDocument[]> workspaceSnapshots = [];
+    private readonly Dictionary<Guid, AssetDocument[]> workspaceSnapshots = [];
     public long SnapshotRevision { get; private set; }
     public event Action? WorkspaceSnapshotsChanged;
-    public bool IsWorkspaceSnapshot(ZbdDocument document)
+    public bool IsWorkspaceSnapshot(AssetDocument document)
     { lock (snapshotGate) return publishedSnapshots.TryGetValue(document.Path, out var published) && ReferenceEquals(published, document); }
-    public ZbdDocument? WorkspaceSnapshot(string path, Guid excludingOwner)
+    public AssetDocument? WorkspaceSnapshot(string path, Guid excludingOwner)
     { lock (snapshotGate) return workspaceSnapshots.Where(p => p.Key != excludingOwner).SelectMany(p => p.Value).SingleOrDefault(d => d.Path.Equals(path, StringComparison.OrdinalIgnoreCase)); }
-    private IReadOnlyDictionary<string, ZbdDocument> publishedSnapshots = new Dictionary<string, ZbdDocument>(StringComparer.OrdinalIgnoreCase);
-    public void SetWorkspaceSnapshots(Guid owner, IEnumerable<ZbdDocument> documents)
+    private IReadOnlyDictionary<string, AssetDocument> publishedSnapshots = new Dictionary<string, AssetDocument>(StringComparer.OrdinalIgnoreCase);
+    public void SetWorkspaceSnapshots(Guid owner, IEnumerable<AssetDocument> documents)
     {
         lock (snapshotGate)
         {
@@ -97,8 +97,8 @@ public sealed class AssetResolver : IDisposable
         var m = Regex.Match(name, @"^(r?texture)(\d+)$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
         return m.Success && int.TryParse(m.Groups[2].Value, out int n) ? (m.Groups[1].Value.StartsWith('r') ? 1000 : 2000) + Math.Min(n, 999) : name.Contains("image", StringComparison.OrdinalIgnoreCase) ? -100 : 0;
     }
-    public Task<ZbdDocument> OpenCachedAsync(string path, CancellationToken token) => OpenCachedAsync(path, FormatRegistry.MaximumDocumentBytes, token);
-    internal async Task<ZbdDocument> OpenCachedAsync(string path, long maximumBytes, CancellationToken token, AssetReadBudget? budget = null)
+    public Task<AssetDocument> OpenCachedAsync(string path, CancellationToken token) => OpenCachedAsync(path, FormatRegistry.MaximumDocumentBytes, token);
+    internal async Task<AssetDocument> OpenCachedAsync(string path, long maximumBytes, CancellationToken token, AssetReadBudget? budget = null)
     {
         if (maximumBytes < 0 || maximumBytes > FormatRegistry.MaximumDocumentBytes) throw new ArgumentOutOfRangeException(nameof(maximumBytes));
         token.ThrowIfCancellationRequested();
@@ -125,7 +125,7 @@ public sealed class AssetResolver : IDisposable
             return doc;
         }
         finally { gate.Release(); }
-        ZbdDocument Admitted(ZbdDocument document)
+        AssetDocument Admitted(AssetDocument document)
         {
             if (document.Bytes.Length > maximumBytes) throw new InvalidDataException("The texture pack exceeds the remaining edit buffer budget.");
             budget?.Document(path, document.Bytes.Length);

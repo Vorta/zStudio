@@ -3,9 +3,9 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using Microsoft.Win32;
-using Recoil.Zbd.Core.Sources;
+using zStudio.Core.Sources;
 
-namespace Recoil.Zbd.Desktop;
+namespace zStudio.Desktop;
 
 /// <summary>
 /// Chooses the retail ZBD folder and a new or empty folder, then initializes a source project there; the caller opens it

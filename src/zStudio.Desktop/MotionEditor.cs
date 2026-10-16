@@ -4,12 +4,12 @@ using System.Windows;
 using System.Windows.Automation;
 using System.Windows.Controls;
 using System.Windows.Threading;
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Core.Animation;
-using Recoil.Zbd.Core.Formats;
-using Recoil.Zbd.Rendering;
+using zStudio.Core;
+using zStudio.Core.Animation;
+using zStudio.Core.Formats;
+using zStudio.Rendering;
 
-namespace Recoil.Zbd.Desktop;
+namespace zStudio.Desktop;
 
 /// <summary>Authored motion transport sharing the normal renderer, resource history and Properties editor.</summary>
 public sealed class MotionEditor : UserControl, IDisposable
@@ -18,7 +18,7 @@ public sealed class MotionEditor : UserControl, IDisposable
     private readonly Guid member;
     private readonly AssetResolver resolver;
     private readonly CancellationToken lifetime;
-    private readonly Func<ZbdDocument, (ResourceEditSession Edits, ResourceSnapshot Snapshot)?> resolveLibrarySnapshot;
+    private readonly Func<AssetDocument, (ResourceEditSession Edits, ResourceSnapshot Snapshot)?> resolveLibrarySnapshot;
     private readonly DockPanel root = new();
     private readonly ToolBar presentationToolbar = new();
     private readonly DockPanel presentationTransport = new() { Margin = new(6) };
@@ -36,7 +36,7 @@ public sealed class MotionEditor : UserControl, IDisposable
     private readonly TextBlock support = new() { TextWrapping = TextWrapping.Wrap, Margin = new(8), Opacity = .75 };
     private readonly DispatcherTimer timer = new() { Interval = TimeSpan.FromMilliseconds(16) };
     private readonly Stopwatch elapsed = new();
-    private ZbdDocument? library;
+    private AssetDocument? library;
     private (ResourceEditSession Edits, ResourceSnapshot Snapshot)? librarySnapshot;
     private MotionPreview? sampler;
     private MotionClip? clip;
@@ -88,7 +88,7 @@ public sealed class MotionEditor : UserControl, IDisposable
         if (librarySkipped.Count > 0) support.Text += $"\nUnreadable archives skipped while resolving the mech library: {string.Join("; ", librarySkipped.Take(2))}";
         if (notes.Count > 4 || notes.Truncated) support.Text += $"\nDiagnostic preview · {notes.Count} notices; shortened text/list. Inspect motion parts for complete authored names.";
     }
-    public MotionEditor(DocumentModel document, Guid member, AssetResolver resolver, CancellationToken lifetime, Func<ZbdDocument, (ResourceEditSession Edits, ResourceSnapshot Snapshot)?> resolveLibrarySnapshot)
+    public MotionEditor(DocumentModel document, Guid member, AssetResolver resolver, CancellationToken lifetime, Func<AssetDocument, (ResourceEditSession Edits, ResourceSnapshot Snapshot)?> resolveLibrarySnapshot)
     {
         this.document = document; this.member = member; this.resolver = resolver; this.lifetime = lifetime; this.resolveLibrarySnapshot = resolveLibrarySnapshot;
         AutomationProperties.SetName(assembly, "Motion mech assembly"); AutomationProperties.SetName(lod, "Motion LOD");
@@ -192,7 +192,7 @@ public sealed class MotionEditor : UserControl, IDisposable
     public async Task RefreshLibraryAsync()
     {
         if (disposed) return;
-        ZbdDocument nextLibrary;
+        AssetDocument nextLibrary;
         List<string> skipped = [];
         try { nextLibrary = await MotionLibrary.LoadAsync(document.Path, resolver, lifetime, skipped); librarySkipped = skipped; }
         catch (OperationCanceledException) when (disposed || lifetime.IsCancellationRequested) { return; }
@@ -223,7 +223,7 @@ public sealed class MotionEditor : UserControl, IDisposable
         catch (Exception ex) when (ex is InvalidDataException or IOException or UnauthorizedAccessException) { if (!disposed) ClearBinding("The bound mech member cannot be previewed: " + ex.Message); }
     }
     /// <summary>Only exact identities survive a library change; never select another member at the former index.</summary>
-    private static int? RemapMember(int oldIndex, Guid? identity, ZbdDocument previous, (ResourceEditSession Edits, ResourceSnapshot Snapshot)? before, ZbdDocument next, (ResourceEditSession Edits, ResourceSnapshot Snapshot)? after)
+    private static int? RemapMember(int oldIndex, Guid? identity, AssetDocument previous, (ResourceEditSession Edits, ResourceSnapshot Snapshot)? before, AssetDocument next, (ResourceEditSession Edits, ResourceSnapshot Snapshot)? after)
     {
         static bool Same(AssetRecord a, AssetRecord b) => a.Name == b.Name && a.Offset == b.Offset && a.Length == b.Length;
         if (oldIndex < 0 || oldIndex >= previous.Assets.Count) return null;

@@ -1,4 +1,4 @@
-namespace Recoil.Zbd.Core.Worlds;
+namespace zStudio.Core.Worlds;
 
 /// <summary>One assembly's cumulative temporary graph traversal and partition-cell allocation allowance.</summary>
 internal sealed class WorldCommandBudget(long maximum = WorldCommandBudget.MaximumBytes, CancellationToken token = default)

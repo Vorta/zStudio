@@ -6,9 +6,9 @@ using System.Windows.Media.Imaging;
 using System.Windows.Media.Media3D;
 using HelixToolkit.SharpDX;
 using HelixToolkit.Wpf.SharpDX;
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Core.Animation;
-using Recoil.Zbd.Rendering;
+using zStudio.Core;
+using zStudio.Core.Animation;
+using zStudio.Rendering;
 using HCamera = HelixToolkit.Wpf.SharpDX.PerspectiveCamera;
 
 internal static class RenderStabilityCheck
@@ -28,7 +28,7 @@ internal static class RenderStabilityCheck
                 scene.Materials.Add(new() { ["alpha"] = 255, ["color"] = new System.Text.Json.Nodes.JsonObject { ["r"] = 255, ["g"] = 0, ["b"] = 0 } });
                 scene.Materials.Add(new() { ["alpha"] = 255, ["color"] = new System.Text.Json.Nodes.JsonObject { ["r"] = 0, ["g"] = 255, ["b"] = 0 } });
                 scene.Models.Add(Plane(0)); scene.Models.Add(Plane(1));
-                var context = new AnimationPreviewContext { Package = new() { Prefix = [], Tail = [] }, World = new("fixture", new(0, DateTime.MinValue), new(FormatFamily.GameZ, 15, Recognition.Supported, ""), ReadOnlyMemory<byte>.Empty) { Scene = scene } };
+                var context = new AnimationPreviewContext { Package = new() { Prefix = [], Tail = [] }, World = new AssetDocument("fixture", new(0, DateTime.MinValue), new(FormatFamily.GameZ, 15, Recognition.Supported, ""), ReadOnlyMemory<byte>.Empty) { Scene = scene } };
                 foreach (bool instanced in new[] { false, true })
                 foreach (bool frontFirst in new[] { true, false })
                 {

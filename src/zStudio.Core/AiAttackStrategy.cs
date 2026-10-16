@@ -1,6 +1,6 @@
 using System.Text.Json.Nodes;
 
-namespace Recoil.Zbd.Core;
+namespace zStudio.Core;
 
 public enum AiAttackStrategyState { Missing, Stored, Invalid }
 public enum AiAttackStrategyKind { Unknown, HEA, CIR, BAC, FOL, ZIG, SIT }

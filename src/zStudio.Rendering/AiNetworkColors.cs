@@ -1,7 +1,7 @@
 using HelixToolkit.Maths;
-using Recoil.Zbd.Core;
+using zStudio.Core;
 
-namespace Recoil.Zbd.Rendering;
+namespace zStudio.Rendering;
 
 /// <summary>One presentation palette shared by the renderer, GUI legend and MCP.</summary>
 public static class AiNetworkColors

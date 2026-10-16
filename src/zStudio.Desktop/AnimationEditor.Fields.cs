@@ -8,10 +8,10 @@ using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Threading;
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Core.Animation;
+using zStudio.Core;
+using zStudio.Core.Animation;
 
-namespace Recoil.Zbd.Desktop;
+namespace zStudio.Desktop;
 
 public partial class AnimationEditor
 {

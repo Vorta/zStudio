@@ -1,6 +1,6 @@
 using System.Text.RegularExpressions;
 
-namespace Recoil.Zbd.Core.Sources;
+namespace zStudio.Core.Sources;
 
 /// <summary>
 /// One file of a source save: its project-relative path (forward slashes), the bytes it must have now

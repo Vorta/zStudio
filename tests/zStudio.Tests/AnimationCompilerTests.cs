@@ -1,12 +1,12 @@
 using System.Numerics;
 using System.Text;
-using Recoil.Zbd.Core.Animation;
-using Recoil.Zbd.Core.Formats;
-using Recoil.Zbd.Core.Sources;
-using Recoil.Zbd.Core.Worlds;
+using zStudio.Core.Animation;
+using zStudio.Core.Formats;
+using zStudio.Core.Sources;
+using zStudio.Core.Worlds;
 using Xunit;
 
-namespace Recoil.Zbd.Tests;
+namespace zStudio.Tests;
 
 public sealed class AnimationCompilerTests
 {
@@ -137,6 +137,19 @@ public sealed class AnimationCompilerTests
     public void DefinitionsCompileAsTheOriginalToolDid()
     {
         var result = AnimationCompiler.Compile(Project(), "data/m1/zrdr/anim.zad", World, Token);
+        var evaluated = AnimationCompiler.Evaluate(Project(), "data/m1/zrdr/anim.zad", World, token: Token).Package;
+        // Source previews hand this package directly to current-package verification (including VTOL edits),
+        // so derived count/sequence headers must already agree without writing and reparsing an archive.
+        Assert.Equal(result.Package.Entries.Count, evaluated.Entries.Count);
+        for (int i = 0; i < evaluated.Entries.Count; i++)
+        {
+            Assert.Null(AnimationComparer.Difference(result.Package.Entries[i], evaluated.Entries[i], Token));
+            Assert.Equal(result.Package.Entries[i].Bytes, evaluated.Entries[i].Bytes);
+            foreach (var pair in result.Package.Entries[i].AllSequences.Zip(evaluated.Entries[i].AllSequences))
+                Assert.Equal(pair.First.Bytes, pair.Second.Bytes);
+            Assert.Equal(-1, evaluated.Entries[i].SourceOffset);
+        }
+        Assert.Equal(result.Bytes, AnimationWriter.Write(evaluated, Token));
         // A missing definition file is skipped with a warning; a definition whose root the world lacks has no entry.
         Assert.Contains(result.Warnings, w => w.Contains("missing.zad"));
         var entries = result.Package.Entries;

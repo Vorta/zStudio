@@ -6,14 +6,14 @@ using System.Windows;
 using System.Windows.Controls;
 using ModelContextProtocol.Client;
 using ModelContextProtocol.Protocol;
-using Recoil.Zbd.Core.Formats;
-using Recoil.Zbd.Core.Sources;
-using Recoil.Zbd.Desktop;
-using Recoil.Zbd.Mcp;
-using Recoil.Zbd.Tests;
+using zStudio.Core.Formats;
+using zStudio.Core.Sources;
+using zStudio.Desktop;
+using zStudio.Mcp;
+using zStudio.Tests;
 using Xunit;
 
-namespace Recoil.Zbd.Desktop.Tests;
+namespace zStudio.Desktop.Tests;
 
 /// <summary>Source projects through the real named-pipe MCP connection and the shared GUI operations.</summary>
 internal static class SourceProjectMcpChecks
@@ -112,7 +112,7 @@ internal static class SourceProjectMcpChecks
             Assert.True(File.Exists(Path.Combine(reconstructedElsewhere, "data", "m1", "zrdr", "ai.zrd")));
             Assert.Equal(Path.GetFullPath(newerRoot), Path.GetFullPath(main.ViewModel.RootPath));
 
-            // A cancel once the project is the root stops only its indexing: the operation completes with the project open.
+            // Cancellation after publication retains the project; map-only roots have no asset indexing to interrupt.
             void CancelAtPublication()
             {
                 main.ViewModel.RootPublished -= CancelAtPublication;
@@ -121,11 +121,11 @@ internal static class SourceProjectMcpChecks
             }
             main.ViewModel.RootPublished += CancelAtPublication;
             var built = await Job("source_reconstruct", new() { ["source"] = fixture.Corpus, ["destination"] = fixture.Project });
-            Assert.True(built["opened"]!.GetValue<bool>()); Assert.False(built["indexComplete"]!.GetValue<bool>());
+            Assert.True(built["opened"]!.GetValue<bool>()); Assert.True(built["indexComplete"]!.GetValue<bool>());
             Assert.Equal(1, built["families"]!["scripts"]!.GetValue<int>()); Assert.Equal(3, built["families"]!["sounds"]!.GetValue<int>());
             Assert.Equal("other.bin", built["notReconstructed"]![0]!.GetValue<string>()); Assert.Equal(1, built["noteCount"]!.GetValue<int>());
             Assert.Equal(Path.GetFullPath(fixture.Project), Path.GetFullPath(main.ViewModel.RootPath!));
-            Assert.Contains(main.ViewModel.Files, f => f.RelativePath == Path.Combine("data", "m1", "zrdr", "ai.zrd"));
+            Assert.Empty(main.ViewModel.Files); Assert.True(main.ViewModel.IsSourceProject);
             var status = await Job("source_status", new() { ["query"] = "m1", ["limit"] = 10 });
             var mission = status["outputs"]!["items"]!.AsArray().Single()!;
             Assert.Equal("m1/zrdr.zbd", mission["path"]!.GetValue<string>()); Assert.Equal(2, mission["inputCount"]!.GetValue<int>());
@@ -195,8 +195,10 @@ internal static class SourceProjectMcpChecks
             var relativeExport = await Job("source_export", new() { ["destination"] = "game" }, "failed");
             Assert.Contains("full path", relativeExport["message"]!.GetValue<string>());
 
-            // A reconstructed .zrd opens in the shared ZRD editor and saves text.
+            // Standalone source-file editing remains available from the compiled/plain explorer, not the map workspace.
             string source = Path.Combine(fixture.Project, "data", "m1", "zrdr", "ai.zrd");
+            Assert.Equal("source_map_required", (await Job("open_document", new() { ["path"] = source }, "failed"))["code"]!.GetValue<string>());
+            await Job("open_root", new() { ["path"] = fixture.Root });
             await Job("open_document", new() { ["path"] = source });
             var doc = main.ViewModel.Documents.Single(d => d.Path.Equals(source, StringComparison.OrdinalIgnoreCase));
             Assert.Equal("zrd-text", doc.Document.SourceSyntax);
@@ -204,9 +206,13 @@ internal static class SourceProjectMcpChecks
             Guid member = Guid.Parse(members["members"]!["items"]![0]!["member"]!.GetValue<string>());
             var gravity = doc.ResourceEdits!.Tree(doc.ResourceEdits.Member(member), token).Children[1].Children[0];
             await Job("zrd_edit", new() { ["document"] = doc.SessionId.ToString(), ["revision"] = doc.Revision, ["action"] = "set", ["member"] = member.ToString(), ["node"] = gravity.Id.ToString(), ["value"] = "-1.5" });
-            var unsaved = await Job("source_export", new(), "failed"); Assert.Equal("unsaved_changes", unsaved["code"]!.GetValue<string>());
+            var unsaved = await Job("open_root", new() { ["path"] = fixture.Project, ["project"] = true }, "failed");
+            Assert.Equal("unsaved_changes", unsaved["code"]!.GetValue<string>());
+            Assert.Same(doc, main.ViewModel.SelectedDocument);
             await Job("save_document", new() { ["document"] = doc.SessionId.ToString(), ["revision"] = doc.Revision });
             Assert.Contains("GRAVITY ( -1.5 )", await File.ReadAllTextAsync(source, token));
+            await Job("open_root", new() { ["path"] = fixture.Project, ["project"] = true });
+            await Job("source_profile", new() { ["profile"] = "original" });
 
             var check = await Job("source_export", new());
             Assert.False(check["written"]!.GetValue<bool>()); Assert.Equal(6, check["built"]!.GetValue<int>()); Assert.Equal(0, check["failed"]!.GetValue<int>());
@@ -262,7 +268,7 @@ internal static class SourceProjectMcpChecks
                 Assert.Contains(main.ViewModel.Problems, p => p.File == worldFixture.Project && p.Message.Contains(omission, StringComparison.Ordinal));
                 await Job("source_world_open", new() { ["mission"] = "m1" });
                 var world = main.ViewModel.Documents.Single(d => d.SourceWorld != null);
-                int buildWarnings = world.SourceBuild!.Outputs.Single(o => o.Path == "m1/gamez.zbd").Warnings.Count;
+                int buildWarnings = world.SourceBuild!.Notes.Count;
                 Assert.True(buildWarnings >= 70);
                 string buildOmission = $"Showing 64 of {buildWarnings} warnings; {buildWarnings - 64} more not shown.";
                 Assert.Contains(main.ViewModel.Problems, p => p.File == script && p.Message.Contains(buildOmission, StringComparison.Ordinal));
@@ -357,7 +363,7 @@ internal static class SourceProjectMcpChecks
         // The welcome screen opens the project once the dialog has closed.
         await main.OpenInitializedProjectAsync(dialog.Report!);
         Assert.Equal(Path.GetFullPath(project), Path.GetFullPath(main.ViewModel.RootPath!));
-        Assert.Contains(main.ViewModel.Files, f => f.RelativePath == Path.Combine("data", "m1", "zrdr", "ai.zrd"));
+        Assert.Empty(main.ViewModel.Files); Assert.True(main.ViewModel.IsSourceProject);
         // Opening the project cleared Problems; the reconstruction's notes are listed after it.
         Assert.NotEmpty(dialog.Report!.Notes);
         foreach (string note in dialog.Report.Notes) Assert.Contains(main.ViewModel.Problems, p => p.Severity == "Warning" && p.Message == note);

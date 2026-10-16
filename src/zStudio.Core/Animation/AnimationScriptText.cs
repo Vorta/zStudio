@@ -1,7 +1,7 @@
 using System.Globalization;
 using System.Text;
 
-namespace Recoil.Zbd.Core.Animation;
+namespace zStudio.Core.Animation;
 
 /// <summary>Measures script output before allocating its builder and final string, sharing reconstruction reservations.</summary>
 internal sealed class AnimationScriptText(int maximumCharacters, CancellationToken token, StringBuilder? text, Action<long>? reserve)

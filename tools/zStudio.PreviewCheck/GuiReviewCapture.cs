@@ -11,9 +11,9 @@ using System.Windows.Media.Media3D;
 using System.Windows.Threading;
 using HelixToolkit.SharpDX;
 using HelixToolkit.Wpf.SharpDX;
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Desktop;
-using Recoil.Zbd.Rendering;
+using zStudio.Core;
+using zStudio.Desktop;
+using zStudio.Rendering;
 
 /// <summary>Captures only this harness's visible window, including the native caption and GPU surfaces.</summary>
 internal static class GuiReviewCapture
@@ -22,7 +22,7 @@ internal static class GuiReviewCapture
     {
         string output = Path.Combine(Path.GetTempPath(), "zstudio-gui-review-" + DateTime.Now.ToString("yyyyMMdd-HHmmss"));
         Directory.CreateDirectory(output); Console.WriteLine("Screenshots: " + output);
-        string settings = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "RecoilZbdStudio", "settings.json");
+        string settings = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "zStudio", "settings.json");
         byte[]? original = File.Exists(settings) ? File.ReadAllBytes(settings) : null;
         var app = new App { ShutdownMode = ShutdownMode.OnExplicitShutdown, ProcessCommandLine = false }; app.InitializeComponent(); int exit = 0;
         nint previousWindow = GetForegroundWindow();
@@ -182,7 +182,7 @@ internal static class GuiReviewCapture
                 ((TabControl)window.FindName("NavigationTabs")).SelectedItem = window.FindName("SearchTab");
                 var textures = await Open("image.zbd");
                 Require(((TabControl)window.FindName("NavigationTabs")).SelectedItem == window.FindName("SearchTab"),"Opening a document unexpectedly replaced Search selection");
-                await Select(textures, textures.Assets.First(a => a.Record.Content is Recoil.Zbd.Core.TextureInfo { Width: 640, Height: 480 }));
+                await Select(textures, textures.Assets.First(a => a.Record.Content is zStudio.Core.TextureInfo { Width: 640, Height: 480 }));
                 await Capture("04-texture");
                 var sounds = await Open("soundsh.zbd"); await Select(sounds, sounds.Assets.First(a => a.Record.Kind == AssetKind.Sound));
                 await Capture("05-audio");

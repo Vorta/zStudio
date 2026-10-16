@@ -5,9 +5,9 @@ using System.Windows;
 using System.Windows.Automation;
 using System.Windows.Controls;
 using System.Windows.Media;
-using Recoil.Zbd.Core;
+using zStudio.Core;
 
-namespace Recoil.Zbd.Desktop;
+namespace zStudio.Desktop;
 
 /// <summary>Read-only presentation; the original JSON remains the copy/export source.</summary>
 public sealed class ReadOnlyPropertySheet : UserControl

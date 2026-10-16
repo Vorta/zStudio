@@ -3,7 +3,7 @@ using System.Windows.Media;
 using HelixToolkit.SharpDX;
 using HelixToolkit.Wpf.SharpDX;
 
-namespace Recoil.Zbd.Rendering;
+namespace zStudio.Rendering;
 
 public sealed partial class SceneViewport
 {

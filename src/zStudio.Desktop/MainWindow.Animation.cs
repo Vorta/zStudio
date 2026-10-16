@@ -3,9 +3,9 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using Microsoft.Win32;
-using Recoil.Zbd.Core.Animation;
+using zStudio.Core.Animation;
 
-namespace Recoil.Zbd.Desktop;
+namespace zStudio.Desktop;
 
 public partial class MainWindow
 {

@@ -3,10 +3,10 @@ using System.ComponentModel;
 using System.Runtime.InteropServices;
 using System.Text;
 using Microsoft.Win32.SafeHandles;
-using Recoil.Zbd.Core.Sources;
+using zStudio.Core.Sources;
 using Xunit;
 
-namespace Recoil.Zbd.Tests;
+namespace zStudio.Tests;
 
 public sealed partial class SourcePublisherTests
 {

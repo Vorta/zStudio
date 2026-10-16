@@ -1,7 +1,7 @@
 using System.Text.Json.Serialization;
-using Recoil.Zbd.Core;
+using zStudio.Core;
 
-namespace Recoil.Zbd.Desktop;
+namespace zStudio.Desktop;
 
 /// <summary>Bound publication previews before retained operation JSON is constructed; internal save identities stay complete.</summary>
 internal static class FileResultPreview

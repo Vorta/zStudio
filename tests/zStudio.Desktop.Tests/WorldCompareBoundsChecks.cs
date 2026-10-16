@@ -5,12 +5,12 @@ using System.Text.Json.Nodes;
 using System.Windows.Controls;
 using ModelContextProtocol.Client;
 using ModelContextProtocol.Protocol;
-using Recoil.Zbd.Core.Worlds;
-using Recoil.Zbd.Desktop;
-using Recoil.Zbd.Mcp;
+using zStudio.Core.Worlds;
+using zStudio.Desktop;
+using zStudio.Mcp;
 using Xunit;
 
-namespace Recoil.Zbd.Desktop.Tests;
+namespace zStudio.Desktop.Tests;
 
 /// <summary>
 /// Compare worlds at sizes far from retail: pages of rows whose text all escapes stay within the response limit, a pair's

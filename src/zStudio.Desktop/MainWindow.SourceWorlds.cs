@@ -3,14 +3,14 @@ using System.Numerics;
 using System.Text.Json.Nodes;
 using System.Windows;
 using System.Windows.Controls;
-using Recoil.Zbd.Automation;
-using Recoil.Zbd.Core.Worlds;
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Core.Formats;
-using Recoil.Zbd.Core.Sources;
-using Recoil.Zbd.Rendering;
+using zStudio.Automation;
+using zStudio.Core.Worlds;
+using zStudio.Core;
+using zStudio.Core.Formats;
+using zStudio.Core.Sources;
+using zStudio.Rendering;
 
-namespace Recoil.Zbd.Desktop;
+namespace zStudio.Desktop;
 
 /// <summary>
 /// Source worlds: when the open root is a source project, a mission's world is shown as its build script assembles it
@@ -105,17 +105,86 @@ public partial class MainWindow
     private DocumentModel? OpenSourceWorld(string root, string mission) => ViewModel.Documents.FirstOrDefault(d => !d.IsDisposed && d.SourceWorld is { IsDisposed: false } world &&
         world.Mission.Equals(mission, StringComparison.OrdinalIgnoreCase) && world.Root.Equals(Path.TrimEndingDirectorySeparator(Path.GetFullPath(root)), StringComparison.OrdinalIgnoreCase));
 
+    /// <summary>Return to the source map picker, sharing the GUI's explicit close decision and MCP's refusal policy.</summary>
+    private async Task<bool> ReturnToSourceMapsAsync(bool automation, CancellationToken token)
+    {
+        string root = SourceProjectRoot ?? throw new StudioCommandException("no_project", "Open a source project first.");
+        long workspace = ViewModel.WorkspaceGeneration;
+        if (automation) RequireNoDrafts();
+        else if (ViewModel.ResolveDraftsAsync != null && !await ViewModel.ResolveDraftsAsync()) return false;
+        RequireSourceRead(root, workspace, token);
+        long navigation = ViewModel.BeginNavigation(token); // Also supersedes an opening when the picker has no document yet.
+        if (!await CloseSourceMapForNavigationAsync(automation, root, workspace, navigation, token)) return false;
+        sourceMapOpening = null;
+        UpdateSourceMapPresentation(); ArrangeWorkspace();
+        ViewModel.Status = "Choose a map";
+        return true;
+    }
+
+    private async Task<bool> CloseSourceMapForNavigationAsync(bool automation, string root, long workspace, long navigation, CancellationToken token)
+    {
+        var doc = ViewModel.Documents.SingleOrDefault(d => d.SourceWorld != null && !d.IsDisposed);
+        if (doc == null) return true;
+        RequireCurrent();
+        if (automation)
+        {
+            RequireNoDrafts();
+            if (doc.IsDirty) throw new StudioCommandException("unsaved_changes", "Save the source project's changes or explicitly close this map with discard=true before opening another map.");
+            if (sourceWorkspaceBusy || doc.SourceWorld?.IsRebuilding == true)
+                throw new StudioCommandException("busy", "Wait for the source map rebuild to finish before closing it.");
+        }
+        else
+        {
+            ViewModel.CloseDecisionsStarting?.Invoke();
+            if (!await ConfirmDocumentCloseAsync(doc)) return false;
+            RequireCurrent();
+            if (doc.ApprovedCloseRevision != doc.Revision)
+                throw new StudioCommandException("revision_conflict", "The map changed after its close decision; its current edits were retained.");
+        }
+        RequireNoDrafts();
+        ViewModel.CloseResolved(doc);
+        return true;
+
+        void RequireCurrent()
+        {
+            RequireSourceRead(root, workspace, token);
+            if (ViewModel.NavigationGeneration != navigation || doc.IsDisposed || !ViewModel.Documents.Contains(doc))
+                throw new StudioCommandException("context_changed", "A newer navigation superseded this map close; its current state was retained.");
+        }
+    }
+
     /// <summary>Opens (or activates) the world <paramref name="mission"/> builds from the open source project.</summary>
     /// <param name="automation">An MCP request: changing the shown document would ask about or commit unfinished GUI input
     /// (DocumentChanged resolves preview and scene-card drafts), so pending drafts refuse it before activation and again
     /// before a built world is published.</param>
     private async Task<DocumentModel> OpenSourceWorldAsync(string mission, CancellationToken token, bool automation = false)
     {
+        // The shared opening owns this presentation until preview preparation completes.
+        // An older request must not clear a newer request's loading screen.
+        object opening = new();
+        sourceMapOpening = ViewModel.IsSourceProject && ViewModel.SelectedDocument == null ? opening : null;
+        UpdateSourceMapPresentation(); ArrangeWorkspace();
+        try { return await OpenSourceWorldCoreAsync(mission, token, automation); }
+        finally
+        {
+            if (ReferenceEquals(sourceMapOpening, opening))
+            {
+                sourceMapOpening = null;
+                UpdateSourceMapPresentation(); ArrangeWorkspace();
+            }
+        }
+    }
+
+    private async Task<DocumentModel> OpenSourceWorldCoreAsync(string mission, CancellationToken token, bool automation)
+    {
         string root = SourceProjectRoot ?? throw new StudioCommandException("no_project", "Open a source project (a folder with data and gamegen) first.");
         long workspace = ViewModel.WorkspaceGeneration;
-        var capturedProject = sourceWorkspace;
         using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(token, ViewModel.WorkspaceToken, shutdownToken);
         token = cancellation.Token;
+        if (!automation && ViewModel.ResolveDraftsAsync != null && !await ViewModel.ResolveDraftsAsync())
+            throw new StudioCommandException("canceled", "Map navigation was canceled; the current map was retained.");
+        RequireSourceRead(root, workspace, token);
+        var capturedProject = sourceWorkspace;
         long navigation = ViewModel.BeginNavigation(token);
         mission = mission.Trim().ToLowerInvariant();
         IReadOnlyList<string> missions;
@@ -130,7 +199,7 @@ public partial class MainWindow
         if (capturedProject != null && !ReferenceEquals(sourceWorkspace, capturedProject))
             throw new StudioCommandException("context_changed", "The source workspace changed while its worlds were being read.");
         if (!missions.Contains(mission, StringComparer.OrdinalIgnoreCase))
-            throw new StudioCommandException("invalid_argument", missions.Count == 0 ? "This project builds no worlds (it needs gamegen/mN.gs scripts and glTF models)." : $"This project builds no {mission} world. Worlds: {string.Join(", ", missions)}.");
+            throw new StudioCommandException("invalid_argument", missions.Count == 0 ? "This project has no map folders with matching gamegen/mN.gs scripts." : $"This project has no {mission} map. Use source_world_list for available maps.");
         if (OpenSourceWorld(root, mission) is { } open)
         {
             if (automation) RequireNoDrafts();
@@ -139,6 +208,17 @@ public partial class MainWindow
             return open;
         }
         RequireNoDrafts();
+        // Clean maps stay visible while the replacement builds. An explicit Save/Discard closes a dirty map first,
+        // so the new build cannot accidentally carry changes the user chose to discard into another mission.
+        var previous = ViewModel.Documents.SingleOrDefault(d => d.SourceWorld != null && !d.IsDisposed);
+        if (previous?.IsDirty == true)
+        {
+            if (!await CloseSourceMapForNavigationAsync(automation, root, workspace, navigation, token))
+                throw new StudioCommandException("canceled", "Map navigation was canceled; the current map was retained.");
+            navigation = ViewModel.BeginNavigation(token);
+            previous = null;
+        }
+        long previousRevision = previous?.Revision ?? 0;
         var project = SourceWorkspaceFor(root);
         // Until the world's document exists, the opening holds the workspace: closing another document must not release it.
         sourceWorldsOpening++;
@@ -156,16 +236,23 @@ public partial class MainWindow
             if (!ReferenceEquals(sourceWorkspace, project)) throw new StudioCommandException("context_changed", "The source workspace changed while the world was building.");
             // Input may have arrived while the world built; publishing (or activating) a world would decide it.
             if (automation) RequireNoDrafts();
+            if (previous != null)
+            {
+                RequireNoDrafts();
+                if (previous.IsDisposed || !ViewModel.Documents.Contains(previous) || previous.Revision != previousRevision || previous.IsDirty)
+                    throw new StudioCommandException("revision_conflict", "The current map changed while another map was building; its edits were retained.");
+            }
             if (OpenSourceWorld(root, mission) is { } other)
             {
-                session.Dispose(); session.DeleteBuild(built.Build.Folder); ViewModel.SelectedDocument = other; CommitRunningJob();
+                session.Dispose(); ViewModel.SelectedDocument = other; CommitRunningJob();
                 await CompleteSourceWorldPresentationAsync(other);
                 return other;
             }
             doc = new DocumentModel(built.World, session, built.Build, built.Revision);
             sourceWorldModels.Add(doc, built.Model);
-            session.SetLookupBaseline(built.Build, built.World.Bytes);
+            session.SetLookupBaseline(built.Build, ((SourceSceneSnapshot)built.World).World);
             ReportSourceBuild(session, built.Build);
+            if (previous != null) ViewModel.CloseResolved(previous);
             ViewModel.AddDocument(doc, true);
             CommitRunningJob();
             SelectNavigatorSection(1);
@@ -223,12 +310,14 @@ public partial class MainWindow
     private void SetSourceRebuilding(SourceWorldSession session, bool rebuilding)
     {
         session.IsRebuilding = sourceWorkspaceBusy = rebuilding;
+        if (shownDocument?.SourceWorld != null) SceneToolbar.IsEnabled = !rebuilding && retiringScene == null;
         if (rebuilding) sourceRebuild ??= new(TaskCreationOptions.RunContinuationsAsynchronously);
         else { var done = sourceRebuild; sourceRebuild = null; done?.TrySetResult(); }
         UpdateDocumentCommands();
         ApplyTerrainBrush(scene);
         UpdateAiPathPanel();
         UpdateParachutePanel();
+        UpdateReloadingView();
     }
     /// <summary>
     /// Completes when no world of the project rebuilds (after a scene-card edit, undo, stroke, Properties or MCP edit) and no
@@ -262,16 +351,17 @@ public partial class MainWindow
     {
         public void Report(SourceProgress value) { step(value); shown.Report(value); }
     }
-    private sealed record SourceWorldBuilt(ZbdDocument World, SourceWorldBuild Build, long Revision, SourceWorldModelEntry Model)
+    private sealed record SourceTransformPublication(MissionSceneContext Mission, SceneTransformUpdate Update, PickupPlacementEditSession Edits, SourceMapSelection Selection, SourceWorldModelEntry Model);
+    private sealed record SourceWorldBuilt(AssetDocument World, SourceSceneState Build, long Revision, SourceWorldModelEntry Model)
     {
         /// <summary>The lookups that find another node than when the world was opened or last saved (see <see cref="LookupChangesAsync"/>).</summary>
         public IReadOnlyList<SourceLookupChange> LookupChanges { get; init; } = [];
     }
     /// <summary>
-    /// Builds the workspace's current sources of the session's mission into a new private folder; a newer request supersedes
-    /// this one. <paramref name="additions"/> are models just added, which the build checks it loaded.
+    /// Evaluates the workspace's current mission sources directly into memory; a newer request supersedes this one.
+    /// <paramref name="additions"/> are models just added, which evaluation checks it loaded.
     /// </summary>
-    private async Task<SourceWorldBuilt> BuildSourceWorldAsync(SourceWorldSession session, CancellationToken token, IReadOnlyList<SourceModelAddition>? additions = null, long? navigation = null)
+    private async Task<SourceWorldBuilt> BuildSourceWorldAsync(SourceWorldSession session, CancellationToken token, IReadOnlyList<SourceModelAddition>? additions = null, long? navigation = null, SourceSceneSnapshot? evaluated = null)
     {
         // A world opened now would build with another world's edit before its rebuild verified it; a failed rebuild takes the
         // edit back and treats builds made before it as current.
@@ -280,7 +370,6 @@ public partial class MainWindow
         session.Building?.Cancel();
         using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(token, ViewModel.WorkspaceToken, shutdownToken);
         session.Building = cancellation;
-        string folder = session.NextFolder(); bool built = false;
         try
         {
             // The overlay and its revision are read together on the UI thread, where the workspace changes.
@@ -288,13 +377,18 @@ public partial class MainWindow
             var overlay = session.Workspace.Overlay();
             IProgress<SourceProgress> progress = new Progress<SourceProgress>(p => { if (session.Building == cancellation && !cancellation.IsCancellationRequested && (navigation == null || ViewModel.NavigationGeneration == navigation)) ViewModel.Status = $"Building the {session.Mission} world {p.Completed}/{p.Total}: {p.Item}"; });
             if (SourceBuildStep is { } step) progress = new StepProgress(step, progress);
-            var build = await Task.Run(() => session.BuildAsync(folder, overlay, progress, cancellation.Token, additions), cancellation.Token);
+            var world = evaluated ?? await session.BuildAsync(overlay, progress, cancellation.Token, additions);
+            var build = world.BuildState;
+            await Task.Run(() =>
+            {
+                if (evaluated == null) progress.Report(new(1, 1, "Built"));
+                CheckSourceEvaluation(session.Workspace, build, cancellation.Token);
+            }, cancellation.Token);
             cancellation.Token.ThrowIfCancellationRequested();
             if (session.IsDisposed || session.Building != cancellation) throw new OperationCanceledException(cancellation.Token);
-            var world = await Task.Run(() => FormatRegistry.Default.OpenAsync(build.WorldPath, cancellation.Token), cancellation.Token);
             cancellation.Token.ThrowIfCancellationRequested();
             if (session.IsDisposed || session.Building != cancellation) throw new OperationCanceledException(cancellation.Token);
-            if (world.Diagnostics.FirstOrDefault(d => d.Severity == "Error") is { } error) throw new InvalidDataException("The built world does not reopen: " + error.Message);
+            if (world.Diagnostics.FirstOrDefault(d => d.Severity == "Error") is { } error) throw new InvalidDataException("The evaluated world is invalid: " + error.Message);
             // Paired as part of the build, so closing the world, a workspace change or shutdown cancels it too.
             var preparing = PreparingSourceWorldModel;
             var model = await Task.Run(() =>
@@ -310,7 +404,6 @@ public partial class MainWindow
             var changes = await LookupChangesAsync(session, result, cancellation.Token);
             cancellation.Token.ThrowIfCancellationRequested();
             if (session.IsDisposed || session.Building != cancellation || session.Workspace.ContentRevision != revision) throw new OperationCanceledException(cancellation.Token);
-            built = true;
             return result with { LookupChanges = changes };
         }
         catch (OperationCanceledException) when (!token.IsCancellationRequested) { throw new StudioCommandException("context_changed", "The world's closing or a workspace change superseded this build."); }
@@ -324,29 +417,23 @@ public partial class MainWindow
         finally
         {
             if (session.Building == cancellation) session.Building = null;
-            if (!built) session.DeleteBuild(folder);
         }
     }
 
-    /// <summary>
-    /// What an addition broke: an output that built before and fails now, or warnings that the game rejects a file which
-    /// the previous build did not have (an animation bound to a node, attachment or effect this world lacks).
-    /// </summary>
-    private static string? NewRejections(SourceWorldBuild previous, SourceWorldBuild next)
+    private static void CheckSourceEvaluation(SourceWorkspace workspace, SourceSceneState state, CancellationToken token)
     {
-        // Output by output: one the game already rejected (or that failed) gains nothing from another warning.
-        List<string> broken = [];
-        foreach (var output in next.Outputs)
+        if (state.ResourceInputsChanged(workspace, token)) throw new SourceFileChangedException("Source resource discovery changed during evaluation; try again.", []);
+        foreach (var (relative, stamp) in state.Inputs)
         {
-            if (previous.Outputs.FirstOrDefault(p => p.Path == output.Path) is not { Error: null } before) continue;
-            if (output.Error != null) { broken.Add($"{output.Path} no longer builds ({output.Error})"); continue; }
-            if (before.Warnings.Any(Rejects)) continue;
-            if (output.Warnings.FirstOrDefault(Rejects) is { } warning) broken.Add($"{output.Path}: {warning}");
+            token.ThrowIfCancellationRequested();
+            string path = SourceProject.Resolve(workspace.Root, relative);
+            if (!File.Exists(path) || FileStamp.Read(path) != stamp
+                || state.InputHashes.TryGetValue(relative, out string? hash) && !SourceRead.Matches(path, stamp.Length, hash, token))
+                throw new SourceFileChangedException($"{relative} changed during evaluation; try again.", [relative]);
         }
-        if (broken.Count == 0) return null;
-        return Bounded("The addition would break the mission's files: " + string.Join("; ", broken.Take(4)) + (broken.Count > 4 ? $" and {broken.Count - 4} more" : "")
-            + ". For a model added with animation definitions, list only those it needs; for a copy, choose a name no animation definition binds.");
-        static bool Rejects(string warning) => warning.Contains("the game rejects", StringComparison.Ordinal);
+        foreach (string relative in state.MissingInputs)
+            if (System.IO.Path.Exists(SourceProject.Resolve(workspace.Root, relative)))
+                throw new SourceFileChangedException($"{relative} appeared during evaluation; try again.", [relative]);
     }
     /// <summary>
     /// The lookups by name that find another node in <paramref name="built"/> than when the world was opened or last saved
@@ -368,18 +455,12 @@ public partial class MainWindow
     /// Lists the build's problems under the world's script, replacing those of its previous build, with the lookups by name
     /// that find another node than when the world was opened or last saved.
     /// </summary>
-    private void ReportSourceBuild(SourceWorldSession session, SourceWorldBuild build, IReadOnlyList<SourceLookupChange>? lookupChanges = null)
+    private void ReportSourceBuild(SourceWorldSession session, SourceSceneState build, IReadOnlyList<SourceLookupChange>? lookupChanges = null)
     {
         string file = SourceWorldProblemFile(session);
         foreach (var old in ViewModel.Problems.Where(p => p.File == file).ToArray()) ViewModel.Problems.Remove(old);
-        foreach (var output in build.Outputs)
-        {
-            string context = $"{Bounded(session.Label, 64)}: {Bounded(output.Path, 188)}";
-            if (output.Error != null) ViewModel.AddProblem(SourceProblemText(context, $"did not build: {Bounded(output.Error, 740)}"), "Warning", file);
-            // Interface image notes concern the export, not the world.
-            if (output.Family == "images") continue;
-            foreach (string warning in SourceWarningMessages(output.Warnings, context)) ViewModel.AddProblem(warning, "Warning", file);
-        }
+        foreach (string warning in SourceWarningMessages(build.Notes, Bounded(session.Label, 64)))
+            ViewModel.AddProblem(warning, "Warning", file);
         session.LookupChangeCount = lookupChanges?.Count ?? 0;
         foreach (var change in (lookupChanges ?? []).Take(64))
         {
@@ -390,38 +471,120 @@ public partial class MainWindow
             ViewModel.AddProblem(SourceProblemText(session.Label, $"Showing 64 of {session.LookupChangeCount} changed lookups; {session.LookupChangeCount - 64} more not shown."), "Warning", file);
     }
 
-    /// <summary>Rebuilds the session's world and replaces the document showing it, keeping the camera.</summary>
+    /// <summary>Evaluates the session's sources, retaining document/viewport geometry for ordinary transforms and the camera across structural presentation replacement.</summary>
     /// <param name="verifyTargets">When set, every script instruction must act on the same nodes as in the shown build (see
     /// <see cref="SourceObjectEdits.TargetChange"/>), compared through how the edit renumbered the scripts' lines: a copy or
     /// move in a glTF file can change which node a lookup finds, and a move in the scripts what a later instruction reaches.</param>
     /// <param name="notes">The edit's notes on its reach, which the status and the replacement document keep.</param>
-    private async Task<DocumentModel> RebuildSourceWorldAsync(SourceWorldSession session, CancellationToken token, IReadOnlyList<SourceModelAddition>? additions = null, ScriptLineChanges? verifyTargets = null, IReadOnlyList<string>? notes = null)
+    private async Task<DocumentModel> RebuildSourceWorldAsync(SourceWorldSession session, CancellationToken token, IReadOnlyList<SourceModelAddition>? additions = null, ScriptLineChanges? verifyTargets = null, IReadOnlyList<string>? notes = null, SourceSceneSnapshot? evaluated = null, Action<DocumentModel>? accepted = null, MissionSceneContext? evaluatedMission = null)
     {
         // The build pairs its lookups too, so nothing can close the world between the checks below and the replacement.
-        var built = await BuildSourceWorldAsync(session, token, additions);
+        var built = await BuildSourceWorldAsync(session, token, additions, evaluated: evaluated);
         var current = session.Owner;
         if (session.IsDisposed || current == null || current.IsDisposed || !ViewModel.Documents.Contains(current))
-        { session.DeleteBuild(built.Build.Folder); throw new StudioCommandException("context_changed", "The world was closed while it was building."); }
+        { throw new StudioCommandException("context_changed", "The world was closed while it was building."); }
         try
         {
             RequireNoDrafts(current, committing: true);
-            if (additions is { Count: > 0 } && current.SourceBuild is { } previous && NewRejections(previous, built.Build) is { } rejection)
-                throw new StudioCommandException("build_failed", rejection);
             if (verifyTargets is { } lines && current.SourceBuild is { } shown && SourceObjectEdits.TargetChange(shown, built.Build, lines) is { } retargeted)
                 throw new StudioCommandException("invalid_argument", retargeted);
         }
-        catch { session.DeleteBuild(built.Build.Folder); throw; }
+        catch { throw; }
+        // Only a prepared source edit carries identities forward. Explicit reload always publishes a fresh
+        // document and preview lifetime, retiring dependency caches and externally stale object identities.
+        // An open VTOL analysis owns an animation context and overlay for the accepted snapshot. Let the
+        // normal replacement lifetime dispose it; a cleared draft preview alone does not retire that analysis.
+        if (evaluated != null && parachutes == null && current == shownDocument && scene is { PreviewScene: { } previousScene } viewport && HasPublishedStaticScene && shownAsset is { Kind: AssetKind.World } selectedAsset)
+        {
+            var source = (SourceSceneSnapshot)built.World;
+            var difficulty = ViewModel.Difficulty; int lod = Math.Max(0, LodCombo.SelectedIndex);
+            var visibility = viewport.NodeVisibility;
+            var previousSelection = SourceSelection(current, previousScene);
+            var previousModel = SourceWorldModel(current);
+            var prepared = await Task.Run(() =>
+            {
+                if (current.Document is not SourceSceneSnapshot previousSource || !SameSourceTextures(previousSource, source)) { SourceTransformRefused?.Invoke("textures"); return null; }
+                var mission = evaluatedMission ?? source.MissionScene(difficulty, token);
+                var update = SceneTransformUpdate.Prepare(previousScene, mission.Scene, selectedAsset, lod, token, visibility, SourceTransformRefused);
+                if (update == null) return null;
+                var model = RetainSourceTransformIdentity(previousModel, built.Model, built.Build, token);
+                if (model == null) { SourceTransformRefused?.Invoke("source-identity"); return null; }
+                var edits = PickupPlacementEditSession.FromSources(source, token);
+                var projection = new SourceMapSelection(mission.Scene, mission, model.Selection, TreeIdentities(mission.Scene, mission, edits), token,
+                    SourceMapActorKeys.Prepare(source.Root, model.Selection, edits, token, source.ReadHashes));
+                if (previousSelection == null || !SameKeys(previousSelection.Identities, projection.Identities)
+                    || !SameKeys(previousSelection.PartIdentities, projection.PartIdentities)) { SourceTransformRefused?.Invoke("placement-identity"); return null; }
+                return new SourceTransformPublication(mission, update, edits, projection, model);
+            }, token);
+            token.ThrowIfCancellationRequested();
+            if (session.IsDisposed || session.Owner != current || current.IsDisposed || scene != viewport || shownDocument != current)
+                throw new StudioCommandException("context_changed", "The source scene changed while the update was prepared.");
+            if (prepared != null) built = built with { Model = prepared.Model };
+            if (prepared != null && viewport.ApplySourceTransforms(prepared.Update, prepared.Mission, prepared.Edits, () =>
+            {
+                // Publish document/provenance before renderer inspection callbacks can observe the new instances.
+                current.AcceptSourceScene(source, built.Revision, prepared.Edits);
+                current.SourceEditNotes = [.. notes ?? []];
+                sourceWorldModels.Remove(current); sourceWorldModels.Add(current, built.Model);
+                sourceSelections.GetOrCreateValue(current).Add(prepared.Mission.Scene, prepared.Selection);
+                ConfigureSourceMapPresentation(viewport, current, prepared.Mission);
+                accepted?.Invoke(current);
+            }, SourceTransformRefused))
+            {
+                PublishSourceMapParts(viewport, current);
+                RefreshSceneTree(); PickupEditsChanged();
+                ReportSourceBuild(session, built.Build, built.LookupChanges);
+                if (session.LookupBaselinePending && ReadsOnlySaved(session, built.Build)) session.SetLookupBaseline(built.Build, source.World);
+                CommitRunningJob();
+                if (directSourcePublication.Value is { } transformPublication) transformPublication.Document = current;
+                ViewModel.Status = $"Updated {session.Mission}. Save writes the changed source files.";
+                return current;
+            }
+        }
+        if (evaluated != null && current != shownDocument && current.Document is SourceSceneSnapshot oldSource && built.World is SourceSceneSnapshot nextSource)
+        {
+            var previousModel = SourceWorldModel(current);
+            var retainedModel = await Task.Run(() => SceneTransformUpdate.Prepare(oldSource.Scene!, nextSource.Scene!,
+                oldSource.Assets.First(asset => asset.Kind == AssetKind.World), 0, token) == null ? null
+                : RetainSourceTransformIdentity(previousModel, built.Model, built.Build, token), token);
+            token.ThrowIfCancellationRequested();
+            if (session.IsDisposed || session.Owner != current || current.IsDisposed)
+                throw new StudioCommandException("context_changed", "The source document changed while the update was prepared.");
+            if (retainedModel != null && current != shownDocument)
+            {
+                var edits = await Task.Run(() => PickupPlacementEditSession.FromSources(nextSource, token), token);
+                token.ThrowIfCancellationRequested();
+                if (session.IsDisposed || session.Owner != current || current.IsDisposed)
+                    throw new StudioCommandException("context_changed", "The source document changed while the update was prepared.");
+                if (current != shownDocument)
+                {
+                    current.AcceptSourceScene(nextSource, built.Revision, edits);
+                    current.SourceEditNotes = [.. notes ?? []];
+                    sourceWorldModels.Remove(current); sourceWorldModels.Add(current, retainedModel);
+                    accepted?.Invoke(current);
+                    ReportSourceBuild(session, built.Build, built.LookupChanges);
+                    CommitRunningJob();
+                    if (directSourcePublication.Value is { } backgroundPublication) backgroundPublication.Document = current;
+                    return current;
+                }
+            }
+        }
         SceneViewport.ViewPose? view = null;
         if (shownDocument == current && scene != null && HasPublishedStaticScene)
             try { view = scene.CaptureView(); } catch (InvalidOperationException) { }
         IReadOnlyList<string> kept = [.. notes ?? []];
-        var replacement = new DocumentModel(built.World, session, built.Build, built.Revision) { PickupsLocked = current.PickupsLocked, SourceEditNotes = kept };
+        var replacement = new DocumentModel(built.World, session, built.Build, built.Revision) { EditingLocked = current.EditingLocked, SourceEditNotes = kept };
         sourceWorldModels.Add(replacement, built.Model);
         // A world that was stale when the project was saved takes the first build that reads only saved sources as its baseline.
-        if (session.LookupBaselinePending && ReadsOnlySaved(session, built.Build)) session.SetLookupBaseline(built.Build, built.World.Bytes);
+        if (session.LookupBaselinePending && ReadsOnlySaved(session, built.Build)) session.SetLookupBaseline(built.Build, ((SourceSceneSnapshot)built.World).World);
         ReportSourceBuild(session, built.Build, built.LookupChanges);
         pendingSourceView = view == null ? null : (replacement, view);
-        ViewModel.ReplaceDocument(current, replacement);
+        // The shown scene stays until the rebuilt world's scene is ready (see RetireScene).
+        sceneHandoff = view == null ? null : replacement;
+        try { ViewModel.ReplaceDocument(current, replacement); }
+        catch { sceneHandoff = null; pendingSourceView = null; throw; }
+        accepted?.Invoke(replacement);
+        if (ReferenceEquals(sceneHandoff, replacement)) sceneHandoff = null; // Not shown (another document is selected).
         CommitRunningJob();
         if (directSourcePublication.Value is { } publication) publication.Document = replacement;
         bool stillShown = await CompleteSourceWorldPresentationAsync(replacement);
@@ -432,9 +595,18 @@ public partial class MainWindow
         return replacement;
     }
 
+    private static bool SameKeys(IReadOnlyDictionary<int, string> before, IReadOnlyDictionary<int, string> after) =>
+        before.Count == after.Count && before.All(pair => after.TryGetValue(pair.Key, out string? next) && pair.Value == next);
+
+    private static bool SameSourceTextures(SourceSceneSnapshot before, SourceSceneSnapshot after) =>
+        before.Textures.Count == after.Textures.Count && before.Textures.All(pair =>
+            after.Textures.TryGetValue(pair.Key, out var next) && pair.Value.Hash == next.Hash);
+
     /// <summary>Refuses a second change while a world of the project is rebuilding (see <see cref="SourceWorldSession.IsRebuilding"/>).</summary>
     private void RequireSourceWorldIdle(SourceWorldSession session)
     {
+        if (session.Owner == shownDocument && staticRefresh != null)
+            throw new StudioCommandException("busy", "Wait for the scene options update before editing this source world.");
         if (sourceWorkspaceBusy || session.IsRebuilding) throw new StudioCommandException("busy", $"A world of this source project is rebuilding after an edit or reload; try again when the {session.Mission} world is shown.");
         if (session.Workspace.IsSaving) throw new StudioCommandException("busy", "The source project is being saved; try again when it finishes.");
     }
@@ -448,10 +620,10 @@ public partial class MainWindow
     /// <remarks>
     /// <paramref name="additions"/> and <paramref name="notes"/> are read after <paramref name="apply"/> runs, so a plan can
     /// list the models it adds and its notes, which the status shows once the world is rebuilt. Edits planned from this
-    /// world's build (<paramref name="fromBuild"/>: provenance, line numbers, archive layouts) are refused once a source the
+    /// world's build (<paramref name="fromBuild"/>: provenance, line numbers, source identities) are refused once a source the
     /// build read changed in the workspace, until the world is reloaded.
     /// </remarks>
-    private async Task<DocumentModel> EditSourceWorldAsync(DocumentModel doc, string action, Func<SourceWorkspace, Action?> apply, CancellationToken token, IReadOnlyList<SourceModelAddition>? additions = null, bool fromBuild = true, Func<ScriptLineChanges?>? verifyTargets = null, IReadOnlyList<string>? notes = null, Action? onRollback = null)
+    private async Task<DocumentModel> EditSourceWorldAsync(DocumentModel doc, string action, Func<SourceWorkspace, Action?> apply, CancellationToken token, IReadOnlyList<SourceModelAddition>? additions = null, bool fromBuild = true, Func<ScriptLineChanges?>? verifyTargets = null, IReadOnlyList<string>? notes = null, Action? onRollback = null, SourceSceneSnapshot? evaluated = null, MissionSceneContext? evaluatedMission = null)
     {
         var session = doc.SourceWorld ?? throw new StudioCommandException("unsupported", "This document is not a source world.");
         if (doc.IsDisposed || session.Owner != doc) throw new StudioCommandException("stale_document", "The world was rebuilt; read zstudio_state for its current document.");
@@ -470,16 +642,26 @@ public partial class MainWindow
         catch (NotSupportedException ex) { throw new StudioCommandException("unsupported", ex.Message); }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { throw new StudioCommandException("io_failed", ex.Message); }
         if (revert == null) return doc;
+        DocumentModel? acceptedDocument = null;
         try
         {
             SetSourceRebuilding(session, true);
-            return await RebuildSourceWorldAsync(session, token, additions, verifyTargets?.Invoke(), notes);
+            return await RebuildSourceWorldAsync(session, token, additions, verifyTargets?.Invoke(), notes, evaluated, accepted: value => acceptedDocument = value, evaluatedMission: evaluatedMission);
         }
         // The rebuilt world was never shown (failed, canceled, or its world closed meanwhile): the edit is taken back, so no
         // other world keeps an edit nothing was built with, and worlds built before it are current again. The status (the
         // build's progress until now) says so, however the edit was asked for.
         catch (Exception ex) when (ex is not (OutOfMemoryException or StackOverflowException))
         {
+            // Once both document and renderer acceptance began, presentation failure cannot retract the source history
+            // behind an already published scene. Report it without turning an accepted edit into a failed transaction.
+            if (acceptedDocument != null)
+            {
+                CommitRunningJob();
+                if (directSourcePublication.Value is { } publication) publication.Document = acceptedDocument;
+                ViewModel.AddProblem(Bounded($"{action} was accepted, but the view could not finish refreshing: {ex.Message}"), "Warning", SourceWorldProblemFile(session));
+                return acceptedDocument;
+            }
             bool discardApproved = discardApprovedWorkspace is { } approved && approved.Workspace == session.Workspace && approved.Revision == session.Workspace.Revision;
             try { revert(); }
             catch (Exception undo) when (undo is InvalidDataException or SourceFileChangedException or IOException or InvalidOperationException or NotSupportedException)
@@ -507,9 +689,16 @@ public partial class MainWindow
         public void Dispose() => Value?.Dispose();
     }
     internal Action<CancellationToken>? SourceEditPreparing { get; set; }
-    /// <summary>Read, decode and serialize on an isolated worker workspace; publish one checked transaction on the dispatcher.</summary>
+    // Internal evidence hooks for the composed source-edit path; never user-facing status or source metadata.
+    internal Action<string>? SourceEditEvaluation { get; set; }
+    internal Action<string>? SourceTransformRefused { get; set; }
+    private static string SourcePreparationFailureStatus(string action, Exception failure)
+        => Bounded(failure is OperationCanceledException
+            ? $"{action} was canceled before acceptance; the source workspace is unchanged."
+            : $"{action} was not applied: {failure.Message}");
+    /// <summary>Read and evaluate an isolated worker workspace; publish one checked transaction on the dispatcher.</summary>
     private async Task<DocumentModel> PrepareSourceWorldEditAsync(DocumentModel doc, string action, Func<SourceWorkspace, CancellationToken, SourceTransaction?> prepare,
-        CancellationToken token, IReadOnlyList<SourceModelAddition>? additions = null, bool fromBuild = true, Func<ScriptLineChanges?>? verifyTargets = null, IReadOnlyList<string>? notes = null, SceneInspectionCard? committingCard = null, ZoneDraft? committingZones = null, AiPathDraft? committingAiPath = null, ParachuteDraft? committingParachute = null, Action<CancellationToken>? preparationStarted = null)
+        CancellationToken token, IReadOnlyList<SourceModelAddition>? additions = null, bool fromBuild = true, Func<ScriptLineChanges?>? verifyTargets = null, IReadOnlyList<string>? notes = null, SceneInspectionCard? committingCard = null, ZoneDraft? committingZones = null, AiPathDraft? committingAiPath = null, ParachuteDraft? committingParachute = null, Action<CancellationToken>? preparationStarted = null, bool? historyRedo = null, bool requireAnimations = false)
     {
         var session = SourceWorldOf(doc);
         if (doc.IsDisposed || session.Owner != doc) throw new StudioCommandException("stale_document", "The world was rebuilt or closed.");
@@ -523,9 +712,14 @@ public partial class MainWindow
         string? draftToken = committingCard?.DraftToken;
         string? zoneToken = committingZones?.Token;
         long revision = session.Workspace.Revision;
+        long workspaceGeneration = ViewModel.WorkspaceGeneration, navigationGeneration = ViewModel.NavigationGeneration;
         if (fromBuild && doc.SourceInputsChanged(verifyContent: false)) throw new StudioCommandException("stale_document", "Sources changed; reload the world before editing it.");
         if (operation != null) throw new StudioCommandException("busy", "An export, validation or source operation is already running.");
         var prepared = session.Workspace.BeginPreparedEdit();
+        SourceSceneSnapshot? evaluated = null;
+        MissionSceneContext? evaluatedMission = null;
+        var previousSourceScene = doc.Document as SourceSceneSnapshot;
+        var previousMission = shownDocument == doc ? scene?.Mission : null;
         using var verification = new PreparedSourceVerification();
         session.Building = cancellation;
         operation = cancellation; CancelOperationItem.IsEnabled = true;
@@ -534,7 +728,7 @@ public partial class MainWindow
         try
         {
             preparationStarted?.Invoke(cancellation.Token);
-            await Task.Run(() =>
+            await Task.Run(async () =>
             {
                 void CheckSources()
                 {
@@ -543,16 +737,60 @@ public partial class MainWindow
                 }
                 CheckSources(); SourceEditPreparing?.Invoke(cancellation.Token); prepare(prepared.Workspace, cancellation.Token);
                 CheckSources(); cancellation.Token.ThrowIfCancellationRequested();
+                try
+                {
+                    var overlay = prepared.Workspace.Overlay();
+                    bool incremental = false;
+                    if (previousSourceScene != null && (additions == null || additions.Count == 0) && !requireAnimations)
+                    {
+                        var candidate = SourceWorlds.TryUpdateTransforms(previousSourceScene, overlay, out string refusal, cancellation.Token);
+                        if (candidate != null)
+                        {
+                            if (previousMission == null) { evaluated = candidate; incremental = true; }
+                            else if (previousMission.WithSourceTransforms(previousSourceScene.Scene!, candidate.Scene!, cancellation.Token) is { } mission)
+                            { evaluated = candidate; evaluatedMission = mission; incremental = true; }
+                            else SourceTransformRefused?.Invoke("mission-initialization");
+                        }
+                        else SourceTransformRefused?.Invoke(refusal);
+                    }
+                    if (evaluated == null)
+                        evaluated = await SourceWorlds.LoadSceneAsync(session.Root, session.Mission, overlay, cancellation.Token, additions);
+                    SourceEditEvaluation?.Invoke(incremental ? "incremental" : "full");
+                }
+                catch (InvalidDataException ex) { throw new StudioCommandException("build_failed", ex.Message); }
+                if (doc.Document is SourceSceneSnapshot previousSource)
+                {
+                    var changedFiles = prepared.Workspace.ChangedSince(0);
+                    bool changedDefinitions = changedFiles.Any(path => path.EndsWith(".zad", StringComparison.OrdinalIgnoreCase));
+                    if (evaluated.Animations == null && (previousSource.Animations != null || changedDefinitions || requireAnimations))
+                        throw new StudioCommandException("build_failed", "The edit would make the mission animation definitions unavailable. " +
+                            Bounded(evaluated.Notes.FirstOrDefault(note => note.Contains("animation", StringComparison.OrdinalIgnoreCase)) ?? "Check the animation definitions and their bindings.", 512));
+                    foreach (var (name, resource) in evaluated.Resources)
+                        if (resource.Root == null && (previousSource.Resources.TryGetValue(name, out var previousResource) && previousResource.Root != null || changedFiles.Contains(resource.Path)))
+                            throw new StudioCommandException("build_failed", $"The edit would make source resource {Bounded(resource.Path, 256)} unavailable.");
+                }
+                SourceBuildStep?.Invoke(new(1, 1, "Built"));
+                CheckSourceEvaluation(prepared.Workspace, evaluated.BuildState, cancellation.Token);
+                if (verifyTargets?.Invoke() is { } targetLines && doc.SourceBuild is { } prior
+                    && SourceObjectEdits.TargetChange(prior, evaluated.BuildState, targetLines) is { } changedTarget)
+                    throw new StudioCommandException("invalid_argument", changedTarget);
+                CheckSources();
                 verification.Value = session.Workspace.VerifyPreparedEdit(prepared, cancellation.Token);
             }, cancellation.Token);
             cancellation.Token.ThrowIfCancellationRequested();
             if (doc.IsDisposed || session.Owner != doc) throw new StudioCommandException("stale_document", "The world was rebuilt or closed while the edit was prepared.");
         }
-        catch (SourceFileChangedException ex) { throw new StudioCommandException("external_change", ex.Message); }
-        catch (SourceModelBuildException ex) { throw new StudioCommandException("build_failed", ex.Message); }
-        catch (InvalidDataException ex) { throw new StudioCommandException("invalid_argument", ex.Message); }
-        catch (NotSupportedException ex) { throw new StudioCommandException("unsupported", ex.Message); }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { throw new StudioCommandException("io_failed", ex.Message); }
+        catch (SourceFileChangedException ex) { throw FailedPreparation(new StudioCommandException("external_change", ex.Message)); }
+        catch (SourceModelBuildException ex) { throw FailedPreparation(new StudioCommandException("build_failed", ex.Message)); }
+        catch (InvalidDataException ex) { throw FailedPreparation(new StudioCommandException("invalid_argument", ex.Message)); }
+        catch (NotSupportedException ex) { throw FailedPreparation(new StudioCommandException("unsupported", ex.Message)); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { throw FailedPreparation(new StudioCommandException("io_failed", ex.Message)); }
+        catch (StudioCommandException ex) { throw FailedPreparation(ex); }
+        catch (OperationCanceledException ex)
+        {
+            if (OwnsPreparationStatus()) ViewModel.Status = SourcePreparationFailureStatus(action, ex);
+            throw;
+        }
         finally
         {
             if (session.Building == cancellation) session.Building = null;
@@ -590,7 +828,7 @@ public partial class MainWindow
             try { session.Workspace.ValidatePreparedEdit(prepared, cancellation.Token, verification.Value); }
             catch (SourceFileChangedException ex) { throw new StudioCommandException("external_change", ex.Message); }
             catch (InvalidDataException ex) { throw new StudioCommandException("invalid_argument", ex.Message); }
-            committingCard.CancelDraft(); UpdateDocumentCommands();
+            committingCard.CancelDraft(accepting: true); UpdateDocumentCommands();
         }
         if (committingZones != null)
         {
@@ -601,10 +839,28 @@ public partial class MainWindow
             catch (InvalidDataException ex) { throw new StudioCommandException("invalid_argument", ex.Message); }
             committingZones.Accepting = true; CancelZoneDraft(close: true);
         }
+        bool OwnsPreparationStatus() => !shutdownToken.IsCancellationRequested && operation == cancellation && session.Building == cancellation
+            && !doc.IsDisposed && session.Owner == doc && sourceWorkspace == session.Workspace
+            && ViewModel.WorkspaceGeneration == workspaceGeneration && ViewModel.NavigationGeneration == navigationGeneration;
+        StudioCommandException FailedPreparation(StudioCommandException failure)
+        {
+            if (OwnsPreparationStatus()) ViewModel.Status = SourcePreparationFailureStatus(action, failure);
+            return failure;
+        }
+
         // No dispatcher yield between releasing the preparation guard and accepting the checked edit.
-        return await EditSourceWorldAsync(doc, action, w => w.AcceptPreparedEdit(prepared, cancellation.Token, verification.Value) is { } t ? () => w.Retract(t) : null,
+        return await EditSourceWorldAsync(doc, action, w =>
+        {
+            if (historyRedo is { } redo)
+            {
+                w.ValidatePreparedEdit(prepared, cancellation.Token, verification.Value);
+                if (redo) { w.Redo(); return () => w.Undo(); }
+                w.Undo(); return () => w.Redo();
+            }
+            return w.AcceptPreparedEdit(prepared, cancellation.Token, verification.Value) is { } t ? () => w.Retract(t) : null;
+        },
             cancellation.Token, additions, fromBuild, verifyTargets, notes,
-            onRollback: () => { if (committingAiPath != null) committingAiPath.RolledBackRevision = doc.Revision; if (committingParachute != null) committingParachute.RolledBackRevision = doc.Revision; });
+            onRollback: () => { if (committingAiPath != null) committingAiPath.RolledBackRevision = doc.Revision; if (committingParachute != null) committingParachute.RolledBackRevision = doc.Revision; }, evaluated: evaluated, evaluatedMission: evaluatedMission);
     }
 
     private Task<DocumentModel> AddSourceModelAsync(DocumentModel doc, SourceWorldAddition addition, CancellationToken token)
@@ -615,7 +871,7 @@ public partial class MainWindow
         RequireSourceWorldIdle(session);
         // The rebuild is checked against the shown build; a stale one would blame the addition for others' changes.
         if (doc.SourceInputsChanged(verifyContent: false)) throw new StudioCommandException("stale_document", "Sources this world was built from changed since; reload the world before adding a model.");
-        return PrepareSourceWorldEditAsync(doc, $"Adding {addition.Model.Name}", (workspace, ct) => SourceWorlds.AddModel(workspace, mission, addition, ct), token, [addition.Model]);
+        return PrepareSourceWorldEditAsync(doc, $"Adding {addition.Model.Name}", (workspace, ct) => SourceWorlds.AddModel(workspace, mission, addition, ct), token, [addition.Model], requireAnimations: addition.DefinitionFiles.Count > 0);
     }
     private Task<DocumentModel> UndoSourceWorldAsync(DocumentModel doc, bool redo, CancellationToken token)
     {
@@ -624,33 +880,48 @@ public partial class MainWindow
         // A rebuild or save in progress says so (the history cannot move while the project is saved).
         RequireSourceWorldIdle(session);
         if (redo ? !workspace.CanRedo : !workspace.CanUndo) throw new StudioCommandException("unsupported", redo ? "Nothing to redo." : "Nothing to undo.");
-        return EditSourceWorldAsync(doc, redo ? "Redo" : "Undo", w =>
+        return PrepareSourceWorldEditAsync(doc, redo ? "Redo" : "Undo", (w, ct) =>
         {
-            if (redo) { w.Redo(); return () => w.Undo(); }
-            w.Undo(); return () => w.Redo();
-        }, token, fromBuild: false);
+            ct.ThrowIfCancellationRequested();
+            if (redo) w.Redo(); else w.Undo();
+            return null;
+        }, token, fromBuild: false, historyRedo: redo);
     }
 
     /// <summary>
     /// A placement edit of a source world (a pickup, AI vehicle or AI node, with its linked difficulty counterparts) becomes
-    /// one change of the resource sources the world's archives were built from; only the edited coordinate tokens change.
+    /// one change of the owning resource sources; only the edited coordinate tokens change.
     /// </summary>
-    private Task<DocumentModel> MoveSourcePlacementAsync(DocumentModel doc, MissionPickupSource source, PlacementTransform transform, CancellationToken token, SceneInspectionCard? committingCard = null) =>
-        PrepareSourceWorldEditAsync(doc, "Moving placement", (workspace, ct) =>
+    private async Task<DocumentModel> MoveSourcePlacementAsync(DocumentModel doc, MissionPickupSource source, PlacementTransform transform, CancellationToken token, SceneInspectionCard? committingCard = null)
+    {
+        var snapshot = doc.Document; var viewport = scene; var session = doc.SourceWorld;
+        long? contentRevision = session?.Workspace.ContentRevision;
+        var restore = committingCard?.CapturePlacementDraftRestore();
+        try
         {
-            var plan = PlanSourcePlacement(doc, workspace, source, transform, ct);
-            return workspace.Apply(plan.Label, plan.Changes, ct);
-        }, token, committingCard: committingCard);
-    /// <summary>Prepare scalar replacements from immutable archive data and an isolated source workspace on the worker.</summary>
+            return await PrepareSourceWorldEditAsync(doc, "Moving placement", (workspace, ct) =>
+            {
+                var plan = PlanSourcePlacement(doc, workspace, source, transform, ct);
+                return workspace.Apply(plan.Label, plan.Changes, ct);
+            }, token, committingCard: committingCard);
+        }
+        catch
+        {
+            if (restore != null && !doc.IsDisposed && session?.Owner == doc && doc.Document == snapshot
+                && contentRevision is { } before && session.Workspace.ChangedSince(before).Count == 0 && shownDocument == doc && ViewModel.SelectedDocument == doc
+                && scene == viewport && CurrentInspectionCard == committingCard && restore())
+                inspectionDraft = committingCard;
+            throw;
+        }
+    }
+    /// <summary>Prepare scalar replacements from immutable source data and an isolated source workspace on the worker.</summary>
     private static (string Label, List<(string, byte[]?)> Changes) PlanSourcePlacement(DocumentModel doc, SourceWorkspace workspace, MissionPickupSource source, PlacementTransform transform, CancellationToken token)
     {
         var edits = doc.PickupEdits ?? throw new StudioCommandException("not_ready", "Load the world's placements first.");
         string label = edits.Find(source) is { } pickup ? $"Move {pickup.Type}" : edits.Coordinate(source) is { } record ? $"Move {record.Name}" : "Move placement";
         var after = edits.PreviewTransform(source, transform);
         List<(string, byte[]?)> changes = [];
-        foreach (var archive in edits.ScalarWrites(after).GroupBy(w => w.ArchivePath, StringComparer.OrdinalIgnoreCase))
-            changes.AddRange(SourceResourceEdits.SourceChanges(edits.ArchiveBytes(archive.Key), archive.Select(w => new SourceResourceEdits.ScalarEdit(w.Offset, SourceResourceEdits.Float(w.Value))),
-                (relative, limits) => workspace.Read(relative, token, limits), token).Select(c => (c.Relative, (byte[]?)c.Content)));
+        changes.AddRange(edits.SourceChanges(after, workspace, token).Select(change => (change.Relative, (byte[]?)change.Content)));
         return (label, changes);
     }
 
@@ -660,7 +931,7 @@ public partial class MainWindow
         var edits = doc.PickupEdits ?? throw new StudioCommandException("not_ready", "Load the world's placements first.");
         var window = propertiesWindow;
         var original = window?.Document == doc ? window.PickupFields?.Json : null;
-        string archive = Path.GetRelativePath(doc.SourceBuild!.Folder, source.ArchivePath);
+        string archive = Path.GetRelativePath(doc.SourceBuild!.Root, source.ArchivePath);
         string? type = edits.Find(source)?.Type;
         var next = await MoveSourcePlacementAsync(doc, source, edits.Transform(source) with { Position = position }, CancellationToken.None);
         if (original == null || next.IsDisposed || !FollowsProperties(window, next)) return;
@@ -671,7 +942,7 @@ public partial class MainWindow
             using var reading = CancellationTokenSource.CreateLinkedTokenSource(next.Lifetime.Token, shutdownToken);
             var current = await next.GetPickupEditsAsync(ViewModel.Resolver!, reading.Token);
             if (next.IsDisposed || !FollowsProperties(window, next)) return;
-            string targetArchive = Path.GetFullPath(Path.Combine(next.SourceBuild!.Folder, archive));
+            string targetArchive = Path.GetFullPath(Path.Combine(next.SourceBuild!.Root, archive));
             // The placement store canonicalizes archive paths for its record keys. Find the retained identity, then use
             // its actual key rather than synthesizing one with the build folder's display casing.
             var matches = current.Records.Where(r => r.Source.ArchivePath.Equals(targetArchive, StringComparison.OrdinalIgnoreCase)
@@ -727,7 +998,7 @@ public partial class MainWindow
             var reloaded = await RebuildSourceWorldAsync(session, token);
             // With nothing unsaved, the reloaded world is the saved one: lookups are compared with it from now on, as after a save.
             if (!reloaded.IsDisposed && session.Owner == reloaded && !workspace.IsDirty && reloaded.SourceBuild is { } build)
-            { session.SetLookupBaseline(build, reloaded.Document.Bytes); ReportSourceBuild(session, build); }
+            { session.SetLookupBaseline(build, ((SourceSceneSnapshot)reloaded.Document).World); ReportSourceBuild(session, build); }
             return reloaded;
         }
         // The status showed the build's progress.
@@ -807,7 +1078,7 @@ public partial class MainWindow
             var saved = worlds[i];
             if (saved.IsDisposed || saved.SourceWorld!.Owner != saved) continue;
             if (older[i]) saved.SourceWorld.ForgetLookupBaseline();
-            else saved.SourceWorld.SetLookupBaseline(saved.SourceBuild!, saved.Document.Bytes);
+            else saved.SourceWorld.SetLookupBaseline(saved.SourceBuild!, ((SourceSceneSnapshot)saved.Document).World);
             ReportSourceBuild(saved.SourceWorld, saved.SourceBuild!);
         }
         UpdateDocumentCommands();
@@ -816,7 +1087,7 @@ public partial class MainWindow
         StudioCommandException Failed(StudioCommandException failure) { ViewModel.Status = Bounded($"The source project was not saved: {failure.Message}"); UpdateDocumentCommands(); return failure; }
     }
     /// <summary>Whether a build read none of the workspace's unsaved sources: it shows the mission as saved.</summary>
-    private static bool ReadsOnlySaved(SourceWorldSession session, SourceWorldBuild build)
+    private static bool ReadsOnlySaved(SourceWorldSession session, SourceSceneState build)
     {
         HashSet<string> dirty = new(session.Workspace.DirtyFiles, StringComparer.OrdinalIgnoreCase);
         return !build.Dependencies.Any(dirty.Contains);
@@ -866,10 +1137,10 @@ public partial class MainWindow
         catch (Exception ex) when (ex is InvalidDataException or IOException or UnauthorizedAccessException) { error = ex.Message; }
         if (generation != sourceWorldMenuGeneration || SourceProjectRoot != root) return;
         SourceWorldMenu.Items.Clear();
-        if (missions == null || missions.Count == 0) { SourceWorldMenu.Items.Add(new MenuItem { Header = new TextBlock { Text = error ?? "No world scripts (gamegen/mN.gs) with models" }, IsEnabled = false }); return; }
+        if (missions == null || missions.Count == 0) { SourceWorldMenu.Items.Add(new MenuItem { Header = new TextBlock { Text = error ?? "No map folders with matching gamegen/mN.gs scripts" }, IsEnabled = false }); return; }
         foreach (string mission in missions)
         {
-            MenuItem item = new() { Header = new TextBlock { Text = mission }, ToolTip = $"Build the {mission} world from gamegen/{mission}.gs and the project's models" };
+            MenuItem item = new() { Header = new TextBlock { Text = mission }, ToolTip = $"Open the {mission} world from gamegen/{mission}.gs and the project's sources" };
             System.Windows.Automation.AutomationProperties.SetName(item, mission);
             item.Click += async (_, _) => await RunUi(() => OpenSourceWorldAsync(mission, CancellationToken.None));
             SourceWorldMenu.Items.Add(item);
@@ -879,8 +1150,9 @@ public partial class MainWindow
     private static object? SourceWorldState(DocumentModel d) => d.SourceWorld is not { } world ? null : new
     {
         mission = world.Mission, project = world.Root, script = world.ScriptPath, definitions = world.Workspace.Exists(world.DefinitionsPath) ? world.DefinitionsPath : null,
-        current = world.Owner == d, rebuilding = world.IsRebuilding, builtRevision = d.SourceRevision, workspace = SourceWorkspaceState(world.Workspace, includeDetails: false),
-        outputs = d.SourceBuild?.Outputs.Select(o => new { path = o.Path, status = o.Status, warningCount = o.Warnings.Count, error = o.Error == null ? null : Bounded(o.Error, 512) }).ToArray(),
+        current = world.Owner == d, evaluating = world.IsRebuilding, sourceRevision = d.SourceRevision, workspace = SourceWorkspaceState(world.Workspace, includeDetails: false),
+        diagnostics = d.SourceBuild?.Notes.Take(64).Select(note => Bounded(note, 512)).ToArray(),
+        diagnosticCount = d.SourceBuild?.Notes.Count ?? 0, diagnosticsTruncated = d.SourceBuild is { } diagnostics && (diagnostics.Notes.Count > 64 || diagnostics.Notes.Take(64).Any(note => note.Length > 512)),
         // The edit this build was made for: its notes on its reach, and the lookups by name now finding another node (Problems lists them).
         editNotes = d.SourceEditNotes.Take(16).Select(n => Bounded(n, 512)).ToArray(), editNoteCount = d.SourceEditNotes.Count,
         lookupChangeCount = world.Owner == d ? world.LookupChangeCount : (int?)null
@@ -906,8 +1178,16 @@ public partial class MainWindow
 
     private void RegisterSourceWorldCommands(StudioCommands r)
     {
-        RegisterJob(r, "source_world_open", "Open (or activate) a mission world of the open source project as its build script assembles it from the project's glTF models, textures, resources and animation definitions, including the project's unsaved edits. The world is built privately, as the export builds it, into the project's zstudio/cache/worlds folder (zStudio's derived data, which builds never read and which is removed when the world closes), and shown in Whole world. Edit it with zstudio_source_world_add_model, the placement commands (pickup_lock, pickup_move, scene_card), undo_redo and save_document, which change only the project's sources; every open world of the project shares one edit history and one save. Build problems are listed in problems.",
-            [P("mission", "string", "Mission folder, for example m1 (see zstudio_source_status: outputs of family world).", true)], true,
+        Register(r, "source_world_list", "List source-project map folders with matching gamegen entry scripts, in numeric order. Broken or missing map assets do not hide a map; opening reports its evaluation problems.", false, [.. PageParameters], async (a, token) =>
+        {
+            string root = SourceProjectRoot ?? throw new StudioCommandException("no_project", "Open a source project first.");
+            long generation = ViewModel.WorkspaceGeneration;
+            var missions = await ReadSourceWorldMissionsAsync(root, token);
+            RequireSourceRead(root, generation, token);
+            return Page(missions, a, m => m, m => new { mission = m });
+        });
+        RegisterJob(r, "source_world_open", "Open or activate one source-project map by evaluating its gamegen entry script, glTF references, textures, resources and animation definitions directly in memory. A different clean map is replaced only after evaluation succeeds; dirty maps require save_document or explicit close_document discard first, and unfinished drafts refuse navigation. Opening, editing, undo_redo and save_document create no ZBD archives. Apply accepts in-memory source edits; save_document writes the owning project sources. Only export creates game archives. Evaluation problems are listed in problems.",
+            [P("mission", "string", "Mission folder from source_world_list, for example m1. Only one map remains open; save or explicitly close a dirty map before changing maps.", true)], true,
             async (a, token) => { var doc = await OpenSourceWorldAsync(Text(a, "mission"), token, automation: true); return Result(new { document = DocumentState(doc) }); });
         Register(r, "source_world_models", "List physical glTF models and map-owned logical aliases of the open source project, including pending edits, paged and filtered by path. Large paths shorten the page without shortening paths; follow nextOffset. A project replacement during inspection returns context_changed; retry for the current project.", false, [.. PageParameters], async (a, token) =>
         {
@@ -947,7 +1227,7 @@ public partial class MainWindow
             if (world.Workspace.ContentRevision != revision) throw new StudioCommandException("context_changed", "The source workspace changed during definition discovery; try again.");
             return SourceDefinitionPage(name, files, a);
         });
-        RegisterJob(r, "source_world_add_model", "Add a physical model or logical alias to a source world. A path already bound in the receiving mission uses that mission's geometry, references and zones; otherwise a unique donor closure is imported, and conflicting dependencies refuse the addition. Add it as one undoable change of the project's workspace: its folder's SetModelDirectory and a LoadGameGen line go before the line of gamegen/mN.gs that writes the world, with Object3DTranslate/Object3DRotate and AddChild under the world when placed. Without position the model is an unplaced root that resources such as aiv.zrd place copies of by name. Definition files are appended to data/mN/zrdr/anim.zad, keeping its comments and layout. The world rebuilds and the result is the replacement document; a change the world cannot be built with, or that makes another mission file fail or makes the game reject one (an animation bound to a node, attachment or effect this world lacks), returns build_failed and is taken back, as is one canceled before the replacement document is published to the workspace. Once published, the edit is accepted: the operation waits for its own preview transition, but later cancellation, navigation or preview failure does not retract it. Preview failures are reported in Problems. A stale world returns stale_document until reload_document. While a world of the project rebuilds, its other edits, undo_redo, save_document and reload_document return busy. Nothing is written until save_document. Completion definitionFiles previews keep at most 64 paths of 512 characters with definitionFileCount and definitionFilesTruncated; inputs and editing retain complete paths.",
+        RegisterJob(r, "source_world_add_model", "Add a physical model or logical alias to a source world. A path already bound in the receiving mission uses that mission's geometry, references and zones; otherwise a unique donor closure is imported, and conflicting dependencies refuse the addition. Add it as one undoable change of the project's workspace: its folder's SetModelDirectory and a LoadGameGen line go before the line of gamegen/mN.gs that writes the world, with Object3DTranslate/Object3DRotate and AddChild under the world when placed. Without position the model is an unplaced root that resources such as aiv.zrd place copies of by name. Definition files are appended to data/mN/zrdr/anim.zad, keeping its comments and layout. The world and its dependencies are evaluated in memory before acceptance; the result identifies the accepted document and revision. Structural changes may replace the presentation. An invalid source graph or animation binding is refused, and cancellation before acceptance leaves the workspace unchanged. Once published, the edit is accepted: the operation waits for its own preview transition, but later cancellation, navigation or preview failure does not retract it. Preview failures are reported in Problems. A stale world returns stale_document until reload_document. While a world of the project is evaluating, its other edits, undo_redo, save_document and reload_document return busy. Save_document writes the owning project sources; only export creates game archives. Completion definitionFiles previews keep at most 64 paths of 512 characters with definitionFileCount and definitionFilesTruncated; inputs and editing retain complete paths.",
             [DocumentParameter, RevisionParameter, P("model", "string", "Project path of the glTF model, as zstudio_source_world_models lists it (for example data/m2/models/bft/ltank.gltf).", true),
              P("name", "string", "Node name: 1–31 letters, digits, '_', '-' or '.'. Resources and animations find the model by it. A placed model's name must not also name a node inside the model, which AddChild would attach instead (build_failed).", true),
              new("position", "object", "Optional world position; omit for an unplaced root.", Properties: [P("x", "number", "World X.", true), P("y", "number", "World Y.", true), P("z", "number", "World Z.", true)]),

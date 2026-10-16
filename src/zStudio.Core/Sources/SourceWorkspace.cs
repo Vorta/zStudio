@@ -1,6 +1,6 @@
-using Recoil.Zbd.Core.Worlds;
+using zStudio.Core.Worlds;
 
-namespace Recoil.Zbd.Core.Sources;
+namespace zStudio.Core.Sources;
 
 /// <summary>One file of an accepted change: its project-relative path and its content before and after (null: the file does not exist).</summary>
 public sealed record SourceFileChange(string Relative, byte[]? Before, byte[]? After);

@@ -1,19 +1,21 @@
 using System.Numerics;
+using System.Buffers.Binary;
+using System.Text;
 using System.Security.Cryptography;
 using System.Text.Json.Nodes;
-using Recoil.Zbd.Core.Formats;
+using zStudio.Core.Formats;
 
-namespace Recoil.Zbd.Core.Export;
+namespace zStudio.Core.Export;
 
 public sealed record ModelBundleResult(string Directory, string Manifest, int Models, int Placements);
 
 public sealed partial class ExportService
 {
     /// <summary>All authored descendants, including inactive LODs and explicitly labeled collision helpers.</summary>
-    public Task<ModelBundleResult> ExportModelBundleAsync(ZbdDocument world, int rootIndex, string destination, string? preferredTexturePack = null, CancellationToken token = default)
+    public Task<ModelBundleResult> ExportModelBundleAsync(AssetDocument world, int rootIndex, string destination, string? preferredTexturePack = null, CancellationToken token = default)
         => ExportModelBundleAsync(world, rootIndex, destination, preferredTexturePack, token, new ModelBundleBudget(token));
 
-    internal async Task<ModelBundleResult> ExportModelBundleAsync(ZbdDocument world, int rootIndex, string destination, string? preferredTexturePack,
+    internal async Task<ModelBundleResult> ExportModelBundleAsync(AssetDocument world, int rootIndex, string destination, string? preferredTexturePack,
         CancellationToken token, ModelBundleBudget budget)
     {
         token.ThrowIfCancellationRequested();
@@ -51,7 +53,7 @@ public sealed partial class ExportService
             modelRows.Add(new JsonObject { ["modelIndex"] = index, ["memberIndex"] = owner?.Index, ["localModelIndex"] = owner?.Content is MechAssembly member ? index - member.FirstModel : null,
                 ["obj"] = $"local/model_{index}.obj", ["modelType"] = scene.Models[index].Metadata.Int("model_type"), ["nodes"] = JsonData.Integers(placements.Where(p => p.ModelIndex == index).Select(p => p.NodeIndex)) });
         }
-        var manifest = new JsonObject { ["version"] = 1, ["source"] = world.Path, ["sourceSha256"] = Convert.ToHexStringLower(SHA256.HashData(world.Bytes.Span)), ["rootNode"] = rootIndex,
+        var manifest = new JsonObject { ["version"] = 1, ["source"] = world.Path, ["sourceSha256"] = ModelBundleSourceIdentity(world, token), ["rootNode"] = rootIndex,
             ["coordinates"] = "Game-local +Y up, -Z forward. OBJ UV origin is bottom-left; zStudio restores game V on import. Local OBJ files have no node transforms baked in.",
             ["memberIndex"] = owner?.Index, ["models"] = modelRows, ["nodes"] = nodes, ["notes"] = "All authored descendants and LOD variants. Collision helpers are labeled, not replacement targets. Names are labels; indices and source SHA-256 identify records." };
         using DirectoryLease directories = new();
@@ -88,6 +90,28 @@ public sealed partial class ExportService
             finally { active.Remove(index); }
         }
         static JsonArray Matrix(Matrix4x4 m) => new(new[] { m.M11,m.M12,m.M13,m.M14,m.M21,m.M22,m.M23,m.M24,m.M31,m.M32,m.M33,m.M34,m.M41,m.M42,m.M43,m.M44 }.Select(v => JsonData.Number(v)).ToArray());
+    }
+
+    private static string ModelBundleSourceIdentity(AssetDocument world, CancellationToken token)
+    {
+        if (world is not zStudio.Core.Sources.SourceSceneSnapshot source)
+            return Convert.ToHexStringLower(SHA256.HashData(world.Bytes.Span));
+        // A source scene owns no serialized archive. Fingerprint the accepted dependency snapshot,
+        // including unsaved sources, rather than reading disk or hashing its empty byte buffer.
+        using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        Append("zStudio source scene v1"); Append(source.Mission);
+        foreach (var (path, contentHash) in source.ReadHashes.OrderBy(pair => pair.Key, StringComparer.Ordinal))
+        {
+            token.ThrowIfCancellationRequested(); Append(path); Append(contentHash);
+        }
+        return Convert.ToHexStringLower(hash.GetHashAndReset());
+        void Append(string value)
+        {
+            token.ThrowIfCancellationRequested();
+            byte[] bytes = Encoding.UTF8.GetBytes(value);
+            Span<byte> length = stackalloc byte[4]; BinaryPrimitives.WriteInt32LittleEndian(length, bytes.Length);
+            hash.AppendData(length); hash.AppendData(bytes);
+        }
     }
 
     /// <summary>Full manifest admission, including escaped text, indented scalar arrays and repeated identities.</summary>

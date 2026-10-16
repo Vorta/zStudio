@@ -2,7 +2,7 @@ using System.Globalization;
 using System.Numerics;
 using System.Text;
 
-namespace Recoil.Zbd.Core.Animation;
+namespace zStudio.Core.Animation;
 
 /// <summary>
 /// A keyframe script (<c>.zan</c>) for <c>OBJECT_MOTION_SI_SCRIPT</c>. The original scripts (exported from Softimage

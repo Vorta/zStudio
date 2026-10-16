@@ -3,12 +3,12 @@ using System.Numerics;
 using System.Text;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
-using Recoil.Zbd.Core.Gltf;
-using Recoil.Zbd.Core.Sources;
-using Recoil.Zbd.Core.Worlds;
+using zStudio.Core.Gltf;
+using zStudio.Core.Sources;
+using zStudio.Core.Worlds;
 using Xunit;
 
-namespace Recoil.Zbd.Tests;
+namespace zStudio.Tests;
 
 /// <summary>
 /// Every listing of a project's folders (data's mission folders, the folders a save writes into, the recovery and staging
@@ -118,24 +118,6 @@ public sealed class ScanTerrainRound7Tests
         Assert.Contains($"{SourcePublisher.StagingFolder} holds more than 35 files and folders", staging.Message);
         new SourcePublisher(project.Root).Publish(writes, "edit", Token);
         Assert.Equal("GRAVITY ( -4.9 )\n", File.ReadAllText(project.Full("data/m1/zrdr/ai.zrd")));
-    }
-
-    [Fact]
-    public void AbandonedWorldBuildsAreFoundByABoundedListing()
-    {
-        using Project project = new();
-        string previews = SourceWorlds.PreviewRoot(project.Root);
-        string old = Path.Combine(previews, "old"), locked = Path.Combine(previews, "locked"), fresh = Path.Combine(previews, "fresh");
-        foreach (string folder in new[] { old, locked, fresh }) Directory.CreateDirectory(folder);
-        File.WriteAllText(Path.Combine(locked, ".lock"), "");
-        File.WriteAllText(Path.Combine(previews, "stray.txt"), "");
-        foreach (string folder in new[] { old, locked }) Directory.SetCreationTimeUtc(folder, DateTime.UtcNow.AddMinutes(-5));
-        // Only the old folder no session holds; the new one may be a session's that has not locked it yet.
-        Assert.Equal([old], SourceWorlds.AbandonedBuilds(previews, Token));
-        var refused = Assert.Throws<IOException>(() => SourceWorlds.AbandonedBuilds(previews, 3, Token).ToList());
-        Assert.Contains("holds more than 3 files and folders", refused.Message);
-        Assert.ThrowsAny<OperationCanceledException>(() => SourceWorlds.AbandonedBuilds(previews, Canceled).ToList());
-        Assert.Empty(SourceWorlds.AbandonedBuilds(Path.Combine(previews, "missing"), Token));
     }
 
     [Fact]
@@ -295,12 +277,8 @@ public sealed class ScanTerrainRound7Tests
     }
 
     [Fact]
-    public void AnInstancesCopiesAreComparedWithoutCopyingTheFirstOnesValues()
+    public void SharedInstancesRejectDivergentValues()
     {
-        // The first copy states a long zoneFromLoad, which the comparison leaves out; it is not copied for each other copy.
-        var doc = Copies(300, i => i == 0 ? new() { ["instance"] = 1, [WorldGltf.ZoneFromLoad] = Zeros(50_000) } : new() { ["instance"] = 1 }, _ => null);
-        long allocated = Allocation(() => WorldGltf.CheckInstances(doc, "big.gltf"));
-        Assert.True(allocated < 64L * 1024 * 1024, $"Comparing allocated {allocated:N0} bytes.");
         // Values that differ are still found, a missing one as null, as before.
         var differing = Copies(2, i => new() { ["instance"] = 1, ["landmark"] = i == 0 }, _ => null);
         Assert.Contains("differ in the engine values of", Assert.Throws<InvalidDataException>(() => WorldGltf.CheckInstances(differing, "x.gltf")).Message);
@@ -309,7 +287,7 @@ public sealed class ScanTerrainRound7Tests
         var fewer = Copies(2, i => i == 1 ? new() { ["instance"] = 1 } : new() { ["instance"] = 1, ["landmark"] = true }, _ => null);
         Assert.Contains("differ in the engine values of", Assert.Throws<InvalidDataException>(() => WorldGltf.CheckInstances(fewer, "x.gltf")).Message);
         // What copies may write differently is left out, and a value missing from the other compares as null (as DeepEquals does).
-        WorldGltf.CheckInstances(Copies(2, i => new() { ["instance"] = 1, ["name"] = "copy", [WorldGltf.ZoneFromLoad] = i == 0 }, _ => null), "x.gltf");
+        WorldGltf.CheckInstances(Copies(2, i => new() { ["instance"] = 1, ["name"] = "copy" }, _ => null), "x.gltf");
         WorldGltf.CheckInstances(Copies(2, i => i == 0 ? new() { ["instance"] = 1, ["a"] = null } : new() { ["instance"] = 1, ["b"] = null }, _ => null), "x.gltf");
         WorldGltf.CheckInstances(Copies(2, i => i == 0 ? new() { ["instance"] = 1, ["landmark"] = false, ["declient"] = null }
             : new() { ["instance"] = 1 }, _ => null), "x.gltf");

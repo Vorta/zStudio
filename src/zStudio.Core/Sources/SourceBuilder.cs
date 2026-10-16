@@ -1,8 +1,8 @@
 using System.Text;
-using Recoil.Zbd.Core.Formats;
-using Recoil.Zbd.Core.Worlds;
+using zStudio.Core.Formats;
+using zStudio.Core.Worlds;
 
-namespace Recoil.Zbd.Core.Sources;
+namespace zStudio.Core.Sources;
 
 /// <summary>A game file that the source tree can build, and the source files it is built from.</summary>
 public sealed record SourceOutputPlan(string Path, string Family, IReadOnlyList<string> Inputs)
@@ -236,7 +236,7 @@ public static partial class SourceBuilder
     /// </summary>
     internal sealed class Snapshot(string root, IReadOnlyDictionary<string, byte[]>? overlay = null, Func<string, Exception>? changed = null,
         long maximumRetainedBytes = SourceExtractor.MaximumRetainedBytes, EffectLimits? effectLimits = null,
-        long inventoryLimit = InventoryBudget.MaximumUnits, CancellationToken inventoryToken = default)
+        long inventoryLimit = InventoryBudget.MaximumUnits, CancellationToken inventoryToken = default, bool retainModelSources = false)
     {
         private readonly (InventoryBudget Budget, PendingInventory Added) inventory = CapturePending(root, overlay, inventoryLimit, inventoryToken);
         internal InventoryBudget Inventory => inventory.Budget;
@@ -322,6 +322,21 @@ public static partial class SourceBuilder
         }
         private readonly Dictionary<string, (string Sha, FileStamp Stamp)> files = new(StringComparer.OrdinalIgnoreCase);
         internal IReadOnlyDictionary<string, string> Hashes() => files.ToDictionary(p => p.Key, p => p.Value.Sha, StringComparer.OrdinalIgnoreCase);
+        private readonly Dictionary<string, string> pendingHashes = new(StringComparer.OrdinalIgnoreCase);
+        internal Dictionary<string, byte[]> ModelSources { get; } = new(StringComparer.OrdinalIgnoreCase);
+        private byte[] RetainModelSource(string path, byte[] bytes)
+        {
+            if (retainModelSources && (path.EndsWith(".gltf", StringComparison.OrdinalIgnoreCase) || path.EndsWith(".glb", StringComparison.OrdinalIgnoreCase)) && !ModelSources.ContainsKey(path))
+            { Retain(bytes.LongLength); ModelSources.Add(path, bytes); }
+            return bytes;
+        }
+        /// <summary>Frozen bytes actually read, including accepted unsaved workspace sources.</summary>
+        internal IReadOnlyDictionary<string, string> ReadHashes()
+        {
+            Dictionary<string, string> result = new(pendingHashes, StringComparer.OrdinalIgnoreCase);
+            foreach (var (path, value) in files) result.Add(path, value.Sha);
+            return result;
+        }
         // Negative lookups affect compilation too (optional definitions, search paths and fallback resources).
         private readonly Dictionary<string, FileStamp?> probes = new(StringComparer.OrdinalIgnoreCase);
         /// <summary>Every project file the run read or asked about, from the overlay or the disk: what its outputs depend on.</summary>
@@ -414,7 +429,8 @@ public static partial class SourceBuilder
             if (overlay?.TryGetValue(relative, out var pending) == true)
             {
                 limits.Validate(pending);
-                return pending;
+                if (!pendingHashes.ContainsKey(relative)) { Retain(160); pendingHashes.Add(relative, SourceProject.Sha256(pending)); }
+                return RetainModelSource(relative, pending);
             }
             if (!Exists(relative)) throw new FileNotFoundException($"{relative} does not exist.");
             string path = SourceProject.Resolve(root, relative);
@@ -422,7 +438,7 @@ public static partial class SourceBuilder
             byte[] bytes = SourceRead.All(path, limits, token); string sha = SourceProject.Sha256(bytes);
             if (FileStamp.Read(path) != stamp) throw Changed(relative, $"{relative} changed while it was read; export again.");
             if (files.TryGetValue(relative, out var first) && (first.Sha != sha || first.Stamp != stamp)) throw Changed(relative, $"{relative} changed while exporting; export again.");
-            files[relative] = (sha, stamp); return bytes;
+            files[relative] = (sha, stamp); return RetainModelSource(relative, bytes);
         }
         /// <summary>The error for a project file that changed during the run: the run's own (see the constructor), else an export's <paramref name="message"/>.</summary>
         internal Exception Changed(string relative, string message) => changed?.Invoke(relative) ?? new InvalidDataException(message);
@@ -497,8 +513,11 @@ public static partial class SourceBuilder
         internal sealed record AssembledWorld(GameZWorld World, IReadOnlyList<string> Warnings, IReadOnlyDictionary<string, string> TextureFiles, IReadOnlyDictionary<string, int> TextureAddressing, IReadOnlyList<WorldNode> LoadedRoots)
         {
             public IReadOnlyDictionary<WorldNode, WorldNodeProvenance> Provenance { get; init; } = new Dictionary<WorldNode, WorldNodeProvenance>();
+            public SourceAuthoredHierarchy AuthoredHierarchy { get; init; } = SourceAuthoredHierarchy.Empty;
             public IReadOnlyDictionary<(string Script, int Line), int> Executions { get; init; } = new Dictionary<(string, int), int>();
             public SourceInstruction? WriteInstruction { get; init; }
+            public IReadOnlyDictionary<WorldNode, WorldNode[]> WorldChildOrder { get; init; } = new Dictionary<WorldNode, WorldNode[]>();
+            public IReadOnlySet<string> TerrainModelInputs { get; init; } = new HashSet<string>();
             /// <summary>The texture cycles the world's scripts set up after writing it, with the materials they are shown on.</summary>
             public IReadOnlyList<CycledTextures> TextureCycles { get; init; } = [];
         }
@@ -513,11 +532,12 @@ public static partial class SourceBuilder
                     WorldAssembler assembler = new(new ProjectFiles(this, root, overlay), token);
                     var world = assembler.Assemble($"{mission}.gs");
                     // Include per-node provenance and its applied instruction references, beside decoded geometry.
-                    Retain(SourceExtractor.Footprint(world) + 512L * assembler.Provenance.Count + 256L * assembler.Executions.Count
+                    Retain(SourceExtractor.Footprint(world) + 512L * assembler.Provenance.Count + 256L * assembler.Executions.Count + assembler.AuthoredHierarchyFootprint
                         + assembler.Provenance.Values.Sum(p => 128L * p.Applied.Count) + assembler.TextureCycles.Sum(c => 64L + 16L * c.Frames.Count));
                     cached = (new(world, assembler.Warnings, new Dictionary<string, string>(assembler.TextureFiles, StringComparer.OrdinalIgnoreCase),
                         new Dictionary<string, int>(assembler.TextureAddressing, StringComparer.OrdinalIgnoreCase), [.. assembler.LoadedRoots])
-                    { Provenance = assembler.Provenance, Executions = assembler.Executions, WriteInstruction = assembler.WriteInstruction, TextureCycles = assembler.TextureCycles }, null);
+                    { Provenance = assembler.Provenance, AuthoredHierarchy = assembler.AuthoredHierarchy(GameZWriter.NodeSlots(world, token)),
+                        Executions = assembler.Executions, WriteInstruction = assembler.WriteInstruction, TextureCycles = assembler.TextureCycles, WorldChildOrder = assembler.WorldChildOrder, TerrainModelInputs = assembler.TerrainModelInputs }, null);
                 }
                 catch (Exception ex) when (IsBuildFailure(ex)) { cached = (null, ex); }
                 worlds[mission] = cached;
@@ -1229,15 +1249,20 @@ public static partial class SourceBuilder
     /// </summary>
     private static (List<(string Input, string Name)> Inputs, IReadOnlyDictionary<string, int> Addressing, List<string> Warnings) PackInputs(SourceOutputPlan plan, Snapshot snapshot, CancellationToken token)
     {
-        List<(string Input, string Name)> inputs = [.. plan.Inputs.Select(input => (input, TextureName(input)))];
-        List<string> warnings = [];
         string mission = plan.Path.Split('/')[0];
-        if (!snapshot.HasWorld(mission)) return (inputs, new Dictionary<string, int>(), warnings);
+        return (TextureInputs(plan.Inputs, mission, snapshot, token), snapshot.HasWorld(mission) ? snapshot.TextureAddressing(mission, token) : new Dictionary<string, int>(), []);
+    }
+
+    /// <summary>Resolve physical texture identity identically for source display and game export.</summary>
+    internal static List<(string Input, string Name)> TextureInputs(IReadOnlyList<string> inputs, string mission, Snapshot snapshot, CancellationToken token)
+    {
+        List<(string Input, string Name)> resolved = [.. inputs.Select(input => (input, TextureName(input)))];
+        if (!snapshot.HasWorld(mission)) return resolved;
         var world = snapshot.World(mission, token);
-        HashSet<string> names = new(inputs.Select(i => i.Name), StringComparer.OrdinalIgnoreCase);
+        HashSet<string> names = new(resolved.Select(i => i.Name), StringComparer.OrdinalIgnoreCase);
         foreach (var (name, file) in world.TextureFiles.OrderBy(t => t.Key, StringComparer.Ordinal))
-            if (names.Add(name)) inputs.Add((file, name.ToLowerInvariant()));
-        return (inputs, snapshot.TextureAddressing(mission, token), warnings);
+            if (names.Add(name)) resolved.Add((file, name.ToLowerInvariant()));
+        return resolved;
     }
 
     /// <summary>

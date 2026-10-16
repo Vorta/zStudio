@@ -1,7 +1,7 @@
-using Recoil.Zbd.Core.Gltf;
-using Recoil.Zbd.Core.Worlds;
+using zStudio.Core.Gltf;
+using zStudio.Core.Worlds;
 
-namespace Recoil.Zbd.Core.Sources;
+namespace zStudio.Core.Sources;
 
 /// <summary>Checks an exclusive crater-mode edit against every mission that reads its shared model source.</summary>
 internal static class SourceDeclientEdits
@@ -21,7 +21,6 @@ internal static class SourceDeclientEdits
         Dictionary<string, IReadOnlyList<IReadOnlyList<string>>?> scripts = new(StringComparer.OrdinalIgnoreCase);
         Dictionary<string, bool> reaches = new(StringComparer.OrdinalIgnoreCase);
         HashSet<string> active = new(StringComparer.OrdinalIgnoreCase);
-        SourceMissionModels bindings = new(null, token);
         ProposedFiles files = new(workspace, plan, token);
         int checkedWorlds = 0;
         foreach (string world in inspection.Worlds().Order(StringComparer.OrdinalIgnoreCase))
@@ -64,7 +63,7 @@ internal static class SourceDeclientEdits
                 if (inspection.ReadModel(path) is not { } bytes) return reaches[path] = false;
                 inspection.ReserveWork(bytes.LongLength);
                 var hierarchy = GltfDocument.ReadHierarchy(bytes, token);
-                foreach (string child in bindings.Dependencies(path, hierarchy, inspection.ReserveWork))
+                foreach (string child in SourceMissionModels.Dependencies(path, hierarchy, inspection.ReserveWork))
                     if (Reaches(child, depth + 1)) return reaches[path] = true;
                 return reaches[path] = false;
             }

@@ -1,11 +1,11 @@
 using System.IO;
 using System.Text.Json.Nodes;
 using System.Windows;
-using Recoil.Zbd.Automation;
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Core.Formats;
+using zStudio.Automation;
+using zStudio.Core;
+using zStudio.Core.Formats;
 
-namespace Recoil.Zbd.Desktop;
+namespace zStudio.Desktop;
 
 public partial class MainWindow
 {

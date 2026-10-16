@@ -6,15 +6,18 @@ using System.Windows.Media.Media3D;
 using HelixToolkit;
 using HelixToolkit.SharpDX;
 using HelixToolkit.Wpf.SharpDX;
-using Recoil.Zbd.Core;
+using zStudio.Core;
 
-namespace Recoil.Zbd.Rendering;
+namespace zStudio.Rendering;
 
 public sealed record SceneInspection(string Target, int Node, int Model, int Material, long? RuntimeInstance,
     string? AiNode, Vector3? Surface, Vector3? Normal, Vector3? Origin, bool Active, double? Time)
 {
     /// <summary>Original polygon in the inspected model, resolved from the actual hit triangle.</summary>
     public int? Polygon { get; init; }
+    /// <summary>Selectable instance owning the physical hit. Node/Model/Polygon retain the actual surface.</summary>
+    public int? OwnerNode { get; init; }
+    public int SelectionNode => OwnerNode ?? Node;
 }
 
 public sealed partial class SceneViewport
@@ -28,7 +31,8 @@ public sealed partial class SceneViewport
     private sealed record InspectionStamp(Point? Pointer, ViewPose Pose, long Serial, string? Selected, bool InputBusy, double Width, double Height);
     private InspectionStamp? inspectionStamp;
     public string? InspectionSourcePath { get; private set; }
-    internal FrameworkElement RenderSurface => viewport;
+    /// <summary>The rendered 3D surface alone (without overlays), also the blurred backdrop behind the inspection panel.</summary>
+    public FrameworkElement RenderSurface => viewport;
     private Point? inspectionPointer;
     private DateTime inspectionTick;
     public SceneInspection? HoverInspection { get; private set; }
@@ -37,6 +41,13 @@ public sealed partial class SceneViewport
     /// <summary>Explicit card/source deselection, distinct from renderer replacement.</summary>
     public event Action? InspectionSelectionCleared;
     public Func<bool>? CanChangeInspection { get; set; }
+    /// <summary>Source editor's prepared instance ownership; identity for other preview modes.</summary>
+    public Func<int, int>? SelectionOwner { get; set; }
+    /// <summary>Immutable source-editor presentation overrides. Null uses initialized mission visibility.</summary>
+    public Func<int, bool?>? NodeVisibility { get; set; }
+    public bool AllowLockedInspection { get; set; }
+    public IReadOnlySet<int> VisibleSceneNodes { get; private set; } = new HashSet<int>();
+    public int SelectionNode(int node) => node < 0 ? node : SelectionOwner?.Invoke(node) ?? node;
     private UIElement? inspectionContent;
     public UIElement? InspectionContent
     {
@@ -61,7 +72,9 @@ public sealed partial class SceneViewport
         while (child != null)
         {
             if (ReferenceEquals(child, root)) return true;
-            child = child is System.Windows.Media.Visual or Visual3D ? System.Windows.Media.VisualTreeHelper.GetParent(child) : LogicalTreeHelper.GetParent(child);
+            // An open drop-down's list is in its own window: continue from the popup that owns it.
+            child = LogicalTreeHelper.GetParent(child) is System.Windows.Controls.Primitives.Popup popup ? popup
+                : child is System.Windows.Media.Visual or Visual3D ? System.Windows.Media.VisualTreeHelper.GetParent(child) : LogicalTreeHelper.GetParent(child);
         }
         return false;
     }
@@ -117,7 +130,8 @@ public sealed partial class SceneViewport
         }
         bool active = mesh.IsRendering && mesh.Visibility == Visibility.Visible && mesh.IsDepthClipEnabled;
         if (meta.Runtime == null) active &= visiblePlacements.TryGetValue(mesh, out var visible) && visible.Contains(placements[mesh][instance]);
-        return new(meta.Id + ":" + instance, node, model, meta.Material, meta.Runtime, null, null, null, active ? origin : null, active, animationFrame?.Time);
+        return new(meta.Id + ":" + instance, node, model, meta.Material, meta.Runtime, null, null, null, active ? origin : null, active, animationFrame?.Time)
+        { OwnerNode = SelectionNode(node) };
     }
     public SceneInspection? InspectTarget(string target)
     {
@@ -136,7 +150,7 @@ public sealed partial class SceneViewport
         SelectedInspection = next;
         if (next == null) { SelectAiNode(null); SelectPickup(null, false, true); FramingSelection = null; InspectionSelectionCleared?.Invoke(); }
         else if (next.AiNode is { } ai) SelectAiNode(ai);
-        else if (next is { Node: >= 0 } node) { SelectFramingNode(PickupAt(node.Node)?.Root ?? node.Node); NodeSelected?.Invoke(node.Node); }
+        else if (next is { Node: >= 0 } node) { SelectFramingNode(PickupAt(node.SelectionNode)?.Root ?? node.SelectionNode); NodeSelected?.Invoke(node.SelectionNode); }
         RefreshPickupSelection(); InspectionChanged?.Invoke(); return true;
     }
     public bool SelectInspectionNode(int node, long? runtime = null)
@@ -145,9 +159,9 @@ public sealed partial class SceneViewport
         foreach (var (mesh, meta) in inspectionMeshes)
         {
             if (runtime != null && meta.Runtime != runtime) continue;
-            if (meta.Runtime != null && meta.Node == node && InspectMesh(mesh, meta, 0)?.Active == true) return SelectInspection(meta.Id + ":0");
+            if (meta.Runtime != null && SelectionNode(meta.Node) == SelectionNode(node) && InspectMesh(mesh, meta, 0)?.Active == true) return SelectInspection(meta.Id + ":0");
             if (meta.Runtime == null && placements.TryGetValue(mesh, out var rows))
-                for (int i = 0; i < rows.Length; i++) if (rows[i].NodeIndex == node && visiblePlacements[mesh].Contains(rows[i])) return SelectInspection(meta.Id + ":" + i);
+                for (int i = 0; i < rows.Length; i++) if (SelectionNode(rows[i].NodeIndex) == SelectionNode(node) && visiblePlacements[mesh].Contains(rows[i])) return SelectInspection(meta.Id + ":" + i);
         }
         return false;
     }

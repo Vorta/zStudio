@@ -4,10 +4,10 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Windows;
 using System.Windows.Controls;
-using Recoil.Zbd.Automation;
-using Recoil.Zbd.Mcp;
+using zStudio.Automation;
+using zStudio.Mcp;
 
-namespace Recoil.Zbd.Desktop;
+namespace zStudio.Desktop;
 
 public partial class MainWindow
 {
@@ -131,7 +131,7 @@ public partial class MainWindow
         if (scene?.IsPickupDragging == true) throw new StudioCommandException("busy", "A pickup drag is in progress.");
     }
     private static object DocumentState(DocumentModel d) => DocumentState(d, includeContentDetails: true);
-    internal static object DocumentState(DocumentModel d, bool includeContentDetails) => new { id = d.SessionId, d.Path, d.Revision, d.IsDirty, d.IsStale, d.PickupsLocked, game = d.PreviewDocument.Game.ToString(), format = d.Document.Probe, assetCount = d.Assets.Count, selected = d.SelectedAsset?.Record.Id, d.LastSavedCopy, sourceWorld = SourceWorldState(d),
+    internal static object DocumentState(DocumentModel d, bool includeContentDetails) => new { id = d.SessionId, d.Path, d.Revision, d.IsDirty, d.IsStale, d.EditingLocked, game = d.PreviewDocument.Game.ToString(), format = d.Document.Probe, assetCount = d.Assets.Count, selected = d.SelectedAsset?.Record.Id, d.LastSavedCopy, sourceWorld = SourceWorldState(d),
         contentEdits = ContentState(d, includeContentDetails) };
     private static object? ContentState(DocumentModel d, bool includeDetails)
     {
@@ -197,6 +197,7 @@ public partial class MainWindow
         RegisterValveCommands(registry);
         RegisterInspectionCommands(registry);
         RegisterSceneTreeCommand(registry);
+        RegisterSourceMapPartCommands(registry);
         RegisterEditCommands(registry);
         RegisterModelCommands(registry);
         RegisterResourceCommands(registry);

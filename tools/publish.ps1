@@ -20,8 +20,7 @@ try {
     Assert-ArtifactPath $outputPath
     $preservedPaths = @($PreserveSuperseded | ForEach-Object { Assert-ArtifactPath $_; [IO.Path]::GetFullPath($_, $repository) })
     if (Test-Path -LiteralPath $outputPath) {
-        $existingApp = (Test-Path -LiteralPath (Join-Path $outputPath 'Recoil.Zbd.Studio.runtimeconfig.json')) -or
-                       (Test-Path -LiteralPath (Join-Path $outputPath 'dependencies/Recoil.Zbd.Studio.runtimeconfig.json'))
+        $existingApp = Test-Path -LiteralPath (Join-Path $outputPath 'dependencies/zStudio.Desktop.runtimeconfig.json')
         if (-not $existingApp) { throw "Refusing to replace a folder that is not a Studio publish: $outputPath" }
     }
     $stage = Join-Path $artifacts ('.studio-publish-' + [Guid]::NewGuid().ToString('N'))
@@ -58,8 +57,7 @@ try {
     foreach ($stale in @(Get-ChildItem -LiteralPath $parent -Directory -Filter ((Split-Path -Leaf $outputPath) + '.previous-*'))) {
         Assert-ArtifactPath $stale.FullName
         if ($stale.FullName -in $preservedPaths) { Write-Warning "Retaining explicitly protected superseded folder: $($stale.FullName)"; continue }
-        $studio = (Test-Path -LiteralPath (Join-Path $stale.FullName 'Recoil.Zbd.Studio.runtimeconfig.json')) -or
-                  (Test-Path -LiteralPath (Join-Path $stale.FullName 'dependencies/Recoil.Zbd.Studio.runtimeconfig.json'))
+        $studio = Test-Path -LiteralPath (Join-Path $stale.FullName 'dependencies/zStudio.Desktop.runtimeconfig.json')
         if (-not $studio) { Write-Warning "Not deleting a folder that is not a Studio publish: $($stale.FullName)"; continue }
         try { Remove-Item -LiteralPath $stale.FullName -Recurse -Force -ErrorAction Stop }
         catch { Write-Warning "Superseded build is still in use and will be deleted by the next publish: $($stale.FullName)" }

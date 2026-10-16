@@ -1,8 +1,8 @@
 using System.Text.Json.Nodes;
-using Recoil.Zbd.Core;
+using zStudio.Core;
 using Xunit;
 
-namespace Recoil.Zbd.Tests;
+namespace zStudio.Tests;
 
 public sealed class MissionActorIndexTests
 {
@@ -95,7 +95,7 @@ public sealed class MissionActorIndexTests
         scene.Nodes[0] = scene.Nodes[0] with { Name = "tank", Parents = [count + 1] };
         for (int i = 1; i <= count; i++) scene.Nodes.Add(new(i, "leaf", "object3d", null, [0], [], new() { ["flags"] = 8 }, new()));
         scene.Nodes.Add(new(count + 1, "world", "world", null, [], [0], new(), new()));
-        var world = new ZbdDocument("mission.zbd", new(0, DateTime.MinValue), new(FormatFamily.GameZ, 15, Recognition.Supported, "fixture"), ReadOnlyMemory<byte>.Empty) { Scene = scene };
+        var world = new AssetDocument("mission.zbd", new(0, DateTime.MinValue), new(FormatFamily.GameZ, 15, Recognition.Supported, "fixture"), ReadOnlyMemory<byte>.Empty) { Scene = scene };
         JsonNode[] rows = Enumerable.Range(0, count).SelectMany(i => new JsonNode[] { Str("tank"), Arr(Number(0), Arr(Number(i), Number(0), Number(0)), Number(0)) }).ToArray();
         var budget = new MissionPlacementBudget(Token);
         var result = MissionSceneLoader.BuildWithBudget(world, budget, null, Arr(rows), Arr(Str("tank"), Arr()), null, token: Token,

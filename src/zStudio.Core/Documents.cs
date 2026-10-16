@@ -3,7 +3,7 @@ using System.Runtime.InteropServices;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 
-namespace Recoil.Zbd.Core;
+namespace zStudio.Core;
 
 public enum FormatFamily { Unknown, TexturePack, Archive, Scripts, Animation, GameZ, Zrd, Wave }
 public enum Recognition { Supported, UnsupportedVersion, Malformed, Unknown }
@@ -65,8 +65,28 @@ public sealed class AssetRecord
     public override string ToString() => Name;
 }
 
-public sealed class ZbdDocument
+/// <summary>The semantic world input shared by source and compiled previews.</summary>
+public interface ISceneDocument
 {
+    string Path { get; }
+    GameVariant Game { get; }
+    GameScene? Scene { get; }
+    List<AssetRecord> Assets { get; }
+}
+
+public sealed class SceneDocument(string path, GameScene scene, GameVariant game = GameVariant.Recoil) : ISceneDocument
+{
+    public string Path { get; } = path;
+    public GameVariant Game { get; } = game;
+    public GameScene Scene { get; } = scene;
+    public List<AssetRecord> Assets { get; } = [new() { Id = new(path, AssetKind.World, 0), Name = "Whole world", Content = scene }];
+}
+
+public class AssetDocument : ISceneDocument
+{
+    protected AssetDocument(string path)
+        : this(path, FileStamp.Unverified, new(FormatFamily.GameZ, 15, Recognition.Supported, "Evaluated source world"), ReadOnlyMemory<byte>.Empty)
+    { SourceSyntax = "source-world"; }
     public string Path { get; }
     public FileStamp Stamp { get; }
     public FormatProbe Probe { get; }
@@ -82,7 +102,7 @@ public sealed class ZbdDocument
     public long? ArchiveDirectoryOffset { get; internal set; }
     public Animation.AnimationPackage? Animations { get; set; }
     public Formats.PreparedScriptPackage? Scripts { get; internal set; }
-    public ZbdDocument(string path, FileStamp stamp, FormatProbe probe, ReadOnlyMemory<byte> bytes)
+    public AssetDocument(string path, FileStamp stamp, FormatProbe probe, ReadOnlyMemory<byte> bytes)
     {
         Path = path; Stamp = stamp; Probe = probe; Bytes = bytes;
         Game = (probe.Family, probe.Version) switch

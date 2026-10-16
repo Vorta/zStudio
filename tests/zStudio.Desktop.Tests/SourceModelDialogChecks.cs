@@ -3,11 +3,11 @@ using System.Reflection;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Threading;
-using Recoil.Zbd.Core.Sources;
-using Recoil.Zbd.Desktop;
+using zStudio.Core.Sources;
+using zStudio.Desktop;
 using Xunit;
 
-namespace Recoil.Zbd.Desktop.Tests;
+namespace zStudio.Desktop.Tests;
 
 /// <summary>
 /// The Add model dialog of a large project: the model list is virtualized and says when a filter matches more models than it

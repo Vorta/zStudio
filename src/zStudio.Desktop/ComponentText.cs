@@ -1,7 +1,7 @@
 using System.Globalization;
 using System.IO;
 
-namespace Recoil.Zbd.Desktop;
+namespace zStudio.Desktop;
 
 /// <summary>Bound compound-field presentation and numeric parsing before splitting authored text.</summary>
 internal static class ComponentText

@@ -1,8 +1,8 @@
 using System.Text.Json.Nodes;
-using Recoil.Zbd.Core.Formats;
-using Recoil.Zbd.Core.Gltf;
+using zStudio.Core.Formats;
+using zStudio.Core.Gltf;
 
-namespace Recoil.Zbd.Core.Worlds;
+namespace zStudio.Core.Worlds;
 
 public static partial class WorldGltf
 {
@@ -78,116 +78,6 @@ public static partial class WorldGltf
 
         static IEnumerable<JsonObject> Primitives(JsonNode? mesh) => (mesh?["primitives"] as JsonArray ?? []).OfType<JsonObject>();
     }
-
-    /// <summary>
-    /// Takes back what <see cref="ApplyPresentation"/> wrote where a build could not tell it from an authored value, in a file
-    /// an editor wrote (a Blender export of a checkout), so the build reads the engine's material, also when the editor
-    /// dropped the engine attributes (Blender's Custom Properties off):
-    /// <list type="bullet">
-    /// <item>Alpha Clip (MASK) at the default 0.5 cutoff with an opaque base colour, in a material that records no texture
-    /// name, over a texture whose alpha is only 0 or 255 (or that has none): the packs draw that texture so (they key out the
-    /// texels below 128), so the material is opaque again. A clip at another cutoff, or over graded alpha (which the game
-    /// blends), stays for the build to refuse.</item>
-    /// <item>a hidden collision volume's material (<c>~hidden</c>, MASK with base alpha 0) that lost its recorded opacity:
-    /// it becomes the opaque material it was hidden from.</item>
-    /// </list>
-    /// <paramref name="texture"/> gives the transparency of an image by its unescaped URI (null when unknown); it is asked only
-    /// for the images of such clipped materials. Values of another shape are left alone. Returns whether the file changed.
-    /// </summary>
-    public static bool RemovePresentation(JsonObject root, Func<string, TextureTransparency?> texture)
-    {
-        if (root["materials"] is not JsonArray materials) return false;
-        var textures = root["textures"] as JsonArray ?? []; var images = root["images"] as JsonArray ?? [];
-        bool changed = false;
-        foreach (var material in materials.OfType<JsonObject>())
-        {
-            if (Text(material["alphaMode"]) != "MASK" || material["alphaCutoff"] is { } cutoff && Finite(cutoff) is not 0.5
-                || material["pbrMetallicRoughness"] is { } values && values is not JsonObject) continue;
-            var pbr = material["pbrMetallicRoughness"] as JsonObject;
-            var engine = (material["extras"] as JsonObject)?[Key] as JsonObject;
-            double? alpha = BaseAlpha(pbr);
-            if (alpha is 1 && engine?["texture"] == null)
-            {
-                // Read before the glTF reader has checked the file: entries of another shape are no image.
-                if (Index((pbr?["baseColorTexture"] as JsonObject)?["index"], textures.Count) is not { } t || Index((textures[t] as JsonObject)?["source"], images.Count) is not { } i
-                    || Text((images[i] as JsonObject)?["uri"]) is not { } uri || uri.StartsWith("data:", StringComparison.Ordinal)
-                    || texture(Uri.UnescapeDataString(uri)) is not (TextureTransparency.Keyed or TextureTransparency.Opaque)) continue;
-            }
-            else if (alpha is 0 && engine?["opacity"] == null && Text(material["name"]) is { } name && BlenderSuffix().Replace(name, "").EndsWith(HiddenSuffix, StringComparison.Ordinal))
-                ((JsonArray)pbr!["baseColorFactor"]!)[3] = 1.0;
-            else continue;
-            material.Remove("alphaMode"); material.Remove("alphaCutoff"); changed = true;
-        }
-        return changed;
-    }
-
-    /// <summary>
-    /// Makes the engine values a material records follow the standard glTF values an editor shows them by, in a file it wrote
-    /// (a Blender export of a checkout), wherever the two no longer agree: the editor changed them, and import would otherwise
-    /// keep the recorded value. Run after <see cref="RemovePresentation"/>.
-    /// <list type="bullet">
-    /// <item><c>color</c> of a material without a texture, by component, from the base colour (rounded to 0–255 as import
-    /// rounds it); a recorded component outside 0–255, which a glTF base colour cannot show, keeps its value while the
-    /// colour shows as the nearest it can.</item>
-    /// <item><c>opacity</c> from the alpha mode and base alpha: Alpha Blend gives its alpha, Alpha Clip 0 below the cutoff and
-    /// 255 otherwise, opaque 255. A hidden collision volume's material (<c>~hidden</c>, Alpha Clip with base alpha 0) shows
-    /// presentation, not its opacity, so its record stays.</item>
-    /// <item><c>backface</c> from <c>doubleSided</c> (Blender's Backface Culling off).</item>
-    /// </list>
-    /// Values of another shape are left alone (import refuses what it cannot read). Returns whether the file changed.
-    /// </summary>
-    public static bool FollowShownMaterials(JsonObject root)
-    {
-        if (root["materials"] is not JsonArray materials) return false;
-        bool changed = false;
-        foreach (var material in materials.OfType<JsonObject>())
-        {
-            if ((material["extras"] as JsonObject)?[Key] is not JsonObject engine || material["pbrMetallicRoughness"] is { } values && values is not JsonObject) continue;
-            var pbr = material["pbrMetallicRoughness"] as JsonObject;
-            var factor = BaseColor(pbr);
-            if (engine["texture"] == null && pbr?["baseColorTexture"] == null && engine["color"] is JsonArray { Count: 3 } color && factor != null)
-                for (int c = 0; c < 3; c++)
-                {
-                    if (Finite(color[c]) is not { } recorded) break;
-                    // Blender writes the float it read back; anything further from the shown value is the artist's colour.
-                    float shown = (float)factor[c] * 255;
-                    if (Math.Abs(shown - Math.Clamp(recorded, 0, 255)) <= 0.01) continue;
-                    color[c] = MathF.Round(shown); changed = true;
-                }
-            double? cutoff = material["alphaCutoff"] is { } given ? Finite(given) : 0.5;
-            if (Finite(engine["opacity"]) is { } opacity && factor != null && cutoff != null)
-            {
-                string mode = Text(material["alphaMode"]) ?? "OPAQUE";
-                double alpha = factor[3];
-                bool hidden = mode == "MASK" && alpha == 0 && Text(material["name"]) is { } name && BlenderSuffix().Replace(name, "").EndsWith(HiddenSuffix, StringComparison.Ordinal);
-                int shown = mode switch
-                {
-                    "MASK" => alpha < cutoff ? 0 : 255,
-                    "BLEND" when alpha < 1 => (int)Math.Clamp(MathF.Round((float)alpha * 255), 0, 255),
-                    _ => 255,
-                };
-                if (!hidden && shown != opacity) { engine["opacity"] = shown; changed = true; }
-            }
-            if (Switch(engine["backface"]) is { } backface)
-            {
-                bool shown = material["doubleSided"] is JsonValue sided && sided.TryGetValue(out bool doubleSided) && doubleSided;
-                if (shown != backface) { engine["backface"] = shown; changed = true; }
-            }
-        }
-        return changed;
-
-        // As import reads a switch: true or false, or an editor's integer 1 or 0.
-        static bool? Switch(JsonNode? node) => node is not JsonValue value ? null : value.TryGetValue(out bool flag) ? flag
-            : GltfInteger.TryInt64(value, out long whole) && whole is 0 or 1 ? whole == 1 : null;
-    }
-
-    /// <summary>A material's base colour factor (white and opaque when it has none), or null when it is malformed.</summary>
-    private static double[]? BaseColor(JsonObject? pbr) => pbr?["baseColorFactor"] switch
-    {
-        null => [1, 1, 1, 1],
-        JsonArray { Count: 4 } factor when factor.All(c => Finite(c) != null) => [.. factor.Select(c => Finite(c)!.Value)],
-        _ => null,
-    };
 
     /// <summary>
     /// Whether a node of this name is a pickup the game sets up and switches the collision volume of: a copy of a pickup

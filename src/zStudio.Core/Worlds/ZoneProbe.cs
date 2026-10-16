@@ -1,6 +1,6 @@
 using System.Numerics;
 
-namespace Recoil.Zbd.Core.Worlds;
+namespace zStudio.Core.Worlds;
 
 /// <summary>
 /// A zone set as the engine keeps it (zTag4): a count and three zone ids. A count of 0 carries no information and passes

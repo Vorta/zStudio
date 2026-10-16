@@ -1,7 +1,7 @@
 using System.Globalization;
 using System.Numerics;
 
-namespace Recoil.Zbd.Core;
+namespace zStudio.Core;
 
 public sealed record MissionResourceSource(string ArchivePath, int AssetIndex, string ResourceName);
 public sealed record MissionPickupSource(string ArchivePath, int AssetIndex, string ResourceName, int RecordIndex);

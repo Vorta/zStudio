@@ -1,9 +1,9 @@
-using Recoil.Zbd.Core.Formats;
+using zStudio.Core.Formats;
 using System.Runtime.InteropServices;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 
-namespace Recoil.Zbd.Core;
+namespace zStudio.Core;
 
 /// <summary>Explicit retained format families shared by preview loading and compiled edit history.</summary>
 internal sealed class RetainedDocumentBudget(long maximumBytes)
@@ -40,7 +40,7 @@ internal sealed class RetainedDocumentBudget(long maximumBytes)
             throw new InvalidDataException("The edited content has an unsupported backing buffer.");
         First(segment.Array, 32L + segment.Array.LongLength, token);
     }
-    internal void Document(ZbdDocument document, CancellationToken token)
+    internal void Document(AssetDocument document, CancellationToken token)
     {
         if (!First(document, 256L + 2L * document.Path.Length, token)) return;
         Json(document.Metadata, token);

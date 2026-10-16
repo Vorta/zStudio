@@ -3,9 +3,9 @@ using System.Text.Json.Nodes;
 using System.Windows;
 using System.Windows.Automation;
 using System.Windows.Controls;
-using Recoil.Zbd.Core;
+using zStudio.Core;
 
-namespace Recoil.Zbd.Desktop;
+namespace zStudio.Desktop;
 
 internal enum SceneInspectionBinding { None, AuthoredPosition, AuthoredRotation, AuthoredHeading }
 
@@ -57,16 +57,19 @@ internal sealed class SceneInspectionField : Grid
         SetColumn(copy, 1); Children.Add(copy);
     }
 
+    /// <summary>Whether the user can type here: an editable placement's bound fields, with or without a draft.</summary>
     internal void SetEditing(bool value)
     {
         editing = value && Binding != SceneInspectionBinding.None;
         foreach (var input in Inputs) { input.IsReadOnly = !editing; input.Opacity = editing ? 1 : .75; }
     }
+    /// <summary>A draft holds this field's input: refreshes must not overwrite it.</summary>
+    internal bool Pinned { get; set; }
 
     internal void Refresh(JsonNode? value, string display)
     {
         // Playback/hover refresh must not overwrite incomplete input, text selection or the caret.
-        if (editing) return;
+        if (Pinned) return;
         for (int i = 0; i < Inputs.Length; i++)
         {
             string text = Inputs.Length == 3 && value is JsonObject vector

@@ -1,4 +1,4 @@
-namespace Recoil.Zbd.Core.Worlds;
+namespace zStudio.Core.Worlds;
 
 /// <summary>
 /// What one world build may spend finding and reading its inputs, across all of its scripts and loads. Every existence

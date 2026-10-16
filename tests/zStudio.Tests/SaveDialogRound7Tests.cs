@@ -1,10 +1,10 @@
 using System.Collections.Concurrent;
 using System.IO;
 using System.Text;
-using Recoil.Zbd.Core.Sources;
+using zStudio.Core.Sources;
 using Xunit;
 
-namespace Recoil.Zbd.Tests;
+namespace zStudio.Tests;
 
 /// <summary>
 /// A source project's save published off the thread that edits it: the files are written on the thread pool while the

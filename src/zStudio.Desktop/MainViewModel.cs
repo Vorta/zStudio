@@ -3,12 +3,12 @@ using System.Globalization;
 using System.IO;
 using System.ComponentModel;
 using CommunityToolkit.Mvvm.ComponentModel;
-using Recoil.Zbd.Automation;
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Core.Formats;
-using Recoil.Zbd.Core.Sources;
+using zStudio.Automation;
+using zStudio.Core;
+using zStudio.Core.Formats;
+using zStudio.Core.Sources;
 
-namespace Recoil.Zbd.Desktop;
+namespace zStudio.Desktop;
 
 public sealed partial class MainViewModel : ObservableObject, IDisposable
 {
@@ -50,11 +50,11 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     internal long NavigationGeneration => navigationGeneration;
     internal long WorkspaceGeneration { get; private set; }
     internal long WorkspaceNavigationGeneration { get; private set; }
-    internal Func<string, CancellationToken, Task<ZbdDocument>> LoadDocumentAsync { get; set; } =
+    internal Func<string, CancellationToken, Task<AssetDocument>> LoadDocumentAsync { get; set; } =
         static (path, token) => Task.Run(() => FormatRegistry.Default.OpenAsync(path, token), token).WaitAsync(token);
     // Invoked on the preparation worker, before constructing any UI-bound views.
-    internal Action<ZbdDocument, CancellationToken>? PreparingDocument { get; set; }
-    private async Task<PreparedDocument> PrepareDocumentAsync(ZbdDocument document, CancellationToken token)
+    internal Action<AssetDocument, CancellationToken>? PreparingDocument { get; set; }
+    private async Task<PreparedDocument> PrepareDocumentAsync(AssetDocument document, CancellationToken token)
     {
         var preparing = PreparingDocument;
         using var preparation = CancellationTokenSource.CreateLinkedTokenSource(token);
@@ -168,6 +168,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     [ObservableProperty] private DocumentModel? selectedDocument;
     [ObservableProperty] private string globalQuery = "";
     [ObservableProperty] private bool hasRoot;
+    [ObservableProperty] private bool isSourceProject;
     [ObservableProperty] private bool searchIsLimited;
     public async Task OpenRootAsync(string root, CancellationToken cancellationToken = default, Action? beforePublish = null)
     {
@@ -178,7 +179,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         root = Path.GetFullPath(root);
         // Directory checks can block on unavailable network shares. Keep that work off
         // the dispatcher and abandon the wait on shutdown; it has no workspace effects.
-        bool exists;
+        bool exists, sourceProject = false;
         using (var preflight = CancellationTokenSource.CreateLinkedTokenSource(workspace.Token, cancellationToken))
         {
             try
@@ -186,7 +187,8 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
                 exists = await CheckRootExistsAsync(root, preflight.Token);
                 if (exists) await Task.Run(() =>
                 {
-                    if (SourceProject.IsProject(root)) SourceProject.RequireCurrentFormat(root, preflight.Token);
+                    sourceProject = SourceProject.IsProject(root);
+                    if (sourceProject) SourceProject.RequireCurrentFormat(root, preflight.Token);
                 }, preflight.Token).WaitAsync(preflight.Token);
             }
             catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
@@ -217,7 +219,8 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         using (var scan = CancellationTokenSource.CreateLinkedTokenSource(workspace.Token, cancellationToken))
         {
             var scanToken = scan.Token;
-            try { scanned = await Task.Run(() => ReadRootInventory(root, scanToken), scanToken).WaitAsync(scanToken); }
+            try { scanned = sourceProject ? new([], new(Path.GetFileName(root), root), new(StringComparer.OrdinalIgnoreCase))
+                : await Task.Run(() => ReadRootInventory(root, scanToken), scanToken).WaitAsync(scanToken); }
             catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
             { throw new StudioCommandException("context_changed", "The workspace changed while scanning the requested folder."); }
         }
@@ -245,7 +248,8 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
             catch (Exception ex) when (ex is ArgumentException or InvalidDataException or NotSupportedException or IOException or UnauthorizedAccessException) { }
         Files = []; Folders.Clear(); fileNodes.Clear(); otherOpenFiles = null; Diagnostics.Clear(); Problems.Clear(); SearchResults.Clear(); index.Clear();
         SearchIndexComplete = false; SearchIndexNotice = "Asset names are still being indexed; search and related results are incomplete.";
-        RootPath = root; HasRoot = true; IsBusy = true; WorkspaceNavigationGeneration = navigationGeneration; Status = "Scanning files…";
+        IsSourceProject = sourceProject;
+        RootPath = root; HasRoot = true; IsBusy = true; WorkspaceNavigationGeneration = navigationGeneration; Status = sourceProject ? "Choose a map" : "Scanning files…";
         RootOpenedWithoutPrompts = beforePublish != null;
         RootPublished?.Invoke();
         Settings.LastRoot = root; Settings.RecentRoots.RemoveAll(p => p.Equals(root, StringComparison.OrdinalIgnoreCase)); Settings.RecentRoots.Insert(0, root); Settings.RecentRoots = Settings.RecentRoots.Take(8).ToList();
@@ -253,6 +257,12 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         {
             // The scanned listing belongs to the published root, so it is shown even when the request is canceled now.
             workspaceToken.ThrowIfCancellationRequested();
+            if (sourceProject)
+            {
+                SearchIndexComplete = true;
+                SearchIndexNotice = "Source projects use the map picker; file and asset search is unavailable.";
+                return;
+            }
             Files = scanned.Files;
             foreach (var pair in scanned.FileNodes) fileNodes.Add(pair.Key, pair.Value);
             Folders.Add(scanned.Root);
@@ -317,6 +327,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     public async Task<DocumentModel?> OpenFileAsync(string path, CancellationToken cancellationToken = default, Action? beforePublish = null, bool activate = true, bool reportStatus = true)
     {
         cancellationToken.ThrowIfCancellationRequested();
+        if (IsSourceProject) throw new StudioCommandException("source_map_required", "Source projects open maps from the map picker. Open a compiled ZBD folder to browse individual files.");
         long generation = AdvanceNavigation();
         RequireCurrentNavigation(generation);
         path = Path.GetFullPath(path);

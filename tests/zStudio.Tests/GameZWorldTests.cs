@@ -1,11 +1,11 @@
 using System.Buffers.Binary;
 using System.Numerics;
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Core.Formats;
-using Recoil.Zbd.Core.Worlds;
+using zStudio.Core;
+using zStudio.Core.Formats;
+using zStudio.Core.Worlds;
 using Xunit;
 
-namespace Recoil.Zbd.Tests;
+namespace zStudio.Tests;
 
 public sealed class GameZWorldTests
 {
@@ -216,7 +216,7 @@ public sealed class GameZWorldTests
     }
 
     /// <summary>Bytes holding stale runtime pointers: node data/list pointers, model and polygon arrays, point vertices, light, world and area lists.</summary>
-    private static bool[] PointerMask(ZbdDocument doc, byte[] bytes)
+    private static bool[] PointerMask(AssetDocument doc, byte[] bytes)
     {
         bool[] mask = new bool[bytes.Length]; var l = doc.GameZLayout!;
         void Mark(long offset, int length) { for (int i = 0; i < length; i++) mask[offset + i] = true; }

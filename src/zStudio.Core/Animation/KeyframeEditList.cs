@@ -1,6 +1,6 @@
 using System.Collections;
 
-namespace Recoil.Zbd.Core.Animation;
+namespace zStudio.Core.Animation;
 
 /// <summary>An editable ordering over a lazy stream. Only explicitly accessed frames become mutable copies.</summary>
 public sealed class KeyframeEditList(IReadOnlyList<AnimationKeyframe> source) : IList<AnimationKeyframe>

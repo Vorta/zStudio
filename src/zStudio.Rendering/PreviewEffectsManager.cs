@@ -1,6 +1,6 @@
 using HelixToolkit.SharpDX;
 
-namespace Recoil.Zbd.Rendering;
+namespace zStudio.Rendering;
 
 /// <summary>Bounds Helix's synchronous D3DImage/device recovery callbacks.</summary>
 internal sealed class PreviewEffectsManager : DefaultEffectsManager, IEffectsManager

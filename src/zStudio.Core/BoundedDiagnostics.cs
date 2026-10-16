@@ -2,7 +2,7 @@ using System.Globalization;
 using System.Runtime.CompilerServices;
 using System.Text;
 
-namespace Recoil.Zbd.Core;
+namespace zStudio.Core;
 
 /// <summary>Operation-owned warning storage and formatting budget. Formatting is reserved before operands are evaluated.</summary>
 internal sealed class BoundedDiagnostics

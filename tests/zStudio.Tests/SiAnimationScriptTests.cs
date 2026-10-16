@@ -1,8 +1,8 @@
 using System.Text;
-using Recoil.Zbd.Core.Animation;
+using zStudio.Core.Animation;
 using Xunit;
 
-namespace Recoil.Zbd.Tests;
+namespace zStudio.Tests;
 
 /// <summary>
 /// SI Animation Scripts. The expected bits come from the reference model of the lost compiler that reproduces every

@@ -20,32 +20,38 @@ class glTF2ExportUserExtension:
     def gather_node_hook(self, node, obj, settings):
         if api()._exporting is None:
             return
-        if obj.get("zs_reference_helper"):
+        if api().state(obj).get("zs_reference_helper"):
             raise ValueError("A reference display helper reached the source exporter")
-        node.extras = {"recoil": api().collect(obj), "zstudio_blender": int(obj.get("zs_origin", -1)),
-                       "zstudio_editor_id": obj["zs_uid"],
-                       "zstudio_transform_changed": json.dumps([list(row) for row in obj.matrix_local]) != obj.get("zs_transform", "")}
-        node.name = obj.recoil.engine_name if "zs_file" in obj else obj.name
-        if "zs_placements" in obj:
-            node.extras["zstudio_placements"] = json.loads(obj["zs_placements"])
+        node.extras = {"recoil": api().collect(obj), "zstudio_blender": int(api().state(obj).get("zs_origin", -1)),
+                       "zstudio_editor_id": api().state(obj)["zs_uid"],
+                       "zstudio_transform_changed": json.dumps([list(row) for row in obj.matrix_local]) != api().state(obj).get("zs_transform", "")}
+        node.name = obj.recoil.engine_name if "zs_file" in api().state(obj) else obj.name
+        if "zs_placements" in api().state(obj):
+            node.extras["zstudio_placements"] = json.loads(api().state(obj)["zs_placements"])
 
     def gather_mesh_hook(self, mesh, blender_mesh, obj, vertex_groups, modifiers, materials, settings):
         if api()._exporting is not None:
-            mesh.extras = {"recoil": json.loads(blender_mesh.get("zs_recoil", "{}")),
-                           "zstudio_editor_id": blender_mesh.get("zs_export_uid", blender_mesh["zs_uid"] + (obj["zs_uid"] if obj and obj.modifiers else "")),
-                           "zstudio_blender": int(blender_mesh.get("zs_origin", -1)) if blender_mesh.get("zs_file") == api()._exporting["zs_path"] else -1}
+            api().require_graph(blender_mesh, api().state(api()._exporting)["zs_session"])
+            mesh.extras = {"recoil": json.loads(api().state(blender_mesh).get("zs_recoil", "{}")),
+                           "zstudio_editor_id": api().state(blender_mesh).get("zs_export_uid", api().state(blender_mesh)["zs_uid"] + (api().state(obj)["zs_uid"] if obj and obj.modifiers else "")),
+                           "zstudio_blender": int(api().state(blender_mesh).get("zs_origin", -1)) if api().state(blender_mesh).get("zs_file") == api().state(api()._exporting)["zs_path"] else -1}
 
     def gather_material_hook(self, material, blender_material, settings):
         if api()._exporting is not None:
-            values = json.loads(blender_material.get("zs_recoil", "{}"))
-            original = json.loads(blender_material.get("zs_original_recoil", "{}"))
-            surface = json.loads(blender_material.get("zs_surface", "{}"))
-            current = api().material_surface(blender_material)
+            api().require_graph(blender_material, api().state(api()._exporting)["zs_session"])
+            values = json.loads(api().state(blender_material).get("zs_recoil", "{}"))
+            original = json.loads(api().state(blender_material).get("zs_original_recoil", "{}"))
+            surface = json.loads(api().state(blender_material).get("zs_surface", "{}"))
+            current = api().material_surface(material)
             for field in ("color", "opacity", "backface"):
-                if current.get(field) != surface.get(field) and values.get(field) == original.get(field):
+                if not api().same_surface_value(current.get(field), surface.get(field)) and values.get(field) == original.get(field):
                     values.pop(field, None)
             material.extras = {"recoil": values,
-                               "zstudio_blender": int(blender_material.get("zs_origin", -1)) if blender_material.get("zs_file") == api()._exporting["zs_path"] else -1}
+                               "zstudio_blender": int(api().state(blender_material).get("zs_origin", -1)) if api().state(blender_material).get("zs_file") == api().state(api()._exporting)["zs_path"] else -1}
+            if "zs_file" in api().state(blender_material):
+                material.extras["zstudio_material_source"] = {
+                    "path": api().state(blender_material)["zs_file"],
+                    "index": int(api().state(blender_material)["zs_origin"])}
 
     def gather_image_hook(self, image, exported, sockets, settings):
         if api()._exporting is None:
@@ -53,18 +59,21 @@ class glTF2ExportUserExtension:
         images = {getattr(fill, "image", None) for fill in exported.fills.values()}
         if exported.original:
             images.add(exported.original)
-        paths = {i.get("zs_source_path") for i in images if i and i.get("zs_source_path")}
+        for source_image in images:
+            if source_image:
+                api().require_graph(source_image, api().state(api()._exporting)["zs_session"])
+        paths = {api().state(i).get("zs_source_path") for i in images if i and api().state(i).get("zs_source_path")}
         if len(paths) == 1:
             image.extras = {"zstudio_blender": paths.pop()}
-            missing = [i for i in images if i and i.get("zs_missing_file")]
+            missing = [i for i in images if i and api().state(i).get("zs_missing_file")]
             if len(missing) == 1 and len([i for i in images if i]) == 1 and tuple(missing[0].size) == (2, 2) \
-                    and json.dumps(list(missing[0].pixels)) == missing[0]["zs_missing_pixels"]:
+                    and json.dumps(list(missing[0].pixels)) == api().state(missing[0])["zs_missing_pixels"]:
                 image.extras["zstudio_missing_image"] = True
 
     def gather_scene_hook(self, scene, blender_scene, settings):
         if api()._exporting is not None:
             collection = api()._exporting
-            scene.extras = json.loads(collection.get("zs_scene_extras", "{}"))
+            scene.extras = json.loads(api().state(collection).get("zs_scene_extras", "{}"))
             recoil = scene.extras.setdefault("recoil", {})
             recoil["sourceFormat"] = 4
             recoil["loadRoot"] = api().collect(collection)
@@ -135,9 +144,10 @@ class RECOIL_OT_export(bpy.types.Operator):
         previous_mode = previous_object.mode if previous_object else "OBJECT"
         staging_scene = None
         staged_objects, staged_meshes = [], []
+        bindings = []
         try:
             _, data = api().session(context)
-            if any(s.get("zs_session") == data["id"] and "zs_placement" in s for s in bpy.data.scenes):
+            if any(api().state(s).get("zs_session") == data["id"] and "zs_placement" in api().state(s) for s in bpy.data.scenes):
                 raise ValueError("Accept or cancel placement zone edits before exporting")
             if context.object and context.object.mode != "OBJECT":
                 bpy.ops.object.mode_set(mode="OBJECT")
@@ -146,6 +156,9 @@ class RECOIL_OT_export(bpy.types.Operator):
                 raise ValueError("Choose a separate export destination")
             scratch = Path(tempfile.mkdtemp(prefix="zstudio-blender-export-"))
             payload = {"protocol": bridge.PROTOCOL, "session": data["folder"], "models": []}
+            # Binding one file can remap accepted zones on references in another.
+            # Snapshot the entire graph before the first file changes anything.
+            bindings = api().binding_snapshot([api().asset_collection(data, item["path"]) for item in data["models"]])
             for item in data["models"]:
                 collection = api().asset_collection(data, item["path"])
                 if any(value != 0 for value in collection.instance_offset):
@@ -154,19 +167,18 @@ class RECOIL_OT_export(bpy.types.Operator):
                 api().validate_reference_displays(data, collection)
             owned = {obj for item in data["models"] for obj in api().source_objects(api().asset_collection(data, item["path"]))}
             for scene in bpy.data.scenes:
-                if scene.get("zs_session") == data["id"] and any(obj not in owned for obj in scene.objects):
+                if api().state(scene).get("zs_session") == data["id"] and any(obj not in owned for obj in scene.objects):
                     raise ValueError("Objects outside a physical source collection cannot be exported. Move them into the intended source collection")
             assignments = placement_assignments(data)
             signatures = {}
             for item in data["models"]:
                 collection = api().asset_collection(data, item["path"])
-                api().bind_objects(collection)
                 staging_scene = bpy.data.scenes.new("RECOIL export staging")
                 context.window.scene = staging_scene
-                geometry_changed = bool(collection.get("zs_force_geometry"))
+                geometry_changed = bool(api().state(collection).get("zs_force_geometry"))
                 copies, mesh_copies = {}, {}
                 for obj in api().source_objects(collection):
-                    if obj.get("zs_reference_helper"):
+                    if api().state(obj).get("zs_reference_helper"):
                         continue
                     copied = obj.copy()
                     staged_objects.append(copied)
@@ -181,12 +193,12 @@ class RECOIL_OT_export(bpy.types.Operator):
                         mesh_key = (obj.data, obj if separate_mesh else None)
                         if mesh_key not in mesh_copies:
                             mesh_copies[mesh_key] = obj.data.copy()
-                            mesh_copies[mesh_key]["zs_export_uid"] = obj.data["zs_uid"] + (obj["zs_uid"] if separate_mesh else "")
+                            api().state(mesh_copies[mesh_key])["zs_export_uid"] = api().state(obj.data)["zs_uid"] + (api().state(obj)["zs_uid"] if separate_mesh else "")
                             staged_meshes.append(mesh_copies[mesh_key])
-                            partition_faces(assignments.get((item["path"], obj.data["zs_uid"]), []), mesh_copies[mesh_key])
+                            partition_faces(assignments.get((item["path"], api().state(obj.data)["zs_uid"]), []), mesh_copies[mesh_key])
                         copied.data = mesh_copies[mesh_key]
-                        geometry_changed |= api().mesh_signature(obj.data) != obj.data.get("zs_signature", "") or bool(obj.modifiers)
-                        geometry_changed |= any(s.link == "OBJECT" or (s.material and api().material_signature(s.material, signatures) != s.material.get("zs_signature", "")) for s in obj.material_slots)
+                        geometry_changed |= api().mesh_signature(obj.data) != api().state(obj.data).get("zs_signature", "") or bool(obj.modifiers)
+                        geometry_changed |= any(s.link == "OBJECT" or (s.material and api().material_signature(s.material, signatures) != api().state(s.material).get("zs_signature", "")) for s in obj.material_slots)
                         if obj.modifiers and obj.data.shape_keys:
                             raise ValueError("Apply modifiers explicitly before exporting a mesh with shape keys")
                 for original, copied in copies.items():
@@ -220,6 +232,7 @@ class RECOIL_OT_export(bpy.types.Operator):
             self.report({"INFO"}, "Exported RECOIL graph to " + result["root"])
             return {"FINISHED"}
         except Exception as error:
+            api().restore_bindings(bindings)
             self.report({"ERROR"}, str(error))
             return {"CANCELLED"}
         finally:
@@ -253,11 +266,11 @@ def placement_assignments(data):
     for item in data["models"]:
         owner_collection = collections[item["path"]]
         for owner in api().source_objects(owner_collection):
-            for edit in json.loads(owner.get("zs_placements", "[]")):
+            for edit in json.loads(api().state(owner).get("zs_placements", "[]")):
                 target = target_path(data, owner)
                 for origin in edit["chain"]:
                     nested = collections[target]
-                    holders = [o for o in api().source_objects(nested) if o.get("zs_uid") == origin]
+                    holders = [o for o in api().source_objects(nested) if api().state(o).get("zs_uid") == origin]
                     if len(holders) != 1:
                         raise ValueError("An edited reference was duplicated or removed; reopen its placement zones")
                     target = target_path(data, holders[0])

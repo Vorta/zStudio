@@ -1,6 +1,6 @@
 using System.Text;
 
-namespace Recoil.Zbd.Core.Formats;
+namespace zStudio.Core.Formats;
 
 public static class WaveDecoder
 {

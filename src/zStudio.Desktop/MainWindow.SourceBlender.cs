@@ -2,10 +2,10 @@ using System.Diagnostics;
 using System.IO;
 using System.Text.Json.Nodes;
 using System.Windows;
-using Recoil.Zbd.Automation;
-using Recoil.Zbd.Core.Sources;
+using zStudio.Automation;
+using zStudio.Core.Sources;
 
-namespace Recoil.Zbd.Desktop;
+namespace zStudio.Desktop;
 
 /// <summary>
 /// The Blender round trip of a source project: Edit in Blender copies a model into the project's zstudio/export folder;
@@ -17,7 +17,16 @@ public partial class MainWindow
     /// <summary>The model a source world's object comes from: its own glTF node, or the file its script loaded.</summary>
     private string? SourceObjectModel(DocumentModel doc, int node)
     {
-        var origin = DescribeSourceObject(doc, node).Origin;
+        if (doc.SourceWorld == null || doc.SourceBuild is not { } build)
+            throw new StudioCommandException("unsupported", "This document is not a source world.");
+        // Geometry checkout follows the physical referenced model, not the source placement wrapper's file.
+        // A runtime clone first resolves its template; resource placement text is never a glTF path.
+        if (doc == shownDocument && scene?.Mission is { } mission && node >= 0 && node < mission.SourceNodes.Count)
+            node = mission.SourceNodes[node];
+        var selection = SourceWorldModel(doc).Selection;
+        int owner = selection.Owners.GetValueOrDefault(node, node);
+        if (selection.Boundaries.GetValueOrDefault(owner)?.Source is { } model) return model;
+        if (!build.Provenance.TryGetValue(node, out var origin)) return null;
         // A helper script can load different models from the same line; the root records its own resolved file,
         // including when that model has an empty scene. Imported nodes keep their own model-file identity.
         return origin.ModelFile ?? origin.LoadedFile;
@@ -84,7 +93,7 @@ public partial class MainWindow
                     : SourceBlender.PlanUpdate(workspace, checkout, export, confirmConflict, ct);
                 // Scripts that turn or scale a node whose rotation or scale the export changes (theirs replace it), here or in other missions.
                 foreach (var (path, content) in plan.Changes.Where(c => c.Relative.EndsWith(".gltf", StringComparison.OrdinalIgnoreCase)))
-                    if (workspace.Read(path, ct, Recoil.Zbd.Core.Gltf.GltfDocument.MaximumJsonBytes) is { } current
+                    if (workspace.Read(path, ct, zStudio.Core.Gltf.GltfDocument.MaximumJsonBytes) is { } current
                         && SourceObjectEdits.ScriptTransformsReached(workspace, mission, path, current, content, provenance, ct) is { Count: > 0 } reached)
                         plan = plan with { Notes = [.. plan.Notes, .. reached] };
             }
@@ -267,7 +276,8 @@ public partial class MainWindow
 
     private static object BlenderExtensionInfo()
     {
-        string archive = Path.Combine(AppContext.BaseDirectory, "blender", "zstudio_recoil-0.1.0.zip");
+        string version = System.Reflection.CustomAttributeExtensions.GetCustomAttribute<System.Reflection.AssemblyInformationalVersionAttribute>(typeof(MainWindow).Assembly)!.InformationalVersion.Split('+')[0];
+        string archive = Path.Combine(AppContext.BaseDirectory, "blender", $"zstudio_recoil-{version}.zip");
         return new { archive, available = File.Exists(archive), blenderMin = "5.2.0", blenderMaxExclusive = "5.3.0", protocol = SourceBlender.GraphProtocol,
             helper = Environment.ProcessPath, install = "Blender Preferences → Get Extensions → Install from Disk; select the archive, then set the extension's zStudio executable preference." };
     }

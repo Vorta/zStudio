@@ -1,12 +1,12 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Core.Formats;
-using Recoil.Zbd.Core.Sources;
-using Recoil.Zbd.Core.Worlds;
+using zStudio.Core;
+using zStudio.Core.Formats;
+using zStudio.Core.Sources;
+using zStudio.Core.Worlds;
 using Xunit;
 
-namespace Recoil.Zbd.Tests;
+namespace zStudio.Tests;
 
 public sealed class InstanceZoneLookupTests
 {
@@ -66,6 +66,43 @@ public sealed class InstanceZoneLookupTests
         Assert.Equal(before, source.Keys.Select(n => n.Zone));
     }
 
+    [Fact]
+    public async Task ImportRecordsWhichNodeSuppliedAnInheritedZone()
+    {
+        using SourceWorldFixture fixture = new();
+        const string path = "data/m1/models/m1.gltf";
+        static JsonObject Zone(JsonNode zone) => new() { ["recoil"] = new JsonObject { ["zone"] = zone } };
+        JsonArray nodes =
+        [
+            new JsonObject { ["name"] = "group_a", ["children"] = new JsonArray(1), ["extras"] = Zone(7) },
+            new JsonObject { ["name"] = "inner", ["children"] = new JsonArray(2) },
+            new JsonObject { ["name"] = "leaf", ["extras"] = Zone("inherit") },
+            new JsonObject { ["name"] = "loose" },
+            new JsonObject { ["name"] = "own", ["extras"] = Zone("any") },
+            // A shared node first defined as a root keeps the load root's zone, although a later root holds a copy.
+            new JsonObject { ["name"] = "shared", ["extras"] = new JsonObject { ["recoil"] = new JsonObject { ["instance"] = 1 } } },
+            new JsonObject { ["name"] = "holder", ["children"] = new JsonArray(7), ["extras"] = Zone(3) },
+            new JsonObject { ["name"] = "shared", ["extras"] = new JsonObject { ["recoil"] = new JsonObject { ["instance"] = 1 } } },
+        ];
+        fixture.Write(path, JsonSerializer.SerializeToUtf8Bytes(new JsonObject { ["asset"] = new JsonObject { ["version"] = "2.0" }, ["scene"] = 0,
+            ["scenes"] = new JsonArray(new JsonObject { ["nodes"] = new JsonArray(0, 3, 4, 5, 6) }), ["nodes"] = nodes }));
+        var build = await SourceWorlds.LoadSceneAsync(fixture.Project, "m1", new SourceWorkspace(fixture.Project).Overlay(), token: Token);
+        Assert.NotNull(build.Scene);
+        // Database groups are freed by the build; their provenance still names the supplier.
+        var origins = build.Provenance.Values.Concat(build.BuildState.Freed).Where(p => p.ModelFile == path).ToDictionary(p => p.ModelNodeName!);
+        Assert.False(origins["group_a"].ImportedZoneInherited);
+        Assert.Same(origins["group_a"], origins["inner"].ImportedZoneSupplier);
+        Assert.Same(origins["group_a"], origins["leaf"].ImportedZoneSupplier);
+        Assert.Equal(7u, origins["leaf"].ImportedZoneWord & 255);
+        Assert.True(origins["loose"].ImportedZoneInherited);
+        Assert.Equal(path, origins["loose"].ImportedZoneSupplier!.LoadedFile);
+        Assert.False(origins["own"].ImportedZoneInherited);
+        Assert.Null(origins["own"].ImportedZoneSupplier);
+        Assert.Equal(255u, origins["own"].ImportedZoneWord & 255);
+        Assert.Equal(path, origins["shared"].ImportedZoneSupplier!.LoadedFile);
+        Assert.Equal(255u, origins["shared"].ImportedZoneWord & 255);
+    }
+
     [Theory]
     [InlineData("delete")]
     [InlineData("move")]
@@ -113,14 +150,12 @@ public sealed class InstanceZoneLookupTests
 
         static JsonObject Leaf(int mark) => new() { ["name"] = "leaf" + mark,
             ["extras"] = new JsonObject { ["recoil"] = new JsonObject { ["instance"] = mark + 1 } } };
-        async Task<(SourceWorldBuild, GameZWorld)> Build()
+        async Task<(SourceSceneState, GameZWorld)> Build()
         {
-            var result = await SourceWorlds.BuildPreviewAsync(fixture.Project, "m1",
-                Path.Combine(SourceWorlds.PreviewRoot(fixture.Project), "p-" + Guid.NewGuid().ToString("N")), workspace.Overlay(), token: Token);
-            Assert.Null(result.Outputs.FirstOrDefault(o => o.Error != null)?.Error);
-            var parsed = GameZWorldReader.FromDocument(FormatRegistry.Default.OpenBytes("gamez.zbd",
-                await File.ReadAllBytesAsync(result.WorldPath, Token), token: Token), Token);
-            return (result, parsed);
+            var result = await SourceWorlds.LoadSceneAsync(fixture.Project, "m1", workspace.Overlay(), token: Token);
+            Assert.NotNull(result.Scene);
+            var parsed = result.World;
+            return (result.BuildState, parsed);
         }
     }
 }

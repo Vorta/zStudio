@@ -147,7 +147,7 @@ dotnet test --solution zStudio.slnx -c Release
 ./tools/publish.ps1
 ```
 
-The solution separates binary readers/exporters (`zStudio.Core`), Direct3D preview (`zStudio.Rendering`), WPF/audio (`zStudio.Desktop`), tests, and verification runners. Project folders and files use `zStudio.*`; existing `Recoil.Zbd.*` assembly names and namespaces remain stable for runtime and resource compatibility. Normal builds and unit tests require no game files or Python. Optional corpus and GPU/audio checks use your own game data. See [architecture and format evidence](docs/architecture.md), [verification commands](docs/testing.md), and [current status](docs/status.md).
+The solution separates binary readers/exporters (`zStudio.Core`), Direct3D preview (`zStudio.Rendering`), WPF/audio (`zStudio.Desktop`), tests, and verification runners. Project folders, assemblies and namespaces use `zStudio.*`. Settings and logs live in `%LOCALAPPDATA%/zStudio`; previous-version settings are not imported. Normal builds and unit tests require no game files or Python. Optional corpus and GPU/audio checks use your own game data. See [architecture and format evidence](docs/architecture.md), [verification commands](docs/testing.md), and [current status](docs/status.md).
 
 ## Current limits
 

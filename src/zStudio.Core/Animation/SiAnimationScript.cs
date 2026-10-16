@@ -2,7 +2,7 @@ using System.Globalization;
 using System.Numerics;
 using System.Text;
 
-namespace Recoil.Zbd.Core.Animation;
+namespace zStudio.Core.Animation;
 
 /// <summary>
 /// RECOIL's original keyframe scripts: Softimage "SI Animation Script" text exported per scene, compiled by a lost tool

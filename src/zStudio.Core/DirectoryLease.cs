@@ -4,7 +4,7 @@ using System.Text;
 using System.Runtime.InteropServices;
 using Microsoft.Win32.SafeHandles;
 
-namespace Recoil.Zbd.Core;
+namespace zStudio.Core;
 
 /// <summary>
 /// Keeps ordinary directory ancestors in place while path-based file operations use them. On Windows each component is

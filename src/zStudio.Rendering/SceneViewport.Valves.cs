@@ -1,10 +1,10 @@
 using System.Numerics;
 using System.Windows.Media.Media3D;
 using HelixToolkit.Maths;
-using Recoil.Zbd.Core;
+using zStudio.Core;
 using MeshGeometry3D = HelixToolkit.SharpDX.MeshGeometry3D;
 
-namespace Recoil.Zbd.Rendering;
+namespace zStudio.Rendering;
 
 public sealed partial class SceneViewport
 {

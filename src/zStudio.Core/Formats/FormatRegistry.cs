@@ -1,11 +1,11 @@
 using System.Buffers.Binary;
 
-namespace Recoil.Zbd.Core.Formats;
+namespace zStudio.Core.Formats;
 
 public interface IZbdFormatReader
 {
     FormatFamily Family { get; }
-    void Read(ZbdDocument document, CancellationToken cancellationToken);
+    void Read(AssetDocument document, CancellationToken cancellationToken);
 }
 
 public sealed class FormatRegistry
@@ -85,8 +85,8 @@ public sealed class FormatRegistry
         return new(FormatFamily.Unknown, null, Recognition.Unknown, "Unrecognized format · raw inspection available");
     }
 
-    public Task<ZbdDocument> OpenAsync(string path, CancellationToken token = default) => OpenAsync(path, MaximumDocumentBytes, token);
-    internal async Task<ZbdDocument> OpenAsync(string path, long maximumBytes, CancellationToken token)
+    public Task<AssetDocument> OpenAsync(string path, CancellationToken token = default) => OpenAsync(path, MaximumDocumentBytes, token);
+    internal async Task<AssetDocument> OpenAsync(string path, long maximumBytes, CancellationToken token)
     {
         if (maximumBytes < 0 || maximumBytes > MaximumDocumentBytes) throw new ArgumentOutOfRangeException(nameof(maximumBytes));
         path = System.IO.Path.GetFullPath(path);
@@ -96,11 +96,11 @@ public sealed class FormatRegistry
         if (FileStamp.Read(path) != stamp) throw new IOException("The file changed while opening. Reload it to read a consistent snapshot.");
         return await Task.Run(() => OpenBytes(path, bytes, stamp, token), token).ConfigureAwait(false);
     }
-    public ZbdDocument OpenBytes(string path, byte[] bytes, FileStamp? stamp = null, CancellationToken token = default)
+    public AssetDocument OpenBytes(string path, byte[] bytes, FileStamp? stamp = null, CancellationToken token = default)
     {
         ValidateDocumentSize(bytes.LongLength);
         var probe = Probe(bytes.AsSpan(0, Math.Min(36, bytes.Length)), bytes.AsSpan(Math.Max(0, bytes.Length - 8)), bytes.Length, System.IO.Path.GetExtension(path));
-        ZbdDocument doc = new(path, stamp ?? new(bytes.Length, DateTime.MinValue), probe, bytes);
+        AssetDocument doc = new(path, stamp ?? new(bytes.Length, DateTime.MinValue), probe, bytes);
         doc.Metadata["family"] = probe.Family.ToString(); doc.Metadata["version"] = probe.Version; doc.Metadata["file_size"] = bytes.Length;
         if (probe.Recognition is Recognition.UnsupportedVersion or Recognition.Malformed)
         {

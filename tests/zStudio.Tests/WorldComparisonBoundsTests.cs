@@ -1,8 +1,8 @@
 using System.Numerics;
-using Recoil.Zbd.Core.Worlds;
+using zStudio.Core.Worlds;
 using Xunit;
 
-namespace Recoil.Zbd.Tests;
+namespace zStudio.Tests;
 
 /// <summary>
 /// Comparing worlds stays within bounded work and memory on worlds far from retail sizes (deep shared hierarchies, many

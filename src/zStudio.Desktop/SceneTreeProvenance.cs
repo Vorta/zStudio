@@ -1,8 +1,8 @@
 using System.Buffers.Binary;
 using System.Security.Cryptography;
-using Recoil.Zbd.Core;
+using zStudio.Core;
 
-namespace Recoil.Zbd.Desktop;
+namespace zStudio.Desktop;
 
 /// <summary>Compact presentation keys; complete source records remain authoritative for all edits.</summary>
 internal sealed class SceneTreeProvenance

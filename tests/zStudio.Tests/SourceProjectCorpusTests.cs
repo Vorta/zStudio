@@ -1,12 +1,12 @@
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Core.Animation;
-using Recoil.Zbd.Core.Formats;
-using Recoil.Zbd.Core.Sources;
-using Recoil.Zbd.Core.Worlds;
+using zStudio.Core;
+using zStudio.Core.Animation;
+using zStudio.Core.Formats;
+using zStudio.Core.Sources;
+using zStudio.Core.Worlds;
 using System.Text.Json.Nodes;
 using Xunit;
 
-namespace Recoil.Zbd.Tests;
+namespace zStudio.Tests;
 
 public sealed class SourceProjectCorpusTests
 {
@@ -80,7 +80,7 @@ public sealed class SourceProjectCorpusTests
             Assert.True(File.Exists(Path.Combine(project, "data", "m1", "zrdr", "anim.zad")));
             Assert.True(File.Exists(Path.Combine(project, "data", "common", "zrdr", "pickup.zad")));
             Assert.All(Directory.GetFiles(Path.Combine(project, "data"), "*.zrd", SearchOption.AllDirectories), f =>
-                Assert.False(Recoil.Zbd.Core.Animation.AnimationDefinitionSet.HoldsDefinitions(ZrdText.LooksLikeText(File.ReadAllBytes(f)) ? ZrdText.Parse(File.ReadAllBytes(f), Token) : ZrdDecoder.Read(File.ReadAllBytes(f), Token)), f));
+                Assert.False(zStudio.Core.Animation.AnimationDefinitionSet.HoldsDefinitions(ZrdText.LooksLikeText(File.ReadAllBytes(f)) ? ZrdText.Parse(File.ReadAllBytes(f), Token) : ZrdDecoder.Read(File.ReadAllBytes(f), Token)), f));
 
             var export = await SourceBuilder.ExportAsync(project, exported, token: Token);
             Assert.Equal(0, export.Failed);
@@ -93,8 +93,8 @@ public sealed class SourceProjectCorpusTests
                 // The shipped resources without the animation definitions, which stay in the project.
                 Dictionary<string, byte[]> expected = new(StringComparer.OrdinalIgnoreCase);
                 foreach (var (name, bytes) in Members(archive))
-                    if (ZrdDecoder.TryRead(bytes, Token) is { } tree && Recoil.Zbd.Core.Animation.AnimationDefinitionSet.HoldsDefinitions(tree))
-                    { if (Recoil.Zbd.Core.Animation.AnimationDefinitionSet.Split(tree).Others is { } others) expected[name] = ZrdWriter.Write(others, Token); }
+                    if (ZrdDecoder.TryRead(bytes, Token) is { } tree && zStudio.Core.Animation.AnimationDefinitionSet.HoldsDefinitions(tree))
+                    { if (zStudio.Core.Animation.AnimationDefinitionSet.Split(tree).Others is { } others) expected[name] = ZrdWriter.Write(others, Token); }
                     else expected[name] = bytes;
                 Assert.Equal(expected.Keys.Order(StringComparer.OrdinalIgnoreCase), built.Keys.Order(StringComparer.OrdinalIgnoreCase));
                 Assert.All(expected, m => Assert.Equal(m.Value, built[m.Key]));
@@ -102,10 +102,10 @@ public sealed class SourceProjectCorpusTests
             // Animations rebuilt from the definitions and keyframe scripts match every shipped entry.
             foreach (string animations in Directory.GetFiles(corpus, "anim.zbd", SearchOption.AllDirectories))
             {
-                var shipped = Recoil.Zbd.Core.Animation.AnimationPackage.Read(File.ReadAllBytes(animations), Token);
-                var built = Recoil.Zbd.Core.Animation.AnimationPackage.Read(File.ReadAllBytes(Path.Combine(exported, Path.GetRelativePath(corpus, animations))), Token);
+                var shipped = zStudio.Core.Animation.AnimationPackage.Read(File.ReadAllBytes(animations), Token);
+                var built = zStudio.Core.Animation.AnimationPackage.Read(File.ReadAllBytes(Path.Combine(exported, Path.GetRelativePath(corpus, animations))), Token);
                 Assert.Equal(shipped.Entries.Select(e => e.Name), built.Entries.Select(e => e.Name));
-                Assert.All(Enumerable.Range(1, shipped.Entries.Count - 1), i => Assert.Null(Recoil.Zbd.Core.Animation.AnimationComparer.Difference(shipped.Entries[i], built.Entries[i], Token)));
+                Assert.All(Enumerable.Range(1, shipped.Entries.Count - 1), i => Assert.Null(zStudio.Core.Animation.AnimationComparer.Difference(shipped.Entries[i], built.Entries[i], Token)));
             }
             // Worlds rebuilt by their scripts have the shipped nodes, placements, flags, cells, models and textures; only the
             // grouping of coplanar triangles into polygons may differ, which draws the same surfaces.
@@ -152,7 +152,7 @@ public sealed class SourceProjectCorpusTests
             // Every keyframe script is the SI Animation Script the shipped keyframes came from.
             var scriptsWritten = Directory.GetFiles(Path.Combine(project, "data"), "*.zan", SearchOption.AllDirectories);
             Assert.NotEmpty(scriptsWritten);
-            Assert.All(scriptsWritten, s => Assert.True(Recoil.Zbd.Core.Animation.SiAnimationScript.Recognize(File.ReadAllBytes(s), TestContext.Current.CancellationToken), s));
+            Assert.All(scriptsWritten, s => Assert.True(zStudio.Core.Animation.SiAnimationScript.Recognize(File.ReadAllBytes(s), TestContext.Current.CancellationToken), s));
             // The shipped files are stamped, so their scripts carry the DKit messages of their exporter.
             Assert.All(scriptsWritten, s => Assert.Contains("\r\nWarning, file version ", File.ReadAllText(s, System.Text.Encoding.Latin1)));
 
@@ -187,7 +187,7 @@ public sealed class SourceProjectCorpusTests
                 var names = FormatRegistry.Default.OpenBytes(pack, File.ReadAllBytes(Path.Combine(added, "m1", pack)), token: Token).Assets.Select(a => a.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
                 Assert.All(textures, t => Assert.Contains(t, names));
             }
-            var package = Recoil.Zbd.Core.Animation.AnimationPackage.Read(File.ReadAllBytes(Path.Combine(added, "m1", "anim.zbd")), Token);
+            var package = zStudio.Core.Animation.AnimationPackage.Read(File.ReadAllBytes(Path.Combine(added, "m1", "anim.zbd")), Token);
             if (definitions.Count > 0) Assert.Contains(package.Entries, e => e.RootName == vehicle.Name);
             void Collect(WorldNode node, int depth)
             {

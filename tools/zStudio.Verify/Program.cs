@@ -1,10 +1,10 @@
 using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text.Json;
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Core.Formats;
+using zStudio.Core;
+using zStudio.Core.Formats;
 
-if (args.Length == 0) { Console.Error.WriteLine("Usage: Recoil.Zbd.Verify <dataset-root> [...]"); return 2; }
+if (args.Length == 0) { Console.Error.WriteLine("Usage: zStudio.Verify <dataset-root> [...]"); return 2; }
 int errors = 0, fileCount = 0, textures = 0; Stopwatch timer = Stopwatch.StartNew(); List<object> results = [];
 foreach (string root in args)
 {

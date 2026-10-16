@@ -8,10 +8,10 @@ using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Threading;
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Core.Export;
+using zStudio.Core;
+using zStudio.Core.Export;
 
-namespace Recoil.Zbd.Desktop;
+namespace zStudio.Desktop;
 
 /// <summary>A single explicitly targeted inspector; selection and preview lifetime never own its content.</summary>
 public sealed class PropertiesWindow : Window

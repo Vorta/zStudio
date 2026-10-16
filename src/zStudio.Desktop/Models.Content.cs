@@ -1,8 +1,8 @@
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Core.Formats;
+using zStudio.Core;
+using zStudio.Core.Formats;
 using System.IO;
 
-namespace Recoil.Zbd.Desktop;
+namespace zStudio.Desktop;
 
 public sealed partial class DocumentModel
 {
@@ -10,11 +10,11 @@ public sealed partial class DocumentModel
     public ScriptEditSession? ScriptEdits { get; private set; }
     public ContentEditSession? ContentEdits => (ContentEditSession?)ScriptEdits ?? TextureEdits;
     public event Action? ContentEditsChanged;
-    private ZbdDocument? contentMirror;
+    private AssetDocument? contentMirror;
     private long mirrorGeneration;
     internal Task ContentMirrorWork { get; private set; } = Task.CompletedTask;
     public bool IsContentMirror => contentMirror != null;
-    private void InitializeContentEdits(ZbdDocument doc)
+    private void InitializeContentEdits(AssetDocument doc)
     {
         if (doc.Diagnostics.Any(d => d.Severity == "Error")) return;
         if (doc.Probe.Family == FormatFamily.TexturePack && doc.Probe.Version == 1) TextureEdits = new(doc);

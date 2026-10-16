@@ -8,14 +8,21 @@ using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Threading;
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Core.Animation;
+using zStudio.Core;
+using zStudio.Core.Animation;
 
-namespace Recoil.Zbd.Desktop;
+namespace zStudio.Desktop;
 
 public partial class FieldEditor : UserControl
 {
     protected bool refreshingFields, committingDraft, resolvingDrafts, disposed;
+    protected bool ManualDraftMode;
+    /// <summary>Card layout: a narrow label beside the value, and X/Y/Z components side by side with their axis letter inside each box.</summary>
+    protected bool CompactRows;
+    /// <summary>The colours of the X, Y and Z axis letters (red, green, blue, readable on light and dark themes).</summary>
+    internal static readonly Brush[] AxisBrushes = [Frozen(0xE8, 0x60, 0x5F), Frozen(0x4C, 0xAF, 0x63), Frozen(0x3E, 0x9B, 0xE0)];
+    private static Brush Frozen(byte r, byte g, byte b) { SolidColorBrush brush = new(Color.FromRgb(r, g, b)); brush.Freeze(); return brush; }
+    protected event Action? ManualDraftChanged;
     private protected readonly List<DraftInput> draftInputs = [];
     protected readonly List<Action> valueRefresh = [];
     protected readonly List<Action> referenceRefresh = [];
@@ -37,11 +44,12 @@ public partial class FieldEditor : UserControl
         AddAutomationField(label, components == null ? "text" : "components", () => getter?.Invoke() ?? value, readOnly ? null : commit, components, hint, asyncWrite: readOnly ? null : asyncCommit);
         // A vector's components share one draft and one commit boundary.
         Grid row = new() { Margin = new(0,2,0,5) };
-        row.ColumnDefinitions.Add(new() { Width = new(112) }); row.ColumnDefinitions.Add(new());
+        row.ColumnDefinitions.Add(new() { Width = new(CompactRows ? 76 : 112) }); row.ColumnDefinitions.Add(new());
         row.RowDefinitions.Add(new() { Height = GridLength.Auto }); row.RowDefinitions.Add(new() { Height = GridLength.Auto });
         TextBlock caption = new() { Text = label + (readOnly ? " (read-only)" : ""),TextWrapping = TextWrapping.Wrap,Margin = new(0,6,6,0) }; row.Children.Add(caption);
+        if (CompactRows) { caption.FontSize = 13; caption.VerticalAlignment = VerticalAlignment.Center; caption.Margin = new(0,0,6,0); caption.SetResourceReference(TextBlock.ForegroundProperty,"TextFillColorSecondaryBrush"); }
         Grid values = new(); Grid.SetColumn(values,1); row.Children.Add(values);
-        if (components != null) { Grid.SetRow(values,1); Grid.SetColumn(values,0); Grid.SetColumnSpan(values,2); Grid.SetColumnSpan(caption,2); row.RowDefinitions.Add(new() { Height = GridLength.Auto }); }
+        if (components != null && !CompactRows) { Grid.SetRow(values,1); Grid.SetColumn(values,0); Grid.SetColumnSpan(values,2); Grid.SetColumnSpan(caption,2); row.RowDefinitions.Add(new() { Height = GridLength.Auto }); }
         var parts = components == null ? new[] { value } : ComponentText.Display(value,separator,components.Length);
         var boxes = new List<ValueTextBox>();
         int columns = componentColumns ?? components?.Length ?? 1;
@@ -50,9 +58,30 @@ public partial class FieldEditor : UserControl
         for (int i = 0; i < (components?.Length ?? 1); i++)
         {
             StackPanel component = new() { Margin = new(i % columns == 0 ? 0 : 3,0,0,3) }; Grid.SetColumn(component,i % columns); Grid.SetRow(component,i / columns); values.Children.Add(component);
-            if (components != null) component.Children.Add(new TextBlock { Text = components[i],Opacity = .7,FontSize = 11 });
+            if (components != null && !CompactRows) component.Children.Add(new TextBlock { Text = components[i],Opacity = .7,FontSize = 11 });
             ValueTextBox box = new() { Text = parts.ElementAtOrDefault(i) ?? "",IsReadOnly = readOnly,MinWidth = 20,ToolTip = hint ?? label }; AutomationProperties.SetName(box,label + (components != null ? " " + components[i] : ""));
-            boxes.Add(box); component.Children.Add(box);
+            if (ManualDraftMode) box.MaxLength = 4096;
+            boxes.Add(box);
+            if (components != null && CompactRows)
+            {
+                // The axis letter sits inside the box, coloured like the 3D handles.
+                Grid inline = new();
+                box.Padding = new(components[i].Length == 1 ? 20 : 8,box.Padding.Top,box.Padding.Right,box.Padding.Bottom);
+                inline.Children.Add(box);
+                if (components[i].Length == 1)
+                {
+                    // The letter is also a scrub handle: drag it sideways to change the value.
+                    Border axisLetter = new() { Padding = new(8,0,4,0),IsHitTestVisible = !readOnly,Background = Brushes.Transparent,Cursor = Cursors.SizeWE,Focusable = !readOnly,FocusVisualStyle = null,
+                        ToolTip = readOnly ? null : "Drag to change · Shift ×10 · Ctrl ×0.1",HorizontalAlignment = HorizontalAlignment.Left,
+                        Child = new TextBlock { Text = components[i],FontSize = 12,FontWeight = FontWeights.SemiBold,VerticalAlignment = VerticalAlignment.Center,
+                            Foreground = "XYZ".IndexOf(components[i][0]) is int axis and >= 0 ? AxisBrushes[axis] : Brushes.Gray } };
+                    KeyboardNavigation.SetIsTabStop(axisLetter,false);
+                    if (!readOnly) ScrubHandle(axisLetter,box,label);
+                    inline.Children.Add(axisLetter);
+                }
+                component.Children.Add(inline);
+            }
+            else component.Children.Add(box);
         }
         if (components?.Length == 4 && componentColumns == null)
         {
@@ -87,13 +116,13 @@ public partial class FieldEditor : UserControl
             (inputScope == "properties" ? valueRefresh : referenceRefresh).Add(() => { draft.Refresh(getter()); Display(); });
         foreach (var box in boxes)
         {
-            box.TextChanged += (_,_) => { if (!displaying) composedText = draft.Text = components == null ? box.Text : string.Join(separator,boxes.Select(b => b.Text)); };
-            box.LostKeyboardFocus += async (_,_) => { if (CanCommitFocus(row) && !readOnly) await CommitInputAsync(input); };
+            box.TextChanged += (_,_) => { if (!displaying) { composedText = draft.Text = components == null ? box.Text : string.Join(separator,boxes.Select(b => b.Text)); if (ManualDraftMode) ManualDraftChanged?.Invoke(); } };
+            box.LostKeyboardFocus += async (_,_) => { if (!ManualDraftMode && CanCommitFocus(row) && !readOnly) await CommitInputAsync(input); };
             box.PreviewKeyDown += async (_,e) =>
             {
                 if (readOnly) return;
-                if (e.Key == Key.Enter) { e.Handled = true; await CommitInputAsync(input); }
-                else if (e.Key == Key.Escape && !draft.IsCommitting) { draft.Discard(); Display(); e.Handled = true; }
+                if (e.Key == Key.Enter) { e.Handled = true; if (!ManualDraftMode) await CommitInputAsync(input); }
+                else if (e.Key == Key.Escape && !draft.IsCommitting) { draft.Discard(); Display(); if (ManualDraftMode) ManualDraftChanged?.Invoke(); e.Handled = true; }
             };
             if (components != null)
             {
@@ -101,7 +130,7 @@ public partial class FieldEditor : UserControl
                 {
                     if (readOnly || e.DataObject.GetData(DataFormats.UnicodeText) is not string text) return;
                     if (ComponentText.TrySplit(text,separator,boxes.Count,out var incoming) && incoming.Length == boxes.Count)
-                    { draft.Text = string.Join(separator,incoming); Display(); e.CancelCommand(); }
+                    { draft.Text = string.Join(separator,incoming); Display(); if (ManualDraftMode) ManualDraftChanged?.Invoke(); e.CancelCommand(); }
                 });
             }
         }
@@ -109,6 +138,31 @@ public partial class FieldEditor : UserControl
         {
             ContextMenu menu = new(); MenuItem copy = new() { Header = "Copy complete value" }; copy.Click += (_,_) => Clipboard.SetText(draft.Text); menu.Items.Add(copy); values.ContextMenu = menu;
         }
+    }
+    /// <summary>Dragging <paramref name="handle"/> sideways steps <paramref name="box"/>'s number: 0.1 per pixel (rotation 0.5°, scale 0.01).</summary>
+    private static void ScrubHandle(FrameworkElement handle, TextBox box, string label)
+    {
+        double step = label.StartsWith("Rotation", StringComparison.Ordinal) ? .5 : label.StartsWith("Scale", StringComparison.Ordinal) ? .01 : .1;
+        Point start = default; double origin = 0; string originText = ""; bool dragging = false;
+        handle.MouseLeftButtonDown += (_, e) =>
+        {
+            if (box.IsReadOnly || !box.IsEnabled || !double.TryParse(box.Text, NumberStyles.Float, CultureInfo.InvariantCulture, out origin) || !double.IsFinite(origin)) return;
+            start = e.GetPosition(handle); originText = box.Text; dragging = handle.CaptureMouse(); e.Handled = true;
+            if (dragging) handle.Focus();
+        };
+        handle.MouseMove += (_, e) =>
+        {
+            if (!dragging) return;
+            double factor = (Keyboard.Modifiers & ModifierKeys.Shift) != 0 ? 10 : (Keyboard.Modifiers & ModifierKeys.Control) != 0 ? .1 : 1;
+            double pixels = Math.Round(e.GetPosition(handle).X - start.X);
+            string text = pixels == 0 ? originText : Math.Round(origin + pixels * step * factor, 4).ToString("0.####", CultureInfo.InvariantCulture);
+            if (box.Text != text) box.Text = text;
+        };
+        // After the drag, typing and Escape belong to the field again.
+        handle.MouseLeftButtonUp += (_, e) => { if (!dragging) return; dragging = false; handle.ReleaseMouseCapture(); e.Handled = true; box.Focus(); };
+        // Escape during a drag restores the value it started from.
+        handle.PreviewKeyDown += (_, e) => { if (dragging && e.Key == Key.Escape) { box.Text = originText; dragging = false; handle.ReleaseMouseCapture(); e.Handled = true; } };
+        handle.LostMouseCapture += (_, _) => dragging = false;
     }
     protected bool CanCommitFocus(FrameworkElement group)
     {

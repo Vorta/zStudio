@@ -5,13 +5,13 @@ using System.Reflection;
 using System.Text.Json.Nodes;
 using ModelContextProtocol.Client;
 using ModelContextProtocol.Protocol;
-using Recoil.Zbd.Automation;
-using Recoil.Zbd.Desktop;
-using Recoil.Zbd.Mcp;
-using Recoil.Zbd.Tests;
+using zStudio.Automation;
+using zStudio.Desktop;
+using zStudio.Mcp;
+using zStudio.Tests;
 using Xunit;
 
-namespace Recoil.Zbd.Desktop.Tests;
+namespace zStudio.Desktop.Tests;
 
 /// <summary>
 /// A source project that is a link, or lies below one, through the GUI's operations and the named-pipe MCP connection:
@@ -29,8 +29,6 @@ internal static class LinkedSourceProjectChecks
         try
         {
             if (!Junction(direct, fixture.Project) || !Junction(above, fixture.Root)) return; // Junctions unavailable on this file system.
-            string sentinelFolder = Path.Combine(fixture.Root, "retained-cache"); Directory.CreateDirectory(sentinelFolder);
-            string sentinel = Path.Combine(sentinelFolder, "keep.txt"); File.WriteAllText(sentinel, "keep");
             using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(90)); var token = deadline.Token;
             var main = new MainWindow { Left = -12000, ShowInTaskbar = false }; main.Show();
             try
@@ -67,10 +65,6 @@ internal static class LinkedSourceProjectChecks
                     }
                     Assert.False(Directory.Exists(Path.Combine(fixture.Project, "zstudio")));
                 }
-
-                using (var cache = new Recoil.Zbd.Core.Sources.SourcePreviewCache(fixture.Project))
-                    Assert.Throws<ArgumentException>(() => cache.DeleteBuild(Path.Combine(above, "retained-cache")));
-                Assert.Equal("keep", File.ReadAllText(sentinel));
 
                 // The project's own folder is a project like any other.
                 await Job("open_root", new() { ["path"] = fixture.Project, ["project"] = true });

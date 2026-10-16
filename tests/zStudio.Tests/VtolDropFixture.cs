@@ -1,9 +1,9 @@
 using System.Text;
-using Recoil.Zbd.Core.Animation;
-using Recoil.Zbd.Core.Sources;
-using Recoil.Zbd.Core.Worlds;
+using zStudio.Core.Animation;
+using zStudio.Core.Sources;
+using zStudio.Core.Worlds;
 
-namespace Recoil.Zbd.Tests;
+namespace zStudio.Tests;
 
 /// <summary>One ten-second authored flight and two whole release windows; no name-based VTOL recognition.</summary>
 internal static class VtolDropFixture

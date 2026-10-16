@@ -11,13 +11,13 @@ using System.Windows.Media;
 using System.Windows.Threading;
 using ModelContextProtocol.Client;
 using ModelContextProtocol.Protocol;
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Core.Animation;
-using Recoil.Zbd.Desktop;
-using Recoil.Zbd.Mcp;
+using zStudio.Core;
+using zStudio.Core.Animation;
+using zStudio.Desktop;
+using zStudio.Mcp;
 using Xunit;
 
-namespace Recoil.Zbd.Desktop.Tests;
+namespace zStudio.Desktop.Tests;
 
 internal static class McpWorkspaceChecks
 {
@@ -27,14 +27,14 @@ internal static class McpWorkspaceChecks
         var package = new AnimationPackage { Prefix=new byte[72],Tail=[] };
         var entry = new AnimationEntry(new byte[308],0,0); entry.SetText(0,"mcp fixture");
         var sequence = new AnimationSequence(new byte[64]) { Name="sequence" }; sequence.Events.Add(AnimationCatalog.Create(10)); entry.Sequences.Add(sequence); package.Entries.Add(entry);
-        var source = new ZbdDocument(Path.Combine(Path.GetTempPath(),"mcp-fixture.zbd"),new(0,DateTime.MinValue),new(FormatFamily.Animation,28,Recognition.Supported,"MCP fixture"),ReadOnlyMemory<byte>.Empty) { Animations=package };
+        var source = new AssetDocument(Path.Combine(Path.GetTempPath(),"mcp-fixture.zbd"),new(0,DateTime.MinValue),new(FormatFamily.Animation,28,Recognition.Supported,"MCP fixture"),ReadOnlyMemory<byte>.Empty) { Animations=package };
         source.Add(AssetKind.Raw,0,"Metadata",0,0); source.Add(AssetKind.Raw,1,"Recovery fixture",0,0); var doc = new DocumentModel(source);
         main.ViewModel.Documents.Add(doc); main.ViewModel.SelectedDocument=doc;
         try
         {
             McpParityChecks.Run(main.Commands);
             byte[] imageBytes = Convert.FromBase64String("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLttAAAAABJRU5ErkJggg==");
-            main.Commands.Add(new("zstudio_test_image", "Synthetic protocol image", false, [], (_,_)=>Task.FromResult(new Recoil.Zbd.Automation.StudioResult(new JsonObject { ["image"]="fixture" },imageBytes))));
+            main.Commands.Add(new("zstudio_test_image", "Synthetic protocol image", false, [], (_,_)=>Task.FromResult(new zStudio.Automation.StudioResult(new JsonObject { ["image"]="fixture" },imageBytes))));
             await using var host = new LocalMcpHost(main.Commands,"test");
             await using var pipe = new NamedPipeClientStream(".",host.Instance.Pipe,PipeDirection.InOut,PipeOptions.Asynchronous|PipeOptions.CurrentUserOnly);
             await pipe.ConnectAsync(5000);
@@ -98,7 +98,7 @@ internal static class McpWorkspaceChecks
                     byte[] payload = new byte[16384]; payload[0] = 254; payload[1] = 1;
                     largeEntry.Primary.Events.Add(new(payload) { Version = version });
                 }
-                var largeSource = new ZbdDocument(Path.Combine(Path.GetTempPath(), $"inspection-{version}.zbd"), new(0, DateTime.MinValue), new(FormatFamily.Animation, version, Recognition.Supported, "fixture"), ReadOnlyMemory<byte>.Empty) { Animations = largePackage };
+                var largeSource = new AssetDocument(Path.Combine(Path.GetTempPath(), $"inspection-{version}.zbd"), new(0, DateTime.MinValue), new(FormatFamily.Animation, version, Recognition.Supported, "fixture"), ReadOnlyMemory<byte>.Empty) { Animations = largePackage };
                 largeSource.Add(AssetKind.Animation, 0, "large", 0, 0, largeEntry.ToPreviewJson(), largeEntry);
                 var largeDoc = new DocumentModel(largeSource); main.ViewModel.Documents.Add(largeDoc);
                 try

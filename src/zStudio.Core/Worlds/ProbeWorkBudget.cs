@@ -1,4 +1,4 @@
-namespace Recoil.Zbd.Core.Worlds;
+namespace zStudio.Core.Worlds;
 
 /// <summary>One allowance shared by every node and polygon occurrence in a probe or comparison.</summary>
 internal sealed class ProbeWorkBudget(long remaining, CancellationToken token, string limitation)

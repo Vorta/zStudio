@@ -1,4 +1,4 @@
-namespace Recoil.Zbd.Core.Animation;
+namespace zStudio.Core.Animation;
 
 /// <summary>
 /// Compares animation entries by their authored content: names as text (the original compiler left residue after

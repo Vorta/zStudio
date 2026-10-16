@@ -1,4 +1,4 @@
-namespace Recoil.Zbd.Core;
+namespace zStudio.Core;
 
 public enum MissionDifficulty { Easy = 0, Medium = 1, Hard = 2 }
 

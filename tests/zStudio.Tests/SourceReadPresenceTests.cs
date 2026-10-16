@@ -1,10 +1,10 @@
 using System.IO;
 using System.Security.AccessControl;
 using System.Security.Principal;
-using Recoil.Zbd.Core.Sources;
+using zStudio.Core.Sources;
 using Xunit;
 
-namespace Recoil.Zbd.Tests;
+namespace zStudio.Tests;
 
 public sealed class SourceReadPresenceTests
 {

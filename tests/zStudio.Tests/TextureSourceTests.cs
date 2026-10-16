@@ -1,12 +1,12 @@
 using System.Buffers.Binary;
 using System.IO.Compression;
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Core.Export;
-using Recoil.Zbd.Core.Formats;
-using Recoil.Zbd.Core.Sources;
+using zStudio.Core;
+using zStudio.Core.Export;
+using zStudio.Core.Formats;
+using zStudio.Core.Sources;
 using Xunit;
 
-namespace Recoil.Zbd.Tests;
+namespace zStudio.Tests;
 
 public sealed class TextureSourceTests
 {
@@ -93,7 +93,7 @@ public sealed class TextureSourceTests
         Assert.Throws<InvalidDataException>(() => PngDecoder.Decode(Png(2, 2, 3, 8, false, (_, _) => [0]), token: Token));
     }
 
-    private static ZbdDocument Open(byte[] bytes) => FormatRegistry.Default.OpenBytes("pack.zbd", bytes, token: Token);
+    private static AssetDocument Open(byte[] bytes) => FormatRegistry.Default.OpenBytes("pack.zbd", bytes, token: Token);
 
     [Fact]
     public void PacksFollowTheEngineRulesForEachRenderer()

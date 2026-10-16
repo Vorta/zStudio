@@ -1,9 +1,9 @@
 using System.Text;
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Core.Worlds;
+using zStudio.Core;
+using zStudio.Core.Worlds;
 using Xunit;
 
-namespace Recoil.Zbd.Tests;
+namespace zStudio.Tests;
 
 public sealed class BuildDiagnosticBudgetTests
 {

@@ -1,9 +1,9 @@
 using System.Text.Json.Nodes;
 using System.Windows.Controls;
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Core.Formats;
+using zStudio.Core;
+using zStudio.Core.Formats;
 
-namespace Recoil.Zbd.Desktop;
+namespace zStudio.Desktop;
 
 /// <summary>Properties stay attached to a member/node identity across reordering and undo.</summary>
 public sealed partial class ResourcePropertiesEditor : FieldEditor, IDisposable

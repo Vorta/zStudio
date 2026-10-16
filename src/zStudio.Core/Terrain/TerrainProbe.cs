@@ -1,7 +1,7 @@
 using System.Numerics;
-using Recoil.Zbd.Core.Worlds;
+using zStudio.Core.Worlds;
 
-namespace Recoil.Zbd.Core.Terrain;
+namespace zStudio.Core.Terrain;
 
 /// <summary>What the altitude probe finds in one node at a point: the height, the polygon's zones and soil, and the node's flags and zone.</summary>
 public readonly record struct TerrainHit(float Height, uint ZoneWord, uint Soil, uint Flags, byte NodeZone, string Node);

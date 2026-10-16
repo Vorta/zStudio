@@ -1,4 +1,4 @@
-namespace Recoil.Zbd.Core.Worlds;
+namespace zStudio.Core.Worlds;
 
 /// <summary>List semantics for graph reversal without repeatedly scanning or shifting an adjacency list.</summary>
 internal sealed class OrderedWorldLinks

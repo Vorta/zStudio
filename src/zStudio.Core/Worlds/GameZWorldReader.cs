@@ -1,9 +1,9 @@
 using System.Buffers.Binary;
 using System.Numerics;
 using System.Text.Json.Nodes;
-using Recoil.Zbd.Core.Formats;
+using zStudio.Core.Formats;
 
-namespace Recoil.Zbd.Core.Worlds;
+namespace zStudio.Core.Worlds;
 
 /// <summary>
 /// Builds a <see cref="GameZWorld"/> from a document the shared GameZ reader has opened: its decoded scene supplies
@@ -17,7 +17,7 @@ public static class GameZWorldReader
     /// <summary>A version-13 Object3D record: the version-15 fields with a translation (12 bytes, a script's Object3DTranslate) after the scale.</summary>
     private const int DemoObject3DSize = 156, DemoTranslation = 48;
 
-    public static GameZWorld FromDocument(ZbdDocument doc, CancellationToken token = default)
+    public static GameZWorld FromDocument(AssetDocument doc, CancellationToken token = default)
     {
         token.ThrowIfCancellationRequested();
         if (doc.Probe is not { Family: FormatFamily.GameZ, Version: 13 or 15 } || doc.Scene is not { } scene || doc.GameZLayout is not { } layout)

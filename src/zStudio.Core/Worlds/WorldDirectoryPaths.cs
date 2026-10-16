@@ -1,4 +1,4 @@
-namespace Recoil.Zbd.Core.Worlds;
+namespace zStudio.Core.Worlds;
 
 /// <summary>Bounds aggregate path decoding, comparisons and list movement before doing the work.</summary>
 internal sealed class DirectoryWorkBudget(long maximumUnits = DirectoryWorkBudget.MaximumUnits)

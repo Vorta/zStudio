@@ -1,13 +1,13 @@
 using System.Text.Json.Nodes;
 
-namespace Recoil.Zbd.Core.Formats;
+namespace zStudio.Core.Formats;
 
 /// <summary>A model hierarchy owned by one archive directory record.</summary>
 public sealed record MechAssembly(int MemberIndex, int RootNode, int NodeCount, int FirstModel, int ModelCount);
 
 internal static class MechLibraryReader
 {
-    internal static void Read(ZbdDocument doc, CancellationToken token)
+    internal static void Read(AssetDocument doc, CancellationToken token)
     {
         // Metadata records identify the library dialect, independently of its filename.
         var versions = doc.Assets.Where(a => a.Name == "version" && a.Length == 4).ToArray();

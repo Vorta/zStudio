@@ -1,6 +1,6 @@
-using Recoil.Zbd.Core.Gltf;
+using zStudio.Core.Gltf;
 
-namespace Recoil.Zbd.Core.Sources;
+namespace zStudio.Core.Sources;
 
 /// <summary>Selected model content cannot be read or decoded to prepare a source-world build.</summary>
 public sealed class SourceModelBuildException(string message, Exception innerException) : IOException(message, innerException) { }
@@ -17,7 +17,6 @@ public static partial class SourceWorlds
         long remaining = 128L << 20, work = 128L << 20;
         HashSet<string> seen = new(StringComparer.OrdinalIgnoreCase) { model };
         Queue<string> pending = new([model]);
-        var bindings = new SourceMissionModels(null, token);
         void Reserve(long amount)
         {
             token.ThrowIfCancellationRequested();
@@ -43,7 +42,7 @@ public static partial class SourceWorlds
             {
                 throw new SourceModelBuildException($"The model {JsonData.ShownText(path)} cannot be built: {ex.Message}", ex);
             }
-            foreach (string reference in bindings.Dependencies(path, hierarchy, Reserve))
+            foreach (string reference in SourceMissionModels.Dependencies(path, hierarchy, Reserve))
             {
                 token.ThrowIfCancellationRequested();
                 if (seen.Contains(reference)) continue;

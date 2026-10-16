@@ -1,7 +1,7 @@
-using Recoil.Zbd.Core.Sources;
-using Recoil.Zbd.Core.Formats;
+using zStudio.Core.Sources;
+using zStudio.Core.Formats;
 
-namespace Recoil.Zbd.Core.Animation;
+namespace zStudio.Core.Animation;
 
 /// <summary>One repair run's syntax growth, including candidate graphs, generalized copies and file wrappers.</summary>
 internal sealed class AnimationDefinitionBudget(CancellationToken token, Action<long>? reserve = null,

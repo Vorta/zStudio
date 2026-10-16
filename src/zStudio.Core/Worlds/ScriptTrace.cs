@@ -1,6 +1,6 @@
-using Recoil.Zbd.Core.Sources;
+using zStudio.Core.Sources;
 
-namespace Recoil.Zbd.Core.Worlds;
+namespace zStudio.Core.Worlds;
 
 /// <summary>
 /// One executed gamegen instruction: its script, command and expanded arguments, and the model and texture directories

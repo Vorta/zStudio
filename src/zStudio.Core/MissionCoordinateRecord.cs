@@ -1,8 +1,8 @@
 using System.Numerics;
 using System.Text.Json.Nodes;
-using Recoil.Zbd.Core.Formats;
+using zStudio.Core.Formats;
 
-namespace Recoil.Zbd.Core;
+namespace zStudio.Core;
 
 public sealed record MissionCoordinateRecord(MissionPickupSource Source, string Kind, string Name,
     Vector3 OriginalPosition, Vector3 Rotation, string Template, long SourceOffset,
@@ -17,7 +17,7 @@ public sealed partial class PickupPlacementEditSession
     private static bool IsCoordinateResource(string name) => MissionAiNetworks.IsCandidate(name) ||
         name.ToLowerInvariant() is "aiv.zrd" or "aiv_easy.zrd" or "aiv_hard.zrd";
 
-    public void AddCoordinates(IEnumerable<(ZbdDocument Archive, AssetRecord Asset)> resources, CancellationToken token = default, bool mw3 = false)
+    public void AddCoordinates(IEnumerable<(AssetDocument Archive, AssetRecord Asset)> resources, CancellationToken token = default, bool mw3 = false, IReadOnlySet<string>? presentResources = null)
     {
         if (CanUndo || CanRedo || IsDirty) throw new InvalidOperationException("Coordinate sources must be loaded before editing.");
         // Cancellation can leave successfully admitted earlier rows; invalidate before the first mutation.
@@ -27,14 +27,14 @@ public sealed partial class PickupPlacementEditSession
         {
             string requested = MissionLayoutSelection.For(d).AivResource;
             var chosen = inputs.FirstOrDefault(r => r.Asset.Name.Equals(requested, StringComparison.OrdinalIgnoreCase));
-            return chosen.Asset != null ? chosen : inputs.FirstOrDefault(r => r.Asset.Name.Equals("aiv.zrd", StringComparison.OrdinalIgnoreCase));
+            return chosen.Asset != null || presentResources?.Contains(requested) == true ? chosen : inputs.FirstOrDefault(r => r.Asset.Name.Equals("aiv.zrd", StringComparison.OrdinalIgnoreCase));
         });
         foreach (var (doc, asset) in inputs)
         {
             token.ThrowIfCancellationRequested();
             try
             {
-                if (doc.Probe.Family != FormatFamily.Archive || doc.Diagnostics.Any(d => d.Severity == "Error") ||
+                if (doc is not Sources.SourceResourceDocument && doc.Probe.Family != FormatFamily.Archive || doc.Diagnostics.Any(d => d.Severity == "Error") ||
                     Overlaps(doc, asset, token))
                     throw new InvalidDataException("An intact, non-overlapping archive member is required.");
                 string archive = Path.GetFullPath(doc.Path).ToUpperInvariant();
@@ -95,7 +95,7 @@ public sealed partial class PickupPlacementEditSession
         }
     }
 
-    public IEnumerable<ZbdDocument> WorkingArchives(CancellationToken token = default)
+    public IEnumerable<AssetDocument> WorkingArchives(CancellationToken token = default)
     {
         // Publish only owned archives; unedited readers remain served by their own documents or files.
         foreach (var (path, archive) in archives.Where(a => touched.Contains(a.Key)).ToArray())

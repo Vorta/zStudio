@@ -1,4 +1,4 @@
-namespace Recoil.Zbd.Core.Animation;
+namespace zStudio.Core.Animation;
 
 /// <summary>One compilation's raw key/pose visits, including indexing and lookahead which emit no frames.</summary>
 internal sealed class AnimationCompileWork(CancellationToken token, long maximum = AnimationCompileWork.MaximumUnits,

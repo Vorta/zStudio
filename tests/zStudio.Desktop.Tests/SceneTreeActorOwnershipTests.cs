@@ -1,14 +1,66 @@
 using System.IO;
 using System.Text.Json.Nodes;
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Desktop;
+using zStudio.Core;
+using zStudio.Core.Formats;
+using zStudio.Core.Sources;
+using zStudio.Core.Worlds;
+using zStudio.Desktop;
 using Xunit;
 
-namespace Recoil.Zbd.Desktop.Tests;
+namespace zStudio.Desktop.Tests;
 
 public sealed class SceneTreeActorOwnershipTests
 {
     private static CancellationToken Token => TestContext.Current.CancellationToken;
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void SourceMapResourcePartsRetainOnlyStablePlacementAndPhysicalProvenance(bool pickup)
+    {
+        string cache = Path.Combine(Path.GetTempPath(), "source-map-identity");
+        var first = Projection(Path.Combine(cache, "build-one"), 100);
+        var rebuilt = Projection(Path.Combine(cache, "build-two"), 200);
+        Assert.Equal(first.Identities[1], rebuilt.Identities[1]);
+        Assert.Equal(first.PartIdentities[2], rebuilt.PartIdentities[2]);
+        Assert.NotEqual(first.Identities[1], Projection(Path.Combine(cache, "build-two"), 200, record: 6).Identities[1]);
+        Assert.NotEqual(first.PartIdentities[2], Projection(Path.Combine(cache, "build-two"), 200, meshNode: 9).PartIdentities[2]);
+        Assert.False(Projection(Path.Combine(cache, "build-two"), 200, ambiguous: true).PartIdentities.ContainsKey(2));
+        Assert.NotEqual(first.PartIdentities[2], Projection(Path.Combine(cache, "build-two"), 200, resourceReordered: true).PartIdentities[2]);
+
+        SourceMapSelection Projection(string folder, int sourceSlot, int record = 5, int meshNode = 1, bool ambiguous = false, bool resourceReordered = false)
+        {
+            string resource = pickup ? "puppies.zrd" : "aiv.zrd", relative = "data/m1/zrdr/" + resource;
+            Dictionary<string, string> readHashes = new(StringComparer.OrdinalIgnoreCase)
+            {
+                ["gamegen/m1.gs"] = SourceProject.Sha256("script"u8),
+                ["data/common/models/tank.gltf"] = SourceProject.Sha256("model"u8),
+                [relative] = SourceProject.Sha256(resourceReordered ? "second,first"u8 : "first,second"u8)
+            };
+            var source = SourceSelectionIndex.Build(new Dictionary<int, WorldNodeProvenance>
+            {
+                [0] = new() { Created = new("gamegen/m1.gs", 1, "CreateWorld", [], []) },
+                [sourceSlot] = new() { ModelFile = "data/common/models/tank.gltf", ModelNode = 0 },
+                [sourceSlot + 1] = new() { ModelFile = "data/common/models/tank.gltf", ModelNode = meshNode },
+            }, Token, readHashes: readHashes);
+            var scene = Scene([1], [2], []);
+            scene.Nodes[0] = scene.Nodes[0] with { Class = "world" };
+            string archivePath = Path.Combine(folder, "m1", "zrdr.zbd");
+            var emptyRows = ZrdNode.Create(ZrdKind.Array) with { Children = [ZrdNode.Create(ZrdKind.Array)] };
+            byte[] payload = ZrdWriter.Write(emptyRows, Token);
+            var archive = FormatRegistry.Default.OpenBytes(archivePath, ArchiveSources.Write([
+                new("puppies.zrd", "data\\m1\\zrdr\\puppies.zrd", payload), new("aiv.zrd", "data\\m1\\zrdr\\aiv.zrd", payload)]), token: Token);
+            var edits = PickupPlacementEditSession.Create([new(MissionDifficulty.Medium, archive, archive.Assets[0])], token: Token);
+            var coordinate = new MissionPickupSource(archivePath, pickup ? 0 : 1, resource.ToUpperInvariant(), record);
+            Assert.Equal(relative, edits.AuthoredResourcePath(coordinate));
+            MissionActor actor = pickup
+                ? new(1, sourceSlot, "pu00101", "resource", new(1, "fixture", 1, 1, default, default, 0, coordinate))
+                : new(1, sourceSlot, "tank_01", "resource", CoordinateSource: coordinate);
+            var mission = Mission(scene, [actor], [0, sourceSlot, ambiguous ? sourceSlot : sourceSlot + 1]);
+            return new(scene, mission, source, MainWindow.TreeIdentities(scene, mission, null), Token,
+                SourceMapActorKeys.Prepare(folder, source, edits, Token, readHashes));
+        }
+    }
 
     [Fact]
     public void RepeatedAivProducerKeepsEveryOccurrenceAndTreeRejectsAmbiguousSelection()
@@ -18,7 +70,7 @@ public sealed class SceneTreeActorOwnershipTests
         scene.Nodes[0] = scene.Nodes[0] with { Name = "tank", Parents = [count + 1] };
         for (int i = 1; i <= count; i++) scene.Nodes.Add(Node(i, [], [0]));
         scene.Nodes.Add(Node(count + 1, [0]) with { Name = "world", Class = "world" });
-        var world = new ZbdDocument("mission.zbd", new(0, DateTime.MinValue),
+        var world = new AssetDocument("mission.zbd", new(0, DateTime.MinValue),
             new(FormatFamily.GameZ, 15, Recognition.Supported, "fixture"), ReadOnlyMemory<byte>.Empty) { Scene = scene };
         var rows = Enumerable.Range(0, count).SelectMany(i => new JsonNode[]
         {

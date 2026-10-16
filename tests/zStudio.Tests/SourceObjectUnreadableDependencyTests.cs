@@ -2,11 +2,11 @@ using System.IO;
 using System.Numerics;
 using System.Security.AccessControl;
 using System.Security.Principal;
-using Recoil.Zbd.Core.Sources;
-using Recoil.Zbd.Core.Worlds;
+using zStudio.Core.Sources;
+using zStudio.Core.Worlds;
 using Xunit;
 
-namespace Recoil.Zbd.Tests;
+namespace zStudio.Tests;
 
 public sealed class SourceObjectUnreadableDependencyTests
 {
@@ -115,7 +115,7 @@ public sealed class SourceObjectUnreadableDependencyTests
         fixture.Write(Bridge, """
             {"asset":{"version":"2.0"},"scene":0,"scenes":[{"nodes":[0]}],"nodes":[{"extras":{"recoil":{"ref":"tank.gltf"}}}]}
             """);
-        fixture.Write("gamegen/m2.gs", "NewWorld world\nSetModelDirectory ../data/m2/models/bft\nSetModelDirectory ../data/missing\nLoadGameGen bridge.flt tank\nFindNode tank\nFindSubNode hull\nsource absent.gs\nsource rotate.gs\nGameZWriteZBDFile world.zbd\n");
+        fixture.Write("gamegen/m2.gs", "NewWorld world\nSetModelDirectory ../data/m2/models/bft\nSetModelDirectory ../data/missing\nLoadGameGen bridge.gltf tank\nFindNode tank\nFindSubNode hull\nsource absent.gs\nsource rotate.gs\nGameZWriteZBDFile world.zbd\n");
         fixture.Write(Rotation, "Object3DRotate 0 45 0\n");
     }
 }

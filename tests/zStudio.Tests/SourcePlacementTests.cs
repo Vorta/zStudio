@@ -1,16 +1,17 @@
 using System.IO;
 using System.Numerics;
 using System.Text;
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Core.Formats;
-using Recoil.Zbd.Core.Sources;
+using zStudio.Core;
+using zStudio.Core.Formats;
+using zStudio.Core.Sources;
+using zStudio.Core.Worlds;
 using Xunit;
 
-namespace Recoil.Zbd.Tests;
+namespace zStudio.Tests;
 
 /// <summary>
-/// Placement edits in a source world: a move made on the built archive changes only the coordinate tokens of the text
-/// resources it was compiled from, including linked difficulty variants, and the rebuilt archive holds the new placement.
+/// Source placement edits change only the owning coordinate tokens, including linked difficulty variants,
+/// and source scene evaluation retains the accepted placement without producing an archive.
 /// </summary>
 public sealed class SourcePlacementTests
 {
@@ -32,19 +33,11 @@ public sealed class SourcePlacementTests
         )
         """;
 
-    private static async Task<(SourceWorkspace Workspace, ZbdDocument Archive, PickupPlacementEditSession Session)> BuildAsync(SourceWorldFixture fixture, SourceWorkspace? workspace = null)
+    private static async Task<(SourceWorkspace Workspace, SourceSceneSnapshot Scene, PickupPlacementEditSession Session)> BuildAsync(SourceWorldFixture fixture, SourceWorkspace? workspace = null)
     {
         workspace ??= new(fixture.Project);
-        string preview = Path.Combine(SourceWorlds.PreviewRoot(fixture.Project), "preview-" + Guid.NewGuid().ToString("N"));
-        var build = await SourceWorlds.BuildPreviewAsync(fixture.Project, "m1", preview, workspace.Overlay(), token: Token);
-        Assert.Equal("built", build.Outputs.Single(o => o.Path == "m1/zrdr.zbd").Status);
-        string path = Path.Combine(preview, "m1", "zrdr.zbd");
-        var archive = FormatRegistry.Default.OpenBytes(path, await File.ReadAllBytesAsync(path, Token), token: Token);
-        AssetRecord Member(string name) => archive.Assets.Single(a => a.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
-        var session = PickupPlacementEditSession.Create([
-            new(MissionDifficulty.Easy, archive, Member("puppies_easy.zrd")),
-            new(MissionDifficulty.Medium, archive, Member("puppies.zrd")),
-            new(MissionDifficulty.Hard, archive, Member("puppies.zrd"))], token: Token);
+        var archive = await SourceWorlds.LoadSceneAsync(fixture.Project, "m1", workspace.Overlay(), token: Token);
+        var session = PickupPlacementEditSession.FromSources(archive, Token);
         Assert.Empty(session.Diagnostics);
         return (workspace, archive, session);
     }
@@ -54,8 +47,17 @@ public sealed class SourcePlacementTests
     {
         using SourceWorldFixture fixture = new();
         fixture.Write("data/m1/zrdr/puppies.zrd", Default); fixture.Write("data/m1/zrdr/puppies_easy.zrd", Easy);
+        // Obtain the edit identity from the shown mission, as GUI/MCP do. Source paths contain directory
+        // separators from both the Windows root and project-relative source path and must canonicalize alike.
+        WorldNode pickup = new("pu001", WorldNodeClass.Object3D), collision = new("bvol", WorldNodeClass.Object3D);
+        pickup.SetPayloadInt(0, 0x28); collision.SetPayloadInt(0, 0x28); pickup.Children.Add(collision);
+        var (json, bin) = WorldGltf.Export([pickup], 0xFF, new() { Texture = texture => (texture.Name + ".png", 0), Token = Token }).Write("pickup.bin", Token);
+        fixture.Write("data/m1/models/pickup.gltf", json); fixture.Write("data/m1/models/pickup.bin", bin);
+        string script = File.ReadAllText(fixture.Path("gamegen/m1.gs"));
+        fixture.Write("gamegen/m1.gs", script.Replace("# no vehicles", "LoadGameGen pickup.gltf pickup_template"));
         var (workspace, archive, session) = await BuildAsync(fixture);
-        var ammo = session.Records.Single(r => r.Type == "HEMORTAR_AMMO" && r.Source.ResourceName == "PUPPIES.ZRD").Source;
+        var ammo = Assert.Single(archive.MissionScene(MissionDifficulty.Medium, Token).Actors, actor => actor.Pickup?.TypeIndex == 1).Pickup!.Source;
+        Assert.NotNull(session.Find(ammo)); Assert.NotNull(session.SourcePresentationKey(ammo));
         // The default record links to Easy's second record; Hard uses the default file itself, so it is one source.
         var scope = session.Scope(ammo);
         Assert.Equal(2, scope.Sources.Count);
@@ -65,7 +67,7 @@ public sealed class SourcePlacementTests
         var writes = session.ScalarWrites(after);
         // Only X differs from the stored values, once per linked record.
         Assert.Equal(2, writes.Count); Assert.All(writes, w => Assert.Equal(20.25f, w.Value));
-        var changes = SourceResourceEdits.SourceChanges(session.ArchiveBytes(writes[0].ArchivePath), writes.Select(w => new SourceResourceEdits.ScalarEdit(w.Offset, SourceResourceEdits.Float(w.Value))), (r, limits) => workspace.Read(r, Token, limits), Token);
+        var changes = session.SourceChanges(after, workspace, Token);
         Assert.Equal(["data/m1/zrdr/puppies.zrd", "data/m1/zrdr/puppies_easy.zrd"], changes.Select(c => c.Relative).Order(StringComparer.Ordinal));
         // Each file differs from its source only where the edited token was: comments, spacing and other values stay.
         string defaultAfter = Encoding.Latin1.GetString(changes.Single(c => c.Relative.EndsWith("puppies.zrd")).Content);
@@ -73,7 +75,7 @@ public sealed class SourcePlacementTests
         Assert.Equal(Default.Replace("( 12 8 -5 )", "( 20.25 8 -5 )"), defaultAfter);
         Assert.Equal(Easy.Replace("( 12 8 -5 )", "( 20.25 8 -5 )"), easyAfter);
 
-        // Accepted into the workspace, the rebuilt archive holds the moved placement in both lists.
+        // Accepted workspace source evaluation holds the moved placement in both lists.
         workspace.Apply("Move HEMORTAR_AMMO", changes.Select(c => (c.Relative, (byte[]?)c.Content)), Token);
         var (_, _, rebuilt) = await BuildAsync(fixture, workspace);
         Assert.All(rebuilt.Records.Where(r => r.Type == "HEMORTAR_AMMO"), r => Assert.Equal(new Vector3(20.25f, 8, -5), r.OriginalPosition));
@@ -93,7 +95,7 @@ public sealed class SourcePlacementTests
         var nanite = session.Records.Single(r => r.Type == "NANITE" && r.Source.ResourceName == "PUPPIES.ZRD").Source;
         var after = session.PreviewTransform(nanite, new(new(100, 0, -100), new(0, 3.1415927f, 0)));
         var writes = session.ScalarWrites(after);
-        var changes = SourceResourceEdits.SourceChanges(session.ArchiveBytes(writes[0].ArchivePath), writes.Select(w => new SourceResourceEdits.ScalarEdit(w.Offset, SourceResourceEdits.Float(w.Value))), (r, limits) => workspace.Read(r, Token, limits), Token);
+        var changes = session.SourceChanges(after, workspace, Token);
         Assert.Equal(Default.Replace("( 0.0 1.5707964 0.0 )", "( 0.0 3.1415927 0.0 )"), Encoding.Latin1.GetString(changes.Single(c => c.Relative.EndsWith("puppies.zrd")).Content));
     }
 
@@ -102,21 +104,20 @@ public sealed class SourcePlacementTests
     {
         using SourceWorldFixture fixture = new();
         SourceWorkspace workspace = new(fixture.Project);
-        using SourcePreviewCache cache = new(fixture.Project);
-        // Neither archive exists yet: a later mission or common resource must still invalidate this preview.
-        var empty = await cache.BuildAsync("m1", cache.NextFolder(), workspace.Overlay(), token: Token);
+        // No resource exists yet: a later mission or common file must still invalidate this scene.
+        var empty = (await SourceWorlds.LoadSceneAsync(fixture.Project, "m1", workspace.Overlay(), token: Token)).BuildState;
         Assert.NotNull(empty.ResourceInputs); Assert.Empty(empty.ResourceInputs);
         Assert.False(empty.ResourceInputsChanged(workspace, Token));
         const string normal = "data/m1/zrdr/puppies.zrd", easy = "data/m1/zrdr/puppies_easy.zrd";
         fixture.Write(normal, Default);
         Assert.True(empty.ResourceInputsChanged(workspace, Token));
-        var built = await cache.BuildAsync("m1", cache.NextFolder(), workspace.Overlay(), token: Token);
+        var built = (await SourceWorlds.LoadSceneAsync(fixture.Project, "m1", workspace.Overlay(), token: Token)).BuildState;
         Assert.False(built.ResourceInputsChanged(workspace, Token));
         workspace.Apply("Add Easy", [(easy, Encoding.Latin1.GetBytes(Easy))], Token);
         Assert.True(built.ResourceInputsChanged(workspace, Token));
         workspace.Undo(); Assert.False(built.ResourceInputsChanged(workspace, Token));
         workspace.Redo();
-        var pending = await cache.BuildAsync("m1", cache.NextFolder(), workspace.Overlay(), token: Token);
+        var pending = (await SourceWorlds.LoadSceneAsync(fixture.Project, "m1", workspace.Overlay(), token: Token)).BuildState;
         Assert.False(pending.ResourceInputsChanged(workspace, Token));
         workspace.Save(Token); Assert.False(pending.ResourceInputsChanged(workspace, Token));
         File.Delete(fixture.Path(easy)); Assert.True(pending.ResourceInputsChanged(workspace, Token));
@@ -137,14 +138,11 @@ public sealed class SourcePlacementTests
         const string text = "( version ( 105 ) # Keep this network comment.\n node_00 ( 12 ( 1.0 2.0 3.0 ) ( 1 -1 -7 ) )\n node_01 ( 23 ( 3.0 2.0 3.0 ) ( 0 -1 -1 ) ) )";
         fixture.Write(relative, text);
         var (workspace, archive, session) = await BuildAsync(fixture);
-        session.AddCoordinates(archive.Assets.Select(a => (archive, a)), Token);
         var selected = session.OtherCoordinates.ToDictionary(c => c.Source, c => c.OriginalPosition);
         Assert.Equal(2, selected.Count);
         var positions = AiPathTransforms.Scale(selected, new(2, 1, 1));
-        var writes = session.ScalarWrites(session.PreviewAiPositions(positions));
-        var changes = SourceResourceEdits.SourceChanges(session.ArchiveBytes(archive.Path),
-            writes.Select(w => new SourceResourceEdits.ScalarEdit(w.Offset, SourceResourceEdits.Float(w.Value))),
-            (r, limits) => workspace.Read(r, Token, limits), Token);
+        var after = session.PreviewAiPositions(positions);
+        var changes = session.SourceChanges(after, workspace, Token);
         var change = Assert.Single(changes);
         Assert.Equal(relative, change.Relative);
         string expected = text.Replace("( 1.0 2.0 3.0 )", "( 0.0 2.0 3.0 )").Replace("( 3.0 2.0 3.0 )", "( 4.0 2.0 3.0 )");
@@ -153,7 +151,7 @@ public sealed class SourcePlacementTests
         workspace.Undo(); Assert.Equal(text, Encoding.Latin1.GetString(workspace.Read(relative, Token)!));
         workspace.Redo(); workspace.Save(Token);
         var (_, rebuilt, _) = await BuildAsync(fixture);
-        var network = Assert.Single(MissionAiNetworks.Read(rebuilt.Assets.Where(a => MissionAiNetworks.IsCandidate(a.Name)).Select(a => (rebuilt, a)), Token).Networks);
+        var network = Assert.Single(rebuilt.MissionScene(MissionDifficulty.Medium, Token).AiNetworks.Networks);
         Assert.Equal([new Vector3(0, 2, 3), new Vector3(4, 2, 3)], network.Nodes.Select(n => n.Position));
         Assert.Equal([12, 23], network.Nodes.Select(n => n.RawValue));
         Assert.Equal([1, -1, -7], network.Nodes[0].Links.Select(l => l.TargetIndex));
@@ -167,11 +165,11 @@ public sealed class SourcePlacementTests
         fixture.Write("data/m1/zrdr/puppies.zrd", Default); fixture.Write("data/m1/zrdr/puppies_easy.zrd", Easy);
         var (workspace, _, session) = await BuildAsync(fixture);
         var ammo = session.Records.Single(r => r.Type == "HEMORTAR_AMMO" && r.Source.ResourceName == "PUPPIES.ZRD").Source;
-        var writes = session.ScalarWrites(session.PreviewTransform(ammo, session.Transform(ammo) with { Position = new(1, 2, 3) }));
-        // The default list gains a record after the build: its tree no longer matches the built member.
+        var after = session.PreviewTransform(ammo, session.Transform(ammo) with { Position = new(1, 2, 3) });
+        // The default list gains a record after evaluation: its syntax belongs to a different revision.
         workspace.Apply("Add record", [("data/m1/zrdr/puppies.zrd", Encoding.Latin1.GetBytes(Default.Replace("\n)", "\n  ( NANITE 1 ( 0.0 0.0 0.0 ) ( 0.0 0.0 0.0 ) 1.0 )\n)")))], Token);
-        var refused = Assert.Throws<InvalidDataException>(() => SourceResourceEdits.SourceChanges(session.ArchiveBytes(writes[0].ArchivePath), writes.Select(w => new SourceResourceEdits.ScalarEdit(w.Offset, SourceResourceEdits.Float(w.Value))), (r, limits) => workspace.Read(r, Token, limits), Token));
-        Assert.Contains("rebuild", refused.Message);
+        var refused = Assert.Throws<SourceFileChangedException>(() => session.SourceChanges(after, workspace, Token));
+        Assert.Contains("reload", refused.Message);
     }
 
     [Fact]
@@ -182,12 +180,13 @@ public sealed class SourcePlacementTests
         var payload = ZrdDecoder.Read(compiled, Token);
         // The second coordinate of the first record.
         var y = payload.Children[0].Children[0].Children[2].Children[1];
-        byte[] result = SourceResourceEdits.Apply(compiled, compiled, [new(y.SourceOffset, SourceResourceEdits.Float(9.5f))], "puppies.zrd", Token);
+        var document = new SourceResourceDocument(Path.GetTempPath(), new("puppies.zrd", compiled, payload, null), Token);
+        byte[] result = document.Replace(new Dictionary<int, float> { [checked((int)y.SourceOffset)] = 9.5f }, Token);
         var changed = Enumerable.Range(0, compiled.Length).Where(i => compiled[i] != result[i]).ToArray();
         Assert.All(changed, i => Assert.InRange(i, y.SourceOffset, y.SourceOffset + 7));
         var reread = ZrdDecoder.Read(result, Token).Children[0].Children[0].Children[2].Children[1];
         Assert.Equal(ZrdKind.Float, reread.Kind); Assert.Equal(9.5f, BitConverter.UInt32BitsToSingle(reread.Bits));
         // Offsets that are not numeric scalars are refused.
-        Assert.Throws<InvalidDataException>(() => SourceResourceEdits.Apply(compiled, compiled, [new(payload.Children[0].SourceOffset, SourceResourceEdits.Float(1))], "puppies.zrd", Token));
+        Assert.Throws<InvalidDataException>(() => document.Replace(new Dictionary<int, float> { [checked((int)payload.Children[0].SourceOffset)] = 1 }, Token));
     }
 }

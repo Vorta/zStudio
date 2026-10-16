@@ -6,13 +6,13 @@ using System.Windows;
 using System.Windows.Controls.Primitives;
 using ModelContextProtocol.Client;
 using ModelContextProtocol.Protocol;
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Desktop;
-using Recoil.Zbd.Mcp;
-using Recoil.Zbd.Rendering;
+using zStudio.Core;
+using zStudio.Desktop;
+using zStudio.Mcp;
+using zStudio.Rendering;
 using Xunit;
 
-namespace Recoil.Zbd.Desktop.Tests;
+namespace zStudio.Desktop.Tests;
 
 internal static class WorldHighlightMcpChecks
 {
@@ -21,7 +21,7 @@ internal static class WorldHighlightMcpChecks
         using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(20));
         var main = new MainWindow { Left = -12000, ShowInTaskbar = false }; main.Show();
         using var viewport = new SceneViewport();
-        var source = new ZbdDocument("highlight-fixture", new(0, DateTime.MinValue), new(FormatFamily.GameZ, 15, Recognition.Supported, "fixture"), ReadOnlyMemory<byte>.Empty);
+        var source = new AssetDocument("highlight-fixture", new(0, DateTime.MinValue), new(FormatFamily.GameZ, 15, Recognition.Supported, "fixture"), ReadOnlyMemory<byte>.Empty);
         var world = source.Add(AssetKind.World, 0, "Whole world", 0, 0);
         using var doc = new DocumentModel(source);
         main.ViewModel.Documents.Add(doc);
@@ -62,16 +62,34 @@ internal static class WorldHighlightMcpChecks
             // The real WPF handlers share state with MCP, including click-again to turn off.
             for (int i = 0; i < buttons.Length; i++)
             {
+                await Options(new() { ["highlight"] = "none" });
                 buttons[i].IsChecked = true;
                 Assert.Equal(modes[i], (await State())["highlight"]!.GetValue<string>());
                 Assert.Single(buttons, b => b.IsChecked == true);
             }
             buttons[3].IsChecked = false;
             Assert.Equal("none", (await State())["highlight"]!.GetValue<string>());
+            foreach (int first in new[] { 1, 2 })
+            {
+                buttons[first].IsChecked = true;
+                buttons[3 - first].IsChecked = true;
+                Assert.Equal("canModifyAndClipTo", (await State())["highlight"]!.GetValue<string>());
+                Assert.True(buttons[1].IsChecked); Assert.True(buttons[2].IsChecked);
+                buttons[first].IsChecked = false;
+                Assert.Equal(modes[3 - first], (await State())["highlight"]!.GetValue<string>());
+                buttons[3 - first].IsChecked = false;
+                Assert.Equal("none", (await State())["highlight"]!.GetValue<string>());
+            }
+            await Options(new() { ["highlight"] = "canModifyAndClipTo" });
+            Assert.Equal(WorldHighlightMode.CanModifyAndClipTo, viewport.HighlightMode);
+            Assert.True(buttons[1].IsChecked); Assert.True(buttons[2].IsChecked);
+            buttons[0].IsChecked = true;
+            Assert.Equal("nonDefaultSoils", (await State())["highlight"]!.GetValue<string>());
+            Assert.False(buttons[1].IsChecked); Assert.False(buttons[2].IsChecked);
             await Options(new() { ["highlight"] = "CANMODIFY" }, "invalid_argument");
             await Options(new() { ["highlight"] = true }, "invalid_argument");
             // Dynamic constraints must reject the whole batch in either JSON order.
-            await Options(new() { ["highlight"] = "canModify" });
+            await Options(new() { ["highlight"] = "canModifyAndClipTo" });
             foreach (var invalid in new JsonObject[] { new() { ["lod"] = 999 }, new() { ["lod"] = long.MaxValue },
                 new() { ["texturePack"] = "unavailable-texture-pack" }, new() { ["difficulty"] = "Impossible" } })
             foreach (bool highlightFirst in new[] { true, false })
@@ -84,8 +102,8 @@ internal static class WorldHighlightMcpChecks
                 if (!highlightFirst) changes["highlight"] = "clipTo";
                 await Options(changes, "invalid_argument");
                 Assert.True(JsonNode.DeepEquals(before, await State()));
-                Assert.Equal(WorldHighlightMode.CanModify, viewport.HighlightMode);
-                Assert.True(buttons[1].IsChecked); Assert.False(buttons[0].IsChecked); Assert.False(buttons[2].IsChecked);
+                Assert.Equal(WorldHighlightMode.CanModifyAndClipTo, viewport.HighlightMode);
+                Assert.True(buttons[1].IsChecked); Assert.False(buttons[0].IsChecked); Assert.True(buttons[2].IsChecked);
                 Assert.False(((ToggleButton)main.FindName("Wireframe")).IsChecked);
                 Assert.Equal(pose, viewport.CaptureView()); Assert.Equal(0, doc.Revision);
             }
@@ -95,8 +113,8 @@ internal static class WorldHighlightMcpChecks
             var beforeFailure = await State();
             await Options(new() { ["highlight"] = "clipTo", ["horizon"] = !beforeFailure["horizon"]!.GetValue<bool>() }, "preview_unavailable");
             Assert.True(JsonNode.DeepEquals(beforeFailure, await State()));
-            Assert.Equal(WorldHighlightMode.CanModify, viewport.HighlightMode);
-            Assert.True(buttons[1].IsChecked); Assert.False(buttons[2].IsChecked);
+            Assert.Equal(WorldHighlightMode.CanModifyAndClipTo, viewport.HighlightMode);
+            Assert.True(buttons[1].IsChecked); Assert.True(buttons[2].IsChecked);
             await Options(new() { ["highlight"] = "none" });
             await Call("scene_options", new() { ["preview"] = Guid.NewGuid().ToString(), ["changes"] = new JsonObject { ["highlight"] = "clipTo" } }, "stale_preview");
             foreach (var kind in new[] { AssetKind.Model, AssetKind.Node, AssetKind.Animation, AssetKind.Texture })
@@ -143,22 +161,22 @@ internal static class WorldHighlightMcpChecks
     {
         using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(20));
         var token = deadline.Token;
-        var material = new Recoil.Zbd.Core.Worlds.WorldMaterial();
-        var builder = new Recoil.Zbd.Core.Worlds.ModelBuilder();
+        var material = new zStudio.Core.Worlds.WorldMaterial();
+        var builder = new zStudio.Core.Worlds.ModelBuilder();
         builder.Add(new([new(0,0,0),new(0,0,1),new(1,0,1)], [], [], [], material));
-        var root = new Recoil.Zbd.Core.Worlds.WorldNode("world", Recoil.Zbd.Core.Worlds.WorldNodeClass.World);
-        var world = new Recoil.Zbd.Core.Worlds.GameZWorld(); world.Nodes.Add(root); world.Models.Add(builder.Model); world.Materials.Add(material);
+        var root = new zStudio.Core.Worlds.WorldNode("world", zStudio.Core.Worlds.WorldNodeClass.World);
+        var world = new zStudio.Core.Worlds.GameZWorld(); world.Nodes.Add(root); world.Models.Add(builder.Model); world.Materials.Add(material);
         for (uint zone = 1; zone <= 2; zone++)
         {
-            var node = new Recoil.Zbd.Core.Worlds.WorldNode("part" + zone, Recoil.Zbd.Core.Worlds.WorldNodeClass.Object3D)
-            { Model = builder.Model, Zone = zone, Flags = Recoil.Zbd.Core.Worlds.WorldGltf.DefaultCarried | 4 };
+            var node = new zStudio.Core.Worlds.WorldNode("part" + zone, zStudio.Core.Worlds.WorldNodeClass.Object3D)
+            { Model = builder.Model, Zone = zone, Flags = zStudio.Core.Worlds.WorldGltf.DefaultCarried | 4 };
             node.SetPayloadInt(0, 0x28); node.Parents.Add(root); root.Children.Add(node); world.Nodes.Add(node);
         }
         string folder = Path.Combine(Path.GetTempPath(), "zstudio-zone-batches-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(folder);
         try
         {
-            var source = Recoil.Zbd.Core.Formats.FormatRegistry.Default.OpenBytes(Path.Combine(folder,"gamez.zbd"), Recoil.Zbd.Core.Worlds.GameZWriter.Write(world, token), token: token);
+            var source = zStudio.Core.Formats.FormatRegistry.Default.OpenBytes(Path.Combine(folder,"gamez.zbd"), zStudio.Core.Worlds.GameZWriter.Write(world, token), token: token);
             using var resolver = new AssetResolver(folder);
             using var viewport = new SceneViewport();
             await viewport.ShowAsync(source, source.Assets.Single(a => a.Kind == AssetKind.World), resolver, null, 0, token);
@@ -171,9 +189,9 @@ internal static class WorldHighlightMcpChecks
                 var mesh = (HelixToolkit.Wpf.SharpDX.MeshGeometryModel3D)batch.Key;
                 var placement = Assert.Single((ScenePlacement[])batch.Value!);
                 int zone = WorldSurfaceHighlights.NodeZone(source.Scene!, placement.NodeIndex);
-                var actual = Assert.IsType<HelixToolkit.Wpf.SharpDX.DiffuseMaterial>(mesh.Material).DiffuseColor;
+                var actual = PreviewMaterials.OverlayColor(Assert.IsType<HelixToolkit.Wpf.SharpDX.DiffuseMaterial>(mesh.Material));
                 var expected = WorldSurfaceHighlights.ZoneColor(zone);
-                Assert.Equal(expected.R, actual.Red); Assert.Equal(expected.G, actual.Green); Assert.Equal(expected.B, actual.Blue);
+                Assert.Equal(expected.R, actual.Red); Assert.Equal(expected.G, actual.Green); Assert.Equal(expected.B, actual.Blue); Assert.Equal(.5f, actual.Alpha);
                 colors.Add(actual.ToString()); Assert.Single(mesh.Instances!);
             }
             Assert.Equal(2, colors.Count);

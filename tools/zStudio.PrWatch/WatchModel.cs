@@ -1,4 +1,4 @@
-namespace Recoil.Zbd.PrWatch;
+namespace zStudio.PrWatch;
 
 // Informational comments (review requests, the review bot's status/summary posts) stay in snapshots and
 // acknowledgment accounting but never consume the one-shot feedback notice.

@@ -1,13 +1,13 @@
 using System.Buffers.Binary;
 using System.Numerics;
 using System.Text.Json.Nodes;
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Core.Export;
-using Recoil.Zbd.Core.Formats;
-using Recoil.Zbd.Core.Worlds;
+using zStudio.Core;
+using zStudio.Core.Export;
+using zStudio.Core.Formats;
+using zStudio.Core.Worlds;
 using Xunit;
 
-namespace Recoil.Zbd.Tests;
+namespace zStudio.Tests;
 
 /// <summary>Version-13 worlds (the 1998 demos): read, read-only, into the same model as the releases' version 15.</summary>
 public sealed class GameZVersion13Tests

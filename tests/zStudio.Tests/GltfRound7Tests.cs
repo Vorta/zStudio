@@ -3,10 +3,10 @@ using System.IO;
 using System.Numerics;
 using System.Text;
 using System.Text.Json.Nodes;
-using Recoil.Zbd.Core.Gltf;
+using zStudio.Core.Gltf;
 using Xunit;
 
-namespace Recoil.Zbd.Tests;
+namespace zStudio.Tests;
 
 /// <summary>
 /// glTF data laid out where the specification places it (strides of 4 to 252 bytes in steps of 4 that hold an element,

@@ -1,9 +1,9 @@
 using System.Globalization;
 using System.Text.Json.Nodes;
 using System.Windows.Controls;
-using Recoil.Zbd.Core.Sources;
+using zStudio.Core.Sources;
 
-namespace Recoil.Zbd.Desktop;
+namespace zStudio.Desktop;
 
 internal sealed record ZoneEditorActions(Action<bool> Mode, Action<byte[]> Zones, Action<bool?> Gate,
     Action<bool> SharedScope, Action Paint, Action Select, Func<Task> Apply, Action Cancel, Func<byte, string, Task> Label);

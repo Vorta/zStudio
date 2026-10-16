@@ -1,10 +1,10 @@
 using System.Globalization;
 using System.Text.Json.Nodes;
 using System.Windows.Controls;
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Core.Terrain;
+using zStudio.Core;
+using zStudio.Core.Terrain;
 
-namespace Recoil.Zbd.Desktop;
+namespace zStudio.Desktop;
 
 /// <summary>What the brush paints: a recipe's region, painting or erasing, with a round brush of a radius in world units.</summary>
 internal sealed record TerrainBrushState(string Recipe, string Region, bool Add, float Radius);

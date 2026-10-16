@@ -1,13 +1,13 @@
 using System.Numerics;
 using System.Text;
 using System.Text.Json.Nodes;
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Core.Animation;
-using Recoil.Zbd.Core.Formats;
-using Recoil.Zbd.Core.Worlds;
+using zStudio.Core;
+using zStudio.Core.Animation;
+using zStudio.Core.Formats;
+using zStudio.Core.Worlds;
 using Xunit;
 
-namespace Recoil.Zbd.Tests;
+namespace zStudio.Tests;
 
 /// <summary>
 /// Lookups by name as ResolveNodeByName, LoadZbd, RebindEntryToNode, CreateFromNamesAtPose and the script interpreter
@@ -32,7 +32,7 @@ public sealed class EngineLookupTests
     private static AnimationPreviewContext Context(GameScene scene, int? loaded, params AnimationEntry[] entries)
     {
         scene.Models.Add(new(0, [Vector3.Zero, Vector3.UnitX, Vector3.UnitY], [], [], [], []));
-        var world = new ZbdDocument("gamez.zbd", new(0, DateTime.MinValue), new(FormatFamily.GameZ, 15, Recognition.Supported, "fixture"), ReadOnlyMemory<byte>.Empty) { Scene = scene };
+        var world = new AssetDocument("gamez.zbd", new(0, DateTime.MinValue), new(FormatFamily.GameZ, 15, Recognition.Supported, "fixture"), ReadOnlyMemory<byte>.Empty) { Scene = scene };
         var package = new AnimationPackage { Prefix = [], Tail = [] };
         package.Entries.AddRange([Entry(0, ""), .. entries]);
         return new() { Package = package, World = world, LoadedNodeCount = loaded };

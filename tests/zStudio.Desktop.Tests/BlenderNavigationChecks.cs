@@ -11,16 +11,16 @@ using HelixToolkit;
 using HelixToolkit.Wpf.SharpDX;
 using ModelContextProtocol.Client;
 using ModelContextProtocol.Protocol;
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Core.Animation;
-using Recoil.Zbd.Desktop;
-using Recoil.Zbd.Mcp;
-using Recoil.Zbd.Rendering;
+using zStudio.Core;
+using zStudio.Core.Animation;
+using zStudio.Desktop;
+using zStudio.Mcp;
+using zStudio.Rendering;
 using Xunit;
 using MeshGeometry3D = HelixToolkit.SharpDX.MeshGeometry3D;
 using ProjectionCamera = HelixToolkit.Wpf.SharpDX.ProjectionCamera;
 
-namespace Recoil.Zbd.Desktop.Tests;
+namespace zStudio.Desktop.Tests;
 
 internal static class BlenderNavigationChecks
 {
@@ -372,7 +372,7 @@ internal static class BlenderNavigationChecks
     {
         using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(25));
         var main = new MainWindow { Left = -12000, ShowInTaskbar = false }; main.Show();
-        var source = new ZbdDocument("camera-fixture", new(0, DateTime.MinValue), new(FormatFamily.GameZ, 15, Recognition.Supported, "fixture"), ReadOnlyMemory<byte>.Empty);
+        var source = new AssetDocument("camera-fixture", new(0, DateTime.MinValue), new(FormatFamily.GameZ, 15, Recognition.Supported, "fixture"), ReadOnlyMemory<byte>.Empty);
         using var doc = new DocumentModel(source); main.ViewModel.Documents.Add(doc);
         Set("shownDocument", doc); Set("scene", scene); Set("shownAsset", source.Add(AssetKind.World, 0, "Whole world", 0, 0));
         ((FrameworkElement)main.FindName("SceneHost")).Visibility = Visibility.Visible;
@@ -424,7 +424,7 @@ internal static class BlenderNavigationChecks
             typeof(SceneViewport).GetProperty(nameof(SceneViewport.IsPickupDragging))!.SetValue(scene, false);
 
             var package = new AnimationPackage { Prefix = new byte[72], Tail = [] }; package.Entries.Add(new(new byte[308], 0, 0));
-            using var animationDoc = new DocumentModel(new ZbdDocument("animation-fixture", new(0, DateTime.MinValue), new(FormatFamily.Animation, 28, Recognition.Supported, "fixture"), ReadOnlyMemory<byte>.Empty) { Animations = package });
+            using var animationDoc = new DocumentModel(new AssetDocument("animation-fixture", new(0, DateTime.MinValue), new(FormatFamily.Animation, 28, Recognition.Supported, "fixture"), ReadOnlyMemory<byte>.Empty) { Animations = package });
             using var editor = new AnimationEditor(animationDoc, 0, new AssetResolver(Path.GetTempPath()), CancellationToken.None);
             Set("animation", editor);
             try

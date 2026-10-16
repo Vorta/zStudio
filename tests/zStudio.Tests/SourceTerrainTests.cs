@@ -1,11 +1,11 @@
 using System.IO;
 using System.Text.Json.Nodes;
-using Recoil.Zbd.Core.Formats;
-using Recoil.Zbd.Core.Sources;
-using Recoil.Zbd.Core.Worlds;
+using zStudio.Core.Formats;
+using zStudio.Core.Sources;
+using zStudio.Core.Worlds;
 using Xunit;
 
-namespace Recoil.Zbd.Tests;
+namespace zStudio.Tests;
 
 /// <summary>A terrain recipe in a source project: the mission database names it, and the world build compiles its pieces.</summary>
 public sealed class SourceTerrainTests
@@ -41,10 +41,9 @@ public sealed class SourceTerrainTests
         var json = JsonNode.Parse(File.ReadAllBytes(fixture.Path(model)))!;
         json["meshes"]![0]!["primitives"]![0]!["attributes"]!.AsObject().Remove("TEXCOORD_0");
         fixture.Write(model, json.ToJsonString());
-        string output = Path.Combine(SourceWorlds.PreviewRoot(fixture.Project), "missing-uv");
-        var error = await Assert.ThrowsAsync<InvalidDataException>(() => SourceWorlds.BuildPreviewAsync(fixture.Project, "m1", output, token: Token));
+        var error = await Assert.ThrowsAsync<InvalidDataException>(() => SourceWorlds.LoadSceneAsync(fixture.Project, "m1", token: Token));
         Assert.Contains("TEXCOORD_0", error.Message);
-        Assert.False(File.Exists(Path.Combine(output, "m1", "gamez.zbd")));
+        Assert.Empty(Directory.EnumerateFiles(fixture.Project, "*.zbd", SearchOption.AllDirectories));
     }
 
     [Fact]
@@ -111,19 +110,27 @@ public sealed class SourceTerrainTests
         return fixture;
     }
 
-    [Fact]
-    public async Task TheDatabaseMarkerBecomesPiecesInTheirGridCells()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task TheDatabaseMarkerBecomesPiecesInTheirGridCells(bool terrainOnly)
     {
         using var fixture = Fixture();
+        if (terrainOnly)
+        {
+            var database = JsonNode.Parse(File.ReadAllBytes(fixture.Path("data/m1/models/m1.gltf")))!;
+            database["scenes"]![0]!["nodes"] = new JsonArray(database["nodes"]!.AsArray().Count - 1);
+            fixture.Write("data/m1/models/m1.gltf", database.ToJsonString());
+        }
         SourceWorkspace workspace = new(fixture.Project);
-        var build = await SourceWorlds.BuildPreviewAsync(fixture.Project, "m1", Path.Combine(SourceWorlds.PreviewRoot(fixture.Project), "preview"), workspace.Overlay(), token: Token);
-        Assert.Null(build.Outputs.FirstOrDefault(o => o.Error != null)?.Error);
-        var world = GameZWorldReader.FromDocument(FormatRegistry.Default.OpenBytes("gamez.zbd", await File.ReadAllBytesAsync(build.WorldPath, Token), token: Token), Token);
+        var build = await SourceWorlds.LoadSceneAsync(fixture.Project, "m1", workspace.Overlay(), token: Token);
+        Assert.NotNull(build.Scene);
+        var world = build.World;
         var worldNode = world.Nodes.Single(n => n.Class == WorldNodeClass.World);
         var pieces = world.Nodes.Where(n => n.Name.StartsWith("coast_land_", StringComparison.Ordinal)).ToArray();
         Assert.Equal(8, pieces.Length);
         Assert.DoesNotContain(world.Nodes, n => n.Name == "terrain");
-        Assert.Contains(world.Nodes, n => n.Name == "ground");
+        Assert.Equal(!terrainOnly, world.Nodes.Any(n => n.Name == "ground"));
         foreach (var piece in pieces)
         {
             // Each piece is a world child in the cell its name gives (columns then rows), never the overflow list.
@@ -143,6 +150,17 @@ public sealed class SourceTerrainTests
         Assert.Equal("land", origin.TerrainSurface);
         Assert.Contains("data/m1/models/coast.terrain.json", build.Dependencies);
         Assert.Contains("data/m1/models/coast.gltf", build.Dependencies);
+        var topology = slots.ToDictionary(p => p.Value, p => p.Key);
+        var selection = SourceSelectionIndex.Build(build.Provenance, Token, topology, build.ReadHashes);
+        Assert.All(pieces, p => Assert.Equal(slots[p], selection.Owners[slots[p]]));
+        Assert.Equal(pieces.Length, pieces.Select(p => selection.Identities[slots[p]]).Distinct().Count());
+        var repeated = SourceSelectionIndex.Build(build.Provenance, Token, topology, build.ReadHashes);
+        Assert.All(pieces, p => Assert.Equal(selection.Identities[slots[p]], repeated.Identities[slots[p]]));
+        var changedInputs = build.ReadHashes.ToDictionary(p => p.Key, p => p.Value, StringComparer.OrdinalIgnoreCase);
+        Assert.Contains("data/m1/models/coast.bin", changedInputs.Keys, StringComparer.OrdinalIgnoreCase);
+        changedInputs["data/m1/models/coast.bin"] = SourceProject.Sha256("changed surface geometry"u8);
+        var changed = SourceSelectionIndex.Build(build.Provenance, Token, topology, changedInputs);
+        Assert.All(pieces, p => Assert.NotEqual(selection.Identities[slots[p]], changed.Identities[slots[p]]));
     }
 
     [Fact]
@@ -152,8 +170,8 @@ public sealed class SourceTerrainTests
         SourceWorkspace workspace = new(fixture.Project);
         // Widening the road in the workspace: the next build uses the pending recipe.
         workspace.Apply("Widen road", [("data/m1/models/coast.terrain.json", System.Text.Encoding.UTF8.GetBytes(Recipe.Replace("[260, 240], [260, 260]", "[280, 240], [280, 260]")))], Token);
-        var build = await SourceWorlds.BuildPreviewAsync(fixture.Project, "m1", Path.Combine(SourceWorlds.PreviewRoot(fixture.Project), "preview"), workspace.Overlay(), token: Token);
-        var world = GameZWorldReader.FromDocument(FormatRegistry.Default.OpenBytes("gamez.zbd", await File.ReadAllBytesAsync(build.WorldPath, Token), token: Token), Token);
+        var build = await SourceWorlds.LoadSceneAsync(fixture.Project, "m1", workspace.Overlay(), token: Token);
+        var world = build.World;
         var road = world.Nodes.Where(n => n.Name.StartsWith("coast_land_", StringComparison.Ordinal) && (n.Flags & 0x20000) != 0).ToArray();
         float area = 0;
         foreach (var node in road)
@@ -191,13 +209,13 @@ public sealed class SourceTerrainTests
         SourceWorkspace workspace = new(fixture.Project);
         var candidates = SourceTerrain.MeshNodes(workspace, "data/m1/models/coast.gltf", Token);
         Assert.Contains("land", candidates); Assert.Contains("odd", candidates); Assert.DoesNotContain("rock", candidates);
-        var build = await SourceWorlds.BuildPreviewAsync(fixture.Project, "m1", Path.Combine(SourceWorlds.PreviewRoot(fixture.Project), "preview"), workspace.Overlay(), token: Token);
-        Assert.Null(build.Outputs.FirstOrDefault(o => o.Error != null)?.Error);
-        var world = GameZWorldReader.FromDocument(FormatRegistry.Default.OpenBytes("gamez.zbd", await File.ReadAllBytesAsync(build.WorldPath, Token), token: Token), Token);
+        var build = await SourceWorlds.LoadSceneAsync(fixture.Project, "m1", workspace.Overlay(), token: Token);
+        Assert.NotNull(build.Scene);
+        var world = build.World;
         var pieces = world.Nodes.Where(n => n.Name.StartsWith("coast_land_", StringComparison.Ordinal)).ToArray();
         // The probe finds the land facing up wherever it lies.
         foreach (var (x, z) in new[] { (210f, 210f), (290f, 290f), (250f, 230f) })
-            Assert.Equal([0f], Recoil.Zbd.Core.Terrain.TerrainProbe.At(pieces, x, z, token: TestContext.Current.CancellationToken).Select(h => h.Height));
+            Assert.Equal([0f], zStudio.Core.Terrain.TerrainProbe.At(pieces, x, z, token: TestContext.Current.CancellationToken).Select(h => h.Height));
     }
 
     [Fact]
@@ -211,7 +229,7 @@ public sealed class SourceTerrainTests
         recoil["mode"] = 1;
         fixture.Write("data/m1/models/coast.gltf", coast.ToJsonString());
         SourceWorkspace workspace = new(fixture.Project);
-        var refused = await Assert.ThrowsAsync<InvalidDataException>(() => SourceWorlds.BuildPreviewAsync(fixture.Project, "m1", Path.Combine(SourceWorlds.PreviewRoot(fixture.Project), "preview"), workspace.Overlay(), token: Token));
+        var refused = await Assert.ThrowsAsync<InvalidDataException>(() => SourceWorlds.LoadSceneAsync(fixture.Project, "m1", workspace.Overlay(), token: Token));
         Assert.Contains("facade or point model", refused.Message);
     }
 
@@ -221,8 +239,8 @@ public sealed class SourceTerrainTests
         using var fixture = Fixture();
         SourceWorkspace workspace = new(fixture.Project);
         SourceWorlds.AddModel(workspace, "m1", new(new(fixture.Tank, "tank_at", new(100, 0, -50)), []), Token);
-        var build = await SourceWorlds.BuildPreviewAsync(fixture.Project, "m1", Path.Combine(SourceWorlds.PreviewRoot(fixture.Project), "preview"), workspace.Overlay(), token: Token);
-        var world = GameZWorldReader.FromDocument(FormatRegistry.Default.OpenBytes("gamez.zbd", await File.ReadAllBytesAsync(build.WorldPath, Token), token: Token), Token);
+        var build = await SourceWorlds.LoadSceneAsync(fixture.Project, "m1", workspace.Overlay(), token: Token);
+        var world = build.World;
         Dictionary<WorldNode, WorldNodeProvenance> provenance = new(ReferenceEqualityComparer.Instance);
         foreach (var (node, slot) in GameZWriter.NodeSlots(world, TestContext.Current.CancellationToken)) if (build.Provenance.TryGetValue(slot, out var origin)) provenance[node] = origin;
         var tank = world.Nodes.Single(n => n.Name == "tank_at");
@@ -241,7 +259,7 @@ public sealed class SourceTerrainTests
         tank["nodes"]!.AsArray().Add(new JsonObject { ["name"] = "terrain", ["extras"] = new JsonObject { ["recoil"] = new JsonObject { ["terrain"] = "../coast.terrain.json" } } });
         tank["scenes"]![0]!["nodes"]!.AsArray().Add(tank["nodes"]!.AsArray().Count - 1);
         fixture.Write(fixture.Tank, tank.ToJsonString());
-        var failure = await Assert.ThrowsAsync<InvalidDataException>(() => SourceWorlds.BuildPreviewAsync(fixture.Project, "m2", Path.Combine(SourceWorlds.PreviewRoot(fixture.Project), "preview"), null, token: Token));
+        var failure = await Assert.ThrowsAsync<InvalidDataException>(() => SourceWorlds.LoadSceneAsync(fixture.Project, "m2", null, token: Token));
         Assert.Contains("mission database", failure.Message);
     }
 }

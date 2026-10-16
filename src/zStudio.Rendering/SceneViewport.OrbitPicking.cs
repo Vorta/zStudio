@@ -6,7 +6,7 @@ using Vector2 = System.Numerics.Vector2;
 using Vector3 = System.Numerics.Vector3;
 using HitTestResult = HelixToolkit.SharpDX.HitTestResult;
 
-namespace Recoil.Zbd.Rendering;
+namespace zStudio.Rendering;
 
 public sealed partial class SceneViewport
 {

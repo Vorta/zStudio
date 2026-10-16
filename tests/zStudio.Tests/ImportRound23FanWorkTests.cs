@@ -1,10 +1,10 @@
 using System.Collections;
 using System.Numerics;
-using Recoil.Zbd.Core.Gltf;
-using Recoil.Zbd.Core.Worlds;
+using zStudio.Core.Gltf;
+using zStudio.Core.Worlds;
 using Xunit;
 
-namespace Recoil.Zbd.Tests;
+namespace zStudio.Tests;
 
 public sealed class ImportRound23FanWorkTests
 {

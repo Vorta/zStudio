@@ -2,7 +2,7 @@ using System.Buffers.Binary;
 using System.Text;
 using System.Text.Json.Nodes;
 
-namespace Recoil.Zbd.Core.Formats;
+namespace zStudio.Core.Formats;
 
 public sealed record ScriptInstruction(Guid Id, IReadOnlyList<string> Tokens, ReadOnlyMemory<byte> Raw, long? SourceOffset)
 {
@@ -40,7 +40,7 @@ internal sealed class ScriptReader : IZbdFormatReader
         }
     }
     public FormatFamily Family => FormatFamily.Scripts;
-    public void Read(ZbdDocument doc, CancellationToken token)
+    public void Read(AssetDocument doc, CancellationToken token)
     {
         BinaryCursor c = new(doc.Bytes); c.Skip(8); uint stored = c.U32(); FormatRegistry.CheckEntries("Script entry", stored); int count = c.Count(stored, 128);
         DecodeBudget budget = new(); budget.Reserve(512L * count);

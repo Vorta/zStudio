@@ -3,9 +3,9 @@ using System.Numerics;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Threading;
-using Recoil.Zbd.Core.Sources;
+using zStudio.Core.Sources;
 
-namespace Recoil.Zbd.Desktop;
+namespace zStudio.Desktop;
 
 /// <summary>
 /// Chooses a project model to load into a mission's source world: the model, its node name, whether it is placed in the

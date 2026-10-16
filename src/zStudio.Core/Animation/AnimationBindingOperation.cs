@@ -1,7 +1,7 @@
-using Recoil.Zbd.Core.Formats;
-using Recoil.Zbd.Core.Worlds;
+using zStudio.Core.Formats;
+using zStudio.Core.Worlds;
 
-namespace Recoil.Zbd.Core.Animation;
+namespace zStudio.Core.Animation;
 
 /// <summary>One preparation/frontier's bounded, immutable-topology name and subtree queries.</summary>
 /// <param name="maximum">The allowance; by default the scene's (<see cref="Allowance(AnimationPreviewContext)"/>).</param>
@@ -144,7 +144,15 @@ internal sealed class AnimationBindingOperation(AnimationPreviewContext context,
     private int Below(int root, string name, int limit, bool unique)
     {
         var tree = Tree(root, limit); Reserve(name.Length + 1L);
-        return (unique ? tree.Unique : tree.First).GetValueOrDefault(name, -1);
+        int result = (unique ? tree.Unique : tree.First).GetValueOrDefault(name, -1);
+        if (!unique && tree.Unique.GetValueOrDefault(name, -1) < 0 && result >= 0 && context.InitializationTransforms is { } dependencies)
+        {
+            // A world partition crossing can change preorder while retaining every node and explicit edge.
+            // Remember only order-sensitive lookups; unique matches cannot change from a transform alone.
+            Reserve(96L + name.Length);
+            dependencies.OrderedLookups.Add((root, name, Math.Min(limit, context.Scene.Nodes.Count), result));
+        }
+        return result;
     }
     internal IReadOnlyList<int> Descendants(int root, int limit) => Tree(root, limit).Nodes;
     private Subtree Tree(int root, int limit)

@@ -2,7 +2,7 @@ using System.Buffers;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 
-namespace Recoil.Zbd.Core.Gltf;
+namespace zStudio.Core.Gltf;
 
 /// <summary>Writes edited source JSON within the same byte limit its reader accepts, without an oversized intermediate string.</summary>
 internal static class GltfJson

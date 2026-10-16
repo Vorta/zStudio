@@ -3,14 +3,14 @@ using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
-using Recoil.Zbd.Rendering;
+using zStudio.Rendering;
 
-namespace Recoil.Zbd.Desktop;
+namespace zStudio.Desktop;
 
 public partial class MainWindow
 {
     private readonly MenuItem cameraNavigationMenu = new() { Header = "3D Navigation" };
-    private SceneViewport? ActiveNavigationViewport => EmptyPreview.Visibility == Visibility.Visible ? null
+    private SceneViewport? ActiveNavigationViewport => EmptyPreview.Visibility == Visibility.Visible || retiringScene != null ? null
         : motion?.Viewport ?? animation?.Viewport ?? (SceneHost.Visibility == Visibility.Visible ? scene : null);
     private void InitializeCameraNavigation()
     {

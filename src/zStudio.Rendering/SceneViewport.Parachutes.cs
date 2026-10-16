@@ -8,7 +8,7 @@ using HelixToolkit.Maths;
 using HelixToolkit.SharpDX;
 using HelixToolkit.Wpf.SharpDX;
 
-namespace Recoil.Zbd.Rendering;
+namespace zStudio.Rendering;
 
 public sealed record ParachutePathPoint(double Phase, Vector3 Position);
 public sealed record ParachuteRelease(double Phase, Vector3 Position, bool Conditional = true);
@@ -82,7 +82,9 @@ public sealed partial class SceneViewport
         parachuteLine = new()
         {
             Geometry = new LineGeometry3D { Positions = new(parachutePath.Select(p => p.Position)),
-                Indices = new(Enumerable.Range(0, parachutePath.Length - 1).SelectMany(i => new[] { i, i + 1 })) },
+                // Sample zero is the pre-flight pose. Keep its time for release/edit calculations,
+                // but do not draw the initial jump from that pose to the flight path.
+                Indices = new(Enumerable.Range(1, parachutePath.Length - 2).SelectMany(i => new[] { i, i + 1 })) },
             // The overlay does not enlarge authored scene depth bounds, just like its release markers.
             Color = Colors.DeepSkyBlue, Thickness = 1.6, IsHitTestVisible = false, IsDepthClipEnabled = false
         };
@@ -110,7 +112,7 @@ public sealed partial class SceneViewport
 
     private void RequireParachuteInteraction()
     {
-        if (!InspectionSelectionEnabled) throw new InvalidOperationException("Unlock editing first.");
+        if (!PlacementEditingEnabled) throw new InvalidOperationException("Unlock editing first.");
         if (IsFlyActive || IsPickupDragging || HasTransformDraft || TerrainBrushActive || ZonePaintActive || AiPathEditingNetwork != null)
             throw new InvalidOperationException("Finish the active navigation or editing operation before editing drop windows.");
         if (parachutePath.Length < 2) throw new InvalidOperationException("Analyze a flight path first.");
@@ -247,7 +249,7 @@ public sealed partial class SceneViewport
         if (chosen == null) return false;
         viewport.Focus();
         if (ambiguous) { Information?.Invoke("Several drop windows meet here. Select the window in the drop-window list to retain its flight phase."); return true; }
-        if (!InspectionSelectionEnabled || IsFlyActive || IsPickupDragging || HasTransformDraft || TerrainBrushActive || ZonePaintActive || AiPathEditingNetwork != null) return true;
+        if (!PlacementEditingEnabled || IsFlyActive || IsPickupDragging || HasTransformDraft || TerrainBrushActive || ZonePaintActive || AiPathEditingNetwork != null) return true;
         SelectParachuteWindow(chosen); return true;
     }
 

@@ -7,13 +7,13 @@ using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using ModelContextProtocol.Client;
 using ModelContextProtocol.Protocol;
-using Recoil.Zbd.Automation;
-using Recoil.Zbd.Desktop;
-using Recoil.Zbd.Mcp;
-using Recoil.Zbd.Tests;
+using zStudio.Automation;
+using zStudio.Desktop;
+using zStudio.Mcp;
+using zStudio.Tests;
 using Xunit;
 
-namespace Recoil.Zbd.Desktop.Tests;
+namespace zStudio.Desktop.Tests;
 
 /// <summary>
 /// Edits a source world's rebuild takes back, through the real named-pipe MCP connection: a move and a copy in the mission
@@ -28,9 +28,9 @@ internal static class SourceTakeBackMcpChecks
     internal static async Task Run()
     {
         using var fixture = new SourceWorldFixture();
-        // Two copies of a part (a crate with a lid, and a post) and a second ground, the newest, which the script marks;
+        // Map-authored crates with lids, a post and a second ground, the newest, which the script marks;
         // FindNode spare finds nothing until a node takes that name. The mission's texture effects find the lid.
-        fixture.WritePartDatabase(secondGround: true);
+        fixture.WriteNestedDatabase(lookupEdits: true, secondGround: true);
         string script = Encoding.Latin1.GetString(File.ReadAllBytes(fixture.Path("gamegen/m1.gs")));
         // A script object attached below a holder, where a later FindSubNode finds it to mark it.
         fixture.Write("gamegen/m1.gs", script.Replace("# no vehicles", "FindNode ground\r\nSetLandmark on\r\nFindNode spare\r\nSetLandmark on\r\n"
@@ -51,7 +51,7 @@ internal static class SourceTakeBackMcpChecks
             var workspace = doc.SourceWorld!.Workspace;
             await Preview();
 
-            // A step to redo: a flag of the part's post, undone.
+            // A step to redo: a flag of the map's post, undone.
             var flagged = Document((await Job("source_world_object_edit", new() { ["document"] = Id(doc), ["revision"] = doc.Revision, ["node"] = Node(doc, "post"), ["flag"] = "0x10000", ["on"] = true }))["document"]!);
             var shown = Document(await Call("undo_redo", new() { ["document"] = Id(flagged), ["revision"] = flagged.Revision, ["action"] = "undo" }));
             Assert.Equal("Set flag 0x10000 of post", workspace.RedoLabel);
@@ -59,15 +59,15 @@ internal static class SourceTakeBackMcpChecks
 
             // The plain ground moved under the marked one would be the newest ground: the script would mark it instead.
             int marked = Grounds(shown).Single(g => shown.SourceBuild!.Provenance[g].Applied.Count > 0), plain = Grounds(shown).Single(g => g != marked);
-            var moved = await TakenBack(new() { ["action"] = "parent", ["node"] = plain, ["parent"] = marked }, "Editing ground was reverted: ");
+            var moved = await RejectedPlan(new() { ["action"] = "parent", ["node"] = plain, ["parent"] = marked }, "Editing ground was not applied: ");
             Assert.Contains("would act on ground (data/m1/models/m1.gltf node", moved);
             // A copy named spare: the line that found nothing would mark the copy.
-            var copied = await TakenBack(new() { ["action"] = "duplicate", ["node"] = Node(shown, "crate"), ["name"] = "spare" }, "Editing crate was reverted: ");
-            Assert.Contains("would act on spare (data/m1/models/m1_01.gltf node", copied);
+            var copied = await RejectedPlan(new() { ["action"] = "duplicate", ["node"] = Node(shown, "crate"), ["name"] = "spare" }, "Editing crate was not applied: ");
+            Assert.Contains("would act on spare (data/m1/models/m1.gltf node", copied);
             Assert.Contains("instead of no node", copied);
             // The script object moved to the world is attached before the world is written, after FindSubNode obj looked for
             // it below the holder: the landmark would be lost.
-            var lost = await TakenBack(new() { ["action"] = "parent", ["node"] = Node(shown, "obj"), ["parent"] = -1 }, "Editing obj was reverted: ");
+            var lost = await RejectedPlan(new() { ["action"] = "parent", ["node"] = Node(shown, "obj"), ["parent"] = -1 }, "Editing obj was not applied: ");
             Assert.Contains("would act on no node instead of the node gamegen/m1.gs line", lost);
 
             // The redo step survived both: it brings the flag back.
@@ -82,7 +82,7 @@ internal static class SourceTakeBackMcpChecks
             var accepted = await Job("source_world_object_edit", new() { ["document"] = Id(redone), ["revision"] = redone.Revision, ["node"] = Node(redone, "crate"), ["action"] = "duplicate", ["name"] = "crate2" });
             var state = accepted["document"]!["sourceWorld"]!;
             var notes = state["editNotes"]!.AsArray().Select(n => n!.GetValue<string>()).ToArray();
-            Assert.Contains(notes, n => n.Contains("so the world gets 2 nodes named crate2", StringComparison.Ordinal));
+            Assert.Contains(notes, n => n.StartsWith("The copy shares the original's meshes and textures", StringComparison.Ordinal));
             Assert.Equal(notes.Length, state["editNoteCount"]!.GetValue<int>());
             Assert.Equal(1, state["lookupChangeCount"]!.GetValue<int>());
             Assert.Single(main.ViewModel.Problems, p => p.Message.Contains("FindNode lid in gamegen/support/tex_fxm1.gw finds", StringComparison.Ordinal));
@@ -130,9 +130,10 @@ internal static class SourceTakeBackMcpChecks
             var draftDocument = main.ViewModel.Documents.Single(d => d.SourceWorld != null);
             Assert.True(await (Task<bool>)typeof(MainWindow).GetMethod("ShowSourceObjectPropertiesAsync", BindingFlags.Instance | BindingFlags.NonPublic)!
                 .Invoke(main, [draftDocument, Node(draftDocument, "post"), CancellationToken.None])!);
-            var draftWindow = main.OpenPropertiesWindow!;
-            await main.Dispatcher.InvokeAsync(() => draftWindow.UpdateLayout(), System.Windows.Threading.DispatcherPriority.Loaded);
-            var draftFields = draftWindow.SourceFields!;
+            var draftCard = (SceneInspectionCard)typeof(MainWindow).GetProperty("CurrentInspectionCard", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(main)!;
+            draftCard.Refresh();
+            await main.Dispatcher.InvokeAsync(() => main.UpdateLayout(), System.Windows.Threading.DispatcherPriority.Loaded);
+            var draftFields = draftCard.ObjectEditor!;
             var position = Descendants(draftFields).OfType<TextBox>().Single(t => System.Windows.Automation.AutomationProperties.GetName(t) == "Position X");
             position.Text = "19";
             Assert.True(draftFields.HasPendingDrafts);
@@ -153,20 +154,24 @@ internal static class SourceTakeBackMcpChecks
                 {
                     var resolving = main.Commands.ExecuteAsync("zstudio_resolve_drafts", new()
                     {
-                        ["document"] = Id(draftDocument), ["target"] = "properties", ["token"] = draftFields.DraftToken, ["action"] = "apply"
+                        ["document"] = Id(draftDocument), ["target"] = "scene", ["token"] = draftCard.DraftToken, ["action"] = "apply"
                     }, request.Token);
                     await draftEntered.Task.WaitAsync(token);
+                    var repeatedApply = Assert.Throws<TargetInvocationException>(() => typeof(MainWindow).GetMethod("ApplyInspectionEditCore", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(main, [draftCard, CancellationToken.None, false]));
+                    Assert.Equal("busy", Assert.IsType<StudioCommandException>(repeatedApply.InnerException).Code);
+                    Assert.True(draftCard.ObjectApplying);
+                    Assert.Equal("busy", Assert.Throws<StudioCommandException>(() => draftCard.CancelDraft()).Code);
+                    Assert.True(draftCard.HasObjectDraft);
                     request.Cancel(); Assert.True(preparationToken.IsCancellationRequested); release.Release();
                     // FieldDraft keeps a canceled commit as a failed draft rather than accepting its baseline.
-                    Assert.Equal("invalid_draft", (await Assert.ThrowsAsync<StudioCommandException>(() => resolving)).Code);
+                    await Assert.ThrowsAnyAsync<OperationCanceledException>(() => resolving);
                     Assert.Same(draftDocument, main.ViewModel.SelectedDocument); Assert.False(draftDocument.IsDisposed);
                     Assert.Equal(draftRevision, workspace.ContentRevision); Assert.Equal(draftUndo, workspace.UndoCount);
-                    Assert.Same(draftWindow, main.OpenPropertiesWindow); Assert.True(draftFields.HasPendingDrafts);
+                    Assert.Null(main.OpenPropertiesWindow); Assert.True(draftFields.HasPendingDrafts);
                 }
                 finally { release.Release(); main.SourceEditPreparing = preparing; }
             }
-            draftFields.ResolveAutomationDrafts(draftFields.DraftToken, apply: false);
-            draftWindow.Dismiss();
+            draftCard.CancelDraft();
             var reloadBefore = main.ViewModel.Documents.Single(d => d.SourceWorld != null);
             var reloaded = Document(await Job("reload_document", new() { ["document"] = Id(reloadBefore), ["revision"] = reloadBefore.Revision }));
             Assert.True(reloadBefore.IsDisposed); Assert.False(reloaded.IsDisposed);
@@ -222,34 +227,37 @@ internal static class SourceTakeBackMcpChecks
             }
 
             // A world that does not open, and a reload whose build fails, also say so rather than keep the build's progress.
+            // Single-map navigation requires settling m1 first; a failed replacement must retain that clean map.
+            var retained = main.ViewModel.Documents.Single(d => d.SourceWorld != null);
+            await Job("save_document", new() { ["document"] = Id(retained), ["revision"] = retained.Revision });
             fixture.Write("gamegen/m2.gs", "Quit\r\n");
             Assert.Equal("build_failed", (await Job("source_world_open", new() { ["mission"] = "m2" }, "failed"))["code"]!.GetValue<string>());
             Assert.StartsWith("The m2 world did not open: ", main.ViewModel.Status);
+            Assert.Same(retained, main.ViewModel.Documents.Single(d => d.SourceWorld != null));
             fixture.Write("data/m1/models/m1.gltf", "{");
             var current = main.ViewModel.Documents.Single(d => d.SourceWorld != null);
             await Job("reload_document", new() { ["document"] = Id(current), ["revision"] = current.Revision }, "failed");
             Assert.StartsWith("The m1 world was not reloaded: ", main.ViewModel.Status);
 
-            // Asks for an edit the rebuild takes back, and checks that everything is as it was.
-            async Task<string> TakenBack(Dictionary<string, object?> edit, string reverted)
+            // Candidate evaluation rejects retargeting before acceptance; content, revision and history stay unchanged.
+            async Task<string> RejectedPlan(Dictionary<string, object?> edit, string statusPrefix)
             {
-                var before = Snapshot();
+                var before = Snapshot(); long revision = shown.Revision;
                 var failed = await Job("source_world_object_edit", new(edit) { ["document"] = Id(shown), ["revision"] = shown.Revision }, "failed");
                 Assert.Equal("invalid_argument", failed["code"]!.GetValue<string>());
                 string message = failed["message"]!.GetValue<string>();
-                Assert.StartsWith(reverted, message);
                 Assert.Contains("the build finds nodes by name, and this change alters which one it finds", message);
                 // The world shown is the one before; the workspace, its history and Problems are as they were.
                 Assert.False(shown.IsDisposed);
                 Assert.Same(shown, main.ViewModel.Documents.Single(d => d.SourceWorld != null));
                 Assert.False(shown.SourceInputsChanged());
-                Assert.Equal(before, Snapshot());
+                Assert.Equal(before, Snapshot()); Assert.Equal(revision, shown.Revision);
                 // The status says what happened, not what the edit was doing.
-                Assert.StartsWith(reverted, main.ViewModel.Status);
+                Assert.StartsWith(statusPrefix, main.ViewModel.Status);
                 return message;
             }
             string Snapshot() => string.Join("\n", [workspace.UndoCount.ToString(), workspace.UndoLabel ?? "-", workspace.RedoLabel ?? "-",
-                .. workspace.History.Select(t => t.Label), .. workspace.DirtyFiles, Encoding.UTF8.GetString(workspace.Read("data/m1/models/m1.gltf")!), Encoding.UTF8.GetString(workspace.Read("data/m1/models/m1_01.gltf")!),
+                .. workspace.History.Select(t => t.Label), .. workspace.DirtyFiles, Encoding.UTF8.GetString(workspace.Read("data/m1/models/m1.gltf")!),
                 .. main.ViewModel.Problems.Select(p => $"{p.Severity} {p.File}: {p.Message}")]);
             int[] Grounds(DocumentModel d) => [.. d.PreviewDocument.Scene!.Nodes.Where(n => n.Name == "ground" && d.SourceBuild!.Provenance.ContainsKey(n.Index)).Select(n => n.Index)];
             static int Node(DocumentModel d, string name) => d.PreviewDocument.Scene!.Nodes.First(n => n.Name == name && d.SourceBuild!.Provenance.ContainsKey(n.Index)).Index;

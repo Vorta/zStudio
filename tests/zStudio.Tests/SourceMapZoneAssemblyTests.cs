@@ -1,12 +1,12 @@
 using System.Numerics;
 using System.Text;
 using System.Text.Json.Nodes;
-using Recoil.Zbd.Core.Gltf;
-using Recoil.Zbd.Core.Sources;
-using Recoil.Zbd.Core.Worlds;
+using zStudio.Core.Gltf;
+using zStudio.Core.Sources;
+using zStudio.Core.Worlds;
 using Xunit;
 
-namespace Recoil.Zbd.Tests;
+namespace zStudio.Tests;
 
 public sealed class SourceMapZoneAssemblyTests
 {
@@ -82,7 +82,7 @@ public sealed class SourceMapZoneAssemblyTests
         StoreProfile(files, First, firstDocument, Profile(firstDocument, 0xFFFF0001));
         StoreProfile(files, Second, secondDocument, Profile(secondDocument, 0xFFFF0101));
         byte[] original = files.Content[First].ToArray();
-        var assembler = Assemble(files, "LoadGameGen turret.flt first\nLoadGameGen turret_2.flt second");
+        var assembler = Assemble(files, "LoadGameGen turret.gltf first\nLoadGameGen turret_2.gltf second");
         var first = Assert.Single(assembler.LoadedRoots[0].Children); var second = Assert.Single(assembler.LoadedRoots[1].Children);
         Assert.Equal(new uint[] { 0xFFFFFF01, 0xFFFF0001 }, first.Model!.Polygons.Select(p => p.Zone));
         Assert.Equal(new uint[] { 0xFFFFFF01, 0xFFFF0101 }, second.Model!.Polygons.Select(p => p.Zone));
@@ -92,7 +92,7 @@ public sealed class SourceMapZoneAssemblyTests
         var origin = assembler.Provenance[second];
         Assert.Equal(Second, origin.ModelFile); Assert.Equal(Second, origin.LogicalModelFile);
         Assert.Equal(Second, origin.ZoneOwnerPath); Assert.Empty(origin.ZoneOwnerReferences);
-        Assert.Null(origin.ZoneManifest); Assert.Equal(0, origin.ZoneNode); Assert.Equal(0, origin.ZoneMesh);
+        Assert.Equal(0, origin.ZoneNode); Assert.Equal(0, origin.ZoneMesh);
         Assert.Contains(First, files.Reads); Assert.Contains(Second, files.Reads);
         Assert.Equal(original, files.Content[First]);
     }
@@ -117,7 +117,7 @@ public sealed class SourceMapZoneAssemblyTests
         StoreProfile(files, Second, second, Profile(second, 0xFFFF0101));
         const string holder = "data/m1/models/holder.gltf";
         Store(files, holder, References(("turret.gltf", 255, null), ("turret.gltf", 255, null), ("./turret.gltf", 255, null), ("turret_2.gltf", 255, null)));
-        var assembler = Assemble(files, "LoadGameGen holder.flt root");
+        var assembler = Assemble(files, "LoadGameGen holder.gltf root");
         var children = assembler.LoadedRoots[0].Children.Select(n => Assert.Single(n.Children)).ToArray();
         Assert.Equal(4, children.Length);
         Assert.Same(children[0].Model, children[1].Model);
@@ -136,7 +136,7 @@ public sealed class SourceMapZoneAssemblyTests
         StoreProfile(files, First, model, Profile(model, 0xFFFF0001) with { Nodes = [new(0, true, Inherit: true)], LoadRoot = null });
         const string holder = "data/m1/models/holder.gltf";
         Store(files, holder, References(("turret.gltf", 2, null), ("turret.gltf", 3, null)));
-        var assembler = Assemble(files, "LoadGameGen holder.flt root");
+        var assembler = Assemble(files, "LoadGameGen holder.gltf root");
         var children = assembler.LoadedRoots[0].Children.Select(n => Assert.Single(n.Children)).ToArray();
         Assert.Equal(new uint[] { 2, 3 }, children.Select(n => n.Zone));
         Assert.Same(children[0].Model, children[1].Model);
@@ -148,7 +148,7 @@ public sealed class SourceMapZoneAssemblyTests
         Files files = new(); var doc = Model(); Store(files, "data/fallback/turret.gltf", doc);
         Store(files, "data/m1/models/holder.gltf", References(("turret.gltf", 255, null)));
         Assert.Throws<InvalidDataException>(() => Assemble(files,
-            "SetModelDirectory ../data/fallback\nSetModelDirectory ../data/m1/models\nLoadGameGen holder.flt root"));
+            "SetModelDirectory ../data/fallback\nSetModelDirectory ../data/m1/models\nLoadGameGen holder.gltf root"));
         Assert.DoesNotContain("data/fallback/turret.gltf", files.Reads);
     }
 
@@ -159,11 +159,11 @@ public sealed class SourceMapZoneAssemblyTests
         var profile = Profile(doc, 0xFFFF0001);
         Store(files, "data/m1/models/holder.gltf", References(("turret.gltf", 255, profile)));
         doc.Roots[0].Mesh!.Primitives[0].Positions[1] = new(2, 0, 0); Store(files, First, doc);
-        var accepted = Assemble(files, "LoadGameGen holder.flt root");
+        var accepted = Assemble(files, "LoadGameGen holder.gltf root");
         Assert.Equal(0xFFFF0001u, Assert.Single(Assert.Single(accepted.LoadedRoots[0].Children).Children).Model!.Polygons[1].Zone);
         doc.Roots[0].Mesh!.Primitives[0].Indices[1] = 2;
         doc.Roots[0].Mesh!.Primitives[0].Indices[2] = 1; Store(files, First, doc);
-        Assert.Contains("topology", Assert.Throws<InvalidDataException>(() => Assemble(files, "LoadGameGen holder.flt root")).Message);
+        Assert.Contains("topology", Assert.Throws<InvalidDataException>(() => Assemble(files, "LoadGameGen holder.gltf root")).Message);
     }
 
     [Fact]
@@ -173,8 +173,8 @@ public sealed class SourceMapZoneAssemblyTests
         byte[] original = files.Content[Geometry].ToArray();
         Store(files, "data/m1/models/m1.gltf", References(("../../common/models/turret.gltf", 255, Profile(doc, 0xFF020102))));
         Store(files, "data/m2/models/m2.gltf", References(("../../common/models/turret.gltf", 255, Profile(doc, 0xFF010202))));
-        var first = Assemble(files, "LoadGameGen m1.flt root");
-        var second = Assemble(files, "LoadGameGen m2.flt root", "m2");
+        var first = Assemble(files, "LoadGameGen m1.gltf root");
+        var second = Assemble(files, "LoadGameGen m2.gltf root", "m2");
         var firstNode = Assert.Single(Assert.Single(first.LoadedRoots[0].Children).Children);
         var secondNode = Assert.Single(Assert.Single(second.LoadedRoots[0].Children).Children);
         Assert.Equal(0xFF020102u, firstNode.Model!.Polygons[1].Zone);
@@ -190,9 +190,9 @@ public sealed class SourceMapZoneAssemblyTests
     {
         Files files = new(); var doc = Model();
         doc.Roots[0].Extras = new() { [WorldGltf.Key] = new JsonObject { ["zone"] = 7 } }; Store(files, First, doc);
-        var assembler = Assemble(files, "LoadGameGen turret.flt root");
+        var assembler = Assemble(files, "LoadGameGen turret.gltf root");
         var node = Assert.Single(assembler.LoadedRoots[0].Children);
-        Assert.Equal(7u, node.Zone); Assert.Null(assembler.Provenance[node].ZoneManifest);
+        Assert.Equal(7u, node.Zone);
         Assert.Equal(0, assembler.Provenance[node].ZoneNode);
         Assert.Equal(First, assembler.Provenance[node].ZoneOwnerPath);
         Assert.DoesNotContain("data/m1/meta/zones.json", files.Content.Keys);

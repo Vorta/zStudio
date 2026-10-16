@@ -1,4 +1,4 @@
-namespace Recoil.Zbd.Core.Sources;
+namespace zStudio.Core.Sources;
 
 /// <summary>Additional retained reconstruction data, beyond the decoded input folders' own budget.</summary>
 internal sealed class ReconstructionBudget(long maximum = ReconstructionBudget.MaximumBytes)

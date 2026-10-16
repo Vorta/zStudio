@@ -2,7 +2,7 @@ using System.Windows.Media.Media3D;
 using HelixToolkit.SharpDX;
 using HCamera = HelixToolkit.Wpf.SharpDX.PerspectiveCamera;
 
-namespace Recoil.Zbd.Rendering;
+namespace zStudio.Rendering;
 
 public sealed partial class SceneViewport
 {

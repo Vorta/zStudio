@@ -1,12 +1,12 @@
 using System.Buffers.Binary;
 using System.IO;
 using System.Text;
-using Recoil.Zbd.Core.Formats;
-using Recoil.Zbd.Core.Sources;
-using Recoil.Zbd.Core.Worlds;
+using zStudio.Core.Formats;
+using zStudio.Core.Sources;
+using zStudio.Core.Worlds;
 using Xunit;
 
-namespace Recoil.Zbd.Tests;
+namespace zStudio.Tests;
 
 public sealed class SourceModelExtensionTests
 {
@@ -26,9 +26,9 @@ public sealed class SourceModelExtensionTests
         Assert.False(workspace.IsDirty);
         Assert.True(prepared.Workspace.IsDirty);
         Assert.Contains("LoadGameGen tank.glb new_tank", Encoding.Latin1.GetString(prepared.Workspace.Read("gamegen/m1.gs", Token)!));
-        var build = await SourceWorlds.BuildPreviewAsync(fixture.Project, "m1", Path.Combine(SourceWorlds.PreviewRoot(fixture.Project), "glb-add"), prepared.Workspace.Overlay(), token: Token, additions: [model]);
-        Assert.All(build.Outputs, output => Assert.Equal("built", output.Status));
-        var world = GameZWorldReader.FromDocument(FormatRegistry.Default.OpenBytes("gamez.zbd", await File.ReadAllBytesAsync(build.WorldPath, Token), token: Token), Token);
+        var build = await SourceWorlds.LoadSceneAsync(fixture.Project, "m1", prepared.Workspace.Overlay(), token: Token, additions: [model]);
+        Assert.NotNull(build.Scene);
+        var world = build.World;
         Assert.Single(world.Nodes, node => node.Name == "glb_content");
         Assert.DoesNotContain(world.Nodes, node => node.Name == "gltf_content");
         var added = Assert.Single(world.Nodes, node => node.Name == "new_tank");
@@ -52,13 +52,12 @@ public sealed class SourceModelExtensionTests
     [InlineData(".GLB", "glb_content")]
     [InlineData(".gltf", "gltf_content")]
     [InlineData("", "gltf_content")]
-    [InlineData(".flt", "gltf_content")]
-    public async Task ModelAdditionHonorsExplicitExtensionAndLegacyPreference(string extension, string expected)
+    public async Task ModelAdditionHonorsExplicitExtensionAndBareNamePreference(string extension, string expected)
     {
         using SourceWorldFixture fixture = new();
         WriteSiblingModels(fixture);
         const string folder = "data/m1/models/";
-        string explicitExtension = extension is "" or ".flt" ? ".gltf" : extension;
+        string explicitExtension = extension == "" ? ".gltf" : extension;
         SourceModelAddition addition = new(folder + "tank" + explicitExtension, "new_tank");
         SourceWorlds.Validate(fixture.Project, addition);
         var lines = SourceWorlds.ScriptLines(addition);
@@ -89,11 +88,10 @@ public sealed class SourceModelExtensionTests
         SourceWorkspace workspace = new(fixture.Project);
         SourceModelAddition addition = new("data/m1/models/tank.gltf", "new_tank");
         SourceWorlds.AddModel(workspace, "m1", new(addition, []), Token);
-        var error = await Assert.ThrowsAsync<InvalidDataException>(() => SourceWorlds.BuildPreviewAsync(fixture.Project, "m1",
-            Path.Combine(SourceWorlds.PreviewRoot(fixture.Project), "shadowed"), workspace.Overlay(), token: Token, additions: [addition]));
+        var error = await Assert.ThrowsAsync<InvalidDataException>(() => SourceWorlds.LoadSceneAsync(fixture.Project, "m1", workspace.Overlay(), token: Token, additions: [addition]));
         Assert.Contains("would load data/m2/models/bft/tank.gltf, not data/m1/models/tank.gltf", error.Message);
         // A preview built without a search folder the scripts name is stale once a pending file is added below it.
-        SourceWorldBuild preview = new("m1", "", "", [], new Dictionary<string, Recoil.Zbd.Core.FileStamp>()) { MissingFolders = ["data/added"] };
+        SourceSceneState preview = new("m1", "", new Dictionary<string, zStudio.Core.FileStamp>()) { MissingFolders = ["data/added"] };
         Assert.True(preview.AddsToMissingFolder(["data/Added/x.gltf"]));
         Assert.False(preview.AddsToMissingFolder(["data/added.gltf", "data/addedx/x.gltf"]));
     }

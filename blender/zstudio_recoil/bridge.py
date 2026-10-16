@@ -7,8 +7,10 @@ import base64
 import io
 import zipfile
 import concurrent.futures
+import tomllib
 from pathlib import Path
 
+VERSION = tomllib.loads(Path(__file__).with_name("blender_manifest.toml").read_text(encoding="utf-8"))["version"]
 PROTOCOL = 1
 MAX_JSON = 32 * 1024 * 1024
 
@@ -62,8 +64,8 @@ def call(executable, operation, **arguments):
     executable = Path(executable)
     if not executable.is_file() or executable.name.lower() != "zstudio.exe":
         raise ValueError("Select the installed zStudio.exe in the extension preferences")
-    if not (executable.parent / "dependencies/blender/zstudio_recoil-0.1.0.zip").is_file():
-        raise ValueError("Select the updated portable zStudio bundle that includes this RECOIL extension; older builds have no windowless helper")
+    if not (executable.parent / f"dependencies/blender/zstudio_recoil-{VERSION}.zip").is_file():
+        raise ValueError(f"Select the portable zStudio {VERSION} bundle matching this RECOIL extension")
     request = json.dumps(dict(protocol=PROTOCOL, operation=operation, **arguments)).encode("utf-8")
     if len(request) > 65536:
         raise ValueError("The helper request exceeds 64 KiB")

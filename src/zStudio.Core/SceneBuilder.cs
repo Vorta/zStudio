@@ -1,10 +1,14 @@
 using System.Numerics;
 using System.Text.Json.Nodes;
 
-namespace Recoil.Zbd.Core;
+namespace zStudio.Core;
 
 public sealed record ScenePlacement(int NodeIndex, int ModelIndex, string Name, Matrix4x4 Transform);
-public sealed record SceneView(IReadOnlyList<ScenePlacement> Placements, IReadOnlyList<Diagnostic> Diagnostics);
+public sealed record SceneView(IReadOnlyList<ScenePlacement> Placements, IReadOnlyList<Diagnostic> Diagnostics)
+{
+    /// <summary>Traversed nodes after ancestor visibility, pending-placement and LOD gates.</summary>
+    public IReadOnlySet<int> VisibleNodes { get; init; } = new HashSet<int>();
+}
 public sealed record MeshPart(int MaterialIndex, Vector3[] Positions, Vector3[] Normals, Vector2[] TextureCoordinates, int[] Indices)
 {
     public Vector4[] Colors { get; init; } = [];
@@ -87,24 +91,24 @@ public static class SceneBuilder
         if (m.Any(v => !float.IsFinite(v))) throw new InvalidDataException("Nonfinite scene transform.");
         return new(m[0], m[1], m[2], 0, m[3], m[4], m[5], 0, m[6], m[7], m[8], 0, m[9], m[10], m[11], 1);
     }
-    public static SceneView ForAsset(GameScene scene, AssetRecord asset, int lodLevel = 0, CancellationToken token = default)
+    public static SceneView ForAsset(GameScene scene, AssetRecord asset, int lodLevel = 0, CancellationToken token = default, Func<int, bool?>? visibility = null)
     {
         token.ThrowIfCancellationRequested();
-        if (asset.Kind == AssetKind.World) return Assemble(scene, lodLevel, token: token);
-        if (SceneLods.PreviewRoot(scene, asset) is int root) return Assemble(scene, lodLevel, token: token, rootIndex: root);
+        if (asset.Kind == AssetKind.World) return Assemble(scene, lodLevel, token: token, visibility: visibility);
+        if (SceneLods.PreviewRoot(scene, asset) is int root) return Assemble(scene, lodLevel, token: token, rootIndex: root, visibility: visibility);
         return new([new(-1, asset.Index, asset.Name, Matrix4x4.Identity)], []);
     }
-    public static SceneView Assemble(GameScene scene, int lodLevel = 0, bool includeHidden = false, CancellationToken token = default, int? rootIndex = null)
-        => Assemble(scene, lodLevel, includeHidden, token, rootIndex, new Worlds.LookupWorkBudget(MaximumTraversalWork, token));
+    public static SceneView Assemble(GameScene scene, int lodLevel = 0, bool includeHidden = false, CancellationToken token = default, int? rootIndex = null, Func<int, bool?>? visibility = null)
+        => Assemble(scene, lodLevel, includeHidden, token, rootIndex, new Worlds.LookupWorkBudget(MaximumTraversalWork, token), visibility: visibility);
 
     internal const long MaximumTraversalWork = 4_000_000;
     internal const int MaximumPlacements = 200_000;
 
     internal static SceneView Assemble(GameScene scene, int lodLevel, bool includeHidden, CancellationToken token, int? rootIndex,
-        Worlds.LookupWorkBudget work, int maximumPlacements = MaximumPlacements)
+        Worlds.LookupWorkBudget work, int maximumPlacements = MaximumPlacements, Func<int, bool?>? visibility = null)
     {
         if (maximumPlacements is < 0 or > MaximumPlacements) throw new ArgumentOutOfRangeException(nameof(maximumPlacements));
-        List<ScenePlacement> placements = []; BoundedDiagnostics diagnostics = new(); HashSet<int> activePath = [];
+        List<ScenePlacement> placements = []; BoundedDiagnostics diagnostics = new(); HashSet<int> activePath = [], visibleNodes = [];
         bool refusing = false;
         SceneLods lods;
         try
@@ -121,7 +125,7 @@ public static class SceneBuilder
         }
         catch (InvalidDataException ex) when (work.Exhausted)
         { throw new InvalidDataException("Scene traversal exceeds its work budget. Simplify repeated instances or preview a smaller subtree.", ex); }
-        return new(placements, diagnostics.Messages.Select(message => new Diagnostic("Warning", message)).ToArray());
+        return new(placements, diagnostics.Messages.Select(message => new Diagnostic("Warning", message)).ToArray()) { VisibleNodes = visibleNodes };
         void Visit(int index, Matrix4x4 parent, int depth)
         {
             token.ThrowIfCancellationRequested();
@@ -132,9 +136,11 @@ public static class SceneBuilder
             try
             {
                 // 0x4 is the engine's visible/traversable node flag.
-                if (!includeHidden && index != rootIndex && node.Class is ("object3d" or "lod") && (node.Metadata.UInt("flags") & 4) == 0) return;
+                if (!includeHidden && index != rootIndex && !(visibility?.Invoke(index) ??
+                    (node.Class is not ("object3d" or "lod") || (node.Metadata.UInt("flags") & 4) != 0))) return;
                 if (!includeHidden && index != rootIndex && node.Metadata["preview_pending_placement"]?.GetValue<bool>() == true) return;
                 Matrix4x4 transform = LocalTransform(node) * parent;
+                visibleNodes.Add(index);
                 if (node.ModelIndex is int model)
                 {
                     if (model >= 0 && model < scene.Models.Count)

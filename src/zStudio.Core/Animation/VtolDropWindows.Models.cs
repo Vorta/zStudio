@@ -1,6 +1,6 @@
 using System.Numerics;
 
-namespace Recoil.Zbd.Core.Animation;
+namespace zStudio.Core.Animation;
 
 /// <summary>One existing call/stop pair. Times are local seconds in the repeating flight cycle.</summary>
 public sealed record VtolDropWindow(Guid Id, int EntryIndex, Guid SequenceId, Guid CallEventId, Guid StopEventId,

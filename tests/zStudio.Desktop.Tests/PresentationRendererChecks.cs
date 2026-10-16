@@ -5,12 +5,12 @@ using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media.Media3D;
 using HelixToolkit.Wpf.SharpDX;
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Rendering;
+using zStudio.Core;
+using zStudio.Rendering;
 using Xunit;
 using Vector = System.Windows.Vector;
 
-namespace Recoil.Zbd.Desktop.Tests;
+namespace zStudio.Desktop.Tests;
 
 internal static class PresentationRendererChecks
 {
@@ -121,11 +121,26 @@ internal static class PresentationRendererChecks
         scene.SetPresentationUiHidden(false); scene.SetAiPathEditing(null);
 
         Guid window = Guid.NewGuid();
+        scene.SetParachuteOverlay([new(0, Vector3.Zero), new(1, new(-20, 0, 0)), new(10, new(20, 0, 0))], [new(window, 5, [])]);
+        var flightLine = Get<LineGeometryModel3D>("parachuteLine").Geometry!;
+        Assert.Equal(new[] { 1, 2 }, flightLine.Indices);
+        Assert.Equal(Vector3.Zero, flightLine.Positions![0]); // Retain sample identity; omit only its rendered edge.
         scene.SetParachuteOverlay([new(0, new(-20, 0, 0)), new(10, new(20, 0, 0))], [new(window, 5, [])]);
+        Assert.Empty(Get<LineGeometryModel3D>("parachuteLine").Geometry!.Indices!);
         scene.SetPresentationUiHidden(true);
         Assert.True(scene.HandleScenePointerDown(new(600, 400), new(Mouse.PrimaryDevice, 0, MouseButton.Left)));
         Assert.Null(scene.SelectedParachuteWindow);
         scene.SetPresentationUiHidden(false);
+        // Source maps permit locked object inspection, but drop-window selection enters an edit-only interaction.
+        // Exercise the real pointer dispatch over the visible marker without native input or mouse capture.
+        scene.AllowLockedInspection = true;
+        scene.SetEditingLocked(true);
+        Assert.True(scene.InspectionSelectionEnabled);
+        Assert.True(scene.HandleScenePointerDown(new(600, 400), new(Mouse.PrimaryDevice, 0, MouseButton.Left)));
+        Assert.Null(scene.SelectedParachuteWindow);
+        Assert.False(scene.IsParachutePointerMoving);
+        Assert.False(scene.HasParachutePreview);
+        scene.SetEditingLocked(false);
         Assert.True(scene.HandleScenePointerDown(new(600, 400), new(Mouse.PrimaryDevice, 0, MouseButton.Left)));
         Assert.Equal(window, scene.SelectedParachuteWindow);
         scene.SetParachutePointerMove(true);
@@ -151,6 +166,7 @@ internal static class PresentationRendererChecks
         typeof(SceneViewport).GetProperty(nameof(SceneViewport.IsPickupDragging))!.SetValue(scene, true);
         List<PlacementTransform> transforms = [];
         scene.TransformDraftChanged += transforms.Add;
+        var handles = new GroupModel3D(); Set("pickupTarget", handles);
         try
         {
             scene.SetPresentationUiHidden(true); Layout(1100, 760);
@@ -161,6 +177,7 @@ internal static class PresentationRendererChecks
             scene.HandlePickupPointerMove(new(650, 380)); Assert.Empty(transforms);
             scene.HandlePickupPointerMove(new(650, 380)); Assert.Equal(draft, transforms[^1]);
             scene.HandlePickupPointerMove(new(660, 380)); Assert.True(transforms[^1].Position.X > draft.Position.X);
+            Assert.Equal(transforms[^1].Position.X, handles.Transform.Value.OffsetX, 4); // The handles follow during the drag, not on release.
             Assert.Equal(0, transforms[^1].Position.Y); Assert.Equal(0, transforms[^1].Position.Z);
             Assert.True(scene.CancelPickupDrag()); Assert.Equal(original, transforms[^1]);
         }

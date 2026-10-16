@@ -1,9 +1,9 @@
-using Recoil.Zbd.Core.Formats;
-using Recoil.Zbd.Core.Terrain;
-using Recoil.Zbd.Core.Worlds;
+using zStudio.Core.Formats;
+using zStudio.Core.Terrain;
+using zStudio.Core.Worlds;
 using Xunit;
 
-namespace Recoil.Zbd.Tests;
+namespace zStudio.Tests;
 
 public sealed class TerrainProbeTieTests
 {

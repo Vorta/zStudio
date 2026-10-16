@@ -12,9 +12,9 @@ using System.Windows.Media.Imaging;
 using System.Windows.Media.Media3D;
 using HelixToolkit.SharpDX;
 using HelixToolkit.Wpf.SharpDX;
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Desktop;
-using Recoil.Zbd.Rendering;
+using zStudio.Core;
+using zStudio.Desktop;
+using zStudio.Rendering;
 using HCamera = HelixToolkit.Wpf.SharpDX.PerspectiveCamera;
 using HitTestResult = HelixToolkit.SharpDX.HitTestResult;
 
@@ -24,7 +24,7 @@ internal static class PickupEditorCheck
     {
         string root = Path.GetFullPath(rootArg);
         string output = Path.Combine(Path.GetTempPath(), "zstudio-pickup-editor-" + Guid.NewGuid().ToString("N")); Directory.CreateDirectory(output);
-        string settings = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "RecoilZbdStudio", "settings.json");
+        string settings = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "zStudio", "settings.json");
         byte[]? originalSettings = File.Exists(settings) ? File.ReadAllBytes(settings) : null;
         var app = new App { ShutdownMode = ShutdownMode.OnExplicitShutdown, ProcessCommandLine = false }; app.InitializeComponent(); int exit = 0;
         app.Startup += async (_, _) =>

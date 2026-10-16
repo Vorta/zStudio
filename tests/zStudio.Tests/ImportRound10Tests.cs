@@ -1,12 +1,12 @@
 using System.Text;
 using System.Buffers.Binary;
 using System.Text.Json.Nodes;
-using Recoil.Zbd.Core.Gltf;
-using Recoil.Zbd.Core.Sources;
-using Recoil.Zbd.Core.Worlds;
+using zStudio.Core.Gltf;
+using zStudio.Core.Sources;
+using zStudio.Core.Worlds;
 using Xunit;
 
-namespace Recoil.Zbd.Tests;
+namespace zStudio.Tests;
 
 public sealed class ImportRound10Tests
 {
@@ -131,8 +131,7 @@ public sealed class ImportRound10Tests
         fixture.Write("gamegen/m2.gs", File.ReadAllText(fixture.Path("gamegen/m1.gs"))
             .Replace("SetModelDirectory ..\\data\\m1\\models", "SetModelDirectory ..\\data\\m2\\models", StringComparison.Ordinal)
             .Replace("..\\m1\\gamez.zbd", "..\\m2\\gamez.zbd", StringComparison.Ordinal));
-        Task<SourceWorldBuild> BuildM2(string label, SourceWorkspace? pending = null) => SourceWorlds.BuildPreviewAsync(fixture.Project, "m2",
-            Path.Combine(SourceWorlds.PreviewRoot(fixture.Project), label), pending?.Overlay(), token: Token);
+        async Task<SourceSceneState> BuildM2(string label, SourceWorkspace? pending = null) => (await SourceWorlds.LoadSceneAsync(fixture.Project, "m2", pending?.Overlay(), token: Token)).BuildState;
         var m2 = await BuildM2("before-shared-zones");
         int ground = m2.Provenance.First(p => p.Value.ModelNodeName == "ground").Key;
         SourceWorkspace other = new(fixture.Project);

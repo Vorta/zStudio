@@ -1,8 +1,8 @@
 using System.Text.Json.Nodes;
-using Recoil.Zbd.Core;
+using zStudio.Core;
 using Xunit;
 
-namespace Recoil.Zbd.Tests;
+namespace zStudio.Tests;
 
 public sealed class WorldSurfaceHighlightTests
 {
@@ -31,6 +31,7 @@ public sealed class WorldSurfaceHighlightTests
         var kind = WorldSurfaceHighlights.Classify(scene, 1, 0);
         Assert.Equal(modify, WorldSurfaceHighlights.Matches(kind, WorldHighlightMode.CanModify));
         Assert.Equal(clip, WorldSurfaceHighlights.Matches(kind, WorldHighlightMode.ClipTo));
+        Assert.Equal(modify || clip, WorldSurfaceHighlights.Matches(kind, WorldHighlightMode.CanModifyAndClipTo));
         Assert.False(WorldSurfaceHighlights.Matches(kind, WorldHighlightMode.None));
         Assert.Equal(flags, scene.Nodes[1].Metadata.UInt("flags"));
     }

@@ -4,14 +4,14 @@ using System.Text;
 using System.Text.Json.Nodes;
 using System.Numerics;
 using System.Security.Cryptography;
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Core.Export;
-using Recoil.Zbd.Core.Formats;
-using Recoil.Zbd.Desktop;
-using Recoil.Zbd.Tests;
+using zStudio.Core;
+using zStudio.Core.Export;
+using zStudio.Core.Formats;
+using zStudio.Desktop;
+using zStudio.Tests;
 using Xunit;
 
-namespace Recoil.Zbd.Desktop.Tests;
+namespace zStudio.Desktop.Tests;
 
 internal static class SceneSnapshotChecks
 {
@@ -37,7 +37,7 @@ internal static class SceneSnapshotChecks
                 Assert.All(prepared.Textures.Values, d => Assert.Equal(FormatFamily.TexturePack, d.Probe.Family));
                 // Even a caller injecting a forged prepared snapshot cannot
                 // publish a ZAR through the model service or mutate history.
-                Assert.Throws<InvalidDataException>(() => models.Accept(prepared with { Textures = new Dictionary<string, ZbdDocument> { [archivePath] = archive.Document } }));
+                Assert.Throws<InvalidDataException>(() => models.Accept(prepared with { Textures = new Dictionary<string, AssetDocument> { [archivePath] = archive.Document } }));
                 Assert.False(doc.IsDirty); Assert.False(doc.CanUndoScene); Assert.Equal(0, doc.Revision);
                 if (modelFirst) models.Accept(prepared);
                 var placements = await doc.GetPickupEditsAsync(resolver, token); var source = Assert.Single(placements.Records).Source;
@@ -89,7 +89,7 @@ internal static class SceneSnapshotChecks
                 var replaced = await doc.GetPickupEditsAsync(resolver, token); var source = Assert.Single(replaced.Records).Source;
                 var original = replaced.Position(source);
                 if (savedAs) Assert.Empty((await replaced.SaveAsync(new Dictionary<string, string> { [source.ArchivePath] = copyPath }, token: token)).Errors);
-                doc.PickupsLocked = false;
+                doc.EditingLocked = false;
                 using var fields = new PickupPropertiesEditor(doc, source, "HEMORTAR_AMMO", new JsonObject());
                 if (!savedAs)
                 {

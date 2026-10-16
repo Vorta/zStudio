@@ -12,14 +12,14 @@ using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 using Microsoft.Win32;
 using NAudio.Wave;
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Core.Export;
-using Recoil.Zbd.Core.Formats;
-using Recoil.Zbd.Rendering;
+using zStudio.Core;
+using zStudio.Core.Export;
+using zStudio.Core.Formats;
+using zStudio.Rendering;
 
-using Recoil.Zbd.Core.Animation;
+using zStudio.Core.Animation;
 
-namespace Recoil.Zbd.Desktop;
+namespace zStudio.Desktop;
 
 public partial class MainWindow : Window
 {
@@ -40,7 +40,7 @@ public partial class MainWindow : Window
     private bool closingAllDocuments;
     /// <summary>A source project whose unsaved edits the user chose to discard while closing; its other worlds close without asking again.</summary>
     /// <summary>A Discard the user chose for a project's edits, valid only while the workspace is as it was then (its revision).</summary>
-    private (Recoil.Zbd.Core.Sources.SourceWorkspace Workspace, long Revision)? discardApprovedWorkspace;
+    private (zStudio.Core.Sources.SourceWorkspace Workspace, long Revision)? discardApprovedWorkspace;
     private DecodedImage? decoded;
     private JsonObject? properties;
     private WaveFileReader? wave;
@@ -79,7 +79,7 @@ public partial class MainWindow : Window
             RequireAutomationMutationAvailable();
             if (closesDocuments) RequireNoDrafts();
             else if (animation?.HasAutomationDrafts == true || HasInspectionDraft || HasAiPathDraft || parachuteDraft != null)
-                throw new Recoil.Zbd.Automation.StudioCommandException("pending_drafts", "Resolve unfinished preview input before changing documents.");
+                throw new zStudio.Automation.StudioCommandException("pending_drafts", "Resolve unfinished preview input before changing documents.");
         };
         ViewModel.ValidateReload = doc => { RequireAutomationMutationAvailable(); RequireNoDrafts(doc); };
         ViewModel.ReloadSourceWorld = ReloadSourceWorldAsync;
@@ -88,9 +88,11 @@ public partial class MainWindow : Window
         InitializeWorkspace();
         InitializeResourceMenus();
         InitializeContentEditors();
-        InitializeCameraNavigation();
+        InitializeCameraNavigation(); InitializeSourceEditor();
         ApplyTheme(s.Theme); UpdateRecent(); ready = true;
         PreviewKeyDown += Keyboard;
+        // After the focused control: a dropdown, a field's restore, a stroke or a grip uses Escape first.
+        KeyDown += (_, e) => { if (!e.Handled) SourceEscape(e); };
         PreviewKeyUp += (_, e) => flyCamera?.HandleKey(e, false);
         diskTimer.Tick += (_, _) => { ViewModel.CheckExternalChanges(); CheckAiPropertiesSnapshot(); }; diskTimer.Start();
         audioTimer.Tick += (_, _) => UpdateAudioPosition(); audioTimer.Start();
@@ -117,7 +119,7 @@ public partial class MainWindow : Window
     private async Task ReportUi(Func<Task> work)
     {
         try { await work(); }
-        catch (Recoil.Zbd.Automation.StudioCommandException ex) when (ex.Code == "context_changed") { }
+        catch (zStudio.Automation.StudioCommandException ex) when (ex.Code == "context_changed") { }
         catch (OperationCanceledException) { ViewModel.Status = "Operation canceled"; }
         catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException) { Report(ex); }
     }
@@ -141,7 +143,7 @@ public partial class MainWindow : Window
             var document = await ViewModel.OpenFileAsync(path);
             if (document == null) return;
             if (ViewModel.SelectedDocument != document)
-                throw new Recoil.Zbd.Automation.StudioCommandException("context_changed", "A newer selection superseded opening files.");
+                throw new zStudio.Automation.StudioCommandException("context_changed", "A newer selection superseded opening files.");
         }
     }
     private void UpdateRecent()
@@ -186,10 +188,18 @@ public partial class MainWindow : Window
             return;
         }
         if (!await resolving || animation?.ResolvePendingDrafts() == false) { ViewModel.SelectedDocument = shownDocument; return; }
+        // A source world rebuilt after an edit keeps its old scene on screen until the new one is ready (see RetireScene).
+        bool handoff = doc != null && ReferenceEquals(sceneHandoff, doc) && HasPublishedStaticScene;
+        sceneHandoff = null;
+        if (handoff) RetireScene(); else DropRetiringScene();
+        var retired = handoff ? retiringScene : null;
         CancelPreview(); // Release old-document interactions before worker discovery can yield.
-        foreach (UIElement element in new UIElement[] { ImageToolbar, ImageScroll, SceneToolbar, SceneHost, AnimationHost, AudioPanel, StructuredPanel, EventsTab }) element.Visibility = Visibility.Collapsed;
-        EmptyPreview.Visibility = Visibility.Visible; EmptyPreview.Text = "Loading preview…";
-        shownDocument = doc; Workspace.Visibility = doc == null ? Visibility.Collapsed : Visibility.Visible; Welcome.Visibility = doc == null ? Visibility.Visible : Visibility.Collapsed;
+        if (!handoff)
+        {
+            foreach (UIElement element in new UIElement[] { ImageToolbar, ImageScroll, SceneToolbar, SceneHost, AnimationHost, AudioPanel, StructuredPanel, EventsTab }) element.Visibility = Visibility.Collapsed;
+            EmptyPreview.Visibility = Visibility.Visible; EmptyPreview.Text = "Loading preview…";
+        }
+        shownDocument = doc; UpdateReloadingView(); Workspace.Visibility = doc == null ? Visibility.Collapsed : Visibility.Visible; Welcome.Visibility = doc == null && !ViewModel.IsSourceProject ? Visibility.Visible : Visibility.Collapsed;
         // Publish the whole transition before starting any work: selection events must not replace its task
         // with an asset-only preview while texture discovery is still pending.
         TaskCompletionSource transition = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -207,6 +217,13 @@ public partial class MainWindow : Window
         finally
         {
             if (ReferenceEquals(pendingDocumentPreview, transition.Task)) { pendingDocumentPreview = null; pendingPreviewDocument = null; }
+            // A transition that ended before its scene loaded (texture discovery failed) must not leave the frozen one shown.
+            if (retired != null && ReferenceEquals(retiringScene, retired))
+            {
+                DropRetiringScene();
+                SceneHost.Visibility = Visibility.Collapsed; EmptyPreview.Visibility = Visibility.Visible;
+                UpdateReloadingView();
+            }
             // Preparation can finish before ShowAssetCore (for example canceled texture discovery).
             // The whole current transition has settled now, including any same-document asset retries.
             RefreshPresentation(previewSettled: generation == documentPreviewGeneration && ViewModel.SelectedDocument == doc && shownDocument == doc);
@@ -224,7 +241,7 @@ public partial class MainWindow : Window
     private async Task PrepareDocumentPreviewAsync(DocumentModel? doc, long generation)
     {
         if (doc != null)
-            doc.SelectedAsset ??= doc.Assets.FirstOrDefault(a => a.Record.Content is Recoil.Zbd.Core.Animation.AnimationEntry { RootName.Length: > 0 }) ?? doc.Assets.FirstOrDefault();
+            doc.SelectedAsset ??= doc.Assets.FirstOrDefault(a => a.Record.Content is zStudio.Core.Animation.AnimationEntry { RootName.Length: > 0 }) ?? doc.Assets.FirstOrDefault();
         string[]? packs = null;
         if (doc?.Document.Scene != null && ViewModel.Resolver is { } resolver)
         {
@@ -298,6 +315,8 @@ public partial class MainWindow : Window
         ClearStaticPreviewProblems();
         DetachPickupEditor();
         selectedNode = null; isolatedNode = null; inspectedSceneSource = null;
+        // A source rebuild replaces the map's document: what was hidden follows by identity (see RestoreHiddenIdentities).
+        CaptureHiddenIdentities(); hiddenRows.Clear();
         pendingAnimationPlay = false;
         EndImagePan();
         animation?.Dispose(); animation = null; AnimationHost.Content = null; DetachAnimationWorkspace();
@@ -323,6 +342,7 @@ public partial class MainWindow : Window
         asset = asset == null ? null : doc.PreviewDocument.Assets.SingleOrDefault(a => a.Id == asset.Id);
         bool differentAsset = shownAsset?.Id != asset?.Id;
         shownResourceMember = asset != null && doc.ResourceEdits is { } shownEdits && asset.Index < shownEdits.Current.Members.Count ? shownEdits.Current.Members[asset.Index].Id : null;
+        SourceMapsButton.Visibility = doc.SourceWorld != null ? Visibility.Visible : Visibility.Collapsed;
         PreviewTitle.Text = asset?.Name ?? Path.GetFileName(doc.Path); PreviewSubtitle.Text = asset == null ? doc.Description : $"{asset.Kind} #{asset.Index} · {asset.Length:N0} bytes · source 0x{asset.Offset:X}";
         ViewModel.Status = asset == null ? doc.Description : $"{asset.Kind} #{asset.Index}: {asset.Name} · {Path.GetFileName(doc.Path)}";
         // A motion's member UUID survives rename/reorder; its asset index does not.
@@ -337,12 +357,21 @@ public partial class MainWindow : Window
         var previousMission = !differentAsset && asset?.Kind == AssetKind.World ? scene?.Mission : null;
         var previousView = previousMission == null ? null : scene?.CaptureView();
         int? previousSelection = selectedNode, previousIsolate = isolatedNode;
+        var previousHidden = hiddenRows.ToArray();
         var previousPickup = selectedNode is int selected ? scene?.PickupAt(selected)?.Pickup?.Source : null;
+        // A rebuilt source world's scene loads behind the retiring one (see RetireScene); anything else replaces it now.
+        bool handoff = retiringScene != null && asset?.Kind == AssetKind.World && doc.Document.Scene != null && ViewModel.Resolver != null;
+        var retired = handoff ? retiringScene : null;
+        if (!handoff) DropRetiringScene();
         CancelPreview(); shownAsset = asset; var previewLifetime = preview.Token;
         using var loading = PreviewOperation.Link(previewLifetime);
         var token = loading.Token;
-        foreach (UIElement element in new UIElement[] { ImageToolbar, ImageScroll, SceneToolbar, SceneHost, AnimationHost, AudioPanel, StructuredPanel, EventsTab }) element.Visibility = Visibility.Collapsed;
-        EmptyPreview.Visibility = Visibility.Visible; EmptyPreview.Text = "Loading preview…"; PreviewInfo.Text = ""; properties = null;
+        if (!handoff)
+        {
+            foreach (UIElement element in new UIElement[] { ImageToolbar, ImageScroll, SceneToolbar, SceneHost, AnimationHost, AudioPanel, StructuredPanel, EventsTab }) element.Visibility = Visibility.Collapsed;
+            EmptyPreview.Visibility = Visibility.Visible;
+        }
+        EmptyPreview.Text = "Loading preview…"; PreviewInfo.Text = ""; properties = null;
         try
         {
             var snapshot = doc.PreviewDocument;
@@ -374,14 +403,24 @@ public partial class MainWindow : Window
                 updating = true; LodCombo.ItemsSource = SceneLods.Choices(count); LodCombo.SelectedIndex = Math.Min(selectedLod, count - 1); LodCombo.IsEnabled = count > 1; updating = false;
                 SceneToolbar.Visibility = SceneHost.Visibility = Visibility.Visible;
                 WorldHighlights.Visibility = asset.Kind == AssetKind.World ? Visibility.Visible : Visibility.Collapsed;
-                SourceWorldTools.Visibility = asset.Kind == AssetKind.World && doc.SourceWorld != null ? Visibility.Visible : Visibility.Collapsed; WorldDifficultyGroup.Visibility = asset.Kind == AssetKind.World && snapshot.Game != GameVariant.MechWarrior3 ? Visibility.Visible : Visibility.Collapsed; WorldMission.Visibility = Visibility.Collapsed;
-                if (scene == null) { scene = new(); ApplyRetainedPresentation(); scene.Information += s => { PreviewInfo.Text = s; PreviewInfo.ToolTip = s; }; scene.NodeSelected += InspectNode; ConfigureAiScene(scene); ConfigurePickupScene(scene); SceneHost.Content = scene; ConfigureFlyScene(scene); }
+                SceneMenus.Visibility = doc.SourceWorld != null ? Visibility.Collapsed : Visibility.Visible; WorldDifficultyGroup.Visibility = asset.Kind == AssetKind.World && snapshot.Game != GameVariant.MechWarrior3 ? Visibility.Visible : Visibility.Collapsed; WorldMission.Visibility = Visibility.Collapsed;
+                if (scene == null)
+                {
+                    scene = new(); ApplyRetainedPresentation(); scene.Information += s => { PreviewInfo.Text = s; PreviewInfo.ToolTip = s; }; scene.NodeSelected += InspectNode; ConfigureAiScene(scene); ConfigurePickupScene(scene);
+                    // During a handoff the retiring scene stays in the host until this one has loaded.
+                    if (retiringScene == null) SceneHost.Content = scene;
+                    ConfigureFlyScene(scene);
+                }
                 if (asset.Kind == AssetKind.World) await PopulateWorldMissionsAsync(doc, token);
                 string? exactMission = ExactMissionFor(doc.Path, ViewModel.Resolver.SelectedMission(doc.Path));
                 var mission = asset.Kind == AssetKind.World ? await MissionSceneLoader.LoadAsync(doc.PreviewDocument, ViewModel.Resolver, token: token, difficulty: ViewModel.Difficulty, mission: exactMission, exactMission: exactMission != null) : null;
                 // A source world's placement edits are carried back to its sources (see MoveSourcePlacementAsync).
                 if (mission != null) { await doc.GetPickupEditsAsync(ViewModel.Resolver, token); await PopulateWorldMissionsAsync(doc, token); }
+                if (mission != null) await PrepareSourceMapSelectionAsync(doc, mission.Scene, mission, token);
+                ConfigureSourceMapPresentation(scene, doc, mission);
                 await scene.ShowAsync(doc.PreviewDocument, asset, ViewModel.Resolver, PreferredPack, LodCombo.SelectedIndex, token, BackdropEnabled.IsChecked == true, mission); token.ThrowIfCancellationRequested(); ApplySceneOptions();
+                PublishSourceMapParts(scene, doc);
+                CompleteSceneHandoff();
                 // A rebuilt source world keeps the camera of the build it replaced.
                 if (pendingSourceView is { } rebuilt && rebuilt.Document == doc) { pendingSourceView = null; scene.RestoreView(rebuilt.View); }
                 var shownOptions = ReadStaticSceneOptions();
@@ -395,6 +434,7 @@ public partial class MainWindow : Window
                     {
                         isolatedNode = previousIsolate is int oldIsolate && mission.RemapNodeFrom(previousMission, oldIsolate) is >= 0 and int mappedIsolate ? mappedIsolate : null;
                         if (isolatedNode != null) scene.Isolate(isolatedNode);
+                        RemapHidden(previousHidden, old => mission.RemapNodeFrom(previousMission, old) is >= 0 and int mappedHidden ? mappedHidden : null);
                         scene.RestoreView(previousView);
                         selectedNode = RemapPickupSelection(previousPickup, mission) ?? (previousSelection is int oldSelection && mission.RemapNodeFrom(previousMission, oldSelection) is >= 0 and int mapped ? mapped : null);
                         if (selectedNode is int node) InspectNode(node);
@@ -453,6 +493,15 @@ public partial class MainWindow : Window
         catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException) { if (!token.IsCancellationRequested) { EmptyPreview.Text = "Preview unavailable: " + ex.Message; Report(ex); } }
         finally
         {
+            // A completed handoff has dropped the retiring scene; one still here means the rebuilt world could not be shown
+            // (failure or cancellation), so the frozen old world must not stay on screen.
+            if (retired != null && ReferenceEquals(retiringScene, retired))
+            {
+                DropRetiringScene();
+                SceneHost.Visibility = Visibility.Collapsed; EmptyPreview.Visibility = Visibility.Visible;
+                if (!EmptyPreview.Text.StartsWith("Preview unavailable", StringComparison.Ordinal)) EmptyPreview.Text = "Loading preview…";
+            }
+            UpdateReloadingView();
             RefreshPresentation(previewSettled: !token.IsCancellationRequested && shownDocument == doc && shownAsset?.Id == asset?.Id);
             ArrangeWorkspace();
         }
@@ -636,18 +685,30 @@ public partial class MainWindow : Window
     {
         if (selectedNode is not int node) { ViewModel.Status = "Select a node in the scene or scene tree first"; return; }
         isolatedNode = scene?.PickupAt(node)?.Root ?? node;
-        scene?.Isolate(isolatedNode);
+        scene?.Isolate(isolatedNode); CurrentInspectionCard?.Refresh();
     }
-    private void ShowAllClick(object sender, RoutedEventArgs e) { isolatedNode = null; scene?.Isolate(null); }
+    private void ShowAllClick(object sender, RoutedEventArgs e) { isolatedNode = null; scene?.Isolate(null); hiddenRows.Clear(); pendingHidden = null; ApplyHiddenRows(); CurrentInspectionCard?.Refresh(); }
     private void InspectNode(int index)
     {
         var scene = motion?.Viewport ?? this.scene;
         inspectedSceneSource = null;
+        if (shownDocument is { SourceWorld: not null } sourceDocument && SourceSelection(sourceDocument, scene?.PreviewScene) is { } projection)
+        {
+            index = projection.Owner(index);
+            if (index < 0)
+            {
+                RevealSceneNode(index);
+                selectedNode = index; scene?.SelectFramingNode(index);
+                if (sceneTree?.Selected is { Synthetic: true } row) { inspectedSceneSource = row; SetProperties(SceneTreeProperties(row)); }
+                ViewModel.Status = "Selected source reference group";
+                return;
+            }
+        }
         if ((scene?.PreviewScene ?? ViewModel.SelectedDocument?.Document.Scene) is not { } data || index < 0 || index >= data.Nodes.Count) return;
         RevealSceneNode(index);
         var actor = scene?.PickupAt(index);
         if (actor != null) index = actor.Root;
-        scene?.SelectPickup(actor?.Root, actor?.Pickup is { } pickup && pickupDocument?.PickupEdits?.Find(pickup.Source) != null, pickupDocument?.PickupsLocked ?? true);
+        scene?.SelectPickup(actor?.Root, actor?.Pickup is { } pickup && pickupDocument?.PickupEdits?.Find(pickup.Source) != null, pickupDocument?.EditingLocked ?? true);
         selectedNode = index; scene?.SelectFramingNode(index); var properties = JsonData.PreviewObject(data.Nodes[index].Metadata);
         if (scene?.Mission is { } mission)
         {
@@ -873,7 +934,7 @@ public partial class MainWindow : Window
         propertiesWindow?.CloseResolved();
         flyCamera?.Dispose();
         ObserveDocumentCommands(null);
-        operation?.Cancel(); preview.Cancel(); ViewModel.PropertyChanged -= DifficultyPreferenceChanged; diskTimer.Stop(); audioTimer.Stop(); StopAudio(); animation?.Dispose(); motion?.Dispose(); scene?.Dispose(); ViewModel.Dispose(); shutdown.Dispose();
+        operation?.Cancel(); preview.Cancel(); ViewModel.PropertyChanged -= DifficultyPreferenceChanged; diskTimer.Stop(); audioTimer.Stop(); StopAudio(); animation?.Dispose(); motion?.Dispose(); scene?.Dispose(); retiringScene?.Dispose(); retiringScene = null; ViewModel.Dispose(); shutdown.Dispose();
         var s = ViewModel.Settings;
         if (ordinaryWindow is { } ordinary) { s.Width = ordinary.SavedWidth; s.Height = ordinary.SavedHeight; }
         else if (WindowState == WindowState.Normal) { s.Width = ActualWidth; s.Height = ActualHeight; }

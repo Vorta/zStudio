@@ -5,12 +5,12 @@ using System.Reflection;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Core.Formats;
-using Recoil.Zbd.Desktop;
+using zStudio.Core;
+using zStudio.Core.Formats;
+using zStudio.Desktop;
 using Xunit;
 
-namespace Recoil.Zbd.Desktop.Tests;
+namespace zStudio.Desktop.Tests;
 
 /// <summary>Runs on the existing STA application; no window or physical input is required.</summary>
 internal static class CompiledInventoryChecks

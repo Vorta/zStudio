@@ -1,8 +1,8 @@
 using System.Text.Json.Nodes;
-using Recoil.Zbd.Core.Gltf;
-using Recoil.Zbd.Core.Worlds;
+using zStudio.Core.Gltf;
+using zStudio.Core.Worlds;
 
-namespace Recoil.Zbd.Core.Sources;
+namespace zStudio.Core.Sources;
 
 public static partial class SourceBlender
 {
@@ -83,7 +83,7 @@ public static partial class SourceBlender
             if (!WorldGltf.MorphPreservesSurface(primitive, candidate, work)) continue;
             if (primitive.Material?.ImageUri != null && primitive.TexCoords.Count == primitive.Positions.Count
                 && !ModelBuilder.Affine(candidate.Select(c => primitive.Positions[c]).ToArray(), candidate.Select(c => primitive.TexCoords[c]).ToArray(), ModelBuilder.AffineTolerance / 4, work)) continue;
-            if (!SourceBlenderZones.KeepsTriangles(primitive, first, count, candidate, changes, work)) continue;
+            if (!KeepsTriangles(primitive, first, count, candidate, changes, work)) continue;
             bool morphs = true;
             foreach (var target in primitive.Targets)
             {
@@ -91,7 +91,7 @@ public static partial class SourceBlender
                 GltfPrimitive shape = new();
                 shape.Indices.AddRange(Enumerable.Range(first * 3, count * 3).Select(i => local[changes[i]]));
                 shape.Positions.AddRange(candidate.Select(i => primitive.Positions[i] + target[i]));
-                if (!SourceBlenderZones.KeepsTriangles(shape, 0, count, Enumerable.Range(0, candidate.Length).ToArray(), [], work)) { morphs = false; break; }
+                if (!KeepsTriangles(shape, 0, count, Enumerable.Range(0, candidate.Length).ToArray(), [], work)) { morphs = false; break; }
             }
             if (morphs)
             {
@@ -100,6 +100,29 @@ public static partial class SourceBlender
             }
         }
         return null;
+    }
+
+    /// <summary>Whether recovering an edited boundary preserves its surface in both polygon consumers.</summary>
+    private static bool KeepsTriangles(GltfPrimitive primitive, int first, int count, int[] corners, Dictionary<int, int> changes, PolygonWorkBudget work)
+    {
+        // Keep explicit polygon boundaries within the supported corner limit.
+        if (corners.Length > ModelBuilder.MaximumCorners) return false;
+        // Ear clipping and its inner scans are charged before allocation.
+        work.Charge(2L * corners.Length * corners.Length * corners.Length + count);
+        var points = corners.Select(c => primitive.Positions[c]).ToArray();
+        static (int, int, int) Key(int a, int b, int c) => a <= b && a <= c ? (a, b, c) : b <= c ? (b, c, a) : (c, a, b);
+        var recovered = WorldGltf.Triangulate(points)
+            .Where(t => !ModelBuilder.Straight(points[t.Item1], points[t.Item2], points[t.Item3]))
+            .Select(t => Key(corners[t.Item1], corners[t.Item2], corners[t.Item3])).Order().ToArray();
+        int At(int at) => changes.GetValueOrDefault(at, primitive.Indices[at]);
+        var authored = Enumerable.Range(first, count).Select(t => Key(At(t * 3), At(t * 3 + 1), At(t * 3 + 2))).Order().ToArray();
+        if (!recovered.SequenceEqual(authored)) return false;
+        // Coplanar polygons retain their established interpolation and boundary semantics. Only a nonplanar
+        // boundary can change the geometric surface merely by choosing a different preview diagonal.
+        if (ModelBuilder.Coplanar(points)) return true;
+        var rendered = GeometryBuilder.Triangulate(points);
+        var preview = Enumerable.Range(0, rendered.Length / 3).Select(t => Key(corners[rendered[t * 3]], corners[rendered[t * 3 + 1]], corners[rendered[t * 3 + 2]])).Order().ToArray();
+        return preview.SequenceEqual(authored);
     }
 
     private static void WriteGraphIndices(string path, JsonObject root, List<(JsonObject Primitive, int[] Indices)> patches, Dictionary<string, byte[]> output)

@@ -2,13 +2,13 @@ using System.IO;
 using System.Security.AccessControl;
 using System.Security.Principal;
 using System.Text;
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Core.Export;
-using Recoil.Zbd.Core.Formats;
-using Recoil.Zbd.Core.Sources;
+using zStudio.Core;
+using zStudio.Core.Export;
+using zStudio.Core.Formats;
+using zStudio.Core.Sources;
 using Xunit;
 
-namespace Recoil.Zbd.Tests;
+namespace zStudio.Tests;
 
 /// <summary>
 /// What an export promises beyond its outputs: the automatic pack holds no more than its name, planning reads only what it
@@ -28,7 +28,7 @@ public sealed class ExportProfileBoundsTests
         for (int i = 0; i < side * side; i++) { rgba[i * 4] = (byte)i; rgba[i * 4 + 1] = (byte)(i >> 8); rgba[i * 4 + 2] = 90; rgba[i * 4 + 3] = alpha; }
         return PngEncoder.Encode(new(side, side, rgba));
     }
-    private static async Task<ZbdDocument> ExportPack(SourceWorldFixture fixture, string pack, List<string> warnings)
+    private static async Task<AssetDocument> ExportPack(SourceWorldFixture fixture, string pack, List<string> warnings)
     {
         string destination = Path.Combine(fixture.Root, "game-" + Guid.NewGuid().ToString("N"));
         var report = await SourceBuilder.ExportAsync(fixture.Project, destination, [pack], token: Token, profile: "small");
@@ -37,7 +37,7 @@ public sealed class ExportProfileBoundsTests
         warnings.AddRange(output.Warnings);
         return FormatRegistry.Default.OpenBytes(Path.GetFileName(pack), await File.ReadAllBytesAsync(Path.Combine(destination, pack), Token), token: Token);
     }
-    private static int Width(ZbdDocument pack, string name) => ((TextureInfo)pack.Assets.Single(a => a.Name == name).Content!).Width;
+    private static int Width(AssetDocument pack, string name) => ((TextureInfo)pack.Assets.Single(a => a.Name == name).Content!).Width;
 
     [Fact]
     public async Task PacksCountAlphaPlanesAsTheirBudgetsDo()
@@ -89,7 +89,7 @@ public sealed class ExportProfileBoundsTests
         // m1 also loads m2's tank, whose camouflage only m2's vehicle folder holds; planning counts only m1's folders.
         fixture.Write("gamegen/m1.gs", string.Join("\r\n", "set worldName world", "SetModelDirectory ..\\data\\m1\\models", "SetTextureDirectory ..\\data\\m1\\textures",
             "NewWorld %worldName%", "FindNode %worldName%", "GameGenSetWorld %worldName%", "FindNode %worldName%", "WorldOrigin 0.0 512.0", "WorldExtents 512.0 -512.0", "WorldPartition 256 -256",
-            "LoadGameGen m1.flt m1.flt", "DeleteTree m1.flt", "SetModelDirectory ..\\data\\m2\\models\\bft", "LoadGameGen tank.flt tank", "GameZWriteZBDFile ..\\m1\\gamez.zbd", "Quit", ""));
+            "LoadGameGen m1.gltf m1.flt", "DeleteTree m1.flt", "SetModelDirectory ..\\data\\m2\\models\\bft", "LoadGameGen tank.gltf tank", "GameZWriteZBDFile ..\\m1\\gamez.zbd", "Quit", ""));
         fixture.Write("data/m2/textures/bft/camo.png", Png(1024, 255));
         byte[] stone = Png(512, 255);
         for (int i = 0; i < 3; i++) fixture.Write($"data/m1/textures/stone{i}.png", stone);
@@ -107,16 +107,17 @@ public sealed class ExportProfileBoundsTests
     }
 
     [Fact]
-    public async Task ListingWorldsAndBuildingPreviewsReadNoTextureHeaders()
+    public async Task ListingWorldsDoesNotSizeExportPacksAndSourceSceneKeepsOriginalTextures()
     {
         using SourceWorldFixture fixture = new();
         fixture.Write("data/m1/textures/stone.png", Png(64, 255));
         string stone = SourceProject.Resolve(fixture.Project, "data/m1/textures/stone.png");
-        // The world menu lists missions, and a preview builds a fixed pack: neither names an automatic pack.
+        // Mission listing does not size export packs; source scenes retain the authored PNG dimensions.
         Assert.Equal(["m1", "m2"], SourceWorlds.Missions(fixture.Project, TestContext.Current.CancellationToken));
         Assert.DoesNotContain(SourceBuilder.Plan(fixture.Project, automaticPacks: false, token: TestContext.Current.CancellationToken), p => p.Automatic);
-        var build = await SourceWorlds.BuildPreviewAsync(fixture.Project, "m1", Path.Combine(SourceWorlds.PreviewRoot(fixture.Project), "bounds"), token: Token);
-        Assert.Contains(build.Outputs, o => o.Path == "m1/rtexture16.zbd" && o.Status == "built");
+        var build = await SourceWorlds.LoadSceneAsync(fixture.Project, "m1", token: Token);
+        Assert.Equal(64, build.Textures["stone"].Width);
+        Assert.Empty(Directory.EnumerateFiles(fixture.Project, "*.zbd", SearchOption.AllDirectories));
         Assert.False(TextureSources.HeaderRead(stone));
         // An export's plan reads them to name the automatic pack.
         _ = SourceBuilder.Plan(fixture.Project, token: TestContext.Current.CancellationToken);

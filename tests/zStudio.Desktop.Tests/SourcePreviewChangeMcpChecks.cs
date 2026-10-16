@@ -4,15 +4,15 @@ using System.Reflection;
 using System.Text.Json.Nodes;
 using ModelContextProtocol.Client;
 using ModelContextProtocol.Protocol;
-using Recoil.Zbd.Core.Sources;
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Automation;
-using Recoil.Zbd.Desktop;
-using Recoil.Zbd.Mcp;
-using Recoil.Zbd.Tests;
+using zStudio.Core.Sources;
+using zStudio.Core;
+using zStudio.Automation;
+using zStudio.Desktop;
+using zStudio.Mcp;
+using zStudio.Tests;
 using Xunit;
 
-namespace Recoil.Zbd.Desktop.Tests;
+namespace zStudio.Desktop.Tests;
 
 /// <summary>
 /// A source world whose build sees another program change a project file, through the real named-pipe MCP connection: the
@@ -44,10 +44,10 @@ internal static class SourcePreviewChangeMcpChecks
             var refused = await Job("source_world_open", new() { ["mission"] = "m1" }, "failed");
             Assert.Equal(0, touches);
             Assert.Equal("external_change", refused["code"]!.GetValue<string>());
-            Assert.StartsWith("data/m1/models/m1.gltf changed on disk while the m1 world was building; the build was not shown.", refused["message"]!.GetValue<string>());
+            Assert.StartsWith("data/m1/models/m1.gltf changed during evaluation; try again.", refused["message"]!.GetValue<string>());
             Assert.DoesNotContain(main.ViewModel.Documents, d => d.SourceWorld != null);
-            Assert.StartsWith("The m1 world did not open: data/m1/models/m1.gltf changed on disk", main.ViewModel.Status);
-            Assert.Empty(Directory.EnumerateFiles(SourceWorlds.PreviewRoot(fixture.Project), "*.zbd", SearchOption.AllDirectories));
+            Assert.StartsWith("The m1 world did not open: data/m1/models/m1.gltf changed during evaluation", main.ViewModel.Status);
+            Assert.Empty(Directory.EnumerateFiles(fixture.Project, "*.zbd", SearchOption.AllDirectories));
 
             // Opened again, it builds; the world shows the model as it is now.
             var doc = Document((await Job("source_world_open", new() { ["mission"] = "m1" }))["document"]!);
@@ -79,19 +79,19 @@ internal static class SourcePreviewChangeMcpChecks
             }
             finally { main.SourceEditPreparing = null; File.Delete(fixture.Path(easy)); }
 
-            // An edit whose rebuild sees the model change is taken back: the shown world and the workspace stay as they were.
+            // An edit whose candidate sees an external change is never accepted; history and the scene stay unchanged.
             touches = 1;
             var failed = await Job("source_world_add_model", new() { ["document"] = Id(doc), ["revision"] = doc.Revision, ["model"] = fixture.Tank, ["name"] = "tank", ["definitionFiles"] = Array.Empty<string>() }, "failed");
             Assert.Equal(0, touches);
             Assert.Equal("external_change", failed["code"]!.GetValue<string>());
-            Assert.StartsWith("Adding tank was reverted: data/m1/models/m1.gltf changed on disk while the m1 world was building", failed["message"]!.GetValue<string>());
-            Assert.StartsWith("Adding tank was reverted: ", main.ViewModel.Status);
+            Assert.StartsWith("data/m1/models/m1.gltf changed during evaluation", failed["message"]!.GetValue<string>());
+            Assert.StartsWith("Adding tank was not applied: ", main.ViewModel.Status);
             Assert.False(doc.IsDisposed);
             Assert.Same(doc, main.ViewModel.Documents.Single(d => d.SourceWorld != null));
             Assert.False(workspace.IsDirty); Assert.False(workspace.CanUndo); Assert.False(workspace.CanRedo);
             // The world shown was built from the model before this change, which it now reports.
             Assert.True(doc.SourceInputsChanged());
-            Assert.Single(Directory.EnumerateFiles(SourceWorlds.PreviewRoot(fixture.Project), "gamez.zbd", SearchOption.AllDirectories));
+            Assert.Empty(Directory.EnumerateFiles(fixture.Project, "*.zbd", SearchOption.AllDirectories));
 
             async Task Preview()
             {

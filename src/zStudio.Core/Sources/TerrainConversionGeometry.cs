@@ -1,7 +1,7 @@
 using System.Numerics;
-using Recoil.Zbd.Core.Gltf;
+using zStudio.Core.Gltf;
 
-namespace Recoil.Zbd.Core.Sources;
+namespace zStudio.Core.Sources;
 
 /// <summary>Bounded plan-view overlap tests on authored triangles, without clipping-grid quantization or polygon expansion.</summary>
 internal sealed class TerrainConversionGeometry(CancellationToken token, int maximumTriangles = 200_000, long maximumWork = 8_000_000)

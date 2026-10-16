@@ -3,10 +3,10 @@ using System.Numerics;
 using System.Windows;
 using System.Windows.Media.Imaging;
 using HelixToolkit.Wpf.SharpDX;
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Core.Animation;
-using Recoil.Zbd.Desktop;
-using Recoil.Zbd.Rendering;
+using zStudio.Core;
+using zStudio.Core.Animation;
+using zStudio.Desktop;
+using zStudio.Rendering;
 using HCamera = HelixToolkit.Wpf.SharpDX.PerspectiveCamera;
 
 internal static class MissionPlacementPreviewCheck
@@ -15,7 +15,7 @@ internal static class MissionPlacementPreviewCheck
     {
         string root = Path.GetFullPath(rootArg), output = Path.Combine(Path.GetTempPath(), "zbd-placements-ui-" + DateTime.Now.ToString("yyyyMMdd-HHmmss"));
         Directory.CreateDirectory(output);
-        string settings = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "RecoilZbdStudio", "settings.json");
+        string settings = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "zStudio", "settings.json");
         byte[]? saved = File.Exists(settings) ? File.ReadAllBytes(settings) : null;
         var app = new App { ShutdownMode = ShutdownMode.OnExplicitShutdown, ProcessCommandLine = false }; app.InitializeComponent(); int exit = 0;
         app.Startup += async (_, _) =>

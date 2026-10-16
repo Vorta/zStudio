@@ -1,9 +1,9 @@
 using System.Numerics;
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Core.Export;
+using zStudio.Core;
+using zStudio.Core.Export;
 using Xunit;
 
-namespace Recoil.Zbd.Tests;
+namespace zStudio.Tests;
 
 public sealed class ImportRound24ObjBoundsTests
 {
@@ -51,7 +51,7 @@ public sealed class ImportRound24ObjBoundsTests
         {
             using AssetResolver resolver = new(input);
             GameScene scene = new(); var model = Model(0, 40_000); scene.Models.Add(model);
-            ZbdDocument document = new(Path.Combine(input, "gamez.zbd"), new(0, DateTime.MinValue),
+            AssetDocument document = new(Path.Combine(input, "gamez.zbd"), new(0, DateTime.MinValue),
                 new(FormatFamily.GameZ, 15, Recognition.Supported, "fixture"), ReadOnlyMemory<byte>.Empty) { Scene = scene };
             var asset = document.Add(AssetKind.Model, 0, "large", 0, 0, content: model);
             var result = await new ExportService(resolver).ExportAsync(document, [asset], output, false, token: Token);

@@ -1,7 +1,7 @@
 using System.Windows;
 using System.Windows.Controls;
 
-namespace Recoil.Zbd.Desktop;
+namespace zStudio.Desktop;
 
 /// <summary>A value field without the Fluent theme's clear-text action.</summary>
 public sealed class ValueTextBox : TextBox

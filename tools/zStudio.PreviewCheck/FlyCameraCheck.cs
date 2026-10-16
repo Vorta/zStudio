@@ -11,9 +11,9 @@ using System.Windows.Media.Media3D;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 using HelixToolkit.Wpf.SharpDX;
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Desktop;
-using Recoil.Zbd.Rendering;
+using zStudio.Core;
+using zStudio.Desktop;
+using zStudio.Rendering;
 using HCamera = HelixToolkit.Wpf.SharpDX.PerspectiveCamera;
 
 internal static class FlyCameraCheck
@@ -22,7 +22,7 @@ internal static class FlyCameraCheck
     {
         string root = Path.GetFullPath(rootArg), path = Path.Combine(root, "m1", "gamez.zbd");
         byte[] sourceHash = SHA256.HashData(File.ReadAllBytes(path));
-        string settings = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "RecoilZbdStudio", "settings.json");
+        string settings = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "zStudio", "settings.json");
         byte[]? oldSettings = File.Exists(settings) ? File.ReadAllBytes(settings) : null;
         string output = Path.Combine(Path.GetTempPath(), "zstudio-freecam-" + DateTime.Now.ToString("yyyyMMdd-HHmmss")); Directory.CreateDirectory(output);
         var app = new App { ShutdownMode = ShutdownMode.OnExplicitShutdown, ProcessCommandLine = false };

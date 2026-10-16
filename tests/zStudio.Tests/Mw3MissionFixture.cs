@@ -1,16 +1,16 @@
 using System.Buffers.Binary;
 using System.IO;
 using System.Text;
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Core.Formats;
+using zStudio.Core;
+using zStudio.Core.Formats;
 
-namespace Recoil.Zbd.Tests;
+namespace zStudio.Tests;
 
 internal sealed class Mw3MissionFixture : IDisposable
 {
     public string Folder { get; } = Path.Combine(Path.GetTempPath(), "zstudio-mw3-layout-" + Guid.NewGuid().ToString("N"));
     public string ReaderPath => Path.Combine(Folder, "readerm1.zbd");
-    public ZbdDocument World { get; }
+    public AssetDocument World { get; }
     public AssetResolver Resolver { get; }
     public byte[] ReaderBytes { get; }
     public Mw3MissionFixture(params string[] names) : this(0, names) { }

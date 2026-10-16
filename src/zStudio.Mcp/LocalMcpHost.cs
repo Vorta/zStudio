@@ -4,15 +4,15 @@ using System.IO.Pipes;
 using System.Security.AccessControl;
 using System.Security.Principal;
 using System.Text.Json;
-using Recoil.Zbd.Automation;
+using zStudio.Automation;
 
-namespace Recoil.Zbd.Mcp;
+namespace zStudio.Mcp;
 
 public sealed record McpInstance(string Id, string Pipe, int ProcessId, long Started, string Executable);
 
 public sealed class LocalMcpHost : IAsyncDisposable
 {
-    public static string RegistrationDirectory => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "RecoilZbdStudio", "mcp-instances");
+    public static string RegistrationDirectory => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "zStudio", "mcp-instances");
     private readonly CancellationTokenSource lifetime = new();
     private readonly ConcurrentDictionary<int, NamedPipeServerStream> connections = new();
     private readonly List<Task> sessions = [];

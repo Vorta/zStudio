@@ -1,6 +1,6 @@
 using Xunit;
 
-namespace Recoil.Zbd.Tests;
+namespace zStudio.Tests;
 
 [CollectionDefinition("Allocation-sensitive", DisableParallelization = true)]
 public sealed class AllocationSensitiveCollection;

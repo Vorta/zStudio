@@ -1,10 +1,10 @@
 using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Nodes;
-using Recoil.Zbd.Core.Gltf;
-using Recoil.Zbd.Core.Worlds;
+using zStudio.Core.Gltf;
+using zStudio.Core.Worlds;
 
-namespace Recoil.Zbd.Core.Sources;
+namespace zStudio.Core.Sources;
 
 public static partial class SourceBlender
 {
@@ -190,13 +190,22 @@ public static partial class SourceBlender
         };
     }
 
-    internal static BlenderCheckout CheckoutGraph(SourceWorkspace workspace, string model, CancellationToken token)
+    internal static BlenderCheckout CheckoutGraph(SourceWorkspace workspace, string model, CancellationToken token, int maximumManifestBytes = MaximumCheckoutManifestBytes)
     {
+        if (maximumManifestBytes is < 0 or > MaximumCheckoutManifestBytes) throw new ArgumentOutOfRangeException(nameof(maximumManifestBytes));
         model = SourceWorkspace.Normalize(model); workspace.CheckEditable(model);
         var snapshot = new SourceBuilder.Snapshot(workspace.Root, workspace.Overlay(), inventoryToken: token);
         var source = snapshot.Files();
         Graph graph = new((path, maximum) => source.Read(path, token, ProjectReadLimits.Bytes(maximum)), token);
         graph.Load(model); snapshot.CheckUnchanged(token);
+        // Charge escaped paths before constructing manifest rows or creating the checkout.
+        long manifestBytes = 2048 + 12L * model.Length;
+        foreach (string path in graph.Files.Keys)
+        {
+            token.ThrowIfCancellationRequested();
+            if ((manifestBytes += 12L * path.Length + 292) > maximumManifestBytes)
+                throw new InvalidDataException("The checkout manifest would exceed 4 MiB; split the source graph before checking it out.");
+        }
         string id = DateTime.UtcNow.ToString("yyyyMMdd-HHmmss", CultureInfo.InvariantCulture) + "-" + Guid.NewGuid().ToString("N")[..12];
         string folder = Path.Combine(Folder(workspace.Root), id);
         using CopyFiles written = new(); written.Root(folder);
@@ -208,12 +217,13 @@ public static partial class SourceBlender
         }
         JsonObject manifest = new()
         {
-            ["format"] = "zstudio-blender-checkout", ["version"] = 2, ["id"] = id, ["model"] = model, ["created"] = DateTime.UtcNow.ToString("o", CultureInfo.InvariantCulture),
+            ["format"] = "zstudio-blender-checkout", ["version"] = CheckoutVersion, ["id"] = id, ["model"] = model, ["created"] = DateTime.UtcNow.ToString("o", CultureInfo.InvariantCulture),
             ["files"] = new JsonArray(files.Select(f => (JsonNode)new JsonObject { ["project"] = f.Project, ["checkout"] = f.Checkout, ["sha256"] = f.Sha256 }).ToArray()),
             ["instructions"] = "Use Blender's Import RECOIL glTF on input/" + model + ". Export RECOIL glTF to outbox, then Update from Blender export in zStudio.",
         };
-        written.Write(Path.Combine(folder, ManifestName), GltfJson.Write(manifest, true, token, MaximumCheckoutManifestBytes));
-        written.Folder(Path.Combine(folder, "outbox")); written.Keep();
-        return new(id, folder, model, DateTime.UtcNow, files) { Version = 2 };
+        written.Write(Path.Combine(folder, ManifestName), GltfJson.Write(manifest, true, token, maximumManifestBytes));
+        written.Folder(Path.Combine(folder, "outbox"));
+        snapshot.CheckUnchanged(token); written.Keep();
+        return new(id, folder, model, DateTime.UtcNow, files);
     }
 }

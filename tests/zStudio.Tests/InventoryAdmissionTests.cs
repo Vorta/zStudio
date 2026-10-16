@@ -1,9 +1,9 @@
 using System.Text;
 using System.Text.Json.Nodes;
-using Recoil.Zbd.Core.Sources;
+using zStudio.Core.Sources;
 using Xunit;
 
-namespace Recoil.Zbd.Tests;
+namespace zStudio.Tests;
 
 public sealed class InventoryAdmissionTests
 {
@@ -136,25 +136,25 @@ public sealed class InventoryAdmissionTests
         {
             project.Write($"zstudio/export/{id}/manifest.json", new JsonObject
             {
-                ["format"] = "zstudio-blender-checkout", ["version"] = 1, ["id"] = id,
+                ["format"] = "zstudio-blender-checkout", ["version"] = 2, ["id"] = id,
                 ["model"] = "data/model.gltf", ["created"] = id == "older" ? "2026-01-01T00:00:00Z" : "2026-02-01T00:00:00Z", ["files"] = new JsonArray()
             }.ToJsonString());
-            project.Write($"zstudio/export/{id}/outbox/model.gltf", "{}");
+            project.Write($"zstudio/export/{id}/outbox/recoil-export.json", "{}");
         }
         long exact = 0;
         foreach (string id in new[] { "older", "newer" })
         {
             string folder = project.Full($"zstudio/export/{id}");
             exact += PathUnits(folder) + 256 + 8L * (folder.Length + "data/model.gltf".Length)
-                + 256 + 8L * (folder.Length + 7) + PathUnits(Path.Combine(folder, "outbox", "model.gltf")) + 3 * 64;
+                + 256 + 8L * (folder.Length + 7) + PathUnits(Path.Combine(folder, "outbox", "recoil-export.json")) + 3 * 64;
         }
         var accepted = SourceBlender.CheckoutExports(project.Root, 100, Token, inventoryLimit: exact);
         Assert.Equal(["newer", "older"], accepted.Select(row => row.Checkout.Id));
         foreach (var row in accepted)
         {
             var export = Assert.Single(row.Exports);
-            Assert.Equal("model.gltf", export.Relative);
-            Assert.Equal(Path.Combine(row.Checkout.Outbox, "model.gltf"), export.Gltf);
+            Assert.Equal("recoil-export.json", export.Relative);
+            Assert.Equal(Path.Combine(row.Checkout.Outbox, "recoil-export.json"), export.Gltf);
             Assert.Single(SourceBlender.Exports(row.Checkout, Token));
         }
         Assert.Throws<InventoryCapacityException>(() => SourceBlender.CheckoutExports(project.Root, 100, Token, inventoryLimit: exact - 1));

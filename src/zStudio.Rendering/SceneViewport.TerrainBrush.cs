@@ -6,7 +6,7 @@ using HelixToolkit.SharpDX;
 using HelixToolkit.Wpf.SharpDX;
 using Vector3 = System.Numerics.Vector3;
 
-namespace Recoil.Zbd.Rendering;
+namespace zStudio.Rendering;
 
 /// <summary>
 /// Terrain painting: while the brush is on, a left-button drag over the scene collects the surface points under the

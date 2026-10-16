@@ -1,7 +1,7 @@
 using System.Runtime.CompilerServices;
-using Recoil.Zbd.Core.Formats;
+using zStudio.Core.Formats;
 
-namespace Recoil.Zbd.Core;
+namespace zStudio.Core;
 
 /// <summary>Compiled edit ownership and construction estimates; no formatting or content cloning to count it.</summary>
 internal static class EditRetentionBudget
@@ -14,7 +14,7 @@ internal static class EditRetentionBudget
     { if (value < 0 || value > maximum) throw new ArgumentOutOfRangeException(nameof(value)); }
     internal static InvalidDataException Refusal() => new("Compiled editing exceeds its retained-content or construction allowance. Use a smaller document or edit fewer resources together; the current edit and undo history were kept.");
 
-    internal static void Document(RetainedDocumentBudget budget, ZbdDocument document, CancellationToken token)
+    internal static void Document(RetainedDocumentBudget budget, AssetDocument document, CancellationToken token)
     {
         budget.Bytes(document.Bytes, token);
         budget.Document(document, token);
@@ -101,7 +101,7 @@ internal static class EditRetentionBudget
 internal sealed class DecodedCosts(long capacity)
 {
     private readonly ConditionalWeakTable<object, StrongBox<long>> costs = new();
-    internal void Document(RetainedDocumentBudget budget, ZbdDocument document, CancellationToken token)
+    internal void Document(RetainedDocumentBudget budget, AssetDocument document, CancellationToken token)
     {
         budget.Bytes(document.Bytes, token);
         if (document.Scripts is { } package) EditRetentionBudget.ScriptPackage(budget, package, token);

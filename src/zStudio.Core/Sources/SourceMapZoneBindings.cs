@@ -1,8 +1,8 @@
 using System.Text.Json.Nodes;
-using Recoil.Zbd.Core.Gltf;
-using Recoil.Zbd.Core.Worlds;
+using zStudio.Core.Gltf;
+using zStudio.Core.Worlds;
 
-namespace Recoil.Zbd.Core.Sources;
+namespace zStudio.Core.Sources;
 
 /// <summary>Prepared companion edits for every map that owns assignments on a physical geometry file.</summary>
 internal sealed class SourceMapZoneBindings
@@ -13,6 +13,8 @@ internal sealed class SourceMapZoneBindings
     private bool referenced;
     private readonly List<Owner> owners = [];
     internal bool Any => owners.Count != 0;
+    /// <summary>Whether an owner loads this geometry through outer references, whose overrides key its reference nodes.</summary>
+    internal bool HasOuterPlacements => owners.Any(o => o.Entry.ReferenceChain.Count != 0);
     internal static void ValidateOwned(SourceWorkspace workspace, string ownerPath, CancellationToken token)
     {
         _ = new SourceEmbeddedZones(workspace, token).Closure(ownerPath);
@@ -60,7 +62,7 @@ internal sealed class SourceMapZoneBindings
             void Visit(string path, int depth)
             {
                 token.ThrowIfCancellationRequested();
-                if (depth > GltfDocument.MaximumDepth || ++work > SourceMapZones.MaximumTargets)
+                if (depth > GltfDocument.MaximumDepth || ++work > SourceEmbeddedZones.MaximumTargets)
                     throw new InvalidDataException("Source geometry dependencies exceed their inspection allowance.");
                 if (!active.Add(path)) throw new InvalidDataException("Source geometry dependencies contain a reference cycle.");
                 if (!closure.Add(path)) { active.Remove(path); return; }
@@ -69,7 +71,7 @@ internal sealed class SourceMapZoneBindings
                 identities += path.Length + 64L;
                 if (!references.TryGetValue(path, out var children))
                 {
-                    if (references.Count >= SourceMapZones.MaximumAssets) throw new InvalidDataException("Too many source geometry dependencies.");
+                    if (references.Count >= SourceEmbeddedZones.MaximumAssets) throw new InvalidDataException("Too many source geometry dependencies.");
                     byte[] bytes;
                     var limits = ProjectReadLimits.Model().WithMaximum((512L << 20) - bytesRead);
                     if (replacements.TryGetValue(path, out var changed)) { limits.Validate(changed); bytes = changed; }
@@ -96,7 +98,7 @@ internal sealed class SourceMapZoneBindings
         foreach (string path in paths.Distinct(StringComparer.OrdinalIgnoreCase))
         {
             token.ThrowIfCancellationRequested();
-            if (result.Count >= SourceMapZones.MaximumAssets) throw new InvalidDataException("Too many source geometry dependencies.");
+            if (result.Count >= SourceEmbeddedZones.MaximumAssets) throw new InvalidDataException("Too many source geometry dependencies.");
             byte[]? bytes = workspace.ReadMapZoneSource(path, disk, (512L << 20) - read, token);
             Dictionary<string, string?> inputs = new(StringComparer.OrdinalIgnoreCase);
             string? semantic = null;
@@ -168,7 +170,7 @@ internal sealed class SourceMapZoneBindings
         foreach (string path in SourceProject.Files(workspace.Root, folder,
             p => p.EndsWith(".gltf", StringComparison.OrdinalIgnoreCase) || p.EndsWith(".glb", StringComparison.OrdinalIgnoreCase), overlay, token))
         {
-            if (references.Count >= SourceMapZones.MaximumAssets) throw new InvalidDataException("Too many source models for placement dependency inspection.");
+            if (references.Count >= SourceEmbeddedZones.MaximumAssets) throw new InvalidDataException("Too many source models for placement dependency inspection.");
             byte[]? bytes = workspace.ReadMapZoneSource(path, disk, (512L << 20) - bytesRead, token);
             if (bytes == null) continue;
             bytesRead += bytes.LongLength;
@@ -177,7 +179,7 @@ internal sealed class SourceMapZoneBindings
             foreach (var node in hierarchy.AllNodes().Distinct())
             {
                 if (node.Extras?[WorldGltf.Key] is not JsonObject values || values["ref"] is not { } value) continue;
-                if (++edges > SourceMapZones.MaximumTargets) throw new InvalidDataException("Too many source references for placement dependency inspection.");
+                if (++edges > SourceEmbeddedZones.MaximumTargets) throw new InvalidDataException("Too many source references for placement dependency inspection.");
                 if (value is not JsonValue text || !text.TryGetValue<string>(out var uri)) throw new InvalidDataException("A model reference must contain a relative path.");
                 nodes.Add(node.Index, (WorldAssembler.Relative(path, uri), values["zoneOverrides"] as JsonObject));
             }
@@ -192,7 +194,7 @@ internal sealed class SourceMapZoneBindings
         void Visit(string owner, int[] chain, string target, JsonObject scope)
         {
             token.ThrowIfCancellationRequested();
-            if (chain.Length > GltfDocument.MaximumDepth || ++visited > SourceMapZones.MaximumTargets)
+            if (chain.Length > GltfDocument.MaximumDepth || ++visited > SourceEmbeddedZones.MaximumTargets)
                 throw new InvalidDataException("Nested placement dependencies exceed their inspection allowance.");
             if (result.TryGetValue(target, out var owners))
             {
@@ -271,7 +273,7 @@ internal sealed class SourceMapZoneBindings
                 if ((node.Extras?[WorldGltf.Key] as JsonObject)?["ref"] is not { } value) continue;
                 if (value is not JsonValue text || !text.TryGetValue<string>(out var uri))
                     throw new InvalidDataException($"{path}: a model reference must contain a relative path.");
-                if (++edges > SourceMapZones.MaximumTargets) throw new InvalidDataException("The source reference graph exceeds its inspection allowance.");
+                if (++edges > SourceEmbeddedZones.MaximumTargets) throw new InvalidDataException("The source reference graph exceeds its inspection allowance.");
                 string referenced = WorldAssembler.Relative(path, uri);
                 if (!incoming.TryGetValue(referenced, out var parents)) incoming.Add(referenced, parents = []);
                 parents.Add((path, node.Index));
@@ -284,7 +286,7 @@ internal sealed class SourceMapZoneBindings
         void Visit(string owner, int[] chain)
         {
             token.ThrowIfCancellationRequested();
-            if (chain.Length > GltfDocument.MaximumDepth || ++occurrences > SourceMapZones.MaximumTargets)
+            if (chain.Length > GltfDocument.MaximumDepth || ++occurrences > SourceEmbeddedZones.MaximumTargets)
                 throw new InvalidDataException("The source reference occurrences exceed their inspection allowance.");
             if (!active.Add(owner)) throw new InvalidDataException("The edited model participates in a cyclic reference hierarchy.");
             var entry = result.embedded.Resolve(owner, chain, geometry);

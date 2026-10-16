@@ -1,9 +1,9 @@
 using System.Globalization;
 using System.IO;
 using System.Windows.Controls;
-using Recoil.Zbd.Automation;
-using Recoil.Zbd.Core.Animation;
-namespace Recoil.Zbd.Desktop;
+using zStudio.Automation;
+using zStudio.Core.Animation;
+namespace zStudio.Desktop;
 public sealed partial class AnimationPropertiesEditor
 {
     private int selectedSegment;

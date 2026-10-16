@@ -5,9 +5,9 @@ using System.Windows;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using HelixToolkit.Wpf.SharpDX;
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Core.Animation;
-using Recoil.Zbd.Rendering;
+using zStudio.Core;
+using zStudio.Core.Animation;
+using zStudio.Rendering;
 
 internal static class FaceOrientationCheck
 {
@@ -27,7 +27,7 @@ internal static class FaceOrientationCheck
             try
             {
                 GameScene scene = new();
-                scene.Materials.Add(new() { ["alpha"] = 0 });
+                scene.Materials.Add(new() { ["alpha"] = 255 });
                 // Intentionally wrong normals: the +Z winding must still appear blue from +Z.
                 scene.Models.Add(new(0, [new(-1,-1,0), new(1,-1,0), new(1,1,0), new(-1,1,0)], [-Vector3.UnitZ], [],
                     [new(0, 4, [0,1,2,3], [0,0,0,0], [], [])], []));
@@ -45,7 +45,7 @@ internal static class FaceOrientationCheck
                         scene.Nodes.Add(new(i + 1, "surface", "object3d", 0, [0], [], new() { ["flags"] = 4 },
                             new() { ["transform"] = new JsonArray(m.M11,m.M12,m.M13,m.M21,m.M22,m.M23,m.M31,m.M32,m.M33,m.M41,m.M42,m.M43) }));
                     }
-                    var world = new ZbdDocument(Path.Combine(folder, $"{animated}-{mirrored}-{nearFirst}.zbd"), new(0, DateTime.MinValue), new(FormatFamily.GameZ, 15, Recognition.Supported, "fixture"), ReadOnlyMemory<byte>.Empty) { Scene = scene };
+                    var world = new AssetDocument(Path.Combine(folder, $"{animated}-{mirrored}-{nearFirst}.zbd"), new(0, DateTime.MinValue), new(FormatFamily.GameZ, 15, Recognition.Supported, "fixture"), ReadOnlyMemory<byte>.Empty) { Scene = scene };
                     var asset = world.Add(AssetKind.World, 0, "Whole world", 0, 0);
                     var context = new AnimationPreviewContext { Package = new() { Prefix = [], Tail = [] }, World = world };
                     var frame = new AnimationFrame(0, transforms.Select((m,i) => new AnimationNodePose(i + 1, i + 1, 0, m, true, 1, -1, 0, 0)).ToArray(), [], [], [], null, null, default, default, [], [], []);
@@ -72,11 +72,10 @@ internal static class FaceOrientationCheck
                     }
                     preview.SetFaceOrientation(false);
                     if (preview.CaptureView() != pose) throw new InvalidOperationException("Appearance changed camera state.");
-                    var pixel = Pixel();
-                    if (pixel[1] == 0 && (pixel[0] == 255 || pixel[2] == 255)) throw new InvalidOperationException("Orientation did not restore the alpha-zero material.");
+
                     if (surface.Items.OfType<MeshGeometryModel3D>().Any(m => m.FillMode != SharpDX.Direct3D11.FillMode.Wireframe)) throw new InvalidOperationException("Wireframe choice was lost.");
                 }
-                Console.WriteLine("PASS: static and animated winding, wrong normals, mirrored transforms, opaque depth in both submission orders, mesh replacement, highlight and alpha restoration.");
+                Console.WriteLine("PASS: static and animated winding, wrong normals, mirrored transforms, opaque depth in both submission orders, mesh replacement, half-tint priority and wireframe restoration.");
                 byte[] Pixel()
                 {
                     var image = new FormatConvertedBitmap(preview.RenderImage(256,256), PixelFormats.Bgra32, null, 0);
@@ -85,7 +84,7 @@ internal static class FaceOrientationCheck
                 void AssertColor(bool red, string label)
                 {
                     var pixel = Pixel();
-                    if (pixel[0] != (red ? 0 : 255) || pixel[1] != 0 || pixel[2] != (red ? 255 : 0))
+                    if (Math.Abs(pixel[0] - (red ? 128 : 255)) > 1 || Math.Abs(pixel[1] - 128) > 1 || Math.Abs(pixel[2] - (red ? 255 : 128)) > 1)
                         throw new InvalidOperationException($"{label}: expected {(red ? "red back" : "blue front")}, got BGRA {string.Join(',', pixel)}.");
                 }
             }

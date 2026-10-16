@@ -1,15 +1,52 @@
 using System.Text.Json.Nodes;
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Core.Export;
-using Recoil.Zbd.Core.Formats;
-using Recoil.Zbd.Core.Sources;
+using zStudio.Core;
+using zStudio.Core.Export;
+using zStudio.Core.Formats;
+using zStudio.Core.Sources;
 using Xunit;
 
-namespace Recoil.Zbd.Tests;
+namespace zStudio.Tests;
 
 public sealed class SourceResourceExportTests
 {
     private static CancellationToken Token => TestContext.Current.CancellationToken;
+
+    [Fact]
+    public async Task SourceWorldAssetExportUsesFrozenSourceTexturesWithoutArchives()
+    {
+        using SourceWorldFixture fixture = new();
+        var source = await SourceWorlds.LoadSceneAsync(fixture.Project, "m1", token: Token);
+        byte[] expected = await File.ReadAllBytesAsync(fixture.Path("data/m1/textures/rock.png"), Token);
+        // Export the accepted snapshot even if the next disk revision has a different image.
+        fixture.Write("data/m1/textures/rock.png", "changed outside the accepted scene");
+        using AssetResolver resolver = new(fixture.Project);
+        var result = await new ExportService(resolver).ExportAsync(source,
+            [source.Assets.Single(a => a.Kind == AssetKind.World)], Path.Combine(fixture.Root, "export"), false, token: Token);
+        Assert.Equal(1, result.Completed); Assert.Empty(result.Errors);
+        string image = Assert.Single(Directory.GetFiles(result.Directory, "*.png", SearchOption.AllDirectories));
+        Assert.Equal(expected, await File.ReadAllBytesAsync(image, Token));
+        string material = Assert.Single(Directory.GetFiles(result.Directory, "*.mtl", SearchOption.AllDirectories));
+        Assert.Contains("map_Kd " + Path.GetFileName(image), await File.ReadAllTextAsync(material, Token));
+        int root = source.Scene!.Nodes.Single(node => node.Name == "ground").Index;
+        var exporter = new ExportService(resolver);
+        var bundle = await exporter.ExportModelBundleAsync(source, root, Path.Combine(fixture.Root, "bundle"), token: Token);
+        Assert.Equal(1, bundle.Models);
+        Assert.True(File.Exists(Path.Combine(bundle.Directory, "local", "model_0.obj")));
+        foreach (string texture in Directory.GetFiles(bundle.Directory, "*.png", SearchOption.AllDirectories))
+            Assert.Equal(expected, await File.ReadAllBytesAsync(texture, Token));
+        string acceptedIdentity = JsonNode.Parse(await File.ReadAllBytesAsync(bundle.Manifest, Token))!["sourceSha256"]!.GetValue<string>();
+        Assert.NotEqual(Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(Array.Empty<byte>())), acceptedIdentity);
+        fixture.Write("data/m1/textures/rock.png", expected);
+        string script = await File.ReadAllTextAsync(fixture.Path("gamegen/m1.gs"), Token);
+        var changed = await SourceWorlds.LoadSceneAsync(fixture.Project, "m1",
+            new Dictionary<string, byte[]> { ["gamegen/m1.gs"] = System.Text.Encoding.ASCII.GetBytes(script.Replace("# no vehicles", "FindNode ground\r\nObject3DTranslate 10 20 30", StringComparison.Ordinal)) }, Token);
+        var changedBundle = await exporter.ExportModelBundleAsync(changed, root, Path.Combine(fixture.Root, "bundle"), token: Token);
+        string changedIdentity = JsonNode.Parse(await File.ReadAllBytesAsync(changedBundle.Manifest, Token))!["sourceSha256"]!.GetValue<string>();
+        Assert.NotEqual(acceptedIdentity, changedIdentity);
+        var repeated = await exporter.ExportModelBundleAsync(source, root, Path.Combine(fixture.Root, "bundle"), token: Token);
+        Assert.Equal(acceptedIdentity, JsonNode.Parse(await File.ReadAllBytesAsync(repeated.Manifest, Token))!["sourceSha256"]!.GetValue<string>());
+        Assert.Empty(Directory.GetFiles(fixture.Root, "*.zbd", SearchOption.AllDirectories));
+    }
 
     [Theory]
     [InlineData(".zrd", true, false)]
@@ -64,7 +101,7 @@ public sealed class SourceResourceExportTests
     {
         using Fixture fixture = new();
         byte[] bytes = text ? "VALUE ("u8.ToArray() : new byte[] { 99, 0, 0, 0, 0, 0, 0, 0 };
-        ZbdDocument document = new(Path.Combine(fixture.Source, "invalid.zrd"), new(bytes.Length, DateTime.UtcNow),
+        AssetDocument document = new(Path.Combine(fixture.Source, "invalid.zrd"), new(bytes.Length, DateTime.UtcNow),
             new(FormatFamily.Zrd, null, Recognition.Supported, "fixture"), bytes) { SourceSyntax = text ? "zrd-text" : null };
         document.Add(AssetKind.Zrd, 0, "invalid.zrd", 0, bytes.Length);
         using AssetResolver resolver = new(fixture.Source);

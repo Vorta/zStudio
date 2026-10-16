@@ -13,9 +13,10 @@ using System.Windows.Media.Media3D;
 using HelixToolkit;
 using HelixToolkit.SharpDX;
 using HelixToolkit.Wpf.SharpDX;
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Desktop;
-using Recoil.Zbd.Rendering;
+using zStudio.Core;
+using zStudio.Core.Animation;
+using zStudio.Desktop;
+using zStudio.Rendering;
 
 internal static class WorldHighlightCheck
 {
@@ -24,7 +25,7 @@ internal static class WorldHighlightCheck
         root = Path.GetFullPath(root);
         string output = Path.Combine(Path.GetTempPath(), "zstudio-highlights-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(output);
-        string settings = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "RecoilZbdStudio", "settings.json");
+        string settings = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "zStudio", "settings.json");
         byte[]? originalSettings = File.Exists(settings) ? File.ReadAllBytes(settings) : null;
         var app = new App { ShutdownMode = ShutdownMode.OnExplicitShutdown, ProcessCommandLine = false }; app.InitializeComponent();
         int exit = 0;
@@ -54,13 +55,12 @@ internal static class WorldHighlightCheck
                     Require(((FrameworkElement)main.FindName("WorldHighlights")).IsVisible, "Whole world highlight controls missing");
                     for (int i = 0; i < buttons.Length; i++)
                     {
-                        buttons[i].IsChecked = true;
-                        await Task.Delay(150, deadline.Token);
-                        Require(buttons.Count(b => b.IsChecked == true) == 1, "Highlight controls are not exclusive");
+                        await PresentedAfter((Viewport3DX)preview.RenderSurface, () => buttons[i].IsChecked = true);
+                        Require(buttons.Count(b => b.IsChecked == true) == (i == 2 ? 2 : 1), "Soils must be exclusive; crater highlights must combine");
                         Require(preview.CaptureView() == pose && ReferenceEquals(host.Content, preview) && ReferenceEquals(data, preview.PreviewScene), "Highlight replaced scene/camera");
                         Require(meshIds.SequenceEqual(Meshes((Viewport3DX)preview.RenderSurface)), "Highlight rebuilt geometry");
                         Save(Presented((Viewport3DX)preview.RenderSurface), Path.Combine(output, mission + "-" + preview.HighlightMode + ".png"));
-                        Console.WriteLine($"PASS: {mission} {preview.HighlightMode}, retained geometry/camera and exclusive GUI state");
+                        Console.WriteLine($"PASS: {mission} {preview.HighlightMode}, retained geometry/camera and combined GUI state");
                     }
                     Save(StudioCapture.Window(main), Path.Combine(output, mission + "-controls.png"));
                     // Isolation and selection identities survive material changes.
@@ -117,7 +117,7 @@ internal static class WorldHighlightCheck
                     Require(doc.Revision == 0 && !doc.IsDirty && hash.SequenceEqual(SHA256.HashData(File.ReadAllBytes(path))), "Highlight changed source document");
                     main.ViewModel.CloseResolved(doc);
                 }
-                Console.WriteLine("PASS: solid highlights, shared instances, mixed soils, alpha/cutouts, restoration, picking, isolation, overflow/theme/density, difficulty/navigation retention and source hashes. " + output);
+                Console.WriteLine("PASS: half-tint highlights, shared instances, mixed soils, alpha/cutouts, restoration, picking, isolation, overflow/theme/density, difficulty/navigation retention and source hashes. " + output);
             }
             catch (Exception ex) { Console.Error.WriteLine(ex); exit = 1; }
             finally
@@ -140,55 +140,64 @@ internal static class WorldHighlightCheck
         texture[64] = 9; texture[68] = 12; texture[70] = 1;
         for (int i = 0; i < 12; i++)
         {
-            texture[80 + i * 2] = 31; texture[81 + i * 2] = 248;
+            texture[80 + i * 2] = i < 8 ? (byte)31 : (byte)224; texture[81 + i * 2] = i < 8 ? (byte)248 : (byte)7;
             texture[104 + i] = i < 4 ? (byte)0 : i < 8 ? (byte)128 : (byte)255;
         }
         File.WriteAllBytes(Path.Combine(fixture, "image.zbd"), texture);
         using var resolver = new AssetResolver(fixture); using var preview = new SceneViewport();
-        var window = new Window { Content = preview, Width = 1000, Height = 700, Left = 20, Top = 20, ShowInTaskbar = false, ShowActivated = false }; window.Show();
+        // Keep the presented fixture above its startup owner without activating it.
+        // Otherwise the owner can cover it after the first await and suspend presentation.
+        var window = new Window { Owner = Application.Current.MainWindow, Content = preview, Width = 1000, Height = 700, Left = 20, Top = 20, ShowInTaskbar = false, ShowActivated = false }; window.Show();
         try
         {
             GameScene scene = new(); scene.Textures.Add(new() { ["name"] = "cutout" });
             scene.Materials.Add(Material(0, 255, 255, 255)); scene.Materials.Add(Material(2, 0, 0, 255));
             var cutout = Material(1, 255, 255, 255); cutout["texture_index"] = 0; scene.Materials.Add(cutout);
             scene.Materials.Add(Material(0, 0, 0, 255)); scene.Materials.Add(Material(1, 255, 255, 255, 128));
-            scene.Models.Add(new(0, [new(-.9f,-.5f,0),new(-.1f,-.5f,0),new(-.1f,.5f,0),new(-.9f,.5f,0),new(.1f,-.5f,0),new(.9f,-.5f,0),new(.9f,.5f,0),new(.1f,.5f,0)], [], [], [new(0,0,[0,1,2,3],[],[],[]),new(1,0,[4,5,6,7],[],[],[])], []));
+            scene.Models.Add(new(0, [new(-.9f,-.5f,0),new(-.1f,-.5f,0),new(-.1f,.5f,0),new(-.9f,.5f,0),new(.1f,-.5f,0),new(.9f,-.5f,0),new(.9f,.5f,0),new(.1f,.5f,0)], [], [], [new(0,0,[0,1,2,3],[],[],[]) { Colors = Enumerable.Repeat(new Vector3(128,255,64),4).ToArray() },new(1,0,[4,5,6,7],[],[],[])], []));
             scene.Models.Add(Quad(1, 2, -1.8f, 1.8f, -2.1f, -.9f, 0));
+            scene.Models[1].Polygons[0] = scene.Models[1].Polygons[0] with { Colors = Enumerable.Repeat(new Vector3(128,255,255),4).ToArray() };
             scene.Models.Add(Quad(2, 3, -5, 5, -2.5f, -.5f, -.1f));
             scene.Models.Add(Quad(3, 4, 2.6f, 3.4f, -2, -1, 0));
             scene.Nodes.Add(new(0, "world", "world", null, [], [1,2,3,4,5,6,7], new() { ["flags"] = 0x30004 }, new()));
             for (int i = 0; i < 4; i++) scene.Nodes.Add(Node(i + 1, 0, (uint)(4 | i << 16), -3 + i * 2, 1.3f));
             scene.Nodes.Add(Node(5, 1, 0x30004)); scene.Nodes.Add(Node(6, 2, 4)); scene.Nodes.Add(Node(7, 3, 0x30004));
-            var doc = new ZbdDocument(Path.Combine(fixture,"gamez.zbd"), new(0,DateTime.MinValue), new(FormatFamily.GameZ,15,Recognition.Supported,"fixture"), ReadOnlyMemory<byte>.Empty) { Scene = scene };
+            var doc = new AssetDocument(Path.Combine(fixture,"gamez.zbd"), new(0,DateTime.MinValue), new(FormatFamily.GameZ,15,Recognition.Supported,"fixture"), ReadOnlyMemory<byte>.Empty) { Scene = scene };
             var asset = doc.Add(AssetKind.World, 0, "Whole world", 0, 0);
             string before = Snapshot(scene);
             await preview.ShowAsync(doc, asset, resolver, null, 0, default, mission: MissionSceneLoader.Build(doc, null, null, null, null));
             var viewport = (Viewport3DX)preview.RenderSurface; viewport.ShowCoordinateSystem = viewport.ShowViewCube = viewport.IsInertiaEnabled = false;
-            preview.RestoreView(new(new(0,0,12), new(0,0,-12), new(0,1,0), 50));
-            await Task.Delay(250);
+            await PresentedAfter(viewport, () => preview.RestoreView(new(new(0,0,12), new(0,0,-12), new(0,1,0), 50)));
             var meshes = Meshes(viewport).ToArray(); var materials = meshes.Select(m => m.Material).ToArray(); var pose = preview.CaptureView();
             byte[] normal = Pixels(Presented(viewport));
-            foreach (var mode in new[] { WorldHighlightMode.NonDefaultSoils, WorldHighlightMode.CanModify, WorldHighlightMode.ClipTo })
+            foreach (var mode in new[] { WorldHighlightMode.NonDefaultSoils, WorldHighlightMode.CanModify, WorldHighlightMode.ClipTo, WorldHighlightMode.CanModifyAndClipTo })
             {
-                preview.SetWorldHighlightMode(mode); await Task.Delay(150);
+                await PresentedAfter(viewport, () => preview.SetWorldHighlightMode(mode));
+                Require(meshes.Any(m => m.Material is HelixToolkit.Wpf.SharpDX.DiffuseMaterial material && PreviewMaterials.OverlayColor(material).Alpha == .5f), "Highlight did not reach normal material shader state");
                 var image = Presented(viewport); Save(image, Path.Combine(output, "fixture-" + mode + ".png"));
                 int[] rgb = mode == WorldHighlightMode.NonDefaultSoils ? [255,255,0] : mode == WorldHighlightMode.CanModify ? [0,255,0] : [255,0,0];
                 for (int node = 0; node < 4; node++) for (int part = 0; part < 2; part++)
                 {
-                    bool matches = mode == WorldHighlightMode.NonDefaultSoils ? part == 1 : mode == WorldHighlightMode.CanModify ? (node & 1) != 0 : (node & 2) != 0;
-                    int[] expected = matches ? rgb : part == 0 ? [255,255,255] : [0,0,255];
+                    bool matches = mode == WorldHighlightMode.NonDefaultSoils ? part == 1 : mode == WorldHighlightMode.CanModify ? (node & 1) != 0 : mode == WorldHighlightMode.ClipTo ? (node & 2) != 0 : node != 0;
+                    int[] baseRgb = part == 0 ? [128,255,64] : [0,0,255];
+                    int[] tint = mode == WorldHighlightMode.CanModifyAndClipTo && (node & 2) == 0 ? [0,255,0] : rgb;
+                    int[] expected = matches ? Mix(baseRgb, tint) : baseRgb;
                     CheckPixel(image, viewport, new(-3 + node * 2 + (part == 0 ? -.5 : .5), 1.3, 0), expected);
                 }
                 CheckPixel(image, viewport, new(-1.3,-1.5,0), [0,0,255]);
-                CheckPixel(image, viewport, new(0,-1.5,0), [rgb[0]/2,rgb[1]/2,(rgb[2]+255)/2]);
-                CheckPixel(image, viewport, new(1.3,-1.5,0), rgb);
-                CheckPixel(image, viewport, new(3,-1.5,0), [rgb[0]/2,rgb[1]/2,(rgb[2]+255)/2]);
-                preview.SetTextured(false); await Task.Delay(100);
-                CheckPixel(Presented(viewport), viewport, new(-1.3,-1.5,0), [0,0,255]);
-                CheckPixel(Presented(viewport), viewport, new(1.3,-1.5,0), rgb);
-                preview.SetTextured(true);
-                preview.SetWireframe(true); Require(meshes.All(m => m.FillMode == SharpDX.Direct3D11.FillMode.Wireframe), "Wireframe lost highlighted meshes"); preview.SetWireframe(false);
-                await Task.Delay(100);
+                CheckPixel(image, viewport, new(0,-1.5,0), Mix(Mix([128,0,255], rgb), [0,0,255]));
+                CheckPixel(image, viewport, new(1.3,-1.5,0), Mix([0,255,0], rgb));
+                CheckPixel(image, viewport, new(3,-1.5,0), Mix(Mix([255,255,255], rgb), [0,0,255]));
+                await PresentedAfter(viewport, () => { preview.SetTextured(false); preview.SetWorldHighlightMode(WorldHighlightMode.None); });
+                var untextured = Presented(viewport);
+                await PresentedAfter(viewport, () => preview.SetWorldHighlightMode(mode));
+                foreach (double x in new[] { -1.3, 1.3 })
+                    CheckPixel(Presented(viewport), viewport, new(x,-1.5,0), Mix(ReadPixel(untextured, viewport, new(x,-1.5,0)), rgb));
+                await PresentedAfter(viewport, () =>
+                {
+                    preview.SetTextured(true);
+                    preview.SetWireframe(true); Require(meshes.All(m => m.FillMode == SharpDX.Direct3D11.FillMode.Wireframe), "Wireframe lost highlighted meshes"); preview.SetWireframe(false);
+                });
                 var ray = new HelixToolkit.Maths.Ray(new(0,0,12), Vector3.Normalize(new(-3.5f,1.3f,-12)));
                 var hitContext = new HitTestContext(viewport.RenderContext, ray, Vector2.Zero);
                 List<HelixToolkit.SharpDX.HitTestResult> hits = [];
@@ -196,11 +205,35 @@ internal static class WorldHighlightCheck
                 Require(hits.Any(h => Vector3.Distance(h.PointHit, new(-3.5f,1.3f,0)) < .001f), "Highlight lost instance ray picking");
                 Require(meshes.SequenceEqual(Meshes(viewport)) && preview.CaptureView() == pose, "Highlight changed geometry or camera");
             }
-            preview.SetWorldHighlightMode(WorldHighlightMode.None); await Task.Delay(150);
+            await PresentedAfter(viewport, () => preview.SetWorldHighlightMode(WorldHighlightMode.None));
             Require(materials.SequenceEqual(meshes.Select(m => m.Material)), "Normal material identities were not restored");
             Require(normal.SequenceEqual(Pixels(Presented(viewport))), "Normal pixels were not restored");
+            // The same normal appearance and transparency must feed winding overlays
+            // in static and animated paths, including vertex tint times a real texture.
+            foreach (bool animated in new[] { false, true })
+            {
+                if (animated)
+                {
+                    var context = new AnimationPreviewContext { Package = new() { Prefix = [], Tail = [] }, World = doc };
+                    var nodes = SceneBuilder.Assemble(scene).Placements.Select(p => new AnimationNodePose(p.NodeIndex, p.NodeIndex, p.ModelIndex, p.Transform, true, 1, -1, 0, 0)).ToArray();
+                    var frame = new AnimationFrame(0, nodes, [], [], [], null, null, default, default, [], [], []);
+                    await preview.ShowAnimationAsync(context, frame, resolver, false, default);
+                    preview.RestoreView(pose);
+                }
+                else preview.SetWorldHighlightMode(WorldHighlightMode.ClipTo);
+                await PresentedAfter(viewport, () => preview.SetFaceOrientation(true));
+                var oriented = Presented(viewport);
+                CheckPixel(oriented, viewport, new(-3.5,1.3,0), Mix([128,255,64], [0,0,255]));
+                CheckPixel(oriented, viewport, new(-1.3,-1.5,0), [0,0,255]); // Texture alpha-zero hole.
+                CheckPixel(oriented, viewport, new(0,-1.5,0), Mix(Mix([128,0,255], [0,0,255]), [0,0,255]));
+                CheckPixel(oriented, viewport, new(1.3,-1.5,0), Mix([0,255,0], [0,0,255]));
+                CheckPixel(oriented, viewport, new(3,-1.5,0), Mix(Mix([255,255,255], [0,0,255]), [0,0,255]));
+                await PresentedAfter(viewport, () => preview.SetFaceOrientation(false));
+                if (!animated) CheckPixel(Presented(viewport), viewport, new(1.3,-1.5,0), Mix([0,255,0], [255,0,0]));
+                else CheckPixel(Presented(viewport), viewport, new(1.3,-1.5,0), [0,255,0]);
+            }
             Require(before == Snapshot(scene), "Highlight mutated source metadata");
-            Console.WriteLine("PASS: GPU fixture exact RGB, per-instance flags, per-material soil, original texture/material alpha and normal pixel restoration.");
+            Console.WriteLine("PASS: GPU fixture half-tint RGB, combined per-instance flags, soil, two texture colors, vertex tint, original alpha/cutouts, normal pixel restoration and static/animated face overlays.");
         }
         finally { window.Close(); }
     }
@@ -219,6 +252,23 @@ internal static class WorldHighlightCheck
         }
     }
     private static IEnumerable<MeshGeometryModel3D> Meshes(Viewport3DX viewport) => viewport.Items.OfType<MeshGeometryModel3D>().Concat(viewport.Items.OfType<SortingGroupModel3D>().SelectMany(g => g.Children.OfType<MeshGeometryModel3D>()));
+    private static async Task PresentedAfter(Viewport3DX viewport, Action change)
+    {
+        var host = viewport.RenderHost!;
+        var frame = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        void Rendered(object? sender, EventArgs e) => frame.TrySetResult();
+        host.Rendered += Rendered;
+        try
+        {
+            change();
+            try { await frame.Task.WaitAsync(TimeSpan.FromSeconds(10)); }
+            catch (TimeoutException)
+            {
+                throw new InvalidDataException($"No presented frame after appearance change: IsRendering={host.IsRendering}, IsBusy={host.IsBusy}, Visible={viewport.IsVisible}, Loaded={viewport.IsLoaded}, WindowActive={Window.GetWindow(viewport)?.IsActive}.");
+            }
+        }
+        finally { host.Rendered -= Rendered; }
+    }
     private static BitmapSource Presented(Viewport3DX viewport)
     {
         using MemoryStream stream = new();
@@ -226,6 +276,13 @@ internal static class WorldHighlightCheck
         stream.Position = 0; return BitmapFrame.Create(stream, BitmapCreateOptions.None, BitmapCacheOption.OnLoad);
     }
     private static byte[] Pixels(BitmapSource image) { var converted = new FormatConvertedBitmap(image,PixelFormats.Bgra32,null,0); byte[] bytes = new byte[converted.PixelWidth * converted.PixelHeight * 4]; converted.CopyPixels(bytes,converted.PixelWidth*4,0); return bytes; }
+    private static int[] Mix(int[] a, int[] b) => Enumerable.Range(0,3).Select(i => (a[i] + b[i]) / 2).ToArray();
+    private static int[] ReadPixel(BitmapSource image, Viewport3DX viewport, Point3D world)
+    {
+        var p = viewport.Project(world); int x = (int)(p.X * image.PixelWidth / viewport.ActualWidth), y = (int)(p.Y * image.PixelHeight / viewport.ActualHeight);
+        var converted = new FormatConvertedBitmap(image,PixelFormats.Bgra32,null,0); byte[] pixel = new byte[4]; converted.CopyPixels(new Int32Rect(x,y,1,1),pixel,4,0);
+        return [pixel[2], pixel[1], pixel[0]];
+    }
     private static void CheckPixel(BitmapSource image, Viewport3DX viewport, Point3D world, int[] rgb)
     {
         var p = viewport.Project(world); int x = (int)(p.X * image.PixelWidth / viewport.ActualWidth), y = (int)(p.Y * image.PixelHeight / viewport.ActualHeight);

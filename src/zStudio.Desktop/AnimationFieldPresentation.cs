@@ -1,6 +1,6 @@
-using Recoil.Zbd.Core.Animation;
+using zStudio.Core.Animation;
 
-namespace Recoil.Zbd.Desktop;
+namespace zStudio.Desktop;
 
 /// <summary>Desktop presentation keyed by catalog type/offset. Unknown fields have an explicit fallback.</summary>
 internal static class AnimationFieldPresentation

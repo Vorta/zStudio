@@ -6,9 +6,9 @@ using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Shell;
 using System.Windows.Threading;
-using Recoil.Zbd.Automation;
+using zStudio.Automation;
 
-namespace Recoil.Zbd.Desktop;
+namespace zStudio.Desktop;
 
 public partial class MainWindow
 {
@@ -94,6 +94,8 @@ public partial class MainWindow
             }
         }
         finally { refreshingPresentation = false; }
+        // A source map's chrome keeps its own toolbar and footer hidden.
+        RefreshSourceChrome();
     }
 
     private void ApplyRetainedPresentation()

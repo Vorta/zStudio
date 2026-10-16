@@ -1,11 +1,11 @@
 using System.IO;
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Core.Formats;
-using Recoil.Zbd.Desktop;
-using Recoil.Zbd.Tests;
+using zStudio.Core;
+using zStudio.Core.Formats;
+using zStudio.Desktop;
+using zStudio.Tests;
 using Xunit;
 
-namespace Recoil.Zbd.Desktop.Tests;
+namespace zStudio.Desktop.Tests;
 
 /// <summary>Map coordinate edits and reader documents (valve/resource edits) own only the archives they change.</summary>
 internal static class MissionOwnershipChecks

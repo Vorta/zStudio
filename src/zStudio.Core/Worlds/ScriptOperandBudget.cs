@@ -1,4 +1,4 @@
-namespace Recoil.Zbd.Core.Worlds;
+namespace zStudio.Core.Worlds;
 
 /// <summary>One execution operation's argument arrays and authored/expanded text work, before allocation.</summary>
 internal sealed class ScriptOperandBudget(long maximumReferences = ScriptOperandBudget.MaximumReferences,

@@ -1,10 +1,10 @@
 using System.Numerics;
 using System.Text.Json.Nodes;
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Core.Animation;
+using zStudio.Core;
+using zStudio.Core.Animation;
 using Xunit;
 
-namespace Recoil.Zbd.Tests;
+namespace zStudio.Tests;
 
 public sealed partial class AnimationTests
 {
@@ -21,6 +21,97 @@ public sealed partial class AnimationTests
         Assert.Equal(2, SceneBuilder.Assemble(mission.Scene, token: TestContext.Current.CancellationToken).Placements.Count);
         Assert.All(mission.Actors, a => Assert.Equal(0, a.SourceRoot));
         Assert.Equal(original, context.Scene.Nodes[0].Data.ToJsonString()); Assert.Equal(2, context.Scene.Nodes.Count);
+    }
+    [Fact]
+    public void SourceTransformsRetainInitializedChildrenAndRefuseInitializationDependencies()
+    {
+        var token = TestContext.Current.CancellationToken;
+        var source = MissionFixture();
+        var root = source.Scene.Nodes[0];
+        source.Scene.Nodes[0] = root with { Children = [2] };
+        source.Scene.Nodes.Add(root with { Index = 2, Name = "gun", Parents = [0], Children = [],
+            Data = (JsonObject)root.Data.DeepClone(), Metadata = (JsonObject)root.Metadata.DeepClone() });
+        var cleanup = MissionEntry(1, "reset", "animated"); cleanup.SetInt(148, 0x20);
+        var reference = new AnimationRecord(new byte[40]); reference.SetText(0, "gun", 36); cleanup.References[1].Add(reference);
+        var rotate = AnimationCatalog.Create(9); rotate.SetShort(28, 2); rotate.SetVector(16, new(0, .75f, 0)); cleanup.Primary.Events.Add(rotate);
+        var hide = AnimationCatalog.Create(6); hide.SetShort(16, 2); hide.SetInt(12, 0); cleanup.Primary.Events.Add(hide);
+        source.Package.Entries.Add(cleanup);
+        var initial = BuildMission(source.World, source.Package, null, null, null);
+        GameScene after = new(); after.Models.AddRange(source.Scene.Models); after.Materials.AddRange(source.Scene.Materials); after.Textures.AddRange(source.Scene.Textures);
+        foreach (var node in source.Scene.Nodes) after.Nodes.Add(node with { Data = (JsonObject)node.Data.DeepClone(), Metadata = (JsonObject)node.Metadata.DeepClone() });
+        MissionSceneLoader.SetPose(after, 0, Matrix4x4.CreateTranslation(12, 3, 4));
+        var incremental = Assert.IsType<MissionSceneContext>(initial.WithSourceTransforms(source.Scene, after, token));
+        var complete = BuildMission(new SceneDocument(source.World.Path, after, source.World.Game), source.Package, null, null, null);
+        for (int i = 0; i < after.Nodes.Count; i++)
+        {
+            Assert.Equal(SceneBuilder.LocalTransform(complete.Scene.Nodes[i]), SceneBuilder.LocalTransform(incremental.Scene.Nodes[i]));
+            Assert.Equal(complete.Scene.Nodes[i].Metadata.UInt("flags"), incremental.Scene.Nodes[i].Metadata.UInt("flags"));
+        }
+        Assert.Same(initial.Scene.Nodes[2], incremental.Scene.Nodes[2]);
+        Assert.Equal(Vector3.Zero, SceneBuilder.LocalTransform(initial.Scene.Nodes[0]).Translation);
+        Assert.Equal(Vector3.Zero, SceneBuilder.LocalTransform(source.Scene.Nodes[0]).Translation);
+        // Even an initialization write equal to the old source is authoritative and must not be overwritten.
+        var set = AnimationCatalog.Create(7); set.SetShort(28, 1); set.SetVector(16, Vector3.Zero); cleanup.Primary.Events.Add(set);
+        Assert.Null(BuildMission(source.World, source.Package, null, null, null).WithSourceTransforms(source.Scene, after, token));
+        cleanup.Primary.Events.Remove(set);
+        // A child initialized from the root's world position depends on the root even though it never writes it.
+        var offset = AnimationCatalog.Create(7); offset.SetShort(28, 2); offset.SetShort(30, 1); cleanup.Primary.Events.Add(offset);
+        Assert.Null(BuildMission(source.World, source.Package, null, null, null).WithSourceTransforms(source.Scene, after, token));
+        cleanup.Primary.Events.Remove(offset);
+        // Dormancy also reads the authored root when a future animation can place it. A move to the origin changes visibility.
+        var future = MissionEntry(2, "future", "animated"); var position = AnimationCatalog.Create(7);
+        position.SetShort(28, 1); position.SetVector(16, new(100, 0, 0)); position.Threshold = 1; future.Sequences[0].Events.Add(position);
+        source.Package.Entries.Add(future);
+        var positionedWorld = new SceneDocument(source.World.Path, after, source.World.Game);
+        var nonzero = BuildMission(positionedWorld, source.Package, null, null, null);
+        Assert.DoesNotContain(0, nonzero.DormantRoots);
+        Assert.Contains(0, BuildMission(source.World, source.Package, null, null, null).DormantRoots);
+        Assert.Null(nonzero.WithSourceTransforms(after, source.Scene, token));
+        source.Package.Entries.Remove(future);
+        // The same equality trap also occurs when an AIV record places an existing authored root.
+        Assert.Null(BuildMission(source.World, null, Arr(Str("animated"), Spawn(0, 0, 0, 0)), Arr(Str("animated"), Arr()), null)
+            .WithSourceTransforms(source.Scene, after, token));
+        using var canceled = new CancellationTokenSource(); canceled.Cancel();
+        Assert.ThrowsAny<OperationCanceledException>(() => initial.WithSourceTransforms(source.Scene, after, canceled.Token));
+    }
+    [Fact]
+    public void SourceTransformsRefuseChangedInitializationBindingAcrossPartitions()
+    {
+        var source = MissionFixture(); var root = source.Scene.Nodes[0];
+        source.Scene.Nodes[0] = root with { Children = [2] };
+        source.Scene.Nodes[1] = source.Scene.Nodes[1] with { Children = [], Data = Partitions(0, 3) };
+        source.Scene.Nodes.Add(root with { Index = 2, Name = "part", Parents = [0], Children = [], Data = (JsonObject)root.Data.DeepClone(), Metadata = (JsonObject)root.Metadata.DeepClone() });
+        source.Scene.Nodes.Add(root with { Index = 3, Name = "other", Parents = [1], Children = [4], Data = (JsonObject)root.Data.DeepClone(), Metadata = (JsonObject)root.Metadata.DeepClone() });
+        source.Scene.Nodes.Add(root with { Index = 4, Name = "part", Parents = [3], Children = [], Data = (JsonObject)root.Data.DeepClone(), Metadata = (JsonObject)root.Metadata.DeepClone() });
+        var setup = MissionEntry(1, "setup", "world"); setup.SetInt(148, 0x20);
+        var part = new AnimationRecord(new byte[40]); part.SetText(0, "part", 36); setup.References[1].Add(part);
+        var position = AnimationCatalog.Create(7); position.SetShort(28, 2); position.SetVector(16, new(9, 0, 0)); setup.Primary.Events.Add(position);
+        source.Package.Entries.Add(setup);
+        var initial = BuildMission(source.World, source.Package, null, null, null);
+        GameScene after = new(); after.Models.AddRange(source.Scene.Models); after.Materials.AddRange(source.Scene.Materials); after.Textures.AddRange(source.Scene.Textures);
+        foreach (var node in source.Scene.Nodes) after.Nodes.Add(node with { Data = (JsonObject)node.Data.DeepClone(), Metadata = (JsonObject)node.Metadata.DeepClone() });
+        MissionSceneLoader.SetPose(after, 0, Matrix4x4.CreateTranslation(12, 0, 0));
+        Assert.NotNull(initial.WithSourceTransforms(source.Scene, after, TestContext.Current.CancellationToken));
+        after.Nodes[1] = after.Nodes[1] with { Data = Partitions(3, 0) };
+        var complete = BuildMission(new SceneDocument(source.World.Path, after, source.World.Game), source.Package, null, null, null);
+        Assert.Equal(9, SceneBuilder.LocalTransform(initial.Scene.Nodes[2]).M41);
+        Assert.Equal(0, SceneBuilder.LocalTransform(initial.Scene.Nodes[4]).M41);
+        Assert.Equal(0, SceneBuilder.LocalTransform(complete.Scene.Nodes[2]).M41);
+        Assert.Equal(9, SceneBuilder.LocalTransform(complete.Scene.Nodes[4]).M41);
+        Assert.Null(initial.WithSourceTransforms(source.Scene, after, TestContext.Current.CancellationToken));
+        // Crossing out of a cell changes only derived overflow membership; mission-added actors must survive both directions.
+        var aiv = Arr(Str("other_01"), Spawn(50, 0, 0, 0)); var vehicles = Arr(Str("other"), Arr());
+        var placed = BuildMission(source.World, null, aiv, vehicles, null);
+        after.Nodes[1] = after.Nodes[1] with { Children = [0], Data = new() { ["partitions"] = new JsonArray(new JsonArray(new JsonObject { ["node_indices"] = new JsonArray(3) })) } };
+        var outside = Assert.IsType<MissionSceneContext>(placed.WithSourceTransforms(source.Scene, after, TestContext.Current.CancellationToken));
+        var outsideFull = BuildMission(new SceneDocument(source.World.Path, after, source.World.Game), null, aiv, vehicles, null);
+        Assert.Equal(SceneBuilder.Children(outsideFull.Scene.Nodes[1]), SceneBuilder.Children(outside.Scene.Nodes[1]));
+        Assert.Equal(placed.Actors, outside.Actors);
+        Assert.Same(placed.Scene.Nodes[placed.Actors[0].Root], outside.Scene.Nodes[placed.Actors[0].Root]);
+        var inside = Assert.IsType<MissionSceneContext>(outside.WithSourceTransforms(after, source.Scene, TestContext.Current.CancellationToken));
+        Assert.Equal(SceneBuilder.Children(placed.Scene.Nodes[1]), SceneBuilder.Children(inside.Scene.Nodes[1]));
+        Assert.Equal(placed.Scene.Nodes[1].Children, inside.Scene.Nodes[1].Children);
+        static JsonObject Partitions(int a, int b) => new() { ["partitions"] = new JsonArray(new JsonArray(new JsonObject { ["node_indices"] = new JsonArray(a, b) })) };
     }
     [Theory]
     [InlineData("rumv_easy_01", "rumv_easy")]
@@ -131,7 +222,7 @@ public sealed partial class AnimationTests
         context.Scene.Nodes.Add(new(2,"camera","camera",null,[],[],[],new() { ["focus_node_xz"] = 0 }));
         Assert.False(Assert.Single(MissionSceneContext.FindHorizons(context.Scene)).FollowHeight);
     }
-    private static MissionSceneContext BuildMission(ZbdDocument world, AnimationPackage? package, JsonNode? aiv, JsonNode? vehicles, JsonNode? starts) => MissionSceneLoader.Build(world, package, aiv, vehicles, starts, token: TestContext.Current.CancellationToken);
+    private static MissionSceneContext BuildMission(ISceneDocument world, AnimationPackage? package, JsonNode? aiv, JsonNode? vehicles, JsonNode? starts) => MissionSceneLoader.Build(world, package, aiv, vehicles, starts, token: TestContext.Current.CancellationToken);
     [Fact]
     public void AutomaticActivationInitializesBeforeExplicitStartup()
     {

@@ -1,6 +1,6 @@
 using System.Text;
 
-namespace Recoil.Zbd.Core.Animation;
+namespace zStudio.Core.Animation;
 
 /// <summary>Bounded Latin-1 lexical work shared by both keyframe-script dialects; no whole-source line/token arrays.</summary>
 internal static class AnimationScriptLexing

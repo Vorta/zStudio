@@ -1,6 +1,6 @@
-namespace Recoil.Zbd.Core;
+namespace zStudio.Core;
 
-public enum WorldHighlightMode { None, NonDefaultSoils, CanModify, ClipTo, Zones }
+public enum WorldHighlightMode { None, NonDefaultSoils, CanModify, ClipTo, Zones, CanModifyAndClipTo }
 
 [Flags]
 public enum WorldSurfaceKind { Default = 0, NonDefaultSoil = 1, CanModify = 2, ClipTo = 4 }
@@ -43,6 +43,7 @@ public static class WorldSurfaceHighlights
         WorldHighlightMode.NonDefaultSoils => (kind & WorldSurfaceKind.NonDefaultSoil) != 0,
         WorldHighlightMode.CanModify => (kind & WorldSurfaceKind.CanModify) != 0,
         WorldHighlightMode.ClipTo => (kind & WorldSurfaceKind.ClipTo) != 0,
+        WorldHighlightMode.CanModifyAndClipTo => (kind & (WorldSurfaceKind.CanModify | WorldSurfaceKind.ClipTo)) != 0,
         WorldHighlightMode.Zones => true,
         _ => throw new ArgumentOutOfRangeException(nameof(mode))
     };

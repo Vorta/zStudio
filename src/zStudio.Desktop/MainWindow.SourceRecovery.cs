@@ -1,10 +1,10 @@
 using System.IO;
 using System.Windows;
 using System.Windows.Controls;
-using Recoil.Zbd.Automation;
-using Recoil.Zbd.Core.Sources;
+using zStudio.Automation;
+using zStudio.Core.Sources;
 
-namespace Recoil.Zbd.Desktop;
+namespace zStudio.Desktop;
 
 /// <summary>
 /// Saves of a source project that were interrupted (the program or the computer stopped while the files were being

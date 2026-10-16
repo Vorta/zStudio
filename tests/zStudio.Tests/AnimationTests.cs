@@ -1,11 +1,11 @@
 using System.Buffers.Binary;
 using System.Numerics;
 using System.Text.Json.Nodes;
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Core.Animation;
+using zStudio.Core;
+using zStudio.Core.Animation;
 using Xunit;
 
-namespace Recoil.Zbd.Tests;
+namespace zStudio.Tests;
 
 public sealed partial class AnimationTests
 {
@@ -360,7 +360,7 @@ public sealed partial class AnimationTests
     }
     private static AnimationPreviewContext Context(AnimationPackage package)
     {
-        var doc = new ZbdDocument("fixture", new(0, DateTime.MinValue), new(FormatFamily.GameZ, 15, Recognition.Supported, "fixture"), ReadOnlyMemory<byte>.Empty) { Scene = new() };
+        var doc = new AssetDocument("fixture", new(0, DateTime.MinValue), new(FormatFamily.GameZ, 15, Recognition.Supported, "fixture"), ReadOnlyMemory<byte>.Empty) { Scene = new() };
         doc.Scene.Models.Add(new(0, [Vector3.Zero, Vector3.UnitX, Vector3.UnitY], [], [], [], []));
         doc.Scene.Nodes.Add(new(0, "animated", "object3d", 0, [], [], new JsonObject { ["flags"] = 4 }, new JsonObject { ["flags"] = 0, ["opacity"] = 1f, ["scale"] = JsonData.Vector(Vector3.One), ["transform"] = new JsonArray(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0) }));
         return new() { Package = package, World = doc };

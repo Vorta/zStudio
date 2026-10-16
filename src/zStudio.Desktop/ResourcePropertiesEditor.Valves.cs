@@ -2,10 +2,10 @@ using System.Globalization;
 using System.IO;
 using System.Windows;
 using System.Windows.Controls;
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Core.Formats;
+using zStudio.Core;
+using zStudio.Core.Formats;
 
-namespace Recoil.Zbd.Desktop;
+namespace zStudio.Desktop;
 
 public sealed record ValveReferenceTarget(AiValveSource Source, Guid Record, string Name, string Role);
 

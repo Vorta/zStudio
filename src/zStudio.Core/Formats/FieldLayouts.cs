@@ -1,13 +1,13 @@
 using System.Text.Json.Nodes;
 
-namespace Recoil.Zbd.Core.Formats;
+namespace zStudio.Core.Formats;
 
 internal static class FieldLayouts
 {
     internal static readonly JsonObject Definitions = Load();
     private static JsonObject Load()
     {
-        using Stream stream = typeof(FieldLayouts).Assembly.GetManifestResourceStream("Recoil.Zbd.Core.Formats.field-layouts.json")!;
+        using Stream stream = typeof(FieldLayouts).Assembly.GetManifestResourceStream("zStudio.Core.Formats.field-layouts.json")!;
         return JsonNode.Parse(stream)!.AsObject();
     }
     public static JsonObject Read(BinaryCursor cursor, int size, string layout) => Decode(cursor.Take(size), Definitions["layouts"]![layout]!.AsArray());

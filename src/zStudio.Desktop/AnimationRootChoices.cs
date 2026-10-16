@@ -1,7 +1,7 @@
 using System.Numerics;
-using Recoil.Zbd.Core;
+using zStudio.Core;
 
-namespace Recoil.Zbd.Desktop;
+namespace zStudio.Desktop;
 
 /// <summary>One first-occurrence actor index per dialog; only the matching page is retained.
 /// Duplicate actors remain distinct in the mission. The chooser describes the same first actor as before.</summary>

@@ -1,9 +1,9 @@
 using System.Buffers.Binary;
 using System.Numerics;
 using System.Text.Json.Nodes;
-using Recoil.Zbd.Core.Formats;
+using zStudio.Core.Formats;
 
-namespace Recoil.Zbd.Core;
+namespace zStudio.Core;
 
 public readonly record struct MotionFrame(Vector3 Translation, Quaternion Rotation);
 public sealed record MotionPart(string Name, uint Flags, IReadOnlyList<MotionFrame> Frames, ReadOnlyMemory<byte> NameBytes);

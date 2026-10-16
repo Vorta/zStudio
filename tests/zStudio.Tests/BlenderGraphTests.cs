@@ -3,12 +3,14 @@ using System.Buffers.Binary;
 using System.Diagnostics;
 using System.Text;
 using System.Text.Json.Nodes;
-using Recoil.Zbd.Core.Gltf;
-using Recoil.Zbd.Core.Sources;
-using Recoil.Zbd.Core.Worlds;
+using zStudio.Core;
+using zStudio.Core.Export;
+using zStudio.Core.Gltf;
+using zStudio.Core.Sources;
+using zStudio.Core.Worlds;
 using Xunit;
 
-namespace Recoil.Zbd.Tests;
+namespace zStudio.Tests;
 
 public sealed class BlenderGraphTests
 {
@@ -166,6 +168,65 @@ public sealed class BlenderGraphTests
         nested["nodes"]![0]!["extras"]!["recoil"]!["ref"] = "other.glb";
         nested["nodes"]![0]!["extras"]!["recoil"]!["zoneOverrides"] = new JsonObject { ["references"] = new JsonObject { ["0"] = profile.DeepClone() } };
         fixture.Write(nestedOwner, Encoding.UTF8.GetBytes(nested.ToJsonString()));
+        // An owner outside a checkout can hold a much larger face assignment than
+        // the reference being duplicated. Admit the whole expansion before cloning,
+        // using a small allowance here instead of allocating a huge mission profile.
+        SourceBlender.Graph graph = new((path, _) => File.ReadAllBytes(fixture.Path(path)), token);
+        graph.Load(model);
+        var scopeRoots = graph.Models.ToDictionary(p => p.Key, p => p.Value.Json, StringComparer.OrdinalIgnoreCase);
+        var scopeDocuments = graph.Models.ToDictionary(p => p.Key, p => p.Value.Document, StringComparer.OrdinalIgnoreCase);
+        Dictionary<string, SourceBlender.GraphMapping> scopeMappings = new(StringComparer.OrdinalIgnoreCase)
+        {
+            [model] = new(new() { [0] = 0 }, []),
+            [part] = new(new() { [0] = 0 }, new() { [0] = (0, [0, 1]) }),
+        };
+        JsonObject Scope() => new() { ["references"] = new JsonObject { ["0"] = profile.DeepClone() } };
+        var retained = Scope(); var unchanged = retained.DeepClone();
+        SourceBlender.ScopeRemapBudget allowance = new(1200, 2400);
+        allowance.BeginOwner(model);
+        SourceBlender.RemapScope(Scope(), model, graph, scopeDocuments, scopeRoots, scopeMappings, token, allowance);
+        // The same owner has already retained one scope, so another cannot consume
+        // a fresh allowance. Starting a different owner resets only the owner cap.
+        Assert.Throws<InvalidDataException>(() => SourceBlender.RemapScope(retained, model, graph, scopeDocuments, scopeRoots, scopeMappings, token, allowance));
+        Assert.True(JsonNode.DeepEquals(unchanged, retained));
+        allowance.BeginOwner(other);
+        SourceBlender.RemapScope(Scope(), model, graph, scopeDocuments, scopeRoots, scopeMappings, token, allowance);
+        allowance.BeginOwner(nestedOwner);
+        Assert.Throws<InvalidDataException>(() => SourceBlender.RemapScope(retained, model, graph, scopeDocuments, scopeRoots, scopeMappings, token, allowance));
+        scopeMappings[model].Nodes.Add(1, 0);
+        Assert.Throws<InvalidDataException>(() => SourceBlender.RemapScope(retained, model, graph, scopeDocuments, scopeRoots, scopeMappings, token, new(1200)));
+        Assert.True(JsonNode.DeepEquals(unchanged, retained));
+        SourceBlender.RemapScope(retained, model, graph, scopeDocuments, scopeRoots, scopeMappings, token, new());
+        Assert.True(JsonNode.DeepEquals(retained["references"]!["0"]!["meshes"], retained["references"]!["1"]!["meshes"]));
+        Assert.Equal("[[9],[10]]", retained["references"]!["1"]!["meshes"]![0]!["polygonZones"]!.ToJsonString());
+        scopeMappings[model].Nodes.Remove(1);
+        scopeMappings[part].EditorNodes[0] = "surface";
+        scopeMappings[part].EditorMeshes[0] = "mesh";
+        Dictionary<string, Dictionary<int, int[]>> placementFaces = new(StringComparer.OrdinalIgnoreCase) { [part] = new() { [0] = [1, 2] } };
+        JsonObject Placement(SourceBlender.ScopeRemapBudget budget)
+        {
+            var holder = scopeRoots[model]["nodes"]![0]!.DeepClone().AsObject();
+            JsonArray accepted = [new JsonObject
+            {
+                ["chain"] = new JsonArray(), ["nodes"] = new JsonObject { ["surface"] = new JsonObject { ["zone"] = 7 } },
+                ["meshes"] = new JsonObject { ["mesh"] = new JsonObject { ["1"] = new JsonArray(12) } },
+            }];
+            SourceBlender.ApplyPlacementEdits(model, holder, accepted, scopeRoots, scopeDocuments, scopeMappings, placementFaces, token, budget);
+            return holder;
+        }
+        // Sparse accepted edits materialize a complete current geometry profile.
+        // Their admission shares the earlier remap charge even after visiting other owners.
+        SourceBlender.ScopeRemapBudget combined = new(1200);
+        combined.BeginOwner(model);
+        SourceBlender.RemapScope(Scope(), model, graph, scopeDocuments, scopeRoots, scopeMappings, token, combined);
+        combined.BeginOwner(other); combined.BeginOwner(model);
+        Assert.Throws<InvalidDataException>(() => Placement(combined));
+        SourceBlender.ScopeRemapBudget placements = new(1200);
+        placements.BeginOwner(model);
+        var placed = Placement(placements); Placement(placements);
+        Assert.Throws<InvalidDataException>(() => Placement(placements));
+        Assert.Equal("[[12],[4]]", placed["extras"]!["recoil"]!["zoneOverrides"]!["meshes"]![0]!["polygonZones"]!.ToJsonString());
+        Assert.Equal(7, placed["extras"]!["recoil"]!["zoneOverrides"]!["nodes"]![0]!["zone"]!.GetValue<int>());
         var workspace = new SourceWorkspace(fixture.Project);
         var checkout = SourceBlender.Checkout(workspace, model, token);
         string session = Path.Combine(fixture.Root, "session");
@@ -234,6 +295,57 @@ public sealed class BlenderGraphTests
         workspace.Save(token);
         Assert.Equal(workspace.Read(binaryOwner, token), File.ReadAllBytes(fixture.Path(binaryOwner)));
         Assert.Equal("[[10],[9]]", Zones());
+    }
+
+    [Fact]
+    public void GraphExportRequiresExplicitTextureRemovalButKeepsOriginallyImagelessMaterials()
+    {
+        var token = TestContext.Current.CancellationToken;
+        using SourceWorldFixture fixture = new();
+        foreach (string kind in new[] { "supplied", "missing", "imageless" })
+        {
+            string source = fixture.Path(kind), session = fixture.Path(kind + "-session"), output = fixture.Path(kind + "-output");
+            CreateFixture(source, missingImage: true);
+            if (kind != "missing") File.WriteAllBytes(Path.Combine(source, "missing.png"), PngEncoder.Encode(new DecodedImage(1, 1, [255, 0, 0, 255]), token));
+            if (kind == "imageless")
+            {
+                var original = JsonNode.Parse(File.ReadAllBytes(Path.Combine(source, "part.gltf")))!;
+                original["materials"]![1]!["pbrMetallicRoughness"]!.AsObject().Remove("baseColorTexture");
+                File.WriteAllText(Path.Combine(source, "part.gltf"), original.ToJsonString());
+            }
+            SourceBlender.PrepareBlenderImport(source, "world.gltf", session, token);
+            string raw = Path.Combine(session, "input"), model = Path.Combine(raw, "part.gltf");
+            var json = JsonNode.Parse(File.ReadAllBytes(model))!;
+            for (int m = 0; m < 2; m++)
+            {
+                var primitive = json["meshes"]![m]!["primitives"]![0]!;
+                int count = m == 0 ? 2 : 1;
+                primitive["extras"] ??= new JsonObject();
+                primitive["extras"]!["zstudio_blender"] = new JsonObject
+                {
+                    ["origins"] = new JsonArray(Enumerable.Range(0, count).Select(_ => (JsonNode)JsonValue.Create(0)!).ToArray()),
+                    ["faces"] = new JsonArray(Enumerable.Range(0, count).Select(_ => (JsonNode)JsonValue.Create(1)!).ToArray()),
+                    ["zones"] = new JsonArray(Enumerable.Range(0, count).Select(_ => (JsonNode)(m == 0 ? new JsonArray(3) : new JsonArray())).ToArray())
+                };
+            }
+            var material = json["materials"]![1]!;
+            material["pbrMetallicRoughness"]!.AsObject().Remove("baseColorTexture");
+            json.AsObject().Remove("images"); json.AsObject().Remove("textures");
+            File.WriteAllText(model, json.ToJsonString());
+            string edits = Path.Combine(raw, "edit.json");
+            File.WriteAllText(edits, new JsonObject { ["protocol"] = 1, ["session"] = session, ["models"] = new JsonArray(
+                new JsonObject { ["path"] = "world.gltf" }, new JsonObject { ["path"] = "part.gltf", ["geometryChanged"] = true }) }.ToJsonString());
+            if (kind != "imageless")
+            {
+                Assert.Contains("Reconnect the image", Assert.Throws<InvalidDataException>(() => SourceBlender.PrepareBlenderExport(edits, output, token)).Message);
+                Assert.False(Directory.Exists(output));
+                material["extras"]!["recoil"]!.AsObject().Remove("texture");
+                File.WriteAllText(model, json.ToJsonString());
+            }
+            var result = SourceBlender.PrepareBlenderExport(edits, output, token);
+            var exported = JsonNode.Parse(File.ReadAllBytes(Path.Combine(Path.GetDirectoryName(result["root"]!.GetValue<string>())!, "part.gltf")))!;
+            Assert.Equal(kind == "imageless" ? "missing" : null, exported["materials"]![1]!["extras"]!["recoil"]?["texture"]?.GetValue<string>());
+        }
     }
 
     // Protects the graph's physical-file identity, source immutability and the helper's windowless protocol.

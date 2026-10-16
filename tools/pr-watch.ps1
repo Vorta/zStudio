@@ -20,7 +20,7 @@ if ($ReleaseOnApproval) { $watchArgs += '--release-on-approval' }
 if ($NotifyTest) { $watchArgs += '--notify-test' }
 if ($DeliveryCheck) { $watchArgs += '--delivery-check' }
 if ($Claude) { $watchArgs += '--claude' }
-$dll = Join-Path $PSScriptRoot 'zStudio.PrWatch/bin/Release/net10.0/Recoil.Zbd.PrWatch.dll'
+$dll = Join-Path $PSScriptRoot 'zStudio.PrWatch/bin/Release/net10.0/zStudio.PrWatch.dll'
 if ($Action -eq 'listen') {
     # Listen from a private content-addressed copy so solution builds remain possible while it waits.
     $runtimeArgs = @('runtime', '--workspace', $workspace, '--pr', [string]$Pr)

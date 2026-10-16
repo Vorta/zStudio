@@ -1,10 +1,10 @@
 using System.Numerics;
 using System.Text.Json.Nodes;
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Core.Formats;
+using zStudio.Core;
+using zStudio.Core.Formats;
 using Xunit;
 
-namespace Recoil.Zbd.Tests;
+namespace zStudio.Tests;
 
 public sealed partial class AnimationTests
 {
@@ -34,9 +34,9 @@ public sealed partial class AnimationTests
             Assert.Equal(-1, easy.RemapNodeFrom(medium, actor.Root)); // Callers without a verified scope must never fall back to names.
             Assert.Equal(-1, hard.RemapNodeFrom(medium, actor.Root));
             Assert.Equal(actor.Root, medium.RemapNodeFrom(medium, actor.Root)); // Exact source provenance survives refresh/fallback layouts.
-            var previous = new Recoil.Zbd.Core.Animation.AnimationPreviewContext { Package = new() { Prefix = new byte[72], Tail = [] }, World = world, Mission = medium };
+            var previous = new zStudio.Core.Animation.AnimationPreviewContext { Package = new() { Prefix = new byte[72], Tail = [] }, World = world, Mission = medium };
             previous.RootOverrides[0] = actor.Root;
-            var next = new Recoil.Zbd.Core.Animation.AnimationPreviewContext { Package = previous.Package, World = world, Mission = easy };
+            var next = new zStudio.Core.Animation.AnimationPreviewContext { Package = previous.Package, World = world, Mission = easy };
             next.RemapBindingsFrom(previous);
             Assert.Empty(next.RootOverrides); Assert.Contains(next.Diagnostics, d => d.Contains("cleared"));
         });

@@ -3,14 +3,14 @@ using System.Reflection;
 using System.Text;
 using System.Text.Json.Nodes;
 using System.Windows.Threading;
-using Recoil.Zbd.Automation;
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Core.Formats;
-using Recoil.Zbd.Desktop;
-using Recoil.Zbd.Tests;
+using zStudio.Automation;
+using zStudio.Core;
+using zStudio.Core.Formats;
+using zStudio.Desktop;
+using zStudio.Tests;
 using Xunit;
 
-namespace Recoil.Zbd.Desktop.Tests;
+namespace zStudio.Desktop.Tests;
 
 /// <summary>Runs on the existing STA test dispatcher; barriers stop only the preparation worker.</summary>
 internal static class DocumentPreparationChecks
@@ -23,7 +23,7 @@ internal static class DocumentPreparationChecks
         await SourceWorld(deadline.Token);
     }
 
-    private static ZbdDocument Resource(string path, CancellationToken token) => FormatRegistry.Default.OpenBytes(
+    private static AssetDocument Resource(string path, CancellationToken token) => FormatRegistry.Default.OpenBytes(
         Path.GetFullPath(path), Encoding.ASCII.GetBytes("# retained\r\n( VALUE ( 7 ) OTHER ( 9 ) )\r\n"), token: token);
 
     private static async Task ResourceOpen(CancellationToken token)
@@ -53,7 +53,7 @@ internal static class DocumentPreparationChecks
                 if (scenario == "cancel") request.Cancel();
                 if (scenario == "navigation")
                 {
-                    var other = new DocumentModel(new ZbdDocument(Path.GetFullPath("other.raw"), new(0, DateTime.MinValue),
+                    var other = new DocumentModel(new AssetDocument(Path.GetFullPath("other.raw"), new(0, DateTime.MinValue),
                         new(FormatFamily.Unknown, null, Recognition.Unknown, "raw"), ReadOnlyMemory<byte>.Empty));
                     vm.Documents.Add(other); vm.SelectedDocument = other;
                     // Navigation cancels cold preparation, so it must finish without releasing the barrier.

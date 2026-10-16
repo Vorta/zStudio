@@ -2,11 +2,11 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
-using Recoil.Zbd.Core.Formats;
-using Recoil.Zbd.Core.Gltf;
-using Recoil.Zbd.Core.Worlds;
+using zStudio.Core.Formats;
+using zStudio.Core.Gltf;
+using zStudio.Core.Worlds;
 
-namespace Recoil.Zbd.Core.Sources;
+namespace zStudio.Core.Sources;
 
 /// <summary>
 /// Reconstructs model sources from shipped worlds: each mission database (<c>data/mN/models/mN.gltf</c>), each file the
@@ -56,6 +56,12 @@ internal static partial class WorldSources
     {
         var (json, bin) = canonical.Write("content.bin");
         CheckJsonLength(json);
+        return HashBuffers(json, bin);
+    }
+
+    /// <summary>Hash the owned source buffers in sequence without allocating their concatenation.</summary>
+    internal static string HashBuffers(ReadOnlySpan<byte> json, ReadOnlySpan<byte> bin)
+    {
         using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
         hash.AppendData(json); hash.AppendData(bin);
         return Convert.ToHexStringLower(hash.GetHashAndReset())[..16];

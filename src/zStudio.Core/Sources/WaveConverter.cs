@@ -1,7 +1,7 @@
 using System.Buffers.Binary;
-using Recoil.Zbd.Core.Formats;
+using zStudio.Core.Formats;
 
-namespace Recoil.Zbd.Core.Sources;
+namespace zStudio.Core.Sources;
 
 /// <summary>A PCM format declared for a sound bank (sounds.zrd HIGH/MED/LOW: rate, bits, channels).</summary>
 public readonly record struct WaveFormat(int Rate, int Bits, int Channels)

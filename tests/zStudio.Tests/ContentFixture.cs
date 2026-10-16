@@ -1,9 +1,9 @@
 using System;
 using System.Buffers.Binary;
 using System.Text;
-using Recoil.Zbd.Core.Formats;
+using zStudio.Core.Formats;
 
-namespace Recoil.Zbd.Tests;
+namespace zStudio.Tests;
 
 internal static class ContentFixture
 {

@@ -1,15 +1,15 @@
 using System.Globalization;
 using System.Text.Json.Nodes;
-using Recoil.Zbd.Core.Gltf;
+using zStudio.Core.Gltf;
 
-namespace Recoil.Zbd.Core.Worlds;
+namespace zStudio.Core.Worlds;
 
 public static partial class WorldGltf
 {
     /// <summary>The editable node ID is separate from the three uninterpreted bytes stored after it.</summary>
     internal static void WriteNodeZoneValue(JsonObject values, uint word, bool inherit = false)
     {
-        values.Remove("zoneWord"); values.Remove("word"); values.Remove("zoneInherited"); values.Remove("inherit");
+        _ = NodeZoneIsInherited(values, "the source zone");
         values["zone"] = inherit ? JsonValue.Create("inherit") : (word & 0xFF) == 255 ? JsonValue.Create("any") : JsonValue.Create((int)(word & 0xFF));
         if ((word >> 8) != 0) values["zonePadding"] = ZoneBytes(word, 1, 3);
         else values.Remove("zonePadding");
@@ -18,14 +18,10 @@ public static partial class WorldGltf
     internal static uint ReadNodeZoneValue(JsonNode? values, uint parent, string path)
     {
         bool inherited = NodeZoneIsInherited(values, path);
-        if (inherited && (values?["zoneWord"] != null || values?["word"] != null))
-            throw new InvalidDataException($"{path}: an inherited zone conflicts with a legacy packed zone field; remove the packed field.");
-        uint? legacy = values?["zoneWord"] is { } old ? Hex(old, "zoneWord", path)
-            : values?["word"] is { } oldWord ? Hex(oldWord, "word", path) : null;
         uint zone = inherited ? parent & 0xFF : values?["zone"] is { } id
             ? id is JsonValue stated && stated.TryGetValue<string>(out var text) && text == "any" ? 255u : (uint)Integer(id, "zone", path, 0, 254)
-            : legacy.GetValueOrDefault() & 0xFF;
-        uint padding = legacy.GetValueOrDefault() & 0xFFFFFF00;
+            : 0;
+        uint padding = 0;
         if (values?["zonePadding"] is { } stored)
         {
             if (values?["zone"] == null) throw new InvalidDataException($"{path}: zonePadding requires a numeric zone ID, \"any\" or \"inherit\".");
@@ -36,9 +32,11 @@ public static partial class WorldGltf
 
     internal static bool NodeZoneIsInherited(JsonNode? values, string path)
     {
-        if (values is JsonObject fields && (fields.ContainsKey("zoneInherited") || fields.ContainsKey("inherit")))
-            throw new InvalidDataException($"{path}: zoneInherited and inherit are obsolete; remove them and set zone to a numeric ID, \"any\" or \"inherit\".");
-        if (values?["zone"] is not { } zone) return values?["zoneWord"] == null && values?["word"] == null;
+        if (values is JsonObject fields && (fields.ContainsKey("zoneInherited") || fields.ContainsKey("inherit") || fields.ContainsKey("zoneFromLoad")))
+            throw new InvalidDataException($"{path}: zoneInherited, inherit and zoneFromLoad are obsolete; remove them and set zone to a numeric ID, \"any\" or \"inherit\".");
+        if (values is JsonObject packed && (packed.ContainsKey("zoneWord") || packed.ContainsKey("word")))
+            throw new InvalidDataException($"{path}: packed node zones are unsupported. Reconstruct the project from the original ZBD files.");
+        if (values?["zone"] is not { } zone) return true;
         NumericOperand(zone, "zone", path);
         if (zone is JsonValue value && value.TryGetValue<string>(out var text))
         {
@@ -54,7 +52,8 @@ public static partial class WorldGltf
     /// <summary>Material defaults use the same count-free IDs as individual polygons.</summary>
     internal static void WritePolygonZoneValue(JsonObject values, uint word)
     {
-        values.Remove("zone"); values.Remove("zonePadding"); values.Remove("zoneRaw");
+        if (values.ContainsKey("zone")) throw new InvalidDataException("Packed material zones are unsupported; reconstruct the project from the original ZBD files.");
+        values.Remove("zonePadding"); values.Remove("zoneRaw");
         int count = (int)(word & 0xFF);
         if (count > 3)
         {
@@ -67,19 +66,20 @@ public static partial class WorldGltf
 
     internal static uint ReadPolygonZoneValue(JsonNode? values, string path)
     {
+        if (values is JsonObject fields && fields.ContainsKey("zone"))
+            throw new InvalidDataException($"{path}: packed material zones are unsupported. Reconstruct the project from the original ZBD files.");
         if (values?["zoneRaw"] is { } raw)
         {
-            if (values["zones"] != null || values["zone"] != null || values["zonePadding"] != null)
+            if (values["zones"] != null || values["zonePadding"] != null)
                 throw new InvalidDataException($"{path}: zoneRaw cannot also contain editable zones or padding.");
             return ReadRawPolygonZone(raw, "zoneRaw", path);
         }
         if (values?["zones"] is { } zones)
         {
-            if (values["zone"] != null) throw new InvalidDataException($"{path}: zones conflicts with the legacy zone word.");
             return ReadPolygonZone(zones, values["zonePadding"], path);
         }
         if (values?["zonePadding"] != null) throw new InvalidDataException($"{path}: zonePadding requires a zones array.");
-        return values?["zone"] is { } old ? Hex(old, "zone", path) : DefaultPolygonZone;
+        return DefaultPolygonZone;
     }
 
     internal static void WritePolygonZoneValues(JsonObject values, IReadOnlyList<uint> words, CancellationToken token)
@@ -129,11 +129,7 @@ public static partial class WorldGltf
                 words[i] = ReadRawPolygonZone(storedRaw, "polygonZoneRaw", path);
             }
             else if (zones[i] is JsonArray ids) words[i] = ReadPolygonZone(ids, padding?[index], path);
-            else
-            {
-                if (padding?.ContainsKey(index) == true) throw new InvalidDataException($"{path}: polygon zone padding requires an ID array.");
-                words[i] = Hex(zones[i], "polygonZones", path);
-            }
+            else throw new InvalidDataException($"{path}: polygon zones require editable ID arrays or explicit raw bytes. Reconstruct older source projects from the original ZBD files.");
         }
         return words;
     }
@@ -152,7 +148,7 @@ public static partial class WorldGltf
         return map;
     }
 
-    private static uint ReadPolygonZone(JsonNode value, JsonNode? padding, string path)
+    internal static uint ReadPolygonZone(JsonNode value, JsonNode? padding, string path)
     {
         if (value is not JsonArray zones || zones.Count > 3)
             throw new InvalidDataException($"{path}: polygon zones must contain zero to three numeric IDs.");

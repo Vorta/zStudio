@@ -4,11 +4,11 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Core.Export;
-using Recoil.Zbd.Automation;
+using zStudio.Core;
+using zStudio.Core.Export;
+using zStudio.Automation;
 
-namespace Recoil.Zbd.Desktop;
+namespace zStudio.Desktop;
 
 internal static class PropertyContext
 {
@@ -29,7 +29,7 @@ public partial class MainWindow
     private DocumentModel? assetContextDocument, sceneContextDocument;
     private bool assetPointerContext, scenePointerContext;
     private long propertyRequest;
-    internal Func<ZbdDocument, AssetRecord, CancellationToken, Task<JsonObject>> LoadAssetPropertiesAsync { get; set; } =
+    internal Func<AssetDocument, AssetRecord, CancellationToken, Task<JsonObject>> LoadAssetPropertiesAsync { get; set; } =
         static (doc, asset, token) => Task.Run(() => ExportService.AssetJson(doc, asset, token, boundedZrd: true), token);
     internal PropertiesWindow? OpenPropertiesWindow => propertiesWindow;
 
@@ -74,7 +74,12 @@ public partial class MainWindow
         if (doc.SourceWorld is { } world)
         {
             if (world.IsRebuilding || sourceWorkspaceBusy) ViewModel.Status = "A world of this source project is still rebuilding; undo and redo are available when it is shown.";
-            else if (redo ? world.Workspace.CanRedo : world.Workspace.CanUndo) sourceWorldWork = RunUi(() => UndoSourceWorldAsync(doc, redo, CancellationToken.None));
+            else if (redo ? world.Workspace.CanRedo : world.Workspace.CanUndo)
+            {
+                // An object's edit mode without a change does not hold history back.
+                if (inspectionDraft is { ObjectEditing: true, HasObjectDraft: false, ObjectApplying: false } clean && clean.DraftDocument == doc) clean.CancelDraft();
+                sourceWorldWork = RunUi(() => UndoSourceWorldAsync(doc, redo, CancellationToken.None));
+            }
             return;
         }
         if (doc.ContentEdits != null) { contentWork = UndoContentAsync(doc, redo); return; }
@@ -139,12 +144,13 @@ public partial class MainWindow
     {
         if (ViewModel.SelectedDocument is not { } doc) return;
         if (!await ResolvePropertiesDraftsAsync()) return;
+        if (doc.SourceWorld != null && CurrentInspectionCard?.ObjectNode is int sourceObject) { FocusSourceObjectCard(doc, sourceObject); return; }
         if (scriptGrid.IsKeyboardFocusWithin && scriptGrid.SelectedItem is ScriptRow scriptRow && doc.SelectedAsset?.ResourceId is Guid script)
         { await OpenScriptPropertiesAsync(doc, script, scriptRow.Id); return; }
         if (CentralTree.IsKeyboardFocusWithin && CentralTree.SelectedItem is ResourceTreeItem resource && doc.SelectedAsset?.ResourceId is Guid member)
         { await OpenResourcePropertiesAsync(doc, member, resource.Node.Id); return; }
         if (AssetGrid.IsKeyboardFocusWithin && doc.SelectedAsset is { } asset) { await OpenAssetPropertiesAsync(doc, asset.Record); return; }
-        if (DocumentSceneTree.IsKeyboardFocusWithin && sceneTree?.Selected is { Node: not null, Problem: null } selectedRow)
+        if (DocumentSceneTree.IsKeyboardFocusWithin && sceneTree?.Selected is { Selectable: true } selectedRow)
         { await OpenScenePropertiesAsync(doc, selectedRow); return; }
         if (inspectedSceneSource is { } item) { await OpenScenePropertiesAsync(doc, item); return; }
         if (IsAiWorld && scene?.AiPathEditingNetwork != null) { await OpenAiPathPropertiesAsync(); return; }
@@ -171,11 +177,33 @@ public partial class MainWindow
     }
     private async Task<PropertiesWindow?> OpenScenePropertiesAsync(DocumentModel doc, SceneTreeItem item, CancellationToken token = default, bool automation = false)
     {
-        if (doc.IsDisposed || doc != sceneTreeDocument || item.Owner != sceneTree || item.Node is not { } node || item.Problem != null)
+        if (doc.IsDisposed || doc != sceneTreeDocument || item.Owner != sceneTree || !item.Selectable)
             return null;
+        if (doc.SourceWorld != null)
+        {
+            if (IsSourceTerrain(doc, item.Index)) return await OpenSourceTerrainAsync(doc, item.Index!.Value, token) ? propertiesWindow : null;
+            if (item.Index is int sourceIndex) FocusSourceObjectCard(doc, sourceIndex);
+            return null;
+        }
+        if (item.Synthetic || item.ReadOnlyReason != null)
+        {
+            ++propertyRequest;
+            var readOnlyWindow = GetPropertiesWindow();
+            bool shown = readOnlyWindow.SetReadOnly(doc, item.DisplayName, SceneTreeProperties(item));
+            PresentProperties(readOnlyWindow, shown); return shown ? readOnlyWindow : null;
+        }
+        var node = item.Node!;
         if (!item.Owner.IsPreview && doc.PreviewDocument.Assets.FirstOrDefault(a => a.Kind == AssetKind.Node && a.Index == node.Index) is { } asset)
             return await OpenAssetPropertiesAsync(doc, asset, token, automation);
         ++propertyRequest;
+        if (doc.SourceWorld != null && scene?.Mission?.ActorAt(node.Index) is { } actor)
+        {
+            var actorWindow = GetPropertiesWindow();
+            bool shown = actor.Pickup is { } pickup && doc.PickupEdits?.Find(pickup.Source) != null
+                ? actorWindow.SetPickup(doc, pickup.Source, item.DisplayName, SceneTreeProperties(item), SourcePickupMove(doc))
+                : actorWindow.SetReadOnly(doc, item.DisplayName, SceneTreeProperties(item));
+            PresentProperties(actorWindow, shown); return shown ? actorWindow : null;
+        }
         if (doc.SourceWorld != null && doc.SourceBuild?.Provenance.ContainsKey(node.Index) == true)
             return await ShowSourceObjectPropertiesAsync(doc, node.Index, token) ? propertiesWindow : null;
         var window = GetPropertiesWindow(); bool opened = window.SetReadOnly(doc, $"{node.Name} · node #{node.Index}", SceneTreeProperties(item));
@@ -207,7 +235,20 @@ public partial class MainWindow
     private void SceneContextOpening(object sender, RoutedEventArgs e)
     {
         if (!scenePointerContext) { contextScene = DocumentSceneTree.SelectedItem as SceneTreeItem; sceneContextDocument = ViewModel.SelectedDocument; }
-        scenePointerContext = false; ScenePropertiesMenu.IsEnabled = contextScene is { Node: not null, Problem: null } && contextScene.Owner == sceneTree;
+        scenePointerContext = false;
+        if (sceneContextDocument?.SourceWorld != null)
+        {
+            // Source worlds offer only Rename, for the source-only rows whose names the build removes.
+            ScenePropertiesMenu.Visibility = Visibility.Collapsed;
+            bool rename = contextScene?.Authored is { } authored && CanRenameRemoved(sceneContextDocument, authored) && contextScene.Owner == sceneTree && sceneContextDocument == shownDocument;
+            SceneRenameMenu.Visibility = rename ? Visibility.Visible : Visibility.Collapsed;
+            SceneRenameMenu.IsEnabled = rename && sceneContextDocument.SourceWorld is { IsRebuilding: false } && !sourceWorkspaceBusy;
+            if (!rename && sender is ContextMenu menu) menu.IsOpen = false;
+            e.Handled = true; return;
+        }
+        SceneRenameMenu.Visibility = Visibility.Collapsed;
+        ScenePropertiesMenu.Visibility = Visibility.Visible;
+        ScenePropertiesMenu.IsEnabled = contextScene is { Selectable: true } && contextScene.Owner == sceneTree;
     }
     private async void ScenePropertiesClick(object sender, RoutedEventArgs e)
     { if (contextScene is { } item && sceneContextDocument is { IsDisposed: false } doc && await ResolvePropertiesDraftsAsync()) await OpenScenePropertiesAsync(doc, item); }

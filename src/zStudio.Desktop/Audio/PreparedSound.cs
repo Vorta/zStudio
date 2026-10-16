@@ -3,7 +3,7 @@ using System.Runtime.InteropServices;
 using NAudio.Wave;
 using NAudio.Wave.SampleProviders;
 
-namespace Recoil.Zbd.Desktop.Audio;
+namespace zStudio.Desktop.Audio;
 
 /// <summary>Immutable interleaved stereo PCM. All conversion happens before playback.</summary>
 internal sealed class PreparedSound

@@ -1,7 +1,7 @@
 using NAudio.Wave;
 using NAudio.Wave.SampleProviders;
 
-namespace Recoil.Zbd.Desktop.Audio;
+namespace zStudio.Desktop.Audio;
 
 internal interface IAnimationAudioOutput : IDisposable
 {

@@ -1,15 +1,15 @@
 using System.Globalization;
 using System.Text.Json.Nodes;
-using Recoil.Zbd.Core.Gltf;
-using Recoil.Zbd.Core.Worlds;
+using zStudio.Core.Gltf;
+using zStudio.Core.Worlds;
 
-namespace Recoil.Zbd.Core.Sources;
+namespace zStudio.Core.Sources;
 
 public static partial class SourceBlender
 {
-    private static void ApplyPlacementEdits(string owner, JsonObject holder, JsonArray edits,
+    internal static void ApplyPlacementEdits(string owner, JsonObject holder, JsonArray edits,
         Dictionary<string, JsonObject> roots, Dictionary<string, GltfDocument> documents,
-        Dictionary<string, GraphMapping> mappings, Dictionary<string, Dictionary<int, int[]>> faceIds, CancellationToken token)
+        Dictionary<string, GraphMapping> mappings, Dictionary<string, Dictionary<int, int[]>> faceIds, CancellationToken token, ScopeRemapBudget budget)
     {
         if (edits.Count > GltfDocument.MaximumNodes) throw new InvalidDataException("Too many edited placement scopes.");
         var values = holder["extras"]![WorldGltf.Key]!.AsObject();
@@ -34,8 +34,11 @@ public static partial class SourceBlender
                 if (nodeValues["zoneOverrides"] is JsonObject local) scopes.Add(local);
                 target = WorldAssembler.Relative(target, nodeValues["ref"]!.GetValue<string>());
             }
-            var document = documents[target]; var layout = WorldGltf.ZoneLayout.Read(document, token);
             var inherited = scopes.FirstOrDefault(s => s["fingerprint"] != null);
+            // Accepted placement edits may predate a geometry expansion. Charge the
+            // complete current profile, not the small edit payload, before creating it.
+            budget.Admit(budget.ProfileBytes(mappings[target], roots[target], inherited, token) + 64L * (chain.Count + 1));
+            var document = documents[target]; var layout = WorldGltf.ZoneLayout.Read(document, token);
             var profile = inherited == null ? WorldGltf.CaptureZoneProfile(document, token: token) : WorldGltf.ReadZoneOverride(inherited, token);
             WorldGltf.ValidateZoneProfile(document, profile, token);
             var result = WorldGltf.WriteZoneOverride(profile, token);
@@ -45,8 +48,13 @@ public static partial class SourceBlender
             {
                 string previous = mappings[target].EditorNodes[layout.Nodes[i].Index];
                 if (nodeEdits[previous] is JsonObject assignment)
-                    foreach (string field in new[] { "zone", "altitudeZoneCheck" })
-                        result["nodes"]![i]![field] = assignment[field]?.DeepClone();
+                {
+                    _ = WorldGltf.ReadNodeZoneValue(assignment, 0, "Blender placement");
+                    uint flags = WorldGltf.StoredNodeFlags(assignment);
+                    var nodeValues = result["nodes"]![i]!.AsObject();
+                    nodeValues["zone"] = assignment["zone"]?.DeepClone() ?? JsonValue.Create("inherit");
+                    WorldGltf.WriteNodeFlags(nodeValues, flags & WorldGltf.ZoneGate);
+                }
             }
             for (int i = 0; i < layout.Meshes.Count; i++)
             {
@@ -62,7 +70,7 @@ public static partial class SourceBlender
                     {
                         JsonObject oldWord = new(); WorldGltf.WritePolygonZoneValue(oldWord, words[j]);
                         if (!JsonNode.DeepEquals(oldWord["zones"] ?? new JsonArray(), word))
-                            words[j] = WorldGltf.ReadPolygonZoneValue(new JsonObject { ["zones"] = word.DeepClone() }, "Blender placement");
+                            words[j] = WorldGltf.ReadPolygonZone(word, null, "Blender placement");
                     }
                 WorldGltf.WritePolygonZoneValues(result["meshes"]![i]!.AsObject(), words, token);
             }

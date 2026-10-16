@@ -1,8 +1,8 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
-using Recoil.Zbd.Core.Formats;
+using zStudio.Core.Formats;
 
-namespace Recoil.Zbd.Core.Sources;
+namespace zStudio.Core.Sources;
 
 /// <summary>
 /// A texture pack a profile builds: its file, texel budget (null: every texture at full size), largest texture side, and

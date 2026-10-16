@@ -1,9 +1,9 @@
 using System.Collections.Concurrent;
 using System.IO;
-using Recoil.Zbd.Core.Animation;
-using Recoil.Zbd.Desktop.Audio;
+using zStudio.Core.Animation;
+using zStudio.Desktop.Audio;
 
-namespace Recoil.Zbd.Desktop;
+namespace zStudio.Desktop;
 
 /// <summary>Prepares audio off-thread; presentation updates only enqueue voices in a warm mixer.</summary>
 public sealed class AnimationAudio : IDisposable, IAsyncDisposable

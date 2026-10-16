@@ -1,9 +1,9 @@
 using System.Buffers.Binary;
 using System.Numerics;
 using System.Text;
-using Recoil.Zbd.Core.Formats;
+using zStudio.Core.Formats;
 
-namespace Recoil.Zbd.Core.Animation;
+namespace zStudio.Core.Animation;
 
 public sealed partial class AnimationCompiler
 {

@@ -2,7 +2,7 @@ using System.Globalization;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 
-namespace Recoil.Zbd.PrWatch;
+namespace zStudio.PrWatch;
 
 public sealed class GitHubException(string message, TimeSpan? retryAfter = null) : IOException(message)
 {

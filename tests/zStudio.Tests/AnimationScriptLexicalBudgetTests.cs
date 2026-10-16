@@ -1,11 +1,11 @@
 using System.Numerics;
 using System.Text;
-using Recoil.Zbd.Core.Animation;
-using Recoil.Zbd.Core.Sources;
-using Recoil.Zbd.Core.Worlds;
+using zStudio.Core.Animation;
+using zStudio.Core.Sources;
+using zStudio.Core.Worlds;
 using Xunit;
 
-namespace Recoil.Zbd.Tests;
+namespace zStudio.Tests;
 
 public sealed class AnimationScriptLexicalBudgetTests
 {

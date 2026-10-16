@@ -1,12 +1,12 @@
 using System.Numerics;
 using System.Text.Json;
 using System.Text.Json.Nodes;
-using Recoil.Zbd.Automation;
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Desktop;
+using zStudio.Automation;
+using zStudio.Core;
+using zStudio.Desktop;
 using Xunit;
 
-namespace Recoil.Zbd.Desktop.Tests;
+namespace zStudio.Desktop.Tests;
 
 public sealed class InspectionResultBudgetTests
 {

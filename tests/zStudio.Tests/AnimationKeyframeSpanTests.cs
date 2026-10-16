@@ -1,11 +1,11 @@
 using System.Buffers.Binary;
 using System.Numerics;
 using System.Text.Json.Nodes;
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Core.Animation;
+using zStudio.Core;
+using zStudio.Core.Animation;
 using Xunit;
 
-namespace Recoil.Zbd.Tests;
+namespace zStudio.Tests;
 
 public sealed partial class AnimationTests
 {
@@ -85,7 +85,7 @@ public sealed partial class AnimationTests
         sequence.Events.Add(ev.WithKeyframes([Segment(0, 1, 5, 0).ForVersion(version)]));
         AnimationPreviewContext World(params string[] names)
         {
-            var doc = new ZbdDocument("fixture", new(0, DateTime.MinValue), new(FormatFamily.GameZ, mw3 ? 27u : 15u, Recognition.Supported, "fixture"), ReadOnlyMemory<byte>.Empty) { Scene = new() };
+            var doc = new AssetDocument("fixture", new(0, DateTime.MinValue), new(FormatFamily.GameZ, mw3 ? 27u : 15u, Recognition.Supported, "fixture"), ReadOnlyMemory<byte>.Empty) { Scene = new() };
             doc.Scene.Models.Add(new(0, [Vector3.Zero, Vector3.UnitX, Vector3.UnitY], [], [], [], []));
             JsonObject Data() => new() { ["flags"] = 0, ["opacity"] = 1f, ["scale"] = JsonData.Vector(Vector3.One), ["transform"] = new JsonArray(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0) };
             doc.Scene.Nodes.Add(new(0, "animated", "object3d", 0, [], Enumerable.Range(1, names.Length).ToArray(), new JsonObject { ["flags"] = 4 }, Data()));

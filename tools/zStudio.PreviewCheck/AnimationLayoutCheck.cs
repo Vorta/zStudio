@@ -11,15 +11,15 @@ using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
-using Recoil.Zbd.Core.Animation;
-using Recoil.Zbd.Desktop;
+using zStudio.Core.Animation;
+using zStudio.Desktop;
 
 internal static class AnimationLayoutCheck
 {
     public static int Run(string root, bool treeOnly = false, bool propertiesOnly = false, bool toolbarOnly = false)
     {
         string output = Path.Combine(Path.GetTempPath(), "zstudio-fluent-" + DateTime.Now.ToString("yyyyMMdd-HHmmss")); Directory.CreateDirectory(output);
-        string settings = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "RecoilZbdStudio", "settings.json");
+        string settings = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "zStudio", "settings.json");
         byte[]? original = File.Exists(settings) ? File.ReadAllBytes(settings) : null;
         var app = new App { ShutdownMode = ShutdownMode.OnExplicitShutdown, ProcessCommandLine = false }; app.InitializeComponent(); int exit = 0;
         app.Startup += async (_, _) =>

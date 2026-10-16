@@ -1,16 +1,16 @@
 using System.Globalization;
 using System.Text.Json.Nodes;
-using Recoil.Zbd.Core.Gltf;
-using Recoil.Zbd.Core.Worlds;
+using zStudio.Core.Gltf;
+using zStudio.Core.Worlds;
 
-namespace Recoil.Zbd.Core.Sources;
+namespace zStudio.Core.Sources;
 
 public static partial class SourceBlender
 {
     private static BlenderUpdatePlan PlanGraphUpdate(SourceWorkspace workspace, BlenderCheckout checkout, string? export, bool force,
         Func<BlenderConflictException, CancellationToken, bool>? confirm, CancellationToken token)
     {
-        if (checkout.Version != 2) throw new InvalidDataException("This checkout predates the reference-aware Blender extension. Create a new checkout.");
+        RequireCurrentCheckout(checkout);
         var prepared = workspace.IsPrepared ? null : workspace.BeginPreparedEdit();
         var view = prepared?.Workspace ?? workspace;
         var exports = Exports(checkout, token);
@@ -53,11 +53,13 @@ public static partial class SourceBlender
         List<string> notes = [];
         // Source files outside this checkout may own placement profiles on an edited shared model.
         long inspected = 0;
+        ScopeRemapBudget scopeBudget = new();
         static bool ModelPath(string path) => path.EndsWith(".gltf", StringComparison.OrdinalIgnoreCase) || path.EndsWith(".glb", StringComparison.OrdinalIgnoreCase);
         foreach (string folder in new[] { SourceProject.DataFolder, SourceProject.GameGenFolder })
         foreach (string owner in SourceProject.Files(view.Root, folder, ModelPath, view.Overlay().Keys.ToArray(), token))
         {
             if (roots.ContainsKey(owner) || !view.Exists(owner, token)) continue;
+            scopeBudget.BeginOwner(owner);
             byte[] bytes = view.Read(owner, token, ProjectReadLimits.Model().WithMaximum(MaximumExportBytes - inspected))!;
             inspected += bytes.Length;
             var json = JsonNode.Parse(GltfDocument.ContainerJson(bytes, token, out _), documentOptions: new() { MaxDepth = 64 }) as JsonObject
@@ -79,7 +81,7 @@ public static partial class SourceBlender
             if (mappings.ContainsKey(target))
             {
                 history ??= GraphHistory(view, checkout, original, exported, mappings, token);
-                RemapScope(scope, target, history.Value.Before, documents, roots, history.Value.Mappings, token); return;
+                RemapScope(scope, target, history.Value.Before, documents, roots, history.Value.Mappings, token, scopeBudget); return;
             }
             if (scope["references"] is not JsonObject nested) return;
             var bytes = view.Read(target, token, ProjectReadLimits.Model().WithMaximum(MaximumExportBytes - inspected)) ?? throw new InvalidDataException("A placement reference is missing.");

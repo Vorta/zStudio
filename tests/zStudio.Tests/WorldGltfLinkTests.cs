@@ -1,11 +1,11 @@
 using System.Text;
 using System.Text.Json.Nodes;
-using Recoil.Zbd.Core.Gltf;
-using Recoil.Zbd.Core.Sources;
-using Recoil.Zbd.Core.Worlds;
+using zStudio.Core.Gltf;
+using zStudio.Core.Sources;
+using zStudio.Core.Worlds;
 using Xunit;
 
-namespace Recoil.Zbd.Tests;
+namespace zStudio.Tests;
 
 public sealed class WorldGltfLinkTests
 {
@@ -142,19 +142,17 @@ public sealed class WorldGltfLinkTests
         const string model = "data/m1/models/m1.gltf";
         byte[] source = File.ReadAllBytes(fixture.Path(model));
         long revision = workspace.Revision;
-        string previews = SourceWorlds.PreviewRoot(fixture.Project);
-        var baseline = await SourceWorlds.BuildPreviewAsync(fixture.Project, "m1", Path.Combine(previews, "baseline"), token: Token);
-        byte[] shown = File.ReadAllBytes(baseline.WorldPath);
+        var baseline = await SourceWorlds.LoadSceneAsync(fixture.Project, "m1", token: Token);
+        var shown = baseline.Scene!.Nodes.Select(n => (n.Name, n.Class, n.Data.ToJsonString())).ToArray();
         byte[] cyclic = Bytes([Node("root", [1], 1), Node("back", mark: 1)]);
-        var error = await Assert.ThrowsAsync<InvalidDataException>(() => SourceWorlds.BuildPreviewAsync(fixture.Project, "m1",
-            Path.Combine(previews, "rejected"), new Dictionary<string, byte[]> { [model] = cyclic }, token: Token));
+        var error = await Assert.ThrowsAsync<InvalidDataException>(() => SourceWorlds.LoadSceneAsync(fixture.Project, "m1", new Dictionary<string, byte[]> { [model] = cyclic }, token: Token));
         Assert.Contains("own ancestor", error.Message);
         Assert.Equal(source, File.ReadAllBytes(fixture.Path(model)));
-        Assert.Equal(shown, File.ReadAllBytes(baseline.WorldPath));
-        Assert.False(File.Exists(Path.Combine(previews, "rejected", "m1", "gamez.zbd")));
+        Assert.Equal(shown, baseline.Scene!.Nodes.Select(n => (n.Name, n.Class, n.Data.ToJsonString())));
+        Assert.Empty(Directory.EnumerateFiles(fixture.Project, "*.zbd", SearchOption.AllDirectories));
         Assert.Empty(workspace.History); Assert.False(workspace.IsDirty); Assert.Equal(revision, workspace.Revision);
-        var retry = await SourceWorlds.BuildPreviewAsync(fixture.Project, "m1", Path.Combine(previews, "retry"), token: Token);
-        Assert.Equal(shown, File.ReadAllBytes(retry.WorldPath));
+        var retry = await SourceWorlds.LoadSceneAsync(fixture.Project, "m1", token: Token);
+        Assert.Equal(shown, retry.Scene!.Nodes.Select(n => (n.Name, n.Class, n.Data.ToJsonString())));
     }
 
     private static WorldGltf.ImportContext Context(LookupWorkBudget? work = null, CancellationToken? token = null,

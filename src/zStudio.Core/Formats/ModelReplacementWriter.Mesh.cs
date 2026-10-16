@@ -1,8 +1,8 @@
 using System.Buffers.Binary;
 using System.Numerics;
-using Recoil.Zbd.Core.Export;
+using zStudio.Core.Export;
 
-namespace Recoil.Zbd.Core.Formats;
+namespace zStudio.Core.Formats;
 
 /// <summary>
 /// Version-27 polygon words copied from the replaced model: priority (+4), field24 (+24, a stored pointer kept as metadata)
@@ -14,7 +14,7 @@ internal readonly record struct PolygonConvention(uint Priority, uint Field24, u
     // A model without authored polygons uses the dominant corpus priority, a nonzero pointer marker like the
     // other stored pointer words, and the authored empty zone set (count 0, 0xFF padding; all mechlib polygons).
     internal static readonly PolygonConvention Default = new(0, 1, 0xFFFFFF00);
-    internal static PolygonConvention From(ZbdDocument source, GameModel model, long dataOffset)
+    internal static PolygonConvention From(AssetDocument source, GameModel model, long dataOffset)
     {
         if (model.Polygons.Length == 0) return Default;
         var record = source.Slice(dataOffset + 12L * (model.Vertices.Length + model.Normals.Length + model.Morphs.Length), 36).Span;
@@ -60,7 +60,7 @@ public static partial class ModelReplacementWriter
     }
 
     /// <summary>Replace one member-local mech model; shared materials and all other member bytes remain intact.</summary>
-    public static byte[] ReplaceMechMember(ZbdDocument source, int memberIndex, int localModel, ImportedMesh mesh, int material, CancellationToken token = default)
+    public static byte[] ReplaceMechMember(AssetDocument source, int memberIndex, int localModel, ImportedMesh mesh, int material, CancellationToken token = default)
     {
         if (source.Diagnostics.Any(d => d.Severity == "Error") || source.Scene is not { } scene || source.Assets.SingleOrDefault(a => a.Index == memberIndex)?.Content is not MechAssembly assembly)
             throw new InvalidDataException("An intact mech assembly member is required.");

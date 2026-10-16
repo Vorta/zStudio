@@ -1,4 +1,4 @@
-namespace Recoil.Zbd.Core.Terrain;
+namespace zStudio.Core.Terrain;
 
 /// <summary>
 /// Edits of a terrain recipe, each returning the changed recipe. Every result is checked against the recipe rules by

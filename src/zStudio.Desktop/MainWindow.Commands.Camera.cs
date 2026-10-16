@@ -1,8 +1,8 @@
 using System.Windows.Media.Media3D;
-using Recoil.Zbd.Automation;
-using Recoil.Zbd.Rendering;
+using zStudio.Automation;
+using zStudio.Rendering;
 
-namespace Recoil.Zbd.Desktop;
+namespace zStudio.Desktop;
 
 public partial class MainWindow
 {
@@ -24,7 +24,7 @@ public partial class MainWindow
             P("projection", "string", "Required for action=projection; optional for set. Explicit orthographic mode persists while orbiting.", false, "perspective", "orthographic"),
             new("width", "number", "Orthographic view width in game units, for set or projection.", NumberMinimum: .001, NumberMaximum: 1e12),
             P("target", "string", "Frame target; defaults to asset, preserving the existing animation-only framing. Selected falls back to asset without a node selection.", false, "asset", "all", "selected"),
-            new("node", "integer", "Optional source node identity to frame, including visible descendants/runtime instances.", Minimum: 0, Maximum: int.MaxValue)
+            new("node", "integer", "Optional scene node or signed selectionOwner from scene_tree to frame in this preview, including visible descendants/runtime instances.", Minimum: int.MinValue, Maximum: int.MaxValue)
         ], a =>
         {
             var viewport = TargetViewport(a); string action = Text(a, "action"); var pose = viewport.CaptureView();
@@ -56,6 +56,7 @@ public partial class MainWindow
             int? node = a.ContainsKey("node") ? Int(a, "node") : null;
             if (node is int index && !viewport.CanInspectNode(index))
                 throw new StudioCommandException("stale_record", "Scene node unavailable.");
+            if (node is int sourceNode) node = viewport.SelectionOwner?.Invoke(sourceNode) ?? sourceNode;
             if (a.ContainsKey("width") && Text(a, "projection", pose.Projection) != "orthographic")
                 throw new StudioCommandException("invalid_argument", "Width requires orthographic projection.");
             if (action != "read")

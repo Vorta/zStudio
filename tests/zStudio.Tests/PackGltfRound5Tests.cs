@@ -1,13 +1,13 @@
 using System.Text;
 using System.Text.Json.Nodes;
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Core.Formats;
-using Recoil.Zbd.Core.Gltf;
-using Recoil.Zbd.Core.Terrain;
-using Recoil.Zbd.Core.Worlds;
+using zStudio.Core;
+using zStudio.Core.Formats;
+using zStudio.Core.Gltf;
+using zStudio.Core.Terrain;
+using zStudio.Core.Worlds;
 using Xunit;
 
-namespace Recoil.Zbd.Tests;
+namespace zStudio.Tests;
 
 /// <summary>
 /// Resampling for texture packs works a few rows at a time with exactly the arithmetic of whole-image passes, and malformed

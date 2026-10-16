@@ -5,7 +5,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 
-namespace Recoil.Zbd.Core.Gltf;
+namespace zStudio.Core.Gltf;
 
 /// <summary>A glTF 2.0 node: a name, an optional mesh, children, a local transform and application extras.</summary>
 public sealed class GltfNode
@@ -635,9 +635,8 @@ public sealed class GltfDocument
             token.ThrowIfCancellationRequested();
             GltfMesh mesh = new() { Name = m?["name"]?.GetValue<string>() ?? "", Extras = Extras(m) };
             foreach (var w in m?["weights"] as JsonArray ?? []) { GltfInteger.Admit(w, numeric); mesh.Weights.Add(w!.GetValue<float>()); }
-            // Older reconstructed point-only models used an empty mesh. Recognize that engine record by validated
-            // content; an ordinary glTF mesh still needs primitives, including when its extras are empty or malformed.
-            if (m?["primitives"] is not JsonArray meshPrimitives || meshPrimitives.Count == 0 && !Worlds.WorldGltf.IsLegacyPointMesh(mesh))
+            // Point-only engine records belong to node extras.recoil.model; every glTF mesh needs primitives.
+            if (m?["primitives"] is not JsonArray meshPrimitives || meshPrimitives.Count == 0)
                 throw new InvalidDataException($"glTF mesh {meshes.Count} must contain a nonempty primitives array.");
             int number = -1;
             foreach (var p in meshPrimitives)

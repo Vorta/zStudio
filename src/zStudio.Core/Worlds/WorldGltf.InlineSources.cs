@@ -1,7 +1,7 @@
 using System.Text.Json.Nodes;
-using Recoil.Zbd.Core.Gltf;
+using zStudio.Core.Gltf;
 
-namespace Recoil.Zbd.Core.Worlds;
+namespace zStudio.Core.Worlds;
 
 public static partial class WorldGltf
 {

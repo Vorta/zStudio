@@ -3,7 +3,7 @@ using System.Runtime.CompilerServices;
 using System.Windows.Media.Media3D;
 using MeshGeometry3D = HelixToolkit.SharpDX.MeshGeometry3D;
 
-namespace Recoil.Zbd.Rendering;
+namespace zStudio.Rendering;
 
 /// <summary>Conservative depth bounds of geometry intersecting the camera's view.
 /// A world AABB containing the camera cannot provide a useful near plane.</summary>

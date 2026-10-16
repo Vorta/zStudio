@@ -1,8 +1,8 @@
 using System.IO;
-using Recoil.Zbd.Automation;
-using Recoil.Zbd.Core;
+using zStudio.Automation;
+using zStudio.Core;
 
-namespace Recoil.Zbd.Desktop;
+namespace zStudio.Desktop;
 
 public sealed partial class MainViewModel
 {
@@ -30,7 +30,7 @@ public sealed partial class MainViewModel
         }
         Validate();
         Status = "Reloading " + Path.GetFileName(reloadPath) + "…";
-        ZbdDocument loaded;
+        AssetDocument loaded;
         PreparedDocument prepared;
         try
         {

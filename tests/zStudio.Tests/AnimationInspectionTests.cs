@@ -1,11 +1,11 @@
 using System.Buffers.Binary;
-using Recoil.Zbd.Core.Animation;
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Core.Export;
-using Recoil.Zbd.Core.Formats;
+using zStudio.Core.Animation;
+using zStudio.Core;
+using zStudio.Core.Export;
+using zStudio.Core.Formats;
 using Xunit;
 
-namespace Recoil.Zbd.Tests;
+namespace zStudio.Tests;
 
 public sealed class AnimationInspectionTests
 {
@@ -66,7 +66,7 @@ public sealed class AnimationInspectionTests
         var sequence = full["properties"]!["sequences"]![0]!;
         string hex = (opaque ? sequence["opaque_tail_hex"] : sequence["events"]![0]!["raw_hex"])!.GetValue<string>();
         Assert.Equal(Convert.ToHexStringLower(bytes.AsSpan(bytes.Length - 2 * 1024 * 1024)), hex);
-        Assert.Equal(bytes, Recoil.Zbd.Core.Animation.AnimationWriter.Write(doc.Animations!, token));
+        Assert.Equal(bytes, zStudio.Core.Animation.AnimationWriter.Write(doc.Animations!, token));
     }
 
     private static byte[] Fixture(int version, int payloadLength, bool opaque)

@@ -4,12 +4,12 @@ using System.Text.Json;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Core.Animation;
-using Recoil.Zbd.Desktop;
+using zStudio.Core;
+using zStudio.Core.Animation;
+using zStudio.Desktop;
 using Xunit;
 
-namespace Recoil.Zbd.Desktop.Tests;
+namespace zStudio.Desktop.Tests;
 
 // Invoked from the existing single-Application STA fixture; never creates a competing dispatcher or changes clipboard.
 internal static class ComponentFieldChecks
@@ -50,7 +50,7 @@ internal static class ComponentFieldChecks
         var frame = AnimationKeyframe.Create(2); frame.End = 1; frame.SetFloat(frame.ChannelOffset(1), 1);
         var ev = AnimationCatalog.Create(12).WithKeyframes([frame]);
         sequence.Events.Add(ev); entry.Sequences.Add(sequence); package.Entries.Add(entry);
-        var source = new ZbdDocument("numeric-properties.zbd", new(0, DateTime.MinValue), new(FormatFamily.Animation, 28, Recognition.Supported, "Fixture"), ReadOnlyMemory<byte>.Empty) { Animations = package };
+        var source = new AssetDocument("numeric-properties.zbd", new(0, DateTime.MinValue), new(FormatFamily.Animation, 28, Recognition.Supported, "Fixture"), ReadOnlyMemory<byte>.Empty) { Animations = package };
         using var document = new DocumentModel(source);
         using var editor = new AnimationPropertiesEditor(document, 0, sequence.Id, ev.Id);
         var fields = JsonSerializer.SerializeToNode(editor.DescribeAutomationFields())!["fields"]!.AsArray();

@@ -1,10 +1,10 @@
 using System.Buffers.Binary;
 using System.Numerics;
 using System.Text;
-using Recoil.Zbd.Core.Formats;
-using Recoil.Zbd.Core.Worlds;
+using zStudio.Core.Formats;
+using zStudio.Core.Worlds;
 
-namespace Recoil.Zbd.Core.Animation;
+namespace zStudio.Core.Animation;
 
 /// <summary>
 /// Compiles a mission's animation definitions (<c>data/mN/zrdr/anim.zad</c> and the files it lists) and their keyframe
@@ -82,14 +82,36 @@ public sealed partial class AnimationCompiler
         long maximumExpansionWork = MaximumExpansionWork, long maximumKeyframeWork = AnimationCompileWork.MaximumUnits,
         Action? keyframeWorkAdmitted = null, bool captureSourceBindings = false)
     {
+        var evaluated = Evaluate(files, root, worldNodes, effects, maximumBytes, token, maximumExpansionWork,
+            maximumKeyframeWork, keyframeWorkAdmitted, captureSourceBindings);
+        byte[] bytes = AnimationWriter.Write(evaluated.Package, token);
+        return new(bytes, AnimationPackage.Read(bytes, token), evaluated.Warnings, evaluated.Inputs)
+        { EngineRejection = evaluated.EngineRejection, SourceBindings = evaluated.SourceBindings };
+    }
+
+    /// <summary>Evaluates source definitions for editing and preview, without producing an animation archive.</summary>
+    public static Evaluation Evaluate(IProjectFiles files, string root, IReadOnlyCollection<string>? worldNodes,
+        IReadOnlyCollection<string>? effects = null, CancellationToken token = default)
+        => Evaluate(files, root, worldNodes, effects, FormatRegistry.MaximumDocumentBytes, token);
+
+    public sealed record Evaluation(AnimationPackage Package, IReadOnlyList<string> Warnings, IReadOnlyList<string> Inputs)
+    {
+        public string? EngineRejection { get; init; }
+        internal IReadOnlyList<SourceBinding>? SourceBindings { get; init; }
+    }
+
+    internal static Evaluation Evaluate(IProjectFiles files, string root, IReadOnlyCollection<string>? worldNodes,
+        IReadOnlyCollection<string>? effects, long maximumBytes, CancellationToken token,
+        long maximumExpansionWork = MaximumExpansionWork, long maximumKeyframeWork = AnimationCompileWork.MaximumUnits,
+        Action? keyframeWorkAdmitted = null, bool captureSourceBindings = false)
+    {
         var set = AnimationDefinitionSet.Load(files, root, token);
         AnimationCompiler compiler = new(set, worldNodes, effects, maximumBytes, token, maximumExpansionWork,
             new(token, maximumKeyframeWork, keyframeWorkAdmitted));
         if (captureSourceBindings) compiler.sourceBindings = [];
-        foreach (var w in set.Warnings) compiler.Warn(w);
+        foreach (var warning in set.Warnings) compiler.Warn(warning);
         var package = compiler.Build();
-        byte[] bytes = AnimationWriter.Write(package, token);
-        return new(bytes, AnimationPackage.Read(bytes, token), compiler.diagnostics.Messages, set.Files.Distinct(StringComparer.OrdinalIgnoreCase).ToArray())
+        return new(package, compiler.diagnostics.Messages, set.Files.Distinct(StringComparer.OrdinalIgnoreCase).ToArray())
         { EngineRejection = compiler.engineRejection, SourceBindings = compiler.sourceBindings };
     }
 
@@ -233,9 +255,32 @@ public sealed partial class AnimationCompiler
         BinaryPrimitives.WriteUInt32LittleEndian(prefix, 0x08170616); BinaryPrimitives.WriteUInt32LittleEndian(prefix.AsSpan(4), 28);
         BinaryPrimitives.WriteUInt32LittleEndian(prefix.AsSpan(12 + 8), (uint)entries.Count << 16);
         BinaryPrimitives.WriteSingleLittleEndian(prefix.AsSpan(12 + 0x1C), definitions.Gravity);
+        foreach (var entry in entries) CompleteHeaders(entry);
         AnimationPackage package = new() { Prefix = prefix, Tail = [] };
         package.Entries.AddRange(entries);
         return package;
+    }
+
+    /// <summary>Complete the derived record fields before the package enters shared preview and edit services.
+    /// Archive writing used to supply these fields; source evaluation has no archive or physical source offsets.</summary>
+    private void CompleteHeaders(AnimationEntry entry)
+    {
+        token.ThrowIfCancellationRequested();
+        entry.Bytes[entry.CountsOffset] = checked((byte)entry.Sequences.Count);
+        for (int table = 0; table < entry.References.Length; table++)
+            entry.Bytes[entry.CountsOffset + entry.ReferenceLanes[table]] = checked((byte)entry.References[table].Count);
+        foreach (var sequence in entry.AllSequences)
+        {
+            int length = sequence.OpaqueTail.Length;
+            foreach (var ev in sequence.Events)
+            {
+                token.ThrowIfCancellationRequested();
+                length = checked(length + ev.Bytes.Length);
+            }
+            BinaryPrimitives.WriteInt32LittleEndian(sequence.Bytes.AsSpan(60), length);
+        }
+        entry.Primary.Bytes.CopyTo(entry.Bytes.AsSpan(196));
+        entry.OriginalPrimaryHeader = (byte[])entry.Primary.Bytes.Clone();
     }
 
     private static string Name(AnimationItem definition) => definition.TextOf("ANIMATION_NAME") ?? definition.TextOf("NAME") ?? "(unnamed)";

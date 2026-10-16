@@ -1,9 +1,9 @@
 using System.Globalization;
 using System.Text.Json.Nodes;
-using Recoil.Zbd.Core.Gltf;
-using Recoil.Zbd.Core.Worlds;
+using zStudio.Core.Gltf;
+using zStudio.Core.Worlds;
 
-namespace Recoil.Zbd.Core.Sources;
+namespace zStudio.Core.Sources;
 
 public static partial class SourceBlender
 {
@@ -55,6 +55,28 @@ public static partial class SourceBlender
             }
             byte[] raw = Read(path, GltfDocument.MaximumJsonBytes);
             var json = Parse(raw, path, token);
+            // A material may be reused in another physical file. Its source image belongs
+            // to that original material, not to a similarly named texture in this file.
+            Dictionary<JsonObject, bool> importedImages = new(ReferenceEqualityComparer.Instance);
+            foreach (var material in (json["materials"] as JsonArray ?? []).OfType<JsonObject>())
+            {
+                var source = material["extras"]?["zstudio_material_source"];
+                string sourcePath = source?["path"]?.GetValue<string>() ?? path;
+                int origin = source?["index"]?.GetValue<int>() ?? material["extras"]?[BridgeKey]?.GetValue<int>() ?? -1;
+                bool hadImage = false;
+                if (origin >= 0)
+                {
+                    if (!original.Models.TryGetValue(sourcePath, out var model) || model.Json["materials"] is not JsonArray materials || origin >= materials.Count)
+                        throw new InvalidDataException("Invalid source material identity.");
+                    hadImage = materials[origin]?["pbrMetallicRoughness"]?["baseColorTexture"]?["index"] != null;
+                }
+                else if (source != null) throw new InvalidDataException("Invalid source material identity.");
+                importedImages.Add(material, hadImage);
+                (material["extras"] as JsonObject)?.Remove("zstudio_material_source");
+            }
+            // Check the submitted material even when the geometry fast path would retain
+            // baseline buffers. Missing-source checker images also count as connections.
+            FollowImages(json, (material, _) => importedImages[material], path, followNames: false);
             var exported = GltfDocument.Read(raw, (uri, maximum) => Read(WorldAssembler.Relative(path, uri), maximum), token);
             var mapping = ReadMapping(before, exported, json, token);
             faceIds[path] = (json["meshes"] as JsonArray ?? []).Select((mesh, index) => (index, Faces: mesh!["primitives"]!.AsArray()
@@ -105,6 +127,9 @@ public static partial class SourceBlender
                     output[target] = png;
                     image["uri"] = Path.GetRelativePath(Path.GetDirectoryName(GraphPath(exportRoot, path))!, GraphPath(exportRoot, target)).Replace('\\', '/');
                 }
+                // Image provenance can restore a different physical filename than Blender's
+                // temporary export name; the compiled texture name follows that final image.
+                FollowImages(result, (_, _) => false, path);
                 WriteGraphIndices(path, result, indexPatches, geometryBuffers);
                 foreach (var buffer in result["buffers"] as JsonArray ?? [])
                 {
@@ -153,19 +178,22 @@ public static partial class SourceBlender
         Dictionary<string, GltfDocument> documents = new(StringComparer.OrdinalIgnoreCase);
         foreach (var (path, json) in roots)
             documents[path] = GltfDocument.Read(output[path], uri => output[WorldAssembler.Relative(path, uri)], token);
+        ScopeRemapBudget scopeBudget = new();
         foreach (var (path, json) in roots)
         {
+            scopeBudget.BeginOwner(path);
             foreach (var node in json["nodes"] as JsonArray ?? [])
                 if (node?["extras"]?[WorldGltf.Key] is JsonObject values && values["ref"] is JsonValue reference && values["zoneOverrides"] is JsonObject scope)
-                    RemapScope(scope, WorldAssembler.Relative(path, reference.GetValue<string>()), original, documents, roots, mappings, token);
+                    RemapScope(scope, WorldAssembler.Relative(path, reference.GetValue<string>()), original, documents, roots, mappings, token, scopeBudget);
             output[path] = GltfJson.Write(json, true, token);
         }
         foreach (var (path, json) in roots)
         {
+            scopeBudget.BeginOwner(path);
             foreach (var node in json["nodes"] as JsonArray ?? [])
                 if (node?["extras"] is JsonObject extras && extras["zstudio_placements"] is JsonArray placements)
                 {
-                    ApplyPlacementEdits(path, node!.AsObject(), placements, roots, documents, mappings, faceIds, token);
+                    ApplyPlacementEdits(path, node!.AsObject(), placements, roots, documents, mappings, faceIds, token, scopeBudget);
                     extras.Remove("zstudio_placements");
                 }
             output[path] = GltfJson.Write(json, true, token);
@@ -400,7 +428,93 @@ public static partial class SourceBlender
             if (scene?["extras"]?[WorldGltf.Key]?["loadRoot"] is JsonObject root) WorldGltf.WriteNodeFlags(root, WorldGltf.StoredNodeFlags(root));
     }
 
-    private static void RemapScope(JsonObject scope, string target, Graph original, Dictionary<string, GltfDocument> documents, Dictionary<string, JsonObject> roots,
+    // Admission is shared by every scope in an owner and every owner in an operation.
+    // Measure the expansion before cloning: a small edited reference file may multiply
+    // large assignments stored in a mission outside the checkout's input graph.
+    internal sealed class ScopeRemapBudget(long ownerMaximum = GltfDocument.MaximumMetadataBytes, long totalMaximum = MaximumExportBytes)
+    {
+        private readonly Dictionary<string, long> owners = new(StringComparer.OrdinalIgnoreCase);
+        private readonly Dictionary<JsonNode, bool> extendedRoots = new(ReferenceEqualityComparer.Instance);
+        private string owner = "";
+        private long totalBytes;
+        // The remap and placement-edit phases revisit each physical owner. Selecting
+        // it again must retain its earlier usage instead of starting a fresh allowance.
+        internal void BeginOwner(string path) => owner = path;
+        internal void Admit(long bytes)
+        {
+            long ownerBytes = owners.GetValueOrDefault(owner);
+            if (bytes < 0 || bytes > ownerMaximum - ownerBytes || bytes > totalMaximum - totalBytes)
+                throw new InvalidDataException("Copying these reference assignments exceeds the source metadata allowance.");
+            owners[owner] = ownerBytes + bytes; totalBytes += bytes;
+        }
+        internal long ProfileBytes(GraphMapping mapping, JsonObject root, JsonObject? inherited, CancellationToken token)
+        {
+            if (!extendedRoots.TryGetValue(root, out bool extended))
+                extendedRoots.Add(root, extended = HasExtendedZones(root, token));
+            long polygonBytes = extended || inherited != null && HasExtendedZones(inherited, token) ? 64 : 16;
+            long bytes = 256L + 128L * mapping.Nodes.Count + 64L * mapping.Meshes.Count;
+            foreach (var mesh in mapping.Meshes.Values)
+            {
+                token.ThrowIfCancellationRequested();
+                bytes += polygonBytes * mesh.Polygons.LongLength;
+                if (bytes > ownerMaximum) throw new InvalidDataException("Copying these reference assignments exceeds the source metadata allowance.");
+            }
+            return bytes;
+        }
+    }
+
+    private static bool HasExtendedZones(JsonNode value, CancellationToken token)
+    {
+        token.ThrowIfCancellationRequested();
+        if (value is JsonObject fields)
+        {
+            if (fields.ContainsKey("polygonZoneRaw") || fields.ContainsKey("polygonZonePadding") || fields.ContainsKey("zoneRaw") || fields.ContainsKey("zonePadding")) return true;
+            foreach (var item in fields) if (item.Value != null && HasExtendedZones(item.Value, token)) return true;
+        }
+        else if (value is JsonArray array)
+            foreach (var item in array) if (item != null && HasExtendedZones(item, token)) return true;
+        return false;
+    }
+
+    internal static void RemapScope(JsonObject scope, string target, Graph original, Dictionary<string, GltfDocument> documents, Dictionary<string, JsonObject> roots,
+        Dictionary<string, GraphMapping> mappings, CancellationToken token, ScopeRemapBudget budget)
+    {
+        Dictionary<(JsonObject Scope, string Target), long> sizes = [];
+        budget.Admit(Measure(scope, target, 0));
+        RemapScopeCore(scope, target, original, documents, roots, mappings, token);
+
+        long Measure(JsonObject values, string path, int depth)
+        {
+            token.ThrowIfCancellationRequested();
+            if (depth > GltfDocument.MaximumDepth) throw new InvalidDataException("A placement override exceeds the hierarchy allowance.");
+            if (sizes.TryGetValue((values, path), out long known)) return known;
+            // Include the source copy as well as the new profile: both are alive while
+            // remapping. The bounded writer measures escaped authored values safely.
+            long size = GltfJson.Write(values, false, token).LongLength;
+            var mapping = mappings[path];
+            if (values["fingerprint"] != null)
+                size += budget.ProfileBytes(mapping, roots[path], values, token);
+            if (values["references"] is JsonObject nested)
+            {
+                foreach (var (current, previous) in mapping.Nodes)
+                {
+                    token.ThrowIfCancellationRequested();
+                    if (previous < 0 || nested[previous.ToString(CultureInfo.InvariantCulture)] is not JsonObject child) continue;
+                    string reference = original.Models[path].Json["nodes"]![previous]!["extras"]![WorldGltf.Key]!["ref"]!.GetValue<string>();
+                    size += 32 + Measure(child, WorldAssembler.Relative(path, reference), depth + 1);
+                    Check();
+                }
+            }
+            Check(); sizes.Add((values, path), size); return size;
+            void Check()
+            {
+                if (size > GltfDocument.MaximumMetadataBytes)
+                    throw new InvalidDataException("Copying these reference assignments exceeds the source metadata allowance.");
+            }
+        }
+    }
+
+    private static void RemapScopeCore(JsonObject scope, string target, Graph original, Dictionary<string, GltfDocument> documents, Dictionary<string, JsonObject> roots,
         Dictionary<string, GraphMapping> mappings, CancellationToken token)
     {
         var before = original.Models[target]; var after = documents[target]; var mapping = mappings[target];
@@ -442,7 +556,8 @@ public static partial class SourceBlender
             {
                 if (previous < 0 || nested[previous.ToString(CultureInfo.InvariantCulture)] is not JsonObject child) continue;
                 string reference = before.Json["nodes"]![previous]!["extras"]![WorldGltf.Key]!["ref"]!.GetValue<string>();
-                var copy = child.DeepClone().AsObject(); RemapScope(copy, WorldAssembler.Relative(target, reference), original, documents, roots, mappings, token);
+                token.ThrowIfCancellationRequested();
+                var copy = child.DeepClone().AsObject(); RemapScopeCore(copy, WorldAssembler.Relative(target, reference), original, documents, roots, mappings, token);
                 next[current.ToString(CultureInfo.InvariantCulture)] = copy;
             }
             scope["references"] = next;

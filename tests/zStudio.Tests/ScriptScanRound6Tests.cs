@@ -2,14 +2,14 @@ using System.IO;
 using System.Numerics;
 using System.Text;
 using System.Text.Json.Nodes;
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Core.Animation;
-using Recoil.Zbd.Core.Formats;
-using Recoil.Zbd.Core.Sources;
-using Recoil.Zbd.Core.Worlds;
+using zStudio.Core;
+using zStudio.Core.Animation;
+using zStudio.Core.Formats;
+using zStudio.Core.Sources;
+using zStudio.Core.Worlds;
 using Xunit;
 
-namespace Recoil.Zbd.Tests;
+namespace zStudio.Tests;
 
 /// <summary>
 /// Walks over gamegen script graphs and the Blender checkout folder follow everything a build supports, or refuse: the
@@ -60,9 +60,9 @@ public sealed class ScriptScanRound6Tests
         fixture.Write("gamegen/m2.gs", Replace(fixture, "gamegen/m2.gs", "NewWorld %worldName%", "source " + Chain(fixture, "far", 600, "world.gw")));
         fixture.Write("gamegen/world.gw", "NewWorld %worldName%\r\n");
         SourceWorkspace workspace = new(fixture.Project);
-        var build = await SourceWorlds.BuildPreviewAsync(fixture.Project, "m1", Path.Combine(SourceWorlds.PreviewRoot(fixture.Project), "p-" + Guid.NewGuid().ToString("N")), workspace.Overlay(), token: Token);
-        Assert.Null(build.Outputs.FirstOrDefault(o => o.Error != null)?.Error);
-        var world = GameZWorldReader.FromDocument(FormatRegistry.Default.OpenBytes("gamez.zbd", await File.ReadAllBytesAsync(build.WorldPath, Token), token: Token), Token);
+        var build = await SourceWorlds.LoadSceneAsync(fixture.Project, "m1", workspace.Overlay(), token: Token);
+        Assert.NotNull(build.Scene);
+        var world = build.World;
         var origin = build.Provenance[GameZWriter.NodeSlots(world, TestContext.Current.CancellationToken)[world.Nodes.Single(n => n.Class == WorldNodeClass.World)]];
         Assert.Equal("gamegen/world.gw", origin.Created!.Script);
         // Fog inserted after NewWorld in world.gw would reach m2 too: refused, as for a mission sourcing it directly.
@@ -160,9 +160,9 @@ public sealed class ScriptScanRound6Tests
         check = await SourceBuilder.CheckAsync(fixture.Project, ["m1/gamez.zbd", "m1/anim.zbd"], token: Token);
         Assert.Empty(check.Lookups);
         Assert.Contains(check.Notes, n => n.StartsWith("The lookups by name the game makes as it loads m1 were not checked", StringComparison.Ordinal) && n.Contains("32 levels deep", StringComparison.Ordinal));
-        var build = await SourceWorlds.BuildPreviewAsync(fixture.Project, "m1", Path.Combine(SourceWorlds.PreviewRoot(fixture.Project), "p-" + Guid.NewGuid().ToString("N")), token: Token);
+        var build = await SourceWorlds.LoadSceneAsync(fixture.Project, "m1", token: Token);
         Assert.Empty(build.Lookups);
-        Assert.Contains(build.Outputs.Single(o => o.Family == "world").Warnings, w => w.StartsWith("The lookups by name the game makes as it loads m1 were not checked", StringComparison.Ordinal));
+        Assert.Contains(build.Notes, w => w.Contains("lookup diagnostics are unavailable", StringComparison.Ordinal) && w.Contains("32 levels deep", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -170,7 +170,7 @@ public sealed class ScriptScanRound6Tests
     {
         using SourceWorldFixture fixture = new();
         // m2 loads the tank and turns its hull; its scripts first source each other deeper than the build follows.
-        fixture.Write("gamegen/m2.gs", Replace(fixture, "gamegen/m2.gs", "LoadGameGen tank.flt tank", "LoadGameGen tank.flt tank\r\nFindSubNode hull\r\nObject3DRotate 0.0 1.0 0.0"));
+        fixture.Write("gamegen/m2.gs", Replace(fixture, "gamegen/m2.gs", "LoadGameGen tank.gltf tank", "LoadGameGen tank.gltf tank\r\nFindSubNode hull\r\nObject3DRotate 0.0 1.0 0.0"));
         SourceWorkspace workspace = new(fixture.Project);
         WorldNodeProvenance origin = new() { ModelFile = fixture.Tank, ModelNode = 0, ModelNodeName = "hull" };
         var hit = SourceObjectEdits.TransformElsewhere(workspace, "m1", origin, "hull", Token);
@@ -185,7 +185,7 @@ public sealed class ScriptScanRound6Tests
     {
         GameScene scene = new();
         scene.Models.Add(new(0, [Vector3.Zero], [], [], [], []));
-        var world = new ZbdDocument("gamez.zbd", new(0, DateTime.MinValue), new(FormatFamily.GameZ, 15, Recognition.Supported, "fixture"), ReadOnlyMemory<byte>.Empty) { Scene = scene };
+        var world = new AssetDocument("gamez.zbd", new(0, DateTime.MinValue), new(FormatFamily.GameZ, 15, Recognition.Supported, "fixture"), ReadOnlyMemory<byte>.Empty) { Scene = scene };
         return new() { Package = new AnimationPackage { Prefix = [], Tail = [] }, World = world };
     }
 
@@ -220,10 +220,15 @@ public sealed class ScriptScanRound6Tests
     {
         string folder = Path.Combine(project, "zstudio", "export", id);
         Directory.CreateDirectory(Path.Combine(folder, "outbox", "nested"));
-        JsonObject manifest = new() { ["format"] = "zstudio-blender-checkout", ["version"] = 1, ["id"] = id, ["model"] = "data/m1/models/m1.gltf", ["created"] = "2026-01-01T00:00:00.0000000Z", ["files"] = files ?? [] };
+        JsonObject manifest = new() { ["format"] = "zstudio-blender-checkout", ["version"] = 2, ["id"] = id, ["model"] = "data/m1/models/m1.gltf", ["created"] = "2026-01-01T00:00:00.0000000Z", ["files"] = files ?? [] };
         File.WriteAllText(Path.Combine(folder, "manifest.json"), manifest.ToJsonString());
-        for (int i = 0; i < exports; i++) File.WriteAllText(Path.Combine(folder, "outbox", i % 2 == 0 ? "" : "nested", $"e{i}.gltf"), "{}");
-        File.WriteAllText(Path.Combine(folder, "outbox", "notes.txt"), "");
+        for (int i = 0; i < exports; i++)
+        {
+            string generation = Path.Combine(folder, "outbox", $"e{i}");
+            Directory.CreateDirectory(generation);
+            File.WriteAllText(Path.Combine(generation, "recoil-export.json"), "{}");
+        }
+        File.WriteAllText(Path.Combine(folder, "outbox", "loose.gltf"), "{}");
         return folder;
     }
 
@@ -234,11 +239,11 @@ public sealed class ScriptScanRound6Tests
         for (int i = 0; i < 3; i++) FakeCheckout(fixture.Project, $"c{i}", 4);
         var listed = SourceBlender.CheckoutExports(fixture.Project, Token);
         Assert.Equal(3, listed.Count);
-        Assert.All(listed, c => Assert.Equal(["e0.gltf", "e2.gltf", "nested/e1.gltf", "nested/e3.gltf"], c.Exports.Select(e => e.Relative).Order(StringComparer.Ordinal)));
-        // Three checkout folders, and in each outbox a nested folder, four exports and a note: 3 + 3 × 6 entries in all.
-        Assert.Equal(3, SourceBlender.CheckoutExports(fixture.Project, 21, Token).Count);
-        var error = Assert.Throws<IOException>(() => SourceBlender.CheckoutExports(fixture.Project, 20, Token));
-        Assert.Contains("zstudio/export holds more than 20 files and folders", error.Message, StringComparison.Ordinal);
+        Assert.All(listed, c => Assert.Equal(["e0/recoil-export.json", "e1/recoil-export.json", "e2/recoil-export.json", "e3/recoil-export.json"], c.Exports.Select(e => e.Relative).Order(StringComparer.Ordinal)));
+        // The listing budget includes each export's generation folder and manifest, plus the other outbox entries.
+        Assert.Equal(3, SourceBlender.CheckoutExports(fixture.Project, 33, Token).Count);
+        var error = Assert.Throws<IOException>(() => SourceBlender.CheckoutExports(fixture.Project, 32, Token));
+        Assert.Contains("zstudio/export holds more than 32 files and folders", error.Message, StringComparison.Ordinal);
         // The files a manifest lists count before they are read.
         FakeCheckout(fixture.Project, "listed", 0, new JsonArray([.. Enumerable.Range(0, 40).Select(_ => (JsonNode?)0)]));
         Assert.Throws<IOException>(() => SourceBlender.CheckoutExports(fixture.Project, 60, Token));
@@ -260,5 +265,13 @@ public sealed class ScriptScanRound6Tests
         manifest["id"] = "another-checkout";
         File.WriteAllText(Path.Combine(a, "manifest.json"), manifest.ToJsonString());
         Assert.Equal("b", Assert.Single(SourceBlender.Checkouts(fixture.Project, Token)).Id);
+        manifest["id"] = "a";
+        foreach (int? version in new int?[] { null, 1, 3 })
+        {
+            manifest["version"] = version;
+            File.WriteAllText(Path.Combine(a, "manifest.json"), manifest.ToJsonString());
+            Assert.Equal("b", Assert.Single(SourceBlender.Checkouts(fixture.Project, Token)).Id);
+            Assert.Contains("Create a new checkout", Assert.Throws<InvalidDataException>(() => SourceBlender.Find(fixture.Project, "a")).Message);
+        }
     }
 }

@@ -1,8 +1,8 @@
 using System.Collections;
-using Recoil.Zbd.Core.Sources;
+using zStudio.Core.Sources;
 using Xunit;
 
-namespace Recoil.Zbd.Tests;
+namespace zStudio.Tests;
 
 public sealed class PendingInventoryTests
 {
@@ -89,14 +89,6 @@ public sealed class PendingInventoryTests
             Assert.Throws<InventoryCapacityException>(() => new SourceBuilder.Snapshot(root, new Dictionary<string, byte[]> { [path] = [] }, inventoryLimit: exact - 1, inventoryToken: Token));
         }
         finally { Directory.Delete(root, true); }
-    }
-
-    [Fact]
-    public void PreviewRevalidationDoesNotRelabelCapacityAsExternalChange()
-    {
-        using SourceWorldFixture fixture = new();
-        var snapshot = new SourceBuilder.Snapshot(fixture.Project, inventoryLimit: 0, inventoryToken: Token);
-        Assert.Throws<InventoryCapacityException>(() => SourceWorlds.CheckPreviewPlanUnchanged(fixture.Project, "m1", snapshot, [], Token));
     }
 
     [Fact]

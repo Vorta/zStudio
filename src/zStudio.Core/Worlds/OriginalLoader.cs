@@ -1,6 +1,6 @@
 using System.Text;
 
-namespace Recoil.Zbd.Core.Worlds;
+namespace zStudio.Core.Worlds;
 
 /// <summary>
 /// The order in which RECOIL's build tool created and freed nodes when it loaded a model file (<c>LoadGameGen</c>). The

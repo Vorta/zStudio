@@ -1,7 +1,7 @@
 using System.Diagnostics;
 using System.Security.Cryptography;
 
-namespace Recoil.Zbd.PrWatch;
+namespace zStudio.PrWatch;
 
 public sealed class WatchService(WatchStore store, IPrSource source, INoticeQueue queue, TimeProvider? time = null,
     Func<WatchState, IPrSource>? sourceFactory = null, Func<WatchState, INoticeQueue>? queueFactory = null)
@@ -234,7 +234,7 @@ public sealed class WatchService(WatchStore store, IPrSource source, INoticeQueu
         }
         return runtime;
     }
-    public static readonly string[] RuntimeFiles = ["Recoil.Zbd.PrWatch.dll", "Recoil.Zbd.PrWatch.deps.json", "Recoil.Zbd.PrWatch.runtimeconfig.json"];
+    public static readonly string[] RuntimeFiles = ["zStudio.PrWatch.dll", "zStudio.PrWatch.deps.json", "zStudio.PrWatch.runtimeconfig.json"];
     public static async Task StartWorkerAsync(WatchStore store, CancellationToken token)
     {
         using var launch = await store.LockAsync("launch", token);

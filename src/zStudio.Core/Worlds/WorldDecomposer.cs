@@ -1,4 +1,4 @@
-namespace Recoil.Zbd.Core.Worlds;
+namespace zStudio.Core.Worlds;
 
 /// <summary>
 /// A model load in a mission's build: the file the script named, the root it created, the nodes the file contributed,

@@ -7,9 +7,9 @@ using System.Windows.Data;
 using System.Windows.Input;
 using System.Windows.Markup;
 using Microsoft.Win32;
-using Recoil.Zbd.Core.Worlds;
+using zStudio.Core.Worlds;
 
-namespace Recoil.Zbd.Desktop;
+namespace zStudio.Desktop;
 
 /// <summary>
 /// Compares two GameZ worlds, such as a retail world and one rebuilt from a source project: their node trees merged by

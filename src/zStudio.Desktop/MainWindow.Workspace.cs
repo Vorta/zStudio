@@ -4,7 +4,7 @@ using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Threading;
 
-namespace Recoil.Zbd.Desktop;
+namespace zStudio.Desktop;
 
 public partial class MainWindow
 {
@@ -45,8 +45,8 @@ public partial class MainWindow
         ViewModel.PropertyChanged += DocumentChanged;
         ViewModel.PropertyChanged += (_, args) =>
         {
-            if (args.PropertyName is nameof(MainViewModel.RootPath) or nameof(MainViewModel.HasRoot) or nameof(MainViewModel.SelectedDocument)) UpdateDocumentCommands();
-            if (args.PropertyName is nameof(MainViewModel.HasRoot) or nameof(MainViewModel.SelectedDocument)) ArrangeWorkspace();
+            if (args.PropertyName is nameof(MainViewModel.RootPath) or nameof(MainViewModel.HasRoot) or nameof(MainViewModel.IsSourceProject) or nameof(MainViewModel.SelectedDocument)) UpdateDocumentCommands();
+            if (args.PropertyName is nameof(MainViewModel.HasRoot) or nameof(MainViewModel.IsSourceProject) or nameof(MainViewModel.SelectedDocument)) ArrangeWorkspace();
             if (args.PropertyName == nameof(MainViewModel.RootPath) && ViewModel.SelectedDocument == null) SelectNavigatorSection(0);
             // The brush paints the shown source world only; another root ends it.
             if (args.PropertyName == nameof(MainViewModel.RootPath)) terrainBrush = null;
@@ -57,6 +57,7 @@ public partial class MainWindow
         // opened is not followed by a dialog (it would hold the workspace from that client): Problems lists the saves, and
         // source_recovery / source_recovery_resolve (or Tools → Resolve interrupted save) decide them.
         ViewModel.RootPublished += () => { if (SourceProjectRoot is { } project) _ = CheckSourceRecoveryAsync(project, ask: !ViewModel.RootOpenedWithoutPrompts); };
+        ViewModel.RootPublished += () => _ = RefreshSourceMapPickerAsync();
         ViewModel.SearchResults.CollectionChanged += (_, _) => UpdateSearchHint();
         ViewModel.Problems.CollectionChanged += (_, _) => UpdateDocumentCommands();
         UpdateSearchHint();
@@ -70,17 +71,19 @@ public partial class MainWindow
         var doc = ViewModel.SelectedDocument;
         ObserveDocumentCommands(doc);
         bool hasDocument = doc != null;
+        UpdateSourceMapPresentation();
         // Move off an unavailable page before collapsing its tab. Preserve Files
         // and Search selections when the document context changes.
         UpdateNavigatorAvailability();
-        InspectorVisibilityMenu.IsEnabled = InspectorPaneButton.IsEnabled = animation != null;
+        InspectorVisibilityMenu.IsEnabled = InspectorPaneButton.IsEnabled = !ViewModel.IsSourceProject && animation != null;
+        NavigatorVisibilityMenu.IsEnabled = NavigatorPaneButton.IsEnabled = !ViewModel.IsSourceProject && ViewModel.HasRoot;
         PropertiesMenu.IsEnabled = hasDocument;
         ToolsVisibilityMenu.IsEnabled = ToolsPaneButton.IsEnabled = hasDocument || ViewModel.Problems.Count > 0;
         DocumentCommands.Visibility = hasDocument ? Visibility.Visible : Visibility.Collapsed;
         ExportSelectedMenu.IsEnabled = ExportAllMenu.IsEnabled = ExportJsonMenu.IsEnabled = CloseDocumentMenu.IsEnabled = ValidateMenu.IsEnabled = ReloadMenu.IsEnabled = hasDocument;
         BackupOnSave.IsEnabled = doc?.PickupEdits != null;
-        ExportModelsMenu.IsEnabled = doc?.SelectedAsset?.Record.Kind is Recoil.Zbd.Core.AssetKind.Animation or Recoil.Zbd.Core.AssetKind.Node or Recoil.Zbd.Core.AssetKind.Model;
-        ReplaceModelsMenu.IsEnabled = doc?.ModelEdits != null || doc?.SelectedAsset?.Record.Content is Recoil.Zbd.Core.Formats.MechAssembly;
+        ExportModelsMenu.IsEnabled = doc?.SelectedAsset?.Record.Kind is zStudio.Core.AssetKind.Animation or zStudio.Core.AssetKind.Node or zStudio.Core.AssetKind.Model;
+        ReplaceModelsMenu.IsEnabled = doc?.ModelEdits != null || doc?.SelectedAsset?.Record.Content is zStudio.Core.Formats.MechAssembly;
         WelcomeTitle.Text = ViewModel.HasRoot ? "Choose a file to inspect" : "Explore Recoil’s assets";
         WelcomeDescription.Text = ViewModel.HasRoot ? "Open a ZBD file from Files, or search for an asset across this folder." : "Textures, worlds, models, audio, scripts, and animation sequences — together in one workspace.";
         WelcomeChoices.Visibility = ViewModel.HasRoot ? Visibility.Collapsed : Visibility.Visible;
@@ -99,13 +102,12 @@ public partial class MainWindow
         SaveMenu.IsEnabled = SaveAsMenu.IsEnabled = DocumentSave.IsEnabled;
         // A source world saves to its project's sources; there is no other destination.
         if (doc?.SourceWorld != null) SaveAsMenu.IsEnabled = false;
-        AddSourceModelMenu.IsEnabled = AddSourceModel.IsEnabled = doc?.SourceWorld != null && !rebuilding;
         UndoMenu.IsEnabled = DocumentUndo.IsEnabled; RedoMenu.IsEnabled = DocumentRedo.IsEnabled;
         DocumentUndo.ToolTip = (doc?.SourceWorld?.Workspace.UndoLabel ?? doc?.AnimationEdits?.UndoDescription) is string undo ? "Undo: " + undo + " (Ctrl+Z)" : "Undo (Ctrl+Z)";
         DocumentRedo.ToolTip = (doc?.SourceWorld?.Workspace.RedoLabel ?? doc?.AnimationEdits?.RedoDescription) is string redo ? "Redo: " + redo + " (Ctrl+Y)" : "Redo (Ctrl+Y)";
     }
     /// <summary>What Save writes in a source project: every changed source file, not only this world's.</summary>
-    private static string SourceSaveTip(Recoil.Zbd.Core.Sources.SourceWorkspace workspace)
+    private static string SourceSaveTip(zStudio.Core.Sources.SourceWorkspace workspace)
     {
         var dirty = workspace.DirtyFiles;
         return dirty.Count == 0 ? "The source project has no unsaved edits (Ctrl+S)"
@@ -184,15 +186,18 @@ public partial class MainWindow
         try
         {
             RefreshPresentation();
+            UpdateSourceMapPresentation();
             if (presentationUiHidden)
             {
                 NavigatorHost.Visibility = NavigatorSplitter.Visibility = InspectorHost.Visibility = InspectorSplitter.Visibility = BottomTools.Visibility = ToolsSplitter.Visibility = Visibility.Collapsed;
+                SourceOutlinerPane.Visibility = SourcePropertiesPane.Visibility = Visibility.Collapsed; RefreshSourceChrome();
                 FilesColumn.Width = NavigatorSplitterColumn.Width = PropertiesColumn.Width = PropertiesSplitterColumn.Width = new(0);
                 ToolsRow.Height = ToolsSplitterRow.Height = new(0);
                 animation?.ShowInspectorReplacement(false);
                 Workspace.Visibility = Visibility.Visible;
                 return;
             }
+            if (ViewModel.IsSourceProject) { ArrangeSourceMapWorkspace(); return; }
             var layout = Layout; bool focus = layout.Preset == "Focus preview";
             double width = Workbench.ActualWidth;
             // Keep both side panes when the center still has a usable width.
@@ -243,6 +248,11 @@ public partial class MainWindow
     private void WorkspaceSplitterCompleted(object sender, DragCompletedEventArgs e)
     {
         if (arrangingWorkspace) return;
+        // A source map's panes keep session widths; the compiled explorer's preferences stay as they are.
+        if (ViewModel.IsSourceProject && sender == InspectorSplitter)
+        { sourcePropertiesWidth = Math.Clamp(PropertiesColumn.ActualWidth, 260, 650); ArrangeWorkspace(); return; }
+        if (ViewModel.IsSourceProject && sender == NavigatorSplitter)
+        { sourceOutlinerWidth = Math.Clamp(FilesColumn.ActualWidth, 200, 650); ArrangeWorkspace(); return; }
         var layout = Layout;
         if (sender == NavigatorSplitter) layout.NavigatorWidth = FilesColumn.ActualWidth - (filesDetached ? layout.FilesWidth + 6 : 0);
         if (sender == FilesSplitter) { layout.FilesWidth = DetachedFilesColumn.ActualWidth; layout.NavigatorWidth = NavigatorContentColumn.ActualWidth; }

@@ -1,10 +1,10 @@
 using System.IO;
 using System.Numerics;
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Core.Formats;
+using zStudio.Core;
+using zStudio.Core.Formats;
 using Xunit;
 
-namespace Recoil.Zbd.Tests;
+namespace zStudio.Tests;
 
 [Collection("Allocation-sensitive")]
 public sealed class MissionLoaderTypedBudgetTests
@@ -30,7 +30,7 @@ public sealed class MissionLoaderTypedBudgetTests
         byte[] bytes = ResourceEditingTests.Archive((selected, Spawn()));
         string path = Path.Combine(Path.GetDirectoryName(fixture.ArchivePath)!, "difficulty.zbd");
         File.WriteAllBytes(path, bytes);
-        ZbdDocument limited = new(path, new(bytes.Length, DateTime.MinValue), new(FormatFamily.Archive, 1, Recognition.Supported, "fixture"), bytes);
+        AssetDocument limited = new(path, new(bytes.Length, DateTime.MinValue), new(FormatFamily.Archive, 1, Recognition.Supported, "fixture"), bytes);
         new ArchiveReader(0).Read(limited, Token);
         fixture.Publish(normal, limited);
         var result = await MissionSceneLoader.LoadAsync(fixture.World, fixture.Resolver, token: Token, difficulty: difficulty);
@@ -105,7 +105,7 @@ public sealed class MissionLoaderTypedBudgetTests
         private readonly Guid owner = Guid.NewGuid();
         public byte[] Bytes { get; }
         public string ArchivePath { get; }
-        public ZbdDocument World { get; }
+        public AssetDocument World { get; }
         public AssetResolver Resolver { get; }
         public Fixture(byte[] bytes)
         {
@@ -119,13 +119,13 @@ public sealed class MissionLoaderTypedBudgetTests
             World = new(Path.Combine(root, "gamez.zbd"), new(0, DateTime.MinValue), new(FormatFamily.GameZ, 15, Recognition.Supported, "fixture"), ReadOnlyMemory<byte>.Empty) { Scene = scene };
             Resolver = new(root);
         }
-        public ZbdDocument Open(long budget)
+        public AssetDocument Open(long budget)
         {
-            ZbdDocument document = new(ArchivePath, new(Bytes.Length, DateTime.MinValue), new(FormatFamily.Archive, 1, Recognition.Supported, "fixture"), Bytes);
+            AssetDocument document = new(ArchivePath, new(Bytes.Length, DateTime.MinValue), new(FormatFamily.Archive, 1, Recognition.Supported, "fixture"), Bytes);
             new ArchiveReader(budget).Read(document, Token);
             return document;
         }
-        public void Publish(params ZbdDocument[] documents) => Resolver.SetWorkspaceSnapshots(owner, documents);
+        public void Publish(params AssetDocument[] documents) => Resolver.SetWorkspaceSnapshots(owner, documents);
         public void Dispose() { Resolver.Dispose(); Directory.Delete(root, true); }
     }
 }

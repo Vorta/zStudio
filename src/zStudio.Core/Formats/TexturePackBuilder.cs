@@ -2,7 +2,7 @@ using System.Buffers.Binary;
 using System.Globalization;
 using System.Text;
 
-namespace Recoil.Zbd.Core.Formats;
+namespace zStudio.Core.Formats;
 
 /// <summary>Which renderer a texture pack serves; the engine loads exactly one mission pack plus image.zbd.</summary>
 public enum TexturePackKind

@@ -1,6 +1,6 @@
-using Recoil.Zbd.Automation;
+using zStudio.Automation;
 
-namespace Recoil.Zbd.Desktop;
+namespace zStudio.Desktop;
 
 public partial class MainWindow
 {
@@ -22,7 +22,7 @@ public partial class MainWindow
         P("aiThroughGeometry", "boolean", "Whole world: show AI through scene geometry; false enables depth occlusion."),
         P("aiNetwork", "string", "Whole world: all, or an AI network ID. A specific ID requires aiSnapshot."),
         P("aiSnapshot", "string", "Expected AI graph snapshot from preview_state.ai; required with a specific aiNetwork ID."),
-        P("highlight", "string", "Whole world only: solid yellow non-default soils, green CanModify, red ClipTo, or zones (each surface in its node zone's colour, grey for any); none restores normal appearance.", false, "none", "nonDefaultSoils", "canModify", "clipTo", "zones"),
+        P("highlight", "string", "Whole world only: 50% colour overlays for yellow non-default soils, green CanModify, red ClipTo, combined CanModify/ClipTo (red wins overlap), or node zones (grey for any); none restores normal appearance.", false, "none", "nonDefaultSoils", "canModify", "clipTo", "canModifyAndClipTo", "zones"),
         new("lod","integer","Authored LOD rank within the active viewer's available range.", Minimum: 0, Maximum: int.MaxValue), P("difficulty","string","Mission layout.",false,"Easy","Medium","Hard"), P("texturePack","string","Available texture pack path, or empty for automatic.")
     ]);
     private static StudioParameter WorkspaceChanges => new("changes", "object", "Optional presentation preferences.", Properties:
@@ -30,6 +30,7 @@ public partial class MainWindow
         .. new[] { "resetLayout", "navigator", "inspector", "tools", "toolsMaximized", "backupOnSave" }.Select(n=>P(n,"boolean",n)),
         P("theme","string","Theme.",false,"System","Light","Dark"), P("density","string","Density.",false,"Compact","Comfortable"),
         P("preset","string","Workspace preset.",false,"Inspect","Edit","Debug","Focus preview"),
+        P("propertiesDocked","boolean","Source maps: true docks Properties as the right pane; false pops it out into the card floating over the view."),
         P("filesWidth","number","Preferred detached Files width in DIP, clamped to 200–650; automatic layout does not overwrite it."),
         P("inspectionPanelHeight","number","Preferred total expanded inspection-panel height in DIP; default 432, minimum 216. Effective height is limited to 80% of the viewport without overwriting this preference; shorter viewports lower the effective minimum. Does not commit drafts."),
         .. new[] { "navigatorWidth", "inspectorWidth", "toolsHeight" }.Select(n=>P(n,"number","Preferred dimension in DIP; clamped to supported layout limits. Navigator width is the content tabs width in split mode, or the combined tab group width otherwise.")),

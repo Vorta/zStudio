@@ -4,8 +4,8 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using ModelContextProtocol.Client;
 using ModelContextProtocol.Protocol;
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Core.Formats;
+using zStudio.Core;
+using zStudio.Core.Formats;
 
 /// <summary>Corpus regression through the packaged stdio connector and its real visible GUI.</summary>
 internal static class McpLiveCheck
@@ -29,7 +29,7 @@ internal static class McpLiveCheck
             await Call("scene_options", new { preview, changes = new { lod = 1, horizon = false } });
             preview = (await Call("state", new { }))["preview"]!.GetValue<string>();
             await Call("scene_card", new { preview, action = "select", node = 0 }, "locked");
-            await Call("pickup_lock", new { document = worldId, revision = 0, locked = false });
+            await Call("scene_lock", new { document = worldId, revision = 0, locked = false });
             await CheckSceneTree(worldId, preview);
             var graph = await Call("ai_networks", new { preview, limit = 1 });
             Equal(91, graph["total"]!.GetValue<int>(), "AI network count");
@@ -101,12 +101,12 @@ internal static class McpLiveCheck
                 {
                     var before = await Call("scene_inspect", new { preview }); long revision = before["revision"]!.GetValue<long>();
                     string target = before["inspection"]!["Target"]!.GetValue<string>();
-                    var locked = await Call("pickup_lock", new { document = worldId, revision, locked = true });
-                    Equal(true, locked["PickupsLocked"]!.GetValue<bool>(), label + " lock state");
+                    var locked = await Call("scene_lock", new { document = worldId, revision, locked = true });
+                    Equal(true, locked["EditingLocked"]!.GetValue<bool>(), label + " lock state");
                     Equal(true, (await Call("scene_inspect", new { preview }))["selected"] == null, label + " locked card closes");
                     await Call("scene_card", new { preview, action = "select", target }, "locked");
                     await Call("scene_card", new { preview, action = "begin", document = worldId, revision }, "locked");
-                    await Call("pickup_lock", new { document = worldId, revision, locked = false });
+                    await Call("scene_lock", new { document = worldId, revision, locked = false });
                     await Call("scene_card", new { preview, action = "select", target });
                     Equal(true, (await Call("scene_inspect", new { preview }))["inspection"]!["Editable"]!.GetValue<bool>(), label + " unlocked card");
                     var p = before["inspection"]!["Authored placement XYZ"]!;
@@ -130,7 +130,7 @@ internal static class McpLiveCheck
                         Equal(draft["draft"]!["token"]!.GetValue<string>(), resized["draft"]!["token"]!.GetValue<string>(), label + " resizing retains draft");
                         Equal(revision, resized["revision"]!.GetValue<long>(), label + " resizing leaves revision unchanged");
                     }
-                    await Call("pickup_lock", new { document = worldId, revision, locked = true }, "pending_drafts");
+                    await Call("scene_lock", new { document = worldId, revision, locked = true }, "pending_drafts");
                     await Task.Delay(200);
                     await Call("capture", new { target = "window", width = 1400, height = 900 });
                     File.Copy(Path.Combine(output, "preview.png"), Path.Combine(output, label + "-edit.png"), true);
@@ -169,7 +169,7 @@ internal static class McpLiveCheck
                     byte[] originalBytes = await File.ReadAllBytesAsync(source), copyBytes = await File.ReadAllBytesAsync(copy);
                     Equal(true, originalBytes.SequenceEqual(copyBytes), label + " undo/save restores byte-exact archive at copy");
                     var finalState = await Call("scene_inspect", new { preview });
-                    await Call("pickup_lock", new { document = worldId, revision = finalState["revision"]!.GetValue<long>(), locked = false });
+                    await Call("scene_lock", new { document = worldId, revision = finalState["revision"]!.GetValue<long>(), locked = false });
                 }
             }
             var cameraBefore = await Call("camera", new { preview, action = "read" });

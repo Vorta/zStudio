@@ -1,10 +1,10 @@
 using System.Buffers.Binary;
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Core.Animation;
-using Recoil.Zbd.Core.Formats;
+using zStudio.Core;
+using zStudio.Core.Animation;
+using zStudio.Core.Formats;
 using Xunit;
 
-namespace Recoil.Zbd.Tests;
+namespace zStudio.Tests;
 
 public sealed class AnimationReferenceCacheTests
 {
@@ -34,7 +34,7 @@ public sealed class AnimationReferenceCacheTests
         Assert.Equal(0, context.ResolveRoot(entry)); Assert.Equal(3, context.ResolveNode(entry, 1));
     }
     /// <summary>A world whose nodes form one parent chain from n0, with <c>target</c> at <paramref name="target"/>.</summary>
-    private static ZbdDocument World(int version, int count, int target)
+    private static AssetDocument World(int version, int count, int target)
     {
         byte[] header = new byte[36]; BinaryPrimitives.WriteUInt32LittleEndian(header, 0x02971222); BinaryPrimitives.WriteUInt32LittleEndian(header.AsSpan(4), (uint)version);
         GameScene scene = new();

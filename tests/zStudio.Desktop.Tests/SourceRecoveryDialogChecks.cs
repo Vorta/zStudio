@@ -2,12 +2,12 @@ using System.Text;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Threading;
-using Recoil.Zbd.Core.Sources;
-using Recoil.Zbd.Desktop;
-using Recoil.Zbd.Tests;
+using zStudio.Core.Sources;
+using zStudio.Desktop;
+using zStudio.Tests;
 using Xunit;
 
-namespace Recoil.Zbd.Desktop.Tests;
+namespace zStudio.Desktop.Tests;
 
 /// <summary>Actual journal descriptions cannot push recovery decisions out of the bounded dialog viewport.</summary>
 internal static class SourceRecoveryDialogChecks

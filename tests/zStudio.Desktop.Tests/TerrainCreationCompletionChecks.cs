@@ -5,12 +5,12 @@ using System.Windows;
 using System.Windows.Controls;
 using ModelContextProtocol.Client;
 using ModelContextProtocol.Protocol;
-using Recoil.Zbd.Core.Sources;
-using Recoil.Zbd.Desktop;
-using Recoil.Zbd.Tests;
+using zStudio.Core.Sources;
+using zStudio.Desktop;
+using zStudio.Tests;
 using Xunit;
 
-namespace Recoil.Zbd.Desktop.Tests;
+namespace zStudio.Desktop.Tests;
 
 /// <summary>Terrain completion is prepared before acceptance; neither listing nor cancellation can conceal an accepted edit.</summary>
 internal static class TerrainCreationCompletionChecks

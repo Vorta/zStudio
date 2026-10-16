@@ -1,15 +1,15 @@
 using System.Numerics;
 using System.Text;
 using System.Text.Json.Nodes;
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Core.Animation;
-using Recoil.Zbd.Core.Gltf;
-using Recoil.Zbd.Core.Sources;
-using Recoil.Zbd.Core.Terrain;
-using Recoil.Zbd.Core.Worlds;
+using zStudio.Core;
+using zStudio.Core.Animation;
+using zStudio.Core.Gltf;
+using zStudio.Core.Sources;
+using zStudio.Core.Terrain;
+using zStudio.Core.Worlds;
 using Xunit;
 
-namespace Recoil.Zbd.Tests;
+namespace zStudio.Tests;
 
 public sealed class WorldReviewRegressionTests
 {
@@ -256,7 +256,7 @@ public sealed class WorldReviewRegressionTests
         public void Put(string path, string text) => File.WriteAllText(Path.Combine(Root, path), text);
         public bool Exists(string path) => File.Exists(Path.Combine(Root, path));
         public byte[] Read(string path, CancellationToken token) => Read(path, token, ProjectReadLimits.Document);
-        public byte[] Read(string path, CancellationToken token, ProjectReadLimits limits) { token.ThrowIfCancellationRequested(); return Recoil.Zbd.Core.Sources.SourceRead.All(Path.Combine(Root, path), limits, token); }
+        public byte[] Read(string path, CancellationToken token, ProjectReadLimits limits) { token.ThrowIfCancellationRequested(); return zStudio.Core.Sources.SourceRead.All(Path.Combine(Root, path), limits, token); }
         public void Dispose() => Directory.Delete(Root, true);
     }
 

@@ -1,17 +1,17 @@
 using System.Security.Cryptography;
-using Recoil.Zbd.Core.Formats;
+using zStudio.Core.Formats;
 
-namespace Recoil.Zbd.Core;
+namespace zStudio.Core;
 
-public sealed record ContentSnapshot(IReadOnlyDictionary<string, ZbdDocument> Documents, object State);
-public sealed record PreparedContentEdit(ContentSnapshot Before, ContentSnapshot After, IReadOnlyDictionary<string, ZbdDocument> Baselines, bool IdentityOrderChanged = false);
+public sealed record ContentSnapshot(IReadOnlyDictionary<string, AssetDocument> Documents, object State);
+public sealed record PreparedContentEdit(ContentSnapshot Before, ContentSnapshot After, IReadOnlyDictionary<string, AssetDocument> Baselines, bool IdentityOrderChanged = false);
 public sealed record ContentSaveResult(IReadOnlyList<string> SavedPaths, IReadOnlyList<string> Errors, IReadOnlyList<string> RemainingPaths);
 
 /// <summary>Shared snapshot history and verified publication for script and texture editing.</summary>
 public abstract class ContentEditSession
 {
     private readonly List<ContentSnapshot> undo = [], redo = [];
-    private readonly Dictionary<string, ZbdDocument> sources = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, AssetDocument> sources = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, (string Path, ReadOnlyMemory<byte> Bytes, FileStamp Stamp, bool NeedsCreate)> saved = new(StringComparer.OrdinalIgnoreCase);
     private bool saving;
     private readonly long maximumRetainedBytes, maximumConstructionBytes;
@@ -20,7 +20,7 @@ public abstract class ContentEditSession
     private readonly DecodedCosts costs;
     public string SourcePath { get; }
     public ContentSnapshot Current { get; private set; }
-    public IEnumerable<ZbdDocument> Documents => sources.Select(p => Current.Documents.TryGetValue(p.Key, out var doc) ? doc : p.Value);
+    public IEnumerable<AssetDocument> Documents => sources.Select(p => Current.Documents.TryGetValue(p.Key, out var doc) ? doc : p.Value);
     public bool IsDirty => saved.Values.Any(s => s.NeedsCreate) || Documents.Any(d => !d.Bytes.Span.SequenceEqual(saved[d.Path].Bytes.Span));
     public bool CanUndo => !saving && undo.Count > 0;
     public bool CanRedo => !saving && redo.Count > 0;
@@ -28,7 +28,7 @@ public abstract class ContentEditSession
     public bool HasAcceptedEdits { get; private set; }
     public bool HasExternalChanges() => saved.Values.Any(s => s.NeedsCreate ? File.Exists(s.Path) || Directory.Exists(s.Path) : FileStamp.Read(s.Path) != s.Stamp);
     public string TargetPath(string source) => saved[source].Path;
-    public IEnumerable<ZbdDocument> PublishedDocuments
+    public IEnumerable<AssetDocument> PublishedDocuments
     {
         get
         {
@@ -39,7 +39,7 @@ public abstract class ContentEditSession
                 if (doc.Probe.Family != FormatFamily.TexturePack || doc.Path.Equals(target.Path, StringComparison.OrdinalIgnoreCase)) continue;
                 // A Save As target is another view of this working snapshot. Share immutable
                 // bytes/content while giving its rows the target file's identity.
-                var alias = new ZbdDocument(target.Path, target.Stamp, doc.Probe, doc.Bytes);
+                var alias = new AssetDocument(target.Path, target.Stamp, doc.Probe, doc.Bytes);
                 foreach (var item in doc.Metadata) alias.Metadata[item.Key] = item.Value?.DeepClone();
                 alias.Diagnostics.AddRange(doc.Diagnostics);
                 foreach (var asset in doc.Assets)
@@ -53,7 +53,7 @@ public abstract class ContentEditSession
     // Verification and destination checks remain outside this publication seam. The staged file stays held against writes
     // and renames from its check against the verified bytes until it is in place (VerifiedDocumentSave.Seal).
     internal Action<SealedFile, string, bool> PublishFile { get; set; } = static (staged, target, createNew) => staged.MoveTo(target, replace: !createNew);
-    protected ContentEditSession(ZbdDocument source, object state,
+    protected ContentEditSession(AssetDocument source, object state,
         long maximumRetainedBytes = EditRetentionBudget.MaximumRetainedBytes, long maximumConstructionBytes = EditRetentionBudget.MaximumConstructionBytes)
     {
         EditRetentionBudget.Limit(maximumRetainedBytes, EditRetentionBudget.MaximumRetainedBytes);
@@ -62,7 +62,7 @@ public abstract class ContentEditSession
         costs = new(Math.Max(maximumRetainedBytes, maximumConstructionBytes));
         if (source.Diagnostics.Any(d => d.Severity == "Error")) throw new InvalidDataException("An intact document is required for editing.");
         SourcePath = source.Path; sources[source.Path] = source; saved[source.Path] = (source.Path, source.Bytes, source.Stamp, false);
-        Current = new(new Dictionary<string, ZbdDocument>(StringComparer.OrdinalIgnoreCase) { [source.Path] = source }, state);
+        Current = new(new Dictionary<string, AssetDocument>(StringComparer.OrdinalIgnoreCase) { [source.Path] = source }, state);
         _ = Retention(Current, [], CancellationToken.None);
     }
     public void Accept(PreparedContentEdit edit)
@@ -79,7 +79,7 @@ public abstract class ContentEditSession
         if (undo.Count > keep) undo.RemoveRange(0, undo.Count - keep);
         undo.Add(Current); TrimRaw(undo); redo.Clear(); Current = edit.After; HasAcceptedEdits = true; Changed?.Invoke();
     }
-    private RetainedDocumentBudget Retention(ContentSnapshot next, IEnumerable<ZbdDocument> baselines, CancellationToken token)
+    private RetainedDocumentBudget Retention(ContentSnapshot next, IEnumerable<AssetDocument> baselines, CancellationToken token)
     {
         RetainedDocumentBudget budget = new(maximumRetainedBytes);
         try
@@ -123,7 +123,7 @@ public abstract class ContentEditSession
         if (targets.Any(p => sources.ContainsKey(p.Value) && !p.Key.Equals(p.Value, StringComparison.OrdinalIgnoreCase)))
             throw new InvalidDataException("A save destination cannot use another record's source identity in this batch, even if that source file is missing.");
         BeforeEdit?.Invoke(sources.Keys.Concat(saved.Values.Select(s => s.Path)).Concat(targets.Values));
-        saving = true; List<(ZbdDocument Doc, string Target, SealedFile File, bool CreateNew)> staged = []; List<string> completed = [], errors = [];
+        saving = true; List<(AssetDocument Doc, string Target, SealedFile File, bool CreateNew)> staged = []; List<string> completed = [], errors = [];
         using DirectoryLease directories = new();
         try
         {
@@ -194,7 +194,7 @@ internal static class VerifiedDocumentSave
         try { return SealedFile.Open(temp, Sources.JournalDigest.OfContent(bytes.Span), directories); }
         catch (IOException ex) { throw new IOException("The verified save was not put in place: " + ex.Message, ex); }
     }
-    internal static async Task<SealedFile> StageAsync(ZbdDocument document, string temp, CancellationToken token, string? destination, DirectoryLease directories)
+    internal static async Task<SealedFile> StageAsync(AssetDocument document, string temp, CancellationToken token, string? destination, DirectoryLease directories)
     {
         FormatRegistry.ValidateDocumentSize(document.Bytes.Length);
         directories.Parent(temp, create: true);

@@ -1,7 +1,7 @@
 using Xunit;
-using static Recoil.Zbd.PrWatch.Tests.WatcherTests;
+using static zStudio.PrWatch.Tests.WatcherTests;
 
-namespace Recoil.Zbd.PrWatch.Tests;
+namespace zStudio.PrWatch.Tests;
 
 /// <summary>Foreground (Claude Code Monitor) delivery: one notice per settled burst, durable claims and channel isolation.</summary>
 public sealed class ListenTests

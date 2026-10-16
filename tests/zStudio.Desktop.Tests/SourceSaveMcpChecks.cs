@@ -5,14 +5,14 @@ using System.Text.Json.Nodes;
 using System.Windows;
 using ModelContextProtocol.Client;
 using ModelContextProtocol.Protocol;
-using Recoil.Zbd.Automation;
-using Recoil.Zbd.Core.Sources;
-using Recoil.Zbd.Desktop;
-using Recoil.Zbd.Mcp;
-using Recoil.Zbd.Tests;
+using zStudio.Automation;
+using zStudio.Core.Sources;
+using zStudio.Desktop;
+using zStudio.Mcp;
+using zStudio.Tests;
 using Xunit;
 
-namespace Recoil.Zbd.Desktop.Tests;
+namespace zStudio.Desktop.Tests;
 
 /// <summary>
 /// Saving a source project through the real named-pipe MCP connection and the GUI's Save: the files are replaced off the

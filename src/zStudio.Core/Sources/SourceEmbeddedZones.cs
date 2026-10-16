@@ -2,14 +2,23 @@ using System.Buffers.Binary;
 using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Nodes;
-using Recoil.Zbd.Core.Gltf;
-using Recoil.Zbd.Core.Worlds;
+using zStudio.Core.Gltf;
+using zStudio.Core.Worlds;
 
-namespace Recoil.Zbd.Core.Sources;
+namespace zStudio.Core.Sources;
+
+public sealed record SourceMapZoneReference(int Node, string Asset, string Spelling);
+public sealed record SourceMapZoneAsset(string LogicalPath, string GeometryPath, WorldZoneProfile Profile, IReadOnlyList<SourceMapZoneReference> References)
+{
+    public IReadOnlyList<int> OwnerReferenceChain { get; init; } = [];
+}
+public sealed record SourceMapZoneLabel(byte Id, string Label);
 
 /// <summary>One bounded, workspace-backed view of embedded assignments and their reference occurrences.</summary>
 internal sealed class SourceEmbeddedZones(SourceWorkspace workspace, CancellationToken token)
 {
+    internal const int MaximumAssets = 16_384, MaximumTargets = 2_000_000, MaximumLabelCharacters = 256;
+
     internal sealed record Model(string Path, byte[] Bytes, JsonObject Root, GltfDocument Document);
     internal sealed record Entry(string OwnerPath, IReadOnlyList<int> ReferenceChain, string ModelPath, WorldZoneProfile Profile, bool HasOverrides = false, IReadOnlyList<string>? AssignmentSites = null)
     {
@@ -36,7 +45,7 @@ internal sealed class SourceEmbeddedZones(SourceWorkspace workspace, Cancellatio
     {
         token.ThrowIfCancellationRequested(); path = SourceWorkspace.Normalize(path);
         if (models.TryGetValue(path, out var known)) return known;
-        if (models.Count >= SourceMapZones.MaximumAssets) throw Bad("Too many referenced model files.");
+        if (models.Count >= SourceEmbeddedZones.MaximumAssets) throw Bad("Too many referenced model files.");
         var bytes = Read(path, ProjectReadLimits.Model());
         var document = WorldAssembler.ReadModel(bytes, path, (buffer, remaining) => Read(buffer, ProjectReadLimits.Bytes(remaining)), token);
         var json = GltfDocument.ContainerJson(bytes, token, out _);
@@ -81,7 +90,7 @@ internal sealed class SourceEmbeddedZones(SourceWorkspace workspace, Cancellatio
         void Visit(string path, int[] chain, List<JsonObject> scopes)
         {
             token.ThrowIfCancellationRequested();
-            if (++occurrences > SourceMapZones.MaximumTargets || chain.Length > GltfDocument.MaximumDepth) throw Bad("The reference hierarchy exceeds its inspection allowance.");
+            if (++occurrences > SourceEmbeddedZones.MaximumTargets || chain.Length > GltfDocument.MaximumDepth) throw Bad("The reference hierarchy exceeds its inspection allowance.");
             if (!active.Add(path)) throw Bad("The model references contain a cycle.");
             var file = File(path);
             var entry = EntryFor(owner, chain, path, scopes);
@@ -124,8 +133,7 @@ internal sealed class SourceEmbeddedZones(SourceWorkspace workspace, Cancellatio
                 foreach (var mesh in meshes)
                 {
                     token.ThrowIfCancellationRequested();
-                    targets += mesh is JsonObject values ? (values["polygonZones"] as JsonArray)?.Count ?? 0
-                        : (mesh as JsonArray)?.Count ?? 0;
+                    targets += (mesh as JsonObject)?["polygonZones"] is JsonArray polygons ? polygons.Count : 0;
                 }
             ReserveProfile(targets);
             overrides.Add(assigned, profile = WorldGltf.ReadZoneOverride(assigned, token));
@@ -141,7 +149,7 @@ internal sealed class SourceEmbeddedZones(SourceWorkspace workspace, Cancellatio
         for (int start = 0; start <= chain.Count; start++)
         {
             token.ThrowIfCancellationRequested();
-            if (++siteCount > SourceMapZones.MaximumTargets || path.Length + 12L * (chain.Count - start) > (16L << 20) - siteCharacters)
+            if (++siteCount > SourceEmbeddedZones.MaximumTargets || path.Length + 12L * (chain.Count - start) > (16L << 20) - siteCharacters)
                 throw Bad("The reference assignment identities exceed their inspection allowance.");
             siteCharacters += path.Length + 12L * (chain.Count - start);
             result.Add(Identity(path, chain.Skip(start).ToArray()));
@@ -158,7 +166,7 @@ internal sealed class SourceEmbeddedZones(SourceWorkspace workspace, Cancellatio
 
     private void ReserveProfile(long count)
     {
-        if (count > SourceMapZones.MaximumTargets - profileTargets) throw Bad("Embedded zone profiles exceed their aggregate target allowance.");
+        if (count > SourceEmbeddedZones.MaximumTargets - profileTargets) throw Bad("Embedded zone profiles exceed their aggregate target allowance.");
         profileTargets += count;
     }
 
@@ -235,7 +243,7 @@ internal sealed class SourceEmbeddedZones(SourceWorkspace workspace, Cancellatio
         {
             if (entry?["id"] is not JsonValue id || !id.TryGetValue<byte>(out var number) || !seen.Add(number)
                 || entry?["label"] is not JsonValue label || !label.TryGetValue<string>(out var text)
-                || text.Length is < 1 or > SourceMapZones.MaximumLabelCharacters || number == 255 && text != "Any") throw Bad("Invalid zone catalog label.");
+                || text.Length is < 1 or > SourceEmbeddedZones.MaximumLabelCharacters || number == 255 && text != "Any") throw Bad("Invalid zone catalog label.");
             labels.Add(new(number, text));
         }
         return labels;

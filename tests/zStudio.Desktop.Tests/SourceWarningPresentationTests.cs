@@ -1,8 +1,8 @@
-using Recoil.Zbd.Core.Sources;
-using Recoil.Zbd.Desktop;
+using zStudio.Core.Sources;
+using zStudio.Desktop;
 using Xunit;
 
-namespace Recoil.Zbd.Desktop.Tests;
+namespace zStudio.Desktop.Tests;
 
 public sealed class SourceWarningPresentationTests
 {

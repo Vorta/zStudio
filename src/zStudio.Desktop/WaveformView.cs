@@ -3,7 +3,7 @@ using System.Windows;
 using System.Windows.Input;
 using System.Windows.Media;
 
-namespace Recoil.Zbd.Desktop;
+namespace zStudio.Desktop;
 
 public sealed class WaveformView : FrameworkElement
 {

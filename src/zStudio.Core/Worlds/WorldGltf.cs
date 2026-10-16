@@ -4,10 +4,10 @@ using System.Runtime.InteropServices;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
-using Recoil.Zbd.Core.Gltf;
-using Recoil.Zbd.Core.Formats;
+using zStudio.Core.Gltf;
+using zStudio.Core.Formats;
 
-namespace Recoil.Zbd.Core.Worlds;
+namespace zStudio.Core.Worlds;
 
 /// <summary>What an exported material stands for: an engine material plus the polygon attributes glTF keeps per material.</summary>
 public readonly record struct SurfaceKey(WorldMaterial Material, int Priority, bool ShowBackFace, uint Zone, bool Normals);
@@ -28,7 +28,7 @@ public static partial class WorldGltf
     public const uint DefaultZone = 0xFF, DefaultPolygonZone = 0xFFFFFF00, DefaultModelFlags = 0x3;
     // Object3D transform bookkeeping is represented by the glTF transform. The remaining flags and +4..+0x14
     // appearance values are authored data, independent of the matrix and retained even when their effect is inactive.
-    private const uint ObjectTransformFlags = 0x39;
+    internal const uint ObjectTransformFlags = 0x39;
 
     [GeneratedRegex(@"\.\d{3}\z")] private static partial Regex BlenderSuffix();
 
@@ -437,6 +437,16 @@ public static partial class WorldGltf
         return turned;
     }
     /// <summary>Whether a transform mirrors: the basis the engine applies (the upper 3×3) has a negative determinant.</summary>
+    internal static void SetImportedTransform(WorldNode node, Matrix4x4 matrix, string path)
+    {
+        float[] rows = [matrix.M11, matrix.M12, matrix.M13, matrix.M21, matrix.M22, matrix.M23, matrix.M31, matrix.M32, matrix.M33, matrix.M41, matrix.M42, matrix.M43];
+        if (!rows.All(float.IsFinite)) throw new InvalidDataException($"{path}: a node transform contains a non-finite value.");
+        uint flags = unchecked((uint)node.PayloadInt(0));
+        node.SetPayloadInt(0, unchecked((int)((flags & ~ObjectTransformFlags) | (matrix.IsIdentity ? 0x28u : 0x30u))));
+        node.SetPayloadFloat(0x24, 1); node.SetPayloadFloat(0x28, 1); node.SetPayloadFloat(0x2C, 1);
+        for (int i = 0; i < 12; i++) node.SetPayloadFloat(0x30 + i * 4, rows[i]);
+    }
+
     internal static bool Mirrors(Matrix4x4 m) =>
         (double)m.M11 * ((double)m.M22 * m.M33 - (double)m.M23 * m.M32)
         - (double)m.M12 * ((double)m.M21 * m.M33 - (double)m.M23 * m.M31)
@@ -489,7 +499,7 @@ public static partial class WorldGltf
         public required Func<string, string, (GltfDocument Document, string Path)> Reference { get; init; }
         /// <summary>Texture name for a material's image URI (relative to the file at the given path).</summary>
         public required Func<string, string?, string, string> TextureName { get; init; }
-        /// <summary>The map's immutable zone profile for a logical asset path, or null for legacy inline zones.</summary>
+        /// <summary>The map's immutable zone profile for a logical asset path, or null to use embedded assignments.</summary>
         public Func<string, GltfDocument, WorldZoneProfile?>? ZoneProfile { get; init; }
         /// <summary>The authored reference URI for a neutral reference holder, by logical path and emitted node ordinal.</summary>
         public Func<string, int, string?>? AssetReference { get; init; }
@@ -505,6 +515,13 @@ public static partial class WorldGltf
         /// copy) and, for a shared node or a node inside one, its place there.
         /// </summary>
         public Action<WorldNode, string, GltfNode, InstancePlace?>? NodeImported { get; init; }
+        /// <summary>
+        /// Per imported node, whether its zone was inherited, the node it was read under (null for a load's top nodes, which
+        /// take the load root's zone) and the file and reference node whose placement overrides assigned it, if any.
+        /// </summary>
+        internal Dictionary<WorldNode, (bool Inherited, WorldNode? Parent, (string File, int Node)? Placement)> NodeZoneSources { get; } = new(ReferenceEqualityComparer.Instance);
+        /// <summary>The nodes whose references, inline sources and children are being imported, innermost last.</summary>
+        internal Stack<WorldNode> ZoneParents { get; } = new();
         internal Dictionary<WorldNode, string> InlineSourceKeys { get; } = new(ReferenceEqualityComparer.Instance);
         internal Dictionary<WorldNode, IReadOnlyList<WorldNode>> InlineSourceContents { get; } = new(ReferenceEqualityComparer.Instance);
         /// <summary>While a referenced file is imported, the node that references it (the innermost, for nested references).</summary>
@@ -530,10 +547,11 @@ public static partial class WorldGltf
         }
         /// <summary>Reads a file relative to a referencing file (terrain recipes): its bytes and project path.</summary>
         public Func<string, string, (byte[] Bytes, string Path)>? ReadFile { get; init; }
+        internal int TerrainReadDepth { get; set; }
         /// <summary>The world's grid, for the mission database load only; terrain recipes elsewhere are refused.</summary>
         public Func<Terrain.TerrainGrid>? Grid { get; init; }
         /// <summary>Called for each node a terrain recipe compiles to, with the recipe's path, the piece and its surface's id.</summary>
-        public Action<WorldNode, string, Terrain.TerrainPiece, string>? TerrainPieceImported { get; init; }
+        public Action<WorldNode, string, Terrain.TerrainPiece, string, int>? TerrainPieceImported { get; init; }
         private readonly Dictionary<string, string> terrainLabels = new(StringComparer.OrdinalIgnoreCase);
         private readonly HashSet<string> usedTerrainLabels = new(StringComparer.OrdinalIgnoreCase);
         /// <summary>
@@ -606,6 +624,7 @@ public static partial class WorldGltf
     internal static void ValidateSupported(GltfDocument doc, string path, ImportContext? context = null)
     {
         _ = RootFlags(doc);
+        _ = EmbeddedLoadRoot(doc);
         HashSet<GltfMesh> meshes = [];
         HashSet<GltfMaterial> materials = [];
         Dictionary<string, int> addressing = new(StringComparer.OrdinalIgnoreCase);
@@ -614,6 +633,7 @@ public static partial class WorldGltf
             context?.Token.ThrowIfCancellationRequested();
             _ = ValidatedEngineName(node, path);
             _ = StoredNodeFlags(EngineValues(node.Extras, path));
+            _ = ReadNodeZoneValue(node.Extras?[Key], DefaultZone, path);
             _ = InlineSourceKey(node, path);
             if (EngineValues(node.Extras, path)?["class"] is { } kind && Text(kind, "class", path) == "lod"
                 && node.Matrix is { IsIdentity: false })
@@ -695,21 +715,12 @@ public static partial class WorldGltf
         }
     }
 
-    /// <summary>Compatibility for old reconstructed point-only meshes, validated with the importer that preserves their records.</summary>
-    internal static bool IsLegacyPointMesh(GltfMesh mesh)
-    {
-        if (mesh.Extras?[Key] is not JsonObject values || values["points"] is not JsonArray { Count: > 0 }) return false;
-        WorldModel model = new();
-        ApplyValues(model, values, 0, "Legacy point mesh");
-        WorldNumbers.Model(model);
-        return model.Points.Count > 0;
-    }
-
     private static void ValidateMesh(GltfMesh mesh, string path, ImportContext? context = null)
     {
         context?.Token.ThrowIfCancellationRequested();
         if (context?.ValidatedMeshes.Contains(mesh) == true) return;
         _ = EngineValues(mesh.Extras, path);
+        if (mesh.Primitives.Count == 0) throw new InvalidDataException($"{path}: a mesh must contain primitives; point-only models belong in node extras.recoil.model.");
         if (mesh.Weights.Count > 1 || mesh.Primitives.Any(p => p.Targets.Count > 1))
             throw new InvalidDataException($"{path}: mesh {JsonData.ShownText(mesh.Name)} has multiple morph targets; RECOIL stores one shape key per model. Export at most one shape key.");
         foreach (var primitive in mesh.Primitives)
@@ -808,12 +819,11 @@ public static partial class WorldGltf
             throw new InvalidDataException($"{path}: material {JsonData.ShownText(source.Name)} has an embedded image; save it as an external PNG beside the model (for example with Blender's glTF Separate format).");
         // The game takes transparency from the texture. A clip at the 0.5 cutoff the packs key at is kept where the material
         // records the engine's: its texture name (reconstructed keyed-texture presentation), or with base alpha 0 the
-        // opacity a hidden collision volume keeps (ApplyPresentation). Blender updates take back the presentation of
-        // materials without these records by their PNGs (RemovePresentation).
+        // opacity a hidden collision volume keeps (ApplyPresentation).
         if (source is { AlphaMode: "MASK" } && (source.ImageUri != null || source.EmbeddedImage || source.Extras?[Key]?["texture"] != null)
             && !(source.AlphaCutoff == 0.5f && (source.BaseColor.W == 1 && source.Extras?[Key]?["texture"] != null
                 || source.BaseColor.W == 0 && source.Extras?[Key]?["opacity"] != null)))
-            throw new InvalidDataException($"{path}: textured MASK material {JsonData.ShownText(source.Name)} needs a cutoff that RECOIL cannot preserve: the game takes transparency from the texture, keying out the texels below alpha 128 of a PNG whose alpha is only 0 or 255 and blending any other alpha. Bake the mask into such a PNG and use BLEND (a Blender update also takes Alpha Clip at 0.5 over it).");
+            throw new InvalidDataException($"{path}: textured MASK material {JsonData.ShownText(source.Name)} needs a cutoff that RECOIL cannot preserve: the game takes transparency from the texture, keying out the texels below alpha 128 of a PNG whose alpha is only 0 or 255 and blending any other alpha. Bake the mask into such a PNG and use BLEND.");
         if (source != null && (source.ImageUri != null || source.EmbeddedImage || source.Extras?[Key]?["texture"] != null) &&
             (source.BaseColor.X != 1 || source.BaseColor.Y != 1 || source.BaseColor.Z != 1))
             throw new InvalidDataException(source.ImageUri == null && !source.EmbeddedImage ? NoImage(path, source.Name, source.Extras?[Key]?["texture"])
@@ -896,14 +906,17 @@ public static partial class WorldGltf
         node.BoundsFlags = 4;
         // Zone IDs are bytes; opaque stored padding is preserved separately and never inherited by children.
         node.Zone = ReadNodeZoneValue(extras, parentZone, path);
-        if (NodeZoneIsInherited(extras, path)) node.Zone = node.Zone & ~255u | parentZone & 255u;
+        bool inheritsZone = NodeZoneIsInherited(extras, path);
+        if (inheritsZone) node.Zone = node.Zone & ~255u | parentZone & 255u;
         uint zone = node.Zone & 0xFF;
         if (zones != null)
         {
             var assigned = zones.Nodes[source];
             node.Zone = assigned.Inherit ? assigned.Word & ~255u | parentZone & 255u : assigned.Word; zone = node.Zone & 0xFF;
             node.Flags = assigned.Gate ? node.Flags | ZoneGate : node.Flags & ~ZoneGate;
+            inheritsZone = assigned.Inherit;
         }
+        context.NodeZoneSources[node] = (inheritsZone, context.ZoneParents.TryPeek(out var zoneParent) ? zoneParent : null, zones?.Placement);
         if (lod)
         {
             var fields = extras?["lod"] is { } values ? values as JsonArray ?? throw new InvalidDataException($"{path}: node {JsonData.ShownText(name)} has an invalid lod record.") : [];
@@ -914,11 +927,7 @@ public static partial class WorldGltf
         else
         {
             var matrix = source.Matrix ?? Matrix4x4.Identity;
-            float[] rows = [matrix.M11, matrix.M12, matrix.M13, matrix.M21, matrix.M22, matrix.M23, matrix.M31, matrix.M32, matrix.M33, matrix.M41, matrix.M42, matrix.M43];
-            if (!rows.All(float.IsFinite)) throw new InvalidDataException($"{path}: node {JsonData.ShownText(name)} has a transform with a non-finite value.");
-            node.SetPayloadInt(0, matrix.IsIdentity ? 0x28 : 0x30);
-            node.SetPayloadFloat(0x24, 1); node.SetPayloadFloat(0x28, 1); node.SetPayloadFloat(0x2C, 1);
-            for (int i = 0; i < 12; i++) node.SetPayloadFloat(0x30 + i * 4, rows[i]);
+            SetImportedTransform(node, matrix, path);
             ApplyAppearance(node, extras, path);
             if (Mirrors(matrix)) mirrored = !mirrored;
         }
@@ -927,6 +936,8 @@ public static partial class WorldGltf
         // The ordered lists carry engine semantics; membership uses reference identity so a wide parent does not
         // scan all earlier children for every append. References and authored children share this one index.
         HashSet<WorldNode>? linkedChildren = null;
+        // Everything read below this node takes its zone from it.
+        using var zoneParentLease = new ZoneParentLease(context, node);
         string? referenceUri = extras?["ref"] is { } referenceValue ? Text(referenceValue, "ref", path) : null;
         if (extras?[ZoneReference] != null)
             referenceUri = zones?.References.GetValueOrDefault(source)
@@ -997,6 +1008,13 @@ public static partial class WorldGltf
                 }
             }
         }
+    }
+
+    private sealed class ZoneParentLease : IDisposable
+    {
+        private readonly ImportContext context;
+        internal ZoneParentLease(ImportContext context, WorldNode node) { this.context = context; context.ZoneParents.Push(node); }
+        public void Dispose() => context.ZoneParents.Pop();
     }
 
     /// <param name="mirrored">Whether the mesh is placed under a mirroring transform: its polygons are turned over (<see cref="TurnedOver{T}"/>), into a model of their own.</param>
@@ -1383,7 +1401,7 @@ public static partial class WorldGltf
     /// <summary>The authored flags a load root takes from its scene; omitted properties are false.</summary>
     public static uint? RootFlags(GltfDocument doc) => StoredNodeFlags(SourceSceneValues(doc, "the scene")?["loadRoot"] as JsonObject);
     /// <summary>
-    /// The numeric zone a node states for itself and its children. Legacy packed words remain readable.
+    /// The numeric zone a node states for itself and its children, using the current named assignment.
     /// Null when the node inherits its parent's zone or holds a value import refuses.
     /// </summary>
     public static uint? StatedZone(JsonNode? engine)

@@ -1,10 +1,10 @@
 using System.Numerics;
 using System.Text.Json.Nodes;
-using Recoil.Zbd.Automation;
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Core.Animation;
+using zStudio.Automation;
+using zStudio.Core;
+using zStudio.Core.Animation;
 
-namespace Recoil.Zbd.Desktop;
+namespace zStudio.Desktop;
 
 public partial class MainWindow
 {
@@ -100,13 +100,14 @@ public partial class MainWindow
                 matches: (p, query) => search.Pickup(p, edits.TargetPath(p.Source.ArchivePath), query),
                 maximumRowBytes: p => InspectionResultBudget.Pickup(p, edits.TargetPath(p.Source.ArchivePath), edits.Scope(p.Source).Description));
         });
-        Register(r, "pickup_lock", "Gate Whole world object cards, selection bounds and transform editing. Locking closes the card; unlock alone does not select an object. Source/tree inspection and hover remain available. Legacy command/state names are retained; new documents start locked, and a 1998 demo world (GameZ version 13) stays locked (unlocking it is refused as read_only). Pending drafts require explicit resolution.", true, [DocumentParameter, RevisionParameter, P("locked", "boolean", "Whether Whole world cards and placement edits are locked; inverse of Unlock editing.", true)], a =>
+        Register(r, "scene_lock", "Gate compiled Whole world object cards, selection bounds and transform editing (source worlds have no lock and refuse this as unsupported). Locking closes the card; unlock alone does not select an object. Source/tree inspection and hover remain available. EditingLocked reports the shared lock; new documents start locked, and a 1998 demo world (GameZ version 13) stays locked (unlocking it is refused as read_only). Pending drafts require explicit resolution.", true, [DocumentParameter, RevisionParameter, P("locked", "boolean", "Whether Whole world cards and placement edits are locked; inverse of Unlock editing.", true)], a =>
         {
             var d = TargetDocument(a, true);
+            if (d.SourceWorld != null) throw new StudioCommandException("unsupported", "Source worlds have no editing lock: select an object and begin its edit (scene_card action=begin).");
             if (!Flag(a, "locked") && PickupPlacementEditSession.ReadOnlyWorld(d.Document.Probe) is { } reason) throw new StudioCommandException("read_only", reason);
             SetSceneEditingLocked(d, Flag(a, "locked")); return Result(DocumentState(d));
         });
-        Register(r, "pickup_move", "Move a pickup to exact coordinates as one undoable operation, including unambiguous difficulty counterparts. Requires unlocked placements. In a source world the move changes the coordinate tokens of the resource sources (data/mN/zrdr/puppies*.zrd), the world rebuilds and the result is the replacement document.", true,
+        Register(r, "pickup_move", "Move a pickup to exact coordinates as one undoable operation, including unambiguous difficulty counterparts. Requires unlocked placements. In a source world the move accepts changed coordinate tokens of the resource sources (data/mN/zrdr/puppies*.zrd) in memory and updates the scene. The result is the accepted document/revision. Save writes the sources; no archives are created.", true,
             [DocumentParameter, RevisionParameter, new("source", "object", "Exact source identity returned by pickups; field names are case-sensitive.", true, Properties:
                 [P("ArchivePath", "string", "Owning archive path returned by pickups.", true),
                  new("AssetIndex", "integer", "Resource asset index returned by pickups.", true, Minimum: 0, Maximum: int.MaxValue),
@@ -114,7 +115,7 @@ public partial class MainWindow
                  new("RecordIndex", "integer", "Placement record index returned by pickups.", true, Minimum: 0, Maximum: int.MaxValue)]),
              P("x", "number", "World X.", true), P("y", "number", "World Y.", true), P("z", "number", "World Z.", true)], async (a, token) =>
         {
-            var d = TargetDocument(a, true); if (d.PickupsLocked) throw new StudioCommandException("locked", "Unlock editing first.");
+            var d = TargetDocument(a, true); if (d.EditingLocked) throw new StudioCommandException("locked", "Unlock editing first.");
             var source = System.Text.Json.JsonSerializer.Deserialize<MissionPickupSource>(a["source"]!.ToJsonString()) ?? throw new StudioCommandException("invalid_argument", "Missing pickup identity.");
             var edits = d.PickupEdits ?? throw new StudioCommandException("not_ready", "Load pickups first.");
             if (edits.Find(source) == null) throw new StudioCommandException("stale_record", "Pickup source no longer exists.");

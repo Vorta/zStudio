@@ -2,13 +2,13 @@ using System.IO;
 using System.Numerics;
 using System.Text;
 using System.Text.Json.Nodes;
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Core.Formats;
-using Recoil.Zbd.Core.Sources;
-using Recoil.Zbd.Core.Worlds;
+using zStudio.Core;
+using zStudio.Core.Formats;
+using zStudio.Core.Sources;
+using zStudio.Core.Worlds;
 using Xunit;
 
-namespace Recoil.Zbd.Tests;
+namespace zStudio.Tests;
 
 /// <summary>
 /// World object edits in a source world: a built node knows where it came from, and an edit changes that source — the
@@ -18,11 +18,11 @@ public sealed class SourceObjectEditTests
 {
     private static CancellationToken Token => TestContext.Current.CancellationToken;
 
-    private static async Task<(SourceWorldBuild Build, GameZWorld World)> BuildAsync(SourceWorldFixture fixture, SourceWorkspace workspace, string mission = "m2")
+    private static async Task<(SourceSceneState Build, GameZWorld World)> BuildAsync(SourceWorldFixture fixture, SourceWorkspace workspace, string mission = "m2")
     {
-        var build = await SourceWorlds.BuildPreviewAsync(fixture.Project, mission, Path.Combine(SourceWorlds.PreviewRoot(fixture.Project), "p-" + Guid.NewGuid().ToString("N")), workspace.Overlay(), token: Token);
-        var world = GameZWorldReader.FromDocument(FormatRegistry.Default.OpenBytes("gamez.zbd", await File.ReadAllBytesAsync(build.WorldPath, Token), token: Token), Token);
-        return (build, world);
+        var build = await SourceWorlds.LoadSceneAsync(fixture.Project, mission, workspace.Overlay(), token: Token);
+        var world = build.World;
+        return (build.BuildState, world);
     }
     private static int Slot(GameZWorld world, string name) => world.Nodes.IndexOf(world.Nodes.Single(n => n.Name == name));
 
@@ -130,7 +130,7 @@ public sealed class SourceObjectEditTests
         // A flag of a script-created node is set by a new instruction after the one that created it.
         var tank = build.Provenance[Slot(world, "tank")];
         var scripted = SourceObjectEdits.PlanFlag(workspace, world.Nodes.Single(n => n.Name == "tank"), tank, build.Executions, 0x10, false, Token);
-        Assert.Contains("LoadGameGen tank.flt tank\r\nSetIntersectSurface off\r\n", Encoding.Latin1.GetString(scripted.Changes.Single().Content));
+        Assert.Contains("LoadGameGen tank.gltf tank\r\nSetIntersectSurface off\r\n", Encoding.Latin1.GetString(scripted.Changes.Single().Content));
     }
 
     [Fact]
@@ -169,7 +169,7 @@ public sealed class SourceObjectEditTests
         using SourceWorldFixture fixture = new();
         const string firstScript = "gamegen/m1.gs", secondScript = "gamegen/m2.gs";
         fixture.Write(firstScript, File.ReadAllText(fixture.Path(firstScript)).Replace("GameZWriteZBDFile",
-            "SetModelDirectory ..\\data\\m2\\models\\bft\r\nLoadGameGen tank.flt shared_tank\r\nGameZWriteZBDFile", StringComparison.Ordinal));
+            "SetModelDirectory ..\\data\\m2\\models\\bft\r\nLoadGameGen tank.gltf shared_tank\r\nGameZWriteZBDFile", StringComparison.Ordinal));
         string second = File.ReadAllText(fixture.Path(secondScript)).Replace("GameZWriteZBDFile",
             "FindNode hull\r\nNodeSetCanModify on\r\nGameZWriteZBDFile", StringComparison.Ordinal);
         fixture.Write(secondScript, second);
@@ -233,7 +233,7 @@ public sealed class SourceObjectEditTests
     [Fact]
     public void ScriptTokensAndLinesChangeLosslessly()
     {
-        string text = "# header\r\nset a 1\r\n  LoadGameGen x.flt x   # trailing\r\nObject3DTranslate 1.0,2.0 3.0\r\nQuit\r\n";
+        string text = "# header\r\nset a 1\r\n  LoadGameGen x.gltf x   # trailing\r\nObject3DTranslate 1.0,2.0 3.0\r\nQuit\r\n";
         var syntax = GameGenScriptSyntax.Parse(text, TestContext.Current.CancellationToken);
         Assert.Equal("\r\n", syntax.Newline);
         Assert.Equal(["Object3DTranslate", "1.0", "2.0", "3.0"], syntax.Line(4).Tokens);

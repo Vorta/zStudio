@@ -9,15 +9,15 @@ using HelixToolkit;
 using HelixToolkit.Maths;
 using HelixToolkit.SharpDX;
 using HelixToolkit.Wpf.SharpDX;
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Core.Formats;
+using zStudio.Core;
+using zStudio.Core.Formats;
 using SharpDX.Direct3D11;
 using HCamera = HelixToolkit.Wpf.SharpDX.PerspectiveCamera;
 using DiffuseMaterial = HelixToolkit.Wpf.SharpDX.DiffuseMaterial;
 using Color = System.Windows.Media.Color;
 using MeshGeometry3D = HelixToolkit.SharpDX.MeshGeometry3D;
 
-namespace Recoil.Zbd.Rendering;
+namespace zStudio.Rendering;
 
 /// <summary>The only application component that exposes Helix/Direct3D types.</summary>
 public sealed partial class SceneViewport : UserControl, IDisposable
@@ -153,15 +153,18 @@ public sealed partial class SceneViewport : UserControl, IDisposable
             { Information?.Invoke("3D preview resize unavailable: " + ex.Message); }
         });
     }
-    public async Task ShowAsync(ZbdDocument doc, AssetRecord asset, AssetResolver resolver, string? pack, int lod, CancellationToken token, bool showBackdrop = false, MissionSceneContext? mission = null)
+    public async Task ShowAsync(ISceneDocument doc, AssetRecord asset, AssetResolver resolver, string? pack, int lod, CancellationToken token, bool showBackdrop = false, MissionSceneContext? mission = null)
     {
         int current = ++generation;
+        var nodeVisibility = NodeVisibility;
         long maximumRenderUnits = MaximumRenderUnits;
         var boundsMeasured = StaticBoundsMeasured;
         if (asset.Kind == AssetKind.World) mission ??= await MissionSceneLoader.LoadAsync(doc, resolver, token: token);
         token.ThrowIfCancellationRequested(); if (current != generation) return;
         GameScene scene = (asset.Kind == AssetKind.World ? mission?.Scene : null) ?? doc.Scene ?? throw new InvalidDataException("No scene data.");
-        var candidateTextures = new PreviewTextureCache(textureMemory, resolver.BeginTextureLookup(doc.Path, pack), asset.Kind == AssetKind.World);
+        var candidateTextures = doc is zStudio.Core.Sources.SourceSceneSnapshot source
+            ? new PreviewTextureCache(textureMemory, source, false)
+            : new PreviewTextureCache(textureMemory, resolver.BeginTextureLookup(doc.Path, pack), false);
         using var textureUse = candidateTextures.Retain();
         var candidateGeometry = new GeometryReservation(this);
         using var geometryUse = candidateGeometry.Retain();
@@ -170,7 +173,7 @@ public sealed partial class SceneViewport : UserControl, IDisposable
         {
         ScenePacket packet = await Task.Run(async () =>
         {
-            SceneView view = SceneBuilder.ForAsset(scene, asset, lod, token);
+            SceneView view = SceneBuilder.ForAsset(scene, asset, lod, token, nodeVisibility);
             long renderUnits = 0;
             HashSet<int> backdrop = []; Stack<int> pending = new(asset.Kind == AssetKind.World ? MissionSceneContext.FindHorizons(scene).Select(n => n.Root) : []);
             while (pending.TryPop(out int index)) { token.ThrowIfCancellationRequested(); if (index < 0 || index >= scene.Nodes.Count || !backdrop.Add(index)) continue; foreach (int child in SceneBuilder.Children(scene.Nodes[index])) pending.Push(child); }
@@ -211,20 +214,25 @@ public sealed partial class SceneViewport : UserControl, IDisposable
                 candidateGeometry.Resize(retainedGeometry);
             }
             Dictionary<int, DecodedImage> textures = [];
-            HashSet<int> alphaTextures = []; Dictionary<int, byte[]> masks = [];
-            int textureNotes = 0;
+            HashSet<int> alphaTextures = [];
+            int textureNotes = 0; HashSet<int> attemptedTextures = [];
             foreach (int index in geometry.Values.SelectMany(p => p).Select(p => p.MaterialIndex).Distinct())
             {
                 if (index < 0 || index >= scene.Materials.Count) continue;
                 int texture = scene.Materials[index].Int("texture_index", -1); if (texture < 0 || texture >= scene.Textures.Count) continue;
-                if (textures.ContainsKey(texture)) continue;
+                if (!attemptedTextures.Add(texture)) continue;
                 string name = scene.Textures[texture].Text("name");
-                var resolved = await candidateTextures.GetAsync(name, token).ConfigureAwait(false);
+                LoadedPreviewTexture? resolved;
+                try { resolved = await candidateTextures.GetAsync(name, token).ConfigureAwait(false); }
+                catch (InvalidDataException error) when (doc is zStudio.Core.Sources.SourceSceneSnapshot)
+                {
+                    if (textureNotes++ < 32) notes.Add(new("Warning", $"Texture {PreviewTextureCache.Label(name)}: {PreviewTextureCache.Label(error.Message)}"));
+                    continue;
+                }
                 if (resolved != null)
                 {
                     textures[texture] = resolved.Image;
                     if (resolved.Alpha) alphaTextures.Add(texture);
-                    if (resolved.WhiteAlphaMask != null) masks[texture] = resolved.WhiteAlphaMask;
                     if (resolved.Ambiguous && textureNotes++ < 32) notes.Add(new("Warning", $"Multiple textures named {PreviewTextureCache.Label(name)}; using record {resolved.RecordIndex}."));
                 }
                 else if (textureNotes++ < 32) notes.Add(new("Warning", $"Missing texture: {PreviewTextureCache.Label(name)}"));
@@ -252,28 +260,20 @@ public sealed partial class SceneViewport : UserControl, IDisposable
                 if (!group.Horizon && geometry[group.Model].Any(part => part.Positions.Length != 0))
                     ReserveRenderUnits(ref renderUnits, group.Instances.LongLength + 1, maximumRenderUnits);
             }
-            return new ScenePacket(view, geometry, localBounds, partBounds, textures, alphaTextures, masks, notes, groups, renderUnits);
+            return new ScenePacket(view, geometry, localBounds, partBounds, textures, alphaTextures, notes, groups, renderUnits);
         }, token);
         token.ThrowIfCancellationRequested(); if (current != generation) return;
         ClearMeshes(); AttachEffects(); QueueRenderSize();
         staticRenderUnits = packet.RenderUnits;
         staticGeometry = candidateGeometry;
         previewTextures = candidateTextures; publishedTextures = true;
-        Mission = mission; PreviewScene = scene; InspectionSourcePath = doc.Path;
+        Mission = mission; PreviewScene = scene; InspectionSourcePath = doc.Path; VisibleSceneNodes = packet.View.VisibleNodes;
         if (asset.Kind == AssetKind.World) SetAiNetworks(mission?.AiNetworks ?? AiNetworkSnapshot.Empty);
         if (asset.Kind == AssetKind.World) ConfigureHorizon(scene);
         sceneMin = new(float.PositiveInfinity); sceneMax = new(float.NegativeInfinity);
-        Dictionary<(int Material, bool Horizon, bool Colors), DiffuseMaterial> materials = [];
+        Dictionary<(int Material, bool Horizon, bool Colors, WorldSurfaceKind Kind, int Zone), DiffuseMaterial> materials = [];
         Dictionary<MeshPart, MeshGeometry3D> geometries = [];
-        Dictionary<int, TextureModel> alphaMasks = [];
-        Dictionary<byte[], TextureModel> maskModels = [];
         Dictionary<DecodedImage, TextureModel> textureModels = [];
-        foreach (var (index, bytes) in packet.AlphaMasks)
-        {
-            var image = packet.Textures[index];
-            if (!maskModels.TryGetValue(bytes, out var mask)) maskModels[bytes] = mask = new TextureModel(bytes, SharpDX.DXGI.Format.R8G8B8A8_UNorm, image.Width, image.Height);
-            alphaMasks[index] = mask;
-        }
         int created = 0;
         foreach (var group in packet.Groups)
         {
@@ -281,7 +281,10 @@ public sealed partial class SceneViewport : UserControl, IDisposable
             foreach (var part in packet.Geometry[group.Model])
             {
                 token.ThrowIfCancellationRequested(); if (current != generation) return;
-                if (!materials.TryGetValue((part.MaterialIndex, group.Horizon, part.Colors.Length != 0), out var material))
+                var kind = asset.Kind == AssetKind.World ? WorldSurfaceHighlights.Classify(scene, instances[0].NodeIndex, part.MaterialIndex) : WorldSurfaceKind.Default;
+                int zone = asset.Kind == AssetKind.World ? WorldSurfaceHighlights.NodeZone(scene, instances[0].NodeIndex) : 0xFF;
+                var materialKey = (part.MaterialIndex, group.Horizon, part.Colors.Length != 0, kind, zone);
+                if (!materials.TryGetValue(materialKey, out var material))
                 {
                     JsonMaterial(scene, part.MaterialIndex, out Color4 color, out int textureIndex);
                     material = PreviewMaterials.Create(group.Horizon, part.Colors.Length != 0, faceOrientation); material.DiffuseColor = color; material.EnableUnLit = true;
@@ -294,7 +297,7 @@ public sealed partial class SceneViewport : UserControl, IDisposable
                         material.EnableUnLit = true;
                         textureMaps[material] = material.DiffuseMap;
                     }
-                    materials[(part.MaterialIndex, group.Horizon, part.Colors.Length != 0)] = material;
+                    materials[materialKey] = material;
                 }
                 if (!geometries.TryGetValue(part, out var geometry))
                 {
@@ -326,7 +329,7 @@ public sealed partial class SceneViewport : UserControl, IDisposable
                         {
                             int at = hit.Tag is int instance ? instance : 0;
                             if (at >= 0 && at < found.Length && found[at].NodeIndex >= 0)
-                            { SelectFramingNode(PickupAt(found[at].NodeIndex)?.Root ?? found[at].NodeIndex); NodeSelected?.Invoke(found[at].NodeIndex); }
+                            { int selected = SelectionNode(found[at].NodeIndex); SelectFramingNode(PickupAt(selected)?.Root ?? selected); NodeSelected?.Invoke(selected); }
                         }
                     };
                     meshes.Add(mesh); placements[mesh] = visiblePlacements[mesh] = batch;
@@ -334,9 +337,7 @@ public sealed partial class SceneViewport : UserControl, IDisposable
                     inspectionPolygons[mesh] = part.VertexPolygons;
                     if (asset.Kind == AssetKind.World)
                     {
-                        JsonMaterial(scene, part.MaterialIndex, out _, out int texture);
-                        surfaceAppearances[mesh] = new(material, WorldSurfaceHighlights.Classify(scene, batch[0].NodeIndex, part.MaterialIndex),
-                            alphaMasks.GetValueOrDefault(texture), group.Horizon, WorldSurfaceHighlights.NodeZone(scene, batch[0].NodeIndex));
+                        surfaceAppearances[mesh] = new(material, kind, zone);
                     }
                     if (mesh.IsTransparent)
                     {
@@ -471,23 +472,64 @@ public sealed partial class SceneViewport : UserControl, IDisposable
             material.EnableUnLit = enabled;
         }
     }
-    public void SetBounds(bool enabled) { foreach (var box in bounds) box.Visibility = enabled ? Visibility.Visible : Visibility.Collapsed; }
+    private bool boundsEnabled;
+    public void SetBounds(bool enabled) { boundsEnabled = enabled; RefreshBoundsBoxes(); }
+    /// <summary>Each box outlines the instances of its model the view shows: an isolated or hidden object's box goes with it.</summary>
+    private void RefreshBoundsBoxes()
+    {
+        foreach (var box in bounds)
+        {
+            var shown = (boundsPlacements.GetValueOrDefault(box) ?? []).Where(IsShownPlacement).ToArray();
+            box.Instances = shown.Select(p => AdjustPickupPlacement(p).Transform).ToList();
+            box.Visibility = boundsEnabled && shown.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
+        }
+    }
+    private int? isolatedRoot;
+    private int[] hiddenRoots = [];
+    /// <summary>The objects hidden in the view (signed selection owners or node indices), drawn again by <see cref="Isolate"/>(null).</summary>
+    public IReadOnlyList<int> HiddenNodes => hiddenRoots;
+    /// <summary>Shows only <paramref name="node"/> and its descendants (less what is hidden), or everything not hidden again for null.</summary>
     public void Isolate(int? node)
     {
-        ++inspectionSerial;
+        isolatedRoot = node;
+        ApplyNodeVisibility();
+    }
+    /// <summary>Hides these objects (and their descendants) in the view only; an empty list shows them again.</summary>
+    public void SetHiddenNodes(IEnumerable<int> nodes)
+    {
+        var next = nodes.Distinct().ToArray();
+        if (next.SequenceEqual(hiddenRoots)) return;
+        hiddenRoots = next;
+        ApplyNodeVisibility();
+    }
+    private HashSet<int> Subtrees(IReadOnlyCollection<int> roots)
+    {
         HashSet<int> included = [];
-        if (node is int root)
+        if (roots.Count == 0) return included;
+        // Signed selection owners stand for every node they own: one pass over the scene finds them all.
+        HashSet<int> owners = roots.Where(r => r < 0).ToHashSet();
+        IEnumerable<int> owned = owners.Count == 0 || PreviewScene == null ? [] : PreviewScene.Nodes.Where(n => owners.Contains(SelectionNode(n.Index))).Select(n => n.Index);
+        Stack<int> pending = new(roots.Where(r => r >= 0).Concat(owned));
+        while (pending.TryPop(out int current))
         {
-            Stack<int> pending = new([root]);
-            while (pending.TryPop(out int current))
-            {
-                if (!included.Add(current) || PreviewScene == null || current < 0 || current >= PreviewScene.Nodes.Count) continue;
-                foreach (int child in SceneBuilder.Children(PreviewScene.Nodes[current])) pending.Push(child);
-            }
+            if (!included.Add(current) || PreviewScene == null || current < 0 || current >= PreviewScene.Nodes.Count) continue;
+            foreach (int child in SceneBuilder.Children(PreviewScene.Nodes[current])) pending.Push(child);
         }
-        foreach (var mesh in meshes) { var shown = placements[mesh].Where(p => node == null || included.Contains(p.NodeIndex) || pickupRoots.GetValueOrDefault(p.NodeIndex, -1) == node).ToArray(); visiblePlacements[mesh] = shown; mesh.Instances = shown.Select(p => p.Transform).ToList(); mesh.Visibility = shown.Length == 0 ? Visibility.Collapsed : Visibility.Visible; }
-        foreach (var box in bounds) box.Visibility = Visibility.Collapsed;
-        RecalculateSceneBounds(); RefreshPickupSelection(); FrameAll();
+        return included;
+    }
+    private HashSet<int> isolatedNodes = [], hiddenNodes = [];
+    private bool IsShownPlacement(ScenePlacement p) => (isolatedRoot == null || isolatedNodes.Contains(p.NodeIndex) || pickupRoots.GetValueOrDefault(p.NodeIndex, -1) == isolatedRoot)
+        && !hiddenNodes.Contains(p.NodeIndex) && !hiddenNodes.Contains(pickupRoots.GetValueOrDefault(p.NodeIndex, -1));
+    private void ApplyNodeVisibility()
+    {
+        ++inspectionSerial;
+        isolatedNodes = isolatedRoot is int root ? Subtrees([root]) : [];
+        hiddenNodes = Subtrees(hiddenRoots);
+        foreach (var mesh in meshes) { var shown = placements[mesh].Where(IsShownPlacement).ToArray(); visiblePlacements[mesh] = shown; mesh.Instances = shown.Select(p => p.Transform).ToList(); mesh.Visibility = shown.Length == 0 ? Visibility.Collapsed : Visibility.Visible; }
+        RefreshBoundsBoxes();
+        // The camera stays where it is; Frame all is a separate, explicit command. The horizon follows it again next frame.
+        RecalculateSceneBounds(); RefreshPickupSelection();
+        cameraPoseDirty = true; viewport.InvalidateRender();
     }
     private void RecalculateSceneBounds()
     {
@@ -512,7 +554,9 @@ public sealed partial class SceneViewport : UserControl, IDisposable
         ClearAnimationResources();
         ClearWorldHighlights();
         ClearAi(); ClearParachutes();
-        horizonNodes.Clear(); Mission = null; PreviewScene = null; InspectionNodes = null;
+        isolatedRoot = null; hiddenRoots = []; isolatedNodes = []; hiddenNodes = [];
+        horizonNodes.Clear(); Mission = null; PreviewScene = null; InspectionNodes = null; VisibleSceneNodes = new HashSet<int>();
+        objectPreviewMeshes = null; objectPreviewBounds = null; objectPreviewOriginals = null; ObjectTransformPreviewNode = null; objectPreviewToken = 0;
         sceneAlphaGroup = null;
         sceneMin = new(float.PositiveInfinity); sceneMax = new(float.NegativeInfinity);
         viewport.Items.Clear(); foreach (var mesh in meshes) mesh.Dispose(); foreach (var box in bounds) box.Dispose(); bounds.Clear(); meshes.Clear(); placements.Clear(); visiblePlacements.Clear(); staticMeshBounds.Clear(); textureMaps.Clear();
@@ -536,5 +580,5 @@ public sealed partial class SceneViewport : UserControl, IDisposable
     private void AttachEffects() => PreviewResourceLifetime.Attach(ref effects, PreviewMaterials.CreateEffects, manager => viewport.EffectsManager = manager);
     public void Dispose() { if (disposed) return; disposed = true; renderResize?.Abort(); Clear(); AttachNavigationWindow(null); viewport.Dispose(); effects?.Dispose(); effects = null; GC.SuppressFinalize(this); }
     private sealed record SceneGroup(int Model, bool Horizon, ScenePlacement[] Instances);
-    private sealed record ScenePacket(SceneView View, Dictionary<int, IReadOnlyList<MeshPart>> Geometry, Dictionary<int, (Vector3 Min, Vector3 Max)> LocalBounds, Dictionary<MeshPart, (Vector3 Min, Vector3 Max)> PartBounds, Dictionary<int, DecodedImage> Textures, HashSet<int> AlphaTextures, Dictionary<int, byte[]> AlphaMasks, List<Diagnostic> Notes, SceneGroup[] Groups, long RenderUnits);
+    private sealed record ScenePacket(SceneView View, Dictionary<int, IReadOnlyList<MeshPart>> Geometry, Dictionary<int, (Vector3 Min, Vector3 Max)> LocalBounds, Dictionary<MeshPart, (Vector3 Min, Vector3 Max)> PartBounds, Dictionary<int, DecodedImage> Textures, HashSet<int> AlphaTextures, List<Diagnostic> Notes, SceneGroup[] Groups, long RenderUnits);
 }

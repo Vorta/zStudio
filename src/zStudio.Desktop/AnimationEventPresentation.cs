@@ -1,8 +1,8 @@
 using System.Globalization;
 using System.IO;
-using Recoil.Zbd.Core.Animation;
+using zStudio.Core.Animation;
 
-namespace Recoil.Zbd.Desktop;
+namespace zStudio.Desktop;
 
 /// <summary>Read-only descriptions of authored instructions, not predicted dispatch times or runtime bindings.</summary>
 internal sealed record AnimationEventPresentation(string Summary, string Timing, string Description)

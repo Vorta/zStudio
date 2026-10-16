@@ -8,14 +8,14 @@ using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using ModelContextProtocol.Client;
 using ModelContextProtocol.Protocol;
-using Recoil.Zbd.Automation;
-using Recoil.Zbd.Core.Worlds;
-using Recoil.Zbd.Desktop;
-using Recoil.Zbd.Mcp;
-using Recoil.Zbd.Tests;
+using zStudio.Automation;
+using zStudio.Core.Worlds;
+using zStudio.Desktop;
+using zStudio.Mcp;
+using zStudio.Tests;
 using Xunit;
 
-namespace Recoil.Zbd.Desktop.Tests;
+namespace zStudio.Desktop.Tests;
 
 /// <summary>Compare worlds through MCP and the window: the merged tree, its filters, selection and refusals.</summary>
 internal static class WorldCompareMcpChecks
@@ -24,7 +24,7 @@ internal static class WorldCompareMcpChecks
     {
         public bool Exists(string relative) => File.Exists(Path.Combine(root, relative));
         public byte[] Read(string relative, CancellationToken token) => Read(relative, token, ProjectReadLimits.Document);
-        public byte[] Read(string relative, CancellationToken token, ProjectReadLimits limits) { token.ThrowIfCancellationRequested(); return Recoil.Zbd.Core.Sources.SourceRead.All(Path.Combine(root, relative), limits, token); }
+        public byte[] Read(string relative, CancellationToken token, ProjectReadLimits limits) { token.ThrowIfCancellationRequested(); return zStudio.Core.Sources.SourceRead.All(Path.Combine(root, relative), limits, token); }
     }
 
     internal static async Task Run()

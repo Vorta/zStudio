@@ -1,9 +1,9 @@
 using System.Buffers.Binary;
 using System.Numerics;
-using Recoil.Zbd.Core.Worlds;
+using zStudio.Core.Worlds;
 using Xunit;
 
-namespace Recoil.Zbd.Tests;
+namespace zStudio.Tests;
 
 /// <summary>
 /// What Compare worlds counts as the same: every value a model keeps that the game uses (not only its counts), for

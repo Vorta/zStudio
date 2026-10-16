@@ -1,8 +1,8 @@
-using Recoil.Zbd.Core.Formats;
-using Recoil.Zbd.Core.Gltf;
-using Recoil.Zbd.Core.Sources;
+using zStudio.Core.Formats;
+using zStudio.Core.Gltf;
+using zStudio.Core.Sources;
 
-namespace Recoil.Zbd.Core.Worlds;
+namespace zStudio.Core.Worlds;
 
 /// <summary>Admission required before a provider allocates, hashes or copies a project file's payload.</summary>
 public readonly record struct ProjectReadLimits

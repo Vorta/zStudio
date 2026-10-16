@@ -4,14 +4,14 @@ using System.Text.Json.Nodes;
 using System.Windows;
 using System.Windows.Controls;
 using NAudio.Wave;
-using Recoil.Zbd.Automation;
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Core.Animation;
-using Recoil.Zbd.Desktop;
-using Recoil.Zbd.Desktop.Audio;
+using zStudio.Automation;
+using zStudio.Core;
+using zStudio.Core.Animation;
+using zStudio.Desktop;
+using zStudio.Desktop.Audio;
 using Xunit;
 
-namespace Recoil.Zbd.Desktop.Tests;
+namespace zStudio.Desktop.Tests;
 
 internal static class AnimationMcpCancellationChecks
 {
@@ -22,9 +22,9 @@ internal static class AnimationMcpCancellationChecks
         var package = new AnimationPackage { Prefix = new byte[72], Tail = [] };
         var entry = new AnimationEntry(new byte[308], 0, 0); package.Entries.Add(entry);
         var sound = AnimationCatalog.Create(2); sound.SetText(12, "retry"); sound.SetInt(52, 1); entry.Primary.Events.Add(sound);
-        var source = new ZbdDocument("fixture", new(0, DateTime.MinValue), new(FormatFamily.Animation, 28, Recognition.Supported, "fixture"), ReadOnlyMemory<byte>.Empty) { Animations = package };
+        var source = new AssetDocument("fixture", new(0, DateTime.MinValue), new(FormatFamily.Animation, 28, Recognition.Supported, "fixture"), ReadOnlyMemory<byte>.Empty) { Animations = package };
         using var doc = new DocumentModel(source);
-        var world = new ZbdDocument("world", new(0, DateTime.MinValue), new(FormatFamily.GameZ, 15, Recognition.Supported, "fixture"), ReadOnlyMemory<byte>.Empty) { Scene = new() };
+        var world = new AssetDocument("world", new(0, DateTime.MinValue), new(FormatFamily.GameZ, 15, Recognition.Supported, "fixture"), ReadOnlyMemory<byte>.Empty) { Scene = new() };
         var context = new AnimationPreviewContext { Package = doc.AnimationEdits!.Package, World = world };
         using var wav = new MemoryStream();
         using (var writer = new BinaryWriter(wav, System.Text.Encoding.ASCII, leaveOpen: true))
@@ -177,7 +177,7 @@ internal static class AnimationMcpCancellationChecks
         var package = new AnimationPackage { Prefix = new byte[72], Tail = [] };
         var entry = new AnimationEntry(new byte[308], 0, 0);
         entry.SetText(32, "root"); entry.SetText(68, "root"); entry.SetFloat(164, -1); package.Entries.Add(entry);
-        var source = new ZbdDocument("replay", new(0, DateTime.MinValue), new(FormatFamily.Animation, 28, Recognition.Supported, "fixture"), ReadOnlyMemory<byte>.Empty) { Animations = package };
+        var source = new AssetDocument("replay", new(0, DateTime.MinValue), new(FormatFamily.Animation, 28, Recognition.Supported, "fixture"), ReadOnlyMemory<byte>.Empty) { Animations = package };
         using var document = new DocumentModel(source);
         var safe = Context(1, 0);
         var retainedPlayer = new AnimationPlayer(safe, 0);
@@ -226,7 +226,7 @@ internal static class AnimationMcpCancellationChecks
                 scene.Nodes.Add(new(i, i == 1 ? "root" : "node" + i, "object3d", i > depth ? 0 : null,
                     [i <= depth ? i - 1 : depth], children, new() { ["flags"] = 4 }, new() { ["flags"] = 8 }));
             }
-            var world = new ZbdDocument("world", new(0, DateTime.MinValue), new(FormatFamily.GameZ, 15, Recognition.Supported, "fixture"), ReadOnlyMemory<byte>.Empty) { Scene = scene };
+            var world = new AssetDocument("world", new(0, DateTime.MinValue), new(FormatFamily.GameZ, 15, Recognition.Supported, "fixture"), ReadOnlyMemory<byte>.Empty) { Scene = scene };
             return new() { Package = document.AnimationEdits!.Package, World = world };
         }
     }
@@ -237,13 +237,13 @@ internal static class AnimationMcpCancellationChecks
         var package = new AnimationPackage { Prefix = new byte[72], Tail = [] };
         var entry = new AnimationEntry(new byte[308], 0, 0);
         entry.SetText(32, "root"); entry.SetText(68, "root"); entry.SetFloat(164, -1); package.Entries.Add(entry);
-        var source = new ZbdDocument("render-refusal", new(0, DateTime.MinValue), new(FormatFamily.Animation, 28, Recognition.Supported, "fixture"), ReadOnlyMemory<byte>.Empty) { Animations = package };
+        var source = new AssetDocument("render-refusal", new(0, DateTime.MinValue), new(FormatFamily.Animation, 28, Recognition.Supported, "fixture"), ReadOnlyMemory<byte>.Empty) { Animations = package };
         using var document = new DocumentModel(source);
         GameScene scene = new();
         scene.Materials.Add(new() { ["alpha"] = 255, ["texture_index"] = -1 });
         scene.Models.Add(new(0, [System.Numerics.Vector3.Zero, System.Numerics.Vector3.UnitX, System.Numerics.Vector3.UnitY], [], [], [new(0, 3, [0, 1, 2], [], [], [])], []));
         scene.Nodes.Add(new(0, "root", "object3d", 0, [], [], new() { ["flags"] = 4 }, new() { ["flags"] = 8 }));
-        var world = new ZbdDocument("world", new(0, DateTime.MinValue), new(FormatFamily.GameZ, 27, Recognition.Supported, "fixture"), ReadOnlyMemory<byte>.Empty) { Scene = scene };
+        var world = new AssetDocument("world", new(0, DateTime.MinValue), new(FormatFamily.GameZ, 27, Recognition.Supported, "fixture"), ReadOnlyMemory<byte>.Empty) { Scene = scene };
         var context = new AnimationPreviewContext { Package = document.AnimationEdits!.Package, World = world };
         var audio = new AnimationAudio(() => new SilentOutput());
         using var resolver = new AssetResolver(Path.GetTempPath());

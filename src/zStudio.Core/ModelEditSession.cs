@@ -1,12 +1,12 @@
 using System.Buffers.Binary;
 using System.Runtime.CompilerServices;
 using System.Security.Cryptography;
-using Recoil.Zbd.Core.Export;
-using Recoil.Zbd.Core.Formats;
+using zStudio.Core.Export;
+using zStudio.Core.Formats;
 
-namespace Recoil.Zbd.Core;
+namespace zStudio.Core;
 
-public sealed record ModelEditSnapshot(ZbdDocument World, IReadOnlyDictionary<string, ZbdDocument> Textures, IReadOnlyDictionary<string, ZbdDocument>? Baselines = null);
+public sealed record ModelEditSnapshot(AssetDocument World, IReadOnlyDictionary<string, AssetDocument> Textures, IReadOnlyDictionary<string, AssetDocument>? Baselines = null);
 public sealed record ModelSaveResult(IReadOnlyList<string> SavedPaths, IReadOnlyList<string> Errors);
 
 /// <summary>Immutable accepted snapshots and one undo step per validated import batch.</summary>
@@ -16,13 +16,13 @@ public sealed class ModelEditSession
     private readonly List<ModelEditSnapshot> undo = [], redo = [];
     // Save baselines share the immutable document arrays; they are never copied.
     private readonly Dictionary<string, (string Target, ReadOnlyMemory<byte> Bytes, bool PendingCopy)> saved = new(StringComparer.OrdinalIgnoreCase);
-    private readonly Dictionary<string, ZbdDocument> originalTextures = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, AssetDocument> originalTextures = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, FileStamp> observedStamps = new(StringComparer.OrdinalIgnoreCase);
     private readonly List<WeakReference<ModelEditSnapshot>> prepared = [];
     // Each immutable document's decoded content is measured once, where it is opened or prepared (off
     // the dispatcher). Admission then sums these by document/array identity instead of re-walking graphs.
-    private readonly ConditionalWeakTable<ZbdDocument, StrongBox<long>> decodedCosts = new();
-    private readonly ZbdDocument sourceWorld;
+    private readonly ConditionalWeakTable<AssetDocument, StrongBox<long>> decodedCosts = new();
+    private readonly AssetDocument sourceWorld;
     // The opened file's snapshot holds only the source world, which stays retained anyway.
     private readonly ModelEditSnapshot opened;
     private readonly long maximumRetainedBytes, maximumConstructionBytes;
@@ -39,15 +39,15 @@ public sealed class ModelEditSession
     /// with other editors of the document can drop the same steps.</summary>
     public event Action<int>? EditAccepted;
     public event Action<IEnumerable<string>>? BeforeEdit;
-    public IEnumerable<ZbdDocument> Documents => originalTextures.Keys.Union(Current.Textures.Keys, StringComparer.OrdinalIgnoreCase).Select(p => Current.Textures.TryGetValue(p, out var d) ? d : originalTextures[p]).Append(Current.World);
+    public IEnumerable<AssetDocument> Documents => originalTextures.Keys.Union(Current.Textures.Keys, StringComparer.OrdinalIgnoreCase).Select(p => Current.Textures.TryGetValue(p, out var d) ? d : originalTextures[p]).Append(Current.World);
     /// <summary>Measures the source world's decoded content; construct it off the dispatcher.</summary>
-    public ModelEditSession(ZbdDocument world, CancellationToken token = default) : this(world, EditRetentionBudget.MaximumRetainedBytes, EditRetentionBudget.MaximumConstructionBytes, token) { }
-    internal ModelEditSession(ZbdDocument world, long maximumRetainedBytes, long maximumConstructionBytes, CancellationToken token = default)
+    public ModelEditSession(AssetDocument world, CancellationToken token = default) : this(world, EditRetentionBudget.MaximumRetainedBytes, EditRetentionBudget.MaximumConstructionBytes, token) { }
+    internal ModelEditSession(AssetDocument world, long maximumRetainedBytes, long maximumConstructionBytes, CancellationToken token = default)
     {
         EditRetentionBudget.Limit(maximumRetainedBytes, EditRetentionBudget.MaximumRetainedBytes);
         EditRetentionBudget.Limit(maximumConstructionBytes, EditRetentionBudget.MaximumConstructionBytes);
         this.maximumRetainedBytes = maximumRetainedBytes; this.maximumConstructionBytes = maximumConstructionBytes;
-        sourceWorld = world; Current = opened = new(world, new Dictionary<string, ZbdDocument>(StringComparer.OrdinalIgnoreCase));
+        sourceWorld = world; Current = opened = new(world, new Dictionary<string, AssetDocument>(StringComparer.OrdinalIgnoreCase));
         saved[world.Path] = (world.Path, world.Bytes, false); observedStamps[world.Path] = world.Stamp;
         // The source is retained beside every later snapshot and is also the first import's input. A world too
         // large to edit is not too large to view: it opens, and only model replacement is refused.
@@ -105,7 +105,7 @@ public sealed class ModelEditSession
             CountInputs(construction, baseline, token);
             CountBatch(construction, batch, token);
             construction.Reserve(128L * paths.Length + paths.Sum(p => 2L * p.Length), token);
-            Dictionary<string,ZbdDocument> textures = new(StringComparer.OrdinalIgnoreCase), baselines = new(StringComparer.OrdinalIgnoreCase);
+            Dictionary<string,AssetDocument> textures = new(StringComparer.OrdinalIgnoreCase), baselines = new(StringComparer.OrdinalIgnoreCase);
             foreach (string path in paths)
             {
                 token.ThrowIfCancellationRequested();
@@ -207,7 +207,7 @@ public sealed class ModelEditSession
         }
         CheckRoom(construction, verification + 131_072, token);
         BeforeEdit?.Invoke(documents.Keys.Concat(saved.Values.Select(s => s.Target)).Concat(targets.Values));
-        saving = true; List<(ZbdDocument Doc,string Target,SealedFile File,bool Replace)> staged = []; List<string> completed = [], errors = [];
+        saving = true; List<(AssetDocument Doc,string Target,SealedFile File,bool Replace)> staged = []; List<string> completed = [], errors = [];
         using DirectoryLease directories = new();
         try
         {
@@ -261,7 +261,7 @@ public sealed class ModelEditSession
     private static Task CheckExternalAsync(string target, ReadOnlyMemory<byte> baseline, CancellationToken token, DirectoryLease directories) =>
         VerifiedDocumentSave.CheckBaselineAsync(target, baseline, token, directories);
 
-    private static async Task VerifyAsync(SealedFile file, ZbdDocument doc, string target, CancellationToken token)
+    private static async Task VerifyAsync(SealedFile file, AssetDocument doc, string target, CancellationToken token)
     {
         byte[] readback = await file.ReadAllAsync(doc.Bytes.Length, token);
         if (!doc.Bytes.Span.SequenceEqual(readback)) throw new IOException("Model save byte verification failed.");
@@ -272,7 +272,7 @@ public sealed class ModelEditSession
 
     /// <summary>Content that stays retained whatever history is retired: the source, original texture packs,
     /// save baselines, Current, live prepared results and an optional candidate with its new baselines.</summary>
-    private RetainedDocumentBudget Mandatory(ModelEditSnapshot? candidate, IEnumerable<ZbdDocument> baselines, long maximum, CancellationToken token)
+    private RetainedDocumentBudget Mandatory(ModelEditSnapshot? candidate, IEnumerable<AssetDocument> baselines, long maximum, CancellationToken token)
     {
         RetainedDocumentBudget budget = new(maximum);
         try
@@ -299,7 +299,7 @@ public sealed class ModelEditSession
         Charge(budget, snapshot.World, token);
         ChargeAll(snapshot.Textures);
         if (snapshot.Baselines is { } baselines) ChargeAll(baselines);
-        void ChargeAll(IReadOnlyDictionary<string, ZbdDocument> documents)
+        void ChargeAll(IReadOnlyDictionary<string, AssetDocument> documents)
         {
             if (!budget.Object(documents, 128L + 96L * documents.Count, token)) return;
             foreach (var (path, document) in documents) { budget.Text(path, token); Charge(budget, document, token); }
@@ -313,13 +313,13 @@ public sealed class ModelEditSession
         { budget.Text(path, token); Charge(budget, document, token); }
     }
     /// <summary>A document's raw array (shared by identity with save baselines) plus its measured decoded content.</summary>
-    private void Charge(RetainedDocumentBudget budget, ZbdDocument document, CancellationToken token)
+    private void Charge(RetainedDocumentBudget budget, AssetDocument document, CancellationToken token)
     {
         budget.Bytes(document.Bytes, token);
         budget.Object(document, DecodedCost(document, token), token);
     }
     /// <summary>Decoded objects of one immutable document, excluding its raw array; measured once and cached.</summary>
-    private long DecodedCost(ZbdDocument document, CancellationToken token)
+    private long DecodedCost(AssetDocument document, CancellationToken token)
     {
         if (decodedCosts.TryGetValue(document, out var known)) return known.Value;
         RetainedDocumentBudget shape = new(Math.Max(maximumRetainedBytes, maximumConstructionBytes));
@@ -334,7 +334,7 @@ public sealed class ModelEditSession
         }
         catch (InvalidDataException) when (shape.Exhausted) { throw EditRetentionBudget.Refusal(); }
     }
-    private static void CountReaderStorage(RetainedDocumentBudget budget, ZbdDocument document, CancellationToken token)
+    private static void CountReaderStorage(RetainedDocumentBudget budget, AssetDocument document, CancellationToken token)
     {
         budget.Object(document.Assets, 64L + 16L * document.Assets.Count, token);
         budget.Object(document.Diagnostics, 64L + 16L * document.Diagnostics.Count, token);
@@ -344,7 +344,7 @@ public sealed class ModelEditSession
             if (asset.Content is TextureInfo texture) budget.Object(texture, 96, token);
     }
     // A new save baseline shares its document's array (charged with that document); only its entry is new.
-    private static int ReserveNewBaselines(RetainedDocumentBudget budget, IEnumerable<ZbdDocument> documents, Func<string, bool> saved, CancellationToken token)
+    private static int ReserveNewBaselines(RetainedDocumentBudget budget, IEnumerable<AssetDocument> documents, Func<string, bool> saved, CancellationToken token)
     {
         HashSet<string> paths = new(StringComparer.OrdinalIgnoreCase);
         foreach (var doc in documents)
@@ -358,7 +358,7 @@ public sealed class ModelEditSession
     // TextureReader retains seven scalar/string metadata fields, a TextureInfo, name,
     // summary and asset per row; no decoded pixels. 8 KiB covers their object/key storage.
     private static long TextureShape(long count, int pathLength) => 8192L * (count + 1) + 2L * pathLength;
-    private async Task<ZbdDocument> OpenTextureAsync(string path, AssetResolver resolver, long remaining,
+    private async Task<AssetDocument> OpenTextureAsync(string path, AssetResolver resolver, long remaining,
         RetainedDocumentBudget construction, CancellationToken token)
     {
         if (resolver.WorkspaceSnapshot(path, Guid.Empty) is { } snapshot)
@@ -393,7 +393,7 @@ public sealed class ModelEditSession
             budget.Object(mesh.Triangles, 32L + 4L * mesh.Triangles.Length, token);
         }
     }
-    private void CheckWorldConstruction(RetainedDocumentBudget budget, ZbdDocument world, ModelImportBatch batch, CancellationToken token)
+    private void CheckWorldConstruction(RetainedDocumentBudget budget, AssetDocument world, ModelImportBatch batch, CancellationToken token)
     {
         var layout = world.GameZLayout ?? throw new InvalidDataException("Model replacement requires GameZ v15 or v27.");
         var dialect = GameZLayouts.For(world.Probe.Version);

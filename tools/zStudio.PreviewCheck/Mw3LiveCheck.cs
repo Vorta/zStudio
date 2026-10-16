@@ -5,8 +5,8 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using ModelContextProtocol.Client;
 using ModelContextProtocol.Protocol;
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Core.Formats;
+using zStudio.Core;
+using zStudio.Core.Formats;
 
 internal static class Mw3LiveCheck
 {
@@ -38,7 +38,7 @@ internal static class Mw3LiveCheck
                 var aiState = (await Call("preview_state", new { preview }))["ai"]!;
                 Require(aiState["visible"]!.GetValue<bool>() && aiState["nodes"]!.GetValue<int>() > 0, "MW3 AI visualization is unavailable");
                 var nodes = await Call("ai_nodes", new { preview, snapshot = aiState["snapshot"]!.GetValue<string>(), limit = 1 });
-                await Call("pickup_lock", new { document, revision = doc["Revision"]!.GetValue<long>(), locked = false });
+                await Call("scene_lock", new { document, revision = doc["Revision"]!.GetValue<long>(), locked = false });
                 await Call("ai_selection", new { preview, snapshot = aiState["snapshot"]!.GetValue<string>(), action = "select", node = nodes["items"]![0]!["node_id"]!.GetValue<string>() });
                 await Call("camera", new { preview, action = "frame", target = "selected" });
                 await Capture("c1-ai");

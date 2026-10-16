@@ -7,11 +7,11 @@ using HelixToolkit;
 using HelixToolkit.Maths;
 using HelixToolkit.SharpDX;
 using HelixToolkit.Wpf.SharpDX;
-using Recoil.Zbd.Core;
+using zStudio.Core;
 using MeshGeometry3D = HelixToolkit.SharpDX.MeshGeometry3D;
 using DiffuseMaterial = HelixToolkit.Wpf.SharpDX.DiffuseMaterial;
 
-namespace Recoil.Zbd.Rendering;
+namespace zStudio.Rendering;
 
 public sealed partial class SceneViewport
 {
@@ -180,7 +180,7 @@ public sealed partial class SceneViewport
         {
             if (AiPathEditingNetwork is { } network)
             {
-                aiSelectionMarker.Visibility = InspectionSelectionEnabled && aiPathSelection.Count != 0 ? Visibility.Visible : Visibility.Collapsed;
+                aiSelectionMarker.Visibility = PlacementEditingEnabled && aiPathSelection.Count != 0 ? Visibility.Visible : Visibility.Collapsed;
                 aiSelectionMarker.Instances = AiNetworks.Networks.Single(n => n.Id == network).Nodes.Where(n => aiPathSelection.Contains(n.Id))
                     .Select(n => Matrix4x4.CreateScale(AiScale(AiPosition(n), 5.5)) * Matrix4x4.CreateTranslation(AiPosition(n))).ToArray();
             }

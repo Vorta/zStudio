@@ -5,13 +5,13 @@ using System.Text;
 using System.Text.Json.Nodes;
 using ModelContextProtocol.Client;
 using ModelContextProtocol.Protocol;
-using Recoil.Zbd.Core.Sources;
-using Recoil.Zbd.Desktop;
-using Recoil.Zbd.Mcp;
-using Recoil.Zbd.Tests;
+using zStudio.Core.Sources;
+using zStudio.Desktop;
+using zStudio.Mcp;
+using zStudio.Tests;
 using Xunit;
 
-namespace Recoil.Zbd.Desktop.Tests;
+namespace zStudio.Desktop.Tests;
 
 /// <summary>
 /// Source-world editing through the real named-pipe MCP connection: a pickup move that changes only the coordinate tokens
@@ -26,9 +26,12 @@ internal static class SourceEditingMcpChecks
     internal static async Task Run()
     {
         using var fixture = new SourceWorldFixture();
+        fixture.WriteReferencedTurretDatabase();
         fixture.Write("data/m1/zrdr/puppies.zrd", Default); fixture.Write("data/m1/zrdr/puppies_easy.zrd", Easy);
         const string aiSource = "node_00 ( 12 ( 1.0 2.0 3.0 ) ( -7 -1 0 ) )\nnode_01 ( 23 ( 5.0 2.0 7.0 ) ( 0 -1 -1 ) )\n";
         fixture.Write("data/m1/zrdr/net_01.zrd", aiSource);
+        fixture.Write("data/m2/zrdr/aiv.zrd", "( tank_01 ( 0 ( 10.0 20.0 30.0 ) 90.0 ) )\r\n# AIV remains source text\r\n");
+        fixture.Write("data/m2/zrdr/vehicle.zrd", "( tank ( ) )");
         using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(120)); var token = deadline.Token;
         var main = new MainWindow { Left = -12000, ShowInTaskbar = false }; main.Show();
         try
@@ -50,17 +53,16 @@ internal static class SourceEditingMcpChecks
 
             main.SourceEditPreparing = ct => Assert.False(main.Dispatcher.CheckAccess());
 
-            // Pickups of a source world are the built archive's; moving one changes the text sources it came from.
+            // Pickups of a source world come directly from the resource sources; moving one changes their coordinate tokens.
             var pickups = await Job("pickups", new() { ["document"] = Id(doc) });
             var ammo = pickups["items"]!.AsArray().First(p => p!["Type"]!.GetValue<string>() == "HEMORTAR_AMMO" && p["source"]!["ResourceName"]!.GetValue<string>() == "PUPPIES.ZRD")!;
-            await Call("pickup_lock", new() { ["document"] = Id(doc), ["revision"] = doc.Revision, ["locked"] = false });
             // Exercise the actual placement planner after an external resource grows beyond its text allowance.
             // A bounded stream writes valid whitespace padding; the planner must refuse before reading it all.
             string resourcePath = fixture.Path("data/m1/zrdr/puppies.zrd");
             DateTime resourceStamp = File.GetLastWriteTimeUtc(resourcePath);
             var placementSource = doc.PickupEdits!.Records.First(r => r.Type == "HEMORTAR_AMMO" && r.Source.ResourceName == "PUPPIES.ZRD").Source;
             var planner = typeof(MainWindow).GetMethod("PlanSourcePlacement", BindingFlags.Static | BindingFlags.NonPublic)!;
-            var placement = new Recoil.Zbd.Core.PlacementTransform(new(20.25f, 8, -5), System.Numerics.Vector3.Zero);
+            var placement = new zStudio.Core.PlacementTransform(new(20.25f, 8, -5), System.Numerics.Vector3.Zero);
             long beforeRevision = doc.SourceWorld!.Workspace.Revision;
             try
             {
@@ -98,7 +100,7 @@ internal static class SourceEditingMcpChecks
             }
             Assert.False(await Task.Run(() => doc.SourceInputsChanged(token), token));
             // Hold actual scene-card source preparation, then type newer GUI input: stale work must retain that draft.
-            var scene = (Recoil.Zbd.Rendering.SceneViewport)typeof(MainWindow).GetField("scene", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(main)!;
+            var scene = (zStudio.Rendering.SceneViewport)typeof(MainWindow).GetField("scene", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(main)!;
             scene.SetAiOptions(true, true, null);
             string cardPreview = ((Guid)typeof(MainWindow).GetField("previewId", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(main)!).ToString();
             string target = "ai:" + scene.AiNetworks.Id + ":" + scene.AiNetworks.Networks[0].Nodes[0].Id;
@@ -191,7 +193,7 @@ internal static class SourceEditingMcpChecks
             pathArgs = PathArguments("confirm"); pathArgs["token"] = pathToken;
             var sourcePathResult = await Job("ai_path", pathArgs);
             var transformedPath = Document(sourcePathResult["document"]!);
-            Assert.True(doc.IsDisposed); Assert.False(sourcePathResult["path"]!["editing"]!.GetValue<bool>());
+            Assert.Same(doc, transformedPath); Assert.False(doc.IsDisposed); Assert.False(sourcePathResult["path"]!["editing"]!.GetValue<bool>());
             string editedAi = aiSource.Replace("( 1.0 2.0 3.0 )", "( 11.0 2.0 3.0 )").Replace("( 5.0 2.0 7.0 )", "( 15.0 2.0 7.0 )");
             Assert.Equal(editedAi, Text(transformedPath.SourceWorld!.Workspace.Read("data/m1/zrdr/net_01.zrd")));
             Assert.Single(transformedPath.SourceWorld.Workspace.History);
@@ -205,7 +207,7 @@ internal static class SourceEditingMcpChecks
             ammo = pickups["items"]!.AsArray().First(p => p!["Type"]!.GetValue<string>() == "HEMORTAR_AMMO" && p["source"]!["ResourceName"]!.GetValue<string>() == "PUPPIES.ZRD")!;
 
             var moved = Document(await Call("pickup_move", new() { ["document"] = Id(doc), ["revision"] = doc.Revision, ["source"] = ammo["source"]!.DeepClone(), ["x"] = 20.25, ["y"] = 8, ["z"] = -5 }));
-            Assert.True(doc.IsDisposed); Assert.False(moved.PickupsLocked);
+            Assert.Same(doc, moved); Assert.False(doc.IsDisposed); Assert.False(moved.EditingLocked);
             var workspace = moved.SourceWorld!.Workspace;
             Assert.Equal(["data/m1/zrdr/puppies.zrd", "data/m1/zrdr/puppies_easy.zrd"], workspace.DirtyFiles);
             Assert.Equal(Default.Replace("( 12 8 -5 )", "( 20.25 8 -5 )"), Text(workspace.Read("data/m1/zrdr/puppies.zrd")));
@@ -217,7 +219,7 @@ internal static class SourceEditingMcpChecks
             var lines = changes["diff"]!["Lines"]!.AsArray().Select(l => l!["Kind"]!.GetValue<string>() + l["Text"]!.GetValue<string>()).ToArray();
             Assert.Contains("-  ( HEMORTAR_AMMO 1 ( 12 8 -5 ) ( 0.0 0.0 0.0 ) 12.5 )   # hand-written", lines);
             Assert.Contains("+  ( HEMORTAR_AMMO 1 ( 20.25 8 -5 ) ( 0.0 0.0 0.0 ) 12.5 )   # hand-written", lines);
-            // The rebuilt archive holds the new position for both difficulties.
+            // The evaluated sources hold the new position for both difficulties.
             var after = await Job("pickups", new() { ["document"] = Id(moved) });
             Assert.All(after["items"]!.AsArray().Where(p => p!["Type"]!.GetValue<string>() == "HEMORTAR_AMMO"), p => Assert.Equal(20.25f, p!["OriginalPosition"]!["X"]!.GetValue<float>()));
 
@@ -225,7 +227,7 @@ internal static class SourceEditingMcpChecks
             // (The fixture has no pickup models, so the pickup is opened in Properties as the scene's card opens it.)
             var hidden = BindingFlags.Instance | BindingFlags.NonPublic;
             var window = (PropertiesWindow)typeof(MainWindow).GetMethod("GetPropertiesWindow", hidden)!.Invoke(main, [])!;
-            var sourceMove = (Func<Recoil.Zbd.Core.MissionPickupSource, System.Numerics.Vector3, Task>?)typeof(MainWindow).GetMethod("SourcePickupMove", hidden)!.Invoke(main, [moved]);
+            var sourceMove = (Func<zStudio.Core.MissionPickupSource, System.Numerics.Vector3, Task>?)typeof(MainWindow).GetMethod("SourcePickupMove", hidden)!.Invoke(main, [moved]);
             var ammoSource = moved.PickupEdits!.Records.First(r => r.Type == "HEMORTAR_AMMO" && r.Source.ResourceName == "PUPPIES.ZRD").Source;
             Assert.True(window.SetPickup(moved, ammoSource, "HEMORTAR_AMMO", new JsonObject(), sourceMove));
             typeof(MainWindow).GetMethod("PresentProperties", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(main, [window, true]);
@@ -233,10 +235,11 @@ internal static class SourceEditingMcpChecks
             await main.Dispatcher.InvokeAsync(() => window.UpdateLayout(), System.Windows.Threading.DispatcherPriority.Loaded);
             var pickupFields = main.OpenPropertiesWindow!.PickupFields!;
             var x = Descendants(pickupFields).OfType<System.Windows.Controls.TextBox>().Single(t => System.Windows.Automation.AutomationProperties.GetName(t) == "Position X");
+            var beforeTyped = moved.Document;
             x.Text = "21.5";
             x.RaiseEvent(new System.Windows.Input.KeyEventArgs(System.Windows.Input.Keyboard.PrimaryDevice, System.Windows.PresentationSource.FromVisual(x), Environment.TickCount, System.Windows.Input.Key.Enter) { RoutedEvent = System.Windows.Input.Keyboard.PreviewKeyDownEvent });
-            for (int wait = 0; wait < 1000 && !moved.IsDisposed; wait++) await Task.Delay(10, token);
-            Assert.True(moved.IsDisposed, "The Properties commit did not rebuild the world.");
+            for (int wait = 0; wait < 1000 && (ReferenceEquals(beforeTyped, moved.Document) || moved.SourceWorld!.IsRebuilding); wait++) await Task.Delay(10, token);
+            Assert.NotSame(beforeTyped, moved.Document); Assert.False(moved.IsDisposed);
             Assert.Equal(Default.Replace("( 12 8 -5 )", "( 21.5 8 -5 )"), Text(workspace.Read("data/m1/zrdr/puppies.zrd")));
             var typed = main.ViewModel.Documents.Single(d => d.SourceWorld != null);
             await Preview();
@@ -246,25 +249,26 @@ internal static class SourceEditingMcpChecks
             var pinned = main.OpenPropertiesWindow.CurrentJson!;
             Assert.Equal(ammoSource.ResourceName, pinned["resource"]!.GetValue<string>());
             Assert.Equal(ammoSource.RecordIndex, pinned["placement_record"]!.GetValue<int>());
-            Assert.Equal(Path.GetRelativePath(moved.SourceBuild!.Folder, ammoSource.ArchivePath),
-                Path.GetRelativePath(typed.SourceBuild!.Folder, pinned["source_archive"]!.GetValue<string>()));
+            Assert.Equal(Path.GetRelativePath(moved.SourceBuild!.Root, ammoSource.ArchivePath),
+                Path.GetRelativePath(typed.SourceBuild!.Root, pinned["source_archive"]!.GetValue<string>()));
             Assert.Equal(21.5d, pinned["preview_world_position"]!["x"]!.GetValue<double>());
             var undoButton = (System.Windows.Controls.Button)typeof(PropertiesWindow).GetField("undo", hidden)!.GetValue(main.OpenPropertiesWindow)!;
             Assert.Equal(System.Windows.Visibility.Visible, undoButton.Visibility); Assert.True(undoButton.IsEnabled);
             // The Properties command follows its pinned owner even when there is no active document.
             main.ViewModel.SelectedDocument = null;
+            var beforePropertiesUndo = typed.Document;
             undoButton.RaiseEvent(new System.Windows.RoutedEventArgs(System.Windows.Controls.Button.ClickEvent));
-            for (int wait = 0; wait < 1000 && !typed.IsDisposed; wait++) await Task.Delay(10, token);
-            Assert.True(typed.IsDisposed, "Properties Undo did not rebuild its pinned source world.");
+            for (int wait = 0; wait < 1000 && (ReferenceEquals(beforePropertiesUndo, typed.Document) || typed.SourceWorld!.IsRebuilding); wait++) await Task.Delay(10, token);
+            Assert.NotSame(beforePropertiesUndo, typed.Document); Assert.False(typed.IsDisposed);
             await ((Task)typeof(MainWindow).GetField("sourceWorldWork", hidden)!.GetValue(main)!).WaitAsync(token);
             moved = main.ViewModel.Documents.Single(d => d.SourceWorld != null);
             main.ViewModel.SelectedDocument = moved; await Preview();
             Assert.Equal(Default.Replace("( 12 8 -5 )", "( 20.25 8 -5 )"), Text(workspace.Read("data/m1/zrdr/puppies.zrd")));
-            string restoredArchive = Path.Combine(moved.SourceBuild!.Folder, Path.GetRelativePath(typed.SourceBuild!.Folder, pinned["source_archive"]!.GetValue<string>()));
+            string restoredArchive = Path.Combine(moved.SourceBuild!.Root, Path.GetRelativePath(typed.SourceBuild!.Root, pinned["source_archive"]!.GetValue<string>()));
             var undoneSource = moved.PickupEdits!.Records.Single(r => r.Source.ArchivePath.Equals(restoredArchive, StringComparison.OrdinalIgnoreCase)
                 && r.Source.ResourceName == ammoSource.ResourceName && r.Source.AssetIndex == ammoSource.AssetIndex && r.Source.RecordIndex == ammoSource.RecordIndex).Source;
             window = (PropertiesWindow)typeof(MainWindow).GetMethod("GetPropertiesWindow", hidden)!.Invoke(main, [])!;
-            sourceMove = (Func<Recoil.Zbd.Core.MissionPickupSource, System.Numerics.Vector3, Task>?)typeof(MainWindow).GetMethod("SourcePickupMove", hidden)!.Invoke(main, [moved]);
+            sourceMove = (Func<zStudio.Core.MissionPickupSource, System.Numerics.Vector3, Task>?)typeof(MainWindow).GetMethod("SourcePickupMove", hidden)!.Invoke(main, [moved]);
             Assert.True(window.SetPickup(moved, undoneSource, "HEMORTAR_AMMO", new JsonObject(), sourceMove));
             typeof(MainWindow).GetMethod("PresentProperties", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(main, [window, true]);
             var redoButton = (System.Windows.Controls.Button)typeof(PropertiesWindow).GetField("redo", hidden)!.GetValue(window)!;
@@ -296,7 +300,58 @@ internal static class SourceEditingMcpChecks
             var described = await Call("source_world_object", new() { ["document"] = Id(redone), ["node"] = ground });
             Assert.Equal("data/m1/models/m1.gltf", described["origin"]!["modelFile"]!.GetValue<string>());
             Assert.True(described["origin"]!["database"]!.GetValue<bool>());
-            var placed = Document((await Job("source_world_object_edit", new() { ["document"] = Id(redone), ["revision"] = redone.Revision, ["node"] = ground, ["position"] = new Dictionary<string, object?> { ["x"] = 10, ["y"] = 0, ["z"] = -10 } }))["document"]!);
+            // Transform application retains the document, viewport, camera and mesh buffers; source preparation
+            // never blanks the viewer or shows a structural reload notice.
+            var sceneField = typeof(MainWindow).GetField("scene", hidden)!;
+            (bool Reloading, int? Previewed)? during = null; bool blanked = false;
+            System.Windows.DependencyPropertyChangedEventHandler watch = (_, e) => { if (e.NewValue is false) blanked = true; };
+            main.SceneHost.IsVisibleChanged += watch;
+            Assert.True(main.SceneHost.IsVisible);
+            // An ordinary transform does not swap the hosted viewport at all.
+            List<object?> hosted = [];
+            EventHandler swapped = (_, _) => hosted.Add(main.SceneHost.Content);
+            var contentProperty = System.ComponentModel.DependencyPropertyDescriptor.FromProperty(System.Windows.Controls.ContentControl.ContentProperty, typeof(System.Windows.Controls.ContentControl));
+            var before = main.SceneHost.Content;
+            var retainedViewport = (zStudio.Rendering.SceneViewport)before!;
+            var retainedPose = retainedViewport.CaptureView();
+            var meshesField = typeof(zStudio.Rendering.SceneViewport).GetField("placements", hidden)!;
+            var retainedMeshes = ((System.Collections.IDictionary)meshesField.GetValue(retainedViewport)!).Keys.Cast<object>().ToArray();
+            contentProperty.AddValueChanged(main.SceneHost, swapped);
+            DocumentModel placed;
+            TaskCompletionSource transformPreparing = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            using (var proceed = new SemaphoreSlim(0))
+            {
+                main.SourceEditPreparing = ct =>
+                {
+                    main.Dispatcher.Invoke(() => during = (main.IsViewReloading, ((zStudio.Rendering.SceneViewport?)sceneField.GetValue(main))?.ObjectTransformPreviewNode));
+                    transformPreparing.TrySetResult(); Assert.True(proceed.Wait(TimeSpan.FromSeconds(20), ct));
+                };
+                var placementJob = Job("source_world_object_edit", new() { ["document"] = Id(redone), ["revision"] = redone.Revision, ["node"] = ground, ["position"] = new Dictionary<string, object?> { ["x"] = 10, ["y"] = 0, ["z"] = -10 } });
+                try
+                {
+                    var first = await Task.WhenAny(transformPreparing.Task, placementJob).WaitAsync(token);
+                    Assert.Same(transformPreparing.Task, first);
+                    // Mutating MCP jobs are serialized; the visible controls are disabled while preparation owns the workspace.
+                    Assert.False(main.SceneToolbar.IsEnabled);
+                    proceed.Release();
+                    var placementResult = await placementJob;
+                    Assert.False(placementResult["unchanged"]!.GetValue<bool>());
+                    placed = Document(placementResult["document"]!);
+                }
+                finally { proceed.Release(); }
+            }
+            main.SourceEditPreparing = null; main.SceneHost.IsVisibleChanged -= watch; contentProperty.RemoveValueChanged(main.SceneHost, swapped);
+            Assert.NotNull(before);
+            Assert.Empty(hosted);
+            Assert.Same(redone, placed); Assert.Same(before, main.SceneHost.Content);
+            Assert.Equal(retainedPose, retainedViewport.CaptureView());
+            Assert.Equal(retainedMeshes, ((System.Collections.IDictionary)meshesField.GetValue(retainedViewport)!).Keys.Cast<object>().ToArray());
+            Assert.Equal((false, (int?)ground), during);
+            Assert.Empty(Directory.EnumerateFiles(fixture.Project, "*.zbd", SearchOption.AllDirectories));
+            Assert.False(blanked);
+            Assert.False(main.IsViewReloading);
+            Assert.Same(sceneField.GetValue(main), main.SceneHost.Content);
+            Assert.Null(typeof(MainWindow).GetField("retiringScene", hidden)!.GetValue(main));
             Assert.Contains("data/m1/models/m1.gltf", workspace.DirtyFiles);
             int groundAfter = placed.PreviewDocument.Scene!.Nodes.First(n => n.Name == "ground").Index;
             var position = (await Call("source_world_object", new() { ["document"] = Id(placed), ["node"] = groundAfter }))["object"]!["position"]!;
@@ -348,19 +403,311 @@ internal static class SourceEditingMcpChecks
             Assert.Equal(0, (await Call("source_recovery", new()))["saveCount"]!.GetValue<int>());
             Assert.Equal("invalid_argument", (await Job("source_recovery_resolve", new() { ["save"] = "missing", ["action"] = "roll_back" }, "failed"))["code"]!.GetValue<string>());
 
-            // Two worlds of one project: an undo in m1 takes back m2's edit, so m2's build is out of date until it is reloaded.
+            // Changing maps closes the old lifetime. Edits and undo target only the current map.
             var second = Document((await Job("source_world_open", new() { ["mission"] = "m2" }))["document"]!);
+            Assert.True(editedWorld.IsDisposed); Assert.Same(second, Assert.Single(main.ViewModel.Documents));
             await Preview();
+            // An AIV token edit retains source record/selection identities even when its text width changes.
+            var tankViewport = (zStudio.Rendering.SceneViewport)main.SceneHost.Content!;
+            var tankActor = Assert.Single(tankViewport.Mission!.Actors, actor => actor.CoordinateSource != null);
+            var tankSource = tankActor.CoordinateSource!;
+            var tankKey = second.PickupEdits!.SourcePresentationKey(tankSource);
+            Assert.NotNull(tankKey);
+            // The world tree holds what the map itself holds; the units aiv.zrd places follow as a top-level pass of their own.
+            var treeRoots = await Call("scene_tree", new() { ["document"] = Id(second) });
+            string treeContext = treeRoots["context"]!.GetValue<string>();
+            var rootRows = treeRoots["children"]!["items"]!.AsArray();
+            async Task<int[]> TreeNodes(JsonNode row) => (await Call("scene_tree", new() { ["document"] = Id(second), ["context"] = treeContext, ["row"] = row["row"]!.GetValue<string>(), ["limit"] = 200 }))
+                ["children"]!["items"]!.AsArray().Where(r => r!["node"] != null).Select(r => r!["node"]!.GetValue<int>()).ToArray();
+            var aivRow = rootRows.Single(r => r!["pass"]?.GetValue<string>() == "aiv")!;
+            Assert.Equal([tankActor.Root], await TreeNodes(aivRow));
+            Assert.DoesNotContain(tankActor.Root, await TreeNodes(rootRows.First(r => r!["pass"] == null)!));
+            // The outliner's search and type filters read the whole hierarchy as a flat list with parent paths; its eye hides an
+            // object in the view only, and Show all shows it again.
+            var found = await Call("scene_tree", new() { ["document"] = Id(second), ["search"] = "tank", ["types"] = "object" });
+            var tankMatch = found["matches"]!["items"]!.AsArray().Single(m => m!["item"]!["node"]?.GetValue<int>() == tankActor.Root)!;
+            Assert.Equal("object", tankMatch["item"]!["category"]!.GetValue<string>());
+            Assert.Equal(aivRow["Label"]!.GetValue<string>().Split(" · ")[0], tankMatch["path"]!.GetValue<string>());
+            Assert.Empty((await Call("scene_tree", new() { ["document"] = Id(second), ["search"] = "tank", ["types"] = "group" }))["matches"]!["items"]!.AsArray());
+            await Call("scene_tree", new() { ["document"] = Id(second), ["context"] = treeContext, ["preview"] = found["preview"]!.GetValue<string>(), ["action"] = "hide", ["row"] = tankMatch["item"]!["row"]!.GetValue<string>() });
+            Assert.Contains(tankActor.Root, tankViewport.HiddenNodes); Assert.False(workspace.IsDirty);
+            Assert.True((await Call("scene_tree", new() { ["document"] = Id(second), ["search"] = "tank", ["types"] = "object" }))["matches"]!["items"]![0]!["item"]!["hidden"]!.GetValue<bool>());
+            await Call("scene_selection", new() { ["preview"] = found["preview"]!.GetValue<string>(), ["action"] = "show_all" });
+            Assert.Empty(tankViewport.HiddenNodes);
+            Assert.True(tankViewport.SelectInspectionNode(tankActor.Root));
+            string tankTarget = tankViewport.SelectedInspection!.Target;
+            // Clicking the pass row (no object of its own) keeps the selected unit. A refused click restores the previous row only
+            // after WPF has moved focus: restoring inside that change made the two rows trade focus until the stack overflowed.
+            var sceneTree = (System.Windows.Controls.TreeView)main.FindName("DocumentSceneTree");
+            await System.Windows.Threading.Dispatcher.Yield(System.Windows.Threading.DispatcherPriority.ApplicationIdle);
+            var tankRow = Assert.IsType<SceneTreeItem>(sceneTree.SelectedItem);
+            var passRow = (System.Windows.Controls.TreeViewItem)sceneTree.ItemContainerGenerator.ContainerFromItem(sceneTree.Items.OfType<SceneTreeItem>().Single(r => r.Pass != null && r.Label.StartsWith("aiv", StringComparison.Ordinal)));
+            foreach (bool focusable in new[] { false, true })
+            {
+                passRow.Focusable = focusable; // A focusable row stands for any refused selection.
+                passRow.RaiseEvent(new System.Windows.Input.MouseButtonEventArgs(System.Windows.Input.Mouse.PrimaryDevice, 0, System.Windows.Input.MouseButton.Left) { RoutedEvent = System.Windows.Input.Mouse.MouseDownEvent });
+                await System.Windows.Threading.Dispatcher.Yield(System.Windows.Threading.DispatcherPriority.ApplicationIdle);
+                Assert.Same(tankRow, sceneTree.SelectedItem); Assert.Equal(tankTarget, tankViewport.SelectedInspection!.Target);
+            }
+            passRow.ClearValue(System.Windows.UIElement.FocusableProperty);
+            string tankPreview = ((Guid)typeof(MainWindow).GetField("previewId", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(main)!).ToString();
+            await Call("scene_card", new() { ["preview"] = tankPreview, ["action"] = "begin", ["document"] = Id(second), ["revision"] = second.Revision });
+            var tankCard = (SceneInspectionCard)tankViewport.InspectionContent!;
+            await Call("scene_card", new() { ["preview"] = tankPreview, ["action"] = "set", ["document"] = Id(second), ["revision"] = second.Revision,
+                ["token"] = tankCard.DraftToken, ["position"] = new[] { "1000.25", "20", "30" } });
+            // A post-preparation failure retracts the transaction without discarding the user's exact draft.
+            var beforeTankFailure = second.Revision; var tankHistory = workspace.History.ToArray(); string[] tankDraftPosition = ["1000.25", "20", "30"];
+            var prepareTankModel = main.PreparingSourceWorldModel;
+            main.PreparingSourceWorldModel = _ => throw new InvalidDataException("Placement publication failure fixture");
+            try
+            {
+                var rejected = await Call("scene_card", new() { ["preview"] = tankPreview, ["action"] = "apply", ["document"] = Id(second),
+                    ["revision"] = second.Revision, ["token"] = tankCard.DraftToken }, error: true);
+                Assert.Contains("build_failed", rejected.GetValue<string>());
+                Assert.Same(second, main.ViewModel.SelectedDocument); Assert.Same(tankViewport, main.SceneHost.Content);
+                Assert.True(second.Revision > beforeTankFailure, "Rollback must advance the document revision.");
+                Assert.True(tankCard.HasDraft, "Rollback must restore the released placement draft.");
+                Assert.True((await Call("state", new()))["pendingSceneDrafts"]!.GetValue<bool>());
+                Assert.Equal(second.Revision, tankCard.DraftRevision); Assert.Equal(tankSource, tankCard.DraftSource);
+                var retainedDraft = System.Text.Json.JsonSerializer.SerializeToNode(tankCard.DescribeDraft())!;
+                Assert.Equal(tankDraftPosition, retainedDraft["position"]!.AsArray().Select(v => v!.GetValue<string>()).ToArray());
+                Assert.Equal(tankHistory, workspace.History); Assert.False(workspace.IsDirty);
+                Assert.DoesNotContain("1000.25", Text(workspace.Read("data/m2/zrdr/aiv.zrd")));
+            }
+            finally { main.PreparingSourceWorldModel = prepareTankModel; }
+            var tankMoved = Document((await Call("scene_card", new() { ["preview"] = tankPreview, ["action"] = "apply", ["document"] = Id(second),
+                ["revision"] = second.Revision, ["token"] = tankCard.DraftToken }))["document"]!);
+            Assert.Same(second, tankMoved); Assert.Same(tankViewport, main.SceneHost.Content);
+            Assert.Equal(tankTarget, tankViewport.SelectedInspection?.Target);
+            Assert.Equal(tankKey, second.PickupEdits!.SourcePresentationKey(Assert.Single(second.PickupEdits.OtherCoordinates, row => row.Kind == "tank").Source));
+            Assert.Contains("1000.25", Text(workspace.Read("data/m2/zrdr/aiv.zrd")));
+            Assert.DoesNotContain("1000.25", File.ReadAllText(fixture.Path("data/m2/zrdr/aiv.zrd")));
+            second = Document(await Call("undo_redo", new() { ["document"] = Id(second), ["revision"] = second.Revision, ["action"] = "undo" }));
+            Assert.False(workspace.IsDirty); Assert.Empty(Directory.EnumerateFiles(fixture.Project, "*.zbd", SearchOption.AllDirectories));
+            // A real referenced turret under nested authored groups follows the object card path, including
+            // per-instance initialization. Applying a move across a world grid cell never evaluates the full world.
+            var retainedTurretDocument = second;
+            var turretViewport = (zStudio.Rendering.SceneViewport)main.SceneHost.Content!;
+            var reachableTurretNodes = zStudio.Core.SceneBuilder.Assemble(turretViewport.Mission!.Scene).VisibleNodes;
+            int turretNode = second.PreviewDocument.Scene!.Nodes.Single(n => n.Class == "object3d" && n.Name == "tur_101"
+                && reachableTurretNodes.Contains(n.Index) && second.SourceBuild!.Provenance.ContainsKey(n.Index)).Index;
+            await Call("scene_properties", new() { ["preview"] = PreviewId(), ["node"] = turretNode, ["open"] = true });
+            var turretCard = (SceneInspectionCard)turretViewport.InspectionContent!;
+            Assert.NotNull(turretCard.ObjectEditor);
+            Assert.Equal("tur_101", turretCard.ObjectEditor.State.Name);
+            var turretCamera = turretViewport.CaptureView();
+            var turretMeshes = ((System.Collections.IDictionary)meshesField.GetValue(turretViewport)!).Keys.Cast<object>().ToArray();
+            string turretTarget = turretViewport.SelectedInspection!.Target;
+            var originalParts = TurretParts();
+            Assert.Equal(new[] { "barrel", "healthy" }, originalParts.Keys.Order(StringComparer.Ordinal));
+            Assert.DoesNotContain(zStudio.Core.SceneBuilder.Assemble(turretViewport.Mission!.Scene).Placements, p => p.Name == "wreck");
+            List<string> evaluations = [], transformRefusals = [];
+            main.SourceEditEvaluation = evaluations.Add;
+            main.SourceTransformRefused = reason => { if (transformRefusals.Count < 8) transformRefusals.Add(reason[..Math.Min(reason.Length, 128)]); };
+            var beforeTurretHistory = workspace.UndoCount;
+            byte[] storedTurretWorld = File.ReadAllBytes(fixture.Path("data/m2/models/m2.gltf"));
+            try
+            {
+                await Call("scene_card", new() { ["preview"] = PreviewId(), ["document"] = Id(second), ["revision"] = second.Revision,
+                    ["action"] = "set", ["token"] = turretCard.DraftToken,
+                    ["fields"] = new[] { new { field = "position", value = "300, 7, -40" } } });
+                second = Document((await Call("scene_card", new() { ["preview"] = PreviewId(), ["document"] = Id(second), ["revision"] = second.Revision,
+                    ["action"] = "apply", ["token"] = turretCard.DraftToken }))["document"]!);
+                Assert.Equal(beforeTurretHistory + 1, workspace.UndoCount);
+                await AssertRetainedTurret(new(300, 7, -40));
+                second = Document(await Call("undo_redo", new() { ["document"] = Id(second), ["revision"] = second.Revision, ["action"] = "undo" }));
+                await AssertRetainedTurret(System.Numerics.Vector3.Zero);
+                second = Document(await Call("undo_redo", new() { ["document"] = Id(second), ["revision"] = second.Revision, ["action"] = "redo" }));
+                await AssertRetainedTurret(new(300, 7, -40));
+                Assert.Equal(new[] { "incremental", "incremental", "incremental" }, evaluations);
+                Assert.Equal(storedTurretWorld, File.ReadAllBytes(fixture.Path("data/m2/models/m2.gltf")));
+                // Saving an incremental snapshot must refresh its source baseline: the next edit must not
+                // mistake our own write for an external change. Undo returns to the saved transform and is clean.
+                var turretSaved = await Job("save_document", new() { ["document"] = Id(second), ["revision"] = second.Revision });
+                Assert.Equal(new[] { "data/m2/models/m2.gltf" }, turretSaved["written"]!.AsArray().Select(v => v!.GetValue<string>()));
+                await AssertRetainedTurret(new(300, 7, -40)); Assert.False(workspace.IsDirty);
+                Assert.False(await Task.Run(() => second.SourceInputsChanged(token), token));
+                byte[] savedTurretWorld = File.ReadAllBytes(fixture.Path("data/m2/models/m2.gltf"));
+                Assert.False(storedTurretWorld.SequenceEqual(savedTurretWorld));
+                var savedHistory = workspace.History.ToArray();
+                turretCard = (SceneInspectionCard)turretViewport.InspectionContent!;
+                // Fields are editable at once. Handles show only when toggled in the transform header (the same toggle hides
+                // them), and Apply/Revert wait for a change.
+                Assert.False(PositionField(turretCard, "X").IsReadOnly); Assert.False(turretViewport.TransformHandlesVisible);
+                Assert.False(CardButton(turretCard, "Apply changes").IsEnabled); Assert.False(CardButton(turretCard, "Revert changes").IsEnabled);
+                // The workspace may still be finishing the save; a toggle refused then would say so.
+                while ((bool)typeof(MainWindow).GetField("sourceWorkspaceBusy", hidden)!.GetValue(main)! || second.SourceWorld!.IsRebuilding) await Task.Delay(10, token);
+                ClickToggle(turretCard, "Move object");
+                Assert.True(turretViewport.TransformHandlesVisible, ((System.Windows.Controls.TextBlock)typeof(SceneInspectionCard).GetField("error", hidden)!.GetValue(turretCard)!).Text);
+                Assert.Equal("move", turretViewport.TransformMode);
+                // A handle press on the unchanged object may start a drag: its draft opens first. A gesture that changes nothing closes it.
+                Assert.True(turretViewport.CanStartPickupEdit!()); Assert.True(turretCard.ObjectEditing);
+                typeof(SceneInspectionCard).GetMethod("ObjectGestureEnded", hidden)!.Invoke(turretCard, null); Assert.False(turretCard.ObjectEditing);
+                await Call("scene_card", new() { ["preview"] = PreviewId(), ["document"] = Id(second), ["revision"] = second.Revision,
+                    ["action"] = "set", ["token"] = turretCard.DraftToken, ["transformMode"] = "rotate" });
+                Assert.Equal("rotate", turretViewport.TransformMode); Assert.True(turretViewport.TransformHandlesVisible);
+                ClickToggle(turretCard, "Rotate object"); Assert.False(turretViewport.TransformHandlesVisible);
+                // Reset rotation and scale (in the Transform header) drafts rotation 0, 0, 0 and scale 1, 1, 1; Revert discards it.
+                CardButton(turretCard, "Reset rotation and scale").RaiseEvent(new System.Windows.RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
+                string DraftField(string key) => turretCard.ObjectEditor!.Describe()["fields"]!.AsArray().Single(f => f!["field"]!.GetValue<string>() == key)!["value"]!.GetValue<string>();
+                Assert.Equal("0, 0, 0", DraftField("rotationDegrees")); Assert.Equal("1, 1, 1", DraftField("scale"));
+                turretCard.CancelDraft();
+                // Change only X through the displayed GUI component. A stale Y baseline would silently
+                // revert the first accepted vertical move when this compound Position field is applied.
+                PositionField(turretCard, "X").Text = "301";
+                Assert.True(CardButton(turretCard, "Apply changes").IsEnabled); Assert.True(CardButton(turretCard, "Revert changes").IsEnabled);
+                second = Document((await Call("scene_card", new() { ["preview"] = PreviewId(), ["document"] = Id(second), ["revision"] = second.Revision,
+                    ["action"] = "apply", ["token"] = turretCard.DraftToken }))["document"]!);
+                await AssertRetainedTurret(new(301, 7, -40)); Assert.True(workspace.IsDirty);
+                Assert.Equal(beforeTurretHistory + 2, workspace.UndoCount);
+                Assert.Equal(savedHistory, workspace.History.Take(savedHistory.Length));
+                second = Document(await Call("undo_redo", new() { ["document"] = Id(second), ["revision"] = second.Revision, ["action"] = "undo" }));
+                await AssertRetainedTurret(new(300, 7, -40)); Assert.False(workspace.IsDirty);
+                Assert.Equal(beforeTurretHistory + 1, workspace.UndoCount);
+                Assert.Equal(savedTurretWorld, File.ReadAllBytes(fixture.Path("data/m2/models/m2.gltf")));
+                // A direct MCP transform also refreshes the already selected clean object card.
+                second = Document((await Job("source_world_object_edit", new() { ["document"] = Id(second), ["revision"] = second.Revision,
+                    ["node"] = turretNode, ["position"] = new Dictionary<string, object?> { ["x"] = 302, ["y"] = 9, ["z"] = -40 } }))["document"]!);
+                await AssertRetainedTurret(new(302, 9, -40));
+                second = Document(await Call("undo_redo", new() { ["document"] = Id(second), ["revision"] = second.Revision, ["action"] = "undo" }));
+                await AssertRetainedTurret(new(300, 7, -40)); Assert.False(workspace.IsDirty);
+                Assert.Equal(Enumerable.Repeat("incremental", 7), evaluations);
+
+                // Zone: the card's combo box takes Inherit, Any or a number, with the altitude zone check beside it. Both apply
+                // with the other fields as one step, written on the node in m2.gltf; Inherit removes the node's own zone again.
+                System.Text.Json.Nodes.JsonObject TurretZone() => System.Text.Json.Nodes.JsonNode.Parse(workspace.Read("data/m2/models/m2.gltf")!)!["nodes"]!.AsArray()
+                    .Single(n => n!["name"]?.GetValue<string>() == "tur_101")!["extras"]?[zStudio.Core.Worlds.WorldGltf.Key]?.AsObject() ?? [];
+                var zoneCard = (SceneInspectionCard)turretViewport.InspectionContent!;
+                var zoneBox = Descendants(zoneCard.ObjectEditor!).OfType<System.Windows.Controls.ComboBox>().Single(b => System.Windows.Automation.AutomationProperties.GetName(b) == "Zone");
+                Assert.Equal("Inherit", zoneBox.Text); Assert.False(TurretZone().ContainsKey("zone"));
+                // A source map docks the card as its Properties pane; popped out it floats over the view again. There the open list
+                // is in its own popup window over the scene: a click on its items belongs to the card, not the scene below.
+                Assert.True(zoneCard.Docked); Assert.Same(zoneCard.PanelRoot, ((System.Windows.Controls.ContentControl)main.FindName("SourcePropertiesHost")).Content);
+                Assert.False((await Call("workspace_view", new() { ["changes"] = new System.Text.Json.Nodes.JsonObject { ["propertiesDocked"] = false } }))["sourceMap"]!["propertiesDocked"]!.GetValue<bool>());
+                Assert.False(zoneCard.Docked); Assert.Contains(zoneCard.PanelRoot, zoneCard.Children.Cast<System.Windows.UIElement>());
+                zoneBox.IsDropDownOpen = true;
+                await System.Windows.Threading.Dispatcher.Yield(System.Windows.Threading.DispatcherPriority.ApplicationIdle);
+                var listed = Assert.IsType<System.Windows.Controls.ComboBoxItem>(zoneBox.ItemContainerGenerator.ContainerFromIndex(0));
+                var listClick = new System.Windows.Input.MouseButtonEventArgs(System.Windows.Input.Mouse.PrimaryDevice, 0, System.Windows.Input.MouseButton.Left) { RoutedEvent = System.Windows.Input.Mouse.PreviewMouseDownEvent, Source = listed };
+                Assert.False(turretViewport.HandleScenePointerDown(new(turretViewport.ActualWidth / 2, turretViewport.ActualHeight / 2), listClick));
+                zoneBox.IsDropDownOpen = false;
+                await Call("workspace_view", new() { ["changes"] = new System.Text.Json.Nodes.JsonObject { ["propertiesDocked"] = true } });
+                Assert.True(zoneCard.Docked);
+                zoneBox.Text = "255";
+                // 255 is Any's number, never typed as a zone: Apply refuses it and keeps the draft.
+                Assert.Contains("0 to 254", (await Call("scene_card", new() { ["preview"] = PreviewId(), ["document"] = Id(second), ["revision"] = second.Revision,
+                    ["action"] = "apply", ["token"] = zoneCard.DraftToken }, error: true)).GetValue<string>());
+                Assert.True(zoneCard.HasObjectDraft); Assert.Equal(savedTurretWorld, File.ReadAllBytes(fixture.Path("data/m2/models/m2.gltf")));
+                zoneBox.Text = "5";
+                var gate = Descendants(zoneCard.ObjectEditor!).OfType<System.Windows.Controls.CheckBox>().Single(b => System.Windows.Automation.AutomationProperties.GetName(b).StartsWith("Altitude zone check", StringComparison.Ordinal));
+                bool gated = gate.IsChecked == true;
+                gate.IsChecked = !gated; gate.RaiseEvent(new System.Windows.RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
+                Assert.True(CardButton(zoneCard, "Apply changes").IsEnabled);
+                second = Document((await Call("scene_card", new() { ["preview"] = PreviewId(), ["document"] = Id(second), ["revision"] = second.Revision,
+                    ["action"] = "apply", ["token"] = zoneCard.DraftToken }))["document"]!);
+                Assert.Equal(5, TurretZone()["zone"]!.GetValue<int>()); Assert.Equal(!gated, TurretZone()["altitudeZoneCheck"]?.GetValue<bool>() == true);
+                // The selected turret's card shows the applied zone (a zone change may rebuild the world rather than patch it).
+                async Task<SceneInspectionCard> TurretCard()
+                {
+                    for (int wait = 0; wait < 500; wait++)
+                    {
+                        await System.Windows.Threading.Dispatcher.Yield(System.Windows.Threading.DispatcherPriority.ApplicationIdle);
+                        if (main.SceneHost.Content is zStudio.Rendering.SceneViewport { InspectionContent: SceneInspectionCard { ObjectEditor: not null } shown }) return shown;
+                        await Task.Delay(10, token);
+                    }
+                    throw new TimeoutException("The turret card did not return after the zone edit.");
+                }
+                zoneCard = await TurretCard();
+                Assert.Equal("5", Descendants(zoneCard.ObjectEditor!).OfType<System.Windows.Controls.ComboBox>().Single().Text);
+                await Call("scene_card", new() { ["preview"] = PreviewId(), ["document"] = Id(second), ["revision"] = second.Revision, ["action"] = "set",
+                    ["token"] = zoneCard.DraftToken, ["fields"] = new System.Text.Json.Nodes.JsonArray(new System.Text.Json.Nodes.JsonObject { ["field"] = "zone", ["value"] = "inherit" }) });
+                second = Document((await Call("scene_card", new() { ["preview"] = PreviewId(), ["document"] = Id(second), ["revision"] = second.Revision,
+                    ["action"] = "apply", ["token"] = zoneCard.DraftToken }))["document"]!);
+                Assert.False(TurretZone()["zone"] is { } kept && kept.ToString() != "inherit");
+                second = Document(await Call("undo_redo", new() { ["document"] = Id(second), ["revision"] = second.Revision, ["action"] = "undo" }));
+                second = Document(await Call("undo_redo", new() { ["document"] = Id(second), ["revision"] = second.Revision, ["action"] = "undo" }));
+                Assert.Equal(savedTurretWorld, File.ReadAllBytes(fixture.Path("data/m2/models/m2.gltf")));
+            }
+            finally { main.SourceEditEvaluation = null; main.SourceTransformRefused = null; }
+
+            // A group the build removes is renamed in its glTF file only (the tree's Rename, MCP sourceFile/gltfNode): the
+            // compiled world keeps its nodes (only a slot the build left free carries the new name), a name the world uses is
+            // refused, and Undo restores the file.
+            var m2Nodes = System.Text.Json.Nodes.JsonNode.Parse(workspace.Read("data/m2/models/m2.gltf")!)!["nodes"]!.AsArray();
+            int turretGroup = m2Nodes.Select((n, i) => (Name: n!["name"]?.GetValue<string>(), i)).Single(n => n.Name == "turret_group").i;
+            var compiledNames = second.PreviewDocument.Scene!.Nodes.Select(n => n.Name).ToArray();
+            Dictionary<string, object?> RenameGroup(string name) => new() { ["document"] = Id(second), ["revision"] = second.Revision, ["action"] = "rename",
+                ["sourceFile"] = "data/m2/models/m2.gltf", ["gltfNode"] = turretGroup, ["name"] = name };
+            var taken = await Job("source_world_object_edit", RenameGroup("tur_101"), "failed");
+            Assert.Equal("invalid_argument", taken["code"]!.GetValue<string>()); Assert.Contains("already have a node named tur_101", taken["message"]!.GetValue<string>());
+            second = Document((await Job("source_world_object_edit", RenameGroup("gTurrets")))["document"]!);
+            Assert.Equal("gTurrets", System.Text.Json.Nodes.JsonNode.Parse(workspace.Read("data/m2/models/m2.gltf")!)!["nodes"]![turretGroup]!["name"]!.GetValue<string>());
+            Assert.Equal(compiledNames.Select(n => n == "turret_group" ? "gTurrets" : n), second.PreviewDocument.Scene!.Nodes.Select(n => n.Name));
+            second = Document(await Call("undo_redo", new() { ["document"] = Id(second), ["revision"] = second.Revision, ["action"] = "undo" }));
+            Assert.False(workspace.IsDirty);
+
+            Dictionary<string, System.Numerics.Matrix4x4> TurretParts() => zStudio.Core.SceneBuilder.Assemble(turretViewport.Mission!.Scene).Placements
+                .Where(p => p.Name is "healthy" or "barrel").ToDictionary(p => p.Name, p => p.Transform, StringComparer.Ordinal);
+            string PreviewId() => ((Guid)typeof(MainWindow).GetField("previewId", hidden)!.GetValue(main)!).ToString();
+            static System.Windows.Controls.Button CardButton(SceneInspectionCard card, string name) => Descendants(card.PanelRoot).OfType<System.Windows.Controls.Button>()
+                .Single(b => System.Windows.Automation.AutomationProperties.GetName(b) == name && b.IsVisible);
+            static void ClickToggle(SceneInspectionCard card, string name) => Descendants(card.PanelRoot).OfType<System.Windows.Controls.Primitives.ToggleButton>()
+                .Single(b => System.Windows.Automation.AutomationProperties.GetName(b) == name && b.IsVisible)
+                .RaiseEvent(new System.Windows.RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
+            static System.Windows.Controls.TextBox PositionField(SceneInspectionCard card, string axis) => Descendants(card.ObjectEditor!)
+                .OfType<System.Windows.Controls.TextBox>().Single(t => System.Windows.Automation.AutomationProperties.GetName(t) == "Position " + axis);
+            async Task AssertRetainedTurret(System.Numerics.Vector3 offset)
+            {
+                await System.Windows.Threading.Dispatcher.Yield(System.Windows.Threading.DispatcherPriority.ApplicationIdle);
+                main.UpdateLayout();
+                var currentCard = (SceneInspectionCard)turretViewport.InspectionContent!;
+                var editor = currentCard.ObjectEditor!;
+                Assert.False(currentCard.HasObjectDraft); Assert.False(editor.HasPendingDrafts);
+                // Check the rendered controls, accepted form baseline, and MCP descriptions independently.
+                Assert.Equal(offset.Y.ToString("R", System.Globalization.CultureInfo.InvariantCulture), PositionField(currentCard, "Y").Text);
+                Assert.Equal(offset, editor.State.Transform!.Value.Position);
+                string expectedPosition = string.Join(", ", new[] { offset.X, offset.Y, offset.Z }.Select(v => v.ToString("R", System.Globalization.CultureInfo.InvariantCulture)));
+                var field = editor.Describe()["fields"]!.AsArray().Single(f => f!["field"]!.GetValue<string>() == "position")!;
+                Assert.Equal(expectedPosition, field["value"]!.GetValue<string>());
+                Assert.Equal(expectedPosition, field["original"]!.GetValue<string>()); Assert.False(field["pending"]!.GetValue<bool>());
+                var inspected = await Call("scene_inspect", new() { ["preview"] = PreviewId() });
+                var described = inspected["draft"]!["content"]!["fields"]!.AsArray().Single(f => f!["field"]!.GetValue<string>() == "position")!;
+                Assert.Equal(expectedPosition, described["value"]!.GetValue<string>());
+                Assert.Equal(expectedPosition, described["original"]!.GetValue<string>());
+                Assert.Equal("Position: " + expectedPosition, (await Call("scene_card", new() { ["preview"] = PreviewId(), ["action"] = "copy", ["field"] = "Position" }))["text"]!.GetValue<string>());
+                Assert.True(ReferenceEquals(retainedTurretDocument, second), $"Turret document replaced; evaluation: {string.Join(", ", evaluations)}; refusal: {string.Join(", ", transformRefusals)}");
+                Assert.Same(turretViewport, main.SceneHost.Content);
+                Assert.False(main.IsViewReloading); Assert.Null(typeof(MainWindow).GetField("retiringScene", hidden)!.GetValue(main));
+                Assert.Equal(turretCamera, turretViewport.CaptureView()); Assert.Equal(turretTarget, turretViewport.SelectedInspection?.Target);
+                Assert.Equal(turretMeshes, ((System.Collections.IDictionary)meshesField.GetValue(turretViewport)!).Keys.Cast<object>().ToArray());
+                Assert.True(turretViewport.SelectionBoundsVisible);
+                var parts = TurretParts();
+                foreach (var (name, original) in originalParts)
+                {
+                    var expected = original * System.Numerics.Matrix4x4.CreateTranslation(offset);
+                    var actual = parts[name];
+                    Assert.Equal(expected.Translation, actual.Translation);
+                    // The shared glTF writer converts an authored matrix to TRS when it decomposes;
+                    // quaternion normalization on reload can change this 45-degree basis by two float ULPs.
+                    // Position and the affine column remain exact; tolerate only that tiny basis round trip.
+                    for (int row = 0; row < 3; row++)
+                        for (int column = 0; column < 3; column++)
+                            Assert.InRange(MathF.Abs(expected[row, column] - actual[row, column]), 0f, 1e-6f);
+                    for (int row = 0; row < 4; row++) Assert.Equal(expected[row, 3], actual[row, 3]);
+                }
+                Assert.DoesNotContain(zStudio.Core.SceneBuilder.Assemble(turretViewport.Mission!.Scene).Placements, p => p.Name == "wreck");
+            }
             int ground2 = second.PreviewDocument.Scene!.Nodes.First(n => n.Name == "ground").Index;
             var edited2 = Document((await Job("source_world_object_edit", new() { ["document"] = Id(second), ["revision"] = second.Revision, ["node"] = ground2, ["position"] = new Dictionary<string, object?> { ["x"] = 5, ["y"] = 0, ["z"] = 5 } }))["document"]!);
             Assert.Equal(["data/m2/models/m2.gltf"], workspace.DirtyFiles);
-            editedWorld = Document(await Call("undo_redo", new() { ["document"] = Id(editedWorld), ["revision"] = editedWorld.Revision, ["action"] = "undo" }));
+            long priorUndoRevision = edited2.Revision;
+            var undone2 = Document(await Call("undo_redo", new() { ["document"] = Id(edited2), ["revision"] = priorUndoRevision, ["action"] = "undo" }));
             Assert.False(workspace.IsDirty);
-            var stale = await Job("source_world_object_edit", new() { ["document"] = Id(edited2), ["revision"] = edited2.Revision, ["node"] = ground2, ["flag"] = "0x10000", ["on"] = true }, "failed");
-            Assert.Equal("stale_document", stale["code"]!.GetValue<string>());
-            var reloaded = Document(await Job("reload_document", new() { ["document"] = Id(edited2), ["revision"] = edited2.Revision }));
+            var stale = await Job("source_world_object_edit", new() { ["document"] = Id(edited2), ["revision"] = priorUndoRevision, ["node"] = ground2, ["flag"] = "0x10000", ["on"] = true }, "failed");
+            Assert.Equal("revision_conflict", stale["code"]!.GetValue<string>());
+            var reloaded = Document(await Job("reload_document", new() { ["document"] = Id(undone2), ["revision"] = undone2.Revision }));
             await Call("close_document", new() { ["document"] = Id(reloaded), ["revision"] = reloaded.Revision });
-            await Call("close_document", new() { ["document"] = Id(editedWorld), ["revision"] = editedWorld.Revision });
+            Assert.Empty(main.ViewModel.Documents);
 
             async Task Preview()
             {

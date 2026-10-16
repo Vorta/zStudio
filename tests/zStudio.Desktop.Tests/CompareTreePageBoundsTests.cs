@@ -1,9 +1,9 @@
 using System.Text.Json.Nodes;
-using Recoil.Zbd.Core.Worlds;
-using Recoil.Zbd.Desktop;
+using zStudio.Core.Worlds;
+using zStudio.Desktop;
 using Xunit;
 
-namespace Recoil.Zbd.Desktop.Tests;
+namespace zStudio.Desktop.Tests;
 
 /// <summary>
 /// A world_compare_tree page at the limits of everything a row may hold, in characters JSON escapes, stays well within the

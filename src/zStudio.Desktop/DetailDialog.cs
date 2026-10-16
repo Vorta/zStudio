@@ -1,7 +1,7 @@
 using System.Windows;
 using System.Windows.Controls;
 
-namespace Recoil.Zbd.Desktop;
+namespace zStudio.Desktop;
 
 internal static class DetailDialog
 {

@@ -3,14 +3,14 @@ using System.IO;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Text;
-using Recoil.Zbd.Automation;
-using Recoil.Zbd.Core.Formats;
-using Recoil.Zbd.Core.Sources;
-using Recoil.Zbd.Desktop;
-using Recoil.Zbd.Tests;
+using zStudio.Automation;
+using zStudio.Core.Formats;
+using zStudio.Core.Sources;
+using zStudio.Desktop;
+using zStudio.Tests;
 using Xunit;
 
-namespace Recoil.Zbd.Desktop.Tests;
+namespace zStudio.Desktop.Tests;
 
 /// <summary>A project at a filesystem root still owns its dirty source files against direct resource editing.</summary>
 internal static partial class SourceRootResourceGuardChecks
@@ -26,7 +26,8 @@ internal static partial class SourceRootResourceGuardChecks
         var main = new MainWindow { Left = -12000, ShowInTaskbar = false }; main.Show();
         try
         {
-            await main.ViewModel.OpenRootAsync(alias.Root, token);
+            // Individual source files are opened from a plain explorer root; the project root now shows maps only.
+            await main.ViewModel.OpenRootAsync(fixture.Root, token);
             var workspace = (SourceWorkspace)typeof(MainWindow).GetMethod("SourceWorkspaceFor", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(main, [alias.Root])!;
             var doc = (await main.ViewModel.OpenFileAsync(Path.Combine(alias.Root, relative), token))!;
             var edits = doc.ResourceEdits!;
@@ -52,10 +53,8 @@ internal static partial class SourceRootResourceGuardChecks
             edits.Accept(prepared);
             Assert.True(edits.IsDirty);
             Assert.Throws<InvalidDataException>(() => workspace.Apply("Conflicting source edit", [(relative, Encoding.ASCII.GetBytes("( 4 )\n"))], token));
-            var exportRefusal = await Assert.ThrowsAsync<StudioCommandException>(async () =>
-            { await main.ExportSourceProjectAsync(null, ["m1/gamez.zbd"], false, token); });
-            Assert.Equal("unsaved_changes", exportRefusal.Code);
-            Assert.Contains("guard.zrd", exportRefusal.Message);
+            // Map-project export is unavailable from this plain explorer; source-project root navigation
+            // resolves the dirty standalone editor first (covered by SourceProjectMcpChecks).
             Assert.Equal(original, File.ReadAllBytes(fixture.Path(relative)));
         }
         finally

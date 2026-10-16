@@ -1,9 +1,9 @@
 using System.Text.Json;
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Desktop;
+using zStudio.Core;
+using zStudio.Desktop;
 using Xunit;
 
-namespace Recoil.Zbd.Desktop.Tests;
+namespace zStudio.Desktop.Tests;
 
 public sealed class DifficultySettingsTests
 {

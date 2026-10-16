@@ -2,7 +2,7 @@ using System.Buffers.Binary;
 using System.IO;
 using System.Text;
 
-namespace Recoil.Zbd.Desktop.Tests;
+namespace zStudio.Desktop.Tests;
 
 internal static class MotionFixture
 {

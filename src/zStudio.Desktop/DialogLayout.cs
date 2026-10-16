@@ -1,7 +1,7 @@
 using System.Windows;
 using System.Windows.Controls;
 
-namespace Recoil.Zbd.Desktop;
+namespace zStudio.Desktop;
 
 /// <summary>Finite owner-monitor dimensions and a decision strip outside all variable dialog content.</summary>
 internal static class DialogLayout

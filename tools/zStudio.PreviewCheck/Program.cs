@@ -5,10 +5,10 @@ using System.Windows.Controls;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Core.Formats;
-using Recoil.Zbd.Desktop;
-using Recoil.Zbd.Rendering;
+using zStudio.Core;
+using zStudio.Core.Formats;
+using zStudio.Desktop;
+using zStudio.Rendering;
 
 internal static class Program
 {
@@ -38,7 +38,7 @@ internal static class Program
             var app = new App { ProcessCommandLine = false, ShutdownMode = ShutdownMode.OnExplicitShutdown };
             app.InitializeComponent();
             var window = new MainWindow();
-            File.WriteAllText(args[1], Recoil.Zbd.Mcp.McpCommandCatalog.Serialize(window.Commands) + Environment.NewLine);
+            File.WriteAllText(args[1], zStudio.Mcp.McpCommandCatalog.Serialize(window.Commands) + Environment.NewLine);
             window.Close();
             return 0;
         }

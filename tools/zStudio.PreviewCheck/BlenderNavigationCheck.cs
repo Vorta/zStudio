@@ -13,10 +13,10 @@ using System.Windows.Media.Media3D;
 using HelixToolkit.Wpf.SharpDX;
 using ModelContextProtocol.Client;
 using ModelContextProtocol.Protocol;
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Desktop;
-using Recoil.Zbd.Mcp;
-using Recoil.Zbd.Rendering;
+using zStudio.Core;
+using zStudio.Desktop;
+using zStudio.Mcp;
+using zStudio.Rendering;
 using ProjectionCamera = HelixToolkit.Wpf.SharpDX.ProjectionCamera;
 using DiffuseMaterial = HelixToolkit.Wpf.SharpDX.DiffuseMaterial;
 
@@ -26,7 +26,7 @@ internal static class BlenderNavigationCheck
     {
         root = Path.GetFullPath(root);
         string output = Path.Combine(Path.GetTempPath(), "zstudio-blender-" + DateTime.Now.ToString("yyyyMMdd-HHmmss")); Directory.CreateDirectory(output);
-        string settings = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "RecoilZbdStudio", "settings.json");
+        string settings = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "zStudio", "settings.json");
         byte[]? previous = File.Exists(settings) ? File.ReadAllBytes(settings) : null;
         var app = new App { ShutdownMode = ShutdownMode.OnExplicitShutdown, ProcessCommandLine = false }; app.InitializeComponent(); int exit = 0;
         app.Startup += async (_, _) =>
@@ -311,9 +311,9 @@ internal static class BlenderNavigationCheck
             // physical input, CaptureMouse or native synthetic pointer events.
             typeof(SceneViewport).GetMethod("ConfigurePickups", fields)!.Invoke(view, []);
             await CheckLockedCubeInput(view, mesh);
-            view.SetPickupLocked(true);
+            view.SetEditingLocked(true);
             Require(!view.SelectInspectionNode(0), "Locked world accepted a card");
-            view.SetPickupLocked(false); Require(view.SelectedInspection == null, "Unlock selected an object");
+            view.SetEditingLocked(false); Require(view.SelectedInspection == null, "Unlock selected an object");
             Require(view.SelectInspectionNode(0) && view.SelectionBoundsVisible && !view.TransformHandlesVisible, "Unlocked selection needs bounds without handles");
             view.RestoreView(new(new(10, 8, 12), new(-10, -8, -12), new(0, 1, 0), 60)); await Task.Delay(100);
             var source = new MissionPickupSource("fixture", 0, "puppies.zrd", 0);
@@ -336,7 +336,7 @@ internal static class BlenderNavigationCheck
                 Require(Math.Abs(System.Numerics.Quaternion.Dot(expected, actual)) > .99999f, "Ring pointer changed the wrong rotation axis or angle");
             }
             view.EndTransformDraft(); Require(!view.TransformHandlesVisible && view.SelectionBoundsVisible, "Cancel did not hide handles while retaining selection");
-            view.SetPickupLocked(true); Require(!view.SelectionBoundsVisible && view.SelectedInspection == null && !viewport.IsMouseCaptured, "Lock did not close selection");
+            view.SetEditingLocked(true); Require(!view.SelectionBoundsVisible && view.SelectedInspection == null && !viewport.IsMouseCaptured, "Lock did not close selection");
             Console.WriteLine("PASS: rendered perspective/orthographic transformed instances, nearest surface, helper/horizon/hidden exclusions, empty-space fallback and orbit inertia");
         }
         finally { viewport.Items.Remove(helper); helper.Dispose(); window.Close(); }
@@ -358,7 +358,7 @@ internal static class BlenderNavigationCheck
             {
                 window.Height = height;
                 card.SetPanelHeight(panelHeight);
-                view.SetPickupLocked(true); view.SetPickupLocked(locked);
+                view.SetEditingLocked(true); view.SetEditingLocked(locked);
                 view.SetAxisView("front"); view.SetProjection("perspective");
                 view.RestoreView(view.CaptureView() with { AxisView = null, AutoPerspective = false }); await Task.Delay(150);
                 var cubeBounds = view.NavigationCubeBounds;
@@ -400,7 +400,7 @@ internal static class BlenderNavigationCheck
             }
             Console.WriteLine("PASS: shared pointer input prioritizes the view cube over geometry in locked/unlocked worlds, retaining the scene selection lock");
         }
-        finally { view.SetPickupLocked(true); view.InspectionContent = previousInspection; window.Height = previousHeight; mesh.Instances = instances; view.RestoreView(pose); }
+        finally { view.SetEditingLocked(true); view.InspectionContent = previousInspection; window.Height = previousHeight; mesh.Instances = instances; view.RestoreView(pose); }
     }
     private static async Task CheckPointerZoom(SceneViewport view, MeshGeometryModel3D mesh, SceneViewport.ViewPose initial)
     {

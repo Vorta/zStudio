@@ -1,9 +1,9 @@
 using System.IO;
 using System.Text;
-using Recoil.Zbd.Core.Sources;
+using zStudio.Core.Sources;
 using Xunit;
 
-namespace Recoil.Zbd.Tests;
+namespace zStudio.Tests;
 
 /// <summary>The project-wide workspace: one history over every source file, dirty state against the disk, save and external changes.</summary>
 public sealed class SourceWorkspaceTests : IDisposable

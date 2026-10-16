@@ -1,6 +1,6 @@
 using System.Text.Json.Nodes;
 
-namespace Recoil.Zbd.Core.Formats;
+namespace zStudio.Core.Formats;
 
 internal sealed class ArchiveReader(long maximumTypedZrdBytes = ArchiveZrdBudget.MaximumAllocation) : IZbdFormatReader
 {
@@ -8,7 +8,7 @@ internal sealed class ArchiveReader(long maximumTypedZrdBytes = ArchiveZrdBudget
     // before creating them; the full typed clip remains available to paged inspection and explicit export.
     private const int MaximumMotionPreviewParts = 4096;
     public FormatFamily Family => FormatFamily.Archive;
-    public void Read(ZbdDocument doc, CancellationToken token)
+    public void Read(AssetDocument doc, CancellationToken token)
     {
         BinaryCursor c = new(doc.Bytes); c.Seek(doc.Bytes.Length - 4); uint records = c.U32(); FormatRegistry.CheckEntries("Archive member", records);
         long table = doc.Bytes.Length - 8L - records * 148L; BinaryCursor.CheckRange(doc.Bytes.Length, table, records * 148L);

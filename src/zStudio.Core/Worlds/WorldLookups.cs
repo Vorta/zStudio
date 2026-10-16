@@ -1,10 +1,10 @@
 using System.Security.Cryptography;
 using System.Text;
-using Recoil.Zbd.Core.Animation;
-using Recoil.Zbd.Core.Formats;
-using Recoil.Zbd.Core.Sources;
+using zStudio.Core.Animation;
+using zStudio.Core.Formats;
+using zStudio.Core.Sources;
 
-namespace Recoil.Zbd.Core.Worlds;
+namespace zStudio.Core.Worlds;
 
 /// <summary>
 /// The engine's lookups by name (docs/engine-evidence.md#name-lookups-and-node-slot-order). Every live node of every class
@@ -84,6 +84,8 @@ public sealed record SourceLookupChange(SourceLookup Before, SourceLookup After)
 /// <param name="provenance">Where the world's nodes came from, by slot, when a source build made it.</param>
 public sealed class SourceLookupBaseline(ReadOnlyMemory<byte> world, IReadOnlyList<SourceLookup> lookups, IReadOnlyDictionary<int, WorldNodeProvenance>? provenance = null)
 {
+    public SourceLookupBaseline(GameZWorld world, IReadOnlyList<SourceLookup> lookups, IReadOnlyDictionary<int, WorldNodeProvenance>? provenance = null)
+        : this(ReadOnlyMemory<byte>.Empty, lookups, provenance) { read = world; }
     private GameZWorld? read;
     public IReadOnlyList<SourceLookup> Lookups { get; } = lookups;
     /// <summary>

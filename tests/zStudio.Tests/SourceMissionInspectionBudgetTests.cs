@@ -1,11 +1,11 @@
 using System.IO;
 using System.Buffers.Binary;
 using System.Text;
-using Recoil.Zbd.Core.Sources;
-using Recoil.Zbd.Core.Worlds;
+using zStudio.Core.Sources;
+using zStudio.Core.Worlds;
 using Xunit;
 
-namespace Recoil.Zbd.Tests;
+namespace zStudio.Tests;
 
 public sealed class SourceMissionInspectionBudgetTests
 {
@@ -92,7 +92,7 @@ public sealed class SourceMissionInspectionBudgetTests
     {
         using SourceWorldFixture fixture = new();
         fixture.Write("gamegen/m2.gs", "#" + new string('x', 63));
-        fixture.Write("gamegen/m3.gs", "SetModelDirectory ../data/m2/models/bft\nLoadGameGen tank.flt tank\nFindSubNode hull\nObject3DRotate 0 1 0\n");
+        fixture.Write("gamegen/m3.gs", "SetModelDirectory ../data/m2/models/bft\nLoadGameGen tank.gltf tank\nFindSubNode hull\nObject3DRotate 0 1 0\n");
         SourceWorkspace workspace = new(fixture.Project);
         SourceScriptInspection inspection = new(workspace, Token, maximumBytes: 100);
         // A prior ownership check in the same operation has already admitted this script.

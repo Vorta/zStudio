@@ -3,9 +3,9 @@ using System.Numerics;
 using System.Windows;
 using System.Windows.Threading;
 using HelixToolkit.Wpf.SharpDX;
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Core.Formats;
-using Recoil.Zbd.Rendering;
+using zStudio.Core;
+using zStudio.Core.Formats;
+using zStudio.Rendering;
 
 internal static class ViewportSizeCheck
 {
@@ -28,7 +28,7 @@ internal static class ViewportSizeCheck
                 var model = new GameModel(0, [new(-1,-1,0), new(1,-1,0), new(0,1,0)], [], [], [new(0, 0, [0,1,2], [], [], [])], []);
                 scene.Models.Add(model);
                 scene.Nodes.Add(new(0, "fixture", "object3d", 0, [], [], new() { ["flags"] = 4 }, []));
-                var document = new ZbdDocument("fixture", new(0, DateTime.MinValue), new(FormatFamily.GameZ, 15, Recognition.Supported, ""), ReadOnlyMemory<byte>.Empty) { Scene = scene };
+                var document = new AssetDocument("fixture", new(0, DateTime.MinValue), new(FormatFamily.GameZ, 15, Recognition.Supported, ""), ReadOnlyMemory<byte>.Empty) { Scene = scene };
                 await preview.ShowAsync(document, new() { Id = new("fixture", AssetKind.Model, 0), Name = "fixture", Content = model }, resolver, null, 0, default);
                 var viewport = (Viewport3DX)preview.RenderSurface;
                 await Check("initial load");

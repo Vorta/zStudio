@@ -7,7 +7,7 @@ using HelixToolkit.SharpDX;
 using HelixToolkit.Wpf.SharpDX;
 using HitTestResult = HelixToolkit.SharpDX.HitTestResult;
 
-namespace Recoil.Zbd.Rendering;
+namespace zStudio.Rendering;
 
 public sealed partial class SceneViewport
 {
@@ -27,12 +27,20 @@ public sealed partial class SceneViewport
         return new(Math.Clamp(viewport.ActualWidth * (1 + horizontal) / 2 - size / 2, 0, Math.Max(0, viewport.ActualWidth - size)),
             Math.Clamp(viewport.ActualHeight * (1 - vertical) / 2 - size / 2, 0, Math.Max(0, viewport.ActualHeight - size)), size, size);
     }
+    /// <summary>Whether the cube sits in the top right corner (with nothing over the view there) instead of the bottom right.</summary>
+    public bool NavigationCubeTopRight { get; set; }
     /// <summary>Keep cube navigation accessible beside a tall panel in a short viewport.</summary>
     public void ReserveInspectionPanel(Rect bounds)
     {
         var home = NavigationCubeHomeBounds;
         double x = cubeHomeX, y = cubeHomeY, scale = cubeHomeSize;
-        if (!bounds.IsEmpty && !home.IsEmpty && home.IntersectsWith(bounds) && viewport.ActualWidth > 0 && viewport.ActualHeight > 0)
+        if (NavigationCubeTopRight && !home.IsEmpty && viewport.ActualWidth > 0 && viewport.ActualHeight > 0)
+        {
+            // 12 DIPs from the top right edges.
+            x = 2 * (viewport.ActualWidth - 12 - home.Width / 2) / viewport.ActualWidth - 1;
+            y = 1 - 2 * (12 + home.Height / 2) / viewport.ActualHeight;
+        }
+        else if (!bounds.IsEmpty && !home.IsEmpty && home.IntersectsWith(bounds) && viewport.ActualWidth > 0 && viewport.ActualHeight > 0)
         {
             double size = Math.Min(home.Width, Math.Max(0, bounds.Left - 20));
             // The panel reserves at least a 60-DIP side slot at constrained

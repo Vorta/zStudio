@@ -1,10 +1,10 @@
 using System.Text;
 using System.Text.Json.Nodes;
-using Recoil.Zbd.Core.Gltf;
-using Recoil.Zbd.Core.Sources;
+using zStudio.Core.Gltf;
+using zStudio.Core.Sources;
 using Xunit;
 
-namespace Recoil.Zbd.Tests;
+namespace zStudio.Tests;
 
 public sealed class ImportRound23JsonOutputTests
 {

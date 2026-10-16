@@ -2,11 +2,11 @@ using System.Buffers.Binary;
 using System.Globalization;
 using System.Numerics;
 using System.Text.Json.Nodes;
-using Recoil.Zbd.Core.Formats;
+using zStudio.Core.Formats;
 
-namespace Recoil.Zbd.Core;
+namespace zStudio.Core;
 
-public sealed record PickupPlacementResource(MissionDifficulty Difficulty, ZbdDocument Archive, AssetRecord Asset);
+public sealed record PickupPlacementResource(MissionDifficulty Difficulty, AssetDocument Archive, AssetRecord Asset);
 public sealed record PickupPlacementRecord(MissionPickupSource Source, string Type, Vector3 OriginalPosition,
     Vector3 Rotation, IReadOnlyList<MissionDifficulty> Difficulties);
 public sealed record PickupPlacementScope(IReadOnlyList<MissionPickupSource> Sources, string Description);
@@ -14,9 +14,9 @@ public sealed record PickupPlacementScope(IReadOnlyList<MissionPickupSource> Sou
 /// <summary>Authored placement edits; never owns or changes a runtime mission scene.</summary>
 public sealed partial class PickupPlacementEditSession
 {
-    private sealed class ArchiveState(ZbdDocument document)
+    private sealed class ArchiveState(AssetDocument document)
     {
-        public ZbdDocument Original { get; } = document;
+        public AssetDocument Original { get; } = document;
         public string Target { get; set; } = document.Path;
         public bool PendingCopy { get; set; }
         public byte[] SavedBytes { get; set; } = document.Bytes.ToArray();
@@ -37,7 +37,7 @@ public sealed partial class PickupPlacementEditSession
     private readonly Dictionary<MissionPickupSource, Vector3> rotations, savedRotations;
     private readonly Stack<Move> undo = [], redo = [];
     private readonly PreviewNotes diagnostics = new();
-    private readonly Dictionary<ZbdDocument, HashSet<AssetRecord>> overlappingMembers = [];
+    private readonly Dictionary<AssetDocument, HashSet<AssetRecord>> overlappingMembers = [];
     // Archives changed by accepted history or saved copies. Only these are owned, published and
     // checked for external changes; other readers stay free for independent resource documents.
     private readonly HashSet<string> touched = new(StringComparer.OrdinalIgnoreCase);
@@ -79,14 +79,14 @@ public sealed partial class PickupPlacementEditSession
         token.ThrowIfCancellationRequested();
         resourcesBudget.Check(token);
         long revision = resolver.SnapshotRevision;
-        Dictionary<string, (ZbdDocument Archive, AssetRecord Asset)> found = new(StringComparer.OrdinalIgnoreCase);
-        List<(ZbdDocument Archive, AssetRecord Asset)> coordinateResources = [];
+        Dictionary<string, (AssetDocument Archive, AssetRecord Asset)> found = new(StringComparer.OrdinalIgnoreCase);
+        List<(AssetDocument Archive, AssetRecord Asset)> coordinateResources = [];
         PreviewNotes notes = new();
         var probe = FormatRegistry.Probe(worldPath);
         bool mw3 = probe is { Family: FormatFamily.GameZ, Version: 27 };
         // Load the coordinate store once for every reader in this map. Preview selection
         // filters by archive identity; changing mission must never discard accepted history.
-        var files = MissionSceneLoader.ResourceFiles(worldPath, resolver, token); HashSet<ZbdDocument> snapshots = new(ReferenceEqualityComparer.Instance);
+        var files = MissionSceneLoader.ResourceFiles(worldPath, resolver, token); HashSet<AssetDocument> snapshots = new(ReferenceEqualityComparer.Instance);
         foreach (string file in files)
         {
             token.ThrowIfCancellationRequested();
@@ -135,7 +135,7 @@ public sealed partial class PickupPlacementEditSession
             var resource = group.First(); var doc = resource.Archive; var asset = resource.Asset;
             try
             {
-                if (doc.Probe.Family != FormatFamily.Archive || doc.Diagnostics.Any(d => d.Severity == "Error") || !IsPickupResource(asset.Name))
+                if (doc is not Sources.SourceResourceDocument && doc.Probe.Family != FormatFamily.Archive || doc.Diagnostics.Any(d => d.Severity == "Error") || !IsPickupResource(asset.Name))
                     throw new InvalidDataException("An intact ZAR pickup resource is required.");
                 if (result.Overlaps(doc, asset, token))
                     throw new InvalidDataException("Pickup member overlaps another archive member.");
@@ -172,7 +172,7 @@ public sealed partial class PickupPlacementEditSession
         }
         return result;
     }
-    private static (Vector3 Vector, int[] Offsets) ReadVector(ZrdNode node, ZbdDocument doc, AssetRecord asset)
+    private static (Vector3 Vector, int[] Offsets) ReadVector(ZrdNode node, AssetDocument doc, AssetRecord asset)
     {
         if (node.Kind != ZrdKind.Array || node.Children is not { Count: 3 } components) throw new InvalidDataException("Expected three position/rotation components.");
         float[] values = new float[3]; int[] offsets = new int[3];
@@ -183,8 +183,9 @@ public sealed partial class PickupPlacementEditSession
         }
         return (new(values[0], values[1], values[2]), offsets);
     }
-    private static int ReadScalarOffset(ZrdNode node, ZbdDocument doc, AssetRecord asset)
+    private static int ReadScalarOffset(ZrdNode node, AssetDocument doc, AssetRecord asset)
     {
+        if (doc is Sources.SourceResourceDocument source) return source.ScalarKey(node);
         long offset = node.SourceOffset;
         if (offset < 0 || offset > asset.Length - 8) throw new InvalidDataException("Invalid transform source range.");
         int absolute = checked((int)(asset.Offset + offset)); _ = doc.Slice(absolute, 8); return absolute;
@@ -195,7 +196,7 @@ public sealed partial class PickupPlacementEditSession
         if (!float.IsFinite(number)) throw new InvalidDataException("Expected a finite numeric coordinate.");
         return number;
     }
-    private bool Overlaps(ZbdDocument doc, AssetRecord asset, CancellationToken token)
+    private bool Overlaps(AssetDocument doc, AssetRecord asset, CancellationToken token)
     {
         if (!overlappingMembers.TryGetValue(doc, out var overlaps))
         {
@@ -291,6 +292,20 @@ public sealed partial class PickupPlacementEditSession
     }
     /// <summary>The bytes of a loaded archive as this session read them.</summary>
     public ReadOnlyMemory<byte> ArchiveBytes(string archivePath) => archives[archivePath].Original.Bytes;
+    /// <summary>The authoritative project source recorded by a loaded resource member; no disk read or inference by name.</summary>
+    public string? AuthoredResourcePath(MissionPickupSource source)
+    {
+        if (!archives.TryGetValue(source.ArchivePath, out var archive)) return null;
+        if (archive.Original is Sources.SourceResourceDocument document) return document.Source.Path;
+        var asset = archive.Original.Assets.FirstOrDefault(a => a.Index == source.AssetIndex && a.Name.Equals(source.ResourceName, StringComparison.OrdinalIgnoreCase));
+        string? field = asset?.Metadata.Text("source_path");
+        if (field is not { Length: > 0 and <= Sources.ArchiveSources.MaximumSourceField }) return null;
+        string relative = field.Replace('\\', '/');
+        if (!relative.StartsWith("data/", StringComparison.OrdinalIgnoreCase)) return null;
+        try { _ = Sources.SourceProject.Resolve(Path.GetTempPath(), relative); }
+        catch (InvalidDataException) { return null; }
+        return relative;
+    }
     public byte[] EncodeArchive(string archivePath)
     {
         var archive = archives[archivePath]; byte[] output = archive.Original.Bytes.ToArray();
@@ -345,7 +360,7 @@ public sealed partial class PickupPlacementEditSession
     /// Whether an unedited archive's baseline differs from the source now served: another
     /// document's published working copy (compared by identity) or otherwise the file.
     /// </summary>
-    public bool HasStaleBaselines(Func<string, ZbdDocument?> published, IEnumerable<string>? paths = null)
+    public bool HasStaleBaselines(Func<string, AssetDocument?> published, IEnumerable<string>? paths = null)
     {
         var scope = paths?.Select(Path.GetFullPath).ToHashSet(StringComparer.OrdinalIgnoreCase);
         foreach (var (key, archive) in archives)

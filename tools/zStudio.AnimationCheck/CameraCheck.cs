@@ -1,5 +1,5 @@
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Core.Animation;
+using zStudio.Core;
+using zStudio.Core.Animation;
 using System.Numerics;
 using System.Security.Cryptography;
 

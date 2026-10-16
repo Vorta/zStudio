@@ -4,7 +4,7 @@ using System.Runtime.InteropServices;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 
-namespace Recoil.Zbd.Core.Terrain;
+namespace zStudio.Core.Terrain;
 
 /// <summary>How a surface treats craters: CanModify (craters form here), ClipTo ("no clip": no crater may overlap it) or neither.</summary>
 public enum TerrainCraters { Ignored, Allowed, Blocked }

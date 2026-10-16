@@ -4,14 +4,14 @@ using System.Reflection;
 using System.Text.Json.Nodes;
 using ModelContextProtocol.Client;
 using ModelContextProtocol.Protocol;
-using Recoil.Zbd.Automation;
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Core.Animation;
-using Recoil.Zbd.Desktop;
-using Recoil.Zbd.Mcp;
+using zStudio.Automation;
+using zStudio.Core;
+using zStudio.Core.Animation;
+using zStudio.Desktop;
+using zStudio.Mcp;
 using Xunit;
 
-namespace Recoil.Zbd.Desktop.Tests;
+namespace zStudio.Desktop.Tests;
 
 internal static class AssetInspectionMcpChecks
 {
@@ -137,7 +137,7 @@ internal static class AssetInspectionMcpChecks
     {
         var package = new AnimationPackage { Prefix = new byte[72], Tail = [] };
         package.Entries.Add(new(new byte[308], 0, 0));
-        var source = new ZbdDocument(Path.Combine(Path.GetTempPath(), "inspection-mcp.zbd"), new(0, DateTime.MinValue),
+        var source = new AssetDocument(Path.Combine(Path.GetTempPath(), "inspection-mcp.zbd"), new(0, DateTime.MinValue),
             new(FormatFamily.Animation, 28, Recognition.Supported, "fixture"), ReadOnlyMemory<byte>.Empty) { Animations = package };
         source.Add(AssetKind.Animation, 0, "animation", 0, 0);
         var doc = new DocumentModel(source);

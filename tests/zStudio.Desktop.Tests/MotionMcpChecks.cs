@@ -8,14 +8,14 @@ using System.Windows;
 using System.Windows.Controls;
 using ModelContextProtocol.Client;
 using ModelContextProtocol.Protocol;
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Core.Animation;
-using Recoil.Zbd.Core.Formats;
-using Recoil.Zbd.Desktop;
-using Recoil.Zbd.Mcp;
+using zStudio.Core;
+using zStudio.Core.Animation;
+using zStudio.Core.Formats;
+using zStudio.Desktop;
+using zStudio.Mcp;
 using Xunit;
 
-namespace Recoil.Zbd.Desktop.Tests;
+namespace zStudio.Desktop.Tests;
 
 internal static class MotionMcpChecks
 {
@@ -211,8 +211,8 @@ internal static class MotionMcpChecks
             Assert.Contains("sample", textured["materials"]!["items"]![0]!["label"]!.GetValue<string>(), StringComparison.OrdinalIgnoreCase);
             Assert.Equal("Material 39 · solid color", sharedMaterials["materials"]!["items"]![0]!["label"]!.GetValue<string>());
             Assert.Equal(1, sharedMaterials["materials"]!["total"]!.GetValue<int>());
-            Recoil.Zbd.Rendering.SceneViewport StaticViewport() => (Recoil.Zbd.Rendering.SceneViewport)typeof(MainWindow).GetField("scene", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(main)!;
-            AnimationFrame Presented() => (AnimationFrame)typeof(Recoil.Zbd.Rendering.SceneViewport).GetField("animationFrame", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(editor.Viewport)!;
+            zStudio.Rendering.SceneViewport StaticViewport() => (zStudio.Rendering.SceneViewport)typeof(MainWindow).GetField("scene", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(main)!;
+            AnimationFrame Presented() => (AnimationFrame)typeof(zStudio.Rendering.SceneViewport).GetField("animationFrame", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(editor.Viewport)!;
             MotionEditor? CurrentMotion() => (MotionEditor?)typeof(MainWindow).GetField("motion", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(main);
             async Task CheckMotionRemoval()
             {
@@ -311,7 +311,7 @@ internal static class MotionMcpChecks
                 var combined = await Call("preview_state", new() { ["preview"] = preview });
                 Assert.True(JsonNode.DeepEquals(state["diagnostics"], combined["motion"]!["diagnostics"]));
                 Assert.True(combined.ToJsonString().Length < 30_000);
-                var boundLibrary = (ZbdDocument)typeof(MotionEditor).GetField("library", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(active)!;
+                var boundLibrary = (AssetDocument)typeof(MotionEditor).GetField("library", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(active)!;
                 for (int i = 0; i < 40; i++) boundLibrary.Add(AssetKind.Model, boundLibrary.Assets.Count, $"extra_{i:D2}", 0, 0, content: new MechAssembly(0, 0, 1, 0, 1));
                 state = await Job("motion_preview", new() { ["preview"] = preview, ["action"] = "state" });
                 Assert.Equal(42, state["assemblyCount"]!.GetValue<int>()); Assert.True(state["assembliesTruncated"]!.GetValue<bool>()); Assert.Equal(32, state["assemblies"]!.AsArray().Count);
@@ -323,7 +323,7 @@ internal static class MotionMcpChecks
             async Task CheckAssemblyLoads()
             {
                 await File.WriteAllBytesAsync(libraryPath, MotionFixture.Library(textured: true), token);
-                await File.WriteAllBytesAsync(Path.Combine(folder, "image.zbd"), Recoil.Zbd.Tests.ContentFixture.Texture(2, 2, false), token);
+                await File.WriteAllBytesAsync(Path.Combine(folder, "image.zbd"), zStudio.Tests.ContentFixture.Texture(2, 2, false), token);
                 var resolver = main.ViewModel.Resolver!; await resolver.InvalidateAsync([libraryPath], token); await editor.RefreshLibraryAsync();
                 // A replaced file cannot prove member identity; the binding is cleared rather than reused by index.
                 Assert.Null(editor.AssemblyMember); await editor.SelectAssemblyAsync(3, token);

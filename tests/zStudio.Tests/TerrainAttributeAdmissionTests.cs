@@ -1,11 +1,11 @@
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
-using Recoil.Zbd.Core.Terrain;
-using Recoil.Zbd.Core.Worlds;
+using zStudio.Core.Terrain;
+using zStudio.Core.Worlds;
 using Xunit;
 
-namespace Recoil.Zbd.Tests;
+namespace zStudio.Tests;
 
 public sealed class TerrainAttributeAdmissionTests
 {

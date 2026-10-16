@@ -1,12 +1,12 @@
 using System.IO;
 using System.Text.Json.Nodes;
-using Recoil.Zbd.Automation;
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Core.Animation;
-using Recoil.Zbd.Core.Export;
-using Recoil.Zbd.Core.Formats;
+using zStudio.Automation;
+using zStudio.Core;
+using zStudio.Core.Animation;
+using zStudio.Core.Export;
+using zStudio.Core.Formats;
 
-namespace Recoil.Zbd.Desktop;
+namespace zStudio.Desktop;
 
 public partial class MainWindow
 {
@@ -133,7 +133,7 @@ public partial class MainWindow
     }
     internal Func<AnimationPackage, string, string, string, CancellationToken, Task> WriteAnimationArchiveAsync { get; set; } = AnimationWriter.SaveAsAsync;
     internal Func<AssetResolver, IAssetExporter> CreateAssetExporter { get; set; } = static resolver => new ExportService(resolver);
-    internal Func<string, CancellationToken, Task<ZbdDocument>> ReadValidationSourceAsync { get; set; } = static (path, token) => FormatRegistry.Default.OpenAsync(path, token);
+    internal Func<string, CancellationToken, Task<AssetDocument>> ReadValidationSourceAsync { get; set; } = static (path, token) => FormatRegistry.Default.OpenAsync(path, token);
     internal async Task SaveAnimationToPathAsync(DocumentModel doc, string destination, CancellationToken token = default)
     {
         using var save = BeginDocumentSave();
@@ -193,6 +193,13 @@ public partial class MainWindow
             ViewModel.Status = "Validating source file on disk…";
             var notes = await Task.Run(async () =>
             {
+                if (selected.SourceWorld is { } source)
+                {
+                    // Validate the on-disk project rather than merely parsing its entry script. The
+                    // visible accepted workspace remains untouched, including any unsaved edits.
+                    var evaluated = await zStudio.Core.Sources.SourceWorlds.LoadSceneAsync(source.Root, source.Mission, token: cancellation.Token);
+                    return evaluated.Notes.Select(note => new StudioProblem("Warning", "File / operation", note, selected.Path)).ToList();
+                }
                 var doc = await ReadValidationSourceAsync(selected.Path, cancellation.Token);
                 var diagnostics = doc.Diagnostics.Select(d => new StudioProblem(d.Severity, "File / operation", d.Message, selected.Path, d.AssetIndex, d.Offset)).ToList();
                 foreach (var asset in doc.Assets)

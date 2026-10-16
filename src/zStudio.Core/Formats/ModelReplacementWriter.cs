@@ -1,14 +1,14 @@
 using System.Buffers.Binary;
 using System.Numerics;
 using System.Text;
-using Recoil.Zbd.Core.Export;
+using zStudio.Core.Export;
 
-namespace Recoil.Zbd.Core.Formats;
+namespace zStudio.Core.Formats;
 
 /// <summary>Edits versioned world ranges recorded by GameZReader. Never serializes unknown records or stored pointers.</summary>
 public static partial class ModelReplacementWriter
 {
-    public static byte[] Replace(ZbdDocument source, IReadOnlyDictionary<int, ImportedMesh> replacements, string textureName, CancellationToken token = default)
+    public static byte[] Replace(AssetDocument source, IReadOnlyDictionary<int, ImportedMesh> replacements, string textureName, CancellationToken token = default)
     {
         if (replacements.Count == 0) return source.Bytes.ToArray();
         var layout = source.GameZLayout ?? throw new InvalidDataException("Model replacement requires GameZ v15 or v27.");
@@ -225,8 +225,8 @@ public static partial class TexturePackWriter
     /// default texture, so 512 needs a device/wrapper that reports at least 512.
     /// </summary>
     public const int MaximumDimension = 512;
-    public static byte[] Append(ZbdDocument source, string name, DecodedImage image, CancellationToken token = default) => Append(source, name, image, FormatRegistry.MaximumDocumentBytes, token);
-    internal static byte[] Append(ZbdDocument source, string name, DecodedImage image, long maximumBytes, CancellationToken token)
+    public static byte[] Append(AssetDocument source, string name, DecodedImage image, CancellationToken token = default) => Append(source, name, image, FormatRegistry.MaximumDocumentBytes, token);
+    internal static byte[] Append(AssetDocument source, string name, DecodedImage image, long maximumBytes, CancellationToken token)
     {
         ModelReplacementWriter.ValidateName(name);
         if (source.Probe.Family != FormatFamily.TexturePack || source.Probe.Version != 1 || source.Diagnostics.Any(d => d.Severity == "Error")) throw new InvalidDataException("An intact v1 texture pack is required.");

@@ -1,8 +1,8 @@
 using System.IO;
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Core.Formats;
+using zStudio.Core;
+using zStudio.Core.Formats;
 
-namespace Recoil.Zbd.Rendering;
+namespace zStudio.Rendering;
 
 /// <summary>Managed pixel storage across current and pending generations of one viewport.</summary>
 internal sealed class TextureMemoryBudget(long maximumBytes = TextureMemoryBudget.MaximumBytes)
@@ -31,13 +31,12 @@ internal sealed class TextureMemoryBudget(long maximumBytes = TextureMemoryBudge
 internal sealed class PreviewTextureCache : IDisposable
 {
     private readonly TextureMemoryBudget budget;
-    private readonly Func<string, CancellationToken, Task<ResolvedTexture?>> resolve;
-    private readonly Func<ResolvedTexture, CancellationToken, DecodedImage> decode;
+    private readonly Func<string, CancellationToken, Task<Input?>> resolve;
     private readonly bool masks;
     private readonly SemaphoreSlim serial = new(1, 1);
     private readonly CancellationTokenSource stopped = new();
     private readonly object lifetime = new();
-    private readonly Dictionary<Identity, LoadedPreviewTexture> images = [];
+    private readonly Dictionary<object, LoadedPreviewTexture> images = [];
     private readonly List<TextureMemoryBudget.Reservation> reservations = [];
     private int users;
     private bool disposed;
@@ -46,7 +45,28 @@ internal sealed class PreviewTextureCache : IDisposable
         : this(budget, lookup.ResolveAsync, masks, (match, token) => TextureDecoder.Decode(match.Document, match.Asset, token)) { }
     internal PreviewTextureCache(TextureMemoryBudget budget, Func<string, CancellationToken, Task<ResolvedTexture?>> resolve,
         bool masks, Func<ResolvedTexture, CancellationToken, DecodedImage> decode)
-    { this.budget = budget; this.resolve = resolve; this.masks = masks; this.decode = decode; }
+    {
+        this.budget = budget; this.masks = masks;
+        this.resolve = async (name, token) =>
+        {
+            var match = await resolve(name, token).ConfigureAwait(false);
+            if (match == null) return null;
+            if (match.Asset.Content is not TextureInfo info) throw new InvalidDataException("Resolved asset is not a texture.");
+            return new(new Identity(match.Document.Path, match.Document.Stamp, match.Asset.Index, match.Asset.Offset, info),
+                info.Width, info.Height, match.Asset.Index, match.Ambiguous, t => decode(match, t));
+        };
+    }
+    internal PreviewTextureCache(TextureMemoryBudget budget, zStudio.Core.Sources.SourceSceneSnapshot source, bool masks)
+    {
+        this.budget = budget; this.masks = masks;
+        resolve = (name, token) =>
+        {
+            token.ThrowIfCancellationRequested();
+            return Task.FromResult(source.Textures.TryGetValue(name, out var texture)
+                ? new Input(texture.Hash, texture.Width, texture.Height, -1, false, texture.Decode) : null);
+        };
+    }
+    private sealed record Input(object Identity, int Width, int Height, int Index, bool Ambiguous, Func<CancellationToken, DecodedImage> Decode);
 
     // Callers that hand buffers to the UI retain this across their continuation too.
     internal IDisposable Retain()
@@ -84,11 +104,10 @@ internal sealed class PreviewTextureCache : IDisposable
             var match = await resolve(name, token).ConfigureAwait(false);
             token.ThrowIfCancellationRequested();
             if (match == null) return null;
-            if (match.Asset.Content is not TextureInfo info) throw new InvalidDataException("Resolved asset is not a texture.");
-            var key = new Identity(match.Document.Path, match.Document.Stamp, match.Asset.Index, match.Asset.Offset, info);
+            var key = match.Identity;
             if (images.TryGetValue(key, out var retained)) return retained;
-            long bytes = checked((long)info.Width * info.Height * 4);
-            if (info.Width <= 0 || info.Height <= 0) throw new InvalidDataException("Invalid texture dimensions.");
+            long bytes = checked((long)match.Width * match.Height * 4);
+            if (match.Width <= 0 || match.Height <= 0) throw new InvalidDataException("Invalid texture dimensions.");
             // Reserve the possible mask before either allocation. Opaque images release
             // that part immediately; no second image can race the shared allowance.
             var pixels = budget.Reserve(bytes);
@@ -96,7 +115,8 @@ internal sealed class PreviewTextureCache : IDisposable
             try
             {
                 if (masks) mask = budget.Reserve(bytes);
-                var image = decode(match, token);
+                var image = match.Decode(token);
+                if (image.Width != match.Width || image.Height != match.Height || image.Rgba.LongLength != bytes) throw new InvalidDataException("Decoded texture dimensions differ from the frozen texture header.");
                 bool alpha = false;
                 for (int i = 3; i < image.Rgba.Length; i += 4)
                 {
@@ -115,7 +135,7 @@ internal sealed class PreviewTextureCache : IDisposable
                 }
                 else { mask?.Dispose(); mask = null; }
                 token.ThrowIfCancellationRequested();
-                var result = new LoadedPreviewTexture(image, alpha, white, match.Asset.Index, match.Ambiguous);
+                var result = new LoadedPreviewTexture(image, alpha, white, match.Index, match.Ambiguous);
                 images.Add(key, result); reservations.Add(pixels);
                 if (mask != null) reservations.Add(mask);
                 return result;

@@ -17,7 +17,7 @@ AI visualization coexists with soil, CanModify and ClipTo highlights. It does no
 
 Selecting a marker also opens its [floating inspection card](scene-inspection.md). **Edit** starts an explicit XYZ draft; **✓** or Enter confirms one undoable move, while Cancel/Escape discards it. The map's Save command verifies a coordinate-only patch to the owning archive. Links, raw node values and other metadata remain unchanged. The separate Properties window retains read-only snapshot inspection.
 
-The card's read-only **Attack strategy** field appears with the scrolling information below **This AI network node**, immediately above **Status**. It uses the same field style and copy button as the other details, participates once in Copy all, and remains read-only during transform editing. Strategy is stored once per network, not per node. Edit the authored string through the existing ZRD Data/Properties editor when needed; accepted resource edits and Undo refresh the preview through the shared workspace snapshot.
+The card's read-only **Attack strategy** field appears with the scrolling information below **This AI network node**, immediately above **Status**. It uses the same field style and copy button as the other details, is included once when `scene_card` copies all details, and remains read-only during transform editing. Strategy is stored once per network, not per node. Edit the authored string through the existing ZRD Data/Properties editor when needed; accepted resource edits and Undo refresh the preview through the shared workspace snapshot.
 
 | Stored strategy prefix | Nodes and arrows |
 | --- | --- |

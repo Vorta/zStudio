@@ -1,51 +1,43 @@
 using HelixToolkit.Maths;
-using HelixToolkit.SharpDX;
 using HelixToolkit.Wpf.SharpDX;
-using Recoil.Zbd.Core;
+using zStudio.Core;
 using DiffuseMaterial = HelixToolkit.Wpf.SharpDX.DiffuseMaterial;
 
-namespace Recoil.Zbd.Rendering;
+namespace zStudio.Rendering;
 
 public sealed partial class SceneViewport
 {
-    private sealed record SurfaceAppearance(DiffuseMaterial Normal, WorldSurfaceKind Kind, TextureModel? AlphaMask, bool Horizon, int Zone = 0xFF);
+    private sealed record SurfaceAppearance(DiffuseMaterial Normal, WorldSurfaceKind Kind, int Zone = 0xFF);
     private readonly Dictionary<MeshGeometryModel3D, SurfaceAppearance> surfaceAppearances = [];
-    private readonly Dictionary<(DiffuseMaterial Normal, WorldHighlightMode Mode, int Zone), DiffuseMaterial> highlightMaterials = [];
     public WorldHighlightMode HighlightMode { get; private set; }
 
-    /// <summary>Changes only appearance; mesh/instance identities, picking and camera stay intact.</summary>
+    /// <summary>Changes only a shader tint; normal materials, picking and camera stay intact.</summary>
     public void SetWorldHighlightMode(WorldHighlightMode mode)
     {
         if (!Enum.IsDefined(mode)) throw new ArgumentOutOfRangeException(nameof(mode));
         HighlightMode = mode;
-        foreach (var (mesh, surface) in surfaceAppearances)
+        foreach (var surface in surfaceAppearances.Values)
         {
-            if (!WorldSurfaceHighlights.Matches(surface.Kind, mode)) { mesh.Material = surface.Normal; continue; }
-            int zone = mode == WorldHighlightMode.Zones ? surface.Zone : -1;
-            if (!highlightMaterials.TryGetValue((surface.Normal, mode, zone), out var material))
+            Color4 tint = default;
+            if (WorldSurfaceHighlights.Matches(surface.Kind, mode))
             {
-                material = PreviewMaterials.Create(surface.Horizon, orientation: faceOrientation);
-                float alpha = surface.Normal.DiffuseColor.Alpha;
                 var (r, g, b) = WorldSurfaceHighlights.ZoneColor(surface.Zone);
-                material.DiffuseColor = mode switch
+                tint = mode switch
                 {
-                    WorldHighlightMode.NonDefaultSoils => new Color4(1, 1, 0, alpha),
-                    WorldHighlightMode.CanModify => new Color4(0, 1, 0, alpha),
-                    WorldHighlightMode.Zones => new Color4(r, g, b, alpha),
-                    _ => new Color4(1, 0, 0, alpha)
+                    WorldHighlightMode.NonDefaultSoils => new(1, 1, 0, .5f),
+                    WorldHighlightMode.CanModify => new(0, 1, 0, .5f),
+                    WorldHighlightMode.CanModifyAndClipTo when (surface.Kind & WorldSurfaceKind.ClipTo) == 0 => new(0, 1, 0, .5f),
+                    WorldHighlightMode.Zones => new(r, g, b, .5f),
+                    _ => new(1, 0, 0, .5f)
                 };
-                material.EnableUnLit = true;
-                // White RGB removes authored texture colors while keeping alpha-zero holes.
-                // These maps deliberately do not participate in the normal Textures toggle.
-                material.DiffuseMap = surface.AlphaMask;
-                highlightMaterials.Add((surface.Normal, mode, zone), material);
             }
-            mesh.Material = material;
+            PreviewMaterials.SetOverlay(surface.Normal, tint);
         }
+        viewport.InvalidateRender();
     }
 
     private void ClearWorldHighlights()
     {
-        surfaceAppearances.Clear(); highlightMaterials.Clear(); HighlightMode = WorldHighlightMode.None;
+        surfaceAppearances.Clear(); HighlightMode = WorldHighlightMode.None;
     }
 }

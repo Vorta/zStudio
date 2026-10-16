@@ -1,10 +1,10 @@
 using System.Numerics;
 using System.Text;
-using Recoil.Zbd.Core.Gltf;
-using Recoil.Zbd.Core.Worlds;
+using zStudio.Core.Gltf;
+using zStudio.Core.Worlds;
 using Xunit;
 
-namespace Recoil.Zbd.Tests;
+namespace zStudio.Tests;
 
 public sealed class WorldLoadCapacityTests
 {
@@ -64,7 +64,7 @@ public sealed class WorldLoadCapacityTests
         GltfDocument document = new(); document.Roots.Add(new() { Name = "surface", Mesh = mesh });
         var (json, binary) = document.Write("surface.bin", Token);
         string script = "SetModelDirectory ..\\data\\a;..\\data\\b;..\\data\\missing\nSetTextureDirectory ..\\data\\t1\nSetTextureDirectory ..\\data\\t2\n"
-            + "SetModelDirectory ..\\data\\a\nSetTextureDirectory ..\\data\\t1\nLoadGameGen surface.flt root\nLoadGameGen absent.flt other\nGameZWriteZBDFile gamez.zbd\n";
+            + "SetModelDirectory ..\\data\\a\nSetTextureDirectory ..\\data\\t1\nLoadGameGen surface.gltf root\nLoadGameGen absent.gltf other\nGameZWriteZBDFile gamez.zbd\n";
         var assembler = new WorldAssembler(new Files(script, new()
         {
             ["data/a/surface.gltf"] = json, ["data/a/surface.bin"] = binary, ["data/b/surface.gltf"] = json, ["data/b/surface.bin"] = binary,
@@ -74,7 +74,7 @@ public sealed class WorldLoadCapacityTests
         Assert.Contains("data/b/surface.gltf", assembler.ModelFiles);
         Assert.DoesNotContain("data/a/surface.gltf", assembler.ModelFiles);
         Assert.Equal("data/t2/skin.png", assembler.TextureFiles["skin"]);
-        Assert.Contains(assembler.Warnings, w => w.EndsWith("found no model for absent.flt in data/b, data/a.", StringComparison.Ordinal));
+        Assert.Contains(assembler.Warnings, w => w.EndsWith("found no model for absent.gltf in data/b, data/a.", StringComparison.Ordinal));
     }
 
     /// <summary>
@@ -113,7 +113,7 @@ public sealed class WorldLoadCapacityTests
     public void RepeatedLoadsShareOneProbeAndModelByteAllowance()
     {
         string folders = string.Join(";", Enumerable.Range(0, 40).Select(i => $"..\\data\\f{i}")) + ";../data/models";
-        string Missing(int loads) => $"SetModelDirectory {folders}\n" + string.Concat(Enumerable.Repeat("LoadGameGen missing.flt x\nDeleteTree x\n", loads)) + "GameZWriteZBDFile gamez.zbd";
+        string Missing(int loads) => $"SetModelDirectory {folders}\n" + string.Concat(Enumerable.Repeat("LoadGameGen missing x\nDeleteTree x\n", loads)) + "GameZWriteZBDFile gamez.zbd";
         var probing = new WorldAssembler(new Files(Missing(10), folders: [.. Enumerable.Range(0, 40).Select(i => $"data/f{i}")]), Token);
         probing.Assemble("m1.gs");
         long probes = probing.Search.Probes;

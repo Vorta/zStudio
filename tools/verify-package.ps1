@@ -9,21 +9,24 @@ $root = (Resolve-Path -LiteralPath $Directory).Path.TrimEnd([IO.Path]::Directory
 $expectedRoot = @('dependencies', 'zStudio.exe')
 $actualRoot = @(Get-ChildItem -LiteralPath $root -Force | Select-Object -ExpandProperty Name | Sort-Object)
 if (@(Compare-Object $expectedRoot $actualRoot).Count -ne 0) { throw 'Portable root must contain exactly zStudio.exe and dependencies/.' }
-foreach ($required in @('dependencies/Recoil.Zbd.Studio.dll', 'dependencies/Recoil.Zbd.Studio.runtimeconfig.json', 'dependencies/hostfxr.dll', 'dependencies/README.md', 'dependencies/LICENSE', 'dependencies/THIRD-PARTY-NOTICES.md', 'dependencies/blender/zstudio_recoil-0.1.0.zip')) {
+$extensionRelative = "dependencies/blender/zstudio_recoil-$ExpectedVersion.zip"
+foreach ($required in @('dependencies/zStudio.Desktop.dll', 'dependencies/zStudio.Desktop.runtimeconfig.json', 'dependencies/hostfxr.dll', 'dependencies/README.md', 'dependencies/LICENSE', 'dependencies/THIRD-PARTY-NOTICES.md', $extensionRelative)) {
     if (-not (Test-Path -LiteralPath (Join-Path $root $required) -PathType Leaf)) { throw "Missing portable file: $required" }
 }
 $expectedFileVersion = ($ExpectedVersion -split '-', 2)[0] + '.0'
-foreach ($binary in @('zStudio.exe', 'dependencies/Recoil.Zbd.Studio.dll')) {
+foreach ($binary in @('zStudio.exe', 'dependencies/zStudio.Desktop.dll')) {
     $version = (Get-Item -LiteralPath (Join-Path $root $binary)).VersionInfo
     if ($version.FileVersion -ne $expectedFileVersion -or ($version.ProductVersion -split '\+', 2)[0] -ne $ExpectedVersion) { throw "Version mismatch in $binary" }
 }
 $launcher = [Text.Encoding]::UTF8.GetString([IO.File]::ReadAllBytes((Join-Path $root 'zStudio.exe')))
-if (-not $launcher.Contains('dependencies/Recoil.Zbd.Studio.dll')) { throw 'Launcher lost its relative apphost binding.' }
+if (-not $launcher.Contains('dependencies/zStudio.Desktop.dll')) { throw 'Launcher lost its relative apphost binding.' }
 $extensionSource = Join-Path (Split-Path -Parent $PSScriptRoot) 'blender/zstudio_recoil'
+$manifest = Get-Content -LiteralPath (Join-Path $extensionSource 'blender_manifest.toml') -Raw
+if ($manifest -notmatch '(?m)^version\s*=\s*"([^"]+)"\s*$' -or $Matches[1] -ne $ExpectedVersion) { throw 'Blender extension version does not match zStudio.' }
 $extensionFiles = @{}
 foreach ($file in Get-ChildItem -LiteralPath $extensionSource -File | Where-Object { $_.Extension -in '.py', '.toml', '.md' }) { $extensionFiles[$file.Name] = $file.FullName }
 $extensionFiles['LICENSE'] = Join-Path (Split-Path -Parent $PSScriptRoot) 'LICENSE'
-$extension = [IO.Compression.ZipFile]::OpenRead((Join-Path $root 'dependencies/blender/zstudio_recoil-0.1.0.zip'))
+$extension = [IO.Compression.ZipFile]::OpenRead((Join-Path $root $extensionRelative))
 try {
     if ($extension.Entries.Count -ne $extensionFiles.Count) { throw 'Unexpected Blender extension inventory' }
     foreach ($entry in $extension.Entries) {

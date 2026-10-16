@@ -1,7 +1,7 @@
 using System.Numerics;
 using System.Text.Json.Nodes;
 
-namespace Recoil.Zbd.Core.Animation;
+namespace zStudio.Core.Animation;
 
 public sealed record AnimationNodePose(long Id, int SourceNode, int Model, Matrix4x4 Transform, bool Visible, float Opacity, int Variant, float Morph, double CycleTime, string? Texture = null);
 public sealed record AnimationSoundCue(long Id, string Name, bool Stop, bool Persistent, double StartedAt, Vector3 Position)
@@ -352,11 +352,13 @@ public sealed partial class AnimationPlayer
     private Matrix4x4 World(Instance instance, Node node)
     {
         bindingOperation?.Reserve(64);
+        context.InitializationTransforms?.Reads.Add(node.Source);
         Matrix4x4 matrix = node.Local; HashSet<int> seen = [node.Source]; int parent = node.Parent;
         while (parent >= 0)
         {
             bindingOperation?.Reserve(64);
             if (!seen.Add(parent) || ParentNode(instance, parent) is not { } p) break;
+            context.InitializationTransforms?.Reads.Add(p.Source);
             matrix *= p.Local; parent = p.Parent;
         }
         return matrix;

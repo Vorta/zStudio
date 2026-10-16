@@ -1,8 +1,8 @@
 using HelixToolkit.SharpDX;
-using Recoil.Zbd.Rendering;
+using zStudio.Rendering;
 using Xunit;
 
-namespace Recoil.Zbd.Desktop.Tests;
+namespace zStudio.Desktop.Tests;
 
 public sealed class PreviewRecoveryTests
 {

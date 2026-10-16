@@ -1,9 +1,9 @@
 using System.Globalization;
 using System.Text.Json.Nodes;
-using Recoil.Zbd.Automation;
-using Recoil.Zbd.Core;
+using zStudio.Automation;
+using zStudio.Core;
 
-namespace Recoil.Zbd.Desktop;
+namespace zStudio.Desktop;
 
 public partial class MainWindow
 {
@@ -22,7 +22,7 @@ public partial class MainWindow
     };
     private void RegisterParachuteCommands(StudioCommands registry)
     {
-        RegisterJob(registry, "parachute", "Inspect and relocate complete existing VTOL drop windows in a Whole world. Show analyzes the first discovered flight; unavailable flights retain the candidate list, entry and analysisRefusal without a partial path. Analyze selects an exact entry. Conditional release markers come from a frozen bounded runtime, never landing predictions. Select/begin/set/confirm/cancel share the GUI draft and one undo step. Set a local start time or exact path segment plus fraction to disambiguate crossings. Compiled edits belong to the returned animation owner; source edits use token-preserving project history and rebuild. Undo/redo/save explicitly target that owner. save requires a NEW destination for compiled animations; source saves retain their project destination. Samples/releases support offset/limit pagination without query; preview_state.parachute reports bounded state. No physical input is captured.",
+        RegisterJob(registry, "parachute", "Inspect and relocate complete existing VTOL drop windows in a Whole world. Show analyzes the first discovered flight; unavailable flights retain the candidate list, entry and analysisRefusal without a partial path. Analyze selects an exact entry. Conditional release markers come from a frozen bounded runtime, never landing predictions. Select/begin/set/confirm/cancel share the GUI draft and one undo step. Set a local start time or exact path segment plus fraction to disambiguate crossings. Compiled edits belong to the returned animation owner; source edits use token-preserving project history and in-memory scene evaluation. Source Apply creates no archives and Save writes the owning animation definitions. Undo/redo/save explicitly target that owner. save requires a NEW destination for compiled animations; source saves retain their project destination. Samples/releases support offset/limit pagination without query; preview_state.parachute reports bounded state. No physical input is captured.",
             [PreviewParameter, DocumentParameter, RevisionParameter,
                 P("action", "string", "Operation.", true, "show", "hide", "analyze", "select", "begin", "set", "confirm", "cancel", "undo", "redo", "save", "samples", "releases"),
                 P("snapshot", "string", "Current Parachute snapshot, required except show."),
@@ -38,7 +38,11 @@ public partial class MainWindow
             if (world != shownDocument || a["revision"]!.GetValue<long>() != world.Revision)
                 throw new StudioCommandException("revision_conflict", "Read the displayed world's current document and revision.");
             string action = Text(a, "action");
-            if (action == "show") { RequireNoDrafts(); await ShowParachutesAsync(token); return Result(new { parachute = ParachuteState() }); }
+            if (action == "show")
+            {
+                if (retiringScene != null) throw new StudioCommandException("not_ready", "Reloading view…");
+                RequireNoDrafts(); await ShowParachutesAsync(token); return Result(new { parachute = ParachuteState() });
+            }
             if (!a.ContainsKey("snapshot")) throw new StudioCommandException("invalid_argument", "Supply the current Parachute snapshot.");
             var state = RequireParachutes(Text(a, "snapshot"));
             if (state.Owner != null && action is "begin" or "set" or "confirm" or "undo" or "redo" or "save")
@@ -86,7 +90,7 @@ public partial class MainWindow
                     RequireParachuteInput(draft);
                     bool time = a.ContainsKey("start"), segment = a.ContainsKey("segment"), fraction = a.ContainsKey("fraction");
                     if (time == segment || segment != fraction) throw new StudioCommandException("invalid_argument", "Supply start, or segment and fraction together.");
-                    float start = time ? (float)Number(a, "start") : Recoil.Zbd.Core.Animation.VtolDropWindows.PlanMove(state.Analysis!, draft.Window.Id, Int(a, "segment"), (float)Number(a, "fraction")).NewStart;
+                    float start = time ? (float)Number(a, "start") : zStudio.Core.Animation.VtolDropWindows.PlanMove(state.Analysis!, draft.Window.Id, Int(a, "segment"), (float)Number(a, "fraction")).NewStart;
                     draft.Input = start.ToString("G9", CultureInfo.InvariantCulture); state.Viewport.SetParachutePointerMove(false);
                     QueueParachutePreview(draft, token: token); UpdateParachutePanel(); await draft.Work.WaitAsync(token); token.ThrowIfCancellationRequested();
                     RequireParachuteDraft(draft.Token);

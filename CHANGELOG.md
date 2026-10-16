@@ -2,10 +2,47 @@
 
 Version numbers follow `MAJOR.MINOR.PATCH`; the 0.x series is under active development. Release tags and downloadable archives use the same version.
 
-## Unreleased
+## 0.9.0 — Unreleased
+
+- Group the source map picker into single-player (m1–m6) and multiplayer maps, six per row, and restyle the selected-object card: a translucent panel over the blurred scene, an icon/name/type header with icon actions, collapsible sections, colour-coded X/Y/Z fields and flag check boxes.
+- Show a source map's later passes as separate trees below the world: AIV units for the selected difficulty, puppies pickups, and objects the startup animations place; mark objects that mission animations bind to (⟳, animations in the tooltip and `scene_tree`).
+- Rename source-map groups and reference holders the build removes (the game never uses their names) from the world tree's right-click **Rename…** or `zstudio_source_world_object_edit` with `sourceFile` and `gltfNode`.
+- A source map opens in the new editor layout: a grouped command bar (Camera, Display, Overlay, Show), the World outliner on the left with type icons, search, type filters and per-object hide, the selected-object card docked as the Properties pane (Pop out returns it to the floating card) with a "Nothing selected" state, chips over the view (view menu, selection, surface under the cursor, AI nodes, Flycam banner) and a status bar with pane toggles. The card adds Reset rotation and scale, drag-to-scrub axis letters and a model browse button. MCP: `scene_tree` search/types/hide/show, `workspace_view` `propertiesDocked`, `scene_inspect` `recentSelections`.
+- Isolate and Show all no longer move the camera.
+- The card's crater flags read CanModify (craters and quicksand allowed) and ClipTo (craters and quicksand blocked).
+- Clicking a scene tree row that cannot be selected (such as the aiv_hard pass) while another object is selected no longer crashes zStudio.
+- A source object's move handles work as soon as they are shown, before any field is changed.
+- Move handles follow a source object while it is dragged, and clicks in an open drop-down list on the card no longer reach the scene behind it.
+- The selected-object card edits an object's zone: Inherit, Any or a zone number, and its altitude zone check, applied with its other fields; a shared zone asks before changing every use. The zone service can now set a node back to Inherit.
+- Edit source-world objects from the selected-object card like pickups and vehicles: fields are editable at once, the footer's Revert and Apply enable once something changes, and the Transform header's Move/Rotate toggles show or hide the handles (move arrows follow the object's rotation). Source worlds no longer have Unlock editing, the Scene and Selection menus, Edit path (Tab), the toolbar Add model or the tree's Parts button; the card gains Isolate, Maps becomes a back arrow beside the Whole world heading, and every card loses Copy all. Source-object cards are titled with the object's name, show its node type and model as read-only text, and have no Parent field.
+- Keep the source world on screen while an edit rebuilds it, with a "Reloading view…" notice, and draw a moved, rotated or scaled object at its new transform immediately; the rebuilt scene replaces it without a blank viewer.
+- Rename mission database objects and change the glTF model an object references (keeping its place, flags and zone) from Properties and `zstudio_source_world_object_edit`. A rename is refused while one of the mission's animations is bound to the old name, such as m1's `destroy_turret` on `tur_101`, which every turret uses.
+- Show a selected object's zone ID and altitude zone check in the inspection card, with the clicked surface and polygon zones; source maps mark inherited zones as `Inherit (ID)` and name the node, placement or load root that supplied them, in the card, Properties and MCP.
+- Show the authored source-map hierarchy, including groups removed during compilation, and distinguish whole-object parents from clicked mesh parents.
+- Omit the initial VTOL preview line segment while retaining release timing, samples and markers.
+- Check aggregate Blender reference and placement metadata growth before copying polygon assignments.
+
+- Remove previous-version source readers, flattened Blender checkout/update paths and settings migrations; obsolete source data requires fresh reconstruction or checkout.
+- Use zStudio assembly and namespace identities and a fresh local settings profile, with MCP disabled by default and no import of previous settings.
+- Rename the shared editing lock to `zstudio_scene_lock` / `EditingLocked`, without compatibility aliases.
+
+- Align whole-object selection bounds with the object's effective rotation and scale.
+- Preview CanModify and ClipTo together, and show surface diagnostics and face orientation as 50% colour overlays that preserve textures and transparency.
+- Use a parachute icon for the world-viewer drop-position control.
+
+- Open source projects through a centered mission picker, with one map at a time and a world-rooted node tree on the right.
+- Select referenced models as whole placed objects, and inspect their internal hierarchy through per-instance, editor-only Parts visibility controls. Share map discovery, selection and Parts operations with MCP.
 
 - Bundle the RECOIL Blender 5.2 LTS extension: linked glTF collections, named node flags, zones, placement-specific polygon assignments, shared-model editing and validated graph export.
 - Restore source-project Blender checkout/update through a windowless shared-format helper, with complete graph provenance, cross-world zone preservation, conflict guards, undo and verified saves. Expose installation details and the same checkout/update service through MCP.
+- Keep the bundled Blender extension version equal to zStudio's version; packaging refuses mismatched versions.
+- Recover cleanly after refused Blender reference exports, validate imported resource ownership across graphs, and isolate Geometry Nodes placement drafts through cancellation and `.blend` saves.
+- Preserve original objects linked into placement drafts when canceling, and retain draft copies or resources adopted by other scenes.
+- Preserve workspace relationships through Blender scene renaming and reopening; cancel nested drafts safely after a parent is renamed or deleted.
+- Refuse removal of an imported material image while a recorded engine texture name remains, preventing a successful export from silently restoring that texture when compiled.
+- Reconcile Blender material appearance from the exported shader values, including linked colour and alpha inputs, while preserving deliberate RECOIL property overrides.
+- Edit Blender node flags and zones through individual fields in Object Properties → RECOIL, with descriptive hover hints and internally saved node metadata.
+- Hide Blender extension source identities and workspace bookkeeping from ordinary Custom Properties while preserving user-created properties and the RECOIL editing controls.
 
 ## 0.8.5 — 2026-10-13
 

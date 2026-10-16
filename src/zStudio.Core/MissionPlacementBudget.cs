@@ -2,7 +2,7 @@ using System.Runtime.InteropServices;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 
-namespace Recoil.Zbd.Core;
+namespace zStudio.Core;
 
 /// <summary>
 /// One mission construction's work and retained copies, admitted before allocation. The allowances bound what

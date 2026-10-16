@@ -2,7 +2,7 @@ using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Text;
 
-namespace Recoil.Zbd.Core.Worlds;
+namespace zStudio.Core.Worlds;
 
 /// <summary>A difference between two worlds, at a node path.</summary>
 public sealed class WorldDifference

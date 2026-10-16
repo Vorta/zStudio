@@ -1,7 +1,7 @@
-using Recoil.Zbd.Core.Worlds;
+using zStudio.Core.Worlds;
 using Xunit;
 
-namespace Recoil.Zbd.Tests;
+namespace zStudio.Tests;
 
 /// <summary>The zone probes on malformed worlds (bounded, no crash) and the parts of the engine's walk the plain cases miss.</summary>
 public sealed class ZoneProbeBoundsTests

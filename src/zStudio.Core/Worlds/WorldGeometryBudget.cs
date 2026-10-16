@@ -1,6 +1,6 @@
-using Recoil.Zbd.Core.Formats;
+using zStudio.Core.Formats;
 
-namespace Recoil.Zbd.Core.Worlds;
+namespace zStudio.Core.Worlds;
 
 /// <summary>The shared reader's aggregate geometry limits, checked while building and before serializing a world.</summary>
 internal sealed class WorldGeometryBudget

@@ -1,12 +1,12 @@
 using System.Numerics;
 using System.Text;
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Core.Formats;
-using Recoil.Zbd.Core.Sources;
-using Recoil.Zbd.Core.Worlds;
+using zStudio.Core;
+using zStudio.Core.Formats;
+using zStudio.Core.Sources;
+using zStudio.Core.Worlds;
 using Xunit;
 
-namespace Recoil.Zbd.Tests;
+namespace zStudio.Tests;
 
 /// <summary>
 /// The zone probe's lights, the inference's references to files without nodes, its mirror budget and child order, the
@@ -92,7 +92,11 @@ public sealed class LoaderReviewFixTests
         public Dictionary<string, byte[]> Files { get; } = files;
         public bool Exists(string relative) => Files.ContainsKey(relative);
         public byte[] Read(string relative, CancellationToken token) => Read(relative, token, ProjectReadLimits.Document);
-        public byte[] Read(string relative, CancellationToken token, ProjectReadLimits limits) { token.ThrowIfCancellationRequested(); byte[] result = Files[relative]; limits.Validate(result); return result; }
+        public byte[] Read(string relative, CancellationToken token, ProjectReadLimits limits) { token.ThrowIfCancellationRequested(); byte[] result = Files[relative];
+            // Original script fixtures remain FLT-based; the current source assembler receives reconstructed filenames.
+            if (relative.StartsWith("gamegen/", StringComparison.Ordinal))
+                result = Encoding.ASCII.GetBytes(GameGenScriptText.Write(GameGenScriptText.ProjectFileNames(GameGenScriptText.Tokenize(Encoding.ASCII.GetString(result)), new HashSet<string>())));
+            limits.Validate(result); return result; }
     }
 
     private static byte[] Script(int mission, string loads, string before = "") => Encoding.ASCII.GetBytes($"""

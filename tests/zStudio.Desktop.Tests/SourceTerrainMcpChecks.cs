@@ -6,17 +6,17 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using ModelContextProtocol.Client;
 using ModelContextProtocol.Protocol;
-using Recoil.Zbd.Automation;
-using Recoil.Zbd.Core.Sources;
-using Recoil.Zbd.Core.Terrain;
-using Recoil.Zbd.Core.Worlds;
-using Recoil.Zbd.Desktop;
-using Recoil.Zbd.Mcp;
-using Recoil.Zbd.Rendering;
-using Recoil.Zbd.Tests;
+using zStudio.Automation;
+using zStudio.Core.Sources;
+using zStudio.Core.Terrain;
+using zStudio.Core.Worlds;
+using zStudio.Desktop;
+using zStudio.Mcp;
+using zStudio.Rendering;
+using zStudio.Tests;
 using Xunit;
 
-namespace Recoil.Zbd.Desktop.Tests;
+namespace zStudio.Desktop.Tests;
 
 /// <summary>
 /// Terrain in a source world through the real named-pipe MCP connection and the GUI: creating a terrain from a surface
@@ -165,6 +165,7 @@ internal static class SourceTerrainMcpChecks
             // Properties of a piece edits its recipe; the brush erases part of the road with a viewport stroke.
             await Preview();
             int piece = doc.PreviewDocument.Scene!.Nodes.First(n => n.Name.StartsWith("hills_land_", StringComparison.Ordinal)).Index;
+            Assert.Equal(piece, (int)typeof(MainWindow).GetMethod("SourceSelectionOwner", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(main, [doc, piece])!);
             string preview = ((Guid)typeof(MainWindow).GetField("previewId", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(main)!).ToString();
             main.TerrainRecipeReader = (w, path, t) =>
             {
@@ -172,6 +173,7 @@ internal static class SourceTerrainMcpChecks
                 return SourceTerrain.Read(w, path, t);
             };
             await Call("scene_properties", new() { ["preview"] = preview, ["node"] = piece, ["open"] = true });
+            Assert.IsType<TerrainPropertiesEditor>(main.OpenPropertiesWindow!.SourceFields);
             // Both semantic entry points must leave the pinned editor intact when their request is canceled
             // after recipe parsing. The tree command is also the GUI scene-row Properties path.
             var reader = main.TerrainRecipeReader;
@@ -265,7 +267,6 @@ internal static class SourceTerrainMcpChecks
             Assert.True(body.IsEnabled);
             // Switching between the two explicit brushes must transfer input ownership. An empty zone
             // draft may retarget to terrain Properties; selected targets still require Apply or Cancel.
-            doc.PickupsLocked = false;
             var view = (SceneViewport)typeof(MainWindow).GetField("scene", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(main)!;
             var brush = typeof(MainWindow).GetField("terrainBrush", BindingFlags.Instance | BindingFlags.NonPublic)!;
             var zone = await ZoneAction("begin");
@@ -316,7 +317,7 @@ internal static class SourceTerrainMcpChecks
             // Inspecting an unrelated raw model uses model-local coordinates. Retain the brush choice,
             // but never consume that preview's input or accept its coordinates as a terrain stroke.
             var worldAsset = doc.SelectedAsset!.Record;
-            var modelAsset = doc.Assets.First(a => a.Record.Kind == Recoil.Zbd.Core.AssetKind.Model &&
+            var modelAsset = doc.Assets.First(a => a.Record.Kind == zStudio.Core.AssetKind.Model &&
                 !doc.SourceBuild!.Provenance.Any(p => p.Value.Terrain != null && doc.PreviewDocument.Scene!.Nodes[p.Key].ModelIndex == a.Index));
             var heldStroke = typeof(SceneViewport).GetField("brushStroke", BindingFlags.Instance | BindingFlags.NonPublic)!;
             heldStroke.SetValue(view, new List<Vector3> { new(250, 0, 250) });
@@ -339,7 +340,7 @@ internal static class SourceTerrainMcpChecks
             int terrainModel = doc.PreviewDocument.Scene!.Nodes[piece].ModelIndex!.Value;
             await Job("select_asset", new() { ["document"] = Id(doc), ["kind"] = "Model", ["index"] = terrainModel });
             Assert.True(view.TerrainBrushActive);
-            var terrainAsset = doc.Assets.Single(a => a.Record.Content is Recoil.Zbd.Core.GameNode n && n.Index == piece);
+            var terrainAsset = doc.Assets.Single(a => a.Record.Content is zStudio.Core.GameNode n && n.Index == piece);
             await Job("select_asset", new() { ["document"] = Id(doc), ["kind"] = terrainAsset.Record.Kind.ToString(), ["index"] = terrainAsset.Index });
             Assert.True(view.TerrainBrushActive);
             await Job("select_asset", new() { ["document"] = Id(doc), ["kind"] = worldAsset.Kind.ToString(), ["index"] = worldAsset.Index });
@@ -402,15 +403,15 @@ internal static class SourceTerrainMcpChecks
                 workspace.Retract(note);
                 Assert.False(workspace.IsDirty);
 
-                // A redo rebuilds the world (MCP edits still run while the GUI plans); the undo returns it.
+                // Source history shares the operation guard with GUI conversion planning.
                 await ClickConvert();
-                var replaced = doc;
-                doc = Document(await Call("undo_redo", new() { ["document"] = Id(doc), ["revision"] = doc.Revision, ["action"] = "redo" }));
-                Assert.True(replaced.IsDisposed);
+                long planningRevision = doc.Revision;
+                var blockedHistory = await Call("undo_redo", new() { ["document"] = Id(doc), ["revision"] = doc.Revision, ["action"] = "redo" }, error: true);
+                Assert.Contains("busy", blockedHistory.GetValue<string>());
+                Assert.False(doc.IsDisposed); Assert.Equal(planningRevision, doc.Revision); Assert.False(workspace.IsDirty);
+                cancelClick.Invoke(main, [main, new System.Windows.RoutedEventArgs()]);
                 planProceed.Release();
-                await Shown("while the conversion was planned");
-                doc = Document(await Call("undo_redo", new() { ["document"] = Id(doc), ["revision"] = doc.Revision, ["action"] = "undo" }));
-                Assert.False(workspace.IsDirty);
+                await Shown("Operation canceled");
 
                 // MCP plans the same way, and its job can be cancelled while it plans.
                 var operation = await Call("source_terrain_convert", new() { ["document"] = Id(doc), ["revision"] = doc.Revision, ["apply"] = true });
@@ -427,9 +428,11 @@ internal static class SourceTerrainMcpChecks
                 // while an MCP conversion still plans; the conversion is accepted and completes while the question waits, so
                 // Discard asks again (now with both) instead of dropping the agent's completed edit unseen.
                 workspace.Apply("Note", [("gamegen/note.gs", "# note\r\n"u8.ToArray())], token);
+                // The direct fixture edit changes the frozen script inventory; evaluate it before testing concurrent conversion.
+                doc = Document(await Job("reload_document", new() { ["document"] = Id(doc), ["revision"] = doc.Revision }));
                 var converting = await Call("source_terrain_convert", new() { ["document"] = Id(doc), ["revision"] = doc.Revision, ["apply"] = true });
                 Assert.True(await planEntered.WaitAsync(TimeSpan.FromSeconds(10), token));
-                List<int> asked = []; bool answering = false;
+                List<int> asked = []; bool answering = false; JsonNode? completedConversion = null;
                 var answer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(20) };
                 answer.Tick += async (_, _) =>
                 {
@@ -442,8 +445,8 @@ internal static class SourceTerrainMcpChecks
                         planProceed.Release();
                         JsonNode done = converting;
                         while (done["State"]!.GetValue<string>() is "queued" or "running") { await Task.Delay(10, token); done = await Call("operation", new() { ["id"] = converting["id"]!.GetValue<string>() }); }
-                        Assert.Equal("completed", done["State"]!.GetValue<string>());
-                        choice = "Discard";
+                        completedConversion = done;
+                        if (done["State"]!.GetValue<string>() == "completed") choice = "Discard";
                     }
                     finally
                     {
@@ -455,7 +458,9 @@ internal static class SourceTerrainMcpChecks
                 answer.Start();
                 try { await main.ViewModel.CloseAsync(doc); }
                 finally { answer.Stop(); }
-                Assert.Equal(2, asked.Count); Assert.Equal(1, asked[0]); Assert.True(asked[1] > 1);
+                Assert.True(completedConversion?["State"]?.GetValue<string>() == "completed", "Concurrent conversion failed: " + completedConversion?.ToJsonString());
+                Assert.True(asked.Count == 2, $"Expected two close decisions; got {asked.Count}; oldDisposed={doc.IsDisposed}; ownerDisposed={doc.SourceWorld?.Owner?.IsDisposed}; documents={main.ViewModel.Documents.Count}; dirtyFiles={workspace.DirtyFiles.Count}; history={workspace.UndoCount}; asked={string.Join(',', asked)}; status={main.ViewModel.Status}");
+                Assert.Equal(1, asked[0]); Assert.True(asked[1] > 1);
                 doc = Assert.Single(main.ViewModel.Documents, d => d.SourceWorld != null);
                 Assert.Contains("gamegen/note.gs", workspace.DirtyFiles); Assert.Equal(asked[1], workspace.DirtyFiles.Count);
                 for (int i = 0; i < 2; i++) doc = Document(await Call("undo_redo", new() { ["document"] = Id(doc), ["revision"] = doc.Revision, ["action"] = "undo" }));

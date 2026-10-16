@@ -2,9 +2,9 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using ModelContextProtocol.Protocol;
 using ModelContextProtocol.Server;
-using Recoil.Zbd.Automation;
+using zStudio.Automation;
 
-namespace Recoil.Zbd.Mcp;
+namespace zStudio.Mcp;
 
 public static class StudioMcpServer
 {

@@ -3,34 +3,22 @@ using System.IO.Pipes;
 using System.Text.Json.Nodes;
 using ModelContextProtocol.Client;
 using ModelContextProtocol.Protocol;
-using Recoil.Zbd.Core.Sources;
-using Recoil.Zbd.Core.Worlds;
-using Recoil.Zbd.Mcp;
-using Recoil.Zbd.Tests;
+using zStudio.Mcp;
+using zStudio.Tests;
 using Xunit;
 
-namespace Recoil.Zbd.Desktop.Tests;
+namespace zStudio.Desktop.Tests;
 
 /// <summary>
-/// Nodes of a part the mission database copies twice, through MCP and Properties: a copy of a part's node is returned (and
-/// followed) in the copy of the part it was made beside, a parent named in Properties is taken from the moved node's copy,
-/// and only the flags a node's source can set are offered.
+/// Map-authored objects through MCP and Properties: a rebuilt object retains its selection, and generated Properties
+/// and MCP share exclusive crater modes, undo, supported flags and verified source persistence.
 /// </summary>
 internal static class SourceObjectPlanMcpChecks
 {
     internal static async Task Run()
     {
         using var fixture = new SourceWorldFixture();
-        fixture.WritePartDatabase();
-        // The two spellings still name one physical source; retain its full long identity.
-        string part = new string('p', 180) + ".gltf";
-        fixture.Write("data/m1/models/" + part, File.ReadAllBytes(fixture.Path("data/m1/models/m1_01.gltf")));
-        var database = JsonNode.Parse(File.ReadAllBytes(fixture.Path("data/m1/models/m1.gltf")))!;
-        var references = database["nodes"]!.AsArray().Select(n => n?["extras"]?["recoil"] as JsonObject)
-            .Where(e => e?["ref"]?.GetValue<string>() == "m1_01.gltf").ToArray();
-        Assert.Equal(2, references.Length);
-        references[0]!["ref"] = part; references[1]!["ref"] = part.ToUpperInvariant();
-        fixture.Write("data/m1/models/m1.gltf", database.ToJsonString());
+        fixture.WriteNestedDatabase(lookupEdits: true);
         using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(90)); var token = deadline.Token;
         var main = new MainWindow { Left = -12000, ShowInTaskbar = false }; main.Show();
         try
@@ -40,54 +28,30 @@ internal static class SourceObjectPlanMcpChecks
             await using var client = await McpClient.CreateAsync(new StreamClientTransport(pipe, pipe), cancellationToken: token);
             await main.ViewModel.OpenRootAsync(fixture.Project, token);
             var doc = Document((await Job("source_world_open", new() { ["mission"] = "m1" }))["document"]!);
-            List<string> keys = [.. Nodes(doc, "post").Select(p => Key(doc, p)).Distinct()];
-            Assert.Equal(2, keys.Count);
-
-            // Copying either copy's post copies it in the part, so in both copies: the result's copy is the one beside it.
-            foreach (string key in keys)
-            {
-                int post = Nodes(doc, "post").Single(p => Key(doc, p) == key);
-                string name = "post_" + keys.IndexOf(key);
-                var copied = await Job("source_world_object_edit", new() { ["document"] = Id(doc), ["revision"] = doc.Revision, ["node"] = post, ["action"] = "duplicate", ["name"] = name });
-                doc = Document(copied["document"]!);
-                Assert.Equal(2, copied["copies"]!.AsArray().Count);
-                int copy = copied["copy"]!.GetValue<int>();
-                Assert.Equal(name, doc.PreviewDocument.Scene!.Nodes.Single(n => n.Index == copy).Name);
-                Assert.Equal(key, Key(doc, copy));
-            }
-
-            // Properties names a parent: of the copies of crate, the one in the moved post's copy of the part.
-            var named = typeof(MainWindow).GetMethod("SourceWorldNodeNamedNear", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!;
-            // (The world Properties reads, whose nodes the parent is one of.)
-            var model = typeof(MainWindow).GetMethod("SourceWorldModel", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.Invoke(main, [doc])!;
-            var slots = GameZWriter.NodeSlots((GameZWorld)model.GetType().GetProperty("World")!.GetValue(model)!);
-            foreach (string key in keys)
-            {
-                int post = Nodes(doc, "post").Single(p => Key(doc, p) == key);
-                var crate = (WorldNode)named.Invoke(main, [doc, "crate", (int?)post])!;
-                Assert.Equal("crate", crate.Name);
-                Assert.Equal(key, Key(doc, slots[crate]));
-            }
-
-            // Exercise the actual warm parent callback, including same-copy preference. This small
-            // fixture must not format each occurrence's full source/lineage path on every lookup.
-            int followed = Nodes(doc, "post").Single(p => Key(doc, p) == keys[1]);
-            long before = GC.GetAllocatedBytesForCurrentThread();
-            for (int i = 0; i < 128; i++) _ = named.Invoke(main, [doc, "crate", (int?)followed]);
-            Assert.True(GC.GetAllocatedBytesForCurrentThread() - before < 128 * 1024, "Parent lookup copied source identities repeatedly.");
+            int followed = Nodes(doc, "post").Single();
 
             // Properties' actual generated field callback rebuilds the source world. Its selection
             // must follow the same occurrence using the new snapshot's identity index.
             var show = typeof(MainWindow).GetMethod("ShowSourceObjectPropertiesAsync", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!;
             Assert.True(await (Task<bool>)show.Invoke(main, [doc, followed, token])!);
-            var fields = Assert.IsType<SourceObjectPropertiesEditor>(main.OpenPropertiesWindow!.SourceFields);
-            var described = System.Text.Json.JsonSerializer.SerializeToNode(fields.DescribeAutomationFields())!;
-            string position = described["fields"]!.AsArray().Single(f => f!["Label"]!.GetValue<string>() == "Position")!["Id"]!.GetValue<string>();
-            await fields.WriteAutomationFieldAsync(position, "0, 0, 4");
-            doc = main.OpenPropertiesWindow!.Document!;
-            var changed = Assert.IsType<SourceObjectPropertiesEditor>(main.OpenPropertiesWindow.SourceFields);
+            var card = Card(); card.Refresh(); main.UpdateLayout();
+            Assert.Null(main.OpenPropertiesWindow);
+            var fields = card.ObjectEditor!;
+            var position = Descendants(fields).OfType<System.Windows.Controls.TextBox>().Single(t => System.Windows.Automation.AutomationProperties.GetName(t) == "Position Z");
+            int undoBefore = doc.SourceWorld!.Workspace.UndoCount;
+            position.Text = "4";
+            Assert.True(card.HasObjectDraft); Assert.Equal(undoBefore, doc.SourceWorld.Workspace.UndoCount);
+            await Call("resolve_drafts", new() { ["document"] = Id(doc), ["target"] = "scene", ["token"] = card.DraftToken, ["action"] = "discard" });
+            Assert.Equal("0", position.Text); Assert.False(card.HasObjectDraft);
+            position.Text = "4";
+            // A second field shares this one transaction and rebuild.
+            await Call("scene_card", new() { ["document"] = Id(doc), ["revision"] = doc.Revision, ["action"] = "set", ["token"] = card.DraftToken,
+                ["fields"] = new[] { new { field = "flag_40", value = "on" } } });
+            doc = Document(await Call("resolve_drafts", new() { ["document"] = Id(doc), ["target"] = "scene", ["token"] = card.DraftToken, ["action"] = "apply" }));
+            Assert.Equal(undoBefore + 1, doc.SourceWorld!.Workspace.UndoCount);
+            var changed = Card().ObjectEditor!;
             Assert.Equal("post", changed.State.Name);
-            Assert.Equal(keys[1], Key(doc, changed.State.Node));
+            Assert.Equal(Nodes(doc, "post").Single(), changed.State.Node);
             Assert.NotNull(changed.State.Transform);
             Assert.Equal(4f, changed.State.Transform.Value.Position.Z);
 
@@ -95,13 +59,45 @@ internal static class SourceObjectPlanMcpChecks
             // file carries every flag.
             int world = doc.PreviewDocument.Scene!.Nodes.First(n => n.Name == "world" && doc.SourceBuild!.Provenance.ContainsKey(n.Index)).Index;
             static IEnumerable<string> Bits(JsonNode state) => state["editableFlags"]!.AsArray().Select(f => f!["bit"]!.GetValue<string>());
+            // A meshless World has the same card route and its clean token cannot edit a different selection.
+            string priorToken = Card().DraftToken; string priorTarget = Card().Selection!.Target;
+            await Call("scene_properties", new() { ["node"] = world, ["open"] = true });
+            Assert.Equal(world, Card().ObjectNode);
+            var tree = (SceneTreeModel)typeof(MainWindow).GetField("sceneTree", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.GetValue(main)!;
+            Assert.Equal(world, tree.Selected?.Index);
+            Assert.Null(main.OpenPropertiesWindow);
+            Assert.NotEqual(priorToken, Card().DraftToken);
+            var inspected = await Call("scene_inspect", new());
+            Assert.Equal(Card().Selection!.Target, inspected["selected"]!.GetValue<string>());
+            Assert.NotNull(inspected["inspection"]);
+            Assert.Contains("draft_conflict", (await Call("scene_card", new() { ["document"] = Id(doc), ["revision"] = doc.Revision, ["action"] = "set", ["token"] = priorToken,
+                ["fields"] = new[] { new { field = "WorldSetAmbient", value = "1 1 1" } } }, error: true)).GetValue<string>());
+            // Failed GUI Apply retains a form that can be corrected, including after its outer reporting task completes.
+            var worldCard = Card();
+            worldCard.SetObjectFields(new JsonArray(new JsonObject { ["field"] = "WorldSetFogDensity", ["value"] = "0.25" }));
+            var preparing = main.SourceEditPreparing;
+            main.SourceEditPreparing = _ => throw new InvalidDataException("Test worker preparation failure");
+            try
+            {
+            typeof(SceneInspectionCard).GetMethod("Apply", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.Invoke(worldCard, null);
+            if (typeof(SceneInspectionCard).GetField("applying", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.GetValue(worldCard) is Task applying) await applying;
+            } finally { main.SourceEditPreparing = preparing; }
+            Assert.True(worldCard.HasObjectDraft); Assert.True(worldCard.ObjectEditor!.IsEnabled);
+            worldCard.CancelDraft();
+            await Call("scene_card", new() { ["action"] = "select", ["target"] = priorTarget });
+            Assert.Equal(CurrentPost(), Card().ObjectNode);
             Assert.Empty(Bits(await Call("source_world_object", new() { ["document"] = Id(doc), ["node"] = world })));
             Assert.Contains("0x20000", Bits(await Call("source_world_object", new() { ["document"] = Id(doc), ["node"] = Nodes(doc, "crate").First() })));
 
-            // The actual Properties callback and MCP share one exclusive crater-mode edit. Both copies
-            // of this definition follow it, and a mode switch is one undoable operation.
-            await SetProperty("Craters allowed (CanModify)", "on");
+            // The actual Properties callback and MCP share one exclusive crater-mode edit; a mode switch is one undoable operation.
+            await SetProperty("CanModify (craters and quicksand allowed)", "on");
             await AssertModes(0x10000);
+            // Cancel resets mode bookkeeping; retrying the same exclusive switch must still clear CanModify.
+            Card().SetObjectFields(new JsonArray(new JsonObject { ["field"] = "flag_20000", ["value"] = "on" }));
+            Card().CancelDraft();
+            Card().SetObjectFields(new JsonArray(new JsonObject { ["field"] = "flag_20000", ["value"] = "on" }));
+            Assert.False(Card().ObjectEditor!.Patch(_ => null).Flags![0x10000]);
+            Card().CancelDraft();
             int history = doc.SourceWorld!.Workspace.UndoCount;
             doc = Document((await Job("source_world_object_edit", new()
             {
@@ -114,28 +110,27 @@ internal static class SourceObjectPlanMcpChecks
             await AssertModes(0x10000);
             doc = Document(await Call("undo_redo", new() { ["document"] = Id(doc), ["revision"] = doc.Revision, ["action"] = "redo" }));
             await AssertModes(0x20000);
-            await SetProperty("No craters (ClipTo)", "off");
+            await SetProperty("ClipTo (craters and quicksand blocked)", "off");
             await AssertModes(0);
             await SetProperty("Overwrite", "on");
             var overwritten = (await Call("source_world_object", new() { ["document"] = Id(doc), ["node"] = CurrentPost() }))["editableFlags"]!.AsArray();
             Assert.True(overwritten.Single(f => f!["bit"]!.GetValue<string>() == "0x800000")!["on"]!.GetValue<bool>());
             // Saved, so closing asks nothing.
             await Job("save_document", new() { ["document"] = Id(doc), ["revision"] = doc.Revision });
-            var saved = JsonNode.Parse(File.ReadAllBytes(fixture.Path("data/m1/models/" + part)))!;
+            var saved = JsonNode.Parse(File.ReadAllBytes(fixture.Path("data/m1/models/m1.gltf")))!;
             var attributes = saved["nodes"]!.AsArray().Single(n => n?["name"]?.GetValue<string>() == "post")!["extras"]!["recoil"]!.AsObject();
             Assert.False(attributes.ContainsKey("declient"));
             Assert.False(attributes.ContainsKey("flags"));
             Assert.True(attributes["overwrite"]!.GetValue<bool>());
 
-            int CurrentPost() => Nodes(doc, "post").Single(p => Key(doc, p) == keys[1]);
+            int CurrentPost() => Nodes(doc, "post").Single();
             async Task SetProperty(string label, string value)
             {
                 Assert.True(await (Task<bool>)show.Invoke(main, [doc, CurrentPost(), token])!);
-                var editor = Assert.IsType<SourceObjectPropertiesEditor>(main.OpenPropertiesWindow!.SourceFields);
-                var description = System.Text.Json.JsonSerializer.SerializeToNode(editor.DescribeAutomationFields())!;
-                string id = description["fields"]!.AsArray().Single(f => f!["Label"]!.GetValue<string>() == label)!["Id"]!.GetValue<string>();
-                await editor.WriteAutomationFieldAsync(id, value);
-                doc = main.OpenPropertiesWindow!.Document!;
+                var selected = Card(); selected.Refresh();
+                string key = "flag_" + SourceObjectFields.EditableFlags.Single(f => f.Label == label).Bit.ToString("X");
+                selected.SetObjectFields(new JsonArray(new JsonObject { ["field"] = key, ["value"] = value }));
+                doc = Document(await Call("resolve_drafts", new() { ["document"] = Id(doc), ["target"] = "scene", ["token"] = selected.DraftToken, ["action"] = "apply" }));
             }
             async Task AssertModes(uint expected)
             {
@@ -147,12 +142,21 @@ internal static class SourceObjectPlanMcpChecks
                 }
             }
 
+            SceneInspectionCard Card() => (SceneInspectionCard)typeof(MainWindow).GetProperty("CurrentInspectionCard", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.GetValue(main)!;
+            static IEnumerable<System.Windows.DependencyObject> Descendants(System.Windows.DependencyObject root)
+            {
+                for (int i = 0; i < System.Windows.Media.VisualTreeHelper.GetChildrenCount(root); i++)
+                {
+                    var child = System.Windows.Media.VisualTreeHelper.GetChild(root, i); yield return child;
+                    foreach (var item in Descendants(child)) yield return item;
+                }
+            }
             List<int> Nodes(DocumentModel d, string name) => [.. d.PreviewDocument.Scene!.Nodes.Where(n => n.Name == name && d.SourceBuild!.Provenance.ContainsKey(n.Index)).Select(n => n.Index)];
-            static string Key(DocumentModel d, int node) => SourceObjectEdits.CopyKey(d.SourceBuild!.Provenance[node]);
             DocumentModel Document(JsonNode state) => main.ViewModel.Documents.Single(d => d.SessionId.ToString() == state["id"]!.GetValue<string>());
             static string Id(DocumentModel d) => d.SessionId.ToString();
             async Task<JsonNode> Call(string name, Dictionary<string, object?> arguments, bool error = false)
             {
+                if (name is "scene_card" or "scene_properties" or "scene_inspect") arguments["preview"] = typeof(MainWindow).GetField("previewId", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.GetValue(main)!.ToString();
                 var result = await client.CallToolAsync("zstudio_" + name, arguments, cancellationToken: token);
                 string text = string.Join(";", result.Content.OfType<TextContentBlock>().Select(c => c.Text));
                 Assert.True((result.IsError == true) == error, text);
@@ -167,6 +171,8 @@ internal static class SourceObjectPlanMcpChecks
         }
         finally
         {
+            // A failed assertion must not leave a modal draft prompt on the private test desktop.
+            if (typeof(MainWindow).GetProperty("CurrentInspectionCard", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.GetValue(main) is SceneInspectionCard { ObjectApplying: false } cleanupCard) cleanupCard.CancelDraft();
             // A failed assertion may leave unsaved edits: resolve them, so no Unsaved changes dialog blocks the next checks.
             foreach (var doc in main.ViewModel.Documents.ToArray()) main.ViewModel.CloseResolved(doc);
             main.Close();

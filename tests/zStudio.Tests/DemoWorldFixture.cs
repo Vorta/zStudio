@@ -1,9 +1,9 @@
 using System.Buffers.Binary;
 using System.IO;
 using System.Numerics;
-using Recoil.Zbd.Core.Formats;
+using zStudio.Core.Formats;
 
-namespace Recoil.Zbd.Tests;
+namespace zStudio.Tests;
 
 /// <summary>
 /// Version-13 worlds for tests: a version-15 file rewritten in the layout of the 1998 demos. Node slots grow to 268 bytes and

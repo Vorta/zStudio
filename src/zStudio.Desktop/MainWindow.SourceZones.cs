@@ -1,11 +1,11 @@
 using System.IO;
 using System.Text.Json.Nodes;
 using System.Windows;
-using Recoil.Zbd.Automation;
-using Recoil.Zbd.Core.Sources;
-using Recoil.Zbd.Rendering;
+using zStudio.Automation;
+using zStudio.Core.Sources;
+using zStudio.Rendering;
 
-namespace Recoil.Zbd.Desktop;
+namespace zStudio.Desktop;
 
 public partial class MainWindow
 {
@@ -150,9 +150,9 @@ public partial class MainWindow
     private void ToggleZonePainting(ZoneDraft draft)
     {
         RequireZoneDraft(draft.Document);
-        if (shownDocument != draft.Document || scene == null || shownAsset?.Kind != Recoil.Zbd.Core.AssetKind.World)
+        if (shownDocument != draft.Document || scene == null || shownAsset?.Kind != zStudio.Core.AssetKind.World)
             throw new StudioCommandException("not_ready", "Show this source world's Whole world preview before painting.");
-        if (draft.Document.PickupsLocked) throw new StudioCommandException("locked", "Unlock world editing before painting zones.");
+        if (draft.Document.EditingLocked) throw new StudioCommandException("locked", "Unlock world editing before painting zones.");
         bool on = !scene.ZonePaintActive;
         if (on)
         {
@@ -217,7 +217,7 @@ public partial class MainWindow
     {
         var draft = RequireZoneDraft(document, expected);
         if (draft.Targets.Count == 0) throw new StudioCommandException("not_ready", "Select or paint targets before applying zones.");
-        if (document.PickupsLocked) throw new StudioCommandException("locked", "Unlock world editing before applying zones.");
+        if (document.EditingLocked) throw new StudioCommandException("locked", "Unlock world editing before applying zones.");
         var selections = draft.Targets.ToArray();
         var assignment = draft.Faces ? new SourceZoneAssignment(PolygonZones: draft.Zones.ToArray()) :
             new SourceZoneAssignment(draft.Zones.Length == 1 ? draft.Zones[0] : draft.Zones.Length == 0 ? null : throw new StudioCommandException("invalid_argument", "Choose at most one object zone."), draft.Gate);

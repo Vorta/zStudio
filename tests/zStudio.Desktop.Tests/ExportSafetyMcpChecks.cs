@@ -5,15 +5,15 @@ using System.Windows;
 using System.Windows.Controls;
 using ModelContextProtocol.Client;
 using ModelContextProtocol.Protocol;
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Core.Formats;
-using Recoil.Zbd.Core.Sources;
-using Recoil.Zbd.Desktop;
-using Recoil.Zbd.Mcp;
-using Recoil.Zbd.Tests;
+using zStudio.Core;
+using zStudio.Core.Formats;
+using zStudio.Core.Sources;
+using zStudio.Desktop;
+using zStudio.Mcp;
+using zStudio.Tests;
 using Xunit;
 
-namespace Recoil.Zbd.Desktop.Tests;
+namespace zStudio.Desktop.Tests;
 
 /// <summary>
 /// What the GUI and MCP promise around exports and source projects: path arguments are full paths, the Blender checkout is
@@ -131,13 +131,13 @@ internal static class ExportSafetyMcpChecks
         // The root changes while the GUI's off-thread output plan/destination confirmation is pending.
         await main.ViewModel.OpenRootAsync(replacement.Project, token);
         string destination = Path.Combine(replacement.Project, "..", "unexpected-export");
-        var error = await Assert.ThrowsAsync<Recoil.Zbd.Automation.StudioCommandException>(() =>
+        var error = await Assert.ThrowsAsync<zStudio.Automation.StudioCommandException>(() =>
             main.ExportSourceProjectAsync(destination, ["m1/gamez.zbd"], true, token, expectedGeneration: generation));
         Assert.Equal("context_changed", error.Code);
         Assert.False(Directory.Exists(destination));
         // Returning to the same path must not revive the stale confirmation either.
         await main.ViewModel.OpenRootAsync(original.Project, token);
-        await Assert.ThrowsAsync<Recoil.Zbd.Automation.StudioCommandException>(() =>
+        await Assert.ThrowsAsync<zStudio.Automation.StudioCommandException>(() =>
             main.ExportSourceProjectAsync(destination, ["m1/gamez.zbd"], true, token, expectedGeneration: generation));
     }
 
@@ -223,8 +223,9 @@ internal static class ExportSafetyMcpChecks
     private static async Task LookupBaselineChecks(MainWindow main, Func<string, Dictionary<string, object?>, Task<JsonNode>> call, Func<string, Dictionary<string, object?>, string, Task<JsonNode>> job, CancellationToken token)
     {
         using var fixture = new SourceWorldFixture();
-        // m1 and m2 both load m1's database, whose part (a crate with a lid) it copies twice; each mission's texture effects find the lid.
-        fixture.WritePartDatabase();
+        // Both missions load m1's database. Two selectable crate holders reference the same lid file;
+        // copying the whole holder changes each mission's lid lookup without editing inside an external source boundary.
+        fixture.WriteReferencingDatabase(twice: true);
         foreach (string mission in new[] { "m1", "m2" })
         {
             fixture.Write($"gamegen/{mission}_zbd.gs", $"source support\\tex_fx{mission}.gw\r\nQuit\r\n");
@@ -273,8 +274,9 @@ internal static class ExportSafetyMcpChecks
         Assert.Equal("5.2.0", extension["blenderMin"]!.GetValue<string>());
         var listedCheckouts = await call("source_blender_checkouts", new());
         Assert.Equal(1, listedCheckouts["checkoutCount"]!.GetValue<int>());
-        var m1 = Document((await job("source_world_open", new() { ["mission"] = "m1" }, "completed"))["document"]!);
         var m2 = Document((await job("source_world_open", new() { ["mission"] = "m2" }, "completed"))["document"]!);
+        var m1 = Document((await job("source_world_open", new() { ["mission"] = "m1" }, "completed"))["document"]!);
+        Assert.True(m2.IsDisposed); Assert.Same(m1, Assert.Single(main.ViewModel.Documents));
         var checkedOut = SourceBlender.Find(fixture.Project, checkout["id"]!.GetValue<string>());
         string blenderSession = Path.Combine(fixture.Root, "blender-session");
         SourceBlender.PrepareBlenderImport(Path.Combine(checkedOut.Folder, "input"), checkedOut.Model, blenderSession, token);
@@ -325,23 +327,23 @@ internal static class ExportSafetyMcpChecks
         Assert.True(m1.IsDirty); Assert.Equal(beforeBlender, File.ReadAllBytes(fixture.Path(checkedOut.Model)));
         m1 = Document(await call("undo_redo", new() { ["document"] = Id(m1), ["revision"] = m1.Revision, ["action"] = "undo" }));
         Assert.DoesNotContain(main.ViewModel.Problems, p => Changed(p, "m1") || Changed(p, "m2"));
-        // Copying the crate in m1 copies its lid, which FindNode lid then finds; m2 reads the same database and is now stale.
-        m1 = await Duplicate(m1, "crate", "crate2");
+        // Copy the last holder: the new lid follows every prior lid, so the runtime lookup changes.
+        m1 = await Duplicate(m1, "crate_b", "crate2");
         Assert.Contains(main.ViewModel.Problems, p => Changed(p, "m1") && p.Message.Contains("crate2/lid", StringComparison.Ordinal));
-        Assert.True(m2.SourceInputsChanged());
 
-        // Saved while another program holds the shown build's world file: the baseline is the world the document holds.
-        using (new FileStream(m1.SourceBuild!.WorldPath, FileMode.Open, FileAccess.Read, FileShare.None))
-            await job("save_document", new() { ["document"] = Id(m1), ["revision"] = m1.Revision }, "completed");
+        // Saving persists source edits and establishes its in-memory lookup baseline without generated archives.
+        await job("save_document", new() { ["document"] = Id(m1), ["revision"] = m1.Revision }, "completed");
         Assert.DoesNotContain(main.ViewModel.Problems, p => Changed(p, "m1") || Changed(p, "m2"));
 
-        // Another edit of the database keeps the project unsaved; m2 reloaded with it finds the saved copy's lid, which is no
-        // change since the save (m2 showed a build from before it, so nothing is compared until a build reads saved sources alone).
+        // Switching to m2 after the verified save establishes its baseline from saved sources.
+        m2 = Document((await job("source_world_open", new() { ["mission"] = "m2" }, "completed"))["document"]!);
+        Assert.True(m1.IsDisposed); Assert.DoesNotContain(main.ViewModel.Problems, p => Changed(p, "m2"));
+        m1 = Document((await job("source_world_open", new() { ["mission"] = "m1" }, "completed"))["document"]!);
+        // Another edit remains local; changing maps cannot silently carry it into a different document.
         int ground = m1.PreviewDocument.Scene!.Nodes.First(n => n.Name == "ground" && m1.SourceBuild!.Provenance.ContainsKey(n.Index)).Index;
         m1 = Document((await job("source_world_object_edit", new() { ["document"] = Id(m1), ["revision"] = m1.Revision, ["node"] = ground, ["position"] = new Dictionary<string, object?> { ["x"] = 5, ["y"] = 0, ["z"] = -5 } }, "completed"))["document"]!);
-        m2 = main.ViewModel.Documents.Single(d => d.SourceWorld?.Mission == "m2");
-        m2 = Document((await job("reload_document", new() { ["document"] = Id(m2), ["revision"] = m2.Revision }, "completed"))!);
-        Assert.DoesNotContain(main.ViewModel.Problems, p => Changed(p, "m2"));
+        Assert.Equal("unsaved_changes", (await job("source_world_open", new() { ["mission"] = "m2" }, "failed"))["code"]!.GetValue<string>());
+        Assert.Same(m1, Assert.Single(main.ViewModel.Documents));
         // m1's next copy, of crate2, is compared with what was saved: its lid is found now, not crate2's.
         m1 = await Duplicate(m1, "crate2", "crate3");
         Assert.Contains(main.ViewModel.Problems, p => Changed(p, "m1") && p.Message.Contains("crate3/lid", StringComparison.Ordinal));

@@ -1,11 +1,11 @@
 using System.IO;
 using System.Text;
 using System.Text.Json;
-using Recoil.Zbd.Core.Sources;
-using Recoil.Zbd.Core.Terrain;
+using zStudio.Core.Sources;
+using zStudio.Core.Terrain;
 using Xunit;
 
-namespace Recoil.Zbd.Tests;
+namespace zStudio.Tests;
 
 /// <summary>
 /// Terrain recipes are measured before anything is built from their JSON (unknown keys, every token, a key given twice),

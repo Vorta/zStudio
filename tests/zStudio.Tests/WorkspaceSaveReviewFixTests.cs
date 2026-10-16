@@ -1,10 +1,10 @@
 using System.Diagnostics;
 using System.Text;
 using System.Text.Json.Nodes;
-using Recoil.Zbd.Core.Sources;
+using zStudio.Core.Sources;
 using Xunit;
 
-namespace Recoil.Zbd.Tests;
+namespace zStudio.Tests;
 
 /// <summary>
 /// Source workspaces and their saves: a project that is a link or lies below one is never edited or saved, a file another

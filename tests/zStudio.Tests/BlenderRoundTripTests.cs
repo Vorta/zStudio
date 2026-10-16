@@ -2,14 +2,14 @@ using System.IO;
 using System.Numerics;
 using System.Text;
 using System.Text.Json.Nodes;
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Core.Formats;
-using Recoil.Zbd.Core.Gltf;
-using Recoil.Zbd.Core.Sources;
-using Recoil.Zbd.Core.Worlds;
+using zStudio.Core;
+using zStudio.Core.Formats;
+using zStudio.Core.Gltf;
+using zStudio.Core.Sources;
+using zStudio.Core.Worlds;
 using Xunit;
 
-namespace Recoil.Zbd.Tests;
+namespace zStudio.Tests;
 
 /// <summary>
 /// Pickup presentation is preserved by reconstruction and ordinary glTF model import.
@@ -102,7 +102,11 @@ public sealed class BlenderRoundTripTests
             AddChild crate1
             GameZWriteZBDFile ..\m1\gamez.zbd
             """;
-        Dictionary<string, byte[]> files = new(StringComparer.Ordinal) { ["gamegen/m1.gs"] = Encoding.ASCII.GetBytes(Script) };
+        // Source builds use reconstructed glTF paths; reconstruction below still receives original FLT evidence.
+        string sourceScript = Script.Replace("LoadGameGen m1.flt ", "LoadGameGen m1.gltf ", StringComparison.Ordinal)
+            .Replace("LoadGameGen ammo.flt ", "LoadGameGen ammo.gltf ", StringComparison.Ordinal)
+            .Replace("LoadGameGen crate.flt ", "LoadGameGen crate.gltf ", StringComparison.Ordinal);
+        Dictionary<string, byte[]> files = new(StringComparer.Ordinal) { ["gamegen/m1.gs"] = Encoding.ASCII.GetBytes(sourceScript) };
         void Model(string stem, params WorldNode[] roots)
         {
             var (json, bin) = WorldGltf.Export(roots, 0xFF, new() { Texture = _ => ("", 0) }).Write(stem + ".bin");

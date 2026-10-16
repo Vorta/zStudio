@@ -1,10 +1,10 @@
 using System.Security.Cryptography;
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Core.Export;
-using Recoil.Zbd.Core.Formats;
+using zStudio.Core;
+using zStudio.Core.Export;
+using zStudio.Core.Formats;
 using Xunit;
 
-namespace Recoil.Zbd.Tests;
+namespace zStudio.Tests;
 
 public sealed class EditBufferAdmissionTests
 {
@@ -86,7 +86,7 @@ public sealed class EditBufferAdmissionTests
     public void AppendRefusesCompleteOutputBeforeTouchingOriginalPayload()
     {
         using var memory = new UnreadableMemory();
-        var source = new ZbdDocument("texture.zbd", new(24, DateTime.MinValue), new(FormatFamily.TexturePack, 1, Recognition.Supported, "test"), memory.Bytes);
+        var source = new AssetDocument("texture.zbd", new(24, DateTime.MinValue), new(FormatFamily.TexturePack, 1, Recognition.Supported, "test"), memory.Bytes);
         var error = Assert.Throws<InvalidDataException>(() => TexturePackWriter.Append(source, "new", Image(), 87, Token));
         Assert.Contains("remaining edit buffer budget", error.Message);
     }

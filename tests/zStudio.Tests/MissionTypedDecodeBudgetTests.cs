@@ -1,8 +1,8 @@
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Core.Formats;
+using zStudio.Core;
+using zStudio.Core.Formats;
 using Xunit;
 
-namespace Recoil.Zbd.Tests;
+namespace zStudio.Tests;
 
 public sealed class MissionTypedDecodeBudgetTests
 {
@@ -18,15 +18,15 @@ public sealed class MissionTypedDecodeBudgetTests
         "aiv.zrd" => A(S("tank_01"), A(I(0), Vector(), F(0))),
         _ => A(S("node_00"), A(I(0), Vector(), A(I(-1), I(-1), I(-1)))),
     };
-    private static ZbdDocument Open(string member, byte[] payload, long budget)
+    private static AssetDocument Open(string member, byte[] payload, long budget)
     {
         byte[] bytes = ResourceEditingTests.Archive((member, payload));
-        ZbdDocument document = new(Path.Combine(Path.GetTempPath(), "typed-budget-reader.zbd"), new(bytes.Length, DateTime.MinValue),
+        AssetDocument document = new(Path.Combine(Path.GetTempPath(), "typed-budget-reader.zbd"), new(bytes.Length, DateTime.MinValue),
             new(FormatFamily.Archive, 1, Recognition.Supported, "fixture"), bytes);
         new ArchiveReader(budget).Read(document, Token);
         return document;
     }
-    private static (int Records, string[] Notes) Consume(string member, ZbdDocument document)
+    private static (int Records, string[] Notes) Consume(string member, AssetDocument document)
     {
         var asset = Assert.Single(document.Assets);
         if (member == "puppies.zrd")

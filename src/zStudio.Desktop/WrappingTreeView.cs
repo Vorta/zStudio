@@ -1,7 +1,7 @@
 using System.Windows;
 using System.Windows.Controls;
 
-namespace Recoil.Zbd.Desktop;
+namespace zStudio.Desktop;
 
 /// <summary>Retains the native tree template while letting headers wrap within the viewport.</summary>
 public sealed class WrappingTreeView : TreeView

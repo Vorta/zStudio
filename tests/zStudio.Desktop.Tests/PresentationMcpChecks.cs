@@ -13,14 +13,14 @@ using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Shell;
 using System.Windows.Threading;
-using Recoil.Zbd.Automation;
-using Recoil.Zbd.Core.Animation;
-using Recoil.Zbd.Desktop;
-using Recoil.Zbd.Rendering;
-using Recoil.Zbd.Tests;
+using zStudio.Automation;
+using zStudio.Core.Animation;
+using zStudio.Desktop;
+using zStudio.Rendering;
+using zStudio.Tests;
 using Xunit;
 
-namespace Recoil.Zbd.Desktop.Tests;
+namespace zStudio.Desktop.Tests;
 
 // Shares WindowClosingTests' one STA/Application. HWND checks run on the private test desktop;
 // none of these checks starts Fly, captures input, or sends physical keyboard events.
@@ -59,7 +59,7 @@ internal static class PresentationMcpChecks
             await Preview();
             // A raw model preview intentionally has no placement identity. Zone painting needs
             // the fixture's actual scene node, just as it does in a Whole world preview.
-            world.SelectedAsset = world.Assets.First(a => a.Record.Kind == Recoil.Zbd.Core.AssetKind.Node);
+            world.SelectedAsset = world.Assets.First(a => a.Record.Kind == zStudio.Core.AssetKind.Node);
             await Preview();
             var viewport = Assert.IsType<SceneViewport>(((ContentControl)main.FindName("SceneHost")).Content);
             State(await Present(), false, false, true);

@@ -2,9 +2,9 @@ using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
-using Recoil.Zbd.Automation;
+using zStudio.Automation;
 
-namespace Recoil.Zbd.Desktop;
+namespace zStudio.Desktop;
 
 public partial class AnimationEditor
 {

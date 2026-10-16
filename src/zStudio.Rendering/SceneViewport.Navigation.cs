@@ -4,13 +4,20 @@ using System.Windows.Input;
 using System.Windows.Media.Media3D;
 using HelixToolkit.Wpf.SharpDX;
 
-namespace Recoil.Zbd.Rendering;
+namespace zStudio.Rendering;
 
 public sealed partial class SceneViewport
 {
     public event Action? ManualNavigationStarting;
     public int? FramingSelection { get; private set; }
-    public void SelectFramingNode(int? node) { if (node is int index && InspectionNodes != null && !InspectionNodes.Contains(index)) return; FramingSelection = node; if (node != null && SelectedAiNode != null) SelectAiNode(null); }
+    public void SelectFramingNode(int? node)
+    {
+        // Ordinary framing selection may be retained before geometry is ready.
+        // Only synthetic source owners need the live projection to validate them.
+        if (node is int index && (index < 0 ? !CanInspectNode(index) : InspectionNodes != null && !InspectionNodes.Contains(index))) return;
+        FramingSelection = node;
+        if (node != null && SelectedAiNode != null) SelectAiNode(null);
+    }
     internal enum NavigationGesture { None, Orbit, Pan, Zoom, Dolly }
     private NavigationGesture navigationGesture;
     private Vector navigationVelocity;

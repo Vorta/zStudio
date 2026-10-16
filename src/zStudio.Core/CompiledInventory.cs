@@ -1,9 +1,9 @@
 using System.Buffers.Binary;
 using System.Runtime.ExceptionServices;
 using System.Security.Cryptography;
-using Recoil.Zbd.Core.Sources;
+using zStudio.Core.Sources;
 
-namespace Recoil.Zbd.Core;
+namespace zStudio.Core;
 
 /// <summary>One compiled-file discovery's path storage and comparison work, including its projections.</summary>
 public sealed class CompiledInventory

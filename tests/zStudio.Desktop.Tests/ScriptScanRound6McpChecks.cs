@@ -3,12 +3,12 @@ using System.IO.Pipes;
 using System.Text.Json.Nodes;
 using ModelContextProtocol.Client;
 using ModelContextProtocol.Protocol;
-using Recoil.Zbd.Desktop;
-using Recoil.Zbd.Mcp;
-using Recoil.Zbd.Tests;
+using zStudio.Desktop;
+using zStudio.Mcp;
+using zStudio.Tests;
 using Xunit;
 
-namespace Recoil.Zbd.Desktop.Tests;
+namespace zStudio.Desktop.Tests;
 
 /// <summary>
 /// The retained Blender checkout listing through the real named-pipe MCP connection lists checkouts and their outboxes with one bounded, cancellable scan off the UI thread, and a zstudio/export folder
@@ -31,7 +31,7 @@ internal static class ScriptScanRound6McpChecks
             Assert.Same(doc, main.ViewModel.SelectedDocument);
 
             // A manifest listing more files than the scan visits in all: the listing is refused, not taken without it.
-            string crowded = Checkout("crowded", 0, new JsonArray([.. Enumerable.Range(0, Recoil.Zbd.Core.Sources.SourceProject.MaximumScannedEntries + 1).Select(_ => (JsonNode?)0)]));
+            string crowded = Checkout("crowded", 0, new JsonArray([.. Enumerable.Range(0, zStudio.Core.Sources.SourceProject.MaximumScannedEntries + 1).Select(_ => (JsonNode?)0)]));
             string refused = (await Call("source_blender_checkouts", new(), error: true)).GetValue<string>();
             Assert.Contains("io_failed", refused, StringComparison.Ordinal);
             Assert.Contains("zstudio/export holds more than 250,000 files and folders", refused, StringComparison.Ordinal);
@@ -47,15 +47,20 @@ internal static class ScriptScanRound6McpChecks
             Assert.Null(remaining["nextOffset"]);
             var newer = listed["checkouts"]![0]!;
             Assert.Equal(("newer", 20, 16), (newer["id"]!.GetValue<string>(), newer["exportCount"]!.GetValue<int>(), newer["exports"]!.AsArray().Count));
-            Assert.Equal(["e0.gltf", "nested/e1.gltf"], listed["checkouts"]![1]!["exports"]!.AsArray().Select(e => e!["path"]!.GetValue<string>()).Order(StringComparer.Ordinal));
+            Assert.Equal(["e0/recoil-export.json", "nested/e1/recoil-export.json"], listed["checkouts"]![1]!["exports"]!.AsArray().Select(e => e!["path"]!.GetValue<string>()).Order(StringComparer.Ordinal));
 
             string Checkout(string id, int exports, JsonArray? files = null, string created = "2026-01-01T00:00:00.0000000Z")
             {
                 string folder = Path.Combine(fixture.Project, "zstudio", "export", id);
                 Directory.CreateDirectory(Path.Combine(folder, "outbox", "nested"));
-                JsonObject manifest = new() { ["format"] = "zstudio-blender-checkout", ["version"] = 1, ["id"] = id, ["model"] = "data/m1/models/m1.gltf", ["created"] = created, ["files"] = files ?? [] };
+                JsonObject manifest = new() { ["format"] = "zstudio-blender-checkout", ["version"] = 2, ["id"] = id, ["model"] = "data/m1/models/m1.gltf", ["created"] = created, ["files"] = files ?? [] };
                 File.WriteAllText(Path.Combine(folder, "manifest.json"), manifest.ToJsonString());
-                for (int i = 0; i < exports; i++) File.WriteAllText(Path.Combine(folder, "outbox", i % 2 == 0 ? "" : "nested", $"e{i}.gltf"), "{}");
+                for (int i = 0; i < exports; i++)
+                {
+                    string generation = Path.Combine(folder, "outbox", i % 2 == 0 ? "" : "nested", $"e{i}");
+                    Directory.CreateDirectory(generation);
+                    File.WriteAllText(Path.Combine(generation, "recoil-export.json"), "{}");
+                }
                 return folder;
             }
             DocumentModel Document(JsonNode state) => main.ViewModel.Documents.Single(d => d.SessionId.ToString() == (state["document"]?["id"] ?? state["id"])!.GetValue<string>());

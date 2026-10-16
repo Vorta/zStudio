@@ -1,10 +1,10 @@
 using System.Collections;
 using System.Numerics;
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Core.Formats;
+using zStudio.Core;
+using zStudio.Core.Formats;
 using Xunit;
 
-namespace Recoil.Zbd.Tests;
+namespace zStudio.Tests;
 
 public sealed class MotionPreviewTests
 {
@@ -60,7 +60,7 @@ public sealed class MotionPreviewTests
 
     private static MotionPart Part(string name) => new(name, 0, [new(Vector3.Zero, Quaternion.Identity), new(new(2, 0, 0), Quaternion.Identity)], ReadOnlyMemory<byte>.Empty);
     private static MotionClip Clip(IReadOnlyList<MotionPart> parts) => new() { Header = ReadOnlyMemory<byte>.Empty, LoopTime = 1, FrameCount = 1, Parts = parts };
-    private static ZbdDocument Library(GameScene scene) => new("library.zbd", new(0, DateTime.MinValue), new(FormatFamily.Archive, 1, Recognition.Supported, "fixture"), ReadOnlyMemory<byte>.Empty) { Scene = scene };
+    private static AssetDocument Library(GameScene scene) => new("library.zbd", new(0, DateTime.MinValue), new(FormatFamily.Archive, 1, Recognition.Supported, "fixture"), ReadOnlyMemory<byte>.Empty) { Scene = scene };
     private sealed class ObservedParts(MotionPart part, Action<bool> read) : IReadOnlyList<MotionPart>
     {
         public int Count => 1;

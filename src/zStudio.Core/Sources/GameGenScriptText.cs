@@ -1,6 +1,6 @@
 using System.Text;
 
-namespace Recoil.Zbd.Core.Sources;
+namespace zStudio.Core.Sources;
 
 /// <summary>
 /// Text form of prepared gamegen scripts (<c>.gs</c>/<c>.gw</c>). Tokenization follows the engine's

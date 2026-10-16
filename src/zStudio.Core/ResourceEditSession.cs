@@ -2,19 +2,19 @@ using System.Buffers.Binary;
 using System.Collections.Concurrent;
 using System.Security.Cryptography;
 using System.Text;
-using Recoil.Zbd.Core.Formats;
-using Recoil.Zbd.Core.Export;
+using zStudio.Core.Formats;
+using zStudio.Core.Export;
 
-namespace Recoil.Zbd.Core;
+namespace zStudio.Core;
 
 public sealed record ResourceMember(Guid Id, int? SourceIndex, string Name, ReadOnlyMemory<byte> Data, ReadOnlyMemory<byte> DirectoryRecord, ZrdNode? Tree = null, bool TypedDecodeLimited = false);
-public sealed record ResourceSnapshot(IReadOnlyList<ResourceMember> Members, ZbdDocument Document, string Hash);
+public sealed record ResourceSnapshot(IReadOnlyList<ResourceMember> Members, AssetDocument Document, string Hash);
 public sealed record PreparedResourceEdit(ResourceSnapshot Before, ResourceSnapshot After);
 
 /// <summary>One archive (including embedded ZRD trees) or one standalone ZRD, with immutable history.</summary>
 public sealed class ResourceEditSession
 {
-    private readonly ZbdDocument source;
+    private readonly AssetDocument source;
     private readonly List<ResourceSnapshot> undo = [], redo = [];
     private readonly ConcurrentDictionary<(Guid, ReadOnlyMemory<byte>), ZrdNode> trees = new();
     private ResourceSnapshot saved;
@@ -40,9 +40,9 @@ public sealed class ResourceEditSession
     public bool HasHistory => undo.Count != 0 || redo.Count != 0;
     public event Action? Changed;
     public event Action? BeforeEdit;
-    public ResourceEditSession(ZbdDocument document) : this(document, CancellationToken.None) { }
-    public ResourceEditSession(ZbdDocument document, CancellationToken token) : this(document, token, null) { }
-    internal ResourceEditSession(ZbdDocument document, CancellationToken token, Action? syntaxPrepared,
+    public ResourceEditSession(AssetDocument document) : this(document, CancellationToken.None) { }
+    public ResourceEditSession(AssetDocument document, CancellationToken token) : this(document, token, null) { }
+    internal ResourceEditSession(AssetDocument document, CancellationToken token, Action? syntaxPrepared,
         long maximumRetainedBytes = EditRetentionBudget.MaximumRetainedBytes, long maximumConstructionBytes = EditRetentionBudget.MaximumConstructionBytes)
     {
         EditRetentionBudget.Limit(maximumRetainedBytes, EditRetentionBudget.MaximumRetainedBytes);
@@ -73,7 +73,7 @@ public sealed class ResourceEditSession
     }
     public ResourceMember Member(Guid id) => Current.Members.SingleOrDefault(m => m.Id == id) ?? throw new InvalidDataException("The archive member no longer exists.");
     /// <summary>Resolve identities for the exact decoded snapshot, including a load overtaken by an edit or Undo/Redo.</summary>
-    public ResourceSnapshot? SnapshotFor(ZbdDocument document) => ReferenceEquals(Current.Document, document) ? Current :
+    public ResourceSnapshot? SnapshotFor(AssetDocument document) => ReferenceEquals(Current.Document, document) ? Current :
         undo.Concat(redo).Append(saved).FirstOrDefault(s => ReferenceEquals(s.Document, document));
     public Task<PreparedResourceEdit> PrepareMechModelAsync(Guid member, int localModel, ImportedMesh mesh, int material, CancellationToken token = default)
     {
@@ -413,7 +413,7 @@ public sealed class ResourceEditSession
 
 public static class ArchiveWriter
 {
-    public static byte[] Write(ZbdDocument source, IReadOnlyList<ResourceMember> members, CancellationToken token = default)
+    public static byte[] Write(AssetDocument source, IReadOnlyList<ResourceMember> members, CancellationToken token = default)
     {
         long table = source.ArchiveDirectoryOffset ?? throw new InvalidDataException("An intact ZAR directory is required.");
         long maximum = table + 8 + members.Count * 148L;

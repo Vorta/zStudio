@@ -1,7 +1,7 @@
 using System.Globalization;
-using Recoil.Zbd.Core.Animation;
+using zStudio.Core.Animation;
 
-namespace Recoil.Zbd.Desktop;
+namespace zStudio.Desktop;
 
 /// <summary>Plain decimal display without rounding away stored single-precision values.</summary>
 internal static class NumericText

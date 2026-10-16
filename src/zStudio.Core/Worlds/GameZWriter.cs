@@ -1,9 +1,9 @@
 using System.Buffers.Binary;
 using System.Numerics;
 using System.Text;
-using Recoil.Zbd.Core.Formats;
+using zStudio.Core.Formats;
 
-namespace Recoil.Zbd.Core.Worlds;
+namespace zStudio.Core.Worlds;
 
 /// <summary>
 /// Writes a GameZ v15 world as the engine does (CZZbd::WriteZBDFile, retail 0x454A50): the texture directory, the
@@ -220,7 +220,7 @@ public static class GameZWriter
         return result;
     }
 
-    private static void Validate(GameZWorld world, CancellationToken token)
+    internal static void Validate(GameZWorld world, CancellationToken token)
     {
         GameZLayouts.CheckEntries("node capacity", world.NodeCapacity);
         GameZLayouts.CheckEntries("model capacity", world.ModelCapacity);

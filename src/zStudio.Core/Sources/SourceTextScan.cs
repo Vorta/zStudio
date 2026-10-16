@@ -1,4 +1,4 @@
-namespace Recoil.Zbd.Core.Sources;
+namespace zStudio.Core.Sources;
 
 /// <summary>Chunked searches shared by source lexers; no substring is allocated while searching.</summary>
 internal static class SourceTextScan

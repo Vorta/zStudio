@@ -189,7 +189,7 @@
           "SharpDX": "4.2.0"
         }
       },
-      "Recoil.Zbd.Core": {
+      "zStudio.Core": {
         "type": "Project",
         "dependencies": {
           "Clipper2": "[2.0.0, )"

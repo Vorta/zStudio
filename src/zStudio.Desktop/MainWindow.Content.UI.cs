@@ -5,9 +5,9 @@ using System.Windows.Controls;
 using System.Windows.Data;
 using System.Windows.Input;
 using Microsoft.Win32;
-using Recoil.Zbd.Core;
+using zStudio.Core;
 
-namespace Recoil.Zbd.Desktop;
+namespace zStudio.Desktop;
 
 public partial class MainWindow
 {

@@ -1,13 +1,13 @@
 using System.Text;
 using System.Buffers.Binary;
-using Recoil.Zbd.Core.Formats;
+using zStudio.Core.Formats;
 using System.Text.Json.Nodes;
-using Recoil.Zbd.Core.Gltf;
-using Recoil.Zbd.Core.Sources;
-using Recoil.Zbd.Core.Worlds;
+using zStudio.Core.Gltf;
+using zStudio.Core.Sources;
+using zStudio.Core.Worlds;
 using Xunit;
 
-namespace Recoil.Zbd.Tests;
+namespace zStudio.Tests;
 
 public sealed class ImportRound16Tests
 {

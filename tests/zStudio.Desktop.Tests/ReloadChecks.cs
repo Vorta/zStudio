@@ -1,11 +1,11 @@
 using System.IO;
-using Recoil.Zbd.Automation;
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Core.Animation;
-using Recoil.Zbd.Desktop;
+using zStudio.Automation;
+using zStudio.Core;
+using zStudio.Core.Animation;
+using zStudio.Desktop;
 using Xunit;
 
-namespace Recoil.Zbd.Desktop.Tests;
+namespace zStudio.Desktop.Tests;
 
 internal static class ReloadChecks
 {
@@ -20,7 +20,7 @@ internal static class ReloadChecks
             original.SelectedAsset = original.Assets.Single(); original.Query = "entry";
             vm.SelectedDocument = scenario == "background" ? other : original;
             TaskCompletionSource started = new(TaskCreationOptions.RunContinuationsAsynchronously);
-            TaskCompletionSource<ZbdDocument> parsed = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            TaskCompletionSource<AssetDocument> parsed = new(TaskCreationOptions.RunContinuationsAsynchronously);
             vm.LoadDocumentAsync = async (_, token) => { started.SetResult(); return await parsed.Task.WaitAsync(token); };
             bool draft = false;
             vm.ValidateReload = _ => { if (draft) throw new StudioCommandException("pending_drafts", "fixture draft"); };
@@ -72,7 +72,7 @@ internal static class ReloadChecks
         Assert.True(dirty.IsDisposed); Assert.NotSame(dirty, gui.SelectedDocument); Assert.False(gui.SelectedDocument!.IsDirty);
 
         TaskCompletionSource parsing = new(TaskCreationOptions.RunContinuationsAsynchronously);
-        TaskCompletionSource<ZbdDocument> failedParse = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        TaskCompletionSource<AssetDocument> failedParse = new(TaskCreationOptions.RunContinuationsAsynchronously);
         gui.LoadDocumentAsync = (_, _) => { parsing.SetResult(); return failedParse.Task; };
         var obsoleteReload = gui.ReloadAsync(); await parsing.Task;
         var newer = new DocumentModel(Source("newer.zbd")); gui.Documents.Add(newer); gui.SelectedDocument = newer;
@@ -82,11 +82,11 @@ internal static class ReloadChecks
         Assert.Equal("New navigation", gui.Status); Assert.Equal(problems, gui.Problems.Count);
     }
 
-    private static ZbdDocument Source(string path)
+    private static AssetDocument Source(string path)
     {
         var package = new AnimationPackage { Prefix = new byte[72], Tail = [] };
         package.Entries.Add(new(new byte[308], 0, 0));
-        var source = new ZbdDocument(path, new(0, DateTime.MinValue), new(FormatFamily.Animation, 28, Recognition.Supported, "fixture"), ReadOnlyMemory<byte>.Empty) { Animations = package };
+        var source = new AssetDocument(path, new(0, DateTime.MinValue), new(FormatFamily.Animation, 28, Recognition.Supported, "fixture"), ReadOnlyMemory<byte>.Empty) { Animations = package };
         source.Add(AssetKind.Animation, 0, "entry", 0, 0);
         return source;
     }

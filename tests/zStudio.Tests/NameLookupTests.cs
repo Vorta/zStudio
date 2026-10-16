@@ -1,13 +1,13 @@
 using System.Numerics;
 using System.Text;
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Core.Animation;
-using Recoil.Zbd.Core.Formats;
-using Recoil.Zbd.Core.Sources;
-using Recoil.Zbd.Core.Worlds;
+using zStudio.Core;
+using zStudio.Core.Animation;
+using zStudio.Core.Formats;
+using zStudio.Core.Sources;
+using zStudio.Core.Worlds;
 using Xunit;
 
-namespace Recoil.Zbd.Tests;
+namespace zStudio.Tests;
 
 /// <summary>Lookups by name as the engine makes them: the highest slot first, and the animation roots' chain.</summary>
 public sealed class NameLookupTests
@@ -43,7 +43,7 @@ public sealed class NameLookupTests
         scene.Nodes.Add(new(2, "ramp", "none", null, [], [], new(), new()));
         scene.Nodes.Add(new(3, "lava", "object3d", null, [], [], new(), new()));
         byte[] header = new byte[36]; System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(header, 0x02971222); header[4] = 15;
-        var world = new ZbdDocument("gamez.zbd", new(header.Length, DateTime.MinValue), new(FormatFamily.GameZ, 15, Recognition.Supported, "fixture"), header) { Scene = scene };
+        var world = new AssetDocument("gamez.zbd", new(header.Length, DateTime.MinValue), new(FormatFamily.GameZ, 15, Recognition.Supported, "fixture"), header) { Scene = scene };
         var package = new AnimationPackage { Prefix = [], Tail = [] };
         package.Entries.AddRange([Entry(0, ""), Entry(1, "ramp"), Entry(2, "ramp"), Entry(3, "lava", 0, "ramp")]);
         var context = new AnimationPreviewContext { Package = package, World = world };
@@ -76,7 +76,7 @@ public sealed class NameLookupTests
         scene.Nodes.Add(new(9, "lid", "object3d", null, [8], [], new(), new()));
         scene.Nodes.Add(new(10, "lid", "object3d", null, [8], [], new(), new()));
         byte[] header = new byte[36]; System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(header, 0x02971222); header[4] = 15;
-        var world = new ZbdDocument("gamez.zbd", new(header.Length, DateTime.MinValue), new(FormatFamily.GameZ, 15, Recognition.Supported, "fixture"), header) { Scene = scene };
+        var world = new AssetDocument("gamez.zbd", new(header.Length, DateTime.MinValue), new(FormatFamily.GameZ, 15, Recognition.Supported, "fixture"), header) { Scene = scene };
         var package = new AnimationPackage { Prefix = [], Tail = [] };
         var hit = Entry(1, "dwall", 0, "healthy"); hit.SetText(68, "wall");
         var own = Entry(2, "dwall", 0, "healthy"); own.SetText(68, "dwall");

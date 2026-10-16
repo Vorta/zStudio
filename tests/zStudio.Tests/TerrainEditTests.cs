@@ -2,13 +2,13 @@ using System.IO;
 using System.Numerics;
 using System.Text;
 using System.Text.Json.Nodes;
-using Recoil.Zbd.Core.Formats;
-using Recoil.Zbd.Core.Sources;
-using Recoil.Zbd.Core.Terrain;
-using Recoil.Zbd.Core.Worlds;
+using zStudio.Core.Formats;
+using zStudio.Core.Sources;
+using zStudio.Core.Terrain;
+using zStudio.Core.Worlds;
 using Xunit;
 
-namespace Recoil.Zbd.Tests;
+namespace zStudio.Tests;
 
 /// <summary>Region shapes, recipe edits and terrain recipes created in a source project's workspace.</summary>
 public sealed class TerrainEditTests
@@ -186,8 +186,8 @@ public sealed class TerrainEditTests
         // Painting a region rebuilds the pieces: four cells, plus the painted road's own pieces.
         SourceTerrain.Edit(workspace, "data/m1/models/terrain/hills.terrain.json", "Add road", r => TerrainEdits.AddRegion(r, new("road", [], new([]), new() { Craters = TerrainCraters.Blocked })), Token);
         SourceTerrain.Edit(workspace, "data/m1/models/terrain/hills.terrain.json", "Paint road", r => TerrainEdits.Paint(r, "road", TerrainShapes.Stroke([new(220, 250), new(280, 250)], 4), add: true), Token);
-        var build = await SourceWorlds.BuildPreviewAsync(fixture.Project, "m1", Path.Combine(SourceWorlds.PreviewRoot(fixture.Project), "preview"), workspace.Overlay(), token: Token);
-        var world = GameZWorldReader.FromDocument(FormatRegistry.Default.OpenBytes("gamez.zbd", await File.ReadAllBytesAsync(build.WorldPath, Token), token: Token), Token);
+        var build = await SourceWorlds.LoadSceneAsync(fixture.Project, "m1", workspace.Overlay(), token: Token);
+        var world = build.World;
         var pieces = world.Nodes.Where(n => n.Name.StartsWith("hills_land_", StringComparison.Ordinal)).ToArray();
         Assert.Equal(4, pieces.Count(p => (p.Flags & 0x20000) == 0));
         Assert.Equal(2, pieces.Count(p => (p.Flags & 0x20000) != 0));
@@ -200,7 +200,7 @@ public sealed class TerrainEditTests
         // world it was accepted for still builds.
         SourceTerrain.Create(workspace, "data/m1/models/m1.gltf", "data/m1/models/terrain/hills.gltf", ["land"], "data/m1/models/terrain/hills_with_a_long_recipe_name.terrain.json", Token);
         Assert.Equal("terrain", JsonNode.Parse(workspace.Read("data/m1/models/m1.gltf", Token)!)!["nodes"]!.AsArray().Last()!["name"]!.GetValue<string>());
-        build = await SourceWorlds.BuildPreviewAsync(fixture.Project, "m1", Path.Combine(SourceWorlds.PreviewRoot(fixture.Project), "long"), workspace.Overlay(), token: Token);
-        Assert.True(File.Exists(build.WorldPath));
+        build = await SourceWorlds.LoadSceneAsync(fixture.Project, "m1", workspace.Overlay(), token: Token);
+        Assert.NotNull(build.Scene);
     }
 }

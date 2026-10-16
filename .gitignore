@@ -41,3 +41,6 @@ venv/
 # OS files
 Thumbs.db
 .DS_Store
+
+# Local design handoff (not part of the repository)
+/design/

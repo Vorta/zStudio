@@ -1,11 +1,11 @@
 using System.Buffers.Binary;
 using System.Text;
 using System.Text.Json.Nodes;
-using Recoil.Zbd.Core.Formats;
-using Recoil.Zbd.Core.Sources;
+using zStudio.Core.Formats;
+using zStudio.Core.Sources;
 using Xunit;
 
-namespace Recoil.Zbd.Tests;
+namespace zStudio.Tests;
 
 /// <summary>
 /// Work on large valid inputs is bounded by what it keeps: a sealed Blender export is held once while it is checked for

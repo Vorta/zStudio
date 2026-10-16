@@ -1,4 +1,4 @@
-namespace Recoil.Zbd.Core.Animation;
+namespace zStudio.Core.Animation;
 
 /// <summary>
 /// The arithmetic of RECOIL's lost keyframe script compiler, reproduced bit for bit from the shipped

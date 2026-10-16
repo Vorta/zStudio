@@ -1,6 +1,6 @@
 using System.Text;
 
-namespace Recoil.Zbd.Core.Formats;
+namespace zStudio.Core.Formats;
 
 /// <summary>Bounded presentation and explicit complete export of stored script tokens.</summary>
 internal static class PreparedScriptText

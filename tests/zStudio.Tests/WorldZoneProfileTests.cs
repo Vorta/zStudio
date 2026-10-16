@@ -1,10 +1,10 @@
 using System.Numerics;
 using System.Text.Json.Nodes;
-using Recoil.Zbd.Core.Gltf;
-using Recoil.Zbd.Core.Worlds;
+using zStudio.Core.Gltf;
+using zStudio.Core.Worlds;
 using Xunit;
 
-namespace Recoil.Zbd.Tests;
+namespace zStudio.Tests;
 
 public sealed class WorldZoneProfileTests
 {
@@ -153,7 +153,7 @@ public sealed class WorldZoneProfileTests
     }
 
     [Fact]
-    public void LegacyCapturePreservesInheritedNodeWordGateAndPolygonBytesWithoutRewriting()
+    public void CapturePreservesInheritedNodeWordGateAndPolygonBytesWithoutRewriting()
     {
         var source = Source(FirstWords, nodeWord: 0xCAFE0012, gate: false);
         var ordinary = WorldGltf.Export([source], 0xFF, new() { Texture = _ => throw new InvalidOperationException(), Token = Token });
@@ -243,6 +243,21 @@ public sealed class WorldZoneProfileTests
         node["zone"] = 256;
         Assert.Throws<InvalidDataException>(() => WorldGltf.CaptureZoneProfile(document, token: Token));
         node["zone"] = 13;
+        foreach (string retired in new[] { "zoneWord", "word" })
+        {
+            node[retired] = "0x0000000D";
+            Assert.Contains("unsupported", Assert.Throws<InvalidDataException>(() => WorldGltf.CaptureZoneProfile(document, token: Token)).Message);
+            node.Remove(retired);
+        }
+        zones[0] = "0xFFFFFF00";
+        Assert.Throws<InvalidDataException>(() => WorldGltf.CaptureZoneProfile(document, token: Token));
+        zones[0] = new JsonArray();
+        var material = document.Roots[0].Mesh!.Primitives[0].Material!;
+        material.Extras ??= new JsonObject();
+        material.Extras[WorldGltf.Key] ??= new JsonObject();
+        material.Extras[WorldGltf.Key]!["zone"] = "0xFFFFFF00";
+        Assert.Contains("unsupported", Assert.Throws<InvalidDataException>(() => WorldGltf.CaptureZoneProfile(document, token: Token)).Message);
+        ((JsonObject)material.Extras[WorldGltf.Key]!).Remove("zone");
         zones[4] = new JsonArray(3, 7);
         Assert.Throws<InvalidDataException>(() => WorldGltf.CaptureZoneProfile(document, token: Token));
         zones[4] = new JsonArray(256);

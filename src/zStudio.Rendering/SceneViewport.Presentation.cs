@@ -6,7 +6,7 @@ using System.Windows.Data;
 using System.Windows.Media.Media3D;
 using HelixToolkit.Wpf.SharpDX;
 
-namespace Recoil.Zbd.Rendering;
+namespace zStudio.Rendering;
 
 public sealed partial class SceneViewport
 {
@@ -14,6 +14,13 @@ public sealed partial class SceneViewport
         nameof(PresentationGuidesVisible), typeof(bool), typeof(SceneViewport), new PropertyMetadata(true));
     public bool PresentationGuidesVisible => (bool)GetValue(PresentationGuidesVisibleProperty);
     public bool PresentationUiHidden { get; private set; }
+    private bool showAxes = true;
+    /// <summary>The coordinate axes in the lower left corner (a docked editor shows the selection there instead).</summary>
+    public bool ShowAxes
+    {
+        get => showAxes;
+        set { showAxes = value; viewport.ShowCoordinateSystem = value && !PresentationUiHidden; }
+    }
     private readonly Grid presentationOverlays = new();
 
     /// <summary>Transient editor chrome only. Guide preferences, geometry and editing sessions stay intact.</summary>
@@ -22,7 +29,7 @@ public sealed partial class SceneViewport
         if (PresentationUiHidden == hidden) return;
         PresentationUiHidden = hidden;
         SetValue(PresentationGuidesVisibleProperty, !hidden);
-        viewport.ShowViewCube = viewport.ShowCoordinateSystem = !hidden;
+        viewport.ShowViewCube = !hidden; viewport.ShowCoordinateSystem = !hidden && showAxes;
         presentationOverlays.Visibility = hidden ? Visibility.Collapsed : Visibility.Visible;
         SetPickupHover(false);
         RebasePresentationPointers();
@@ -99,8 +106,10 @@ public sealed partial class SceneViewport
 
     private void MovePresentationPickup(Point point)
     {
-        if (PickupPresentationPoint(point, out var hit))
-            PublishTransformDrag(transformDraft with { Position = pickupPresentationPosition + pickupPresentationAxis * Vector3.Dot(hit - pickupPresentationHit, pickupPresentationAxis) });
+        if (!PickupPresentationPoint(point, out var hit)) return;
+        PublishTransformDrag(transformDraft with { Position = pickupPresentationPosition + pickupPresentationAxis * Vector3.Dot(hit - pickupPresentationHit, pickupPresentationAxis) });
+        // This drag moves the draft itself, not Helix's handle target: the handles follow it now rather than on release.
+        if (IsPickupDragging) PlacePickupHandles();
     }
     private float rotationPresentationAngle;
 }

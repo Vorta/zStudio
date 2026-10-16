@@ -1,8 +1,8 @@
 using System.Globalization;
-using Recoil.Zbd.Core.Animation;
+using zStudio.Core.Animation;
 using Xunit;
 
-namespace Recoil.Zbd.Desktop.Tests;
+namespace zStudio.Desktop.Tests;
 
 public sealed class NumericTextTests
 {

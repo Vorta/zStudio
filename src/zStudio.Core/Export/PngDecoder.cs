@@ -1,7 +1,7 @@
 using System.Buffers.Binary;
 using System.IO.Compression;
 
-namespace Recoil.Zbd.Core.Export;
+namespace zStudio.Core.Export;
 
 /// <summary>
 /// PNG decoder for images saved by common editors: greyscale, RGB, palette, grey+alpha and RGBA at every legal bit depth,

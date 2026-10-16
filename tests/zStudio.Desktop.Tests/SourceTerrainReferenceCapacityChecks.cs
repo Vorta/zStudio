@@ -6,15 +6,15 @@ using System.Windows;
 using System.Windows.Controls;
 using ModelContextProtocol.Client;
 using ModelContextProtocol.Protocol;
-using Recoil.Zbd.Automation;
-using Recoil.Zbd.Core.Sources;
-using Recoil.Zbd.Core.Terrain;
-using Recoil.Zbd.Desktop;
-using Recoil.Zbd.Mcp;
-using Recoil.Zbd.Tests;
+using zStudio.Automation;
+using zStudio.Core.Sources;
+using zStudio.Core.Terrain;
+using zStudio.Desktop;
+using zStudio.Mcp;
+using zStudio.Tests;
 using Xunit;
 
-namespace Recoil.Zbd.Desktop.Tests;
+namespace zStudio.Desktop.Tests;
 
 /// <summary>Real GUI and named-pipe refusal when conversion cannot discover a complete reference set.</summary>
 internal static class SourceTerrainReferenceCapacityChecks
@@ -45,14 +45,13 @@ internal static class SourceTerrainReferenceCapacityChecks
             var doc = main.ViewModel.Documents.Single(d => d.SessionId.ToString() == opened["document"]!["id"]!.GetValue<string>());
             await ((Task)typeof(MainWindow).GetField("previewWork", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(main)!).WaitAsync(token);
             Assert.Contains(resource, doc.SourceBuild!.Dependencies);
-            Assert.DoesNotContain(doc.SourceBuild.Outputs, o => o.Error != null);
             var workspace = doc.SourceWorld!.Workspace;
             long revision = workspace.Revision, contentRevision = workspace.ContentRevision, documentRevision = doc.Revision;
             var history = workspace.History.ToArray();
             bool canUndo = workspace.CanUndo, canRedo = workspace.CanRedo;
             var preview = doc.PreviewDocument;
 
-            var warning = Assert.Single(doc.SourceBuild.Outputs.SelectMany(o => o.Warnings), w => w.Contains("FindNode") && w.Contains("found no node"));
+            var warning = Assert.Single(doc.SourceBuild!.Notes, w => w.Contains("FindNode") && w.Contains("found no node"));
             Assert.InRange(warning.Length, 1, 1024);
             var shownWarning = Assert.Single(main.ViewModel.Problems, p => p.Message.Contains("FindNode") && p.Message.Contains("found no node"));
             Assert.Equal("Warning", shownWarning.Severity);

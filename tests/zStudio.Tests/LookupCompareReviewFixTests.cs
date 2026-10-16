@@ -1,13 +1,13 @@
 using System.Buffers.Binary;
 using System.Numerics;
 using System.Text.Json.Nodes;
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Core.Animation;
-using Recoil.Zbd.Core.Formats;
-using Recoil.Zbd.Core.Worlds;
+using zStudio.Core;
+using zStudio.Core.Animation;
+using zStudio.Core.Formats;
+using zStudio.Core.Worlds;
 using Xunit;
 
-namespace Recoil.Zbd.Tests;
+namespace zStudio.Tests;
 
 /// <summary>
 /// Review fixes for name lookups and Compare worlds: children of a pair at many places are paired once and within one
@@ -144,7 +144,7 @@ public sealed class LookupCompareReviewFixTests
         entry.References[3].AddRange([new(new byte[44]), Named(44, "choppr_snd1")]);
         var sequence = new AnimationSequence(new byte[64]) { Name = "motion" }; entry.Sequences.Add(sequence);
         var show = AnimationCatalog.Create(6, version); show.SetShort(16, 1); show.SetInt(12, 1); sequence.Events.Add(show);
-        var doc = new ZbdDocument("fixture", new(0, DateTime.MinValue), new(FormatFamily.GameZ, mw3 ? 27u : 15u, Recognition.Supported, "fixture"), ReadOnlyMemory<byte>.Empty) { Scene = new() };
+        var doc = new AssetDocument("fixture", new(0, DateTime.MinValue), new(FormatFamily.GameZ, mw3 ? 27u : 15u, Recognition.Supported, "fixture"), ReadOnlyMemory<byte>.Empty) { Scene = new() };
         doc.Scene.Models.Add(new(0, [Vector3.Zero, Vector3.UnitX, Vector3.UnitY], [], [], [], []));
         doc.Scene.Nodes.Add(SceneNode(0, "heli", [], []));
         var frame = new AnimationPlayer(new AnimationPreviewContext { Package = package, World = doc }, 0).EvaluateForTest(.1);
@@ -163,7 +163,7 @@ public sealed class LookupCompareReviewFixTests
         scene.Nodes.AddRange([SceneNode(0, "world", [], [1, 3, 5], "world"), SceneNode(1, "dwall02", [0], [2]), SceneNode(2, "healthy", [1], []),
             SceneNode(3, "dwall02", [0], [4]), SceneNode(4, "healthy", [3], []), SceneNode(5, "wall1", [0], [6]), SceneNode(6, "healthy", [5], [])]);
         scene.Models.Add(new(0, [Vector3.Zero, Vector3.UnitX, Vector3.UnitY], [], [], [], []));
-        var world = new ZbdDocument("gamez.zbd", new(0, DateTime.MinValue), new(FormatFamily.GameZ, 15, Recognition.Supported, "fixture"), ReadOnlyMemory<byte>.Empty) { Scene = scene };
+        var world = new AssetDocument("gamez.zbd", new(0, DateTime.MinValue), new(FormatFamily.GameZ, 15, Recognition.Supported, "fixture"), ReadOnlyMemory<byte>.Empty) { Scene = scene };
         var package = new AnimationPackage { Prefix = [], Tail = [] };
         AnimationEntry Entry(int index, string root, string attach, params string[] references)
         {

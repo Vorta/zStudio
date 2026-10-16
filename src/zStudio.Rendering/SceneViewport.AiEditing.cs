@@ -4,9 +4,9 @@ using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Media3D;
 using System.Windows.Shapes;
-using Recoil.Zbd.Core;
+using zStudio.Core;
 
-namespace Recoil.Zbd.Rendering;
+namespace zStudio.Rendering;
 
 public sealed partial class SceneViewport
 {
@@ -61,7 +61,7 @@ public sealed partial class SceneViewport
 
     private void RequireAiPathInteraction()
     {
-        if (!InspectionSelectionEnabled) throw new InvalidOperationException("Unlock editing first.");
+        if (!PlacementEditingEnabled) throw new InvalidOperationException("Unlock editing first.");
         if (IsFlyActive || IsPickupDragging || HasTransformDraft || TerrainBrushActive || ZonePaintActive || HasParachutePreview || IsParachutePointerMoving)
             throw new InvalidOperationException("Finish the active navigation or editing operation before editing an AI path.");
     }
@@ -147,7 +147,7 @@ public sealed partial class SceneViewport
             if (aiPathSelection.Count != 0) AiPropertiesRequested?.Invoke();
             return true;
         }
-        if (!InspectionSelectionEnabled || IsFlyActive || aiPathPreview.Count != 0 || AiPathSelectionChanging?.Invoke() == false) return true;
+        if (!PlacementEditingEnabled || IsFlyActive || aiPathPreview.Count != 0 || AiPathSelectionChanging?.Invoke() == false) return true;
         string mode = Keyboard.Modifiers.HasFlag(ModifierKeys.Control) ? "toggle" : Keyboard.Modifiers.HasFlag(ModifierKeys.Shift) ? "add" : "replace";
         if (PickAiNode(point) is { } id && aiPathNetworkNodes.Contains(id))
             SetAiPathSelection([id], mode);

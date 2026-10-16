@@ -2,9 +2,9 @@ using System.ComponentModel;
 using System.Globalization;
 using System.Numerics;
 using System.Windows.Media;
-using Recoil.Zbd.Core.Worlds;
+using zStudio.Core.Worlds;
 
-namespace Recoil.Zbd.Desktop;
+namespace zStudio.Desktop;
 
 /// <summary>
 /// Two worlds compared as the Compare worlds window shows them: the merged node tree as rows, the window's filter, and

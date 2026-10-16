@@ -1,7 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
 
-namespace Recoil.Zbd.Core.Sources;
+namespace zStudio.Core.Sources;
 
 /// <summary>Windowless, one-request file adapter. Does not access a live workspace or enable automation.</summary>
 public static class BlenderBridge

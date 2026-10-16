@@ -1,11 +1,11 @@
 using System.IO;
-using Recoil.Zbd.Core.Formats;
-using Recoil.Zbd.Core.Sources;
-using Recoil.Zbd.Core.Terrain;
-using Recoil.Zbd.Core.Worlds;
+using zStudio.Core.Formats;
+using zStudio.Core.Sources;
+using zStudio.Core.Terrain;
+using zStudio.Core.Worlds;
 using Xunit;
 
-namespace Recoil.Zbd.Tests;
+namespace zStudio.Tests;
 
 /// <summary>
 /// Convert to editable terrain on shipped missions: the converted terrain gives the altitude probe the same heights, zones,
@@ -39,14 +39,14 @@ public sealed class TerrainConversionCorpusTests
             }
             SourceWorkspace workspace = new(project);
             string database = $"data/{mission}/models/{mission}.gltf";
-            var before = await SourceWorlds.BuildPreviewAsync(project, mission, Path.Combine(SourceWorlds.PreviewRoot(project), "before"), workspace.Overlay(), token: Token);
+            var before = await SourceWorlds.LoadSceneAsync(project, mission, workspace.Overlay(), token: Token);
             var plan = SourceTerrainConversion.Plan(workspace, database, SourceTerrainConversion.References(workspace, before.Dependencies, $"gamegen/{before.Mission}.gs", Token), Token);
             var output = TestContext.Current.TestOutputHelper;
             output?.WriteLine($"{mission}: {plan.Converted} pieces into {plan.Groups.Count} surfaces; kept {plan.Kept.Count}: " +
                 string.Join("; ", plan.Kept.GroupBy(k => k.Reason).Select(g => $"{g.Key} ×{g.Count()}")));
             Assert.True(plan.Converted > 0);
             SourceTerrainConversion.Apply(workspace, plan, Token);
-            var after = await SourceWorlds.BuildPreviewAsync(project, mission, Path.Combine(SourceWorlds.PreviewRoot(project), "after"), workspace.Overlay(), token: Token);
+            var after = await SourceWorlds.LoadSceneAsync(project, mission, workspace.Overlay(), token: Token);
             var (worldA, nodesA) = await Read(before, p => p.ModelFile == database && p.Database && plan.Groups.Any(g => g.Nodes.Contains(p.ModelNode)));
             var recipes = plan.Recipes.ToHashSet(StringComparer.OrdinalIgnoreCase);
             var (worldB, nodesB) = await Read(after, p => p.Terrain != null && recipes.Contains(p.Terrain));
@@ -100,9 +100,9 @@ public sealed class TerrainConversionCorpusTests
         foreach (string folder in Directory.EnumerateDirectories(from, "*", options)) Directory.CreateDirectory(Path.Combine(to, Path.GetRelativePath(from, folder)));
         foreach (string file in Directory.EnumerateFiles(from, "*", options)) File.Copy(file, Path.Combine(to, Path.GetRelativePath(from, file)));
     }
-    private static async Task<(GameZWorld World, List<WorldNode> Nodes)> Read(SourceWorldBuild build, Func<WorldNodeProvenance, bool> select)
+    private static async Task<(GameZWorld World, List<WorldNode> Nodes)> Read(SourceSceneSnapshot build, Func<WorldNodeProvenance, bool> select)
     {
-        var world = GameZWorldReader.FromDocument(FormatRegistry.Default.OpenBytes("gamez.zbd", await File.ReadAllBytesAsync(build.WorldPath, Token), token: Token), Token);
+        var world = build.World;
         var slots = GameZWriter.NodeSlots(world, TestContext.Current.CancellationToken);
         return (world, world.Nodes.Where(n => slots.TryGetValue(n, out int slot) && build.Provenance.TryGetValue(slot, out var p) && select(p)).ToList());
     }

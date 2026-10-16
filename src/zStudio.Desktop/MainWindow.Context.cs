@@ -1,8 +1,8 @@
 using System.Windows;
 using System.Windows.Controls;
-using Recoil.Zbd.Core;
+using zStudio.Core;
 
-namespace Recoil.Zbd.Desktop;
+namespace zStudio.Desktop;
 
 public partial class MainWindow
 {
@@ -23,8 +23,17 @@ public partial class MainWindow
     {
         if (scene == null) return;
         ClearStaticPreviewProblems();
+        // Source evaluation notes already belong to ReportSourceBuild's file/operation rows. Core also
+        // carries them into mission contexts for headless consumers; suppress only the individually reported
+        // source warnings, leaving notes beyond that display cap available to the preview.
+        // Compare full identities only when MissionSceneLoader's 1023-character-plus-ellipsis bound leaves
+        // them unchanged; do not collapse distinct longer warnings merely because their previews match.
+        var sourceNotes = document.Document is zStudio.Core.Sources.SourceSceneSnapshot source
+            ? source.Notes.Take(SourceWarningsShown).Where(note => note.Length <= 1023 || note.Length == 1024 && note[^1] == '…')
+                .ToHashSet(StringComparer.Ordinal) : null;
         foreach (var note in scene.PreviewDiagnostics)
         {
+            if (note.Severity == "Warning" && sourceNotes?.Contains(note.Message) == true) continue;
             // Asset scope is known; these renderer notes do not supply per-actor source identities.
             var problem = new StudioProblem(note.Severity, "Preview", note.Message, document.Path, asset.Index, asset.Offset);
             staticPreviewProblems.Add(problem); ViewModel.Problems.Add(problem);
@@ -33,6 +42,7 @@ public partial class MainWindow
         PreviewNotices.Visibility = staticPreviewProblems.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
         PreviewInfo.Text = (scene.Mission is { } mission ? mission.Layout.Label + " · " : "") + scene.PreviewSummary;
         PreviewInfo.ToolTip = scene.Mission?.Layout.Description ?? scene.PreviewSummary;
+        RefreshSourceStatus();
     }
     private void PreviewNoticesClick(object sender, RoutedEventArgs e)
     {

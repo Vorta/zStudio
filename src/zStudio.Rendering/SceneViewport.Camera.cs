@@ -6,7 +6,7 @@ using HelixToolkit.SharpDX;
 using HelixToolkit.Wpf.SharpDX;
 using HCamera = HelixToolkit.Wpf.SharpDX.PerspectiveCamera;
 
-namespace Recoil.Zbd.Rendering;
+namespace zStudio.Rendering;
 
 public sealed partial class SceneViewport
 {
@@ -18,6 +18,11 @@ public sealed partial class SceneViewport
     private bool autoPerspective;
     private Point3D? orbitPivot;
     private double? navigationReferenceDistance;
+    private string? reportedViewMode;
+    /// <summary>The view's projection and named view, as a label: Perspective, Orthographic, or the axis view (Top, Front…).</summary>
+    public string ViewMode => axisView is { } named ? char.ToUpperInvariant(named[0]) + named[1..] : viewport.Camera is OrthographicCamera ? "Orthographic" : "Perspective";
+    /// <summary>The projection or named view changed (see <see cref="ViewMode"/>).</summary>
+    public event Action? ViewModeChanged;
     public ViewPose CaptureView() => viewport.Camera is ProjectionCamera camera
         ? new(camera.Position, camera.LookDirection, camera.UpDirection, camera is HCamera p ? p.FieldOfView : perspectiveFieldOfView,
             camera is OrthographicCamera ? "orthographic" : "perspective", (camera as OrthographicCamera)?.Width, axisView, autoPerspective,
@@ -97,6 +102,9 @@ public sealed partial class SceneViewport
                 cameraPoseDirty = false; authoredCameraPose = false;
             }
             UpdatePickupGizmoSize(); UpdateClipPlanes(); UpdateAiMarkers(); UpdateParachuteMarkers(); RefreshInspection();
+            // Presentation only: report a projection or named-view change after this frame, never from inside it.
+            string mode = ViewMode;
+            if (mode != reportedViewMode) { reportedViewMode = mode; Dispatcher.BeginInvoke(() => ViewModeChanged?.Invoke()); }
         }
         finally { preparingCamera = false; }
     }

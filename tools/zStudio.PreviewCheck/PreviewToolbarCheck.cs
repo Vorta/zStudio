@@ -8,7 +8,7 @@ using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Threading;
-using Recoil.Zbd.Desktop;
+using zStudio.Desktop;
 
 internal static class PreviewToolbarCheck
 {

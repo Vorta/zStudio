@@ -3,23 +3,23 @@ using System.Numerics;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
-using Recoil.Zbd.Core.Formats;
+using zStudio.Core.Formats;
 
-using Recoil.Zbd.Core.Animation;
+using zStudio.Core.Animation;
 
-namespace Recoil.Zbd.Core.Export;
+namespace zStudio.Core.Export;
 
 public sealed record ExportProgress(int Completed, int Total, string Name);
 public sealed record ExportResult(string Directory, int Completed, IReadOnlyList<string> Errors);
 public interface IAssetExporter
 {
-    Task<ExportResult> ExportAsync(ZbdDocument document, IReadOnlyList<AssetRecord> assets, string destination, bool jsonOnly,
+    Task<ExportResult> ExportAsync(AssetDocument document, IReadOnlyList<AssetRecord> assets, string destination, bool jsonOnly,
         string? preferredTexturePack = null, int lodLevel = 0, IProgress<ExportProgress>? progress = null, CancellationToken token = default);
 }
 
 public sealed partial class ExportService(AssetResolver resolver) : IAssetExporter
 {
-    public async Task<ExportResult> ExportAsync(ZbdDocument doc, IReadOnlyList<AssetRecord> assets, string destination, bool jsonOnly,
+    public async Task<ExportResult> ExportAsync(AssetDocument doc, IReadOnlyList<AssetRecord> assets, string destination, bool jsonOnly,
         string? preferredTexturePack = null, int lodLevel = 0, IProgress<ExportProgress>? progress = null, CancellationToken token = default)
     {
         using DirectoryLease directories = new();
@@ -63,7 +63,7 @@ public sealed partial class ExportService(AssetResolver resolver) : IAssetExport
         await WriteJson(target, "export-report.json", new JsonObject { ["source"] = doc.Path, ["completed"] = complete, ["errors"] = new JsonArray(errors.Select(e => (JsonNode?)JsonValue.Create(e)).ToArray()), ["purpose"] = "Standard assets; not a repackable project" }, token, directories).ConfigureAwait(false);
         return new(target, complete, errors);
     }
-    public static JsonObject AssetJson(ZbdDocument doc, AssetRecord a, CancellationToken token = default, bool boundedZrd = false)
+    public static JsonObject AssetJson(AssetDocument doc, AssetRecord a, CancellationToken token = default, bool boundedZrd = false)
     {
         token.ThrowIfCancellationRequested();
         var metadata = boundedZrd ? JsonData.Preview(a.Metadata, token: token) : (Value: JsonData.Clone(a.Metadata, token), Truncated: false);
@@ -136,7 +136,7 @@ public sealed partial class ExportService(AssetResolver resolver) : IAssetExport
             return preview.Value;
         }
     }
-    private async Task ExportObj(ZbdDocument doc, AssetRecord asset, string target, string name, string? preferred, int lod, CancellationToken token, DirectoryLease directories, SceneView? placements = null, TextureLookupOperation? textureLookup = null)
+    private async Task ExportObj(AssetDocument doc, AssetRecord asset, string target, string name, string? preferred, int lod, CancellationToken token, DirectoryLease directories, SceneView? placements = null, TextureLookupOperation? textureLookup = null)
     {
         GameScene scene = doc.Scene ?? throw new InvalidDataException("Missing GameZ scene.");
         var view = placements ?? SceneBuilder.ForAsset(scene, asset, lod, token);
@@ -180,7 +180,27 @@ public sealed partial class ExportService(AssetResolver resolver) : IAssetExport
             int texture = material.Int("texture_index", -1);
             if (texture >= 0 && texture < scene.Textures.Count)
             {
-                string textureName = scene.Textures[texture].Text("name"); var resolved = await textureLookup.ResolveAsync(textureName, token).ConfigureAwait(false);
+                string textureName = scene.Textures[texture].Text("name");
+                if (doc is zStudio.Core.Sources.SourceSceneSnapshot source)
+                {
+                    // The source snapshot already resolved and froze the authored PNG. Looking beside
+                    // its entry script for texture archives would silently omit every source texture.
+                    if (source.Textures.TryGetValue(textureName, out var sourceTexture))
+                    {
+                        string file = $"texture_{texture:D4}_{SafeName(textureName)}.png";
+                        string relative = Path.Combine(Path.GetDirectoryName(name) ?? "", file).Replace('\\', '/');
+                        if (!directories.Exists(Path.Combine(target, relative)))
+                        {
+                            _ = sourceTexture.Decode(token); // Refuse an invalid image before publishing its bytes.
+                            await WriteAtomicAsync(target, relative, sourceTexture.Bytes, token, directories).ConfigureAwait(false);
+                        }
+                        mtl.AppendLine("map_Kd " + file);
+                    }
+                    else textureNotes.Add($"Unresolved texture {textureName}.");
+                    mtl.AppendLine();
+                    continue;
+                }
+                var resolved = await textureLookup.ResolveAsync(textureName, token).ConfigureAwait(false);
                 if (resolved != null)
                 {
                     string file = $"texture_{texture:D4}_{SafeName(resolved.Asset.Name)}.png";

@@ -8,16 +8,16 @@ using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using ModelContextProtocol.Client;
 using ModelContextProtocol.Protocol;
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Core.Animation;
-using Recoil.Zbd.Core.Formats;
-using Recoil.Zbd.Automation;
-using Recoil.Zbd.Desktop;
-using Recoil.Zbd.Mcp;
-using Recoil.Zbd.Tests;
+using zStudio.Core;
+using zStudio.Core.Animation;
+using zStudio.Core.Formats;
+using zStudio.Automation;
+using zStudio.Desktop;
+using zStudio.Mcp;
+using zStudio.Tests;
 using Xunit;
 
-namespace Recoil.Zbd.Desktop.Tests;
+namespace zStudio.Desktop.Tests;
 
 /// <summary>The two owning-document paths share real protocol jobs and the visible draft's actual buttons.</summary>
 internal static class ParachuteMcpChecks
@@ -41,27 +41,19 @@ internal static class ParachuteMcpChecks
             await main.ViewModel.OpenRootAsync(fixture.Project, token);
             var world = Document((await Job("source_world_open", new() { ["mission"] = "m1" }))["document"]!);
             await Preview();
-            var otherSource = await main.ViewModel.OpenFileAsync(fixture.Path("data/m1/zrdr/gates.zad"), token, activate: false);
-            Assert.NotNull(otherSource);
-            // Keep an independent compiled baseline before source confirmation replaces/removes the preview build.
+            // Explicit export supplies the separate compiled-editor regression fixture.
             string compiled = Path.Combine(fixture.Root, "compiled");
-            foreach (string path in Directory.EnumerateFiles(world.SourceBuild!.Folder, "*", SearchOption.AllDirectories))
-            {
-                string copy = Path.Combine(compiled, Path.GetRelativePath(world.SourceBuild.Folder, path));
-                Directory.CreateDirectory(Path.GetDirectoryName(copy)!); File.Copy(path, copy);
-            }
+            var exported = await zStudio.Core.Sources.SourceBuilder.ExportAsync(fixture.Project, compiled,
+                ["m1/gamez.zbd", "m1/anim.zbd", "m1/zrdr.zbd"], token: token);
+            Assert.All(exported.Outputs, output => Assert.Null(output.Error));
             var state = (await PathAction("show"))["parachute"]!;
             Assert.Equal(2, state["windows"]!.AsArray().Count);
             Assert.True(state["cycleSeconds"]!.GetValue<double>() >= 10);
-            Assert.Null(state["selected"]);
+            // A source world has no editing lock: Show selects the first window.
+            Assert.Equal(Guid.Parse(state["windows"]![0]!["id"]!.GetValue<string>()), state["selected"]!.GetValue<Guid>());
             Assert.StartsWith("VTOL drop windows ready:", main.ViewModel.Status);
             var windowsPicker = (ComboBox)main.FindName("ParachuteWindows");
-            Assert.False(windowsPicker.IsEnabled); Assert.Equal(-1, windowsPicker.SelectedIndex);
-            // Even a queued selection raised before admission changed must restore the semantic row.
-            windowsPicker.SelectedIndex = 0;
-            Assert.Equal(-1, windowsPicker.SelectedIndex); Assert.Null((await State())!["selected"]);
-            ((ToggleButton)main.FindName("EditingUnlocked")).IsChecked = true;
-            Assert.True(windowsPicker.IsEnabled); Assert.False(world.PickupsLocked);
+            Assert.True(windowsPicker.IsEnabled); Assert.False(world.EditingLocked);
             windowsPicker.SelectedIndex = 0;
             Assert.Equal((await State())!["selected"]!.GetValue<Guid>(), Viewport().SelectedParachuteWindow);
             Assert.True(((FrameworkElement)main.FindName("ParachuteMoveButtons")).IsEnabled);
@@ -105,7 +97,7 @@ internal static class ParachuteMcpChecks
             await PathAction("set", new() { ["token"] = draft, ["start"] = 2 });
             var displayedReleases = (await PathAction("releases"))["items"]!.ToJsonString();
             Assert.NotEqual(baselineReleases, displayedReleases);
-            var rendererPreview = (Recoil.Zbd.Rendering.ParachuteWindowOverlay)typeof(Recoil.Zbd.Rendering.SceneViewport)
+            var rendererPreview = (zStudio.Rendering.ParachuteWindowOverlay)typeof(zStudio.Rendering.SceneViewport)
                 .GetField("parachutePreview", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(Viewport())!;
             double displayedFirstRelease = rendererPreview.Releases[0].Phase;
             ((TextBox)main.FindName("ParachuteStart")).Text = "4";
@@ -116,7 +108,7 @@ internal static class ParachuteMcpChecks
             Assert.Equal("4", state["draft"]!["input"]!.GetValue<string>());
             Assert.Equal(state["draft"]!["error"]!.GetValue<string>(), ((TextBlock)main.FindName("ParachuteMessage")).Text);
             Assert.Equal(displayedReleases, (await PathAction("releases"))["items"]!.ToJsonString());
-            Assert.Equal(displayedFirstRelease, ((Recoil.Zbd.Rendering.ParachuteWindowOverlay)typeof(Recoil.Zbd.Rendering.SceneViewport)
+            Assert.Equal(displayedFirstRelease, ((zStudio.Rendering.ParachuteWindowOverlay)typeof(zStudio.Rendering.SceneViewport)
                 .GetField("parachutePreview", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(Viewport())!).Releases[0].Phase);
             Assert.Equal("invalid_argument", (await Job("parachute", await Arguments("confirm", new() { ["token"] = draft }), "failed"))["code"]!.GetValue<string>());
             ((TextBox)main.FindName("ParachuteStart")).Text = "-";
@@ -141,7 +133,7 @@ internal static class ParachuteMcpChecks
                     if (first == canceled) Assert.Fail("Confirmation did not reach source preparation: " + (await canceled).ToJsonString());
                     Assert.False(Viewport().IsParachutePointerMoving);
                     // Already queued renderer/numeric callbacks cannot replace the accepted worker plan or its input.
-                    ((Action<int, double>)typeof(Recoil.Zbd.Rendering.SceneViewport).GetField("ParachuteMoveRequested", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(Viewport())!)(150, 0);
+                    ((Action<int, double>)typeof(zStudio.Rendering.SceneViewport).GetField("ParachuteMoveRequested", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(Viewport())!)(150, 0);
                     ((TextBox)main.FindName("ParachuteStart")).Text = "3";
                     var accepting = (await State())!["draft"]!;
                     Assert.Equal("2", accepting["input"]!.GetValue<string>());
@@ -167,8 +159,7 @@ internal static class ParachuteMcpChecks
                 finally { release.Release(); main.SourceEditPreparing = null; }
             }
 
-            await CheckGuiDiscard(navigate: false);
-            await CheckGuiDiscard(navigate: true);
+            await CheckGuiDiscard();
             state = (await PathAction("begin"))["parachute"]!;
             draft = state["draft"]!["token"]!.GetValue<string>();
             await PathAction("set", new() { ["token"] = draft, ["start"] = 2 });
@@ -236,12 +227,13 @@ internal static class ParachuteMcpChecks
                 var first = await Task.WhenAny(presenting.Task, accepted).WaitAsync(token);
                 if (first == accepted) { await accepted; Assert.Fail("Source confirmation did not reach replacement presentation."); }
                 main.DiscoverTexturePacksAsync = discover;
-                main.ViewModel.SelectedDocument = otherSource; await Preview();
-                main.ViewModel.Status = "Newer source-document status retained";
+                // Source projects now have one map and no concurrently open individual source files.
+                // Keep this barrier focused on completion after presentation. Maps/newer-root supersession
+                // is covered by SourceWorldMcpChecks; compiled owner/navigation races remain below.
+                Assert.False(accepted.IsCompleted);
                 releasePresentation.TrySetResult([]);
                 world = Document((await accepted)["document"]!);
-                Assert.Same(otherSource, main.ViewModel.SelectedDocument);
-                Assert.Equal("Newer source-document status retained", main.ViewModel.Status);
+                Assert.Same(world, main.ViewModel.SelectedDocument);
             }
             finally { main.DiscoverTexturePacksAsync = discover; releasePresentation.TrySetResult([]); }
             main.ViewModel.SelectedDocument = world; await Preview();
@@ -366,7 +358,7 @@ internal static class ParachuteMcpChecks
             // A document can hold accepted animation and coordinate edits together. Save-and-close
             // must persist both, rather than approving disposal after only one session was saved.
             await Job("pickups", new() { ["document"] = Id(owner) });
-            await Call("pickup_lock", new() { ["document"] = Id(owner), ["revision"] = owner.Revision, ["locked"] = false });
+            await Call("scene_lock", new() { ["document"] = Id(owner), ["revision"] = owner.Revision, ["locked"] = false });
             var placement = owner.PickupEdits!.Records[0];
             var position = owner.PickupEdits.Position(placement.Source);
             var coordinateSource = new Dictionary<string, object?> { ["ArchivePath"] = placement.Source.ArchivePath, ["AssetIndex"] = placement.Source.AssetIndex,
@@ -512,7 +504,7 @@ internal static class ParachuteMcpChecks
                 // or suppresses errors. Drain that continuation before asserting visible effects.
                 await System.Windows.Threading.Dispatcher.Yield(System.Windows.Threading.DispatcherPriority.ApplicationIdle);
             }
-            async Task CheckGuiDiscard(bool navigate)
+            async Task CheckGuiDiscard()
             {
                 var pending = (await PathAction("begin"))["parachute"]!["draft"]!["token"]!.GetValue<string>();
                 await PathAction("set", new() { ["token"] = pending, ["start"] = 2 });
@@ -528,32 +520,17 @@ internal static class ParachuteMcpChecks
                     Viewport().RaiseEvent(new System.Windows.Input.KeyEventArgs(System.Windows.Input.Keyboard.PrimaryDevice,
                         PresentationSource.FromVisual(main), Environment.TickCount, System.Windows.Input.Key.Escape)
                         { RoutedEvent = System.Windows.Input.Keyboard.PreviewKeyDownEvent });
-                    if (navigate)
-                    {
-                        main.ViewModel.SelectedDocument = otherSource;
-                        await Until(() => ReferenceEquals(typeof(MainWindow).GetField("shownDocument", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(main), otherSource));
-                        await Preview();
-                        // Navigation replaces its preview diagnostics; compare only additions made
-                        // by the old confirmation after the newer context has taken ownership.
-                        problems = main.ViewModel.Problems.Count;
-                        main.ViewModel.Status = "Newer GUI source navigation retained";
-                    }
                     release.Release(); await GuiConfirmFinished();
-                    Assert.Equal(navigate ? "Newer GUI source navigation retained" : "VTOL drop-window move canceled.", main.ViewModel.Status);
+                    Assert.Equal("VTOL drop-window move canceled.", main.ViewModel.Status);
                     Assert.Equal(problems, main.ViewModel.Problems.Count);
-                    if (!navigate) Assert.Equal(toolTab, ((TabControl)main.FindName("ToolTabs")).SelectedIndex);
+                    Assert.Equal(toolTab, ((TabControl)main.FindName("ToolTabs")).SelectedIndex);
                     Assert.False(world.IsDirty); Assert.Empty(world.SourceWorld!.Workspace.History);
-                    if (navigate)
-                    {
-                        main.ViewModel.SelectedDocument = world; await Preview();
-                        await PathAction("show"); await SelectFirstWindow();
-                    }
                     Assert.Null((await State())!["draft"]);
                 }
                 finally { release.Release(); main.SourceEditPreparing = null; }
             }
-            async Task Unlock() => await Call("pickup_lock", new() { ["document"] = Id(world), ["revision"] = world.Revision, ["locked"] = false });
-            Recoil.Zbd.Rendering.SceneViewport Viewport() => (Recoil.Zbd.Rendering.SceneViewport)((ContentControl)main.FindName("SceneHost")).Content;
+            async Task Unlock() => await Call("scene_lock", new() { ["document"] = Id(world), ["revision"] = world.Revision, ["locked"] = false });
+            zStudio.Rendering.SceneViewport Viewport() => (zStudio.Rendering.SceneViewport)((ContentControl)main.FindName("SceneHost")).Content;
             async Task SelectFirstWindow() => await PathAction("select", new() { ["window"] = (await State())!["windows"]![0]!["id"]!.GetValue<string>() });
             async Task<JsonNode?> State()
             {

@@ -1,8 +1,8 @@
 using System.Buffers.Binary;
 using System.Text;
-using Recoil.Zbd.Core.Formats;
+using zStudio.Core.Formats;
 
-namespace Recoil.Zbd.Core.Sources;
+namespace zStudio.Core.Sources;
 
 /// <summary>ZAR archives: zReader resources (<c>zrdr.zbd</c>) and sound banks (<c>sounds{h,m,l}.zbd</c>).</summary>
 internal static class ArchiveSources

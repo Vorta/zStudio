@@ -1,9 +1,9 @@
 using System.Numerics;
 using System.Text.Json.Nodes;
-using Recoil.Zbd.Core.Gltf;
-using Recoil.Zbd.Core.Worlds;
+using zStudio.Core.Gltf;
+using zStudio.Core.Worlds;
 
-namespace Recoil.Zbd.Core.Sources;
+namespace zStudio.Core.Sources;
 
 /// <summary>
 /// Structural edits of a glTF file's node hierarchy, on its JSON: removing a node with its descendants, copying one beside

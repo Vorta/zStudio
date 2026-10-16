@@ -1,6 +1,6 @@
 using System.Globalization;
 
-namespace Recoil.Zbd.Core.Sources;
+namespace zStudio.Core.Sources;
 
 /// <summary>Operation-owned admission for reconstruction placement metadata and path work, before allocation.</summary>
 internal sealed class WorldCopyBudget(long maximum = WorldCopyBudget.MaximumUnits, CancellationToken token = default)

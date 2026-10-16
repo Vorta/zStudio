@@ -7,10 +7,10 @@ using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using HelixToolkit.SharpDX;
 using HelixToolkit.Wpf.SharpDX;
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Core.Animation;
-using Recoil.Zbd.Desktop;
-using Recoil.Zbd.Rendering;
+using zStudio.Core;
+using zStudio.Core.Animation;
+using zStudio.Desktop;
+using zStudio.Rendering;
 using HCamera = HelixToolkit.Wpf.SharpDX.PerspectiveCamera;
 using DiffuseMaterial = HelixToolkit.Wpf.SharpDX.DiffuseMaterial;
 
@@ -18,7 +18,7 @@ internal static class AlphaCheck
 {
     public static int Run(string root)
     {
-        string settings = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "RecoilZbdStudio", "settings.json");
+        string settings = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "zStudio", "settings.json");
         byte[]? originalSettings = File.Exists(settings) ? File.ReadAllBytes(settings) : null;
         var app = new App { ShutdownMode = ShutdownMode.OnExplicitShutdown, ProcessCommandLine = false }; app.InitializeComponent(); int exit = 0;
         app.Startup += async (_, _) =>
@@ -32,7 +32,7 @@ internal static class AlphaCheck
                 var scene = new GameScene();
                 scene.Materials.Add(new JsonObject { ["alpha"] = 255 });
                 scene.Models.Add(new(0, [new(-1,-1,0), new(1,-1,0), new(1,1,0), new(-1,1,0)], [], [], [new(0, 4, [0,1,2,3], [], [Vector2.Zero, Vector2.UnitX, Vector2.One, Vector2.UnitY], [])], []));
-                var context = new AnimationPreviewContext { Package = new() { Prefix = [], Tail = [] }, World = new("alpha", new(0, DateTime.MinValue), new(FormatFamily.GameZ, 15, Recognition.Supported, ""), ReadOnlyMemory<byte>.Empty) { Scene = scene } };
+                var context = new AnimationPreviewContext { Package = new() { Prefix = [], Tail = [] }, World = new AssetDocument("alpha", new(0, DateTime.MinValue), new(FormatFamily.GameZ, 15, Recognition.Supported, ""), ReadOnlyMemory<byte>.Empty) { Scene = scene } };
                 AnimationFrame frame = new(0, [new(1,0,0,Matrix4x4.Identity,true,1,-1,0,0), new(2,1,0,Matrix4x4.CreateTranslation(0,0,-.1f),true,1,-1,0,0)], [], [], [], null,null,Vector4.Zero,Vector4.Zero,[],[],[]);
                 await preview.ShowAnimationAsync(context, frame, resolver, false, CancellationToken.None);
                 var viewport = (Viewport3DX)preview.RenderSurface; viewport.ShowCoordinateSystem = viewport.ShowViewCube = false;

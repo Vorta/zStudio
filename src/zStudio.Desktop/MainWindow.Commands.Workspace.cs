@@ -1,12 +1,12 @@
 using System.IO;
 using System.Text.Json.Nodes;
-using Recoil.Zbd.Automation;
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Core.Animation;
-using Recoil.Zbd.Core.Export;
-using Recoil.Zbd.Core.Formats;
+using zStudio.Automation;
+using zStudio.Core;
+using zStudio.Core.Animation;
+using zStudio.Core.Export;
+using zStudio.Core.Formats;
 
-namespace Recoil.Zbd.Desktop;
+namespace zStudio.Desktop;
 
 public partial class MainWindow
 {
@@ -139,7 +139,7 @@ public partial class MainWindow
             if (doc.IsDirty && !Flag(a, "discard") && !OtherSourceWorldOpen(doc)) throw new StudioCommandException("unsaved_changes", doc.SourceWorld != null ? "Save or explicitly discard the source project's edits; this is its last open world." : "Save or explicitly discard this document.");
             ViewModel.CloseResolved(doc); return Result(new { closed = doc.SessionId });
         });
-        RegisterJob(r, "reload_document", "Stage and reparse a clean document before replacing it, using the current model/resource Save As destination. An already-open destination, failure or pre-publication cancellation retains the document and preview. Dirty documents must first be saved or explicitly closed. A source world instead rebuilds from the project's current sources and pending edits. External changes to any dirty workspace source cause a conflict, including scripts, models, resources and animation definitions (.zad).", [DocumentParameter, RevisionParameter], false, async (a, token) =>
+        RegisterJob(r, "reload_document", "Stage and reparse a clean document before replacing it, using the current model/resource Save As destination. An already-open destination, failure or pre-publication cancellation retains the document and preview. Dirty documents must first be saved or explicitly closed. A source world instead evaluates the project's current sources and pending edits directly in memory, without creating archives. External changes to any dirty workspace source cause a conflict, including scripts, models, resources and animation definitions (.zad).", [DocumentParameter, RevisionParameter], false, async (a, token) =>
         {
             var doc = TargetDocument(a, true); if (doc.IsDirty && doc.SourceWorld == null) throw new StudioCommandException("unsaved_changes", "Save or explicitly close with discard before reloading.");
             bool active = ViewModel.SelectedDocument == doc;
@@ -170,7 +170,7 @@ public partial class MainWindow
             if (d.SourceWorld != null) return Result(DocumentState(await UndoSourceWorldAsync(d, Text(a, "action") == "redo", token)));
             UndoDocument(d, Text(a, "action") == "redo"); if (d.ContentEdits != null) await contentWork.WaitAsync(token); else if (d.ResourceEdits != null) await resourceWork.WaitAsync(token); else if (d.ModelEdits != null) await modelRefreshWork.WaitAsync(token); return Result(DocumentState(d));
         });
-        RegisterJob(r, "save_document", "Verified save: animations require a NEW destination outside the source root; pickup/AI/tank coordinates save owning archives or explicit new destinations; model edits save all texture variants before GameZ; ZAR/ZRD, script and texture saves verify and atomically replace each working destination or create new Save As files. Batch results preview at most 64 saved/remaining paths and 32 errors, each at most 512 characters, with SavedPathCount/SavedPathsTruncated, RemainingPathCount/RemainingPathsTruncated and ErrorCount/ErrorsTruncated. Source saves return written with writtenCount/writtenTruncated under the same path bound. All files are still saved; truncated previews are not full path identities. Global state.contentEdits reports fileCount with empty files/filesTruncated; per-document command results preview affected paths and targets. Partial content/coordinate Save As retains every requested destination; ordinary Save retries unpublished copies without overwriting existing files.",
+        RegisterJob(r, "save_document", "Verified save: source worlds save every accepted project change to its owning glTF, script, ZRD or animation-definition source, creating no archives; animations require a NEW destination outside the source root; pickup/AI/tank coordinates save owning archives or explicit new destinations; model edits save all texture variants before GameZ; ZAR/ZRD, script and texture saves verify and atomically replace each working destination or create new Save As files. Batch results preview at most 64 saved/remaining paths and 32 errors, each at most 512 characters, with SavedPathCount/SavedPathsTruncated, RemainingPathCount/RemainingPathsTruncated and ErrorCount/ErrorsTruncated. Source saves return written with writtenCount/writtenTruncated under the same path bound. All files are still saved; truncated previews are not full path identities. Global state.contentEdits reports fileCount with empty files/filesTruncated; per-document command results preview affected paths and targets. Partial content/coordinate Save As retains every requested destination; ordinary Save retries unpublished copies without overwriting existing files.",
             [DocumentParameter, RevisionParameter, P("destination", "string", "Full path of a new single-file Save As (animation, ZAR/ZRD, script or texture pack). Omit to save working files."), P("modelDirectory", "string", "Full path of the model Save As directory; all GameZ/texture destinations must be new. Omit for verified save to the working files."), new("destinations", "object", "Mission coordinate or texture batch source path to new Save As path map; cover every affected file.", AdditionalProperties: new("", "string", "New Save As full path for this source archive.")), P("backup", "boolean", "Mission coordinate backup preference; defaults to app setting.")], false, async (a, token) =>
         {
             var d = TargetDocument(a, true);
@@ -235,7 +235,7 @@ public partial class MainWindow
             var d = TargetDocument(a); var assets = a["assets"] is JsonArray list ? list.Select(x => TargetAsset(d, x as JsonObject ?? throw new StudioCommandException("invalid_argument", "Asset must contain kind/index."))).ToArray() : d.PreviewDocument.Assets.ToArray();
             return Result(await ExportAssetsAsync(d, assets, FullPath(a, "destination"), Flag(a, "jsonOnly"), Text(a, "texturePack") is { Length: > 0 } pack ? pack : null, Int(a, "lod"), token));
         });
-        RegisterJob(r, "validate", "Validate the source archive on disk, not pending edits. Returns structured diagnostics.", [DocumentParameter], true, async (a, token) => Result(await ValidateDocumentSourceAsync(TargetDocument(a), token)));
+        RegisterJob(r, "validate", "Validate on-disk data, not pending edits: evaluate a source world directly from its project or validate a compiled archive. Creates no game archives. Returns structured diagnostics.", [DocumentParameter], true, async (a, token) => Result(await ValidateDocumentSourceAsync(TargetDocument(a), token)));
         Register(r, "problems", "List file/operation problems with original severity and complete source context. Long or escaped rows shorten pages; follow nextOffset.", false, PageParameters, a => Page(ViewModel.Problems, a, p => p.Message + " " + p.File + " " + p.Severity + " " + p.Category, maximumRowBytes: InspectionResultBudget.Problem));
         RegisterOperationCommands(r);
     }

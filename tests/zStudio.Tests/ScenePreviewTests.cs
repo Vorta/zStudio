@@ -1,11 +1,11 @@
 using System.Numerics;
 using System.Text.Json.Nodes;
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Core.Animation;
-using Recoil.Zbd.Core.Formats;
+using zStudio.Core;
+using zStudio.Core.Animation;
+using zStudio.Core.Formats;
 using Xunit;
 
-namespace Recoil.Zbd.Tests;
+namespace zStudio.Tests;
 
 public sealed class ScenePreviewTests
 {
@@ -15,6 +15,18 @@ public sealed class ScenePreviewTests
         var scene = LodScene();
         Assert.Equal([3, 8], SceneBuilder.Assemble(scene, token: TestContext.Current.CancellationToken).Placements.Select(p => p.NodeIndex));
         Assert.Equal([4, 9], SceneBuilder.Assemble(scene, 1, token: TestContext.Current.CancellationToken).Placements.Select(p => p.NodeIndex));
+        // Editor-only part gates can reveal an initialized hidden part without
+        // changing stored flags, crossing LOD bands or revealing dormant actors.
+        scene.Nodes[3].Metadata["flags"] = 0;
+        Assert.Equal([8], SceneBuilder.Assemble(scene, token: TestContext.Current.CancellationToken).Placements.Select(p => p.NodeIndex));
+        var shown = SceneBuilder.Assemble(scene, token: TestContext.Current.CancellationToken, visibility: n => n == 3 ? true : null);
+        Assert.Equal([3, 8], shown.Placements.Select(p => p.NodeIndex)); Assert.Contains(3, shown.VisibleNodes);
+        Assert.Equal(0u, scene.Nodes[3].Metadata.UInt("flags"));
+        Assert.Equal([8], SceneBuilder.Assemble(scene, token: TestContext.Current.CancellationToken,
+            visibility: n => n == 0 ? false : n == 3 ? true : null).Placements.Select(p => p.NodeIndex));
+        scene.Nodes[3].Metadata["preview_pending_placement"] = true;
+        Assert.Equal([8], SceneBuilder.Assemble(scene, token: TestContext.Current.CancellationToken, visibility: n => n == 3 ? true : null).Placements.Select(p => p.NodeIndex));
+        Assert.Equal([4, 9], SceneBuilder.Assemble(scene, 1, token: TestContext.Current.CancellationToken, visibility: n => n == 3 ? true : null).Placements.Select(p => p.NodeIndex));
         Assert.Equal([4, 9], SceneBuilder.Assemble(scene, 20, token: TestContext.Current.CancellationToken).Placements.Select(p => p.NodeIndex));
         Assert.Equal(2, new SceneLods(scene).Count());
         scene.Nodes[1].Data["range_far_sq"] = 200; // Authored crossfade overlaps the next band.
@@ -115,7 +127,7 @@ public sealed class ScenePreviewTests
     {
         // Palette index zero is red; index one is the transparent zero color.
         byte[] bytes = palette ? [0, 1, 0, 248, 0, 0] : [0, 248, 0, 0];
-        var doc = new ZbdDocument("key", new(bytes.Length, DateTime.MinValue), new(FormatFamily.TexturePack, null, Recognition.Supported, ""), bytes);
+        var doc = new AssetDocument("key", new(bytes.Length, DateTime.MinValue), new(FormatFamily.TexturePack, null, Recognition.Supported, ""), bytes);
         var asset = doc.Add(AssetKind.Texture, 0, "key", 0, bytes.Length, content: new TextureInfo(2, 1, 3, palette ? 2 : 0, -1, 0, palette ? 2 : 4, -1, palette ? 2 : -1, palette ? 4 : 0));
         Assert.Equal(new byte[] { 255, 0, 0, 255, 0, 0, 0, 0 }, TextureDecoder.Decode(doc, asset, TestContext.Current.CancellationToken).Rgba);
         asset.Content = ((TextureInfo)asset.Content!) with { Flags = 1 };
@@ -125,7 +137,7 @@ public sealed class ScenePreviewTests
     {
         var package = new AnimationPackage { Prefix = new byte[72], Tail = [] };
         var entry = new AnimationEntry(new byte[308], 0, 72); entry.SetText(32, "first"); entry.SetFloat(164, -1); package.Entries.Add(entry);
-        return new() { Package = package, World = new("fixture", new(0, DateTime.MinValue), new(FormatFamily.GameZ, 15, Recognition.Supported, ""), ReadOnlyMemory<byte>.Empty) { Scene = scene } };
+        return new() { Package = package, World = new AssetDocument("fixture", new(0, DateTime.MinValue), new(FormatFamily.GameZ, 15, Recognition.Supported, ""), ReadOnlyMemory<byte>.Empty) { Scene = scene } };
     }
     private static GameScene LodScene()
     {

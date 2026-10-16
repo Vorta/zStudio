@@ -1,14 +1,14 @@
 using System.Buffers.Binary;
 using System.Numerics;
 using System.Text.Json.Nodes;
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Core.Animation;
-using Recoil.Zbd.Core.Formats;
-using Recoil.Zbd.Core.Sources;
-using Recoil.Zbd.Core.Worlds;
+using zStudio.Core;
+using zStudio.Core.Animation;
+using zStudio.Core.Formats;
+using zStudio.Core.Sources;
+using zStudio.Core.Worlds;
 using Xunit;
 
-namespace Recoil.Zbd.Tests;
+namespace zStudio.Tests;
 
 public sealed class AnimationEffectCycleBudgetTests
 {
@@ -207,9 +207,9 @@ public sealed class AnimationEffectCycleBudgetTests
                 Path.Combine(directory, "anim.zbd"), resolver, rawRefusal, worldPath, Token));
             Assert.True(rawRefusal.Exhausted);
             // Tiny documents fit individually, but owned asset and document metadata must share admission.
-            var first = new ZbdDocument("first.zbd", new(0, DateTime.MinValue),
+            var first = new AssetDocument("first.zbd", new(0, DateTime.MinValue),
                 new(FormatFamily.Archive, null, Recognition.Supported, "fixture"), ReadOnlyMemory<byte>.Empty);
-            var second = new ZbdDocument("second.zbd", first.Stamp, first.Probe, ReadOnlyMemory<byte>.Empty);
+            var second = new AssetDocument("second.zbd", first.Stamp, first.Probe, ReadOnlyMemory<byte>.Empty);
             first.Add(AssetKind.Raw, 0, "metadata", 0, 0).Metadata["rows"] =
                 new JsonArray(Enumerable.Range(0, 32).Select(i => (JsonNode)JsonValue.Create(i)!).ToArray());
             second.Metadata["rows"] = new JsonArray(Enumerable.Range(0, 32).Select(i => (JsonNode)JsonValue.Create(i)!).ToArray());
@@ -239,7 +239,7 @@ public sealed class AnimationEffectCycleBudgetTests
             // Selected layout resources project JSON even when their rows have no known actor. Their
             // retained typed graphs fit this allowance, but the four additional projections do not.
             byte[] ignored = ZrdWriter.Write(ZrdText.Parse("( ignored ( " + string.Join(' ', Enumerable.Repeat("1", 256)) + " ) )", Token), Token);
-            List<ZbdDocument> selected = [];
+            List<AssetDocument> selected = [];
             foreach (string name in new[] { "aiv", "vehicle", "startanims", "ai" })
             {
                 string path = Path.Combine(directory, name + ".zbd");
@@ -269,7 +269,7 @@ public sealed class AnimationEffectCycleBudgetTests
         scene.Nodes.Add(Node(0, null, [.. Enumerable.Range(1, children)]));
         for (int i = 1; i <= children; i++) scene.Nodes.Add(Node(i, modeled && i == children ? 0 : null, []));
         scene.Models.Add(new(0, [], [], [], [new(0, 0, [], [], [], [])], new()));
-        var world = new ZbdDocument("world.zbd", new(0, DateTime.MinValue),
+        var world = new AssetDocument("world.zbd", new(0, DateTime.MinValue),
             new(FormatFamily.GameZ, 15, Recognition.Supported, "fixture"), ReadOnlyMemory<byte>.Empty) { Scene = scene };
         return new() { Package = new() { Prefix = [], Tail = [] }, World = world };
     }

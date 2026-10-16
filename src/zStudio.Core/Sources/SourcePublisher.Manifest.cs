@@ -2,7 +2,7 @@ using System.Buffers;
 using System.Text;
 using System.Text.Json;
 
-namespace Recoil.Zbd.Core.Sources;
+namespace zStudio.Core.Sources;
 
 public sealed partial class SourcePublisher
 {
