@@ -323,7 +323,8 @@ public sealed partial class SceneViewport : UserControl, IDisposable
                         RenderOrder = group.Horizon ? 0 : 1,
                         IsDepthClipEnabled = !group.Horizon,
                     };
-                    mesh.MouseDown3D += (_, e) =>
+                    // The horizon is backdrop, as for the hover probe: clicking the sky selects nothing.
+                    if (!group.Horizon) mesh.MouseDown3D += (_, e) =>
                     {
                         if (InspectionSelectionEnabled && !IsFlyActive && !IsPickupDragging && e is MouseDown3DEventArgs { OriginalInputEventArgs: MouseButtonEventArgs { ChangedButton: MouseButton.Left } } args && args.HitTestResult is { } hit && visiblePlacements.TryGetValue(mesh, out var found))
                         {
@@ -337,7 +338,7 @@ public sealed partial class SceneViewport : UserControl, IDisposable
                     inspectionPolygons[mesh] = part.VertexPolygons;
                     if (asset.Kind == AssetKind.World)
                     {
-                        surfaceAppearances[mesh] = new(material, kind, zone);
+                        surfaceAppearances[mesh] = new(material, kind, zone, group.Horizon);
                     }
                     if (mesh.IsTransparent)
                     {

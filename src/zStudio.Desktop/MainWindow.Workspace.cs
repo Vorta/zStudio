@@ -253,6 +253,8 @@ public partial class MainWindow
         { sourcePropertiesWidth = Math.Clamp(PropertiesColumn.ActualWidth, 260, 650); ArrangeWorkspace(); return; }
         if (ViewModel.IsSourceProject && sender == NavigatorSplitter)
         { sourceOutlinerWidth = Math.Clamp(FilesColumn.ActualWidth, 200, 650); ArrangeWorkspace(); return; }
+        if (ViewModel.IsSourceProject && sender == ToolsSplitter)
+        { sourceToolsHeight = Math.Clamp(ToolsRow.ActualHeight, 100, 700); ArrangeWorkspace(); return; }
         var layout = Layout;
         if (sender == NavigatorSplitter) layout.NavigatorWidth = FilesColumn.ActualWidth - (filesDetached ? layout.FilesWidth + 6 : 0);
         if (sender == FilesSplitter) { layout.FilesWidth = DetachedFilesColumn.ActualWidth; layout.NavigatorWidth = NavigatorContentColumn.ActualWidth; }
@@ -281,6 +283,7 @@ public partial class MainWindow
     }
     private void ToolsButtonClick(object sender, RoutedEventArgs e)
     {
+        if (ViewModel.IsSourceProject) { SetToolsVisible(!SourceToolsVisible); return; }
         if (Layout.Preset == "Focus preview") Layout.Preset = previousPreset;
         Layout.ToolsVisible = !Layout.ToolsVisible; ArrangeWorkspace();
     }

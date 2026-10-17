@@ -71,9 +71,9 @@ internal sealed class SceneTreeModel
     }
     internal SceneTreeIdentity Identity(int node) => identity(node);
     internal IReadOnlyList<SceneHierarchyEdge> Children(int node) => Projection?.Children(node) ?? Hierarchy.Children(node);
-    internal SceneTreeItem New(int? node, SceneTreeItem? parent, string kind, int slot)
+    internal SceneTreeItem New(int? node, SceneTreeItem? parent, string kind, int slot, SourceMapPassEntry? placement = null)
     {
-        var row = new SceneTreeItem(this, node, parent, kind, slot);
+        var row = new SceneTreeItem(this, node, parent, kind, slot, placement);
         rows.Add(row.Id, row);
         if (row.StateKey == State.Selection && row.Selectable) Select(row);
         return row;
@@ -125,6 +125,10 @@ public sealed class SceneTreeItem : INotifyPropertyChanged
     public int? Index { get; }
     public string Kind { get; }
     public string? Problem { get; }
+    /// <summary>The unit or pickup an aiv or puppies row lists, with the difficulties placing it; null for other rows.</summary>
+    internal SourceMapPassEntry? Placement { get; }
+    /// <summary>A unit or pickup only other difficulties place: listed (dimmed) without an object in the view.</summary>
+    public bool IsOtherDifficulty => Placement is { Row: null };
     public GameNode? Node => Index is int i && i >= 0 && i < Owner.Hierarchy.Scene.Nodes.Count ? Owner.Hierarchy.Scene.Nodes[i] : null;
     public bool SourceGroup => Index is int i && Owner.Projection?.IsSourceGroup(i) == true;
     /// <summary>A source map's later pass (aiv, puppies, anim) shown as a top-level tree of its own.</summary>
@@ -135,16 +139,16 @@ public sealed class SceneTreeItem : INotifyPropertyChanged
     public bool Synthetic => SourceGroup || Index is int i && Owner.Projection?.Boundaries.GetValueOrDefault(i)?.Synthetic == true;
     public bool Selectable => Problem == null && (Node != null || Synthetic);
     public bool ReferencedObject => Index is int i && Owner.Projection?.IsBoundary(i) == true;
-    public string DisplayName => Owner.Projection != null && Index is int i ? Owner.Projection.DisplayName(i) : Node?.Name ?? "Missing node";
+    public string DisplayName => IsOtherDifficulty ? Placement!.Name : Owner.Projection != null && Index is int i ? Owner.Projection.DisplayName(i) : Node?.Name ?? "Missing node";
     public string? ReadOnlyReason => SourceGroup ? "This authored group is removed during compilation. Its hierarchy can be inspected and it can be renamed (right-click); other group edits are unavailable."
         : Index is int i ? Owner.Projection?.Boundaries.GetValueOrDefault(i)?.ReadOnlyReason : null;
-    public string NodeType => Pass != null ? "pass" : SourceGroup ? "group" : ReferencedObject ? "reference" : Node?.Class switch
+    public string NodeType => Pass != null ? "pass" : IsOtherDifficulty ? "placement" : SourceGroup ? "group" : ReferencedObject ? "reference" : Node?.Class switch
     { "object3d" when Node.ModelIndex != null => "mesh", "object3d" => "group", { } kind => kind, _ => Kind };
     public int Depth { get; }
     public bool Shared => Index is int i && (Owner.Projection?.ParentCount(i) ?? (Node != null ? Owner.Hierarchy.Parents(i).Count : 0)) > 1;
-    public int ChildCount => Problem != null ? 0 : Kind == "unlinked" ? Owner.Hierarchy.UnlinkedRoots.Count : Pass is { } pass ? pass.Roots.Count :
+    public int ChildCount => Problem != null ? 0 : Kind == "unlinked" ? Owner.Hierarchy.UnlinkedRoots.Count : Pass is { } pass ? pass.Entries.Count :
         Index is int i && (Node != null || Synthetic) ? Owner.Children(i).Count : 0;
-    public string Label => Pass is { } pass ? $"{pass.Label} · {pass.Roots.Count}" : Owner.Projection != null && Selectable ? Short(DisplayName, 180) + (Animations != null ? " ⟳" : "") : Kind == "unlinked" ? $"Unlinked nodes · {ChildCount}" : Node is { } n ?
+    public string Label => Pass is { } pass ? $"{pass.Label} · {pass.Entries.Count}" : Owner.Projection != null && (Selectable || IsOtherDifficulty) ? Short(DisplayName, 180) : Kind == "unlinked" ? $"Unlinked nodes · {ChildCount}" : Node is { } n ?
         $"{Short(n.Name, 180)} · {n.Class} #{n.Index}" + (ChildCount > 0 ? $" · {ChildCount} {(ChildCount == 1 ? "child" : "children")}" : "") +
         (Shared ? " · shared" : "") + (Kind == "world partition" ? " · partition reference" : "") + (Problem == null ? "" : " · " + Problem) : $"Missing node #{Index}";
     public string Glyph => Pass != null ? "◫" : Problem != null || !Selectable && Kind != "unlinked" ? "!" : Kind == "unlinked" ? "◇" : NodeType switch
@@ -152,23 +156,38 @@ public sealed class SceneTreeItem : INotifyPropertyChanged
     /// <summary>A source map's outliner shows its own row: type icon and colour, name, zone and hide eye.</summary>
     public bool IsSourceMap => Owner.Projection != null;
     /// <summary>The outliner's type: world, group, geometry, object (a placed model) or node (lights, cameras, LOD…).</summary>
-    public string Category => Pass != null || Kind == "unlinked" ? "group" : Problem != null ? "node" : NodeType switch
+    public string Category => Pass != null || Kind == "unlinked" ? "group" : IsOtherDifficulty ? "object" : Problem != null ? "node" : NodeType switch
     { "world" => "world", "group" or "lod" => "group", "mesh" => "geometry", "reference" => "object", _ => "node" };
-    public string OutlinerIcon => OutlinerKinds.Icon(Category);
-    public System.Windows.Media.Brush OutlinerBrush => OutlinerKinds.Brush(Category);
+    public string OutlinerIcon => Pass is { } pass ? OutlinerKinds.PassIcon(pass.Kind) : OutlinerKinds.Icon(Category);
+    public System.Windows.Media.Brush OutlinerBrush => Pass is { } pass ? OutlinerKinds.PassBrush(pass.Kind) : OutlinerKinds.Brush(Category);
     /// <summary>The name alone: groups show no counts.</summary>
-    public string OutlinerLabel => Pass is { } pass ? pass.Label : Kind == "unlinked" ? "Unlinked nodes" : Problem != null ? Label : Short(DisplayName, 180) + (Animations != null ? " ⟳" : "");
-    /// <summary>An object's zone, at the row's right.</summary>
-    public string Meta => Category == "object" && Node?.Metadata["zone_id"] is System.Text.Json.Nodes.JsonValue zone && ZoneWord(zone) is long word
-        ? "Zone " + ((word & 0xFF) == 0xFF ? "Any" : (word & 0xFF).ToString(System.Globalization.CultureInfo.InvariantCulture)) : "";
+    public string OutlinerLabel => Pass is { } pass ? pass.Label : Kind == "unlinked" ? "Unlinked nodes" : Problem != null && !IsOtherDifficulty ? Label : Short(DisplayName, 180);
+    /// <summary>Whether a mission animation binds to this object (an icon beside its name).</summary>
+    public bool IsAnimated => Animations != null;
+    /// <summary>The aiv or puppies pass this row lies in (units and pickups the mission places after the world is loaded), or null.</summary>
+    private readonly string? addedPass;
+    public string? AnimationsToolTip => Animations is { } animations ? "Bound to mission animations: " + string.Join(", ", animations.Select(a => Short(a, 64))) : null;
+    /// <summary>
+    /// The text at the row's right: the zone of an object or piece of geometry in the world ("Zone: 12"), or the difficulties
+    /// placing an aiv or puppies unit or pickup ("E/M/H"). The units and pickups the mission places after the world is loaded
+    /// have no zone, nor do other runtime copies; the anim pass's objects keep theirs.
+    /// </summary>
+    public string Meta => Placement is { Difficulties.Count: > 0 } placement ? placement.Tag : Zone is { } zone ? "Zone: " + zone : "";
+    /// <summary>The row's zone, "Any" or 0–254, or null (see <see cref="Meta"/>).</summary>
+    public string? Zone => Category is "object" or "geometry" && addedPass == null && Index is int i && Owner.Projection?.IsRuntimeCopy(i) == false
+        && Node?.Metadata["zone_id"] is System.Text.Json.Nodes.JsonValue zone && ZoneWord(zone) is long word
+        ? (word & 0xFF) == 0xFF ? "Any" : (word & 0xFF).ToString(System.Globalization.CultureInfo.InvariantCulture) : null;
+    public string? MetaToolTip => Placement is { Difficulties.Count: > 0 } placement ? "Placed on " + string.Join(", ", placement.Difficulties) : null;
     private static long? ZoneWord(System.Text.Json.Nodes.JsonValue value) =>
         value.TryGetValue<uint>(out uint word) ? word : value.TryGetValue<int>(out int signed) ? signed : value.TryGetValue<long>(out long wide) ? wide : null;
     public bool CanHide => IsSourceMap && Index is int && Problem == null;
+    /// <summary>The row's Frame selection button: a selectable object, piece of geometry or node (not a group the build removes).</summary>
+    public bool CanFrame => IsSourceMap && Index is int && Selectable && !SourceGroup;
     public bool IsHidden => Index is int i && Owner.IsHiddenNode?.Invoke(i) == true;
     public string EyeIcon => IsHidden ? "EyeOff" : "Eye";
     public string EyeToolTip => IsHidden ? "Show in viewport" : "Hide in viewport";
     internal void NotifyHidden() { Changed(nameof(IsHidden)); Changed(nameof(EyeIcon)); Changed(nameof(EyeToolTip)); }
-    public string ToolTip => (Pass is { } pass ? pass.Description : ToolTipCore) + (Animations is { } animations ? "\nAnimations: " + string.Join(", ", animations.Select(a => Short(a, 64))) : "");
+    public string ToolTip => (Pass is { } pass ? pass.Description : IsOtherDifficulty ? OtherDifficultyToolTip : ToolTipCore) + (Animations is { } animations ? "\nAnimations: " + string.Join(", ", animations.Select(a => Short(a, 64))) : "");
     private string ToolTipCore => Authored is { } authored ? $"{Short(DisplayName, 2048)} · {NodeType}\nSource: {Short(authored.File, 2048)} · glTF node #{authored.SourceNode}\n" +
         $"Tree parent: {(Parent == null ? "none" : Short(Parent.DisplayName, 200))}\nCompiled node: {authored.CompiledNode?.ToString() ?? "none"}" + (ReadOnlyReason == null ? "" : "\n" + ReadOnlyReason)
         : Synthetic ? $"{Short(DisplayName, 2048)} · referenced source group\n{ReadOnlyReason}" : Node is { } node ? $"{Short(node.Name, 2048)} · {(ReferencedObject ? "referenced object" : node.Class)} #{node.Index}\n" +
@@ -177,6 +196,8 @@ public sealed class SceneTreeItem : INotifyPropertyChanged
         $"Source node: #{Owner.Identity(node.Index).SourceNode} · model: {node.ModelIndex?.ToString() ?? "none"}\n" +
         Short(Owner.Source, 2048) + (Owner.Identity(node.Index).PlacementPreview() is { } placement ? "\n" + placement : "") +
         (Problem == null ? "" : "\n" + Problem) : Kind == "unlinked" ? "Nodes outside the world roots, including disconnected cyclic components." : $"Invalid scene reference #{Index}.";
+    private string OtherDifficultyToolTip => $"{Short(DisplayName, 2048)} · {Placement!.Detail}\nPlaced on {string.Join(", ", Placement.Difficulties)}; " +
+        "the view shows another difficulty. Choose one of these difficulties to see it.";
     private bool isExpanded, isSelected;
     private IReadOnlyList<SceneTreeItem>? children;
     public bool IsExpanded
@@ -186,24 +207,26 @@ public sealed class SceneTreeItem : INotifyPropertyChanged
     }
     public bool IsSelected { get => isSelected; set { if (isSelected != value) { isSelected = value; Changed(nameof(IsSelected)); } } }
     internal void SetSelected(bool value) => IsSelected = value;
-    internal SceneTreeItem(SceneTreeModel owner, int? index, SceneTreeItem? parent, string kind, int slot)
+    internal SceneTreeItem(SceneTreeModel owner, int? index, SceneTreeItem? parent, string kind, int slot, SourceMapPassEntry? placement = null)
     {
-        Owner = owner; Index = index; Parent = parent; Kind = kind; Depth = (parent?.Depth ?? -1) + 1;
+        Owner = owner; Index = index; Parent = parent; Kind = kind; Placement = placement; Depth = (parent?.Depth ?? -1) + 1;
+        addedPass = parent == null ? null : parent.Pass?.Kind is "aiv" or "puppies" ? parent.Pass.Kind : parent.addedPass;
         if (index != null && Node == null && !Synthetic) Problem = "invalid reference";
         for (var ancestor = parent; ancestor != null; ancestor = ancestor.Parent)
             if (index != null && ancestor.Index == index) { Problem = "cycle reference"; break; }
         if (Depth >= SceneHierarchy.MaximumDepth && ChildCount > 0) Problem = "hierarchy depth limit";
         // Include sibling occurrence, never display names, in path identity.
         StateKey = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes((parent?.StateKey ?? "root") + "/" +
-            (Node == null && !Synthetic ? kind + ":" + index : owner.Identity(index!.Value).Key) + "/" + kind + "/" + slot)));
-        isExpanded = owner.State.Expanded.GetValueOrDefault(StateKey, parent == null && Node?.Class == "world");
+            (placement is { Row: null } ? "placement:" + placement.Key : Node == null && !Synthetic ? kind + ":" + index : owner.Identity(index!.Value).Key) + "/" + kind + "/" + slot)));
+        // A source map's outliner starts with the world and its later passes collapsed.
+        isExpanded = owner.State.Expanded.GetValueOrDefault(StateKey, owner.Projection == null && parent == null && Node?.Class == "world");
     }
     public IReadOnlyList<SceneTreeItem> Children => children ??= CreateChildren();
     private IReadOnlyList<SceneTreeItem> CreateChildren()
     {
         if (Problem != null) return [];
         if (Kind == "unlinked") return Owner.Hierarchy.UnlinkedRoots.Select(i => Owner.New(i, this, "unlinked root", 0)).ToArray();
-        if (Pass is { } pass) return pass.Roots.Select(i => Owner.New(i, this, pass.Kind, 0)).ToArray();
+        if (Pass is { } pass) return pass.Entries.Select(e => Owner.New(e.Row, this, pass.Kind, 0, e)).ToArray();
         if (Index is not int node || !Selectable) return [];
         Dictionary<(int, string), int> occurrences = [];
         return Owner.Children(node).Select(edge =>

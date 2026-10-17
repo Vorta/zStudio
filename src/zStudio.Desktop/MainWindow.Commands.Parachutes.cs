@@ -40,7 +40,7 @@ public partial class MainWindow
             string action = Text(a, "action");
             if (action == "show")
             {
-                if (retiringScene != null) throw new StudioCommandException("not_ready", "Reloading view…");
+                if (retiringScene != null) throw new StudioCommandException("not_ready", "The view is reloading after a source edit; read zstudio_state again shortly.");
                 RequireNoDrafts(); await ShowParachutesAsync(token); return Result(new { parachute = ParachuteState() });
             }
             if (!a.ContainsKey("snapshot")) throw new StudioCommandException("invalid_argument", "Supply the current Parachute snapshot.");

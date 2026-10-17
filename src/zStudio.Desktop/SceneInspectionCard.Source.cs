@@ -92,7 +92,7 @@ internal sealed partial class SceneInspectionCard
         sourceRows.Visibility = ObjectEditor == null ? Visibility.Collapsed : Visibility.Visible;
         if (ObjectEditor == null) { detailsSection.Visibility = Visibility.Visible; return false; }
         detailsSection.Visibility = Visibility.Collapsed; valves.Visibility = Visibility.Collapsed;
-        if (ObjectEditor.TransformSection is { } transformSection) PlaceModes(transformSection, reset: true);
+        if (ObjectEditor.TransformSection is { } transformSection) PlaceModes(transformSection);
         ObjectEditor.IsEnabled = !objectBinding!.Document.SourceWorld!.IsRebuilding && !ObjectApplying;
         foreach (var actions in sourceRows.Children.OfType<StackPanel>()) actions.IsEnabled = ObjectEditor.IsEnabled;
         heading.Text = objectBinding.State.Name; heading.ToolTip = objectBinding.State.Name; selectionName.Text = heading.Text;

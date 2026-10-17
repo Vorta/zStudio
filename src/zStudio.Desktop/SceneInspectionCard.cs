@@ -205,21 +205,13 @@ internal sealed partial class SceneInspectionCard : Grid
         var data = viewport.PreviewScene; int node = selected.SelectionNode >= 0 ? selected.SelectionNode : selected.Node;
         return data != null && node >= 0 && node < data.Nodes.Count ? data.Nodes[node].Class : "";
     }
-    /// <summary>
-    /// Puts the gizmo's Move/Rotate mode in <paramref name="target"/>'s header; a source object's Transform header also holds
-    /// Reset rotation and scale.
-    /// </summary>
-    private void PlaceModes(CardSection target, bool reset = false)
+    /// <summary>Puts the gizmo's Move/Rotate mode in <paramref name="target"/>'s header.</summary>
+    private void PlaceModes(CardSection target)
     {
-        UIElement wanted = reset ? transformTools : modesFrame;
-        if (ReferenceEquals(target.Trailing, wanted) && (!reset || ReferenceEquals(modesFrame.Parent, transformTools))) return;
+        if (ReferenceEquals(target.Trailing, modesFrame)) return;
         if (modesFrame.Parent is Border holder) holder.Child = null;
-        else if (modesFrame.Parent is Panel tools) tools.Children.Remove(modesFrame);
-        if (transformTools.Parent is Border previous) previous.Child = null;
-        if (reset) transformTools.Children.Insert(0, modesFrame);
-        target.Trailing = wanted;
+        target.Trailing = modesFrame;
     }
-    private readonly StackPanel transformTools = new() { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
     /// <summary>A footer action: an icon and text, named for automation.</summary>
     private static Button FooterButton(string kind, string text, string name, string style, Action action)
     {

@@ -70,6 +70,7 @@ public partial class MainWindow
         UpdateNavigatorAvailability();
         ScheduleSceneTreeReveal();
         RestoreHiddenIdentities(doc);
+        RestoreTreeLayout(doc);
         if (sourceChromeActive) RefreshOutlinerFilter();
     }
 
@@ -282,7 +283,7 @@ public partial class MainWindow
     }
     private void RegisterSceneTreeCommand(StudioCommands commands)
     {
-        Register(commands, "scene_tree", "Read the Document scene hierarchy, including stable preview placements, shared/partition references and disconnected nodes. Source maps show the authored glTF hierarchy, including groups removed by compilation, under the world root; objects later passes add follow as top-level pass rows (pass aiv: units the AIV resource places for the selected difficulty; puppies: its pickups; anim: objects startup animations place or hide until placed), each listing its objects. animations lists the mission animations bound to an object by name (at most eight, then an ellipsis). sourceFile/gltfNode identify authored nodes, sourceOccurrence identifies a tree path, and compiledNode is an optional built slot. selectionOwner for source_map_parts is a signed current-preview identity; source-only authored groups have node=null and selectionOwner=null and support read-only row inspection. properties focuses the source-object card, or opens pinned Properties in other viewers. Read returns roots or a row's direct children, optionally filtered before paging; in a source map, search and/or types read the whole hierarchy as a flat list of matches with their parent paths, as the outliner's search box and type filters do. Source map rows carry category (world, group, geometry, object, node), zone and hidden. Expand/collapse/reveal only change tree presentation; hide/show hide a row's object (a removed group: what it holds) in the view only, like the outliner's eye; select shares scene inspection and draft guards. Runtime parenting is not represented.", true,
+        Register(commands, "scene_tree", "Read the Document scene hierarchy, including stable preview placements, shared/partition references and disconnected nodes. Source maps show the authored glTF hierarchy, including groups removed by compilation, under the world root; objects later passes add follow as top-level pass rows (pass aiv: units the AIV resources place; puppies: their pickups; anim: objects startup animations place or hide until placed), each listing its objects. The aiv and puppies passes list every difficulty's units and pickups with the difficulties placing each; those the shown difficulty does not place have otherDifficulty=true, node=null and a placement summary, and cannot be selected. animations lists the mission animations bound to an object by name (at most eight, then an ellipsis). sourceFile/gltfNode identify authored nodes, sourceOccurrence identifies a tree path, and compiledNode is an optional built slot. selectionOwner for source_map_parts is a signed current-preview identity; source-only authored groups have node=null and selectionOwner=null and support read-only row inspection. properties focuses the source-object card, or opens pinned Properties in other viewers. Read returns roots or a row's direct children, optionally filtered before paging; in a source map, search and/or types read the whole hierarchy as a flat list of matches with their parent paths, as the outliner's search box does (types narrows it by the legend's categories). A row's zone is null in the aiv and puppies passes. Source map rows carry category (world, group, geometry, object, node), zone and hidden. Expand/collapse/reveal only change tree presentation; hide/show hide a row's object (a removed group: what it holds) in the view only, like the outliner's eye; select shares scene inspection and draft guards. Runtime parenting is not represented.", true,
             [DocumentParameter, P("action", "string", "Tree action; default read. Properties focuses the source-object card; other viewers open the same pinned window as the row context menu. hide/show (source maps) change only what the view draws.", false, "read", "expand", "collapse", "reveal", "select", "properties", "hide", "show"),
                 P("search", "string", "Source maps: case-insensitive name search across the whole hierarchy (read without row); results are flat rows with path."),
                 P("types", "string", "Source maps: comma-separated categories the flat read includes (group, geometry, object, node); default all."),
@@ -316,6 +317,10 @@ public partial class MainWindow
                 }
                 if (row == null) throw new StudioCommandException("stale_record", "Supply an available tree row or node.");
                 if (row.Pass != null && action is "select" or "properties") throw new StudioCommandException("invalid_argument", "A pass row groups the objects a later pass adds; select one of them.");
+                if (row.IsOtherDifficulty && action is "select" or "properties")
+                    throw new StudioCommandException("invalid_argument", row.Placement!.Difficulties.Count == 1
+                        ? $"Only {row.Placement.Difficulties[0]} places this; choose that difficulty (zstudio_scene_options difficulty) to select it."
+                        : $"Only {string.Join(", ", row.Placement.Difficulties)} place this; choose one of them (zstudio_scene_options difficulty) to select it.");
                 if (action is "hide" or "show")
                 {
                     if (!row.CanHide || row.Index is not int hiddenIndex) throw new StudioCommandException("unsupported", "Only a source map's object rows can be hidden in the view.");
@@ -352,13 +357,13 @@ public partial class MainWindow
                 if (types.Count == 0 || types.Any(t => !OutlinerKinds.Categories.Contains(t))) throw new StudioCommandException("invalid_argument", "types lists group, geometry, object and/or node.");
                 var hits = OutlinerMatches(sceneTree, search, types, 10_000, out bool truncated);
                 var found = Page(hits, a, h => h.Row.Label, h => new { path = h.Path, item = DescribeTreeRow(h.Row) },
-                    maximumRowBytes: h => 2048 + 6L * (h.Path.Length + h.Row.Label.Length + (h.Row.Authored?.File.Length ?? 0) + (h.Row.Animations?.Sum(n => n.Length + 4) ?? 0) + (h.Row.ReadOnlyReason?.Length ?? 0)));
+                    maximumRowBytes: h => 2048 + 6L * (h.Path.Length + h.Row.Label.Length + (h.Row.Authored?.File.Length ?? 0) + (h.Row.Animations?.Sum(n => n.Length + 4) ?? 0) + (h.Row.ReadOnlyReason?.Length ?? 0) + (h.Row.Placement?.Detail.Length ?? 0)));
                 return Result(new { context = sceneTree.Context, document = doc.SessionId, revision = doc.Revision, preview = sceneTree.IsPreview ? previewId.ToString() : null,
                     search, types = types.Order().ToArray(), matchesTruncated = truncated, matches = found.Data });
             }
             var page = Page(row == null ? sceneTree.Roots : row.Children, a, r => r.Label, r => DescribeTreeRow(r),
                 maximumRowBytes: r => 2048 + 6L * (r.Label.Length + (r.Authored?.File.Length ?? 0) + (r.Pass?.Description.Length ?? 0) + (r.Animations?.Sum(a => a.Length + 4) ?? 0)
-                    + (r.ReadOnlyReason?.Length ?? 0) + (r.Problem?.Length ?? 0)));
+                    + (r.ReadOnlyReason?.Length ?? 0) + (r.Problem?.Length ?? 0) + (r.Placement?.Detail.Length ?? 0)));
             return Result(new { context = sceneTree.Context, document = doc.SessionId, revision = doc.Revision,
                 preview = sceneTree.IsPreview ? previewId.ToString() : null, source = sceneTree.Source,
                 hierarchy = sceneTree.Projection != null ? "authored source hierarchy" : sceneTree.IsPreview ? "bound preview scene" : "stored scene", selected = sceneTree.Selected?.Id,
@@ -375,5 +380,7 @@ public partial class MainWindow
         sourceNode = row.Node == null ? (int?)null : row.Owner.Identity(row.Index!.Value).SourceNode,
         model = row.Node?.ModelIndex, storedParents = row.Node?.Parents.Take(32).ToArray(), storedParentCount = row.Node?.Parents.Length,
         pass = row.Pass?.Kind, passDescription = row.Pass?.Description, animations = row.Animations,
-        category = row.IsSourceMap ? row.Category : null, zone = row.IsSourceMap && row.Meta.Length > 0 ? row.Meta["Zone ".Length..] : null, hidden = row.IsSourceMap ? row.IsHidden : (bool?)null };
+        category = row.IsSourceMap ? row.Category : null, zone = row.IsSourceMap ? row.Zone : null, hidden = row.IsSourceMap ? row.IsHidden : (bool?)null,
+        difficulties = row.Placement is { Difficulties.Count: > 0 } placement ? placement.Difficulties.Select(d => d.ToString()).ToArray() : null,
+        otherDifficulty = row.IsOtherDifficulty ? true : (bool?)null, placement = row.IsOtherDifficulty ? row.Placement!.Detail : null };
 }

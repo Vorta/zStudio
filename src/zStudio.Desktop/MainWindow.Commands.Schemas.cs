@@ -22,7 +22,7 @@ public partial class MainWindow
         P("aiThroughGeometry", "boolean", "Whole world: show AI through scene geometry; false enables depth occlusion."),
         P("aiNetwork", "string", "Whole world: all, or an AI network ID. A specific ID requires aiSnapshot."),
         P("aiSnapshot", "string", "Expected AI graph snapshot from preview_state.ai; required with a specific aiNetwork ID."),
-        P("highlight", "string", "Whole world only: 50% colour overlays for yellow non-default soils, green CanModify, red ClipTo, combined CanModify/ClipTo (red wins overlap), or node zones (grey for any); none restores normal appearance.", false, "none", "nonDefaultSoils", "canModify", "clipTo", "canModifyAndClipTo", "zones"),
+        P("highlight", "string", "Whole world only: 50% colour overlays for yellow non-default soils, green CanModify, red ClipTo, combined CanModify/ClipTo (red wins overlap), node zones (grey for any), or magenta landmarks (never culled, with everything below a landmark object); none restores normal appearance.", false, "none", "nonDefaultSoils", "canModify", "clipTo", "canModifyAndClipTo", "zones", "landmarks"),
         new("lod","integer","Authored LOD rank within the active viewer's available range.", Minimum: 0, Maximum: int.MaxValue), P("difficulty","string","Mission layout.",false,"Easy","Medium","Hard"), P("texturePack","string","Available texture pack path, or empty for automatic.")
     ]);
     private static StudioParameter WorkspaceChanges => new("changes", "object", "Optional presentation preferences.", Properties:

@@ -478,6 +478,8 @@ public partial class MainWindow
     /// <param name="notes">The edit's notes on its reach, which the status and the replacement document keep.</param>
     private async Task<DocumentModel> RebuildSourceWorldAsync(SourceWorldSession session, CancellationToken token, IReadOnlyList<SourceModelAddition>? additions = null, ScriptLineChanges? verifyTargets = null, IReadOnlyList<string>? notes = null, SourceSceneSnapshot? evaluated = null, Action<DocumentModel>? accepted = null, MissionSceneContext? evaluatedMission = null)
     {
+        // Evaluating the whole world again (a reload) darkens the shown view once it takes longer than a moment.
+        if (evaluated == null && session.Owner is { } owner) MarkWorldEvaluating(owner);
         // The build pairs its lookups too, so nothing can close the world between the checks below and the replacement.
         var built = await BuildSourceWorldAsync(session, token, additions, evaluated: evaluated);
         var current = session.Owner;
@@ -511,7 +513,7 @@ public partial class MainWindow
                 if (model == null) { SourceTransformRefused?.Invoke("source-identity"); return null; }
                 var edits = PickupPlacementEditSession.FromSources(source, token);
                 var projection = new SourceMapSelection(mission.Scene, mission, model.Selection, TreeIdentities(mission.Scene, mission, edits), token,
-                    SourceMapActorKeys.Prepare(source.Root, model.Selection, edits, token, source.ReadHashes));
+                    SourceMapActorKeys.Prepare(source.Root, model.Selection, edits, token, source.ReadHashes), edits);
                 if (previousSelection == null || !SameKeys(previousSelection.Identities, projection.Identities)
                     || !SameKeys(previousSelection.PartIdentities, projection.PartIdentities)) { SourceTransformRefused?.Invoke("placement-identity"); return null; }
                 return new SourceTransformPublication(mission, update, edits, projection, model);
@@ -723,6 +725,8 @@ public partial class MainWindow
         using var verification = new PreparedSourceVerification();
         session.Building = cancellation;
         operation = cancellation; CancelOperationItem.IsEnabled = true;
+        // A new edit starts its own notice: what an earlier one left (still to be cleared at idle) does not carry over.
+        EndRebuildNotice();
         SetSourceRebuilding(session, true);
         ViewModel.Status = $"Preparing {action}…";
         try
@@ -754,7 +758,10 @@ public partial class MainWindow
                         else SourceTransformRefused?.Invoke(refusal);
                     }
                     if (evaluated == null)
+                    {
+                        MarkWorldEvaluating(doc);
                         evaluated = await SourceWorlds.LoadSceneAsync(session.Root, session.Mission, overlay, cancellation.Token, additions);
+                    }
                     SourceEditEvaluation?.Invoke(incremental ? "incremental" : "full");
                 }
                 catch (InvalidDataException ex) { throw new StudioCommandException("build_failed", ex.Message); }

@@ -18,12 +18,15 @@ namespace zStudio.Core.Sources;
 /// missions' vehicle scripts load identically from their own folders is one file in <c>data/common/models</c> instead
 /// (see <c>ShareVehicles</c>), and effects are kept with their textures in <c>data/common/effects/models</c> (see
 /// <c>GatherEffects</c>). An external reference is written beside every file that references it, so missions
-/// sharing one keep a copy each, as they do textures.
+/// sharing one keep a copy each, as they do textures; the turrets the databases reference are the exception, one file in
+/// <c>data/common/models</c> when their copies differ only in zones (see <c>ShareTurrets</c>).
 /// </summary>
 internal static partial class WorldSources
 {
     [System.Text.RegularExpressions.GeneratedRegex(@"^data/m(\d+)/", System.Text.RegularExpressions.RegexOptions.CultureInvariant)] private static partial System.Text.RegularExpressions.Regex MissionFolder();
     public const string CommonModels = "data/common/models", CommonEffectsModels = "data/common/effects/models", EffectsModels = "data/effects/models";
+    /// <summary>The turret models the missions' databases reference, kept as one file in data/common/models when their copies agree (user decision, 2026-10-17).</summary>
+    internal static readonly IReadOnlySet<string> SharedTurrets = new HashSet<string>(["pturret", "nturret", "samsite1", "fturret", "lturret", "arcturt", "sonictur"], StringComparer.Ordinal);
     internal const long MaximumReferenceVisits = 4_194_304;
     internal sealed record MissionWorld(int Mission, GameZWorld World);
     internal sealed record Output(string Path, byte[] Bytes);
@@ -334,7 +337,8 @@ internal static partial class WorldSources
             }
 
         // External references are found by path from the file that names them. Each goes beside every file that
-        // references it (following references of references), with the texture folders that file searched.
+        // references it (following references of references), with the texture folders that file searched; ShareTurrets
+        // then moves the turrets' copies into one common file.
         Dictionary<Unit, List<Unit>> referenced = new(ReferenceEqualityComparer.Instance);
         List<Unit> Referenced(Unit owner)
         {
@@ -385,6 +389,12 @@ internal static partial class WorldSources
             var (unit, folder) = spread.Dequeue();
             foreach (var r in Referenced(unit)) QueueCopy(r, folder, copies[(unit, folder)]);
         }
+        // The turrets several missions' databases reference are one file in data/common/models (user decision, 2026-10-17),
+        // although the original tree had a copy beside each database: when every copy is the same file apart from its zones
+        // (each placement keeps its own as overrides), references nothing and finds the same textures. Every reference names
+        // that file, keeping its own spelling's second path, so each mission caches and builds the same world.
+        Dictionary<(Unit Unit, string Folder), (Unit Unit, string Folder)> sharedCopies = [];
+        ShareTurrets();
         Dictionary<(Unit Unit, string Folder), string> copyPaths = [];
         Dictionary<string, Unit> physicalUnits = new(StringComparer.OrdinalIgnoreCase);
         Dictionary<(string Folder, string Stem, string Hash), string> neutralPaths = [];
@@ -407,6 +417,7 @@ internal static partial class WorldSources
             string path = ClaimPath(folder, unit.Stem, reserved);
             copyPaths[(unit, folder)] = path; neutralPaths.Add(identity, path); physicalUnits.Add(path, unit);
         }
+        foreach (var (copy, shared) in sharedCopies) copyPaths[copy] = copyPaths[shared];
         // Each load finds its own file among every file written.
         foreach (var (mission, load, unit) in loads)
         {
@@ -414,7 +425,7 @@ internal static partial class WorldSources
             if (resolved == null) diagnostics.Add($"m{mission}: {load.File} is written to {unit.Path}, which the build does not search when it loads {load.NodeName}.");
             else if (!resolved.Equals(unit.Path, StringComparison.OrdinalIgnoreCase)) diagnostics.Add($"m{mission}: {load.File} ({load.NodeName}) resolves to {resolved}, not to its own version {unit.Path}.");
         }
-        HashSet<Unit> copied = new(copies.Keys.Select(k => k.Unit), ReferenceEqualityComparer.Instance);
+        HashSet<Unit> copied = new(copies.Keys.Concat(sharedCopies.Keys).Select(k => k.Unit), ReferenceEqualityComparer.Instance);
         foreach (var unit in references.Values.Where(u => !copied.Contains(u)).OrderBy(u => u.Stem, StringComparer.Ordinal))
             diagnostics.Add($"External reference {unit.Stem}.flt is used by no loaded file and was not written.");
         // The campaign's vehicle scripts (bft1.gw–bft6.gw) each set their mission's own folder and load the same enemy files.
@@ -449,6 +460,58 @@ internal static partial class WorldSources
                 token.ThrowIfCancellationRequested();
                 MoveIfFound([unit], CommonEffectsModels, loadsOf);
             }
+        }
+        void ShareTurrets()
+        {
+            foreach (string stem in SharedTurrets.Order(StringComparer.Ordinal))
+            {
+                token.ThrowIfCancellationRequested();
+                var keys = copies.Keys.Where(k => k.Unit.Stem == stem).OrderBy(k => k.Folder, StringComparer.Ordinal).ThenBy(k => k.Unit.Hash, StringComparer.Ordinal).ToList();
+                // A file a script loads, or another file already of the name in data/common/models, keeps its place.
+                if (keys.Count == 0 || unitsByStem.ContainsKey(stem) || taken.Contains(placement.Path(CommonModels, stem)) || reserved.Contains(placement.Path(CommonModels, stem))) continue;
+                if (keys.Select(k => k.Unit.NeutralHash).Distinct(StringComparer.Ordinal).Take(2).Count() > 1)
+                {
+                    diagnostics.Add($"{stem}.flt stays beside each file referencing it: its copies differ beyond their zones.");
+                    continue;
+                }
+                if (keys.Any(k => Referenced(k.Unit).Count > 0))
+                {
+                    diagnostics.Add($"{stem}.flt stays beside each file referencing it: it references other files.");
+                    continue;
+                }
+                // The version most copies hold is the shared file; the other placements keep their zones as overrides.
+                var baseline = keys.GroupBy(k => k.Unit).OrderByDescending(g => g.Count()).ThenBy(g => g.Key.Missions.Min).ThenBy(g => g.Key.Hash, StringComparer.Ordinal).First().Key;
+                var textures = copies[keys.First(k => k.Unit == baseline)];
+                var names = TextureNames(baseline);
+                string[] Targets(Unit unit, IReadOnlyList<string> directories, int mission) => [.. names.Select(n => TextureTarget(unit, directories, mission, n))];
+                var expected = Targets(baseline, textures, baseline.Missions.Min);
+                if (keys.Any(k => !Targets(k.Unit, copies[k], MissionOf(k.Folder) ?? k.Unit.Missions.Min).SequenceEqual(expected, StringComparer.OrdinalIgnoreCase)))
+                {
+                    diagnostics.Add($"{stem}.flt stays beside each file referencing it: its copies find different textures.");
+                    continue;
+                }
+                var shared = (baseline, CommonModels);
+                // A copy already in data/common/models (beside a shared file referencing it) is the shared file itself.
+                foreach (var key in keys) { copies.Remove(key); if (key != shared) sharedCopies[key] = shared; }
+                copies[shared] = textures;
+            }
+        }
+        static int? MissionOf(string folder) => MissionFolder().Match(folder) is { Success: true } match ? int.Parse(match.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture) : null;
+        // The image the build finds by name in the folders it searches, else the one the mission's packs held.
+        string TextureTarget(Unit unit, IReadOnlyList<string> textureDirectories, int mission, string name) =>
+            textureDirectories.Select(d => $"{d}/{name.ToLowerInvariant()}{TextureSources.Extension}").FirstOrDefault(textureFiles.Contains)
+                ?? texturePath(mission, name) ?? unit.Missions.Select(m => texturePath(m, name)).FirstOrDefault(p => p != null) ?? $"data/m{mission}/textures/{name}{TextureSources.Extension}";
+        // The textures a file's materials name, in the order it names them.
+        List<string> TextureNames(Unit unit)
+        {
+            List<string> names = []; HashSet<string> seen = new(StringComparer.Ordinal);
+            WorldGltf.Export(unit.Content, unit.Zone, new()
+            {
+                Token = token, Texture = t => { if (seen.Add(t.Name)) names.Add(t.Name); return ($"texture:{t.Name}", addressing(t.Name)); },
+                Reference = n => referenceOf.ContainsKey(n) ? "ref" : null, Content = n => parts.TryGetValue(n, out var c) ? c : null,
+                InlineSource = n => inlineSources.GetValueOrDefault(n), InlineContent = n => inlineContents.GetValueOrDefault(n), Group = groups.Contains,
+            });
+            return names;
         }
         Dictionary<Unit, List<LoadedModel>> LoadsOf() => loads.GroupBy(l => l.Unit).ToDictionary(g => g.Key, g => g.Select(l => l.Load).ToList());
         // Makes identical units one file in another folder when every load still finds it there: no file of the name is
@@ -581,6 +644,8 @@ internal static partial class WorldSources
         placement.Sort(copyPaths.Count, MaximumKey(copyPaths.Values, p => (long)p.Length));
         foreach (var ((unit, folder), path) in copyPaths.OrderBy(c => c.Value, StringComparer.Ordinal))
         {
+            // A copy that names the shared turret is written once, as the shared file.
+            if (sharedCopies.ContainsKey((unit, folder))) continue;
             placement.Lookup(folder);
             if (loadUnits.TryGetValue((folder, unit.Stem, unit.Hash), out var same) && same.Path == path) continue;
             // A copy in a mission's folder takes that mission's textures; one in a shared folder the first mission's.
@@ -600,13 +665,7 @@ internal static partial class WorldSources
             var zoned = WorldGltf.ExportZoned(unit.Content, unit.Zone, new()
             {
                 Token = token,
-                Texture = t =>
-                {
-                    // The image the build finds by name in the folders it searches, else the one the mission's packs held.
-                    string target = textureDirectories.Select(d => $"{d}/{t.Name.ToLowerInvariant()}{TextureSources.Extension}").FirstOrDefault(textureFiles.Contains)
-                        ?? texturePath(mission, t.Name) ?? unit.Missions.Select(m => texturePath(m, t.Name)).FirstOrDefault(p => p != null) ?? $"data/m{mission}/textures/{t.Name}{TextureSources.Extension}";
-                    return (RelativeUri(folder, target), addressing(t.Name));
-                },
+                Texture = t => (RelativeUri(folder, TextureTarget(unit, textureDirectories, mission, t.Name)), addressing(t.Name)),
                 Reference = n => !referenceOf.TryGetValue(n, out var r) ? null
                     : copyPaths.TryGetValue((r.Unit, folder), out var target) ? Spelled(n, RelativeUri(folder, target))
                     : throw new InvalidDataException($"{path}: the evidenced original file {n.Name} has no reconstructed source."),

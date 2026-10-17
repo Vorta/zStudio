@@ -15,7 +15,6 @@ internal sealed partial class SceneInspectionCard
     internal const string AuthoredHeading = "Heading degrees";
     private readonly StackPanel modes = new() { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
     private ToggleButton moveMode = null!, rotateMode = null!;
-    private Button resetTransform = null!;
     private PlacementTransform originalTransform, lastValidTransform;
     private PlacementRotationKind rotationKind;
     private string transformMode = "move";
@@ -38,12 +37,6 @@ internal sealed partial class SceneInspectionCard
             modes.Children.Add(button); return button;
         }
         moveMode = Mode("Move object", "Move", "move"); rotateMode = Mode("Rotate object", "Rotate", "rotate");
-        Button reset = new() { Content = new PreviewIcon { Kind = "Reset", Width = 14, Height = 14 }, ToolTip = "Reset rotation and scale", Margin = new(4, 0, 0, 0) };
-        reset.SetResourceReference(StyleProperty, "CardIconButton");
-        reset.Width = reset.Height = 30;
-        AutomationProperties.SetName(reset, "Reset rotation and scale");
-        reset.Click += (_, _) => Try(() => { if (ObjectEditor is { IsEnabled: true } editor && !ObjectApplying) editor.ResetRotationAndScale(); });
-        transformTools.Children.Add(reset); resetTransform = reset;
         viewport.TransformDraftChanged += ReceiveTransformDrag;
         viewport.ObjectDraftDragged += ReceiveObjectDrag;
         viewport.ObjectGestureEnded += ObjectGestureEnded;
@@ -94,7 +87,6 @@ internal sealed partial class SceneInspectionCard
             : !values.ContainsKey(AuthoredPlacement) ? Visibility.Collapsed : editable ? Visibility.Visible : Visibility.Hidden;
         modesFrame.Visibility = modes.Visibility;
         moveMode.IsEnabled = editable && !ObjectApplying;
-        resetTransform.IsEnabled = sourceObject && editable && !ObjectApplying && ObjectEditor!.IsEnabled;
         // A placement without authored rotation has only Move: the segmented control shrinks to it.
         rotateMode.Visibility = !editable || rotatable ? Visibility.Visible : Visibility.Collapsed;
         rotateMode.IsEnabled = editable && rotatable && !ObjectApplying;

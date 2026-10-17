@@ -123,7 +123,7 @@ public partial class MainWindow : Window
         catch (OperationCanceledException) { ViewModel.Status = "Operation canceled"; }
         catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException) { Report(ex); }
     }
-    private void Report(Exception ex) { ViewModel.Status = ex.Message; ViewModel.AddProblem(ex.Message); Layout.ToolsVisible = true; ToolTabs.SelectedIndex = 2; ArrangeWorkspace(); }
+    private void Report(Exception ex) { ViewModel.Status = ex.Message; ViewModel.AddProblem(ex.Message); SetToolsVisible(true, problems: true); }
     private async void OpenFolderClick(object sender, RoutedEventArgs e)
     {
         OpenFolderDialog dialog = new() { Title = "Choose the root of the ZBD folder", InitialDirectory = Directory.Exists(ViewModel.Settings.LastRoot) ? ViewModel.Settings.LastRoot : "" };
@@ -315,8 +315,9 @@ public partial class MainWindow : Window
         ClearStaticPreviewProblems();
         DetachPickupEditor();
         selectedNode = null; isolatedNode = null; inspectedSceneSource = null;
-        // A source rebuild replaces the map's document: what was hidden follows by identity (see RestoreHiddenIdentities).
-        CaptureHiddenIdentities(); hiddenRows.Clear();
+        // A source rebuild replaces the map's document: what was hidden follows by identity (see RestoreHiddenIdentities), and
+        // the outliner's open rows by their source paths (RestoreTreeLayout).
+        CaptureTreeLayout(); CaptureHiddenIdentities(); hiddenRows.Clear();
         pendingAnimationPlay = false;
         EndImagePan();
         animation?.Dispose(); animation = null; AnimationHost.Content = null; DetachAnimationWorkspace();
@@ -343,7 +344,7 @@ public partial class MainWindow : Window
         bool differentAsset = shownAsset?.Id != asset?.Id;
         shownResourceMember = asset != null && doc.ResourceEdits is { } shownEdits && asset.Index < shownEdits.Current.Members.Count ? shownEdits.Current.Members[asset.Index].Id : null;
         SourceMapsButton.Visibility = doc.SourceWorld != null ? Visibility.Visible : Visibility.Collapsed;
-        PreviewTitle.Text = asset?.Name ?? Path.GetFileName(doc.Path); PreviewSubtitle.Text = asset == null ? doc.Description : $"{asset.Kind} #{asset.Index} · {asset.Length:N0} bytes · source 0x{asset.Offset:X}";
+        PreviewTitle.Text = asset?.Name ?? Path.GetFileName(doc.Path); PreviewSubtitle.Text = SourceWorldFile(doc) is { } worldFile ? Path.GetFileName(worldFile) : asset == null ? doc.Description : $"{asset.Kind} #{asset.Index} · {asset.Length:N0} bytes · source 0x{asset.Offset:X}";
         ViewModel.Status = asset == null ? doc.Description : $"{asset.Kind} #{asset.Index}: {asset.Name} · {Path.GetFileName(doc.Path)}";
         // A motion's member UUID survives rename/reorder; its asset index does not.
         // Conversely, deleting a member can put another clip at the same asset ID.
@@ -528,7 +529,7 @@ public partial class MainWindow : Window
         var original = asset == null ? null : doc.OriginalAsset(asset);
         var sourceBytes = asset == null ? doc.Document.Bytes : original == null ? ReadOnlyMemory<byte>.Empty : doc.Document.Slice(original.Offset, original.Length);
         RawText.Text = original == null && asset != null ? "New record: no original source bytes." : Hex(sourceBytes.Span[..Math.Min(sourceBytes.Length, 4096)], original?.Offset ?? 0) + (sourceBytes.Length > 4096 ? "\n… first 4,096 original source bytes shown." : "");
-        PreviewSubtitle.Text = asset == null ? doc.Description : $"{asset.Kind} #{asset.Index} · {asset.Length:N0} edited bytes" + (original == null ? " · new record" : $" · source 0x{original.Offset:X}");
+        PreviewSubtitle.Text = SourceWorldFile(doc) is { } worldFile ? Path.GetFileName(worldFile) : asset == null ? doc.Description : $"{asset.Kind} #{asset.Index} · {asset.Length:N0} edited bytes" + (original == null ? " · new record" : $" · source 0x{original.Offset:X}");
         var related = asset == null ? null : FindRelated(asset, doc);
         RelatedList.ItemsSource = related?.Items;
         RelatedLimit.Visibility = related?.Truncated == true ? Visibility.Visible : Visibility.Collapsed;
@@ -769,7 +770,7 @@ public partial class MainWindow : Window
     private async void CloseCurrentClick(object sender, RoutedEventArgs e) { if (ViewModel.SelectedDocument is { } doc) await RunUi(() => ViewModel.CloseAsync(doc)); }
     private void ExitClick(object sender, RoutedEventArgs e) => Close();
     private void InspectorVisibilityClick(object sender, RoutedEventArgs e) { Layout.InspectorVisible = ((MenuItem)sender).IsChecked; inspectorTemporary = true; ArrangeWorkspace(); }
-    private void DiagnosticsClick(object sender, RoutedEventArgs e) { Layout.ToolsVisible = ((MenuItem)sender).IsChecked; ToolTabs.SelectedIndex = 2; ArrangeWorkspace(); }
+    private void DiagnosticsClick(object sender, RoutedEventArgs e) => SetToolsVisible(((MenuItem)sender).IsChecked, problems: true);
     private void ThemeClick(object sender, RoutedEventArgs e) => ApplyTheme(((MenuItem)sender).Header.ToString()!);
     // .NET 10 still marks runtime Fluent theme switching as experimental.
 #pragma warning disable WPF0001

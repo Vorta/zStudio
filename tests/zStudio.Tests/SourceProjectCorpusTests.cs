@@ -23,11 +23,12 @@ public sealed class SourceProjectCorpusTests
             var report = await SourceExtractor.ExtractAsync(corpus, project, token: Token);
             if (Directory.Exists(Path.Combine(corpus, "m3")))
             {
-                // Distinct readings of the same original FLT keep one physical source and reference-local attributes.
-                // Distinct original files remain physical even when their geometry happens to match.
-                Assert.True(File.Exists(Path.Combine(project, "data/m3/models/lturret.gltf")));
-                Assert.True(File.Exists(Path.Combine(project, "data/m3/models/pturret.gltf")));
-                Assert.False(File.Exists(Path.Combine(project, "data/m3/models/lturret_2.gltf")));
+                // Distinct readings of the same original FLT keep one physical source and reference-local attributes; the
+                // turrets several databases reference are that one source in data/common/models (user decision).
+                Assert.True(File.Exists(Path.Combine(project, "data/common/models/lturret.gltf")));
+                Assert.True(File.Exists(Path.Combine(project, "data/common/models/pturret.gltf")));
+                Assert.False(File.Exists(Path.Combine(project, "data/m3/models/lturret.gltf")));
+                Assert.False(File.Exists(Path.Combine(project, "data/common/models/lturret_2.gltf")));
             }
             Assert.Empty(Directory.GetFiles(Path.Combine(project, "data"), "zones.json", SearchOption.AllDirectories));
             foreach (string model in Directory.GetFiles(Path.Combine(project, "data"), "*.gltf", SearchOption.AllDirectories))

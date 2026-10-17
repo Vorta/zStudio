@@ -6,10 +6,21 @@ using zStudio.Core.Sources;
 namespace zStudio.Desktop;
 
 /// <summary>
-/// A later pass that adds objects to the map: aiv (units the mission's AIV resource places for the selected difficulty),
-/// puppies (its pickups) and anim (objects the startup animations place). Its rows are top-level siblings of the world.
+/// A later pass that adds objects to the map: aiv (units the mission's AIV resources place), puppies (its pickups) and anim
+/// (objects the startup animations place). Its rows are top-level siblings of the world. <see cref="Roots"/> are the objects
+/// in the view; <see cref="Entries"/> lists them with the units or pickups only other difficulties place.
 /// </summary>
-internal sealed record SourceMapPass(string Kind, string Label, string Description, IReadOnlyList<int> Roots);
+internal sealed record SourceMapPass(string Kind, string Label, string Description, IReadOnlyList<int> Roots, IReadOnlyList<SourceMapPassEntry> Entries);
+
+/// <summary>
+/// One unit or pickup of a pass: <paramref name="Row"/> is its object in the view, or null when the shown difficulty does not
+/// place it. <paramref name="Difficulties"/> are those whose resources place it (matched across them like placement edits).
+/// </summary>
+internal sealed record SourceMapPassEntry(int? Row, string Key, string Name, IReadOnlyList<MissionDifficulty> Difficulties, string Detail)
+{
+    /// <summary>"E/M/H", "M/H", "H"…; empty when unknown.</summary>
+    internal string Tag => string.Join("/", Difficulties.Select(d => d.ToString()[..1]));
+}
 
 /// <summary>Immutable editor projection. Negative row IDs denote source-only groups, never scene slots.</summary>
 internal sealed class SourceMapSelection
@@ -21,6 +32,9 @@ internal sealed class SourceMapSelection
     internal SourceMapPass? PassOf(int row) => passOf.GetValueOrDefault(row);
     /// <summary>The mission animations bound to each object (the game binds them by name), at most eight per object.</summary>
     internal IReadOnlyDictionary<int, IReadOnlyList<string>> Animations { get; }
+    private readonly IReadOnlyList<int>? sourceNodes;
+    /// <summary>A template copy the mission makes at run time, which has no source node of its own (a defensive rule for copies outside the aiv and puppies passes).</summary>
+    internal bool IsRuntimeCopy(int node) => node >= 0 && sourceNodes != null && node < sourceNodes.Count && sourceNodes[node] != node;
     internal GameScene Scene { get; }
     internal IReadOnlyDictionary<int, int> Owners { get; }
     internal IReadOnlyDictionary<int, SourceSelectionBoundary> Boundaries { get; }
@@ -55,9 +69,10 @@ internal sealed class SourceMapSelection
     }
 
     internal SourceMapSelection(GameScene scene, MissionSceneContext? mission, SourceSelectionIndex source,
-        Func<int, SceneTreeIdentity> identity, CancellationToken token, Func<MissionActor, string?>? actorIdentity = null)
+        Func<int, SceneTreeIdentity> identity, CancellationToken token, Func<MissionActor, string?>? actorIdentity = null,
+        PickupPlacementEditSession? placements = null)
     {
-        Scene = scene;
+        Scene = scene; sourceNodes = mission?.SourceNodes;
         if (scene.Nodes.Count > 200_000) throw new InvalidDataException("The source map has too many nodes to prepare selection.");
         var actors = mission?.PrepareActorIndex(scene, token);
         Dictionary<int, int> owners = [];
@@ -171,23 +186,29 @@ internal sealed class SourceMapSelection
         // Objects later passes add or place leave the world's rows for their pass: the world shows what the map itself holds.
         List<int> aiv = [], puppies = [], animated = [];
         HashSet<int> assigned = [];
+        Dictionary<int, MissionPickupSource> placedBy = [];
         foreach (var actor in mission?.Actors ?? [])
         {
             token.ThrowIfCancellationRequested();
             int row = Owner(actor.Root);
             var pass = actor.Pickup != null ? puppies : actor.CoordinateSource != null ? aiv : actor.PlacementSource == "Animation initialization" ? animated : null;
-            if (pass != null && assigned.Add(row)) pass.Add(row);
+            if (pass == null || !assigned.Add(row)) continue;
+            pass.Add(row);
+            if ((actor.Pickup?.Source ?? actor.CoordinateSource) is { } record) placedBy[row] = record;
         }
         foreach (int root in mission?.DormantRoots.Order() ?? Enumerable.Empty<int>())
             if (assigned.Add(Owner(root))) animated.Add(Owner(root));
         List<SourceMapPass> passes = [];
-        string Short(string resource) => System.IO.Path.GetFileNameWithoutExtension(resource);
-        if (aiv.Count > 0) passes.Add(new("aiv", mission!.Layout.AivResource is { } aivResource ? Short(aivResource) : "aiv",
-            $"Units {mission.Layout.AivResource} places for {mission.Layout.Difficulty}: the mission adds them after the world is loaded.", aiv));
-        if (puppies.Count > 0) passes.Add(new("puppies", Short(mission!.Layout.PickupResource),
-            $"Pickups {mission.Layout.PickupResource} places for {mission.Layout.Difficulty}.", puppies));
+        // The aiv and puppies trees list every difficulty's units and pickups, whichever difficulty the view shows.
+        var shown = mission?.Layout is { DifficultyApplies: true } layout ? layout.Difficulty : (MissionDifficulty?)null;
+        var aivEntries = PassEntries(aiv, false); var pickupEntries = PassEntries(puppies, true);
+        if (aivEntries.Count > 0) passes.Add(new("aiv", "aiv",
+            $"Units the mission's AIV resources (aiv_easy, aiv, aiv_hard) place: the mission adds them after the world is loaded. The view shows {mission!.Layout.Difficulty}'s; the others are dimmed.", aiv, aivEntries));
+        if (pickupEntries.Count > 0) passes.Add(new("puppies", "puppies",
+            $"Pickups the mission's puppies resources (puppies_easy, puppies, puppies_hard) place. The view shows {mission!.Layout.Difficulty}'s; the others are dimmed.", puppies, pickupEntries));
         if (animated.Count > 0) passes.Add(new("anim", "anim",
-            "Objects the mission's startup animations place, or hide until an animation places them. Their placement comes from the animations.", animated));
+            "Objects the mission's startup animations place, or hide until an animation places them. Their placement comes from the animations.", animated,
+            animated.Select(row => new SourceMapPassEntry(row, "", DisplayName(row), [], "")).ToArray()));
         Passes = passes;
         HashSet<int> passRows = [];
         foreach (var pass in passes) foreach (int row in pass.Roots) { passOf[row] = pass; passRows.Add(row); }
@@ -217,6 +238,63 @@ internal sealed class SourceMapSelection
             token.ThrowIfCancellationRequested();
             foreach (var child in Children(node)) if (predecessor.TryAdd(child.Node, node)) pending.Enqueue(child.Node);
         }
+
+        // A pass's units or pickups with the difficulties placing each, matched across the difficulty resources like placement
+        // edits (type or template, original position and rotation). Those the shown difficulty does not place follow as entries
+        // without a row. The order is stable across difficulties: by the first difficulty placing each, then its record there.
+        List<SourceMapPassEntry> PassEntries(List<int> rows, bool pickups)
+        {
+            if (placements == null || shown is not MissionDifficulty current)
+                return rows.Select(row => new SourceMapPassEntry(row, "", DisplayName(row), [], "")).ToList();
+            List<PassGroup> groups = [];
+            Dictionary<MissionPickupSource, PassGroup> groupOf = new(placements.SourceComparer);
+            var records = pickups
+                ? placements.Records.Select(r => new PassRecord(r.Source, r.Difficulties,
+                    MissionPickupType.Catalog.FirstOrDefault(t => t.Name == r.Type)?.TemplateName ?? r.Type, $"{r.Type} pickup · {Position(r.OriginalPosition)}", true))
+                : placements.OtherCoordinates.Where(c => c.Kind == "tank").Select(c => new PassRecord(c.Source, c.Difficulties, c.Name,
+                    $"{c.Template} · {Position(c.OriginalPosition)} · heading {c.Rotation.Y.ToString("0.#", System.Globalization.CultureInfo.InvariantCulture)}°", c.TemplateSourceNode != null));
+            foreach (var record in records)
+            {
+                token.ThrowIfCancellationRequested();
+                // A resource no difficulty uses (a variant shadows it) places nothing.
+                if (record.Difficulties.Count == 0 || groupOf.ContainsKey(record.Source)) continue;
+                var scope = placements.Scope(record.Source).Sources;
+                var group = scope.Select(s => groupOf.GetValueOrDefault(s)).FirstOrDefault(g => g != null);
+                if (group == null) groups.Add(group = new());
+                group.Records.Add(record); groupOf[record.Source] = group;
+            }
+            List<(SourceMapPassEntry Entry, (int, int, int) Order)> entries = [];
+            int ordinal = 0;
+            foreach (int row in rows)
+            {
+                var group = placedBy.TryGetValue(row, out var placed) ? groupOf.GetValueOrDefault(placed) : null;
+                if (group is { Row: null }) { group.Row = row; continue; }
+                entries.Add((new(row, "", DisplayName(row), [current], ""), ((int)current, placed?.RecordIndex ?? int.MaxValue, ordinal++)));
+            }
+            foreach (var group in groups)
+            {
+                token.ThrowIfCancellationRequested();
+                var difficulties = group.Records.SelectMany(r => r.Difficulties).Distinct().Order().ToArray();
+                var first = group.Records.MinBy(r => ((int)r.Difficulties.Min(), r.Source.RecordIndex))!;
+                var order = ((int)first.Difficulties.Min(), first.Source.RecordIndex, ordinal++);
+                // The presentation key is unique within its resource only: the resource name tells difficulty files apart.
+                string key = first.Source.ResourceName + ":" + (placements.SourcePresentationKey(first.Source) ?? "#" + first.Source.RecordIndex.ToString(System.Globalization.CultureInfo.InvariantCulture));
+                // A record the shown difficulty places that the view could not show (its notices say why) stays out, as does
+                // one whose template the world lacks: the game skips both.
+                if (group.Row is int row) entries.Add((new(row, key, DisplayName(row), difficulties, first.Detail), order));
+                else if (!difficulties.Contains(current) && group.Records.Any(r => r.Placeable))
+                    entries.Add((new(null, key, first.Name, difficulties, first.Detail), order));
+            }
+            return entries.OrderBy(e => e.Order).Select(e => e.Entry).ToList();
+        }
+        static string Position(System.Numerics.Vector3 p) => string.Create(System.Globalization.CultureInfo.InvariantCulture, $"X {p.X:0.#}, Y {p.Y:0.#}, Z {p.Z:0.#}");
+    }
+
+    private sealed record PassRecord(MissionPickupSource Source, IReadOnlyList<MissionDifficulty> Difficulties, string Name, string Detail, bool Placeable);
+    private sealed class PassGroup
+    {
+        internal List<PassRecord> Records { get; } = [];
+        internal int? Row { get; set; }
     }
 }
 
@@ -232,7 +310,7 @@ public partial class MainWindow
         var edits = doc.PickupEdits;
         string buildFolder = doc.SourceBuild!.Root;
         var projection = await Task.Run(() => new SourceMapSelection(data, mission, source, TreeIdentities(data, mission, edits), token,
-            SourceMapActorKeys.Prepare(buildFolder, source, edits, token, doc.SourceBuild.ReadHashes)), token);
+            SourceMapActorKeys.Prepare(buildFolder, source, edits, token, doc.SourceBuild.ReadHashes), edits), token);
         token.ThrowIfCancellationRequested();
         if (!cache.TryGetValue(data, out _)) cache.Add(data, projection);
     }

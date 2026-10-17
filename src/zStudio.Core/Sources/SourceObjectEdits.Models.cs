@@ -91,7 +91,7 @@ public static partial class SourceObjectEdits
         RequireDatabaseNode(node, origin, "given another model");
         model = model.Replace('\\', '/');
         if (!model.EndsWith(".gltf", StringComparison.OrdinalIgnoreCase) || !model.StartsWith(SourceProject.DataFolder + "/", StringComparison.OrdinalIgnoreCase) || model.Split('/').Any(part => part is "" or "." or ".."))
-            throw new InvalidDataException("Name a .gltf model of the project's data folder by its project path, such as data/m1/models/sonictur.gltf.");
+            throw new InvalidDataException("Name a .gltf model of the project's data folder by its project path, such as data/common/models/sonictur.gltf.");
         // Outer placements key nested zone overrides by this file's reference nodes; they would describe the previous model.
         if (origin.Part || !string.Equals(origin.ZoneOwnerPath ?? origin.ModelFile, origin.ModelFile, StringComparison.OrdinalIgnoreCase))
             throw new InvalidDataException($"{node.Name} is in {origin.ModelFile}, which {origin.ZoneOwnerPath} references with its own zone assignments; change the model in Blender, where those placements are kept.");

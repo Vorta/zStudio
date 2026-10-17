@@ -44,6 +44,10 @@ public sealed class WorldSurfaceHighlightTests
         Assert.Equal(scene.Nodes[0].ModelIndex, scene.Nodes[1].ModelIndex);
         Assert.Equal(WorldSurfaceKind.CanModify | WorldSurfaceKind.ClipTo, WorldSurfaceHighlights.NodeKind(scene, 0));
         Assert.Equal(WorldSurfaceKind.Default, WorldSurfaceHighlights.NodeKind(scene, 1));
+        // A landmark (0x80) is the exception: geometry below a landmark object is drawn with it.
+        scene.Nodes[0].Metadata["flags"] = 0x30084;
+        Assert.True(WorldSurfaceHighlights.Matches(WorldSurfaceHighlights.NodeKind(scene, 1), WorldHighlightMode.Landmarks));
+        Assert.Equal(WorldSurfaceKind.Landmark, WorldSurfaceHighlights.NodeKind(scene, 1));
     }
 
     [Fact]

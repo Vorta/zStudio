@@ -39,8 +39,8 @@ public partial class MainWindow
         Workspace.Visibility = open ? Visibility.Visible : Visibility.Collapsed;
         NavigatorVisibilityMenu.IsChecked = false; InspectorVisibilityMenu.IsChecked = open;
         double available = Math.Max(0, Workbench.ActualHeight - 400);
-        bool tools = open && Layout.ToolsVisible && available >= 100;
-        ToolsRow.Height = new(tools ? Math.Min(Layout.ToolsHeight, available) : 0);
+        bool tools = open && SourceToolsVisible && available >= 100;
+        ToolsRow.Height = new(tools ? Math.Min(sourceToolsHeight ?? Layout.ToolsHeight, available) : 0);
         ToolsSplitterRow.Height = new(tools ? 6 : 0);
         BottomTools.Visibility = ToolsSplitter.Visibility = tools ? Visibility.Visible : Visibility.Collapsed;
         ToolsVisibilityMenu.IsChecked = tools;

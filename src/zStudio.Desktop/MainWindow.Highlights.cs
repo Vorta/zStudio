@@ -16,6 +16,7 @@ public partial class MainWindow
         WorldHighlightMode.ClipTo => "clipTo",
         WorldHighlightMode.CanModifyAndClipTo => "canModifyAndClipTo",
         WorldHighlightMode.Zones => "zones",
+        WorldHighlightMode.Landmarks => "landmarks",
         _ => "none"
     };
 
@@ -33,8 +34,8 @@ public partial class MainWindow
             });
             return;
         }
-        var mode = sender == HighlightSoils ? WorldHighlightMode.NonDefaultSoils :
-            sender == HighlightCanModify ? WorldHighlightMode.CanModify : sender == HighlightZones ? WorldHighlightMode.Zones : WorldHighlightMode.ClipTo;
+        var mode = sender == HighlightSoils ? WorldHighlightMode.NonDefaultSoils : sender == HighlightZones ? WorldHighlightMode.Zones :
+            sender == HighlightLandmarks ? WorldHighlightMode.Landmarks : WorldHighlightMode.ClipTo;
         SetWorldHighlightMode(((System.Windows.Controls.Primitives.ToggleButton)sender).IsChecked == true ? mode : WorldHighlightMode.None);
     }
 
@@ -49,6 +50,7 @@ public partial class MainWindow
             HighlightCanModify.IsChecked = mode is WorldHighlightMode.CanModify or WorldHighlightMode.CanModifyAndClipTo;
             HighlightClipTo.IsChecked = mode is WorldHighlightMode.ClipTo or WorldHighlightMode.CanModifyAndClipTo;
             HighlightZones.IsChecked = mode == WorldHighlightMode.Zones;
+            HighlightLandmarks.IsChecked = mode == WorldHighlightMode.Landmarks;
         }
         finally { synchronizingWorldHighlight = false; }
         ApplyWorldHighlight();

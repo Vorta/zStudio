@@ -4,8 +4,8 @@ using zStudio.Rendering;
 namespace zStudio.Desktop;
 
 /// <summary>
-/// A structural source edit can replace the presentation. Its previous scene stays frozen on screen while a new viewport
-/// is prepared; a "Reloading view" notice covers that presentation transition. Ordinary transforms retain the viewport.
+/// A structural source edit can replace the presentation. Its previous scene stays frozen on screen, darkened under a
+/// notice, while a new viewport is prepared. Ordinary transforms retain the viewport.
 /// </summary>
 public partial class MainWindow
 {
@@ -13,7 +13,17 @@ public partial class MainWindow
     private DocumentModel? sceneHandoff;
     /// <summary>The replaced document's scene, shown without input until the rebuilt world's scene is ready.</summary>
     private SceneViewport? retiringScene;
-    internal bool IsViewReloading => ReloadingView.Visibility == Visibility.Visible;
+    /// <summary>A rebuilt scene is replacing the shown one (MCP preview_state reloading).</summary>
+    internal bool IsViewReloading => retiringScene != null;
+    private System.Windows.Threading.DispatcherTimer? rebuildNoticeDelay;
+    /// <summary>The rebuild has run for longer than a moment.</summary>
+    private bool rebuildNoticeDue;
+    /// <summary>The rebuild evaluates the whole world (not a transform the view keeps): only that darkens the view before the swap.</summary>
+    private bool rebuildEvaluating;
+    /// <summary>The document the notice's state belongs to: another shown document (a replacement without a handoff) starts afresh.</summary>
+    private DocumentModel? noticeDocument;
+    /// <summary>Marks, from any thread, that <paramref name="doc"/>'s rebuild evaluates the whole world (when it is the shown one).</summary>
+    private void MarkWorldEvaluating(DocumentModel doc) => Dispatcher.BeginInvoke(() => { if (shownDocument == doc) { rebuildEvaluating = true; UpdateReloadingView(); } });
 
     /// <summary>Keeps the shown scene on screen as the retiring scene; the next 3D preview loads into a new viewport.</summary>
     private void RetireScene()
@@ -34,6 +44,8 @@ public partial class MainWindow
     {
         if (retiringScene is not { } retiring) return;
         retiringScene = null;
+        // The rebuilt scene is shown (or could not be): the rebuild's notice ends with it.
+        rebuildEvaluating = rebuildNoticeDue = false; rebuildNoticeDelay?.Stop();
         if (ReferenceEquals(SceneHost.Content, retiring)) SceneHost.Content = scene;
         retiring.Dispose();
         SceneToolbar.IsEnabled = true;
@@ -52,8 +64,45 @@ public partial class MainWindow
         ApplyAiOptions();
     }
 
-    /// <summary>The notice shows while the shown source world rebuilds and until its new scene replaces the old one.</summary>
-    private void UpdateReloadingView() =>
-        ReloadingView.Visibility = retiringScene != null
-            ? Visibility.Visible : Visibility.Collapsed;
+    /// <summary>
+    /// While an edit of the shown source world takes longer than a moment, a card names the step and its progress. The view
+    /// darkens under it once it is reloading: the whole world is evaluated again, then the rebuilt scene replaces the shown one.
+    /// A transform edit the view keeps only shows the card while it is prepared. An edit's phases (preparation, then
+    /// acceptance) follow each other without a gap: the notice ends only once no rebuild follows.
+    /// </summary>
+    private void UpdateReloadingView()
+    {
+        if (shownDocument != noticeDocument && retiringScene == null) { rebuildNoticeDelay?.Stop(); rebuildNoticeDue = rebuildEvaluating = false; }
+        noticeDocument = shownDocument;
+        bool rebuilding = shownDocument?.SourceWorld?.IsRebuilding == true && SceneHost.Visibility == Visibility.Visible;
+        if (rebuilding && !rebuildNoticeDue && rebuildNoticeDelay?.IsEnabled != true)
+        {
+            rebuildNoticeDelay ??= new(System.Windows.Threading.DispatcherPriority.Normal, Dispatcher) { Interval = TimeSpan.FromMilliseconds(350) };
+            rebuildNoticeDelay.Tick -= RebuildNoticeDue; rebuildNoticeDelay.Tick += RebuildNoticeDue;
+            rebuildNoticeDelay.Start();
+        }
+        if (!rebuilding && retiringScene == null && (rebuildNoticeDue || rebuildEvaluating || rebuildNoticeDelay?.IsEnabled == true))
+        {
+            // A tick after the work ended must not bring the notice (or its shade) back before it is ended.
+            rebuildNoticeDelay?.Stop();
+            Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Background, EndRebuildNotice);
+        }
+        bool reloading = retiringScene != null || rebuildNoticeDue && rebuildEvaluating && SceneHost.Visibility == Visibility.Visible;
+        bool shown = reloading || rebuildNoticeDue && rebuilding;
+        ReloadingTitle.Text = retiringScene != null ? "Loading the rebuilt world…" : rebuildEvaluating ? "Rebuilding the world…" : "Applying the edit…";
+        if (reloading) ReloadingView.SetResourceReference(System.Windows.Controls.Panel.BackgroundProperty, "ReloadingShade");
+        else ReloadingView.Background = System.Windows.Media.Brushes.Transparent;
+        ReloadingView.Visibility = shown ? Visibility.Visible : Visibility.Collapsed;
+        RefreshStaleBanner();
+    }
+    private void RebuildNoticeDue(object? sender, EventArgs e) { rebuildNoticeDelay?.Stop(); rebuildNoticeDue = true; UpdateReloadingView(); }
+    private void EndRebuildNotice()
+    {
+        if (shownDocument?.SourceWorld?.IsRebuilding == true || retiringScene != null) return;
+        rebuildNoticeDelay?.Stop(); rebuildNoticeDue = rebuildEvaluating = false;
+        UpdateReloadingView();
+    }
+    /// <summary>The "Source file changed on disk" banner gives way to the reload notice (and hides with the UI).</summary>
+    private void RefreshStaleBanner() =>
+        SourceStaleHost.Visibility = presentationUiHidden || ReloadingView.Visibility == Visibility.Visible ? Visibility.Collapsed : Visibility.Visible;
 }

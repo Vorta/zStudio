@@ -46,7 +46,7 @@ public partial class MainWindow
     }
     private void PreviewNoticesClick(object sender, RoutedEventArgs e)
     {
-        Layout.ToolsVisible = true; ToolTabs.SelectedIndex = 2; ArrangeWorkspace();
+        SetToolsVisible(true, problems: true);
         FileProblems.SelectedItem = staticPreviewProblems.FirstOrDefault();
     }
     private void FileProblemSelectionChanged(object sender, SelectionChangedEventArgs e)

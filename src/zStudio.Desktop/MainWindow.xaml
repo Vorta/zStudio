@@ -7,6 +7,8 @@
  Background="{DynamicResource ApplicationBackgroundBrush}" UseLayoutRounding="True" AllowDrop="True" Drop="OnDrop" Closing="OnClosing">
  <Window.Resources>
   <SolidColorBrush x:Key="AssetIconBrush" Color="#3C91D4"/>
+  <local:InverseBool x:Key="InverseBool"/>
+  <SolidColorBrush x:Key="ReloadingShade" Color="#8C000000"/>
   <SolidColorBrush x:Key="CaptionHoverBrush" Color="#20808080"/><SolidColorBrush x:Key="CaptionPressedBrush" Color="#40808080"/>
   <HierarchicalDataTemplate DataType="{x:Type local:FolderNode}" ItemsSource="{Binding Children}">
    <DockPanel ToolTip="{Binding ToolTip}" LastChildFill="True">
@@ -44,18 +46,28 @@
     <Border x:Name="CompiledRow" BorderThickness="1,0,0,0" BorderBrush="{DynamicResource {x:Static SystemColors.ControlDarkBrushKey}}" Padding="6,2,2,2">
      <DockPanel><TextBlock Text="{Binding Glyph}" Opacity="0.7" Margin="0,0,6,0"/><TextBlock Text="{Binding Label}" TextTrimming="CharacterEllipsis"/></DockPanel>
     </Border>
-    <DockPanel x:Name="SourceRow" Visibility="Collapsed" Height="28" Background="Transparent">
+    <DockPanel x:Name="SourceRow" Visibility="Collapsed" Height="28" Background="Transparent" local:OutlinerRowStretch.Enabled="True">
      <Button x:Name="RowEye" DockPanel.Dock="Right" Style="{StaticResource OutlinerEye}" Visibility="Hidden" Click="OutlinerEyeClick" Tag="{Binding}" ToolTip="{Binding EyeToolTip}" AutomationProperties.Name="{Binding EyeToolTip}"><local:PreviewIcon Kind="{Binding EyeIcon}" Width="14" Height="14"/></Button>
-     <TextBlock DockPanel.Dock="Right" Text="{Binding Meta}" FontSize="11" Margin="6,0,4,0" VerticalAlignment="Center" Foreground="{DynamicResource TextFillColorTertiaryBrush}"/>
+     <Button x:Name="RowFrame" DockPanel.Dock="Right" Style="{StaticResource OutlinerEye}" Visibility="Hidden" Click="OutlinerFrameClick" Tag="{Binding}" ToolTip="Frame selection" AutomationProperties.Name="Frame selection"><local:PreviewIcon Kind="FrameSelection" Width="14" Height="14"/></Button>
+     <TextBlock DockPanel.Dock="Right" Text="{Binding Meta}" ToolTip="{Binding MetaToolTip}" FontSize="11" Margin="6,0,10,0" VerticalAlignment="Center" Foreground="{DynamicResource TextFillColorTertiaryBrush}"/>
      <local:PreviewIcon Kind="{Binding OutlinerIcon}" TextElement.Foreground="{Binding OutlinerBrush}" Width="15" Height="15" Margin="0,0,8,0" VerticalAlignment="Center"/>
-     <TextBlock Text="{Binding OutlinerLabel}" FontSize="13" VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/>
+     <!-- The name, then (for an object a mission animation binds to) its icon; the name trims first. -->
+     <Grid HorizontalAlignment="Left"><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+      <TextBlock Text="{Binding OutlinerLabel}" FontSize="13" VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/>
+      <Border Grid.Column="1" Background="Transparent" Margin="6,0,0,0" VerticalAlignment="Center" Visibility="{Binding IsAnimated,Converter={StaticResource BoolVisibility}}" ToolTip="{Binding AnimationsToolTip}">
+       <local:PreviewIcon Kind="Animated" Width="14" Height="14" TextElement.Foreground="#6FC8D6"/></Border>
+     </Grid>
     </DockPanel>
    </Grid>
    <HierarchicalDataTemplate.Triggers>
     <DataTrigger Binding="{Binding IsSourceMap}" Value="True"><Setter TargetName="CompiledRow" Property="Visibility" Value="Collapsed"/><Setter TargetName="SourceRow" Property="Visibility" Value="Visible"/></DataTrigger>
-    <DataTrigger Binding="{Binding IsMouseOver,ElementName=SourceRow}" Value="True"><Setter TargetName="RowEye" Property="Visibility" Value="Visible"/></DataTrigger>
+    <DataTrigger Binding="{Binding IsMouseOver,ElementName=SourceRow}" Value="True"><Setter TargetName="RowEye" Property="Visibility" Value="Visible"/><Setter TargetName="RowFrame" Property="Visibility" Value="Visible"/></DataTrigger>
+    <DataTrigger Binding="{Binding IsSelected}" Value="True"><Setter TargetName="RowEye" Property="Visibility" Value="Visible"/><Setter TargetName="RowFrame" Property="Visibility" Value="Visible"/></DataTrigger>
     <DataTrigger Binding="{Binding IsHidden}" Value="True"><Setter TargetName="RowEye" Property="Visibility" Value="Visible"/><Setter TargetName="SourceRow" Property="Opacity" Value="0.55"/></DataTrigger>
     <DataTrigger Binding="{Binding CanHide}" Value="False"><Setter TargetName="RowEye" Property="Visibility" Value="Collapsed"/></DataTrigger>
+    <DataTrigger Binding="{Binding CanFrame}" Value="False"><Setter TargetName="RowFrame" Property="Visibility" Value="Collapsed"/></DataTrigger>
+    <!-- A unit or pickup only other difficulties place: dimmed, with its difficulties lined up with the others'. -->
+    <DataTrigger Binding="{Binding IsOtherDifficulty}" Value="True"><Setter TargetName="RowEye" Property="Visibility" Value="Hidden"/><Setter TargetName="RowFrame" Property="Visibility" Value="Hidden"/><Setter TargetName="SourceRow" Property="Opacity" Value="0.45"/></DataTrigger>
    </HierarchicalDataTemplate.Triggers>
   </HierarchicalDataTemplate>
   <Style TargetType="TreeView" BasedOn="{StaticResource {x:Type TreeView}}"><Setter Property="BorderThickness" Value="0"/><Setter Property="VirtualizingStackPanel.IsVirtualizing" Value="True"/><Setter Property="VirtualizingStackPanel.VirtualizationMode" Value="Recycling"/></Style>
@@ -133,13 +145,13 @@
     <Button x:Name="CaptionClose" Tag="Close" Style="{StaticResource CaptionButtonStyle}" Click="CaptionCloseClick" shell:WindowChrome.IsHitTestVisibleInChrome="True" AutomationProperties.Name="Close" ToolTip="Close"><TextBlock FontFamily="Segoe Fluent Icons" FontSize="10" Text="&#xE8BB;"/></Button>
    </StackPanel>
   </Grid>
-  <!-- A source map's command bar: file commands, its scope, LOD and difficulty, then the viewport's commands in labelled groups. -->
+  <!-- A source map's command bar: its scope, file commands, LOD and difficulty, then the viewport's commands in labelled groups. -->
   <DockPanel x:Name="SourceCommandBar" DockPanel.Dock="Top" Visibility="Collapsed" Margin="10,0,10,4" MinHeight="46" AutomationProperties.Name="Editor commands">
    <Button x:Name="ViewportSettingsButton" DockPanel.Dock="Right" Style="{StaticResource CommandButton}" VerticalAlignment="Top" Margin="1,7,0,0" Click="ViewportSettingsClick" ToolTip="Viewport settings" AutomationProperties.Name="Viewport settings"><local:PreviewIcon Kind="Settings"/></Button>
    <WrapPanel x:Name="SourceCommandItems" VerticalAlignment="Center">
-    <StackPanel x:Name="SourceFileCommands" Orientation="Horizontal" VerticalAlignment="Center" Margin="0,3"/>
-    <Border Style="{StaticResource CommandSeparator}"/>
     <ContentControl x:Name="SourceScopeHost" VerticalAlignment="Center" Margin="0,3" Focusable="False"/>
+    <Border Style="{StaticResource CommandSeparator}"/>
+    <StackPanel x:Name="SourceFileCommands" Orientation="Horizontal" VerticalAlignment="Center" Margin="0,3"/>
     <Border Style="{StaticResource CommandSeparator}"/>
     <StackPanel x:Name="SourcePickers" Orientation="Horizontal" VerticalAlignment="Center" Margin="0,3,3,3"/>
     <Border x:Name="SourceCameraGroup" Style="{StaticResource CommandGroup}" AutomationProperties.Name="Camera"><StackPanel Orientation="Horizontal"><TextBlock Text="Camera" Style="{StaticResource CommandGroupLabel}"/><StackPanel x:Name="SourceCameraItems" Orientation="Horizontal"/></StackPanel></Border>
@@ -154,9 +166,9 @@
        <Border CornerRadius="8" MinWidth="18" Height="16" Padding="5,0" VerticalAlignment="Center" Background="{DynamicResource SystemFillColorCautionBrush}"><TextBlock x:Name="StatusNoticeCount" FontSize="11" FontWeight="SemiBold" Foreground="#1A1A1A" HorizontalAlignment="Center" VerticalAlignment="Center"/></Border></StackPanel>
      </Button>
      <Border Width="1" Height="14" Margin="4,0" VerticalAlignment="Center" Background="{DynamicResource DividerStrokeColorDefaultBrush}"/>
-     <ToggleButton x:Name="OutlinerPaneToggle" Style="{StaticResource StatusPaneToggle}" Content="Outliner" Tag="outliner" Click="SourcePaneClick" AutomationProperties.Name="Outliner" ToolTip="Show or hide the World outliner"/>
+     <ToggleButton x:Name="OutlinerPaneToggle" Style="{StaticResource StatusPaneToggle}" Content="World tree" Tag="outliner" Click="SourcePaneClick" AutomationProperties.Name="World tree" ToolTip="Show or hide the World tree"/>
      <ToggleButton x:Name="PropertiesPaneToggle" Style="{StaticResource StatusPaneToggle}" Content="Properties" Tag="properties" Click="SourcePaneClick" AutomationProperties.Name="Properties pane" ToolTip="Show or hide the Properties pane"/>
-     <ToggleButton x:Name="ToolsPaneToggle" Style="{StaticResource StatusPaneToggle}" Content="Tools" Tag="tools" Click="SourcePaneClick" AutomationProperties.Name="Tools pane" ToolTip="Show or hide the bottom tools"/>
+     <ToggleButton x:Name="ToolsPaneToggle" Style="{StaticResource StatusPaneToggle}" Content="Diagnostics" Tag="tools" Click="SourcePaneClick" AutomationProperties.Name="Diagnostics pane" ToolTip="Show or hide Diagnostics: the file and preview problems"/>
     </StackPanel>
     <StackPanel x:Name="SourceStatusLeft" DockPanel.Dock="Left" Orientation="Horizontal" Visibility="Collapsed">
      <local:PreviewIcon Kind="Pointer" Width="13" Height="13" Margin="8,0,6,0" VerticalAlignment="Center" TextElement.Foreground="{DynamicResource AccentFillColorDefaultBrush}"/>
@@ -218,10 +230,11 @@
  <ToggleButton x:Name="TexturesEnabled" Style="{StaticResource PreviewIconToggle}" IsChecked="True" Checked="SceneOptionsChanged" Unchecked="SceneOptionsChanged" AutomationProperties.Name="Textures" Tag="Show surface textures."><local:PreviewIcon Kind="Textures" IsChecked="{Binding IsChecked,RelativeSource={RelativeSource AncestorType=ToggleButton}}"/></ToggleButton>
  <ToggleButton x:Name="BoundsEnabled" Style="{StaticResource PreviewIconToggle}" IsChecked="False" Checked="SceneOptionsChanged" Unchecked="SceneOptionsChanged" AutomationProperties.Name="Bounds" Tag="Show object bounding boxes."><local:PreviewIcon Kind="Bounds" IsChecked="{Binding IsChecked,RelativeSource={RelativeSource AncestorType=ToggleButton}}"/></ToggleButton>
  <StackPanel x:Name="WorldHighlights" Orientation="Horizontal" Visibility="Collapsed" ToolBar.OverflowMode="AsNeeded">
-  <ToggleButton x:Name="HighlightSoils" Style="{StaticResource PreviewIconToggle}" IsChecked="False" Checked="WorldHighlightChanged" Unchecked="WorldHighlightChanged" AutomationProperties.Name="Non-default soils" Tag="Overlay non-default soil surfaces with 50% yellow. Replaces crater and zone highlights; click again to restore normal appearance."><local:PreviewIcon Kind="Soils" IsChecked="{Binding IsChecked,RelativeSource={RelativeSource AncestorType=ToggleButton}}"/></ToggleButton>
+  <ToggleButton x:Name="HighlightSoils" Style="{StaticResource PreviewIconToggle}" IsChecked="False" Checked="WorldHighlightChanged" Unchecked="WorldHighlightChanged" AutomationProperties.Name="Non-default soils" Tag="Overlay non-default soil surfaces with 50% yellow. Replaces crater, zone and landmark highlights; click again to restore normal appearance."><local:PreviewIcon Kind="Soils" IsChecked="{Binding IsChecked,RelativeSource={RelativeSource AncestorType=ToggleButton}}"/></ToggleButton>
   <ToggleButton x:Name="HighlightCanModify" Style="{StaticResource PreviewIconToggle}" IsChecked="False" Checked="WorldHighlightChanged" Unchecked="WorldHighlightChanged" AutomationProperties.Name="CanModify" Tag="Overlay CanModify regions with 50% green. Can be shown with ClipTo; red takes precedence on surfaces carrying both flags."><local:PreviewIcon Kind="CanModify" IsChecked="{Binding IsChecked,RelativeSource={RelativeSource AncestorType=ToggleButton}}"/></ToggleButton>
   <ToggleButton x:Name="HighlightClipTo" Style="{StaticResource PreviewIconToggle}" IsChecked="False" Checked="WorldHighlightChanged" Unchecked="WorldHighlightChanged" AutomationProperties.Name="ClipTo" Tag="Overlay ClipTo regions with 50% red. Can be shown with CanModify; red takes precedence on surfaces carrying both flags."><local:PreviewIcon Kind="ClipTo" IsChecked="{Binding IsChecked,RelativeSource={RelativeSource AncestorType=ToggleButton}}"/></ToggleButton>
-  <ToggleButton x:Name="HighlightZones" Style="{StaticResource PreviewIconToggle}" IsChecked="False" Checked="WorldHighlightChanged" Unchecked="WorldHighlightChanged" AutomationProperties.Name="Zones" Tag="Overlay each surface with 50% of its node zone colour (grey for any). Replaces soil and crater highlights; click again to restore normal appearance."><local:PreviewIcon Kind="Zones" IsChecked="{Binding IsChecked,RelativeSource={RelativeSource AncestorType=ToggleButton}}"/></ToggleButton>
+  <ToggleButton x:Name="HighlightZones" Style="{StaticResource PreviewIconToggle}" IsChecked="False" Checked="WorldHighlightChanged" Unchecked="WorldHighlightChanged" AutomationProperties.Name="Zones" Tag="Overlay each surface with 50% of its node zone colour (grey for any). Replaces soil, crater and landmark highlights; click again to restore normal appearance."><local:PreviewIcon Kind="Zones" IsChecked="{Binding IsChecked,RelativeSource={RelativeSource AncestorType=ToggleButton}}"/></ToggleButton>
+  <ToggleButton x:Name="HighlightLandmarks" Style="{StaticResource PreviewIconToggle}" IsChecked="False" Checked="WorldHighlightChanged" Unchecked="WorldHighlightChanged" AutomationProperties.Name="Landmarks" Tag="Overlay landmark geometry (never culled), including everything below a landmark object, with 50% magenta. Replaces the other highlights; click again to restore normal appearance."><local:PreviewIcon Kind="Landmark" IsChecked="{Binding IsChecked,RelativeSource={RelativeSource AncestorType=ToggleButton}}"/></ToggleButton>
  </StackPanel>
  <Button x:Name="ParachuteButton" Style="{StaticResource PreviewIconButton}" Tag="show" Visibility="Collapsed" Click="ParachuteActionClick" ToolBar.OverflowMode="AsNeeded" ToolTip="Show conditional VTOL release positions and move existing drop windows along their flight path" AutomationProperties.Name="Parachute"><local:PreviewIcon Kind="Parachute"/></Button>
  <StackPanel x:Name="AiTools" Orientation="Horizontal" Visibility="Collapsed" ToolBar.OverflowMode="AsNeeded">
@@ -244,9 +257,16 @@
          </Grid>
         </ScrollViewer>
         <ContentControl x:Name="SceneHost" Visibility="Collapsed" />
-        <Border x:Name="ReloadingView" Visibility="Collapsed" IsHitTestVisible="False" Panel.ZIndex="11" HorizontalAlignment="Center" VerticalAlignment="Top" Margin="0,14,0,0" Padding="14,8" CornerRadius="6" Background="{DynamicResource CardBackgroundFillColorDefaultBrush}" BorderBrush="{DynamicResource CardStrokeColorDefaultBrush}" BorderThickness="1" AutomationProperties.Name="Reloading view" AutomationProperties.LiveSetting="Polite">
-         <StackPanel Orientation="Horizontal"><ProgressBar IsIndeterminate="True" Width="72" Height="4" VerticalAlignment="Center" Margin="0,0,10,0" IsTabStop="False"/><TextBlock Text="Reloading view…" FontWeight="SemiBold" VerticalAlignment="Center"/></StackPanel>
-        </Border>
+        <!-- While an edit takes longer than a moment: a card naming the step; the scene darkens under it while the view reloads. -->
+        <Grid x:Name="ReloadingView" Visibility="Collapsed" IsHitTestVisible="False" Panel.ZIndex="11" AutomationProperties.Name="{Binding Text,ElementName=ReloadingTitle}" AutomationProperties.LiveSetting="Polite">
+         <Border HorizontalAlignment="Center" VerticalAlignment="Center" Padding="20,16" MinWidth="280" MaxWidth="460" CornerRadius="8" Background="{DynamicResource SolidBackgroundFillColorBaseBrush}" BorderBrush="{DynamicResource CardStrokeColorDefaultBrush}" BorderThickness="1">
+          <StackPanel>
+           <TextBlock x:Name="ReloadingTitle" Text="Reloading view…" FontSize="15" FontWeight="SemiBold" TextAlignment="Center"/>
+           <TextBlock x:Name="ReloadingDetail" Text="{Binding Status}" FontSize="12" Margin="0,6,0,0" TextAlignment="Center" TextWrapping="Wrap" MaxHeight="36" TextTrimming="CharacterEllipsis" Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
+           <ProgressBar IsIndeterminate="True" Height="4" Margin="0,12,0,0" IsTabStop="False"/>
+          </StackPanel>
+         </Border>
+        </Grid>
         <Grid x:Name="PreviewOverlayChrome" Panel.ZIndex="12"><Border x:Name="AiPathPanel" Panel.ZIndex="12" Visibility="Collapsed" HorizontalAlignment="Left" VerticalAlignment="Bottom" Margin="10" Padding="10" Width="370" CornerRadius="5" Background="{DynamicResource CardBackgroundFillColorDefaultBrush}" BorderBrush="{DynamicResource CardStrokeColorDefaultBrush}" BorderThickness="1">
          <StackPanel>
           <TextBlock x:Name="AiPathHeading" FontWeight="SemiBold"/>
@@ -303,15 +323,17 @@
     </Grid>
     <GridSplitter x:Name="ToolsSplitter" Grid.Row="1" Height="6" HorizontalAlignment="Stretch" ResizeDirection="Rows" DragCompleted="WorkspaceSplitterCompleted" AutomationProperties.Name="Resize bottom tools"/>
     <DockPanel x:Name="BottomTools" Grid.Row="2">
-     <StackPanel DockPanel.Dock="Right" Orientation="Vertical"><Button Content="↕" Tag="Layout" Click="MaximizeToolsClick" ToolTip="Maximize / restore tools" AutomationProperties.Name="Maximize or restore bottom tools"/><Button Content="×" Tag="Layout" Click="ToolsButtonClick" ToolTip="Hide tools" AutomationProperties.Name="Hide bottom tools"/></StackPanel>
+     <StackPanel x:Name="ToolsButtons" DockPanel.Dock="Right" Orientation="Vertical"><Button Content="↕" Tag="Layout" Click="MaximizeToolsClick" ToolTip="Maximize / restore tools" AutomationProperties.Name="Maximize or restore bottom tools"/><Button Content="×" Tag="Layout" Click="ToolsButtonClick" ToolTip="Hide tools" AutomationProperties.Name="Hide bottom tools"/></StackPanel>
+     <!-- A source map shows only the problems (moved into SourceDiagnosticsHost), without tabs. -->
+     <Grid><ContentControl x:Name="SourceDiagnosticsHost" Visibility="Collapsed" Focusable="False"/>
      <TabControl x:Name="ToolTabs" SelectionChanged="ToolSelectionChanged">
       <TabItem Header="Dispatch" x:Name="DispatchTab"><ContentControl x:Name="DispatchHost"/></TabItem>
       <TabItem Header="Event log" x:Name="EventLogTab"><ContentControl x:Name="EventLogHost"/></TabItem>
-      <TabItem Header="Problems"><Grid><ContentControl x:Name="ProblemsHost"/><Expander x:Name="DiagnosticsExpander" IsExpanded="True"><Expander.Header><StackPanel Orientation="Horizontal"><TextBlock Text="File and preview notices" VerticalAlignment="Center"/><Button x:Name="FileProblemDetailsButton" Content="Details…" Click="FileProblemDetailsClick" IsEnabled="False" Margin="10,0,0,0"/></StackPanel></Expander.Header><DockPanel><DataGrid x:Name="FileProblems" SelectionChanged="FileProblemSelectionChanged" ItemsSource="{Binding Problems}" Background="Transparent" RowBackground="Transparent" IsReadOnly="True" AutoGenerateColumns="False" CanUserAddRows="False" EnableRowVirtualization="True" MouseDoubleClick="FileProblemDoubleClick"><DataGrid.Columns><DataGridTextColumn Header="Severity" Binding="{Binding Severity}" Width="SizeToHeader" MinWidth="100"/><DataGridTextColumn Header="Source" Binding="{Binding Scope}" Width="140"/><DataGridTextColumn Header="Message" Binding="{Binding Message}" Width="*"/></DataGrid.Columns><DataGrid.RowStyle><Style TargetType="DataGridRow" BasedOn="{StaticResource {x:Type DataGridRow}}"><Setter Property="ToolTip" Value="{Binding Details}"/></Style></DataGrid.RowStyle></DataGrid></DockPanel></Expander></Grid></TabItem>
+      <TabItem Header="Problems"><Grid x:Name="ProblemsPage"><ContentControl x:Name="ProblemsHost"/><Expander x:Name="DiagnosticsExpander" IsExpanded="True"><Expander.Header><StackPanel Orientation="Horizontal"><TextBlock Text="File and preview notices" VerticalAlignment="Center"/><Button x:Name="FileProblemDetailsButton" Content="Details…" Click="FileProblemDetailsClick" IsEnabled="False" Margin="10,0,0,0"/></StackPanel></Expander.Header><DockPanel><DataGrid x:Name="FileProblems" SelectionChanged="FileProblemSelectionChanged" ItemsSource="{Binding Problems}" Background="Transparent" RowBackground="Transparent" IsReadOnly="True" AutoGenerateColumns="False" CanUserAddRows="False" EnableRowVirtualization="True" MouseDoubleClick="FileProblemDoubleClick"><DataGrid.Columns><DataGridTextColumn Header="Severity" Binding="{Binding Severity}" Width="SizeToHeader" MinWidth="100"/><DataGridTextColumn Header="Source" Binding="{Binding Scope}" Width="140"/><DataGridTextColumn Header="Message" Binding="{Binding Message}" Width="*"/></DataGrid.Columns><DataGrid.RowStyle><Style TargetType="DataGridRow" BasedOn="{StaticResource {x:Type DataGridRow}}"><Setter Property="ToolTip" Value="{Binding Details}"/></Style></DataGrid.RowStyle></DataGrid></DockPanel></Expander></Grid></TabItem>
       <TabItem Header="Runtime" x:Name="RuntimeTab"><ContentControl x:Name="RuntimeHost"/></TabItem>
       <TabItem Header="Related" ToolTip="Name-based matches; not a complete dependency graph"><Grid><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions><TextBlock x:Name="RelatedLimit" Text="Limited name-based matches: reference, index or result limits were reached. Use Search to find other assets." Margin="12,8" TextWrapping="Wrap" Visibility="Collapsed"/><ListBox Grid.Row="1" x:Name="RelatedList" Background="Transparent" BorderThickness="0" MouseDoubleClick="RelatedDoubleClick"><ListBox.ItemTemplate><DataTemplate><StackPanel Margin="3,5"><TextBlock Text="{Binding Display}" TextWrapping="Wrap" /><TextBlock Text="{Binding Location}" FontSize="11" Opacity="0.6" /></StackPanel></DataTemplate></ListBox.ItemTemplate></ListBox><TextBlock Grid.Row="1" Text="No name-based matches for this asset." Margin="12" TextWrapping="Wrap"><TextBlock.Style><Style TargetType="TextBlock"><Setter Property="Visibility" Value="Collapsed"/><Style.Triggers><DataTrigger Binding="{Binding HasItems,ElementName=RelatedList}" Value="False"><Setter Property="Visibility" Value="Visible"/></DataTrigger></Style.Triggers></Style></TextBlock.Style></TextBlock></Grid></TabItem>
       <TabItem Header="Bytes"><TextBox x:Name="RawText" Background="Transparent" IsReadOnly="True" FontFamily="Consolas" AcceptsReturn="True" HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto" BorderThickness="0" /></TabItem>
-     </TabControl>
+     </TabControl></Grid>
     </DockPanel>
 <StackPanel Grid.RowSpan="3" x:Name="Welcome" VerticalAlignment="Center" HorizontalAlignment="Center" MaxWidth="700" Margin="30"><TextBlock x:Name="WelcomeTitle" Text="Explore Recoil’s assets" FontSize="32" FontWeight="SemiBold" TextWrapping="Wrap" /><TextBlock x:Name="WelcomeDescription" Text="Textures, worlds, models, audio, scripts, and animation sequences — together in one workspace." FontSize="16" Opacity="0.65" Margin="0,16,0,26" TextWrapping="Wrap" />
      <!-- The two ways to work, side by side at the width of the text above (the window's minimum width always fits both). -->
@@ -348,24 +370,39 @@
     </ScrollViewer>
    </Grid>
    <GridSplitter x:Name="InspectorSplitter" Grid.Column="3" Width="6" HorizontalAlignment="Stretch" DragCompleted="WorkspaceSplitterCompleted" AutomationProperties.Name="Resize Inspector"/>
-   <Border x:Name="SourceOutlinerPane" Grid.Column="0" Style="{StaticResource SourcePane}" Visibility="Collapsed" AutomationProperties.Name="World outliner">
+   <Border x:Name="SourceOutlinerPane" Grid.Column="0" Style="{StaticResource SourcePane}" Visibility="Collapsed" AutomationProperties.Name="World tree">
     <DockPanel>
      <DockPanel DockPanel.Dock="Top" Margin="14,8,8,4">
       <Button x:Name="OutlinerNewGroup" DockPanel.Dock="Right" Style="{StaticResource CommandButton}" Width="30" Height="30" IsEnabled="False" ToolTip="New group · creating groups is not available yet" AutomationProperties.Name="New group"><local:PreviewIcon Kind="NewGroup"/></Button>
       <Button DockPanel.Dock="Right" Style="{StaticResource CommandButton}" Width="30" Height="30" Click="OutlinerCollapseAllClick" ToolTip="Collapse all" AutomationProperties.Name="Collapse all"><local:PreviewIcon Kind="CollapseAll"/></Button>
+      <!-- What the outliner's icons mean: a legend that opens from the info button. -->
+      <ToggleButton x:Name="OutlinerLegendButton" DockPanel.Dock="Right" Style="{StaticResource CommandButton}" Width="30" Height="30" ToolTip="What the icons mean" AutomationProperties.Name="Icon legend"
+                    IsChecked="{Binding IsOpen,ElementName=OutlinerLegend,Mode=TwoWay}" IsHitTestVisible="{Binding IsOpen,ElementName=OutlinerLegend,Converter={StaticResource InverseBool}}"><local:PreviewIcon Kind="Info"/></ToggleButton>
+      <Popup x:Name="OutlinerLegend" PlacementTarget="{Binding ElementName=OutlinerLegendButton}" Placement="Bottom" HorizontalOffset="-200" VerticalOffset="4" StaysOpen="False" AllowsTransparency="True" PopupAnimation="Fade">
+       <Border Background="{DynamicResource SolidBackgroundFillColorBaseBrush}" BorderBrush="{DynamicResource DividerStrokeColorDefaultBrush}" BorderThickness="1" CornerRadius="8" Padding="14,10,16,12" MinWidth="230" AutomationProperties.Name="Icon legend">
+        <StackPanel TextElement.FontSize="12">
+         <TextBlock Text="Icons" FontWeight="SemiBold" Margin="0,0,0,8"/>
+         <StackPanel Orientation="Horizontal" Margin="0,3"><local:PreviewIcon Kind="World" Width="15" Height="15" Margin="0,0,10,0" TextElement.Foreground="{DynamicResource TextFillColorPrimaryBrush}"/><TextBlock Text="World"/></StackPanel>
+         <StackPanel Orientation="Horizontal" Margin="0,3"><local:PreviewIcon Kind="Folder" Width="15" Height="15" Margin="0,0,10,0" TextElement.Foreground="#E8C26B"/><TextBlock Text="Groups (including level of detail)"/></StackPanel>
+         <StackPanel Orientation="Horizontal" Margin="0,3"><local:PreviewIcon Kind="Geometry" Width="15" Height="15" Margin="0,0,10,0" TextElement.Foreground="#7FB8E8"/><TextBlock Text="Geometry"/></StackPanel>
+         <StackPanel Orientation="Horizontal" Margin="0,3"><local:PreviewIcon Kind="Cube" Width="15" Height="15" Margin="0,0,10,0" TextElement.Foreground="{DynamicResource AccentFillColorDefaultBrush}"/><TextBlock Text="Objects (placed models)"/></StackPanel>
+         <StackPanel Orientation="Horizontal" Margin="0,3"><local:PreviewIcon Kind="Node" Width="15" Height="15" Margin="0,0,10,0" TextElement.Foreground="#C9A2FF"/><TextBlock Text="Other nodes (lights, cameras…)"/></StackPanel>
+         <StackPanel Orientation="Horizontal" Margin="0,3"><local:PreviewIcon Kind="Tank" Width="15" Height="15" Margin="0,0,10,0" TextElement.Foreground="#E8907F"/><TextBlock Text="AI vehicles list (aiv)"/></StackPanel>
+         <StackPanel Orientation="Horizontal" Margin="0,3"><local:PreviewIcon Kind="Pickup" Width="15" Height="15" Margin="0,0,10,0" TextElement.Foreground="#8FD18B"/><TextBlock Text="Pickups list (puppies)"/></StackPanel>
+         <StackPanel Orientation="Horizontal" Margin="0,3"><local:PreviewIcon Kind="Animation" Width="15" Height="15" Margin="0,0,10,0" TextElement.Foreground="#6FC8D6"/><TextBlock Text="Map animations list (anim)"/></StackPanel>
+         <StackPanel Orientation="Horizontal" Margin="0,3"><local:PreviewIcon Kind="Animated" Width="15" Height="15" Margin="0,0,10,0" TextElement.Foreground="#6FC8D6"/><TextBlock Text="Bound to mission animations"/></StackPanel>
+         <StackPanel Orientation="Horizontal" Margin="0,3"><local:PreviewIcon Kind="FrameSelection" Width="15" Height="15" Margin="0,0,10,0" TextElement.Foreground="{DynamicResource TextFillColorSecondaryBrush}"/><TextBlock Text="Select it and frame it in the view"/></StackPanel>
+         <StackPanel Orientation="Horizontal" Margin="0,3"><local:PreviewIcon Kind="Eye" Width="15" Height="15" Margin="0,0,10,0" TextElement.Foreground="{DynamicResource TextFillColorSecondaryBrush}"/><TextBlock Text="Hide or show in the view (no source edit)"/></StackPanel>
+        </StackPanel>
+       </Border>
+      </Popup>
       <TextBlock Text="World" FontSize="14" FontWeight="SemiBold" VerticalAlignment="Center"/>
      </DockPanel>
-     <Grid DockPanel.Dock="Top" Margin="10,2,10,6">
+     <Grid DockPanel.Dock="Top" Margin="10,2,10,8">
       <TextBox x:Name="OutlinerSearch" TextChanged="OutlinerSearchChanged" MaxLength="256" Padding="10,5,32,5" AutomationProperties.Name="Search nodes"/>
-      <TextBlock x:Name="OutlinerSearchHint" Text="Search nodes" IsHitTestVisible="False" Margin="12,0" VerticalAlignment="Center" Foreground="{DynamicResource TextFillColorTertiaryBrush}"/>
+      <TextBlock x:Name="OutlinerSearchHint" Text="Search" IsHitTestVisible="False" Margin="12,0" VerticalAlignment="Center" Foreground="{DynamicResource TextFillColorTertiaryBrush}"/>
       <local:PreviewIcon Kind="Search" Width="14" Height="14" HorizontalAlignment="Right" VerticalAlignment="Center" Margin="0,0,12,0" TextElement.Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
      </Grid>
-     <WrapPanel DockPanel.Dock="Top" Margin="8,0,4,4">
-    <ToggleButton x:Name="OutlinerGroups" Style="{StaticResource OutlinerChip}" IsChecked="True" Tag="group" Click="OutlinerTypeClick" ToolTip="Show or hide groups (including level of detail)" AutomationProperties.Name="Groups"><StackPanel Orientation="Horizontal"><local:PreviewIcon Kind="Folder" Width="12" Height="12" Margin="0,0,3,0" VerticalAlignment="Center" TextElement.Foreground="#E8C26B"/><TextBlock Text="Groups" VerticalAlignment="Center"/></StackPanel></ToggleButton>
-    <ToggleButton x:Name="OutlinerGeometry" Style="{StaticResource OutlinerChip}" IsChecked="True" Tag="geometry" Click="OutlinerTypeClick" ToolTip="Show or hide geometry" AutomationProperties.Name="Geometry"><StackPanel Orientation="Horizontal"><local:PreviewIcon Kind="Geometry" Width="12" Height="12" Margin="0,0,3,0" VerticalAlignment="Center" TextElement.Foreground="#7FB8E8"/><TextBlock Text="Geometry" VerticalAlignment="Center"/></StackPanel></ToggleButton>
-    <ToggleButton x:Name="OutlinerObjects" Style="{StaticResource OutlinerChip}" IsChecked="True" Tag="object" Click="OutlinerTypeClick" ToolTip="Show or hide placed objects" AutomationProperties.Name="Objects"><StackPanel Orientation="Horizontal"><local:PreviewIcon Kind="Cube" Width="12" Height="12" Margin="0,0,3,0" VerticalAlignment="Center" TextElement.Foreground="{DynamicResource AccentFillColorDefaultBrush}"/><TextBlock Text="Objects" VerticalAlignment="Center"/></StackPanel></ToggleButton>
-    <ToggleButton x:Name="OutlinerNodes" Style="{StaticResource OutlinerChip}" IsChecked="True" Tag="node" Click="OutlinerTypeClick" ToolTip="Show or hide other nodes (lights, cameras…)" AutomationProperties.Name="Nodes"><StackPanel Orientation="Horizontal"><local:PreviewIcon Kind="Node" Width="12" Height="12" Margin="0,0,3,0" VerticalAlignment="Center" TextElement.Foreground="#C9A2FF"/><TextBlock Text="Nodes" VerticalAlignment="Center"/></StackPanel></ToggleButton>
-     </WrapPanel>
      <Grid>
       <ContentControl x:Name="SourceTreeHost" Margin="6,0,6,8" Focusable="False"/>
       <ListBox x:Name="OutlinerResults" Visibility="Collapsed" Margin="6,0,6,8" Background="Transparent" BorderThickness="0" SelectionChanged="OutlinerResultSelected" ScrollViewer.HorizontalScrollBarVisibility="Disabled" VirtualizingPanel.IsVirtualizing="True" VirtualizingPanel.VirtualizationMode="Recycling" AutomationProperties.Name="Matching nodes">
@@ -374,11 +411,12 @@
          <TextBlock DockPanel.Dock="Right" Text="{Binding Row.Meta}" FontSize="11" Margin="6,0,4,0" VerticalAlignment="Center" Foreground="{DynamicResource TextFillColorTertiaryBrush}"/>
          <local:PreviewIcon Kind="{Binding Row.OutlinerIcon}" TextElement.Foreground="{Binding Row.OutlinerBrush}" Width="15" Height="15" Margin="0,0,8,0" VerticalAlignment="Center"/>
          <TextBlock Text="{Binding Row.OutlinerLabel}" FontSize="13" VerticalAlignment="Center" MaxWidth="150" TextTrimming="CharacterEllipsis"/>
+         <local:PreviewIcon Kind="Animated" Visibility="{Binding Row.IsAnimated,Converter={StaticResource BoolVisibility}}" Width="14" Height="14" Margin="6,0,0,0" VerticalAlignment="Center" TextElement.Foreground="#6FC8D6"/>
          <TextBlock Text="{Binding Path}" FontSize="11" Margin="8,0,0,0" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" Foreground="{DynamicResource TextFillColorTertiaryBrush}"/>
         </DockPanel>
        </DataTemplate></ListBox.ItemTemplate>
       </ListBox>
-      <TextBlock x:Name="OutlinerEmpty" Visibility="Collapsed" Text="No nodes match this search and filter" Margin="16,12" FontSize="12" TextWrapping="Wrap" Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
+      <TextBlock x:Name="OutlinerEmpty" Visibility="Collapsed" Text="No nodes match this search" Margin="16,12" FontSize="12" TextWrapping="Wrap" Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
      </Grid>
     </DockPanel>
    </Border>

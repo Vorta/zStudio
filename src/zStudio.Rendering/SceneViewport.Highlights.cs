@@ -7,7 +7,7 @@ namespace zStudio.Rendering;
 
 public sealed partial class SceneViewport
 {
-    private sealed record SurfaceAppearance(DiffuseMaterial Normal, WorldSurfaceKind Kind, int Zone = 0xFF);
+    private sealed record SurfaceAppearance(DiffuseMaterial Normal, WorldSurfaceKind Kind, int Zone = 0xFF, bool Horizon = false);
     private readonly Dictionary<MeshGeometryModel3D, SurfaceAppearance> surfaceAppearances = [];
     public WorldHighlightMode HighlightMode { get; private set; }
 
@@ -19,7 +19,8 @@ public sealed partial class SceneViewport
         foreach (var surface in surfaceAppearances.Values)
         {
             Color4 tint = default;
-            if (WorldSurfaceHighlights.Matches(surface.Kind, mode))
+            // The horizon is a landmark too, but tinting the whole sky would hide the landmarks seen against it.
+            if (WorldSurfaceHighlights.Matches(surface.Kind, mode) && !(mode == WorldHighlightMode.Landmarks && surface.Horizon))
             {
                 var (r, g, b) = WorldSurfaceHighlights.ZoneColor(surface.Zone);
                 tint = mode switch
@@ -28,6 +29,7 @@ public sealed partial class SceneViewport
                     WorldHighlightMode.CanModify => new(0, 1, 0, .5f),
                     WorldHighlightMode.CanModifyAndClipTo when (surface.Kind & WorldSurfaceKind.ClipTo) == 0 => new(0, 1, 0, .5f),
                     WorldHighlightMode.Zones => new(r, g, b, .5f),
+                    WorldHighlightMode.Landmarks => new(1, 0, 1, .5f),
                     _ => new(1, 0, 0, .5f)
                 };
             }

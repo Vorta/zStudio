@@ -70,8 +70,9 @@ public partial class MainWindow
             FullscreenMenu.IsEnabled = presentationFullscreen || ActiveNavigationViewport != null;
             HideUiMenu.IsEnabled = hidden || ActiveNavigationViewport != null;
             CaptionMaximize.IsEnabled = !presentationFullscreen;
-            foreach (var chrome in new UIElement[] { TitleArea, PresentationStatusBar, PreviewHeading, PreviewFooter, PreviewToolbarHost, PreviewOverlayChrome, SourceStaleHost })
+            foreach (var chrome in new UIElement[] { TitleArea, PresentationStatusBar, PreviewHeading, PreviewFooter, PreviewToolbarHost, PreviewOverlayChrome })
                 chrome.Visibility = hidden ? Visibility.Collapsed : Visibility.Visible;
+            RefreshStaleBanner();
             Workbench.Margin = hidden ? new(0) : new(6, 0, 6, 4);
             PreviewInner.Margin = hidden ? new(0) : new(4);
             ApplyRetainedPresentation();

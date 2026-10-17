@@ -31,7 +31,7 @@ internal static class WorldHighlightMcpChecks
         var preview = (Guid)typeof(MainWindow).GetField("previewId", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(main)!;
         viewport.RestoreView(new(new(12, 34, 56), new(0, 0, -10), new(0, 1, 0), 60));
         var pose = viewport.CaptureView();
-        var buttons = new[] { "HighlightSoils", "HighlightCanModify", "HighlightClipTo", "HighlightZones" }.Select(n => (ToggleButton)main.FindName(n)).ToArray();
+        var buttons = new[] { "HighlightSoils", "HighlightCanModify", "HighlightClipTo", "HighlightZones", "HighlightLandmarks" }.Select(n => (ToggleButton)main.FindName(n)).ToArray();
         try
         {
             await using var host = new LocalMcpHost(main.Commands, "test");
@@ -50,7 +50,7 @@ internal static class WorldHighlightMcpChecks
             await Options(new() { ["wireframe"] = false });
             await Options(new() { ["faceOrientation"] = "blue" }, "invalid_argument");
             Assert.Equal(pose, viewport.CaptureView()); Assert.Equal(0, doc.Revision);
-            string[] modes = ["nonDefaultSoils", "canModify", "clipTo", "zones", "none"];
+            string[] modes = ["nonDefaultSoils", "canModify", "clipTo", "zones", "landmarks", "none"];
             for (int i = 0; i < modes.Length; i++)
             {
                 await Options(new() { ["highlight"] = modes[i] });
@@ -67,7 +67,7 @@ internal static class WorldHighlightMcpChecks
                 Assert.Equal(modes[i], (await State())["highlight"]!.GetValue<string>());
                 Assert.Single(buttons, b => b.IsChecked == true);
             }
-            buttons[3].IsChecked = false;
+            buttons[^1].IsChecked = false;
             Assert.Equal("none", (await State())["highlight"]!.GetValue<string>());
             foreach (int first in new[] { 1, 2 })
             {

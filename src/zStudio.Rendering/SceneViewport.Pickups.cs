@@ -74,17 +74,28 @@ public sealed partial class SceneViewport
                 // Do not select against its old rectangle after the viewport has resized.
                 if (aiPathBoxStart != null && e.ChangedButton == MouseButton.Left)
                 { CancelAiPathBox(); e.Handled = true; return; }
+                emptyClickStart = null;
                 if (HandleZoneUp(e) || HandleTerrainBrushUp(e) || HandlePickupPointerUp(e.GetPosition(viewport), e)) e.Handled = true;
                 return;
             }
             if (HandleAiPathUp(e.GetPosition(viewport), e) || HandleZoneUp(e) || HandleTerrainBrushUp(e) || HandlePickupPointerUp(e.GetPosition(viewport), e)) e.Handled = true;
+            else if (e.ChangedButton == MouseButton.Left && emptyClickStart is { } start)
+            {
+                // Released where it was pressed (not a drag): a click on empty space.
+                emptyClickStart = null;
+                if ((e.GetPosition(viewport) - start).Length <= 4 && !IsFlyActive && !IsPickupDragging) EmptySpaceClicked?.Invoke();
+            }
         };
-        MouseLeave += (_, _) => { if (!PresentationUiHidden && !pickupPresentationRebase) CancelPickupDrag(); SetPickupHover(false); hoveredAiNode = null; PublishAiLabel(); };
-        viewport.LostMouseCapture += (_, _) => { if (IsPickupDragging) CancelPickupDrag(); CancelTerrainStroke(); CancelZoneGesture(); CancelAiPathBox(); };
+        MouseLeave += (_, _) => { emptyClickStart = null; if (!PresentationUiHidden && !pickupPresentationRebase) CancelPickupDrag(); SetPickupHover(false); hoveredAiNode = null; PublishAiLabel(); };
+        viewport.LostMouseCapture += (_, _) => { emptyClickStart = null; if (IsPickupDragging) CancelPickupDrag(); CancelTerrainStroke(); CancelZoneGesture(); CancelAiPathBox(); };
         viewport.PreviewKeyDown += (_, e) => { if (e.Key == Key.Escape && (CancelAiPathBox() || CancelPickupDrag() || CancelTerrainStroke() || CancelZoneGesture())) e.Handled = true; };
     }
+    /// <summary>A left click (pressed and released without dragging) on empty space: nothing selectable, no handle and no tool took it.</summary>
+    public event Action? EmptySpaceClicked;
+    private Point? emptyClickStart;
     internal bool HandleScenePointerDown(Point point, MouseButtonEventArgs e)
     {
+        emptyClickStart = null;
         if (PresentationUiHidden) return e.ChangedButton is MouseButton.Left or MouseButton.Right;
         if (e.Handled ||
             InspectionContent is DependencyObject panel && IsInspectionInput(e.OriginalSource as DependencyObject, panel)) return false;
@@ -92,7 +103,9 @@ public sealed partial class SceneViewport
         // The screen-space cube owns its clicks, even over scene geometry or
         // handles. Resolve it before the editing lock can consume a scene click.
         if (!IsAiPathPointerTransform && !IsParachutePointerMoving && aiPathBoxStart == null && e.ChangedButton == MouseButton.Left && NavigateCubeAt(point)) return true;
-        return HandleParachuteDown(point, e) || HandleAiPathDown(point, e) || HandleZoneDown(point, e) || HandleTerrainBrushDown(point, e) || HandlePickupPointerDown(point, e) || HandleInspectionClick(point, e) || HandleAiPointerDown(point, e);
+        bool handled = HandleParachuteDown(point, e) || HandleAiPathDown(point, e) || HandleZoneDown(point, e) || HandleTerrainBrushDown(point, e) || HandlePickupPointerDown(point, e) || HandleInspectionClick(point, e) || HandleAiPointerDown(point, e);
+        if (!handled && e.ChangedButton == MouseButton.Left) emptyClickStart = point;
+        return handled;
     }
     private void ConfigurePickups()
     {

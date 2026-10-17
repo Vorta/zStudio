@@ -421,8 +421,12 @@ internal static class SourceEditingMcpChecks
                 ["children"]!["items"]!.AsArray().Where(r => r!["node"] != null).Select(r => r!["node"]!.GetValue<int>()).ToArray();
             var aivRow = rootRows.Single(r => r!["pass"]?.GetValue<string>() == "aiv")!;
             Assert.Equal([tankActor.Root], await TreeNodes(aivRow));
+            // The pass keeps its name whatever the difficulty, and each unit names the difficulties placing it (aiv.zrd serves all three here).
+            Assert.Equal("aiv · 1", aivRow["Label"]!.GetValue<string>());
+            var tankListed = (await Call("scene_tree", new() { ["document"] = Id(second), ["context"] = treeContext, ["row"] = aivRow["row"]!.GetValue<string>() }))["children"]!["items"]![0]!;
+            Assert.Equal(["Easy", "Medium", "Hard"], tankListed["difficulties"]!.AsArray().Select(d => d!.GetValue<string>()));
             Assert.DoesNotContain(tankActor.Root, await TreeNodes(rootRows.First(r => r!["pass"] == null)!));
-            // The outliner's search and type filters read the whole hierarchy as a flat list with parent paths; its eye hides an
+            // The outliner's search reads the whole hierarchy as a flat list with parent paths; its eye hides an
             // object in the view only, and Show all shows it again.
             var found = await Call("scene_tree", new() { ["document"] = Id(second), ["search"] = "tank", ["types"] = "object" });
             var tankMatch = found["matches"]!["items"]!.AsArray().Single(m => m!["item"]!["node"]?.GetValue<int>() == tankActor.Root)!;
@@ -547,11 +551,6 @@ internal static class SourceEditingMcpChecks
                     ["action"] = "set", ["token"] = turretCard.DraftToken, ["transformMode"] = "rotate" });
                 Assert.Equal("rotate", turretViewport.TransformMode); Assert.True(turretViewport.TransformHandlesVisible);
                 ClickToggle(turretCard, "Rotate object"); Assert.False(turretViewport.TransformHandlesVisible);
-                // Reset rotation and scale (in the Transform header) drafts rotation 0, 0, 0 and scale 1, 1, 1; Revert discards it.
-                CardButton(turretCard, "Reset rotation and scale").RaiseEvent(new System.Windows.RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
-                string DraftField(string key) => turretCard.ObjectEditor!.Describe()["fields"]!.AsArray().Single(f => f!["field"]!.GetValue<string>() == key)!["value"]!.GetValue<string>();
-                Assert.Equal("0, 0, 0", DraftField("rotationDegrees")); Assert.Equal("1, 1, 1", DraftField("scale"));
-                turretCard.CancelDraft();
                 // Change only X through the displayed GUI component. A stale Y baseline would silently
                 // revert the first accepted vertical move when this compound Position field is applied.
                 PositionField(turretCard, "X").Text = "301";
@@ -593,6 +592,11 @@ internal static class SourceEditingMcpChecks
                 zoneBox.IsDropDownOpen = false;
                 await Call("workspace_view", new() { ["changes"] = new System.Text.Json.Nodes.JsonObject { ["propertiesDocked"] = true } });
                 Assert.True(zoneCard.Docked);
+                // Diagnostics is a session pane: toggling it never changes the compiled explorer's saved Tools preference.
+                bool savedTools = main.ViewModel.Settings.GetWorkspace().ToolsVisible;
+                var diagnostics = await Call("workspace_view", new() { ["changes"] = new System.Text.Json.Nodes.JsonObject { ["tools"] = !savedTools } });
+                Assert.Equal(!savedTools, diagnostics["sourceMap"]!["diagnostics"]!.GetValue<bool>()); Assert.Equal(savedTools, main.ViewModel.Settings.GetWorkspace().ToolsVisible);
+                await Call("workspace_view", new() { ["changes"] = new System.Text.Json.Nodes.JsonObject { ["tools"] = savedTools } });
                 zoneBox.Text = "255";
                 // 255 is Any's number, never typed as a zone: Apply refuses it and keeps the draft.
                 Assert.Contains("0 to 254", (await Call("scene_card", new() { ["preview"] = PreviewId(), ["document"] = Id(second), ["revision"] = second.Revision,
@@ -640,7 +644,13 @@ internal static class SourceEditingMcpChecks
                 ["sourceFile"] = "data/m2/models/m2.gltf", ["gltfNode"] = turretGroup, ["name"] = name };
             var taken = await Job("source_world_object_edit", RenameGroup("tur_101"), "failed");
             Assert.Equal("invalid_argument", taken["code"]!.GetValue<string>()); Assert.Contains("already have a node named tur_101", taken["message"]!.GetValue<string>());
+            // The outliner keeps the rows that were open across the rebuild the rename causes.
+            var groupSearch = await Call("scene_tree", new() { ["document"] = Id(second), ["search"] = "turret_group" });
+            var groupRow = groupSearch["matches"]!["items"]!.AsArray().Single()!["item"]!;
+            await Call("scene_tree", new() { ["document"] = Id(second), ["context"] = groupSearch["context"]!.GetValue<string>(), ["preview"] = groupSearch["preview"]!.GetValue<string>(),
+                ["action"] = "expand", ["row"] = groupRow["row"]!.GetValue<string>() });
             second = Document((await Job("source_world_object_edit", RenameGroup("gTurrets")))["document"]!);
+            Assert.True((await Call("scene_tree", new() { ["document"] = Id(second), ["search"] = "gTurrets" }))["matches"]!["items"]!.AsArray().Single()!["item"]!["IsExpanded"]!.GetValue<bool>());
             Assert.Equal("gTurrets", System.Text.Json.Nodes.JsonNode.Parse(workspace.Read("data/m2/models/m2.gltf")!)!["nodes"]![turretGroup]!["name"]!.GetValue<string>());
             Assert.Equal(compiledNames.Select(n => n == "turret_group" ? "gTurrets" : n), second.PreviewDocument.Scene!.Nodes.Select(n => n.Name));
             second = Document(await Call("undo_redo", new() { ["document"] = Id(second), ["revision"] = second.Revision, ["action"] = "undo" }));

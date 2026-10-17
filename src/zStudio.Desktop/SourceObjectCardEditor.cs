@@ -265,13 +265,6 @@ internal sealed class SourceObjectCardEditor : FieldEditor
         }
         catch (Exception ex) when (ex is StudioCommandException or System.IO.InvalidDataException) { return null; }
     }
-    /// <summary>The Transform header's reset: rotation 0, 0, 0 and scale 1, 1, 1 in the draft (position stays).</summary>
-    internal void ResetRotationAndScale()
-    {
-        if (inputs.TryGetValue("rotationDegrees", out var turn) && turn.Draft.Text != "0, 0, 0") { turn.Draft.Text = "0, 0, 0"; turn.Display(); }
-        if (inputs.TryGetValue("scale", out var size) && size.Draft.Text != "1, 1, 1") { size.Draft.Text = "1, 1, 1"; size.Display(); }
-        Notify();
-    }
     /// <summary>A folder button inside the Model box: choosing a file writes its project path into the draft.</summary>
     private void AddBrowse(DraftInput input)
     {

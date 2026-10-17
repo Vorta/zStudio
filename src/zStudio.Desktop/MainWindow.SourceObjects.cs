@@ -515,7 +515,7 @@ public partial class MainWindow
              P("flag", "string", "Node flag to set or clear. Enabling CanModify (0x10000) or ClipTo (0x20000) clears the other mode atomically; a source that cannot express that change is refused.", false, SourceObjectFields.EditableFlags.Select(f => $"0x{f.Bit:X}").ToArray()),
              P("on", "boolean", "Whether the flag is set; required with flag. Clearing the selected crater mode leaves neither mode. For a glTF-owned mode this removes declient; a script-owned setting changes its instruction."),
              new("name", "string", "The copy's node name (duplicate) or the object's new name (rename): 1–32 printable characters without spaces, commas, quotes or # % ;, used by no node of the world."),
-             new("model", "string", "Project path of a .gltf model under data/ the object should reference (model), as zstudio_source_world_models lists it, for example data/m1/models/sonictur.gltf."),
+             new("model", "string", "Project path of a .gltf model under data/ the object should reference (model), as zstudio_source_world_models lists it, for example data/common/models/sonictur.gltf."),
              new("parent", "integer", "The new parent's scene node index (parent); -1 or the world's node makes it a root of the world (a node of a part of the mission database: a root of the part).", Minimum: -1, Maximum: int.MaxValue)], true,
             async (a, token) =>
             {

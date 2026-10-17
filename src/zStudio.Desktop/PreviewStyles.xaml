@@ -6,16 +6,23 @@
   <DataTemplate x:Key="LodShortTemplate"><TextBlock Text="{Binding Converter={StaticResource ShortLodLabel}}"/></DataTemplate>
   <DataTemplate x:Key="LodFullTemplate"><TextBlock Text="{Binding}"/></DataTemplate>
   <local:LodItemTemplateSelector x:Key="LodItemTemplateSelector"/>
-  <!-- Fluent's overlay scrollbar must not cover inspection actions. Keep the
-       native ScrollViewer parts, with a permanent gutter even without overflow. -->
+  <!-- Fluent's overlay scrollbar must not cover inspection actions. Keep the native ScrollViewer parts; while the
+       content overflows, the scrollbar takes its own column after a gap. Without it, the content keeps a 6 px right
+       margin, which with the card's padding matches the left. -->
   <ControlTemplate x:Key="InspectionScrollTemplate" TargetType="ScrollViewer">
     <Grid>
-      <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="6"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-      <ScrollContentPresenter x:Name="PART_ScrollContentPresenter" Content="{TemplateBinding Content}" ContentTemplate="{TemplateBinding ContentTemplate}" CanContentScroll="{TemplateBinding CanContentScroll}"/>
-      <Border Grid.Column="2" Width="{DynamicResource {x:Static SystemParameters.VerticalScrollBarWidthKey}}">
+      <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+      <ScrollContentPresenter x:Name="PART_ScrollContentPresenter" Margin="0,0,6,0" Content="{TemplateBinding Content}" ContentTemplate="{TemplateBinding ContentTemplate}" CanContentScroll="{TemplateBinding CanContentScroll}"/>
+      <Border x:Name="ScrollGutter" Grid.Column="1" Visibility="Collapsed" Width="{DynamicResource {x:Static SystemParameters.VerticalScrollBarWidthKey}}">
         <ScrollBar x:Name="PART_VerticalScrollBar" Orientation="Vertical" Minimum="0" Maximum="{TemplateBinding ScrollableHeight}" ViewportSize="{TemplateBinding ViewportHeight}" Value="{Binding VerticalOffset,RelativeSource={RelativeSource TemplatedParent},Mode=OneWay}" Visibility="{TemplateBinding ComputedVerticalScrollBarVisibility}"/>
       </Border>
     </Grid>
+    <ControlTemplate.Triggers>
+      <Trigger Property="ComputedVerticalScrollBarVisibility" Value="Visible">
+        <Setter TargetName="ScrollGutter" Property="Visibility" Value="Visible"/>
+        <Setter TargetName="ScrollGutter" Property="Margin" Value="4,0,0,0"/>
+      </Trigger>
+    </ControlTemplate.Triggers>
   </ControlTemplate>
   <Style TargetType="local:PreviewIcon"><Setter Property="Width" Value="{DynamicResource PreviewIconSize}"/><Setter Property="Height" Value="{DynamicResource PreviewIconSize}"/><Setter Property="IsHitTestVisible" Value="False"/></Style>
   <Style x:Key="PreviewIconButton" TargetType="Button" BasedOn="{StaticResource DefaultButtonStyle}">
@@ -40,6 +47,7 @@
   <!-- The selected-object card: subtle icon buttons, a red-hover close, a segmented gizmo mode and section headers. -->
   <Style x:Key="CardIconButton" TargetType="Button">
    <Setter Property="Width" Value="32"/><Setter Property="Height" Value="32"/><Setter Property="Padding" Value="0"/><Setter Property="Margin" Value="1,0"/>
+   <Setter Property="ToolTipService.InitialShowDelay" Value="0"/><Setter Property="ToolTipService.BetweenShowDelay" Value="0"/>
    <Setter Property="Background" Value="Transparent"/><Setter Property="Foreground" Value="{DynamicResource TextFillColorSecondaryBrush}"/>
    <Setter Property="VerticalAlignment" Value="Center"/><Setter Property="ToolTipService.ShowOnDisabled" Value="True"/>
    <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="Button">
@@ -98,7 +106,7 @@
     </ControlTemplate.Triggers>
    </ControlTemplate></Setter.Value></Setter>
   </Style>
-  <!-- The source map editor: panes, the grouped command bar, viewport chips and the outliner's filter chips. -->
+  <!-- The source map editor: panes, the grouped command bar and viewport chips. -->
   <Style x:Key="SourcePane" TargetType="Border">
    <Setter Property="CornerRadius" Value="8"/><Setter Property="BorderThickness" Value="1"/>
    <Setter Property="Background" Value="{DynamicResource SolidBackgroundFillColorTertiaryBrush}"/><Setter Property="BorderBrush" Value="{DynamicResource DividerStrokeColorDefaultBrush}"/>
@@ -117,10 +125,19 @@
    <Setter Property="Background" Value="{DynamicResource DividerStrokeColorDefaultBrush}"/>
   </Style>
   <!-- A command: transparent until hovered; a toggled one takes the accent fill with dark icons. -->
+  <!-- An expander that stays open: its header above its content, with no toggle (the source map's Diagnostics). -->
+  <Style x:Key="FixedExpander" TargetType="Expander">
+   <Setter Property="Foreground" Value="{DynamicResource TextFillColorPrimaryBrush}"/>
+   <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="Expander">
+    <DockPanel><ContentPresenter DockPanel.Dock="Top" ContentSource="Header" Margin="12,8,12,6"/><ContentPresenter/></DockPanel>
+   </ControlTemplate></Setter.Value></Setter>
+  </Style>
   <Style x:Key="CommandButton" TargetType="ButtonBase">
    <Setter Property="Width" Value="34"/><Setter Property="Height" Value="32"/><Setter Property="Padding" Value="0"/><Setter Property="Margin" Value="1,0"/>
    <Setter Property="Background" Value="Transparent"/><Setter Property="Foreground" Value="{DynamicResource TextFillColorPrimaryBrush}"/>
    <Setter Property="VerticalAlignment" Value="Center"/><Setter Property="ToolTipService.ShowOnDisabled" Value="True"/><Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+   <!-- An icon's name shows as soon as it is pointed at. -->
+   <Setter Property="ToolTipService.InitialShowDelay" Value="0"/><Setter Property="ToolTipService.BetweenShowDelay" Value="0"/>
    <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="ButtonBase">
     <Border x:Name="Chrome" Background="{TemplateBinding Background}" BorderThickness="1" BorderBrush="Transparent" CornerRadius="4" Padding="{TemplateBinding Padding}"><ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/></Border>
     <ControlTemplate.Triggers>
@@ -150,19 +167,6 @@
     </Grid>
    </ControlTemplate></Setter.Value></Setter>
   </Style>
-  <!-- An outliner type filter: a rounded chip whose icon doubles as the tree's legend. -->
-  <Style x:Key="OutlinerChip" TargetType="ToggleButton">
-   <Setter Property="Height" Value="26"/><Setter Property="Margin" Value="1,0,1,4"/><Setter Property="Padding" Value="4,0,5,0"/><Setter Property="FontSize" Value="11"/>
-   <Setter Property="Background" Value="Transparent"/><Setter Property="Foreground" Value="{DynamicResource TextFillColorTertiaryBrush}"/><Setter Property="BorderBrush" Value="{DynamicResource DividerStrokeColorDefaultBrush}"/>
-   <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="ToggleButton">
-    <Border x:Name="Chrome" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="1" CornerRadius="13" Padding="{TemplateBinding Padding}"><ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/></Border>
-    <ControlTemplate.Triggers>
-     <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="Chrome" Property="Background" Value="{DynamicResource SubtleFillColorSecondaryBrush}"/></Trigger>
-     <Trigger Property="IsChecked" Value="True"><Setter TargetName="Chrome" Property="Background" Value="{DynamicResource SubtleFillColorSecondaryBrush}"/><Setter Property="Foreground" Value="{DynamicResource TextFillColorPrimaryBrush}"/><Setter TargetName="Chrome" Property="BorderBrush" Value="{DynamicResource ControlStrokeColorSecondaryBrush}"/></Trigger>
-     <Trigger Property="IsKeyboardFocused" Value="True"><Setter TargetName="Chrome" Property="BorderBrush" Value="{DynamicResource TextFillColorPrimaryBrush}"/></Trigger>
-    </ControlTemplate.Triggers>
-   </ControlTemplate></Setter.Value></Setter>
-  </Style>
   <!-- A pane toggle in the status bar: a small bar that takes the accent while its pane shows. -->
   <Style x:Key="StatusPaneToggle" TargetType="ToggleButton">
    <Setter Property="Height" Value="24"/><Setter Property="Padding" Value="8,0"/><Setter Property="Margin" Value="1,0"/><Setter Property="FontSize" Value="12"/>
@@ -179,5 +183,5 @@
    </ControlTemplate></Setter.Value></Setter>
   </Style>
   <!-- A row's hide-in-view eye: shown while the row is pointed at or the object is hidden. -->
-  <Style x:Key="OutlinerEye" TargetType="Button" BasedOn="{StaticResource CommandButton}"><Setter Property="Width" Value="26"/><Setter Property="Height" Value="26"/><Setter Property="Foreground" Value="{DynamicResource TextFillColorTertiaryBrush}"/></Style>
+  <Style x:Key="OutlinerEye" TargetType="Button" BasedOn="{StaticResource CommandButton}"><Setter Property="Width" Value="22"/><Setter Property="Height" Value="24"/><Setter Property="Margin" Value="0"/><Setter Property="Foreground" Value="{DynamicResource TextFillColorTertiaryBrush}"/></Style>
 </ResourceDictionary>

@@ -1,9 +1,9 @@
 namespace zStudio.Core;
 
-public enum WorldHighlightMode { None, NonDefaultSoils, CanModify, ClipTo, Zones, CanModifyAndClipTo }
+public enum WorldHighlightMode { None, NonDefaultSoils, CanModify, ClipTo, Zones, CanModifyAndClipTo, Landmarks }
 
 [Flags]
-public enum WorldSurfaceKind { Default = 0, NonDefaultSoil = 1, CanModify = 2, ClipTo = 4 }
+public enum WorldSurfaceKind { Default = 0, NonDefaultSoil = 1, CanModify = 2, ClipTo = 4, Landmark = 8 }
 
 /// <summary>Stored material/node semantics, independent of rendering and gameplay simulation.</summary>
 public static class WorldSurfaceHighlights
@@ -14,7 +14,24 @@ public static class WorldSurfaceHighlights
         if (nodeIndex < 0 || nodeIndex >= scene.Nodes.Count) return WorldSurfaceKind.Default;
         uint flags = scene.Nodes[nodeIndex].Metadata.UInt("flags");
         return ((flags & 0x10000) != 0 ? WorldSurfaceKind.CanModify : 0) |
-            ((flags & 0x20000) != 0 ? WorldSurfaceKind.ClipTo : 0);
+            ((flags & 0x20000) != 0 ? WorldSurfaceKind.ClipTo : 0) |
+            (IsLandmark(scene, nodeIndex) ? WorldSurfaceKind.Landmark : 0);
+    }
+
+    /// <summary>
+    /// Whether a node is a landmark (0x80, never culled) or lies below one: a landmark object's geometry is drawn with it.
+    /// The walk over stored parents is bounded and cycle-safe.
+    /// </summary>
+    public static bool IsLandmark(GameScene scene, int nodeIndex)
+    {
+        Stack<int> pending = new([nodeIndex]); HashSet<int> seen = [];
+        while (pending.TryPop(out int node) && seen.Count < 4096)
+        {
+            if (node < 0 || node >= scene.Nodes.Count || !seen.Add(node)) continue;
+            if ((scene.Nodes[node].Metadata.UInt("flags") & 0x80) != 0) return true;
+            foreach (int parent in scene.Nodes[node].Parents) pending.Push(parent);
+        }
+        return false;
     }
 
     /// <summary>A node's zone (the low byte of its zone word; 255 admits every zone).</summary>
@@ -45,6 +62,7 @@ public static class WorldSurfaceHighlights
         WorldHighlightMode.ClipTo => (kind & WorldSurfaceKind.ClipTo) != 0,
         WorldHighlightMode.CanModifyAndClipTo => (kind & (WorldSurfaceKind.CanModify | WorldSurfaceKind.ClipTo)) != 0,
         WorldHighlightMode.Zones => true,
+        WorldHighlightMode.Landmarks => (kind & WorldSurfaceKind.Landmark) != 0,
         _ => throw new ArgumentOutOfRangeException(nameof(mode))
     };
 }

@@ -31,6 +31,13 @@ public partial class MainWindow
         viewport.CanChangeInspection = () => ResolveInspectionDrafts();
         viewport.InspectionChanged += () => SceneTreeInspectionChanged(viewport);
         viewport.InspectionSelectionCleared += () => { card.ClearSourceNode(); ClearSceneTreeSelection(viewport); };
+        // In a source map, a click on empty space clears the selection like Escape (asking about a pending edit first).
+        viewport.EmptySpaceClicked += () =>
+        {
+            // The click that only dismissed the icon legend is not a click on the view.
+            if (Environment.TickCount64 - legendClosedAt < 500) return;
+            if (sourceChromeActive && viewport == scene && card.Selection != null) card.ClearSelection();
+        };
     }
     /// <summary>The card's Isolate: shows only the selected object (a pickup's whole placement), or everything again.</summary>
     private void ToggleCardIsolation(SceneViewport viewport, SceneInspectionCard card)

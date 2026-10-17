@@ -26,7 +26,9 @@ public partial class MainWindow
         var world = SourceWorldModel(doc).World;
         List<string> notes = [];
         ScriptLineChanges? verify = null;
-        return PrepareSourceWorldEditAsync(doc, $"Renaming {Bounded(expected ?? $"node {gltfNode}", 64)}", (workspace, ct) =>
+        // The progress names the node as the tree shows it (MCP gives only its file and index).
+        string shown = expected ?? build.AuthoredHierarchy.Nodes.FirstOrDefault(n => n.SourceNode == gltfNode && string.Equals(n.File, file, StringComparison.OrdinalIgnoreCase))?.Name ?? $"node {gltfNode}";
+        return PrepareSourceWorldEditAsync(doc, $"Renaming {Bounded(shown, 64)}", (workspace, ct) =>
         {
             var plan = SourceObjectEdits.PlanRenameRemoved(workspace, world, build, file, gltfNode, expected, name, ct);
             notes.AddRange(plan.Notes);
@@ -41,8 +43,14 @@ public partial class MainWindow
         if (contextScene?.Authored is not { CompiledNode: null } authored || contextScene.Owner != sceneTree || sceneContextDocument is not { IsDisposed: false, SourceWorld: not null } doc || doc != shownDocument) return;
         if (!await ResolvePropertiesDraftsAsync()) return;
         if (PromptName("Rename", $"Rename {authored.Name}. The build removes it, so the game never uses its name.", authored.Name) is not { } name || name == authored.Name) return;
-        var renaming = RenameRemovedSourceNodeAsync(doc, authored.File, authored.SourceNode, authored.Name, name, CancellationToken.None);
-        sourceWorldWork = renaming; await renaming;
+        // The rebuilt tree scrolls back to the renamed group.
+        pendingTreeAnchor = LayoutPath(contextScene);
+        try
+        {
+            var renaming = RenameRemovedSourceNodeAsync(doc, authored.File, authored.SourceNode, authored.Name, name, CancellationToken.None);
+            sourceWorldWork = renaming; await renaming;
+        }
+        finally { pendingTreeAnchor = null; }
     });
 
     /// <summary>A small modal name prompt; null when canceled.</summary>

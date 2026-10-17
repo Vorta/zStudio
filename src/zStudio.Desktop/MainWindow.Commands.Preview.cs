@@ -24,7 +24,7 @@ public partial class MainWindow
         RequirePreview(a);
         if (EmptyPreview.Visibility == Visibility.Visible) throw new StudioCommandException("not_ready", EmptyPreview.Text);
         // The rebuilt world's scene is still loading behind the frozen one it replaces.
-        if (retiringScene != null) throw new StudioCommandException("not_ready", "Reloading view…");
+        if (retiringScene != null) throw new StudioCommandException("not_ready", "The view is reloading after a source edit; read zstudio_state again shortly.");
         return motion?.Viewport ?? animation?.Viewport ?? (SceneHost.Visibility == Visibility.Visible ? scene : null) ?? throw new StudioCommandException("unsupported", "No 3D viewport is active.");
     }
     private AnimationEditor TargetAnimation(JsonObject a)
@@ -129,7 +129,7 @@ public partial class MainWindow
             }
             return Result(new { visible = "all" });
         });
-        RegisterJob(r, "scene_options", "Set static model/world options: lod(integer), difficulty(Easy/Medium/Hard; RECOIL only, MW3 uses missions), textures/wireframe/faceOrientation/bounds/horizon(boolean), texturePack(path or empty for automatic), highlight(none/nonDefaultSoils/canModify/clipTo/canModifyAndClipTo/zones), aiNodes/aiThroughGeometry(boolean), aiNetwork(all or ID with aiSnapshot). Highlights and AI are Whole world only.", [PreviewParameter,SceneChanges], false, async (a, token) =>
+        RegisterJob(r, "scene_options", "Set static model/world options: lod(integer), difficulty(Easy/Medium/Hard; RECOIL only, MW3 uses missions), textures/wireframe/faceOrientation/bounds/horizon(boolean), texturePack(path or empty for automatic), highlight(none/nonDefaultSoils/canModify/clipTo/canModifyAndClipTo/zones/landmarks), aiNodes/aiThroughGeometry(boolean), aiNetwork(all or ID with aiSnapshot). Highlights and AI are Whole world only.", [PreviewParameter,SceneChanges], false, async (a, token) =>
         {
             RequirePreview(a); RequireNoDrafts(shownDocument); if (animation != null || motion != null) throw new StudioCommandException("unsupported","Use animation_options or motion_preview.");
             TargetViewport(a);
@@ -219,6 +219,7 @@ public partial class MainWindow
                     "clipTo" => WorldHighlightMode.ClipTo,
                     "canModifyAndClipTo" => WorldHighlightMode.CanModifyAndClipTo,
                     "zones" => WorldHighlightMode.Zones,
+                    "landmarks" => WorldHighlightMode.Landmarks,
                     _ => WorldHighlightMode.None
                 });
             }

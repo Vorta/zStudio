@@ -1111,7 +1111,7 @@
   },
   {
     "Name": "zstudio_scene_options",
-    "Description": "Set static model/world options: lod(integer), difficulty(Easy/Medium/Hard; RECOIL only, MW3 uses missions), textures/wireframe/faceOrientation/bounds/horizon(boolean), texturePack(path or empty for automatic), highlight(none/nonDefaultSoils/canModify/clipTo/canModifyAndClipTo/zones), aiNodes/aiThroughGeometry(boolean), aiNetwork(all or ID with aiSnapshot). Highlights and AI are Whole world only. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Description": "Set static model/world options: lod(integer), difficulty(Easy/Medium/Hard; RECOIL only, MW3 uses missions), textures/wireframe/faceOrientation/bounds/horizon(boolean), texturePack(path or empty for automatic), highlight(none/nonDefaultSoils/canModify/clipTo/canModifyAndClipTo/zones/landmarks), aiNodes/aiThroughGeometry(boolean), aiNetwork(all or ID with aiSnapshot). Highlights and AI are Whole world only. Returns an operation ID; use zstudio_operation to await/read the result.",
     "Mutates": true,
     "Parameters": [
       {
@@ -1204,7 +1204,7 @@
           {
             "Name": "highlight",
             "Type": "string",
-            "Description": "Whole world only: 50% colour overlays for yellow non-default soils, green CanModify, red ClipTo, combined CanModify/ClipTo (red wins overlap), or node zones (grey for any); none restores normal appearance.",
+            "Description": "Whole world only: 50% colour overlays for yellow non-default soils, green CanModify, red ClipTo, combined CanModify/ClipTo (red wins overlap), node zones (grey for any), or magenta landmarks (never culled, with everything below a landmark object); none restores normal appearance.",
             "Required": false,
             "Choices": [
               "none",
@@ -1212,7 +1212,8 @@
               "canModify",
               "clipTo",
               "canModifyAndClipTo",
-              "zones"
+              "zones",
+              "landmarks"
             ],
             "Properties": null
           },
@@ -1827,7 +1828,7 @@
   },
   {
     "Name": "zstudio_workspace_view",
-    "Description": "Read or set presentation preferences and read effective navigatorMode (hidden, tabbed, split). In a source map, navigator/inspector and navigatorWidth/inspectorWidth show, hide and size its World outliner (left) and docked Properties pane (right) for the session, without overwriting compiled-explorer preferences; propertiesDocked pops Properties out into the floating card or docks it. Supports theme, density, preset, pane visibility/dimensions and stable section indices, including detached Files. Does not commit drafts.",
+    "Description": "Read or set presentation preferences and read effective navigatorMode (hidden, tabbed, split). In a source map, navigator/inspector and navigatorWidth/inspectorWidth show, hide and size its World tree (left) and docked Properties pane (right) for the session, without overwriting compiled-explorer preferences, and tools/toolsHeight show, hide and size its Diagnostics pane (the problems alone, no toolsTab) the same way; propertiesDocked pops Properties out into the floating card or docks it. Supports theme, density, preset, pane visibility/dimensions and stable section indices, including detached Files. Does not commit drafts.",
     "Mutates": true,
     "Parameters": [
       {
@@ -3109,7 +3110,7 @@
   },
   {
     "Name": "zstudio_scene_tree",
-    "Description": "Read the Document scene hierarchy, including stable preview placements, shared/partition references and disconnected nodes. Source maps show the authored glTF hierarchy, including groups removed by compilation, under the world root; objects later passes add follow as top-level pass rows (pass aiv: units the AIV resource places for the selected difficulty; puppies: its pickups; anim: objects startup animations place or hide until placed), each listing its objects. animations lists the mission animations bound to an object by name (at most eight, then an ellipsis). sourceFile/gltfNode identify authored nodes, sourceOccurrence identifies a tree path, and compiledNode is an optional built slot. selectionOwner for source_map_parts is a signed current-preview identity; source-only authored groups have node=null and selectionOwner=null and support read-only row inspection. properties focuses the source-object card, or opens pinned Properties in other viewers. Read returns roots or a row\u0027s direct children, optionally filtered before paging; in a source map, search and/or types read the whole hierarchy as a flat list of matches with their parent paths, as the outliner\u0027s search box and type filters do. Source map rows carry category (world, group, geometry, object, node), zone and hidden. Expand/collapse/reveal only change tree presentation; hide/show hide a row\u0027s object (a removed group: what it holds) in the view only, like the outliner\u0027s eye; select shares scene inspection and draft guards. Runtime parenting is not represented.",
+    "Description": "Read the Document scene hierarchy, including stable preview placements, shared/partition references and disconnected nodes. Source maps show the authored glTF hierarchy, including groups removed by compilation, under the world root; objects later passes add follow as top-level pass rows (pass aiv: units the AIV resources place; puppies: their pickups; anim: objects startup animations place or hide until placed), each listing its objects. The aiv and puppies passes list every difficulty\u0027s units and pickups with the difficulties placing each; those the shown difficulty does not place have otherDifficulty=true, node=null and a placement summary, and cannot be selected. animations lists the mission animations bound to an object by name (at most eight, then an ellipsis). sourceFile/gltfNode identify authored nodes, sourceOccurrence identifies a tree path, and compiledNode is an optional built slot. selectionOwner for source_map_parts is a signed current-preview identity; source-only authored groups have node=null and selectionOwner=null and support read-only row inspection. properties focuses the source-object card, or opens pinned Properties in other viewers. Read returns roots or a row\u0027s direct children, optionally filtered before paging; in a source map, search and/or types read the whole hierarchy as a flat list of matches with their parent paths, as the outliner\u0027s search box does (types narrows it by the legend\u0027s categories). A row\u0027s zone is null in the aiv and puppies passes. Source map rows carry category (world, group, geometry, object, node), zone and hidden. Expand/collapse/reveal only change tree presentation; hide/show hide a row\u0027s object (a removed group: what it holds) in the view only, like the outliner\u0027s eye; select shares scene inspection and draft guards. Runtime parenting is not represented.",
     "Mutates": true,
     "Parameters": [
       {
@@ -6175,7 +6176,7 @@
       {
         "Name": "model",
         "Type": "string",
-        "Description": "Project path of a .gltf model under data/ the object should reference (model), as zstudio_source_world_models lists it, for example data/m1/models/sonictur.gltf.",
+        "Description": "Project path of a .gltf model under data/ the object should reference (model), as zstudio_source_world_models lists it, for example data/common/models/sonictur.gltf.",
         "Required": false,
         "Choices": null,
         "Properties": null

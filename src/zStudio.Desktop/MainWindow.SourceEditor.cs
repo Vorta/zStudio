@@ -25,7 +25,17 @@ public partial class MainWindow
     private Grid? difficultyPrefix;
     private Border? aiExtrasDivider;
     private bool sourceOutlinerVisible = true, sourcePropertiesVisible = true, sourcePropertiesDocked = true;
-    private double sourceOutlinerWidth = 290, sourcePropertiesWidth = 340;
+    // Diagnostics (the bottom pane) is a session pane too: it starts as the compiled explorer's Tools preference and never changes it.
+    private bool? sourceToolsVisible; private double? sourceToolsHeight;
+    private bool SourceToolsVisible => sourceToolsVisible ?? Layout.ToolsVisible;
+    /// <summary>Shows or hides the bottom tools: a source map's session Diagnostics pane, or the compiled explorer's Tools (optionally on Problems).</summary>
+    private void SetToolsVisible(bool visible, bool problems = false)
+    {
+        if (ViewModel.IsSourceProject) sourceToolsVisible = visible;
+        else { Layout.ToolsVisible = visible; if (problems) ToolTabs.SelectedIndex = 2; }
+        ArrangeWorkspace();
+    }
+    private double sourceOutlinerWidth = 320, sourcePropertiesWidth = 340;
     private SceneInspectionCard? dockedCard;
     private SceneViewport? viewModeViewport;
     private readonly List<SceneInspectionCard.RecentSelection> recentSelections = [];
@@ -33,8 +43,13 @@ public partial class MainWindow
     /// <summary>Objects hidden in the view from the outliner's eye: the row's node (or selection owner) and the nodes it hides.</summary>
     private readonly Dictionary<int, int[]> hiddenRows = [];
 
+    private long legendClosedAt = long.MinValue / 2;
     private void InitializeSourceEditor()
     {
+        // Only a left press elsewhere closes the legend with a click that could reach the view. IsOpen changes during that
+        // press (Closed follows only after the fade), so the button state is read there.
+        DependencyPropertyDescriptor.FromProperty(Popup.IsOpenProperty, typeof(Popup)).AddValueChanged(OutlinerLegend, (_, _) =>
+        { if (!OutlinerLegend.IsOpen && Mouse.LeftButton == MouseButtonState.Pressed) legendClosedAt = Environment.TickCount64; });
         // A replaced or shown scene brings its own card: dock it (or the next one) once the change settles.
         EventHandler sceneChanged = (_, _) => Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Loaded, RefreshSourceChrome);
         DependencyPropertyDescriptor.FromProperty(ContentControl.ContentProperty, typeof(ContentControl)).AddValueChanged(SceneHost, sceneChanged);
@@ -61,7 +76,7 @@ public partial class MainWindow
 
     private void EnterSourceChrome()
     {
-        // File commands, then the scope, then LOD and difficulty.
+        // The scope, then file commands, then LOD and difficulty.
         Move(DocumentSave, SourceFileCommands, "CommandButton", "Save (Ctrl+S)", "Save");
         Move(DocumentUndo, SourceFileCommands, "CommandButton", null, "Undo");
         Move(DocumentRedo, SourceFileCommands, "CommandButton", null, "Redo");
@@ -73,7 +88,7 @@ public partial class MainWindow
         Restyle(LodCombo, ToolTipProperty, "Level of detail · LOD 0 is the highest detail of each object");
         // Difficulty reads "Difficulty Hard": a muted prefix inside the picker.
         Move(WorldDifficultyGroup, SourcePickers);
-        Restyle(WorldDifficulty, WidthProperty, 156d); Restyle(WorldDifficulty, PaddingProperty, new Thickness(76, 0, 8, 0));
+        Restyle(WorldDifficulty, WidthProperty, 174d); Restyle(WorldDifficulty, FontSizeProperty, 13d); Restyle(WorldDifficulty, PaddingProperty, new Thickness(76, 0, 8, 0));
         TextBlock prefix = new() { Text = "Difficulty", FontSize = 13, IsHitTestVisible = false, VerticalAlignment = VerticalAlignment.Center, Margin = new(13, 0, 0, 0) };
         prefix.SetResourceReference(TextBlock.ForegroundProperty, "TextFillColorTertiaryBrush");
         WorldDifficultyGroup.Children.Remove(WorldDifficulty);
@@ -89,10 +104,11 @@ public partial class MainWindow
         Move(BackdropEnabled, SourceDisplayItems, "CommandToggle", "Horizon");
         Move(WorldHighlights, SourceOverlayItems);
         Restyle(HighlightSoils, "CommandToggle", "Non-default soils — water, lava, sand");
-        Restyle(HighlightCanModify, "CommandToggle", "CanModify — geometry that can be cratered in game");
-        Restyle(HighlightClipTo, "CommandToggle", "ClipTo — geometry that can't be modified in game");
+        Restyle(HighlightCanModify, "CommandToggle", "CanModify");
+        Restyle(HighlightClipTo, "CommandToggle", "ClipTo");
         Restyle(HighlightZones, "CommandToggle", "Zones — culling zone of each piece of geometry");
-        Move(ParachuteButton, SourceShowItems, "CommandGroupButton", "Parachute path — supply drop route");
+        Restyle(HighlightLandmarks, "CommandToggle", "Landmarks — geometry and objects that are never culled");
+        Move(ParachuteButton, SourceShowItems, "CommandGroupButton", "VTOL route");
         Move(AiTools, SourceShowItems);
         Restyle(AiEnabled, "CommandToggle", "AI nodes");
         Restyle(AiNetworkCombo, HeightProperty, 28d); Restyle(AiNetworkCombo, WidthProperty, 170d); Restyle(AiNetworkCombo, FontSizeProperty, 12d);
@@ -117,12 +133,20 @@ public partial class MainWindow
         AiLabel.Margin = new(10, 100, 10, 10);
         if (DocumentSceneTree.Parent is ContentControl tab) tab.Content = null;
         SourceTreeHost.Content = DocumentSceneTree;
+        Restyle(DocumentSceneTree, ScrollViewer.HorizontalScrollBarVisibilityProperty, ScrollBarVisibility.Disabled);
+        // Diagnostics is the problems page alone: no Related or Bytes, and no tabs.
+        Move(ProblemsPage, SourceDiagnosticsHost);
+        Restyle(ToolTabs, VisibilityProperty, Visibility.Collapsed); Restyle(SourceDiagnosticsHost, VisibilityProperty, Visibility.Visible);
+        // Its notices stay open (no collapse), and the status bar's Diagnostics toggle replaces maximize and hide.
+        Restyle(DiagnosticsExpander, StyleProperty, FindResource("FixedExpander")); Restyle(DiagnosticsExpander, Expander.IsExpandedProperty, true);
+        Restyle(ToolsButtons, VisibilityProperty, Visibility.Collapsed);
         PreviewHost.SizeChanged += ClipPreviewHost; ClipPreviewHost(null, null);
         RefreshOutlinerFilter();
     }
 
     private void LeaveSourceChrome()
     {
+        OutlinerLegend.IsOpen = false;
         UndockCard();
         PreviewHost.SizeChanged -= ClipPreviewHost; PreviewHost.Clip = null;
         SourceTreeHost.Content = null; DocumentSceneTab.Content = DocumentSceneTree;
@@ -349,12 +373,19 @@ public partial class MainWindow
                 int space = part.IndexOf(' ');
                 if (space > 0) rows.Add((char.ToUpperInvariant(part[space + 1]) + part[(space + 2)..], part[..space]));
             }
-        foreach (string part in PreviewSubtitle.Text.Split(" · "))
-        {
-            if (part.EndsWith(" edited bytes", StringComparison.Ordinal)) rows.Add(("Edited bytes", part[..^" edited bytes".Length]));
-            else if (part.StartsWith("source ", StringComparison.Ordinal)) rows.Add(("Source", part["source ".Length..]));
-        }
+        if (shownDocument != null && SourceWorldFile(shownDocument) is { } file)
+            rows.Add(("Source", System.IO.Path.IsPathRooted(file) ? System.IO.Path.GetRelativePath(ViewModel.RootPath, file).Replace('\\', '/') : file));
         return rows;
+    }
+
+    /// <summary>The project file of a source map's world (its mission database glTF, such as data/m1/models/m1.gltf), or null.</summary>
+    private static string? SourceWorldFile(DocumentModel doc)
+    {
+        if (doc.SourceWorld == null || doc.SourceBuild?.AuthoredHierarchy is not { } hierarchy) return null;
+        foreach (var root in hierarchy.Roots)
+            foreach (int child in root.Children)
+                if (hierarchy.Nodes.FirstOrDefault(n => n.Id == child) is { Origin.Database: true } node) return node.File;
+        return hierarchy.Nodes.FirstOrDefault(n => n.Origin.Database)?.File;
     }
 
     private void ArrangeSourcePanes(bool open)
@@ -379,7 +410,7 @@ public partial class MainWindow
         {
             case "outliner": sourceOutlinerVisible = !sourceOutlinerVisible; break;
             case "properties": if (!sourcePropertiesDocked) { RunCardDocking(true); return; } sourcePropertiesVisible = !sourcePropertiesVisible; break;
-            case "tools": ToolsButtonClick(sender, e); return;
+            case "tools": sourceToolsVisible = !SourceToolsVisible; break;
         }
         ArrangeWorkspace();
     }
@@ -415,6 +446,8 @@ public partial class MainWindow
     /// <summary>Escape clears a source map's selection once nothing else uses it (a field, a drag, Flycam or a running operation).</summary>
     private bool SourceEscape(KeyEventArgs e)
     {
+        // The open icon legend holds the mouse capture: Escape closes it first.
+        if (e.Key == Key.Escape && OutlinerLegend.IsOpen) { OutlinerLegend.IsOpen = false; e.Handled = true; return true; }
         if (e.Key != Key.Escape || !sourceChromeActive || operation is { IsCancellationRequested: false } || Mouse.Captured != null || CurrentInspectionCard is not { Selection: not null } card) return false;
         if (e.OriginalSource is DependencyObject origin && Window.GetWindow(origin) is { } window && window != this) return false;
         for (var source = e.OriginalSource as DependencyObject; source != null; source = source is Visual ? VisualTreeHelper.GetParent(source) : LogicalTreeHelper.GetParent(source))
@@ -425,7 +458,7 @@ public partial class MainWindow
         return true;
     }
 
-    // The outliner: search and type filters turn the tree into a flat list of matches with their parent paths.
+    // The outliner: a search turns the tree into a flat list of matches with their parent paths.
     private sealed record OutlinerHit(SceneTreeItem Row, string Path);
     private const int MaximumOutlinerHits = 1000;
     private readonly System.Windows.Threading.DispatcherTimer outlinerSearchDelay = new() { Interval = TimeSpan.FromMilliseconds(180) };
@@ -436,14 +469,6 @@ public partial class MainWindow
         if (outlinerSearchDelay.Tag == null) { outlinerSearchDelay.Tag = true; outlinerSearchDelay.Tick += (_, _) => { outlinerSearchDelay.Stop(); if (sourceChromeActive) RefreshOutlinerFilter(); }; }
         outlinerSearchDelay.Start();
     }
-    private void OutlinerTypeClick(object sender, RoutedEventArgs e)
-    {
-        if (sender is ToggleButton chip) chip.ToolTip = (chip.IsChecked == true ? "Hide " : "Show ") + AutomationNameOf(chip).ToLowerInvariant();
-        RefreshOutlinerFilter();
-    }
-    private static string AutomationNameOf(DependencyObject element) => System.Windows.Automation.AutomationProperties.GetName(element);
-    private HashSet<string> OutlinerTypes() =>
-        new[] { (OutlinerGroups, "group"), (OutlinerGeometry, "geometry"), (OutlinerObjects, "object"), (OutlinerNodes, "node") }.Where(p => p.Item1.IsChecked == true).Select(p => p.Item2).ToHashSet();
     /// <summary>The rows matching a search (case-insensitive name) and type filter, in tree order, with their parent paths.</summary>
     internal IReadOnlyList<(SceneTreeItem Row, string Path)> OutlinerMatches(SceneTreeModel model, string query, IReadOnlySet<string> types, int limit, out bool truncated)
     {
@@ -472,12 +497,11 @@ public partial class MainWindow
     {
         string query = OutlinerSearch.Text.Trim();
         OutlinerSearchHint.Visibility = OutlinerSearch.Text.Length == 0 ? Visibility.Visible : Visibility.Collapsed;
-        var types = OutlinerTypes();
-        bool flat = query.Length > 0 || types.Count < 4;
+        bool flat = query.Length > 0;
         DocumentSceneTree.Visibility = flat ? Visibility.Collapsed : Visibility.Visible;
         OutlinerResults.Visibility = flat ? Visibility.Visible : Visibility.Collapsed;
         if (!flat || sceneTree?.Projection == null) { OutlinerResults.ItemsSource = null; OutlinerEmpty.Visibility = Visibility.Collapsed; return; }
-        var hits = OutlinerMatches(sceneTree, query, types, MaximumOutlinerHits, out bool truncated);
+        var hits = OutlinerMatches(sceneTree, query, OutlinerKinds.Categories.ToHashSet(), MaximumOutlinerHits, out bool truncated);
         showingOutlinerResults = true;
         try { OutlinerResults.ItemsSource = hits.Where(h => h.Row.Selectable).Select(h => new OutlinerHit(h.Row, h.Path)).ToArray(); OutlinerResults.SelectedItem = null; }
         finally { showingOutlinerResults = false; }
@@ -503,7 +527,24 @@ public partial class MainWindow
     private void OutlinerCollapseAllClick(object sender, RoutedEventArgs e)
     {
         if (sceneTree == null) return;
-        foreach (var row in sceneTree.CreatedRows.ToArray()) row.IsExpanded = row.Parent == null && row.Category == "world";
+        foreach (var row in sceneTree.CreatedRows.ToArray()) row.IsExpanded = false;
+    }
+
+    // A row's Frame selection: selects the row (resolving pending input first) and frames it, like the card's button.
+    private void OutlinerFrameClick(object sender, RoutedEventArgs e)
+    {
+        e.Handled = true;
+        if ((sender as FrameworkElement)?.Tag is not SceneTreeItem { CanFrame: true } row) return;
+        try
+        {
+            if (sceneTree?.Selected != row)
+            {
+                if (!ResolvePropertiesDrafts(sceneTreeDocument) || animation?.ResolvePendingDrafts() == false) return;
+                SelectSceneTreeRow(row);
+            }
+            RunCameraNavigation("frameSelected");
+        }
+        catch (StudioCommandException ex) { ViewModel.Status = ex.Message; }
     }
 
     // Hide in viewport: presentation only, never a source edit.
