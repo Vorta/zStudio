@@ -15,8 +15,15 @@ public sealed record SourceMapZoneAsset(string LogicalPath, string GeometryPath,
 public sealed record SourceMapZoneLabel(byte Id, string Label);
 
 /// <summary>One bounded, workspace-backed view of embedded assignments and their reference occurrences.</summary>
-internal sealed class SourceEmbeddedZones(SourceWorkspace workspace, CancellationToken token)
+internal sealed class SourceEmbeddedZones
 {
+    private readonly SourceWorkspace? workspace;
+    private readonly Func<string, ProjectReadLimits, byte[]?>? reader;
+    private readonly CancellationToken token;
+    internal SourceEmbeddedZones(SourceWorkspace workspace, CancellationToken token) { this.workspace = workspace; this.token = token; }
+    /// <summary>Resolves occurrences from the given sources alone: no mission scripts and no workspace tracking.</summary>
+    internal SourceEmbeddedZones(Func<string, ProjectReadLimits, byte[]?> read, CancellationToken token) { reader = read; this.token = token; }
+    private SourceWorkspace Workspace => workspace ?? throw new InvalidOperationException("These map zones read given sources only.");
     internal const int MaximumAssets = 16_384, MaximumTargets = 2_000_000, MaximumLabelCharacters = 256;
 
     internal sealed record Model(string Path, byte[] Bytes, JsonObject Root, GltfDocument Document);
@@ -27,7 +34,8 @@ internal sealed class SourceEmbeddedZones(SourceWorkspace workspace, Cancellatio
     internal sealed record Mission(string MasterPath, IReadOnlyList<Entry> Entries, IReadOnlyList<SourceMapZoneLabel> Labels);
     private readonly Dictionary<string, Model> models = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> changed = new(StringComparer.OrdinalIgnoreCase);
-    private readonly SourceScriptInspection inspection = new(workspace, token);
+    private SourceScriptInspection? inspection;
+    private SourceScriptInspection Inspection => inspection ??= new(Workspace, token);
     private readonly ScriptTraceBudget traceBudget = new();
     private readonly Dictionary<string, IReadOnlyList<IReadOnlyList<string>>?> scripts = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, IReadOnlyList<Entry>> closures = new(StringComparer.OrdinalIgnoreCase);
@@ -56,7 +64,8 @@ internal sealed class SourceEmbeddedZones(SourceWorkspace workspace, Cancellatio
 
     private byte[] Read(string path, ProjectReadLimits limits)
     {
-        var bytes = workspace.Read(path, token, limits.WithMaximum(MaximumBytes - readBytes)) ?? throw Bad($"Source file {JsonData.ShownText(path)} is missing.");
+        var bounded = limits.WithMaximum(MaximumBytes - readBytes);
+        var bytes = (workspace != null ? workspace.Read(path, token, bounded) : reader!(path, bounded)) ?? throw Bad($"Source file {JsonData.ShownText(path)} is missing.");
         readBytes += bytes.LongLength; return bytes;
     }
 
@@ -198,7 +207,7 @@ internal sealed class SourceEmbeddedZones(SourceWorkspace workspace, Cancellatio
             token.ThrowIfCancellationRequested();
             if (step.Command == "GameGenSetWorld") database = true;
             if (step is not { Command: "LoadGameGen", Args: [var name, _, ..] }) return;
-            string path = WorldAssembler.ResolveModel(name, step.ModelDirectories, p => workspace.Exists(p, token))
+            string path = WorldAssembler.ResolveModel(name, step.ModelDirectories, p => Workspace.Exists(p, token))
                 ?? throw Bad($"The mission's model {JsonData.ShownText(name)} is missing.");
             if (database) { master ??= path; database = false; }
             if (seenRoots.Add(path)) roots.Add(path);
@@ -211,7 +220,7 @@ internal sealed class SourceEmbeddedZones(SourceWorkspace workspace, Cancellatio
         {
             string path = "gamegen/" + name.Replace('\\', '/');
             if (scripts.TryGetValue(path, out var known)) return known;
-            var parsed = inspection.Read(path);
+            var parsed = Inspection.Read(path);
             return scripts[path] = parsed == null ? throw Bad($"Mission script {JsonData.ShownText(path)} is missing.") : [.. parsed.Lines.Where(l => l.IsInstruction).Select(l => l.Tokens)];
         }
     }
@@ -297,7 +306,7 @@ internal sealed class SourceEmbeddedZones(SourceWorkspace workspace, Cancellatio
             byte[] output = Repack(model.Bytes, model.Root, token);
             if (!output.AsSpan().SequenceEqual(model.Bytes)) result.Add((path, output));
         }
-        workspace.TrackMapZoneSources(result.Select(c => c.Relative).ToArray(), result, token);
+        workspace?.TrackMapZoneSources(result.Select(c => c.Relative).ToArray(), result, token);
         return result;
     }
     /// <summary>Replace only the JSON of a validated source container, retaining every GLB payload chunk.</summary>

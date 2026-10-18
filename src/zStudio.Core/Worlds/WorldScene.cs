@@ -119,7 +119,7 @@ public static class WorldScene
     }
 
     private static JsonObject Decode(byte[] bytes, string layout) => FieldLayouts.Decode(bytes, FieldLayouts.Definitions["layouts"]![layout]!.AsArray());
-    private static JsonArray Zones(uint packed)
+    internal static JsonArray Zones(uint packed)
     {
         JsonArray result = [];
         for (int i = 0; i < Math.Min(packed & 255, 3); i++) result.Add((long)(sbyte)(packed >> (8 + i * 8)));

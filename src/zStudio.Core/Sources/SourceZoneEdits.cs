@@ -29,7 +29,7 @@ public sealed record SourceZoneEditPlan(string Label, IReadOnlyList<(string Rela
     int AffectedMissionCount = 0, IReadOnlyList<string>? AffectedSources = null, int AffectedSourceCount = 0);
 
 /// <summary>One map's embedded zone catalog and exact source-occurrence assignments, shared by GUI and automation.</summary>
-public static class SourceZoneEdits
+public static partial class SourceZoneEdits
 {
     public const int MaximumSelections = 4096, MaximumSelectedAssets = 64, MaximumPage = 32, MaximumAffectedShown = 256, MaximumAffectedPathsShown = 32;
 
@@ -160,14 +160,21 @@ public static class SourceZoneEdits
             context.AffectedSources.Take(MaximumAffectedPathsShown).ToArray(), context.AffectedSources.Count);
     }
 
+    /// <summary>Names zone <paramref name="id"/> in the map's catalog; an empty label removes its name (its assignments stay).</summary>
     public static SourceZoneEditPlan PlanLabel(SourceWorkspace workspace, string mission, byte id, string label, CancellationToken token = default)
     {
         SourceEmbeddedZones sources = new(workspace, token);
         var map = sources.ReadMission(mission, includeEntries: false);
-        if (label.Length is < 1 or > SourceEmbeddedZones.MaximumLabelCharacters || id == 255 && label != "Any")
-            throw Bad("Use a nonempty label of at most 256 characters; zone 255 is always Any.");
+        if (label.Length > SourceEmbeddedZones.MaximumLabelCharacters || id == 255)
+            throw Bad("Use a label of at most 256 characters; zone 255 is always Any.");
+        if (label.Length == 0)
+        {
+            if (!map.Labels.Any(x => x.Id == id)) throw Bad($"Zone {id} has no label to remove.");
+            sources.SetLabels(map.MasterPath, map.Labels.Where(x => x.Id != id));
+            return new($"Remove the label of zone {id}", sources.Changes(), [], 0, false);
+        }
         sources.SetLabels(map.MasterPath, map.Labels.Where(x => x.Id != id).Append(new SourceMapZoneLabel(id, label)));
-        return new("Name map zone", sources.Changes(), [], 0, false);
+        return new($"Label zone {id} “{JsonData.ShownText(label, 64)}”", sources.Changes(), [], 0, false);
     }
 
     public static SourceZoneEditPlan PlanRemoveLabel(SourceWorkspace workspace, string mission, byte id, byte? replacement = null, CancellationToken token = default)
@@ -265,6 +272,8 @@ public static class SourceZoneEdits
         internal SourceEmbeddedZones Sources { get; } = sources;
         internal Dictionary<string, SourceEmbeddedZones.Entry> Assets { get; } = new(StringComparer.OrdinalIgnoreCase);
         internal List<SourceZoneTarget> Targets { get; } = [];
+        /// <summary>For each of <see cref="Targets"/>, the first selection that named it.</summary>
+        internal List<SourceZoneSelection> Selections { get; } = [];
         internal Dictionary<(string Key, int Index), uint?> InheritedZones { get; } = [];
         internal Dictionary<string, Dictionary<(SourceZoneTargetKind Kind, int Index), List<int>>> Scopes { get; } = new(StringComparer.OrdinalIgnoreCase);
         internal SortedSet<int> Affected { get; } = [];
@@ -276,7 +285,8 @@ public static class SourceZoneEdits
         internal List<int> Scope(SourceZoneTarget target) => Scopes[Key(target)][(target.Kind, target.Index)];
     }
 
-    private static Context Prepare(SourceWorkspace workspace, SourceSceneState build, IReadOnlyList<SourceZoneSelection> selections, CancellationToken token)
+    private static Context Prepare(SourceWorkspace workspace, SourceSceneState build, IReadOnlyList<SourceZoneSelection> selections, CancellationToken token,
+        int maximumAssets = MaximumSelectedAssets)
     {
         if (selections.Count is < 1 or > MaximumSelections) throw Bad("Select between one and 4,096 exact zone targets.");
         if (build.Provenance.Count > SourceEmbeddedZones.MaximumTargets || build.Freed.Count > SourceEmbeddedZones.MaximumTargets)
@@ -297,7 +307,7 @@ public static class SourceZoneEdits
             string key = Key(origin, model);
             if (!context.Assets.TryGetValue(key, out var asset))
             {
-                if (context.Assets.Count >= MaximumSelectedAssets) throw Bad("Select at most 64 source occurrences per zone edit.");
+                if (context.Assets.Count >= maximumAssets) throw Bad($"Select at most {maximumAssets:N0} source occurrences per zone edit.");
                 asset = sources.Resolve(origin.ZoneOwnerPath ?? model, origin.ZoneOwnerReferences, model);
                 context.Assets.Add(key, asset);
             }
@@ -336,7 +346,7 @@ public static class SourceZoneEdits
                         context.InheritedZones[identity] = null;
                 }
             }
-            if (targets.Add((key, target.Kind, target.Index, target.Polygon))) context.Targets.Add(target);
+            if (targets.Add((key, target.Kind, target.Index, target.Polygon))) { context.Targets.Add(target); context.Selections.Add(selection); }
         }
         foreach (var target in context.Targets)
         {

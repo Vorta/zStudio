@@ -13,45 +13,17 @@ public static partial class SourceWorlds
     public static SourceSceneSnapshot? TryUpdateTransforms(SourceSceneSnapshot accepted, IReadOnlyDictionary<string, byte[]> overlay,
         out string reason, CancellationToken token = default)
     {
-        reason = "The source edit changes more than an unambiguous imported transform.";
-        if (accepted.Scene == null || accepted.WorldChildOrder.Count == 0 || accepted.ModelSources.Count == 0) { reason = "The accepted scene lacks retained source transform data."; return null; }
-        // An unknown pending source can change a previously absent dependency or a resource inventory.
-        if (overlay.Keys.Any(path => !accepted.ReadHashes.ContainsKey(path))) { reason = "The edit contains a source outside the accepted dependency snapshot."; return null; }
-        Dictionary<string, byte[]> sources = new(accepted.ModelSources, StringComparer.OrdinalIgnoreCase);
-        Dictionary<string, string> hashes = new(accepted.ReadHashes, StringComparer.OrdinalIgnoreCase);
-        Dictionary<string, string> diskHashes = new(accepted.InputHashes, StringComparer.OrdinalIgnoreCase);
-        Dictionary<string, FileStamp> stamps = new(accepted.Inputs, StringComparer.OrdinalIgnoreCase);
-        // Match complete evaluation: pending sources are guarded by their workspace baselines, not by
-        // an obsolete disk stamp. A successful Save may replace those files without retiring this scene.
-        foreach (string path in overlay.Keys) { diskHashes.Remove(path); stamps.Remove(path); }
-        long retainedBytes = accepted.RetainedBytes;
+        if (accepted.WorldChildOrder.Count == 0) { reason = "The accepted scene lacks retained source transform data."; return null; }
+        if (ReadChangedModels(accepted, overlay, token, out reason) is not { } read) return null;
+        reason = "The edit changes more than an unambiguous imported transform.";
         List<(string Path, WorldGltf.NodeTransformChange Change)> changes = [];
-        SourceBuilder.Snapshot reads = new(accepted.Root, overlay, inventoryToken: token);
-        foreach (var (path, hash) in accepted.ReadHashes)
+        foreach (var (path, before, bytes) in read.Files)
         {
             token.ThrowIfCancellationRequested();
-            byte[]? bytes = null;
-            if (overlay.TryGetValue(path, out var pending))
-            { if (SourceProject.Sha256(pending) != hash) bytes = pending; }
-            else if (!accepted.InputHashes.TryGetValue(path, out string? disk) || disk != hash)
-            {
-                // Undo may remove a newly created, unsaved source from the overlay. Inventory/resource
-                // changes require full evaluation; do not try to open their nonexistent disk counterpart.
-                if (!sources.ContainsKey(path)) { reason = "A pending resource, script or geometry buffer changed or left the overlay."; return null; }
-                if (!reads.Exists(path)) { reason = "A pending model left the overlay without a disk counterpart."; return null; }
-                // Exists distinguishes genuine absence from I/O/access failures; existing unreadable or
-                // concurrently changed sources still propagate their normal failure rather than being ignored.
-                bytes = reads.Read(path, token, ProjectReadLimits.Model());
-            }
-            if (bytes == null || SourceProject.Sha256(bytes) == hash) continue;
-            if (accepted.TerrainModelInputs.Contains(path)) { reason = "A changed model also supplies baked terrain geometry."; return null; }
-            if (!sources.TryGetValue(path, out byte[]? before)) { reason = "The edit changes a resource, script or geometry buffer."; return null; }
             var changed = WorldGltf.TransformChanges(before, bytes, token);
             if (changed == null) { reason = "A changed model contains non-transform edits or changes reflection parity."; return null; }
-            retainedBytes += bytes.LongLength - before.LongLength;
-            if (retainedBytes > SourceExtractor.MaximumRetainedBytes || changed.Count > GameZWorld.MaximumNodeCapacity - changes.Count) return null;
+            if (changed.Count > GameZWorld.MaximumNodeCapacity - changes.Count) return null;
             foreach (var change in changed) changes.Add((path, change));
-            sources[path] = bytes; hashes[path] = SourceProject.Sha256(bytes);
         }
         if (changes.Count == 0) { reason = "The edit has no changed imported transforms."; return null; }
         var slots = GameZWriter.NodeSlots(accepted.World, token);
@@ -88,6 +60,69 @@ public static partial class SourceWorlds
         }
         WorldUpdate.SingleParentFlags(world);
         var scene = WorldScene.Create(world, accepted.Scene, token);
+        reason = "Imported transforms updated from the accepted source snapshot.";
+        return Derive(accepted, read, world, scene, provenance => { foreach (var (slot, matrix) in transforms) provenance[slot].ModelTransformAuthored = !matrix.IsIdentity; }, token);
+    }
+
+    /// <summary>The model sources an edit changed against an accepted snapshot, with the snapshot's read records updated.</summary>
+    private sealed record ChangedModels(Dictionary<string, byte[]> Sources, Dictionary<string, string> Hashes, Dictionary<string, string> DiskHashes,
+        Dictionary<string, FileStamp> Stamps, long RetainedBytes, SourceBuilder.Snapshot Reads, IReadOnlyList<(string Path, byte[] Before, byte[] After)> Files);
+
+    /// <summary>
+    /// Null (with the reason) unless the edit changes only model glTF files the accepted snapshot read: never a resource,
+    /// script, geometry buffer, a file it did not read or a model that also supplies baked terrain geometry.
+    /// </summary>
+    private static ChangedModels? ReadChangedModels(SourceSceneSnapshot accepted, IReadOnlyDictionary<string, byte[]> overlay, CancellationToken token, out string reason)
+    {
+        reason = "The edit changes no model source.";
+        if (accepted.Scene == null || accepted.ModelSources.Count == 0) { reason = "The accepted scene lacks retained source data."; return null; }
+        // An unknown pending source can change a previously absent dependency or a resource inventory.
+        if (overlay.Keys.Any(path => !accepted.ReadHashes.ContainsKey(path))) { reason = "The edit contains a source outside the accepted dependency snapshot."; return null; }
+        Dictionary<string, byte[]> sources = new(accepted.ModelSources, StringComparer.OrdinalIgnoreCase);
+        Dictionary<string, string> hashes = new(accepted.ReadHashes, StringComparer.OrdinalIgnoreCase);
+        Dictionary<string, string> diskHashes = new(accepted.InputHashes, StringComparer.OrdinalIgnoreCase);
+        Dictionary<string, FileStamp> stamps = new(accepted.Inputs, StringComparer.OrdinalIgnoreCase);
+        // Match complete evaluation: pending sources are guarded by their workspace baselines, not by
+        // an obsolete disk stamp. A successful Save may replace those files without retiring this scene.
+        foreach (string path in overlay.Keys) { diskHashes.Remove(path); stamps.Remove(path); }
+        long retainedBytes = accepted.RetainedBytes;
+        List<(string Path, byte[] Before, byte[] After)> files = [];
+        SourceBuilder.Snapshot reads = new(accepted.Root, overlay, inventoryToken: token);
+        foreach (var (path, hash) in accepted.ReadHashes)
+        {
+            token.ThrowIfCancellationRequested();
+            byte[]? bytes = null;
+            if (overlay.TryGetValue(path, out var pending))
+            { if (SourceProject.Sha256(pending) != hash) bytes = pending; }
+            else if (!accepted.InputHashes.TryGetValue(path, out string? disk) || disk != hash)
+            {
+                // Undo may remove a newly created, unsaved source from the overlay. Inventory/resource
+                // changes require full evaluation; do not try to open their nonexistent disk counterpart.
+                if (!sources.ContainsKey(path)) { reason = "A pending resource, script or geometry buffer changed or left the overlay."; return null; }
+                if (!reads.Exists(path)) { reason = "A pending model left the overlay without a disk counterpart."; return null; }
+                // Exists distinguishes genuine absence from I/O/access failures; existing unreadable or
+                // concurrently changed sources still propagate their normal failure rather than being ignored.
+                bytes = reads.Read(path, token, ProjectReadLimits.Model());
+            }
+            if (bytes == null || SourceProject.Sha256(bytes) == hash) continue;
+            if (accepted.TerrainModelInputs.Contains(path)) { reason = "A changed model also supplies baked terrain geometry."; return null; }
+            if (!sources.TryGetValue(path, out byte[]? before)) { reason = "The edit changes a resource, script or geometry buffer."; return null; }
+            retainedBytes += bytes.LongLength - before.LongLength;
+            if (retainedBytes > SourceExtractor.MaximumRetainedBytes) { reason = "The changed models exceed the retained source allowance."; return null; }
+            files.Add((path, before, bytes));
+            sources[path] = bytes; hashes[path] = SourceProject.Sha256(bytes);
+        }
+        if (files.Count == 0) return null;
+        return new(sources, hashes, diskHashes, stamps, retainedBytes, reads, files);
+    }
+
+    /// <summary>
+    /// A snapshot of the accepted one with an updated world and scene and the changed sources; everything else (resources,
+    /// textures, animations, lookups) is the accepted snapshot's. <paramref name="adjust"/> may change the copied provenance.
+    /// </summary>
+    private static SourceSceneSnapshot Derive(SourceSceneSnapshot accepted, ChangedModels read, GameZWorld world, GameScene scene,
+        Action<Dictionary<int, WorldNodeProvenance>>? adjust, CancellationToken token)
+    {
         Dictionary<WorldNodeProvenance, WorldNodeProvenance> origins = [];
         WorldNodeProvenance Origin(WorldNodeProvenance before)
         {
@@ -98,26 +133,25 @@ public static partial class SourceWorlds
             return copy;
         }
         var provenance = accepted.Provenance.ToDictionary(p => p.Key, p => Origin(p.Value));
-        foreach (var (slot, matrix) in transforms) provenance[slot].ModelTransformAuthored = !matrix.IsIdentity;
-        foreach (var (path, hash) in reads.Hashes()) diskHashes[path] = hash;
-        foreach (var (path, stamp) in reads.Stamps()) stamps[path] = stamp;
-        reads.CheckUnchanged(token);
+        adjust?.Invoke(provenance);
+        foreach (var (path, hash) in read.Reads.Hashes()) read.DiskHashes[path] = hash;
+        foreach (var (path, stamp) in read.Reads.Stamps()) read.Stamps[path] = stamp;
+        read.Reads.CheckUnchanged(token);
         SourceSceneSnapshot result = new(accepted.Root, accepted.Mission)
         {
-            World = world, Scene = scene, ModelSources = sources, WorldChildOrder = accepted.WorldChildOrder, RetainedBytes = retainedBytes, TerrainModelInputs = accepted.TerrainModelInputs,
+            World = world, Scene = scene, ModelSources = read.Sources, WorldChildOrder = accepted.WorldChildOrder, RetainedBytes = read.RetainedBytes, TerrainModelInputs = accepted.TerrainModelInputs,
             Resources = accepted.Resources, TextureFiles = accepted.TextureFiles, Textures = accepted.Textures, Sounds = accepted.Sounds,
             TextureScripts = accepted.TextureScripts, Animations = accepted.Animations, Provenance = provenance,
             Freed = accepted.Freed.Select(Origin).ToArray(), AuthoredHierarchy = accepted.AuthoredHierarchy with
                 { Nodes = accepted.AuthoredHierarchy.Nodes.Select(node => node with { Origin = Origin(node.Origin) }).ToArray() },
-            Executions = accepted.Executions, WriteInstruction = accepted.WriteInstruction, Inputs = stamps, InputHashes = diskHashes,
-            ReadHashes = hashes, Dependencies = accepted.Dependencies, MissingInputs = accepted.MissingInputs, MissingFolders = accepted.MissingFolders,
+            Executions = accepted.Executions, WriteInstruction = accepted.WriteInstruction, Inputs = read.Stamps, InputHashes = read.DiskHashes,
+            ReadHashes = read.Hashes, Dependencies = accepted.Dependencies, MissingInputs = accepted.MissingInputs, MissingFolders = accepted.MissingFolders,
             ResourceInputs = accepted.ResourceInputs, TextureInputs = accepted.TextureInputs, SoundInputs = accepted.SoundInputs,
             ScriptInputs = accepted.ScriptInputs, Notes = accepted.Notes, Lookups = accepted.Lookups
         };
         result.Assets.Add(new() { Id = new(result.Path, AssetKind.World, 0), Name = "Whole world", Content = scene });
         foreach (var model in scene.Models) result.Assets.Add(new() { Id = new(result.Path, AssetKind.Model, model.Index), Name = $"Model {model.Index}", Content = model, Metadata = model.Metadata });
         foreach (var node in scene.Nodes) result.Assets.Add(new() { Id = new(result.Path, AssetKind.Node, node.Index), Name = node.Name, Content = node, Metadata = node.Metadata });
-        reason = "Imported transforms updated from the accepted source snapshot.";
         return result;
     }
 

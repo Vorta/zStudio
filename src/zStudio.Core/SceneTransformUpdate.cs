@@ -6,6 +6,9 @@ namespace zStudio.Core;
 /// <summary>A prepared replacement of instance transforms with unchanged geometry, appearance and hierarchy.</summary>
 public sealed record SceneTransformUpdate(IReadOnlyDictionary<ScenePlacement, ScenePlacement> Placements)
 {
+    /// <summary>Models whose polygons carry other zone sets (a polygon zone edit); their geometry and appearance are the same.</summary>
+    public IReadOnlySet<int> ZoneModels { get; init; } = new HashSet<int>();
+
     public static SceneTransformUpdate? Prepare(GameScene before, GameScene after, AssetRecord asset, int lod,
         CancellationToken token = default, Func<int, bool?>? visibility = null, Action<string>? refused = null)
     {
@@ -14,6 +17,7 @@ public sealed record SceneTransformUpdate(IReadOnlyDictionary<ScenePlacement, Sc
         if (before.Nodes.Count != after.Nodes.Count || before.Models.Count != after.Models.Count || before.Materials.Count != after.Materials.Count || before.Textures.Count != after.Textures.Count) return Refuse("scene collection counts changed");
         for (int i = 0; i < before.Textures.Count; i++) if (!JsonNode.DeepEquals(before.Textures[i], after.Textures[i])) return Refuse($"texture {i} changed");
         for (int i = 0; i < before.Materials.Count; i++) if (!JsonNode.DeepEquals(before.Materials[i], after.Materials[i])) return Refuse($"material {i} changed");
+        HashSet<int> zoneModels = [];
         for (int i = 0; i < before.Models.Count; i++)
         {
             token.ThrowIfCancellationRequested(); var a = before.Models[i]; var b = after.Models[i];
@@ -26,7 +30,8 @@ public sealed record SceneTransformUpdate(IReadOnlyDictionary<ScenePlacement, Sc
                 token.ThrowIfCancellationRequested(); var x = a.Polygons[p]; var y = b.Polygons[p];
                 if (x.MaterialIndex != y.MaterialIndex || x.Flags != y.Flags || !x.Vertices.AsSpan().SequenceEqual(y.Vertices)
                     || !x.Normals.AsSpan().SequenceEqual(y.Normals) || !x.Uvs.AsSpan().SequenceEqual(y.Uvs) || !x.Colors.AsSpan().SequenceEqual(y.Colors)
-                    || !JsonNode.DeepEquals(x.Metadata, y.Metadata)) return Refuse($"model {i} polygon {p} changed");
+                    || !SameExceptZones(x.Metadata, y.Metadata)) return Refuse($"model {i} polygon {p} changed");
+                if (!JsonNode.DeepEquals(x.Metadata["zone_set"], y.Metadata["zone_set"])) zoneModels.Add(i);
             }
         }
         LookupWorkBudget hierarchyWork = new(token: token);
@@ -73,8 +78,11 @@ public sealed record SceneTransformUpdate(IReadOnlyDictionary<ScenePlacement, Sc
                 remaining[row] = count - 1; replacements[row] = row;
             }
         }
-        return new(replacements);
+        return new(replacements) { ZoneModels = zoneModels };
     }
+
+    private static bool SameExceptZones(JsonObject a, JsonObject b) =>
+        a.Count == b.Count && a.All(pair => pair.Key == "zone_set" ? b.ContainsKey(pair.Key) : b.TryGetPropertyValue(pair.Key, out var value) && JsonNode.DeepEquals(pair.Value, value));
 
     /// <summary>World cells and overflow are spatial storage for the same children, not authored parent changes.</summary>
     internal static bool SameTransformChildren(GameNode before, GameNode after, LookupWorkBudget work)
