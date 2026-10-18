@@ -706,19 +706,18 @@ public partial class MainWindow
             : $"{action} was not applied: {failure.Message}");
     /// <summary>Read and evaluate an isolated worker workspace; publish one checked transaction on the dispatcher.</summary>
     private async Task<DocumentModel> PrepareSourceWorldEditAsync(DocumentModel doc, string action, Func<SourceWorkspace, CancellationToken, SourceTransaction?> prepare,
-        CancellationToken token, IReadOnlyList<SourceModelAddition>? additions = null, bool fromBuild = true, Func<ScriptLineChanges?>? verifyTargets = null, IReadOnlyList<string>? notes = null, SceneInspectionCard? committingCard = null, ZoneDraft? committingZones = null, AiPathDraft? committingAiPath = null, ParachuteDraft? committingParachute = null, Action<CancellationToken>? preparationStarted = null, bool? historyRedo = null, bool requireAnimations = false)
+        CancellationToken token, IReadOnlyList<SourceModelAddition>? additions = null, bool fromBuild = true, Func<ScriptLineChanges?>? verifyTargets = null, IReadOnlyList<string>? notes = null, SceneInspectionCard? committingCard = null, AiPathDraft? committingAiPath = null, ParachuteDraft? committingParachute = null, Action<CancellationToken>? preparationStarted = null, bool? historyRedo = null, bool requireAnimations = false, bool zoneEdit = false)
     {
         var session = SourceWorldOf(doc);
         if (doc.IsDisposed || session.Owner != doc) throw new StudioCommandException("stale_document", "The world was rebuilt or closed.");
         RequireSourceWorldIdle(session);
-        RequireNoDrafts(doc, committing: true, committingCard, committingZones, committingAiPath, committingParachute);
+        RequireNoDrafts(doc, committing: true, committingCard, committingAiPath, committingParachute);
         // Properties callbacks use the GUI helper with no explicit token. When invoked by a direct command,
         // its request must still cancel preparation before any edit is accepted.
         using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(token, directSourcePublication.Value?.Token ?? default,
             doc.Lifetime.Token, ViewModel.WorkspaceToken, shutdownToken);
         cancellation.Token.ThrowIfCancellationRequested();
         string? draftToken = committingCard?.DraftToken;
-        string? zoneToken = committingZones?.Token;
         long revision = session.Workspace.Revision;
         long workspaceGeneration = ViewModel.WorkspaceGeneration, navigationGeneration = ViewModel.NavigationGeneration;
         if (fromBuild && doc.SourceInputsChanged(verifyContent: false)) throw new StudioCommandException("stale_document", "Sources changed; reload the world before editing it.");
@@ -754,19 +753,36 @@ public partial class MainWindow
                     bool incremental = false;
                     if (previousSourceScene != null && (additions == null || additions.Count == 0) && !requireAnimations)
                     {
-                        var candidate = SourceWorlds.TryUpdateTransforms(previousSourceScene, overlay, out string refusal, cancellation.Token);
-                        if (candidate != null)
+                        // A polygon zone or zone label edit replaces only the models whose zones changed; its own edits try that first.
+                        if (zoneEdit) TryPolygonZones(previousSourceScene);
+                        if (evaluated == null)
                         {
-                            if (previousMission == null) { evaluated = candidate; incremental = true; }
-                            else if (previousMission.WithSourceTransforms(previousSourceScene.Scene!, candidate.Scene!, cancellation.Token) is { } mission)
-                            { evaluated = candidate; evaluatedMission = mission; incremental = true; }
-                            else SourceTransformRefused?.Invoke("mission-initialization");
+                            var candidate = SourceWorlds.TryUpdateTransforms(previousSourceScene, overlay, out string refusal, cancellation.Token);
+                            if (candidate != null)
+                            {
+                                if (previousMission == null) { evaluated = candidate; incremental = true; }
+                                else if (previousMission.WithSourceTransforms(previousSourceScene.Scene!, candidate.Scene!, cancellation.Token) is { } mission)
+                                { evaluated = candidate; evaluatedMission = mission; incremental = true; }
+                                else SourceTransformRefused?.Invoke("mission-initialization");
+                            }
+                            else SourceTransformRefused?.Invoke(refusal);
                         }
-                        else SourceTransformRefused?.Invoke(refusal);
+                        // Undo and Redo of zone edits come through here too.
+                        if (evaluated == null && !zoneEdit) TryPolygonZones(previousSourceScene);
+                        void TryPolygonZones(SourceSceneSnapshot previous)
+                        {
+                            var zones = SourceWorlds.TryUpdatePolygonZones(previous, overlay, out string zoneRefusal, cancellation.Token);
+                            if (zones == null) SourceTransformRefused?.Invoke(zoneRefusal);
+                            else if (previousMission == null) { evaluated = zones; incremental = true; }
+                            else if (previousMission.WithSourcePolygonZones(previous.Scene!, zones.Scene!, cancellation.Token) is { } mission)
+                            { evaluated = zones; evaluatedMission = mission; incremental = true; }
+                            else SourceTransformRefused?.Invoke("mission-zones");
+                        }
                     }
                     if (evaluated == null)
                     {
-                        MarkWorldEvaluating(doc);
+                        // A stroke of the polygon zone tool keeps the view as it is while the world is evaluated again.
+                        if (!zoneEdit) MarkWorldEvaluating(doc);
                         evaluated = await SourceWorlds.LoadSceneAsync(session.Root, session.Mission, overlay, cancellation.Token, additions);
                     }
                     SourceEditEvaluation?.Invoke(incremental ? "incremental" : "full");
@@ -845,15 +861,6 @@ public partial class MainWindow
             catch (InvalidDataException ex) { throw new StudioCommandException("invalid_argument", ex.Message); }
             committingCard.CancelDraft(accepting: true); UpdateDocumentCommands();
         }
-        if (committingZones != null)
-        {
-            if (RequireZoneDraft(doc, zoneToken) != committingZones) throw new StudioCommandException("stale_draft", "The zone draft changed during preparation.");
-            RequireNoDrafts(doc, committing: true, committingZones: committingZones);
-            try { session.Workspace.ValidatePreparedEdit(prepared, cancellation.Token, verification.Value); }
-            catch (SourceFileChangedException ex) { throw new StudioCommandException("external_change", ex.Message); }
-            catch (InvalidDataException ex) { throw new StudioCommandException("invalid_argument", ex.Message); }
-            committingZones.Accepting = true; CancelZoneDraft(close: true);
-        }
         bool OwnsPreparationStatus() => !shutdownToken.IsCancellationRequested && operation == cancellation && session.Building == cancellation
             && !doc.IsDisposed && session.Owner == doc && sourceWorkspace == session.Workspace
             && ViewModel.WorkspaceGeneration == workspaceGeneration && ViewModel.NavigationGeneration == navigationGeneration;
@@ -894,7 +901,10 @@ public partial class MainWindow
         var workspace = session.Workspace;
         // A rebuild or save in progress says so (the history cannot move while the project is saved).
         RequireSourceWorldIdle(session);
+        if (scene?.IsZonePainting == true || zoneTool.Applying) throw new StudioCommandException("busy", "A polygon zone stroke is in progress; undo and redo wait until it has applied.");
         if (redo ? !workspace.CanRedo : !workspace.CanUndo) throw new StudioCommandException("unsupported", redo ? "Nothing to redo." : "Nothing to undo.");
+        // The notices of the last stroke describe what undo takes back.
+        if (ZoneToolEngaged) { ClearZoneNotices(); zoneTool.LastStroke = null; }
         return PrepareSourceWorldEditAsync(doc, redo ? "Redo" : "Undo", (w, ct) =>
         {
             ct.ThrowIfCancellationRequested();

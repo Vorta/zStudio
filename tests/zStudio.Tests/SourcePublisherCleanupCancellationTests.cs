@@ -18,7 +18,7 @@ public sealed partial class SourcePublisherTests
         if (!committed)
         {
             // A process may stop after the journal was renamed for deletion but before its descendants were removed.
-            Directory.Move(project.Full($"zstudio/recovery/{journal.SaveId}"), project.Full($"zstudio/recovery/{journal.SaveId}.removed"));
+            Directory.Move(project.Full($".zstudio/recovery/{journal.SaveId}"), project.Full($".zstudio/recovery/{journal.SaveId}.removed"));
         }
         var before = project.Sources();
         int visits = 0;

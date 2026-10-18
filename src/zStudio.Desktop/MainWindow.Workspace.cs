@@ -66,6 +66,8 @@ public partial class MainWindow
     }
     private void UpdateDocumentCommands()
     {
+        // The polygon zone tool ends with its map (closed, or another one chosen).
+        if (zoneTool.Session is { } zoneSession && (zoneSession.IsDisposed || ViewModel.SelectedDocument is { } selected && selected.SourceWorld != zoneSession)) LeaveZoneTool();
         RefreshPresentation();
         UpdateSourceInputBlock();
         RefreshSceneTree();
@@ -91,7 +93,7 @@ public partial class MainWindow
         foreach (var column in AssetGrid.Columns.Skip(1)) column.Visibility = doc?.AnimationEdits != null ? Visibility.Visible : Visibility.Collapsed;
         foreach (var item in AnimationMenu.Items.OfType<MenuItem>()) if (item.Tag is string command) item.IsEnabled = animation?.CanRunCommand(command) == true;
         // A rebuilding source world accepts no other edit or save until the rebuilt world is shown.
-        bool rebuilding = doc?.SourceWorld is { } rebuildingWorld && (rebuildingWorld.IsRebuilding || sourceWorkspaceBusy || rebuildingWorld.Workspace.IsSaving);
+        bool rebuilding = doc?.SourceWorld is { } rebuildingWorld && (rebuildingWorld.IsRebuilding || sourceWorkspaceBusy || rebuildingWorld.Workspace.IsSaving || scene?.IsZonePainting == true || zoneTool.Applying);
         DocumentSave.IsEnabled = !rebuilding && (doc?.SourceWorld != null || doc?.AnimationEdits != null || doc?.PickupEdits != null || doc?.ModelEdits != null || doc?.ResourceEdits != null || doc?.ContentEdits != null);
         DocumentSave.ToolTip = doc?.SourceWorld is { } sourceWorld ? SourceSaveTip(sourceWorld.Workspace) : doc?.AnimationEdits != null ? doc.PickupEdits?.IsDirty == true ? "Save an animation copy and modified mission coordinates (Ctrl+S)" : "Save the animation pack to a new file (Ctrl+S)" : doc?.ModelEdits?.IsDirty == true ? "Save model and texture changes (Ctrl+S)" : doc?.PickupEdits != null ? "Save pickup placements to the owning archive (Ctrl+S)" : "Save (Ctrl+S)";
         DocumentUndo.IsEnabled = !rebuilding && (doc?.SourceWorld?.Workspace.CanUndo == true || doc?.AnimationEdits?.CanUndo == true || doc?.CanUndoScene == true || doc?.ResourceEdits?.CanUndo == true || doc?.ContentEdits?.CanUndo == true);

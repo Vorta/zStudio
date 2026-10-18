@@ -8,7 +8,7 @@ namespace zStudio.Desktop;
 
 /// <summary>
 /// Saves of a source project that were interrupted (the program or the computer stopped while the files were being
-/// replaced) leave a journal in the project's zstudio/recovery folder. Opening the project reports them, and the user
+/// replaced) leave a journal in the project's .zstudio/recovery folder. Opening the project reports them, and the user
 /// decides: roll the files back to before the save, complete the save, or keep the files as they are and set the journal
 /// aside. Until then the project cannot be saved; nothing is decided automatically.
 /// </summary>
@@ -207,7 +207,7 @@ public partial class MainWindow
 
     private void RegisterSourceRecoveryCommands(StudioCommands r)
     {
-        Register(r, "source_recovery", "List the open source project's interrupted saves (journals in zstudio/recovery): each with its files and whether each now holds the content from before the save, the content the save wrote, is missing, or was changed by another program. Returns at most 32 saves with 64 files each and total counts; file paths keep 256 characters with fileTruncated. The scan bounds all journal manifests and logs together to 64 MiB and 50,000 file rows. A committed journal only needs cleaning up. While an uncommitted one exists, the project cannot be saved. A project replacement during inspection returns context_changed; retry for the current project.", false, [], async (_, token) =>
+        Register(r, "source_recovery", "List the open source project's interrupted saves (journals in .zstudio/recovery): each with its files and whether each now holds the content from before the save, the content the save wrote, is missing, or was changed by another program. Returns at most 32 saves with 64 files each and total counts; file paths keep 256 characters with fileTruncated. The scan bounds all journal manifests and logs together to 64 MiB and 50,000 file rows. A committed journal only needs cleaning up. While an uncommitted one exists, the project cannot be saved. A project replacement during inspection returns context_changed; retry for the current project.", false, [], async (_, token) =>
         {
             string root = SourceProjectRoot ?? throw new StudioCommandException("no_project", "Open a source project (a folder with data and gamegen) first.");
             long generation = ViewModel.WorkspaceGeneration;
@@ -230,7 +230,7 @@ public partial class MainWindow
                 saveCount = cases.Count
             });
         });
-        RegisterJob(r, "source_recovery_resolve", "Resolve an interrupted save of the open source project: roll_back restores every file the save had replaced (a file changed by another program since is left alone and reported), complete finishes the save, and abandon keeps the files as they are and moves the journal (with any original it kept) to zstudio/recovery/abandoned. It runs off the UI thread with the workspace disabled as during a save. Cancelling stops it between two files, never during one: the journal records what it did, the save still needs a decision (any action resolves it from there), and a cancellation after files changed says which. Returns at most 64 changed paths and conflicts with total counts. Paths keep 256 characters, with pathsTruncated for changed paths and fileTruncated on conflicts. Refused while a world of the project opens or rebuilds; roll_back and complete are also refused while the project has unsaved edits of a file the save involves (undo them, or close the worlds discarding them), while abandon, which changes no file, is not.",
+        RegisterJob(r, "source_recovery_resolve", "Resolve an interrupted save of the open source project: roll_back restores every file the save had replaced (a file changed by another program since is left alone and reported), complete finishes the save, and abandon keeps the files as they are and moves the journal (with any original it kept) to .zstudio/recovery/abandoned. It runs off the UI thread with the workspace disabled as during a save. Cancelling stops it between two files, never during one: the journal records what it did, the save still needs a decision (any action resolves it from there), and a cancellation after files changed says which. Returns at most 64 changed paths and conflicts with total counts. Paths keep 256 characters, with pathsTruncated for changed paths and fileTruncated on conflicts. Refused while a world of the project opens or rebuilds; roll_back and complete are also refused while the project has unsaved edits of a file the save involves (undo them, or close the worlds discarding them), while abandon, which changes no file, is not.",
             [P("save", "string", "Save id from zstudio_source_recovery.", true), P("action", "string", "What to do.", true, "roll_back", "complete", "abandon")], true, async (a, token) =>
         {
             string root = SourceProjectRoot ?? throw new StudioCommandException("no_project", "Open a source project (a folder with data and gamegen) first.");

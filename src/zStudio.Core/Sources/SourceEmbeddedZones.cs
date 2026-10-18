@@ -15,8 +15,15 @@ public sealed record SourceMapZoneAsset(string LogicalPath, string GeometryPath,
 public sealed record SourceMapZoneLabel(byte Id, string Label);
 
 /// <summary>One bounded, workspace-backed view of embedded assignments and their reference occurrences.</summary>
-internal sealed class SourceEmbeddedZones(SourceWorkspace workspace, CancellationToken token)
+internal sealed class SourceEmbeddedZones
 {
+    private readonly SourceWorkspace? workspace;
+    private readonly Func<string, ProjectReadLimits, byte[]?>? reader;
+    private readonly CancellationToken token;
+    internal SourceEmbeddedZones(SourceWorkspace workspace, CancellationToken token) { this.workspace = workspace; this.token = token; }
+    /// <summary>Resolves occurrences from the given sources alone: no mission scripts and no workspace tracking.</summary>
+    internal SourceEmbeddedZones(Func<string, ProjectReadLimits, byte[]?> read, CancellationToken token) { reader = read; this.token = token; }
+    private SourceWorkspace Workspace => workspace ?? throw new InvalidOperationException("These map zones read given sources only.");
     internal const int MaximumAssets = 16_384, MaximumTargets = 2_000_000, MaximumLabelCharacters = 256;
 
     internal sealed record Model(string Path, byte[] Bytes, JsonObject Root, GltfDocument Document);
@@ -27,7 +34,8 @@ internal sealed class SourceEmbeddedZones(SourceWorkspace workspace, Cancellatio
     internal sealed record Mission(string MasterPath, IReadOnlyList<Entry> Entries, IReadOnlyList<SourceMapZoneLabel> Labels);
     private readonly Dictionary<string, Model> models = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> changed = new(StringComparer.OrdinalIgnoreCase);
-    private readonly SourceScriptInspection inspection = new(workspace, token);
+    private SourceScriptInspection? inspection;
+    private SourceScriptInspection Inspection => inspection ??= new(Workspace, token);
     private readonly ScriptTraceBudget traceBudget = new();
     private readonly Dictionary<string, IReadOnlyList<IReadOnlyList<string>>?> scripts = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, IReadOnlyList<Entry>> closures = new(StringComparer.OrdinalIgnoreCase);
@@ -56,7 +64,8 @@ internal sealed class SourceEmbeddedZones(SourceWorkspace workspace, Cancellatio
 
     private byte[] Read(string path, ProjectReadLimits limits)
     {
-        var bytes = workspace.Read(path, token, limits.WithMaximum(MaximumBytes - readBytes)) ?? throw Bad($"Source file {JsonData.ShownText(path)} is missing.");
+        var bounded = limits.WithMaximum(MaximumBytes - readBytes);
+        var bytes = (workspace != null ? workspace.Read(path, token, bounded) : reader!(path, bounded)) ?? throw Bad($"Source file {JsonData.ShownText(path)} is missing.");
         readBytes += bytes.LongLength; return bytes;
     }
 
@@ -190,7 +199,21 @@ internal sealed class SourceEmbeddedZones(SourceWorkspace workspace, Cancellatio
 
     internal Mission ReadMission(string mission, bool includeEntries = true)
     {
+        var (master, roots) = TraceMission(mission);
+        List<Entry> entries = [];
+        if (includeEntries) foreach (var root in roots) entries.AddRange(Closure(root));
+        return new(master, entries, Labels(File(master).Root));
+    }
+
+    private readonly Dictionary<string, (string Master, IReadOnlyList<string> Roots)> traced = new(StringComparer.OrdinalIgnoreCase);
+    /// <summary>
+    /// The mission's master world model (the load after GameGenSetWorld) and every model its scripts load, from the scripts
+    /// alone: no model file is read.
+    /// </summary>
+    internal (string Master, IReadOnlyList<string> Roots) TraceMission(string mission)
+    {
         if (!SourceProject.MissionName().IsMatch(mission)) throw Bad("The mission name is invalid.");
+        if (traced.TryGetValue(mission, out var known)) return known;
         List<string> roots = []; HashSet<string> seenRoots = new(StringComparer.OrdinalIgnoreCase);
         string? master = null; bool database = false;
         ScriptTrace.Visit(Script, mission + ".gs", step =>
@@ -198,20 +221,18 @@ internal sealed class SourceEmbeddedZones(SourceWorkspace workspace, Cancellatio
             token.ThrowIfCancellationRequested();
             if (step.Command == "GameGenSetWorld") database = true;
             if (step is not { Command: "LoadGameGen", Args: [var name, _, ..] }) return;
-            string path = WorldAssembler.ResolveModel(name, step.ModelDirectories, p => workspace.Exists(p, token))
+            string path = WorldAssembler.ResolveModel(name, step.ModelDirectories, p => Workspace.Exists(p, token))
                 ?? throw Bad($"The mission's model {JsonData.ShownText(name)} is missing.");
             if (database) { master ??= path; database = false; }
             if (seenRoots.Add(path)) roots.Add(path);
         }, token, budget: traceBudget);
         if (master == null) throw Bad("The mission script does not identify a master world model.");
-        List<Entry> entries = [];
-        if (includeEntries) foreach (var root in roots) entries.AddRange(Closure(root));
-        return new(master, entries, Labels(File(master).Root));
+        return traced[mission] = (master, roots);
         IReadOnlyList<IReadOnlyList<string>>? Script(string name)
         {
             string path = "gamegen/" + name.Replace('\\', '/');
             if (scripts.TryGetValue(path, out var known)) return known;
-            var parsed = inspection.Read(path);
+            var parsed = Inspection.Read(path);
             return scripts[path] = parsed == null ? throw Bad($"Mission script {JsonData.ShownText(path)} is missing.") : [.. parsed.Lines.Where(l => l.IsInstruction).Select(l => l.Tokens)];
         }
     }
@@ -269,11 +290,12 @@ internal sealed class SourceEmbeddedZones(SourceWorkspace workspace, Cancellatio
         return scope as JsonObject;
     }
 
-    internal void Set(Entry entry, WorldZoneProfile profile, GltfDocument? expectedDocument = null)
+    /// <param name="polygonsOnly">Only polygon zones changed: a file's own node and load-root attributes keep their stored form.</param>
+    internal void Set(Entry entry, WorldZoneProfile profile, GltfDocument? expectedDocument = null, bool polygonsOnly = false)
     {
         var owner = File(entry.OwnerPath);
         WorldGltf.ValidateZoneProfile(expectedDocument ?? File(entry.ModelPath).Document, profile, token);
-        if (entry.ReferenceChain.Count == 0) WorldGltf.PatchEmbeddedZones(owner.Root, owner.Document, profile, token);
+        if (entry.ReferenceChain.Count == 0) WorldGltf.PatchEmbeddedZones(owner.Root, owner.Document, profile, token, polygonsOnly);
         else
         {
             var at = Object(Object(Object(ReferenceNode(owner, entry.ReferenceChain[0]), "extras"), WorldGltf.Key), "zoneOverrides");
@@ -297,7 +319,7 @@ internal sealed class SourceEmbeddedZones(SourceWorkspace workspace, Cancellatio
             byte[] output = Repack(model.Bytes, model.Root, token);
             if (!output.AsSpan().SequenceEqual(model.Bytes)) result.Add((path, output));
         }
-        workspace.TrackMapZoneSources(result.Select(c => c.Relative).ToArray(), result, token);
+        workspace?.TrackMapZoneSources(result.Select(c => c.Relative).ToArray(), result, token);
         return result;
     }
     /// <summary>Replace only the JSON of a validated source container, retaining every GLB payload chunk.</summary>

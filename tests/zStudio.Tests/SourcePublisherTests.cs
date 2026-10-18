@@ -36,7 +36,7 @@ public sealed partial class SourcePublisherTests
             foreach (string path in Directory.EnumerateFileSystemEntries(Root, "*", SearchOption.AllDirectories))
             {
                 string relative = Path.GetRelativePath(Root, path).Replace('\\', '/');
-                if (relative == "zstudio" || relative.StartsWith("zstudio/", StringComparison.Ordinal)) continue;
+                if (relative == ".zstudio" || relative.StartsWith(".zstudio/", StringComparison.Ordinal)) continue;
                 entries[relative] = File.Exists(path) ? Encoding.ASCII.GetString(File.ReadAllBytes(path)) : null;
             }
             return entries;
@@ -44,8 +44,8 @@ public sealed partial class SourcePublisherTests
         /// <summary>Journal folders in the recovery folder, and save folders in staging.</summary>
         public string[] Leftovers() =>
         [
-            .. Entries("zstudio/recovery").Where(n => Path.GetFileName(n) is not (".lock" or "abandoned")),
-            .. Entries("zstudio/staging"),
+            .. Entries(".zstudio/recovery").Where(n => Path.GetFileName(n) is not (".lock" or "abandoned")),
+            .. Entries(".zstudio/staging"),
         ];
         private IEnumerable<string> Entries(string relative) => Directory.Exists(Full(relative)) ? Directory.EnumerateFileSystemEntries(Full(relative)).Select(p => relative + "/" + Path.GetFileName(p)) : [];
         public void Dispose()
@@ -298,7 +298,7 @@ public sealed partial class SourcePublisherTests
         // Abandoning keeps the files and the original the journal still holds.
         Assert.True(publisher.Resolve(found.SaveId, SourceRecoveryAction.Abandon, Token).Resolved);
         Assert.Equal(before, project.Sources());
-        Assert.Equal(original, File.ReadAllBytes(project.Full($"zstudio/recovery/abandoned/{found.SaveId}/held/0.bin")));
+        Assert.Equal(original, File.ReadAllBytes(project.Full($".zstudio/recovery/abandoned/{found.SaveId}/held/0.bin")));
         Assert.Empty(project.Leftovers()); Assert.Empty(publisher.FindInterrupted(Token));
         publisher.Publish(ScriptChange(project), "next", Token);
     }
@@ -352,7 +352,7 @@ public sealed partial class SourcePublisherTests
         Assert.True(publisher.Resolve(found.SaveId, SourceRecoveryAction.Abandon, Token).Resolved);
         Assert.Equal(before, project.Sources());
         Assert.Empty(project.Leftovers());
-        Assert.False(Directory.Exists(project.Full("zstudio/recovery/abandoned")));
+        Assert.False(Directory.Exists(project.Full(".zstudio/recovery/abandoned")));
         Assert.Equal(found.SaveId, Assert.Throws<SourceRecoveryNotFoundException>(() => publisher.Resolve(found.SaveId, SourceRecoveryAction.RollBack, Token)).SaveId);
         Assert.Throws<ArgumentException>(() => publisher.Resolve("../outside", SourceRecoveryAction.RollBack, Token));
     }
@@ -381,11 +381,11 @@ public sealed partial class SourcePublisherTests
         var before = project.Sources();
         Assert.Throws<SourcePublisher.Crash>(() => Failing(project, "install", 0, () => new SourcePublisher.Crash()).Publish(ThreeFiles(project), "torn", Token));
         SourcePublisher publisher = new(project.Root);
-        string id = Assert.Single(publisher.FindInterrupted(Token)).SaveId, log = project.Full($"zstudio/recovery/{id}/events.log");
+        string id = Assert.Single(publisher.FindInterrupted(Token)).SaveId, log = project.Full($".zstudio/recovery/{id}/events.log");
         string[] lines = File.ReadAllText(log).Split('\n', StringSplitOptions.RemoveEmptyEntries);
         Assert.Equal(["prepared", "intent", "held"], lines.Select(l => l.Split('|')[1]));
         Assert.All(lines, line => Assert.Matches("^[0-9]+\\|[a-z-]+\\|-?[0-9]+\\|[0-9a-f]{16}$", line));
-        string manifest = File.ReadAllText(project.Full($"zstudio/recovery/{id}/manifest.json"));
+        string manifest = File.ReadAllText(project.Full($".zstudio/recovery/{id}/manifest.json"));
         Assert.Contains($"\"saveId\": \"{id}\"", manifest); Assert.Contains("\"sha256\":", manifest);
 
         // A commit record whose write did not finish, with or without its line end, does not count.
@@ -418,8 +418,8 @@ public sealed partial class SourcePublisherTests
     {
         using Project project = new();
         var before = project.Sources();
-        Directory.CreateDirectory(project.Full("zstudio/recovery"));
-        using (new FileStream(project.Full("zstudio/recovery/.lock"), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None))
+        Directory.CreateDirectory(project.Full(".zstudio/recovery"));
+        using (new FileStream(project.Full(".zstudio/recovery/.lock"), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None))
         {
             var busy = Assert.Throws<IOException>(() => new SourcePublisher(project.Root).Publish(ThreeFiles(project), "busy", Token));
             Assert.Contains("Another save or recovery", busy.Message);
@@ -449,19 +449,19 @@ public sealed partial class SourcePublisherTests
         string[] invalid =
         [
             "../outside.zrd", "data/../../outside.zrd", "data/./m1.zrd", "data//m1.zrd", "", " ", "/data/m1.zrd", "C:/data/m1.zrd", "data\\m1\\ai.zrd",
-            "zstudio/recovery/x.bin", "zstudio/staging/0.tmp", "other/x.zrd", "data", "gamegen",
+            ".zstudio/recovery/x.bin", ".zstudio/staging/0.tmp", "other/x.zrd", "data", "gamegen",
             "data/m1/ai.zrd:stream", "data/m1/CON.zrd", "data/m1/nul", "data/m1/ai.zrd.", "data/m1/ai.zrd ", "data/m1/*.zrd", "data/m1/ai.zrd/inside.zrd",
         ];
         foreach (string relative in invalid)
         {
             Assert.Throws<InvalidDataException>(() => new SourcePublisher(project.Root).Publish([new(relative, null, content)], "invalid", Token));
-            Assert.False(Directory.Exists(project.Full("zstudio")), relative);
+            Assert.False(Directory.Exists(project.Full(".zstudio")), relative);
         }
         Assert.Throws<ArgumentException>(() => new SourcePublisher(project.Root).Publish([new(Ai, project.Read(Ai), content), new("DATA/M1/AI.ZRD", project.Read(Ai), content)], "twice", Token));
         Assert.Throws<ArgumentException>(() => new SourcePublisher(project.Root).Publish([new(Ai, project.Read(Ai), project.Read(Ai))], "nothing", Token));
         Assert.Throws<ArgumentException>(() => new SourcePublisher(project.Root).Publish([], "nothing", Token));
         Assert.Equal(before, project.Sources());
-        Assert.False(Directory.Exists(project.Full("zstudio")));
+        Assert.False(Directory.Exists(project.Full(".zstudio")));
 
         // A project inside a protected corpus folder is never written.
         string parent = Path.Combine(Path.GetTempPath(), "zstudio-publisher-protected-" + Guid.NewGuid().ToString("N"), "zbd_1999");
@@ -471,7 +471,7 @@ public sealed partial class SourcePublisherTests
             var protectedBefore = inside.Sources();
             Assert.Contains("protected", Assert.Throws<IOException>(() => new SourcePublisher(inside.Root).Publish(ThreeFiles(inside), "protected", Token)).Message);
             Assert.Equal(protectedBefore, inside.Sources());
-            Assert.False(Directory.Exists(inside.Full("zstudio")));
+            Assert.False(Directory.Exists(inside.Full(".zstudio")));
         }
         finally { Directory.Delete(Path.GetDirectoryName(parent)!, true); }
     }
@@ -506,7 +506,7 @@ public sealed partial class SourcePublisherTests
         {
             canceled.Cancel();
             Assert.Throws<OperationCanceledException>(() => new SourcePublisher(project.Root).Publish(ThreeFiles(project), "canceled", canceled.Token));
-            Assert.False(Directory.Exists(project.Full("zstudio")));
+            Assert.False(Directory.Exists(project.Full(".zstudio")));
         }
         using (CancellationTokenSource staging = new())
         {

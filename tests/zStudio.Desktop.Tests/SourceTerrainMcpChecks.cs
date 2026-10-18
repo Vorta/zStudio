@@ -265,14 +265,12 @@ internal static class SourceTerrainMcpChecks
             Assert.False(body.IsEnabled);
             busy.SetValue(main, false); block.Invoke(main, []);
             Assert.True(body.IsEnabled);
-            // Switching between the two explicit brushes must transfer input ownership. An empty zone
-            // draft may retarget to terrain Properties; selected targets still require Apply or Cancel.
+            // Switching between the terrain brush and the polygon zone tool transfers input ownership; neither ends
+            // the other's stroke in progress.
             var view = (SceneViewport)typeof(MainWindow).GetField("scene", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(main)!;
             var brush = typeof(MainWindow).GetField("terrainBrush", BindingFlags.Instance | BindingFlags.NonPublic)!;
-            var zone = await ZoneAction("begin");
-            string zoneToken = zone["draft"]!["draftToken"]!.GetValue<string>();
-            zone = await ZoneAction("paint", zoneToken);
-            Assert.True(zone["draft"]!["painting"]!.GetValue<bool>());
+            var zone = await Call("source_zone_tool", new() { ["document"] = Id(doc), ["action"] = "engage" });
+            Assert.True(zone["engaged"]!.GetValue<bool>());
             Assert.False(view.TerrainBrushActive);
             Assert.Throws<InvalidOperationException>(() => view.TerrainBrushActive = true);
             Assert.True(view.ZonePaintActive); Assert.False(view.TerrainBrushActive);
@@ -282,33 +280,21 @@ internal static class SourceTerrainMcpChecks
                 .Single(x => x!["Label"]!.GetValue<string>() == "Erase in viewport")!["Id"]!.GetValue<string>();
             await fields.InvokeAutomationActionAsync(eraseAction);
             Assert.True(view.TerrainBrushActive); Assert.False(view.ZonePaintActive);
-            var stoppedZone = (await Call("source_zones", new() { ["document"] = Id(doc) }))["draft"]!;
-            Assert.Equal(zoneToken, stoppedZone["draftToken"]!.GetValue<string>());
-            Assert.False(stoppedZone["painting"]!.GetValue<bool>());
-            zone = await ZoneAction("paint", zoneToken);
+            Assert.False((await Call("source_zone_tool", new() { ["document"] = Id(doc), ["action"] = "state" }))["engaged"]!.GetValue<bool>());
+            await Call("source_zone_tool", new() { ["document"] = Id(doc), ["action"] = "engage" });
             Assert.True(view.ZonePaintActive); Assert.False(view.TerrainBrushActive); Assert.Null(brush.GetValue(main));
-            int zoneNode = doc.SourceBuild!.Provenance.Single(p => p.Value.ModelNodeName == "flat_a").Key;
-            zone = await ZoneAction("add", zoneToken, new[] { new { node = zoneNode, polygon = 0 } });
-            var pendingZone = zone["draft"]!.DeepClone();
+            var strokeField = typeof(SceneViewport).GetField("zoneStroke", BindingFlags.Instance | BindingFlags.NonPublic)!;
+            strokeField.SetValue(view, Activator.CreateInstance(strokeField.FieldType));
             try
             {
                 var setBrush = typeof(MainWindow).GetMethod("SetTerrainBrush", BindingFlags.Instance | BindingFlags.NonPublic)!;
                 var refusal = Assert.Throws<TargetInvocationException>(() => setBrush.Invoke(main, [new TerrainBrushState(Recipe, "road", false, 8)]));
-                Assert.Equal("pending_drafts", Assert.IsType<StudioCommandException>(refusal.InnerException).Code);
+                Assert.Equal("busy", Assert.IsType<StudioCommandException>(refusal.InnerException).Code);
                 Assert.True(view.ZonePaintActive); Assert.False(view.TerrainBrushActive); Assert.Null(brush.GetValue(main));
-                Assert.True(JsonNode.DeepEquals(pendingZone, (await Call("source_zones", new() { ["document"] = Id(doc) }))["draft"]));
             }
-            finally { await ZoneAction("cancel", pendingZone["draftToken"]!.GetValue<string>()); }
+            finally { view.CancelZoneGesture(); await Call("source_zone_tool", new() { ["document"] = Id(doc), ["action"] = "exit" }); }
             await Call("scene_properties", new() { ["preview"] = preview, ["node"] = piece, ["open"] = true });
             fields = Assert.IsType<TerrainPropertiesEditor>(main.OpenPropertiesWindow!.SourceFields);
-
-            Task<JsonNode> ZoneAction(string action, string? draftToken = null, object? targets = null)
-            {
-                Dictionary<string, object?> args = new() { ["document"] = Id(doc), ["revision"] = doc.Revision, ["action"] = action };
-                if (draftToken != null) args["draftToken"] = draftToken;
-                if (targets != null) args["targets"] = targets;
-                return Job("source_zone_draft", args);
-            }
             var automation = JsonSerializer.SerializeToNode(fields.DescribeAutomationFields())!;
             string erase = automation["actions"]!.AsArray().Single(x => x!["Label"]!.GetValue<string>() == "Erase in viewport")!["Id"]!.GetValue<string>();
             await fields.InvokeAutomationActionAsync(erase);

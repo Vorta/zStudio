@@ -44,7 +44,7 @@ internal static class ExportSafetyMcpChecks
                     Assert.Equal(priorRoot, main.ViewModel.RootPath);
                 }
                 Assert.Equal("{}", File.ReadAllText(legacy.Path("data/m1/meta/zones.json")));
-                Assert.False(Directory.Exists(Path.Combine(legacy.Project, "zstudio")));
+                Assert.False(Directory.Exists(Path.Combine(legacy.Project, ".zstudio")));
             }
             await RelativePathChecks(main, Job, token);
             await SourceResourceOperationChecks.Run(main, Job, token);

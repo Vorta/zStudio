@@ -276,6 +276,7 @@ public partial class MainWindow
     private void BeginParachute(bool pointer = false)
     {
         var state = RequireParachutes(edit: true); RequireNoDrafts();
+        EndZoneToolFor("moving a drop window");
         var window = state.Analysis?.Windows.FirstOrDefault(w => w.Id == state.Selected) ?? throw new StudioCommandException("selection_required", "Select a drop window.");
         if (!state.Viewport.SelectParachuteWindow(window.Id)) throw new StudioCommandException("busy", "Finish the current selection operation first.");
         parachuteDraft = new(state, window) { Plan = VtolDropWindows.PlanMove(state.Analysis!, window.Id, window.Start), Preview = state.Analysis, DisplayedPreview = state.Analysis };

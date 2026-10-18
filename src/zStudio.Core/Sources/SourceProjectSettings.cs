@@ -75,6 +75,20 @@ public static class SourceProjectSettings
     // Read-modify-write is serialized: two changes (a view setting and the dithering) never lose one another.
     private static readonly Lock Gate = new();
     /// <summary>
+    /// Hides the project's .zstudio folder that holds <paramref name="path"/> (working data is created there before any
+    /// setting may be): where the file system allows it, and never failing the work that created it.
+    /// </summary>
+    internal static void HideFolderOf(string path)
+    {
+        for (var directory = new DirectoryInfo(path); directory != null; directory = directory.Parent)
+        {
+            if (!directory.Name.Equals(Folder, StringComparison.OrdinalIgnoreCase)) continue;
+            try { if (OperatingSystem.IsWindows() && directory.Exists && !directory.Attributes.HasFlag(FileAttributes.Hidden)) directory.Attributes |= FileAttributes.Hidden; }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+            return;
+        }
+    }
+    /// <summary>
     /// Changes the settings file, keeping its other keys, in the hidden folder. A file that cannot be read is replaced only by
     /// an explicit choice (<paramref name="replaceDamaged"/>, the dithering); remembering the view leaves it as it is.
     /// </summary>

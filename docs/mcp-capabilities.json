@@ -143,7 +143,7 @@
         "zstudio_workspace_view",
         "zstudio_camera"
       ],
-      "note": "Compiled Whole world cards, selection bounds and viewport manipulation require unlocked editing; source maps have no lock. Tree inspection and hover remain available while locked. Header Isolate and Close and footer Revert/Apply share scene_card revisions, draft lifetimes, archive ownership, history and verified saves. AuthoredPosition, AuthoredRotation and AuthoredHeading bindings enable persistent fields in place. Editable placement fields take input at once (a change starts the draft); Move/Rotate toggles in the Details header show or hide world-axis handles (showing them starts a draft; transformMode move/rotate/none), sharing the draft with scene_card set position/rotationDegrees/headingDegrees. Revert and Apply are enabled only once the draft changes something. Pickups support XYZ radians displayed as degrees; vehicles support native Y heading degrees; Rotate stays hidden for placements without authored rotation. Drags preview until Apply (or Enter in a placement field) creates one combined undo step; Revert (or Escape in a field) discards the draft; Escape during a drag restores that gesture only. Invalid inputs retain the last valid preview and hide handles. Per-field copy (and scene_card copy without a field, MCP only) returns accepted values with labels. World-origin readouts, animation poses and ambiguous actor ownership remain read-only. Header spacing, scrolling and gutter do not change camera or document state. Short viewports automatically place the navigation cube beside the panel, restoring its normal corner when space permits or details close; axis commands remain shared and no physical input is captured. Source-world object fields are editable at once; the Transform header's toggles show Move arrows along the object's own axes or Rotate rings about world X, Y and Z, writing the local Position/Rotation fields (scene_card set fields/transformMode, none hides them); Apply accepts one source transaction and Revert restores the accepted values. Isolate (scene_selection isolate/show_all) shows only the selected object in model and Whole world previews, and again everything when pressed while isolated. In a source map the card is always docked as the Properties pane, which adds Frame selection (camera frame target selected) and, with nothing selected, Recently selected (scene_inspect recentSelections, then scene_tree select); its footer has icon buttons with immediate tooltips: Copy… and Delete (source_world_object_edit) left of Revert and Apply (scene_card cancel/apply)."
+      "note": "Compiled Whole world cards, selection bounds and viewport manipulation require unlocked editing; source maps have no lock. Tree inspection and hover remain available while locked. Header Isolate and Close and footer Revert/Apply share scene_card revisions, draft lifetimes, archive ownership, history and verified saves. AuthoredPosition, AuthoredRotation and AuthoredHeading bindings enable persistent fields in place. Editable placement fields take input at once (a change starts the draft); Move/Rotate toggles in the Details header show or hide world-axis handles (showing them starts a draft; transformMode move/rotate/none), sharing the draft with scene_card set position/rotationDegrees/headingDegrees. Revert and Apply are enabled only once the draft changes something. Pickups support XYZ radians displayed as degrees; vehicles support native Y heading degrees; Rotate stays hidden for placements without authored rotation. Drags preview until Apply (or Enter in a placement field) creates one combined undo step; Revert (or Escape in a field) discards the draft; Escape during a drag restores that gesture only. Invalid inputs retain the last valid preview and hide handles. Per-field copy (and scene_card copy without a field, MCP only) returns accepted values with labels. World-origin readouts, animation poses and ambiguous actor ownership remain read-only. Header spacing, scrolling and gutter do not change camera or document state. Short viewports automatically place the navigation cube beside the panel, restoring its normal corner when space permits or details close; axis commands remain shared and no physical input is captured. Source-world object fields are editable at once; the Transform header's toggles show Move arrows along the object's own axes or Rotate rings about world X, Y and Z, writing the local Position/Rotation fields (scene_card set fields/transformMode, none hides them); Apply accepts one source transaction and Revert restores the accepted values. Isolate (scene_selection isolate/show_all) shows only the selected object in model and Whole world previews, and again everything when pressed while isolated. In a source map the card is always docked as the Properties pane, without Isolate (the World tree's eyes isolate), and, with nothing selected, Recently selected (scene_inspect recentSelections, then scene_tree select); its footer has icon buttons with immediate tooltips: Copy… and Delete (source_world_object_edit) left of Revert and Apply (scene_card cancel/apply)."
     },
     {
       "gui": "DocumentSceneTree:Hierarchy",
@@ -235,7 +235,7 @@
         "zstudio_scene_card",
         "zstudio_scene_inspect"
       ],
-      "note": "Source-world object editing lives in the selected-object card: a source map always docks it as the Properties pane. The title is the object's name with its class and node number as read-only text (the model in its tooltip); Name and model (where they can change), local Position/Rotation/Scale, supported flags and class-specific commands share an explicit draft. Fields are editable at once: the first change opens the draft, the footer's Apply and Revert end it; focus and Enter do not commit. scene_card set also takes transformMode (move, rotate, none). scene_card set accepts up to 32 fields (field/value strings, 4096 characters each); scene_inspect and drafts target=scene expose the same fields and token. Apply/resolve_drafts accepts one source transaction and undo step, then updates the evaluated scene in memory; input it cannot accept is refused as invalid_draft, shown on the card with the draft kept. Copy/Delete resolve pending input first. scene_properties open focuses this panel; the source tree has no Properties menu. Terrain recipes retain Edit terrain and their dedicated editor. Source ownership, script provenance, rename protections and exclusive crater modes remain enforced. The Zone section's combo box (field zone: inherit, any or 0–254; a load root cannot inherit) and Altitude zone check (field altitudeZoneCheck) join the same draft and write where the occurrence keeps its zone (node, placement override or load root); a shared assignment asks in the GUI and needs scene_card apply sharedScope true over MCP (shared_scope otherwise). Under an unchanged inherited zone the field's hint reads Inherit (ID) · Inherited from its supplier (scene_inspect's Zone source). The Zone section also shows the read-only Polygon zones (one line per zone set with its polygon count) and the Clicked polygon; apart from the node number under the title, compiled-node metadata and competing world-origin coordinates are absent from the source-object GUI. The drag-to-scrub axis letters and the Model browse button only fill the same draft fields as scene_card set."
+      "note": "Source-world object editing lives in the selected-object card: a source map always docks it as the Properties pane. The title is the object's name with its class and node number as read-only text (the model in its tooltip); Name and model (where they can change), local Position/Rotation/Scale, supported flags and class-specific commands share an explicit draft. Fields are editable at once: the first change opens the draft, the footer's Apply and Revert end it; focus and Enter do not commit. scene_card set also takes transformMode (move, rotate, none). scene_card set accepts up to 32 fields (field/value strings, 4096 characters each); scene_inspect and drafts target=scene expose the same fields and token. Apply/resolve_drafts accepts one source transaction and undo step, then updates the evaluated scene in memory; input it cannot accept is refused as invalid_draft, shown on the card with the draft kept. Copy/Delete resolve pending input first. scene_properties open focuses this panel; the source tree has no Properties menu. Terrain recipes retain Edit terrain and their dedicated editor. Source ownership, script provenance, rename protections and exclusive crater modes remain enforced. The Zone section's combo box (field zone: inherit, any or 0–254; a load root cannot inherit) and Altitude zone check (field altitudeZoneCheck) join the same draft and write where the occurrence keeps its zone (node, placement override or load root); a shared assignment asks in the GUI and needs scene_card apply sharedScope true over MCP (shared_scope otherwise). Under an unchanged inherited zone the field's hint reads Zone N · inherited from its supplier, with the full source (scene_inspect's Zone source) in its tooltip. The Zone section also shows the read-only Polygon zones of a placed object, group or geometry (one row per zone set with the count of all its polygons, scene_inspect Object polygon zones rows; right-click Copy polygon zones copies them as text); apart from the node number under the title, compiled-node metadata and competing world-origin coordinates are absent from the source-object GUI. The drag-to-scrub axis letters and the Model browse button only fill the same draft fields as scene_card set."
     },
     {
       "gui": "TerrainPropertiesEditor:Fields",
@@ -253,20 +253,35 @@
       "note": "While the brush is on, a left-button drag over a source world collects the surface points under the pointer; on release the stroke's plan-view path and the brush radius paint or erase the brush's region as one undoable change (source_terrain_edit paint with path and radius). Escape or lost capture drops a stroke in progress; MCP never synthesizes pointer input."
     },
     {
-      "gui": "ZonePropertiesEditor:Fields",
+      "gui": "ZonePicker:Controls",
       "tools": [
-        "zstudio_source_zones",
-        "zstudio_source_zone_draft"
+        "zstudio_source_zone_tool",
+        "zstudio_source_zone_label"
       ],
-      "note": "Map zone catalog, object gate and exact polygon assignments share the source zone service. Catalog reports MasterPath; inspection reports MasterPath and SourcePaths, with OwnerPath and OwnerReferences on exact targets instead of an external manifest identity. Draft begin/set/add/apply/cancel/label use the pinned source world, revision and draft token; shared assignments require explicit sharedScope, including shared model defaults consumed by other missions. Inspection and edit plans disclose AffectedMissions and AffectedSources (32 each) with AffectedMissionCount and AffectedSourceCount totals; reference-placement overrides remain isolated from unrelated occurrences. Replacing a removed label across another mission's shared defaults is refused with guidance to apply an explicit shared-scope assignment edit first. Cancel with the current document revision and owned draft token also discards targets made stale by another source edit; editing those stale targets remains refused. Native zone Properties fields and actions are exposed through these dedicated zone commands. Applying accepts one undoable edit to the owning glTF attributes, retaining geometry buffers; Save uses the existing verified source workspace save."
+      "note": "The zone picker's text box (0–254, Any or a label; Enter picks), arrow keys and rows choose the zone (source_zone_tool engage with zone; state lists the map's zones with labels and polygon counts as placed in the world). A row's pencil renames its label in place: Enter, Tab or closing the picker saves, Escape restores, empty removes; each is one undoable change (source_zone_label)."
     },
     {
       "gui": "SceneViewport.Zones:Strokes",
       "tools": [
-        "zstudio_source_zones",
-        "zstudio_source_zone_draft"
+        "zstudio_source_polygon_zones",
+        "zstudio_source_zone_tool",
+        "zstudio_source_zones"
       ],
-      "note": "Explicit face/object brush strokes collect exact scene-node and source polygon identities (a picked built face is recorded as the source polygon it comes from, the index source_zones inspection returns), bounded to 4096 targets. Release adds targets to the shared draft; Apply remains explicit. MCP add supplies those identities without capturing physical input; paint only toggles the visible brush. The targets add takes are the brush's and Add selected surface or object's: one exact scene node and, for faces, source polygon per hit, accepted by the same draft check, so any face or object a view shows can be targeted and add's explicit polygon indices need no other GUI control. Terrain recipe painting retains source_terrain_edit semantics."
+      "note": "While the tool is engaged, a left-button drag paints or erases its zone on each paintable source polygon the pointer crosses (looking through models the tool cannot paint); release applies the stroke as one undoable change: source_polygon_zones with the source polygons source_zones inspection returns. Ctrl held inverts the mode for a stroke, Shift+click picks a zone of the polygon under the pointer and [ ] step through the used zones (source_zone_tool engage with mode or zone), and Esc drops a stroke in progress. MCP never synthesizes pointer input."
+    },
+    {
+      "gui": "MainWindow.SourceZones:Notices",
+      "tools": [
+        "zstudio_source_zone_tool"
+      ],
+      "note": "After a stroke, notices under the tool banner report the full polygons it skipped, with Show/Hide outlining them (source_zone_tool showSkipped or hideSkipped; state lastStroke lists them), editable terrain it crossed and its polygon limit; ✕ dismisses a notice."
+    },
+    {
+      "gui": "MainWindow.SourceZones:ZoneToolKey",
+      "tools": [
+        "zstudio_source_zone_tool"
+      ],
+      "note": "Outside text fields, P and E engage the tool in Paint or Erase (or switch its mode), [ and ] step through the zones the map uses, and Esc leaves the tool once no stroke is in progress (a stroke in progress is dropped first): source_zone_tool engage or exit. Ctrl and Shift only change the cursor and banner until a stroke or click uses them."
     },
     {
       "gui": "SourceModelDialog:Controls",
@@ -923,7 +938,7 @@
       "tools": [
         "zstudio_scene_selection"
       ],
-      "note": "The Selection menu (compiled worlds), the card's Isolate, the Show all eye in a source map's World tree header and scene_selection isolate/show_all share the same isolation; Show all also shows rows hidden with the outliner's eye."
+      "note": "The Selection menu (compiled worlds), the card's Isolate, a middle-click on a World tree row's eye, the Show all eye in a source map's World tree header and scene_selection isolate/show_all share the same isolation; Show all also shows rows hidden with the outliner's eye."
     },
     {
       "gui": "MainWindow.xaml:MaximizeToolsClick",
@@ -1092,7 +1107,7 @@
       "tools": [
         "zstudio_scene_selection"
       ],
-      "note": "The Selection menu (compiled worlds), the card's Isolate, the Show all eye in a source map's World tree header and scene_selection isolate/show_all share the same isolation; Show all also shows rows hidden with the outliner's eye."
+      "note": "The Selection menu (compiled worlds), the card's Isolate, a middle-click on a World tree row's eye, the Show all eye in a source map's World tree header and scene_selection isolate/show_all share the same isolation; Show all also shows rows hidden with the outliner's eye."
     },
     {
       "gui": "MainWindow.xaml:StopAudioClick",
@@ -1260,11 +1275,46 @@
       "note": "Tools > Create terrain chooses a glTF file in the project, then opens the Create terrain dialog (TerrainCreateDialog:Controls) for its meshes and recipe path; Create makes the recipe and the database marker as one undoable change (source_terrain_create with model, surfaces and recipe) and shows the recipe in Properties."
     },
     {
-      "gui": "MainWindow.xaml:EditZonesClick",
+      "gui": "MainWindow.xaml:PaintZonesClick",
       "tools": [
-        "zstudio_source_zone_draft"
+        "zstudio_source_zone_tool"
       ],
-      "note": "Open the pinned source-world zone editor using action begin."
+      "note": "Tools > Paint polygon zones (P) engages the polygon zone tool in Paint on the shown source map, or switches an engaged tool to Paint: source_zone_tool with action engage and mode paint."
+    },
+    {
+      "gui": "MainWindow.xaml:EraseZonesClick",
+      "tools": [
+        "zstudio_source_zone_tool"
+      ],
+      "note": "Tools > Erase polygon zones (E) engages the tool in Erase, or switches it to Erase: source_zone_tool with action engage and mode erase."
+    },
+    {
+      "gui": "MainWindow.xaml:PolygonZoneToolClick",
+      "tools": [
+        "zstudio_source_zone_tool"
+      ],
+      "note": "The Zones group's Edit zones toggle engages the tool (in its last mode and zone) or leaves it: source_zone_tool engage or exit. Engaged, the tool draws its own zone view and the overlays pause with their buttons disabled (scene_options highlight and faceOrientation return busy); leaving resumes them."
+    },
+    {
+      "gui": "MainWindow.xaml:ZoneModeChecked",
+      "tools": [
+        "zstudio_source_zone_tool"
+      ],
+      "note": "The Paint | Erase switch beside the engaged toggle sets the mode: source_zone_tool engage with mode."
+    },
+    {
+      "gui": "MainWindow.xaml:ZonePickerClick",
+      "tools": [
+        "zstudio_source_zone_tool"
+      ],
+      "note": "The zone dropdown opens the zone picker (ZonePicker:Controls); source_zone_tool state lists the same zones with labels and polygon counts as placed in the world."
+    },
+    {
+      "gui": "MainWindow.xaml:ZoneToolExitClick",
+      "tools": [
+        "zstudio_source_zone_tool"
+      ],
+      "note": "The tool banner's Exit leaves the tool, as Esc does: source_zone_tool exit."
     },
     {
       "gui": "MainWindow.xaml:ConvertTerrainClick",
@@ -1379,6 +1429,14 @@
         "zstudio_scene_selection"
       ],
       "note": "A row's eye is scene_tree hide/show (view only, no source edit); scene_selection show_all shows everything again."
+    },
+    {
+      "gui": "MainWindow.xaml:OutlinerEyeMiddleClick",
+      "tools": [
+        "zstudio_scene_tree",
+        "zstudio_scene_selection"
+      ],
+      "note": "Middle-clicking a row's eye isolates its object (scene_tree isolate on the row, which rows report as isolated; for an object, the same as scene_selection isolate with its node); middle-clicking the isolated row's eye shows everything again (scene_tree isolate on that row; rows hidden with the eye stay hidden, unlike scene_selection show_all)."
     },
     {
       "gui": "MainWindow.xaml:OpenWorkspaceClick",

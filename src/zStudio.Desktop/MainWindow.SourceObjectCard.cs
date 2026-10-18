@@ -30,6 +30,9 @@ public partial class MainWindow
             if (current != CurrentInspectionCard || shownDocument is not { SourceWorld: not null } doc || current.ObjectNode == null)
                 throw new StudioCommandException("context_changed", "The source object is no longer selected.");
             RequireSourceWorldIdle(doc.SourceWorld); RequireNoDrafts(doc, committing: true, committingCard: current);
+            // Editing the object takes over from the polygon zone tool (its strokes would wait on this draft).
+            if (scene?.IsZonePainting == true || zoneTool.Applying) throw new StudioCommandException("busy", "Finish the polygon zone strokes before editing the object.");
+            LeaveZoneTool();
             inspectionDraft = current;
         };
         card.BrowseModel = () =>
@@ -71,7 +74,7 @@ public partial class MainWindow
             if (shownDocument is not { SourceWorld: not null } doc || card.Selection is not { } selected) return;
             var state = DescribeSourceObject(doc, EditableSourceSelectionNode(doc, selected.Node));
             if (state.Origin.Terrain is not { } recipe) return;
-            // Properties leaves what it shows (a map zone draft, pending input) only once that is resolved.
+            // Properties leaves what it shows (pending input) only once that is resolved.
             if (!await ResolvePropertiesDraftsAsync()) return;
             await ShowTerrainPropertiesAsync(doc, recipe, state.Origin.TerrainSurface, null, null, CancellationToken.None);
         });

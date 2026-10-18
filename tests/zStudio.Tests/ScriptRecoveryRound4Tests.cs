@@ -174,14 +174,14 @@ public sealed class ScriptRecoveryRound4Tests
         }
         public string Full(string relative) => Path.Combine(Root, relative.Replace('/', Path.DirectorySeparatorChar));
         public byte[] Read(string relative) => File.ReadAllBytes(Full(relative));
-        public byte[] Events => Read($"zstudio/recovery/{SaveId}/events.log");
+        public byte[] Events => Read($".zstudio/recovery/{SaveId}/events.log");
         public SortedDictionary<string, string?> Sources()
         {
             SortedDictionary<string, string?> entries = new(StringComparer.Ordinal);
             foreach (string path in Directory.EnumerateFileSystemEntries(Root, "*", SearchOption.AllDirectories))
             {
                 string relative = Path.GetRelativePath(Root, path).Replace('\\', '/');
-                if (relative == "zstudio" || relative.StartsWith("zstudio/", StringComparison.Ordinal)) continue;
+                if (relative == ".zstudio" || relative.StartsWith(".zstudio/", StringComparison.Ordinal)) continue;
                 entries[relative] = File.Exists(path) ? File.ReadAllText(path) : null;
             }
             return entries;
@@ -292,10 +292,10 @@ public sealed class ScriptRecoveryRound4Tests
         Assert.Empty(new SourcePublisher(project.Root).SaveFiles("20990101T000000000Z-00000000"));
         Assert.Empty(new SourcePublisher(project.Root).SaveFiles("not a save"));
         // Rolled back, but its journal could not be removed: resolving it again changes no file of the project.
-        using (new FileStream(project.Full($"zstudio/recovery/{project.SaveId}/manifest.json"), FileMode.Open, FileAccess.Read, FileShare.Read))
+        using (new FileStream(project.Full($".zstudio/recovery/{project.SaveId}/manifest.json"), FileMode.Open, FileAccess.Read, FileShare.Read))
             Assert.False(new SourcePublisher(project.Root).Resolve(project.SaveId, SourceRecoveryAction.RollBack, Token).Resolved);
         Assert.Equal(project.Before, project.Sources());
-        Assert.True(File.Exists(project.Full($"zstudio/recovery/{project.SaveId}/manifest.json")));
+        Assert.True(File.Exists(project.Full($".zstudio/recovery/{project.SaveId}/manifest.json")));
         Assert.Empty(new SourcePublisher(project.Root).SaveFiles(project.SaveId));
         Assert.True(new SourcePublisher(project.Root).Resolve(project.SaveId, SourceRecoveryAction.Complete, Token).Resolved);
         Assert.Empty(new SourcePublisher(project.Root).SaveFiles(project.SaveId));

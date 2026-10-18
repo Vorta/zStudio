@@ -44,6 +44,8 @@ internal sealed class SceneTreeModel
     internal event Action<SceneTreeItem>? Collapsing;
     /// <summary>Whether a node is hidden in the view (the outliner's eye); null outside source maps.</summary>
     internal Func<int, bool>? IsHiddenNode { get; set; }
+    /// <summary>Whether the view shows only this node (middle-click on its eye).</summary>
+    internal Func<int, bool>? IsIsolatedNode { get; set; }
     /// <summary>Every row created so far, for refreshing their hidden state.</summary>
     internal IEnumerable<SceneTreeItem> CreatedRows => rows.Values;
     internal void OnCollapsing(SceneTreeItem row) => Collapsing?.Invoke(row);
@@ -186,9 +188,10 @@ public sealed class SceneTreeItem : INotifyPropertyChanged
     /// <summary>The row's Frame selection button: a selectable object, piece of geometry or node (not a group the build removes).</summary>
     public bool CanFrame => IsSourceMap && Index is int && Selectable && !SourceGroup;
     public bool IsHidden => Index is int i && Owner.IsHiddenNode?.Invoke(i) == true;
-    public string EyeIcon => IsHidden ? "EyeOff" : "Eye";
-    public string EyeToolTip => IsHidden ? "Show in viewport" : "Hide in viewport";
-    internal void NotifyHidden() { Changed(nameof(IsHidden)); Changed(nameof(EyeIcon)); Changed(nameof(EyeToolTip)); }
+    public bool IsIsolated => Index is int i && Owner.IsIsolatedNode?.Invoke(i) == true;
+    public string EyeIcon => IsHidden ? "EyeOff" : IsIsolated ? "Isolate" : "Eye";
+    public string EyeToolTip => (IsHidden ? "Show in viewport" : "Hide in viewport") + (IsIsolated ? "\nMiddle-click: show all objects again" : "\nMiddle-click: hide all other objects");
+    internal void NotifyHidden() { Changed(nameof(IsHidden)); Changed(nameof(IsIsolated)); Changed(nameof(EyeIcon)); Changed(nameof(EyeToolTip)); }
     public string ToolTip => (Pass is { } pass ? pass.Description : IsOtherDifficulty ? OtherDifficultyToolTip : ToolTipCore) + (Animations is { } animations ? "\nAnimations: " + string.Join(", ", animations.Select(a => Short(a, 64))) : "");
     private string ToolTipCore => Authored is { } authored ? $"{Short(DisplayName, 2048)} · {NodeType}\nSource: {Short(authored.File, 2048)} · glTF node #{authored.SourceNode}\n" +
         $"Tree parent: {(Parent == null ? "none" : Short(Parent.DisplayName, 200))}\nCompiled node: {authored.CompiledNode?.ToString() ?? "none"}" + (ReadOnlyReason == null ? "" : "\n" + ReadOnlyReason)

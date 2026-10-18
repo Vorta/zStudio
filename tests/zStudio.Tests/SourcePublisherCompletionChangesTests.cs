@@ -26,7 +26,7 @@ public sealed partial class SourcePublisherTests
             .Publish(writes, "replacement admission", Token));
         SourcePublisher publisher = new(project.Root);
         string id = Assert.Single(publisher.FindInterrupted(Token)).SaveId;
-        string folder = project.Full($"zstudio/recovery/{id}"), manifestPath = Path.Combine(folder, "manifest.json");
+        string folder = project.Full($".zstudio/recovery/{id}"), manifestPath = Path.Combine(folder, "manifest.json");
         var manifest = JsonNode.Parse(File.ReadAllBytes(manifestPath))!;
         manifest["files"]![1]!["content"]!["length"] = FormatRegistry.MaximumDocumentBytes + 1;
         // An oversized expected/external original is still inspectable; it was never reached by this save.
@@ -80,7 +80,7 @@ public sealed partial class SourcePublisherTests
         FileStream? blocker = null;
         publisher.Fault = (step, _) =>
         {
-            if (step == "complete") blocker = new(project.Full($"zstudio/staging/{id}/0.tmp"), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
+            if (step == "complete") blocker = new(project.Full($".zstudio/staging/{id}/0.tmp"), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
         };
         try
         {
@@ -93,7 +93,7 @@ public sealed partial class SourcePublisherTests
         var missing = new SortedDictionary<string, string?>(before, StringComparer.Ordinal);
         missing.Remove(Script);
         Assert.Equal(missing, project.Sources());
-        Assert.Equal(original, project.Read($"zstudio/recovery/{id}/held/0.bin"));
+        Assert.Equal(original, project.Read($".zstudio/recovery/{id}/held/0.bin"));
         var state = Assert.Single(Assert.Single(publisher.FindInterrupted(Token)).Files);
         Assert.Equal(SourceRecoveryFileState.Missing, state.State);
         Assert.True(state.HeldOriginal);
@@ -108,7 +108,7 @@ public sealed partial class SourcePublisherTests
         }
         finally { blocker?.Dispose(); }
         Assert.Equal(missing, project.Sources());
-        Assert.Equal(original, project.Read($"zstudio/recovery/{id}/held/0.bin"));
+        Assert.Equal(original, project.Read($".zstudio/recovery/{id}/held/0.bin"));
 
         publisher.Fault = null;
         var recovered = publisher.Resolve(id, next, Token);
@@ -153,7 +153,7 @@ public sealed partial class SourcePublisherTests
         FileStream? blocker = null;
         publisher.Fault = (step, _) =>
         {
-            if (step == "complete") blocker = new(project.Full($"zstudio/staging/{id}/0.tmp"), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
+            if (step == "complete") blocker = new(project.Full($".zstudio/staging/{id}/0.tmp"), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
         };
         try
         {
@@ -186,7 +186,7 @@ public sealed partial class SourcePublisherTests
         publisher.Fault = (step, index) =>
         {
             if (step != "complete" || index != 0) return;
-            blocker = new(project.Full($"zstudio/staging/{id}/0.tmp"), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
+            blocker = new(project.Full($".zstudio/staging/{id}/0.tmp"), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
             cancellation.Cancel(); // This file finishes its attempt; cancellation is observed before the next file.
         };
         try
@@ -201,7 +201,7 @@ public sealed partial class SourcePublisherTests
         var missing = new SortedDictionary<string, string?>(before, StringComparer.Ordinal);
         missing.Remove(Ai);
         Assert.Equal(missing, project.Sources());
-        Assert.Equal(Text("GRAVITY ( -9.8 )\n"), project.Read($"zstudio/recovery/{id}/held/0.bin"));
+        Assert.Equal(Text("GRAVITY ( -9.8 )\n"), project.Read($".zstudio/recovery/{id}/held/0.bin"));
         publisher.Fault = null;
         var restored = publisher.Resolve(id, SourceRecoveryAction.RollBack, Token);
         Assert.True(restored.Resolved);

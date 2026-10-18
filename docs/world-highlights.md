@@ -1,6 +1,6 @@
 # Whole world surface highlights
 
-The six icon buttons after **Bounds** (in a source map, the command bar's **Overlay** group) identify stored game surface properties:
+The six icon buttons after **Bounds** (in a source map, the command bar's **Overlay** group, with Object zones and Polygon zones in its **Zones** group) identify stored game surface properties:
 
 | Button | Color | What it shows |
 | --- | --- | --- |
@@ -13,7 +13,7 @@ The six icon buttons after **Bounds** (in a source map, the command bar's **Over
 
 CanModify and ClipTo can be enabled together or separately. When both are enabled, a surface carrying both flags is red (ClipTo takes precedence). Soils, Object zones, Polygon zones and Landmarks are alternative modes: enabling one clears the crater highlights and the others, and enabling a crater highlight clears them. Clicking a checked button turns that highlight off. In the compiled toolbar, hover a button to see its name, on/off state and description; a source map's Overlay buttons have short fixed tooltips. In the compiled Whole world toolbar, the six buttons move together into the toolbar overflow at narrow widths.
 
-Matching surfaces blend their normal RGB equally with the diagnostic color, preserving textures, vertex/material colors, texture holes and transparency; Polygon zones instead replaces vertex colours with its zone encoding (RECOIL source meshes have none). Unmatched surfaces retain their normal appearance. The Textures button also applies to highlighted surfaces: with textures off, the tint blends over the ordinary untextured appearance. Face orientation uses the same 50% blend and temporarily takes precedence over these highlights. Wireframe (polygon outlines over the surfaces), bounds, selection, isolation and pickup editing remain available.
+Matching surfaces blend their normal RGB equally with the diagnostic color, preserving textures, vertex/material colors, texture holes and transparency; Polygon zones instead replaces vertex colours with its zone encoding (RECOIL source meshes have none). Unmatched surfaces retain their normal appearance. The Textures button also applies to highlighted surfaces: with textures off, the tint blends over the ordinary untextured appearance. Face orientation uses the same 50% blend and temporarily takes precedence over these highlights. Wireframe (light polygon outlines on a dark halo over the surfaces), bounds, selection, isolation and pickup editing remain available.
 
 Soil is a **material property**, so different surfaces on the same object can have different soil classifications. CanModify and ClipTo are **node flags**: instances sharing a model can have different flags, and a parent's flag does not automatically classify its children. Landmark is the exception: a landmark object's geometry is drawn with it, so Landmarks also highlights what lies below one. These views inspect the current mission starting scene; they do not predict whether a particular gameplay action will succeed or simulate terrain deformation.
 

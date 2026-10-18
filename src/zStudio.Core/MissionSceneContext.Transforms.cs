@@ -115,7 +115,33 @@ public sealed partial class MissionSceneContext
         { AiNetworks = AiNetworks, InitializationTransforms = dependencies, AnimationRoots = AnimationRoots };
     }
 
-    private static readonly string[] BoundsFields = ["node_bbox", "model_bbox", "child_bbox", "area_partition", "update_flags"];
+    /// <summary>
+    /// Rebase an initialized mission onto a source update that replaced only built models' polygon zones (see
+    /// SourceWorlds.TryUpdatePolygonZones): nodes, materials and textures are the same objects, so initialization, which
+    /// reads no polygon zone, stands. Null when the update replaced anything else or the mission does not show those models.
+    /// </summary>
+    public MissionSceneContext? WithSourcePolygonZones(GameScene beforeSource, GameScene afterSource, CancellationToken token = default)
+    {
+        token.ThrowIfCancellationRequested();
+        if (beforeSource.Nodes.Count != afterSource.Nodes.Count || beforeSource.Models.Count != afterSource.Models.Count
+            || Scene.Models.Count < beforeSource.Models.Count || beforeSource.Materials.Count != afterSource.Materials.Count || beforeSource.Textures.Count != afterSource.Textures.Count
+            || !beforeSource.Nodes.Zip(afterSource.Nodes).All(pair => ReferenceEquals(pair.First, pair.Second))
+            || !beforeSource.Materials.Zip(afterSource.Materials).All(pair => ReferenceEquals(pair.First, pair.Second))
+            || !beforeSource.Textures.Zip(afterSource.Textures).All(pair => ReferenceEquals(pair.First, pair.Second))) return null;
+        GameScene scene = new(); scene.Models.AddRange(Scene.Models); scene.Materials.AddRange(Scene.Materials); scene.Textures.AddRange(Scene.Textures); scene.Nodes.AddRange(Scene.Nodes);
+        for (int i = 0; i < beforeSource.Models.Count; i++)
+        {
+            token.ThrowIfCancellationRequested();
+            if (ReferenceEquals(beforeSource.Models[i], afterSource.Models[i])) continue;
+            var (a, b) = (beforeSource.Models[i], afterSource.Models[i]);
+            if (!ReferenceEquals(Scene.Models[i], a) || a.Polygons.Length != b.Polygons.Length || !ReferenceEquals(a.Vertices, b.Vertices)) return null;
+            scene.Models[i] = b;
+        }
+        return new(scene, SourceNodes.ToList(), Actors.ToList(), new(DormantRoots), Diagnostics, Layout, originalNodeCount, token)
+        { AiNetworks = AiNetworks, InitializationTransforms = InitializationTransforms, AnimationRoots = AnimationRoots };
+    }
+
+    private static readonly string[] BoundsFields =["node_bbox", "model_bbox", "child_bbox", "area_partition", "update_flags"];
     private static bool DerivedMetadata(string field) => field is "node_bbox" or "model_bbox" or "child_bbox" or "area_partition" or "update_flags";
     private static bool TransformField(GameNode node, string field) => node.Class == "object3d" && field is "transform" or "rotate" or "scale" or "translate" or "flags";
     private static bool SameFields(JsonObject before, JsonObject after, Func<string, bool> ignored)

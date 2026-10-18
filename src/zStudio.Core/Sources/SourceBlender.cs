@@ -7,7 +7,7 @@ using zStudio.Core.Worlds;
 
 namespace zStudio.Core.Sources;
 
-/// <summary>A model checked out for Blender: its folder under <c>zstudio/export</c> and the project files it was copied from.</summary>
+/// <summary>A model checked out for Blender: its folder under <c>.zstudio/export</c> and the project files it was copied from.</summary>
 public sealed record BlenderCheckout(string Id, string Folder, string Model, DateTime CreatedUtc, IReadOnlyList<BlenderCheckoutFile> Files)
 {
     public int Version { get; init; } = SourceBlender.CheckoutVersion;
@@ -49,20 +49,20 @@ public sealed class BlenderConflictException(IReadOnlyList<string> files, string
 
 /// <summary>
 /// The reference-aware Blender round trip. <see cref="Checkout"/> copies one project graph into
-/// <c>zstudio/export/&lt;id&gt;/input</c>. The RECOIL Blender extension writes a completed graph generation into
+/// <c>.zstudio/export/&lt;id&gt;/input</c>. The RECOIL Blender extension writes a completed graph generation into
 /// <c>outbox</c>; <see cref="PlanUpdate"/> verifies and seals its receipt and dependencies before planning changes.
 /// Nothing reaches the project until the user accepts the plan into the shared workspace.
 /// </summary>
 public static partial class SourceBlender
 {
-    public const string ExportFolder = "zstudio/export";
+    public const string ExportFolder = SourcePublisher.WorkingFolder + "/export";
     private const string ManifestName = "manifest.json";
     private const long MaximumExportBytes = 512L * 1024 * 1024;
     private const long MaximumManifestBytes = 64L * 1024 * 1024;
     private const int MaximumCheckoutManifestBytes = 4 * 1024 * 1024;
     public const int CheckoutVersion = 2;
 
-    private static string Folder(string root) => Path.Combine(Path.TrimEndingDirectorySeparator(Path.GetFullPath(root)), "zstudio", "export");
+    private static string Folder(string root) => Path.Combine(Path.TrimEndingDirectorySeparator(Path.GetFullPath(root)), SourcePublisher.WorkingFolder, "export");
 
     /// <summary>Owns one new checkout/sealed generation, including cleanup through the same held directories.</summary>
     private sealed class CopyFiles : IDisposable
@@ -82,6 +82,7 @@ public static partial class SourceBlender
             directories.Parent(path, create: true);
             // A colliding folder belongs to somebody else; neither write into it nor clean it up.
             directories.CreateDirectory(path);
+            SourceProjectSettings.HideFolderOf(path);
             root = path;
             folders.Add(path); knownFolders.Add(path);
         }

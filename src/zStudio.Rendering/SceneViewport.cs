@@ -476,6 +476,7 @@ public sealed partial class SceneViewport : UserControl, IDisposable
             material.DiffuseMap = enabled ? texture : null;
             material.EnableUnLit = enabled;
         }
+        SyncZoneGhosts();
     }
     private bool boundsEnabled;
     public void SetBounds(bool enabled) { boundsEnabled = enabled; RefreshBoundsBoxes(); }
@@ -490,13 +491,17 @@ public sealed partial class SceneViewport : UserControl, IDisposable
         }
     }
     private int? isolatedRoot;
+    private int[] isolatedMembers = [];
     private int[] hiddenRoots = [];
     /// <summary>The objects hidden in the view (signed selection owners or node indices), drawn again by <see cref="Isolate"/>(null).</summary>
     public IReadOnlyList<int> HiddenNodes => hiddenRoots;
-    /// <summary>Shows only <paramref name="node"/> and its descendants (less what is hidden), or everything not hidden again for null.</summary>
-    public void Isolate(int? node)
+    /// <summary>
+    /// Shows only <paramref name="node"/> and its descendants (less what is hidden), or everything not hidden again for null;
+    /// <paramref name="members"/> are shown with it (the objects a source group holds, which owns no node of its own).
+    /// </summary>
+    public void Isolate(int? node, IReadOnlyCollection<int>? members = null)
     {
-        isolatedRoot = node;
+        isolatedRoot = node; isolatedMembers = node == null || members == null ? [] : [.. members];
         ApplyNodeVisibility();
     }
     /// <summary>Hides these objects (and their descendants) in the view only; an empty list shows them again.</summary>
@@ -523,17 +528,17 @@ public sealed partial class SceneViewport : UserControl, IDisposable
         return included;
     }
     private HashSet<int> isolatedNodes = [], hiddenNodes = [];
-    private bool IsShownPlacement(ScenePlacement p) => (isolatedRoot == null || isolatedNodes.Contains(p.NodeIndex) || pickupRoots.GetValueOrDefault(p.NodeIndex, -1) == isolatedRoot)
+    private bool IsShownPlacement(ScenePlacement p) => (isolatedRoot == null || isolatedNodes.Contains(p.NodeIndex) || pickupRoots.TryGetValue(p.NodeIndex, out int pickup) && (pickup == isolatedRoot || isolatedNodes.Contains(pickup)))
         && !hiddenNodes.Contains(p.NodeIndex) && !hiddenNodes.Contains(pickupRoots.GetValueOrDefault(p.NodeIndex, -1));
     private void ApplyNodeVisibility()
     {
         ++inspectionSerial;
-        isolatedNodes = isolatedRoot is int root ? Subtrees([root]) : [];
+        isolatedNodes = isolatedRoot is int root ? Subtrees([root, .. isolatedMembers]) : [];
         hiddenNodes = Subtrees(hiddenRoots);
         foreach (var mesh in meshes) { var shown = placements[mesh].Where(IsShownPlacement).ToArray(); visiblePlacements[mesh] = shown; mesh.Instances = shown.Select(p => p.Transform).ToList(); mesh.Visibility = shown.Length == 0 ? Visibility.Collapsed : Visibility.Visible; }
         RefreshBoundsBoxes();
         // The camera stays where it is; Frame all is a separate, explicit command. The horizon follows it again next frame.
-        RecalculateSceneBounds(); RefreshPickupSelection();
+        RecalculateSceneBounds(); RefreshPickupSelection(); RefreshZoneVisibility();
         cameraPoseDirty = true; viewport.InvalidateRender();
     }
     private void RecalculateSceneBounds()
@@ -559,7 +564,7 @@ public sealed partial class SceneViewport : UserControl, IDisposable
         ClearAnimationResources();
         ClearWorldHighlights(); ClearPolygonOverlays();
         ClearAi(); ClearParachutes();
-        isolatedRoot = null; hiddenRoots = []; isolatedNodes = []; hiddenNodes = [];
+        isolatedRoot = null; isolatedMembers = []; hiddenRoots = []; isolatedNodes = []; hiddenNodes = [];
         horizonNodes.Clear(); Mission = null; PreviewScene = null; InspectionNodes = null; VisibleSceneNodes = new HashSet<int>();
         objectPreviewMeshes = null; objectPreviewBounds = null; objectPreviewOriginals = null; ObjectTransformPreviewNode = null; objectPreviewToken = 0;
         sceneAlphaGroup = null;

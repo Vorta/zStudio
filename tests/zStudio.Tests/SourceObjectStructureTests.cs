@@ -194,7 +194,7 @@ public sealed class SourceObjectStructureTests
         int gateSlot = build.Provenance.Single(p => p.Value.ModelNodeName == "gate").Key;
         var gate = world.Nodes.Single(n => n.Name == "gate");
         Assert.False(SourceObjectEdits.FlagSettable(gate.Class, build.Provenance[gateSlot], WorldGltf.ZoneGate));
-        Assert.Contains("map zone editor", Assert.Throws<InvalidDataException>(() => SourceObjectEdits.PlanFlag(workspace, gate, build.Provenance[gateSlot], build.Executions, WorldGltf.ZoneGate, true, Token)).Message);
+        Assert.Contains("Zone section", Assert.Throws<InvalidDataException>(() => SourceObjectEdits.PlanFlag(workspace, gate, build.Provenance[gateSlot], build.Executions, WorldGltf.ZoneGate, true, Token)).Message);
         Assert.True(SourceZoneEdits.Inspect(workspace, build, [new(gateSlot)], token: Token).RequiresSharedScope);
         Assert.Throws<InvalidDataException>(() => SourceZoneEdits.PlanAssignments(workspace, build, [new(gateSlot)], new(NodeZone: 8), false, Token));
         Apply(workspace, SourceObjectEdits.PlanDelete(Target(workspace, "m1", build, world, "sgate1"), Token));

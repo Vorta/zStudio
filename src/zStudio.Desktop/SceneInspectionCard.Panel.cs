@@ -201,6 +201,8 @@ internal sealed partial class SceneInspectionCard
     private Grid contents = null!;
     private System.Windows.Shapes.Rectangle blur = null!, tint = null!;
     private readonly TextBlock surfaceName = new() { FontWeight = FontWeights.SemiBold, Margin = new(4, 0, 10, 0), VerticalAlignment = VerticalAlignment.Center, MaxWidth = 180, TextTrimming = TextTrimming.CharacterEllipsis };
+    /// <summary>What a tool adds to the surface readout (the polygon zone tool: the polygon's file, placements and zones).</summary>
+    private readonly TextBlock surfaceDetail = new() { Margin = new(0, 0, 10, 0), VerticalAlignment = VerticalAlignment.Center, MaxWidth = 300, TextTrimming = TextTrimming.CharacterEllipsis, Visibility = Visibility.Collapsed };
     private readonly TextBlock[] surfaceAxes = Enumerable.Range(0, 3).Select(i => new TextBlock { Margin = new(0, 0, i == 2 ? 0 : 10, 0), VerticalAlignment = VerticalAlignment.Center }).ToArray();
     private readonly PreviewIcon selectionGlyph = new() { Width = 14, Height = 14, Margin = new(0, 0, 8, 0), VerticalAlignment = VerticalAlignment.Center };
     private readonly TextBlock selectionName = new() { VerticalAlignment = VerticalAlignment.Center, MaxWidth = 220, TextTrimming = TextTrimming.CharacterEllipsis };
@@ -235,13 +237,18 @@ internal sealed partial class SceneInspectionCard
         probe.SetResourceReference(System.Windows.Documents.TextElement.ForegroundProperty, "TextFillColorTertiaryBrush");
         TextBlock label = new() { Text = "Surface", VerticalAlignment = VerticalAlignment.Center };
         label.SetResourceReference(TextBlock.ForegroundProperty, "TextFillColorTertiaryBrush");
-        surface.Children.Add(probe); surface.Children.Add(label); surface.Children.Add(surfaceName);
+        surface.Children.Add(probe); surface.Children.Add(label); surface.Children.Add(surfaceName); surface.Children.Add(surfaceDetail);
         foreach (var axis in surfaceAxes) surface.Children.Add(axis);
         surfaceChip.Content = surface;
         StackPanel selection = new() { Orientation = Orientation.Horizontal };
         selectionMode.SetResourceReference(TextBlock.ForegroundProperty, "TextFillColorTertiaryBrush");
         selection.Children.Add(selectionGlyph); selection.Children.Add(selectionName); selection.Children.Add(selectionMode);
         selectionChip.Content = selection;
+    }
+    internal void SetSurfaceDetail(string? text)
+    {
+        surfaceDetail.Text = text ?? ""; surfaceDetail.ToolTip = text;
+        surfaceDetail.Visibility = string.IsNullOrEmpty(text) ? Visibility.Collapsed : Visibility.Visible;
     }
     /// <summary>Docked: the selected object (and the shown gizmo) at the view's lower left, the surface under the cursor at its lower right.</summary>
     private void RefreshChips(zStudio.Rendering.SceneInspection? selected)

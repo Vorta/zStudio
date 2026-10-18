@@ -29,7 +29,7 @@ public sealed class SourceObjectPlanTests
         var source = await SourceWorlds.LoadSceneAsync(fixture.Project, "m2", token: Token);
         var context = zStudio.Core.Animation.AnimationPreviewContext.FromSources(source, MissionDifficulty.Medium, Token);
         Assert.True(context.Sounds["report"].Loop); Assert.Equal(wave, context.Sounds["report"].Bytes.ToArray());
-        Assert.False(Directory.Exists(Path.Combine(fixture.Project, "zstudio")));
+        Assert.False(Directory.Exists(Path.Combine(fixture.Project, ".zstudio")));
         Assert.Empty(Directory.EnumerateFiles(fixture.Project, "*.zbd", SearchOption.AllDirectories));
         Assert.NotNull(source.Animations);
         Assert.Contains(source.Animations.Entries, entry => entry.RootName == "tank");

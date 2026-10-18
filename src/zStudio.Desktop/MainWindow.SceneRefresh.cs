@@ -113,14 +113,14 @@ public partial class MainWindow
             ConfigurePickupScene(scene); ConfigureFlyScene(scene);
             SceneHost.Content = scene;
             ApplySceneOptions();
-            RefreshZoneDraftView();
+            RefreshZoneToolScene();
             if (asset.Kind == AssetKind.World) AttachPickupEditor(doc);
             scene.SetValveOptions(previous.ValveOverlayVisible,
                 mission?.Layout.MissionArchive == previous.Mission?.Layout.MissionArchive ? previous.ValveFilter : null);
             ApplyAiOptions();
-            isolatedNode = mission != null && previous.Mission != null && isolate is int oldIsolate
+            isolatedNode = isolatedGroup ? null : mission != null && previous.Mission != null && isolate is int oldIsolate
                 ? Remap(oldIsolate) : isolate;
-            if (isolatedNode != null) scene.Isolate(isolatedNode);
+            ApplyIsolation(); RefreshRowEyes();
             RemapHidden(hidden, old => mission != null && previous.Mission != null ? Remap(old) : old);
             // A refresh retains the user's camera.
             scene.RestoreView(view);

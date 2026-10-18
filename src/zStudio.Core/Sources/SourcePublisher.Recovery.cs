@@ -13,7 +13,7 @@ public enum SourceRecoveryAction
     RollBack,
     /// <summary>Finish the save from its journal, replacing only files that still have their expected content.</summary>
     Complete,
-    /// <summary>Keep the files as they are and retire the journal; originals it still holds move to <c>zstudio/recovery/abandoned</c>.</summary>
+    /// <summary>Keep the files as they are and retire the journal; originals it still holds move to <c>.zstudio/recovery/abandoned</c>.</summary>
     Abandon,
 }
 
@@ -149,7 +149,7 @@ public sealed partial class SourcePublisher
     }
 
     /// <summary>
-    /// Whether <c>zstudio/recovery</c> still holds the journal of <paramref name="saveId"/>; each save removes those of saves
+    /// Whether <c>.zstudio/recovery</c> still holds the journal of <paramref name="saveId"/>; each save removes those of saves
     /// that finished. Reads no file, holds nothing and takes no lock, so it only tells whether a report about that save can
     /// still apply.
     /// </summary>

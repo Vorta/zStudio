@@ -88,6 +88,7 @@ public partial class MainWindow
         var target = graph.Networks.FirstOrDefault(n => n.Id == network) ?? throw new StudioCommandException("stale_record", "Network unavailable.");
         if (target.Nodes.Count == 0 || target.Nodes.Count > AiPathTransforms.MaximumNodes)
             throw new StudioCommandException("unsupported", $"Edit mode supports 1–{AiPathTransforms.MaximumNodes:N0} nodes in one network.");
+        EndZoneToolFor("editing an AI path");
         SetAiOptions(true, aiThroughGeometry, network);
         selectedNode = null; inspectedSceneSource = null;
         scene.SetAiPathEditing(network, scene.SelectedAiNode is { } id ? [id] : []);

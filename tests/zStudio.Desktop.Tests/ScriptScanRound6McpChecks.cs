@@ -11,7 +11,7 @@ using Xunit;
 namespace zStudio.Desktop.Tests;
 
 /// <summary>
-/// The retained Blender checkout listing through the real named-pipe MCP connection lists checkouts and their outboxes with one bounded, cancellable scan off the UI thread, and a zstudio/export folder
+/// The retained Blender checkout listing through the real named-pipe MCP connection lists checkouts and their outboxes with one bounded, cancellable scan off the UI thread, and a .zstudio/export folder
 /// beyond the scan's budget is refused (io_failed, and the reason in the status) rather than listed in part.
 /// </summary>
 internal static class ScriptScanRound6McpChecks
@@ -34,7 +34,7 @@ internal static class ScriptScanRound6McpChecks
             string crowded = Checkout("crowded", 0, new JsonArray([.. Enumerable.Range(0, zStudio.Core.Sources.SourceProject.MaximumScannedEntries + 1).Select(_ => (JsonNode?)0)]));
             string refused = (await Call("source_blender_checkouts", new(), error: true)).GetValue<string>();
             Assert.Contains("io_failed", refused, StringComparison.Ordinal);
-            Assert.Contains("zstudio/export holds more than 250,000 files and folders", refused, StringComparison.Ordinal);
+            Assert.Contains(".zstudio/export holds more than 250,000 files and folders", refused, StringComparison.Ordinal);
             Directory.Delete(crowded, true);
 
             // Checkouts and their exports (newest first, nested folders included), each outbox scanned once.
@@ -51,7 +51,7 @@ internal static class ScriptScanRound6McpChecks
 
             string Checkout(string id, int exports, JsonArray? files = null, string created = "2026-01-01T00:00:00.0000000Z")
             {
-                string folder = Path.Combine(fixture.Project, "zstudio", "export", id);
+                string folder = Path.Combine(fixture.Project, ".zstudio", "export", id);
                 Directory.CreateDirectory(Path.Combine(folder, "outbox", "nested"));
                 JsonObject manifest = new() { ["format"] = "zstudio-blender-checkout", ["version"] = 2, ["id"] = id, ["model"] = "data/m1/models/m1.gltf", ["created"] = created, ["files"] = files ?? [] };
                 File.WriteAllText(Path.Combine(folder, "manifest.json"), manifest.ToJsonString());

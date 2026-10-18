@@ -84,7 +84,7 @@ public partial class MainWindow
         if (scene?.InspectionContent is SceneInspectionCard card)
         {
             card.IsSourceWorld = shownDocument?.SourceWorld != null;
-            if (!sourceChromeActive) { card.WorldRebuilding = null; card.FrameSelection = null; card.CategoryOf = null; card.RecentSelections = null; card.PickRecent = null; card.WorldSummary = null; }
+            if (!sourceChromeActive) { card.WorldRebuilding = null; card.CategoryOf = null; card.ZoneLabel = null; card.RecentSelections = null; card.PickRecent = null; card.WorldSummary = null; }
         }
         RefreshSourceChrome();
     }
@@ -113,7 +113,6 @@ public partial class MainWindow
         Move(FrameScene, SourceCameraItems, "CommandGroupButton", "Frame all — fit all visible geometry in view");
         Move(FlyEnabled, SourceCameraItems, "CommandToggle", "Flycam — Esc restores normal controls");
         Move(Wireframe, SourceDisplayItems, "CommandToggle", "Wireframe — outline each polygon over the surfaces");
-        Move(FaceOrientation, SourceDisplayItems, "CommandToggle", "Face orientation — show normal direction");
         Move(TexturesEnabled, SourceDisplayItems, "CommandToggle", "Textures");
         Move(BoundsEnabled, SourceDisplayItems, "CommandToggle", "Bounds — object bounding boxes");
         Move(BackdropEnabled, SourceDisplayItems, "CommandToggle", "Horizon");
@@ -121,9 +120,13 @@ public partial class MainWindow
         Restyle(HighlightSoils, "CommandToggle", "Non-default soils — water, lava, sand");
         Restyle(HighlightCanModify, "CommandToggle", "CanModify");
         Restyle(HighlightClipTo, "CommandToggle", "ClipTo");
-        Restyle(HighlightZones, "CommandToggle", "Object zones — the zone that decides whether each object is drawn");
-        Restyle(HighlightPolygonZones, "CommandToggle", "Polygon zones — the zones each polygon makes current when the camera or a vehicle is on it; striped where it has several");
+        Restyle(HighlightZones, "CommandToggle", "Show/hide object zones — the zone that decides whether each object is drawn");
+        Restyle(HighlightPolygonZones, "CommandToggle", "Show/hide polygon zones — the zones each polygon makes current when the camera or a vehicle is on it; striped where it has several");
         Restyle(HighlightLandmarks, "CommandToggle", "Landmarks — geometry and objects that are never culled");
+        Move(FaceOrientation, SourceOverlayItems, "CommandToggle", "Face orientation — show normal direction");
+        // The zone overlays lead the Zones group, before the tool that edits them.
+        Move(HighlightZones, SourceZoneOverlayItems);
+        Move(HighlightPolygonZones, SourceZoneOverlayItems);
         Move(ParachuteButton, SourceShowItems, "CommandGroupButton", "VTOL route");
         Move(AiTools, SourceShowItems);
         Restyle(AiEnabled, "CommandToggle", "AI nodes");
@@ -284,7 +287,12 @@ public partial class MainWindow
         }
         ViewModeChip.Visibility = shown && !flying ? Visibility.Visible : Visibility.Collapsed;
         RefreshViewMode();
-        FlyBanner.Visibility = FlyFrame.Visibility = shown && flying ? Visibility.Visible : Visibility.Collapsed;
+        FlyBanner.Visibility = shown && flying ? Visibility.Visible : Visibility.Collapsed;
+        // The Zones group's overlays and tool work in a source map's Whole world.
+        SourceZonesGroup.Visibility = shownAsset?.Kind == zStudio.Core.AssetKind.World && shownDocument?.SourceWorld != null ? Visibility.Visible : Visibility.Collapsed;
+        // The polygon zone tool frames the view as Flycam does, with its own banner.
+        FlyFrame.Visibility = shown && (flying || ZoneToolEngaged) ? Visibility.Visible : Visibility.Collapsed;
+        RefreshZoneBanner();
         FlyHint.Visibility = !sourceChromeActive && flying ? Visibility.Visible : Visibility.Collapsed;
         if (flying && scene != null) FlyBannerSpeed.Text = $"· {scene.FlySpeed:0.##} units/s";
         AiChip.Visibility = shown && aiVisible && IsAiWorld ? Visibility.Visible : Visibility.Collapsed;
@@ -303,8 +311,8 @@ public partial class MainWindow
         if (card != null)
         {
             card.WorldRebuilding = () => rebuildEvaluating;
-            card.FrameSelection = () => RunCameraNavigation("frameSelected");
             card.CategoryOf = SelectionCategory;
+            card.ZoneLabel = zone => shownDocument?.SourceWorld is { IsDisposed: false } world ? ZoneLabels(world).GetValueOrDefault(zone) : null;
             card.RecentSelections = () => recentDocument == shownDocument ? recentSelections : [];
             card.PickRecent = PickRecentSelection;
             card.WorldSummary = WorldSummary;
@@ -551,6 +559,44 @@ public partial class MainWindow
         try { SetRowHidden(row, index, !row.IsHidden); }
         catch (StudioCommandException ex) { Report(ex); }
     }
+    // Middle-click on the eye: show only this object (what Isolate did), or everything again on the isolated one.
+    private void OutlinerEyeMiddleClick(object sender, System.Windows.Input.MouseButtonEventArgs e)
+    {
+        if (e.ChangedButton != System.Windows.Input.MouseButton.Middle) return;
+        e.Handled = true;
+        if ((sender as FrameworkElement)?.Tag is not SceneTreeItem { CanHide: true, Index: int index } row) return;
+        try { ToggleRowIsolation(row, index); }
+        catch (StudioCommandException ex) { Report(ex); }
+    }
+    internal void ToggleRowIsolation(SceneTreeItem row, int index)
+    {
+        if (scene == null || row.Owner != sceneTree) throw new StudioCommandException("stale_record", "The tree node is no longer available.");
+        if (scene.IsPickupDragging || scene.IsFlyActive) throw new StudioCommandException("busy", "Finish the transform drag or exit Fly first.");
+        int node = scene.PickupAt(index)?.Root ?? index;
+        if (isolatedNode == node) isolatedNode = null;
+        else
+        {
+            if (CurrentInspectionCard?.HasDraft == true) throw new StudioCommandException("pending_drafts", "Apply or discard the edit first.");
+            isolatedNode = node;
+        }
+        ApplyIsolation(); CurrentInspectionCard?.Refresh(); RefreshRowEyes();
+    }
+    /// <summary>
+    /// Shows only the isolated object, or everything again: a source group, which owns no node of its own, brings the
+    /// objects the tree shows below it, the same ones its eye hides.
+    /// </summary>
+    private void ApplyIsolation(SceneViewport? viewport = null)
+    {
+        viewport ??= scene;
+        if (viewport == null) return;
+        int[]? members = isolatedNode is int node && node < 0 && viewport == scene && sceneTree?.Reveal(node, expand: false) is { Synthetic: true } ? HiddenNodesFor(sceneTree, node) : null;
+        isolatedGroup = members != null;
+        viewport.Isolate(isolatedNode, members);
+    }
+    /// <summary>Whether the isolation is a source group's: its members come from the tree, so a replaced scene ends it.</summary>
+    private bool isolatedGroup;
+    /// <summary>The rows' eyes follow what is hidden and isolated.</summary>
+    private void RefreshRowEyes() { if (sceneTree != null) foreach (var row in sceneTree.CreatedRows) row.NotifyHidden(); }
     internal void SetRowHidden(SceneTreeItem row, int index, bool hidden)
     {
         if (scene == null || row.Owner != sceneTree) throw new StudioCommandException("stale_record", "The tree node is no longer available.");
@@ -638,6 +684,6 @@ public partial class MainWindow
         if (sceneTree == null) return;
         HashSet<int> hidden = hiddenRows.Values.SelectMany(n => n).ToHashSet();
         sceneTree.IsHiddenNode = hidden.Contains;
-        foreach (var row in sceneTree.CreatedRows) row.NotifyHidden();
+        RefreshRowEyes();
     }
 }

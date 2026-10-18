@@ -79,9 +79,13 @@ public static partial class WorldGltf
         PutLoadRootZone(scene, profile.LoadRoot);
     }
 
-    /// <summary>Updates JSON attributes only; buffer URIs, accessors, vertex bytes and unrelated extras remain intact.</summary>
+    /// <summary>
+    /// Updates JSON attributes only; buffer URIs, accessors, vertex bytes and unrelated extras remain intact. With
+    /// <paramref name="polygonsOnly"/> only the primitives' polygon zones are written (a polygon zone stroke), so node and
+    /// load-root attributes keep their stored form.
+    /// </summary>
     public static void PatchEmbeddedZones(JsonObject root, GltfDocument document, WorldZoneProfile profile,
-        CancellationToken token = default)
+        CancellationToken token = default, bool polygonsOnly = false)
     {
         AdmitEmbeddedProfile(profile, token);
         var layout = ZoneLayout.Read(document, token);
@@ -95,7 +99,7 @@ public static partial class WorldGltf
             var node = layout.Nodes[i];
             if (node.Index < 0 || node.Index >= nodes.Count || nodes[node.Index] is not JsonObject stored)
                 throw new InvalidDataException("The source node identity no longer matches its JSON document.");
-            PutNodeZone(EmbeddedValues(EnsureObject(stored, "extras")), profile.Nodes[i]);
+            if (!polygonsOnly) PutNodeZone(EmbeddedValues(EnsureObject(stored, "extras")), profile.Nodes[i]);
             if (node.Mesh is { } mesh) meshIndices.TryAdd(mesh, checked((int)Integer(stored["mesh"], "mesh", "the source model", 0, int.MaxValue)));
         }
         for (int i = 0; i < layout.Meshes.Count; i++)
@@ -112,6 +116,7 @@ public static partial class WorldGltf
                 WritePolygonZoneValues(EmbeddedValues(EnsureObject(stored, "extras")), words, token);
             }
         }
+        if (polygonsOnly) return;
         var scenes = root["scenes"] as JsonArray;
         if (scenes == null || scenes.Count == 0)
         {

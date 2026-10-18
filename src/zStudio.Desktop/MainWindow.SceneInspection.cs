@@ -44,12 +44,12 @@ public partial class MainWindow
     {
         if (viewport != scene || animation != null || motion != null) throw new StudioCommandException("unsupported", "Isolation is available only in model and Whole world previews.");
         if (viewport.IsPickupDragging || viewport.IsFlyActive) throw new StudioCommandException("busy", "Finish the transform drag or exit Fly first.");
-        if (isolatedNode != null) { isolatedNode = null; viewport.Isolate(null); return; }
+        if (isolatedNode != null) { isolatedNode = null; viewport.Isolate(null); RefreshRowEyes(); return; }
         if (card.HasDraft) throw new StudioCommandException("pending_drafts", "Apply or discard the edit first.");
         if (card.Selection is not { AiNode: null } selected) throw new StudioCommandException("not_ready", "Select an object first.");
         int node = selected.SelectionNode;
         node = viewport.PickupAt(node)?.Root ?? node;
-        isolatedNode = node; viewport.Isolate(node);
+        isolatedNode = node; ApplyIsolation(viewport); RefreshRowEyes();
     }
     private bool ResolveInspectionDrafts(DocumentModel? doc = null)
         => ResolveParachuteDraft(doc) && ResolveAiPathDraft(doc) && (!HasInspectionDraft || doc != null && inspectionDraft!.DraftDocument != doc || inspectionDraft!.ResolvePending());
@@ -66,7 +66,7 @@ public partial class MainWindow
         if (actor == null || viewport.Mission!.Actors.Count(a => a.Root == actor.Root) != 1) return null;
         return actor.Pickup?.Source ?? actor.CoordinateSource;
     }
-    private readonly System.Runtime.CompilerServices.ConditionalWeakTable<GameScene, Dictionary<int, string[]>> objectPolygonZones = new();
+    private readonly System.Runtime.CompilerServices.ConditionalWeakTable<GameScene, Dictionary<int, JsonObject>> objectPolygonZones = new();
     private JsonObject DescribeInspection(SceneViewport viewport, SceneInspection item)
     {
         static string Short(string text) => text.Length > 2048 ? text[..2048] + "…" : text;
@@ -232,7 +232,7 @@ public partial class MainWindow
             {
                 var cached = objectPolygonZones.GetOrCreateValue(data!);
                 if (!cached.TryGetValue(polygonOwner, out var objectZones)) cached[polygonOwner] = objectZones = ObjectPolygonZones(polygonOwner);
-                info["Object polygon zones"] = new JsonArray(objectZones.Select(line => JsonValue.Create(line)).ToArray());
+                info["Object polygon zones"] = objectZones.DeepClone();
             }
             if (owned is { } whole && Stored(whole))
             {
@@ -252,36 +252,38 @@ public partial class MainWindow
                 && ZoneReadout.PolygonZones(data.Models[item.Model].Polygons[polygon].Metadata["zone_set"]) is { } zones)
                 info["Polygon zones"] = zones;
         }
-        // How many polygons of the object's meshes (its own and those below it) carry each zone set, most common first, bounded.
-        string[] ObjectPolygonZones(int root)
+        // How many polygons of the object's meshes (its own and those below it) carry each zone set, most common first, bounded:
+        // rows of stored zones (255 is Any; empty has no zones), then the further sets together and the unreadable polygons.
+        JsonObject ObjectPolygonZones(int root)
         {
-            const int MaximumNodes = 4096, MaximumPolygons = 200_000;
-            Dictionary<string, int> sets = []; int nodes = 0, polygons = 0, unknown = 0; string? partial = null;
+            const int MaximumNodes = 4096, MaximumPolygons = 200_000, MaximumRows = 16;
+            Dictionary<string, (int[] Zones, int Count)> sets = []; int nodes = 0, polygons = 0, unknown = 0; string? truncated = null;
             HashSet<int> seen = []; Stack<int> pending = new([root]);
             while (pending.TryPop(out int index))
             {
                 if (index < 0 || index >= data!.Nodes.Count || !seen.Add(index)) continue;
-                if (++nodes > MaximumNodes) { partial = $"(first {MaximumNodes:N0} objects only)"; break; }
+                if (++nodes > MaximumNodes) { truncated = "objects"; break; }
                 var node = data.Nodes[index];
                 if (node.ModelIndex is int model && model >= 0 && model < data.Models.Count)
                     foreach (var polygon in data.Models[model].Polygons)
                     {
-                        if (++polygons > MaximumPolygons) { partial = $"(first {MaximumPolygons:N0} polygons only)"; break; }
-                        if (ZoneReadout.PolygonZones(polygon.Metadata["zone_set"]) is { } set) sets[set] = sets.GetValueOrDefault(set) + 1;
+                        if (polygons >= MaximumPolygons) { truncated = "polygons"; break; }
+                        polygons++;
+                        if (ZoneReadout.PolygonZoneIds(polygon.Metadata["zone_set"]) is { } zones)
+                        {
+                            string key = string.Join(',', zones);
+                            sets[key] = (zones, (sets.TryGetValue(key, out var set) ? set.Count : 0) + 1);
+                        }
                         else unknown++;
                     }
-                if (partial != null) break;
+                if (truncated != null) break;
                 foreach (int child in SceneBuilder.Children(node)) pending.Push(child);
             }
-            if (polygons == 0) return ["None (no polygons)"];
-            static string Count(int count) => count == 1 ? "1 polygon" : $"{count:N0} polygons";
-            const int MaximumLines = 16;
-            var ordered = sets.OrderByDescending(s => s.Value).ThenBy(s => s.Key, StringComparer.Ordinal).ToArray();
-            var lines = ordered.Take(MaximumLines).Select(s => $"{s.Key} – {Count(s.Value)}").ToList();
-            if (ordered.Length > MaximumLines) lines.Add($"… {ordered.Length - MaximumLines:N0} more zone sets – {Count(ordered.Skip(MaximumLines).Sum(s => s.Value))}");
-            if (unknown > 0) lines.Add($"Unknown – {Count(unknown)}");
-            if (partial != null) lines.Add(partial);
-            return [.. lines];
+            var ordered = sets.Values.OrderByDescending(s => s.Count).ThenBy(s => string.Join(',', s.Zones), StringComparer.Ordinal).ToArray();
+            JsonArray rows = [.. ordered.Take(MaximumRows).Select(s => (JsonNode)new JsonObject { ["zones"] = new JsonArray([.. s.Zones.Select(z => (JsonNode)z)]), ["polygons"] = s.Count })];
+            if (ordered.Length > MaximumRows) rows.Add(new JsonObject { ["moreSets"] = ordered.Length - MaximumRows, ["polygons"] = ordered.Skip(MaximumRows).Sum(s => s.Count) });
+            if (unknown > 0) rows.Add(new JsonObject { ["unknown"] = true, ["polygons"] = unknown });
+            return new JsonObject { ["rows"] = rows, ["total"] = polygons, ["truncated"] = truncated };
         }
         string NodeName(int index) => index >= 0 && index < data!.Nodes.Count
             ? JsonData.ShownText(data.Nodes[index].Name, 160) + $" · #{index}"
@@ -360,7 +362,7 @@ public partial class MainWindow
 
     private void RegisterInspectionCommands(StudioCommands commands)
     {
-        Register(commands, "scene_inspect", "Read independent hover/selection information from the fixed top-right inspection panel (a source map docks it as the Properties pane, with the hover readout as the surface chip over the view), or query an explicit viewport point/target without moving the mouse. Parent(s) describes the selected object or authored source-tree occurrence; Surface node and Surface parent(s) separately describe a clicked internal mesh. glTF node indices and compiled source slots are distinct. The permanent hover readout clears its coordinates over empty space. Coordinates distinguish triangle hits, object origins and authored placement positions. Zone is the selected object's built zone ID (Any is 255), as Inherit (ID) when its source node inherits it, with its altitude zone check; Surface zone and Polygon zones separately describe a clicked internal mesh and its polygon (an empty polygon set has no zones); Object polygon zones (the selection only) lists each zone set of the object's polygons with how many carry it. In source worlds, Zone source names the glTF node, reference placement, ancestor or load root that supplied it. AI results include attackStrategy/hoverAttackStrategy with stored value, status, key, character count, truncation and network RGB hex color. Panel state includes preferred/effective heights, viewport limits, expanded state and whether a source map docks it as the Properties pane. In a source map, recentSelections lists the empty pane's Recently selected objects (newest first) with the node scene_tree select takes for each (null when it is no longer in the world).", false,
+        Register(commands, "scene_inspect", "Read independent hover/selection information from the fixed top-right inspection panel (a source map docks it as the Properties pane, with the hover readout as the surface chip over the view), or query an explicit viewport point/target without moving the mouse. Parent(s) describes the selected object or authored source-tree occurrence; Surface node and Surface parent(s) separately describe a clicked internal mesh. glTF node indices and compiled source slots are distinct. The permanent hover readout clears its coordinates over empty space. Coordinates distinguish triangle hits, object origins and authored placement positions. Zone is the selected object's built zone ID (Any is 255), as Inherit (ID) when its source node inherits it, with its altitude zone check; Surface zone and Polygon zones separately describe a clicked internal mesh and its polygon (an empty polygon set has no zones); Object polygon zones (the selection only) counts the zone sets of the object's polygons and those below it: rows of zones (255 is Any, empty none) or moreSets or unknown, each with polygons, then total and truncated. In source worlds, Zone source names the glTF node, reference placement, ancestor or load root that supplied it. AI results include attackStrategy/hoverAttackStrategy with stored value, status, key, character count, truncation and network RGB hex color. Panel state includes preferred/effective heights, viewport limits, expanded state and whether a source map docks it as the Properties pane. In a source map, recentSelections lists the empty pane's Recently selected objects (newest first) with the node scene_tree select takes for each (null when it is no longer in the world).", false,
             [PreviewParameter, P("target", "string", "Opaque target from a previous inspection."), new("screenPoint", "array", "Viewport DIP [x,y].", Items: new("", "number", "Coordinate.", NumberMinimum: 0), MinItems: 2, MaxItems: 2)], a =>
         {
             var viewport = TargetViewport(a); SceneInspection? item;

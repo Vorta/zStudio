@@ -2844,7 +2844,7 @@
   },
   {
     "Name": "zstudio_scene_inspect",
-    "Description": "Read independent hover/selection information from the fixed top-right inspection panel (a source map docks it as the Properties pane, with the hover readout as the surface chip over the view), or query an explicit viewport point/target without moving the mouse. Parent(s) describes the selected object or authored source-tree occurrence; Surface node and Surface parent(s) separately describe a clicked internal mesh. glTF node indices and compiled source slots are distinct. The permanent hover readout clears its coordinates over empty space. Coordinates distinguish triangle hits, object origins and authored placement positions. Zone is the selected object\u0027s built zone ID (Any is 255), as Inherit (ID) when its source node inherits it, with its altitude zone check; Surface zone and Polygon zones separately describe a clicked internal mesh and its polygon (an empty polygon set has no zones); Object polygon zones (the selection only) lists each zone set of the object\u0027s polygons with how many carry it. In source worlds, Zone source names the glTF node, reference placement, ancestor or load root that supplied it. AI results include attackStrategy/hoverAttackStrategy with stored value, status, key, character count, truncation and network RGB hex color. Panel state includes preferred/effective heights, viewport limits, expanded state and whether a source map docks it as the Properties pane. In a source map, recentSelections lists the empty pane\u0027s Recently selected objects (newest first) with the node scene_tree select takes for each (null when it is no longer in the world).",
+    "Description": "Read independent hover/selection information from the fixed top-right inspection panel (a source map docks it as the Properties pane, with the hover readout as the surface chip over the view), or query an explicit viewport point/target without moving the mouse. Parent(s) describes the selected object or authored source-tree occurrence; Surface node and Surface parent(s) separately describe a clicked internal mesh. glTF node indices and compiled source slots are distinct. The permanent hover readout clears its coordinates over empty space. Coordinates distinguish triangle hits, object origins and authored placement positions. Zone is the selected object\u0027s built zone ID (Any is 255), as Inherit (ID) when its source node inherits it, with its altitude zone check; Surface zone and Polygon zones separately describe a clicked internal mesh and its polygon (an empty polygon set has no zones); Object polygon zones (the selection only) counts the zone sets of the object\u0027s polygons and those below it: rows of zones (255 is Any, empty none) or moreSets or unknown, each with polygons, then total and truncated. In source worlds, Zone source names the glTF node, reference placement, ancestor or load root that supplied it. AI results include attackStrategy/hoverAttackStrategy with stored value, status, key, character count, truncation and network RGB hex color. Panel state includes preferred/effective heights, viewport limits, expanded state and whether a source map docks it as the Properties pane. In a source map, recentSelections lists the empty pane\u0027s Recently selected objects (newest first) with the node scene_tree select takes for each (null when it is no longer in the world).",
     "Mutates": false,
     "Parameters": [
       {
@@ -3098,7 +3098,7 @@
       {
         "Name": "action",
         "Type": "string",
-        "Description": "Tree action; default read. Properties focuses the source-object card; other viewers open the same pinned window as the row context menu. hide/show (source maps) change only what the view draws.",
+        "Description": "Tree action; default read. Properties focuses the source-object card; other viewers open the same pinned window as the row context menu. hide/show (source maps) change only what the view draws; isolate (source maps) shows only the row's object, or everything again on the isolated row, as a middle-click on its eye.",
         "Required": false,
         "Choices": [
           "read",
@@ -3108,7 +3108,8 @@
           "select",
           "properties",
           "hide",
-          "show"
+          "show",
+          "isolate"
         ],
         "Properties": null
       },
@@ -6301,13 +6302,13 @@
   },
   {
     "Name": "zstudio_source_recovery",
-    "Description": "List the open source project\u0027s interrupted saves (journals in zstudio/recovery): each with its files and whether each now holds the content from before the save, the content the save wrote, is missing, or was changed by another program. Returns at most 32 saves with 64 files each and total counts; file paths keep 256 characters with fileTruncated. The scan bounds all journal manifests and logs together to 64 MiB and 50,000 file rows. A committed journal only needs cleaning up. While an uncommitted one exists, the project cannot be saved. A project replacement during inspection returns context_changed; retry for the current project.",
+    "Description": "List the open source project\u0027s interrupted saves (journals in .zstudio/recovery): each with its files and whether each now holds the content from before the save, the content the save wrote, is missing, or was changed by another program. Returns at most 32 saves with 64 files each and total counts; file paths keep 256 characters with fileTruncated. The scan bounds all journal manifests and logs together to 64 MiB and 50,000 file rows. A committed journal only needs cleaning up. While an uncommitted one exists, the project cannot be saved. A project replacement during inspection returns context_changed; retry for the current project.",
     "Mutates": false,
     "Parameters": []
   },
   {
     "Name": "zstudio_source_recovery_resolve",
-    "Description": "Resolve an interrupted save of the open source project: roll_back restores every file the save had replaced (a file changed by another program since is left alone and reported), complete finishes the save, and abandon keeps the files as they are and moves the journal (with any original it kept) to zstudio/recovery/abandoned. It runs off the UI thread with the workspace disabled as during a save. Cancelling stops it between two files, never during one: the journal records what it did, the save still needs a decision (any action resolves it from there), and a cancellation after files changed says which. Returns at most 64 changed paths and conflicts with total counts. Paths keep 256 characters, with pathsTruncated for changed paths and fileTruncated on conflicts. Refused while a world of the project opens or rebuilds; roll_back and complete are also refused while the project has unsaved edits of a file the save involves (undo them, or close the worlds discarding them), while abandon, which changes no file, is not. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Description": "Resolve an interrupted save of the open source project: roll_back restores every file the save had replaced (a file changed by another program since is left alone and reported), complete finishes the save, and abandon keeps the files as they are and moves the journal (with any original it kept) to .zstudio/recovery/abandoned. It runs off the UI thread with the workspace disabled as during a save. Cancelling stops it between two files, never during one: the journal records what it did, the save still needs a decision (any action resolves it from there), and a cancellation after files changed says which. Returns at most 64 changed paths and conflicts with total counts. Paths keep 256 characters, with pathsTruncated for changed paths and fileTruncated on conflicts. Refused while a world of the project opens or rebuilds; roll_back and complete are also refused while the project has unsaved edits of a file the save involves (undo them, or close the worlds discarding them), while abandon, which changes no file, is not. Returns an operation ID; use zstudio_operation to await/read the result.",
     "Mutates": true,
     "Parameters": [
       {
@@ -6726,7 +6727,7 @@
   },
   {
     "Name": "zstudio_source_zones",
-    "Description": "Inspect the map zone catalog and pinned draft. Zone assignments live in their owning glTF nodes, polygons or reference placements. Catalog and inspection report the master and owning source paths. Optional exact targets return a bounded assignment/scope page.",
+    "Description": "Inspect the map zone catalog. Zone assignments live in their owning glTF nodes, polygons or reference placements. Catalog and inspection report the master and owning source paths. Optional exact targets return a bounded assignment/scope page.",
     "Mutates": false,
     "Parameters": [
       {
@@ -6788,8 +6789,8 @@
     ]
   },
   {
-    "Name": "zstudio_source_zone_draft",
-    "Description": "Open, edit, paint or apply the shared zone draft. begin opens Properties; set configures faces/objects, ordered zones, gate and shared scope; add supplies exact node/polygon targets; paint toggles the explicit GUI brush; apply accepts one undoable edit; cancel discards, including targets made stale by another source edit. Every action after begin requires the current draftToken and current document revision. Zone-only edits update owning glTF metadata without changing geometry buffers. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Name": "zstudio_source_polygon_zones",
+    "Description": "Paint or erase one zone on exact source polygons of the map\u0027s own models as one undoable change (the polygon zone tool\u0027s stroke). Paint adds the zone after a polygon\u0027s others and skips (reports) a polygon that already has three; painting Any (255) replaces a polygon\u0027s zones, and painting a numbered zone replaces Any. Erase removes the zone, keeping the others\u0027 order; erasing the last leaves no zones, which differs from Any. A placement of a model takes its own zones; a file\u0027s own geometry changes wherever the file is loaded. Polygons of models outside the map\u0027s own folder (data/common, mission subfolders), placed units and pickups, editable terrain and files another mission\u0027s scripts load are refused; at most 4,096 polygons across 1,024 placements; busy while a GUI stroke is held or applying. Nothing to change accepts no edit (changed 0). Returns an operation ID; use zstudio_operation to await/read the result.",
     "Mutates": true,
     "Parameters": [
       {
@@ -6813,97 +6814,29 @@
       {
         "Name": "action",
         "Type": "string",
-        "Description": "Draft operation.",
+        "Description": "Paint or erase the zone.",
         "Required": true,
         "Choices": [
-          "begin",
-          "set",
-          "add",
           "paint",
-          "apply",
-          "cancel",
-          "label"
+          "erase"
         ],
         "Properties": null
       },
       {
-        "Name": "draftToken",
-        "Type": "string",
-        "Description": "Current draft token from source_zones.",
-        "Required": false,
-        "Choices": null,
-        "Properties": null
-      },
-      {
-        "Name": "faces",
-        "Type": "boolean",
-        "Description": "True for polygon faces, false for object zones.",
-        "Required": false,
-        "Choices": null,
-        "Properties": null
-      },
-      {
-        "Name": "zones",
-        "Type": "array",
-        "Description": "Zero to three ordered face zone IDs; objects accept one ID or an empty list to keep their current zone; 255 means Any.",
-        "Required": false,
-        "Choices": null,
-        "Properties": null,
-        "Items": {
-          "Name": "",
-          "Type": "integer",
-          "Description": "Zone ID.",
-          "Required": false,
-          "Choices": null,
-          "Properties": null,
-          "Minimum": 0,
-          "Maximum": 255
-        },
-        "MaxItems": 3
-      },
-      {
-        "Name": "gate",
-        "Type": "string",
-        "Description": "Object altitude-probe gate: keep retains each object\u0027s value; on/off explicitly set it.",
-        "Required": false,
-        "Choices": [
-          "keep",
-          "on",
-          "off"
-        ],
-        "Properties": null
-      },
-      {
-        "Name": "zoneId",
+        "Name": "zone",
         "Type": "integer",
-        "Description": "Zone ID to name with action label.",
-        "Required": false,
+        "Description": "The zone: 0\u2013254, or 255 for Any.",
+        "Required": true,
         "Choices": null,
         "Properties": null,
         "Minimum": 0,
         "Maximum": 255
       },
       {
-        "Name": "label",
-        "Type": "string",
-        "Description": "Zone name of 1\u2013256 characters for action label; 255 must remain Any.",
-        "Required": false,
-        "Choices": null,
-        "Properties": null
-      },
-      {
-        "Name": "sharedScope",
-        "Type": "boolean",
-        "Description": "Explicitly permit other placements and missions that inherit the selected source assignment. Inspect source_zones for the affected sources and missions first.",
-        "Required": false,
-        "Choices": null,
-        "Properties": null
-      },
-      {
         "Name": "targets",
         "Type": "array",
-        "Description": "Exact source scene nodes and, for faces, source polygon indices (as inspection returns them).",
-        "Required": false,
+        "Description": "Exact source scene nodes and their source polygon indices (as inspection returns them).",
+        "Required": true,
         "Choices": null,
         "Properties": null,
         "Items": {
@@ -6926,8 +6859,8 @@
             {
               "Name": "polygon",
               "Type": "integer",
-              "Description": "Polygon index in the node\u0027s source mesh, the Polygon an inspection target returns; not the built model\u0027s polygon index, which differs where the build split or discarded polygons. An index no built face comes from is refused. Omit for object.",
-              "Required": false,
+              "Description": "Polygon index in the node\u0027s source mesh, the Polygon an inspection target returns; not the built model\u0027s polygon index, which differs where the build split or discarded polygons. An index no built face comes from is refused.",
+              "Required": true,
               "Choices": null,
               "Properties": null,
               "Minimum": 0,
@@ -6936,6 +6869,99 @@
           ]
         },
         "MaxItems": 4096
+      }
+    ]
+  },
+  {
+    "Name": "zstudio_source_zone_tool",
+    "Description": "Read or set the polygon zone tool of the shown source map (GUI state; it synthesizes no pointer input): engage it in a mode with a zone (the Zones group\u0027s Edit zones toggle, Paint | Erase and zone picker, Tools \u003E Paint/Erase polygon zones, P/E, [ ], Shift\u002Bclick), exit it, or show/hide the polygons the last stroke skipped. State lists the zones the map\u0027s polygons carry as placed in the world (with labels and polygon counts) and what the last GUI stroke did.",
+    "Mutates": true,
+    "Parameters": [
+      {
+        "Name": "document",
+        "Type": "string",
+        "Description": "Document lifetime ID from zstudio_state.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "action",
+        "Type": "string",
+        "Description": "state reads; engage engages (or changes mode/zone); exit leaves; showSkipped/hideSkipped outline the last stroke\u0027s full polygons.",
+        "Required": true,
+        "Choices": [
+          "state",
+          "engage",
+          "exit",
+          "showSkipped",
+          "hideSkipped"
+        ],
+        "Properties": null
+      },
+      {
+        "Name": "mode",
+        "Type": "string",
+        "Description": "engage: paint or erase (default: as before).",
+        "Required": false,
+        "Choices": [
+          "paint",
+          "erase"
+        ],
+        "Properties": null
+      },
+      {
+        "Name": "zone",
+        "Type": "integer",
+        "Description": "engage: the zone, 0\u2013254 or 255 for Any (default: as before).",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": 0,
+        "Maximum": 255
+      }
+    ]
+  },
+  {
+    "Name": "zstudio_source_zone_label",
+    "Description": "Name a map zone (the zone picker\u0027s rename): the label is stored in the map\u0027s master model and shown with the zone; an empty label removes it (the zone\u0027s assignments stay). One undoable change. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Mutates": true,
+    "Parameters": [
+      {
+        "Name": "document",
+        "Type": "string",
+        "Description": "Document lifetime ID from zstudio_state.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "revision",
+        "Type": "integer",
+        "Description": "Expected current document revision. Read before editing.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": 0,
+        "Maximum": 9223372036854775807
+      },
+      {
+        "Name": "zoneId",
+        "Type": "integer",
+        "Description": "The zone, 0\u2013254 (Any is always Any).",
+        "Required": true,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": 0,
+        "Maximum": 254
+      },
+      {
+        "Name": "label",
+        "Type": "string",
+        "Description": "The label, at most 256 characters; empty removes it.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
       }
     ]
   },

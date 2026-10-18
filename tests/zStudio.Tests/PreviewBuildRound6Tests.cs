@@ -42,6 +42,6 @@ public sealed class PreviewBuildRound6Tests
         Assert.Contains("rock", scene.Textures.Keys);
         Assert.Equal(File.ReadAllBytes(fixture.Path(scene.Textures["rock"].Path)), scene.Textures["rock"].Bytes);
         Assert.Empty(Directory.EnumerateFiles(fixture.Project, "*.zbd", SearchOption.AllDirectories));
-        Assert.False(Directory.Exists(Path.Combine(fixture.Project, "zstudio", "cache", "worlds")));
+        Assert.False(Directory.Exists(Path.Combine(fixture.Project, ".zstudio", "cache", "worlds")));
     }
 }

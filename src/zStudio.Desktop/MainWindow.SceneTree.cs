@@ -63,7 +63,7 @@ public partial class MainWindow
                 }
                 sceneTree = new(data, source, true, state, TreeIdentities(data, viewport.Mission, doc.PickupEdits), viewport.InspectionNodes, SourceSelection(doc, data));
             }
-            if (sceneTree != null) { sceneTree.Collapsing += SceneTreeCollapsing; var hidden = hiddenRows.Values.SelectMany(n => n).ToHashSet(); sceneTree.IsHiddenNode = hidden.Contains; }
+            if (sceneTree != null) { sceneTree.Collapsing += SceneTreeCollapsing; var hidden = hiddenRows.Values.SelectMany(n => n).ToHashSet(); sceneTree.IsHiddenNode = hidden.Contains; sceneTree.IsIsolatedNode = node => isolatedNode == node; }
             DocumentSceneTree.ItemsSource = sceneTree?.Roots;
             // Renderer replacement clears its framing identity. Restore it from
             // the tree's provenance match, together with source inspection, without
@@ -295,7 +295,7 @@ public partial class MainWindow
     private void RegisterSceneTreeCommand(StudioCommands commands)
     {
         Register(commands, "scene_tree", "Read the Document scene hierarchy, including stable preview placements, shared/partition references and disconnected nodes. Source maps show the authored glTF hierarchy, including groups removed by compilation, under the world root; objects later passes add follow as top-level pass rows (pass aiv: units the AIV resources place; puppies: their pickups; anim: objects startup animations place or hide until placed), each listing its objects. The aiv and puppies passes list every difficulty's units and pickups with the difficulties placing each; those the shown difficulty does not place have otherDifficulty=true, node=null and a placement summary, and cannot be selected. animations lists the mission animations bound to an object by name (at most eight, then an ellipsis). sourceFile/gltfNode identify authored nodes, sourceOccurrence identifies a tree path, and compiledNode is an optional built slot. selectionOwner for source_map_parts is a signed current-preview identity; source-only authored groups have node=null and selectionOwner=null and support read-only row inspection. properties focuses the source-object card, or opens pinned Properties in other viewers. Read returns roots or a row's direct children, optionally filtered before paging; in a source map, search and/or types read the whole hierarchy as a flat list of matches with their parent paths, as the outliner's search box does (types narrows it by the legend's categories). A row's zone is null in the aiv and puppies passes. Source map rows carry category (world, group, geometry, object, node), zone and hidden. Expand/collapse/reveal only change tree presentation; hide/show hide a row's object (a removed group: what it holds) in the view only, like the outliner's eye; select shares scene inspection and draft guards. Runtime parenting is not represented.", true,
-            [DocumentParameter, P("action", "string", "Tree action; default read. Properties focuses the source-object card; other viewers open the same pinned window as the row context menu. hide/show (source maps) change only what the view draws.", false, "read", "expand", "collapse", "reveal", "select", "properties", "hide", "show"),
+            [DocumentParameter, P("action", "string", "Tree action; default read. Properties focuses the source-object card; other viewers open the same pinned window as the row context menu. hide/show (source maps) change only what the view draws; isolate (source maps) shows only the row's object, or everything again on the isolated row, as a middle-click on its eye.", false, "read", "expand", "collapse", "reveal", "select", "properties", "hide", "show", "isolate"),
                 P("search", "string", "Source maps: case-insensitive name search across the whole hierarchy (read without row); results are flat rows with path."),
                 P("types", "string", "Source maps: comma-separated categories the flat read includes (group, geometry, object, node); default all."),
                 P("context", "string", "Current hierarchy context from read; required for all actions and row queries."),
@@ -336,6 +336,11 @@ public partial class MainWindow
                 {
                     if (!row.CanHide || row.Index is not int hiddenIndex) throw new StudioCommandException("unsupported", "Only a source map's object rows can be hidden in the view.");
                     SetRowHidden(row, hiddenIndex, action == "hide");
+                }
+                if (action == "isolate")
+                {
+                    if (!row.CanHide || row.Index is not int isolatedIndex) throw new StudioCommandException("unsupported", "Only a source map's object rows can be isolated in the view.");
+                    ToggleRowIsolation(row, isolatedIndex);
                 }
                 if (action == "properties")
                 {
@@ -391,7 +396,7 @@ public partial class MainWindow
         sourceNode = row.Node == null ? (int?)null : row.Owner.Identity(row.Index!.Value).SourceNode,
         model = row.Node?.ModelIndex, storedParents = row.Node?.Parents.Take(32).ToArray(), storedParentCount = row.Node?.Parents.Length,
         pass = row.Pass?.Kind, passDescription = row.Pass?.Description, animations = row.Animations,
-        category = row.IsSourceMap ? row.Category : null, zone = row.IsSourceMap ? row.Zone : null, hidden = row.IsSourceMap ? row.IsHidden : (bool?)null,
+        category = row.IsSourceMap ? row.Category : null, zone = row.IsSourceMap ? row.Zone : null, hidden = row.IsSourceMap ? row.IsHidden : (bool?)null, isolated = row.IsSourceMap && row.IsIsolated ? true : (bool?)null,
         difficulties = row.Placement is { Difficulties.Count: > 0 } placement ? placement.Difficulties.Select(d => d.ToString()).ToArray() : null,
         otherDifficulty = row.IsOtherDifficulty ? true : (bool?)null, placement = row.IsOtherDifficulty ? row.Placement!.Detail : null };
 }

@@ -67,7 +67,7 @@ internal sealed partial class SceneInspectionCard : Grid
     internal event Action? DraftClosed;
     internal string DraftToken => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes($"{draftId}|{DraftDocument?.SessionId}|{DraftRevision}|{DraftTarget}|{ObjectIdentityToken}|{transformMode}|{(ObjectEditor != null ? ObjectEditor.DraftToken : string.Join('|', DraftStrings))}")));
     internal SceneInspection? Selection => treeSelection ?? viewport.SelectedInspection;
-    private readonly Button close, frame;
+    private readonly Button close;
     private readonly Border objectIcon;
     private readonly PreviewIcon objectGlyph = new() { Kind = "Cube", Width = 17, Height = 17, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center };
     private readonly System.Windows.Shapes.Rectangle emptyTileOutline = new() { RadiusX = 6, RadiusY = 6, StrokeThickness = 1, StrokeDashArray = [3, 2], Visibility = Visibility.Collapsed };
@@ -79,7 +79,6 @@ internal sealed partial class SceneInspectionCard : Grid
     internal bool Docked { get; private set; }
     /// <summary>The panel to host in the docked pane.</summary>
     internal Border PanelRoot => panel;
-    internal Action? FrameSelection { get; set; }
     /// <summary>The outliner type of a selection (world, group, geometry, object or node), for its icon.</summary>
     internal Func<SceneInspection, string>? CategoryOf { get; set; }
     /// <summary>The recently selected objects the empty pane offers, newest first, and how to select one again.</summary>
@@ -125,9 +124,6 @@ internal sealed partial class SceneInspectionCard : Grid
         close = IconButton("Close", "Close node card", () => ClearSelection());
         close.SetResourceReference(StyleProperty, "CardCloseButton");
         DockPanel.SetDock(close, Dock.Right); title.Children.Add(close);
-        frame = IconButton("FrameSelection", "Frame selection", () => FrameSelection?.Invoke());
-        frame.Visibility = Visibility.Collapsed;
-        DockPanel.SetDock(frame, Dock.Right); title.Children.Add(frame);
         isolate = new() { Content = Icon("Isolate"), Width = 32, Height = 32, Visibility = Visibility.Collapsed };
         isolate.SetResourceReference(StyleProperty, "CardSegmentToggle");
         System.Windows.Automation.AutomationProperties.SetName(isolate, "Isolate");
@@ -347,7 +343,9 @@ internal sealed partial class SceneInspectionCard : Grid
     {
         if (value is JsonObject vector && new[] { "x", "y", "z" }.All(k => vector[k] is JsonValue))
             return string.Join("   ", new[] { "x", "y", "z" }.Select(k => k.ToUpperInvariant() + " " + (degrees ? vector[k]!.GetValue<double>().ToString("R", CultureInfo.InvariantCulture) : JsonData.Scalar(vector[k], float.NaN).ToString("R", CultureInfo.InvariantCulture))));
-        // A list of lines (polygon zone sets, parents) reads one per line rather than as JSON.
+        // Polygon zone counts read as their rows (cards without the source-object Zone section list them as a detail).
+        if (ZoneReadout.PolygonZoneLines(value) is { } zoneLines) return zoneLines;
+        // A list of lines (parents) reads one per line rather than as JSON.
         if (value is JsonArray lines && lines.Count > 0 && lines.All(line => line is JsonValue v && v.TryGetValue<string>(out _)))
             return string.Join('\n', lines.Select(line => line!.GetValue<string>()));
         return value is JsonValue scalar && scalar.TryGetValue<string>(out var text) ? text : value?.ToJsonString() ?? "Unavailable";
@@ -368,7 +366,6 @@ internal sealed partial class SceneInspectionCard : Grid
         ArrangePanel();
         scroll.Visibility = empty ? Visibility.Collapsed : Visibility.Visible;
         emptyView.Visibility = empty ? Visibility.Visible : Visibility.Collapsed;
-        frame.Visibility = !empty && FrameSelection != null ? Visibility.Visible : Visibility.Collapsed;
         close.Visibility = empty ? Visibility.Collapsed : Visibility.Visible;
         close.ToolTip = Docked ? "Clear selection (Esc)" : "Close node card";
         System.Windows.Automation.AutomationProperties.SetName(close, Docked ? "Clear selection" : "Close node card");
@@ -385,8 +382,9 @@ internal sealed partial class SceneInspectionCard : Grid
             return;
         }
         ShowTypeTile(CategoryOf?.Invoke(selected) ?? "object");
-        // An AI marker is not a scene object to isolate. Like scene_selection, isolation waits for an open edit.
-        isolate.Visibility = CanIsolate?.Invoke() == true && selected.AiNode == null ? Visibility.Visible : Visibility.Collapsed;
+        // An AI marker is not a scene object to isolate. Like scene_selection, isolation waits for an open edit. In a source
+        // map the World tree's eyes isolate (middle-click), so the docked card has no Isolate of its own.
+        isolate.Visibility = CanIsolate?.Invoke() == true && selected.AiNode == null && !(IsSourceWorld && Docked) ? Visibility.Visible : Visibility.Collapsed;
         isolate.IsChecked = IsIsolated?.Invoke() == true; isolate.IsEnabled = !HasDraft;
         ToolTipService.SetShowOnDisabled(isolate, true);
         isolate.ToolTip = HasDraft ? "Apply or discard the edit first" : isolate.IsChecked == true ? "Show all objects" : "Isolate: show only this object";

@@ -21,6 +21,7 @@ public sealed partial class SceneViewport
         objectPreviewMeshes = null; objectPreviewBounds = null; objectPreviewOriginals = null; ObjectTransformPreviewNode = null; objectPreviewToken = 0;
         Mission = mission; PreviewScene = mission.Scene;
         ConfigureHorizon(mission.Scene);
+        RefreshZoneModels(update.ZoneModels);
         placementDeltas.Clear(); pickupBasePlacements.Clear();
         foreach (var (mesh, rows) in nextMeshes) { placements[mesh] = rows; pickupBasePlacements[mesh] = rows; }
         foreach (var (mesh, rows) in nextVisible)

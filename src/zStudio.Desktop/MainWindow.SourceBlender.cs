@@ -8,7 +8,7 @@ using zStudio.Core.Sources;
 namespace zStudio.Desktop;
 
 /// <summary>
-/// The Blender round trip of a source project: Edit in Blender copies a model into the project's zstudio/export folder;
+/// The Blender round trip of a source project: Edit in Blender copies a model into the project's .zstudio/export folder;
 /// Update from Blender export reads what Blender exported there and changes the project's sources as one undoable edit,
 /// rebuilding the world. Nothing Blender writes is used until the user asks for the update.
 /// </summary>
@@ -144,7 +144,7 @@ public partial class MainWindow
     }
 
     /// <summary>
-    /// The project's checkouts with the exports in their outboxes, listed off the UI thread: a zstudio/export folder of many
+    /// The project's checkouts with the exports in their outboxes, listed off the UI thread: a .zstudio/export folder of many
     /// checkouts or files is read on a worker, bounded and cancellable (<see cref="SourceBlender.CheckoutExports(string, CancellationToken)"/>).
     /// </summary>
     internal Func<string, CancellationToken, IReadOnlyList<(BlenderCheckout Checkout, IReadOnlyList<BlenderExport> Exports)>> ReadCheckoutExports { get; set; } = SourceBlender.CheckoutExports;
@@ -202,7 +202,7 @@ public partial class MainWindow
         if (doc.IsDisposed && session.Owner is { IsDisposed: false } rebuilt) doc = rebuilt;
         if (doc.IsDisposed || !ViewModel.Documents.Contains(doc)) throw new StudioCommandException("context_changed", "The world was closed while the Blender exports were listed.");
         var candidates = listed.Where(c => c.Exports.Count > 0).ToArray();
-        if (candidates.Length == 0) throw new StudioCommandException("not_ready", "No Blender export was found in the project's zstudio/export folder. Use Edit in Blender first.");
+        if (candidates.Length == 0) throw new StudioCommandException("not_ready", "No Blender export was found in the project's .zstudio/export folder. Use Edit in Blender first.");
         BlenderUpdateDialog dialog = new(candidates) { Owner = this };
         if (dialog.ShowDialog() != true) return;
         var (checkout, export) = dialog.Chosen;

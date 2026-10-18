@@ -170,6 +170,10 @@ internal static class PresentationRendererChecks
         float radius = scene.TerrainBrushRadius; scene.TerrainBrushRadius = .1f;
         int brushCompletions = 0, zoneCompletions = 0;
         scene.TerrainStrokeCompleted += BrushCompleted; scene.ZoneStrokeCompleted += ZoneCompleted;
+        // The polygon zone tool paints every face of this model; each source polygon is its built one.
+        scene.SetZoneBrush(new PolygonZoneBrush { Reach = _ => PolygonZoneReach.Paintable, SourcePolygons = _ => Enumerable.Range(0, 4096).ToArray(), Site = node => "node" + node, SiteNodes = _ => [] });
+        var strokeField = typeof(SceneViewport).GetField("zoneStroke", Private)!;
+        System.Collections.IDictionary Stroke() { var stroke = (System.Collections.IDictionary)Activator.CreateInstance(strokeField.FieldType)!; strokeField.SetValue(scene, stroke); return stroke; }
         try
         {
             var ordinary = new List<Vector3> { position }; Set("brushStroke", ordinary);
@@ -183,23 +187,23 @@ internal static class PresentationRendererChecks
             ordinary = [position]; Set("brushStroke", ordinary);
             scene.HandleTerrainBrushMove(next); Assert.Equal(2, ordinary.Count); scene.CancelTerrainStroke();
 
-            HashSet<ZonePaintTarget> normalTargets = []; Set("zoneGesture", normalTargets);
-            Call("HandleZoneMove", next); Assert.Equal(new(zoneHit.Node, zoneHit.Polygon), Assert.Single(normalTargets)); scene.CancelZoneGesture();
-            HashSet<ZonePaintTarget> frozenTargets = []; Set("zoneGesture", frozenTargets);
+            var normalTargets = Stroke();
+            Call("HandleZoneMove", next); Assert.Single(normalTargets); scene.CancelZoneGesture();
+            var frozenTargets = Stroke();
             Call("RebasePresentationPointers"); Call("RebasePresentationPointers");
             Call("HandleZoneMove", next); Assert.Empty(frozenTargets); Assert.Equal(0, zoneCompletions);
             Assert.True((bool)Call("HandleZoneUp", Release())!); Assert.Equal(1, zoneCompletions);
             Assert.False((bool)Call("HandleZoneUp", Release())!); Assert.Equal(1, zoneCompletions);
-            normalTargets = []; Set("zoneGesture", normalTargets);
+            normalTargets = Stroke();
             Call("HandleZoneMove", next); Assert.Single(normalTargets);
         }
         finally
         {
-            scene.CancelTerrainStroke(); scene.CancelZoneGesture(); scene.TerrainBrushRadius = radius;
+            scene.CancelTerrainStroke(); scene.CancelZoneGesture(); scene.SetZoneBrush(null); scene.TerrainBrushRadius = radius;
             scene.TerrainStrokeCompleted -= BrushCompleted; scene.ZoneStrokeCompleted -= ZoneCompleted;
         }
         void BrushCompleted(IReadOnlyList<Vector3> points) { brushCompletions++; Assert.Single(points); Assert.Equal(position, points[0]); }
-        void ZoneCompleted(IReadOnlyList<ZonePaintTarget> targets) { zoneCompletions++; Assert.Empty(targets); }
+        void ZoneCompleted(ZonePaintStroke stroke) { zoneCompletions++; Assert.Empty(stroke.Targets); }
         void Set(string name, object value) => typeof(SceneViewport).GetField(name, Private)!.SetValue(scene, value);
         object? Call(string name, params object[] values) => typeof(SceneViewport).GetMethod(name, Private)!.Invoke(scene, values);
         static MouseButtonEventArgs Release() => new(Mouse.PrimaryDevice, 0, MouseButton.Left);

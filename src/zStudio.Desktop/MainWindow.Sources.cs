@@ -545,8 +545,11 @@ public partial class MainWindow
         if (e.OriginalSource != sender) return;
         string? root = SourceProjectRoot;
         SourceMenuSeparator.Visibility = AddSourceModelMenu.Visibility =
-            EditInBlenderMenu.Visibility = UpdateFromBlenderMenu.Visibility = CreateTerrainMenu.Visibility = ConvertTerrainMenu.Visibility = EditZonesMenu.Visibility = root != null ? Visibility.Visible : Visibility.Collapsed;
-        CreateTerrainMenu.IsEnabled = ConvertTerrainMenu.IsEnabled = EditZonesMenu.IsEnabled = ViewModel.SelectedDocument?.SourceWorld is { IsRebuilding: false } && !sourceWorkspaceBusy;
+            EditInBlenderMenu.Visibility = UpdateFromBlenderMenu.Visibility = CreateTerrainMenu.Visibility = ConvertTerrainMenu.Visibility = PaintZonesMenu.Visibility = EraseZonesMenu.Visibility = root != null ? Visibility.Visible : Visibility.Collapsed;
+        CreateTerrainMenu.IsEnabled = ConvertTerrainMenu.IsEnabled = ViewModel.SelectedDocument?.SourceWorld is { IsRebuilding: false } && !sourceWorkspaceBusy;
+        // The polygon zone tool paints the shown source map's Whole world.
+        PaintZonesMenu.IsEnabled = EraseZonesMenu.IsEnabled = ViewModel.SelectedDocument is { SourceWorld: not null } zoneDocument && zoneDocument == shownDocument && shownAsset?.Kind == zStudio.Core.AssetKind.World;
+        PaintZonesMenu.IsChecked = ZoneToolEngaged && !zoneTool.Erase; EraseZonesMenu.IsChecked = ZoneToolEngaged && zoneTool.Erase;
         EditInBlenderMenu.IsEnabled = root != null && !sourceWorkspaceBusy;
         UpdateFromBlenderMenu.IsEnabled = ViewModel.SelectedDocument?.SourceWorld is { IsRebuilding: false } && !sourceWorkspaceBusy;
         EditInBlenderMenu.ToolTip = "Choose a source model or master map and check out its complete graph for the RECOIL Blender extension";

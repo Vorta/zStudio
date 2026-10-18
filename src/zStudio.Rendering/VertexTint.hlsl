@@ -61,6 +61,8 @@ float4 Appearance(TintPixel input, bool vertexTint)
         float3 eye = vertexTint ? normalize(input.eye.xyz) : normalize(vEyePos - input.world.xyz);
         result.rgb *= saturate(.5 + .5 * abs(dot(eye, normal)));
     }
+    // vMaterialReflect.x fades the surface (models the polygon zone tool cannot paint); 0 keeps it as it is.
+    result.a *= 1 - saturate(vMaterialReflect.x);
     return result;
 }
 float4 NormalAppearance(TintPixel input)
@@ -92,14 +94,29 @@ float3 ZoneColor(uint zone)
 }
 // COLOR0 carries the polygon's zone set here (ids in RGB as n/255, count in A as n/3), never an authored tint.
 // One zone tints the polygon; two or three alternate in diagonal screen stripes. Without zones it looks normal.
+// vMaterialSpecular sets the emphasis (PreviewMaterials.SetZoneEmphasis): w = 0 tints every zone at half strength;
+// w = 1 tints polygons listing zone x (n/255) at y and the others at z; w = 2 draws only the zone colours at opacity y.
 float4 PSPolygonZones(TintPixel input) : SV_TARGET
 {
-    float4 result = Appearance(input, false);
+    uint mode = (uint)round(vMaterialSpecular.w);
+    float4 result = mode == 2 ? float4(0, 0, 0, 0) : Appearance(input, false);
     uint count = (uint)round(saturate(input.color.a) * 3);
-    if (count == 0) return result;
+    // The stroke preview of a polygon left with no zones: a dark fill over its old tint.
+    if (count == 0) return mode == 2 ? float4(.08, .08, .08, .55) : result;
     uint band = (uint)floor((input.position.x + input.position.y) / (6 * max(DpiScale, 1)));
     uint index = band % count;
     float id = index == 0 ? input.color.r : index == 1 ? input.color.g : input.color.b;
-    result.rgb = lerp(result.rgb, ZoneColor((uint)round(saturate(id) * 255)), .5);
+    float3 color = ZoneColor((uint)round(saturate(id) * 255));
+    if (mode == 2) return float4(color, vMaterialSpecular.y);
+    float strength = .5;
+    if (mode == 1)
+    {
+        uint chosen = (uint)round(saturate(vMaterialSpecular.x) * 255);
+        bool listed = (uint)round(saturate(input.color.r) * 255) == chosen
+            || count > 1 && (uint)round(saturate(input.color.g) * 255) == chosen
+            || count > 2 && (uint)round(saturate(input.color.b) * 255) == chosen;
+        strength = listed ? vMaterialSpecular.y : vMaterialSpecular.z;
+    }
+    result.rgb = lerp(result.rgb, color, strength);
     return result;
 }

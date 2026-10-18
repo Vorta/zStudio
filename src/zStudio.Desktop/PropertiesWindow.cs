@@ -232,17 +232,10 @@ public sealed class PropertiesWindow : Window
     }
     /// <summary>The window was dismissed (X, Alt+F4, properties_close), rather than closed by its document's replacement.</summary>
     internal bool ClosedByUser { get; private set; }
-    /// <summary>
-    /// Decides drafts the owner keeps for this window's content (a map zone draft, which closing discards) before any
-    /// close, explicit ones included; false keeps the window open.
-    /// </summary>
-    internal Func<DocumentModel?, bool>? ResolveClosingDrafts { get; set; }
     private void OnClosing(object? sender, CancelEventArgs e)
     {
         // A close whose field drafts are being resolved asks nothing more until that finishes.
         if (resolvingClose && !closingResolved) { e.Cancel = true; return; }
-        // Declining keeps the window as it was: it still follows edits and resolves its input on the next close.
-        if (ResolveClosingDrafts?.Invoke(Document) == false) { e.Cancel = true; closingResolved = ClosedByUser = false; return; }
         if (!closingResolved) ClosedByUser = true;
         if (closingResolved || !HasPendingDrafts) return;
         e.Cancel = true;

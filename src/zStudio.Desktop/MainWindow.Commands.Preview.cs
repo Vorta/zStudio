@@ -121,7 +121,7 @@ public partial class MainWindow
                     RevealSceneNode(node);
                 }
                 viewport.SelectFramingNode(node);
-                if (action == "isolate") { viewport.Isolate(node); isolatedNode = node; CurrentInspectionCard?.Refresh(); }
+                if (action == "isolate") { isolatedNode = node; ApplyIsolation(viewport); CurrentInspectionCard?.Refresh(); RefreshRowEyes(); }
                 if (node < 0 && sceneTree?.Reveal(node) is { Synthetic: true } sourceRow)
                     return Result(SceneTreeProperties(sourceRow));
                 if (node < 0) throw new StudioCommandException("stale_record", "Source selection owner is not in the current scene hierarchy.");
@@ -164,6 +164,9 @@ public partial class MainWindow
                 requestedPack = TexturePackCombo.Items.Cast<PackChoice>().FirstOrDefault(p => (p.Path ?? "").Equals(Text(changes, "texturePack"), StringComparison.OrdinalIgnoreCase))
                     ?? throw new StudioCommandException("invalid_argument", "Choose an available texture variant.");
             long highlightGeneration = worldHighlightGeneration;
+            // As in the GUI, whose overlay buttons are disabled while the polygon zone tool is engaged.
+            if (ZoneToolEngaged && (changes.ContainsKey("highlight") || changes.ContainsKey("faceOrientation")))
+                throw new StudioCommandException("busy", "The overlays pause while the polygon zone tool is engaged; leave it first.");
             foreach (var (name,value) in changes)
             {
                 token.ThrowIfCancellationRequested();

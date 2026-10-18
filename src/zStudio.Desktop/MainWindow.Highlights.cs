@@ -58,5 +58,8 @@ public partial class MainWindow
         ApplyWorldHighlight();
     }
 
-    private void ApplyWorldHighlight() => scene?.SetWorldHighlightMode(shownAsset?.Kind == AssetKind.World ? worldHighlightMode : WorldHighlightMode.None);
+    /// <summary>The chosen overlay, in a world; none while the polygon zone tool draws its own zone view.</summary>
+    private void ApplyWorldHighlight() => scene?.SetWorldHighlightMode(shownAsset?.Kind == AssetKind.World && !ZoneToolEngaged ? worldHighlightMode : WorldHighlightMode.None);
+    /// <summary>The overlays (colour overlays and face orientation) as chosen, paused while the polygon zone tool is engaged.</summary>
+    private void ApplyOverlays() { scene?.SetFaceOrientation(FaceOrientation.IsChecked == true && !ZoneToolEngaged); ApplyWorldHighlight(); }
 }

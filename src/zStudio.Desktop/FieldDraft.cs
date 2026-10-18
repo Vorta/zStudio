@@ -19,7 +19,7 @@ internal sealed class FieldDraft(string value, Action<string> commit, Func<strin
         if (!IsPending) { Error = null; return true; }
         if (IsAsync) return false;
         try { commit(Text); Committed = Text; Error = null; return true; }
-        // A refusal of the edit (a stale map zone draft, for example) is shown at the field, as for asynchronous commits.
+        // A refusal of the edit (a stale source, for example) is shown at the field, as for asynchronous commits.
         catch (Exception ex) when (ex is InvalidDataException or FormatException or OverflowException or ArgumentException or InvalidOperationException or zStudio.Automation.StudioCommandException)
         { Error = ex.Message; return false; }
     }

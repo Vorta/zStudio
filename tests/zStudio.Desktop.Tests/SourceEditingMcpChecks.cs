@@ -577,7 +577,7 @@ internal static class SourceEditingMcpChecks
                 System.Text.Json.Nodes.JsonObject TurretZone() => System.Text.Json.Nodes.JsonNode.Parse(workspace.Read("data/m2/models/m2.gltf")!)!["nodes"]!.AsArray()
                     .Single(n => n!["name"]?.GetValue<string>() == "tur_101")!["extras"]?[zStudio.Core.Worlds.WorldGltf.Key]?.AsObject() ?? [];
                 var zoneCard = (SceneInspectionCard)turretViewport.InspectionContent!;
-                var zoneBox = Descendants(zoneCard.ObjectEditor!).OfType<System.Windows.Controls.ComboBox>().Single(b => System.Windows.Automation.AutomationProperties.GetName(b) == "Zone");
+                var zoneBox = Descendants(zoneCard.ObjectEditor!).OfType<System.Windows.Controls.ComboBox>().Single(b => System.Windows.Automation.AutomationProperties.GetName(b) == "Object zone");
                 Assert.Equal("Inherit", zoneBox.Text); Assert.False(TurretZone().ContainsKey("zone"));
                 // A source map always docks the card as its Properties pane: hiding the pane hides it, never floating it over the view.
                 Assert.True(zoneCard.Docked); Assert.Same(zoneCard.PanelRoot, ((System.Windows.Controls.ContentControl)main.FindName("SourcePropertiesHost")).Content);

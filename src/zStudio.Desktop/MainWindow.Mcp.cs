@@ -116,8 +116,7 @@ public partial class MainWindow
     }
     /// <summary>
     /// Before choosing another object (MCP select, as the GUI's tree, search and viewport selection): the drafts a selection
-    /// resolves. A map zone draft (which collects chosen objects) and Properties input stay, since choosing never retargets
-    /// Properties.
+    /// resolves. Properties input stays, since choosing never retargets Properties.
     /// </summary>
     private void RequireNoSelectionDrafts(DocumentModel? doc = null)
     {
@@ -131,14 +130,12 @@ public partial class MainWindow
             throw new StudioCommandException("pending_drafts", "Unfinished GUI input is retained. Inspect and explicitly resolve drafts before continuing.");
     }
     /// <remarks>With <paramref name="committing"/>, drafts whose commit is running (and called this) do not count.</remarks>
-    private void RequireNoDrafts(DocumentModel? doc = null, bool committing = false, SceneInspectionCard? committingCard = null, ZoneDraft? committingZones = null, AiPathDraft? committingAiPath = null, ParachuteDraft? committingParachute = null)
+    private void RequireNoDrafts(DocumentModel? doc = null, bool committing = false, SceneInspectionCard? committingCard = null, AiPathDraft? committingAiPath = null, ParachuteDraft? committingParachute = null)
     {
         if (parachuteDraft is { } drop && drop != committingParachute && (doc == null || doc == drop.Session.World || doc == drop.Session.Owner || doc.ResourceEdits != null || doc.ContentEdits != null))
             throw new StudioCommandException("pending_drafts", "Confirm or cancel the Parachute move before continuing.");
         if (HasAiPathDraft && aiPathDraft != committingAiPath && (doc == null || aiPathDraft!.Document == doc || doc.ResourceEdits != null || doc.ContentEdits != null))
             throw new StudioCommandException("pending_drafts", "Confirm or cancel the AI path transform with ai_path before continuing.");
-        if (HasZoneDraft && zoneDraft != committingZones && (doc == null || zoneDraft!.Document == doc))
-            throw new StudioCommandException("pending_drafts", "Apply or cancel the map zone draft before continuing.");
         // Resource/content edits elsewhere refresh the shown preview, whose scene-card draft would otherwise need a modal decision mid-request.
         if (HasInspectionDraft && inspectionDraft != committingCard && (doc == null || inspectionDraft!.DraftDocument == doc || doc != shownDocument && inspectionDraft.DraftDocument == shownDocument && (doc.ResourceEdits != null || doc.ContentEdits != null)))
             throw new StudioCommandException("pending_drafts", "Resolve the scene card draft explicitly before continuing.");
@@ -200,8 +197,6 @@ public partial class MainWindow
                 documents = page.Documents.Select(d => DocumentState(d, includeContentDetails: false)).ToArray(), total = page.Total, offset = page.Offset, nextOffset = page.NextOffset, activeDocument = ViewModel.SelectedDocument?.SessionId,
                 preview = previewId, selectedAsset = shownAsset?.Id, animationTime = animation?.CurrentFrame?.Time, animationPlaying = animation?.IsPlaying,
                 pendingPropertiesDrafts = propertiesWindow?.HasPendingDrafts == true, pendingPreviewDrafts = animation?.HasAutomationDrafts == true, pendingSceneDrafts = HasInspectionDraft, pendingAiPathDrafts = HasAiPathDraft,
-                // A map zone draft with targets blocks other writes until source_zone_draft applies or cancels it.
-                pendingZoneDrafts = HasZoneDraft
             });
         });
         Register(registry, "capabilities", "Read all capability schemas. Unsupported formats remain read-only; MCP does not add binary patching.", false, [], _ => new(registry.Describe()));

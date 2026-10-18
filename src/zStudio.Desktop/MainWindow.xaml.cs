@@ -89,7 +89,7 @@ public partial class MainWindow : Window
         InitializeContentEditors();
         InitializeSourceEditor();
         ApplyTheme(s.Theme); UpdateRecent(); ready = true;
-        PreviewKeyDown += Keyboard;
+        PreviewKeyDown += Keyboard; PreviewKeyUp += ZoneToolKeyUp;
         // After the focused control: a dropdown, a field's restore, a stroke or a grip uses Escape first.
         KeyDown += (_, e) => { if (!e.Handled) SourceEscape(e); };
         PreviewKeyUp += (_, e) => flyCamera?.HandleKey(e, false);
@@ -137,7 +137,7 @@ public partial class MainWindow : Window
     private void SetSceneControlsEnabled(bool enabled)
     {
         SceneToolbar.IsEnabled = enabled;
-        foreach (var part in new FrameworkElement[] { SourcePickers, SourceCameraGroup, SourceDisplayGroup, SourceOverlayGroup, SourceShowGroup }) part.IsEnabled = enabled;
+        foreach (var part in new FrameworkElement[] { SourcePickers, SourceCameraGroup, SourceDisplayGroup, SourceOverlayGroup, SourceShowGroup, SourceZoneOverlayItems }) part.IsEnabled = enabled;
     }
     /// <summary>
     /// A failure the user must see: in Problems (and Diagnostics in a map), not only in the status, which a source map's
@@ -450,7 +450,7 @@ public partial class MainWindow : Window
                 if (mission != null) { await doc.GetPickupEditsAsync(ViewModel.Resolver, token); await PopulateWorldMissionsAsync(doc, token); }
                 if (mission != null) await PrepareSourceMapSelectionAsync(doc, mission.Scene, mission, token);
                 ConfigureSourceMapPresentation(scene, doc, mission);
-                await scene.ShowAsync(doc.PreviewDocument, asset, ViewModel.Resolver, PreferredPack, LodCombo.SelectedIndex, token, BackdropEnabled.IsChecked == true, mission); token.ThrowIfCancellationRequested(); ApplySceneOptions(); RefreshZoneDraftView();
+                await scene.ShowAsync(doc.PreviewDocument, asset, ViewModel.Resolver, PreferredPack, LodCombo.SelectedIndex, token, BackdropEnabled.IsChecked == true, mission); token.ThrowIfCancellationRequested(); ApplySceneOptions(); RefreshZoneToolScene();
                 PublishSourceMapParts(scene, doc);
                 CompleteSceneHandoff();
                 // A rebuilt source world keeps the camera of the build it replaced.
@@ -464,8 +464,8 @@ public partial class MainWindow : Window
                 {
                     if (previousMission != null && previousView != null)
                     {
-                        isolatedNode = previousIsolate is int oldIsolate && mission.RemapNodeFrom(previousMission, oldIsolate) is >= 0 and int mappedIsolate ? mappedIsolate : null;
-                        if (isolatedNode != null) scene.Isolate(isolatedNode);
+                        isolatedNode = !isolatedGroup && previousIsolate is int oldIsolate && mission.RemapNodeFrom(previousMission, oldIsolate) is >= 0 and int mappedIsolate ? mappedIsolate : null;
+                        ApplyIsolation(); RefreshRowEyes();
                         RemapHidden(previousHidden, old => mission.RemapNodeFrom(previousMission, old) is >= 0 and int mappedHidden ? mappedHidden : null);
                         scene.RestoreView(previousView);
                         selectedNode = RemapPickupSelection(previousPickup, mission) ?? (previousSelection is int oldSelection && mission.RemapNodeFrom(previousMission, oldSelection) is >= 0 and int mapped ? mapped : null);
@@ -708,14 +708,14 @@ public partial class MainWindow : Window
     }
     private string? PreferredPack => (TexturePackCombo.SelectedItem as PackChoice)?.Path;
     private async void SceneSourceChanged(object sender, RoutedEventArgs e) { if (ready && !updating && SceneHost.Visibility == Visibility.Visible && ViewModel.SelectedDocument is { } doc && shownAsset != null) await ShowAsset(doc, shownAsset); }
-    private void ApplySceneOptions() { scene?.SetFaceOrientation(FaceOrientation.IsChecked == true); scene?.SetWireframe(Wireframe.IsChecked == true); scene?.SetTextured(TexturesEnabled.IsChecked == true); scene?.SetBounds(BoundsEnabled.IsChecked == true); ApplyWorldHighlight(); ApplyAiOptions(); }
+    private void ApplySceneOptions() { scene?.SetFaceOrientation(FaceOrientation.IsChecked == true && !ZoneToolEngaged); scene?.SetWireframe(Wireframe.IsChecked == true); scene?.SetTextured(TexturesEnabled.IsChecked == true); scene?.SetBounds(BoundsEnabled.IsChecked == true); ApplyWorldHighlight(); ApplyAiOptions(); }
     private void SceneOptionsChanged(object sender, RoutedEventArgs e) { if (ready) ApplySceneOptions(); }
     private void FrameSceneClick(object sender, RoutedEventArgs e) => RunCameraNavigation("frameAsset");
     private void IsolateClick(object sender, RoutedEventArgs e)
     {
         if (selectedNode is not int node) { ViewModel.Status = "Select a node in the scene or scene tree first"; return; }
         isolatedNode = scene?.PickupAt(node)?.Root ?? node;
-        scene?.Isolate(isolatedNode); CurrentInspectionCard?.Refresh();
+        ApplyIsolation(); CurrentInspectionCard?.Refresh(); RefreshRowEyes();
     }
     private void ShowAllClick(object sender, RoutedEventArgs e) { isolatedNode = null; scene?.Isolate(null); hiddenRows.Clear(); pendingHidden = null; ApplyHiddenRows(); CurrentInspectionCard?.Refresh(); }
     private void InspectNode(int index)
@@ -855,7 +855,7 @@ public partial class MainWindow : Window
         SaveWorkspacePreferences();
     }
     private void CopyPropertiesClick(object sender, RoutedEventArgs e) { if (animation?.ResolvePendingDrafts() == false) return; if (properties != null) Clipboard.SetText(properties.ToJsonString(JsonData.Options)); }
-    private void HelpClick(object sender, RoutedEventArgs e) => MessageBox.Show(this, "Workspace: Initialize unpacks the retail ZBD files once into a source project (a folder with data and gamegen); File > Open workspace (Ctrl+O) opens one. Choose a map to edit it; the back arrow returns to the maps. Ctrl+Z/Ctrl+Y undo and redo, Ctrl+S saves the project's changed files, Ctrl+W closes the map. Export builds game files from the sources into a folder outside the project.\n\nView: middle drag orbits; Shift+middle drag pans; Ctrl+middle drag or the wheel zooms toward the pointer (orthographic views scale about it); Ctrl+Shift+middle drag dollies. Numpad 1/3/7 selects front/right/top (Ctrl for the opposite views), Numpad 5 toggles perspective/orthographic, Home frames everything and Numpad decimal frames the selection; the Perspective chip offers the same. F11 toggles fullscreen. Flycam: WASD moves along the view, Space/C moves up/down, the mouse looks around and the wheel changes speed; Escape returns to normal controls.\n\nObjects: click one in the view or the World tree to select it; its Properties pane edits it. Move and Rotate show handles; Apply accepts the changes as one undo step, Revert discards them. Escape or a click on empty space clears the selection. Copy… asks for the copy's name and places it beside the original (in place when it shows nothing with a width).", "Controls and formats");
+    private void HelpClick(object sender, RoutedEventArgs e) => MessageBox.Show(this, "Workspace: Initialize unpacks the retail ZBD files once into a source project (a folder with data and gamegen); File > Open workspace (Ctrl+O) opens one. Choose a map to edit it; the back arrow returns to the maps. Ctrl+Z/Ctrl+Y undo and redo, Ctrl+S saves the project's changed files, Ctrl+W closes the map. Export builds game files from the sources into a folder outside the project.\n\nView: middle drag orbits; Shift+middle drag pans; Ctrl+middle drag or the wheel zooms toward the pointer (orthographic views scale about it); Ctrl+Shift+middle drag dollies. Numpad 1/3/7 selects front/right/top (Ctrl for the opposite views), Numpad 5 toggles perspective/orthographic, Home frames everything and Numpad decimal frames the selection; the Perspective chip offers the same. F11 toggles fullscreen. Flycam: WASD moves along the view, Space/C moves up/down, the mouse looks around and the wheel changes speed; Escape returns to normal controls.\n\nObjects: click one in the view or the World tree to select it; its Properties pane edits it. Move and Rotate show handles; Apply accepts the changes as one undo step, Revert discards them. Escape or a click on empty space clears the selection. Copy… asks for the copy's name and places it beside the original (in place when it shows nothing with a width).\n\nPolygon zones: the Zones group's Edit zones tool (P paints, E erases) adds a zone to, or removes it from, every polygon you drag over in the map's own models; Ctrl inverts it for a stroke, Shift+click picks a polygon's zone, [ and ] step through the map's zones, and Escape leaves the tool. The zone picker names zones.", "Controls and formats");
     private void AboutClick(object sender, RoutedEventArgs e)
     {
         var assembly = typeof(MainWindow).Assembly;
@@ -867,6 +867,7 @@ public partial class MainWindow : Window
     {
         if (PresentationKey(e)) return;
         if (flyCamera?.HandleKey(e, true) == true) return;
+        if (ZoneToolKey(e)) return;
         if (ParachuteKeyboard(e)) return;
         if (AiPathKeyboard(e)) return;
         if (CameraKeyboard(e)) return;
@@ -880,7 +881,7 @@ public partial class MainWindow : Window
             if (!e.IsRepeat) { if (motion != null) motion.TogglePlayback(); else if (animation != null) animation.TogglePlayback(); else pendingAnimationPlay = !pendingAnimationPlay; }
             return;
         }
-        bool ctrl = KeyboardModifiers(); if (ctrl && e.Key == Key.O) OpenWorkspaceClick(this, e); else if (ctrl && e.Key == Key.S) { if ((System.Windows.Input.Keyboard.Modifiers & ModifierKeys.Shift) != 0) SaveCurrentAsClick(this, e); else SaveCurrentClick(this, e); } else if (ctrl && e.Key == Key.Z && e.OriginalSource is not TextBoxBase) UndoAnimationClick(this, e); else if (ctrl && e.Key == Key.Y && e.OriginalSource is not TextBoxBase) RedoAnimationClick(this, e); else if (ctrl && e.Key == Key.W) CloseCurrentClick(this, e); else if (e.Key == Key.F5) ReloadClick(this, e); else if (e.Key == Key.Escape && OperationRunning) CancelRunningOperation(); else return; e.Handled = true;
+        bool ctrl = KeyboardModifiers(); if (ctrl && e.Key == Key.O) OpenWorkspaceClick(this, e); else if (ctrl && e.Key == Key.S) { if ((System.Windows.Input.Keyboard.Modifiers & ModifierKeys.Shift) != 0) SaveCurrentAsClick(this, e); else SaveCurrentClick(this, e); } else if (ctrl && e.Key == Key.Z && e.OriginalSource is not TextBoxBase) UndoAnimationClick(this, e); else if (ctrl && e.Key == Key.Y && e.OriginalSource is not TextBoxBase) RedoAnimationClick(this, e); else if (ctrl && e.Key == Key.W) CloseCurrentClick(this, e); else if (e.Key == Key.F5) ReloadClick(this, e); else if (e.Key == Key.Escape && OperationRunning && !zoneTool.Applying) CancelRunningOperation(); else return; e.Handled = true;
     }
     private bool AnimationSpaceTarget(DependencyObject? source)
     {
@@ -904,14 +905,16 @@ public partial class MainWindow : Window
             if (sourceWorkspaceBusy) { CancelSourceBuilds(); ViewModel.Status = "Cancelling the rebuild so the application can close…"; }
             return;
         }
-        if (automationCloseRequested && (ViewModel.Documents.Any(d => d.IsDirty) || HasZoneDraft || HasInspectionDraft || HasAiPathDraft || parachuteDraft != null || animation?.HasAutomationDrafts == true || propertiesWindow?.HasPendingDrafts == true || scene?.IsPickupDragging == true))
+        if (automationCloseRequested && (ViewModel.Documents.Any(d => d.IsDirty) || HasInspectionDraft || HasAiPathDraft || parachuteDraft != null || animation?.HasAutomationDrafts == true || propertiesWindow?.HasPendingDrafts == true || scene?.IsPickupDragging == true || scene?.IsZonePainting == true || zoneTool.Applying))
         {
             automationCloseRequested = false; e.Cancel = true;
             ViewModel.Status = "Close canceled: the workspace has new edits or unfinished input. Resolve them before closing.";
             return;
         }
         System.Windows.Input.Keyboard.ClearFocus();
-        if (!allowClose && (ViewModel.Documents.Any(d => d.IsDirty) || HasZoneDraft || HasInspectionDraft || HasAiPathDraft || parachuteDraft != null || animation?.HasPendingDrafts == true || propertiesWindow?.HasPendingDrafts == true))
+        // Released polygon zone strokes apply first (a second or two): closing would discard them.
+        if (!allowClose && (scene?.IsZonePainting == true || zoneTool.Applying)) { e.Cancel = true; ShowZoneRefusal("Polygon zone strokes are still applying; close again when they are done."); return; }
+        if (!allowClose && (ViewModel.Documents.Any(d => d.IsDirty) || HasInspectionDraft || HasAiPathDraft || parachuteDraft != null || animation?.HasPendingDrafts == true || propertiesWindow?.HasPendingDrafts == true))
         {
             e.Cancel = true; resolvingClose = true;
             try
