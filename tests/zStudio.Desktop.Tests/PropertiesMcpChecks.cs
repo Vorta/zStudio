@@ -89,6 +89,7 @@ internal static class PropertiesMcpChecks
             var closingDraft = Descendants(main.OpenPropertiesWindow.AnimationFields!).OfType<TextBox>().Single(t => AutomationProperties.GetName(t) == "Reset delay (s)");
             closingDraft.Text = "-";
             for (int attempt = 0; attempt < 100 && !main.ViewModel.Status.StartsWith("Close canceled:", StringComparison.Ordinal); attempt++) await Task.Delay(50, deadline.Token);
+            Assert.StartsWith("Close canceled:", main.ViewModel.Status);
             Assert.True(main.IsVisible); Assert.Equal("-", closingDraft.Text); Assert.True(main.OpenPropertiesWindow.HasPendingDrafts);
             closingDraft.Text = "0";
             main.LoadAssetPropertiesAsync = (_, _, _) => Task.FromResult(new JsonObject { ["fixture"] = "raw properties" });

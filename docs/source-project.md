@@ -154,7 +154,7 @@ Terrain recipes retain their existing surface/region authority and viewport pain
 
 The [status record](status.md) lists the checks the polygon zone tool has passed and its remaining limitations.
 
-A stroke takes at most 4,096 polygons (a longer one keeps its first and says so) across at most 1,024 placements (more are refused). For a map-owned object, its altitude-probe gate is edited through the zone service (the card's Zone section); the ordinary glTF flag editor refuses a gate write that the map would override.
+A stroke takes at most 4,096 polygons (a longer one keeps its first and says so) across at most 1,024 placements (an MCP request with more is refused; a GUI stroke keeps the first and says so). For a map-owned object, its altitude-probe gate is edited through the zone service (the card's Zone section); the ordinary glTF flag editor refuses a gate write that the map would override.
 
 ### Terrain
 

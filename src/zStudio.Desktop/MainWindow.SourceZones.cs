@@ -50,15 +50,16 @@ public partial class MainWindow
 
     /// <summary>
     /// What names a painted object whatever edits come between drawing and applying its stroke: the assignment site its
-    /// polygons are written at (owner file, reference nodes, mesh) and the names of the node and of the placements that
-    /// reference it. A deletion renumbers the nodes after it; the names do not move with the numbers.
+    /// polygons are written at (owner file, reference nodes, mesh), the model file and the names of the node and of the
+    /// placements that reference it. A deletion renumbers the nodes after it; the names do not move with the numbers.
     /// </summary>
     private static string? ZoneIdentity(SourceSceneState build, int node)
     {
         if (!build.Provenance.TryGetValue(node, out var origin) || SourceZoneEdits.PolygonSite(origin) is not { } site) return null;
         System.Text.StringBuilder identity = new(site);
+        identity.Append('\n').Append(origin.ModelFile);
         int depth = 0;
-        for (var at = origin; at != null && depth++ < 64; at = at.ReferencedBy) identity.Append('|').Append(at.ModelNodeName);
+        for (var at = origin; at != null && depth++ < 64; at = at.ReferencedBy) identity.Append('\n').Append(at.ModelNodeName?.Length).Append(':').Append(at.ModelNodeName);
         return identity.ToString();
     }
     /// <summary>Released strokes waiting to apply, in order; painting goes on meanwhile (each keeps its preview until applied).</summary>
@@ -219,6 +220,8 @@ public partial class MainWindow
     /// Another tool (AI path or VTOL route editing) takes the pointer: the polygon zone tool ends. It waits for the strokes
     /// still applying, also those released before the tool was left.
     /// </summary>
+    private const string ZoneOperationRunning = "another operation (an export, a check or terrain planning) is running; paint again when it has finished.";
+
     private void EndZoneToolFor(string tool)
     {
         if (scene?.IsZonePainting == true || zoneTool.Applying) throw new StudioCommandException("busy", $"Finish the polygon zone stroke before {tool}.");
@@ -569,7 +572,16 @@ public partial class MainWindow
     private async void ZoneStrokeFinished(SceneViewport viewport, ZonePaintStroke stroke)
     {
         if (!ReferenceEquals(viewport, scene) || zoneTool.Session is not { Owner: { SourceBuild: { } build } } session) { viewport.ResolveZoneStroke(stroke.Id); return; }
-        zoneTool.LastStroke = stroke; zoneTool.Stroke = null;
+        zoneTool.Stroke = null;
+        // An export, a check or terrain planning runs for long: a stroke released meanwhile is refused at once rather than
+        // after waiting, without the notices of a stroke that applies.
+        if (stroke.Changed > 0 && operation != null && !session.IsRebuilding && !sourceWorkspaceBusy && !zoneTool.Applying)
+        {
+            viewport.ResolveZoneStroke(stroke.Id);
+            string busy = $"A polygon zone stroke was not applied: {ZoneOperationRunning}";
+            zoneTool.LastResult = (busy, 0, 0, false); Report(busy); return;
+        }
+        zoneTool.LastStroke = stroke;
         ShowZoneNotices(stroke);
         if (stroke.Changed == 0) { viewport.ResolveZoneStroke(stroke.Id); zoneTool.LastResult = ("Nothing changed", 0, stroke.Full, false); ZoneFlash("Nothing changed", false); return; }
         // The stroke's polygons as source polygons of the build it was drawn on, now: a later build (one that replaced the
@@ -580,20 +592,19 @@ public partial class MainWindow
             selections = [.. stroke.Targets.Select(t => SourceZoneEdits.FromCompiled(build, t.Node, t.Polygon))];
             sites = [.. selections.Select(s => ZoneIdentity(build, s.SceneNode))];
         }
-        catch (InvalidDataException ex) { viewport.ResolveZoneStroke(stroke.Id); zoneTool.LastResult = (ex.Message, 0, 0, false); Report(ex); return; }
-        // An export or a check runs for long: a stroke released meanwhile is refused at once rather than after waiting.
-        if (operation != null && !session.IsRebuilding && !sourceWorkspaceBusy && !zoneTool.Applying)
+        catch (InvalidDataException ex)
         {
             viewport.ResolveZoneStroke(stroke.Id);
-            const string busy = "A polygon zone stroke was not applied: an export or check is running; paint again when it has finished.";
-            zoneTool.LastResult = (busy, 0, 0, false); Report(busy); return;
+            string message = $"A polygon zone stroke was not applied: {ex.Message}";
+            zoneTool.LastResult = (message, 0, 0, false); Report(message); return;
         }
         zoneStrokes.Enqueue(new(viewport, stroke, session, selections, sites));
         viewport.ZonePaintWaiting = zoneStrokes.Count >= MaximumQueuedStrokes;
         if (zoneTool.Applying) { RefreshZoneBanner(); return; }
-        zoneTool.Applying = true; RefreshZoneBanner(); UpdateDocumentCommands();
+        zoneTool.Applying = true;
         try
         {
+            RefreshZoneBanner(); UpdateDocumentCommands();
             while (zoneStrokes.TryDequeue(out var queued))
             {
                 try { await ApplyQueuedStrokeAsync(queued); }
@@ -630,8 +641,8 @@ public partial class MainWindow
         {
             if (session.IsDisposed || session.Owner is not { IsDisposed: false }) throw new StudioCommandException("context_changed", "its map was closed.");
             if (!session.IsRebuilding && !sourceWorkspaceBusy && operation == null && !session.Workspace.IsSaving && (session.Owner != shownDocument || staticRefresh == null)) break;
-            // An operation that is no source edit (an export or check) is not waited for.
-            if (operation != null && !session.IsRebuilding && !sourceWorkspaceBusy) throw new StudioCommandException("busy", "an export or check is running; paint again when it has finished.");
+            // An operation that is no source edit (an export, a check or terrain planning) is not waited for.
+            if (operation != null && !session.IsRebuilding && !sourceWorkspaceBusy) throw new StudioCommandException("busy", ZoneOperationRunning);
             if (waited.Elapsed > TimeSpan.FromSeconds(60)) throw new StudioCommandException("busy", "the project stayed busy with another edit for a minute.");
         }
         var document = session.Owner!;
