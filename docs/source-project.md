@@ -285,7 +285,7 @@ Everything zStudio writes into a project goes into one hidden `.zstudio\` folder
 - `recovery\` holds save journals;
 - `staging\` holds files being prepared for a save.
 
-Earlier versions kept the working data in a separate `zstudio\` folder (and preview builds in its `cache\worlds\`); it is no longer used. Move an unfinished Blender checkout from its `export\` to `.zstudio\export\` (or check the model out again), then delete it. Mission worlds are evaluated in memory, so nothing is built into the project.
+Earlier versions kept the working data in a separate `zstudio\` folder (and preview builds in its `cache\worlds\`); it is no longer used. Resolve any save that 0.9.0 reported as interrupted with 0.9.0 first (its journal there is not read any more), move an unfinished Blender checkout from its `export\` to `.zstudio\export\` (or check the model out again), then delete it. Mission worlds are evaluated in memory, so nothing is built into the project.
 
 Builds never read the folder. Its working folders are listed like the sources: `recovery\` and `staging\` when saving or looking for an interrupted save, each counting every entry there, whoever put it there. One holding more than 250,000 is refused with a message naming it, and a cancellation stops the listing. A save also lists each folder on the way to the files it writes, counting their entries together towards the same limit. Leave the folder out when sharing a project. It is safe to delete when no save was interrupted and no Blender checkout is still needed (the remembered view goes with it).
 

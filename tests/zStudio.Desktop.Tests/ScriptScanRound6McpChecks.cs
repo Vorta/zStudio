@@ -11,7 +11,7 @@ using Xunit;
 namespace zStudio.Desktop.Tests;
 
 /// <summary>
-/// The retained Blender checkout listing through the real named-pipe MCP connection lists checkouts and their outboxes with one bounded, cancellable scan off the UI thread, and a zstudio/export folder
+/// The retained Blender checkout listing through the real named-pipe MCP connection lists checkouts and their outboxes with one bounded, cancellable scan off the UI thread, and a .zstudio/export folder
 /// beyond the scan's budget is refused (io_failed, and the reason in the status) rather than listed in part.
 /// </summary>
 internal static class ScriptScanRound6McpChecks

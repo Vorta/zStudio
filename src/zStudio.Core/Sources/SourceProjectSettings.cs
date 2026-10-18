@@ -75,10 +75,6 @@ public static class SourceProjectSettings
     // Read-modify-write is serialized: two changes (a view setting and the dithering) never lose one another.
     private static readonly Lock Gate = new();
     /// <summary>
-    /// Changes the settings file, keeping its other keys, in the hidden folder. A file that cannot be read is replaced only by
-    /// an explicit choice (<paramref name="replaceDamaged"/>, the dithering); remembering the view leaves it as it is.
-    /// </summary>
-    /// <summary>
     /// Hides the project's .zstudio folder that holds <paramref name="path"/> (working data is created there before any
     /// setting may be): where the file system allows it, and never failing the work that created it.
     /// </summary>
@@ -92,6 +88,10 @@ public static class SourceProjectSettings
             return;
         }
     }
+    /// <summary>
+    /// Changes the settings file, keeping its other keys, in the hidden folder. A file that cannot be read is replaced only by
+    /// an explicit choice (<paramref name="replaceDamaged"/>, the dithering); remembering the view leaves it as it is.
+    /// </summary>
     private static void Update(string root, Action<JsonObject> change, bool replaceDamaged = false)
     {
         lock (Gate) UpdateLocked(root, change, replaceDamaged);

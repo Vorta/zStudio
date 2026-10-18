@@ -17,7 +17,7 @@ public sealed class ImportRound10Tests
         using SourceWorldFixture fixture = new();
         const string path = "data/m1/models/m1.gltf";
         var json = JsonNode.Parse(File.ReadAllBytes(Path.Combine(fixture.Project, path)))!;
-        json["buffers"]![0]!["uri"] = "../../../zstudio/export/id/input/mesh.bin";
+        json["buffers"]![0]!["uri"] = "../../../.zstudio/export/id/input/mesh.bin";
         File.WriteAllText(Path.Combine(fixture.Project, path), json.ToJsonString());
         var report = await SourceBuilder.CheckAsync(fixture.Project, ["m1/gamez.zbd"], token: Token);
         Assert.Contains(report.Outputs, o => o.Error?.Contains("authoritative source", StringComparison.Ordinal) == true);
@@ -71,7 +71,7 @@ public sealed class ImportRound10Tests
     }
 
     [Theory]
-    [InlineData("../zstudio/export/id/input")][InlineData("../other/models")][InlineData("../DATA/../zstudio")]
+    [InlineData("../.zstudio/export/id/input")][InlineData("../other/models")][InlineData("../DATA/../.zstudio")]
     public void ScriptSearchesCannotNameWorkingOrNonSourceFolders(string path)
     {
         Assert.Null(WorldAssembler.ProjectPath(path));
