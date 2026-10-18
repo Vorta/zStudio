@@ -2,7 +2,7 @@ using System.Buffers.Binary;
 using System.Numerics;
 using System.Text;
 
-namespace Recoil.Zbd.Core;
+namespace zStudio.Core;
 
 public sealed class BinaryCursor(ReadOnlyMemory<byte> data, long origin = 0)
 {

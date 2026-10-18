@@ -1,6 +1,6 @@
 using System.Collections;
 
-namespace Recoil.Zbd.Core;
+namespace zStudio.Core;
 
 /// <summary>Bound notices before retaining or publishing them; source records remain independently inspectable.</summary>
 public sealed class PreviewNotes : IReadOnlyList<string>

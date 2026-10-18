@@ -6,7 +6,7 @@ using HelixToolkit.SharpDX;
 using HelixToolkit.Wpf.SharpDX;
 using Vector3 = System.Numerics.Vector3;
 
-namespace Recoil.Zbd.Rendering;
+namespace zStudio.Rendering;
 
 /// <summary>
 /// Terrain painting: while the brush is on, a left-button drag over the scene collects the surface points under the
@@ -70,7 +70,7 @@ public sealed partial class SceneViewport
         if (brushStroke == null) return false;
         // A layout change puts another surface under the same physical pointer. Keep the
         // existing continuous stroke until release/Escape; a new stroke uses the new layout.
-        if (brushPresentationSuspended || PresentationUiHidden) return true;
+        if (brushPresentationSuspended) return true;
         if (TryNavigationSurface(point, out var hit))
         {
             Vector3 p = new((float)hit.X, (float)hit.Y, (float)hit.Z);
@@ -107,7 +107,7 @@ public sealed partial class SceneViewport
         if (brushTrail == null)
         {
             brushTrail = new() { Color = System.Windows.Media.Colors.OrangeRed, Thickness = 3, IsHitTestVisible = false, IsDepthClipEnabled = false, DepthBias = -1000 };
-            PresentationGuide(brushTrail); viewport.Items.Add(brushTrail);
+            viewport.Items.Add(brushTrail);
         }
         brushTrail.Geometry = geometry;
     }

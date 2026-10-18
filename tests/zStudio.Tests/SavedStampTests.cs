@@ -1,9 +1,9 @@
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Core.Export;
-using Recoil.Zbd.Core.Sources;
+using zStudio.Core;
+using zStudio.Core.Export;
+using zStudio.Core.Sources;
 using Xunit;
 
-namespace Recoil.Zbd.Tests;
+namespace zStudio.Tests;
 
 /// <summary>A file saved and then replaced by another program before its stamp is read must not look like zStudio's own save.</summary>
 public sealed class SavedStampTests

@@ -1,4 +1,4 @@
-namespace Recoil.Zbd.Core.Worlds;
+namespace zStudio.Core.Worlds;
 
 /// <summary>Project inputs. A provider must apply admission before materializing, hashing or cloning a payload.</summary>
 public interface IProjectFiles

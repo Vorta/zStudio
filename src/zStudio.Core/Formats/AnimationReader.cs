@@ -1,12 +1,12 @@
 using System.Text.Json.Nodes;
-using Recoil.Zbd.Core.Animation;
+using zStudio.Core.Animation;
 
-namespace Recoil.Zbd.Core.Formats;
+namespace zStudio.Core.Formats;
 
 internal sealed class AnimationReader : IZbdFormatReader
 {
     public FormatFamily Family => FormatFamily.Animation;
-    public void Read(ZbdDocument doc, CancellationToken token)
+    public void Read(AssetDocument doc, CancellationToken token)
     {
         doc.Animations = AnimationPackage.Read(doc.Bytes, token);
         doc.Diagnostics.AddRange(doc.Animations.Diagnostics);

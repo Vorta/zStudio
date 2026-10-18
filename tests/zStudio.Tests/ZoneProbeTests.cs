@@ -1,8 +1,8 @@
 using System.Numerics;
-using Recoil.Zbd.Core.Worlds;
+using zStudio.Core.Worlds;
 using Xunit;
 
-namespace Recoil.Zbd.Tests;
+namespace zStudio.Tests;
 
 /// <summary>The engine's zone probes (retail 0x443d20, 0x4444b0, 0x4290f0, 0x406510, 0x428d60), one rule per case.</summary>
 public sealed class ZoneProbeTests

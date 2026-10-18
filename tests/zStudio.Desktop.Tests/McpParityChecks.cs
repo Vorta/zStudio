@@ -1,23 +1,23 @@
 using System.IO;
 using System.Text.Json.Nodes;
 using System.Xml.Linq;
-using Recoil.Zbd.Automation;
+using zStudio.Automation;
 using Xunit;
 
-namespace Recoil.Zbd.Desktop.Tests;
+namespace zStudio.Desktop.Tests;
 
 internal static class McpParityChecks
 {
     internal static void Run(StudioCommands commands)
     {
-        var discovery = Recoil.Zbd.Mcp.McpCommandCatalog.Create((_, _, _) => throw new NotSupportedException());
-        Assert.Equal(Recoil.Zbd.Mcp.McpCommandCatalog.Serialize(commands), Recoil.Zbd.Mcp.McpCommandCatalog.Serialize(discovery));
+        var discovery = zStudio.Mcp.McpCommandCatalog.Create((_, _, _) => throw new NotSupportedException());
+        Assert.Equal(zStudio.Mcp.McpCommandCatalog.Serialize(commands), zStudio.Mcp.McpCommandCatalog.Serialize(discovery));
         string root = AppContext.BaseDirectory;
         while (!File.Exists(Path.Combine(root, "zStudio.slnx"))) root = Directory.GetParent(root)?.FullName ?? throw new DirectoryNotFoundException("Repository root");
         var capabilityMap = JsonNode.Parse(File.ReadAllText(Path.Combine(root, "docs", "mcp-capabilities.json")))!;
         var inventory = capabilityMap["handlers"]!.AsArray();
         var interactions = capabilityMap["interactions"]!.AsArray();
-        Assert.Equal(new[] { "MainWindow.Navigation:CameraNavigationClick", "MainWindow.Navigation:CameraKeyboard", "SceneViewport.Navigation:ConfigureNavigation", "SceneViewport.NavigationCube:NavigateCubeAt", "MainWindow.Resources:ArchiveMembers", "MainWindow.Resources:ZrdNodes", "ResourcePropertiesEditor:Fields", "MainWindow.Content:Textures", "MainWindow.Content:Scripts", "ScriptPropertiesEditor:Fields", "SceneViewport.Ai:HandleAiPointerDown", "SceneViewport.Inspection:Pointer", "SceneInspectionCard:Resize", "SceneInspectionCard:Actions", "DocumentSceneTree:Hierarchy", "MotionEditor:Controls", "ResourcePropertiesEditor:MotionFields", "MainWindow.MechModels:ReplaceMechModelDialogAsync", "ResourcePropertiesEditor:ValveFields", "SceneViewport:Valves", "MainWindow.Sources:ExportSourceFileMenu", "MainWindow.Sources:SourceProfileMenu", "MainWindow.SourceWorlds:SourceWorldMenu", "SourceObjectPropertiesEditor:Fields", "TerrainPropertiesEditor:Fields", "SceneViewport.TerrainBrush:Strokes", "ZonePropertiesEditor:Fields", "SceneViewport.Zones:Strokes", "SourceModelDialog:Controls", "BlenderUpdateDialog:Controls", "SourceInitializeDialog:Controls", "WorldCompareWindow:Controls", "TerrainCreateDialog:Controls", "MainWindow.AiPath:AiPathKeyboard", "SceneViewport.AiEditing:HandleAiPathDown", "MainWindow.Parachutes:ParachuteKeyboard", "SceneViewport.Parachutes:HandleParachuteDown", "MainWindow.Presentation:PresentationKey" },
+        Assert.Equal(new[] { "MainWindow.Navigation:CameraNavigationClick", "MainWindow.Navigation:CameraKeyboard", "SceneViewport.Navigation:ConfigureNavigation", "SceneViewport.NavigationCube:NavigateCubeAt", "MainWindow.Resources:ArchiveMembers", "MainWindow.Resources:ZrdNodes", "ResourcePropertiesEditor:Fields", "MainWindow.Content:Textures", "MainWindow.Content:Scripts", "ScriptPropertiesEditor:Fields", "SceneViewport.Ai:HandleAiPointerDown", "SceneViewport.Inspection:Pointer", "SceneInspectionCard:Resize", "SceneInspectionCard:Actions", "DocumentSceneTree:Hierarchy", "MotionEditor:Controls", "ResourcePropertiesEditor:MotionFields", "MainWindow.MechModels:ReplaceMechModelDialogAsync", "ResourcePropertiesEditor:ValveFields", "SceneViewport:Valves", "MainWindow.Sources:ExportSourceFileMenu", "MainWindow.Sources:SourceProfileMenu", "SourceObjectCardEditor:Fields", "TerrainPropertiesEditor:Fields", "SceneViewport.TerrainBrush:Strokes", "ZonePropertiesEditor:Fields", "SceneViewport.Zones:Strokes", "SourceModelDialog:Controls", "BlenderUpdateDialog:Controls", "SourceExportDialog:Controls", "SourceInitializeDialog:Controls", "WorldCompareWindow:Controls", "TerrainCreateDialog:Controls", "MainWindow.AiPath:AiPathKeyboard", "SceneViewport.AiEditing:HandleAiPathDown", "MainWindow.Parachutes:ParachuteKeyboard", "SceneViewport.Parachutes:HandleParachuteDown", "MainWindow.Presentation:PresentationKey", "MainWindow.MapWorkspace:MapPicker" },
             interactions.Select(row => row!["gui"]!.GetValue<string>()));
         var mapped = inventory.Select(x => x!["gui"]!.GetValue<string>()).Order().ToArray();
         string[] events = ["Click", "Checked", "Unchecked", "SelectionChanged", "ValueChanged", "TextChanged", "LostFocus", "LostKeyboardFocus", "KeyDown", "SelectedItemChanged", "MouseDoubleClick", "DragCompleted"];

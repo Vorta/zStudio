@@ -1,13 +1,13 @@
 using System.Numerics;
 using System.Text;
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Core.Formats;
-using Recoil.Zbd.Core.Gltf;
-using Recoil.Zbd.Core.Sources;
-using Recoil.Zbd.Core.Worlds;
+using zStudio.Core;
+using zStudio.Core.Formats;
+using zStudio.Core.Gltf;
+using zStudio.Core.Sources;
+using zStudio.Core.Worlds;
 using Xunit;
 
-namespace Recoil.Zbd.Tests;
+namespace zStudio.Tests;
 
 public sealed class WorldAssemblyTests
 {
@@ -18,7 +18,11 @@ public sealed class WorldAssemblyTests
         public Dictionary<string, byte[]> Files { get; } = files;
         public bool Exists(string relative) => Files.ContainsKey(relative);
         public byte[] Read(string relative, CancellationToken token) => Read(relative, token, ProjectReadLimits.Document);
-        public byte[] Read(string relative, CancellationToken token, ProjectReadLimits limits) { token.ThrowIfCancellationRequested(); byte[] result = Files[relative]; limits.Validate(result); return result; }
+        public byte[] Read(string relative, CancellationToken token, ProjectReadLimits limits) { token.ThrowIfCancellationRequested(); byte[] result = Files[relative];
+            // Original script fixtures remain FLT-based; the current source assembler receives reconstructed filenames.
+            if (relative.StartsWith("gamegen/", StringComparison.Ordinal))
+                result = Encoding.ASCII.GetBytes(GameGenScriptText.Write(GameGenScriptText.ProjectFileNames(GameGenScriptText.Tokenize(Encoding.ASCII.GetString(result)), new HashSet<string>())));
+            limits.Validate(result); return result; }
     }
 
     private const string Script = """
@@ -468,14 +472,17 @@ public sealed class WorldAssemblyTests
         Assert.Equal("set dbName m1.gltf\nset other m1.flt\nLoadGameGen %dbName% %dbName%\nDeleteTree %dbName%\n", Text(0));
         Assert.Equal("LoadGameGen rfpg_mzl.gltf rfpg_mzl.flt\nLoadGameGen vtol.gltf vtol1\nFindNode sizzle.flt\nAddChild lite_ref.flt\nCycleTextureSetMap fire101.png\nWriteTextureSetMap fire1 water.png\nTextureAdd name\n", Text(1));
 
-        // The build loads the file a script names, and an OpenFlight name (older projects) finds its glTF.
+        // The build accepts current explicit filenames and bare names, never old OpenFlight aliases.
         var project = Project();
         project.Files["data/m1/models/crate.glb"] = project.Files["data/common/models/crate.gltf"];
         var assembler = new WorldAssembler(project, Token);
         assembler.Assemble("m1.gs");
         Assert.Equal("data/m1/models/crate.glb", assembler.ResolveModel("crate.glb"));
         Assert.Equal("data/common/models/crate.gltf", assembler.ResolveModel("crate.gltf"));
-        Assert.Equal("data/common/models/crate.gltf", assembler.ResolveModel("crate.flt"));
+        // Directory precedence wins over extension preference: common was listed last and is searched first.
+        Assert.Equal("data/common/models/crate.gltf", assembler.ResolveModel("crate"));
+        Assert.Null(assembler.ResolveModel("crate.flt"));
+        Assert.Null(assembler.ResolveModel("crate.obj"));
         Assert.Null(assembler.ResolveModel("missing.gltf"));
     }
 

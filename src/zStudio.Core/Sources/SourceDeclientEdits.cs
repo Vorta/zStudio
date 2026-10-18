@@ -1,21 +1,26 @@
-using Recoil.Zbd.Core.Gltf;
-using Recoil.Zbd.Core.Worlds;
+using zStudio.Core.Gltf;
+using zStudio.Core.Worlds;
 
-namespace Recoil.Zbd.Core.Sources;
+namespace zStudio.Core.Sources;
 
 /// <summary>Checks an exclusive crater-mode edit against every mission that reads its shared model source.</summary>
 internal static class SourceDeclientEdits
 {
     internal static void Validate(SourceWorkspace workspace, string model, SourceEditPlan plan,
         SourceScriptInspection inspection, CancellationToken token)
+        => ValidateModels(workspace, [model], plan, inspection, "crater-mode edit", token);
+
+    internal static void ValidateModels(SourceWorkspace workspace, IReadOnlyCollection<string> models, SourceEditPlan plan,
+        SourceScriptInspection inspection, string description, CancellationToken token)
     {
-        // Flag edits cannot change loads or reference links. Discover consumers from the current sources,
-        // then assemble only those consumers with the proposed files. Neither stage changes the workspace.
+        var changedModels = models.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        // Scripts do not change here. Any edited reference link is in changedModels,
+        // so its current consumers also cover newly reached dependencies. Assemble
+        // those consumers with the proposed files without changing the workspace.
         ScriptTraceBudget budget = new();
         Dictionary<string, IReadOnlyList<IReadOnlyList<string>>?> scripts = new(StringComparer.OrdinalIgnoreCase);
         Dictionary<string, bool> reaches = new(StringComparer.OrdinalIgnoreCase);
         HashSet<string> active = new(StringComparer.OrdinalIgnoreCase);
-        SourceMissionModels bindings = new(null, token);
         ProposedFiles files = new(workspace, plan, token);
         int checkedWorlds = 0;
         foreach (string world in inspection.Worlds().Order(StringComparer.OrdinalIgnoreCase))
@@ -31,11 +36,11 @@ internal static class SourceDeclientEdits
             }, token, budget: budget);
             if (!affected) continue;
             if (++checkedWorlds > 256)
-                throw new InvalidDataException("The shared crater-mode edit reaches more than 256 missions. Give the model independent source ownership before editing its crater mode.");
+                throw new InvalidDataException($"The {description} reaches more than 256 missions. Give the model independent source ownership before editing it.");
             try { _ = new WorldAssembler(files, token).Assemble(Path.GetFileName(world)); }
             catch (Exception error) when ((error is InvalidDataException or IOException) && error is not SourceFileChangedException)
             {
-                throw new InvalidDataException($"The crater-mode edit cannot be applied: {world} also reads {model} and cannot build with the proposed mode. Resolve its model and script crater settings first. {error.Message}", error);
+                throw new InvalidDataException($"The {description} cannot be applied: {world} reads an edited source and cannot build with the proposed files. Resolve its model and script settings first. {error.Message}", error);
             }
         }
 
@@ -49,7 +54,7 @@ internal static class SourceDeclientEdits
         bool Reaches(string path, int depth)
         {
             inspection.ReserveWork(path.Length + 1L);
-            if (path.Equals(model, StringComparison.OrdinalIgnoreCase)) return true;
+            if (changedModels.Contains(path)) return true;
             if (reaches.TryGetValue(path, out bool found)) return found;
             if (depth >= GltfDocument.MaximumDepth || !active.Add(path))
                 throw new InvalidDataException("The shared model reference hierarchy is cyclic or too deep to check the crater-mode edit.");
@@ -58,7 +63,7 @@ internal static class SourceDeclientEdits
                 if (inspection.ReadModel(path) is not { } bytes) return reaches[path] = false;
                 inspection.ReserveWork(bytes.LongLength);
                 var hierarchy = GltfDocument.ReadHierarchy(bytes, token);
-                foreach (string child in bindings.Dependencies(path, hierarchy, inspection.ReserveWork))
+                foreach (string child in SourceMissionModels.Dependencies(path, hierarchy, inspection.ReserveWork))
                     if (Reaches(child, depth + 1)) return reaches[path] = true;
                 return reaches[path] = false;
             }

@@ -1,9 +1,9 @@
 using System.Buffers.Binary;
 using System.Security.Cryptography;
 using System.Text;
-using Recoil.Zbd.Core.Gltf;
+using zStudio.Core.Gltf;
 
-namespace Recoil.Zbd.Core.Worlds;
+namespace zStudio.Core.Worlds;
 
 /// <summary>A node's complete stored zone word and its independent altitude-probe gate.</summary>
 public sealed record WorldNodeZone(uint Word, bool Gate, bool Inherit = false);
@@ -56,7 +56,7 @@ public static partial class WorldGltf
     public static string LayoutFingerprint(GltfDocument document, CancellationToken token = default) => ZoneLayout.Read(document, token).Fingerprint;
 
     /// <summary>
-    /// Captures legacy inline assignments without rewriting geometry. The caller supplies the actual load's inherited
+    /// Captures embedded assignments without rewriting geometry. The caller supplies the actual load's inherited
     /// zone, and must not collapse uses whose inherited assignments differ into one logical profile.
     /// </summary>
     public static WorldZoneProfile CaptureZoneProfile(GltfDocument document, uint parentZone = DefaultZone,
@@ -143,6 +143,8 @@ public static partial class WorldGltf
     internal sealed class BoundZones
     {
         internal required string Identity { get; set; }
+        /// <summary>For a reference placement's overrides (rather than the file's own assignments), the file and reference node holding them.</summary>
+        internal (string File, int Node)? Placement { get; init; }
         internal Dictionary<GltfNode, WorldNodeZone> Nodes { get; } = new(ReferenceEqualityComparer.Instance);
         internal Dictionary<GltfMesh, uint[]> Meshes { get; } = new(ReferenceEqualityComparer.Instance);
         internal Dictionary<GltfPrimitive, List<int[]>> Polygons { get; } = new(ReferenceEqualityComparer.Instance);
@@ -159,7 +161,11 @@ public static partial class WorldGltf
                     ValidateZoneOverrideScope(document, scope, context.Token);
                     context.ValidatedZoneScopes.Add((document, scope));
                 }
-        var placement = context.EmbeddedZoneScopes.Count > 0 ? context.EmbeddedZoneScopes.Peek().Overrides.FirstOrDefault(s => s["fingerprint"] != null) : null;
+        var scopes = context.EmbeddedZoneScopes.Count > 0 ? context.EmbeddedZoneScopes.Peek() : null;
+        int chosen = -1;
+        for (int i = 0; scopes != null && chosen < 0 && i < scopes.Overrides.Count; i++)
+            if (scopes.Overrides[i]["fingerprint"] != null) chosen = i;
+        var placement = chosen < 0 ? null : scopes!.Overrides[chosen];
         bool cached = placement == null;
         if (cached && context.ZoneBindings.TryGetValue((path, document), out var known)) return known;
         if (placement != null && context.EmbeddedZoneBindings.TryGetValue((document, placement), out var placed)) return placed;
@@ -188,14 +194,14 @@ public static partial class WorldGltf
             if (!Flag(marker, ZoneReference, path) || node.Extras?[Key]?["ref"] != null)
                 throw new InvalidDataException($"{path}: neutral reference {i} has conflicting or invalid reference fields.");
             string uri = context.AssetReference?.Invoke(path, i)
-                ?? throw new InvalidDataException($"{path}: map reference {i} has no authored URI in its zone manifest.");
+                ?? throw new InvalidDataException($"{path}: map reference {i} has no supplied authored URI.");
             if (uri.Length == 0 || uri.Length > 4096)
                 throw new InvalidDataException($"{path}: map reference {i} has an empty or excessive URI.");
             references.Add(node, uri);
         }
         using ZoneHash identity = new(context.Token);
         identity.Text(layout.Fingerprint);
-        BoundZones bound = new() { Identity = "" };
+        BoundZones bound = new() { Identity = "", Placement = chosen < 0 ? null : scopes!.Holders[chosen] };
         for (int i = 0; i < layout.Nodes.Count; i++)
         {
             var assigned = profile.Nodes[i] ?? throw new InvalidDataException($"{path}: a node zone assignment is absent.");

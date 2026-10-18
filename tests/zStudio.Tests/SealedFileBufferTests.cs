@@ -1,8 +1,8 @@
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Core.Sources;
+using zStudio.Core;
+using zStudio.Core.Sources;
 using Xunit;
 
-namespace Recoil.Zbd.Tests;
+namespace zStudio.Tests;
 
 [Collection("Allocation-sensitive")]
 [System.Runtime.Versioning.SupportedOSPlatform("windows")]

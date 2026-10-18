@@ -5,12 +5,12 @@ using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Threading;
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Core.Animation;
-using Recoil.Zbd.Desktop;
+using zStudio.Core;
+using zStudio.Core.Animation;
+using zStudio.Desktop;
 using Xunit;
 
-namespace Recoil.Zbd.Desktop.Tests;
+namespace zStudio.Desktop.Tests;
 
 // Runs inside the close regression's single STA Application, avoiding competing WPF applications/settings writes.
 internal static class PropertiesWindowChecks
@@ -26,7 +26,7 @@ internal static class PropertiesWindowChecks
         main.ViewModel.Documents.Add(first); main.ViewModel.Documents.Add(second);
         try
         {
-            var diagnosticSource = new ZbdDocument(Path.Combine(Path.GetTempPath(), "diagnostic-navigation.zbd"), new(256, DateTime.MinValue),
+            var diagnosticSource = new AssetDocument(Path.Combine(Path.GetTempPath(), "diagnostic-navigation.zbd"), new(256, DateTime.MinValue),
                 new(FormatFamily.Unknown, null, Recognition.Unknown, "Navigation fixture"), new byte[256]);
             diagnosticSource.Add(AssetKind.Raw, 0, "first", 0, 128);
             diagnosticSource.Add(AssetKind.Raw, 1, "affected", 128, 128);
@@ -191,7 +191,7 @@ internal static class PropertiesWindowChecks
             var frame = AnimationKeyframe.Create(7); frame.End = 1;
             var ev = AnimationCatalog.Create(12, version).WithKeyframes(Enumerable.Repeat(frame, 10_000));
             sequence.Events.Add(ev); entry.Sequences.Add(sequence); package.Entries.Add(entry);
-            var source = new ZbdDocument("keyframe-properties.zbd", new(0, DateTime.MinValue), new(FormatFamily.Animation, version, Recognition.Supported, "Fixture"), ReadOnlyMemory<byte>.Empty) { Animations = package };
+            var source = new AssetDocument("keyframe-properties.zbd", new(0, DateTime.MinValue), new(FormatFamily.Animation, version, Recognition.Supported, "Fixture"), ReadOnlyMemory<byte>.Empty) { Animations = package };
             using var doc = new DocumentModel(source);
             using var editor = new AnimationPropertiesEditor(doc, 0, sequence.Id, ev.Id);
             _ = editor.DescribeAutomationFields();
@@ -217,7 +217,7 @@ internal static class PropertiesWindowChecks
         var sequence = new AnimationSequence(new byte[64]) { Name = "sequence" };
         sequence.Events.Add(AnimationCatalog.Create(10)); sequence.Events.Add(AnimationCatalog.Create(10));
         entry.Sequences.Add(sequence); package.Entries.Add(entry);
-        var document = new ZbdDocument(Path.Combine(Path.GetTempPath(), name + ".zbd"), new(0, DateTime.MinValue), new(FormatFamily.Animation, 28, Recognition.Supported, "Properties fixture"), ReadOnlyMemory<byte>.Empty) { Animations = package };
+        var document = new AssetDocument(Path.Combine(Path.GetTempPath(), name + ".zbd"), new(0, DateTime.MinValue), new(FormatFamily.Animation, 28, Recognition.Supported, "Properties fixture"), ReadOnlyMemory<byte>.Empty) { Animations = package };
         document.Add(AssetKind.Raw, 0, "Non-animation preview", 0, 0);
         return new(document);
     }

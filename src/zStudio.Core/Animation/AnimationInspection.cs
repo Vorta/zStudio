@@ -1,6 +1,6 @@
 using System.Text.Json.Nodes;
 
-namespace Recoil.Zbd.Core.Animation;
+namespace zStudio.Core.Animation;
 
 /// <summary>Bound before expanding authored collections or payloads. Complete data remains in JSON export.</summary>
 public static class AnimationInspection

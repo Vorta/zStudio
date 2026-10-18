@@ -1,4 +1,4 @@
-namespace Recoil.Zbd.Desktop;
+namespace zStudio.Desktop;
 
 /// <summary>Flows MCP shutdown cancellation through preview work started by GUI bindings.
 /// Only loading/seeking requests link this token; retained renderer/player lifetimes do not.</summary>

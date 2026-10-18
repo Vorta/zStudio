@@ -1,10 +1,10 @@
 using System.Buffers.Binary;
 using System.IO;
 using System.Text;
-using Recoil.Zbd.Core.Formats;
-using Recoil.Zbd.Core.Sources;
+using zStudio.Core.Formats;
+using zStudio.Core.Sources;
 
-namespace Recoil.Zbd.Tests;
+namespace zStudio.Tests;
 
 /// <summary>
 /// A small shipped data folder: common and mission resource archives, three sound banks declared by sounds.zrd,

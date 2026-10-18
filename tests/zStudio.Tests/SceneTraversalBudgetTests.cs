@@ -1,11 +1,11 @@
 using System.Numerics;
 using System.Text.Json.Nodes;
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Core.Formats;
-using Recoil.Zbd.Core.Worlds;
+using zStudio.Core;
+using zStudio.Core.Formats;
+using zStudio.Core.Worlds;
 using Xunit;
 
-namespace Recoil.Zbd.Tests;
+namespace zStudio.Tests;
 
 public sealed class SceneTraversalBudgetTests
 {
@@ -36,7 +36,7 @@ public sealed class SceneTraversalBudgetTests
         return world;
     }
     private static void Link(WorldNode parent, WorldNode child) { parent.Children.Add(child); child.Parents.Add(parent); }
-    private static ZbdDocument Read(GameZWorld world)
+    private static AssetDocument Read(GameZWorld world)
     {
         var document = FormatRegistry.Default.OpenBytes("scene.zbd", GameZWriter.Write(world, Token), token: Token);
         Assert.DoesNotContain(document.Diagnostics, d => d.Severity == "Error");

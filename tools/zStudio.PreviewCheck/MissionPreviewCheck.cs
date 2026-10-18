@@ -6,10 +6,10 @@ using System.Windows.Media.Imaging;
 using System.Windows.Media.Media3D;
 using HelixToolkit.SharpDX;
 using HelixToolkit.Wpf.SharpDX;
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Core.Animation;
-using Recoil.Zbd.Desktop;
-using Recoil.Zbd.Rendering;
+using zStudio.Core;
+using zStudio.Core.Animation;
+using zStudio.Desktop;
+using zStudio.Rendering;
 using HCamera = HelixToolkit.Wpf.SharpDX.PerspectiveCamera;
 
 internal static class MissionPreviewCheck
@@ -30,7 +30,7 @@ internal static class MissionPreviewCheck
                 scene.Models.Add(Plane(0,300,0)); scene.Models.Add(Plane(1,100,-5));
                 scene.Nodes.Add(new(0,"world","world",null,[],[1,2],[],[]));
                 scene.Nodes.Add(Node(1,"horizon",1)); scene.Nodes.Add(Node(2,"foreground",0));
-                var context = new AnimationPreviewContext { Package = new() { Prefix=[],Tail=[] }, World = new("fixture",new(0,DateTime.MinValue),new(FormatFamily.GameZ,15,Recognition.Supported,""),ReadOnlyMemory<byte>.Empty) { Scene=scene } };
+                var context = new AnimationPreviewContext { Package = new() { Prefix=[],Tail=[] }, World = new AssetDocument("fixture",new(0,DateTime.MinValue),new(FormatFamily.GameZ,15,Recognition.Supported,""),ReadOnlyMemory<byte>.Empty) { Scene=scene } };
                 AnimationFrame frame = new(0,[new(1,1,1,Matrix4x4.Identity,true,1,-1,0,0),new(2,2,0,Matrix4x4.Identity,true,1,-1,0,0)],[],[],[],null,null,Vector4.Zero,Vector4.Zero,[],[],[]);
                 await preview.ShowAnimationAsync(context,frame,resolver,false,CancellationToken.None);
                 var viewport = (Viewport3DX)preview.RenderSurface; viewport.ShowCoordinateSystem = viewport.ShowViewCube = false; viewport.IsInertiaEnabled = false;

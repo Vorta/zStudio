@@ -1,8 +1,8 @@
 using System.Text.Json.Nodes;
-using Recoil.Zbd.Core.Gltf;
-using Recoil.Zbd.Core.Worlds;
+using zStudio.Core.Gltf;
+using zStudio.Core.Worlds;
 
-namespace Recoil.Zbd.Core.Sources;
+namespace zStudio.Core.Sources;
 
 public static partial class SourceTerrainConversion
 {
@@ -74,7 +74,7 @@ public static partial class SourceTerrainConversion
                 {
                     token.ThrowIfCancellationRequested();
                     var source = meshWords[originals[index].Mesh!];
-                    if (source.Count > SourceMapZones.MaximumTargets - count)
+                    if (source.Count > SourceEmbeddedZones.MaximumTargets - count)
                         throw new InvalidDataException("Converted terrain exceeds the map's polygon zone assignment limit.");
                     count += source.Count; words.AddRange(source);
                 }

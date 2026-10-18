@@ -6,7 +6,7 @@ using HelixToolkit.SharpDX;
 using HelixToolkit.Wpf.SharpDX;
 using HitTestResult = HelixToolkit.SharpDX.HitTestResult;
 
-namespace Recoil.Zbd.Rendering;
+namespace zStudio.Rendering;
 
 public sealed partial class SceneViewport
 {
@@ -22,7 +22,7 @@ public sealed partial class SceneViewport
 
     private HitTestResult? PickPickupHandle(Point point)
     {
-        if (PresentationUiHidden || !CanManipulate ||
+        if (!CanManipulate ||
             pickupManipulator?.Visibility != Visibility.Visible || viewport.Camera is not HelixToolkit.Wpf.SharpDX.ProjectionCamera camera ||
             !IsInsidePickupViewport(point)) return null;
         var origin = transformDraft.Position;
@@ -77,7 +77,7 @@ public sealed partial class SceneViewport
         if (e.ChangedButton != MouseButton.Left) return false;
         if (PickPickupHandle(point) is not { ModelHit: MeshGeometryModel3D arrow } hit) return false;
         // A rejected handle click must not fall through to Helix and start a drag.
-        if (CanStartPickupEdit?.Invoke() == false) return true;
+        if (CanStartPickupEdit?.Invoke() == false) { if (objectDraftNode != null) ObjectGestureEnded?.Invoke(); return true; }
         PickupInteractionStarting?.Invoke();
         // Use the native axis constraint, but own routing/capture for the whole drag. Do not let
         // scene depth or another triangle choose a different target after this screen-space pick.
@@ -87,14 +87,31 @@ public sealed partial class SceneViewport
             var axis = (arrow.Transform?.Value ?? Matrix3D.Identity).Transform(new Vector3D(1, 0, 0));
             if (BeginPickupDrag(down)) BeginRotationPointer(point, new((float)axis.X, (float)axis.Y, (float)axis.Z), hit.PointHit);
         }
+        else if (objectDraftNode != null)
+        {
+            // Source objects move along the arrow as drawn (it may follow the object's rotation), on the plane facing the camera.
+            if (BeginPickupDrag(down))
+            {
+                activePickupHandle = hit;
+                var direction = (arrow.Transform?.Value ?? Matrix3D.Identity).Transform(new Vector3D(1, 0, 0));
+                pickupPresentationAxis = Vector3.Normalize(new((float)direction.X, (float)direction.Y, (float)direction.Z));
+                var look = CaptureView().LookDirection;
+                var forward = Vector3.Normalize(new((float)look.X, (float)look.Y, (float)look.Z));
+                pickupPresentationNormal = forward - pickupPresentationAxis * Vector3.Dot(forward, pickupPresentationAxis);
+                pickupPresentationPosition = transformDraft.Position;
+                pickupPresentationConstraint = Finite(pickupPresentationNormal) && pickupPresentationNormal.LengthSquared() > 1e-8f && PickupPresentationPoint(point, out pickupPresentationHit);
+                if (!pickupPresentationConstraint) CancelPickupDrag();
+            }
+        }
         else arrow.RaiseEvent(down);
         if (IsPickupDragging) activePickupHandle = hit;
+        // A gesture that could not begin ends here (its draft may have opened for it).
+        else if (objectDraftNode != null) ObjectGestureEnded?.Invoke();
         return true;
     }
 
     internal bool HandlePickupPointerMove(Point point)
     {
-        if (PresentationUiHidden) return IsPickupDragging;
         if (IsFlyActive) return true;
         if (IsPickupDragging && activePickupHandle?.ModelHit is MeshGeometryModel3D arrow)
         {
@@ -122,14 +139,15 @@ public sealed partial class SceneViewport
     {
         if (IsFlyActive) return true;
         if (!IsPickupDragging || e.ChangedButton != MouseButton.Left) return false;
-        if (!PresentationUiHidden && !IsInsidePickupViewport(point)) { CancelPickupDrag(); return true; }
-        if (TransformMode == "move" && activePickupHandle?.ModelHit is MeshGeometryModel3D arrow)
+        if (!IsInsidePickupViewport(point)) { CancelPickupDrag(); return true; }
+        if (TransformMode == "move" && objectDraftNode == null && activePickupHandle?.ModelHit is MeshGeometryModel3D arrow)
             arrow.RaiseEvent(new MouseUp3DEventArgs(arrow, activePickupHandle, point, viewport, e));
         activePickupHandle = null; IsPickupDragging = false;
         ResumePickupCamera(); viewport.ReleaseMouseCapture();
         // Completing a gesture updates the card draft only. The document service
         // accepts one combined transform when the card is explicitly confirmed.
         if (selectedPickup is int root) PickupMoveCommitted?.Invoke(root, transformDraft.Position);
+        if (objectDraftNode != null) ObjectGestureEnded?.Invoke();
         RefreshPickupSelection();
         SetPickupHover(PickPickupHandle(point) != null);
         return true;

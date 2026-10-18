@@ -1,11 +1,11 @@
 using System.Buffers.Binary;
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Core.Animation;
-using Recoil.Zbd.Core.Formats;
-using Recoil.Zbd.Core.Sources;
+using zStudio.Core;
+using zStudio.Core.Animation;
+using zStudio.Core.Formats;
+using zStudio.Core.Sources;
 using Xunit;
 
-namespace Recoil.Zbd.Tests;
+namespace zStudio.Tests;
 
 [Collection("Allocation-sensitive")]
 public sealed class AnimationWorldDiscoveryTests
@@ -64,8 +64,8 @@ public sealed class AnimationWorldDiscoveryTests
         private readonly Guid snapshotOwner = Guid.NewGuid();
         public AssetResolver Resolver { get; }
         public AnimationPackage Package { get; }
-        public ZbdDocument MatchingWorld { get; }
-        public ZbdDocument OtherWorld { get; }
+        public AssetDocument MatchingWorld { get; }
+        public AssetDocument OtherWorld { get; }
         public string AnimationPath => Path.Combine(directory, "animation.zbd");
 
         public Fixture(int animationVersion, int worldVersion, int otherVersion)
@@ -85,7 +85,7 @@ public sealed class AnimationWorldDiscoveryTests
             Package = new() { Prefix = prefix, Tail = [] };
         }
 
-        private static ZbdDocument World(string path, int version)
+        private static AssetDocument World(string path, int version)
         {
             byte[] bytes = new byte[36];
             BinaryPrimitives.WriteUInt32LittleEndian(bytes, 0x02971222);

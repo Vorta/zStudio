@@ -2,7 +2,7 @@ using System.Globalization;
 using System.Numerics;
 using System.Text.Json.Nodes;
 
-namespace Recoil.Zbd.Core.Animation;
+namespace zStudio.Core.Animation;
 
 public enum AnimationFieldKind { Integer, Short, Float, Vector, Flags, Text }
 public sealed record AnimationField(string Name, int Offset, AnimationFieldKind Kind, int Size = 4, int ReferenceTable = -1, bool ReadOnly = false, string Hint = "")

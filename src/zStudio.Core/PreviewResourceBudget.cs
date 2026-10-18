@@ -1,6 +1,6 @@
-using Recoil.Zbd.Core.Formats;
+using zStudio.Core.Formats;
 
-namespace Recoil.Zbd.Core;
+namespace zStudio.Core;
 
 /// <summary>One preview load's retained resources, shared by mission, sound and prepared-script discovery.</summary>
 internal sealed class PreviewResourceBudget
@@ -16,7 +16,7 @@ internal sealed class PreviewResourceBudget
     // Keep decoded headroom separate from the unchanged raw-file and interpretation-work limits.
     internal const long MaximumDecodedBytes = 768L * 1024 * 1024;
     internal AssetReadBudget Reads { get; }
-    private readonly Dictionary<string, ZbdDocument> documents = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, AssetDocument> documents = new(StringComparer.OrdinalIgnoreCase);
     private readonly RetainedDocumentBudget content;
     private long remainingWork = 64L * 1024 * 1024;
     private long remainingMemberBytes = 512L * 1024 * 1024;
@@ -49,7 +49,7 @@ internal sealed class PreviewResourceBudget
         foreach (var child in tree.Children) Interpret(child, token, depth + 1);
     }
 
-    internal async Task<ZbdDocument> OpenAsync(string path, AssetResolver resolver, CancellationToken token)
+    internal async Task<AssetDocument> OpenAsync(string path, AssetResolver resolver, CancellationToken token)
     {
         Check(token);
         if (documents.TryGetValue(path, out var retained)) return retained;
@@ -58,7 +58,7 @@ internal sealed class PreviewResourceBudget
         return document;
     }
 
-    internal void Retain(ZbdDocument document, CancellationToken token)
+    internal void Retain(AssetDocument document, CancellationToken token)
     {
         Check(token);
         if (documents.TryGetValue(document.Path, out var prior))

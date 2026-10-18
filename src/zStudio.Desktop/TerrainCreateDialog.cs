@@ -1,9 +1,9 @@
 using System.Windows;
 using System.Windows.Controls;
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Core.Terrain;
+using zStudio.Core;
+using zStudio.Core.Terrain;
 
-namespace Recoil.Zbd.Desktop;
+namespace zStudio.Desktop;
 
 /// <summary>Chooses which mesh nodes of a glTF file become terrain surfaces, and the recipe's project path.</summary>
 internal sealed class TerrainCreateDialog : Window

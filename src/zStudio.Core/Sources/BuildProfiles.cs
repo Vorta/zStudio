@@ -1,8 +1,8 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
-using Recoil.Zbd.Core.Formats;
+using zStudio.Core.Formats;
 
-namespace Recoil.Zbd.Core.Sources;
+namespace zStudio.Core.Sources;
 
 /// <summary>
 /// A texture pack a profile builds: its file, texel budget (null: every texture at full size), largest texture side, and
@@ -31,6 +31,11 @@ public sealed record BuildProfile(string Name, string Description, string Status
 {
     /// <summary>Why the project's file of this profile cannot be used (null when it can); such a profile has no packs and is not the default.</summary>
     public string? Error { get; init; }
+    /// <summary>
+    /// How its texture packs convert colours: the export's choice (Export → Texture dithering, kept in the project's hidden
+    /// .zstudio folder by the workspace), not part of a profile file, so builds never read it from the project.
+    /// </summary>
+    public Formats.TextureDithering Dithering { get; init; }
 }
 
 public static class BuildProfiles

@@ -1,7 +1,7 @@
 using System.Collections.Concurrent;
 using NAudio.Wave;
 
-namespace Recoil.Zbd.Desktop.Audio;
+namespace zStudio.Desktop.Audio;
 
 /// <summary>Only the audio callback owns voice cursors. UI operations enqueue small commands, never wait for it.</summary>
 internal sealed class AnimationMixer : ISampleProvider

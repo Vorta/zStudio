@@ -1,29 +1,28 @@
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Core.Animation;
-using Recoil.Zbd.Core.Formats;
-using Recoil.Zbd.Core.Sources;
+using zStudio.Core;
+using zStudio.Core.Animation;
+using zStudio.Core.Formats;
+using zStudio.Core.Sources;
 using Xunit;
 
-namespace Recoil.Zbd.Tests;
+namespace zStudio.Tests;
 
 public sealed class SourceProjectTests
 {
     private static CancellationToken Token => TestContext.Current.CancellationToken;
     private static readonly string[] AllOutputs = ["zrdr.zbd", "interp.zbd", "soundsh.zbd", "soundsm.zbd", "soundsl.zbd", "m1/zrdr.zbd"];
-    private static ZbdDocument Open(string path) => FormatRegistry.Default.OpenBytes(path, File.ReadAllBytes(path), token: Token);
-    private static byte[] Member(ZbdDocument doc, string name) { var asset = doc.Assets.Single(a => a.Name == name); return doc.Slice(asset.Offset, asset.Length).ToArray(); }
+    private static AssetDocument Open(string path) => FormatRegistry.Default.OpenBytes(path, File.ReadAllBytes(path), token: Token);
+    private static byte[] Member(AssetDocument doc, string name) { var asset = doc.Assets.Single(a => a.Name == name); return doc.Slice(asset.Offset, asset.Length).ToArray(); }
     private static WaveFormat Format(byte[] wave) => WaveConverter.Format(wave);
 
     [Fact]
-    public void OldMapSidecarsAndBlenderRoundTripsRefuseWithoutWriting()
+    public void OldMapSidecarsAndFlattenedBlenderUpdatesRefuseWithoutWriting()
     {
         using SourceWorldFixture fixture = new();
         var workspace = new SourceWorkspace(fixture.Project);
-        Assert.Equal(SourceBlender.UnavailableMessage, Assert.Throws<NotSupportedException>(() => SourceBlender.Checkout(workspace, fixture.Tank, Token)).Message);
-        var checkout = new BlenderCheckout("old", Path.Combine(fixture.Project, "zstudio", "export", "old"), fixture.Tank, DateTime.UtcNow, []);
-        Assert.Equal(SourceBlender.UnavailableMessage, Assert.Throws<NotSupportedException>(() => SourceBlender.PlanUpdate(workspace, checkout, token: Token)).Message);
+        var checkout = new BlenderCheckout("old", Path.Combine(fixture.Project, "zstudio", "export", "old"), fixture.Tank, DateTime.UtcNow, []) { Version = 1 };
+        Assert.Contains("Create a new checkout", Assert.Throws<InvalidDataException>(() => SourceBlender.PlanUpdate(workspace, checkout, token: Token)).Message);
         bool prompted = false;
-        Assert.Throws<NotSupportedException>(() => SourceBlender.PlanUpdate(workspace, checkout, null, (_, _) => { prompted = true; return true; }, Token));
+        Assert.Throws<InvalidDataException>(() => SourceBlender.PlanUpdate(workspace, checkout, null, (_, _) => { prompted = true; return true; }, Token));
         Assert.False(prompted);
         Assert.False(Directory.Exists(Path.Combine(fixture.Project, "zstudio")));
         // Even an empty old sidecar denotes unsupported storage. Similar unrelated JSON is not a version marker.
@@ -288,7 +287,7 @@ public sealed class SourceProjectTests
         fixture.Write("data/common/paint/paint.png", image);
         string exported = Path.Combine(fixture.Root, "zbd");
         await SourceBuilder.ExportAsync(fixture.Project, exported, ["m2/gamez.zbd", "m2/rtexture16.zbd", "m2/texture2.zbd"], token: Token);
-        var world = Recoil.Zbd.Core.Worlds.GameZWorldReader.FromDocument(Open(Path.Combine(exported, "m2", "gamez.zbd")), Token);
+        var world = zStudio.Core.Worlds.GameZWorldReader.FromDocument(Open(Path.Combine(exported, "m2", "gamez.zbd")), Token);
         Assert.Contains(world.Textures, t => t.Name == "paint"); Assert.DoesNotContain(world.Textures, t => t.Name == "camo");
         foreach (string pack in new[] { "rtexture16.zbd", "texture2.zbd" })
         {
@@ -339,5 +338,31 @@ public sealed class SourceProjectTests
         var failed = Assert.Single((await SourceBuilder.CheckAsync(fixture.Project, ["zrdr.zbd"], token: Token)).Outputs);
         Assert.Equal("failed", failed.Status);
         Assert.Contains("data/common/zrdr/old.zrd", failed.Error); Assert.Contains("holds animation definitions", failed.Error);
+    }
+
+    [Fact]
+    public void ProjectSettingsAreRememberedInAHiddenFolderAndToleratedWhenDamaged()
+    {
+        using SourceWorldFixture fixture = new();
+        // Nothing remembered: the view is empty and exports do not dither.
+        Assert.Equal(new SourceProjectView(null, null, null), SourceProjectSettings.ReadView(fixture.Project));
+        SourceProjectSettings.WriteDithering(fixture.Project, TextureDithering.Ordered);
+        SourceProjectSettings.WriteDiagnostics(fixture.Project, false, 240);
+        SourceProjectSettings.WriteDifficulty(fixture.Project, MissionDifficulty.Hard);
+        // Each write keeps the others.
+        Assert.Equal(new SourceProjectView(false, 240, MissionDifficulty.Hard), SourceProjectSettings.ReadView(fixture.Project));
+        Assert.Equal(TextureDithering.Ordered, SourceProjectSettings.ReadDithering(fixture.Project));
+        var folder = new DirectoryInfo(Path.Combine(fixture.Project, ".zstudio"));
+        Assert.True(folder.Attributes.HasFlag(FileAttributes.Hidden));
+        // A damaged file remembers no view (the project still opens), while an export refuses to guess its dithering.
+        File.WriteAllText(Path.Combine(folder.FullName, "settings.json"), "{ not json");
+        Assert.Equal(new SourceProjectView(null, null, null), SourceProjectSettings.ReadView(fixture.Project));
+        Assert.Throws<InvalidDataException>(() => SourceProjectSettings.ReadDithering(fixture.Project));
+        // Remembering the view never replaces it (its dithering would be lost); choosing the dithering does.
+        Assert.Throws<InvalidDataException>(() => SourceProjectSettings.WriteDifficulty(fixture.Project, MissionDifficulty.Easy));
+        SourceProjectSettings.WriteDithering(fixture.Project, TextureDithering.Diffusion);
+        SourceProjectSettings.WriteDifficulty(fixture.Project, MissionDifficulty.Easy);
+        Assert.Equal(MissionDifficulty.Easy, SourceProjectSettings.ReadView(fixture.Project).Difficulty);
+        Assert.Equal(TextureDithering.Diffusion, SourceProjectSettings.ReadDithering(fixture.Project));
     }
 }

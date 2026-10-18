@@ -4,12 +4,12 @@ using System.IO.Compression;
 using System.Numerics;
 using System.Text;
 using System.Text.Json.Nodes;
-using Recoil.Zbd.Core.Export;
-using Recoil.Zbd.Core.Gltf;
-using Recoil.Zbd.Core.Sources;
+using zStudio.Core.Export;
+using zStudio.Core.Gltf;
+using zStudio.Core.Sources;
 using Xunit;
 
-namespace Recoil.Zbd.Tests;
+namespace zStudio.Tests;
 
 /// <summary>
 /// Malformed or oversized model inputs: glTF buffers bounded together, node transforms refused rather than read as

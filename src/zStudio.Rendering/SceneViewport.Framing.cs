@@ -1,10 +1,10 @@
 using System.Windows;
 using System.Windows.Media.Media3D;
 using HelixToolkit.Wpf.SharpDX;
-using Recoil.Zbd.Core;
+using zStudio.Core;
 using MeshGeometry3D = HelixToolkit.SharpDX.MeshGeometry3D;
 
-namespace Recoil.Zbd.Rendering;
+namespace zStudio.Rendering;
 
 public sealed partial class SceneViewport
 {
@@ -15,7 +15,7 @@ public sealed partial class SceneViewport
     {
         if (target is not ("all" or "asset" or "selected")) throw new ArgumentException("Unknown framing target.", nameof(target));
         if (IsPickupDragging || IsFlyActive || IsAiPathPointerTransform || IsParachutePointerMoving || viewport.Camera is not ProjectionCamera) return false;
-        long? selectedRuntime = target == "selected" && node == null && FramingSelection == SelectedInspection?.Node
+        long? selectedRuntime = target == "selected" && node == null && FramingSelection == SelectedInspection?.SelectionNode
             ? SelectedInspection?.RuntimeInstance : null;
         if (selectedRuntime != null && InspectTarget(SelectedInspection!.Target)?.Active != true) return false;
         if (target == "selected" && node == null && AiVisible && SelectedAiNode is { } ai && AiNetworks.Find(ai) is { } selectedAi)
@@ -32,7 +32,8 @@ public sealed partial class SceneViewport
         {
             if (!CanInspectNode(root)) return false;
             root = PickupAt(root)?.Root ?? root;
-            selected = []; Stack<int> pending = new(); pending.Push(root);
+            selected = []; Stack<int> pending = new(root < 0
+                ? PreviewScene!.Nodes.Where(n => SelectionNode(n.Index) == root).Select(n => n.Index) : [root]);
             while (pending.TryPop(out int current))
             {
                 if (!CanInspectNode(current) || !selected.Add(current)) continue;

@@ -1,7 +1,7 @@
 using System.Numerics;
-using Recoil.Zbd.Core.Animation;
+using zStudio.Core.Animation;
 
-namespace Recoil.Zbd.Core;
+namespace zStudio.Core;
 
 public enum PlacementRotationKind { None, EulerRadians, HeadingDegrees }
 

@@ -1,11 +1,11 @@
 using System.IO;
 using System.Text.Json.Nodes;
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Core.Formats;
-using Recoil.Zbd.Desktop;
+using zStudio.Core;
+using zStudio.Core.Formats;
+using zStudio.Desktop;
 using Xunit;
 
-namespace Recoil.Zbd.Desktop.Tests;
+namespace zStudio.Desktop.Tests;
 
 public sealed class SceneTreeProvenanceTests
 {
@@ -33,7 +33,7 @@ public sealed class SceneTreeProvenanceTests
         GameScene scene = new();
         scene.Nodes.Add(Node(0, "pu001", children: [1])); scene.Nodes.Add(Node(1, "bvol", parents: [0]));
         scene.Nodes.Add(Node(2, "world", "world"));
-        var world = new ZbdDocument(Path.GetFullPath("tree-provenance.zbd"), new(0, DateTime.MinValue),
+        var world = new AssetDocument(Path.GetFullPath("tree-provenance.zbd"), new(0, DateTime.MinValue),
             new(FormatFamily.GameZ, 15, Recognition.Supported, "fixture"), ReadOnlyMemory<byte>.Empty) { Scene = scene };
         string archive = "C:/" + string.Join('/', Enumerable.Repeat(new string('p', 120), 20)) + "/resources.zbd";
         var rows = A(A(Enumerable.Range(0, 6).Select(i => PickupRow(i)).ToArray()));
@@ -48,7 +48,7 @@ public sealed class SceneTreeProvenanceTests
         {
             var row = identity(actor.Root);
             Assert.True(row.Key.Length < 100); Assert.DoesNotContain(archive, row.Key);
-            Assert.Equal(archive.ToUpperInvariant(), actor.Pickup!.Source.ArchivePath);
+            Assert.Equal(Path.GetFullPath(archive).ToUpperInvariant(), actor.Pickup!.Source.ArchivePath);
             Assert.Same(actor.Name, row.ActorName); Assert.Same(actor.PlacementSource, row.Placement);
         });
         Assert.Equal(3, scene.Nodes.Count); // The production mission builder did not mutate source nodes.

@@ -3,10 +3,10 @@ using System.Globalization;
 using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Text.Json.Nodes;
-using Recoil.Zbd.Core.Formats;
-using Recoil.Zbd.Core.Worlds;
+using zStudio.Core.Formats;
+using zStudio.Core.Worlds;
 
-namespace Recoil.Zbd.Core.Animation;
+namespace zStudio.Core.Animation;
 
 public sealed record AnimationEffectTemplate(string Name, string ModelName, int RootNode, string[] Textures, float Speed, bool Loop);
 public sealed record AnimationSound(string Name, string FileName, bool Loop, ReadOnlyMemory<byte> Bytes)
@@ -33,8 +33,9 @@ public enum AnimationBinding
 
 public sealed partial class AnimationPreviewContext
 {
+    internal MissionInitializationTransforms? InitializationTransforms { get; init; }
     public required AnimationPackage Package { get; init; }
-    public required ZbdDocument World { get; init; }
+    public required ISceneDocument World { get; init; }
     private MissionSceneContext? mission;
     /// <summary>Replacing the mission replaces <see cref="Scene"/>, so scene-derived lookups are rebuilt.</summary>
     public MissionSceneContext? Mission { get => mission; set { mission = value; roots.Clear(); nodes.Clear(); trackedNodes.Clear(); lods = null; loadedNames = null; rootPositions = null; } }
@@ -147,13 +148,13 @@ public sealed partial class AnimationPreviewContext
         // The loaded mission is exact here: another reader must not silently supply its resources.
         var files = world.Game == GameVariant.MechWarrior3 ? (await MissionSceneLoader.Mw3ResourcesAsync(world.Path, resolver, context.Mission.Layout.MissionArchive, true, token, resources).ConfigureAwait(false)).Files :
             MissionSceneLoader.ResourceFiles(world.Path, resolver, token, inventory, sort: false);
-        List<(string Name, string File, bool Loop)> aliases = []; List<ZbdDocument> soundArchives = [];
+        List<(string Name, string File, bool Loop)> aliases = []; List<AssetDocument> soundArchives = [];
         HashSet<ZrdNode> soundTrees = new(ReferenceEqualityComparer.Instance), effectTrees = new(ReferenceEqualityComparer.Instance);
         Dictionary<string, int>? effectNames = null;
         foreach (string file in files)
         {
             token.ThrowIfCancellationRequested(); if (FormatRegistry.Probe(file).Family != FormatFamily.Archive) continue;
-            ZbdDocument archive;
+            AssetDocument archive;
             try { archive = await resources.OpenAsync(file, resolver, token).ConfigureAwait(false); }
             catch (Exception ex) when (!resources.Exhausted && (ex is InvalidDataException or IOException or UnauthorizedAccessException))
             { context.Diagnostics.Add($"Animation resources {Path.GetFileName(file)}: {ex.Message}"); continue; }
@@ -516,6 +517,9 @@ public sealed partial class AnimationPreviewContext
         {
             operation?.Reserve(40);
             if (!seen.Add(index)) break;
+            // Initialization consumers include copied roots, whose resulting detached pose otherwise hides
+            // its source ancestors, and range/offset probes. Playback contexts have no dependency tracker.
+            InitializationTransforms?.Reads.Add(index);
             var node = Scene.Nodes[index]; result *= SceneBuilder.LocalTransform(node); index = node.Parents.FirstOrDefault(-1);
         }
         return result;

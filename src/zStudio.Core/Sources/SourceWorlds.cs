@@ -2,11 +2,11 @@ using System.Globalization;
 using System.Numerics;
 using System.Text;
 using System.Text.RegularExpressions;
-using Recoil.Zbd.Core.Animation;
-using Recoil.Zbd.Core.Formats;
-using Recoil.Zbd.Core.Worlds;
+using zStudio.Core.Animation;
+using zStudio.Core.Formats;
+using zStudio.Core.Worlds;
 
-namespace Recoil.Zbd.Core.Sources;
+namespace zStudio.Core.Sources;
 
 /// <summary>A glTF model in the project that a world script can load.</summary>
 public sealed record SourceModelChoice(string Path, string Folder, string Name);
@@ -20,9 +20,10 @@ public sealed record SourceModelAddition(string Model, string Name, Vector3? Pos
 public sealed record SourceDefinitionFile(string Path, IReadOnlyList<string> Animations, IReadOnlyList<string> Missions);
 /// <summary>One accepted world edit: a model and the definition files listed with it.</summary>
 public sealed record SourceWorldAddition(SourceModelAddition Model, IReadOnlyList<string> DefinitionFiles);
-/// <summary>A private build of one mission for previewing: the world file and the results and inputs of each output.</summary>
-public sealed record SourceWorldBuild(string Mission, string Folder, string WorldPath, IReadOnlyList<SourceExportResult> Outputs, IReadOnlyDictionary<string, FileStamp> Inputs)
+/// <summary>Source identity, provenance and dependency state of one evaluated mission.</summary>
+public sealed record SourceSceneState(string Mission, string Root, IReadOnlyDictionary<string, FileStamp> Inputs)
 {
+    public IReadOnlyList<string> Notes { get; init; } = [];
     /// <summary>Every project file the build read or looked for, from the pending content or the disk.</summary>
     public IReadOnlyCollection<string> Dependencies { get; init; } = [];
     /// <summary>Disk files and search folders absent when the build searched for them; their appearance makes the preview stale.</summary>
@@ -34,25 +35,39 @@ public sealed record SourceWorldBuild(string Mission, string Folder, string Worl
         file.Length > folder.Length && file[folder.Length] == '/' && file.StartsWith(folder, StringComparison.OrdinalIgnoreCase)));
     /// <summary>Content identities of disk inputs actually read; length/timestamp equality alone is insufficient.</summary>
     public IReadOnlyDictionary<string, string> InputHashes { get; init; } = new Dictionary<string, string>();
-    /// <summary>The planned resource archive members, including an empty inventory when neither archive existed.</summary>
+    /// <summary>Frozen content hashes of every input actually read, including unsaved overlay sources.</summary>
+    public IReadOnlyDictionary<string, string> ReadHashes { get; init; } = new Dictionary<string, string>();
+    /// <summary>The discovered source resources, including an empty inventory when no resources existed.</summary>
     public IReadOnlyList<string>? ResourceInputs { get; init; }
+    public IReadOnlyList<string>? TextureInputs { get; init; }
+    public IReadOnlyList<string>? SoundInputs { get; init; }
+    public IReadOnlyList<string>? ScriptInputs { get; init; }
+    internal static bool IsScript(string name) => name.EndsWith(".gw", StringComparison.OrdinalIgnoreCase) || name.EndsWith(".gs", StringComparison.OrdinalIgnoreCase);
+    internal static bool IsSound(string name) => name.EndsWith(".wav", StringComparison.OrdinalIgnoreCase);
     /// <summary>
     /// A new resource can replace a difficulty fallback or shadow a mission member without changing any file the build
-    /// read. Compare membership through the same bounded discovery as the archive plan, including unsaved new sources.
+    /// read. Compare membership through the same bounded discovery as scene evaluation, including unsaved new sources.
     /// </summary>
     public bool ResourceInputsChanged(SourceWorkspace workspace, CancellationToken token = default)
     {
         if (ResourceInputs == null) return false;
-        var added = workspace.Overlay().Keys.ToArray();
+        var overlay = workspace.Overlay();
+        var added = overlay.Keys.ToArray();
+        SourceBuilder.Snapshot discovery = new(workspace.Root, overlay, inventoryToken: token);
         InventoryBudget inventory = new();
         var common = SourceBuilder.ResourceInputs(workspace.Root, null, added, token, inventory);
         var mission = SourceBuilder.ResourceInputs(workspace.Root, Mission, added, token, inventory);
-        return !ResourceInputs.SequenceEqual(common.Concat(mission), StringComparer.OrdinalIgnoreCase);
+        return !ResourceInputs.SequenceEqual(common.Concat(mission), StringComparer.OrdinalIgnoreCase)
+            || TextureInputs != null && !TextureInputs.SequenceEqual(SourceBuilder.MissionTextures(workspace.Root, Mission, added, token, snapshot: discovery, inventory: inventory), StringComparer.OrdinalIgnoreCase)
+            || SoundInputs != null && !SoundInputs.SequenceEqual(SourceProject.Files(workspace.Root, SourceBuilder.SoundsFolder, IsSound, added, token, inventory), StringComparer.OrdinalIgnoreCase)
+            || ScriptInputs != null && !ScriptInputs.SequenceEqual(SourceProject.Files(workspace.Root, SourceProject.GameGenFolder, IsScript, added, token, inventory), StringComparer.OrdinalIgnoreCase);
     }
     /// <summary>Every lookup by name the mission makes as the game loads it, with the node it finds in this build.</summary>
     public IReadOnlyList<SourceLookup> Lookups { get; init; } = [];
-    /// <summary>Where each node of the built world came from, by its slot in the world file (the scene's node index).</summary>
+    /// <summary>Where each evaluated node came from, keyed by its index in the source scene.</summary>
     public IReadOnlyDictionary<int, WorldNodeProvenance> Provenance { get; init; } = new Dictionary<int, WorldNodeProvenance>();
+    /// <summary>Authored database relationships before compilation removes its grouping nodes.</summary>
+    public SourceAuthoredHierarchy AuthoredHierarchy { get; init; } = SourceAuthoredHierarchy.Empty;
     /// <summary>
     /// Where the nodes came from that script instructions acted on and the build freed again (a DeleteTree's, such as the
     /// mission database's root and groups), which the world does not hold.
@@ -60,7 +75,7 @@ public sealed record SourceWorldBuild(string Mission, string Folder, string Worl
     public IReadOnlyList<WorldNodeProvenance> Freed { get; init; } = [];
     /// <summary>How many times each script instruction (script, line) ran while the world was built.</summary>
     public IReadOnlyDictionary<(string Script, int Line), int> Executions { get; init; } = new Dictionary<(string, int), int>();
-    /// <summary>The GameZWriteZBDFile instruction that wrote the world.</summary>
+    /// <summary>The script boundary at which the source world was evaluated.</summary>
     public SourceInstruction? WriteInstruction { get; init; }
 }
 
@@ -80,12 +95,26 @@ public static partial class SourceWorlds
     /// </summary>
     public const int MaximumDefinitionChoices = 64;
     /// <summary>Game files a preview builds: the world, what the Whole world view reads beside it, and one full-quality texture pack.</summary>
-    private static readonly string[] PreviewOutputs = ["{0}/gamez.zbd", "{0}/anim.zbd", "{0}/zrdr.zbd", "{0}/rtexture16.zbd", "zrdr.zbd", "interp.zbd", "image.zbd"];
     [GeneratedRegex(@"\A[A-Za-z0-9_.\-]{1,31}\z", RegexOptions.CultureInvariant)] private static partial Regex NodeName();
     [GeneratedRegex(@"\Am[0-9]{1,3}\z", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)] private static partial Regex MissionName();
 
-    /// <summary>Missions whose world the project builds (those with a gamegen/mN.gs script), in number order.</summary>
-    public static IReadOnlyList<string> Missions(string root, CancellationToken token = default) => SourceBuilder.Plan(root, automaticPacks: false, token: token).Where(p => p.Family == "world").Select(p => p.Path.Split('/')[0]).ToArray();
+    /// <summary>Map folders with a matching gamegen entry script, without parsing their potentially broken assets.</summary>
+    public static IReadOnlyList<string> Missions(string root, CancellationToken token = default)
+    {
+        token.ThrowIfCancellationRequested();
+        if (!SourceProject.IsProject(root)) throw new InvalidDataException("This folder is not a source project (it needs data and gamegen folders).");
+        SourceProject.RejectLinkedProject(root);
+        SourceProject.RejectNestedLinks(root, SourceProject.DataFolder);
+        SourceProject.RejectNestedLinks(root, SourceProject.GameGenFolder);
+        List<string> missions = [];
+        foreach (string mission in SourceProject.MissionFolders(root, token))
+        {
+            token.ThrowIfCancellationRequested();
+            // Merely list entry points. Opening a map performs the full source/link/build validation.
+            if (SourceRead.FileExists(SourceProject.Resolve(root, $"gamegen/{mission}.gs"))) missions.Add(mission);
+        }
+        return missions.OrderBy(m => int.Parse(m.AsSpan(1))).ThenBy(m => m, StringComparer.Ordinal).ToArray();
+    }
 
     /// <summary>Physical models a script can load, in full path order.</summary>
     public static IReadOnlyList<SourceModelChoice> Models(string root, CancellationToken token = default)
@@ -139,7 +168,7 @@ public static partial class SourceWorlds
         string folder = Path.GetDirectoryName(model)!.Replace('\\', '/');
         if (!IsScriptFolder(folder)) throw new InvalidDataException($"Scripts cannot name the folder {folder} (spaces, commas, '#', '%' or ';'); move the model first.");
         // ScriptLines names the chosen extension explicitly. The shared WorldAssembler resolver honors that
-        // extension; its .gltf-before-.glb preference applies only to bare names and legacy .flt operands.
+        // extension; its .gltf-before-.glb preference applies only to bare names.
         if (!NodeName().IsMatch(addition.Name)) throw new InvalidDataException($"Node names need 1–{MaximumNameLength} letters, digits, '_', '-' or '.'.");
         if (addition.Position is { } p && !(Finite(p.X) && Finite(p.Y) && Finite(p.Z))) throw new InvalidDataException($"Positions need finite coordinates within ±{MaximumCoordinate:N0}.");
         if (!float.IsFinite(addition.Heading) || Math.Abs(addition.Heading) > 360) throw new InvalidDataException("The heading needs −360 to 360 degrees.");
@@ -346,6 +375,29 @@ public static partial class SourceWorlds
         return found.OrderBy(f => f.Key, StringComparer.OrdinalIgnoreCase).Select(f => new SourceDefinitionFile(f.Key, [.. f.Value.Animations], [.. f.Value.Missions.OrderBy(m => int.Parse(m.AsSpan(1)))])).ToArray();
     }
 
+    /// <summary>
+    /// The animations the mission's own definitions bind to a node named <paramref name="name"/> in a world whose node names
+    /// are <paramref name="before"/>, with the roots each binds to once the world's names are <paramref name="after"/> (empty when
+    /// it binds to none): a NAME list binds to the first name the world has, so renaming that node moves or drops the animation.
+    /// </summary>
+    public static IReadOnlyList<(string File, string Animation, IReadOnlyList<string> Roots)> AnimationsBoundTo(string projectRoot, string mission, string name,
+        IReadOnlyCollection<string> before, IReadOnlyCollection<string> after, IReadOnlyDictionary<string, byte[]>? overlay = null, CancellationToken token = default)
+    {
+        DefinitionDiscoveryFiles files = new(projectRoot, overlay, AnimationDefinitionSet.MaximumSourceBytes, 64L << 20, token);
+        string root = SourceBuilder.AnimationRoot(mission);
+        if (!files.Exists(root)) return [];
+        List<(string, string, IReadOnlyList<string>)> bound = [];
+        foreach (var definition in AnimationDefinitionSet.Load(files, root, token).Definitions)
+        {
+            token.ThrowIfCancellationRequested();
+            if (!AnimationCompiler.Roots(definition.Item, before, _ => { }, token).Any(r => r.Root == name)) continue;
+            var moved = AnimationCompiler.Roots(definition.Item, after, _ => { }, token).Select(r => r.Root).Where(after.Contains).ToList();
+            string animation = definition.Item.Item("ANIMATION_NAME")?.Text() is { Length: > 0 } named ? named : name;
+            bound.Add((definition.File, animation, moved));
+        }
+        return bound;
+    }
+
     /// <summary>One discovery allowance spans the selected mission and every other mission, including repeated reads.</summary>
     private sealed class DefinitionDiscoveryFiles(string projectRoot, IReadOnlyDictionary<string, byte[]>? overlay,
         long remainingBytes, long remainingProbeWork, CancellationToken cancellation) : IProjectFiles
@@ -418,182 +470,6 @@ public static partial class SourceWorlds
             string path = SourceProject.Resolve(root, relative);
             return SourceRead.All(path, limits, token);
         }
-    }
-
-    /// <summary>Where mission worlds are built to be shown: derived data in zStudio's working folder of the project, which builds never read.</summary>
-    public const string PreviewFolder = SourcePublisher.WorkingFolder + "/cache/worlds";
-    /// <summary>The project's <see cref="PreviewFolder"/>.</summary>
-    public static string PreviewRoot(string root) => Path.Combine(Path.TrimEndingDirectorySeparator(Path.GetFullPath(root)), PreviewFolder.Replace('/', Path.DirectorySeparatorChar));
-    /// <summary>
-    /// The build folders in <paramref name="previews"/> (a project's <see cref="PreviewRoot"/>) whose sessions ended without
-    /// removing them: regular folders without a session's <c>.lock</c> file, created more than a minute ago. Found as they are
-    /// listed, so each can be removed before the next is looked at. The listing is a scan of the project like any other: every
-    /// entry counts towards <see cref="SourceProject.MaximumScannedEntries"/> (beyond that <see cref="IOException"/> ends it),
-    /// and <paramref name="token"/> is observed at each.
-    /// </summary>
-    public static IEnumerable<string> AbandonedBuilds(string previews, CancellationToken token = default) => AbandonedBuilds(previews, SourceProject.MaximumScannedEntries, token);
-    /// <param name="maximumEntries">The files and folders the listing may visit (<see cref="SourceProject.MaximumScannedEntries"/>; smaller in tests).</param>
-    internal static IEnumerable<string> AbandonedBuilds(string previews, int maximumEntries, CancellationToken token)
-    {
-        if (!Directory.Exists(previews)) yield break;
-        SourceProject.ScanBudget budget = new(maximumEntries, maximum => new IOException($"{previews} holds more than {maximum:N0} files and folders; only the world builds zStudio shows belong there."), token);
-        DateTime before = DateTime.UtcNow.AddMinutes(-1);
-        foreach (var entry in SourceProject.Entries(previews, budget))
-            if (entry is DirectoryInfo directory && !directory.Attributes.HasFlag(FileAttributes.ReparsePoint) && !File.Exists(Path.Combine(directory.FullName, ".lock")) && directory.CreationTimeUtc < before)
-                yield return directory.FullName;
-    }
-
-    /// <summary>
-    /// Builds <paramref name="mission"/> into <paramref name="destination"/> (a new folder inside the project's
-    /// <see cref="PreviewFolder"/>) as the export would, with <paramref name="overlay"/> replacing project files: the world, its animations and resources,
-    /// the common resources, scripts and images the Whole world view reads beside it, and one full-quality texture pack
-    /// (<see cref="PreviewProfile"/>, whatever profile the project's exports use).
-    /// Only the world must build; other failures are reported in the outputs. A project file another program changes while the
-    /// build reads the project (after it was read, or added, removed or renamed after the outputs were planned) fails the build
-    /// with <see cref="SourceFileChangedException"/>, so a world is never shown built from two states of the project. <paramref name="additions"/> are models
-    /// the overlay's script has just added (see <see cref="AddModel"/>): the world must load each of them where it is written,
-    /// and hold each placed one (see <see cref="CheckAdditions"/>).
-    /// </summary>
-    public static Task<SourceWorldBuild> BuildPreviewAsync(string root, string mission, string destination, IReadOnlyDictionary<string, byte[]>? overlay = null, IProgress<SourceProgress>? progress = null, CancellationToken token = default, IReadOnlyList<SourceModelAddition>? additions = null)
-        => BuildPreviewCoreAsync(root, mission, destination, overlay, progress, token, additions, null);
-
-    internal static async Task<SourceWorldBuild> BuildPreviewCoreAsync(string root, string mission, string destination, IReadOnlyDictionary<string, byte[]>? overlay, IProgress<SourceProgress>? progress, CancellationToken token, IReadOnlyList<SourceModelAddition>? additions, DirectoryLease? captured)
-    {
-        root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(root));
-        destination = Path.TrimEndingDirectorySeparator(Path.GetFullPath(destination));
-        if (!MissionName().IsMatch(mission)) throw new InvalidDataException($"'{mission}' is not a mission folder name.");
-        mission = mission.ToLowerInvariant();
-        // Only inside the project's preview folder, never through a link: nothing else of the project (or elsewhere) is written.
-        string previews = PreviewRoot(root);
-        if (!destination.StartsWith(previews + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase) || PickupPlacementEditSession.IsProtectedPath(destination))
-            throw new InvalidDataException($"A mission world is built in the project's {PreviewFolder} folder, not in {destination}.");
-        SourceProject.RejectLinks(destination);
-        using DirectoryLease? owned = captured == null ? new() : null;
-        DirectoryLease directories = captured ?? owned!;
-        directories.Hold(root);
-        string capturedPreviews = PreviewRoot(directories.CapturedPath(root)), capturedDestination = directories.CapturedPath(destination);
-        if (!capturedDestination.StartsWith(capturedPreviews + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)
-            || PickupPlacementEditSession.IsProtectedPath(capturedDestination))
-            throw new InvalidDataException($"A mission world is built in the project's {PreviewFolder} folder, not in {destination}.");
-        bool existingDestination = directories.Exists(destination);
-        if (existingDestination)
-        {
-            directories.Hold(destination);
-            if (directories.Entries(destination, token).Any()) throw new IOException($"The preview folder {destination} is not empty.");
-        }
-        // The build's view starts before planning, as an export's does (see SourceBuilder.ExportAsync). Reads may repeat;
-        // the snapshot checks captured content digests and rechecks the plan and dependencies before returning the build.
-        // A detected external change refuses publication rather than showing a world assembled from different file states.
-        SourceBuilder.Snapshot snapshot = new(root, overlay, relative => new SourceFileChangedException($"{relative} changed on disk while the {mission} world was building; the build was not shown. Try again.", [relative]), inventoryToken: token);
-        var selected = await Task.Run(() => PreviewPlan(root, mission, snapshot, token), token).ConfigureAwait(false);
-        if (!selected.Any(p => p.Family == "world")) throw new InvalidDataException($"The project has no world script for {mission} ({SourceBuilder.WorldScript(mission)}) or no glTF models.");
-        List<SourceExportResult> results = []; Animation.AnimationPackage? animations = null;
-        // Keep the same captured ancestor chain across planning. A new destination is created exclusively; an existing
-        // empty destination is checked again through its held identity before any output is published.
-        if (existingDestination)
-        {
-            if (directories.Entries(destination, token).Any()) throw new IOException($"The preview folder {destination} is not empty.");
-        }
-        else directories.CreateDirectory(destination);
-        for (int i = 0; i < selected.Length; i++)
-        {
-            token.ThrowIfCancellationRequested(); var output = selected[i]; progress?.Report(new(i, selected.Length, output.Path));
-            try
-            {
-                var built = await Task.Run(() => SourceBuilder.Build(root, output, snapshot, token), token).ConfigureAwait(false);
-                if (output.Family == "animations") animations = built.Package;
-                if (output.Family == "world" && additions != null) { var world = snapshot.World(mission, token); CheckAdditions(world.LoadedRoots, additions, world.Provenance); }
-                var check = FormatRegistry.Default.OpenBytes(output.Path, built.Bytes, token: token);
-                if (check.Diagnostics.FirstOrDefault(d => d.Severity == "Error") is { } error) throw new InvalidDataException("The built file does not reopen: " + error.Message);
-                string path = SourceProject.Resolve(destination, output.Path);
-                directories.Parent(path, create: true);
-                // A private build never replaces a file and never resolves mutable ancestor paths again at publication.
-                await using (var stream = directories.OpenFile(path, FileMode.CreateNew, FileAccess.Write, FileShare.None, 81920, FileOptions.Asynchronous))
-                    await stream.WriteAsync(built.Bytes, token).ConfigureAwait(false);
-                results.Add(new(output.Path, output.Family, "built", built.Bytes.Length, built.Items, built.Warnings));
-            }
-            catch (Exception ex) when (SourceBuilder.IsBuildFailure(ex))
-            {
-                // A source another program changed while it was read fails the build, not only the output reading it.
-                ThrowIfChanged(ex);
-                if (output.Family == "world")
-                {
-                    // A world that fails because a source was removed or renamed after planning, or changed after it was read, fails
-                    // as that change, not as a world that does not build.
-                    CheckPreviewPlanUnchanged(root, mission, snapshot, selected, token);
-                    snapshot.CheckUnchanged(token);
-                    throw new InvalidDataException($"The {mission} world does not build: {ex.Message}", ex);
-                }
-                results.Add(new(output.Path, output.Family, "failed", 0, 0, [], ex.Message));
-            }
-        }
-        progress?.Report(new(selected.Length, selected.Length, "Built"));
-        var assembled = snapshot.World(mission, token);
-        var slots = GameZWriter.SlotIndices(assembled.World);
-        Dictionary<int, WorldNodeProvenance> provenance = []; List<WorldNodeProvenance> freed = [];
-        foreach (var (node, origin) in assembled.Provenance)
-            if (slots.TryGetValue(node, out int slot)) provenance[slot] = origin;
-            else if (origin.Applied.Count > 0 || origin.Named.Count > 0) freed.Add(origin);
-        // What the mission looks up by name when the game loads it, so an edit that changes what a lookup finds can say so.
-        // Only the world must build: lookups the project's scripts or animations keep from being resolved are not compared,
-        // and the world's output says so (a script they cannot follow may look up a node an edit moves).
-        IReadOnlyList<SourceLookup> lookups;
-        try { lookups = await Task.Run(() => SourceBuilder.MissionLookups(mission, snapshot, animations, token), token).ConfigureAwait(false); }
-        catch (Exception ex) when (SourceBuilder.IsBuildFailure(ex))
-        {
-            ThrowIfChanged(ex); lookups = [];
-            int at = results.FindIndex(r => r.Family == "world");
-            if (at >= 0) results[at] = results[at] with { Warnings = [.. results[at].Warnings, SourceBuilder.LookupsUnchecked(mission, ex)] };
-        }
-        // Before the build is shown, as before an export publishes: the project plans the same outputs from the same sources (none
-        // added, removed or renamed since they were planned), and every file read is as it was read. The stamps returned are
-        // those just verified.
-        await Task.Run(() =>
-        {
-            CheckPreviewPlanUnchanged(root, mission, snapshot, selected, token);
-            snapshot.CheckUnchanged(token);
-        }, token).ConfigureAwait(false);
-        var resources = new[] { "zrdr.zbd", $"{mission}/zrdr.zbd" }
-            .SelectMany(path => selected.FirstOrDefault(p => p.Path.Equals(path, StringComparison.OrdinalIgnoreCase))?.Inputs ?? []).ToArray();
-        return new(mission, destination, SourceProject.Resolve(destination, $"{mission}/gamez.zbd"), results, snapshot.Stamps()) { Dependencies = snapshot.Dependencies(), MissingInputs = snapshot.Missing(), MissingFolders = snapshot.MissingFolders(), InputHashes = snapshot.Hashes(), ResourceInputs = resources, Lookups = lookups, Provenance = provenance, Freed = freed, Executions = assembled.Executions, WriteInstruction = assembled.WriteInstruction };
-    }
-
-    /// <summary>
-    /// The texture pack a preview builds, whatever profile the project's exports use: the 16-bit Direct3D pack for a 16 MB card,
-    /// every texture at up to 1024 texels, as the built-in modern profile builds <c>rtexture16</c>.
-    /// </summary>
-    internal static BuildProfile PreviewProfile { get; } = new("preview", "The fixed texture pack of a world preview.", "experimental", [new("rtexture16.zbd", 16L << 20, 1024)]);
-    /// <summary>The outputs a preview of <paramref name="mission"/> builds (<see cref="PreviewOutputs"/>), as the project plans them now.</summary>
-    private static SourceOutputPlan[] PreviewPlan(string root, string mission, SourceBuilder.Snapshot snapshot, CancellationToken token)
-    {
-        // The preview's pack is a fixed one, so the automatic packs are not sized (each would read every PNG header).
-        var plan = SourceBuilder.Plan(root, snapshot.Added, PreviewProfile, false, token, snapshot, mission);
-        return PreviewOutputs.Select(o => string.Format(CultureInfo.InvariantCulture, o, mission))
-            .Select(o => plan.FirstOrDefault(p => p.Path.Equals(o, StringComparison.OrdinalIgnoreCase))).OfType<SourceOutputPlan>().ToArray();
-    }
-    /// <summary>
-    /// Refuses a preview whose outputs the project no longer plans as they were built (a source added, removed or renamed, or a
-    /// mission's texture folders changed, after planning): the plan is made again and must give the same outputs, each with the
-    /// same inputs and pack (see <see cref="SourceBuilder.SamePlan"/>).
-    /// </summary>
-    internal static void CheckPreviewPlanUnchanged(string root, string mission, SourceBuilder.Snapshot snapshot, IReadOnlyList<SourceOutputPlan> built, CancellationToken token)
-    {
-        token.ThrowIfCancellationRequested();
-        SourceOutputPlan[] now;
-        try { now = PreviewPlan(root, mission, snapshot, token); }
-        catch (InventoryCapacityException) { throw; }
-        catch (Exception ex) when (ex is InvalidDataException or IOException or UnauthorizedAccessException)
-        { throw new SourceFileChangedException($"The project changed while the {mission} world was building; the build was not shown. Try again. ({ex.Message})", []); }
-        if (now.Length == built.Count && built.Zip(now).All(p => SourceBuilder.SamePlan(p.First, p.Second))) return;
-        HashSet<string> before = new(built.SelectMany(p => p.Inputs), StringComparer.Ordinal), after = new(now.SelectMany(p => p.Inputs), StringComparer.Ordinal);
-        string[] files = [.. before.Except(after).Concat(after.Except(before)).Order(StringComparer.Ordinal).Take(64)];
-        throw new SourceFileChangedException($"Files of the project were added, removed or renamed while the {mission} world was building{(files.Length == 0 ? "" : $" ({string.Join(", ", files.Take(3))}{(files.Length > 3 ? ", …" : "")})")}; the build was not shown. Try again.", files);
-    }
-    /// <summary>Rethrows the change another program made to a source while the build read it, however the build wrapped it.</summary>
-    private static void ThrowIfChanged(Exception ex)
-    {
-        for (var inner = ex; inner != null; inner = inner.InnerException)
-            if (inner is SourceFileChangedException changed) System.Runtime.ExceptionServices.ExceptionDispatchInfo.Throw(changed);
     }
 
     /// <summary>

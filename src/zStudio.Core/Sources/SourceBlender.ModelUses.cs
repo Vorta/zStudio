@@ -1,8 +1,8 @@
-using Recoil.Zbd.Core.Gltf;
-using Recoil.Zbd.Core.Terrain;
-using Recoil.Zbd.Core.Worlds;
+using zStudio.Core.Gltf;
+using zStudio.Core.Terrain;
+using zStudio.Core.Worlds;
 
-namespace Recoil.Zbd.Core.Sources;
+namespace zStudio.Core.Sources;
 
 public static partial class SourceBlender
 {
@@ -20,7 +20,6 @@ public static partial class SourceBlender
         {
             token.ThrowIfCancellationRequested();
             if (missions.TryGetValue(mission, out bool known)) return known;
-            var bindings = inspection.MissionModels(mission);
             Dictionary<string, bool> holds = new(StringComparer.OrdinalIgnoreCase);
             bool found = false;
             try
@@ -41,13 +40,13 @@ public static partial class SourceBlender
             bool Exists(string path)
             {
                 inspection.ReserveWork(path.Length + 1L);
-                return bindings.Exists(path, inspection.ModelExists);
+                return inspection.ModelExists(path);
             }
             bool Holds(string path, int depth)
             {
                 inspection.ReserveWork(path.Length + 1L);
                 if (!Exists(path)) return false;
-                string geometry = bindings.Geometry(path);
+                string geometry = path;
                 if (geometry.Equals(model, StringComparison.OrdinalIgnoreCase)) return true;
                 if (holds.TryGetValue(path, out bool cached)) return cached;
                 holds[path] = false;
@@ -55,7 +54,7 @@ public static partial class SourceBlender
                 if (inspection.ReadModel(geometry) is not { } bytes) return false;
                 inspection.ReserveWork(bytes.LongLength);
                 var hierarchy = GltfDocument.ReadHierarchy(bytes, token);
-                foreach (string next in bindings.Dependencies(path, hierarchy, inspection.ReserveWork))
+                foreach (string next in SourceMissionModels.Dependencies(path, hierarchy, inspection.ReserveWork))
                     if (Holds(next, depth + 1)) return holds[path] = true;
                 // Terrain markers in a loaded database take surfaces from their recipe, including transparent groups.
                 if (depth == 0)
@@ -85,7 +84,7 @@ public static partial class SourceBlender
                         {
                             inspection.ReserveWork(4L * (path.Length + surface.Model.Length + 1));
                             string logical = SourceTerrain.SurfaceFile(path, surface);
-                            if (bindings.Geometry(logical).Equals(model, StringComparison.OrdinalIgnoreCase)) return true;
+                            if (logical.Equals(model, StringComparison.OrdinalIgnoreCase)) return true;
                         }
                     return false;
                 }

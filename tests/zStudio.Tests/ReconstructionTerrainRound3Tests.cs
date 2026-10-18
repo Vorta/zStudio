@@ -2,13 +2,13 @@ using System.Numerics;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
-using Recoil.Zbd.Core.Formats;
-using Recoil.Zbd.Core.Gltf;
-using Recoil.Zbd.Core.Sources;
-using Recoil.Zbd.Core.Worlds;
+using zStudio.Core.Formats;
+using zStudio.Core.Gltf;
+using zStudio.Core.Sources;
+using zStudio.Core.Worlds;
 using Xunit;
 
-namespace Recoil.Zbd.Tests;
+namespace zStudio.Tests;
 
 /// <summary>
 /// A reconstruction reads the game files the checks before it decided on, or stops; a world's canonical content is hashed
@@ -109,10 +109,12 @@ public sealed class ReconstructionTerrainRound3Tests
         var (json, bin) = doc.Write("content.bin", TestContext.Current.CancellationToken);
         // The hash of the JSON followed by the binary buffer, as the reconstruction has always told files apart by.
         using (MemoryStream joined = new()) { joined.Write(json); joined.Write(bin); Assert.Equal(Convert.ToHexStringLower(SHA256.HashData(joined.ToArray()))[..16], WorldSources.ContentHash(doc)); }
-        long written = Allocated(() => doc.Write("content.bin"));
-        long hashed = Allocated(() => WorldSources.ContentHash(doc));
-        // Writing it is all it costs: no copy of the ~9 MB output.
-        Assert.True(hashed <= written + 64 * 1024, $"hashing allocated {hashed:N0} bytes; writing alone {written:N0}");
+        // Measure hashing of the owned buffers directly. Serializer pool refills are unrelated to
+        // the invariant and cannot obscure a joined copy of the roughly 9 MiB binary buffer.
+        string? actual = null;
+        long hashed = Allocated(() => actual = WorldSources.HashBuffers(json, bin));
+        Assert.Equal(WorldSources.ContentHash(doc), actual);
+        Assert.InRange(hashed, 0, 64 * 1024);
     }
 
     // ---- Terrain conversion's names ----

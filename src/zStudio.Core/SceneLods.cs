@@ -1,4 +1,4 @@
-namespace Recoil.Zbd.Core;
+namespace zStudio.Core;
 
 /// <summary>Manual detail ranks within each parent's LOD distance bands, independent of camera distance.</summary>
 public sealed class SceneLods

@@ -1,7 +1,7 @@
 using System.Text.Json.Nodes;
-using Recoil.Zbd.Core.Animation;
+using zStudio.Core.Animation;
 
-namespace Recoil.Zbd.Core;
+namespace zStudio.Core;
 
 public static partial class MissionSceneLoader
 {

@@ -1,13 +1,13 @@
 using System.Buffers.Binary;
 using System.Text.Json.Nodes;
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Core.Animation;
-using Recoil.Zbd.Core.Formats;
-using Recoil.Zbd.Core.Sources;
-using Recoil.Zbd.Core.Worlds;
+using zStudio.Core;
+using zStudio.Core.Animation;
+using zStudio.Core.Formats;
+using zStudio.Core.Sources;
+using zStudio.Core.Worlds;
 using Xunit;
 
-namespace Recoil.Zbd.Tests;
+namespace zStudio.Tests;
 
 public sealed class AnimationBindingWorkTests
 {
@@ -239,7 +239,7 @@ public sealed class AnimationBindingWorkTests
     [Fact]
     public void Mw3UsesUniqueLocalThenGlobalAndKeepsTrackedNamesLocal()
     {
-        var context = Context(3, 1, 1); context.World.Game = GameVariant.MechWarrior3;
+        var context = Context(3, 1, 1); ((AssetDocument)context.World).Game = GameVariant.MechWarrior3;
         var entry = context.Package.Entries[1];
         context.Scene.Nodes[2] = Node(2, "duplicate", []);
         context.Scene.Nodes[3] = Node(3, "duplicate", []);

@@ -3,9 +3,9 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using Microsoft.Win32;
-using Recoil.Zbd.Core.Sources;
+using zStudio.Core.Sources;
 
-namespace Recoil.Zbd.Desktop;
+namespace zStudio.Desktop;
 
 /// <summary>
 /// Chooses the retail ZBD folder and a new or empty folder, then initializes a source project there; the caller opens it
@@ -75,7 +75,7 @@ internal sealed class SourceInitializeDialog : Window
         return row;
     }
 
-    private bool Ready => retail.Text.Trim().Length > 0 && project.Text.Trim().Length > 0;
+    private bool Ready => retail.Text.Trim().Trim('"').Length > 0 && project.Text.Trim().Trim('"').Length > 0;
     private void Changed() { start.IsEnabled = running == null && Ready; error.Text = ""; }
 
     private void Browse(TextBox box, string title)
@@ -84,7 +84,8 @@ internal sealed class SourceInitializeDialog : Window
         // Start at the typed folder, or at its nearest existing parent when it is a new folder.
         try
         {
-            for (string? folder = box.Text.Trim().Length > 0 ? Path.GetFullPath(box.Text.Trim()) : null; folder != null; folder = Path.GetDirectoryName(folder))
+            string typed = box.Text.Trim().Trim('"');
+            for (string? folder = typed.Length > 0 ? Path.GetFullPath(typed) : null; folder != null; folder = Path.GetDirectoryName(folder))
                 if (Directory.Exists(folder)) { dialog.InitialDirectory = folder; break; }
         }
         catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException or IOException or UnauthorizedAccessException) { }
@@ -97,7 +98,7 @@ internal sealed class SourceInitializeDialog : Window
         using CancellationTokenSource cancellation = new(); running = cancellation;
         Busy(true); error.Text = ""; progressText.Text = "Checking the folders…";
         SourceReconstructionReport? report = null;
-        try { report = await initialize(retail.Text.Trim(), project.Text.Trim(), new Progress<string>(text => { if (running == cancellation && !cancellation.IsCancellationRequested) progressText.Text = text; }), cancellation.Token); }
+        try { report = await initialize(retail.Text.Trim().Trim('"'), project.Text.Trim().Trim('"'), new Progress<string>(text => { if (running == cancellation && !cancellation.IsCancellationRequested) progressText.Text = text; }), cancellation.Token); }
         catch (OperationCanceledException) when (cancellation.IsCancellationRequested) { }
         // A refusal (for example a folder that is not the original game files) stays in the dialog so the folders can be changed.
         catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException) { error.Text = ex.Message; }

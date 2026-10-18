@@ -1,4 +1,4 @@
-namespace Recoil.Zbd.Core.Worlds;
+namespace zStudio.Core.Worlds;
 
 /// <summary>Directory multiplicity and links, pairing repeated names by their directory occurrence, never as one identity.</summary>
 internal static class WorldTextureComparison

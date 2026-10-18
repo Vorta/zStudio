@@ -1,7 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
 
-namespace Recoil.Zbd.PrWatch;
+namespace zStudio.PrWatch;
 
 public static class Program
 {

@@ -1,7 +1,7 @@
 using System.Numerics;
 using Clipper2Lib;
 
-namespace Recoil.Zbd.Core.Terrain;
+namespace zStudio.Core.Terrain;
 
 /// <summary>
 /// Region shapes as plan-view areas: a shape covers the union of its polygons, each minus its holes. Painting adds or

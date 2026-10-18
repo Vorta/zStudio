@@ -1,6 +1,6 @@
 using System.Collections;
 
-namespace Recoil.Zbd.Core.Sources;
+namespace zStudio.Core.Sources;
 
 /// <summary>
 /// One operation's immutable pending identities. Folder queries reuse the index rather than revisiting every

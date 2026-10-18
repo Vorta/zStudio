@@ -1,10 +1,10 @@
 using System.IO;
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Core.Sources;
-using Recoil.Zbd.Core.Worlds;
+using zStudio.Core;
+using zStudio.Core.Sources;
+using zStudio.Core.Worlds;
 using Xunit;
 
-namespace Recoil.Zbd.Tests;
+namespace zStudio.Tests;
 
 public sealed class ScriptTraceBudgetTests
 {
@@ -104,25 +104,6 @@ public sealed class ScriptTraceBudgetTests
         var error = Assert.Throws<InvalidDataException>(() => WorldSources.Reconstruct([new(1, world), new(2, world)],
             _ => lines, (_, _) => null, new HashSet<string>(), _ => 0, [], Token, maximumTraceUnits: 9));
         Assert.Contains("directory history", error.Message);
-    }
-
-    [Fact]
-    public void CheckoutRefusesSharedDirectoryHistoryInsteadOfSkippingAMission()
-    {
-        using SourceWorldFixture fixture = new();
-        fixture.Write("gamegen/m1.gs", "SetModelDirectory ../data/m1/models\n");
-        fixture.Write("gamegen/m2.gs", "SetTextureDirectory ../data/m2/textures\n");
-        SourceWorkspace workspace = new(fixture.Project);
-        const string model = "data/m1/models/m1.gltf";
-        byte[] original = File.ReadAllBytes(fixture.Path(model));
-        List<string> reads = [];
-        var error = Assert.Throws<InvalidDataException>(() => SourceBlender.Checkout(workspace, model, Token, reads.Add, maximumTraceUnits: 9));
-        Assert.Contains("directory history", error.Message);
-        Assert.Contains("gamegen/m1.gs", reads);
-        Assert.Contains("gamegen/m2.gs", reads);
-        Assert.False(Directory.Exists(fixture.Path(SourceBlender.ExportFolder)));
-        Assert.Equal(original, File.ReadAllBytes(fixture.Path(model)));
-        Assert.Empty(SourceBlender.Checkouts(fixture.Project, Token));
     }
 
     [Theory]

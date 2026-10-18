@@ -1,9 +1,9 @@
 using System.Text;
-using Recoil.Zbd.Core.Sources;
-using Recoil.Zbd.Core.Worlds;
+using zStudio.Core.Sources;
+using zStudio.Core.Worlds;
 using Xunit;
 
-namespace Recoil.Zbd.Tests;
+namespace zStudio.Tests;
 
 public sealed class ScriptOperandBudgetTests
 {
@@ -84,21 +84,6 @@ public sealed class ScriptOperandBudgetTests
         Assert.Contains("executed operand", Assert.Throws<InvalidDataException>(() => SourceObjectEdits.TransformElsewhere(new(fixture.Project),
             "m1", new() { ModelFile = fixture.Tank }, "hull", Token, budget)).Message);
         Assert.True(budget.Exhausted);
-    }
-
-    [Fact]
-    public void CheckoutPropagatesSharedOperandRefusalWithoutWritingOrChangingSources()
-    {
-        using SourceWorldFixture fixture = new();
-        fixture.Write("gamegen/m1.gs", "echo x"); fixture.Write("gamegen/m2.gs", "echo x");
-        const string model = "data/m1/models/m1.gltf";
-        byte[] original = File.ReadAllBytes(fixture.Path(model));
-        List<string> reads = [];
-        Assert.Contains("executed operand", Assert.Throws<InvalidDataException>(() => SourceBlender.Checkout(new(fixture.Project), model, Token,
-            reads.Add, maximumOperandReferences: 25)).Message);
-        Assert.Contains("gamegen/m1.gs", reads); Assert.Contains("gamegen/m2.gs", reads);
-        Assert.Equal(original, File.ReadAllBytes(fixture.Path(model)));
-        Assert.False(Directory.Exists(fixture.Path(SourceBlender.ExportFolder)));
     }
 
     [Fact]

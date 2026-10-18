@@ -263,7 +263,7 @@ Folders named by each script (`common.gw` lines use `%MISSION_DIR%`, so they nam
 
 A search load finds a file an earlier folder holds: `mission1.gw` loads `miss_lo.flt`, which `data\effects\models` holds (searched before the mission's own folder).
 
-m3 references two different versions of `lturret.flt` and of `pturret.flt`; the shipped world keeps both, so one folder cannot have held a single file for each. zStudio writes the second as `lturret_2` and `pturret_2`.
+m3 references two different versions of `lturret.flt` and of `pturret.flt` (the second by another path, so the loader cached it again); the shipped world keeps both, so one folder cannot have held a single file for each. The versions differ only in their polygon zones, so zStudio writes one file for each, keeping the second path's spelling and its zones as overrides on those placements; the turrets are written once to `data/common/models` for every mission referencing them (user decision).
 
 `data\m2\models\testdb.flt` is loaded by `testdb.gs` (script). No script names a model in `common\effects\models`; common.gw searches it before `common\models`, so the pickups, and any database or mission object, could have been there instead.
 

@@ -1,8 +1,8 @@
 using System.Numerics;
-using Recoil.Zbd.Core.Worlds;
+using zStudio.Core.Worlds;
 using Xunit;
 
-namespace Recoil.Zbd.Tests;
+namespace zStudio.Tests;
 
 /// <summary>Two worlds compared as one merged tree: matched by parent-child structure, independently of serialized slots.</summary>
 public sealed class WorldComparisonTreeTests

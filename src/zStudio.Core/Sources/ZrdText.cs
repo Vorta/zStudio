@@ -1,8 +1,8 @@
 using System.Globalization;
 using System.Text;
-using Recoil.Zbd.Core.Formats;
+using zStudio.Core.Formats;
 
-namespace Recoil.Zbd.Core.Sources;
+namespace zStudio.Core.Sources;
 
 /// <summary>
 /// Lossless text form of a zReader resource, used for reconstructed source files. The original compiler's
@@ -186,6 +186,7 @@ public static class ZrdText
         ZrdNode Spanned(ZrdNode node, int start)
         {
             token.ThrowIfCancellationRequested();
+            if (spans != null) node = node with { SourceOffset = start };
             spans?.Invoke(node, new(start, position - start));
             token.ThrowIfCancellationRequested();
             return node;

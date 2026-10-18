@@ -4,14 +4,14 @@ using System.Text;
 using System.Text.Json.Nodes;
 using ModelContextProtocol.Client;
 using ModelContextProtocol.Protocol;
-using Recoil.Zbd.Desktop;
-using Recoil.Zbd.Mcp;
-using Recoil.Zbd.Tests;
+using zStudio.Desktop;
+using zStudio.Mcp;
+using zStudio.Tests;
 using Xunit;
 
-namespace Recoil.Zbd.Desktop.Tests;
+namespace zStudio.Desktop.Tests;
 
-/// <summary>Shared history must not multiply into an unreadable workspace state when several missions are open.</summary>
+/// <summary>Map switching retains a bounded state summary even when its shared source history is large.</summary>
 internal static class SourceWorkspaceStateBoundsChecks
 {
     internal static async Task Run()
@@ -33,7 +33,7 @@ internal static class SourceWorkspaceStateBoundsChecks
             await pipe.ConnectAsync(token);
             await using var client = await McpClient.CreateAsync(new StreamClientTransport(pipe, pipe), cancellationToken: token);
             await main.ViewModel.OpenRootAsync(fixture.Project, token);
-            for (int i = 1; i <= 6; i++) await Job("source_world_open", new() { ["mission"] = $"m{i}" });
+            for (int i = 1; i <= 6; i++) { await Job("source_world_open", new() { ["mission"] = $"m{i}" }); Assert.Single(main.ViewModel.Documents); }
             var workspace = main.ViewModel.Documents[0].SourceWorld!.Workspace;
             Assert.All(main.ViewModel.Documents, d => Assert.Same(workspace, d.SourceWorld!.Workspace));
             var empty = await Call("state", new());
@@ -45,13 +45,13 @@ internal static class SourceWorkspaceStateBoundsChecks
             });
 
             // Legal paths with escaped JSON characters, 16 files per transaction, below every workspace limit.
-            // Full history repeated once per mission previously made zstudio_state fail response_too_large.
+            // Full path/history details belong to source_changes, not the ordinary workspace summary.
             string[] paths = [.. Enumerable.Range(0, 16).Select(i => "data/" + new string('\u00e9', 240) + $"/f{i:D2}.gltf")];
             for (int i = 0; i < 32; i++)
                 workspace.Apply("Blender update", paths.Select(p => (p, (byte[]?)Encoding.UTF8.GetBytes("{\"asset\":{\"version\":\"2.0\"},\"extras\":{\"revision\":" + i + "}}"))));
             var state = await Call("state", new());
             Assert.True(state.ToJsonString().Length < 128 * 1024);
-            Assert.Equal(6, state["documents"]!.AsArray().Count);
+            Assert.Single(state["documents"]!.AsArray());
             Assert.Equal(main.ViewModel.Documents.Select(d => d.SessionId.ToString()), state["documents"]!.AsArray().Select(d => d!["id"]!.GetValue<string>()));
             Assert.All(state["documents"]!.AsArray(), d =>
             {

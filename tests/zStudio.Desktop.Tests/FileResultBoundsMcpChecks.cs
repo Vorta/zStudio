@@ -6,16 +6,16 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using ModelContextProtocol.Client;
 using ModelContextProtocol.Protocol;
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Core.Export;
-using Recoil.Zbd.Core.Formats;
-using Recoil.Zbd.Core.Sources;
-using Recoil.Zbd.Desktop;
-using Recoil.Zbd.Mcp;
-using Recoil.Zbd.Tests;
+using zStudio.Core;
+using zStudio.Core.Export;
+using zStudio.Core.Formats;
+using zStudio.Core.Sources;
+using zStudio.Desktop;
+using zStudio.Mcp;
+using zStudio.Tests;
 using Xunit;
 
-namespace Recoil.Zbd.Desktop.Tests;
+namespace zStudio.Desktop.Tests;
 
 /// <summary>Producers crossing the path-preview cap must retain retrievable completion results after every file is saved.</summary>
 internal static class FileResultBoundsMcpChecks
@@ -259,10 +259,10 @@ internal static class FileResultBoundsMcpChecks
                     var single = StateDocumentPage.Select(documents, 0, 1);
                     Assert.Single(single.Documents); Assert.Equal(1, single.NextOffset);
                     Assert.Empty(StateDocumentPage.Select(documents, int.MaxValue, 64).Documents);
-                    Assert.Throws<Recoil.Zbd.Automation.StudioCommandException>(() => StateDocumentPage.Select(documents, -1, 64));
-                    Assert.Throws<Recoil.Zbd.Automation.StudioCommandException>(() => StateDocumentPage.Select(documents, 0, 65));
+                    Assert.Throws<zStudio.Automation.StudioCommandException>(() => StateDocumentPage.Select(documents, -1, 64));
+                    Assert.Throws<zStudio.Automation.StudioCommandException>(() => StateDocumentPage.Select(documents, 0, 65));
                     documents[0].LastSavedCopy = new string('&', StateDocumentPage.MaximumBytes);
-                    Assert.Throws<Recoil.Zbd.Automation.StudioCommandException>(() => StateDocumentPage.Select(documents, 0, 1));
+                    Assert.Throws<zStudio.Automation.StudioCommandException>(() => StateDocumentPage.Select(documents, 0, 1));
                 }
                 finally { foreach (var document in documents) document.Dispose(); }
             }

@@ -2,11 +2,11 @@ using System.IO.Pipes;
 using System.Text.Json.Nodes;
 using ModelContextProtocol.Client;
 using ModelContextProtocol.Protocol;
-using Recoil.Zbd.Automation;
-using Recoil.Zbd.Mcp;
+using zStudio.Automation;
+using zStudio.Mcp;
 using Xunit;
 
-namespace Recoil.Zbd.Desktop.Tests;
+namespace zStudio.Desktop.Tests;
 
 public sealed class McpLazyConnectorTests
 {
@@ -16,7 +16,7 @@ public sealed class McpLazyConnectorTests
         int connections = 0;
         await WithConnector(_ => { connections++; throw new Exception("Must not connect"); }, () => false, async client =>
         {
-            Assert.Equal(110, (await client.ListToolsAsync()).Count);
+            Assert.Equal(115, (await client.ListToolsAsync()).Count);
             Assert.Equal(2, (await client.ListResourcesAsync()).Count);
             Assert.False((await client.CallToolAsync("zstudio_capabilities")).IsError);
             Assert.Single((await client.ReadResourceAsync("zstudio://capabilities")).Contents);

@@ -1,6 +1,6 @@
-using Recoil.Zbd.Core.Worlds;
+using zStudio.Core.Worlds;
 
-namespace Recoil.Zbd.Core.Sources;
+namespace zStudio.Core.Sources;
 
 /// <summary>
 /// An exact source-world node, optionally one polygon of its source mesh: the polygon's ordinal in the mesh's embedded zone profile,
@@ -13,8 +13,11 @@ public enum SourceZoneTargetKind { Node, LoadRoot, Polygon }
 public sealed record SourceZoneTarget(string Asset, SourceZoneTargetKind Kind, int Index, int Polygon = -1,
     string? OwnerPath = null, IReadOnlyList<int>? OwnerReferences = null);
 public sealed record SourceZoneTargetState(SourceZoneTarget Target, uint Word, bool? Gate, int AffectedCount);
-/// <summary>Null leaves that property alone. An empty polygon list explicitly authors no zones; 255 means Any.</summary>
-public sealed record SourceZoneAssignment(byte? NodeZone = null, bool? Gate = null, IReadOnlyList<byte>? PolygonZones = null);
+/// <summary>
+/// Null leaves that property alone. An empty polygon list explicitly authors no zones; 255 means Any. <paramref name="Inherit"/>
+/// makes an object node take its parent's zone again (keeping its opaque upper bytes); a load root has no parent to inherit from.
+/// </summary>
+public sealed record SourceZoneAssignment(byte? NodeZone = null, bool? Gate = null, IReadOnlyList<byte>? PolygonZones = null, bool Inherit = false);
 public sealed record SourceZoneInspection(string MasterPath, IReadOnlyList<string> SourcePaths, IReadOnlyList<SourceZoneTargetState> Targets,
     int TargetCount, int Offset, int? NextOffset, IReadOnlyList<int> AffectedNodes, int AffectedCount, bool RequiresSharedScope,
     IReadOnlyList<string> AffectedMissions, int AffectedMissionCount, IReadOnlyList<string> AffectedSources, int AffectedSourceCount);
@@ -48,7 +51,7 @@ public static class SourceZoneEdits
     /// The selection a viewport pick makes: a polygon of the node's built model becomes the source polygon it was built from
     /// (the pieces a build splits one source polygon into select it together).
     /// </summary>
-    public static SourceZoneSelection FromCompiled(SourceWorldBuild build, int sceneNode, int? compiledPolygon)
+    public static SourceZoneSelection FromCompiled(SourceSceneState build, int sceneNode, int? compiledPolygon)
     {
         if (compiledPolygon is not { } polygon) return new(sceneNode);
         if (!build.Provenance.TryGetValue(sceneNode, out var origin) || origin.ZonePolygons is not { } mapping || polygon < 0 || polygon >= mapping.Count)
@@ -60,7 +63,7 @@ public static class SourceZoneEdits
     /// Refuses a source polygon ordinal the node's built model has no face for (a polygon the build discarded, or an index
     /// read from another layout), so that a stale index is never applied to another face.
     /// </summary>
-    public static void RequireBuiltPolygons(SourceWorldBuild build, IReadOnlyList<SourceZoneSelection> selections, CancellationToken token = default)
+    public static void RequireBuiltPolygons(SourceSceneState build, IReadOnlyList<SourceZoneSelection> selections, CancellationToken token = default)
     {
         BuiltPolygons built = new();
         foreach (var selection in selections)
@@ -70,7 +73,7 @@ public static class SourceZoneEdits
         }
     }
 
-    public static SourceZoneInspection Inspect(SourceWorkspace workspace, SourceWorldBuild build,
+    public static SourceZoneInspection Inspect(SourceWorkspace workspace, SourceSceneState build,
         IReadOnlyList<SourceZoneSelection> selections, int offset = 0, CancellationToken token = default)
     {
         if (offset < 0) throw Bad("Use a nonnegative inspection offset.");
@@ -99,12 +102,13 @@ public static class SourceZoneEdits
             context.AffectedSources.Take(MaximumAffectedPathsShown).ToArray(), context.AffectedSources.Count);
     }
 
-    public static SourceZoneEditPlan PlanAssignments(SourceWorkspace workspace, SourceWorldBuild build,
+    public static SourceZoneEditPlan PlanAssignments(SourceWorkspace workspace, SourceSceneState build,
         IReadOnlyList<SourceZoneSelection> selections, SourceZoneAssignment assignment, bool sharedScope,
         CancellationToken token = default)
     {
-        if (assignment.NodeZone == null && assignment.Gate == null && assignment.PolygonZones == null)
+        if (assignment.NodeZone == null && assignment.Gate == null && assignment.PolygonZones == null && !assignment.Inherit)
             throw Bad("Choose an object zone, gate or polygon zone set.");
+        if (assignment.Inherit && (assignment.NodeZone != null || assignment.PolygonZones != null)) throw Bad("An inheriting object has no zone of its own.");
         if (assignment.PolygonZones?.Count > 3) throw Bad("A polygon accepts zero to three ordered zone IDs.");
         var context = Prepare(workspace, build, selections, token);
         // The GUI shows no scope page, so the refusal itself states what the edit would reach.
@@ -120,12 +124,15 @@ public static class SourceZoneEdits
             IReadOnlyList<uint>[]? meshes = null;
             Dictionary<int, uint[]> editedMeshes = [];
             var root = profile.LoadRoot;
-            // When one transaction changes a file default and also authors an override that            // previously inherited it, carry both selected changes into the new full profile.            var dependencies = (context.Assets[group.Key].AssignmentSites ?? [group.Key]).ToHashSet(StringComparer.OrdinalIgnoreCase);            foreach (var target in context.Targets.Where(t => dependencies.Contains(Key(t))))
+            // When one transaction changes a file default and also authors an override that
+            // previously inherited it, carry both selected changes into the new full profile.
+            var dependencies = (context.Assets[group.Key].AssignmentSites ?? [group.Key]).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            foreach (var target in context.Targets.Where(t => dependencies.Contains(Key(t))))
             {
                 token.ThrowIfCancellationRequested();
                 if (target.Kind == SourceZoneTargetKind.Polygon)
                 {
-                    if (assignment.PolygonZones == null || assignment.NodeZone != null || assignment.Gate != null)
+                    if (assignment.PolygonZones == null || assignment.NodeZone != null || assignment.Gate != null || assignment.Inherit)
                         throw Bad("Polygon selections require only a polygon zone set; object zone and gate are separate edits.");
                     if (!editedMeshes.TryGetValue(target.Index, out var words))
                     {
@@ -139,8 +146,9 @@ public static class SourceZoneEdits
                 {
                     if (assignment.PolygonZones != null) throw Bad("Object selections do not identify a polygon; select exact faces for a polygon edit.");
                     var previous = Node(profile, target)!;
+                    if (assignment.Inherit && target.Kind == SourceZoneTargetKind.LoadRoot) throw Bad("A load root has no parent to inherit a zone from; choose a zone or Any.");
                     var next = new WorldNodeZone(assignment.NodeZone is { } id ? previous.Word & ~255u | id : previous.Word,
-                        assignment.Gate ?? previous.Gate, assignment.NodeZone == null && previous.Inherit);
+                        assignment.Gate ?? previous.Gate, assignment.Inherit || assignment.NodeZone == null && previous.Inherit);
                     if (target.Kind == SourceZoneTargetKind.LoadRoot) root = next;
                     else { nodes ??= profile.Nodes.ToArray(); nodes[target.Index] = next; }
                 }
@@ -156,7 +164,7 @@ public static class SourceZoneEdits
     {
         SourceEmbeddedZones sources = new(workspace, token);
         var map = sources.ReadMission(mission, includeEntries: false);
-        if (label.Length is < 1 or > SourceMapZones.MaximumLabelCharacters || id == 255 && label != "Any")
+        if (label.Length is < 1 or > SourceEmbeddedZones.MaximumLabelCharacters || id == 255 && label != "Any")
             throw Bad("Use a nonempty label of at most 256 characters; zone 255 is always Any.");
         sources.SetLabels(map.MasterPath, map.Labels.Where(x => x.Id != id).Append(new SourceMapZoneLabel(id, label)));
         return new("Name map zone", sources.Changes(), [], 0, false);
@@ -268,10 +276,10 @@ public static class SourceZoneEdits
         internal List<int> Scope(SourceZoneTarget target) => Scopes[Key(target)][(target.Kind, target.Index)];
     }
 
-    private static Context Prepare(SourceWorkspace workspace, SourceWorldBuild build, IReadOnlyList<SourceZoneSelection> selections, CancellationToken token)
+    private static Context Prepare(SourceWorkspace workspace, SourceSceneState build, IReadOnlyList<SourceZoneSelection> selections, CancellationToken token)
     {
         if (selections.Count is < 1 or > MaximumSelections) throw Bad("Select between one and 4,096 exact zone targets.");
-        if (build.Provenance.Count > SourceMapZones.MaximumTargets || build.Freed.Count > SourceMapZones.MaximumTargets)
+        if (build.Provenance.Count > SourceEmbeddedZones.MaximumTargets || build.Freed.Count > SourceEmbeddedZones.MaximumTargets)
             throw Bad("The source world has too many zone occurrences.");
         SourceEmbeddedZones sources = new(workspace, token);
         var mission = sources.ReadMission(build.Mission, includeEntries: false);
@@ -389,7 +397,7 @@ public static class SourceZoneEdits
         token.ThrowIfCancellationRequested(); return context;
     }
 
-    private static Dictionary<string, WorldNodeZone?> ImportedLoadRoots(SourceWorldBuild build,
+    private static Dictionary<string, WorldNodeZone?> ImportedLoadRoots(SourceSceneState build,
         IReadOnlyList<SourceZoneSelection> selections, CancellationToken token)
     {
         HashSet<string> wanted = new(StringComparer.OrdinalIgnoreCase);

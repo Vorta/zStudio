@@ -1,7 +1,7 @@
-using Recoil.Zbd.Core.Worlds;
+using zStudio.Core.Worlds;
 using Xunit;
 
-namespace Recoil.Zbd.Tests;
+namespace zStudio.Tests;
 
 /// <summary>The order in which the original build tool made (+) and freed (−) nodes while loading a file.</summary>
 public sealed class OriginalLoaderTests

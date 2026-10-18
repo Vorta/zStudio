@@ -1,7 +1,7 @@
 using System.Security.Cryptography;
-using Recoil.Zbd.Core.Formats;
+using zStudio.Core.Formats;
 
-namespace Recoil.Zbd.Core;
+namespace zStudio.Core;
 
 public sealed record PickupPlacementSaveResult(IReadOnlyList<string> SavedPaths, IReadOnlyList<string> Errors);
 

@@ -1,7 +1,7 @@
 using System.Diagnostics;
 using System.Text;
 
-namespace Recoil.Zbd.PrWatch;
+namespace zStudio.PrWatch;
 
 public sealed record CommandResult(int ExitCode, string Output, string Error);
 public interface ICommandRunner

@@ -1,10 +1,10 @@
 using System.ComponentModel;
 using System.Runtime.InteropServices;
 using System.Text;
-using Recoil.Zbd.Core.Sources;
+using zStudio.Core.Sources;
 using Xunit;
 
-namespace Recoil.Zbd.Tests;
+namespace zStudio.Tests;
 
 [CollectionDefinition("Prepared project root aliases", DisableParallelization = true)]
 public sealed class PreparedRootAliasCollection { }

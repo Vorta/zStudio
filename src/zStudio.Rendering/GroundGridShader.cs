@@ -3,13 +3,13 @@ using HelixToolkit.SharpDX.Shaders;
 using SharpDX.D3DCompiler;
 using SharpDX.Direct3D11;
 
-namespace Recoil.Zbd.Rendering;
+namespace zStudio.Rendering;
 
 internal static class GroundGridShader
 {
     private static readonly Lazy<(byte[] Vertex, byte[] Pixel)> Shaders = new(() =>
     {
-        using var stream = typeof(GroundGridShader).Assembly.GetManifestResourceStream("Recoil.Zbd.Rendering.GroundGrid.hlsl")
+        using var stream = typeof(GroundGridShader).Assembly.GetManifestResourceStream("zStudio.Rendering.GroundGrid.hlsl")
             ?? throw new InvalidOperationException("The ground grid shader is missing.");
         using var reader = new System.IO.StreamReader(stream);
         string source = reader.ReadToEnd();

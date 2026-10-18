@@ -1,12 +1,12 @@
-using Recoil.Zbd.Core.Formats;
+using zStudio.Core.Formats;
 
-namespace Recoil.Zbd.Core;
+namespace zStudio.Core;
 
 public sealed class ScriptEditSession : ContentEditSession
 {
     public PreparedScriptPackage Package => (PreparedScriptPackage)Current.State;
-    public ScriptEditSession(ZbdDocument document) : base(document, document.Scripts ?? throw new InvalidDataException("An intact v7 prepared-script pack is required.")) { }
-    internal ScriptEditSession(ZbdDocument document, long maximumRetainedBytes, long maximumConstructionBytes = EditRetentionBudget.MaximumConstructionBytes)
+    public ScriptEditSession(AssetDocument document) : base(document, document.Scripts ?? throw new InvalidDataException("An intact v7 prepared-script pack is required.")) { }
+    internal ScriptEditSession(AssetDocument document, long maximumRetainedBytes, long maximumConstructionBytes = EditRetentionBudget.MaximumConstructionBytes)
         : base(document, document.Scripts ?? throw new InvalidDataException("An intact v7 prepared-script pack is required."), maximumRetainedBytes, maximumConstructionBytes) { }
     public PreparedScriptEntry Entry(Guid id) => Package.Entries.SingleOrDefault(e => e.Id == id) ?? throw new InvalidDataException("The script entry no longer exists.");
     public Task<PreparedContentEdit> PrepareEntryAsync(string action, Guid entry = default, string name = "", int position = -1, uint fileTime = 0, CancellationToken token = default)
@@ -71,7 +71,7 @@ public sealed class ScriptEditSession : ContentEditSession
         var previous = (PreparedScriptPackage)before.State;
         bool identitiesChanged = !previous.Entries.Select(e => e.Id).SequenceEqual(package.Entries.Select(e => e.Id)) ||
             previous.Entries.Zip(package.Entries).Any(pair => !pair.First.Instructions.Select(i => i.Id).SequenceEqual(pair.Second.Instructions.Select(i => i.Id)));
-        return Admit(new(before, new(new Dictionary<string, ZbdDocument>(StringComparer.OrdinalIgnoreCase) { [SourcePath] = doc }, package), before.Documents, identitiesChanged), token);
+        return Admit(new(before, new(new Dictionary<string, AssetDocument>(StringComparer.OrdinalIgnoreCase) { [SourcePath] = doc }, package), before.Documents, identitiesChanged), token);
     }
     private static void Move<T>(List<T> list, int index, int position)
     {

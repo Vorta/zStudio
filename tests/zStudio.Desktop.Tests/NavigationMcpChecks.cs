@@ -4,12 +4,12 @@ using System.Windows;
 using System.Windows.Automation;
 using System.Windows.Controls;
 using System.Windows.Media;
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Core.Animation;
-using Recoil.Zbd.Desktop;
+using zStudio.Core;
+using zStudio.Core.Animation;
+using zStudio.Desktop;
 using Xunit;
 
-namespace Recoil.Zbd.Desktop.Tests;
+namespace zStudio.Desktop.Tests;
 
 internal static class NavigationMcpChecks
 {
@@ -40,7 +40,7 @@ internal static class NavigationMcpChecks
             {
                 main.ViewModel.SelectedDocument = first; first.SelectedAsset = first.Assets[0];
                 TaskCompletionSource started = new(TaskCreationOptions.RunContinuationsAsynchronously);
-                TaskCompletionSource<ZbdDocument> decoded = new(TaskCreationOptions.RunContinuationsAsynchronously);
+                TaskCompletionSource<AssetDocument> decoded = new(TaskCreationOptions.RunContinuationsAsynchronously);
                 main.ViewModel.LoadDocumentAsync = async (_, token) => { started.SetResult(); return await decoded.Task.WaitAsync(token); };
                 string path = Path.Combine(root, "opened-" + scenario + ".zbd");
                 var queued = await main.Commands.ExecuteAsync("zstudio_open_document", new() { ["path"] = path }, deadline.Token);
@@ -73,7 +73,7 @@ internal static class NavigationMcpChecks
             // Exercise the GUI error wrapper as well as the service: an obsolete
             // decoder failure must not report into the newer selection's UI.
             main.ViewModel.SelectedDocument = first;
-            TaskCompletionSource<ZbdDocument> obsoleteDecode = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            TaskCompletionSource<AssetDocument> obsoleteDecode = new(TaskCreationOptions.RunContinuationsAsynchronously);
             main.ViewModel.LoadDocumentAsync = (_, _) => obsoleteDecode.Task;
             var runUi = typeof(MainWindow).GetMethod("RunUi", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!;
             var obsoleteGuiOpen = (Task)runUi.Invoke(main, new object[] { (Func<Task>)(async () => await main.ViewModel.OpenFileAsync(Path.Combine(root, "obsolete-gui.zbd"))) })!;
@@ -107,7 +107,7 @@ internal static class NavigationMcpChecks
             await secondDecision.Task.WaitAsync(deadline.Token);
             first.AnimationEdits!.Apply(0, "Edit after accepted close", e => e.SetFloat(164, 2));
             acceptSecond.SetResult(true);
-            var conflict = await Assert.ThrowsAsync<Recoil.Zbd.Automation.StudioCommandException>(() => guiOpen);
+            var conflict = await Assert.ThrowsAsync<zStudio.Automation.StudioCommandException>(() => guiOpen);
             Assert.Equal("revision_conflict", conflict.Code);
             Assert.False(first.IsDisposed); Assert.True(first.IsDirty); Assert.Equal(root, main.ViewModel.RootPath);
             first.AnimationEdits.Undo();
@@ -156,7 +156,7 @@ internal static class NavigationMcpChecks
             string oldPath = Path.Combine(implicitRoot, "old.zbd"), guiPath = Path.Combine(implicitRoot, "gui.zbd");
             File.WriteAllBytes(oldPath, [1, 0, 0, 0, 0, 0, 0, 0]);
             TaskCompletionSource guiStarted = new(TaskCreationOptions.RunContinuationsAsynchronously);
-            TaskCompletionSource<ZbdDocument> guiLoaded = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            TaskCompletionSource<AssetDocument> guiLoaded = new(TaskCreationOptions.RunContinuationsAsynchronously);
             Task<DocumentModel?>? guiOpening = null;
             fresh.ViewModel.LoadDocumentAsync = async (path, token) =>
             {
@@ -180,7 +180,7 @@ internal static class NavigationMcpChecks
                 var guiDocument = await guiOpening!.WaitAsync(deadline.Token);
                 Assert.Same(guiDocument, fresh.ViewModel.SelectedDocument);
                 Assert.DoesNotContain(fresh.ViewModel.Documents, d => d.Path == oldPath);
-                TaskCompletionSource<ZbdDocument> rootSupersededDecode = new(TaskCreationOptions.RunContinuationsAsynchronously);
+                TaskCompletionSource<AssetDocument> rootSupersededDecode = new(TaskCreationOptions.RunContinuationsAsynchronously);
                 fresh.ViewModel.LoadDocumentAsync = (_, _) => rootSupersededDecode.Task;
                 var obsoleteRootOpen = (Task)runUi.Invoke(fresh, new object[] { (Func<Task>)(async () => await fresh.ViewModel.OpenFileAsync(Path.Combine(implicitRoot, "obsolete-root.zbd"))) })!;
                 fresh.ViewModel.ConfirmDiscardAsync = _ => Task.FromResult(true);
@@ -246,11 +246,11 @@ internal static class NavigationMcpChecks
             }
         }
     }
-    private static ZbdDocument Source(string path)
+    private static AssetDocument Source(string path)
     {
         var package = new AnimationPackage { Prefix = new byte[72], Tail = [] };
         package.Entries.Add(new(new byte[308], 0, 0));
-        var source = new ZbdDocument(path, new(0, DateTime.MinValue), new(FormatFamily.Unknown, null, Recognition.Unknown, "navigation fixture"), ReadOnlyMemory<byte>.Empty) { Animations = package };
+        var source = new AssetDocument(path, new(0, DateTime.MinValue), new(FormatFamily.Unknown, null, Recognition.Unknown, "navigation fixture"), ReadOnlyMemory<byte>.Empty) { Animations = package };
         source.Add(AssetKind.Raw, 0, "first", 0, 0); source.Add(AssetKind.Raw, 1, "second", 0, 0); return source;
     }
     private static IEnumerable<DependencyObject> Descendants(DependencyObject root)

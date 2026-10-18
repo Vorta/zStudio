@@ -2,14 +2,14 @@ using System.IO;
 using System.Numerics;
 using System.Text;
 using System.Text.Json.Nodes;
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Core.Formats;
-using Recoil.Zbd.Core.Gltf;
-using Recoil.Zbd.Core.Sources;
-using Recoil.Zbd.Core.Worlds;
+using zStudio.Core;
+using zStudio.Core.Formats;
+using zStudio.Core.Gltf;
+using zStudio.Core.Sources;
+using zStudio.Core.Worlds;
 using Xunit;
 
-namespace Recoil.Zbd.Tests;
+namespace zStudio.Tests;
 
 /// <summary>
 /// Source-world object edits where a node's values come from elsewhere than its own file or script: a shared node's zone
@@ -93,27 +93,27 @@ public sealed class SourceObjectReviewFixTests
             .Select(n => n?["extras"]?[WorldGltf.Key]?["zoneOverrides"]?.ToJsonString()).ToArray();
     }
 
-    private static async Task<(SourceWorldBuild Build, GameZWorld World)> BuildAsync(SourceWorldFixture fixture, SourceWorkspace workspace, string mission = "m1")
+    private static async Task<(SourceSceneState Build, GameZWorld World)> BuildAsync(SourceWorldFixture fixture, SourceWorkspace workspace, string mission = "m1")
     {
-        var build = await SourceWorlds.BuildPreviewAsync(fixture.Project, mission, Path.Combine(SourceWorlds.PreviewRoot(fixture.Project), "p-" + Guid.NewGuid().ToString("N")), workspace.Overlay(), token: Token);
-        Assert.Null(build.Outputs.FirstOrDefault(o => o.Error != null)?.Error);
-        var world = GameZWorldReader.FromDocument(FormatRegistry.Default.OpenBytes("gamez.zbd", await File.ReadAllBytesAsync(build.WorldPath, Token), token: Token), Token);
-        return (build, world);
+        var build = await SourceWorlds.LoadSceneAsync(fixture.Project, mission, workspace.Overlay(), token: Token);
+        Assert.NotNull(build.Scene);
+        var world = build.World;
+        return (build.BuildState, world);
     }
-    private static Dictionary<WorldNode, WorldNodeProvenance> Provenance(SourceWorldBuild build, GameZWorld world)
+    private static Dictionary<WorldNode, WorldNodeProvenance> Provenance(SourceSceneState build, GameZWorld world)
     {
         Dictionary<WorldNode, WorldNodeProvenance> provenance = new(ReferenceEqualityComparer.Instance);
         foreach (var (node, slot) in GameZWriter.NodeSlots(world, TestContext.Current.CancellationToken)) if (build.Provenance.TryGetValue(slot, out var origin)) provenance[node] = origin;
         return provenance;
     }
-    private static SourceObjectTarget Target(SourceWorkspace workspace, SourceWorldBuild build, GameZWorld world, WorldNode picked, string mission = "m1")
+    private static SourceObjectTarget Target(SourceWorkspace workspace, SourceSceneState build, GameZWorld world, WorldNode picked, string mission = "m1")
     {
         var provenance = Provenance(build, world);
         return new(workspace, mission, world, SourceObjectEdits.ObjectOf(picked, provenance), provenance, build.Executions) { Write = build.WriteInstruction };
     }
-    private static SourceObjectTarget Target(SourceWorkspace workspace, SourceWorldBuild build, GameZWorld world, string name) => Target(workspace, build, world, world.Nodes.Single(n => n.Name == name));
-    private static WorldNodeProvenance Origin(SourceWorldBuild build, GameZWorld world, WorldNode node) => build.Provenance[GameZWriter.NodeSlots(world, TestContext.Current.CancellationToken)[node]];
-    private static WorldNodeProvenance Origin(SourceWorldBuild build, GameZWorld world, string name) => Origin(build, world, world.Nodes.Single(n => n.Name == name));
+    private static SourceObjectTarget Target(SourceWorkspace workspace, SourceSceneState build, GameZWorld world, string name) => Target(workspace, build, world, world.Nodes.Single(n => n.Name == name));
+    private static WorldNodeProvenance Origin(SourceSceneState build, GameZWorld world, WorldNode node) => build.Provenance[GameZWriter.NodeSlots(world, TestContext.Current.CancellationToken)[node]];
+    private static WorldNodeProvenance Origin(SourceSceneState build, GameZWorld world, string name) => Origin(build, world, world.Nodes.Single(n => n.Name == name));
     private static void Apply(SourceWorkspace workspace, SourceEditPlan plan) => Assert.NotNull(workspace.Apply(plan.Label, plan.Changes.Select(c => (c.Relative, (byte[]?)c.Content)), Token));
     private static string Text(SourceWorkspace workspace, string path) => Encoding.Latin1.GetString(workspace.Read(path, Token)!);
     private static string Message(Action plan) => Assert.Throws<InvalidDataException>(plan).Message;
@@ -265,7 +265,7 @@ public sealed class SourceObjectReviewFixTests
         foreach (string mission in new[] { "m1", "m2" }) Replace(fixture, $"gamegen/{mission}.gs", "NewWorld %worldName%", "source world.gw");
         fixture.Write("gamegen/world.gw", string.Join("\r\n",
             "NewWorld %worldName%", "WorldSetFogColor 0.1 0.2 0.3", "NewObject3D marker", "Object3DTranslate 1.0 2.0 3.0", "Object3DScale 2.0 2.0 2.0", "SetLandmark off", "FindNode %worldName%", "AddChild marker",
-            "SetModelDirectory ..\\data\\m2\\models\\bft", "LoadGameGen tank.flt tmpl", "SetIntersectSurface off", "FindSubNode hull", "SetLandmark on", ""));
+            "SetModelDirectory ..\\data\\m2\\models\\bft", "LoadGameGen tank.gltf tmpl", "SetIntersectSurface off", "FindSubNode hull", "SetLandmark on", ""));
         SourceWorkspace workspace = new(fixture.Project);
         var (build, world) = await BuildAsync(fixture, workspace);
 
@@ -336,7 +336,7 @@ public sealed class SourceObjectReviewFixTests
         // m1 loads the tank m2 loads; m2's script turns the hull of its load, which replaces the file's rotation and scale
         // there. An export turning the hull does not turn m2's: the update says so (a Blender update replaces the model whole).
         using SourceWorldFixture fixture = new();
-        Replace(fixture, "gamegen/m2.gs", "LoadGameGen tank.flt tank", "LoadGameGen tank.flt tank\r\nFindSubNode hull\r\nObject3DRotate 0.0 45.0 0.0");
+        Replace(fixture, "gamegen/m2.gs", "LoadGameGen tank.gltf tank", "LoadGameGen tank.gltf tank\r\nFindSubNode hull\r\nObject3DRotate 0.0 45.0 0.0");
         SourceWorkspace workspace = new(fixture.Project);
         SourceWorlds.AddModel(workspace, "m1", new(new(fixture.Tank, "tank_a", new(100, 0, -50)), []), Token);
         var (build, world) = await BuildAsync(fixture, workspace);
@@ -363,7 +363,7 @@ public sealed class SourceObjectReviewFixTests
     {
         // m1 loads the tank m2 loads; m2's script turns the hull of its load.
         using SourceWorldFixture fixture = new();
-        Replace(fixture, "gamegen/m2.gs", "LoadGameGen tank.flt tank", "LoadGameGen tank.flt tank\r\nFindSubNode hull\r\nObject3DRotate 0.0 45.0 0.0");
+        Replace(fixture, "gamegen/m2.gs", "LoadGameGen tank.gltf tank", "LoadGameGen tank.gltf tank\r\nFindSubNode hull\r\nObject3DRotate 0.0 45.0 0.0");
         SourceWorkspace workspace = new(fixture.Project);
         SourceWorlds.AddModel(workspace, "m1", new(new(fixture.Tank, "tank_a", new(100, 0, -50)), []), Token);
         var (build, world) = await BuildAsync(fixture, workspace);
@@ -392,14 +392,14 @@ public sealed class SourceObjectReviewFixTests
         Assert.DoesNotContain("m2.gs", Plan(shown with { RotationDegrees = new(0, 30, 0) }));
         // Through a file that references the tank.
         fixture.Write("data/m2/models/bft/wrapper.gltf", """{"asset":{"version":"2.0"},"scenes":[{"nodes":[0]}],"nodes":[{"name":"wrap","extras":{"recoil":{"ref":"tank.gltf"}}}]}""");
-        Replace(fixture, "gamegen/m2.gs", "LoadGameGen tank.flt tank\r\nFindNode tank\r\nFindSubNode hull\r\nNodeSetDescription hull_1\r\nFindNode tank\r\nFindSubNode hull_1\r\nObject3DTranslate 1.0 0.0 0.0",
-            "LoadGameGen wrapper.flt wrapped\r\nFindSubNode hull\r\nObject3DRotate 0.0 45.0 0.0");
+        Replace(fixture, "gamegen/m2.gs", "LoadGameGen tank.gltf tank\r\nFindNode tank\r\nFindSubNode hull\r\nNodeSetDescription hull_1\r\nFindNode tank\r\nFindSubNode hull_1\r\nObject3DTranslate 1.0 0.0 0.0",
+            "LoadGameGen wrapper.gltf wrapped\r\nFindSubNode hull\r\nObject3DRotate 0.0 45.0 0.0");
         Assert.Contains("gamegen/m2.gs line 16 (Object3DRotate) sets the rotation and scale of hull where m2 loads", Plan(shown with { RotationDegrees = new(0, 30, 0) }));
 
         // A node of another name, or the hull of a file that does not hold this one, is not noted.
-        Replace(fixture, "gamegen/m2.gs", "LoadGameGen wrapper.flt wrapped\r\nFindSubNode hull", "LoadGameGen tank.flt tank\r\nFindSubNode turret");
+        Replace(fixture, "gamegen/m2.gs", "LoadGameGen wrapper.gltf wrapped\r\nFindSubNode hull", "LoadGameGen tank.gltf tank\r\nFindSubNode turret");
         Assert.DoesNotContain("m2.gs", Plan(shown with { RotationDegrees = new(0, 30, 0) }));
-        Replace(fixture, "gamegen/m2.gs", "LoadGameGen tank.flt tank\r\nFindSubNode turret", "LoadGameGen m2.flt other\r\nFindSubNode hull");
+        Replace(fixture, "gamegen/m2.gs", "LoadGameGen tank.gltf tank\r\nFindSubNode turret", "LoadGameGen m2.gltf other\r\nFindSubNode hull");
         Assert.DoesNotContain("m2.gs", Plan(shown with { RotationDegrees = new(0, 30, 0) }));
     }
 

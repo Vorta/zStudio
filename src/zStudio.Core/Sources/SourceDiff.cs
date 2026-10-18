@@ -1,6 +1,6 @@
 using System.Text;
 
-namespace Recoil.Zbd.Core.Sources;
+namespace zStudio.Core.Sources;
 
 /// <summary>A line of a source diff: ' ' kept, '-' only on disk, '+' only in the workspace; numbers are 1-based (0: not on that side).</summary>
 public sealed record SourceDiffLine(char Kind, int DiskLine, int WorkingLine, string Text, bool TextTruncated = false);

@@ -1,7 +1,7 @@
-using Recoil.Zbd.Core.Animation;
+using zStudio.Core.Animation;
 using Xunit;
 
-namespace Recoil.Zbd.Tests;
+namespace zStudio.Tests;
 
 public sealed partial class AnimationTests
 {

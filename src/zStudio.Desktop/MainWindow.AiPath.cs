@@ -5,12 +5,12 @@ using System.Text.Json.Nodes;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
-using Recoil.Zbd.Automation;
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Core.Sources;
-using Recoil.Zbd.Rendering;
+using zStudio.Automation;
+using zStudio.Core;
+using zStudio.Core.Sources;
+using zStudio.Rendering;
 
-namespace Recoil.Zbd.Desktop;
+namespace zStudio.Desktop;
 
 public partial class MainWindow
 {
@@ -65,7 +65,7 @@ public partial class MainWindow
     {
         if (!IsAiWorld || shownDocument is not { IsDisposed: false } doc || doc.PickupEdits == null)
             throw new StudioCommandException("not_ready", "Open a Whole world with supported AI coordinate records.");
-        if (doc.PickupsLocked) throw new StudioCommandException("locked", "Unlock editing before editing an AI path.");
+        if (doc.EditingLocked) throw new StudioCommandException("locked", "Unlock editing before editing an AI path.");
         if (scene!.IsFlyActive || scene.IsPickupDragging || doc.SourceWorld?.IsRebuilding == true || sourceWorkspaceBusy)
             throw new StudioCommandException("busy", "Finish the active gesture or world operation first.");
         if (doc.PickupEdits.HasExternalChanges()) throw new StudioCommandException("external_change", "An owning archive changed outside zStudio.");
@@ -154,10 +154,7 @@ public partial class MainWindow
                 {
                     var edits = draft.Document.PickupEdits!;
                     var after = edits.PreviewAiPositions(draft.After);
-                    List<(string, byte[]?)> changes = [];
-                    foreach (var archive in edits.ScalarWrites(after).GroupBy(w => w.ArchivePath, StringComparer.OrdinalIgnoreCase))
-                        changes.AddRange(SourceResourceEdits.SourceChanges(edits.ArchiveBytes(archive.Key), archive.Select(w => new SourceResourceEdits.ScalarEdit(w.Offset, SourceResourceEdits.Float(w.Value))),
-                            (relative, limits) => workspace.Read(relative, ct, limits), ct).Select(c => (c.Relative, (byte[]?)c.Content)));
+                    var changes = edits.SourceChanges(after, workspace, ct).Select(change => (change.Relative, (byte[]?)change.Content));
                     return workspace.Apply("Transform AI path nodes", changes, ct);
                 }, token, committingAiPath: draft);
                 draft.Lifetime = AiPathDraftLifetime.Completed;
@@ -218,6 +215,7 @@ public partial class MainWindow
         AiPathPanel.Visibility = editing ? Visibility.Visible : Visibility.Collapsed;
         AiPathPanel.IsEnabled = !sourceWorkspaceBusy;
         AiPathEdit.Content = editing ? "Exit Edit (Tab)" : "Edit path (Tab)";
+        AiPathEdit.Visibility = shownDocument?.SourceWorld == null ? Visibility.Visible : Visibility.Collapsed;
         AiPathHeading.Text = $"AI path · {scene?.SelectedAiPathNodes.Count ?? 0} selected";
         AiPathFields.Visibility = aiPathDraft == null ? Visibility.Collapsed : Visibility.Visible;
         synchronizingAiPath = true;
@@ -255,6 +253,7 @@ public partial class MainWindow
         if (!IsAiWorld || CameraInputIsNative(e.OriginalSource as DependencyObject) || CameraInputIsNative(System.Windows.Input.Keyboard.FocusedElement as DependencyObject)
             || System.Windows.Input.Keyboard.Modifiers != ModifierKeys.None) return false;
         if (e.Key != Key.Tab && scene?.AiPathEditingNetwork == null) return false;
+        if (e.Key == Key.Tab && shownDocument?.SourceWorld != null) return false;
         if (e.Key is not (Key.Tab or Key.G or Key.R or Key.S or Key.X or Key.Y or Key.Z or Key.Enter or Key.Escape)) return false;
         e.Handled = true; if (e.IsRepeat) return true;
         _ = ReportUi(async () =>

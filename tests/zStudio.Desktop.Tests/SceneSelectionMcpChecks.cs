@@ -7,14 +7,14 @@ using System.Windows;
 using HelixToolkit.Wpf.SharpDX;
 using ModelContextProtocol.Client;
 using ModelContextProtocol.Protocol;
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Core.Animation;
-using Recoil.Zbd.Desktop;
-using Recoil.Zbd.Mcp;
-using Recoil.Zbd.Rendering;
+using zStudio.Core;
+using zStudio.Core.Animation;
+using zStudio.Desktop;
+using zStudio.Mcp;
+using zStudio.Rendering;
 using Xunit;
 
-namespace Recoil.Zbd.Desktop.Tests;
+namespace zStudio.Desktop.Tests;
 
 internal static class SceneSelectionMcpChecks
 {
@@ -29,7 +29,7 @@ internal static class SceneSelectionMcpChecks
         data.Nodes.Add(new(0, "fixture", "Object3D", null, [], [], new() { ["marker"] = "original" }, new()));
         data.Nodes.Add(new(1, "pickup mesh one", "Object3D", null, [], [], new() { ["marker"] = "child" }, new()));
         data.Nodes.Add(new(2, "pickup mesh two", "Object3D", null, [], [], new(), new()));
-        using var doc = new DocumentModel(new ZbdDocument("fixture", new(0, DateTime.MinValue),
+        using var doc = new DocumentModel(new AssetDocument("fixture", new(0, DateTime.MinValue),
             new(FormatFamily.Animation, 28, Recognition.Supported, "fixture"), ReadOnlyMemory<byte>.Empty) { Animations = package });
         main.ViewModel.Documents.Add(doc);
         using var editor = new AnimationEditor(doc, 0, new AssetResolver(Path.GetTempPath()), CancellationToken.None);
@@ -68,10 +68,14 @@ internal static class SceneSelectionMcpChecks
             typeof(SceneViewport).GetProperty(nameof(SceneViewport.PreviewScene))!.SetValue(viewport, data);
             typeof(MainWindow).GetField("scene", flags)!.SetValue(main, viewport);
             ((FrameworkElement)main.FindName("SceneHost")).Visibility = Visibility.Visible;
+            // Isolate and Show all leave the camera where it is.
+            viewport.RestoreView(new(new(12, 34, 56), new(0, 0, -10), new(0, 1, 0), 60)); var staticPose = viewport.CaptureView();
             Assert.False((await Call("isolate")).IsError == true);
             Assert.Equal(0, typeof(MainWindow).GetField("isolatedNode", flags)!.GetValue(main));
+            Assert.Equal(staticPose, viewport.CaptureView());
             Assert.False((await Call("show_all")).IsError == true);
             Assert.Null(typeof(MainWindow).GetField("isolatedNode", flags)!.GetValue(main));
+            Assert.Equal(staticPose, viewport.CaptureView());
 
             // A clicked pickup child selects and isolates its entire placed actor,
             // exactly as GUI InspectNode followed by Isolate does.
@@ -137,6 +141,20 @@ internal static class SceneSelectionMcpChecks
             data.Nodes.Add(new(3, "unrendered source", "object3d", null, [], [], new(), new()));
             typeof(SceneViewport).GetMethod("RegisterInspectionMesh", flags)!.Invoke(viewport, [mesh, 0, null, -1, -1]);
             Assert.True(viewport.SelectInspectionNode(1)); Assert.NotNull(viewport.SelectedInspection);
+            // Source-map ownership changes selection, never the physical surface.
+            // Locked source inspection remains available but cannot start a transform.
+            viewport.SelectionOwner = n => n is 1 or 2 ? -10 : n;
+            viewport.AllowLockedInspection = true;
+            viewport.SetEditingLocked(true);
+            Assert.True(viewport.SelectInspectionNode(-10));
+            Assert.Equal(1, viewport.SelectedInspection!.Node);
+            Assert.Equal(-10, viewport.SelectedInspection.SelectionNode);
+            Assert.Equal(-10, viewport.FramingSelection);
+            Assert.Throws<InvalidOperationException>(() => viewport.PreviewTransformDraft(new("fixture", 0, "fixture", 0),
+                new(Vector3.Zero, Vector3.Zero), PlacementRotationKind.None, "move", true));
+            viewport.SetEditingLocked(true); Assert.NotNull(viewport.SelectedInspection);
+            viewport.SelectionOwner = null; viewport.AllowLockedInspection = false;
+            viewport.SetEditingLocked(false);
             Assert.False((await Call("select", 3)).IsError == true);
             Assert.Null(viewport.SelectedInspection);
             Assert.Equal(3, viewport.FramingSelection);

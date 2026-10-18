@@ -1,8 +1,8 @@
 using System.Text.Json.Nodes;
-using Recoil.Zbd.Core;
+using zStudio.Core;
 using Xunit;
 
-namespace Recoil.Zbd.Tests;
+namespace zStudio.Tests;
 
 public sealed class WorldSurfaceHighlightTests
 {
@@ -31,6 +31,7 @@ public sealed class WorldSurfaceHighlightTests
         var kind = WorldSurfaceHighlights.Classify(scene, 1, 0);
         Assert.Equal(modify, WorldSurfaceHighlights.Matches(kind, WorldHighlightMode.CanModify));
         Assert.Equal(clip, WorldSurfaceHighlights.Matches(kind, WorldHighlightMode.ClipTo));
+        Assert.Equal(modify || clip, WorldSurfaceHighlights.Matches(kind, WorldHighlightMode.CanModifyAndClipTo));
         Assert.False(WorldSurfaceHighlights.Matches(kind, WorldHighlightMode.None));
         Assert.Equal(flags, scene.Nodes[1].Metadata.UInt("flags"));
     }
@@ -43,6 +44,10 @@ public sealed class WorldSurfaceHighlightTests
         Assert.Equal(scene.Nodes[0].ModelIndex, scene.Nodes[1].ModelIndex);
         Assert.Equal(WorldSurfaceKind.CanModify | WorldSurfaceKind.ClipTo, WorldSurfaceHighlights.NodeKind(scene, 0));
         Assert.Equal(WorldSurfaceKind.Default, WorldSurfaceHighlights.NodeKind(scene, 1));
+        // A landmark (0x80) is the exception: geometry below a landmark object is drawn with it.
+        scene.Nodes[0].Metadata["flags"] = 0x30084;
+        Assert.True(WorldSurfaceHighlights.Matches(WorldSurfaceHighlights.NodeKind(scene, 1), WorldHighlightMode.Landmarks));
+        Assert.Equal(WorldSurfaceKind.Landmark, WorldSurfaceHighlights.NodeKind(scene, 1));
     }
 
     [Fact]

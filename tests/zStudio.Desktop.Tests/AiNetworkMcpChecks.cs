@@ -8,13 +8,13 @@ using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using ModelContextProtocol.Client;
 using ModelContextProtocol.Protocol;
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Desktop;
-using Recoil.Zbd.Mcp;
-using Recoil.Zbd.Rendering;
+using zStudio.Core;
+using zStudio.Desktop;
+using zStudio.Mcp;
+using zStudio.Rendering;
 using Xunit;
 
-namespace Recoil.Zbd.Desktop.Tests;
+namespace zStudio.Desktop.Tests;
 
 internal static class AiNetworkMcpChecks
 {
@@ -23,7 +23,7 @@ internal static class AiNetworkMcpChecks
         using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(30));
         var main = new MainWindow { Left = -12000, ShowInTaskbar = false }; main.Show();
         using var viewport = new SceneViewport();
-        var source = new ZbdDocument("ai-fixture", new(0, DateTime.MinValue), new(FormatFamily.GameZ, 15, Recognition.Supported, "fixture"), ReadOnlyMemory<byte>.Empty);
+        var source = new AssetDocument("ai-fixture", new(0, DateTime.MinValue), new(FormatFamily.GameZ, 15, Recognition.Supported, "fixture"), ReadOnlyMemory<byte>.Empty);
         var world = source.Add(AssetKind.World, 0, "Whole world", 0, 0);
         using var doc = new DocumentModel(source); main.ViewModel.Documents.Add(doc);
         Set("shownDocument", doc); Set("shownAsset", world); Set("scene", viewport);

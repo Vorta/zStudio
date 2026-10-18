@@ -1,12 +1,12 @@
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Core.Formats;
+using zStudio.Core;
+using zStudio.Core.Formats;
 
-namespace Recoil.Zbd.Desktop;
+namespace zStudio.Desktop;
 
 /// <summary>Non-WPF editor state prepared from the exact document that will be published.</summary>
-internal sealed record PreparedDocument(ZbdDocument Document, ResourceEditSession? Resources, ModelEditSession? Models = null)
+internal sealed record PreparedDocument(AssetDocument Document, ResourceEditSession? Resources, ModelEditSession? Models = null)
 {
-    internal static PreparedDocument Create(ZbdDocument document, CancellationToken token)
+    internal static PreparedDocument Create(AssetDocument document, CancellationToken token)
     {
         token.ThrowIfCancellationRequested();
         ResourceEditSession? resources = null;
@@ -19,6 +19,6 @@ internal sealed record PreparedDocument(ZbdDocument Document, ResourceEditSessio
         return new(document, resources, models);
     }
     /// <summary>Compiled GameZ files whose models can be replaced (source worlds change through their build instead).</summary>
-    internal static bool EditsModels(ZbdDocument document) =>
+    internal static bool EditsModels(AssetDocument document) =>
         document.GameZLayout != null && document.Probe.Version is 15 or 27 && !document.Diagnostics.Any(d => d.Severity == "Error");
 }

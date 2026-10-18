@@ -1,10 +1,10 @@
 using System.Numerics;
 using System.Windows.Media.Media3D;
 using HelixToolkit.Wpf.SharpDX;
-using Recoil.Zbd.Core;
+using zStudio.Core;
 using HCamera = HelixToolkit.Wpf.SharpDX.ProjectionCamera;
 
-namespace Recoil.Zbd.Rendering;
+namespace zStudio.Rendering;
 
 public sealed partial class SceneViewport
 {
@@ -13,7 +13,8 @@ public sealed partial class SceneViewport
     public MissionSceneContext? Mission { get; private set; }
     public GameScene? PreviewScene { get; private set; }
     public IReadOnlySet<int>? InspectionNodes { get; private set; }
-    public bool CanInspectNode(int index) => PreviewScene != null && index >= 0 && index < PreviewScene.Nodes.Count && (InspectionNodes == null || InspectionNodes.Contains(index));
+    public bool CanInspectNode(int index) => PreviewScene != null && (index >= 0 && index < PreviewScene.Nodes.Count && (InspectionNodes == null || InspectionNodes.Contains(index)) ||
+        index < 0 && SelectionOwner != null && PreviewScene.Nodes.Any(n => SelectionOwner(n.Index) == index && (InspectionNodes == null || InspectionNodes.Contains(n.Index))));
     public IEnumerable<GameNode> InspectableNodes => (PreviewScene?.Nodes ?? []).Where(n => CanInspectNode(n.Index));
     public bool HorizonEnabled
     {

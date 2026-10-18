@@ -1,4 +1,4 @@
-namespace Recoil.Zbd.Core.Worlds;
+namespace zStudio.Core.Worlds;
 
 /// <summary>One operation's aggregate node comparisons and graph visits, reserved before scanning or allocating.</summary>
 internal sealed class LookupWorkBudget(long maximum = LookupWorkBudget.MaximumUnits, CancellationToken token = default,

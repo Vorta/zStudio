@@ -1,6 +1,6 @@
 using System.Numerics;
 
-namespace Recoil.Zbd.Core.Animation;
+namespace zStudio.Core.Animation;
 
 public sealed partial class AnimationPlayer
 {
@@ -195,6 +195,7 @@ public sealed partial class AnimationPlayer
                 source.Metadata["flags"] = node.Active ? source.Metadata.UInt("flags") | 4u : source.Metadata.UInt("flags") & ~4u;
                 if (node.Changed && source.Class == "object3d")
                 {
+                    context.InitializationTransforms?.Writes.Add(node.Source);
                     try { MissionSceneLoader.SetPose(context.Scene, node.Source, node.Local); }
                     catch (InvalidDataException ex) { AddNote($"{source.Name}: invalid initialization pose was ignored: {ex.Message}"); continue; }
                 }

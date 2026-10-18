@@ -2,7 +2,7 @@ using System.IO;
 using System.Text.Json.Nodes;
 using ModelContextProtocol.Client;
 using ModelContextProtocol.Protocol;
-using Recoil.Zbd.Mcp;
+using zStudio.Mcp;
 
 internal static class McpStdioCheck
 {
@@ -11,7 +11,7 @@ internal static class McpStdioCheck
     {
         using var savedSettings = new SettingsSnapshot();
         if (LocalMcpHost.Discover(executable).Count > 0) throw new InvalidOperationException("Close this test installation first.");
-        string path = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "RecoilZbdStudio", "settings.json");
+        string path = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "zStudio", "settings.json");
         var settings = File.Exists(path) ? JsonNode.Parse(File.ReadAllText(path))!.AsObject() : new JsonObject();
         if (settings["McpEnabled"]?.GetValue<bool>() != true) throw new InvalidOperationException("Enable MCP manually before this portable check. The check never changes access settings.");
         async Task<McpClient> Connect()
@@ -36,7 +36,7 @@ internal static class McpStdioCheck
                 Console.WriteLine($"Portable stdio: {tools.Count} tools, {resources.Count} resources; discovery stayed windowless and concurrent first calls opened one GUI.");
                 if (root != null)
                 {
-                    if (File.Exists(Path.Combine(root, "c1", "gamez.zbd")) && Recoil.Zbd.Core.Formats.FormatRegistry.Probe(Path.Combine(root, "c1", "gamez.zbd")).Version == 27)
+                    if (File.Exists(Path.Combine(root, "c1", "gamez.zbd")) && zStudio.Core.Formats.FormatRegistry.Probe(Path.Combine(root, "c1", "gamez.zbd")).Version == 27)
                         await Mw3LiveCheck.Run(client, root);
                     else await McpLiveCheck.Run(client, root);
                 }

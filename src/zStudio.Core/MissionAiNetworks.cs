@@ -4,9 +4,9 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
-using Recoil.Zbd.Core.Formats;
+using zStudio.Core.Formats;
 
-namespace Recoil.Zbd.Core;
+namespace zStudio.Core;
 
 public sealed record AiLink(int Slot, int TargetIndex, string? Target, string? Problem);
 public sealed record AiNode(string Id, int Index, int RawValue, Vector3 Position, long SourceOffset, IReadOnlyList<AiLink> Links)
@@ -75,7 +75,7 @@ public static partial class MissionAiNetworks
     private static readonly object CacheGate = new();
     /// <summary>Snapshots retain their decoded source trees, so they are cached only while their first source
     /// archive is alive: closed documents and replaced roots must not keep them reachable.</summary>
-    private static readonly ConditionalWeakTable<ZbdDocument, Dictionary<string, AiNetworkSnapshot>> Cache = new();
+    private static readonly ConditionalWeakTable<AssetDocument, Dictionary<string, AiNetworkSnapshot>> Cache = new();
     [GeneratedRegex("^net_[0-9]{2}\\.zrd\\z", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
     private static partial Regex ResourceName();
     [GeneratedRegex("^node_([0-9]+)\\z", RegexOptions.CultureInvariant)]
@@ -111,9 +111,9 @@ public static partial class MissionAiNetworks
         return !mw3 || AttributePairs(c, 3, token);
     }
 
-    public static AiNetworkSnapshot Read(IEnumerable<(ZbdDocument Archive, AssetRecord Asset)> resources, CancellationToken token = default)
+    public static AiNetworkSnapshot Read(IEnumerable<(AssetDocument Archive, AssetRecord Asset)> resources, CancellationToken token = default)
     {
-        List<(ZbdDocument Archive, AssetRecord Asset, string Id)> inputs = []; using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        List<(AssetDocument Archive, AssetRecord Asset, string Id)> inputs = []; using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
         foreach (var (archive, asset) in resources)
         {
             token.ThrowIfCancellationRequested();

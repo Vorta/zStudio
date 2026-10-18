@@ -1,4 +1,4 @@
-namespace Recoil.Zbd.Core;
+namespace zStudio.Core;
 
 /// <summary>Workspace-local ownership, shared by archive editing and specialized writers.</summary>
 public sealed class ResourceEditOwnership

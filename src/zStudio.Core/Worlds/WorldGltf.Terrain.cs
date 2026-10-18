@@ -1,10 +1,10 @@
 using System.Numerics;
 using System.Text.Json.Nodes;
-using Recoil.Zbd.Core.Formats;
-using Recoil.Zbd.Core.Gltf;
-using Recoil.Zbd.Core.Terrain;
+using zStudio.Core.Formats;
+using zStudio.Core.Gltf;
+using zStudio.Core.Terrain;
 
-namespace Recoil.Zbd.Core.Worlds;
+namespace zStudio.Core.Worlds;
 
 public static partial class WorldGltf
 {
@@ -17,6 +17,13 @@ public static partial class WorldGltf
         => ImportTerrain(uri, from, context, TerrainCompiler.MaximumCreatedCorners);
 
     internal static List<WorldNode> ImportTerrain(string uri, string from, ImportContext context, long maximumInputCorners)
+    {
+        context.TerrainReadDepth++;
+        try { return ImportTerrainCore(uri, from, context, maximumInputCorners); }
+        finally { context.TerrainReadDepth--; }
+    }
+
+    private static List<WorldNode> ImportTerrainCore(string uri, string from, ImportContext context, long maximumInputCorners)
     {
         long inputCorners = 0;
         var grid = context.Grid?.Invoke() ?? throw new InvalidDataException($"{from}: the terrain recipe {JsonData.ShownText(uri)} must be a root of the mission database (the load after GameGenSetWorld), whose world grid it is cut for.");
@@ -133,7 +140,7 @@ public static partial class WorldGltf
             ApplyAppearance(node, nodeValues, modelPath);
             ApplyValues(node.Model, modelValues, morph, modelPath);
             context.AddModel(node.Model);
-            context.TerrainPieceImported?.Invoke(node, recipePath, piece, recipe.Surfaces[piece.Surface].Id);
+            context.TerrainPieceImported?.Invoke(node, recipePath, piece, recipe.Surfaces[piece.Surface].Id, nodes.Count);
             nodes.Add(node);
         }
         return nodes;

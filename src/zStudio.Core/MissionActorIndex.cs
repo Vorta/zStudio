@@ -1,6 +1,6 @@
-using Recoil.Zbd.Core.Worlds;
+using zStudio.Core.Worlds;
 
-namespace Recoil.Zbd.Core;
+namespace zStudio.Core;
 
 /// <summary>Prepared ownership of mission nodes. Each authored actor occurrence remains a distinct identity.</summary>
 public sealed class MissionActorIndex

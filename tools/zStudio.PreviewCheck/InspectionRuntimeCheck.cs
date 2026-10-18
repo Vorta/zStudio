@@ -1,9 +1,9 @@
 using System.IO;
 using System.Numerics;
 using System.Windows;
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Core.Animation;
-using Recoil.Zbd.Rendering;
+using zStudio.Core;
+using zStudio.Core.Animation;
+using zStudio.Rendering;
 
 internal static class InspectionRuntimeCheck
 {
@@ -23,7 +23,7 @@ internal static class InspectionRuntimeCheck
                     [new(0, 4, [0, 1, 2, 3], [], [Vector2.Zero, Vector2.UnitX, Vector2.One, Vector2.UnitY], [])], []));
             }
             var context = new AnimationPreviewContext { Package = new() { Prefix = [], Tail = [] },
-                World = new("inspection", new(0, DateTime.MinValue), new(FormatFamily.GameZ, 15, Recognition.Supported, ""), ReadOnlyMemory<byte>.Empty) { Scene = scene } };
+                World = new AssetDocument("inspection", new(0, DateTime.MinValue), new(FormatFamily.GameZ, 15, Recognition.Supported, ""), ReadOnlyMemory<byte>.Empty) { Scene = scene } };
             const long first = 1L << 32, second = 2L << 32;
             AnimationFrame Frame(params AnimationNodePose[] poses) => new(0, poses, [], [], [], null, null, Vector4.Zero, Vector4.Zero, [], [], []);
             AnimationNodePose Pose(long id, int node, int model, float x) => new(id, node, model, Matrix4x4.CreateTranslation(x, 0, 0), true, 1, -1, 0, 0);

@@ -4,12 +4,12 @@ using System.Windows;
 using System.Windows.Automation;
 using System.Windows.Controls;
 using System.Windows.Threading;
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Core.Animation;
-using Recoil.Zbd.Core.Formats;
-using Recoil.Zbd.Rendering;
+using zStudio.Core;
+using zStudio.Core.Animation;
+using zStudio.Core.Formats;
+using zStudio.Rendering;
 
-namespace Recoil.Zbd.Desktop;
+namespace zStudio.Desktop;
 
 /// <summary>Authored motion transport sharing the normal renderer, resource history and Properties editor.</summary>
 public sealed class MotionEditor : UserControl, IDisposable
@@ -18,16 +18,10 @@ public sealed class MotionEditor : UserControl, IDisposable
     private readonly Guid member;
     private readonly AssetResolver resolver;
     private readonly CancellationToken lifetime;
-    private readonly Func<ZbdDocument, (ResourceEditSession Edits, ResourceSnapshot Snapshot)?> resolveLibrarySnapshot;
+    private readonly Func<AssetDocument, (ResourceEditSession Edits, ResourceSnapshot Snapshot)?> resolveLibrarySnapshot;
     private readonly DockPanel root = new();
     private readonly ToolBar presentationToolbar = new();
     private readonly DockPanel presentationTransport = new() { Margin = new(6) };
-    internal bool PresentationUiHidden { get; private set; }
-    internal void SetPresentationUiHidden(bool hidden)
-    {
-        PresentationUiHidden = hidden;
-        presentationToolbar.Visibility = presentationTransport.Visibility = support.Visibility = hidden ? Visibility.Collapsed : Visibility.Visible;
-    }
     private readonly ComboBox assembly = new() { MinWidth = 140, MaxWidth = 260, DisplayMemberPath = nameof(AssetRecord.Name) };
     private readonly ComboBox lod = new() { MinWidth = 80 };
     private readonly Slider seeker = new() { Minimum = 0, MinWidth = 40, Margin = new(8, 0, 8, 0) };
@@ -36,7 +30,7 @@ public sealed class MotionEditor : UserControl, IDisposable
     private readonly TextBlock support = new() { TextWrapping = TextWrapping.Wrap, Margin = new(8), Opacity = .75 };
     private readonly DispatcherTimer timer = new() { Interval = TimeSpan.FromMilliseconds(16) };
     private readonly Stopwatch elapsed = new();
-    private ZbdDocument? library;
+    private AssetDocument? library;
     private (ResourceEditSession Edits, ResourceSnapshot Snapshot)? librarySnapshot;
     private MotionPreview? sampler;
     private MotionClip? clip;
@@ -88,7 +82,7 @@ public sealed class MotionEditor : UserControl, IDisposable
         if (librarySkipped.Count > 0) support.Text += $"\nUnreadable archives skipped while resolving the mech library: {string.Join("; ", librarySkipped.Take(2))}";
         if (notes.Count > 4 || notes.Truncated) support.Text += $"\nDiagnostic preview · {notes.Count} notices; shortened text/list. Inspect motion parts for complete authored names.";
     }
-    public MotionEditor(DocumentModel document, Guid member, AssetResolver resolver, CancellationToken lifetime, Func<ZbdDocument, (ResourceEditSession Edits, ResourceSnapshot Snapshot)?> resolveLibrarySnapshot)
+    public MotionEditor(DocumentModel document, Guid member, AssetResolver resolver, CancellationToken lifetime, Func<AssetDocument, (ResourceEditSession Edits, ResourceSnapshot Snapshot)?> resolveLibrarySnapshot)
     {
         this.document = document; this.member = member; this.resolver = resolver; this.lifetime = lifetime; this.resolveLibrarySnapshot = resolveLibrarySnapshot;
         AutomationProperties.SetName(assembly, "Motion mech assembly"); AutomationProperties.SetName(lod, "Motion LOD");
@@ -161,9 +155,6 @@ public sealed class MotionEditor : UserControl, IDisposable
                 ct.ThrowIfCancellationRequested(); if (disposed || request != generation) return;
             }
             seconds = Math.Min(seconds, nextClip.LoopTime);
-            // Assembly loading can finish after Hide UI changed. Inherit the current override
-            // before the replacement is attached or can present its first frame.
-            replacement.SetPresentationUiHidden(PresentationUiHidden);
             var previous = Viewport; Viewport = replacement; replacement = null;
             root.Children.Remove(previous); root.Children.Add(Viewport); previous.Dispose();
             ++clipGeneration; selectedIdentity = identity; selectedMember = index; clip = nextClip; sampler = next;
@@ -192,7 +183,7 @@ public sealed class MotionEditor : UserControl, IDisposable
     public async Task RefreshLibraryAsync()
     {
         if (disposed) return;
-        ZbdDocument nextLibrary;
+        AssetDocument nextLibrary;
         List<string> skipped = [];
         try { nextLibrary = await MotionLibrary.LoadAsync(document.Path, resolver, lifetime, skipped); librarySkipped = skipped; }
         catch (OperationCanceledException) when (disposed || lifetime.IsCancellationRequested) { return; }
@@ -223,7 +214,7 @@ public sealed class MotionEditor : UserControl, IDisposable
         catch (Exception ex) when (ex is InvalidDataException or IOException or UnauthorizedAccessException) { if (!disposed) ClearBinding("The bound mech member cannot be previewed: " + ex.Message); }
     }
     /// <summary>Only exact identities survive a library change; never select another member at the former index.</summary>
-    private static int? RemapMember(int oldIndex, Guid? identity, ZbdDocument previous, (ResourceEditSession Edits, ResourceSnapshot Snapshot)? before, ZbdDocument next, (ResourceEditSession Edits, ResourceSnapshot Snapshot)? after)
+    private static int? RemapMember(int oldIndex, Guid? identity, AssetDocument previous, (ResourceEditSession Edits, ResourceSnapshot Snapshot)? before, AssetDocument next, (ResourceEditSession Edits, ResourceSnapshot Snapshot)? after)
     {
         static bool Same(AssetRecord a, AssetRecord b) => a.Name == b.Name && a.Offset == b.Offset && a.Length == b.Length;
         if (oldIndex < 0 || oldIndex >= previous.Assets.Count) return null;

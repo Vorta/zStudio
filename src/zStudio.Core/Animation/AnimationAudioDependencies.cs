@@ -1,4 +1,4 @@
-namespace Recoil.Zbd.Core.Animation;
+namespace zStudio.Core.Animation;
 
 /// <summary>Static sound discovery, including dormant branches and cleanup, without advancing simulation.</summary>
 public sealed record AnimationAudioDependencies(IReadOnlySet<string> Names, IReadOnlyList<string> Diagnostics)

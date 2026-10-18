@@ -1,7 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <RootNamespace>Recoil.Zbd.Tests</RootNamespace>
-    <AssemblyName>Recoil.Zbd.Tests</AssemblyName>
+    <RootNamespace>zStudio.Tests</RootNamespace>
+    <AssemblyName>zStudio.Tests</AssemblyName>
     <!-- Required by source-generated interop for temporary filesystem-alias fixtures. -->
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>

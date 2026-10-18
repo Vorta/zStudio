@@ -1,6 +1,6 @@
 using System.Security.Cryptography;
 
-namespace Recoil.Zbd.Core.Sources;
+namespace zStudio.Core.Sources;
 
 /// <summary>
 /// A RECOIL source tree in the original build layout: <c>data/</c> holds the assets and <c>gamegen/</c> the build scripts.

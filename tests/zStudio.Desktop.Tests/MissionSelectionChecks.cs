@@ -2,14 +2,14 @@ using System.IO;
 using System.Reflection;
 using System.Windows;
 using System.Windows.Controls;
-using Recoil.Zbd.Automation;
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Desktop;
-using Recoil.Zbd.Rendering;
-using Recoil.Zbd.Tests;
+using zStudio.Automation;
+using zStudio.Core;
+using zStudio.Desktop;
+using zStudio.Rendering;
+using zStudio.Tests;
 using Xunit;
 
-namespace Recoil.Zbd.Desktop.Tests;
+namespace zStudio.Desktop.Tests;
 
 internal static class MissionSelectionChecks
 {
@@ -103,7 +103,7 @@ internal static class MissionSelectionChecks
             selection = (Task)typeof(MainWindow).GetMethod("SelectMissionAsync", flags)!.Invoke(main, [second, true, token])!;
             await enteredFirst.Task.WaitAsync(token);
             // An unrelated option refresh cancels the mission's refresh after it captured readerm2.
-            refresh = (Task)typeof(MainWindow).GetMethod("RefreshStaticSceneAsync", flags)!.Invoke(main, [document, asset])!;
+            refresh = (Task)typeof(MainWindow).GetMethod("RefreshStaticSceneAsync", flags)!.Invoke(main, [document, asset, null])!;
             await enteredSecond.Task.WaitAsync(token);
             releaseFirst.TrySetResult();
             await Task.Delay(50, token);

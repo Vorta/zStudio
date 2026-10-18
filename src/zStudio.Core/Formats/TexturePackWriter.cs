@@ -1,10 +1,10 @@
 using System.Buffers.Binary;
 using System.Text;
 
-namespace Recoil.Zbd.Core.Formats;
+namespace zStudio.Core.Formats;
 
 public sealed record TexturePayload(string Name, ReadOnlyMemory<byte> Bytes, int PalettePage = -1);
-public sealed record TexturePackEdit(ZbdDocument Source, IReadOnlyDictionary<int, TexturePayload> Replacements, IReadOnlyList<TexturePayload> Added);
+public sealed record TexturePackEdit(AssetDocument Source, IReadOnlyDictionary<int, TexturePayload> Replacements, IReadOnlyList<TexturePayload> Added);
 public sealed record TextureEncodingResult(TexturePayload Payload, int PaletteColors, int QuantizedColors);
 
 public static partial class TexturePackWriter
@@ -46,7 +46,7 @@ public static partial class TexturePackWriter
         }
         return bytes;
     }
-    public static TextureEncodingResult Encode(string name, DecodedImage image, ZbdDocument? source = null, AssetRecord? original = null, CancellationToken token = default)
+    public static TextureEncodingResult Encode(string name, DecodedImage image, AssetDocument? source = null, AssetRecord? original = null, CancellationToken token = default)
     {
         if (image.Width is < 1 or > 4096 || image.Height is < 1 or > 4096 || image.Rgba.Length != checked(image.Width * image.Height * 4)) throw new InvalidDataException("Texture imports support dimensions from 1 to 4096.");
         var info = original?.Content as TextureInfo;

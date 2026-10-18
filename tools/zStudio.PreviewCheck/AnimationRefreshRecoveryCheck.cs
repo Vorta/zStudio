@@ -4,9 +4,9 @@ using System.Reflection;
 using System.Text.Json.Nodes;
 using System.Windows;
 using System.Windows.Controls;
-using Recoil.Zbd.Desktop;
-using Recoil.Zbd.Automation;
-using Recoil.Zbd.Core.Animation;
+using zStudio.Desktop;
+using zStudio.Automation;
+using zStudio.Core.Animation;
 
 internal static class AnimationRefreshRecoveryCheck
 {

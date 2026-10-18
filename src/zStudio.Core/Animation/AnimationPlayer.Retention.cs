@@ -1,4 +1,4 @@
-namespace Recoil.Zbd.Core.Animation;
+namespace zStudio.Core.Animation;
 
 public sealed partial class AnimationPlayer
 {

@@ -1,7 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <RootNamespace>Recoil.Zbd.AnimationCheck</RootNamespace>
-    <AssemblyName>Recoil.Zbd.AnimationCheck</AssemblyName>
+    <RootNamespace>zStudio.AnimationCheck</RootNamespace>
+    <AssemblyName>zStudio.AnimationCheck</AssemblyName>
   </PropertyGroup>
   <PropertyGroup><OutputType>Exe</OutputType></PropertyGroup>
   <ItemGroup><ProjectReference Include="../../src/zStudio.Core/zStudio.Core.csproj" /></ItemGroup>

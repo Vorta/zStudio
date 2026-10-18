@@ -1,8 +1,8 @@
 using System.Windows;
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Rendering;
+using zStudio.Core;
+using zStudio.Rendering;
 
-namespace Recoil.Zbd.Desktop;
+namespace zStudio.Desktop;
 
 public partial class MainWindow
 {
@@ -32,18 +32,24 @@ public partial class MainWindow
         finally { updating = wasUpdating; restoringStaticOptions = false; }
     }
 
-    private Task<Guid?> RefreshStaticSceneAsync(DocumentModel doc, AssetRecord asset)
+    private Task<Guid?> RefreshStaticSceneAsync(DocumentModel doc, AssetRecord asset, IReadOnlyDictionary<string, bool>? partOverrides = null)
     {
+        if (doc.SourceWorld != null && (sourceWorkspaceBusy || doc.SourceWorld.IsRebuilding))
+        {
+            if (publishedStaticOptions != null) RestoreStaticSceneOptions(publishedStaticOptions);
+            Notice("Wait for source evaluation before changing scene options.");
+            return Task.FromResult<Guid?>(null);
+        }
         if (!ResolveInspectionDrafts(doc)) { if (publishedStaticOptions != null) RestoreStaticSceneOptions(publishedStaticOptions); return Task.FromResult<Guid?>(null); }
         long generation = ++staticRefreshGeneration;
-        var work = RefreshStaticSceneCoreAsync(doc, asset);
+        var work = RefreshStaticSceneCoreAsync(doc, asset, partOverrides);
         // A synchronous status/binding callback may already have started a newer
         // refresh before the async core reaches its first await.
         if (generation == staticRefreshGeneration) staticRefreshWork = work;
         return work;
     }
 
-    private async Task<Guid?> RefreshStaticSceneCoreAsync(DocumentModel doc, AssetRecord asset)
+    private async Task<Guid?> RefreshStaticSceneCoreAsync(DocumentModel doc, AssetRecord asset, IReadOnlyDictionary<string, bool>? partOverrides = null)
     {
         var previous = scene!;
         var retainedOptions = publishedStaticOptions!;
@@ -68,6 +74,8 @@ public partial class MainWindow
             // Keep all partially built meshes off the displayed viewport. ShowAsync
             // yields during GPU object creation, so cancellation must not touch it.
             replacement = new SceneViewport();
+            if (mission != null) await PrepareSourceMapSelectionAsync(doc, mission.Scene, mission, token);
+            ConfigureSourceMapPresentation(replacement, doc, mission, partOverrides);
             await replacement.ShowAsync(doc.PreviewDocument, asset, resolver, requested.Pack?.Path, requested.Lod, token, requested.Horizon, mission);
             token.ThrowIfCancellationRequested();
             if (!OwnsRequest()) return null;
@@ -79,35 +87,53 @@ public partial class MainWindow
             var view = previous.CaptureView();
             string? aiSelection = previous.SelectedAiNode;
             int? selection = selectedNode, isolate = isolatedNode;
+            var hidden = hiddenRows.ToArray();
             var pickup = selection is int s ? previous.PickupAt(s)?.Pickup?.Source : null;
-            int Remap(int oldNode)
+            int? Remap(int oldNode)
             {
+                if (SourceSelection(doc, previous.PreviewScene) is { } before && SourceSelection(doc, mission?.Scene) is { } after)
+                {
+                    int owner = before.Owner(oldNode);
+                    if (!before.Identities.TryGetValue(owner, out string? key)) return null;
+                    var matchesByIdentity = after.Identities.Where(p => p.Value == key).Take(2).Select(p => p.Key).ToArray();
+                    return matchesByIdentity.Length == 1 ? matchesByIdentity[0] : null;
+                }
                 var source = previous.ActorAt(oldNode)?.CoordinateSource;
                 var matches = source != null && doc.PickupEdits?.Coordinate(source) != null ? doc.PickupEdits.Scope(source).Sources.ToHashSet(doc.PickupEdits.SourceComparer) : null;
-                return mission!.RemapNodeFrom(previous.Mission!, oldNode, matches);
+                int mapped = mission!.RemapNodeFrom(previous.Mission!, oldNode, matches);
+                return mapped >= 0 ? mapped : null;
             }
             previous.CancelPickupDrag(); DetachPickupEditor();
             flyRequest++;
             scene = replacement; replacement = null;
+            PublishSourceMapParts(scene, doc);
             scene.Information += text => { PreviewInfo.Text = text; PreviewInfo.ToolTip = text; };
             scene.NodeSelected += InspectNode;
             ConfigureAiScene(scene);
             ConfigurePickupScene(scene); ConfigureFlyScene(scene);
-            ApplyRetainedPresentation();
             SceneHost.Content = scene;
             ApplySceneOptions();
+            RefreshZoneDraftView();
             if (asset.Kind == AssetKind.World) AttachPickupEditor(doc);
             scene.SetValveOptions(previous.ValveOverlayVisible,
                 mission?.Layout.MissionArchive == previous.Mission?.Layout.MissionArchive ? previous.ValveFilter : null);
             ApplyAiOptions();
-            scene.RestoreView(view);
             isolatedNode = mission != null && previous.Mission != null && isolate is int oldIsolate
-                ? Remap(oldIsolate) is >= 0 and int mapped ? mapped : null : isolate;
+                ? Remap(oldIsolate) : isolate;
             if (isolatedNode != null) scene.Isolate(isolatedNode);
+            RemapHidden(hidden, old => mission != null && previous.Mission != null ? Remap(old) : old);
+            // A refresh retains the user's camera.
+            scene.RestoreView(view);
             selectedNode = mission != null && previous.Mission != null
-                ? RemapPickupSelection(pickup, mission) ?? (selection is int oldSelection && Remap(oldSelection) is >= 0 and int mappedSelection ? mappedSelection : null)
+                ? RemapPickupSelection(pickup, mission) ?? (selection is int oldSelection ? Remap(oldSelection) : null)
                 : selection;
-            if (selectedNode is int node) { InspectNode(node); scene.SelectInspectionNode(node); }
+            if (selectedNode is int node)
+            {
+                InspectNode(node);
+                // A source map's tree-only selection (a light, a hidden object) has nothing to pick in the view: the card selects it.
+                if (!scene.SelectInspectionNode(node) && doc.SourceWorld != null)
+                    try { FocusSourceObjectCard(doc, node); } catch (zStudio.Automation.StudioCommandException) { }
+            }
             if (aiSelection != null && previous.AiNetworks.Find(aiSelection) is { } oldAi && scene.AiNetworks.Find(aiSelection) is { } newAi &&
                 oldAi.Node.SourceOffset == newAi.Node.SourceOffset) scene.SelectAiNode(aiSelection);
             publishedStaticOptions = requested with { Mission = mission?.Layout.MissionArchive ?? requested.Mission }; previewId = Guid.NewGuid();
@@ -117,7 +143,7 @@ public partial class MainWindow
             if (mission != null) WorldDifficulty.ToolTip = mission.Layout.Description;
             ShowStaticPreviewProblems(doc, asset);
             EmptyPreview.Visibility = Visibility.Collapsed;
-            RefreshPresentation(previewSettled: true);
+            RefreshPresentation();
             RefreshSceneTree();
             if (selectedNode is int retainedNode) RevealSceneNode(retainedNode);
             previous.Dispose(); SynchronizeFly();

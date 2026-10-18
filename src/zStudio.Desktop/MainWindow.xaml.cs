@@ -12,14 +12,14 @@ using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 using Microsoft.Win32;
 using NAudio.Wave;
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Core.Export;
-using Recoil.Zbd.Core.Formats;
-using Recoil.Zbd.Rendering;
+using zStudio.Core;
+using zStudio.Core.Export;
+using zStudio.Core.Formats;
+using zStudio.Rendering;
 
-using Recoil.Zbd.Core.Animation;
+using zStudio.Core.Animation;
 
-namespace Recoil.Zbd.Desktop;
+namespace zStudio.Desktop;
 
 public partial class MainWindow : Window
 {
@@ -40,7 +40,7 @@ public partial class MainWindow : Window
     private bool closingAllDocuments;
     /// <summary>A source project whose unsaved edits the user chose to discard while closing; its other worlds close without asking again.</summary>
     /// <summary>A Discard the user chose for a project's edits, valid only while the workspace is as it was then (its revision).</summary>
-    private (Recoil.Zbd.Core.Sources.SourceWorkspace Workspace, long Revision)? discardApprovedWorkspace;
+    private (zStudio.Core.Sources.SourceWorkspace Workspace, long Revision)? discardApprovedWorkspace;
     private DecodedImage? decoded;
     private JsonObject? properties;
     private WaveFileReader? wave;
@@ -62,7 +62,6 @@ public partial class MainWindow : Window
         shutdownToken = shutdown.Token;
         preview = CancellationTokenSource.CreateLinkedTokenSource(shutdownToken);
         InitializeComponent(); DataContext = ViewModel;
-        BackupOnSave.IsChecked = ViewModel.Settings.CreateBackupOnSave;
         WorldDifficulty.ItemsSource = MainViewModel.DifficultyChoices;
         ViewModel.PropertyChanged += DifficultyPreferenceChanged;
         ViewModel.ConfirmDiscardAsync = ConfirmDocumentCloseAsync;
@@ -79,7 +78,7 @@ public partial class MainWindow : Window
             RequireAutomationMutationAvailable();
             if (closesDocuments) RequireNoDrafts();
             else if (animation?.HasAutomationDrafts == true || HasInspectionDraft || HasAiPathDraft || parachuteDraft != null)
-                throw new Recoil.Zbd.Automation.StudioCommandException("pending_drafts", "Resolve unfinished preview input before changing documents.");
+                throw new zStudio.Automation.StudioCommandException("pending_drafts", "Resolve unfinished preview input before changing documents.");
         };
         ViewModel.ValidateReload = doc => { RequireAutomationMutationAvailable(); RequireNoDrafts(doc); };
         ViewModel.ReloadSourceWorld = ReloadSourceWorldAsync;
@@ -88,9 +87,11 @@ public partial class MainWindow : Window
         InitializeWorkspace();
         InitializeResourceMenus();
         InitializeContentEditors();
-        InitializeCameraNavigation();
+        InitializeSourceEditor();
         ApplyTheme(s.Theme); UpdateRecent(); ready = true;
         PreviewKeyDown += Keyboard;
+        // After the focused control: a dropdown, a field's restore, a stroke or a grip uses Escape first.
+        KeyDown += (_, e) => { if (!e.Handled) SourceEscape(e); };
         PreviewKeyUp += (_, e) => flyCamera?.HandleKey(e, false);
         diskTimer.Tick += (_, _) => { ViewModel.CheckExternalChanges(); CheckAiPropertiesSnapshot(); }; diskTimer.Start();
         audioTimer.Tick += (_, _) => UpdateAudioPosition(); audioTimer.Start();
@@ -107,8 +108,9 @@ public partial class MainWindow : Window
     }
     public async void OpenStartupPath(string path) => await RunUi(async () =>
     {
-        if (Directory.Exists(path)) await ViewModel.OpenRootAsync(path);
-        else if (File.Exists(path)) await OpenFilesAsync([path], forceRoot: true);
+        // The GUI opens source projects only, as File → Open workspace… does (MCP open_root still opens other folders).
+        if (Directory.Exists(path)) { await RequireSourceProjectAsync(path, CancellationToken.None); await ViewModel.OpenRootAsync(path); }
+        else if (File.Exists(path)) throw new zStudio.Automation.StudioCommandException("unsupported", "zStudio opens source projects: give the project folder (with data and gamegen) instead of a file.");
         else throw new IOException("The supplied path does not exist: " + path);
         UpdateRecent();
     });
@@ -117,20 +119,36 @@ public partial class MainWindow : Window
     private async Task ReportUi(Func<Task> work)
     {
         try { await work(); }
-        catch (Recoil.Zbd.Automation.StudioCommandException ex) when (ex.Code == "context_changed") { }
+        catch (zStudio.Automation.StudioCommandException ex) when (ex.Code == "context_changed") { }
         catch (OperationCanceledException) { ViewModel.Status = "Operation canceled"; }
         catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException) { Report(ex); }
     }
-    private void Report(Exception ex) { ViewModel.Status = ex.Message; ViewModel.AddProblem(ex.Message); Layout.ToolsVisible = true; ToolTabs.SelectedIndex = 2; ArrangeWorkspace(); }
-    private async void OpenFolderClick(object sender, RoutedEventArgs e)
+    private void Report(Exception ex) => Report(ex.Message);
+    /// <summary>A refused user action: listed like a failure in a source map (whose status bar shows no messages), otherwise the status.</summary>
+    private void Notice(string message)
     {
-        OpenFolderDialog dialog = new() { Title = "Choose the root of the ZBD folder", InitialDirectory = Directory.Exists(ViewModel.Settings.LastRoot) ? ViewModel.Settings.LastRoot : "" };
-        if (dialog.ShowDialog(this) == true) await RunUi(async () => { await ViewModel.OpenRootAsync(dialog.FolderName); UpdateRecent(); });
+        if (ViewModel.SelectedDocument?.SourceWorld == null) { ViewModel.Status = message; return; }
+        // A refusal, not a failure: one warning however often it is repeated.
+        ViewModel.Status = message;
+        if (ViewModel.Problems.LastOrDefault() is not { } last || last.Message != message) ViewModel.AddProblem(message, "Warning");
+        SetToolsVisible(true, problems: true);
     }
-    private async void OpenFileClick(object sender, RoutedEventArgs e)
+    /// <summary>The scene's controls: the toolbar, and in a source map the command bar's pickers and groups moved out of it.</summary>
+    private void SetSceneControlsEnabled(bool enabled)
     {
-        OpenFileDialog dialog = new() { Filter = "Recoil assets|*.zbd;*.zrd;*.zad;*.wav|All files|*.*" };
-        if (dialog.ShowDialog(this) == true) await RunUi(() => OpenFilesAsync([dialog.FileName]));
+        SceneToolbar.IsEnabled = enabled;
+        foreach (var part in new FrameworkElement[] { SourcePickers, SourceCameraGroup, SourceDisplayGroup, SourceOverlayGroup, SourceShowGroup }) part.IsEnabled = enabled;
+    }
+    /// <summary>
+    /// A failure the user must see: in Problems (and Diagnostics in a map), not only in the status, which a source map's
+    /// status bar does not show.
+    /// </summary>
+    private void Report(string message)
+    {
+        ViewModel.Status = message; ViewModel.AddProblem(message);
+        // A source project's map picker has no Diagnostics pane (its own message line shows what failed there): showing it
+        // would only change the project's preference.
+        if (!ViewModel.IsSourceProject || ViewModel.SelectedDocument?.SourceWorld != null) SetToolsVisible(true, problems: true);
     }
     internal async Task OpenFilesAsync(IReadOnlyList<string> paths, bool forceRoot = false)
     {
@@ -141,7 +159,7 @@ public partial class MainWindow : Window
             var document = await ViewModel.OpenFileAsync(path);
             if (document == null) return;
             if (ViewModel.SelectedDocument != document)
-                throw new Recoil.Zbd.Automation.StudioCommandException("context_changed", "A newer selection superseded opening files.");
+                throw new zStudio.Automation.StudioCommandException("context_changed", "A newer selection superseded opening files.");
         }
     }
     private void UpdateRecent()
@@ -152,7 +170,18 @@ public partial class MainWindow : Window
             // Folder names are literal text, not menu access-key labels.
             MenuItem item = new() { Header = new TextBlock { Text = path } };
             System.Windows.Automation.AutomationProperties.SetName(item,path);
-            item.Click += async (_, _) => await RunUi(async () => { await ViewModel.OpenRootAsync(path); UpdateRecent(); });
+            item.Click += async (_, _) => await RunUi(async () =>
+            {
+                // A folder that is (no longer) a source project leaves the list; one that is unavailable (an offline
+                // share or a removed drive) stays for later.
+                try { await RequireSourceProjectAsync(path, CancellationToken.None); }
+                catch (zStudio.Automation.StudioCommandException ex) when (ex.Code != "context_changed")
+                {
+                    if (await Task.Run(() => Directory.Exists(path))) { ViewModel.Settings.RecentRoots.RemoveAll(p => p.Equals(path, StringComparison.OrdinalIgnoreCase)); UpdateRecent(); }
+                    throw;
+                }
+                await ViewModel.OpenRootAsync(path); UpdateRecent();
+            });
             RecentMenu.Items.Add(item);
         }
         RecentMenu.IsEnabled = RecentMenu.HasItems;
@@ -160,7 +189,11 @@ public partial class MainWindow : Window
     private async void OnDrop(object sender, DragEventArgs e)
     {
         if (e.Data.GetData(DataFormats.FileDrop) is not string[] { Length: > 0 } paths) return;
-        await RunUi(async () => { if (Directory.Exists(paths[0])) { await ViewModel.OpenRootAsync(paths[0]); UpdateRecent(); } else await OpenFilesAsync(paths); });
+        await RunUi(async () =>
+        {
+            if (!Directory.Exists(paths[0])) throw new zStudio.Automation.StudioCommandException("unsupported", "Drop a source project folder (one with data and gamegen); zStudio does not open single files.");
+            await RequireSourceProjectAsync(paths[0], CancellationToken.None); await ViewModel.OpenRootAsync(paths[0]); UpdateRecent();
+        });
     }
     private async void FileDoubleClick(object sender, MouseButtonEventArgs e)
     {
@@ -186,10 +219,18 @@ public partial class MainWindow : Window
             return;
         }
         if (!await resolving || animation?.ResolvePendingDrafts() == false) { ViewModel.SelectedDocument = shownDocument; return; }
+        // A source world rebuilt after an edit keeps its old scene on screen until the new one is ready (see RetireScene).
+        bool handoff = doc != null && ReferenceEquals(sceneHandoff, doc) && HasPublishedStaticScene;
+        sceneHandoff = null;
+        if (handoff) RetireScene(); else DropRetiringScene();
+        var retired = handoff ? retiringScene : null;
         CancelPreview(); // Release old-document interactions before worker discovery can yield.
-        foreach (UIElement element in new UIElement[] { ImageToolbar, ImageScroll, SceneToolbar, SceneHost, AnimationHost, AudioPanel, StructuredPanel, EventsTab }) element.Visibility = Visibility.Collapsed;
-        EmptyPreview.Visibility = Visibility.Visible; EmptyPreview.Text = "Loading preview…";
-        shownDocument = doc; Workspace.Visibility = doc == null ? Visibility.Collapsed : Visibility.Visible; Welcome.Visibility = doc == null ? Visibility.Visible : Visibility.Collapsed;
+        if (!handoff)
+        {
+            foreach (UIElement element in new UIElement[] { ImageToolbar, ImageScroll, SceneToolbar, SceneHost, AnimationHost, AudioPanel, StructuredPanel, EventsTab }) element.Visibility = Visibility.Collapsed;
+            EmptyPreview.Visibility = Visibility.Visible; EmptyPreview.Text = "Loading preview…";
+        }
+        shownDocument = doc; UpdateReloadingView(); Workspace.Visibility = doc == null ? Visibility.Collapsed : Visibility.Visible; Welcome.Visibility = doc == null && !ViewModel.IsSourceProject ? Visibility.Visible : Visibility.Collapsed;
         // Publish the whole transition before starting any work: selection events must not replace its task
         // with an asset-only preview while texture discovery is still pending.
         TaskCompletionSource transition = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -207,9 +248,16 @@ public partial class MainWindow : Window
         finally
         {
             if (ReferenceEquals(pendingDocumentPreview, transition.Task)) { pendingDocumentPreview = null; pendingPreviewDocument = null; }
+            // A transition that ended before its scene loaded (texture discovery failed) must not leave the frozen one shown.
+            if (retired != null && ReferenceEquals(retiringScene, retired))
+            {
+                DropRetiringScene();
+                SceneHost.Visibility = Visibility.Collapsed; EmptyPreview.Visibility = Visibility.Visible;
+                UpdateReloadingView();
+            }
             // Preparation can finish before ShowAssetCore (for example canceled texture discovery).
             // The whole current transition has settled now, including any same-document asset retries.
-            RefreshPresentation(previewSettled: generation == documentPreviewGeneration && ViewModel.SelectedDocument == doc && shownDocument == doc);
+            RefreshPresentation();
             ArrangeWorkspace();
         }
     }
@@ -224,7 +272,7 @@ public partial class MainWindow : Window
     private async Task PrepareDocumentPreviewAsync(DocumentModel? doc, long generation)
     {
         if (doc != null)
-            doc.SelectedAsset ??= doc.Assets.FirstOrDefault(a => a.Record.Content is Recoil.Zbd.Core.Animation.AnimationEntry { RootName.Length: > 0 }) ?? doc.Assets.FirstOrDefault();
+            doc.SelectedAsset ??= doc.Assets.FirstOrDefault(a => a.Record.Content is zStudio.Core.Animation.AnimationEntry { RootName.Length: > 0 }) ?? doc.Assets.FirstOrDefault();
         string[]? packs = null;
         if (doc?.Document.Scene != null && ViewModel.Resolver is { } resolver)
         {
@@ -298,6 +346,9 @@ public partial class MainWindow : Window
         ClearStaticPreviewProblems();
         DetachPickupEditor();
         selectedNode = null; isolatedNode = null; inspectedSceneSource = null;
+        // A source rebuild replaces the map's document: what was hidden follows by identity (see RestoreHiddenIdentities), and
+        // the outliner's open rows by their source paths (RestoreTreeLayout).
+        CaptureTreeLayout(); CaptureHiddenIdentities(); hiddenRows.Clear();
         pendingAnimationPlay = false;
         EndImagePan();
         animation?.Dispose(); animation = null; AnimationHost.Content = null; DetachAnimationWorkspace();
@@ -323,7 +374,8 @@ public partial class MainWindow : Window
         asset = asset == null ? null : doc.PreviewDocument.Assets.SingleOrDefault(a => a.Id == asset.Id);
         bool differentAsset = shownAsset?.Id != asset?.Id;
         shownResourceMember = asset != null && doc.ResourceEdits is { } shownEdits && asset.Index < shownEdits.Current.Members.Count ? shownEdits.Current.Members[asset.Index].Id : null;
-        PreviewTitle.Text = asset?.Name ?? Path.GetFileName(doc.Path); PreviewSubtitle.Text = asset == null ? doc.Description : $"{asset.Kind} #{asset.Index} · {asset.Length:N0} bytes · source 0x{asset.Offset:X}";
+        SourceMapsButton.Visibility = doc.SourceWorld != null ? Visibility.Visible : Visibility.Collapsed;
+        PreviewTitle.Text = asset?.Name ?? Path.GetFileName(doc.Path); PreviewSubtitle.Text = SourceWorldFile(doc) is { } worldFile ? Path.GetFileName(worldFile) : asset == null ? doc.Description : $"{asset.Kind} #{asset.Index} · {asset.Length:N0} bytes · source 0x{asset.Offset:X}";
         ViewModel.Status = asset == null ? doc.Description : $"{asset.Kind} #{asset.Index}: {asset.Name} · {Path.GetFileName(doc.Path)}";
         // A motion's member UUID survives rename/reorder; its asset index does not.
         // Conversely, deleting a member can put another clip at the same asset ID.
@@ -337,12 +389,21 @@ public partial class MainWindow : Window
         var previousMission = !differentAsset && asset?.Kind == AssetKind.World ? scene?.Mission : null;
         var previousView = previousMission == null ? null : scene?.CaptureView();
         int? previousSelection = selectedNode, previousIsolate = isolatedNode;
+        var previousHidden = hiddenRows.ToArray();
         var previousPickup = selectedNode is int selected ? scene?.PickupAt(selected)?.Pickup?.Source : null;
+        // A rebuilt source world's scene loads behind the retiring one (see RetireScene); anything else replaces it now.
+        bool handoff = retiringScene != null && asset?.Kind == AssetKind.World && doc.Document.Scene != null && ViewModel.Resolver != null;
+        var retired = handoff ? retiringScene : null;
+        if (!handoff) DropRetiringScene();
         CancelPreview(); shownAsset = asset; var previewLifetime = preview.Token;
         using var loading = PreviewOperation.Link(previewLifetime);
         var token = loading.Token;
-        foreach (UIElement element in new UIElement[] { ImageToolbar, ImageScroll, SceneToolbar, SceneHost, AnimationHost, AudioPanel, StructuredPanel, EventsTab }) element.Visibility = Visibility.Collapsed;
-        EmptyPreview.Visibility = Visibility.Visible; EmptyPreview.Text = "Loading preview…"; PreviewInfo.Text = ""; properties = null;
+        if (!handoff)
+        {
+            foreach (UIElement element in new UIElement[] { ImageToolbar, ImageScroll, SceneToolbar, SceneHost, AnimationHost, AudioPanel, StructuredPanel, EventsTab }) element.Visibility = Visibility.Collapsed;
+            EmptyPreview.Visibility = Visibility.Visible;
+        }
+        EmptyPreview.Text = "Loading preview…"; PreviewInfo.Text = ""; properties = null;
         try
         {
             var snapshot = doc.PreviewDocument;
@@ -374,14 +435,24 @@ public partial class MainWindow : Window
                 updating = true; LodCombo.ItemsSource = SceneLods.Choices(count); LodCombo.SelectedIndex = Math.Min(selectedLod, count - 1); LodCombo.IsEnabled = count > 1; updating = false;
                 SceneToolbar.Visibility = SceneHost.Visibility = Visibility.Visible;
                 WorldHighlights.Visibility = asset.Kind == AssetKind.World ? Visibility.Visible : Visibility.Collapsed;
-                SourceWorldTools.Visibility = asset.Kind == AssetKind.World && doc.SourceWorld != null ? Visibility.Visible : Visibility.Collapsed; WorldDifficultyGroup.Visibility = asset.Kind == AssetKind.World && snapshot.Game != GameVariant.MechWarrior3 ? Visibility.Visible : Visibility.Collapsed; WorldMission.Visibility = Visibility.Collapsed;
-                if (scene == null) { scene = new(); ApplyRetainedPresentation(); scene.Information += s => { PreviewInfo.Text = s; PreviewInfo.ToolTip = s; }; scene.NodeSelected += InspectNode; ConfigureAiScene(scene); ConfigurePickupScene(scene); SceneHost.Content = scene; ConfigureFlyScene(scene); }
+                SceneMenus.Visibility = doc.SourceWorld != null ? Visibility.Collapsed : Visibility.Visible; WorldDifficultyGroup.Visibility = asset.Kind == AssetKind.World && snapshot.Game != GameVariant.MechWarrior3 ? Visibility.Visible : Visibility.Collapsed; WorldMission.Visibility = Visibility.Collapsed;
+                if (scene == null)
+                {
+                    scene = new(); scene.Information += s => { PreviewInfo.Text = s; PreviewInfo.ToolTip = s; }; scene.NodeSelected += InspectNode; ConfigureAiScene(scene); ConfigurePickupScene(scene);
+                    // During a handoff the retiring scene stays in the host until this one has loaded.
+                    if (retiringScene == null) SceneHost.Content = scene;
+                    ConfigureFlyScene(scene);
+                }
                 if (asset.Kind == AssetKind.World) await PopulateWorldMissionsAsync(doc, token);
                 string? exactMission = ExactMissionFor(doc.Path, ViewModel.Resolver.SelectedMission(doc.Path));
                 var mission = asset.Kind == AssetKind.World ? await MissionSceneLoader.LoadAsync(doc.PreviewDocument, ViewModel.Resolver, token: token, difficulty: ViewModel.Difficulty, mission: exactMission, exactMission: exactMission != null) : null;
                 // A source world's placement edits are carried back to its sources (see MoveSourcePlacementAsync).
                 if (mission != null) { await doc.GetPickupEditsAsync(ViewModel.Resolver, token); await PopulateWorldMissionsAsync(doc, token); }
-                await scene.ShowAsync(doc.PreviewDocument, asset, ViewModel.Resolver, PreferredPack, LodCombo.SelectedIndex, token, BackdropEnabled.IsChecked == true, mission); token.ThrowIfCancellationRequested(); ApplySceneOptions();
+                if (mission != null) await PrepareSourceMapSelectionAsync(doc, mission.Scene, mission, token);
+                ConfigureSourceMapPresentation(scene, doc, mission);
+                await scene.ShowAsync(doc.PreviewDocument, asset, ViewModel.Resolver, PreferredPack, LodCombo.SelectedIndex, token, BackdropEnabled.IsChecked == true, mission); token.ThrowIfCancellationRequested(); ApplySceneOptions(); RefreshZoneDraftView();
+                PublishSourceMapParts(scene, doc);
+                CompleteSceneHandoff();
                 // A rebuilt source world keeps the camera of the build it replaced.
                 if (pendingSourceView is { } rebuilt && rebuilt.Document == doc) { pendingSourceView = null; scene.RestoreView(rebuilt.View); }
                 var shownOptions = ReadStaticSceneOptions();
@@ -395,6 +466,7 @@ public partial class MainWindow : Window
                     {
                         isolatedNode = previousIsolate is int oldIsolate && mission.RemapNodeFrom(previousMission, oldIsolate) is >= 0 and int mappedIsolate ? mappedIsolate : null;
                         if (isolatedNode != null) scene.Isolate(isolatedNode);
+                        RemapHidden(previousHidden, old => mission.RemapNodeFrom(previousMission, old) is >= 0 and int mappedHidden ? mappedHidden : null);
                         scene.RestoreView(previousView);
                         selectedNode = RemapPickupSelection(previousPickup, mission) ?? (previousSelection is int oldSelection && mission.RemapNodeFrom(previousMission, oldSelection) is >= 0 and int mapped ? mapped : null);
                         if (selectedNode is int node) InspectNode(node);
@@ -408,7 +480,6 @@ public partial class MainWindow : Window
             {
                 var editor = new MotionEditor(doc, doc.ResourceEdits.Current.Members[asset.Index].Id, ViewModel.Resolver, previewLifetime,
                     library => ViewModel.Documents.Select(d => d.ResourceEdits is { } e && e.SnapshotFor(library) is { } s ? (e, s) : ((ResourceEditSession, ResourceSnapshot)?)null).SingleOrDefault(p => p != null)); motion = editor;
-                ApplyRetainedPresentation();
                 editor.SceneChanged += () => { AttachInspection(editor.Viewport); editor.Viewport.NodeSelected -= InspectNode; editor.Viewport.NodeSelected += InspectNode; RefreshSceneTree(); };
                 editor.StatusChanged += text => { if (!previewLifetime.IsCancellationRequested) ViewModel.Status = text; };
                 AnimationHost.Content = editor; AnimationHost.Visibility = Visibility.Visible;
@@ -417,7 +488,6 @@ public partial class MainWindow : Window
             else if (asset?.Kind == AssetKind.Animation && doc.AnimationEdits != null && ViewModel.Resolver != null)
             {
                 var editor = new AnimationEditor(doc, asset.Index, ViewModel.Resolver, previewLifetime, ViewModel); animation = editor; editor.MissionRequested = path => SelectMissionAsync(path, false, CancellationToken.None); editor.ExactMission = PendingExactMission;
-                ApplyRetainedPresentation();
                 if (pendingAnimationPlay) { pendingAnimationPlay = false; editor.TogglePlayback(); }
                 editor.StatusChanged += text => { if (!previewLifetime.IsCancellationRequested) ViewModel.Status = text; };
                 editor.InspectionChanged += (json, data) => { if (previewLifetime.IsCancellationRequested) return; properties = json; var source = editor.SourceByteSelection(); RawText.Text = source.Scope + "\n\n" + (source.Offset >= 0 ? Hex(source.Bytes.Span,source.Offset) : "") + (source.Length > 4096 ? "\n… first 4,096 source bytes shown." : ""); };
@@ -453,7 +523,16 @@ public partial class MainWindow : Window
         catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException) { if (!token.IsCancellationRequested) { EmptyPreview.Text = "Preview unavailable: " + ex.Message; Report(ex); } }
         finally
         {
-            RefreshPresentation(previewSettled: !token.IsCancellationRequested && shownDocument == doc && shownAsset?.Id == asset?.Id);
+            // A completed handoff has dropped the retiring scene; one still here means the rebuilt world could not be shown
+            // (failure or cancellation), so the frozen old world must not stay on screen.
+            if (retired != null && ReferenceEquals(retiringScene, retired))
+            {
+                DropRetiringScene();
+                SceneHost.Visibility = Visibility.Collapsed; EmptyPreview.Visibility = Visibility.Visible;
+                if (!EmptyPreview.Text.StartsWith("Preview unavailable", StringComparison.Ordinal)) EmptyPreview.Text = "Loading preview…";
+            }
+            UpdateReloadingView();
+            RefreshPresentation();
             ArrangeWorkspace();
         }
     }
@@ -479,7 +558,7 @@ public partial class MainWindow : Window
         var original = asset == null ? null : doc.OriginalAsset(asset);
         var sourceBytes = asset == null ? doc.Document.Bytes : original == null ? ReadOnlyMemory<byte>.Empty : doc.Document.Slice(original.Offset, original.Length);
         RawText.Text = original == null && asset != null ? "New record: no original source bytes." : Hex(sourceBytes.Span[..Math.Min(sourceBytes.Length, 4096)], original?.Offset ?? 0) + (sourceBytes.Length > 4096 ? "\n… first 4,096 original source bytes shown." : "");
-        PreviewSubtitle.Text = asset == null ? doc.Description : $"{asset.Kind} #{asset.Index} · {asset.Length:N0} edited bytes" + (original == null ? " · new record" : $" · source 0x{original.Offset:X}");
+        PreviewSubtitle.Text = SourceWorldFile(doc) is { } worldFile ? Path.GetFileName(worldFile) : asset == null ? doc.Description : $"{asset.Kind} #{asset.Index} · {asset.Length:N0} edited bytes" + (original == null ? " · new record" : $" · source 0x{original.Offset:X}");
         var related = asset == null ? null : FindRelated(asset, doc);
         RelatedList.ItemsSource = related?.Items;
         RelatedLimit.Visibility = related?.Truncated == true ? Visibility.Visible : Visibility.Collapsed;
@@ -636,18 +715,30 @@ public partial class MainWindow : Window
     {
         if (selectedNode is not int node) { ViewModel.Status = "Select a node in the scene or scene tree first"; return; }
         isolatedNode = scene?.PickupAt(node)?.Root ?? node;
-        scene?.Isolate(isolatedNode);
+        scene?.Isolate(isolatedNode); CurrentInspectionCard?.Refresh();
     }
-    private void ShowAllClick(object sender, RoutedEventArgs e) { isolatedNode = null; scene?.Isolate(null); }
+    private void ShowAllClick(object sender, RoutedEventArgs e) { isolatedNode = null; scene?.Isolate(null); hiddenRows.Clear(); pendingHidden = null; ApplyHiddenRows(); CurrentInspectionCard?.Refresh(); }
     private void InspectNode(int index)
     {
         var scene = motion?.Viewport ?? this.scene;
         inspectedSceneSource = null;
+        if (shownDocument is { SourceWorld: not null } sourceDocument && SourceSelection(sourceDocument, scene?.PreviewScene) is { } projection)
+        {
+            index = projection.Owner(index);
+            if (index < 0)
+            {
+                RevealSceneNode(index);
+                selectedNode = index; scene?.SelectFramingNode(index);
+                if (sceneTree?.Selected is { Synthetic: true } row) { inspectedSceneSource = row; SetProperties(SceneTreeProperties(row)); }
+                ViewModel.Status = "Selected source reference group";
+                return;
+            }
+        }
         if ((scene?.PreviewScene ?? ViewModel.SelectedDocument?.Document.Scene) is not { } data || index < 0 || index >= data.Nodes.Count) return;
         RevealSceneNode(index);
         var actor = scene?.PickupAt(index);
         if (actor != null) index = actor.Root;
-        scene?.SelectPickup(actor?.Root, actor?.Pickup is { } pickup && pickupDocument?.PickupEdits?.Find(pickup.Source) != null, pickupDocument?.PickupsLocked ?? true);
+        scene?.SelectPickup(actor?.Root, actor?.Pickup is { } pickup && pickupDocument?.PickupEdits?.Find(pickup.Source) != null, pickupDocument?.EditingLocked ?? true);
         selectedNode = index; scene?.SelectFramingNode(index); var properties = JsonData.PreviewObject(data.Nodes[index].Metadata);
         if (scene?.Mission is { } mission)
         {
@@ -682,7 +773,6 @@ public partial class MainWindow : Window
     private void AudioSeekChanged(object sender, RoutedPropertyChangedEventArgs<double> e) { if (ready && !seeking) SeekAudio(e.NewValue); }
     private void CueDoubleClick(object sender, MouseButtonEventArgs e) { if (AudioCues.SelectedItem is CueChoice cue) SeekAudio(cue.Seconds); }
     private async void ExportSelectedClick(object sender, RoutedEventArgs e) => await Export(false, false);
-    private async void ExportAllClick(object sender, RoutedEventArgs e) => await Export(true, false);
     private async void ExportJsonClick(object sender, RoutedEventArgs e) => await Export(false, true);
     private Task Export(bool all, bool json) => RunUi(async () =>
     {
@@ -696,19 +786,28 @@ public partial class MainWindow : Window
     });
     private async void ValidateClick(object sender, RoutedEventArgs e) => await RunUi(async () =>
     {
-        if (ViewModel.SelectedDocument is { } doc) await ValidateDocumentSourceAsync(doc, CancellationToken.None);
+        if (ViewModel.SelectedDocument is not { } doc) return;
+        var notes = await ValidateDocumentSourceAsync(doc, CancellationToken.None);
+        // A source map's status bar shows no messages: the outcome is shown, and notes open Diagnostics.
+        if (doc.SourceWorld != null)
+        {
+            if (notes.Count > 0) SetToolsVisible(true, problems: true);
+            MessageBox.Show(this, notes.Count == 0 ? "The map's source files on disk build without notes."
+                : $"The map's source files on disk build with {notes.Count} note{(notes.Count == 1 ? "" : "s")}, listed in Diagnostics.", "Validate source files", MessageBoxButton.OK, MessageBoxImage.Information);
+        }
     });
     private async void ReloadClick(object sender, RoutedEventArgs e) => await RunUi(() => ViewModel.ReloadAsync());
-    private void CancelClick(object sender, RoutedEventArgs e)
+    /// <summary>Whether an export, validation, reconstruction or planning operation runs that Escape can still cancel.</summary>
+    internal bool OperationRunning => operation is { IsCancellationRequested: false };
+    /// <summary>Escape: cancels the running export, validation, reconstruction or planning operation.</summary>
+    internal void CancelRunningOperation()
     {
         if (operation is not { IsCancellationRequested: false }) return;
-        operation.Cancel(); CancelOperationItem.IsEnabled = false; ViewModel.Status = "Canceling current operation…";
+        operation.Cancel(); ViewModel.Status = "Canceling current operation…";
     }
     private async void CloseFileClick(object sender, RoutedEventArgs e) { e.Handled = true; if ((sender as Button)?.Tag is DocumentModel doc) await RunUi(() => ViewModel.CloseAsync(doc)); }
     private async void CloseCurrentClick(object sender, RoutedEventArgs e) { if (ViewModel.SelectedDocument is { } doc) await RunUi(() => ViewModel.CloseAsync(doc)); }
     private void ExitClick(object sender, RoutedEventArgs e) => Close();
-    private void InspectorVisibilityClick(object sender, RoutedEventArgs e) { Layout.InspectorVisible = ((MenuItem)sender).IsChecked; inspectorTemporary = true; ArrangeWorkspace(); }
-    private void DiagnosticsClick(object sender, RoutedEventArgs e) { Layout.ToolsVisible = ((MenuItem)sender).IsChecked; ToolTabs.SelectedIndex = 2; ArrangeWorkspace(); }
     private void ThemeClick(object sender, RoutedEventArgs e) => ApplyTheme(((MenuItem)sender).Header.ToString()!);
     // .NET 10 still marks runtime Fluent theme switching as experimental.
 #pragma warning disable WPF0001
@@ -750,13 +849,13 @@ public partial class MainWindow : Window
             InspectorTabs.SelectedIndex = animation != null ? defaults.InspectorTab : -1;
             // Static viewers have no Dispatch page; use their normal Related fallback.
             ToolTabs.SelectedIndex = animation != null ? defaults.ToolTab : 4;
-            ApplyDensity(); animation?.ResetLayout(); ArrangeWorkspace();
+            ApplyMetrics(); animation?.ResetLayout(); ArrangeWorkspace();
         }
         finally { detachingWorkspace = false; }
         SaveWorkspacePreferences();
     }
     private void CopyPropertiesClick(object sender, RoutedEventArgs e) { if (animation?.ResolvePendingDrafts() == false) return; if (properties != null) Clipboard.SetText(properties.ToJsonString(JsonData.Options)); }
-    private void HelpClick(object sender, RoutedEventArgs e) => MessageBox.Show(this, "Open the root containing image.zbd and mission folders. Double-click a file to open it. Filter assets within a tab or search across the whole root.\n\nTextures open at 1:1 (one texture pixel per screen pixel). Wheel zooms; left or middle drag pans. Fit and 1:1 reset the scale. Choose channels or inspect the palette.\n3D (models, Whole world and animations): middle drag orbits; Shift+middle drag pans; Ctrl+middle drag or the wheel zooms toward the pointer (orthographic views scale about it); Ctrl+Shift+middle drag dollies. Shift/Ctrl can be pressed or released during a middle drag in either order. Smooth inertia remains enabled. Numpad 1/3/7 selects front/right/top; hold Ctrl for the opposite views. Numpad 5 toggles perspective/orthographic. Axis views are orthographic; orbit returns them to perspective unless orthographic was explicitly selected. Home frames all visible geometry; Numpad decimal frames the selection. View > 3D Navigation provides menu equivalents. In any 3D preview, F11 toggles fullscreen and Ctrl+Shift+H independently hides or restores the workbench and editing guides. Both modes are temporary and preserve the preview, playback and unfinished input. Manual navigation exits animation Follow camera; Numpad 0 toggles it. Pick a node or use the Scene tree, then Isolate. LOD 0 selects the highest detail for each object. Higher LOD numbers show lower-detail variants. In models and Whole world, Fly captures the viewer: WASD moves along the view, Space/C moves up/down, mouse movement looks around, and the wheel changes speed. Escape releases controls without changing the pose. Switching away also exits. Flight has no terrain collision and is available only for models and Whole world.\nWhole world pickups: click a pickup to select its bounds. Enable Unlock editing to reveal XYZ movement arrows and editable coordinates. This also unlocks AI-node and supported tank coordinates in their floating cards. Drag an arrow, or open View > Properties (Alt+Enter), type a coordinate and press Enter. Escape cancels a drag. Moves include unambiguously matching difficulty records. Ctrl+Z/Ctrl+Y undo/redo. Ctrl+S saves to the owning archive (often zrdr.zbd); Ctrl+Shift+S saves a new copy and retargets subsequent saves. Reference datasets require Save As. File > Create backup on Save is optional and off by default. Other map objects remain inspectable.\nAudio: Play/pause, seek using waveform or slider; double-click a cue.\nAnimation: Space plays/pauses immediately after selecting an asset. Transport icons and the seek bar share one row. The range follows the calculated duration; indefinite animations show a labeled preview range. The Dispatched events graphic sits below the player. The Sequences tab on the right selects entries, sequences and events. The right tabs are Sequences, Settings and References. Sequences opens first; switching animations retains the selected tab. Right-click an entry, sequence or event and choose Properties, or press Alt+Enter. Properties opens in a separate resizable window and stays on that item while you browse. The same window inspects assets and scene objects. Accepted edits enter the document undo history; Close keeps them and Save writes them to disk. Draft fields validate inline; Escape restores a value. View offers workspace presets, density and Reset layout. Bottom tools contain Dispatch, Event log, Problems, Runtime, Related and original source Bytes. Ctrl+wheel zooms Dispatch. Reset / stop previews cleanup separately. The LOD picker applies to animation and mission context. Sprite textures cycle automatically. Map shows context; Bind chooses a root. Show grid and Flat-ground collision are independent, both enabled by default. Height offsets the animation above or below the plane (−999 to 999). Mute controls audio. Problems and Event log distinguish approximation and unavailable game behavior.\n\nExports create a new folder outside the source tree. Ctrl+E exports selected records. Animation edits support Ctrl+Z/Ctrl+Y and Ctrl+S Save As to a new file. Animation Save As and exports preserve source files. Edit offers texture PNG import, script instructions, archive members and typed ZRD nodes. These share undo and verified save; protected reference datasets require Save As. F5 reloads; Escape cancels an active export or validation; Ctrl+W closes a file.", "Controls and formats");
+    private void HelpClick(object sender, RoutedEventArgs e) => MessageBox.Show(this, "Workspace: Initialize unpacks the retail ZBD files once into a source project (a folder with data and gamegen); File > Open workspace (Ctrl+O) opens one. Choose a map to edit it; the back arrow returns to the maps. Ctrl+Z/Ctrl+Y undo and redo, Ctrl+S saves the project's changed files, Ctrl+W closes the map. Export builds game files from the sources into a folder outside the project.\n\nView: middle drag orbits; Shift+middle drag pans; Ctrl+middle drag or the wheel zooms toward the pointer (orthographic views scale about it); Ctrl+Shift+middle drag dollies. Numpad 1/3/7 selects front/right/top (Ctrl for the opposite views), Numpad 5 toggles perspective/orthographic, Home frames everything and Numpad decimal frames the selection; the Perspective chip offers the same. F11 toggles fullscreen. Flycam: WASD moves along the view, Space/C moves up/down, the mouse looks around and the wheel changes speed; Escape returns to normal controls.\n\nObjects: click one in the view or the World tree to select it; its Properties pane edits it. Move and Rotate show handles; Apply accepts the changes as one undo step, Revert discards them. Escape or a click on empty space clears the selection. Copy… asks for the copy's name and places it beside the original (in place when it shows nothing with a width).", "Controls and formats");
     private void AboutClick(object sender, RoutedEventArgs e)
     {
         var assembly = typeof(MainWindow).Assembly;
@@ -781,7 +880,7 @@ public partial class MainWindow : Window
             if (!e.IsRepeat) { if (motion != null) motion.TogglePlayback(); else if (animation != null) animation.TogglePlayback(); else pendingAnimationPlay = !pendingAnimationPlay; }
             return;
         }
-        bool ctrl = KeyboardModifiers(); if (ctrl && e.Key == Key.O) OpenFolderClick(this, e); else if (ctrl && e.Key == Key.E) ExportSelectedClick(this, e); else if (ctrl && e.Key == Key.S) { if ((System.Windows.Input.Keyboard.Modifiers & ModifierKeys.Shift) != 0) SaveCurrentAsClick(this, e); else SaveCurrentClick(this, e); } else if (ctrl && e.Key == Key.Z && e.OriginalSource is not TextBoxBase) UndoAnimationClick(this, e); else if (ctrl && e.Key == Key.Y && e.OriginalSource is not TextBoxBase) RedoAnimationClick(this, e); else if (ctrl && e.Key == Key.W) CloseCurrentClick(this, e); else if (e.Key == Key.F5) ReloadClick(this, e); else if (e.Key == Key.Escape && operation is { IsCancellationRequested: false }) CancelClick(this, e); else return; e.Handled = true;
+        bool ctrl = KeyboardModifiers(); if (ctrl && e.Key == Key.O) OpenWorkspaceClick(this, e); else if (ctrl && e.Key == Key.S) { if ((System.Windows.Input.Keyboard.Modifiers & ModifierKeys.Shift) != 0) SaveCurrentAsClick(this, e); else SaveCurrentClick(this, e); } else if (ctrl && e.Key == Key.Z && e.OriginalSource is not TextBoxBase) UndoAnimationClick(this, e); else if (ctrl && e.Key == Key.Y && e.OriginalSource is not TextBoxBase) RedoAnimationClick(this, e); else if (ctrl && e.Key == Key.W) CloseCurrentClick(this, e); else if (e.Key == Key.F5) ReloadClick(this, e); else if (e.Key == Key.Escape && OperationRunning) CancelRunningOperation(); else return; e.Handled = true;
     }
     private bool AnimationSpaceTarget(DependencyObject? source)
     {
@@ -873,7 +972,7 @@ public partial class MainWindow : Window
         propertiesWindow?.CloseResolved();
         flyCamera?.Dispose();
         ObserveDocumentCommands(null);
-        operation?.Cancel(); preview.Cancel(); ViewModel.PropertyChanged -= DifficultyPreferenceChanged; diskTimer.Stop(); audioTimer.Stop(); StopAudio(); animation?.Dispose(); motion?.Dispose(); scene?.Dispose(); ViewModel.Dispose(); shutdown.Dispose();
+        operation?.Cancel(); preview.Cancel(); ViewModel.PropertyChanged -= DifficultyPreferenceChanged; diskTimer.Stop(); audioTimer.Stop(); StopAudio(); animation?.Dispose(); motion?.Dispose(); scene?.Dispose(); retiringScene?.Dispose(); retiringScene = null; ViewModel.Dispose(); shutdown.Dispose();
         var s = ViewModel.Settings;
         if (ordinaryWindow is { } ordinary) { s.Width = ordinary.SavedWidth; s.Height = ordinary.SavedHeight; }
         else if (WindowState == WindowState.Normal) { s.Width = ActualWidth; s.Height = ActualHeight; }

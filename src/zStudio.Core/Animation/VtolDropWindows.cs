@@ -1,6 +1,7 @@
+using System.Buffers.Binary;
 using System.Security.Cryptography;
 
-namespace Recoil.Zbd.Core.Animation;
+namespace zStudio.Core.Animation;
 
 /// <summary>Existing callback-911 flight windows. All writes change one clock threshold, never the flight or callback program.</summary>
 public static class VtolDropWindows
@@ -171,8 +172,10 @@ public static class VtolDropWindows
         if (plan.NewStart == plan.Window.Start) return original;
         CheckPackage(frozenContext.Package, token);
         var copy = frozenContext.Snapshot(); token.ThrowIfCancellationRequested();
-        new AnimationEditSession(copy.Package).Apply(plan.Window.EntryIndex, "Preview parachute drop window", entry =>
-            entry.Sequences.Single(s => s.Id == plan.Window.SequenceId).Events.Single(e => e.Id == plan.Window.CallEventId).Threshold = plan.NewStart);
+        // Snapshot owns every cloned entry. This disposable simulation needs no document undo session,
+        // whose compiled-edit comparison would otherwise serialize the before/after entry records.
+        copy.Package.Entries[plan.Window.EntryIndex].Sequences.Single(s => s.Id == plan.Window.SequenceId)
+            .Events.Single(e => e.Id == plan.Window.CallEventId).Threshold = plan.NewStart;
         var candidate = Discover(copy.Package, token).Candidates.SingleOrDefault(c => c.EntryIndex == original.Candidate.EntryIndex && c.ScheduleSequenceId == original.Candidate.ScheduleSequenceId)
             ?? throw new InvalidDataException("The edited drop window no longer has a supported flight schedule.");
         var preview = Analyze(copy, candidate, token);
@@ -223,7 +226,44 @@ public static class VtolDropWindows
     internal static string Fingerprint(AnimationPackage package, CancellationToken token = default)
     {
         CheckPackage(package, token);
-        return Convert.ToHexString(SHA256.HashData(AnimationWriter.Write(package, token)));
+        // Candidates belong to an in-memory snapshot, including source packages that have never been
+        // serialized. Frame every collection and record so different record boundaries cannot alias.
+        using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        Bytes(package.Prefix); Bytes(package.Tail); Count(package.Entries.Count);
+        foreach (var entry in package.Entries)
+        {
+            Bytes(entry.Bytes); Count(entry.References.Length);
+            foreach (var table in entry.References)
+            {
+                Count(table.Count);
+                foreach (var record in table) Bytes(record.Bytes);
+            }
+            Count(entry.Puffers.Count);
+            foreach (var puffer in entry.Puffers) Bytes(puffer.Bytes);
+            Count(1 + entry.Sequences.Count);
+            foreach (var sequence in entry.AllSequences)
+            {
+                Bytes(sequence.Bytes); Bytes(sequence.OpaqueTail); Count(sequence.Events.Count);
+                foreach (var ev in sequence.Events) Bytes(ev.Bytes);
+            }
+        }
+        return Convert.ToHexString(hash.GetHashAndReset());
+
+        void Count(int count)
+        {
+            token.ThrowIfCancellationRequested();
+            Span<byte> bytes = stackalloc byte[4];
+            BinaryPrimitives.WriteInt32LittleEndian(bytes, count); hash.AppendData(bytes);
+        }
+        void Bytes(byte[] bytes)
+        {
+            Count(bytes.Length);
+            for (int offset = 0; offset < bytes.Length; offset += 4096)
+            {
+                token.ThrowIfCancellationRequested();
+                hash.AppendData(bytes.AsSpan(offset, Math.Min(4096, bytes.Length - offset)));
+            }
+        }
     }
 
     private static void CheckPackage(AnimationPackage package, CancellationToken token)

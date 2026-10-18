@@ -6,14 +6,14 @@ using System.Windows;
 using System.Windows.Controls;
 using ModelContextProtocol.Client;
 using ModelContextProtocol.Protocol;
-using Recoil.Zbd.Core.Formats;
-using Recoil.Zbd.Core.Sources;
-using Recoil.Zbd.Desktop;
-using Recoil.Zbd.Mcp;
-using Recoil.Zbd.Tests;
+using zStudio.Core.Formats;
+using zStudio.Core.Sources;
+using zStudio.Desktop;
+using zStudio.Mcp;
+using zStudio.Tests;
 using Xunit;
 
-namespace Recoil.Zbd.Desktop.Tests;
+namespace zStudio.Desktop.Tests;
 
 /// <summary>Source projects through the real named-pipe MCP connection and the shared GUI operations.</summary>
 internal static class SourceProjectMcpChecks
@@ -36,7 +36,9 @@ internal static class SourceProjectMcpChecks
             Assert.Equal(Path.GetFullPath(Path.Combine(fixture.Root, "initialized")), Path.GetFullPath(main.ViewModel.RootPath!));
             var reopened = await Job("open_root", new() { ["path"] = Path.Combine(fixture.Root, "initialized"), ["project"] = true });
             Assert.Equal(Path.GetFullPath(Path.Combine(fixture.Root, "initialized")), Path.GetFullPath(reopened["RootPath"]!.GetValue<string>()));
-            Assert.Equal(["MCP integration…", "Compare worlds…", "-", "Export all ZBD files…", "Export ZBD file", "Check source project", "Resolve interrupted save…", "Build profile", "Open mission world", "Add model to world…", "Edit in Blender…", "Update from Blender export…", "Edit map zones…", "Create terrain…", "Convert to editable terrain…", "-", "Validate source file on disk", "Reload current file", "Cancel export or validation"], ToolsMenu(main));
+            Assert.Equal(["MCP integration…", "Compare worlds…", "-", "Add model to world…", "Edit in Blender…", "Update from Blender export…", "Edit map zones…", "Create terrain…", "Convert to editable terrain…", "-", "Validate source file on disk", "Reload current file"], ToolsMenu(main));
+            // The export commands and the texture dithering choice have their own menu, between Tools and Help.
+            Assert.Equal(["Export all ZBD files…", "Export ZBD file", "Check source project", "Build profile", "-", "Texture dithering"], ToolsMenu(main, "ExportMenu", "ExportMenuOpened"));
             // Project preflight also precedes navigation: a slow folder check must not replace a newer clean root.
             // Cover both a pending VM root and another project preflight that has not reached the VM yet.
             foreach (bool projectPreflight in new[] { false, true })
@@ -76,7 +78,7 @@ internal static class SourceProjectMcpChecks
                 Assert.Equal(Path.GetFullPath(expectedRoot), Path.GetFullPath(main.ViewModel.RootPath));
             }
             await Job("open_root", new() { ["path"] = fixture.Corpus });
-            Assert.Equal(["MCP integration…", "Compare worlds…", "-", "Validate source file on disk", "Reload current file", "Cancel export or validation"], ToolsMenu(main));
+            Assert.Equal(["MCP integration…", "Compare worlds…", "-", "Validate source file on disk", "Reload current file"], ToolsMenu(main));
 
             var failed = await Job("source_export", new(), "failed"); Assert.Equal("no_project", failed["code"]!.GetValue<string>());
             var inside = await Job("source_reconstruct", new() { ["source"] = fixture.Corpus, ["destination"] = Path.Combine(fixture.Corpus, "project") }, "failed");
@@ -112,7 +114,7 @@ internal static class SourceProjectMcpChecks
             Assert.True(File.Exists(Path.Combine(reconstructedElsewhere, "data", "m1", "zrdr", "ai.zrd")));
             Assert.Equal(Path.GetFullPath(newerRoot), Path.GetFullPath(main.ViewModel.RootPath));
 
-            // A cancel once the project is the root stops only its indexing: the operation completes with the project open.
+            // Cancellation after publication retains the project; map-only roots have no asset indexing to interrupt.
             void CancelAtPublication()
             {
                 main.ViewModel.RootPublished -= CancelAtPublication;
@@ -121,20 +123,20 @@ internal static class SourceProjectMcpChecks
             }
             main.ViewModel.RootPublished += CancelAtPublication;
             var built = await Job("source_reconstruct", new() { ["source"] = fixture.Corpus, ["destination"] = fixture.Project });
-            Assert.True(built["opened"]!.GetValue<bool>()); Assert.False(built["indexComplete"]!.GetValue<bool>());
+            Assert.True(built["opened"]!.GetValue<bool>()); Assert.True(built["indexComplete"]!.GetValue<bool>());
             Assert.Equal(1, built["families"]!["scripts"]!.GetValue<int>()); Assert.Equal(3, built["families"]!["sounds"]!.GetValue<int>());
             Assert.Equal("other.bin", built["notReconstructed"]![0]!.GetValue<string>()); Assert.Equal(1, built["noteCount"]!.GetValue<int>());
             Assert.Equal(Path.GetFullPath(fixture.Project), Path.GetFullPath(main.ViewModel.RootPath!));
-            Assert.Contains(main.ViewModel.Files, f => f.RelativePath == Path.Combine("data", "m1", "zrdr", "ai.zrd"));
+            Assert.Empty(main.ViewModel.Files); Assert.True(main.ViewModel.IsSourceProject);
             var status = await Job("source_status", new() { ["query"] = "m1", ["limit"] = 10 });
             var mission = status["outputs"]!["items"]!.AsArray().Single()!;
             Assert.Equal("m1/zrdr.zbd", mission["path"]!.GetValue<string>()); Assert.Equal(2, mission["inputCount"]!.GetValue<int>());
             Assert.Equal(2, status["families"]!["archive"]!.GetValue<int>()); Assert.Equal(3, status["families"]!["sounds"]!.GetValue<int>());
 
-            // Export commands appear once a source project is the root; the one-file menu lists every buildable game file.
+            // The Export menu appears once a source project is the root; the one-file menu lists every buildable game file.
             main.SourceProfilesReading = ct => Assert.False(main.Dispatcher.CheckAccess());
-            typeof(MainWindow).GetMethod("ToolsMenuOpened", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(main, [main, new RoutedEventArgs(MenuItem.SubmenuOpenedEvent, main)]);
-            Assert.Equal(Visibility.Visible, ((MenuItem)main.FindName("ExportSourceMenu")).Visibility);
+            typeof(MainWindow).GetMethod("ExportMenuOpened", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(main, [main, new RoutedEventArgs(MenuItem.SubmenuOpenedEvent, main)]);
+            Assert.Equal(Visibility.Visible, ((MenuItem)main.FindName("ExportMenu")).Visibility);
             var single = (MenuItem)main.FindName("ExportSourceFileMenu");
             while (single.Items.Count != 6) { token.ThrowIfCancellationRequested(); await Task.Delay(10, token); }
             Assert.Equal(["zrdr.zbd", "interp.zbd", "soundsh.zbd", "soundsm.zbd", "soundsl.zbd", "m1/zrdr.zbd"], single.Items.Cast<MenuItem>().Select(i => ((TextBlock)i.Header).Text));
@@ -160,7 +162,7 @@ internal static class SourceProjectMcpChecks
             var cancelledChoice = Job("source_profile", new() { ["profile"] = "original" }, "canceled");
             await reading.Task.WaitAsync(token);
             await Call("state", new());
-            ((MenuItem)main.FindName("CancelOperationItem")).RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
+            main.CancelRunningOperation();
             await cancelledChoice;
             Assert.True(((MenuItem)profiles.Items[0]).IsChecked);
             main.SourceProfilesReading = ct => Assert.False(main.Dispatcher.CheckAccess());
@@ -195,8 +197,10 @@ internal static class SourceProjectMcpChecks
             var relativeExport = await Job("source_export", new() { ["destination"] = "game" }, "failed");
             Assert.Contains("full path", relativeExport["message"]!.GetValue<string>());
 
-            // A reconstructed .zrd opens in the shared ZRD editor and saves text.
+            // Standalone source-file editing remains available from the compiled/plain explorer, not the map workspace.
             string source = Path.Combine(fixture.Project, "data", "m1", "zrdr", "ai.zrd");
+            Assert.Equal("source_map_required", (await Job("open_document", new() { ["path"] = source }, "failed"))["code"]!.GetValue<string>());
+            await Job("open_root", new() { ["path"] = fixture.Root });
             await Job("open_document", new() { ["path"] = source });
             var doc = main.ViewModel.Documents.Single(d => d.Path.Equals(source, StringComparison.OrdinalIgnoreCase));
             Assert.Equal("zrd-text", doc.Document.SourceSyntax);
@@ -204,9 +208,13 @@ internal static class SourceProjectMcpChecks
             Guid member = Guid.Parse(members["members"]!["items"]![0]!["member"]!.GetValue<string>());
             var gravity = doc.ResourceEdits!.Tree(doc.ResourceEdits.Member(member), token).Children[1].Children[0];
             await Job("zrd_edit", new() { ["document"] = doc.SessionId.ToString(), ["revision"] = doc.Revision, ["action"] = "set", ["member"] = member.ToString(), ["node"] = gravity.Id.ToString(), ["value"] = "-1.5" });
-            var unsaved = await Job("source_export", new(), "failed"); Assert.Equal("unsaved_changes", unsaved["code"]!.GetValue<string>());
+            var unsaved = await Job("open_root", new() { ["path"] = fixture.Project, ["project"] = true }, "failed");
+            Assert.Equal("unsaved_changes", unsaved["code"]!.GetValue<string>());
+            Assert.Same(doc, main.ViewModel.SelectedDocument);
             await Job("save_document", new() { ["document"] = doc.SessionId.ToString(), ["revision"] = doc.Revision });
             Assert.Contains("GRAVITY ( -1.5 )", await File.ReadAllTextAsync(source, token));
+            await Job("open_root", new() { ["path"] = fixture.Project, ["project"] = true });
+            await Job("source_profile", new() { ["profile"] = "original" });
 
             var check = await Job("source_export", new());
             Assert.False(check["written"]!.GetValue<bool>()); Assert.Equal(6, check["built"]!.GetValue<int>()); Assert.Equal(0, check["failed"]!.GetValue<int>());
@@ -262,7 +270,7 @@ internal static class SourceProjectMcpChecks
                 Assert.Contains(main.ViewModel.Problems, p => p.File == worldFixture.Project && p.Message.Contains(omission, StringComparison.Ordinal));
                 await Job("source_world_open", new() { ["mission"] = "m1" });
                 var world = main.ViewModel.Documents.Single(d => d.SourceWorld != null);
-                int buildWarnings = world.SourceBuild!.Outputs.Single(o => o.Path == "m1/gamez.zbd").Warnings.Count;
+                int buildWarnings = world.SourceBuild!.Notes.Count;
                 Assert.True(buildWarnings >= 70);
                 string buildOmission = $"Showing 64 of {buildWarnings} warnings; {buildWarnings - 64} more not shown.";
                 Assert.Contains(main.ViewModel.Problems, p => p.File == script && p.Message.Contains(buildOmission, StringComparison.Ordinal));
@@ -313,7 +321,7 @@ internal static class SourceProjectMcpChecks
     {
         Assert.False(main.ViewModel.HasRoot);
         Assert.Equal(Visibility.Visible, ((FrameworkElement)main.FindName("WelcomeChoices")).Visibility);
-        foreach (string name in new[] { "WelcomeOpen", "WelcomeInitializeProject", "WelcomeOpenProject" }) Assert.True(((Button)main.FindName(name)).IsVisible, name);
+        foreach (string name in new[] { "WelcomeInitializeProject", "WelcomeOpenProject" }) Assert.True(((Button)main.FindName(name)).IsVisible, name);
         // Initialize is the GUI's only reconstruction: Tools has no reconstruct command, and no separator without a folder;
         // comparing two world files needs no folder.
         Assert.Equal(["MCP integration…", "Compare worlds…"], ToolsMenu(main));
@@ -357,7 +365,7 @@ internal static class SourceProjectMcpChecks
         // The welcome screen opens the project once the dialog has closed.
         await main.OpenInitializedProjectAsync(dialog.Report!);
         Assert.Equal(Path.GetFullPath(project), Path.GetFullPath(main.ViewModel.RootPath!));
-        Assert.Contains(main.ViewModel.Files, f => f.RelativePath == Path.Combine("data", "m1", "zrdr", "ai.zrd"));
+        Assert.Empty(main.ViewModel.Files); Assert.True(main.ViewModel.IsSourceProject);
         // Opening the project cleared Problems; the reconstruction's notes are listed after it.
         Assert.NotEmpty(dialog.Report!.Notes);
         foreach (string note in dialog.Report.Notes) Assert.Contains(main.ViewModel.Problems, p => p.Severity == "Warning" && p.Message == note);
@@ -411,10 +419,10 @@ internal static class SourceProjectMcpChecks
     }
 
     /// <summary>The Tools menu's visible entries as the menu shows them once opened ("-" for a separator).</summary>
-    internal static string[] ToolsMenu(MainWindow main)
+    internal static string[] ToolsMenu(MainWindow main, string menu = "ToolsMenu", string opened = "ToolsMenuOpened")
     {
-        var tools = (MenuItem)main.FindName("ToolsMenu");
-        typeof(MainWindow).GetMethod("ToolsMenuOpened", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(main, [tools, new RoutedEventArgs(MenuItem.SubmenuOpenedEvent, tools)]);
+        var tools = (MenuItem)main.FindName(menu);
+        typeof(MainWindow).GetMethod(opened, BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(main, [tools, new RoutedEventArgs(MenuItem.SubmenuOpenedEvent, tools)]);
         return tools.Items.OfType<Control>().Where(c => c.Visibility == Visibility.Visible).Select(c => c is Separator ? "-" : (string)((MenuItem)c).Header).ToArray();
     }
     private static T Find<T>(DependencyObject root, Func<T, bool> match) where T : DependencyObject

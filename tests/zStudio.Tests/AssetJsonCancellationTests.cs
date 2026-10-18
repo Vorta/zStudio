@@ -2,13 +2,13 @@ using System.Collections;
 using System.Numerics;
 using System.Text.Json;
 using System.Text.Json.Nodes;
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Core.Animation;
-using Recoil.Zbd.Core.Export;
-using Recoil.Zbd.Core.Formats;
+using zStudio.Core;
+using zStudio.Core.Animation;
+using zStudio.Core.Export;
+using zStudio.Core.Formats;
 using Xunit;
 
-namespace Recoil.Zbd.Tests;
+namespace zStudio.Tests;
 
 public sealed class AssetJsonCancellationTests
 {
@@ -164,7 +164,7 @@ public sealed class AssetJsonCancellationTests
             writer.Write("data"u8); writer.Write(0u);
         }
         byte[] bytes = stream.ToArray();
-        var doc = new ZbdDocument("fixture", new(bytes.Length, DateTime.MinValue), new(FormatFamily.Wave, null, Recognition.Supported, "fixture"), bytes);
+        var doc = new AssetDocument("fixture", new(bytes.Length, DateTime.MinValue), new(FormatFamily.Wave, null, Recognition.Supported, "fixture"), bytes);
         var asset = doc.Add(AssetKind.Sound, 0, "sound", 0, bytes.Length);
         Assert.True(JsonNode.DeepEquals(JsonSerializer.SerializeToNode(WaveDecoder.Read(bytes, TestContext.Current.CancellationToken)),
             ExportService.AssetJson(doc, asset, TestContext.Current.CancellationToken)["wave"]));
@@ -223,7 +223,7 @@ public sealed class AssetJsonCancellationTests
         Assert.Throws<OperationCanceledException>(() => sequence.Events[0].Clone(cancellation.Token));
     }
 
-    private static ZbdDocument Document() => new("fixture", new(0, DateTime.MinValue),
+    private static AssetDocument Document() => new("fixture", new(0, DateTime.MinValue),
         new(FormatFamily.GameZ, 15, Recognition.Supported, "fixture"), ReadOnlyMemory<byte>.Empty);
 
     private sealed class CancelingInstructions(CancellationTokenSource cancellation) : IReadOnlyList<string[]>

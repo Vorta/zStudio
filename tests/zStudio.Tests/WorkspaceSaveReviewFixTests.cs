@@ -1,10 +1,10 @@
 using System.Diagnostics;
 using System.Text;
 using System.Text.Json.Nodes;
-using Recoil.Zbd.Core.Sources;
+using zStudio.Core.Sources;
 using Xunit;
 
-namespace Recoil.Zbd.Tests;
+namespace zStudio.Tests;
 
 /// <summary>
 /// Source workspaces and their saves: a project that is a link or lies below one is never edited or saved, a file another
@@ -94,9 +94,9 @@ public sealed class WorkspaceSaveReviewFixTests : IDisposable
         byte[] saved = Text("GRAVITY ( -4.9 )\n"), replacement = Text("GRAVITY ( -1.0 ) # written by another program\n");
         string? replace = null;
         // Another program replaces the file after the publisher put it in place and before the workspace records it.
-        SourceWorkspace workspace = new(root, (writes, description, token) =>
+        SourceWorkspace workspace = new(root, (writes, description, token, validation) =>
         {
-            var written = new SourcePublisher(root).Publish([.. writes.Select(w => new SourceFileWrite(w.Relative, w.Expected, w.Content))], description, token).Written;
+            var written = new SourcePublisher(root).Publish([.. writes.Select(w => new SourceFileWrite(w.Relative, w.Expected, w.Content))], description, token, validation).Written;
             if (replace != null) File.WriteAllBytes(At(root, replace), replacement);
             return written;
         });
@@ -123,9 +123,9 @@ public sealed class WorkspaceSaveReviewFixTests : IDisposable
         // A file created by a save and removed by another program before it is recorded is reported too.
         replace = null;
         const string Added = "data/m1/added.zrd";
-        SourceWorkspace removing = new(root, (writes, description, token) =>
+        SourceWorkspace removing = new(root, (writes, description, token, validation) =>
         {
-            var written = new SourcePublisher(root).Publish([.. writes.Select(w => new SourceFileWrite(w.Relative, w.Expected, w.Content))], description, token).Written;
+            var written = new SourcePublisher(root).Publish([.. writes.Select(w => new SourceFileWrite(w.Relative, w.Expected, w.Content))], description, token, validation).Written;
             File.Delete(At(root, Added));
             return written;
         });

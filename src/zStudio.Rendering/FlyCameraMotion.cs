@@ -1,6 +1,6 @@
 using System.Windows.Media.Media3D;
 
-namespace Recoil.Zbd.Rendering;
+namespace zStudio.Rendering;
 
 /// <summary>Time-based navigation, independent of geometry hit tests and keyboard repeat.</summary>
 internal static class FlyCameraMotion

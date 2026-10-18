@@ -1,6 +1,6 @@
 using System.Runtime.CompilerServices;
 
-namespace Recoil.Zbd.Core;
+namespace zStudio.Core;
 
 /// <summary>An operation-local view: compare complete source prefixes once, then look up integer record offsets.</summary>
 internal sealed class MissionCoordinateProjection<T>

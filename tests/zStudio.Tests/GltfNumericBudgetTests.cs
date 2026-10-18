@@ -1,9 +1,9 @@
 using System.Text;
 using System.Text.Json.Nodes;
-using Recoil.Zbd.Core.Gltf;
+using zStudio.Core.Gltf;
 using Xunit;
 
-namespace Recoil.Zbd.Tests;
+namespace zStudio.Tests;
 
 public sealed class GltfNumericBudgetTests
 {

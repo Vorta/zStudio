@@ -1,8 +1,8 @@
 using System.Security.Cryptography;
 using System.Text.Json;
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Core.Animation;
-using Recoil.Zbd.Core.Formats;
+using zStudio.Core;
+using zStudio.Core.Animation;
+using zStudio.Core.Formats;
 
 if (args.Contains("--mission")) return await MissionCheck.RunAsync(args.Where(a => a != "--mission").ToArray());
 if (args.Contains("--difficulty")) return await DifficultyCheck.RunAsync(args.Where(a => a != "--difficulty").ToArray());

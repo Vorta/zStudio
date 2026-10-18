@@ -4,7 +4,7 @@ using System.IO.Compression;
 using System.Numerics;
 using System.Text.Json;
 
-namespace Recoil.Zbd.Core.Export;
+namespace zStudio.Core.Export;
 
 public sealed record ImportedMesh(Vector3[] Positions, Vector3[] Normals, Vector2[] Uvs, int[] Triangles)
 {

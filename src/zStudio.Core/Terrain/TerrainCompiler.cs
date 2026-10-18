@@ -1,7 +1,7 @@
 using System.Numerics;
-using Recoil.Zbd.Core.Worlds;
+using zStudio.Core.Worlds;
 
-namespace Recoil.Zbd.Core.Terrain;
+namespace zStudio.Core.Terrain;
 
 /// <summary>A corner of terrain geometry in world space.</summary>
 public readonly record struct TerrainCorner(Vector3 Position, Vector3 Normal, Vector2 Uv)

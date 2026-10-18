@@ -2,13 +2,13 @@ using System.IO;
 using System.Numerics;
 using System.Text;
 using System.Text.Json.Nodes;
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Core.Formats;
-using Recoil.Zbd.Core.Sources;
-using Recoil.Zbd.Core.Worlds;
+using zStudio.Core;
+using zStudio.Core.Formats;
+using zStudio.Core.Sources;
+using zStudio.Core.Worlds;
 using Xunit;
 
-namespace Recoil.Zbd.Tests;
+namespace zStudio.Tests;
 
 /// <summary>
 /// What a source-world object edit reaches beyond the edited node: every copy of an instance, every load of a model file,
@@ -16,24 +16,126 @@ namespace Recoil.Zbd.Tests;
 /// </summary>
 public sealed class SourceObjectPlanTests
 {
+    [Fact]
+    public async Task SourceSceneEvaluatesWithoutArchivesAndMatchesExplicitWorldExport()
+    {
+        using SourceWorldFixture fixture = new();
+        fixture.Write("data/m2/zrdr/aiv.zrd", "( tank_01 ( 0 ( 10.0 20.0 30.0 ) 90.0 ) )\r\n# retain me\r\n");
+        fixture.Write("data/m2/zrdr/vehicle.zrd", "( tank ( ) )");
+        fixture.Write("data/common/zrdr/sounds.zrd", "( report report.wav LOOPED )");
+        Directory.CreateDirectory(fixture.Path("data/common/sounds"));
+        byte[] wave = WaveConverter.Write(new(22050, 8, 1), new byte[220], []);
+        await File.WriteAllBytesAsync(fixture.Path("data/common/sounds/report.wav"), wave, Token);
+        var source = await SourceWorlds.LoadSceneAsync(fixture.Project, "m2", token: Token);
+        var context = zStudio.Core.Animation.AnimationPreviewContext.FromSources(source, MissionDifficulty.Medium, Token);
+        Assert.True(context.Sounds["report"].Loop); Assert.Equal(wave, context.Sounds["report"].Bytes.ToArray());
+        Assert.False(Directory.Exists(Path.Combine(fixture.Project, "zstudio")));
+        Assert.Empty(Directory.EnumerateFiles(fixture.Project, "*.zbd", SearchOption.AllDirectories));
+        Assert.NotNull(source.Animations);
+        Assert.Contains(source.Animations.Entries, entry => entry.RootName == "tank");
+        var mission = source.MissionScene(MissionDifficulty.Medium, Token);
+        var actor = Assert.Single(mission.Actors, actor => actor.CoordinateSource != null);
+        var edits = PickupPlacementEditSession.FromSources(source, Token);
+        var placement = actor.CoordinateSource!;
+        SourceWorkspace workspace = new(fixture.Project);
+        var original = await File.ReadAllBytesAsync(fixture.Path("data/m2/zrdr/aiv.zrd"), Token);
+        var changes = edits.SourceChanges(edits.PreviewTransform(placement, edits.Transform(placement) with { Position = new(42, 20, 30) }), workspace, Token);
+        Assert.Equal("data/m2/zrdr/aiv.zrd", Assert.Single(changes).Relative);
+        workspace.Apply("Move tank", changes.Select(change => (change.Relative, (byte[]?)change.Content)), Token);
+        Assert.Equal(original, await File.ReadAllBytesAsync(fixture.Path("data/m2/zrdr/aiv.zrd"), Token));
+        var edited = await SourceWorlds.LoadSceneAsync(fixture.Project, "m2", workspace.Overlay(), Token);
+        var changedMission = edited.MissionScene(MissionDifficulty.Medium, Token);
+        Assert.Equal(new Vector3(42, 20, 30), changedMission.Actors.Single(actor => actor.CoordinateSource != null).PlacementPosition);
+        Assert.NotNull(SceneTransformUpdate.Prepare(mission.Scene, changedMission.Scene, source.Assets.First(asset => asset.Kind == AssetKind.World), 0, Token));
+        workspace.Undo(); Assert.Equal(original, workspace.Read("data/m2/zrdr/aiv.zrd", Token)); workspace.Redo();
+        Assert.Equal(["data/m2/zrdr/aiv.zrd"], await workspace.SaveAsync(Token));
+        Assert.Contains("# retain me", await File.ReadAllTextAsync(fixture.Path("data/m2/zrdr/aiv.zrd"), Token));
+        var reopened = await SourceWorlds.LoadSceneAsync(fixture.Project, "m2", token: Token);
+        Assert.Equal(new Vector3(42, 20, 30), reopened.MissionScene(MissionDifficulty.Medium, Token).Actors.Single(actor => actor.CoordinateSource != null).PlacementPosition);
+        Assert.Empty(Directory.EnumerateFiles(fixture.Project, "*.zbd", SearchOption.AllDirectories));
+        var exported = FormatRegistry.Default.OpenBytes("gamez.zbd", GameZWriter.Write(source.World, Token), token: Token).Scene!;
+        Assert.Equal(exported.Nodes.Count, source.Scene!.Nodes.Count);
+        for (int i = 0; i < exported.Nodes.Count; i++)
+        {
+            var expected = exported.Nodes[i]; var actual = source.Scene!.Nodes[i];
+            Assert.Equal(expected.Name, actual.Name); Assert.Equal(expected.Class, actual.Class);
+            Assert.True(JsonNode.DeepEquals(expected.Metadata["model_index"], actual.Metadata["model_index"]));
+            Assert.Equal(expected.Parents, actual.Parents); Assert.Equal(expected.Children, actual.Children);
+            Assert.Equal(SceneBuilder.LocalTransform(expected), SceneBuilder.LocalTransform(actual));
+            Assert.Equal(expected.Metadata["model_bbox"]!.ToJsonString(), actual.Metadata["model_bbox"]!.ToJsonString());
+        }
+        for (int i = 0; i < exported.Textures.Count; i++)
+            Assert.True(JsonNode.DeepEquals(exported.Textures[i]["next_variant_index"], source.Scene!.Textures[i]["next_variant_index"]));
+        for (int i = 0; i < exported.Materials.Count; i++)
+            foreach (string field in new[] { "alpha", "flags", "texture_index", "color", "soil" })
+                Assert.Equal(exported.Materials[i][field]!.ToJsonString(), source.Scene!.Materials[i][field]!.ToJsonString());
+        Assert.Equal(exported.Models.SelectMany(m => m.Polygons).Select(p => p.Metadata["zone_set"]!.ToJsonString()),
+            source.Scene!.Models.SelectMany(m => m.Polygons).Select(p => p.Metadata["zone_set"]!.ToJsonString()));
+        // Unavailable optional inputs keep their authored identity and cannot silently activate a fallback.
+        fixture.Write("data/m2/zrdr/aiv_easy.zrd", "( broken");
+        fixture.Write("data/common/zrdr/effects.zrd", "( broken");
+        fixture.Write("data/m2/textures/unused.png", "broken");
+        var incomplete = await SourceWorlds.LoadSceneAsync(fixture.Project, "m2", token: Token);
+        Assert.Null(incomplete.Resources["aiv_easy.zrd"].Root);
+        Assert.DoesNotContain(incomplete.MissionScene(MissionDifficulty.Easy, Token).Actors, actor => actor.CoordinateSource != null);
+        var available = PickupPlacementEditSession.FromSources(incomplete, Token);
+        Assert.DoesNotContain(MissionDifficulty.Easy, Assert.Single(available.OtherCoordinates, row => row.Kind == "tank").Difficulties);
+        Assert.Contains(incomplete.Notes, note => note.Contains("effects.zrd", StringComparison.Ordinal));
+        Assert.Contains(incomplete.Notes, note => note.Contains("unused.png", StringComparison.Ordinal));
+        Assert.Empty(Directory.EnumerateFiles(fixture.Project, "*.zbd", SearchOption.AllDirectories));
+    }
+
     private static CancellationToken Token => TestContext.Current.CancellationToken;
 
-    private static async Task<(SourceWorldBuild Build, GameZWorld World)> BuildAsync(SourceWorldFixture fixture, SourceWorkspace workspace, string mission)
+    [Fact]
+    public async Task ObjectPatchCombinesFieldsInOneTransactionAndPreservesScriptAnchors()
     {
-        var build = await SourceWorlds.BuildPreviewAsync(fixture.Project, mission, Path.Combine(SourceWorlds.PreviewRoot(fixture.Project), "p-" + Guid.NewGuid().ToString("N")), workspace.Overlay(), token: Token);
-        Assert.Null(build.Outputs.FirstOrDefault(o => o.Error != null)?.Error);
-        var world = GameZWorldReader.FromDocument(FormatRegistry.Default.OpenBytes("gamez.zbd", await File.ReadAllBytesAsync(build.WorldPath, Token), token: Token), Token);
-        return (build, world);
+        using SourceWorldFixture fixture = new();
+        var post = Node("post", Quad(2, 0)); var parent = Node("parent", Quad(2, 0));
+        Database(fixture, [post, parent], edit: root => Named(root, "parent")["translation"] = new JsonArray(10, 0, 0));
+        SourceWorkspace workspace = new(fixture.Project);
+        BeforeWrite(workspace, "NewObject3D marker\r\nObject3DTranslate 1 2 3\r\nObject3DRotate 0 270 0\r\nFindNode world\r\nAddChild marker");
+        var (build, world) = await BuildAsync(fixture, workspace, "m1");
+        var target = Target(workspace, "m1", build, world, "post");
+        int count = workspace.UndoCount;
+        var before = workspace.Read("data/m1/models/m1.gltf", Token)!;
+        var plan = SourceObjectEdits.PlanPatch(target, new() { Name = "renamed", Reparent = true, Parent = world.Nodes.Single(n => n.Name == "parent"),
+            Position = new(3, 0, 0), Flags = new Dictionary<uint, bool> { [0x40] = true, [0x80] = true, [0x800000] = true } }, Token);
+        Apply(workspace, plan);
+        Assert.Equal(count + 1, workspace.UndoCount);
+        (build, world) = await BuildAsync(fixture, workspace, "m1");
+        var renamed = world.Nodes.Single(n => n.Name == "renamed");
+        Assert.Equal("parent", Assert.Single(renamed.Parents).Name);
+        Assert.Equal(new Vector3(3, 0, 0), ObjectTransform.Of(renamed).Position);
+        Assert.Equal(0x8000C0u, renamed.Flags & 0x8000C0u);
+        workspace.Undo(); Assert.Equal(before, workspace.Read("data/m1/models/m1.gltf", Token));
+        (build, world) = await BuildAsync(fixture, workspace, "m1");
+        var marker = Target(workspace, "m1", build, world, "marker");
+        count = workspace.UndoCount;
+        plan = SourceObjectEdits.PlanPatch(marker, new() { Reparent = true, Parent = world.Nodes.Single(n => n.Name == "parent"), Position = new(4, 2, 3), Scale = new(2, 2, 2), Flags = new Dictionary<uint, bool> { [0x40] = true, [0x80] = true } }, Token);
+        Apply(workspace, plan); Assert.Equal(count + 1, workspace.UndoCount);
+        (_, world) = await BuildAsync(fixture, workspace, "m1");
+        var edited = world.Nodes.Single(n => n.Name == "marker");
+        Assert.Equal(new Vector3(4, 2, 3), ObjectTransform.Of(edited).Position);
+        Assert.Equal(new Vector3(2), ObjectTransform.Of(edited).Scale);
+        Assert.Equal(new Vector3(0, 270, 0), ObjectTransform.Of(edited).RotationDegrees);
+        Assert.Equal(0xC0u, edited.Flags & 0xC0u);
     }
-    private static SourceObjectTarget Target(SourceWorkspace workspace, string mission, SourceWorldBuild build, GameZWorld world, string name) =>
+
+    private static async Task<(SourceSceneState Build, GameZWorld World)> BuildAsync(SourceWorldFixture fixture, SourceWorkspace workspace, string mission)
+    {
+        var snapshot = await SourceWorlds.LoadSceneAsync(fixture.Project, mission, workspace.Overlay(), token: Token);
+        return (snapshot.BuildState, snapshot.World);
+    }
+    private static SourceObjectTarget Target(SourceWorkspace workspace, string mission, SourceSceneState build, GameZWorld world, string name) =>
         Target(workspace, mission, build, world, world.Nodes.Single(n => n.Name == name));
-    private static SourceObjectTarget Target(SourceWorkspace workspace, string mission, SourceWorldBuild build, GameZWorld world, WorldNode picked)
+    private static SourceObjectTarget Target(SourceWorkspace workspace, string mission, SourceSceneState build, GameZWorld world, WorldNode picked)
     {
         Dictionary<WorldNode, WorldNodeProvenance> provenance = new(ReferenceEqualityComparer.Instance);
         foreach (var (node, slot) in GameZWriter.NodeSlots(world, TestContext.Current.CancellationToken)) if (build.Provenance.TryGetValue(slot, out var origin)) provenance[node] = origin;
         return new(workspace, mission, world, SourceObjectEdits.ObjectOf(picked, provenance), provenance, build.Executions) { Write = build.WriteInstruction };
     }
-    private static WorldNodeProvenance Origin(SourceWorldBuild build, GameZWorld world, WorldNode node) => build.Provenance[GameZWriter.NodeSlots(world, TestContext.Current.CancellationToken)[node]];
+    private static WorldNodeProvenance Origin(SourceSceneState build, GameZWorld world, WorldNode node) => build.Provenance[GameZWriter.NodeSlots(world, TestContext.Current.CancellationToken)[node]];
     private static void Apply(SourceWorkspace workspace, SourceEditPlan plan) => Assert.NotNull(workspace.Apply(plan.Label, plan.Changes.Select(c => (c.Relative, (byte[]?)c.Content)), Token));
     private static string Text(SourceWorkspace workspace, string path) => Encoding.Latin1.GetString(workspace.Read(path, Token)!);
     /// <summary>Adds script lines right before m1's world is written.</summary>
@@ -300,7 +402,7 @@ public sealed class SourceObjectPlanTests
         Assert.Contains("# AddChild hull\r\n", Text(workspace, "gamegen/m1.gs"));
         (build, world) = await BuildAsync(fixture, workspace, "m1");
         Assert.DoesNotContain(world.Nodes, n => n.Name is "hull" or "tank_at");
-        Assert.DoesNotContain(build.Outputs.SelectMany(o => o.Warnings), w => w.Contains("AddChild hull", StringComparison.Ordinal));
+        Assert.DoesNotContain(build.Notes, w => w.Contains("AddChild hull", StringComparison.Ordinal));
 
         // As bft1.gw names a copter's rotors: the renaming of a part and the FindSubNode before it are taken out with it.
         using SourceWorldFixture copter = new();
@@ -357,7 +459,7 @@ public sealed class SourceObjectPlanTests
         using SourceWorldFixture fixture = new();
         // mission1.gw, which only m1 runs, loads a tank and attaches it to the world.
         fixture.Write("gamegen/m1.gs", Encoding.Latin1.GetString(File.ReadAllBytes(fixture.Path("gamegen/m1.gs"))).Replace("# no vehicles", "source mission1.gw", StringComparison.Ordinal));
-        fixture.Write("gamegen/mission1.gw", "SetModelDirectory ..\\data\\m2\\models\\bft\r\nLoadGameGen tank.flt tank_x\r\nObject3DTranslate 10.0 0.0 20.0\r\nFindNode %worldName%\r\nAddChild tank_x\r\n");
+        fixture.Write("gamegen/mission1.gw", "SetModelDirectory ..\\data\\m2\\models\\bft\r\nLoadGameGen tank.gltf tank_x\r\nObject3DTranslate 10.0 0.0 20.0\r\nFindNode %worldName%\r\nAddChild tank_x\r\n");
         SourceWorkspace workspace = new(fixture.Project);
         var (build, world) = await BuildAsync(fixture, workspace, "m1");
         var before = WorldUpdate.LocalMatrix(world.Nodes.Single(n => n.Name == "tank_x"))!.Value;

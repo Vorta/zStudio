@@ -2,9 +2,9 @@ using System.Numerics;
 using System.Runtime.InteropServices;
 using System.Text.Json;
 using System.Text.Json.Nodes;
-using Recoil.Zbd.Core.Gltf;
+using zStudio.Core.Gltf;
 
-namespace Recoil.Zbd.Core.Worlds;
+namespace zStudio.Core.Worlds;
 
 /// <summary>One load/authoring operation's allowance, shared by all terrain source documents and lookups.</summary>
 internal sealed class TerrainPlacementBudget(CancellationToken token, long maximumWork = GltfDocument.MaximumEntries,

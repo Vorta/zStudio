@@ -4,20 +4,22 @@ using System.Windows;
 using System.Windows.Automation;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
-using Recoil.Zbd.Automation;
-using Recoil.Zbd.Core;
+using zStudio.Automation;
+using zStudio.Core;
 
-namespace Recoil.Zbd.Desktop;
+namespace zStudio.Desktop;
 
 internal sealed partial class SceneInspectionCard
 {
     internal const string AuthoredRotation = "Authored rotation XYZ (degrees)";
     internal const string AuthoredHeading = "Heading degrees";
-    private readonly StackPanel modes = new() { Orientation = Orientation.Horizontal, Margin = new(0, 3, 0, 0) };
+    private readonly StackPanel modes = new() { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
     private ToggleButton moveMode = null!, rotateMode = null!;
     private PlacementTransform originalTransform, lastValidTransform;
     private PlacementRotationKind rotationKind;
     private string transformMode = "move";
+    /// <summary>Whether the Move or Rotate handles are shown: each toggle shows its handles or hides them again.</summary>
+    private bool handlesShown;
     private string[] initialAngles = [];
     private bool changingDraft;
     private ValueTextBox[] Angles => values.TryGetValue(rotationKind == PlacementRotationKind.HeadingDegrees ? AuthoredHeading : AuthoredRotation, out var angleField) ? angleField.Inputs : [];
@@ -28,25 +30,71 @@ internal sealed partial class SceneInspectionCard
     {
         ToggleButton Mode(string label, string kind, string mode)
         {
-            ToggleButton button = new() { Content = new PreviewIcon { Kind = kind }, ToolTip = label };
-            button.SetResourceReference(StyleProperty, "PreviewIconToggle");
+            ToggleButton button = new() { Content = new PreviewIcon { Kind = kind, Width = 16, Height = 16 }, ToolTip = label };
+            button.SetResourceReference(StyleProperty, "CardSegmentToggle");
             AutomationProperties.SetName(button, label);
-            button.Click += (_, _) => { Try(() => SetDraft(DraftToken, mode: mode)); RefreshModeControls(); };
+            button.Click += (_, _) => { Try(() => ToggleHandles(mode)); RefreshModeControls(); };
             modes.Children.Add(button); return button;
         }
         moveMode = Mode("Move object", "Move", "move"); rotateMode = Mode("Rotate object", "Rotate", "rotate");
         viewport.TransformDraftChanged += ReceiveTransformDrag;
+        viewport.ObjectDraftDragged += ReceiveObjectDrag;
+        viewport.ObjectGestureEnded += ObjectGestureEnded;
+    }
+    /// <summary>
+    /// The transform header's toggles: Move or Rotate shows those handles, the same one again hides them. A placement's handles
+    /// belong to a draft, which showing them starts (and hiding them ends while it changes nothing).
+    /// </summary>
+    internal void ToggleHandles(string mode)
+    {
+        if (mode is not ("move" or "rotate" or "none")) throw new StudioCommandException("invalid_argument", "Invalid transform mode.");
+        bool show = mode != "none" && !(handlesShown && transformMode == mode);
+        if (ObjectEditor != null) { SetObjectMode(show ? mode : "none"); return; }
+        if (show && mode == "rotate" && rotationKind == PlacementRotationKind.None && HasDraft) throw new StudioCommandException("read_only", "This placement has no authored rotation.");
+        if (viewport.IsPickupDragging) throw new StudioCommandException("busy", "Finish or cancel the active transform drag.");
+        if (!show)
+        {
+            handlesShown = false; viewport.TransformHandlesEnabled = false;
+            if (HasDraft && !HasChanges) CancelDraft();
+            RefreshModeControls(); return;
+        }
+        if (!HasDraft) begin(this);
+        if (!HasDraft) return;
+        if (mode == "rotate" && rotationKind == PlacementRotationKind.None) throw new StudioCommandException("read_only", "This placement has no authored rotation.");
+        handlesShown = true; transformMode = mode; viewport.TransformHandlesEnabled = true;
+        RefreshDraftPreview();
+    }
+    /// <summary>The first input into an editable placement starts its draft, keeping what was typed.</summary>
+    private void BeginFromInput()
+    {
+        string[] typed = Coordinates.Select(c => c.Text).ToArray(), turned = Angles.Select(c => c.Text).ToArray();
+        var kind = rotationKind;
+        Try(() =>
+        {
+            begin(this);
+            if (!HasDraft) return;
+            SetDraft(DraftToken, typed, rotationKind == PlacementRotationKind.EulerRadians && turned.Length == 3 ? turned : null,
+                rotationKind == PlacementRotationKind.HeadingDegrees && turned.Length == 1 ? turned[0] : null);
+        });
     }
     private void RefreshModeControls()
     {
-        modes.Visibility = !values.ContainsKey(AuthoredPlacement) ? Visibility.Collapsed : HasDraft ? Visibility.Visible : Visibility.Hidden;
-        moveMode.IsEnabled = HasDraft;
-        rotateMode.Visibility = HasDraft && rotationKind != PlacementRotationKind.None ? Visibility.Visible : Visibility.Hidden;
-        rotateMode.IsEnabled = HasDraft && rotationKind != PlacementRotationKind.None;
-        rotateMode.ToolTip = rotationKind == PlacementRotationKind.None ? "This placement has no authored rotation" :
+        // The toggles are in the transform (or details) header for anything with handles; rotation needs authored angles.
+        // Before a draft, an authored rotation or heading field says whether the placement can turn.
+        bool sourceObject = ObjectEditor != null, rotatable = sourceObject || (HasDraft ? rotationKind != PlacementRotationKind.None : values.ContainsKey(AuthoredRotation) || values.ContainsKey(AuthoredHeading));
+        bool editable = sourceObject ? ObjectEditor!.CanEdit && ObjectEditor.State.Transform != null : HasDraft || details["Editable"]?.GetValue<bool>() == true;
+        modes.Visibility = sourceObject ? (editable ? Visibility.Visible : Visibility.Collapsed)
+            : !values.ContainsKey(AuthoredPlacement) ? Visibility.Collapsed : editable ? Visibility.Visible : Visibility.Hidden;
+        modesFrame.Visibility = modes.Visibility;
+        moveMode.IsEnabled = editable && !ObjectApplying;
+        // A placement without authored rotation has only Move: the segmented control shrinks to it.
+        rotateMode.Visibility = !editable || rotatable ? Visibility.Visible : Visibility.Collapsed;
+        rotateMode.IsEnabled = editable && rotatable && !ObjectApplying;
+        rotateMode.ToolTip = sourceObject ? "Rotate object · X, Y and Z" : rotationKind == PlacementRotationKind.None ? "This placement has no authored rotation" :
             rotationKind == PlacementRotationKind.HeadingDegrees ? "Rotate object · Y heading only" : "Rotate object · X, Y and Z";
         ToolTipService.SetShowOnDisabled(rotateMode, true);
-        moveMode.IsChecked = transformMode == "move"; rotateMode.IsChecked = transformMode == "rotate";
+        moveMode.IsChecked = handlesShown && transformMode == "move"; rotateMode.IsChecked = handlesShown && transformMode == "rotate";
+        viewport.TransformHandlesEnabled = handlesShown;
     }
     internal PlacementTransform DraftTransform()
     {
@@ -81,7 +129,7 @@ internal sealed partial class SceneInspectionCard
 
     private void ReceiveTransformDrag(PlacementTransform value)
     {
-        if (!HasDraft) return;
+        if (DraftSource == null) return;
         changingDraft = true;
         try
         {
@@ -108,7 +156,7 @@ internal sealed partial class SceneInspectionCard
         Bounded(xyz); Bounded(rotationDegrees);
         if (rotationDegrees != null && rotationKind != PlacementRotationKind.EulerRadians || headingDegrees != null && rotationKind != PlacementRotationKind.HeadingDegrees)
             throw new StudioCommandException("read_only", "The selected placement does not support those rotation axes.");
-        if (headingDegrees?.Length > 64 || mode != null && mode is not ("move" or "rotate")) throw new StudioCommandException("invalid_argument", "Invalid heading or transform mode.");
+        if (headingDegrees?.Length > 64 || mode != null && mode is not ("move" or "rotate" or "none")) throw new StudioCommandException("invalid_argument", "Invalid heading or transform mode.");
         if (mode == "rotate" && rotationKind == PlacementRotationKind.None) throw new StudioCommandException("read_only", "This placement has no authored rotation.");
         changingDraft = true;
         try
@@ -116,7 +164,8 @@ internal sealed partial class SceneInspectionCard
             if (xyz != null) for (int i = 0; i < 3; i++) if (Coordinates[i].Text != xyz[i]) Coordinates[i].Text = xyz[i];
             if (rotationDegrees != null) for (int i = 0; i < 3; i++) if (Angles[i].Text != rotationDegrees[i]) Angles[i].Text = rotationDegrees[i];
             if (headingDegrees != null && Angles[0].Text != headingDegrees) Angles[0].Text = headingDegrees;
-            if (mode != null) transformMode = mode;
+            if (mode == "none") handlesShown = false;
+            else if (mode != null) { transformMode = mode; handlesShown = true; }
         }
         finally { changingDraft = false; }
         RefreshDraftPreview();

@@ -1,10 +1,10 @@
 using System.IO;
-using Recoil.Zbd.Automation;
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Desktop;
+using zStudio.Automation;
+using zStudio.Core;
+using zStudio.Desktop;
 using Xunit;
 
-namespace Recoil.Zbd.Desktop.Tests;
+namespace zStudio.Desktop.Tests;
 
 internal static class GuiNavigationChecks
 {
@@ -16,7 +16,7 @@ internal static class GuiNavigationChecks
         string oldPath = Path.Combine(root, "initial.zbd"), newerPath = Path.Combine(root, "newer.zbd");
         File.WriteAllBytes(oldPath, [1, 0, 0, 0, 0, 0, 0, 0]);
         var main = new MainWindow { Left = -12000, ShowInTaskbar = false }; main.Show();
-        TaskCompletionSource<ZbdDocument> newerLoaded = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        TaskCompletionSource<AssetDocument> newerLoaded = new(TaskCreationOptions.RunContinuationsAsynchronously);
         Task<DocumentModel?>? newerOpen = null;
         System.ComponentModel.PropertyChangedEventHandler navigate = (_, e) =>
         {
@@ -42,7 +42,7 @@ internal static class GuiNavigationChecks
             await main.OpenFilesAsync([oldPath], forceRoot: true).WaitAsync(deadline.Token);
             Assert.Equal(oldPath, main.ViewModel.SelectedDocument!.Path);
 
-            TaskCompletionSource<ZbdDocument> firstLoaded = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            TaskCompletionSource<AssetDocument> firstLoaded = new(TaskCreationOptions.RunContinuationsAsynchronously);
             string firstPath = Path.Combine(root, "drop-first.zbd"), secondPath = Path.Combine(root, "drop-second.zbd");
             main.ViewModel.LoadDocumentAsync = (path, _) =>
             { Assert.Equal(firstPath, path); return firstLoaded.Task; };
@@ -61,6 +61,6 @@ internal static class GuiNavigationChecks
             main.Close(); Directory.Delete(root, true);
         }
     }
-    private static ZbdDocument Source(string path) => new(path, new(0, DateTime.MinValue),
+    private static AssetDocument Source(string path) => new(path, new(0, DateTime.MinValue),
         new(FormatFamily.Unknown, null, Recognition.Unknown, "GUI navigation fixture"), ReadOnlyMemory<byte>.Empty);
 }

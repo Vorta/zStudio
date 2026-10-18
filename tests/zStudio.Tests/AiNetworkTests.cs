@@ -1,11 +1,11 @@
 using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Security.Cryptography;
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Core.Formats;
+using zStudio.Core;
+using zStudio.Core.Formats;
 using Xunit;
 
-namespace Recoil.Zbd.Tests;
+namespace zStudio.Tests;
 
 // Relies on a weak cache entry surviving between two reads; kept apart from tests that run in parallel.
 [Collection("Allocation-sensitive")]
@@ -49,9 +49,9 @@ public sealed class AiNetworkTests
     private static ZrdNode A(params ZrdNode[] children) => ZrdNode.Create(ZrdKind.Array) with { Children = children };
     private static ZrdNode Node(int a = -1, int b = -1, int c = -1) => A(I(12), A(F("1.25"), F("-2"), F("3")), A(I(a), I(b), I(c)));
     private static AiNetwork Decode(ZrdNode root) => MissionAiNetworks.Decode("network", "archive.zbd", 3, "net_01.zrd", root, TestContext.Current.CancellationToken);
-    private static ZbdDocument Archive(params ZrdNode[] roots) => FormatRegistry.Default.OpenBytes("ai-test.zbd",
+    private static AssetDocument Archive(params ZrdNode[] roots) => FormatRegistry.Default.OpenBytes("ai-test.zbd",
         ResourceEditingTests.Archive(roots.Select(root => ("net_01.zrd", ZrdWriter.Write(root, TestContext.Current.CancellationToken))).ToArray()), token: TestContext.Current.CancellationToken);
-    private static AiNetworkSnapshot Read(ZbdDocument doc) => MissionAiNetworks.Read(doc.Assets.Select(a => (doc, a)), TestContext.Current.CancellationToken);
+    private static AiNetworkSnapshot Read(AssetDocument doc) => MissionAiNetworks.Read(doc.Assets.Select(a => (doc, a)), TestContext.Current.CancellationToken);
     [Fact]
     public void CachedSnapshotsLiveOnlyAsLongAsTheirSourceArchive()
     {
@@ -62,10 +62,10 @@ public sealed class AiNetworkTests
     }
     /// <summary>While the archive lives, reading it again reuses the decoded snapshot.</summary>
     [MethodImpl(MethodImplOptions.NoInlining)]
-    private static bool ReusesSnapshot(WeakReference<ZbdDocument> archive, WeakReference snapshot) =>
+    private static bool ReusesSnapshot(WeakReference<AssetDocument> archive, WeakReference snapshot) =>
         archive.TryGetTarget(out var doc) && ReferenceEquals(snapshot.Target, Read(doc));
     [MethodImpl(MethodImplOptions.NoInlining)]
-    private static (WeakReference<ZbdDocument> Archive, WeakReference Snapshot) CachedSnapshot()
+    private static (WeakReference<AssetDocument> Archive, WeakReference Snapshot) CachedSnapshot()
     {
         var doc = Archive(A(S("node_00"), Node())); var snapshot = Read(doc);
         Assert.NotNull(Assert.Single(snapshot.Networks).Source);

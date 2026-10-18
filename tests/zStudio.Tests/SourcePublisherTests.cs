@@ -2,11 +2,11 @@ using System.ComponentModel;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
-using Recoil.Zbd.Core.Sources;
+using zStudio.Core.Sources;
 using Xunit;
-using State = Recoil.Zbd.Core.Sources.SourceRecoveryFileState;
+using State = zStudio.Core.Sources.SourceRecoveryFileState;
 
-namespace Recoil.Zbd.Tests;
+namespace zStudio.Tests;
 
 /// <summary>Journaled multi-file source saves: publication, undo, crash recovery and refusal of unexpected files.</summary>
 public sealed partial class SourcePublisherTests

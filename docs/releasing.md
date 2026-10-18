@@ -14,15 +14,15 @@ Dependency alerts/security update PRs and confidential vulnerability reporting a
 
 ## Cutting a release
 
-1. Update the version in `Directory.Build.props` and add its dated entry to `CHANGELOG.md`. Update the README download version and applicable guides. Use `MAJOR.MINOR.PATCH`, or an explicit prerelease suffix for previews.
+1. Update the matching versions in `Directory.Build.props` and `blender/zstudio_recoil/blender_manifest.toml` and add its dated entry to `CHANGELOG.md`. Update the README download version and applicable guides. Use `MAJOR.MINOR.PATCH`, or an explicit prerelease suffix for previews.
 2. Run Release build/tests and the relevant local corpus/UI checks. The CI check also publishes and validates a portable package from a clean Windows runner without game assets. Original-game compatibility still requires separate validation.
 3. Merge the reviewed version change to `main` after CI passes. Fetch current `main` and create/push its annotated version tag, for example:
 
    ```powershell
    git switch main
    git pull --ff-only
-   git tag -a v0.8.5 -m 'zStudio 0.8.5'
-   git push origin v0.8.5
+   git tag -a v0.9.0 -m 'zStudio 0.9.0'
+   git push origin v0.9.0
    ```
 
 4. The Release workflow checks tag/version equality and main ancestry, restores locked dependencies, builds, tests and packages. A separate job with release-write permission uploads the verified ZIP and `SHA256SUMS` to GitHub Releases. Changelog text supplies the notes. Prerelease version suffixes create prereleases; ordinary versions become the latest release.
@@ -36,12 +36,12 @@ Run `./tools/publish.ps1`. It creates `artifacts/zStudio-win-x64/` and `artifact
 
 Keep this folder and ZIP current with the latest validated local build. Use `artifacts/zStudio-win-x64/zStudio.exe` for user-facing launches and live GUI/MCP work, including unreleased feature work; republish application changes before handoff. A local package refresh does not publish a release or change its version. Internal test/build outputs may remain in `bin`, but they are not the user-facing installation.
 
-The executable remains the SDK apphost bound to `dependencies/Recoil.Zbd.Studio.dll`. Internal assembly names and `%LOCALAPPDATA%/RecoilZbdStudio` settings/error logs remain stable across the rename. The icon uses the owner's updated artwork at the existing checked-in resource path. Packaging temporarily moves the old portable directory aside, then deletes it after verifying the replacement. Superseded portable folders and ZIPs are not retained. Keep the current folder and ZIP in artifacts, with reports/checksum sidecars in a temporary directory.
+The executable remains the SDK apphost bound to `dependencies/zStudio.Desktop.dll`. Assemblies and namespaces use `zStudio.*`; settings, error logs and MCP registrations use `%LOCALAPPDATA%/zStudio`. Previous-version settings are not imported or deleted. The new profile starts with defaults and local MCP disabled. The icon uses the owner's updated artwork at the existing checked-in resource path. Packaging temporarily moves the old portable directory aside, then deletes it after verifying the replacement. Superseded portable folders and ZIPs are not retained. Keep the current folder and ZIP in artifacts, with reports/checksum sidecars in a temporary directory.
 
 The package verifier can be run independently:
 
 ```powershell
-./tools/verify-package.ps1 -Directory artifacts/zStudio-win-x64 -Archive artifacts/zStudio-0.8.5-win-x64.zip -ExpectedVersion 0.8.5
+./tools/verify-package.ps1 -Directory artifacts/zStudio-win-x64 -Archive artifacts/zStudio-0.9.0-win-x64.zip -ExpectedVersion 0.9.0
 ```
 
 ## Maintenance checks

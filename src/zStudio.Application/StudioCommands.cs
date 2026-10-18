@@ -2,7 +2,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 
-namespace Recoil.Zbd.Automation;
+namespace zStudio.Automation;
 
 public sealed class StudioCommandException(string code, string message) : Exception(message)
 {

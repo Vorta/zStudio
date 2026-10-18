@@ -1,11 +1,11 @@
 using System.Numerics;
 using System.Text.Json.Nodes;
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Core.Animation;
-using Recoil.Zbd.Core.Formats;
+using zStudio.Core;
+using zStudio.Core.Animation;
+using zStudio.Core.Formats;
 using Xunit;
 
-namespace Recoil.Zbd.Tests;
+namespace zStudio.Tests;
 
 public sealed class VtolDropWindowsTests
 {
@@ -67,7 +67,7 @@ public sealed class VtolDropWindowsTests
 
     internal static AnimationPreviewContext Context(AnimationPackage package)
     {
-        var world = new ZbdDocument("fixture", new(0, DateTime.MinValue), new(FormatFamily.GameZ, 15, Recognition.Supported, "fixture"), ReadOnlyMemory<byte>.Empty) { Scene = new() };
+        var world = new AssetDocument("fixture", new(0, DateTime.MinValue), new(FormatFamily.GameZ, 15, Recognition.Supported, "fixture"), ReadOnlyMemory<byte>.Empty) { Scene = new() };
         world.Scene.Nodes.Add(new(0, "world", "world", -1, [], [1], new JsonObject(), Data(0)));
         world.Scene.Nodes.Add(new(1, "parent", "object3d", -1, [0], [2], new JsonObject { ["flags"] = 4 }, Data(100)));
         world.Scene.Nodes.Add(new(2, "ground", "object3d", -1, [1], [], new JsonObject { ["flags"] = 4 }, Data(0)));

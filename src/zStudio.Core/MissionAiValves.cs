@@ -3,9 +3,9 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Security.Cryptography;
 using System.Text;
-using Recoil.Zbd.Core.Formats;
+using zStudio.Core.Formats;
 
-namespace Recoil.Zbd.Core;
+namespace zStudio.Core;
 
 public sealed record AiValveRecord(Guid Id, Guid Parent, int ChildIndex, ZrdNode NameNode, ZrdNode Value,
     string Kind, int? NodeIndex = null, int? From = null, int? To = null)
@@ -22,7 +22,7 @@ public sealed record AiValveTarget(Guid Id, string Name, long SourceOffset, bool
 /// <summary>Semantic views over the shared ZRD tree. Occurrences, not names, identify editable records.</summary>
 public static class MissionAiValves
 {
-    public static AiNetworkSnapshot Attach(AiNetworkSnapshot graph, IEnumerable<ZbdDocument> archives, CancellationToken token)
+    public static AiNetworkSnapshot Attach(AiNetworkSnapshot graph, IEnumerable<AssetDocument> archives, CancellationToken token)
     {
         List<AiValveSource> sources = []; using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
         Dictionary<string, Dictionary<int, ZrdNode?>> networkRoots = new(StringComparer.OrdinalIgnoreCase);

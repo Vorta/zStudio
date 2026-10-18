@@ -1,8 +1,8 @@
-using Recoil.Zbd.Core.Formats;
-using Recoil.Zbd.Core.Worlds;
+using zStudio.Core.Formats;
+using zStudio.Core.Worlds;
 using Xunit;
 
-namespace Recoil.Zbd.Tests;
+namespace zStudio.Tests;
 
 /// <summary>How the shipped worlds meet the engine's zone probes (see docs/world-editor-plan.md, "Zone probes").</summary>
 public sealed class ZoneProbeCorpusTests

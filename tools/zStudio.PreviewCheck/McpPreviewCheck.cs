@@ -6,15 +6,15 @@ using System.Text.Json.Nodes;
 using System.Windows;
 using ModelContextProtocol.Client;
 using ModelContextProtocol.Protocol;
-using Recoil.Zbd.Desktop;
-using Recoil.Zbd.Mcp;
+using zStudio.Desktop;
+using zStudio.Mcp;
 
 internal static class McpPreviewCheck
 {
     public static int Run(string root)
     {
         root = Path.GetFullPath(root);
-        string settings = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "RecoilZbdStudio", "settings.json");
+        string settings = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "zStudio", "settings.json");
         byte[]? originalSettings = File.Exists(settings) ? File.ReadAllBytes(settings) : null;
         string output = Path.Combine(Path.GetTempPath(), "zstudio-mcp-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(output);
@@ -178,8 +178,8 @@ internal static class McpPreviewCheck
                 await CancelNavigation("open_document", new { path = gamezPath }, "World");
                 var (world, worldPreview) = await Select(gamezPath, "World", "Whole world");
                 var highlightHost = (System.Windows.Controls.ContentControl)window.FindName("SceneHost");
-                var highlightScene = (Recoil.Zbd.Rendering.SceneViewport)highlightHost.Content;
-                highlightScene.RestoreView(Recoil.Zbd.Rendering.SceneViewport.UprightPose(highlightScene.CaptureView()));
+                var highlightScene = (zStudio.Rendering.SceneViewport)highlightHost.Content;
+                highlightScene.RestoreView(zStudio.Rendering.SceneViewport.UprightPose(highlightScene.CaptureView()));
                 var highlightPose = highlightScene.CaptureView();
                 foreach (string highlight in new[] { "nonDefaultSoils", "canModify", "clipTo", "none", "nonDefaultSoils" })
                 {
@@ -195,13 +195,13 @@ internal static class McpPreviewCheck
                     var state = await Call("state", new { });
                     string retainedPreview = state["preview"]!.GetValue<string>();
                     var sceneHost = (System.Windows.Controls.ContentControl)window.FindName("SceneHost");
-                    var retainedScene = (Recoil.Zbd.Rendering.SceneViewport)sceneHost.Content;
+                    var retainedScene = (zStudio.Rendering.SceneViewport)sceneHost.Content;
                     var retainedData = retainedScene.PreviewScene;
                     bool wholeWorld = retainedScene.Mission != null;
                     // FrameAll starts with world-up; the next presented frame
                     // orthogonalizes it. Start from an explicit upright pose so
                     // this check isolates refresh cancellation from that update.
-                    retainedScene.RestoreView(Recoil.Zbd.Rendering.SceneViewport.UprightPose(retainedScene.CaptureView()));
+                    retainedScene.RestoreView(zStudio.Rendering.SceneViewport.UprightPose(retainedScene.CaptureView()));
                     var retainedView = retainedScene.CaptureView();
                     var before = await Call("preview_state", new { preview = retainedPreview });
                     var lod = (System.Windows.Controls.ComboBox)window.FindName("LodCombo");
@@ -261,12 +261,12 @@ internal static class McpPreviewCheck
                         throw new InvalidDataException("Successful refresh did not publish the requested highlight mode.");
                     await Call("capture", new { target = "preview", preview = published["preview"]!.GetValue<string>(), width = 800, height = 600 });
 
-                    if (((Recoil.Zbd.Rendering.SceneViewport)sceneHost.Content).Mission != null)
+                    if (((zStudio.Rendering.SceneViewport)sceneHost.Content).Mission != null)
                     {
                         // Reenter the difficulty setter before its MCP caller can
                         // capture the refresh task. Only the newer GUI request owns it.
                         var guiDifficulty = window.ViewModel.Difficulty;
-                        string requestedDifficulty = guiDifficulty == Recoil.Zbd.Core.MissionDifficulty.Hard ? "Easy" : "Hard";
+                        string requestedDifficulty = guiDifficulty == zStudio.Core.MissionDifficulty.Hard ? "Easy" : "Hard";
                         bool difficultySuperseded = false;
                         System.ComponentModel.PropertyChangedEventHandler replaceDifficulty = (_, e) =>
                         {
@@ -285,7 +285,7 @@ internal static class McpPreviewCheck
                         using var difficultyTimeout = new CancellationTokenSource(TimeSpan.FromMinutes(2));
                         while (window.ViewModel.Status == "Updating preview…") await Task.Delay(20, difficultyTimeout.Token);
                         var guiPublished = await Call("state", new { });
-                        var guiScene = (Recoil.Zbd.Rendering.SceneViewport)sceneHost.Content;
+                        var guiScene = (zStudio.Rendering.SceneViewport)sceneHost.Content;
                         if (guiPublished["preview"]!.GetValue<string>() == published["preview"]!.GetValue<string>() ||
                             guiScene.Mission?.Layout.Difficulty != guiDifficulty || window.ViewModel.Difficulty != guiDifficulty ||
                             window.ViewModel.Settings.Difficulty != guiDifficulty)
@@ -346,7 +346,7 @@ internal static class McpPreviewCheck
                     await Call("capture", new { target = "preview", preview = current["preview"]!.GetValue<string>(), width = 800, height = 600 });
                 }
                 await CheckCanceledStaticRefresh();
-                var modelRecord = window.ViewModel.SelectedDocument!.Document.Assets.First(a => a.Kind == Recoil.Zbd.Core.AssetKind.Model);
+                var modelRecord = window.ViewModel.SelectedDocument!.Document.Assets.First(a => a.Kind == zStudio.Core.AssetKind.Model);
                 await CancelNavigation("select_asset", new { document = world, kind = "Model", index = modelRecord.Index }, "Model");
                 await CheckCanceledStaticRefresh();
                 (_, worldPreview) = await Select(gamezPath, "World", "Whole world");
@@ -364,7 +364,7 @@ internal static class McpPreviewCheck
                 var pickup = placements["items"]![0]!;
                 var state2 = await Call("state", new { });
                 long revision = state2["documents"]!.AsArray().Single(d => d!["id"]!.GetValue<string>() == world)!["Revision"]!.GetValue<long>();
-                await Call("pickup_lock", new { document = world, revision, locked = false });
+                await Call("scene_lock", new { document = world, revision, locked = false });
                 var position = pickup["position"]!;
                 await Call("pickup_move", new { document = world, revision, source = pickup["source"]!.DeepClone(), x = position["X"]!.GetValue<double>() + 1, y = position["Y"]!.GetValue<double>(), z = position["Z"]!.GetValue<double>() });
                 state2 = await Call("state", new { });

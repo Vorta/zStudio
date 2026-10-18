@@ -30,7 +30,7 @@
           "Microsoft.Extensions.DependencyInjection.Abstractions": "10.0.10"
         }
       },
-      "Recoil.Zbd.Application": {
+      "zStudio.Application": {
         "type": "Project"
       }
     },

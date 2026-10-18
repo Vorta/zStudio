@@ -1,12 +1,12 @@
 using System.Numerics;
 using System.Text.Json.Nodes;
 
-namespace Recoil.Zbd.Core.Formats;
+namespace zStudio.Core.Formats;
 
 internal sealed class GameZReader : IZbdFormatReader
 {
     public FormatFamily Family => FormatFamily.GameZ;
-    public void Read(ZbdDocument doc, CancellationToken token)
+    public void Read(AssetDocument doc, CancellationToken token)
     {
         var layout = GameZLayouts.For(doc.Probe.Version);
         BinaryCursor h = new(doc.Bytes); h.Skip(8);
@@ -37,7 +37,7 @@ internal sealed class GameZReader : IZbdFormatReader
         if (scene.Nodes.Any(n => n.Class == "world"))
             doc.Add(AssetKind.World, 0, "Whole world", 0, doc.Bytes.Length, new JsonObject { ["nodes"] = scene.Nodes.Count, ["models"] = scene.Models.Count, ["preview"] = "Static scene; no gameplay or effect simulation" }, scene);
     }
-    private static void ReadMaterials(ZbdDocument doc, GameScene scene, BinaryCursor c, CancellationToken token)
+    private static void ReadMaterials(AssetDocument doc, GameScene scene, BinaryCursor c, CancellationToken token)
     {
         uint capacity = c.U32(), count = c.U32(); c.Skip(8); if (count > capacity) throw new InvalidDataException("Material count exceeds capacity."); GameZLayouts.CheckEntries("material", count); c.Count(capacity, 44);
         for (int i = 0; i < count; i++)
@@ -57,7 +57,7 @@ internal sealed class GameZReader : IZbdFormatReader
                 cycle["texture_indices"] = JsonData.Integers(c.Indices(cycle.Int("tex_map_count"))); material["cycle"] = cycle;
             }
     }
-    private static void ReadModels(ZbdDocument doc, GameScene scene, BinaryCursor c, GameZLayouts layout, CancellationToken token)
+    private static void ReadModels(AssetDocument doc, GameScene scene, BinaryCursor c, GameZLayouts layout, CancellationToken token)
     {
         uint capacity = c.U32(), count = c.U32(); c.Skip(4); if (count > capacity) throw new InvalidDataException("Model count exceeds capacity."); GameZLayouts.CheckEntries("model", count); c.Count(capacity, layout.ModelSize + 4);
         List<JsonObject> infos = []; GeometryBudget geometry = new();
@@ -107,7 +107,7 @@ internal sealed class GameZReader : IZbdFormatReader
 
         return new(index, vertices, normals, morphs, polygons.ToArray(), info);
     }
-    private static IReadOnlyList<long> ReadNodes(ZbdDocument doc, GameScene scene, BinaryCursor c, uint capacity, GameZLayouts layout, CancellationToken token)
+    private static IReadOnlyList<long> ReadNodes(AssetDocument doc, GameScene scene, BinaryCursor c, uint capacity, GameZLayouts layout, CancellationToken token)
     {
         GameZLayouts.CheckEntries("node", capacity);
         int count = c.Count(capacity, layout.NodeSize + 4); List<(JsonObject Info, uint Offset, long Header)> entries = []; bool free = false;

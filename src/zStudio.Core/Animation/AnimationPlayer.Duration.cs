@@ -1,6 +1,6 @@
 using System.Diagnostics;
 
-namespace Recoil.Zbd.Core.Animation;
+namespace zStudio.Core.Animation;
 
 public enum AnimationDurationKind { Finite, Looping, OpenEnded, Unavailable, AnalysisLimit }
 

@@ -1,6 +1,6 @@
 using System.Numerics;
 
-namespace Recoil.Zbd.Core;
+namespace zStudio.Core;
 
 public sealed partial class PickupPlacementEditSession
 {

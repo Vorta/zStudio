@@ -1,8 +1,8 @@
 using System.Buffers.Binary;
 using System.Numerics;
-using Recoil.Zbd.Core.Export;
+using zStudio.Core.Export;
 
-namespace Recoil.Zbd.Tests;
+namespace zStudio.Tests;
 
 internal static class ModelFixture
 {

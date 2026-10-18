@@ -1,57 +1,29 @@
 using System.Text.Json.Nodes;
-using Recoil.Zbd.Core.Gltf;
-using Recoil.Zbd.Core.Worlds;
+using zStudio.Core.Gltf;
+using zStudio.Core.Worlds;
 
-namespace Recoil.Zbd.Core.Sources;
+namespace zStudio.Core.Sources;
 
-/// <summary>One mission's logical model bindings, shared by builds and source editing.</summary>
-internal sealed class SourceMissionModels
+/// <summary>Current physical glTF references shared by builds and source dependency inspection.</summary>
+internal static class SourceMissionModels
 {
-    internal SourceMapZones? Map { get; }
-    private readonly Dictionary<string, Dictionary<int, string>> references = new(StringComparer.OrdinalIgnoreCase);
-
-    internal SourceMissionModels(SourceMapZones? map, CancellationToken token)
-    {
-        Map = map;
-        if (map == null) return;
-        foreach (var asset in map.Assets)
-        {
-            token.ThrowIfCancellationRequested();
-            Dictionary<int, string> nodes = [];
-            foreach (var reference in asset.References)
-            { token.ThrowIfCancellationRequested(); nodes.Add(reference.Node, reference.Spelling); }
-            references.Add(asset.LogicalPath, nodes);
-        }
-    }
-
-    internal SourceMapZoneAsset? Asset(string logical) => Map?.TryGetAsset(logical, out var asset) == true ? asset : null;
-    internal string Geometry(string logical) => logical;
-    internal string? Reference(string logical, int node) => references.TryGetValue(logical, out var nodes) ? nodes.GetValueOrDefault(node) : null;
-
-    internal static string? EffectiveReference(JsonObject? extras, string? binding)
+    internal static string? Reference(JsonObject? extras)
     {
         var engine = extras?[WorldGltf.Key] as JsonObject;
-        // WorldGltf imports map URIs only on neutral holders. A legacy ref remains authoritative.
-        if (engine?[WorldGltf.ZoneReference] != null)
-            return binding ?? throw new InvalidDataException("The model needs its map reference bindings before its dependencies can be checked.");
+        if (engine?.ContainsKey(WorldGltf.ZoneReference) == true)
+            throw new InvalidDataException("A source model needs embedded reference URIs. Reconstruct older projects from the original ZBD files.");
         return engine?["ref"] is JsonValue reference && reference.TryGetValue(out string? value) ? value : null;
     }
 
-    internal IEnumerable<string> Dependencies(string logical, GltfDocument hierarchy, Action<long> reserve)
+    internal static IEnumerable<string> Dependencies(string path, GltfDocument hierarchy, Action<long> reserve)
     {
-        int ordinal = 0;
         foreach (var node in hierarchy.AllNodes())
         {
             reserve(1);
-            string? uri = EffectiveReference(node.Extras, Reference(logical, ordinal++));
+            string? uri = Reference(node.Extras);
             if (uri == null) continue;
-            reserve(4L * (logical.Length + uri.Length + 1));
-            yield return WorldAssembler.Relative(logical, uri);
+            reserve(4L * (path.Length + uri.Length + 1));
+            yield return WorldAssembler.Relative(path, uri);
         }
-    }
-
-    internal bool Exists(string logical, Func<string, bool> exists)
-    {
-        return exists(logical);
     }
 }

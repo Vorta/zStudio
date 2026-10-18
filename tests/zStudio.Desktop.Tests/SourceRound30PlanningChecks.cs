@@ -5,16 +5,16 @@ using System.Reflection;
 using System.Text.Json.Nodes;
 using ModelContextProtocol.Client;
 using ModelContextProtocol.Protocol;
-using Recoil.Zbd.Automation;
-using Recoil.Zbd.Core.Sources;
-using Recoil.Zbd.Core.Terrain;
-using Recoil.Zbd.Core.Worlds;
-using Recoil.Zbd.Desktop;
-using Recoil.Zbd.Mcp;
-using Recoil.Zbd.Tests;
+using zStudio.Automation;
+using zStudio.Core.Sources;
+using zStudio.Core.Terrain;
+using zStudio.Core.Worlds;
+using zStudio.Desktop;
+using zStudio.Mcp;
+using zStudio.Tests;
 using Xunit;
 
-namespace Recoil.Zbd.Desktop.Tests;
+namespace zStudio.Desktop.Tests;
 
 /// <summary>GUI/shared planning and real protocol regressions for complete source dependency analysis.</summary>
 internal static class SourceRound30PlanningChecks
@@ -53,18 +53,17 @@ internal static class SourceRound30PlanningChecks
             var opened = await Job("source_world_open", new() { ["mission"] = "m1" });
             var doc = main.ViewModel.Documents.Single(d => d.SessionId.ToString() == opened["document"]!["id"]!.GetValue<string>());
             await ((Task)typeof(MainWindow).GetField("previewWork", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(main)!).WaitAsync(token);
-            Assert.DoesNotContain(doc.SourceBuild!.Outputs, o => o.Error != null);
             var workspace = doc.SourceWorld!.Workspace;
             long revision = workspace.Revision, contentRevision = workspace.ContentRevision, documentRevision = doc.Revision;
             var history = workspace.History.ToArray(); var preview = doc.PreviewDocument;
 
             if (macroTerrain)
             {
-                // The preview packages every script into interp.zbd: archive membership does not mean m2 ran in m1.
-                Assert.Contains("gamegen/m2.gs", doc.SourceBuild.Dependencies);
-                var world = GameZWorldReader.FromDocument(doc.Document, token);
+                // The snapshot freezes scripts for runtime texture cycles; membership does not mean m2 ran in m1.
+                Assert.Contains("gamegen/m2.gs", doc.SourceBuild!.Dependencies);
+                var world = ((SourceSceneSnapshot)doc.Document).World;
                 Assert.Single(world.Nodes, n => n.Name == "flat_a");
-                Assert.DoesNotContain(doc.SourceBuild.Outputs.SelectMany(o => o.Warnings), w => w.Contains("FindNode") && w.Contains("found no node"));
+                Assert.DoesNotContain(doc.SourceBuild!.Notes, w => w.Contains("FindNode") && w.Contains("found no node"));
                 var method = typeof(MainWindow).GetMethod("PlanTerrainConversionAsync", BindingFlags.Instance | BindingFlags.NonPublic)!;
                 var gui = await ((Task<(TerrainConversionPlan Plan, long Revision)>)method.Invoke(main, [doc, token])!).WaitAsync(token);
                 Assert.Equal(2, gui.Plan.Converted);
@@ -76,8 +75,8 @@ internal static class SourceRound30PlanningChecks
                 var apply = Arguments(); apply["apply"] = true;
                 var converted = await Job("source_terrain_convert", apply);
                 var next = main.ViewModel.Documents.Single(d => d.SessionId.ToString() == converted["document"]!["id"]!.GetValue<string>());
-                Assert.Single(GameZWorldReader.FromDocument(next.Document, token).Nodes, n => n.Name == "flat_a");
-                Assert.DoesNotContain(next.SourceBuild!.Outputs.SelectMany(o => o.Warnings), w => w.Contains("FindNode") && w.Contains("found no node"));
+                Assert.Single(((SourceSceneSnapshot)next.Document).World.Nodes, n => n.Name == "flat_a");
+                Assert.DoesNotContain(next.SourceBuild!.Notes, w => w.Contains("FindNode") && w.Contains("found no node"));
                 Assert.True(workspace.CanUndo); Assert.True(workspace.IsDirty);
                 foreach (var (path, bytes) in original) Assert.Equal(bytes, File.ReadAllBytes(path));
                 await Call("undo_redo", new() { ["document"] = next.SessionId.ToString(), ["revision"] = next.Revision, ["action"] = "undo" });
@@ -85,10 +84,11 @@ internal static class SourceRound30PlanningChecks
             }
             else
             {
-                var world = GameZWorldReader.FromDocument(doc.Document, token);
+                var world = ((SourceSceneSnapshot)doc.Document).World;
                 var hull = Assert.Single(world.Nodes, n => n.Name == "hull");
                 int node = GameZWriter.NodeSlots(world, TestContext.Current.CancellationToken)[hull];
-                // A turn of the shared file's hull reads m2's scripts, whose turn keeps its own there, to note it.
+                // Picking the hull targets the complete loaded tank placement. The dependency guard still
+                // requires the captured scripts to be readable before publishing a replacement world.
                 var requested = ObjectTransform.Of(hull) with { RotationDegrees = new Vector3(0, 30, 0) };
                 var method = typeof(MainWindow).GetMethod("MoveSourceObjectAsync", BindingFlags.Instance | BindingFlags.NonPublic)!;
                 Task<DocumentModel> GuiEdit() => (Task<DocumentModel>)method.Invoke(main, [doc, node, requested, token])!;
@@ -108,9 +108,14 @@ internal static class SourceRound30PlanningChecks
                     Assert.Equal(refused.Message, protocol["message"]!.GetValue<string>());
                     Unchanged("gamegen/m2.gs");
                 }
-                // A failed read must not be cached as absence: releasing the lock, the turn goes ahead and notes m2's script.
+                // A failed read must not be cached as absence: releasing the lock, the whole-placement turn goes ahead.
+                // It changes m1's instance, leaving the shared hull definition and m2's independent script untouched.
                 var retried = await Job("source_world_object_edit", EditArguments());
-                Assert.Contains(retried["document"]!["sourceWorld"]!["editNotes"]!.AsArray(), n => n!.GetValue<string>().Contains("Object3DRotate", StringComparison.Ordinal));
+                var next = main.ViewModel.Documents.Single(d => d.SessionId.ToString() == retried["document"]!["id"]!.GetValue<string>());
+                var changedWorld = ((SourceSceneSnapshot)next.Document).World;
+                Assert.Equal(new Vector3(0, 30, 0), ObjectTransform.Of(Assert.Single(changedWorld.Nodes, n => n.Name == "tank")).RotationDegrees);
+                Assert.Equal(ObjectTransform.Of(hull), ObjectTransform.Of(Assert.Single(changedWorld.Nodes, n => n.Name == "hull")));
+                Assert.Equal(["gamegen/m1.gs"], workspace.DirtyFiles);
                 Assert.True(workspace.IsDirty);
                 foreach (var (path, bytes) in original) Assert.Equal(bytes, File.ReadAllBytes(path));
             }
@@ -123,7 +128,7 @@ internal static class SourceRound30PlanningChecks
                 Assert.False(workspace.CanUndo); Assert.False(workspace.CanRedo); Assert.False(workspace.IsDirty);
                 Assert.Empty(workspace.Overlay()); Assert.Same(doc, main.ViewModel.SelectedDocument);
                 Assert.Same(preview, doc.PreviewDocument); Assert.False(doc.IsDisposed);
-                Assert.False(main.CancelOperationItem.IsEnabled);
+                Assert.False(main.OperationRunning);
                 foreach (var (path, bytes) in original) if (path != (locked == null ? null : fixture.Path(locked))) Assert.Equal(bytes, File.ReadAllBytes(path));
             }
             async Task<JsonNode> Call(string name, Dictionary<string, object?> arguments)

@@ -1,9 +1,9 @@
 using System.IO;
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Core.Formats;
-using Recoil.Zbd.Core.Sources;
+using zStudio.Core;
+using zStudio.Core.Formats;
+using zStudio.Core.Sources;
 
-namespace Recoil.Zbd.Desktop;
+namespace zStudio.Desktop;
 
 /// <summary>A complete, privately staged Files tree. Failed discovery never publishes partial rows.</summary>
 internal sealed record RootFileInventory(List<FileEntry> Files, FolderNode Root, Dictionary<string, FolderNode> FileNodes)
@@ -13,7 +13,6 @@ internal sealed record RootFileInventory(List<FileEntry> Files, FolderNode Root,
         inventory ??= new(token); inventory.Path(root.Length);
         root = Path.TrimEndingDirectorySeparator(root);
         List<FileEntry> files = [];
-        string previews = Path.DirectorySeparatorChar + SourceWorlds.PreviewFolder.Replace('/', Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
         string recoveryLock = Path.DirectorySeparatorChar + SourcePublisher.LockFile.Replace('/', Path.DirectorySeparatorChar);
         Dictionary<string, bool> projects = new(StringComparer.OrdinalIgnoreCase);
         foreach (var entry in inventory.Entries(root, recurse: true, ignoreInaccessible: true, skip: FileAttributes.ReparsePoint))
@@ -22,7 +21,7 @@ internal sealed record RootFileInventory(List<FileEntry> Files, FolderNode Root,
             if (entry is not FileInfo) continue;
             string file = entry.FullName;
             int at = file.EndsWith(recoveryLock, StringComparison.OrdinalIgnoreCase) ? file.Length - recoveryLock.Length
-                : file.IndexOf(previews, Math.Max(0, root.Length - 1), StringComparison.OrdinalIgnoreCase);
+                : -1;
             if (at >= Math.Max(0, root.Length - 1))
             {
                 inventory.Path(at);

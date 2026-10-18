@@ -1,10 +1,10 @@
 using System.Text;
-using Recoil.Zbd.Core.Sources;
-using Recoil.Zbd.Core.Worlds;
+using zStudio.Core.Sources;
+using zStudio.Core.Worlds;
 using Xunit;
-using State = Recoil.Zbd.Core.Sources.SourceRecoveryFileState;
+using State = zStudio.Core.Sources.SourceRecoveryFileState;
 
-namespace Recoil.Zbd.Tests;
+namespace zStudio.Tests;
 
 /// <summary>
 /// Gamegen scripts bounded before their lines and tokens are made (and each read once per build), and interrupted saves

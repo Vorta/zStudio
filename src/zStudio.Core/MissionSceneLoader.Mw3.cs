@@ -1,8 +1,8 @@
 using System.Numerics;
 using System.Text.Json.Nodes;
-using Recoil.Zbd.Core.Formats;
+using zStudio.Core.Formats;
 
-namespace Recoil.Zbd.Core;
+namespace zStudio.Core;
 
 public sealed record MissionVariant(string Archive, string Label);
 /// <summary>Authored mission readers plus per-file discovery failures; one unreadable archive never hides the others.</summary>
@@ -20,7 +20,7 @@ public static partial class MissionSceneLoader
         public bool Complete { get; init; } = true;
     }
     // Discovery, loading and valve scopes share one definition of a mission reader.
-    internal static string? ParseError(ZbdDocument doc) => doc.Diagnostics.FirstOrDefault(d => d.Severity == "Error") is { } error
+    internal static string? ParseError(AssetDocument doc) => doc.Diagnostics.FirstOrDefault(d => d.Severity == "Error") is { } error
         ? (error.Message.Length > 512 ? error.Message[..512] + "…" : error.Message) : null;
     private static bool IsMissionAiv(AssetRecord asset) => asset.Kind == AssetKind.Zrd && asset.Name.Equals("aiv.zrd", StringComparison.OrdinalIgnoreCase);
     public static async Task<IReadOnlyList<MissionVariant>> Mw3MissionsAsync(string worldPath, AssetResolver resolver, CancellationToken token = default)
@@ -110,7 +110,7 @@ public static partial class MissionSceneLoader
     /// A private load. Its key holds every input of the build (world identity, requested reader, published snapshots and the
     /// stamp of each map and shared archive), so an unchanged request reuses the published context before reading anything.
     /// </summary>
-    private static async Task<MissionSceneContext> LoadMw3CachedAsync(ZbdDocument world, AssetResolver resolver, string? requested, bool exact, CancellationToken token)
+    private static async Task<MissionSceneContext> LoadMw3CachedAsync(AssetDocument world, AssetResolver resolver, string? requested, bool exact, CancellationToken token)
     {
         token.ThrowIfCancellationRequested();
         CompiledInventory inventory = new(token);
@@ -142,7 +142,7 @@ public static partial class MissionSceneLoader
         public bool Reusable { get; set; } = true;
     }
 
-    internal static async Task<MissionSceneContext> LoadMw3WithBudgetAsync(ZbdDocument world, AssetResolver resolver, string? requested, bool exact,
+    internal static async Task<MissionSceneContext> LoadMw3WithBudgetAsync(AssetDocument world, AssetResolver resolver, string? requested, bool exact,
         MissionPlacementBudget budget, CancellationToken token, AssetReadBudget? reads = null, PreviewResourceBudget? preview = null, Mw3LoadReport? report = null)
     {
         reads ??= preview?.Reads ?? new();
@@ -159,7 +159,7 @@ public static partial class MissionSceneLoader
         PreviewNotes loadNotes = new(); loadNotes.AddRange(resources.Diagnostics);
         if (resources.Unavailable != null)
             loadNotes.Add($"The remembered mission reader {Path.GetFileName(resources.Unavailable)} {(resources.Unreadable ? "could not be read" : "is no longer available")}; showing {(resources.Mission == null ? "stored world geometry" : Path.GetFileName(resources.Mission))}.");
-        List<ZbdDocument> archives = []; string mapDirectory = Path.GetDirectoryName(Path.GetFullPath(world.Path))!;
+        List<AssetDocument> archives = []; string mapDirectory = Path.GetDirectoryName(Path.GetFullPath(world.Path))!;
         foreach (string path in paths)
             try
             {

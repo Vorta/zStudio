@@ -9,16 +9,16 @@ using System.Windows.Threading;
 using HelixToolkit.Wpf.SharpDX;
 using ModelContextProtocol.Client;
 using ModelContextProtocol.Protocol;
-using Recoil.Zbd.Automation;
-using Recoil.Zbd.Core.Sources;
-using Recoil.Zbd.Core.Worlds;
-using Recoil.Zbd.Desktop;
-using Recoil.Zbd.Mcp;
-using Recoil.Zbd.Rendering;
-using Recoil.Zbd.Tests;
+using zStudio.Automation;
+using zStudio.Core.Sources;
+using zStudio.Core.Worlds;
+using zStudio.Desktop;
+using zStudio.Mcp;
+using zStudio.Rendering;
+using zStudio.Tests;
 using Xunit;
 
-namespace Recoil.Zbd.Desktop.Tests;
+namespace zStudio.Desktop.Tests;
 
 internal static class SourceZoneMcpChecks
 {
@@ -78,9 +78,10 @@ internal static class SourceZoneMcpChecks
             Assert.True(scope["AffectedMissionCount"]!.GetValue<int>() >= 1);
             Assert.Contains(geometry, scope["AffectedSources"]!.AsArray().Select(p => p!.GetValue<string>()));
             Assert.True(scope["AffectedSourceCount"]!.GetValue<int>() >= 1);
-            // A clean editor may retarget; selected faces must survive a refused cross-document begin.
+            // The previously open map's identity cannot retarget the current editor.
             var otherBegin = new Dictionary<string, object?> { ["document"] = other.SessionId.ToString(), ["revision"] = other.Revision, ["action"] = "begin" };
-            await Job("source_zone_draft", otherBegin);
+            Assert.True(other.IsDisposed);
+            Assert.Equal("stale_document", (await Job("source_zone_draft", otherBegin, "failed"))["code"]!.GetValue<string>());
             var state = await Job("source_zone_draft", Args("begin"));
             Assert.IsType<ZonePropertiesEditor>(main.OpenPropertiesWindow!.SourceFields);
             string draft = state["draft"]!["draftToken"]!.GetValue<string>();
@@ -118,7 +119,7 @@ internal static class SourceZoneMcpChecks
             Assert.True((await Call("state", new()))["pendingZoneDrafts"]!.GetValue<bool>());
             Assert.False(doc.SourceWorld!.Workspace.IsDirty);
             var pending = state["draft"]!.DeepClone();
-            Assert.Equal("pending_drafts", (await Job("source_zone_draft", otherBegin, "failed"))["code"]!.GetValue<string>());
+            Assert.Equal("stale_document", (await Job("source_zone_draft", otherBegin, "failed"))["code"]!.GetValue<string>());
             Assert.True(JsonNode.DeepEquals(pending, (await Call("source_zones", new() { ["document"] = doc.SessionId.ToString() }))["draft"]));
             Assert.Same(doc, main.OpenPropertiesWindow!.Document);
             // Closing Properties discards the zone draft: MCP refuses without a dialog, and a declined native close keeps the
@@ -142,9 +143,6 @@ internal static class SourceZoneMcpChecks
             Assert.False(doc.SourceWorld.Workspace.IsDirty);
             Assert.True(JsonNode.DeepEquals(pending, (await Call("source_zones", new() { ["document"] = doc.SessionId.ToString() }))["draft"]));
             var apply = Args("apply"); apply["draftToken"] = state["draft"]!["draftToken"]!.GetValue<string>();
-            Assert.Equal("locked", (await Job("source_zone_draft", apply, "failed"))["code"]!.GetValue<string>());
-            // Explicit unlock is the same document state the GUI lock control owns.
-            doc.PickupsLocked = false;
             using (CancellationTokenSource cancelBuild = new())
             {
                 var workspace = doc.SourceWorld!.Workspace;
@@ -167,7 +165,7 @@ internal static class SourceZoneMcpChecks
             state = await Job("source_zone_draft", apply); doc = Document(state["document"]!);
             Assert.Equal(new[] { geometry }, doc.SourceWorld!.Workspace.DirtyFiles);
             Assert.Equal(original, File.ReadAllBytes(fixture.Path(geometry)));
-            Assert.Contains(GameZWorldReader.FromDocument(doc.PreviewDocument, token).Models.SelectMany(m => m.Polygons), p => p.Zone == 0xFFFF0702u);
+            Assert.Contains(((SourceSceneSnapshot)doc.PreviewDocument).World.Models.SelectMany(m => m.Polygons), p => p.Zone == 0xFFFF0702u);
             var inspector = await Call("source_zones", new() { ["document"] = doc.SessionId.ToString() });
             Assert.Equal(geometry, inspector["catalog"]!["MasterPath"]!.GetValue<string>());
             Assert.Null(inspector["catalog"]!["Manifest"]);
@@ -207,7 +205,6 @@ internal static class SourceZoneMcpChecks
             Assert.Equal(originalBuffer, File.ReadAllBytes(fixture.Path(buffer)));
             Assert.False(File.Exists(fixture.Path("data/m1/meta/zones.json")));
             // Input arriving while a world builds is not decided by showing the built world either.
-            await Call("close_document", new() { ["document"] = other.SessionId.ToString(), ["revision"] = other.Revision });
             var shownZones = Assert.IsType<ZonePropertiesEditor>(main.OpenPropertiesWindow!.SourceFields);
             main.OpenPropertiesWindow.UpdateLayout();
             var typedIds = Descendants(shownZones).OfType<System.Windows.Controls.TextBox>().Single(t => System.Windows.Automation.AutomationProperties.GetName(t) == "Zone IDs");
@@ -257,10 +254,8 @@ internal static class SourceZoneMcpChecks
             Assert.Contains(doc.PreviewDocument.Scene!.Nodes, n => n.Name == aliasRoot);
             Assert.Null((await Call("source_zones", new() { ["document"] = doc.SessionId.ToString() }))["draft"]);
 
-            // Another open mission may edit the shared workspace while this world's zone targets are pending.
-            // Those targets become stale for editing, but their current owner/token must still allow explicit discard.
-            other = Document((await Job("source_world_open", new() { ["mission"] = "m2" }))["document"]!);
-            await Job("source_world_open", new() { ["mission"] = "m1" });
+            // A dependency change invalidates pending exact targets. Exercise the shared workspace boundary
+            // directly: another simultaneously open mission is no longer a supported UI state.
             state = await Job("source_zone_draft", Args("begin"));
             string beforeAdd = state["draft"]!["draftToken"]!.GetValue<string>();
             node = doc.SourceBuild!.Provenance.First(p => p.Value.ModelNodeName == "flat_a").Key;
@@ -268,12 +263,8 @@ internal static class SourceZoneMcpChecks
             state = await Job("source_zone_draft", add);
             string ownedToken = state["draft"]!["draftToken"]!.GetValue<string>();
             long beforeOtherEdit = doc.Revision;
-            other = Document((await Job("source_world_command", new()
-            {
-                ["document"] = other.SessionId.ToString(), ["revision"] = other.Revision,
-                ["node"] = other.PreviewDocument.Scene!.Nodes.Single(n => n.Name == "world").Index,
-                ["command"] = "WorldSetFogColor", ["arguments"] = new[] { "0.2", "0.3", "0.4" }
-            }))["document"]!);
+            byte[] dependency = doc.SourceWorld!.Workspace.Read("gamegen/m2.gs", token)!;
+            doc.SourceWorld.Workspace.Apply("Changed script dependency", [("gamegen/m2.gs", (byte[]?)[.. dependency, (byte)'\n'])], token);
             Assert.True(doc.Revision > beforeOtherEdit);
             foreach (string action in new[] { "set", "add", "paint", "apply", "label" })
             {
@@ -285,7 +276,7 @@ internal static class SourceZoneMcpChecks
             discard = Args("cancel"); discard["draftToken"] = beforeAdd;
             Assert.Equal("stale_draft", (await Job("source_zone_draft", discard, "failed"))["code"]!.GetValue<string>());
             discard["document"] = other.SessionId.ToString(); discard["revision"] = other.Revision; discard["draftToken"] = ownedToken;
-            Assert.Equal("stale_draft", (await Job("source_zone_draft", discard, "failed"))["code"]!.GetValue<string>());
+            Assert.Equal("stale_document", (await Job("source_zone_draft", discard, "failed"))["code"]!.GetValue<string>());
             Assert.Equal(1, (await Call("source_zones", new() { ["document"] = doc.SessionId.ToString() }))["draft"]!["targetCount"]!.GetValue<int>());
             discard = Args("cancel"); discard["draftToken"] = ownedToken;
             var staleFields = Assert.IsType<ZonePropertiesEditor>(main.OpenPropertiesWindow!.SourceFields);

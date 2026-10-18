@@ -5,18 +5,18 @@ using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media.Media3D;
 using HelixToolkit.Wpf.SharpDX;
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Rendering;
+using zStudio.Core;
+using zStudio.Rendering;
 using Xunit;
 using Vector = System.Windows.Vector;
 
-namespace Recoil.Zbd.Desktop.Tests;
+namespace zStudio.Desktop.Tests;
 
 internal static class PresentationRendererChecks
 {
     private const BindingFlags Private = BindingFlags.Instance | BindingFlags.NonPublic;
 
-    // Retained renderer math and guide publication, with no input capture or native gesture start.
+    // Gestures and inertia across a resize of the view (fullscreen changes its size), with no input capture or native gesture start.
     internal static void Run()
     {
         using var scene = new SceneViewport();
@@ -36,14 +36,14 @@ internal static class PresentationRendererChecks
             scene.BeginNavigationDrag(gesture, new(150, 150));
             scene.MoveNavigationDrag(new(155, 155), modifiers);
             var moved = scene.CaptureView();
-            scene.SetPresentationUiHidden(true); Layout(1100, 700);
+            Layout(1100, 700);
             scene.MoveNavigationDrag(new(1500, 900), modifiers);
             Assert.Equal(moved, scene.CaptureView());
-            scene.MoveNavigationDrag(new(350, 250), modifiers); // Same physical point after the viewport origin moved.
+            scene.MoveNavigationDrag(new(350, 250), modifiers); // The first point inside the resized view only sets the anchor.
             Assert.Equal(moved, scene.CaptureView());
             scene.MoveNavigationDrag(new(353, 254), modifiers);
             Assert.NotEqual(moved, scene.CaptureView());
-            scene.SetPresentationUiHidden(false); Layout(900, 600);
+            Layout(900, 600);
             var restored = scene.CaptureView();
             scene.NavigationModifierKey(Key.LeftShift, ModifierKeys.Shift, new(153, 154));
             Assert.Equal(restored, scene.CaptureView());
@@ -59,10 +59,10 @@ internal static class PresentationRendererChecks
             var startingPose = projection == "orthographic" ? pose with { Projection = projection, OrthographicWidth = 100 } : pose;
             SceneViewport.ViewPose Inertia(bool resize)
             {
-                scene.CancelNavigation(); scene.SetPresentationUiHidden(false); Layout(900, 600); scene.RestoreView(startingPose);
+                scene.CancelNavigation(); Layout(900, 600); scene.RestoreView(startingPose);
                 scene.ZoomBy(1, new(150, 100));
                 Set("navigationGesture", SceneViewport.NavigationGesture.Zoom); Set("navigationVelocity", new Vector(0, 80));
-                if (resize) { scene.SetPresentationUiHidden(true); Layout(1200, 250); }
+                if (resize) Layout(1200, 250);
                 Call("AdvanceNavigationInertia", .02);
                 return scene.CaptureView();
             }
@@ -71,23 +71,10 @@ internal static class PresentationRendererChecks
             Assert.True((baseline.LookDirection - resized.LookDirection).Length < 1e-7);
             Assert.Equal(baseline.OrthographicWidth, resized.OrthographicWidth);
         }
-        scene.CancelNavigation(); scene.SetPresentationUiHidden(false); Layout(900, 600); scene.RestoreView(pose);
+        scene.CancelNavigation(); Layout(900, 600); scene.RestoreView(pose);
         AiNode node = new("presentation-node", 0, 0, Vector3.Zero, 0, []);
         scene.SetAiNetworks(new("presentation", [new("network", "fixture", 0, "net_01.zrd", "path", "standard", 0, [node], [])]));
         scene.SetAiOptions(true, true, null);
-        var card = new Border(); scene.InspectionContent = card;
-        var ai = Get<Element3D>("aiOverlay");
-        Assert.True(ai.IsRendering);
-        scene.SetPresentationUiHidden(true);
-        Assert.False(ai.IsRendering); Assert.False(surface.ShowViewCube); Assert.False(surface.ShowCoordinateSystem);
-        Assert.Equal(Visibility.Collapsed, ((FrameworkElement)card.Parent).Visibility);
-        Assert.True(scene.AiVisible); Assert.Equal(pose, scene.CaptureView());
-        scene.SetAiOptions(true, false, null); // Recreates the overlay while the override is active.
-        Assert.False(Get<Element3D>("aiOverlay").IsRendering);
-        Assert.Null(scene.PickAiNode(new(450, 300)));
-        scene.SetPresentationUiHidden(false);
-        Assert.True(Get<Element3D>("aiOverlay").IsRendering); Assert.True(surface.ShowViewCube);
-        Assert.Same(card, scene.InspectionContent); Assert.Equal(Visibility.Visible, ((FrameworkElement)card.Parent).Visibility);
 
         scene.SetAiPathEditing("network", [node.Id]);
         Set("aiPathPointerStart", new Point(450, 300));
@@ -96,9 +83,7 @@ internal static class PresentationRendererChecks
         scene.AiPathPointerMoved += (move, x, y) => moves.Add((move, x, y));
         Call("HandleAiPathMove", new Point(460, 305));
         Assert.Equal(new Vector3(10, -5, 0), moves[^1].Move);
-        scene.SetPresentationUiHidden(true); Layout(1200, 800);
-        Call("HandleAiPathMove", new Point(800, 600)); Assert.Single(moves);
-        scene.SetPresentationUiHidden(false);
+        Layout(1200, 800);
         Call("HandleAiPathMove", new Point(800, 600)); Assert.Single(moves); // Establishes the new pointer origin only.
         Call("HandleAiPathMove", new Point(803, 598));
         Assert.Equal(new Vector3(13, -3, 0), moves[^1].Move);
@@ -109,33 +94,32 @@ internal static class PresentationRendererChecks
         Call("HandleAiPathMove", new Point(400, 300));
         Assert.Equal(new Thickness(300, 200, 0, 0), marquee.Margin);
         Assert.Equal(100, marquee.Width); Assert.Equal(100, marquee.Height);
-        scene.CancelAiPathBox();
-        Set("aiPathBoxStart", new Point(100, 100));
-        scene.SetPresentationUiHidden(true);
-        Assert.NotNull(typeof(SceneViewport).GetField("aiPathBoxStart", Private)!.GetValue(scene));
-        var release = new MouseButtonEventArgs(Mouse.PrimaryDevice, 0, MouseButton.Left) { RoutedEvent = Mouse.PreviewMouseUpEvent };
-        scene.RaiseEvent(release);
-        Assert.True(release.Handled);
-        Assert.Null(typeof(SceneViewport).GetField("aiPathBoxStart", Private)!.GetValue(scene));
-        Assert.Equal(new[] { node.Id }, scene.SelectedAiPathNodes);
-        scene.SetPresentationUiHidden(false); scene.SetAiPathEditing(null);
+        scene.CancelAiPathBox(); scene.SetAiPathEditing(null);
 
         Guid window = Guid.NewGuid();
+        scene.SetParachuteOverlay([new(0, Vector3.Zero), new(1, new(-20, 0, 0)), new(10, new(20, 0, 0))], [new(window, 5, [])]);
+        var flightLine = Get<LineGeometryModel3D>("parachuteLine").Geometry!;
+        Assert.Equal(new[] { 1, 2 }, flightLine.Indices);
+        Assert.Equal(Vector3.Zero, flightLine.Positions![0]); // Retain sample identity; omit only its rendered edge.
         scene.SetParachuteOverlay([new(0, new(-20, 0, 0)), new(10, new(20, 0, 0))], [new(window, 5, [])]);
-        scene.SetPresentationUiHidden(true);
+        Assert.Empty(Get<LineGeometryModel3D>("parachuteLine").Geometry!.Indices!);
+        // Source maps permit locked object inspection, but drop-window selection enters an edit-only interaction.
+        // Exercise the real pointer dispatch over the visible marker without native input or mouse capture.
+        scene.AllowLockedInspection = true;
+        scene.SetEditingLocked(true);
+        Assert.True(scene.InspectionSelectionEnabled);
         Assert.True(scene.HandleScenePointerDown(new(600, 400), new(Mouse.PrimaryDevice, 0, MouseButton.Left)));
         Assert.Null(scene.SelectedParachuteWindow);
-        scene.SetPresentationUiHidden(false);
+        Assert.False(scene.IsParachutePointerMoving);
+        Assert.False(scene.HasParachutePreview);
+        scene.SetEditingLocked(false);
         Assert.True(scene.HandleScenePointerDown(new(600, 400), new(Mouse.PrimaryDevice, 0, MouseButton.Left)));
         Assert.Equal(window, scene.SelectedParachuteWindow);
         scene.SetParachutePointerMove(true);
         List<(int Segment, double Fraction)> phases = [];
         scene.ParachuteMoveRequested += (segment, fraction) => phases.Add((segment, fraction));
-        scene.SetPresentationUiHidden(true);
         scene.SetParachutePreview(window, 5, []);
-        Assert.False(Get<Element3D>("parachuteOverlay").IsRendering);
-        Assert.True(scene.MoveParachutePointer(new(900, 400))); Assert.Empty(phases);
-        scene.SetPresentationUiHidden(false); Layout(1000, 700);
+        Layout(1000, 700);
         scene.MoveParachutePointer(new(700, 350)); Assert.Empty(phases);
         scene.MoveParachutePointer(new(700, 350));
         Assert.Equal(.5, phases[^1].Fraction, 6); // A stationary pointer after resize cannot relocate the window.
@@ -151,16 +135,16 @@ internal static class PresentationRendererChecks
         typeof(SceneViewport).GetProperty(nameof(SceneViewport.IsPickupDragging))!.SetValue(scene, true);
         List<PlacementTransform> transforms = [];
         scene.TransformDraftChanged += transforms.Add;
+        var handles = new GroupModel3D(); Set("pickupTarget", handles);
         try
         {
-            scene.SetPresentationUiHidden(true); Layout(1100, 760);
-            Assert.True(scene.HandlePickupPointerMove(new(900, 400))); Assert.Empty(transforms);
-            scene.SetPresentationUiHidden(false);
+            Layout(1100, 760);
             scene.HandlePickupPointerMove(new(1500, 900));
             Assert.True(scene.IsPickupDragging); Assert.Empty(transforms);
             scene.HandlePickupPointerMove(new(650, 380)); Assert.Empty(transforms);
             scene.HandlePickupPointerMove(new(650, 380)); Assert.Equal(draft, transforms[^1]);
             scene.HandlePickupPointerMove(new(660, 380)); Assert.True(transforms[^1].Position.X > draft.Position.X);
+            Assert.Equal(transforms[^1].Position.X, handles.Transform.Value.OffsetX, 4); // The handles follow during the drag, not on release.
             Assert.Equal(0, transforms[^1].Position.Y); Assert.Equal(0, transforms[^1].Position.Z);
             Assert.True(scene.CancelPickupDrag()); Assert.Equal(original, transforms[^1]);
         }

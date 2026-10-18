@@ -1,11 +1,11 @@
 using System.Text;
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Core.Export;
-using Recoil.Zbd.Core.Formats;
-using Recoil.Zbd.Core.Sources;
+using zStudio.Core;
+using zStudio.Core.Export;
+using zStudio.Core.Formats;
+using zStudio.Core.Sources;
 using Xunit;
 
-namespace Recoil.Zbd.Tests;
+namespace zStudio.Tests;
 
 public sealed class ImportRound22SourceTests
 {
@@ -25,16 +25,15 @@ public sealed class ImportRound22SourceTests
         fixture.Write("data/common/multi_bft/textures/multi.png", PngEncoder.Encode(new DecodedImage(1, 1, [0, 255, 0, 255]), Token));
         byte[] pending = Encoding.ASCII.GetBytes(removeMultiplayer ? SinglePlayer : Multiplayer);
         Dictionary<string, byte[]> overlay = new(StringComparer.OrdinalIgnoreCase) { [Load] = pending };
-        var preview = await SourceWorlds.BuildPreviewAsync(fixture.Project, "m1", Path.Combine(SourceWorlds.PreviewRoot(fixture.Project), "pending"), overlay, token: Token);
-        string[] pendingNames = Names(preview.Folder);
+        var preview = await SourceWorlds.LoadSceneAsync(fixture.Project, "m1", overlay, token: Token);
+        string[] pendingNames = Names(preview);
         fixture.Write(Load, pending);
-        var saved = await SourceWorlds.BuildPreviewAsync(fixture.Project, "m1", Path.Combine(SourceWorlds.PreviewRoot(fixture.Project), "saved"), token: Token);
-        Assert.Equal(Names(saved.Folder), pendingNames);
+        var saved = await SourceWorlds.LoadSceneAsync(fixture.Project, "m1", token: Token);
+        Assert.Equal(Names(saved), pendingNames);
         Assert.Equal(!removeMultiplayer, pendingNames.Contains("multi"));
         Assert.Contains("rock", pendingNames);
 
-        string[] Names(string folder) => FormatRegistry.Default.OpenBytes("rtexture16.zbd", File.ReadAllBytes(Path.Combine(folder, "m1", "rtexture16.zbd")), token: Token)
-            .Assets.Select(a => a.Name).OrderBy(n => n, StringComparer.Ordinal).ToArray();
+        string[] Names(SourceSceneSnapshot scene) => scene.Textures.Keys.Order(StringComparer.Ordinal).ToArray();
     }
 
     [Fact]
@@ -42,7 +41,7 @@ public sealed class ImportRound22SourceTests
     {
         using SourceWorldFixture fixture = new();
         fixture.Write(Load, SinglePlayer);
-        var preview = await SourceWorlds.BuildPreviewAsync(fixture.Project, "m1", Path.Combine(SourceWorlds.PreviewRoot(fixture.Project), "scope"), token: Token);
+        var preview = await SourceWorlds.LoadSceneAsync(fixture.Project, "m1", token: Token);
         Assert.Contains(Load, preview.Dependencies);
         Assert.DoesNotContain("gamegen/support/loadm2.gw", preview.Dependencies);
         Assert.DoesNotContain("gamegen/support/loadm2.gw", preview.InputHashes.Keys);

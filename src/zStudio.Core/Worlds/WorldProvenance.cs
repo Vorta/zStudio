@@ -1,4 +1,4 @@
-namespace Recoil.Zbd.Core.Worlds;
+namespace zStudio.Core.Worlds;
 
 /// <summary>
 /// One executed script instruction: the script (project path), its 1-based physical line, the command, the tokens as
@@ -44,12 +44,11 @@ public sealed class InstancePlace
 /// </summary>
 public sealed class WorldNodeProvenance
 {
+    internal WorldNodeProvenance Copy() => (WorldNodeProvenance)MemberwiseClone();
     /// <summary>The project path of the glTF file the node was imported from, or null for a node a script created.</summary>
     public string? ModelFile { get; internal set; }
     /// <summary>The physical model identity used by the loader, retained alongside its source path.</summary>
     public string? LogicalModelFile { get; internal set; }
-    /// <summary>Legacy sidecar provenance; current embedded source builds leave this null.</summary>
-    public string? ZoneManifest { get; internal set; }
     /// <summary>The physical glTF whose reference occurrence owns these editable assignments.</summary>
     public string? ZoneOwnerPath { get; internal set; }
     /// <summary>Physical node indices through the owner's reference hierarchy; empty for its own defaults.</summary>
@@ -59,9 +58,21 @@ public sealed class WorldNodeProvenance
     public int ZoneMesh { get; internal set; } = -1;
     /// <summary>Compiled polygon index to authored polygon ordinal; split pieces share an ordinal and dropped faces leave no entry.</summary>
     public IReadOnlyList<int>? ZonePolygons { get; internal set; }
-    /// <summary>Source-import values before later script instructions change the node; used for explicit legacy profile capture.</summary>
+    /// <summary>Source-import values before later script instructions change the node; used when checking edits against the imported assignments.</summary>
     public uint? ImportedZoneWord { get; internal set; }
     public bool? ImportedZoneGate { get; internal set; }
+    /// <summary>Whether the imported glTF node's zone was <c>inherit</c> (its import parent's zone); null for a node no glTF node made.</summary>
+    public bool? ImportedZoneInherited { get; internal set; }
+    /// <summary>
+    /// When a reference placement's overrides assigned the node's zone rather than its own file: the project path of the file
+    /// holding that reference and the reference node's index in it.
+    /// </summary>
+    public (string File, int Node)? ImportedZonePlacement { get; internal set; }
+    /// <summary>
+    /// For an inherited zone, the node whose own assignment supplied it at import: the nearest ancestor that does not
+    /// inherit (a group or a reference holder, possibly one the build later deletes), or the load's root.
+    /// </summary>
+    public WorldNodeProvenance? ImportedZoneSupplier { get; internal set; }
     /// <summary>The node's index in <see cref="ModelFile"/>.</summary>
     public int ModelNode { get; internal set; } = -1;
     /// <summary>The glTF node's name in <see cref="ModelFile"/>, which an edit checks before changing node <see cref="ModelNode"/>.</summary>
@@ -119,6 +130,8 @@ public sealed class WorldNodeProvenance
     public string? Terrain { get; internal set; }
     public string? TerrainSurface { get; internal set; }
     public (int Column, int Row) TerrainCell { get; internal set; } = (-1, -1);
+    /// <summary>Ordinal in one deterministic recipe compilation, valid only with the same complete input snapshot.</summary>
+    public int TerrainPiece { get; internal set; } = -1;
     /// <summary>For the root a LoadGameGen created: the project path of the glTF file it loaded.</summary>
     public string? LoadedFile { get; internal set; }
     public string? LogicalLoadedFile { get; internal set; }

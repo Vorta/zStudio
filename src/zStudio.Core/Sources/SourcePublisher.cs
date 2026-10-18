@@ -1,6 +1,6 @@
 using System.Text.RegularExpressions;
 
-namespace Recoil.Zbd.Core.Sources;
+namespace zStudio.Core.Sources;
 
 /// <summary>
 /// One file of a source save: its project-relative path (forward slashes), the bytes it must have now
@@ -11,6 +11,16 @@ public sealed record SourceFileWrite(string Relative, byte[]? Expected, byte[]? 
 
 /// <summary>A completed save: its journal identity and the files it wrote or deleted, in request order and spelling.</summary>
 public sealed record SourcePublishResult(string SaveId, IReadOnlyList<string> Written);
+
+/// <summary>
+/// Semantic inputs verified under the project's publication lock. The publisher holds the lease until publication
+/// finishes and checks these additional, unchanged dependencies before staging and again before committing.
+/// </summary>
+public sealed class SourcePublishValidation(IDisposable? lease, IReadOnlyList<SourceFileWrite> checks) : IDisposable
+{
+    public IReadOnlyList<SourceFileWrite> Checks { get; } = checks;
+    public void Dispose() => lease?.Dispose();
+}
 
 /// <summary>Files that did not have their expected content. The save was refused or undone; it left nothing on disk.</summary>
 public sealed class SourceConflictException(string message, IReadOnlyList<string> files, Exception? inner = null) : IOException(message, inner)
@@ -128,22 +138,42 @@ public sealed partial class SourcePublisher
     /// content first; a target that changes during the save stops it and the save is undone (<see cref="SourceConflictException"/>).
     /// Cancellation is honoured until publication starts; from then on the save finishes or is undone. If it cannot be
     /// undone completely, its journal is kept and <see cref="SourceRecoveryRequiredException"/> names the files.
+    /// Optional semantic validation runs under the shared project lock after write admission and before staging; its returned lease
+    /// is disposed on success or failure, and additional dependencies must be check-only entries.
     /// </summary>
-    public SourcePublishResult Publish(IReadOnlyList<SourceFileWrite> writes, string description, CancellationToken token = default)
+    public SourcePublishResult Publish(IReadOnlyList<SourceFileWrite> writes, string description, CancellationToken token = default,
+        Func<CancellationToken, SourcePublishValidation>? validation = null)
     {
         using DirectoryLease directories = new();
         ArgumentNullException.ThrowIfNull(writes); ArgumentNullException.ThrowIfNull(description);
         if (description.Length > MaximumDescriptionLength) throw new ArgumentException($"The save description is longer than {MaximumDescriptionLength} characters.", nameof(description));
 
        directories.Hold(root);
-        var (changes, checks) = Plan(directories, writes, token);
-        string id = NewSaveId();
-        JournalManifest manifest = new(JournalFormat, id, description, DateTime.UtcNow, [.. changes.Select(c => new JournalFile(c.Relative, c.Expected, c.Content))], NewFolders(directories, changes, token));
-        byte[] manifestBytes = PrepareManifest(manifest, token);
+        // Admit writes and their complete recovery manifest before creating working folders. Semantic validation
+        // cannot change these writes; it enumerates current owners and adds only read checks under the lock.
+        var planned = PreparePlan(writes);
         token.ThrowIfCancellationRequested();
         using FileStream gate = Lock(directories);
         Tidy(directories, token);
         if (Journals(directories, token).FirstOrDefault(j => !j.Committed && !j.RolledBack) is { } pending) throw Blocked(pending);
+        using SourcePublishValidation? verified = validation?.Invoke(token);
+        if (validation != null)
+        {
+            if (verified == null) throw new InvalidOperationException("Source publication validation returned no result.");
+            if ((long)writes.Count + verified.Checks.Count > SourceProject.MaximumFiles)
+                throw new ArgumentException($"A save can include at most {SourceProject.MaximumFiles:N0} files.", nameof(writes));
+            foreach (var check in verified.Checks)
+            {
+                token.ThrowIfCancellationRequested();
+                if (check == null || !(check.Expected == null ? check.Content == null : check.Content != null && check.Expected.AsSpan().SequenceEqual(check.Content)))
+                    throw new ArgumentException("Semantic validation may add only unchanged check dependencies.", nameof(validation));
+            }
+            // Reuse the admitted writes/manifest. Replanning the combined list validates new dependency paths,
+            // rejects aliases/duplicates and uses the normal final-commit checks without introducing new writes.
+            planned.Checks = Plan(directories, [.. writes, .. verified.Checks], token).Checks;
+        }
+        var (changes, checks, manifest, manifestBytes) = planned;
+        string id = manifest.SaveId;
         string[] conflicts = [.. changes.Concat(checks).OrderBy(t => t.Order).Where(t => !Look(directories, t.Path, token, t.Expected).Is(t.Expected)).Select(t => t.Name)];
         if (conflicts.Length > 0) throw ConflictingSources(conflicts);
         foreach (var change in changes)
@@ -163,6 +193,14 @@ public sealed partial class SourcePublisher
         try { Step("cleanup", -1); Discard(directories, id); }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
         return new(id, [.. changes.Select(c => c.Name)]);
+
+        (Target[] Changes, Target[] Checks, JournalManifest Manifest, byte[] ManifestBytes) PreparePlan(IReadOnlyList<SourceFileWrite> entries)
+        {
+            var (plannedChanges, plannedChecks) = Plan(directories, entries, token);
+            JournalManifest plannedManifest = new(JournalFormat, NewSaveId(), description, DateTime.UtcNow,
+                [.. plannedChanges.Select(c => new JournalFile(c.Relative, c.Expected, c.Content))], NewFolders(directories, plannedChanges, token));
+            return (plannedChanges, plannedChecks, plannedManifest, PrepareManifest(plannedManifest, token));
+        }
     }
 
     /// <summary>Writes the journal (new contents, then the manifest, then "prepared") and stages every new content; on failure removes them again.</summary>

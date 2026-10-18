@@ -8,15 +8,15 @@ using System.Windows.Threading;
 using ModelContextProtocol.Client;
 using ModelContextProtocol.Protocol;
 using NAudio.Wave;
-using Recoil.Zbd.Automation;
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Core.Animation;
-using Recoil.Zbd.Desktop;
-using Recoil.Zbd.Desktop.Audio;
-using Recoil.Zbd.Mcp;
+using zStudio.Automation;
+using zStudio.Core;
+using zStudio.Core.Animation;
+using zStudio.Desktop;
+using zStudio.Desktop.Audio;
+using zStudio.Mcp;
 using Xunit;
 
-namespace Recoil.Zbd.Desktop.Tests;
+namespace zStudio.Desktop.Tests;
 
 internal static class ShutdownMcpChecks
 {
@@ -28,7 +28,7 @@ internal static class ShutdownMcpChecks
             var main = new MainWindow { Left = -12000, ShowInTaskbar = false }; main.Show();
             var package = new AnimationPackage { Prefix = new byte[72], Tail = [] };
             package.Entries.Add(new(new byte[308], 0, 0));
-            var source = new ZbdDocument(Path.Combine(Path.GetTempPath(), "shutdown-mcp.zbd"), new(0, DateTime.MinValue),
+            var source = new AssetDocument(Path.Combine(Path.GetTempPath(), "shutdown-mcp.zbd"), new(0, DateTime.MinValue),
                 new(FormatFamily.Animation, 28, Recognition.Supported, "fixture"), ReadOnlyMemory<byte>.Empty) { Animations = package };
             source.Add(AssetKind.Raw, 0, "first", 0, 0);
             source.Add(AssetKind.Raw, 1, "blocked", 0, 0);
@@ -141,12 +141,12 @@ internal static class ShutdownMcpChecks
         using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(10));
         var main = new MainWindow { Left = -12000, ShowInTaskbar = false }; main.Show();
         var package = new AnimationPackage { Prefix = new byte[72], Tail = [] }; package.Entries.Add(new(new byte[308], 0, 0));
-        var doc = new DocumentModel(new ZbdDocument("shutdown-seek", new(0, DateTime.MinValue),
+        var doc = new DocumentModel(new AssetDocument("shutdown-seek", new(0, DateTime.MinValue),
             new(FormatFamily.Animation, 28, Recognition.Supported, "fixture"), ReadOnlyMemory<byte>.Empty) { Animations = package });
         main.ViewModel.Documents.Add(doc);
         using var resolver = new AssetResolver(Path.GetTempPath());
         var context = new AnimationPreviewContext { Package = doc.AnimationEdits!.Package,
-            World = new ZbdDocument("world", new(0, DateTime.MinValue), new(FormatFamily.GameZ, 15, Recognition.Supported, "fixture"), ReadOnlyMemory<byte>.Empty) { Scene = new() } };
+            World = new AssetDocument("world", new(0, DateTime.MinValue), new(FormatFamily.GameZ, 15, Recognition.Supported, "fixture"), ReadOnlyMemory<byte>.Empty) { Scene = new() } };
         var previewToken = ((CancellationTokenSource)typeof(MainWindow).GetField("preview", flags)!.GetValue(main)!).Token;
         using var audio = new AnimationAudio(() => new SilentOutput());
         using var editor = new AnimationEditor(doc, 0, resolver, previewToken, null, audio);
@@ -202,7 +202,7 @@ internal static class ShutdownMcpChecks
         const BindingFlags flags = BindingFlags.Instance | BindingFlags.NonPublic;
         using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(10));
         var main = new MainWindow { Left = -12000, ShowInTaskbar = false }; main.Show();
-        var source = new ZbdDocument("shutdown-inspection", new(0, DateTime.MinValue),
+        var source = new AssetDocument("shutdown-inspection", new(0, DateTime.MinValue),
             new(FormatFamily.Unknown, null, Recognition.Unknown, "fixture"), ReadOnlyMemory<byte>.Empty);
         source.Add(AssetKind.Raw, 0, "blocked", 0, 0);
         var doc = new DocumentModel(source); main.ViewModel.Documents.Add(doc);

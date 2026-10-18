@@ -7,11 +7,11 @@ using HelixToolkit;
 using HelixToolkit.Maths;
 using HelixToolkit.SharpDX;
 using HelixToolkit.Wpf.SharpDX;
-using Recoil.Zbd.Core;
+using zStudio.Core;
 using MeshGeometry3D = HelixToolkit.SharpDX.MeshGeometry3D;
 using DiffuseMaterial = HelixToolkit.Wpf.SharpDX.DiffuseMaterial;
 
-namespace Recoil.Zbd.Rendering;
+namespace zStudio.Rendering;
 
 public sealed partial class SceneViewport
 {
@@ -77,7 +77,7 @@ public sealed partial class SceneViewport
         ClearAiDrawables();
         RenderedAiNodes = RenderedAiLinks = 0; AiRenderTruncated = false; aiRendered.Clear();
         if (!AiVisible) { PublishAiLabel(); return; }
-        aiOverlay = new(); PresentationGuide(aiOverlay); viewport.Items.Add(aiOverlay);
+        aiOverlay = new(); viewport.Items.Add(aiOverlay);
         foreach (var network in VisibleAiNetworks)
         {
             var color = AiNetworkColors.Color(network.AttackStrategy);
@@ -180,7 +180,7 @@ public sealed partial class SceneViewport
         {
             if (AiPathEditingNetwork is { } network)
             {
-                aiSelectionMarker.Visibility = InspectionSelectionEnabled && aiPathSelection.Count != 0 ? Visibility.Visible : Visibility.Collapsed;
+                aiSelectionMarker.Visibility = PlacementEditingEnabled && aiPathSelection.Count != 0 ? Visibility.Visible : Visibility.Collapsed;
                 aiSelectionMarker.Instances = AiNetworks.Networks.Single(n => n.Id == network).Nodes.Where(n => aiPathSelection.Contains(n.Id))
                     .Select(n => Matrix4x4.CreateScale(AiScale(AiPosition(n), 5.5)) * Matrix4x4.CreateTranslation(AiPosition(n))).ToArray();
             }
@@ -202,7 +202,7 @@ public sealed partial class SceneViewport
     }
     internal string? PickAiNode(Point point)
     {
-        if (PresentationUiHidden || !AiVisible || IsFlyActive || IsPickupDragging || !IsInsidePickupViewport(point) || viewport.RenderContext == null) return null;
+        if (!AiVisible || IsFlyActive || IsPickupDragging || !IsInsidePickupViewport(point) || viewport.RenderContext == null) return null;
         double nearest = 81, chosenDepth = double.PositiveInfinity; string? chosen = null;
         // Only drawn markers are pickable; the complete graph stays selectable through inspection commands.
         foreach (var node in aiRendered)

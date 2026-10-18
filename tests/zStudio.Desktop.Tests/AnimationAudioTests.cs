@@ -2,13 +2,13 @@ using System.Buffers.Binary;
 using System.IO;
 using System.Numerics;
 using NAudio.Wave;
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Core.Animation;
-using Recoil.Zbd.Desktop;
-using Recoil.Zbd.Desktop.Audio;
+using zStudio.Core;
+using zStudio.Core.Animation;
+using zStudio.Desktop;
+using zStudio.Desktop.Audio;
 using Xunit;
 
-namespace Recoil.Zbd.Desktop.Tests;
+namespace zStudio.Desktop.Tests;
 
 public sealed class AnimationAudioTests
 {
@@ -315,7 +315,7 @@ public sealed class AnimationAudioTests
     {
         var package = new AnimationPackage { Prefix = [], Tail = [] };
         var entry = new AnimationEntry(new byte[308], 0, 0); entry.SetText(0, "test"); entry.Primary.Events.Add(SoundEvent("tone")); package.Entries.Add(entry);
-        var world = new ZbdDocument("fixture", new(0, DateTime.MinValue), new(FormatFamily.GameZ, 15, Recognition.Supported, "fixture"), ReadOnlyMemory<byte>.Empty) { Scene = new() };
+        var world = new AssetDocument("fixture", new(0, DateTime.MinValue), new(FormatFamily.GameZ, 15, Recognition.Supported, "fixture"), ReadOnlyMemory<byte>.Empty) { Scene = new() };
         AnimationPreviewContext context = new() { Package = package, World = world };
         context.Sounds["tone"] = new("tone", "tone.wav", loop, Wave()); return context;
     }

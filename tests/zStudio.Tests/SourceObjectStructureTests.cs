@@ -3,30 +3,30 @@ using System.Buffers.Binary;
 using System.Numerics;
 using System.Text;
 using System.Text.Json.Nodes;
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Core.Formats;
-using Recoil.Zbd.Core.Gltf;
-using Recoil.Zbd.Core.Sources;
-using Recoil.Zbd.Core.Worlds;
+using zStudio.Core;
+using zStudio.Core.Formats;
+using zStudio.Core.Gltf;
+using zStudio.Core.Sources;
+using zStudio.Core.Worlds;
 using Xunit;
 
-namespace Recoil.Zbd.Tests;
+namespace zStudio.Tests;
 
 /// <summary>Deleting, copying and re-parenting world objects of a source world through the sources that made them.</summary>
 public sealed class SourceObjectStructureTests
 {
     private static CancellationToken Token => TestContext.Current.CancellationToken;
 
-    private static async Task<(SourceWorldBuild Build, GameZWorld World)> BuildAsync(SourceWorldFixture fixture, SourceWorkspace workspace, string mission)
+    private static async Task<(SourceSceneState Build, GameZWorld World)> BuildAsync(SourceWorldFixture fixture, SourceWorkspace workspace, string mission)
     {
-        var build = await SourceWorlds.BuildPreviewAsync(fixture.Project, mission, Path.Combine(SourceWorlds.PreviewRoot(fixture.Project), "p-" + Guid.NewGuid().ToString("N")), workspace.Overlay(), token: Token);
-        Assert.Null(build.Outputs.FirstOrDefault(o => o.Error != null)?.Error);
-        var world = GameZWorldReader.FromDocument(FormatRegistry.Default.OpenBytes("gamez.zbd", await File.ReadAllBytesAsync(build.WorldPath, Token), token: Token), Token);
-        return (build, world);
+        var build = await SourceWorlds.LoadSceneAsync(fixture.Project, mission, workspace.Overlay(), token: Token);
+        Assert.NotNull(build.Scene);
+        var world = build.World;
+        return (build.BuildState, world);
     }
-    private static SourceObjectTarget Target(SourceWorkspace workspace, string mission, SourceWorldBuild build, GameZWorld world, string name) =>
+    private static SourceObjectTarget Target(SourceWorkspace workspace, string mission, SourceSceneState build, GameZWorld world, string name) =>
         Target(workspace, mission, build, world, world.Nodes.Single(n => n.Name == name));
-    private static SourceObjectTarget Target(SourceWorkspace workspace, string mission, SourceWorldBuild build, GameZWorld world, WorldNode picked)
+    private static SourceObjectTarget Target(SourceWorkspace workspace, string mission, SourceSceneState build, GameZWorld world, WorldNode picked)
     {
         var slots = GameZWriter.NodeSlots(world, TestContext.Current.CancellationToken);
         Dictionary<WorldNode, WorldNodeProvenance> provenance = new(ReferenceEqualityComparer.Instance);
@@ -53,7 +53,7 @@ public sealed class SourceObjectStructureTests
         fixture.Write(database, json.ToJsonString());
         const string otherMaster = "data/m2/models/m2.gltf";
         string owner = gamegenGlb ? "gamegen/bridge.glb" : otherMaster;
-        Recoil.Zbd.Core.Gltf.GltfDocument holder = new();
+        zStudio.Core.Gltf.GltfDocument holder = new();
         holder.Roots.Add(new() { Extras = new JsonObject { [WorldGltf.Key] = new JsonObject
             { ["ref"] = gamegenGlb ? "../data/m1/models/m1.gltf" : "../../m1/models/m1.gltf", ["zoneOverrides"] = WorldGltf.WriteZoneOverride(other, Token) } } });
         byte[] ownerBytes = holder.Write("m2.bin", Token).Json;
@@ -171,9 +171,9 @@ public sealed class SourceObjectStructureTests
                 node["extras"] ??= new JsonObject(); node["extras"]![WorldGltf.Key] ??= new JsonObject();
                 node["extras"]![WorldGltf.Key]!["zone"] = name == "sgate1" ? 20 : 60;
             }
-            else { fields?.Remove("zone"); fields?.Remove("zoneWord"); fields?.Remove("zonePadding"); }
+            else { fields?.Remove("zone"); fields?.Remove("zonePadding"); }
         }
-        byte[] bytes = Recoil.Zbd.Core.Gltf.GltfJson.Write(json, false, Token);
+        byte[] bytes = zStudio.Core.Gltf.GltfJson.Write(json, false, Token);
         var document = WorldAssembler.ReadModel(bytes, database, (path, _) => File.ReadAllBytes(fixture.Path(path)), Token);
         var profile = WorldGltf.CaptureZoneProfile(document, token: Token);
         if (editedChild)
@@ -265,7 +265,7 @@ public sealed class SourceObjectStructureTests
         using SourceWorldFixture fixture = new();
         // The tank is placed in the world and a script scales its hull: a copy would repeat only the tank's own lines.
         string script = Encoding.Latin1.GetString(File.ReadAllBytes(fixture.Path("gamegen/m2.gs")));
-        fixture.Write("gamegen/m2.gs", script.Replace("LoadGameGen tank.flt tank", "LoadGameGen tank.flt tank\r\nFindNode world\r\nAddChild tank\r\nFindNode hull\r\nObject3DScale 1.0 1.0 1.0", StringComparison.Ordinal));
+        fixture.Write("gamegen/m2.gs", script.Replace("LoadGameGen tank.gltf tank", "LoadGameGen tank.gltf tank\r\nFindNode world\r\nAddChild tank\r\nFindNode hull\r\nObject3DScale 1.0 1.0 1.0", StringComparison.Ordinal));
         SourceWorkspace workspace = new(fixture.Project);
         var (build, world) = await BuildAsync(fixture, workspace, "m2");
         Assert.Contains("acts on hull, which is below tank", Assert.Throws<InvalidDataException>(() => SourceObjectEdits.PlanDuplicate(Target(workspace, "m2", build, world, "tank"), "tank2", null, Token)).Message);
@@ -330,6 +330,37 @@ public sealed class SourceObjectStructureTests
         Apply(workspace, SourceObjectEdits.PlanReparent(Target(workspace, "m1", build, world, plain), flagged, Token));
         var (after, _) = await BuildAsync(fixture, workspace, "m1");
         Assert.Contains("would act on", SourceObjectEdits.TargetChange(build, after));
+    }
+
+    [Fact]
+    public async Task RenamingAndReplacingTheReferencedModelRebuildTheObject()
+    {
+        using SourceWorldFixture fixture = new();
+        fixture.WriteReferencingDatabase();
+        // A second model, sharing the lid's buffer, whose node is named box.
+        fixture.Write("data/m1/models/boxm.gltf", File.ReadAllText(fixture.Path("data/m1/models/lidm.gltf")).Replace("\"lid\"", "\"box\"", StringComparison.Ordinal));
+        // As the shipped destroy_turret binds to tur_101 in m1, this animation lists an absent name first and binds to crate.
+        string Definition(string names) => $"( ANIMATION_DEFINITIONS ( ANIMATION_LIST ( ANIMATION_DEFINITION ( NAME ( {names} ) ANIMATION_NAME ( break_crate ) ACTIVATION ( ON_CALL ) SEQUENCE_DEFINITION ( NAME ( b ) OBJECT_ACTIVE_STATE ( NAME ( ground ) STATE ( INACTIVE ) ) ) ) ) ) )";
+        fixture.Write("data/m1/zrdr/gates.zad", Definition("absent crate"));
+        SourceWorkspace workspace = new(fixture.Project);
+        var (build, world) = await BuildAsync(fixture, workspace, "m1");
+        Assert.Contains("break_crate (data/m1/zrdr/gates.zad) is bound to crate", Assert.Throws<InvalidDataException>(() => SourceObjectEdits.PlanRename(Target(workspace, "m1", build, world, "crate"), "crate_x", Token)).Message);
+        // A node its events name is needed too: renamed, the game would reject the animation file.
+        Assert.Contains("break_crate names node ground", Assert.Throws<InvalidDataException>(() => SourceObjectEdits.PlanRename(Target(workspace, "m1", build, world, "ground"), "ground_x", Token)).Message);
+        // Listing the new name keeps the binding, so the rename is accepted.
+        fixture.Write("data/m1/zrdr/gates.zad", Definition("absent crate crate_x"));
+        workspace = new(fixture.Project);
+        (build, world) = await BuildAsync(fixture, workspace, "m1");
+        Apply(workspace, SourceObjectEdits.PlanRename(Target(workspace, "m1", build, world, "crate"), "crate_x", Token));
+        (build, world) = await BuildAsync(fixture, workspace, "m1");
+        Assert.DoesNotContain(world.Nodes, n => n.Name == "crate");
+        Assert.Contains("has no model", Assert.Throws<InvalidDataException>(() => SourceObjectEdits.PlanReplaceModel(Target(workspace, "m1", build, world, "crate_x"), "data/m1/models/nothere.gltf", Token)).Message);
+        Apply(workspace, SourceObjectEdits.PlanReplaceModel(Target(workspace, "m1", build, world, "crate_x"), "data/m1/models/boxm.gltf", Token));
+        (build, world) = await BuildAsync(fixture, workspace, "m1");
+        var crate = world.Nodes.Single(n => n.Name == "crate_x");
+        Assert.Contains(crate.Children, c => c.Name == "box");
+        Assert.DoesNotContain(world.Nodes, n => n.Name == "lid");
+        Assert.Contains("\"ref\": \"boxm.gltf\"", Text(workspace, "data/m1/models/m1.gltf").Replace("\"ref\":\"", "\"ref\": \"", StringComparison.Ordinal));
     }
 
     [Fact]

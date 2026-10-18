@@ -1,7 +1,7 @@
 using System.Windows;
-using Recoil.Zbd.Core;
+using zStudio.Core;
 
-namespace Recoil.Zbd.Desktop;
+namespace zStudio.Desktop;
 
 public partial class MainWindow
 {
@@ -14,15 +14,29 @@ public partial class MainWindow
         WorldHighlightMode.NonDefaultSoils => "nonDefaultSoils",
         WorldHighlightMode.CanModify => "canModify",
         WorldHighlightMode.ClipTo => "clipTo",
+        WorldHighlightMode.CanModifyAndClipTo => "canModifyAndClipTo",
         WorldHighlightMode.Zones => "zones",
+        WorldHighlightMode.PolygonZones => "polygonZones",
+        WorldHighlightMode.Landmarks => "landmarks",
         _ => "none"
     };
 
     private void WorldHighlightChanged(object sender, RoutedEventArgs e)
     {
         if (!ready || synchronizingWorldHighlight) return;
-        var mode = sender == HighlightSoils ? WorldHighlightMode.NonDefaultSoils :
-            sender == HighlightCanModify ? WorldHighlightMode.CanModify : sender == HighlightZones ? WorldHighlightMode.Zones : WorldHighlightMode.ClipTo;
+        if (sender == HighlightCanModify || sender == HighlightClipTo)
+        {
+            SetWorldHighlightMode((HighlightCanModify.IsChecked == true, HighlightClipTo.IsChecked == true) switch
+            {
+                (true, true) => WorldHighlightMode.CanModifyAndClipTo,
+                (true, false) => WorldHighlightMode.CanModify,
+                (false, true) => WorldHighlightMode.ClipTo,
+                _ => WorldHighlightMode.None
+            });
+            return;
+        }
+        var mode = sender == HighlightSoils ? WorldHighlightMode.NonDefaultSoils : sender == HighlightZones ? WorldHighlightMode.Zones :
+            sender == HighlightPolygonZones ? WorldHighlightMode.PolygonZones : sender == HighlightLandmarks ? WorldHighlightMode.Landmarks : WorldHighlightMode.ClipTo;
         SetWorldHighlightMode(((System.Windows.Controls.Primitives.ToggleButton)sender).IsChecked == true ? mode : WorldHighlightMode.None);
     }
 
@@ -34,9 +48,11 @@ public partial class MainWindow
         try
         {
             HighlightSoils.IsChecked = mode == WorldHighlightMode.NonDefaultSoils;
-            HighlightCanModify.IsChecked = mode == WorldHighlightMode.CanModify;
-            HighlightClipTo.IsChecked = mode == WorldHighlightMode.ClipTo;
+            HighlightCanModify.IsChecked = mode is WorldHighlightMode.CanModify or WorldHighlightMode.CanModifyAndClipTo;
+            HighlightClipTo.IsChecked = mode is WorldHighlightMode.ClipTo or WorldHighlightMode.CanModifyAndClipTo;
             HighlightZones.IsChecked = mode == WorldHighlightMode.Zones;
+            HighlightPolygonZones.IsChecked = mode == WorldHighlightMode.PolygonZones;
+            HighlightLandmarks.IsChecked = mode == WorldHighlightMode.Landmarks;
         }
         finally { synchronizingWorldHighlight = false; }
         ApplyWorldHighlight();

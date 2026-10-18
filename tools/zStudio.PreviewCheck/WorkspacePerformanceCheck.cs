@@ -4,7 +4,7 @@ using System.Text.Json;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Threading;
-using Recoil.Zbd.Desktop;
+using zStudio.Desktop;
 
 internal static class WorkspacePerformanceCheck
 {
@@ -12,7 +12,7 @@ internal static class WorkspacePerformanceCheck
     // preserved portable baseline assemblies for a comparable local measurement.
     public static int Run(string root)
     {
-        string settings = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"RecoilZbdStudio","settings.json");
+        string settings = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"zStudio","settings.json");
         byte[]? original = File.Exists(settings) ? File.ReadAllBytes(settings) : null;
         App app = new() { ProcessCommandLine = false, ShutdownMode = ShutdownMode.OnExplicitShutdown }; app.InitializeComponent(); int exit = 0;
         app.Startup += async (_,_) =>

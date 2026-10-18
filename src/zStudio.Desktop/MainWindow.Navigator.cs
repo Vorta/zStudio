@@ -4,9 +4,9 @@ using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Threading;
 using KeyboardInput = System.Windows.Input.Keyboard;
-using Recoil.Zbd.Automation;
+using zStudio.Automation;
 
-namespace Recoil.Zbd.Desktop;
+namespace zStudio.Desktop;
 
 public partial class MainWindow
 {
@@ -30,13 +30,13 @@ public partial class MainWindow
                 RememberNavigatorSection(NavigationTabs.SelectedIndex);
         };
     }
-    private bool NavigatorSectionAvailable(int index) => index switch
+    private bool NavigatorSectionAvailable(int index) => !ViewModel.IsSourceProject && (index switch
     {
         0 or 2 => true,
         1 => ViewModel.SelectedDocument != null,
         3 => sceneTreeDocument == ViewModel.SelectedDocument && sceneTree?.Roots.Count > 0,
         _ => false
-    };
+    });
     private void ValidateNavigatorSection(int index)
     {
         if (!NavigatorSectionAvailable(index))
@@ -44,6 +44,7 @@ public partial class MainWindow
     }
     private void RememberNavigatorSection(int index)
     {
+        if (ViewModel.IsSourceProject) return;
         navigatorInteractionGeneration++;
         Layout.BrowserTab = index;
         if (index > 0) Layout.ContentBrowserTab = index;
@@ -67,6 +68,7 @@ public partial class MainWindow
     }
     private void UpdateNavigatorAvailability()
     {
+        if (ViewModel.IsSourceProject) return;
         bool previous = changingNavigator; changingNavigator = true;
         try
         {

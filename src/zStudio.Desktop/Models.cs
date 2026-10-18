@@ -6,11 +6,11 @@ using System.Text.Json.Nodes;
 using System.Windows.Data;
 using System.Windows.Media.Imaging;
 using CommunityToolkit.Mvvm.ComponentModel;
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Core.Formats;
-using Recoil.Zbd.Core.Animation;
+using zStudio.Core;
+using zStudio.Core.Formats;
+using zStudio.Core.Animation;
 
-namespace Recoil.Zbd.Desktop;
+namespace zStudio.Desktop;
 
 public sealed record FileEntry(string Path, string RelativePath, FormatProbe Probe)
 {
@@ -68,19 +68,19 @@ public sealed partial class DocumentModel : ObservableObject, IDisposable
     /// one); an edit accepted after it is not covered. Callers clear it before asking.
     /// </summary>
     internal long? ApprovedCloseRevision { get; set; }
-    public ZbdDocument Document { get; }
+    public AssetDocument Document { get; private set; }
     public string Path => Document.Path;
     public string Title => (SourceWorld?.Label ?? System.IO.Path.GetFileName(System.IO.Path.GetDirectoryName(Path)) + "/" + System.IO.Path.GetFileName(Path)) + (IsDirty ? " *" : "");
     /// <summary>A mission world built from the open source project; its edits go to the project's sources, never to this file.</summary>
     internal SourceWorldSession? SourceWorld { get; }
-    /// <summary>The private build this document shows, with the project files it read.</summary>
-    internal Recoil.Zbd.Core.Sources.SourceWorldBuild? SourceBuild { get; }
+    /// <summary>The evaluated scene state this document shows, with the project files it read.</summary>
+    internal zStudio.Core.Sources.SourceSceneState? SourceBuild { get; private set; }
     /// <summary>The project workspace's content revision the shown build was made from.</summary>
-    internal long SourceRevision { get; }
+    internal long SourceRevision { get; private set; }
     /// <summary>The notes on the reach of the edit this build was made for (a copy's part names, a part's other copies).</summary>
-    internal IReadOnlyList<string> SourceEditNotes { get; init; } = [];
+    internal IReadOnlyList<string> SourceEditNotes { get; set; } = [];
     public event Action? SourceWorldChanged;
-    private void SourceEditsChanged(Recoil.Zbd.Core.Sources.SourceWorkspaceChange change)
+    private void SourceEditsChanged(zStudio.Core.Sources.SourceWorkspaceChange change)
     {
         if (IsDisposed) return;
         Revision++; OnPropertyChanged(nameof(Title)); OnPropertyChanged(nameof(IsDirty)); SourceWorldChanged?.Invoke();
@@ -98,13 +98,13 @@ public sealed partial class DocumentModel : ObservableObject, IDisposable
         // Directory discovery, like content hashing, belongs to the worker checks before and after edit preparation.
         if (verifyContent && build.ResourceInputsChanged(world.Workspace, token)) return true;
         if (world.Workspace.ExternalChanges(token, verifyContent, build.Dependencies).Count > 0) return true;
-        if (build.MissingInputs.Any(relative => System.IO.Path.Exists(Recoil.Zbd.Core.Sources.SourceProject.Resolve(world.Root, relative)))) return true;
+        if (build.MissingInputs.Any(relative => System.IO.Path.Exists(zStudio.Core.Sources.SourceProject.Resolve(world.Root, relative)))) return true;
         foreach (var (relative, stamp) in build.Inputs)
         {
             token.ThrowIfCancellationRequested();
-            string path = Recoil.Zbd.Core.Sources.SourceProject.Resolve(world.Root, relative);
+            string path = zStudio.Core.Sources.SourceProject.Resolve(world.Root, relative);
             if (!File.Exists(path) || FileStamp.Read(path) != stamp) return true;
-            if (verifyContent && build.InputHashes.TryGetValue(relative, out string? hash) && !Recoil.Zbd.Core.Sources.SourceRead.Matches(path, stamp.Length, hash, token)) return true;
+            if (verifyContent && build.InputHashes.TryGetValue(relative, out string? hash) && !zStudio.Core.Sources.SourceRead.Matches(path, stamp.Length, hash, token)) return true;
         }
         return false;
     }
@@ -112,7 +112,7 @@ public sealed partial class DocumentModel : ObservableObject, IDisposable
     public ModelEditSession? ModelEdits { get; }
     public ResourceEditSession? ResourceEdits { get; }
     public event Action? ResourceEditsChanged;
-    public ZbdDocument PreviewDocument => contentMirror ?? ContentEdits?.Current.Documents.GetValueOrDefault(Path) ?? ResourceEdits?.Current.Document ?? ModelEdits?.Current.World ?? Document;
+    public AssetDocument PreviewDocument => contentMirror ?? ContentEdits?.Current.Documents.GetValueOrDefault(Path) ?? ResourceEdits?.Current.Document ?? ModelEdits?.Current.World ?? Document;
     public AssetRecord? OriginalAsset(AssetRecord asset) => ResourceEdits is { } resources
         ? resources.OriginalAsset(resources.Current.Members[asset.Index])
         : ScriptEdits is { } scripts ? scripts.Package.Entries.ElementAtOrDefault(asset.Index)?.SourceIndex is int index ? Document.Assets.SingleOrDefault(a => a.Index == index) : null
@@ -159,15 +159,16 @@ public sealed partial class DocumentModel : ObservableObject, IDisposable
     public PickupPlacementEditSession? PickupEdits { get => pickupEdits; private set => SetProperty(ref pickupEdits, value); }
     private Task<PickupPlacementEditSession>? pickupLoading;
     private long pickupSnapshotRevision;
-    private bool pickupsLocked = true;
-    public bool PickupsLocked { get => pickupsLocked; set => SetProperty(ref pickupsLocked, value); }
+    private bool editingLocked = true;
+    /// <summary>The compiled Whole world editing lock (Unlock editing). A source world has none: its card's Edit starts each edit.</summary>
+    public bool EditingLocked { get => editingLocked && SourceWorld == null; set => SetProperty(ref editingLocked, value); }
     public bool IsDisposed { get; private set; }
     public event Action? Disposing;
     public bool PickupDiagnosticsReported { get; set; }
     /// <summary>Asked before a resource edit is accepted; throws to refuse it (a source project's workspace holds unsaved edits of the file).</summary>
     internal Action<DocumentModel>? BeforeResourceEdit { get; set; }
     internal Dictionary<AssetId,Dictionary<string,bool>> DataTreeExpansion { get; } = [];
-    /// <summary>A source world's placements change through its sources (the workspace), never through its private build's archives.</summary>
+    /// <summary>A source world's placements change through its source workspace and are persisted only by Save.</summary>
     public bool IsDirty => SourceWorld?.Workspace.IsDirty == true || ContentEdits?.IsDirty == true || ResourceEdits?.IsDirty == true || AnimationEdits?.IsDirty == true || SourceWorld == null && PickupEdits?.IsDirty == true || ModelEdits?.IsDirty == true;
     public void ClaimResourcePaths(IEnumerable<string> paths) => workspaceResolver?.EditOwnership.Acquire(SessionId, Title, paths);
     public void InvalidateCleanPickupEdits()
@@ -183,6 +184,21 @@ public sealed partial class DocumentModel : ObservableObject, IDisposable
         token.ThrowIfCancellationRequested();
         if (IsDisposed) throw new OperationCanceledException("The pickup document was closed.", token);
         var lifetime = Lifetime.Token;
+        if (Document is zStudio.Core.Sources.SourceSceneSnapshot sourceSnapshot)
+        {
+            if (PickupEdits != null) return PickupEdits;
+            if (pickupLoading == null || pickupLoading.IsCanceled || pickupLoading.IsFaulted)
+                pickupLoading = Task.Run(() => PickupPlacementEditSession.FromSources(sourceSnapshot, lifetime), lifetime);
+            var sourceLoading = pickupLoading;
+            var sourceEdits = await sourceLoading.WaitAsync(token);
+            token.ThrowIfCancellationRequested(); lifetime.ThrowIfCancellationRequested();
+            // Evaluation may accept a newer source scene while an earlier caller is awaiting its resources.
+            // Never install a retired snapshot, including when two readers share the same loading task.
+            if (!ReferenceEquals(Document, sourceSnapshot) || !ReferenceEquals(pickupLoading, sourceLoading))
+                return await GetPickupEditsAsync(resolver, token);
+            PickupEdits ??= sourceEdits;
+            return PickupEdits;
+        }
         if (PickupEdits != null)
         {
             if (pickupSnapshotRevision != resolver.SnapshotRevision && !PickupEdits.CanUndo && !PickupEdits.CanRedo) InvalidateCleanPickupEdits();
@@ -306,9 +322,9 @@ public sealed partial class DocumentModel : ObservableObject, IDisposable
     partial void OnSelectedAssetChanged(AssetItem? value) { if (value?.ResourceId is Guid id) lastResourceSelection = id; }
     [ObservableProperty] private bool isStale;
     public string[] Kinds { get; private set; }
-    public DocumentModel(ZbdDocument doc) : this(doc, null, null) { }
+    public DocumentModel(AssetDocument doc) : this(doc, null, null) { }
     internal DocumentModel(PreparedDocument prepared) : this(prepared.Document, null, null, 0, prepared) { }
-    internal DocumentModel(ZbdDocument doc, SourceWorldSession? sourceWorld, Recoil.Zbd.Core.Sources.SourceWorldBuild? sourceBuild, long sourceRevision = 0, PreparedDocument? prepared = null)
+    internal DocumentModel(AssetDocument doc, SourceWorldSession? sourceWorld, zStudio.Core.Sources.SourceSceneState? sourceBuild, long sourceRevision = 0, PreparedDocument? prepared = null)
     {
         Document = doc;
         SourceWorld = sourceWorld; SourceBuild = sourceBuild; SourceRevision = sourceRevision;
@@ -342,7 +358,7 @@ public sealed partial class DocumentModel : ObservableObject, IDisposable
                 InvalidateMissionContext(); OnPropertyChanged(nameof(Title)); OnPropertyChanged(nameof(IsDirty)); ModelEditsChanged?.Invoke();
             };
         }
-        if (doc.Animations is { } source)
+        if (sourceWorld == null && doc.Animations is { } source)
         {
             // Accepted edits replace complete entry snapshots. Give that working
             // set its own container so source inspection/export stays original;
@@ -353,6 +369,17 @@ public sealed partial class DocumentModel : ObservableObject, IDisposable
             AnimationEdits.Changed += () => { Revision++; contextLoading?.Cancel(); animationContext = null; OnPropertyChanged(nameof(Title)); OnPropertyChanged(nameof(IsDirty)); };
         }
         if (doc.Scene is GameScene scene) ResetStoredSceneTree(scene);
+    }
+    internal void AcceptSourceScene(zStudio.Core.Sources.SourceSceneSnapshot source, long revision, PickupPlacementEditSession edits)
+    {
+        if (SourceWorld == null || IsDisposed) throw new InvalidOperationException("The source document is no longer open.");
+        Document = source; SourceBuild = source.BuildState; SourceRevision = revision;
+        PickupEdits = edits; pickupLoading = null; PickupDiagnosticsReported = false;
+        contextLoading?.Cancel(); animationContext = null;
+        var records = source.Assets.ToDictionary(asset => asset.Id);
+        foreach (var item in Assets) if (records.TryGetValue(item.Record.Id, out var record)) item.UpdateRecord(record);
+        ResetStoredSceneTree(source.Scene!);
+        Revision++; OnPropertyChanged(nameof(Document)); OnPropertyChanged(nameof(Title)); OnPropertyChanged(nameof(IsDirty));
     }
     private void RebuildModelAssets()
     {
@@ -405,7 +432,6 @@ public sealed partial class DocumentModel : ObservableObject, IDisposable
             world.Workspace.Changed -= SourceEditsChanged;
             // The document showing the world owns the session; a replaced document only releases its build.
             if (world.Owner == this) world.Dispose();
-            if (SourceBuild != null) world.DeleteBuild(SourceBuild.Folder);
         }
     }
     private void DisposeCore() { IsDisposed = true; if (workspaceResolver != null) workspaceResolver.WorkspaceSnapshotsChanged -= ContentSnapshotsChanged; workspaceResolver?.SetWorkspaceSnapshots(SessionId, []); workspaceResolver?.EditOwnership.Release(SessionId); Disposing?.Invoke(); Lifetime.Cancel(); contextLoading?.Cancel(); contextLoading?.Dispose(); Lifetime.Dispose(); foreach (var a in Assets) a.Thumbnail = null; GC.SuppressFinalize(this); }
@@ -471,8 +497,7 @@ public sealed class StudioSettings
     public WorkspaceLayout? Workspace { get; set; }
     public WorkspaceLayout GetWorkspace()
     {
-        // Old expander heights described a different layout and deliberately do not migrate.
-        Workspace ??= new() { InspectorWidth = double.IsFinite(PropertiesWidth) && PropertiesWidth >= 320 ? PropertiesWidth : 352 };
+        if (Workspace?.Version != WorkspaceLayout.CurrentVersion) Workspace = new();
         Workspace.Normalize(); return Workspace;
     }
     public bool CreateBackupOnSave { get; set; }
@@ -487,19 +512,13 @@ public sealed class StudioSettings
     }
     public double Width { get; set; } = 1560;
     public double Height { get; set; } = 940;
-    public double FilesWidth { get; set; } = 215;
-    public double AssetsWidth { get; set; } = 280;
-    public double PropertiesWidth { get; set; } = 300;
-    public double AnimationSidebarWidth { get; set; } = 360;
-    public Dictionary<string, bool> AnimationSections { get; set; } = [];
-    public Dictionary<string, double> AnimationSectionHeights { get; set; } = [];
     public string Theme { get; set; } = "System";
     public string LastRoot { get; set; } = "";
     /// <summary>The worlds Compare worlds compared last.</summary>
     public string CompareRetail { get; set; } = "";
     public string CompareRebuilt { get; set; } = "";
     public List<string> RecentRoots { get; set; } = [];
-    private static string SettingsPath => System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "RecoilZbdStudio", "settings.json");
+    internal static string SettingsPath => System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "zStudio", "settings.json");
     public static StudioSettings Load()
     {
         try { return File.Exists(SettingsPath) ? JsonSerializer.Deserialize<StudioSettings>(File.ReadAllText(SettingsPath)) ?? new() : new(); }

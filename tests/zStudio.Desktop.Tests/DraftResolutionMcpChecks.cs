@@ -4,14 +4,14 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Threading;
 using NAudio.Wave;
-using Recoil.Zbd.Automation;
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Core.Animation;
-using Recoil.Zbd.Desktop;
-using Recoil.Zbd.Desktop.Audio;
+using zStudio.Automation;
+using zStudio.Core;
+using zStudio.Core.Animation;
+using zStudio.Desktop;
+using zStudio.Desktop.Audio;
 using Xunit;
 
-namespace Recoil.Zbd.Desktop.Tests;
+namespace zStudio.Desktop.Tests;
 
 internal static class DraftResolutionMcpChecks
 {
@@ -26,10 +26,10 @@ internal static class DraftResolutionMcpChecks
             {
                 var package = new AnimationPackage { Prefix = new byte[72], Tail = [] };
                 package.Entries.Add(new(new byte[308], 0, 0));
-                using var document = new DocumentModel(new ZbdDocument("draft-fixture", new(0, DateTime.MinValue),
+                using var document = new DocumentModel(new AssetDocument("draft-fixture", new(0, DateTime.MinValue),
                     new(FormatFamily.Animation, 28, Recognition.Supported, "draft fixture"), ReadOnlyMemory<byte>.Empty) { Animations = package });
                 main.ViewModel.Documents.Add(document);
-                var world = new ZbdDocument("world", new(0, DateTime.MinValue), new(FormatFamily.GameZ, 15, Recognition.Supported, "fixture"), ReadOnlyMemory<byte>.Empty) { Scene = new() };
+                var world = new AssetDocument("world", new(0, DateTime.MinValue), new(FormatFamily.GameZ, 15, Recognition.Supported, "fixture"), ReadOnlyMemory<byte>.Empty) { Scene = new() };
                 var context = new AnimationPreviewContext { Package = document.AnimationEdits!.Package, World = world };
                 using var audio = new AnimationAudio(() => new SilentOutput());
                 using var editor = new AnimationEditor(document, 0, new AssetResolver(Path.GetTempPath()), CancellationToken.None, null, audio);

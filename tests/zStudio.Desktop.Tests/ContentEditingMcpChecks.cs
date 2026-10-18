@@ -6,15 +6,15 @@ using System.Windows.Controls;
 using System.Windows.Media;
 using ModelContextProtocol.Client;
 using ModelContextProtocol.Protocol;
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Core.Formats;
-using Recoil.Zbd.Core.Export;
-using Recoil.Zbd.Desktop;
-using Recoil.Zbd.Mcp;
-using Recoil.Zbd.Tests;
+using zStudio.Core;
+using zStudio.Core.Formats;
+using zStudio.Core.Export;
+using zStudio.Desktop;
+using zStudio.Mcp;
+using zStudio.Tests;
 using Xunit;
 
-namespace Recoil.Zbd.Desktop.Tests;
+namespace zStudio.Desktop.Tests;
 
 internal static class ContentEditingMcpChecks
 {
@@ -33,7 +33,7 @@ internal static class ContentEditingMcpChecks
             // Exercise editors after a real 3D preview has been cleared but its viewport retained.
             string worldPath=Path.Combine(root,"gamez.zbd");await File.WriteAllBytesAsync(worldPath,ModelFixture.GameZ(),token);
             await Job("open_document",new() { ["path"]=worldPath });var world=main.ViewModel.Documents.Single();
-            Assert.NotNull(Assert.IsType<Recoil.Zbd.Rendering.SceneViewport>(((ContentControl)main.FindName("SceneHost")).Content).PreviewScene);
+            Assert.NotNull(Assert.IsType<zStudio.Rendering.SceneViewport>(((ContentControl)main.FindName("SceneHost")).Content).PreviewScene);
             await Call("close_document",new() { ["document"]=world.SessionId.ToString(),["revision"]=world.Revision });
             await Job("open_document",new() { ["path"]=source });var doc=main.ViewModel.Documents.Single();var edits=doc.ScriptEdits!;
             // Related inspection shares the bounded GUI lookup and discloses its per-name result cap through the protocol.

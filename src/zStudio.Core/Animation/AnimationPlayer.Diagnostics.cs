@@ -1,4 +1,4 @@
-namespace Recoil.Zbd.Core.Animation;
+namespace zStudio.Core.Animation;
 
 public sealed record AnimationDiagnosticContext(int Entry, long? Instance = null, Guid? Sequence = null, Guid? Event = null);
 public sealed record AnimationPreviewDiagnostic(string Severity, string Category, string Message, AnimationDiagnosticContext Source, long Count, double FirstTime, double LastTime);

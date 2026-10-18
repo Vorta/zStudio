@@ -5,14 +5,14 @@ using System.Text;
 using System.Text.Json.Nodes;
 using ModelContextProtocol.Client;
 using ModelContextProtocol.Protocol;
-using Recoil.Zbd.Automation;
-using Recoil.Zbd.Core.Sources;
-using Recoil.Zbd.Desktop;
-using Recoil.Zbd.Mcp;
-using Recoil.Zbd.Tests;
+using zStudio.Automation;
+using zStudio.Core.Sources;
+using zStudio.Desktop;
+using zStudio.Mcp;
+using zStudio.Tests;
 using Xunit;
 
-namespace Recoil.Zbd.Desktop.Tests;
+namespace zStudio.Desktop.Tests;
 
 /// <summary>
 /// Resolving an interrupted save of a source project through the real named-pipe MCP connection and the GUI's path: the
@@ -39,10 +39,8 @@ internal static class SourceRecoveryMcpChecks
             // operation completes it.
             var cleanup = new SourcePublisher(fixture.Project) { Fault = (step, _) => { if (step == "cleanup") throw new SourcePublisher.Crash(); } };
             Assert.Throws<SourcePublisher.Crash>(() => cleanup.Publish([new("gamegen/note.gs", null, Encoding.ASCII.GetBytes("# note\r\n"))], "Committed save", token));
-            fixture.Write("data/ordinary.lock", "keep visible");
             await main.ViewModel.OpenRootAsync(fixture.Project, token);
-            Assert.DoesNotContain(main.ViewModel.Files, f => f.Path == fixture.Path(SourcePublisher.LockFile));
-            Assert.Contains(main.ViewModel.Files, f => f.Path == fixture.Path("data/ordinary.lock"));
+            Assert.Empty(main.ViewModel.Files); // Source projects expose maps; recovery still reports through Problems.
             for (int wait = 0; wait < 500 && !main.ViewModel.Problems.Any(p => p.Message.Contains("interrupted save", StringComparison.Ordinal)); wait++) await Task.Delay(10, token);
             string committed = (await Call("source_recovery", new()))["saves"]![0]!["id"]!.GetValue<string>();
             Assert.True((await Job("source_recovery_resolve", new() { ["save"] = committed, ["action"] = "complete" }))["resolved"]!.GetValue<bool>());

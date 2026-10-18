@@ -2,11 +2,11 @@ using System.Buffers.Binary;
 using System.IO;
 using System.Numerics;
 using System.Text;
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Core.Formats;
+using zStudio.Core;
+using zStudio.Core.Formats;
 using Xunit;
 
-namespace Recoil.Zbd.Tests;
+namespace zStudio.Tests;
 
 public sealed class Mw3MissionIsolationTests
 {
@@ -217,7 +217,7 @@ public sealed class Mw3MissionIsolationTests
         AssertOnlyPositionChanged(fixture.ReaderBytes, File.ReadAllBytes(fixture.ReaderPath), new(1, 2, 3));
     }
 
-    private static Func<string, ZbdDocument?> Published(AssetResolver resolver, Guid owner) => path => resolver.WorkspaceSnapshot(path, owner);
+    private static Func<string, AssetDocument?> Published(AssetResolver resolver, Guid owner) => path => resolver.WorkspaceSnapshot(path, owner);
     // Mirrors DocumentModel: claim changed archives only, after checking their served baseline.
     private static void Wire(PickupPlacementEditSession edits, AssetResolver resolver, ResourceEditOwnership ownership, Guid owner)
     {
@@ -295,17 +295,17 @@ public sealed class Mw3MissionIsolationTests
         using var fixture = new Mw3MissionFixture("actor_01");
         fixture.Resolver.SetWorkspaceSnapshots(Guid.NewGuid(), [fixture.World]);
         byte[] prefix = new byte[80]; BinaryPrimitives.WriteUInt32LittleEndian(prefix, 0x08170616); BinaryPrimitives.WriteInt32LittleEndian(prefix.AsSpan(4), 39);
-        var package = new Recoil.Zbd.Core.Animation.AnimationPackage { Prefix = prefix, Tail = [] };
+        var package = new zStudio.Core.Animation.AnimationPackage { Prefix = prefix, Tail = [] };
         string animation = Path.Combine(fixture.Folder, "anim.zbd"), vanished = Path.Combine(fixture.Folder, "readerm2.zbd");
-        var context = await Recoil.Zbd.Core.Animation.AnimationPreviewContext.LoadAsync(package, animation, fixture.Resolver, fixture.World.Path, Token, exactMission: fixture.ReaderPath);
+        var context = await zStudio.Core.Animation.AnimationPreviewContext.LoadAsync(package, animation, fixture.Resolver, fixture.World.Path, Token, exactMission: fixture.ReaderPath);
         Assert.Equal(fixture.ReaderPath, context.Mission!.Layout.MissionArchive, ignoreCase: true);
         // The requested reader disappeared after the picker listed it: fail before publishing another reader.
         fixture.Resolver.SelectMission(fixture.World.Path, vanished);
-        var error = await Assert.ThrowsAsync<InvalidDataException>(() => Recoil.Zbd.Core.Animation.AnimationPreviewContext.LoadAsync(package, animation, fixture.Resolver, fixture.World.Path, Token, exactMission: vanished));
+        var error = await Assert.ThrowsAsync<InvalidDataException>(() => zStudio.Core.Animation.AnimationPreviewContext.LoadAsync(package, animation, fixture.Resolver, fixture.World.Path, Token, exactMission: vanished));
         Assert.Contains("readerm2.zbd", error.Message);
         await Assert.ThrowsAsync<InvalidDataException>(() => context.WithDifficultyAsync(fixture.Resolver, MissionDifficulty.Medium, Token, vanished));
         // A remembered (non-exact) selection still falls back visibly.
-        var fallback = await Recoil.Zbd.Core.Animation.AnimationPreviewContext.LoadAsync(package, animation, fixture.Resolver, fixture.World.Path, Token);
+        var fallback = await zStudio.Core.Animation.AnimationPreviewContext.LoadAsync(package, animation, fixture.Resolver, fixture.World.Path, Token);
         Assert.Equal(fixture.ReaderPath, fallback.Mission!.Layout.MissionArchive, ignoreCase: true);
         Assert.Equal(vanished, fallback.Mission.Layout.UnavailableMission, ignoreCase: true);
     }

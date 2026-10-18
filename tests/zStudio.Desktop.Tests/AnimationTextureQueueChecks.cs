@@ -5,13 +5,13 @@ using System.Text;
 using System.Windows;
 using HelixToolkit.SharpDX;
 using HelixToolkit.Wpf.SharpDX;
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Core.Animation;
-using Recoil.Zbd.Rendering;
+using zStudio.Core;
+using zStudio.Core.Animation;
+using zStudio.Rendering;
 using Xunit;
 using DiffuseMaterial = HelixToolkit.Wpf.SharpDX.DiffuseMaterial;
 
-namespace Recoil.Zbd.Desktop.Tests;
+namespace zStudio.Desktop.Tests;
 
 /// <summary>Runs on the existing STA application, through the real two-material frame/queue path.</summary>
 internal static class AnimationTextureQueueChecks
@@ -59,11 +59,12 @@ internal static class AnimationTextureQueueChecks
                 Assert.Equal(Vector3.Zero, geometry.Positions[0]);
                 Assert.Equal(new Vector3(1, 1, 0), geometry.Positions[6]);
             });
-            preview.Isolate(2);
+            // Isolate leaves the camera; an explicit Frame all then measures only the isolated geometry.
+            preview.Isolate(2); preview.FrameAll();
             Assert.Equal(24, framingCorners);
             Assert.Equal(Vector3.Zero, Field<Vector3>("sceneMin"));
             Assert.Equal(new Vector3(1, 1, 0), Field<Vector3>("sceneMax"));
-            preview.Isolate(null);
+            preview.Isolate(null); preview.FrameAll();
             Assert.Equal(96, framingCorners);
             preview.StaticFramingMeasured = null;
             Assert.Equal(12, Field<System.Collections.IList>("meshes").Count);
@@ -176,7 +177,7 @@ internal static class AnimationTextureQueueChecks
                     Enumerable.Range(0, parts).Select(i => new Polygon(i, 3, [0, 1, 2], [], [], [])).ToArray(), []));
                 scene.Nodes.Add(new(0, "world", "world", null, [], Enumerable.Range(1, placements).ToArray(), new(), new()));
                 for (int i = 1; i <= placements; i++) scene.Nodes.Add(new(i, "mesh" + i, "object3d", 0, [0], [], new() { ["flags"] = 4 }, new() { ["flags"] = 8 }));
-                var world = new ZbdDocument(Path.Combine(root, "gamez.zbd"), new(0, DateTime.MinValue),
+                var world = new AssetDocument(Path.Combine(root, "gamez.zbd"), new(0, DateTime.MinValue),
                     new(FormatFamily.GameZ, 27, Recognition.Supported, "fixture"), ReadOnlyMemory<byte>.Empty) { Scene = scene };
                 var mission = new MissionSceneContext(scene, Enumerable.Range(0, scene.Nodes.Count).ToList(), [], [], [], MissionLayoutSelection.For(MissionDifficulty.Medium), scene.Nodes.Count);
                 return (new AnimationPreviewContext { Package = new() { Prefix = [], Tail = [] }, World = world, Mission = mission }, world.Add(AssetKind.World, 0, "world", 0, 0));
@@ -194,7 +195,7 @@ internal static class AnimationTextureQueueChecks
         string root = Directory.CreateDirectory(Path.Combine(Path.GetTempPath(), "zstudio-animation-texture-queue-" + Guid.NewGuid().ToString("N"))).FullName;
         try
         {
-            byte[] bytes = Recoil.Zbd.Tests.ContentFixture.Texture(2, 2, false);
+            byte[] bytes = zStudio.Tests.ContentFixture.Texture(2, 2, false);
             bytes.AsSpan(64, 32).Clear(); Encoding.ASCII.GetBytes("bar").CopyTo(bytes, 64);
             File.WriteAllBytes(Path.Combine(root, "texture1.zbd"), bytes);
             using var resolver = new AssetResolver(root); using var preview = new SceneViewport();
@@ -210,7 +211,7 @@ internal static class AnimationTextureQueueChecks
             var context = new AnimationPreviewContext
             {
                 Package = new() { Prefix = [], Tail = [] },
-                World = new(Path.Combine(root, "gamez.zbd"), new(0, DateTime.MinValue),
+                World = new AssetDocument(Path.Combine(root, "gamez.zbd"), new(0, DateTime.MinValue),
                     new(FormatFamily.GameZ, 27, Recognition.Supported, "fixture"), ReadOnlyMemory<byte>.Empty) { Scene = scene }
             };
             context.MaterialCycles[0] = new(rejectedName == null ? [firstName] : [firstName, rejectedName], 0, false);

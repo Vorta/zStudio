@@ -1,4 +1,4 @@
-namespace Recoil.Zbd.Core.Worlds;
+namespace zStudio.Core.Worlds;
 
 /// <summary>Retail 0x4C20A0's case-sensitive core command prefixes, in dispatch order.
 /// Interpreter built-ins and GameGen-specific commands are handled separately; exact-only core names are not prefixes.</summary>

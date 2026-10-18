@@ -1,10 +1,10 @@
 using System.Text;
 using System.Text.Json.Nodes;
-using Recoil.Zbd.Core.Gltf;
-using Recoil.Zbd.Core.Worlds;
+using zStudio.Core.Gltf;
+using zStudio.Core.Worlds;
 using Xunit;
 
-namespace Recoil.Zbd.Tests;
+namespace zStudio.Tests;
 
 public sealed class ImportRound17Tests
 {
@@ -50,14 +50,6 @@ public sealed class ImportRound17Tests
         JsonObject node = new() { ["matrix"] = new JsonArray(values.Select(f => (JsonNode?)JsonValue.Create(f)).ToArray()) };
         var matrix = GltfDocument.LocalTransform(node)!.Value;
         Assert.Equal(new System.Numerics.Vector3(4,12,19), System.Numerics.Vector3.Transform(new(1,2,3),matrix));
-    }
-
-    [Theory]
-    [InlineData("[]")][InlineData("[{}]")][InlineData("[{\"record\":\"00\",\"vertices\":[]}]")]
-    public void EmptyMeshesCannotMasqueradeAsLegacyPointRecords(string points)
-    {
-        string json = """{"asset":{"version":"2.0"},"meshes":[{"primitives":[],"extras":{"recoil":{"points":""" + points + "}}}]}";
-        Assert.Throws<InvalidDataException>(() => GltfDocument.Read(Encoding.UTF8.GetBytes(json), _ => [], Token));
     }
 
     [Theory]

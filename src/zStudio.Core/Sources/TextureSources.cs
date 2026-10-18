@@ -1,6 +1,6 @@
-using Recoil.Zbd.Core.Formats;
+using zStudio.Core.Formats;
 
-namespace Recoil.Zbd.Core.Sources;
+namespace zStudio.Core.Sources;
 
 /// <summary>
 /// Where texture sources belong. The original build sorted pack records by their full source path, so each mission pack

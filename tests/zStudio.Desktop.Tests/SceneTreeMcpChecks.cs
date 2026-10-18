@@ -6,13 +6,15 @@ using System.Windows;
 using System.Windows.Controls;
 using ModelContextProtocol.Client;
 using ModelContextProtocol.Protocol;
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Desktop;
-using Recoil.Zbd.Mcp;
-using Recoil.Zbd.Rendering;
+using zStudio.Core;
+using zStudio.Core.Sources;
+using zStudio.Core.Worlds;
+using zStudio.Desktop;
+using zStudio.Mcp;
+using zStudio.Rendering;
 using Xunit;
 
-namespace Recoil.Zbd.Desktop.Tests;
+namespace zStudio.Desktop.Tests;
 
 internal static class SceneTreeMcpChecks
 {
@@ -22,7 +24,7 @@ internal static class SceneTreeMcpChecks
         using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(30));
         var main = new MainWindow { Left = -12000, ShowInTaskbar = false }; main.Show();
         var data = Scene();
-        var source = new ZbdDocument("hierarchy-fixture", new(0, DateTime.MinValue), new(FormatFamily.GameZ, 15, Recognition.Supported, "fixture"), ReadOnlyMemory<byte>.Empty) { Scene = data };
+        var source = new AssetDocument("hierarchy-fixture", new(0, DateTime.MinValue), new(FormatFamily.GameZ, 15, Recognition.Supported, "fixture"), ReadOnlyMemory<byte>.Empty) { Scene = data };
         using var doc = new DocumentModel(source);
         using var viewport = new SceneViewport();
         try
@@ -94,6 +96,111 @@ internal static class SceneTreeMcpChecks
             Assert.Equal("Stored document scene", properties.CurrentJson!["hierarchy"]!.GetValue<string>());
             Assert.False(doc.IsDirty);
 
+            // A deleted external source group has a discoverable owner identity, not a fabricated compiled node.
+            ((FrameworkElement)main.FindName("EmptyPreview")).Visibility = Visibility.Collapsed;
+            data = viewport.PreviewScene!;
+            var reference = new WorldNodeProvenance { ModelFile = "data/m1/models/m1.gltf", ModelNode = 7, ModelNodeName = "region" };
+            var ownership = SourceSelectionIndex.Build(new Dictionary<int, WorldNodeProvenance>
+            {
+                [0] = new(),
+                [1] = new() { ModelFile = "data/m1/models/region.gltf", ModelNode = 0, ReferencedBy = reference },
+                [2] = new() { ModelFile = "data/m1/models/region.gltf", ModelNode = 1, ReferencedBy = reference },
+            }, deadline.Token);
+            var projection = new SourceMapSelection(data, null, ownership, i => new("node:" + i, i, null), deadline.Token);
+            viewport.SelectionOwner = projection.Owner;
+            Set("sceneTree", new SceneTreeModel(data, "fixture", true, new(), projection: projection));
+            read = await Call(new()); context = read["context"]!.GetValue<string>();
+            root = read["children"]!["items"]![0]!["row"]!.GetValue<string>();
+            children = await Call(Args("read", root));
+            var sourceGroup = Assert.Single(children["children"]!["items"]!.AsArray())!;
+            Assert.Null(sourceGroup["node"]); Assert.True(sourceGroup["selectionOwner"]!.GetValue<int>() < -1);
+            Assert.Equal("reference", sourceGroup["nodeType"]!.GetValue<string>());
+            string groupRow = sourceGroup["row"]!.GetValue<string>();
+            await Call(Args("select", groupRow));
+            Assert.Equal(sourceGroup["selectionOwner"]!.GetValue<int>(), viewport.FramingSelection);
+            await Call(Args("properties", groupRow));
+            Assert.False(properties.CurrentJson!["editable"]!.GetValue<bool>());
+            int owner = sourceGroup["selectionOwner"]!.GetValue<int>();
+            // The direct Properties route shares the GUI's atomic row, whether addressed by its signed
+            // owner or a physical child. Both inspection and opening remain safe for a source-only group.
+            foreach (int target in new[] { owner, 1 })
+                foreach (bool open in new[] { false, true })
+                {
+                    var describedOwner = await Tool("scene_properties", new() { ["preview"] = preview, ["node"] = target, ["open"] = open });
+                    Assert.Null(describedOwner["Index"]); Assert.Equal(owner, describedOwner["selectionOwner"]!.GetValue<int>());
+                    Assert.False(describedOwner["Metadata"]!["editable"]!.GetValue<bool>());
+                    if (open) Assert.True(JsonNode.DeepEquals(describedOwner["Metadata"], properties.CurrentJson));
+                }
+            await Call(Args("reveal", node: owner));
+            // This fixture has no geometry: signed framing reaches the renderer's no-geometry refusal.
+            await Tool("camera", new() { ["preview"] = preview, ["action"] = "frame", ["node"] = owner }, "not_ready");
+            await Tool("scene_properties", new() { ["preview"] = preview, ["node"] = -1 }, "stale_record");
+            // Authored database groups survive compilation in the tree, not in the renderer's slot namespace.
+            var group42 = new WorldNodeProvenance { ModelFile = "data/m1/models/m1.gltf", ModelNode = 5, ModelNodeName = "group42", Database = true };
+            var group43 = new WorldNodeProvenance { ModelFile = "data/m1/models/m1.gltf", ModelNode = 6, ModelNodeName = "group43", Database = true };
+            var firstPart = new WorldNodeProvenance { ModelFile = "data/m1/models/region.gltf", ModelNode = 0, ReferencedBy = reference };
+            var secondPart = new WorldNodeProvenance { ModelFile = "data/m1/models/region.gltf", ModelNode = 1, ReferencedBy = reference };
+            SourceAuthoredHierarchy authored = new([
+                new(0, null, "group42", group42.ModelFile!, 5, true, [1], group42),
+                new(1, null, "group43", group43.ModelFile!, 6, true, [2], group43),
+                new(2, null, "region", reference.ModelFile!, 7, false, [3, 4], reference),
+                new(3, 1, "part1", firstPart.ModelFile!, 0, false, [], firstPart),
+                new(4, 2, "part2", secondPart.ModelFile!, 1, false, [], secondPart)], [new(0, [0])])
+                { FlattenedEdges = [new(0, 1), new(0, 2)] };
+            ownership = SourceSelectionIndex.Build(new Dictionary<int, WorldNodeProvenance> { [0] = new(), [1] = firstPart, [2] = secondPart }, deadline.Token, authored: authored);
+            projection = new SourceMapSelection(data, null, ownership, i => new("node:" + i, i, null), deadline.Token);
+            viewport.SelectionOwner = projection.Owner;
+            Set("sceneTree", new SceneTreeModel(data, "fixture", true, new(), projection: projection));
+            read = await Call(new()); context = read["context"]!.GetValue<string>();
+            root = read["children"]!["items"]![0]!["row"]!.GetValue<string>();
+            var firstGroup = Assert.Single((await Call(Args("read", root)))["children"]!["items"]!.AsArray())!;
+            Assert.Equal("group42", firstGroup["Label"]!.GetValue<string>()); Assert.Equal("group", firstGroup["nodeType"]!.GetValue<string>());
+            Assert.Null(firstGroup["node"]); Assert.Null(firstGroup["selectionOwner"]); Assert.Null(firstGroup["compiledNode"]);
+            Assert.Equal(5, firstGroup["gltfNode"]!.GetValue<int>());
+            string firstGroupRow = firstGroup["row"]!.GetValue<string>();
+            await Call(Args("select", firstGroupRow)); Assert.Null(viewport.FramingSelection);
+            await Call(Args("properties", firstGroupRow)); Assert.False(properties.CurrentJson!["editable"]!.GetValue<bool>());
+            Assert.Equal("world", properties.CurrentJson["parent"]!.GetValue<string>());
+            var secondGroup = Assert.Single((await Call(Args("read", firstGroupRow)))["children"]!["items"]!.AsArray())!;
+            string secondGroupRow = secondGroup["row"]!.GetValue<string>();
+            var referenceRow = Assert.Single((await Call(Args("read", secondGroupRow)))["children"]!["items"]!.AsArray())!;
+            owner = referenceRow["selectionOwner"]!.GetValue<int>();
+            Assert.Equal("group43", projection.DisplayName(projection.Parent(owner)!.Value));
+            await Call(Args("reveal", node: 1));
+            await Call(Args("properties", referenceRow["row"]!.GetValue<string>()));
+            Assert.Equal("group43", properties.CurrentJson!["parent"]!.GetValue<string>());
+            // Script-created shared parents survive alongside the original authored path. A script edge
+            // to another physical part of this owner also retains the explicit world occurrence.
+            data.Nodes[0] = data.Nodes[0] with { Children = [1, 2, 3] };
+            data.Nodes.Add(new(3, "extra", "object3d", null, [0], [1], new(), new()));
+            var additionalOrigins = new Dictionary<int, WorldNodeProvenance> { [0] = new(), [1] = firstPart, [2] = secondPart, [3] = new() };
+            ownership = SourceSelectionIndex.Build(additionalOrigins, deadline.Token, authored: authored);
+            var sharedProjection = new SourceMapSelection(data, null, ownership, i => new("node:" + i, i, null), deadline.Token);
+            Assert.Contains(sharedProjection.Children(3), edge => edge.Node == sharedProjection.Owner(1));
+            Assert.DoesNotContain(sharedProjection.Children(0), edge => edge.Node == sharedProjection.Owner(1));
+            ownership = SourceSelectionIndex.Build(additionalOrigins, deadline.Token,
+                authored: authored with { FlattenedEdges = [new(0, 1)], ScriptEdges = [new(0, 2)] });
+            sharedProjection = new SourceMapSelection(data, null, ownership, i => new("node:" + i, i, null), deadline.Token);
+            Assert.Contains(sharedProjection.Children(0), edge => edge.Node == sharedProjection.Owner(1));
+            // A detached component can retain a physical imported child after its original root was deleted.
+            // It has an owner but no path in the world tree: reject before changing selection, never index -2.
+            data = new();
+            data.Nodes.Add(new(0, "world", "world", null, [], [], new(), new()));
+            data.Nodes.Add(new(1, "library", "object3d", null, [], [2], new(), new()));
+            data.Nodes.Add(new(2, "part", "object3d", null, [1], [], new(), new()));
+            ownership = SourceSelectionIndex.Build(new Dictionary<int, WorldNodeProvenance>
+            {
+                [0] = new(), [1] = new(),
+                [2] = new() { ModelFile = "data/m1/models/region.gltf", ModelNode = 0, ReferencedBy = reference },
+            }, deadline.Token);
+            projection = new SourceMapSelection(data, null, ownership, i => new("node:" + i, i, null), deadline.Token);
+            typeof(SceneViewport).GetProperty(nameof(SceneViewport.PreviewScene))!.SetValue(viewport, data);
+            viewport.SelectionOwner = projection.Owner; viewport.SelectFramingNode(null);
+            Set("sceneTree", new SceneTreeModel(data, "fixture", true, new(), projection: projection));
+            await Tool("scene_selection", new() { ["preview"] = preview, ["action"] = "select", ["node"] = 2 }, "stale_record");
+            Assert.Null(viewport.FramingSelection);
+            await Tool("scene_properties", new() { ["preview"] = preview, ["node"] = 2, ["open"] = true }, "stale_record");
+
             JsonObject Args(string action, string? row = null, int? node = null)
             {
                 JsonObject args = new() { ["action"] = action, ["context"] = context, ["preview"] = preview };
@@ -102,7 +209,11 @@ internal static class SceneTreeMcpChecks
             async Task<JsonNode> Call(JsonObject args, string? error = null)
             {
                 args["document"] = doc.SessionId.ToString();
-                var reply = await client.CallToolAsync("zstudio_scene_tree", args.ToDictionary(p => p.Key, p => (object?)p.Value), cancellationToken: deadline.Token);
+                return await Tool("scene_tree", args, error);
+            }
+            async Task<JsonNode> Tool(string command, JsonObject args, string? error = null)
+            {
+                var reply = await client.CallToolAsync("zstudio_" + command, args.ToDictionary(p => p.Key, p => (object?)p.Value), cancellationToken: deadline.Token);
                 var result = JsonNode.Parse(reply.Content.OfType<TextContentBlock>().Single().Text)!;
                 if (error == null) Assert.False(reply.IsError == true, result.ToJsonString()); else Assert.Equal(error, result["code"]!.GetValue<string>());
                 return result;

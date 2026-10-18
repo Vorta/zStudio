@@ -1,11 +1,11 @@
 using System.Text;
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Core.Formats;
-using Recoil.Zbd.Core.Sources;
-using Recoil.Zbd.Core.Worlds;
+using zStudio.Core;
+using zStudio.Core.Formats;
+using zStudio.Core.Sources;
+using zStudio.Core.Worlds;
 using Xunit;
 
-namespace Recoil.Zbd.Tests;
+namespace zStudio.Tests;
 
 /// <summary>
 /// Reconstruction infers a mission database's files from the shipped slots: worlds built from small projects, read back
@@ -20,7 +20,11 @@ public sealed class ReconstructionInferenceTests
         public Dictionary<string, byte[]> Files { get; } = files;
         public bool Exists(string relative) => Files.ContainsKey(relative);
         public byte[] Read(string relative, CancellationToken token) => Read(relative, token, ProjectReadLimits.Document);
-        public byte[] Read(string relative, CancellationToken token, ProjectReadLimits limits) { token.ThrowIfCancellationRequested(); byte[] result = Files[relative]; limits.Validate(result); return result; }
+        public byte[] Read(string relative, CancellationToken token, ProjectReadLimits limits) { token.ThrowIfCancellationRequested(); byte[] result = Files[relative];
+            // Original script fixtures remain FLT-based; the current source assembler receives reconstructed filenames.
+            if (relative.StartsWith("gamegen/", StringComparison.Ordinal))
+                result = Encoding.ASCII.GetBytes(GameGenScriptText.Write(GameGenScriptText.ProjectFileNames(GameGenScriptText.Tokenize(Encoding.ASCII.GetString(result)), new HashSet<string>())));
+            limits.Validate(result); return result; }
     }
 
     private static string Script(int mission, string loads, string before = "") => $"""
@@ -224,6 +228,38 @@ public sealed class ReconstructionInferenceTests
         Assert.Contains(outputs, o => o.Path == "data/common/models/tank.gltf");
         Assert.DoesNotContain(outputs, o => o.Path == "data/m1/models/bft/tank.gltf");
         for (int m = 1; m <= 2; m++) Assert.Empty(WorldComparer.Compare(shipped(m), Rebuild(files, outputs, m)));
+    }
+
+    [Fact]
+    public void TurretsSeveralDatabasesReferenceAreOneFileInCommonModels()
+    {
+        // Both databases reference the same pturret.flt (the original tree had a copy beside each), each mission's placements
+        // in a zone of their own: one file in data/common/models, each zone kept on its placement.
+        Dictionary<string, byte[]> files = new(StringComparer.Ordinal);
+        for (int m = 1; m <= 2; m++)
+        {
+            files[$"gamegen/m{m}.gs"] = Encoding.ASCII.GetBytes(Script(m, "LoadGameGen lamp.flt lamp1"));
+            Gltf(files, $"data/m{m}/models", "pturret", [Node("base", Quad(2, 0)), Node("gun", Quad(1, 2))]);
+            WorldNode first = Node("pturret.flt", null, Node("placeholder")), second = Node("pturret.flt", null, Node("placeholder"));
+            first.Zone = second.Zone = (uint)(m + 2);
+            Gltf(files, $"data/m{m}/models", $"m{m}", [Node("ground", Quad(64, 0)), Node("hut", Quad(3, 0), first), Node("tree", Quad(1, 5)), Node("tower", Quad(2, 4), second)],
+                new Dictionary<WorldNode, string>(ReferenceEqualityComparer.Instance) { [first] = "pturret.gltf", [second] = "pturret.gltf" });
+            Gltf(files, $"data/m{m}/models", "lamp", [Node("base", Quad(1, 0)), Node("bulb", Quad(1, 2))]);
+        }
+        var (outputs, notes, shipped) = Reconstruct(files, 1, 2);
+        Assert.Empty(notes);
+        Assert.Contains(outputs, o => o.Path == "data/common/models/pturret.gltf");
+        Assert.DoesNotContain(outputs, o => o.Path is "data/m1/models/pturret.gltf" or "data/m2/models/pturret.gltf");
+        for (int m = 1; m <= 2; m++)
+        {
+            var master = System.Text.Json.Nodes.JsonNode.Parse(outputs.Single(o => o.Path == $"data/m{m}/models/m{m}.gltf").Bytes)!;
+            var references = master["nodes"]!.AsArray().Select(n => (string?)n?["extras"]?["recoil"]?["ref"]).OfType<string>().ToArray();
+            Assert.NotEmpty(references);
+            Assert.All(references, r => Assert.EndsWith("../../common/models/pturret.gltf", r, StringComparison.Ordinal));
+            var rebuilt = Rebuild(files, outputs, m);
+            Assert.Equal(Slots(shipped(m)), Slots(rebuilt));
+            Assert.Empty(WorldComparer.Compare(shipped(m), rebuilt));
+        }
     }
 
     private static List<string> Load(IReadOnlyList<WorldNode> records, Dictionary<WorldNode, IReadOnlyList<WorldNode>> content, IReadOnlySet<WorldNode>? references = null)

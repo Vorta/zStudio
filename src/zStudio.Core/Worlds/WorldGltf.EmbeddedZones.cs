@@ -1,16 +1,17 @@
 using System.Globalization;
 using System.Text.Json.Nodes;
-using Recoil.Zbd.Core.Gltf;
+using zStudio.Core.Gltf;
 
-namespace Recoil.Zbd.Core.Worlds;
+namespace zStudio.Core.Worlds;
 
 public static partial class WorldGltf
 {
     internal static bool HasEmbeddedZones(GltfDocument document) =>
         document.SceneExtras?[Key] is JsonObject scene && scene["sourceFormat"] != null
-        || document.AllNodes().Any(node => (node.Extras?[Key] as JsonObject)?["zoneInherited"] != null
-            || node.Mesh?.Primitives.Any(p => (p.Extras?[Key] as JsonObject)?["polygonZones"] != null) == true);
-    internal sealed record EmbeddedZoneScope(string OwnerPath, IReadOnlyList<int> References, IReadOnlyList<JsonObject> Overrides);
+        || document.AllNodes().Any(node => node.Mesh?.Primitives.Any(p => (p.Extras?[Key] as JsonObject)?["polygonZones"] != null) == true);
+    /// <summary><paramref name="Holders"/> names, per override, the file and reference node that authored it.</summary>
+    internal sealed record EmbeddedZoneScope(string OwnerPath, IReadOnlyList<int> References, IReadOnlyList<JsonObject> Overrides,
+        IReadOnlyList<(string File, int Node)> Holders);
     private sealed class EmbeddedZoneLease(ImportContext context, bool pushed) : IDisposable
     {
         public void Dispose() { if (pushed) context.EmbeddedZoneScopes.Pop(); }
@@ -18,7 +19,7 @@ public static partial class WorldGltf
     private static IDisposable EnterEmbeddedZones(ImportContext context, string path)
     {
         bool push = context.EmbeddedZoneScopes.Count == 0;
-        if (push) context.EmbeddedZoneScopes.Push(new(path, [], []));
+        if (push) context.EmbeddedZoneScopes.Push(new(path, [], [], []));
         return new EmbeddedZoneLease(context, push);
     }
     private static IDisposable PushZoneOverrides(ImportContext context, GltfNode source, GltfDocument referenced,
@@ -26,18 +27,20 @@ public static partial class WorldGltf
     {
         var parent = context.EmbeddedZoneScopes.Peek();
         List<JsonObject> scopes = [];
-        foreach (var scope in parent.Overrides)
+        List<(string File, int Node)> holders = [];
+        for (int i = 0; i < parent.Overrides.Count; i++)
         {
+            var scope = parent.Overrides[i];
             if (scope["references"] is { } refs && refs is not JsonObject)
                 throw new InvalidDataException($"{ownerPath}: nested reference zone overrides must be an object.");
             var inherited = scope["references"]?[source.Index.ToString(CultureInfo.InvariantCulture)];
-            if (inherited is JsonObject value) scopes.Add(value);
+            if (inherited is JsonObject value) { scopes.Add(value); holders.Add(parent.Holders[i]); }
             else if (inherited != null) throw new InvalidDataException($"{ownerPath}: a reference zone override must be an object.");
         }
         var authored = source.Extras?[Key]?["zoneOverrides"];
-        if (authored is JsonObject own) scopes.Add(own);
+        if (authored is JsonObject own) { scopes.Add(own); holders.Add((ownerPath, source.Index)); }
         else if (authored != null) throw new InvalidDataException($"{ownerPath}: a reference zone override must be an object.");
-        context.EmbeddedZoneScopes.Push(new(parent.OwnerPath, [.. parent.References, source.Index], scopes));
+        context.EmbeddedZoneScopes.Push(new(parent.OwnerPath, [.. parent.References, source.Index], scopes, holders));
         return new EmbeddedZoneLease(context, true);
     }
 
@@ -152,16 +155,11 @@ public static partial class WorldGltf
         foreach (var mesh in meshes)
         {
             token.ThrowIfCancellationRequested();
-            var words = mesh as JsonArray ?? (mesh as JsonObject)?["polygonZones"] as JsonArray;
-            if (words == null || (count += words.Count) > GltfDocument.MaximumDecodedElements)
+            if (mesh is not JsonObject fields || fields["polygonZones"] is not JsonArray words)
+                throw new InvalidDataException("Reference polygon zones require current embedded assignments. Reconstruct older projects from the original ZBD files.");
+            if ((count += words.Count) > GltfDocument.MaximumDecodedElements)
                 throw new InvalidDataException("The reference zone override exceeds its polygon allowance.");
-            uint[] values;
-            if (mesh is JsonObject fields) values = ReadPolygonZoneValues(fields, words.Count, "the reference", token);
-            else
-            {
-                values = new uint[words.Count];
-                for (int i = 0; i < words.Count; i++) { token.ThrowIfCancellationRequested(); values[i] = Hex(words[i], "polygonZones", "the reference"); }
-            }
+            uint[] values = ReadPolygonZoneValues(fields, words.Count, "the reference", token);
             meshValues.Add(values);
         }
         return new(hash, nodeValues, meshValues, value["loadRoot"] is { } root ? ReadEmbeddedLoadRoot(root) : null);
@@ -196,7 +194,7 @@ public static partial class WorldGltf
     private static WorldNodeZone ReadEmbeddedLoadRoot(JsonNode value)
     {
         // A load root may carry flags alone; its missing zone is the engine's unconstrained root zone.
-        if (value is JsonObject fields && !fields.ContainsKey("zone") && !fields.ContainsKey("word") && !fields.ContainsKey("zoneWord"))
+        if (value is JsonObject fields && !fields.ContainsKey("zone"))
             return new(ReadNodeZoneValue(fields, DefaultZone, "the source load root"), (StoredNodeFlags(fields) & ZoneGate) != 0);
         var root = ReadEmbeddedNode(value);
         if (root.Inherit) throw new InvalidDataException("A source load-root zone cannot inherit from a model parent.");
@@ -228,7 +226,6 @@ public static partial class WorldGltf
         if (parent[key] != null) throw new InvalidDataException($"The source attribute {key} must be an object.");
         JsonObject created = []; parent[key] = created; return created;
     }
-    private static string ZoneHex(uint value) => "0x" + value.ToString("X8", CultureInfo.InvariantCulture);
     private static JsonObject WriteEmbeddedNode(WorldNodeZone node)
     {
         JsonObject result = [];
@@ -239,7 +236,7 @@ public static partial class WorldGltf
     {
         if (node is not JsonObject value) throw new InvalidDataException("A source node zone must be an object.");
         bool inherited = NodeZoneIsInherited(value, "the source zone");
-        if (value["zone"] == null && value["word"] == null && value["zoneWord"] == null)
+        if (value["zone"] == null)
             throw new InvalidDataException("A source node zone needs a numeric zone ID, \"any\" or \"inherit\".");
         return new(ReadNodeZoneValue(value, DefaultZone, "the source zone"), (StoredNodeFlags(value) & ZoneGate) != 0,
             inherited);
@@ -257,7 +254,7 @@ public static partial class WorldGltf
         else if (scene["loadRoot"] is JsonObject root)
         {
             // Zone-only edits must retain the independently authored load-root flags.
-            foreach (string key in new[] { "zone", "zonePadding", "zoneWord", "word" }) root.Remove(key);
+            foreach (string key in new[] { "zone", "zonePadding" }) root.Remove(key);
             if (root.Count == 0) scene.Remove("loadRoot");
         }
     }

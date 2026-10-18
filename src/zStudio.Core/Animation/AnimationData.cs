@@ -3,7 +3,7 @@ using System.Numerics;
 using System.Text;
 using System.Text.Json.Nodes;
 
-namespace Recoil.Zbd.Core.Animation;
+namespace zStudio.Core.Animation;
 
 /// <summary>Little-endian serialized data. Pointer-shaped fields are never dereferenced.</summary>
 public class AnimationRecord(byte[] bytes)

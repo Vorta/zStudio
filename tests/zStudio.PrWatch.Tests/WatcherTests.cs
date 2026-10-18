@@ -1,6 +1,6 @@
 using Xunit;
 
-namespace Recoil.Zbd.PrWatch.Tests;
+namespace zStudio.PrWatch.Tests;
 
 public sealed class WatcherTests
 {

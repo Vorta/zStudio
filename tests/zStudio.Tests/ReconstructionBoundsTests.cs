@@ -1,11 +1,11 @@
 using System.Collections;
 using System.Text;
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Core.Sources;
-using Recoil.Zbd.Core.Worlds;
+using zStudio.Core;
+using zStudio.Core.Sources;
+using zStudio.Core.Worlds;
 using Xunit;
 
-namespace Recoil.Zbd.Tests;
+namespace zStudio.Tests;
 
 /// <summary>The original loader's emulation and the world writer stay within their inputs' size on crafted files.</summary>
 public sealed class ReconstructionBoundsTests
@@ -163,7 +163,7 @@ public sealed class ReconstructionBoundsTests
                 WorldOrigin 0.0 512.0
                 WorldExtents 512.0 -512.0
                 WorldPartition 256 -256
-                LoadGameGen big.flt big
+                LoadGameGen big.gltf big
                 GameZWriteZBDFile ..\m1\gamez.zbd
                 """),
             ["data/m1/models/big.gltf"] = Encoding.UTF8.GetBytes(gltf),

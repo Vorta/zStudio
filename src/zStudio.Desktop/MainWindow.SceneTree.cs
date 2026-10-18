@@ -4,11 +4,11 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
 using System.Windows.Threading;
-using Recoil.Zbd.Automation;
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Rendering;
+using zStudio.Automation;
+using zStudio.Core;
+using zStudio.Rendering;
 
-namespace Recoil.Zbd.Desktop;
+namespace zStudio.Desktop;
 
 public partial class MainWindow
 {
@@ -19,7 +19,7 @@ public partial class MainWindow
     private int sceneTreeRevealGeneration;
     private readonly HashSet<SceneTreeItem> collapsingSceneRows = [];
     private readonly ConditionalWeakTable<DocumentModel, Dictionary<string, SceneTreeState>> sceneTreeStates = new();
-    private SceneViewport? TreeViewport => EmptyPreview.Visibility == Visibility.Collapsed ?
+    private SceneViewport? TreeViewport => EmptyPreview.Visibility == Visibility.Collapsed && retiringScene == null ?
         motion?.Viewport ?? animation?.Viewport ?? (SceneHost.Visibility == Visibility.Visible ? scene : null) : null;
 
     private void RefreshSceneTree()
@@ -30,6 +30,17 @@ public partial class MainWindow
         var data = viewport?.PreviewScene ?? doc?.PreviewDocument.Scene;
         bool active = data != null && viewport?.PreviewScene == data;
         if (doc?.IsDisposed == true) { doc = null; data = null; }
+        // A source map shows only its projected World tree: while a rebuild replaces the view (or its projection is prepared),
+        // the shown tree stays, disabled, rather than the stored scene's compiled list.
+        bool sourceMap = doc?.SourceWorld != null;
+        if (sourceMap && (!active || SourceSelection(doc!, data) == null))
+        {
+            // The same map's tree (a rebuild replaces its document) stays until the rebuilt one is shown.
+            if (sceneTree?.Projection != null && (sceneTreeDocument == doc || sceneTreeDocument?.SourceWorld is { } shownWorld && shownWorld.Workspace == doc!.SourceWorld!.Workspace && shownWorld.Mission == doc.SourceWorld.Mission))
+            { DocumentSceneTree.IsEnabled = OutlinerResults.IsEnabled = OutlinerShowAll.IsEnabled = false; return; }
+            data = null;
+        }
+        DocumentSceneTree.IsEnabled = OutlinerResults.IsEnabled = OutlinerShowAll.IsEnabled = true;
         if (sceneTreeDocument == doc && sceneTree?.Hierarchy.Scene == data && sceneTree?.IsPreview == active && ReferenceEquals(sceneTree?.Hierarchy.Included, active ? viewport?.InspectionNodes : null)) return;
         changingSceneTree = true;
         try
@@ -50,25 +61,28 @@ public partial class MainWindow
                     if (states.Count >= 16) states.Remove(states.Keys.First());
                     states[key] = state = new();
                 }
-                sceneTree = new(data, source, true, state, TreeIdentities(data, viewport.Mission, doc.PickupEdits), viewport.InspectionNodes);
+                sceneTree = new(data, source, true, state, TreeIdentities(data, viewport.Mission, doc.PickupEdits), viewport.InspectionNodes, SourceSelection(doc, data));
             }
-            if (sceneTree != null) sceneTree.Collapsing += SceneTreeCollapsing;
+            if (sceneTree != null) { sceneTree.Collapsing += SceneTreeCollapsing; var hidden = hiddenRows.Values.SelectMany(n => n).ToHashSet(); sceneTree.IsHiddenNode = hidden.Contains; }
             DocumentSceneTree.ItemsSource = sceneTree?.Roots;
             // Renderer replacement clears its framing identity. Restore it from
             // the tree's provenance match, together with source inspection, without
             // selecting a runtime copy, moving the camera or resolving drafts.
-            if (sceneTree?.Selected is { Node: { } retained } selected)
+            if (sceneTree?.Selected is { Selectable: true, Index: int retained } selected)
             {
                 inspectedSceneSource = selected;
-                selectedNode = active ? retained.Index : null;
+                selectedNode = active && !selected.SourceGroup ? retained : null;
                 SetProperties(SceneTreeProperties(selected));
-                if (active && viewport!.SelectedInspection == null && viewport.SelectedAiNode == null)
-                    viewport.SelectFramingNode(retained.Index);
+                if (active && !selected.SourceGroup && viewport!.SelectedInspection == null && viewport.SelectedAiNode == null)
+                    viewport.SelectFramingNode(retained);
             }
         }
         finally { changingSceneTree = false; }
         UpdateNavigatorAvailability();
         ScheduleSceneTreeReveal();
+        RestoreHiddenIdentities(doc);
+        RestoreTreeLayout(doc);
+        if (sourceChromeActive) RefreshOutlinerFilter();
     }
 
     internal static Func<int, SceneTreeIdentity> TreeIdentities(GameScene data, MissionSceneContext? mission, PickupPlacementEditSession? edits)
@@ -125,10 +139,11 @@ public partial class MainWindow
         if (viewport.SelectedInspection is { Node: >= 0 } selected)
         {
             bool inspectingSource = inspectedSceneSource != null;
-            RevealSceneNode(selected.Node);
+            RevealSceneNode(selected.SelectionNode);
+            if (sceneTree?.Selected is { } shownRow && shownRow.Index == selected.SelectionNode) RememberSelection(shownRow);
             // Retain source-inspection intent, but never the previously selected
             // row. The existing Properties window itself remains independently pinned.
-            if (inspectingSource) inspectedSceneSource = sceneTree?.Selected?.Index == selected.Node ? sceneTree.Selected : null;
+            if (inspectingSource) inspectedSceneSource = sceneTree?.Selected?.Index == selected.SelectionNode ? sceneTree.Selected : null;
         }
         else if (viewport.SelectedInspection?.AiNode != null)
         {
@@ -159,51 +174,79 @@ public partial class MainWindow
         if (collapsingSceneRows.Contains(row) && previous != null)
             for (var parent = previous.Parent; parent != null; parent = parent.Parent)
                 if (parent == row) { Restore(); return; }
-        if (row.Node == null || row.Problem != null) { Restore(); return; }
-        if (!ResolvePropertiesDrafts(sceneTreeDocument) || animation?.ResolvePendingDrafts() == false) { Restore(); return; }
+        if (!row.Selectable) { Restore(); return; }
+        if (!ResolveSelectionDrafts(sceneTreeDocument) || animation?.ResolvePendingDrafts() == false) { Restore(); return; }
         try { SelectSceneTreeRow(row); }
-        catch (StudioCommandException ex) { ViewModel.Status = ex.Message; Restore(); }
+        catch (StudioCommandException ex) { Notice(ex.Message); Restore(); }
         void Restore()
         {
-            changingSceneTree = true;
-            try { row.IsSelected = false; sceneTree?.Select(previous); }
-            finally { changingSceneTree = false; }
+            // A click selects its row while WPF is still moving keyboard focus to it. Selecting another row inside that
+            // change makes the two rows take focus and select each other until the stack overflows: restore afterwards.
+            var model = sceneTree;
+            Dispatcher.BeginInvoke(DispatcherPriority.Input, () =>
+            {
+                if (sceneTree != model || model == null || !row.IsSelected) return;
+                changingSceneTree = true;
+                try { row.IsSelected = false; model.Select(previous); }
+                finally { changingSceneTree = false; }
+            });
         }
     }
     private void SelectSceneTreeRow(SceneTreeItem row)
     {
-        if (row.Owner != sceneTree || row.Node is not { } node || row.Problem != null || sceneTreeDocument is not { IsDisposed: false } doc)
+        if (row.Owner != sceneTree || row.Index is not int node || !row.Selectable || sceneTreeDocument is not { IsDisposed: false } doc)
             throw new StudioCommandException("stale_record", "The tree node is no longer available.");
         var viewport = sceneTree.IsPreview ? TreeViewport : null;
         if (viewport?.IsPickupDragging == true || viewport?.IsFlyActive == true) throw new StudioCommandException("busy", "Finish the pickup drag or exit Fly before selecting a node.");
         changingSceneTree = true;
         try
         {
-            if (viewport != null)
+            if (viewport != null && !row.SourceGroup)
             {
                 // Revealing a runtime card never comes through here. An intentional
                 // source selection may choose a visible pose; an existing exact copy is retained.
-                if (viewport.SelectedInspection?.Node != node.Index && !viewport.SelectInspectionNode(node.Index)) viewport.SelectInspection(null, false);
-                if (animation == null) InspectNode(node.Index);
-                selectedNode = node.Index; viewport.SelectFramingNode(node.Index);
+                if (viewport.SelectedInspection?.SelectionNode != node && !viewport.SelectInspectionNode(node)) viewport.SelectInspection(null, false);
+                if (animation == null && node >= 0) InspectNode(node);
+                selectedNode = node; viewport.SelectFramingNode(node);
             }
-            else selectedNode = null;
+            else
+            {
+                selectedNode = null;
+                if (viewport != null) { viewport.SelectInspection(null, false); viewport.SelectFramingNode(null); }
+            }
             SetProperties(SceneTreeProperties(row));
             inspectedSceneSource = row;
             sceneTree.Select(row); SceneTreeModel.ExpandAncestors(row);
-            ViewModel.Status = $"Selected node #{node.Index}: {node.Name}";
+            if (doc.SourceWorld != null && viewport != null) FocusSourceObjectCard(doc, node);
+            if (viewport?.InspectionContent is SceneInspectionCard card) card.Refresh();
+            ViewModel.Status = row.SourceGroup ? $"Selected source group: {row.DisplayName}" : row.Synthetic ? $"Selected reference: {row.DisplayName}" : $"Selected node #{node}: {row.DisplayName}";
+            RememberSelection(row);
         }
         finally { changingSceneTree = false; }
         ScheduleSceneTreeReveal();
     }
     private JsonObject SceneTreeProperties(SceneTreeItem row)
     {
+        if (row.Synthetic) return new()
+        {
+            ["name"] = row.DisplayName, ["kind"] = row.SourceGroup ? "source group" : "source reference group", ["source_occurrence"] = row.StateKey,
+            ["editable"] = false, ["reason"] = row.ReadOnlyReason, ["scene_source"] = row.Owner.Source,
+            ["source_file"] = row.Authored?.File, ["gltf_node_index"] = row.Authored?.SourceNode,
+            ["parent"] = row.Parent?.DisplayName,
+        };
         var node = row.Node!; var properties = JsonData.PreviewObject(node.Metadata);
         properties["node_index"] = node.Index; properties["source_node_index"] = row.Owner.Identity(node.Index).SourceNode;
         properties["scene_source"] = row.Owner.Source;
-        properties["hierarchy"] = row.Owner.IsPreview ? "Bound preview scene (not runtime parenting)" : "Stored document scene";
-        properties["parent_indices"] = JsonData.Integers(node.Parents.Take(64)); properties["parent_count"] = node.Parents.Length;
-        properties["child_indices"] = JsonData.Integers(node.Children.Take(64)); properties["child_count"] = node.Children.Length;
+        if (row.Authored is { } authored)
+        {
+            properties["source_file"] = authored.File; properties["gltf_node_index"] = authored.SourceNode;
+            properties["source_occurrence"] = row.StateKey; properties["parent"] = row.Parent?.DisplayName;
+            properties["compiled_node_index"] = authored.CompiledNode;
+        }
+        properties["hierarchy"] = row.Owner.Projection != null ? "Authored source hierarchy" : row.Owner.IsPreview ? "Bound preview scene (not runtime parenting)" : "Stored document scene";
+        string prefix = row.Owner.Projection != null ? "compiled_" : "";
+        properties[prefix + "parent_indices"] = JsonData.Integers(node.Parents.Take(64)); properties[prefix + "parent_count"] = node.Parents.Length;
+        properties[prefix + "child_indices"] = JsonData.Integers(node.Children.Take(64)); properties[prefix + "child_count"] = node.Children.Length;
         if (node.Parents.Length > 64 || node.Children.Length > 64) properties["inspection_truncated"] = true;
         return properties;
     }
@@ -251,11 +294,13 @@ public partial class MainWindow
     }
     private void RegisterSceneTreeCommand(StudioCommands commands)
     {
-        Register(commands, "scene_tree", "Read the Document scene hierarchy, including stable preview placements, shared/partition references and disconnected nodes. Read returns roots or a row's direct children, optionally filtered before paging. Expand/collapse/reveal only change tree presentation; select shares scene inspection and draft guards. Runtime parenting is not represented.", true,
-            [DocumentParameter, P("action", "string", "Tree action; default read. Properties opens the same pinned window as the row context menu.", false, "read", "expand", "collapse", "reveal", "select", "properties"),
+        Register(commands, "scene_tree", "Read the Document scene hierarchy, including stable preview placements, shared/partition references and disconnected nodes. Source maps show the authored glTF hierarchy, including groups removed by compilation, under the world root; objects later passes add follow as top-level pass rows (pass aiv: units the AIV resources place; puppies: their pickups; anim: objects startup animations place or hide until placed), each listing its objects. The aiv and puppies passes list every difficulty's units and pickups with the difficulties placing each; those the shown difficulty does not place have otherDifficulty=true, node=null and a placement summary, and cannot be selected. animations lists the mission animations bound to an object by name (at most eight, then an ellipsis). sourceFile/gltfNode identify authored nodes, sourceOccurrence identifies a tree path, and compiledNode is an optional built slot. selectionOwner for source_map_parts is a signed current-preview identity; source-only authored groups have node=null and selectionOwner=null and support read-only row inspection. properties focuses the source-object card, or opens pinned Properties in other viewers. Read returns roots or a row's direct children, optionally filtered before paging; in a source map, search and/or types read the whole hierarchy as a flat list of matches with their parent paths, as the outliner's search box does (types narrows it by the legend's categories). A row's zone is null in the aiv and puppies passes. Source map rows carry category (world, group, geometry, object, node), zone and hidden. Expand/collapse/reveal only change tree presentation; hide/show hide a row's object (a removed group: what it holds) in the view only, like the outliner's eye; select shares scene inspection and draft guards. Runtime parenting is not represented.", true,
+            [DocumentParameter, P("action", "string", "Tree action; default read. Properties focuses the source-object card; other viewers open the same pinned window as the row context menu. hide/show (source maps) change only what the view draws.", false, "read", "expand", "collapse", "reveal", "select", "properties", "hide", "show"),
+                P("search", "string", "Source maps: case-insensitive name search across the whole hierarchy (read without row); results are flat rows with path."),
+                P("types", "string", "Source maps: comma-separated categories the flat read includes (group, geometry, object, node); default all."),
                 P("context", "string", "Current hierarchy context from read; required for all actions and row queries."),
                 P("preview", "string", "Current preview ID from read; required for actions on a preview hierarchy."),
-                P("row", "string", "Opaque row ID for child queries or actions."), new("node", "integer", "Scene node index for reveal/select/properties instead of row.", Minimum: 0, Maximum: int.MaxValue), .. PageParameters], async (a, token) =>
+                P("row", "string", "Opaque row ID for child queries or actions."), new("node", "integer", "Scene node index or signed selectionOwner for reveal/select/properties instead of row, scoped to the current hierarchy.", Minimum: int.MinValue, Maximum: int.MaxValue), .. PageParameters], async (a, token) =>
         {
             var doc = TargetDocument(a); RefreshSceneTree();
             if (doc != sceneTreeDocument || sceneTree == null) throw new StudioCommandException("not_ready", "Document scene is unavailable for this document.");
@@ -270,7 +315,7 @@ public partial class MainWindow
             {
                 if (action is "select" or "properties")
                 {
-                    RequireNoDrafts(action == "properties" ? null : doc);
+                    if (action == "properties") RequireNoDrafts(); else RequireNoSelectionDrafts(doc);
                     if (sceneTree.IsPreview && TreeViewport is { } viewport && (viewport.IsPickupDragging || viewport.IsFlyActive))
                         throw new StudioCommandException("busy", "Finish the pickup drag or exit Fly before selecting a node.");
                 }
@@ -282,28 +327,71 @@ public partial class MainWindow
                     finally { changingSceneTree = false; }
                 }
                 if (row == null) throw new StudioCommandException("stale_record", "Supply an available tree row or node.");
+                if (row.Pass != null && action is "select" or "properties") throw new StudioCommandException("invalid_argument", "A pass row groups the objects a later pass adds; select one of them.");
+                if (row.IsOtherDifficulty && action is "select" or "properties")
+                    throw new StudioCommandException("invalid_argument", row.Placement!.Difficulties.Count == 1
+                        ? $"Only {row.Placement.Difficulties[0]} places this; choose that difficulty (zstudio_scene_options difficulty) to select it."
+                        : $"Only {string.Join(", ", row.Placement.Difficulties)} place this; choose one of them (zstudio_scene_options difficulty) to select it.");
+                if (action is "hide" or "show")
+                {
+                    if (!row.CanHide || row.Index is not int hiddenIndex) throw new StudioCommandException("unsupported", "Only a source map's object rows can be hidden in the view.");
+                    SetRowHidden(row, hiddenIndex, action == "hide");
+                }
                 if (action == "properties")
                 {
                     var model = sceneTree;
-                    var opened = await OpenScenePropertiesAsync(doc, row, token, automation: true);
-                    if (sceneTree != model || opened == null) throw new StudioCommandException("context_changed", "The requested hierarchy Properties target was not published.");
+                    if (doc.SourceWorld != null && !IsSourceTerrain(doc, row.Index))
+                    {
+                        SelectSceneTreeRow(row);
+                        if (row.Index is int sourceNode && !row.SourceGroup && !FocusSourceObjectCard(doc, sourceNode)) throw new StudioCommandException("not_ready", "The source object panel is unavailable.");
+                    }
+                    else
+                    {
+                        var opened = await OpenScenePropertiesAsync(doc, row, token, automation: true);
+                        if (sceneTree != model || opened == null) throw new StudioCommandException("context_changed", "The requested hierarchy Properties target was not published.");
+                    }
                 }
                 else if (action == "select") SelectSceneTreeRow(row);
                 else if (action == "expand") row.IsExpanded = true;
                 else if (action == "collapse") row.IsExpanded = false;
-                else { SceneTreeModel.ExpandAncestors(row); }
+                else if (action == "reveal") SceneTreeModel.ExpandAncestors(row);
                 if (action == "reveal") ScheduleSceneTreeReveal(row);
             }
             else if (a["node"] != null) throw new StudioCommandException("invalid_argument", "Use node with reveal/select.");
-            var page = Page(row == null ? sceneTree.Roots : row.Children, a, r => r.Label, r => DescribeTreeRow(r));
+            if (action == "read" && (a["search"] != null || a["types"] != null))
+            {
+                if (sceneTree.Projection == null) throw new StudioCommandException("unsupported", "Hierarchy search is available in source maps.");
+                if (row != null) throw new StudioCommandException("invalid_argument", "search and types read the whole hierarchy; omit row.");
+                string search = Text(a, "search").Trim();
+                if (search.Length > 256) throw new StudioCommandException("invalid_argument", "Search text is limited to 256 characters.");
+                var types = a["types"] == null ? OutlinerKinds.Categories.ToHashSet() : Text(a, "types").Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToHashSet();
+                if (types.Count == 0 || types.Any(t => !OutlinerKinds.Categories.Contains(t))) throw new StudioCommandException("invalid_argument", "types lists group, geometry, object and/or node.");
+                var hits = OutlinerMatches(sceneTree, search, types, 10_000, out bool truncated);
+                var found = Page(hits, a, h => h.Row.Label, h => new { path = h.Path, item = DescribeTreeRow(h.Row) },
+                    maximumRowBytes: h => 2048 + 6L * (h.Path.Length + h.Row.Label.Length + (h.Row.Authored?.File.Length ?? 0) + (h.Row.Animations?.Sum(n => n.Length + 4) ?? 0) + (h.Row.ReadOnlyReason?.Length ?? 0) + (h.Row.Placement?.Detail.Length ?? 0)));
+                return Result(new { context = sceneTree.Context, document = doc.SessionId, revision = doc.Revision, preview = sceneTree.IsPreview ? previewId.ToString() : null,
+                    search, types = types.Order().ToArray(), matchesTruncated = truncated, matches = found.Data });
+            }
+            var page = Page(row == null ? sceneTree.Roots : row.Children, a, r => r.Label, r => DescribeTreeRow(r),
+                maximumRowBytes: r => 2048 + 6L * (r.Label.Length + (r.Authored?.File.Length ?? 0) + (r.Pass?.Description.Length ?? 0) + (r.Animations?.Sum(a => a.Length + 4) ?? 0)
+                    + (r.ReadOnlyReason?.Length ?? 0) + (r.Problem?.Length ?? 0) + (r.Placement?.Detail.Length ?? 0)));
             return Result(new { context = sceneTree.Context, document = doc.SessionId, revision = doc.Revision,
                 preview = sceneTree.IsPreview ? previewId.ToString() : null, source = sceneTree.Source,
-                hierarchy = sceneTree.IsPreview ? "bound preview scene" : "stored scene", selected = sceneTree.Selected?.Id,
+                hierarchy = sceneTree.Projection != null ? "authored source hierarchy" : sceneTree.IsPreview ? "bound preview scene" : "stored scene", selected = sceneTree.Selected?.Id,
                 row = row == null ? null : DescribeTreeRow(row), children = page.Data });
         });
     }
-    private static object DescribeTreeRow(SceneTreeItem row) => new { row = row.Id, node = row.Index, row.Label,
+    private static object DescribeTreeRow(SceneTreeItem row) => new { row = row.Id, node = row.Synthetic ? null : row.Index, row.Label,
+        selectionOwner = row.Owner.Projection != null && row.Selectable && !row.SourceGroup ? row.Index : null,
+        nodeType = row.NodeType,
         parent = row.Parent?.Id, relation = row.Kind, row.Shared, row.Problem, row.ChildCount, row.IsExpanded, row.IsSelected,
+        synthetic = row.Synthetic, referencedObject = row.ReferencedObject, readOnlyReason = row.ReadOnlyReason,
+        sourceFile = row.Authored?.File, gltfNode = row.Authored?.SourceNode, sourceOccurrence = row.Authored == null ? null : row.StateKey,
+        compiledNode = row.Authored?.CompiledNode, sourceGroup = row.SourceGroup,
         sourceNode = row.Node == null ? (int?)null : row.Owner.Identity(row.Index!.Value).SourceNode,
-        model = row.Node?.ModelIndex, storedParents = row.Node?.Parents.Take(32).ToArray(), storedParentCount = row.Node?.Parents.Length };
+        model = row.Node?.ModelIndex, storedParents = row.Node?.Parents.Take(32).ToArray(), storedParentCount = row.Node?.Parents.Length,
+        pass = row.Pass?.Kind, passDescription = row.Pass?.Description, animations = row.Animations,
+        category = row.IsSourceMap ? row.Category : null, zone = row.IsSourceMap ? row.Zone : null, hidden = row.IsSourceMap ? row.IsHidden : (bool?)null,
+        difficulties = row.Placement is { Difficulties.Count: > 0 } placement ? placement.Difficulties.Select(d => d.ToString()).ToArray() : null,
+        otherDifficulty = row.IsOtherDifficulty ? true : (bool?)null, placement = row.IsOtherDifficulty ? row.Placement!.Detail : null };
 }

@@ -2,7 +2,7 @@ using System.Diagnostics;
 using System.Text;
 using System.Text.Json.Nodes;
 
-namespace Recoil.Zbd.PrWatch;
+namespace zStudio.PrWatch;
 
 public interface INoticeQueue
 {

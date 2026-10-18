@@ -1,4 +1,4 @@
-namespace Recoil.Zbd.Core.Export;
+namespace zStudio.Core.Export;
 
 /// <summary>Scans the already bounded interchange text without a string or array per line/word.</summary>
 internal sealed class ObjText(CancellationToken token, Action<string>? checkpoint = null)

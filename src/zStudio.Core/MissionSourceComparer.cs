@@ -1,6 +1,6 @@
 using System.Runtime.CompilerServices;
 
-namespace Recoil.Zbd.Core;
+namespace zStudio.Core;
 
 /// <summary>Exact record identity with session-owned, weak query memoization.</summary>
 internal sealed class MissionSourceComparer : IEqualityComparer<MissionPickupSource>

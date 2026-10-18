@@ -1,4 +1,4 @@
-namespace Recoil.Zbd.Core.Animation;
+namespace zStudio.Core.Animation;
 
 /// <summary>Operation-owned first-name lookup. Recreate after editing a package; names are not unique.</summary>
 internal sealed class AnimationEntryLookup(AnimationPackage package)

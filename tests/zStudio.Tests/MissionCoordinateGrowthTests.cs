@@ -1,11 +1,11 @@
 using System.Collections;
 using System.Numerics;
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Core.Animation;
-using Recoil.Zbd.Core.Formats;
+using zStudio.Core;
+using zStudio.Core.Animation;
+using zStudio.Core.Formats;
 using Xunit;
 
-namespace Recoil.Zbd.Tests;
+namespace zStudio.Tests;
 
 public sealed class MissionCoordinateGrowthTests
 {
@@ -14,7 +14,7 @@ public sealed class MissionCoordinateGrowthTests
     private static ZrdNode F(float value) => ZrdNode.Create(ZrdKind.Float) with { Bits = BitConverter.SingleToUInt32Bits(value) };
     private static ZrdNode I(int value) => ZrdNode.Create(ZrdKind.Int) with { Bits = unchecked((uint)value) };
     private static ZrdNode Actor(float x = 1, params ZrdNode[] extra) => A([I(0), A(F(x), F(2), F(3)), F(90), ..extra]);
-    private static ZbdDocument Archive(string name, ZrdNode root) => FormatRegistry.Default.OpenBytes(Path.GetFullPath("coordinates.zbd"),
+    private static AssetDocument Archive(string name, ZrdNode root) => FormatRegistry.Default.OpenBytes(Path.GetFullPath("coordinates.zbd"),
         ResourceEditingTests.Archive((name, ZrdWriter.Write(root, TestContext.Current.CancellationToken))), token: TestContext.Current.CancellationToken);
 
     [Fact]

@@ -1,13 +1,13 @@
 using System.IO;
 using System.Numerics;
 using System.Text.Json.Nodes;
-using Recoil.Zbd.Automation;
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Core.Sources;
-using Recoil.Zbd.Core.Terrain;
-using Recoil.Zbd.Rendering;
+using zStudio.Automation;
+using zStudio.Core;
+using zStudio.Core.Sources;
+using zStudio.Core.Terrain;
+using zStudio.Rendering;
 
-namespace Recoil.Zbd.Desktop;
+namespace zStudio.Desktop;
 
 /// <summary>
 /// Terrain in source worlds: recipes (see docs/source-project.md, Terrain) are edited through the project's workspace and
@@ -127,7 +127,7 @@ public partial class MainWindow
     /// <summary>
     /// What converting this world's mission database to editable terrain would do (references come from the files its build
     /// read), with the workspace's content revision it holds for. The sources are read, decoded and matched off the UI thread,
-    /// as a source operation Tools → Cancel (Escape) stops, like closing the world or zStudio; a plan whose world was replaced
+    /// as a source operation Escape stops, like closing the world or zStudio; a plan whose world was replaced
     /// or whose project changed meanwhile is never returned.
     /// </summary>
     private async Task<(TerrainConversionPlan Plan, long Revision)> PlanTerrainConversionAsync(DocumentModel doc, CancellationToken token)
@@ -135,15 +135,13 @@ public partial class MainWindow
         var session = SourceWorldOf(doc);
         if (doc.IsDisposed || session.Owner != doc) throw new StudioCommandException("stale_document", "The world was rebuilt; read zstudio_state for its current document.");
         var build = doc.SourceBuild ?? throw new StudioCommandException("not_ready", "The world has not been built.");
-        // Names that keep pieces as objects come from the files the build read; an output that failed read only some of them.
-        if (build.Outputs.FirstOrDefault(o => o.Error != null) is { } failed)
-            throw new StudioCommandException("unsupported", Bounded($"{failed.Path} did not build ({failed.Error}), so the names its sources use are unknown; fix it before converting."));
+        // Only successfully evaluated source snapshots are published, with their complete dependencies.
         string database = MissionDatabase(doc);
         if (operation != null) throw new StudioCommandException("busy", "An export, validation or source operation is already running.");
         var workspace = session.Workspace; var dependencies = build.Dependencies; var plan = PlanSourceTerrainConversion;
         long revision = workspace.ContentRevision;
         using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(token, doc.Lifetime.Token, ViewModel.WorkspaceToken, shutdownToken);
-        operation = cancellation; CancelOperationItem.IsEnabled = true;
+        operation = cancellation;
         ViewModel.Status = $"Planning the conversion of {database} to editable terrain…";
         TerrainConversionPlan planned;
         try { planned = await Task.Run(() => plan(workspace, database, dependencies, $"gamegen/{build.Mission}.gs", cancellation.Token), cancellation.Token); }
@@ -152,7 +150,7 @@ public partial class MainWindow
         // The world was replaced or closed while the plan was made: the plan was for a world no longer shown.
         catch (OperationCanceledException) when (!token.IsCancellationRequested && !shutdownToken.IsCancellationRequested && (doc.IsDisposed || session.Owner != doc))
         { throw new StudioCommandException("stale_document", "The world was rebuilt or closed while the conversion was planned; read zstudio_state for its current document."); }
-        finally { if (operation == cancellation) { operation = null; CancelOperationItem.IsEnabled = false; } }
+        finally { if (operation == cancellation) { operation = null; } }
         if (doc.IsDisposed || session.Owner != doc) throw new StudioCommandException("stale_document", "The world was rebuilt or closed while the conversion was planned; read zstudio_state for its current document.");
         // The workspace changes on this thread: an edit, undo or reload made while the sources were read could mix two states.
         if (workspace.ContentRevision != revision) { ViewModel.Status = TerrainPlanChanged; throw new StudioCommandException("context_changed", TerrainPlanChanged); }
@@ -160,7 +158,7 @@ public partial class MainWindow
         return (planned, revision);
     }
     /// <summary>The shown world's nodes whose provenance matches, read from its world file.</summary>
-    private List<Recoil.Zbd.Core.Worlds.WorldNode> SourceWorldNodes(DocumentModel doc, Func<Recoil.Zbd.Core.Worlds.WorldNodeProvenance, bool> select)
+    private List<zStudio.Core.Worlds.WorldNode> SourceWorldNodes(DocumentModel doc, Func<zStudio.Core.Worlds.WorldNodeProvenance, bool> select)
     {
         var build = doc.SourceBuild ?? throw new StudioCommandException("not_ready", "The world has not been built.");
         return [.. SourceWorldModel(doc).Slots.Where(p => build.Provenance.TryGetValue(p.Key, out var origin) && select(origin)).OrderBy(p => p.Key).Select(p => p.Value)];
@@ -182,7 +180,7 @@ public partial class MainWindow
         var converted = plan.Groups.SelectMany(g => g.Nodes).ToHashSet();
         var recipes = plan.Recipes.ToHashSet(StringComparer.OrdinalIgnoreCase);
         var before = SourceWorldNodes(doc, p => p.Database && string.Equals(p.ModelFile, plan.Database, StringComparison.OrdinalIgnoreCase) && converted.Contains(p.ModelNode));
-        var grid = SourceWorldModel(doc).World.Nodes.FirstOrDefault(n => n.Class == Recoil.Zbd.Core.Worlds.WorldNodeClass.World);
+        var grid = SourceWorldModel(doc).World.Nodes.FirstOrDefault(n => n.Class == zStudio.Core.Worlds.WorldNodeClass.World);
         var next = await PrepareSourceWorldEditAsync(doc, "Converting to editable terrain", (w, ct) => SourceTerrainConversion.Apply(w, plan, ct), token);
         var after = SourceWorldNodes(next, p => p.Terrain != null && recipes.Contains(p.Terrain));
         // The conversion is applied and shown; comparing it is a report. Cancelling the request stops the comparison
@@ -204,20 +202,20 @@ public partial class MainWindow
     private void ConvertTerrainClick(object sender, System.Windows.RoutedEventArgs e) => _ = RunUi(async () =>
     {
         if (ViewModel.SelectedDocument is not { SourceWorld: not null } doc) throw new StudioCommandException("unsupported", "Open a mission world of a source project first.");
-        // Planned off the UI thread; Tools → Cancel (Escape) stops it, and a plan the project changed under is not shown.
+        // Planned off the UI thread; Escape stops it, and a plan the project changed under is not shown.
         (TerrainConversionPlan Plan, long Revision) planned;
         try { planned = await PlanTerrainConversionAsync(doc, CancellationToken.None); }
-        catch (StudioCommandException ex) when (ex.Code == "context_changed") { ViewModel.Status = ex.Message; return; }
+        catch (StudioCommandException ex) when (ex.Code == "context_changed") { Report(ex); return; }
         var plan = planned.Plan;
         var reasons = plan.Kept.GroupBy(k => k.Reason).OrderByDescending(g => g.Count()).ToArray();
         string kept = string.Join("\n", reasons.Take(32).Select(g => $"  {g.Count()} {Bounded(g.Key, 256)}")) + (reasons.Length > 32 ? $"\n  … ({reasons.Length} distinct reasons)" : "");
         if (plan.Converted == 0) { System.Windows.MessageBox.Show(this, $"No piece of {plan.Database} can become terrain:\n{kept}", "Convert to editable terrain"); return; }
         var recipePaths = plan.Recipes;
         string recipes = string.Join("\n", recipePaths.Take(32).Select(path => "  " + Bounded(path, 256)))
-            + (recipePaths.Count > 32 ? $"\n  … ({recipePaths.Count} recipes; all appear in Files after conversion)" : "");
+            + (recipePaths.Count > 32 ? $"\n  … ({recipePaths.Count} recipes)" : "");
         if (System.Windows.MessageBox.Show(this, $"{plan.Converted} pieces of {plan.Database} become {plan.Groups.Count} terrain surfaces in {plan.Surfaces}, painted by {recipePaths.Count} terrain recipes in encounter order:\n{recipes}\n\nKept as objects:\n{kept}\n\nThe pieces are rebuilt along the grid's cell lines; their polygons, materials, zones, soils and flags stay. Convert?",
             "Convert to editable terrain", System.Windows.MessageBoxButton.YesNo, System.Windows.MessageBoxImage.Question) != System.Windows.MessageBoxResult.Yes) return;
-        if (!doc.IsDisposed && doc.SourceWorld?.Workspace.ContentRevision != planned.Revision) { ViewModel.Status = TerrainPlanChanged; return; }
+        if (!doc.IsDisposed && doc.SourceWorld?.Workspace.ContentRevision != planned.Revision) { Report(TerrainPlanChanged); return; }
         var (next, _, compared) = await ConvertTerrainAsync(doc, 8, CancellationToken.None, planned);
         if (compared == null || !compared.Complete)
         {
@@ -280,7 +278,7 @@ public partial class MainWindow
         var window = propertiesWindow;
         var next = await edit();
         if (!next.IsDisposed && FollowsProperties(window, next))
-            try { await ShowTerrainPropertiesAsync(next, recipe, surface, null, region); } catch (StudioCommandException ex) { ViewModel.Status = ex.Message; }
+            try { await ShowTerrainPropertiesAsync(next, recipe, surface, null, region); } catch (StudioCommandException ex) { Report(ex); }
     }
     /// <summary>Turns the viewport brush on (painting or erasing one region) or off.</summary>
     private void SetTerrainBrush(TerrainBrushState? brush)
@@ -291,7 +289,9 @@ public partial class MainWindow
             // An empty zone draft can remain pinned, but it must stop consuming terrain input.
             if (HasZoneDraft) throw new StudioCommandException("pending_drafts", "Apply or cancel the map zone draft before painting terrain.");
             if (scene?.IsZonePainting == true) throw new StudioCommandException("busy", "Finish or cancel the zone stroke before painting terrain.");
-            if (scene?.ZonePaintActive == true) scene.ZonePaintActive = false;
+            if (scene is { } shown && TerrainBrushBlocked(shown))
+                throw new StudioCommandException("busy", "Finish the AI path or drop-window editing before painting terrain.");
+            if (scene?.ZonePaintActive == true) { scene.ZonePaintActive = false; RefreshZoneDraftView(); }
         }
         if (terrainBrush != brush) scene?.CancelTerrainStroke();
         terrainBrush = brush;
@@ -334,11 +334,14 @@ public partial class MainWindow
     private void ApplyTerrainBrush(SceneViewport? viewport)
     {
         if (viewport == null) return;
-        bool on = TerrainBrushApplies(viewport, terrainBrush);
+        // Never while another tool owns the pointer (the viewport refuses it): the brush waits instead.
+        bool on = TerrainBrushApplies(viewport, terrainBrush) && !viewport.ZonePaintActive && !TerrainBrushBlocked(viewport);
         viewport.TerrainBrushRadius = terrainBrush?.Radius ?? 8;
         viewport.TerrainBrushWaiting = sourceWorkspaceBusy;
         viewport.TerrainBrushActive = on;
     }
+    private static bool TerrainBrushBlocked(SceneViewport viewport) =>
+        viewport.AiPathEditingNetwork != null || viewport.HasParachutePreview || viewport.IsParachutePointerMoving;
     private void ConfigureTerrainScene(SceneViewport viewport)
     {
         ApplyTerrainBrush(viewport);
@@ -349,7 +352,7 @@ public partial class MainWindow
     {
         if (terrainBrush is not { } brush || ViewModel.SelectedDocument is not { SourceWorld: not null } doc) return;
         if (!TerrainBrushApplies(scene, brush) || sourceWorkspaceBusy)
-        { ViewModel.Status = "The terrain brush paints the published Whole world or a generated terrain piece; return to that preview before painting."; return; }
+        { Report("The terrain brush paints the published Whole world or a generated terrain piece; return to that preview before painting."); return; }
         // Properties closes with the replaced document; when it showed this recipe, it shows it again for the rebuilt world.
         var window = propertiesWindow;
         var shown = window?.SourceFields as TerrainPropertiesEditor;
@@ -360,7 +363,7 @@ public partial class MainWindow
             if (follow && !next.IsDisposed && FollowsProperties(window, next))
                 await ShowTerrainPropertiesAsync(next, brush.Recipe, shown!.Surface, null, brush.Region);
         }
-        catch (StudioCommandException ex) { ViewModel.Status = ex.Message; }
+        catch (StudioCommandException ex) { Report(ex); }
     }
 
     /// <summary>GUI: Create terrain from meshes of a glTF file in the project, then show its recipe in Properties.</summary>
@@ -390,7 +393,7 @@ public partial class MainWindow
         if (!created.Document.IsDisposed)
             try { await ShowTerrainPropertiesAsync(created.Document, created.Recipe, null, null, null); }
             catch (Exception ex) when (ex is StudioCommandException or IOException or UnauthorizedAccessException or OperationCanceledException)
-            { ViewModel.Status = Bounded($"Terrain was created, but Properties could not be opened: {ex.Message}"); }
+            { Report(Bounded($"Terrain was created, but Properties could not be opened: {ex.Message}")); }
     });
 
     // ---------------------------------------------------------------- MCP
@@ -496,7 +499,7 @@ public partial class MainWindow
                 brush = terrainBrush?.Recipe == path ? new { region = terrainBrush.Region, mode = terrainBrush.Add ? "paint" : "erase", radius = terrainBrush.Radius } : null
             });
         });
-        RegisterJob(r, "source_terrain_edit", "Edit a terrain recipe of the open source world's project as one undoable change of the workspace; the world rebuilds and the result is the replacement document. Actions: set_defaults (attributes; surface for a surface's defaults), add_region (region, optional surfaces, attributes, index; it starts empty unless wholeSurfaces), update_region (region; any of name, surfaces, attributes, wholeSurfaces), remove_region, move_region (region, index), paint (region, mode paint or erase, and a stroke: path of [x, z] points with radius, or polygons). Attributes patch the layer: a key with a value sets it, a key with null removes the override so the layers before show through, absent keys stay.",
+        RegisterJob(r, "source_terrain_edit", "Edit a terrain recipe of the open source world's project as one undoable change of the workspace; the scene is evaluated in memory and the result is the accepted document/revision. Save writes the recipe; no archives are created. Actions: set_defaults (attributes; surface for a surface's defaults), add_region (region, optional surfaces, attributes, index; it starts empty unless wholeSurfaces), update_region (region; any of name, surfaces, attributes, wholeSurfaces), remove_region, move_region (region, index), paint (region, mode paint or erase, and a stroke: path of [x, z] points with radius, or polygons). Attributes patch the layer: a key with a value sets it, a key with null removes the override so the layers before show through, absent keys stay.",
             [DocumentParameter, RevisionParameter, P("recipe", "string", "The recipe's project path.", true),
              P("action", "string", "What to do.", true, ["set_defaults", "add_region", "update_region", "remove_region", "move_region", "paint"]),
              P("surface", "string", "set_defaults: the surface whose defaults change (the recipe's when omitted)."),
@@ -585,7 +588,7 @@ public partial class MainWindow
                 }
                 return Result(new { document = DocumentState(next) });
             });
-        RegisterJob(r, "source_terrain_convert", "Convert to editable terrain: the open source world's mission database pieces (untransformed mesh roots no script, resource or animation names, except landmarks) become surfaces of new terrain recipes beside the database, preserving encounter order around retained objects, as one undoable change. Without apply, report the plan: surfaces, pieces, a bounded recipes summary of full paths with total/omitted counts, and the objects kept with reasons. plan.recipe is the first recipe. With apply, convert, rebuild, and compare the altitude probe over all converted recipes before and after (heights, polygon zones, soils, node flags and zones) on a grid of the given spacing. The returned recipeListing identifies the replacement document for the read-only source_terrain inventory; follow that tool's nextOffset to inspect every recipe without applying again. The probe reports complete=false and a limitation if its index or polygon work budget is exceeded; the conversion remains applied.",
+        RegisterJob(r, "source_terrain_convert", "Convert to editable terrain: the open source world's mission database pieces (untransformed mesh roots no script, resource or animation names, except landmarks) become surfaces of new terrain recipes beside the database, preserving encounter order around retained objects, as one undoable change. Without apply, report the plan: surfaces, pieces, a bounded recipes summary of full paths with total/omitted counts, and the objects kept with reasons. plan.recipe is the first recipe. With apply, convert, evaluate in memory, and compare the altitude probe over all converted recipes before and after (heights, polygon zones, soils, node flags and zones) on a grid of the given spacing. The returned recipeListing identifies the replacement document for the read-only source_terrain inventory; follow that tool's nextOffset to inspect every recipe without applying again. The probe reports complete=false and a limitation if its index or polygon work budget is exceeded; the conversion remains applied.",
             [DocumentParameter, RevisionParameter, P("apply", "boolean", "Convert (default false: only report the plan)."),
              new("spacing", "number", "Probe sample spacing in world units for the comparison (default 8, 1–256).")], true,
             async (a, token) =>
@@ -616,7 +619,7 @@ public partial class MainWindow
                     probe = report == null ? null : new { complete = report.Complete, limitation = report.Limitation, samples = report.Samples, spacing = report.Spacing, hits = report.Hits, mismatches = report.Mismatches, heightOnly = report.HeightOnly, maximumHeightDifference = report.MaximumHeightDifference, revealed = report.Revealed, examples = report.Examples.Select(x => Bounded(x, 1024)).ToArray() }
                 });
             });
-        RegisterJob(r, "source_terrain_create", "Create a terrain recipe for surfaces of a glTF file in the open source world's project (surfaces: node names, each with a mesh, in a file of their own — not the mission database) and add a marker for it at the end of the mission database's roots, as one undoable change; the world rebuilds with the compiled pieces. The recipe goes beside the file (name.terrain.json) unless recipe names another path ending in .terrain.json.",
+        RegisterJob(r, "source_terrain_create", "Create a terrain recipe for surfaces of a glTF file in the open source world's project (surfaces: node names, each with a mesh, in a file of their own — not the mission database) and add a marker for it at the end of the mission database's roots, as one undoable change; the source scene evaluates the pieces in memory without creating archives. The recipe goes beside the file (name.terrain.json) unless recipe names another path ending in .terrain.json.",
             [DocumentParameter, RevisionParameter, P("model", "string", "The surfaces' glTF file (project path).", true),
              new("surfaces", "array", "Node names of the file that are terrain.", true, Items: new("", "string", "Node name."), MinItems: 1, MaxItems: TerrainRecipe.MaximumSurfaces),
              P("recipe", "string", "Optional recipe path.")], true,

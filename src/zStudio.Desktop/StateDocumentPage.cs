@@ -1,6 +1,6 @@
-using Recoil.Zbd.Automation;
+using zStudio.Automation;
 
-namespace Recoil.Zbd.Desktop;
+namespace zStudio.Desktop;
 
 /// <summary>Charge escaped document metadata before constructing any state rows or JSON.</summary>
 internal static class StateDocumentPage
@@ -36,11 +36,7 @@ internal static class StateDocumentPage
         bytes += 2 * 128 * 6;
         foreach (string note in document.SourceEditNotes.Take(16)) bytes += 8 + 6L * Math.Min(note.Length, 512);
         if (document.SourceBuild is { } build)
-            foreach (var output in build.Outputs)
-            {
-                bytes += 128 + Text(output.Path) + Text(output.Status) + 6L * Math.Min(output.Error?.Length ?? 0, 512);
-                if (bytes > MaximumBytes) break;
-            }
+            foreach (var note in build.Notes.Take(64)) bytes += 8 + 6L * Math.Min(note.Length, 512);
         return bytes;
     }
 

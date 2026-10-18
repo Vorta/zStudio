@@ -1,7 +1,7 @@
-using Recoil.Zbd.Core.Export;
-using Recoil.Zbd.Core.Formats;
+using zStudio.Core.Export;
+using zStudio.Core.Formats;
 
-namespace Recoil.Zbd.Core;
+namespace zStudio.Core;
 
 public sealed record TextureTarget(string Path, int Index);
 public sealed record TextureTargetCandidate(string Path, int? Index, string Name, int Width, int Height, bool Ambiguous, string? Problem);
@@ -11,8 +11,8 @@ public sealed class TextureEditSession : ContentEditSession
     private IReadOnlyDictionary<string, TexturePackEdit> Packs => (IReadOnlyDictionary<string, TexturePackEdit>)Current.State;
     private HashSet<string> SaveAsAliases() => Documents.Where(d => !d.Path.Equals(TargetPath(d.Path), StringComparison.OrdinalIgnoreCase))
         .Select(d => TargetPath(d.Path)).ToHashSet(StringComparer.OrdinalIgnoreCase);
-    public TextureEditSession(ZbdDocument source) : base(source, Initial(source)) { }
-    private static IReadOnlyDictionary<string, TexturePackEdit> Initial(ZbdDocument source)
+    public TextureEditSession(AssetDocument source) : base(source, Initial(source)) { }
+    private static IReadOnlyDictionary<string, TexturePackEdit> Initial(AssetDocument source)
     {
         if (source.Probe.Family != FormatFamily.TexturePack || source.Probe.Version != 1) throw new InvalidDataException("A v1 texture pack is required.");
         return new Dictionary<string, TexturePackEdit>(StringComparer.OrdinalIgnoreCase) { [source.Path] = new(source, new Dictionary<int, TexturePayload>(), []) };
@@ -96,7 +96,7 @@ public sealed class TextureEditSession : ContentEditSession
         if (index == null && chosen.Length > 0) throw new InvalidDataException("Adding a texture targets only the open pack.");
         if (index != null && (chosen.Length is < 1 or > 64 || chosen.Select(t => t.Path).Distinct(StringComparer.OrdinalIgnoreCase).Count() != chosen.Length || !chosen.Any(t => t.Path.Equals(SourcePath, StringComparison.OrdinalIgnoreCase) && t.Index == index)))
             throw new InvalidDataException("Choose the selected texture and at most one record per sibling pack (up to 64 packs).");
-        var baselines = new Dictionary<string, ZbdDocument>(StringComparer.OrdinalIgnoreCase);
+        var baselines = new Dictionary<string, AssetDocument>(StringComparer.OrdinalIgnoreCase);
         foreach (var target in chosen)
         {
             if (!Path.GetDirectoryName(target.Path)!.Equals(Path.GetDirectoryName(SourcePath), StringComparison.OrdinalIgnoreCase)) throw new InvalidDataException("Variant targets must be sibling mission texture packs.");
@@ -113,7 +113,7 @@ public sealed class TextureEditSession : ContentEditSession
         if (packs.Values.Sum(p => (long)p.Source.Bytes.Length) > FormatRegistry.MaximumDocumentBytes) throw new InvalidDataException("Selected texture packs exceed the 512 MiB batch budget.");
         return await Task.Run(() =>
         {
-            var documents = new Dictionary<string, ZbdDocument>(before.Documents, StringComparer.OrdinalIgnoreCase);
+            var documents = new Dictionary<string, AssetDocument>(before.Documents, StringComparer.OrdinalIgnoreCase);
             if (index == null)
             {
                 TexturePackWriter.ValidateTextureName(name);

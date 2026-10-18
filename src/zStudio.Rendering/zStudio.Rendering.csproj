@@ -1,7 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <RootNamespace>Recoil.Zbd.Rendering</RootNamespace>
-    <AssemblyName>Recoil.Zbd.Rendering</AssemblyName>
+    <RootNamespace>zStudio.Rendering</RootNamespace>
+    <AssemblyName>zStudio.Rendering</AssemblyName>
   </PropertyGroup>
   <PropertyGroup><TargetFramework>net10.0-windows</TargetFramework><UseWPF>true</UseWPF></PropertyGroup>
   <ItemGroup>

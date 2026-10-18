@@ -1,7 +1,7 @@
 using System.Text;
-using Recoil.Zbd.Core.Formats;
+using zStudio.Core.Formats;
 
-namespace Recoil.Zbd.Core.Animation;
+namespace zStudio.Core.Animation;
 
 /// <summary>One name index and matching budget shared by all definitions of a compilation or reconstruction.</summary>
 internal sealed class AnimationRoots

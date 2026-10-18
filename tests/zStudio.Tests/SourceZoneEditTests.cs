@@ -1,12 +1,12 @@
 using System.Numerics;
 using System.Text.Json.Nodes;
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Core.Gltf;
-using Recoil.Zbd.Core.Sources;
-using Recoil.Zbd.Core.Worlds;
+using zStudio.Core;
+using zStudio.Core.Gltf;
+using zStudio.Core.Sources;
+using zStudio.Core.Worlds;
 using Xunit;
 
-namespace Recoil.Zbd.Tests;
+namespace zStudio.Tests;
 
 public sealed class SourceZoneEditTests
 {
@@ -17,7 +17,7 @@ public sealed class SourceZoneEditTests
     {
         internal SourceWorldFixture Files { get; } = new();
         internal SourceWorkspace Workspace { get; }
-        internal SourceWorldBuild Build { get; }
+        internal SourceSceneState Build { get; }
         internal byte[] GeometryBytes { get; }
         internal byte[] BufferBytes { get; }
         internal WorldZoneProfile Profile { get; }
@@ -42,7 +42,7 @@ public sealed class SourceZoneEditTests
             };
             Dictionary<int, WorldNodeProvenance> origins = new() { [10] = Origin() };
             if (shared) origins.Add(11, Origin());
-            Build = new("m1", "", "", [], new Dictionary<string, FileStamp>()) { Provenance = origins };
+            Build = new("m1", "", new Dictionary<string, FileStamp>()) { Provenance = origins };
             Workspace = new(Files.Project);
         }
         internal void Apply(SourceZoneEditPlan plan) => Workspace.Apply(plan.Label,
@@ -97,7 +97,7 @@ public sealed class SourceZoneEditTests
             ["intersectSurface"] = true, ["proximity"] = true, ["overwrite"] = true };
         fixture.Write(fixture.Tank, json.ToJsonString());
         string script = File.ReadAllText(fixture.Path("gamegen/m2.gs"));
-        fixture.Write("gamegen/m2.gs", script.Replace("GameZWriteZBDFile", "LoadGameGen tank.flt tank_again\r\nGameZWriteZBDFile", StringComparison.Ordinal));
+        fixture.Write("gamegen/m2.gs", script.Replace("GameZWriteZBDFile", "LoadGameGen tank.gltf tank_again\r\nGameZWriteZBDFile", StringComparison.Ordinal));
         byte[] original = File.ReadAllBytes(fixture.Path(fixture.Tank));
         byte[] buffer = File.ReadAllBytes(fixture.Path("data/m2/models/bft/tank.bin"));
         SourceWorkspace workspace = new(fixture.Project);
@@ -108,7 +108,7 @@ public sealed class SourceZoneEditTests
         }
         var before = Build(); var picked = before.World.Nodes.Single(n => n.Name == "tank");
         var slots = GameZWriter.NodeSlots(before.World, Token);
-        SourceWorldBuild build = new("m2", "", "", [], new Dictionary<string, FileStamp>())
+        SourceSceneState build = new("m2", "", new Dictionary<string, FileStamp>())
         { Provenance = before.Provenance.Where(p => slots.ContainsKey(p.Key)).ToDictionary(p => slots[p.Key], p => p.Value) };
         // Inspection uses the source import baseline, never a later visible/runtime node value.
         picked.Zone = 99; picked.Flags |= WorldGltf.ZoneGate;
@@ -164,16 +164,16 @@ public sealed class SourceZoneEditTests
         else Values(master["nodes"]!.AsArray().Single(n => n?["name"]?.GetValue<string>() == "lid")!).Remove("zone");
         fixture.Write(Master, master.ToJsonString());
         SourceWorkspace workspace = new(fixture.Project);
-        (SourceWorldBuild Build, SourceZoneSelection Parent, SourceZoneSelection Child) Rebuild()
+        (SourceSceneState Build, SourceZoneSelection Parent, SourceZoneSelection Child) Rebuild()
         {
             WorldAssembler assembler = new(new SourceWorlds.DiskFiles(fixture.Project, workspace.Overlay()), Token);
             assembler.Assemble("m1.gs");
             var slots = GameZWriter.NodeSlots(assembler.World, Token);
-            SourceWorldBuild build = new("m1", "", "", [], new Dictionary<string, FileStamp>())
+            SourceSceneState build = new("m1", "", new Dictionary<string, FileStamp>())
             { Provenance = assembler.Provenance.Where(p => slots.ContainsKey(p.Key)).ToDictionary(p => slots[p.Key], p => p.Value) };
             return (build, new(slots[assembler.World.Nodes.Single(n => n.Name == "crate")]), new(slots[assembler.World.Nodes.Single(n => n.Name == "lid")]));
         }
-        void Apply(SourceWorldBuild build, SourceZoneSelection selected, SourceZoneAssignment assignment)
+        void Apply(SourceSceneState build, SourceZoneSelection selected, SourceZoneAssignment assignment)
         {
             var plan = SourceZoneEdits.PlanAssignments(workspace, build, [selected], assignment, true, Token);
             workspace.Apply(plan.Label, plan.Changes.Select(c => (c.Relative, (byte[]?)c.Content)), Token);
@@ -197,6 +197,12 @@ public sealed class SourceZoneEditTests
         Apply(painted.Build, painted.Parent, new(NodeZone: 15));
         var final = Rebuild();
         Assert.Equal(padding | 11u, Assert.Single(SourceZoneEdits.Inspect(workspace, final.Build, [final.Child], token: Token).Targets).Word);
+        // Inherit makes it follow its parent again, still keeping its opaque bytes and its gate.
+        Apply(final.Build, final.Child, new(Inherit: true));
+        var inherited = Rebuild();
+        inspected = Assert.Single(SourceZoneEdits.Inspect(workspace, inherited.Build, [inherited.Child], token: Token).Targets);
+        Assert.Equal(padding | 15u, inspected.Word); Assert.False(inspected.Gate);
+        Assert.True(inherited.Build.Provenance[inherited.Child.SceneNode].ImportedZoneInherited);
     }
 
     [Fact]
@@ -233,7 +239,7 @@ public sealed class SourceZoneEditTests
         Assert.Null(before.Provenance[picked].Instance);
         Assert.True(before.Provenance[picked].SharedPlacement);
         var slots = GameZWriter.NodeSlots(before.World, Token);
-        SourceWorldBuild build = new("m1", "", "", [], new Dictionary<string, FileStamp>())
+        SourceSceneState build = new("m1", "", new Dictionary<string, FileStamp>())
         { Provenance = before.Provenance.Where(p => slots.ContainsKey(p.Key)).ToDictionary(p => slots[p.Key], p => p.Value) };
         var selection = new SourceZoneSelection(slots[picked]);
         var inspection = SourceZoneEdits.Inspect(workspace, build, [selection], token: Token);

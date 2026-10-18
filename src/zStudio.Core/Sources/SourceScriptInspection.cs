@@ -1,4 +1,4 @@
-namespace Recoil.Zbd.Core.Sources;
+namespace zStudio.Core.Sources;
 
 /// <summary>One edit's reads and scans of other missions, shared by all of its ownership and transform checks.</summary>
 internal sealed class SourceScriptInspection(SourceWorkspace workspace, CancellationToken token,
@@ -9,7 +9,6 @@ internal sealed class SourceScriptInspection(SourceWorkspace workspace, Cancella
 {
     private readonly Dictionary<string, GameGenScriptSyntax?> scripts = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, byte[]?> models = new(StringComparer.OrdinalIgnoreCase);
-    private readonly Dictionary<string, SourceMissionModels> missions = new(StringComparer.OrdinalIgnoreCase);
     private string[]? worlds;
     private long bytes, tokens, lines, work;
     internal long RetainedModelBytes { get; private set; }
@@ -70,13 +69,6 @@ internal sealed class SourceScriptInspection(SourceWorkspace workspace, Cancella
         token.ThrowIfCancellationRequested();
         if (content != null) RetainedModelBytes += content.LongLength;
         return models[relative] = content;
-    }
-
-    internal SourceMissionModels MissionModels(string mission)
-    {
-        ReserveWork(mission.Length + 1L);
-        if (missions.TryGetValue(mission, out var known)) return known;
-        return missions[mission] = new(null, token);
     }
 
     internal GameGenScriptSyntax ParseEdit(string text)

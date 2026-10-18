@@ -1,4 +1,4 @@
-namespace Recoil.Zbd.Mcp;
+namespace zStudio.Mcp;
 
 /// <summary>Bounds each newline-delimited JSON-RPC request before the SDK parses it.</summary>
 internal sealed class BoundedMcpStream(Stream inner) : Stream

@@ -3,10 +3,10 @@ using System.Numerics;
 using System.Windows;
 using System.Windows.Input;
 using Microsoft.Win32;
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Rendering;
+using zStudio.Core;
+using zStudio.Rendering;
 
-namespace Recoil.Zbd.Desktop;
+namespace zStudio.Desktop;
 
 public partial class MainWindow
 {
@@ -14,9 +14,11 @@ public partial class MainWindow
     private void ConfigurePickupScene(SceneViewport viewport)
     {
         ConfigureTerrainScene(viewport);
-        viewport.CanStartPickupEdit = () => CurrentInspectionCard is { HasDraft: true } card &&
-            pickupDocument is { PickupsLocked: false } doc && card.DraftDocument == doc && card.DraftRevision == doc.Revision &&
-            doc.PickupEdits?.HasExternalChanges() == false &&
+        // A source object's fields are editable without a draft: its handles open one first, as typing does.
+        viewport.CanStartPickupEdit = () => CurrentInspectionCard is { ObjectApplying: false } card &&
+            pickupDocument is { EditingLocked: false } doc && (card.HasDraft || card.ObjectEditor != null && card.OpenObjectDraftForGesture()) &&
+            card.DraftDocument == doc && card.DraftRevision == doc.Revision &&
+            (card.ObjectEditing || doc.PickupEdits?.HasExternalChanges() == false) &&
             (propertiesWindow == null || propertiesWindow.Document != doc || propertiesWindow.ResolvePendingDrafts()) && card.DraftRevision == doc.Revision;
     }
     private void DetachPickupEditor()
@@ -33,8 +35,8 @@ public partial class MainWindow
         pickupDocument = document; document.PickupEditsChanged += PickupEditsChanged;
         // A 1998 demo world opens read-only: its placements stay locked (inspection and hover remain).
         EditingUnlocked.IsEnabled = PickupPlacementEditSession.ReadOnlyWorld(document.Document.Probe) == null;
-        SetSceneEditingLocked(document, document.PickupsLocked);
-        PickupTools.Visibility = Visibility.Visible; PickupEditsChanged();
+        SetSceneEditingLocked(document, document.EditingLocked);
+        PickupTools.Visibility = document.SourceWorld == null ? Visibility.Visible : Visibility.Collapsed; PickupEditsChanged();
         if (!document.PickupDiagnosticsReported && document.PickupEdits is { } edits)
         {
             foreach (string note in edits.Diagnostics) ViewModel.AddProblem("Pickup editor: " + note,"Warning",document.Path);
@@ -56,21 +58,20 @@ public partial class MainWindow
     private void EditingUnlockedChanged(object sender, RoutedEventArgs e)
     {
         if (!ready || updating || pickupDocument == null) return;
-        if (!ResolvePropertiesDrafts(pickupDocument)) { updating = true; EditingUnlocked.IsChecked = !pickupDocument.PickupsLocked; updating = false; return; }
+        if (!ResolvePropertiesDrafts(pickupDocument)) { updating = true; EditingUnlocked.IsChecked = !pickupDocument.EditingLocked; updating = false; return; }
         SetSceneEditingLocked(pickupDocument, EditingUnlocked.IsChecked != true);
     }
     private void SetSceneEditingLocked(DocumentModel document, bool locked)
     {
-        // Keep the existing document/MCP lock identity; the visible option is
-        // positively named Unlock editing, so its checked state is the inverse.
+        // Unlock editing is the inverse of the shared document/MCP editing lock.
         // A read-only world (a 1998 demo) is never unlocked.
-        document.PickupsLocked = locked || PickupPlacementEditSession.ReadOnlyWorld(document.Document.Probe) != null;
-        locked = document.PickupsLocked;
+        document.EditingLocked = locked || PickupPlacementEditSession.ReadOnlyWorld(document.Document.Probe) != null;
+        locked = document.EditingLocked;
         if (pickupDocument != document) return;
         bool previous = updating; updating = true;
         try { EditingUnlocked.IsChecked = !locked; }
         finally { updating = previous; }
-        scene?.SetPickupLocked(locked);
+        scene?.SetEditingLocked(locked);
     }
     private async void SaveCurrentClick(object sender, RoutedEventArgs e)
     { if (ViewModel.SelectedDocument is { } doc) await SaveCurrentAsync(doc); }
@@ -93,12 +94,6 @@ public partial class MainWindow
         if (!LiveDocument(document).IsDirty) return true;
         ViewModel.Status = "Some document changes remain unsaved.";
         return false;
-    }
-    private void BackupOnSaveChanged(object sender, RoutedEventArgs e)
-    {
-        if (!ready) return;
-        ViewModel.Settings.CreateBackupOnSave = BackupOnSave.IsChecked;
-        try { ViewModel.Settings.Save(); } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { Report(ex); }
     }
     private async Task<bool> SavePickupsAsync(DocumentModel document, bool saveAs)
     {

@@ -1,8 +1,8 @@
 using System.IO;
-using Recoil.Zbd.Automation;
-using Recoil.Zbd.Core;
+using zStudio.Automation;
+using zStudio.Core;
 
-namespace Recoil.Zbd.Desktop;
+namespace zStudio.Desktop;
 
 public sealed partial class MainViewModel
 {
@@ -30,7 +30,7 @@ public sealed partial class MainViewModel
         }
         Validate();
         Status = "Reloading " + Path.GetFileName(reloadPath) + "…";
-        ZbdDocument loaded;
+        AssetDocument loaded;
         PreparedDocument prepared;
         try
         {
@@ -91,6 +91,8 @@ public sealed partial class MainViewModel
         {
             // A source world's reload does not take a navigation generation; its failure is always the request's to report.
             bool OwnsRequest() => original.SourceWorld != null ? ex.Code != "context_changed" : generation == navigationGeneration && !original.IsDisposed && SelectedDocument == original;
+            // A source map's status bar shows no messages: its failure goes to the caller, which lists it and opens Diagnostics.
+            if (OwnsRequest() && original.SourceWorld != null) throw;
             if (OwnsRequest()) AddProblem(ex.Message, file: original.Path);
             if (OwnsRequest()) Status = ex.Message;
         }

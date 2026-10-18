@@ -6,13 +6,13 @@ using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Threading;
-using Recoil.Zbd.Automation;
-using Recoil.Zbd.Core.Terrain;
-using Recoil.Zbd.Core.Worlds;
-using Recoil.Zbd.Desktop;
+using zStudio.Automation;
+using zStudio.Core.Terrain;
+using zStudio.Core.Worlds;
+using zStudio.Desktop;
 using Xunit;
 
-namespace Recoil.Zbd.Desktop.Tests;
+namespace zStudio.Desktop.Tests;
 
 // Runs in the existing STA Application. These are GUI drafts and their resolve_drafts consumer, not direct typed-array tools.
 internal static class SourcePropertyInputChecks
@@ -54,33 +54,28 @@ internal static class SourcePropertyInputChecks
         var origin = new WorldNodeProvenance();
         origin.Writers[name] = new("gamegen/m1.gs", 1, name, [name, "0", "0", "0"], ["0", "0", "0"]);
         var state = new SourceObjectState(0, "world", "World", null, 0, origin, "gamegen/m1.gs", []);
-        byte[] bytes = Encoding.Latin1.GetBytes("WorldSetFogColor 0 0 0\n"), original = bytes.ToArray();
-        int calls = 0; List<byte[]> history = []; string[]? accepted = null; string? acceptedCommand = null;
-        using var editor = new SourceObjectPropertiesEditor(state, _ => Task.CompletedTask, (_, _) => Task.CompletedTask, (command, args) =>
-        {
-            calls++; accepted = args.ToArray(); acceptedCommand = command; history.Add(bytes);
-            bytes = Encoding.Latin1.GetBytes(command + " " + string.Join(" ", args) + "\n");
-            return Task.CompletedTask;
-        });
+        var editor = new SourceObjectCardEditor(state);
         var window = Show(editor);
         try
         {
+            await Task.CompletedTask;
             var box = Box(editor, name);
-            await Reject(editor, box, string.Concat(Enumerable.Repeat("0 ", 500_000)), () => { Assert.Equal(original, bytes); Assert.Empty(history); Assert.Equal(0, calls); });
-            await Reject(editor, box, new string('0', 1_000_000), () => { Assert.Equal(original, bytes); Assert.Empty(history); Assert.Equal(0, calls); });
-            string first = new('0', 63); first += "1";
-            box.Text = first + ",\t0, 0";
-            await editor.ResolveAutomationDraftsAsync(editor.DraftToken, true);
-            Assert.NotNull(accepted);
-            Assert.Equal([first, "0", "0"], accepted); Assert.Single(history); Assert.Equal(1, calls);
-            // As source_world_object lists them, a command that fits the node but is not set yet is offered empty, and a
-            // commit adds it through the same command edit as source_world_command; commands of other classes are not offered.
+            box.Text = new string('0', 1_000_000);
+            Assert.ThrowsAny<Exception>(() => editor.Patch(_ => null));
+            long allocationStart = GC.GetAllocatedBytesForCurrentThread();
+            string oversizedToken = editor.DraftToken;
+            var bounded = editor.Describe();
+            Assert.True(GC.GetAllocatedBytesForCurrentThread() - allocationStart < 200_000);
+            Assert.True(bounded["fields"]!.AsArray().Single(f => f!["field"]!.GetValue<string>() == name)!["truncated"]!.GetValue<bool>());
+            Assert.True(bounded.ToJsonString().Length < 50_000);
+            editor.Discard(); Assert.NotEqual(oversizedToken, editor.DraftToken);
+            box.Text = "1, 0, 0";
+            var patch = editor.Patch(_ => null);
+            Assert.Equal(["1", "0", "0"], patch.Commands[name]);
             Assert.DoesNotContain(Descendants(editor).OfType<TextBox>(), b => AutomationProperties.GetName(b) == "LightSetColor");
             var unset = Box(editor, "WorldSetFogDensity");
-            Assert.Equal("", unset.Text);
-            unset.Text = "0.25";
-            await editor.ResolveAutomationDraftsAsync(editor.DraftToken, true);
-            Assert.Equal("WorldSetFogDensity", acceptedCommand); Assert.Equal(["0.25"], accepted); Assert.Equal(2, calls);
+            Assert.Equal("", unset.Text); unset.Text = "0.25";
+            Assert.Equal(["0.25"], editor.Patch(_ => null).Commands["WorldSetFogDensity"]);
         }
         finally { window.Close(); }
     }
@@ -144,7 +139,7 @@ internal static class SourcePropertyInputChecks
         Assert.False(editor.HasPendingDrafts); unchanged();
     }
 
-    private static Window Show(SourcePropertiesEditor editor)
+    private static Window Show(FieldEditor editor)
     {
         Window window = new() { Content = editor, Width = 650, Height = 650, Left = -12000, ShowInTaskbar = false };
         window.Show(); window.UpdateLayout(); return window;

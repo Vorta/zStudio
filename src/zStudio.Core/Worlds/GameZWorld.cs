@@ -2,7 +2,7 @@ using System.Buffers.Binary;
 using System.Numerics;
 using System.Text;
 
-namespace Recoil.Zbd.Core.Worlds;
+namespace zStudio.Core.Worlds;
 
 /// <summary>Node classes the engine serializes (CZZbd::WriteSingleNodeClassData, retail 0x4544B0).</summary>
 public enum WorldNodeClass { Plain = 0, Camera = 1, World = 2, Window = 3, Display = 4, Object3D = 5, Lod = 6, Light = 9, Sound = 10 }

@@ -1,11 +1,11 @@
 using System.Numerics;
 using System.Security.Cryptography;
 using System.Text;
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Core.Formats;
+using zStudio.Core;
+using zStudio.Core.Formats;
 using Xunit;
 
-namespace Recoil.Zbd.Tests;
+namespace zStudio.Tests;
 
 public sealed class MissionIdentityProjectionTests
 {
@@ -182,7 +182,7 @@ public sealed class MissionIdentityProjectionTests
         Assert.Equal(fixture.ReaderBytes, File.ReadAllBytes(fixture.ReaderPath)); Assert.Equal(2, fixture.World.Scene!.Nodes.Count);
     }
 
-    private static (ZbdDocument Archive, PickupPlacementEditSession Edits, AiNetworkSnapshot Snapshot) Coordinates(int count)
+    private static (AssetDocument Archive, PickupPlacementEditSession Edits, AiNetworkSnapshot Snapshot) Coordinates(int count)
     {
         var root = A(Enumerable.Range(0, count).SelectMany(i => new[] { S($"node_{i:D2}"), A(I(12), A(F(i + 1), F(2), F(3)), A(I(-1), I(-1), I(-1))) }).ToArray());
         var archive = FormatRegistry.Default.OpenBytes(Path.GetFullPath("identity-network.zbd"),

@@ -1,13 +1,13 @@
 using System.Numerics;
 using System.Text;
 using System.Text.Json.Nodes;
-using Recoil.Zbd.Core.Formats;
-using Recoil.Zbd.Core.Gltf;
-using Recoil.Zbd.Core.Terrain;
-using Recoil.Zbd.Core.Worlds;
+using zStudio.Core.Formats;
+using zStudio.Core.Gltf;
+using zStudio.Core.Terrain;
+using zStudio.Core.Worlds;
 using Xunit;
 
-namespace Recoil.Zbd.Tests;
+namespace zStudio.Tests;
 
 public sealed class WorldGltfTests
 {
@@ -442,12 +442,12 @@ public sealed class WorldGltfTests
         var point = Assert.Single(model.Points);
         Assert.Equal(new Vector3(0, 13.5f, 0), Assert.Single(point.Vertices));
         Assert.Equal(7, point.Record[0]); Assert.Equal(1, point.Record[20]);
-        // Files written before keep loading: an empty mesh with the values still becomes the model.
+        // Retired empty-mesh representations are rejected rather than silently becoming empty models.
         string old = """
         {"asset":{"version":"2.0"},"scene":0,"scenes":[{"nodes":[0]}],"nodes":[{"name":"halo","mesh":0}],
          "meshes":[{"primitives":[],"extras":{"recoil":{"mode":1,"points":[{"record":"07000000000000000000000000000000000000000100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000","vertices":[[0,13.5,0]]}]}}}]}
         """;
-        Assert.Single(Import(old, new(), out _).Single().Model!.Points);
+        Assert.Throws<InvalidDataException>(() => Import(old, new(), out _));
     }
 
     [Fact]

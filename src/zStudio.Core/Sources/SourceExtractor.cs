@@ -1,7 +1,7 @@
 using System.Text;
-using Recoil.Zbd.Core.Formats;
+using zStudio.Core.Formats;
 
-namespace Recoil.Zbd.Core.Sources;
+namespace zStudio.Core.Sources;
 
 /// <summary>What a reconstruction wrote. Game files whose family is not reconstructed yet are listed, not copied.</summary>
 public sealed record SourceReconstructionReport(string Project, int SourceFiles, IReadOnlyDictionary<string, int> Families, IReadOnlyList<string> NotReconstructed, IReadOnlyList<string> Notes);
@@ -359,7 +359,7 @@ public static class SourceExtractor
         writes.CreateDirectory(Path.Combine(projectRoot, SourceProject.DataFolder)); writes.CreateDirectory(Path.Combine(projectRoot, SourceProject.GameGenFolder));
         Dictionary<string, int> families = []; List<string> skipped = [];
         List<(string Relative, IReadOnlyList<ArchiveSources.Member> Members)> soundBanks = [];
-        List<(string Relative, ZbdDocument Document)> texturePacks = [];
+        List<(string Relative, AssetDocument Document)> texturePacks = [];
         // A world is kept as the model its sources are reconstructed from (or why it cannot be one), not as its document,
         // which holds many times more.
         List<(string Relative, Worlds.GameZWorld? World, string? Failure)> worlds = [];
@@ -476,7 +476,7 @@ public static class SourceExtractor
     }
 
     /// <summary>Rank variants across packs only after identities inside each pack are unambiguous.</summary>
-    internal static void ValidateTextureNames(string relative, ZbdDocument doc, CancellationToken token, long maximumComparedBytes = 512L * 1024 * 1024,
+    internal static void ValidateTextureNames(string relative, AssetDocument doc, CancellationToken token, long maximumComparedBytes = 512L * 1024 * 1024,
         Func<AssetRecord, string>? identity = null)
     {
         Dictionary<string, AssetRecord> names = new(StringComparer.OrdinalIgnoreCase);
@@ -709,10 +709,10 @@ public static class SourceExtractor
         /// stored copy; among copies of that size in different shapes, the shape kept by the pack with the most room (see
         /// <see cref="PackRoom"/>); then direct colour over a palette. Lower-quality packs are rebuilt on export.
         /// </summary>
-        internal async Task ExtractTexturesAsync(IReadOnlyList<(string Relative, ZbdDocument Document)> packs)
+        internal async Task ExtractTexturesAsync(IReadOnlyList<(string Relative, AssetDocument Document)> packs)
         {
             foreach (var (relative, doc) in packs.Where(p => TextureSources.MissionNumber(p.Relative) > 0)) ValidateTextureNames(relative, doc, token);
-            Dictionary<(string Folder, string Name), List<(int Mission, ZbdDocument Doc, AssetRecord Asset, (long, int) Room)>> candidates = [];
+            Dictionary<(string Folder, string Name), List<(int Mission, AssetDocument Doc, AssetRecord Asset, (long, int) Room)>> candidates = [];
             foreach (var mission in packs.Where(p => TextureSources.MissionNumber(p.Relative) > 0).GroupBy(p => TextureSources.MissionNumber(p.Relative)).OrderBy(g => g.Key))
             {
                 token.ThrowIfCancellationRequested();

@@ -1,14 +1,14 @@
 using System.IO;
 using System.Text.Json.Nodes;
 using System.Windows.Threading;
-using Recoil.Zbd.Automation;
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Core.Animation;
-using Recoil.Zbd.Core.Export;
-using Recoil.Zbd.Desktop;
+using zStudio.Automation;
+using zStudio.Core;
+using zStudio.Core.Animation;
+using zStudio.Core.Export;
+using zStudio.Desktop;
 using Xunit;
 
-namespace Recoil.Zbd.Desktop.Tests;
+namespace zStudio.Desktop.Tests;
 
 internal static class OperationPublicationChecks
 {
@@ -23,7 +23,7 @@ internal static class OperationPublicationChecks
             await main.ViewModel.OpenRootAsync(root, deadline.Token);
             var package = new AnimationPackage { Prefix = new byte[72], Tail = [] };
             package.Entries.Add(new AnimationEntry(new byte[308], 0, 0));
-            var source = new ZbdDocument(Path.Combine(root, "animation.zbd"), new(0, DateTime.MinValue),
+            var source = new AssetDocument(Path.Combine(root, "animation.zbd"), new(0, DateTime.MinValue),
                 new(FormatFamily.Animation, 28, Recognition.Supported, "fixture"), ReadOnlyMemory<byte>.Empty) { Animations = package };
             var doc = new DocumentModel(source); main.ViewModel.Documents.Add(doc);
             doc.AnimationEdits!.Apply(0, "Initial edit", e => e.SetFloat(164, 2));
@@ -73,7 +73,7 @@ internal static class OperationPublicationChecks
 
             foreach (bool export in new[] { true, false })
             {
-                var inspected = new ZbdDocument(Path.Combine(root, "source.zbd"), new(0, DateTime.MinValue),
+                var inspected = new AssetDocument(Path.Combine(root, "source.zbd"), new(0, DateTime.MinValue),
                     new(FormatFamily.Unknown, null, Recognition.Unknown, "fixture"), ReadOnlyMemory<byte>.Empty);
                 var owner = new DocumentModel(inspected); main.ViewModel.Documents.Add(owner);
                 TaskCompletionSource started = new(TaskCreationOptions.RunContinuationsAsynchronously), release = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -122,7 +122,7 @@ internal static class OperationPublicationChecks
     }
     private sealed class DeferredExporter(Func<IProgress<ExportProgress>?, Task<ExportResult>> export) : IAssetExporter
     {
-        public Task<ExportResult> ExportAsync(ZbdDocument document, IReadOnlyList<AssetRecord> assets, string destination, bool jsonOnly,
+        public Task<ExportResult> ExportAsync(AssetDocument document, IReadOnlyList<AssetRecord> assets, string destination, bool jsonOnly,
             string? preferredTexturePack = null, int lodLevel = 0, IProgress<ExportProgress>? progress = null, CancellationToken token = default) => export(progress);
     }
 }

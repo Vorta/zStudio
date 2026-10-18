@@ -1,6 +1,6 @@
 using System.Buffers.Binary;
 
-namespace Recoil.Zbd.Core.Animation;
+namespace zStudio.Core.Animation;
 
 public static class AnimationWriter
 {

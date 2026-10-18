@@ -1,7 +1,7 @@
 using System.Buffers.Binary;
 using System.IO.Compression;
 
-namespace Recoil.Zbd.Core.Export;
+namespace zStudio.Core.Export;
 
 /// <summary>Deterministic, lossless RGBA8 PNG output without a UI dependency.</summary>
 public static class PngEncoder

@@ -7,16 +7,16 @@ using System.Windows;
 using System.Windows.Controls;
 using ModelContextProtocol.Client;
 using ModelContextProtocol.Protocol;
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Core.Animation;
-using Recoil.Zbd.Core.Formats;
-using Recoil.Zbd.Desktop;
-using Recoil.Zbd.Mcp;
-using Recoil.Zbd.Rendering;
-using Recoil.Zbd.Tests;
+using zStudio.Core;
+using zStudio.Core.Animation;
+using zStudio.Core.Formats;
+using zStudio.Desktop;
+using zStudio.Mcp;
+using zStudio.Rendering;
+using zStudio.Tests;
 using Xunit;
 
-namespace Recoil.Zbd.Desktop.Tests;
+namespace zStudio.Desktop.Tests;
 
 /// <summary>Actual pipe responses over small valid resources with long, escaped, complete filesystem identities.</summary>
 internal static class InspectionResultMcpChecks
@@ -51,7 +51,7 @@ internal static class InspectionResultMcpChecks
             for (int i = 0; i < count; i++) await File.WriteAllBytesAsync(Path.Combine(root, $"rtexture{i + 1}.zbd"), ModelFixture.Texture(), token);
             await main.ViewModel.OpenRootAsync(root, token);
             var resolver = main.ViewModel.Resolver!;
-            var world = new ZbdDocument(worldPath, FileStamp.Read(worldPath), new(FormatFamily.GameZ, 15, Recognition.Supported, "bounded response fixture"), worldBytes) { Scene = new() };
+            var world = new AssetDocument(worldPath, FileStamp.Read(worldPath), new(FormatFamily.GameZ, 15, Recognition.Supported, "bounded response fixture"), worldBytes) { Scene = new() };
             var asset = world.Add(AssetKind.World, 0, "Whole world", 0, worldBytes.Length);
             using var doc = new DocumentModel(world); doc.AttachResolver(resolver); main.ViewModel.Documents.Add(doc);
             typeof(MainViewModel).GetField("selectedDocument", BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(main.ViewModel, doc);
@@ -199,7 +199,7 @@ internal static class InspectionResultMcpChecks
             string originalMetadata = world.Scene.Nodes[0].Metadata.ToJsonString();
             var package = new AnimationPackage { Prefix = new byte[72], Tail = [] };
             package.Entries.Add(new(new byte[308], 0, 0));
-            using var animationDocument = new DocumentModel(new ZbdDocument("animation", new(0, DateTime.MinValue), new(FormatFamily.Animation, 28, Recognition.Supported, "fixture"), ReadOnlyMemory<byte>.Empty) { Animations = package });
+            using var animationDocument = new DocumentModel(new AssetDocument("animation", new(0, DateTime.MinValue), new(FormatFamily.Animation, 28, Recognition.Supported, "fixture"), ReadOnlyMemory<byte>.Empty) { Animations = package });
             using (var editor = new AnimationEditor(animationDocument, 0, resolver, token))
             {
                 var flags = BindingFlags.Instance | BindingFlags.NonPublic;

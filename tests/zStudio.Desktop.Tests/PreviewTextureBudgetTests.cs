@@ -1,10 +1,10 @@
 using System.IO;
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Core.Formats;
-using Recoil.Zbd.Rendering;
+using zStudio.Core;
+using zStudio.Core.Formats;
+using zStudio.Rendering;
 using Xunit;
 
-namespace Recoil.Zbd.Desktop.Tests;
+namespace zStudio.Desktop.Tests;
 
 /// <summary>GPU-free tests of the same lifetime owner used by static and animated viewports.</summary>
 public sealed class PreviewTextureBudgetTests
@@ -54,7 +54,7 @@ public sealed class PreviewTextureBudgetTests
             "alpha" => info with { AlphaOffset = -1 },
             _ => info
         };
-        var document = difference == "path" ? new ZbdDocument("other.zbd", second.Document.Stamp, second.Document.Probe, second.Document.Bytes) : second.Document;
+        var document = difference == "path" ? new AssetDocument("other.zbd", second.Document.Stamp, second.Document.Probe, second.Document.Bytes) : second.Document;
         var asset = new AssetRecord { Id = new(document.Path, AssetKind.Texture, second.Asset.Index), Name = "texture", Offset = difference == "offset" ? 1 : 0, Content = info };
         second = new(document, asset, false);
         TextureMemoryBudget budget = new(32); int decoded = 0;
@@ -135,7 +135,7 @@ public sealed class PreviewTextureBudgetTests
     {
         byte[] bytes = [0, 0, 0, 248, 224, 7, 255, 255, 0, 128, 255, 255];
         if (opaque) bytes.AsSpan(8).Fill(255);
-        var document = new ZbdDocument("texture.zbd", new(bytes.Length, DateTime.MinValue), new(FormatFamily.TexturePack, 1, Recognition.Supported, "test"), bytes);
+        var document = new AssetDocument("texture.zbd", new(bytes.Length, DateTime.MinValue), new(FormatFamily.TexturePack, 1, Recognition.Supported, "test"), bytes);
         var asset = document.Add(AssetKind.Texture, index, "texture", 0, bytes.Length, content: new TextureInfo(2, 2, 9, 0, -1, 0, 8, 8, -1, 0));
         return new(document, asset, false);
     }

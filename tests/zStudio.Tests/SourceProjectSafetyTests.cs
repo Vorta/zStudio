@@ -1,12 +1,12 @@
 using System.Buffers.Binary;
 using System.Diagnostics;
 using System.Text;
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Core.Formats;
-using Recoil.Zbd.Core.Sources;
+using zStudio.Core;
+using zStudio.Core.Formats;
+using zStudio.Core.Sources;
 using Xunit;
 
-namespace Recoil.Zbd.Tests;
+namespace zStudio.Tests;
 
 /// <summary>Publication, snapshot, link and input-validation guarantees of source projects.</summary>
 public sealed class SourceProjectSafetyTests
@@ -40,7 +40,7 @@ public sealed class SourceProjectSafetyTests
     public async Task ReconstructionReservesWorldDecodingBeforeParsingEvenAnInvalidBody()
     {
         using var fixture = new SourceFixture();
-        var bytes = Recoil.Zbd.Core.Worlds.GameZWriter.Write(GameZVersion13Tests.SampleWorld(), Token);
+        var bytes = zStudio.Core.Worlds.GameZWriter.Write(GameZVersion13Tests.SampleWorld(), Token);
         // A supported header but an invalid body: parsing would reject/skip it, whereas the reservation must stop first.
         BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(12), uint.MaxValue);
         Array.Resize(ref bytes, 1024 * 1024);
@@ -283,7 +283,7 @@ public sealed class SourceProjectSafetyTests
             string target = Path.Combine(demo, Path.GetRelativePath(fixture.Corpus, file)); Directory.CreateDirectory(Path.GetDirectoryName(target)!); File.Copy(file, target);
         }
         Directory.CreateDirectory(Path.Combine(demo, "m1"));
-        File.WriteAllBytes(Path.Combine(demo, "m1", "gamez.zbd"), DemoWorldFixture.FromVersion15(Recoil.Zbd.Core.Worlds.GameZWriter.Write(GameZVersion13Tests.SampleWorld(), Token)));
+        File.WriteAllBytes(Path.Combine(demo, "m1", "gamez.zbd"), DemoWorldFixture.FromVersion15(zStudio.Core.Worlds.GameZWriter.Write(GameZVersion13Tests.SampleWorld(), Token)));
         var error = await Assert.ThrowsAsync<InvalidDataException>(() => SourceExtractor.ExtractAsync(demo, project, token: Token));
         Assert.Contains("1998 demo world (GameZ version 13)", error.Message);
         Assert.False(Directory.Exists(project));

@@ -1,10 +1,10 @@
 using System.Security.AccessControl;
 using System.Security.Principal;
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Core.Sources;
+using zStudio.Core;
+using zStudio.Core.Sources;
 using Xunit;
 
-namespace Recoil.Zbd.Tests;
+namespace zStudio.Tests;
 
 /// <summary>A sealed output replaces a file as File.Replace did: also while others read it, and keeping its metadata.</summary>
 public sealed class SealedFileReplaceTests

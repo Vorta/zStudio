@@ -1,7 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <OutputType>Exe</OutputType><IsTestProject>true</IsTestProject><IsPackable>false</IsPackable>
-    <RootNamespace>Recoil.Zbd.PrWatch.Tests</RootNamespace><AssemblyName>Recoil.Zbd.PrWatch.Tests</AssemblyName>
+    <RootNamespace>zStudio.PrWatch.Tests</RootNamespace><AssemblyName>zStudio.PrWatch.Tests</AssemblyName>
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.NET.Test.Sdk" />

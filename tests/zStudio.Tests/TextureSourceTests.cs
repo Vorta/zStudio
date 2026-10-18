@@ -1,12 +1,12 @@
 using System.Buffers.Binary;
 using System.IO.Compression;
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Core.Export;
-using Recoil.Zbd.Core.Formats;
-using Recoil.Zbd.Core.Sources;
+using zStudio.Core;
+using zStudio.Core.Export;
+using zStudio.Core.Formats;
+using zStudio.Core.Sources;
 using Xunit;
 
-namespace Recoil.Zbd.Tests;
+namespace zStudio.Tests;
 
 public sealed class TextureSourceTests
 {
@@ -93,7 +93,7 @@ public sealed class TextureSourceTests
         Assert.Throws<InvalidDataException>(() => PngDecoder.Decode(Png(2, 2, 3, 8, false, (_, _) => [0]), token: Token));
     }
 
-    private static ZbdDocument Open(byte[] bytes) => FormatRegistry.Default.OpenBytes("pack.zbd", bytes, token: Token);
+    private static AssetDocument Open(byte[] bytes) => FormatRegistry.Default.OpenBytes("pack.zbd", bytes, token: Token);
 
     [Fact]
     public void PacksFollowTheEngineRulesForEachRenderer()
@@ -152,6 +152,60 @@ public sealed class TextureSourceTests
         Assert.Equal(2, ui.Assets.Count);
         Assert.Null(TexturePackVariant.FromFileName("texture0.zbd"));
         Assert.Equal(TexturePackKind.Software, TexturePackVariant.FromFileName("TEXTUREMAX.ZBD")!.Kind);
+    }
+
+    [Fact]
+    public void DitheringKeepsExactColoursAndKeepsTheMeanOfOthers()
+    {
+        // Colours RGB565 holds exactly (the engine's expansion of its levels), as in a texture extracted from the game.
+        static int Five(int level) => (level << 3) | (level >> 2);
+        static int Six(int level) => (level << 2) | (level >> 4);
+        var exact = Image(16, 16, (x, y) => ((byte)Five((x * 7 + y) % 32), (byte)Six((x * 5 + y * 3) % 64), (byte)Five((y * 11 + x) % 32), 255));
+        // Red and blue 100 fall between the 5-bit levels 99 and 107: rounding alone shows 99 everywhere.
+        var flat = Image(16, 16, (_, _) => (100, 100, 100, 255));
+        // A keyed grey texture with a white panel.
+        var sign = Image(64, 64, (x, y) => x == 0 && y == 0 ? ((byte)0, (byte)0, (byte)0, (byte)0) : x is >= 8 and < 56 && y is >= 16 and < 40 ? ((byte)255, (byte)255, (byte)255, (byte)255) : ((byte)60, (byte)60, (byte)64, (byte)255));
+        // A colour-keyed texture stores green at five bits; it shows as that six-bit level, (q << 3) | (q >> 3).
+        var keyed = Image(16, 16, (x, y) => ((byte)Five((x * 7 + y) % 31 + 1), (byte)((((x * 5 + y * 3) % 32) << 3) | (((x * 5 + y * 3) % 32) >> 3)), (byte)Five((y * 11 + x) % 32), (byte)((x + y) % 5 == 0 ? 0 : 255)));
+        TexturePackVariant hardware = TexturePackVariant.FromFileName("rtexture16.zbd")!;
+        byte[] Pack(DecodedImage image, TextureDithering dithering) => TexturePackBuilder.Build([new("t", "t", image)], hardware with { Dithering = dithering }, Token).Bytes;
+        double MeanRed(byte[] pack) { var doc = Open(pack); return TextureDecoder.Decode(doc, doc.Assets[0], Token).Rgba.Where((_, i) => i % 4 == 0).Average(v => (double)v); }
+        Assert.Equal(99, MeanRed(Pack(flat, TextureDithering.None)));
+        foreach (var dithering in new[] { TextureDithering.Ordered, TextureDithering.Diffusion })
+        {
+            Assert.Equal(Pack(exact, TextureDithering.None), Pack(exact, dithering));
+            Assert.Equal(Pack(keyed, TextureDithering.None), Pack(keyed, dithering));
+            // A keyed green shows at most 251: white's error must not pile up and spill green below it.
+            var doc = Open(Pack(sign, dithering));
+            byte[] shown = TextureDecoder.Decode(doc, doc.Assets[0], Token).Rgba;
+            Assert.InRange(Enumerable.Range(40 * 64, 64).Average(i => (double)shown[i * 4 + 1]), 55, 66);
+            Assert.InRange(MeanRed(Pack(flat, dithering)), 99.5, 100.5);
+        }
+        // A software (paletted) pack stores black as 0x0020: diffusion must not pile error up across black and smear the colours
+        // after it. More colours than a palette holds below the black, so the pack must dither them.
+        var below = Image(64, 128, (x, y) => y < 64 ? ((byte)0, (byte)0, (byte)0, (byte)255) : ((byte)(x * 5 % 96), (byte)((x * 3 + y * 7) % 96), (byte)((y * 11 + x) % 96), (byte)255));
+        TexturePackVariant software = TexturePackVariant.FromFileName("texturemax.zbd")!;
+        byte[] Software(TextureDithering dithering, DecodedImage image, params PackTexture[] others)
+        {
+            var doc = Open(TexturePackBuilder.Build([new("t", "t", image), .. others], software with { Dithering = dithering }, Token).Bytes);
+            return TextureDecoder.Decode(doc, doc.Assets.First(a => a.Name == "t"), Token).Rgba;
+        }
+        double Green(byte[] rgba, int row) => Enumerable.Range(row * 64, 4 * 64).Average(i => (double)rgba[i * 4 + 1]);
+        Assert.InRange(Green(Software(TextureDithering.Diffusion, below), 64), Green(Software(TextureDithering.None, below), 64) - 3, Green(Software(TextureDithering.None, below), 64) + 3);
+        // Error reaching black from colours above it, on a page shared with other textures (dark entries near black), dies out
+        // within a few rows instead of carrying on through the black.
+        var random = new Random(7);
+        var band = Image(64, 64, (x, y) => y >= 20 ? ((byte)0, (byte)0, (byte)0, (byte)255) : ((byte)(60 + x * 2 + random.Next(20)), (byte)(50 + y * 4 + random.Next(20)), (byte)(40 + x + random.Next(20)), (byte)255));
+        PackTexture[] noise = [.. Enumerable.Range(0, 6).Select(k =>
+        {
+            var r = new Random(k);
+            return new PackTexture($"n{k}", $"n{k}", Image(64, 64, (_, _) => ((byte)Math.Clamp(40 + k * 15 + r.Next(-60, 60), 0, 255), (byte)Math.Clamp(60 + k * 10 + r.Next(-60, 60), 0, 255), (byte)Math.Clamp(50 + k * 12 + r.Next(-60, 60), 0, 255), (byte)255)));
+        })];
+        byte[] diffused = Software(TextureDithering.Diffusion, band, noise);
+        Assert.Equal(0, Enumerable.Range(26 * 64, 38 * 64).Count(i => diffused[i * 4] + diffused[i * 4 + 1] + diffused[i * 4 + 2] > 4));
+        // That entry is also the exact colour (0,4,0), common in the game's textures: dithering keeps it as it keeps every exact colour.
+        var dark = Image(16, 16, (x, _) => x < 8 ? ((byte)0, (byte)4, (byte)0, (byte)255) : ((byte)16, (byte)16, (byte)16, (byte)255));
+        Assert.Equal(Software(TextureDithering.None, dark), Software(TextureDithering.Diffusion, dark));
     }
 
     [Fact]

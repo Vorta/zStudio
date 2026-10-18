@@ -1,8 +1,8 @@
 using System.Buffers.Binary;
 using System.Collections;
-using Recoil.Zbd.Core.Formats;
+using zStudio.Core.Formats;
 
-namespace Recoil.Zbd.Core.Animation;
+namespace zStudio.Core.Animation;
 
 /// <summary>Frame edits belong to this view, never the event's validated source or another caller.</summary>
 internal sealed class EditableKeyframeView(IReadOnlyList<AnimationKeyframe> source) : IReadOnlyList<AnimationKeyframe>

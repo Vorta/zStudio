@@ -1,9 +1,9 @@
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Core.Animation;
-using Recoil.Zbd.Core.Formats;
+using zStudio.Core;
+using zStudio.Core.Animation;
+using zStudio.Core.Formats;
 using Xunit;
 
-namespace Recoil.Zbd.Tests;
+namespace zStudio.Tests;
 
 public sealed class AnimationTextureLoadScopeTests
 {
@@ -19,7 +19,7 @@ public sealed class AnimationTextureLoadScopeTests
         scene.Models.Add(new(1, [], [], [], [new(MaterialIndex: 1, Flags: 0, [], [], [], [])], []));
         Assert.Equal(0, scene.Models[0].Polygons[0].MaterialIndex);
         Assert.Equal(1, scene.Models[1].Polygons[0].MaterialIndex);
-        var world = new ZbdDocument("world.zbd", new(0, DateTime.MinValue),
+        var world = new AssetDocument("world.zbd", new(0, DateTime.MinValue),
             new(FormatFamily.GameZ, 15, Recognition.Supported, "fixture"), ReadOnlyMemory<byte>.Empty) { Scene = scene };
         var context = new AnimationPreviewContext { Package = new() { Prefix = [], Tail = [] }, World = world, LoadedNodeCount = 4 };
 

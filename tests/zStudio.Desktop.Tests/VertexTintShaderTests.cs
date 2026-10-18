@@ -1,6 +1,6 @@
 using System.IO;
 using System.Runtime.InteropServices;
-using Recoil.Zbd.Rendering;
+using zStudio.Rendering;
 using SharpDX.D3DCompiler;
 using SharpDX.Direct3D;
 using SharpDX.Direct3D11;
@@ -9,7 +9,7 @@ using Xunit;
 using Buffer = SharpDX.Direct3D11.Buffer;
 using Device = SharpDX.Direct3D11.Device;
 
-namespace Recoil.Zbd.Desktop.Tests;
+namespace zStudio.Desktop.Tests;
 
 public sealed class VertexTintShaderTests
 {
@@ -24,7 +24,7 @@ public sealed class VertexTintShaderTests
     [InlineData(false, false, true)]
     public void TextureTintIsViewIndependentAndOnlyUntexturedLitModeShades(bool textured, bool unlit, bool flat)
     {
-        using var sourceStream = typeof(SceneViewport).Assembly.GetManifestResourceStream("Recoil.Zbd.Rendering.VertexTint.hlsl")!;
+        using var sourceStream = typeof(SceneViewport).Assembly.GetManifestResourceStream("zStudio.Rendering.VertexTint.hlsl")!;
         using var reader = new StreamReader(sourceStream);
         string source = reader.ReadToEnd();
         using var pixelCode = ShaderBytecode.Compile(source, "PSMain", "ps_5_0", ShaderFlags.OptimizationLevel3);
@@ -53,6 +53,8 @@ public sealed class VertexTintShaderTests
         // Helix DiffuseMaterialVariables binds EnableUnLit to this ABI slot.
         Flag("bHasNormalMap", unlit);
         Flag("bRenderFlat", flat);
+        // Production vertex-tint materials select authored colors through this ABI field.
+        BitConverter.GetBytes(1f).CopyTo(meshData, meshLayout.GetVariable("vertColorBlending").Description.StartOffset);
 
         using var device = new Device(DriverType.Warp, DeviceCreationFlags.None);
         using var context = device.ImmediateContext;

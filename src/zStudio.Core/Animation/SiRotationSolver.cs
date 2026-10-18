@@ -1,4 +1,4 @@
-namespace Recoil.Zbd.Core.Animation;
+namespace zStudio.Core.Animation;
 
 /// <summary>
 /// Finds the six-decimal Euler angles a script held for a compiled rotation. The exporter printed Softimage's raw

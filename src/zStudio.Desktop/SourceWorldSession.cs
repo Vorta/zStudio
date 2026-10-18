@@ -1,15 +1,12 @@
 using System.IO;
-using Recoil.Zbd.Core.Worlds;
-using Recoil.Zbd.Core.Sources;
+using zStudio.Core.Worlds;
+using zStudio.Core.Sources;
 
-namespace Recoil.Zbd.Desktop;
+namespace zStudio.Desktop;
 
 /// <summary>
-/// A mission world edited from its source project. The world shown is a private build of the mission (see
-/// <see cref="SourceWorlds.BuildPreviewAsync"/>) in the project's <c>zstudio/cache/worlds</c> folder, zStudio's derived
-/// data that builds never read; each build has its own subfolder, removed with the document that shows it. Edits belong to the project's <see cref="Workspace"/>, which every
-/// open world of the project shares, and reach the project only when saved. The session passes from document to document
-/// as edits rebuild the world.
+/// An accepted source mission evaluated in memory. Every open mission shares the project's workspace;
+/// edits reach the source files only on Save. Game archives are produced only by export.
 /// </summary>
 internal sealed class SourceWorldSession : IDisposable
 {
@@ -17,7 +14,7 @@ internal sealed class SourceWorldSession : IDisposable
     public string Root => Workspace.Root;
     public string Mission { get; }
     public string ScriptPath => $"{SourceProject.GameGenFolder}/{Mission}.gs";
-    public string DefinitionsPath => $"{SourceProject.DataFolder}/{Mission}/zrdr/anim{Recoil.Zbd.Core.Animation.AnimationDefinitionSet.Extension}";
+    public string DefinitionsPath => $"{SourceProject.DataFolder}/{Mission}/zrdr/anim{zStudio.Core.Animation.AnimationDefinitionSet.Extension}";
     public string Label => $"{Mission} world (sources)";
     /// <summary>The document currently showing this world; disposing it ends the session.</summary>
     internal DocumentModel? Owner { get; set; }
@@ -32,7 +29,7 @@ internal sealed class SourceWorldSession : IDisposable
     /// </summary>
     internal bool LookupBaselinePending { get; private set; }
     /// <summary>The build shown and its world as the document holds it (the build's files are not read again).</summary>
-    internal void SetLookupBaseline(SourceWorldBuild build, ReadOnlyMemory<byte> world) { LookupBaseline = new(world, build.Lookups, build.Provenance); LookupBaselinePending = false; }
+    internal void SetLookupBaseline(SourceSceneState build, GameZWorld world) { LookupBaseline = new(world, build.Lookups, build.Provenance); LookupBaselinePending = false; }
     internal void ForgetLookupBaseline() { LookupBaseline = null; LookupBaselinePending = true; }
     /// <summary>How many lookups by name the shown build finds another node for than <see cref="LookupBaseline"/>, as Problems lists them.</summary>
     internal int LookupChangeCount { get; set; }
@@ -43,36 +40,26 @@ internal sealed class SourceWorldSession : IDisposable
     /// and reloads wait for it, so the world shown always matches the workspace and only edits it was built with are saved.
     /// </summary>
     internal bool IsRebuilding { get; set; }
-    private readonly SourcePreviewCache cache;
     public bool IsDisposed { get; private set; }
 
-    /// <param name="token">Observed before checking script presence and while the folders of ended sessions are looked for (see <see cref="SourceWorlds.AbandonedBuilds"/>).</param>
     public SourceWorldSession(SourceWorkspace workspace, string mission, CancellationToken token = default)
     {
         Workspace = workspace; Mission = mission.ToLowerInvariant();
         if (!workspace.Exists(ScriptPath, token)) throw new InvalidDataException($"The project has no world script {ScriptPath}.");
-        cache = new(Root, token);
     }
 
-    /// <summary>A new, empty folder for the next build.</summary>
-    public string NextFolder()
+    internal Task<SourceSceneSnapshot> BuildAsync(IReadOnlyDictionary<string, byte[]>? overlay,
+        IProgress<SourceProgress>? progress, CancellationToken token, IReadOnlyList<SourceModelAddition>? additions)
     {
         ObjectDisposedException.ThrowIf(IsDisposed, this);
-        return cache.NextFolder();
+        progress?.Report(new(0, 1, Mission));
+        return SourceWorlds.LoadSceneAsync(Root, Mission, overlay, token, additions);
     }
-
-    internal Task<SourceWorldBuild> BuildAsync(string destination, IReadOnlyDictionary<string, byte[]>? overlay,
-        IProgress<SourceProgress>? progress, CancellationToken token, IReadOnlyList<SourceModelAddition>? additions)
-        => cache.BuildAsync(Mission, destination, overlay, progress, token, additions);
-
-    /// <summary>Removes one build's files once no document shows them.</summary>
-    public void DeleteBuild(string buildFolder) => cache.DeleteBuild(buildFolder);
 
     public void Dispose()
     {
         if (IsDisposed) return;
         IsDisposed = true; Owner = null;
         Building?.Cancel();
-        cache.Dispose();
     }
 }

@@ -1,11 +1,11 @@
 using System.Text;
 using System.Text.Json.Nodes;
-using Recoil.Zbd.Core.Sources;
-using Recoil.Zbd.Core.Worlds;
-using Recoil.Zbd.Desktop;
+using zStudio.Core.Sources;
+using zStudio.Core.Worlds;
+using zStudio.Desktop;
 using Xunit;
 
-namespace Recoil.Zbd.Desktop.Tests;
+namespace zStudio.Desktop.Tests;
 
 public sealed class SourcePageBoundsTests
 {

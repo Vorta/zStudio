@@ -4,16 +4,18 @@ Opening and reloading prepare resource syntax, compiled trees and baseline hashe
 
 ZAR containers and typed ZRD resources now have shared GUI/MCP editors. These are the first two priorities toward a complete ZBD editor. They do not make every other ZBD format editable.
 
+Editing compiled ZBD assets is being retired in favour of [source projects](source-project.md). A compiled root opens only through MCP `open_root` (the GUI opens only source projects); the workflows below apply there.
+
 Resource editing uses the same [compiled-history admission limits](texture-script-editing.md) as texture and prepared-script editing: 1 GiB of estimated retained raw/decoded content and a separate 1 GiB construction allowance. Successful edits can trim the oldest undo entries; refusal preserves the accepted document and its history. Source and saved baselines remain counted even when their former undo entries have been retired.
 
 ## Archive members
 
 1. Open a ZAR archive, such as a mission's `zrdr.zbd`, from **Files**. Its members appear in **Assets** in directory order.
-2. Right-click a member and open **Edit archive member**, or use **Edit → Archive members**. The menu can add a file, create an empty ZRD array, replace a member, rename, duplicate, delete, or move a member up/down.
+2. Right-click a member and open **Edit archive member** (MCP `zstudio_archive_edit`). The menu can add a file, create an empty ZRD array, replace a member, rename, duplicate, delete, or move a member up/down.
 3. Choose a file for Add/Replace. Replacement can change the payload length. Known ZRD/WAV inputs are validated before accepting the edit; other payloads remain opaque. The resulting container must still be recognized unambiguously by the shared format reader.
 4. Names are 1–63 Latin-1 characters without NUL. Duplicate names are allowed. The editor tracks the member's identity rather than using its name or current row number.
    A complete bounded structural decode identifies embedded ZRD data even after its `.zrd` extension is removed. Renaming retains the same node identities, and the typed GUI/MCP editor remains available after save/reopen. A plausible first word alone does not classify opaque bytes as ZRD.
-5. Use the document's **Undo/Redo** controls to reverse accepted changes. **File → Export selected** exports the edited payload; ZRD export also includes inspection JSON.
+5. Use the document's **Undo/Redo** controls to reverse accepted changes. **Export selected…** in the Assets context menu (MCP `zstudio_export`) exports the edited payload; ZRD export also includes inspection JSON.
 6. **Save** verifies and atomically replaces the working file. **Save As** requires a new file and makes it the destination for subsequent saves. Reference datasets `zbd_1998` and `zbd_1999` require a copy elsewhere. The Properties window and MCP state identify the save destination; the open document retains its original source context.
 
 Unchanged payload bytes, original payload padding, and untouched directory metadata are retained. Changed/new payloads are appended before the rebuilt directory. Deleting a member removes its directory entry but does not compact the original payload region. A no-op serialization is byte-identical. Archives remain subject to the 512 MiB document limit.
@@ -28,7 +30,7 @@ Members that share one payload range reuse its immutable decoded tree; edits sti
 2. Right-click a node and choose **Properties**, or select it and press **Alt+Enter**. This pins Properties to that node. Later selection changes do not retarget the window.
 3. Edit an integer, float or string in Properties. **Enter** or an intentional field boundary applies one undoable change; **Escape** restores the committed value. Invalid input stays in place with an inline diagnostic. Navigation that retargets Properties, saving, and closing explicitly resolve pending input.
 4. Integers are signed 32-bit values. Floats accept finite invariant decimal text or explicit `0xXXXXXXXX` bits, preserving nonfinite values and signed zero. Strings use JSON quotes/escapes and Latin-1 characters, for example `"text"`, `"line\nnext"`, or `"embedded\u0000byte"`.
-5. Use the node's context menu or **Edit → ZRD nodes** to add children, change type, duplicate, delete, reorder, or **Move to array**. Moving selects the destination in a tree and uses a zero-based final child index measured after removing the moved node. Cycles are rejected. The root can change type but cannot be deleted or duplicated.
+5. Use the node's context menu (MCP `zstudio_zrd_edit`) to add children, change type, duplicate, delete, reorder, or **Move to array**. Moving selects the destination in a tree and uses a zero-based final child index measured after removing the moved node. Cycles are rejected. The root can change type but cannot be deleted or duplicated.
 6. Changing type replaces the old scalar/children, including choosing Array again to create an empty array. Undo restores the previous data and node identities. Properties shows a deleted-record notice if its pinned node/member is removed, and reconnects when Undo restores it.
 7. Save the owning archive or standalone ZRD with the normal document controls. Embedded resource changes share the archive's undo history and save transaction.
 

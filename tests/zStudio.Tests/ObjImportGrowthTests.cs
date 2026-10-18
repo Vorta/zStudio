@@ -1,10 +1,10 @@
 using System.Numerics;
 using System.Text.Json;
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Core.Export;
+using zStudio.Core;
+using zStudio.Core.Export;
 using Xunit;
 
-namespace Recoil.Zbd.Tests;
+namespace zStudio.Tests;
 
 [Collection("Allocation-sensitive")]
 public sealed class ObjImportGrowthTests

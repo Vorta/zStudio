@@ -1,6 +1,6 @@
 using System.Globalization;
 
-namespace Recoil.Zbd.Core.Worlds;
+namespace zStudio.Core.Worlds;
 
 /// <summary>A texture cycle's frames and the texture of the material it is shown on (null when that has none).</summary>
 internal sealed record CycledTextures(string? Base, IReadOnlyList<string> Frames);

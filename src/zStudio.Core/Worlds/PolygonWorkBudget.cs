@@ -1,4 +1,4 @@
-namespace Recoil.Zbd.Core.Worlds;
+namespace zStudio.Core.Worlds;
 
 /// <summary>One allowance for polygon reconstruction across a load, including every referenced mesh and surface.</summary>
 internal sealed class PolygonWorkBudget(CancellationToken token = default, long maximumWork = 32_000_000)

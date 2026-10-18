@@ -1,12 +1,12 @@
 using System.IO;
 using System.Numerics;
 using System.Text;
-using Recoil.Zbd.Core.Gltf;
-using Recoil.Zbd.Core.Terrain;
-using Recoil.Zbd.Core.Worlds;
+using zStudio.Core.Gltf;
+using zStudio.Core.Terrain;
+using zStudio.Core.Worlds;
 using Xunit;
 
-namespace Recoil.Zbd.Tests;
+namespace zStudio.Tests;
 
 /// <summary>The terrain splitter: cuts at cell lines and region outlines, attributes by layer, no T-junctions, model limits, determinism.</summary>
 public sealed class TerrainCompilerTests

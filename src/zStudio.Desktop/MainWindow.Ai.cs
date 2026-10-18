@@ -1,11 +1,11 @@
 using System.IO;
 using System.Text.Json.Nodes;
 using System.Windows;
-using Recoil.Zbd.Automation;
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Rendering;
+using zStudio.Automation;
+using zStudio.Core;
+using zStudio.Rendering;
 
-namespace Recoil.Zbd.Desktop;
+namespace zStudio.Desktop;
 
 public partial class MainWindow
 {
@@ -35,7 +35,7 @@ public partial class MainWindow
             { await RunUi(OpenAiPathPropertiesAsync); return; }
             if (scene != viewport || viewport.SelectedAiNode is not { } id) return;
             try { await OpenAiPropertiesAsync(id, false); }
-            catch (StudioCommandException ex) { ViewModel.Status = ex.Message; }
+            catch (StudioCommandException ex) { Report(ex); }
         };
         viewport.AiLabelChanged += text =>
         {
@@ -57,8 +57,9 @@ public partial class MainWindow
     private void ApplyAiOptions()
     {
         bool world = IsAiWorld; AiTools.Visibility = world ? Visibility.Visible : Visibility.Collapsed;
+        AiPathEdit.Visibility = shownDocument?.SourceWorld == null ? Visibility.Visible : Visibility.Collapsed;
         UpdateParachutePanel();
-        if (!world) { AiLabel.Visibility = Visibility.Collapsed; UpdateAiPathPanel(); return; }
+        if (!world) { AiLabel.Visibility = Visibility.Collapsed; UpdateAiPathPanel(); RefreshViewportChips(); return; }
         var graph = scene!.AiNetworks;
         AiValves.Visibility = graph.ValveSources.Count == 0 ? Visibility.Collapsed : Visibility.Visible;
         AiValveOverlay.Visibility = AiValves.Visibility;
@@ -84,7 +85,7 @@ public partial class MainWindow
         }
         finally { synchronizingAi = false; }
         scene.SetAiOptions(aiVisible, aiThroughGeometry, aiNetworkFilter);
-        UpdateAiPathPanel();
+        UpdateAiPathPanel(); RefreshViewportChips();
         if (aiVisible && scene.AiRenderTruncated)
         {
             string limit = $"The AI overlay draws {scene.RenderedAiNodes:N0} nodes and {scene.RenderedAiLinks:N0} links (limits {SceneViewport.MaximumRenderedAiNodes:N0} and {SceneViewport.MaximumRenderedAiLinks:N0}). Filter a network, or inspect the complete graph through AI node Properties or ai_nodes.";

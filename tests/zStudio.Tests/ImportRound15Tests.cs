@@ -1,14 +1,14 @@
 using System.Numerics;
 using System.Text;
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Core.Animation;
-using Recoil.Zbd.Core.Gltf;
-using Recoil.Zbd.Core.Formats;
-using Recoil.Zbd.Core.Sources;
-using Recoil.Zbd.Core.Worlds;
+using zStudio.Core;
+using zStudio.Core.Animation;
+using zStudio.Core.Gltf;
+using zStudio.Core.Formats;
+using zStudio.Core.Sources;
+using zStudio.Core.Worlds;
 using Xunit;
 
-namespace Recoil.Zbd.Tests;
+namespace zStudio.Tests;
 
 public sealed class ImportRound15Tests
 {
@@ -117,13 +117,13 @@ public sealed class ImportRound15Tests
     public void PositivePlanViewOverlapAlwaysKeepsSheetsSeparate(float size)
     {
         using SourceWorldFixture fixture = new();
-        var document = new Recoil.Zbd.Core.Gltf.GltfDocument();
+        var document = new zStudio.Core.Gltf.GltfDocument();
         foreach (float y in new[] { 0f, 1f })
         {
-            var primitive = new Recoil.Zbd.Core.Gltf.GltfPrimitive();
+            var primitive = new zStudio.Core.Gltf.GltfPrimitive();
             primitive.Positions.AddRange([new(0, y, 0), new(size, y, 0), new(0, y, size)]);
             primitive.Indices.AddRange([0, 1, 2]);
-            var mesh = new Recoil.Zbd.Core.Gltf.GltfMesh(); mesh.Primitives.Add(primitive);
+            var mesh = new zStudio.Core.Gltf.GltfMesh(); mesh.Primitives.Add(primitive);
             document.Roots.Add(new() { Name = "sheet" + y, Mesh = mesh });
         }
         var (json, bin) = document.Write("m1.bin", TestContext.Current.CancellationToken);

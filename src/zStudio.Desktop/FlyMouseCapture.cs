@@ -4,7 +4,7 @@ using System.Windows;
 using System.Windows.Interop;
 using System.Windows.Threading;
 
-namespace Recoil.Zbd.Desktop;
+namespace zStudio.Desktop;
 
 /// <summary>One foreground raw-mouse registration owned by the application, never the format/render libraries.</summary>
 internal sealed partial class FlyMouseCapture : IDisposable

@@ -1,6 +1,6 @@
 using System.Text.Json.Nodes;
 
-namespace Recoil.Zbd.Core.Formats;
+namespace zStudio.Core.Formats;
 
 /// <summary>
 /// Serialized layouts for the supported world formats: RECOIL version 15 (the releases), RECOIL version 13 (the July and

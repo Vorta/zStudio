@@ -4,9 +4,9 @@ using System.ComponentModel;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using Microsoft.Win32.SafeHandles;
-using Recoil.Zbd.Core.Sources;
+using zStudio.Core.Sources;
 
-namespace Recoil.Zbd.Core;
+namespace zStudio.Core;
 
 /// <summary>
 /// A staged file held from the check of its content until it has its final name, so a publication puts in place exactly the

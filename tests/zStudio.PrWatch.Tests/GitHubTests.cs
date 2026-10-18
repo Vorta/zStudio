@@ -1,8 +1,8 @@
 using System.Text.Json.Nodes;
 using Xunit;
-using static Recoil.Zbd.PrWatch.Tests.WatcherTests;
+using static zStudio.PrWatch.Tests.WatcherTests;
 
-namespace Recoil.Zbd.PrWatch.Tests;
+namespace zStudio.PrWatch.Tests;
 
 public sealed class GitHubTests
 {

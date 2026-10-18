@@ -3,7 +3,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Runtime.InteropServices;
 
-namespace Recoil.Zbd.Core.Gltf;
+namespace zStudio.Core.Gltf;
 
 /// <summary>JSON integer properties may use decimals/exponents, but must be exactly integral, without floating rounding.</summary>
 internal static class GltfInteger

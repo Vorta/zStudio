@@ -1,4 +1,4 @@
-namespace Recoil.Zbd.Core.Sources;
+namespace zStudio.Core.Sources;
 
 /// <summary>Read the opened file, never a length checked on a different path lookup.</summary>
 public static class SourceRead

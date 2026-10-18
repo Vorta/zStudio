@@ -1,6 +1,6 @@
-using Recoil.Zbd.Core.Formats;
+using zStudio.Core.Formats;
 
-namespace Recoil.Zbd.Core;
+namespace zStudio.Core;
 
 /// <summary>Bounded discovery and lookup shared by all textures in one preview or export.
 /// Indexes retain ordinals and stamps, never the raw pack documents.</summary>
@@ -62,7 +62,7 @@ public sealed class TextureLookupOperation
             foreach (string path in packs)
             {
                 Spend(key.Length + path.Length + 1L, token); CheckRevision();
-                ZbdDocument? document = null;
+                AssetDocument? document = null;
                 if (!indexes.TryGetValue(path, out var index))
                 {
                     document = await resolver.OpenCachedAsync(path, FormatRegistry.MaximumDocumentBytes, token, reads).ConfigureAwait(false);

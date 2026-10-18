@@ -1,10 +1,10 @@
 using System.Numerics;
 using System.Text.Json.Nodes;
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Core.Animation;
+using zStudio.Core;
+using zStudio.Core.Animation;
 using Xunit;
 
-namespace Recoil.Zbd.Tests;
+namespace zStudio.Tests;
 
 public sealed class MissionPlacementWorkTests
 {
@@ -282,7 +282,7 @@ public sealed class MissionPlacementWorkTests
     }
 
     [Fact]
-    public void PickupRowsShareCompleteUppercaseOnlyIdentityWithoutCanonicalizingThePath()
+    public void PickupRowsShareFullNormalizedSourceStringsAndKeepDistinctRecordIdentities()
     {
         var world = PickupWorld();
         string archive = "mixed/../" + new string('p', 80) + ".zbd", resource = "puppies_" + new string('q', 80) + ".zrd";
@@ -292,10 +292,12 @@ public sealed class MissionPlacementWorkTests
         Assert.Equal(new[] { 0, 1, 2 }, identities.Select(i => i.RecordIndex));
         Assert.All(identities, i =>
         {
-            Assert.Equal(archive.ToUpperInvariant(), i.ArchivePath); Assert.Equal(resource.ToUpperInvariant(), i.ResourceName);
+            // Match the canonical archive identity used by the placement editing store, including mixed separators.
+            Assert.Equal(Path.GetFullPath(archive).ToUpperInvariant(), i.ArchivePath); Assert.Equal(resource.ToUpperInvariant(), i.ResourceName);
+            Assert.Equal(4, i.AssetIndex);
             Assert.Same(identities[0].ArchivePath, i.ArchivePath); Assert.Same(identities[0].ResourceName, i.ResourceName);
         });
-        Assert.Contains("..", identities[0].ArchivePath); Assert.NotEqual(identities[0], identities[1]);
+        Assert.NotEqual(identities[0], identities[1]);
     }
 
     [Fact]
@@ -379,17 +381,17 @@ public sealed class MissionPlacementWorkTests
         public int Reads { get; private set; }
         public string Value { get { Reads++; return "not serialized during admission"; } }
     }
-    private static MissionSceneContext Build(ZbdDocument world, MissionPlacementBudget budget, JsonNode? actors, JsonNode? vehicles = null)
+    private static MissionSceneContext Build(AssetDocument world, MissionPlacementBudget budget, JsonNode? actors, JsonNode? vehicles = null)
         => MissionSceneLoader.BuildWithBudget(world, budget, null, actors, vehicles ?? Vehicles("tank"), null, token: Token);
-    private static ZbdDocument World(params GameNode[] nodes)
+    private static AssetDocument World(params GameNode[] nodes)
     {
         GameScene scene = new(); scene.Nodes.AddRange(nodes);
         return new(Path.GetFullPath("placement-work.zbd"), new(0, DateTime.MinValue), new(FormatFamily.GameZ, 15, Recognition.Supported, "test"), Array.Empty<byte>()) { Scene = scene };
     }
     private static GameNode Node(int index, string name, string kind = "object3d", int[]? parents = null, int[]? children = null)
         => new(index, name, kind, null, parents ?? [], children ?? [], new() { ["flags"] = 4 }, new() { ["flags"] = 8 });
-    private static ZbdDocument PickupWorld() => World(Node(0, "tank"), Node(1, "pu001", children: [2]), Node(2, "bvol", parents: [1]), Node(3, "world", "world", children: [0, 0]));
-    private static string[] Snapshot(ZbdDocument world) => world.Scene!.Nodes.Select(n => $"{n.Index}:{n.Name}:{string.Join(',', n.Parents)}:{string.Join(',', n.Children)}:{n.Data.ToJsonString()}:{n.Metadata.ToJsonString()}").ToArray();
+    private static AssetDocument PickupWorld() => World(Node(0, "tank"), Node(1, "pu001", children: [2]), Node(2, "bvol", parents: [1]), Node(3, "world", "world", children: [0, 0]));
+    private static string[] Snapshot(AssetDocument world) => world.Scene!.Nodes.Select(n => $"{n.Index}:{n.Name}:{string.Join(',', n.Parents)}:{string.Join(',', n.Children)}:{n.Data.ToJsonString()}:{n.Metadata.ToJsonString()}").ToArray();
     private static JsonObject Arr(params JsonNode[] nodes) => new() { ["type"] = "array", ["children"] = new JsonArray(nodes) };
     private static JsonObject Str(string value) => new() { ["type"] = "string", ["value"] = value };
     private static JsonObject Num(float value) => new() { ["type"] = "float", ["value"] = value };

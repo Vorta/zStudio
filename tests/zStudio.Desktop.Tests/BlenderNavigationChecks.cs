@@ -11,16 +11,16 @@ using HelixToolkit;
 using HelixToolkit.Wpf.SharpDX;
 using ModelContextProtocol.Client;
 using ModelContextProtocol.Protocol;
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Core.Animation;
-using Recoil.Zbd.Desktop;
-using Recoil.Zbd.Mcp;
-using Recoil.Zbd.Rendering;
+using zStudio.Core;
+using zStudio.Core.Animation;
+using zStudio.Desktop;
+using zStudio.Mcp;
+using zStudio.Rendering;
 using Xunit;
 using MeshGeometry3D = HelixToolkit.SharpDX.MeshGeometry3D;
 using ProjectionCamera = HelixToolkit.Wpf.SharpDX.ProjectionCamera;
 
-namespace Recoil.Zbd.Desktop.Tests;
+namespace zStudio.Desktop.Tests;
 
 internal static class BlenderNavigationChecks
 {
@@ -372,7 +372,7 @@ internal static class BlenderNavigationChecks
     {
         using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(25));
         var main = new MainWindow { Left = -12000, ShowInTaskbar = false }; main.Show();
-        var source = new ZbdDocument("camera-fixture", new(0, DateTime.MinValue), new(FormatFamily.GameZ, 15, Recognition.Supported, "fixture"), ReadOnlyMemory<byte>.Empty);
+        var source = new AssetDocument("camera-fixture", new(0, DateTime.MinValue), new(FormatFamily.GameZ, 15, Recognition.Supported, "fixture"), ReadOnlyMemory<byte>.Empty);
         using var doc = new DocumentModel(source); main.ViewModel.Documents.Add(doc);
         Set("shownDocument", doc); Set("scene", scene); Set("shownAsset", source.Add(AssetKind.World, 0, "Whole world", 0, 0));
         ((FrameworkElement)main.FindName("SceneHost")).Visibility = Visibility.Visible;
@@ -386,10 +386,9 @@ internal static class BlenderNavigationChecks
             await using var client = await McpClient.CreateAsync(new StreamClientTransport(pipe, pipe), cancellationToken: deadline.Token);
             scene.RestoreView(initial); await Call("view", new() { ["view"] = "top" }); Assert.Equal("top", scene.CaptureView().AxisView);
             var top = scene.CaptureView();
-            var menu = (MenuItem)typeof(MainWindow).GetField("cameraNavigationMenu", Fields)!.GetValue(main)!;
-            var menuItems = menu.Items.Cast<MenuItem>().ToDictionary(i => (string)i.Tag);
-            Assert.Equal(new[] { "back", "bottom", "follow", "frameAll", "frameSelected", "front", "left", "opposite", "orthographic", "perspective", "right", "top" }, menuItems.Keys.Order());
-            menuItems["front"].RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent)); var gui = scene.CaptureView(); Assert.Equal("front", gui.AxisView);
+            // The view chip's named views run the same command as camera view.
+            typeof(MainWindow).GetMethod("CameraNavigationClick", Fields)!.Invoke(main, [new MenuItem { Tag = "front" }, new RoutedEventArgs(MenuItem.ClickEvent)]);
+            var gui = scene.CaptureView(); Assert.Equal("front", gui.AxisView);
             scene.RestoreView(top); await Call("view", new() { ["view"] = "front" }); Assert.Equal(gui, scene.CaptureView());
             await Call("projection", new() { ["projection"] = "orthographic", ["width"] = .5 }); Assert.Equal(.5, scene.CaptureView().OrthographicWidth);
             foreach (string projection in new[] { "perspective", "orthographic", "perspective" })
@@ -424,7 +423,7 @@ internal static class BlenderNavigationChecks
             typeof(SceneViewport).GetProperty(nameof(SceneViewport.IsPickupDragging))!.SetValue(scene, false);
 
             var package = new AnimationPackage { Prefix = new byte[72], Tail = [] }; package.Entries.Add(new(new byte[308], 0, 0));
-            using var animationDoc = new DocumentModel(new ZbdDocument("animation-fixture", new(0, DateTime.MinValue), new(FormatFamily.Animation, 28, Recognition.Supported, "fixture"), ReadOnlyMemory<byte>.Empty) { Animations = package });
+            using var animationDoc = new DocumentModel(new AssetDocument("animation-fixture", new(0, DateTime.MinValue), new(FormatFamily.Animation, 28, Recognition.Supported, "fixture"), ReadOnlyMemory<byte>.Empty) { Animations = package });
             using var editor = new AnimationEditor(animationDoc, 0, new AssetResolver(Path.GetTempPath()), CancellationToken.None);
             Set("animation", editor);
             try

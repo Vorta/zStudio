@@ -1,6 +1,6 @@
 using System.Numerics;
 
-namespace Recoil.Zbd.Core.Animation;
+namespace zStudio.Core.Animation;
 
 public sealed partial class AnimationPlayer
 {
@@ -47,7 +47,8 @@ public sealed partial class AnimationPlayer
                 if (node != null)
                 {
                     Vector3 angles = ev.Vector(16); int flags = ev.I32(12) & 7;
-                    if (flags is not (0 or 1) && NodeRef(instance, ev.I16(30)) is Node basis) angles += basis.Euler;
+                    if (flags is not (0 or 1) && NodeRef(instance, ev.I16(30)) is Node basis)
+                    { context.InitializationTransforms?.Reads.Add(basis.Source); angles += basis.Euler; }
                     Rotation(node, angles, flags == 1);
                 }
                 return 2;

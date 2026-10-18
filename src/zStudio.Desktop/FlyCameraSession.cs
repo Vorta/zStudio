@@ -1,9 +1,9 @@
 using System.ComponentModel;
 using System.Windows;
 using System.Windows.Input;
-using Recoil.Zbd.Rendering;
+using zStudio.Rendering;
 
-namespace Recoil.Zbd.Desktop;
+namespace zStudio.Desktop;
 
 /// <summary>Owns input only while the user explicitly activates the visible static 3D viewer.</summary>
 internal sealed class FlyCameraSession : IDisposable

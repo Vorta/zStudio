@@ -1,6 +1,6 @@
-using Recoil.Zbd.Core.Formats;
+using zStudio.Core.Formats;
 
-namespace Recoil.Zbd.Core;
+namespace zStudio.Core;
 
 /// <summary>Raw buffers retained by one texture preparation, including originals and complete replacements.
 /// This is an admission bound, not an estimate of parsed object or undo-history heap usage.</summary>
@@ -13,7 +13,7 @@ internal sealed class EditBufferBudget
         if (maximumBytes < 0 || maximumBytes > FormatRegistry.MaximumDocumentBytes) throw new ArgumentOutOfRangeException(nameof(maximumBytes));
         Remaining = maximumBytes;
     }
-    public void Document(ZbdDocument document)
+    public void Document(AssetDocument document)
     {
         if (documents.Contains(document)) return;
         Reserve(document.Bytes.Length); documents.Add(document);

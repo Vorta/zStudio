@@ -1,10 +1,10 @@
 using System.Numerics;
 using System.Buffers;
 using System.Collections.Frozen;
-using Recoil.Zbd.Core.Animation;
-using Recoil.Zbd.Core.Formats;
+using zStudio.Core.Animation;
+using zStudio.Core.Formats;
 
-namespace Recoil.Zbd.Core;
+namespace zStudio.Core;
 
 /// <summary>Deterministic authored motion sampling; no gait, aiming, IK, or gameplay simulation.</summary>
 public sealed class MotionPreview
@@ -22,7 +22,7 @@ public sealed class MotionPreview
     public IReadOnlyList<string> Diagnostics { get; }
     public IReadOnlySet<int> InspectionNodes { get; }
     public int DiagnosticCount => Diagnostics is PreviewNotes notes ? notes.TotalCount : Diagnostics.Count;
-    public MotionPreview(MotionClip clip, ZbdDocument library, MechAssembly assembly, CancellationToken token = default)
+    public MotionPreview(MotionClip clip, AssetDocument library, MechAssembly assembly, CancellationToken token = default)
     {
         token.ThrowIfCancellationRequested();
         this.clip = clip; scene = library.Scene ?? throw new InvalidDataException("A decoded mech library is required."); this.assembly = assembly;

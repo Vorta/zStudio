@@ -1,10 +1,10 @@
 using System.Runtime.InteropServices;
 using System.Text.Json;
 using System.Text.Json.Nodes;
-using Recoil.Zbd.Core.Gltf;
-using Recoil.Zbd.Core.Terrain;
+using zStudio.Core.Gltf;
+using zStudio.Core.Terrain;
 
-namespace Recoil.Zbd.Core.Sources;
+namespace zStudio.Core.Sources;
 
 /// <summary>
 /// Conversion repeats each selected piece's primitives, even when its input mesh is shared. Reserve the complete

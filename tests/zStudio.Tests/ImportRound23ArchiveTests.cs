@@ -1,11 +1,11 @@
 using System.Buffers.Binary;
 using System.Text;
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Core.Export;
-using Recoil.Zbd.Core.Formats;
+using zStudio.Core;
+using zStudio.Core.Export;
+using zStudio.Core.Formats;
 using Xunit;
 
-namespace Recoil.Zbd.Tests;
+namespace zStudio.Tests;
 
 public sealed class ImportRound23ArchiveTests
 {
@@ -136,7 +136,7 @@ public sealed class ImportRound23ArchiveTests
         Assert.True(document.Assets[1].Metadata["typed_decode_limited"]!.GetValue<bool>());
     }
 
-    private static ZbdDocument Document(byte[] bytes, string path = "archive.zbd") => new(path, new(bytes.Length, DateTime.MinValue),
+    private static AssetDocument Document(byte[] bytes, string path = "archive.zbd") => new(path, new(bytes.Length, DateTime.MinValue),
         new(FormatFamily.Archive, 1, Recognition.Supported, "fixture"), bytes);
 
     private static byte[] Overlapping(int records, int payload, bool aliases = false)

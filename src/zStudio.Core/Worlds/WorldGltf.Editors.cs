@@ -1,133 +1,12 @@
 using System.Numerics;
 using System.Text.Json.Nodes;
-using System.Text.RegularExpressions;
-using Recoil.Zbd.Core.Gltf;
+using zStudio.Core.Gltf;
 
-namespace Recoil.Zbd.Core.Worlds;
+namespace zStudio.Core.Worlds;
 
-/// <summary>Rules for model files an editor that knows nothing of the engine wrote back (Blender).</summary>
+/// <summary>Hierarchy and shared-instance checks used by source editing and imports.</summary>
 public static partial class WorldGltf
 {
-    /// <summary>
-    /// Marks, in a copy for an editor, a node that has no zone of its own and none from its parents in the file: it takes
-    /// its zone from whatever loads the file (0xFF for a script's load, the referencing node's for a reference).
-    /// </summary>
-    public const string ZoneFromLoad = "zoneFromLoad";
-
-    /// <summary>
-    /// Prepares a copy of a model for an editor that moves nodes freely: a node without a zone of its own takes its
-    /// parent's, so a move would change it. Each such node is given the zone its parents in the file give it, or, when that
-    /// comes from whatever loads the file, the <see cref="ZoneFromLoad"/> mark. A node without a name (1999 m9's node under
-    /// sgate1–sgate8) states its empty engine name: Blender names it after its place in the file (<c>Node_459</c>), which
-    /// would otherwise become its engine name and differ between the copies of a shared node. <see cref="ImplicitZones"/>
-    /// undoes all of this.
-    /// </summary>
-    public static void ExplicitZones(JsonObject root)
-    {
-        if (root["nodes"] is not JsonArray nodes) return;
-        foreach (var item in nodes)
-            if (item is JsonObject node && string.IsNullOrEmpty(Text(node["name"])) && ((node["extras"] as JsonObject)?[Key] as JsonObject)?["name"] == null && Engine(node) is { } named)
-                named["name"] = "";
-        var parents = Parents(nodes);
-        var zones = FileZones(nodes, parents);
-        // A shared node is one node, which import takes, with its zone, from its first copy in the file. A later copy
-        // without a zone of its own under a parent of another zone states the first copy's, as the build reads it, so the
-        // copies agree when the editor writes them back (CheckInstances refuses copies that differ).
-        Dictionary<long, uint?> shared = [];
-        bool stated = false;
-        foreach (int i in ImportOrder(root, nodes))
-        {
-            if (nodes[i] is not JsonObject node || Mark(((node["extras"] as JsonObject)?[Key] as JsonObject)?["instance"]) is not { } mark) continue;
-            if (!shared.TryGetValue(mark, out var first)) { shared[mark] = zones[i].Zone; continue; }
-            if (first is { } zone && zones[i].Zone != zone && StatedZone((node["extras"] as JsonObject)?[Key]) == null && Engine(node) is { } copy)
-            { WriteNodeZoneValue(copy, ReadNodeZoneValue(copy, DefaultZone, "the source node") & ~255u | zone); stated = true; }
-        }
-        if (stated) zones = FileZones(nodes, parents);
-        for (int i = 0; i < nodes.Count; i++)
-        {
-            if (nodes[i] is not JsonObject node || StatedZone((node["extras"] as JsonObject)?[Key]) != null || Engine(node) is not { } engine) continue;
-            if (zones[i].Zone is { } zone) WriteNodeZoneValue(engine, ReadNodeZoneValue(engine, DefaultZone, "the source node") & ~255u | zone);
-            else engine[ZoneFromLoad] = true;
-        }
-    }
-
-    /// <summary>
-    /// Undoes <see cref="ExplicitZones"/> on what the editor wrote: a zone the node's new parent in the file gives it anyway
-    /// is left out again, one a move made necessary stays, and the marks go. A marked node moved under a node that had a
-    /// zone in the file would take that zone instead of the one it had, which the file does not hold: refused. (Under a
-    /// marked node the artist gave a zone, it takes that zone, as the artist meant.) A node whose engine name is empty has
-    /// no name again, so the name the editor made up for it (<c>Node_459</c>) does not stay in the file.
-    /// </summary>
-    public static void ImplicitZones(JsonObject root, string path)
-    {
-        if (root["nodes"] is not JsonArray nodes) return;
-        var parents = Parents(nodes); var zones = FileZones(nodes, parents);
-        bool[] marks = [.. nodes.Select(n => ((n as JsonObject)?["extras"] as JsonObject)?[Key] is JsonObject e && e[ZoneFromLoad] != null)];
-        for (int i = 0; i < nodes.Count; i++)
-        {
-            if (nodes[i] is not JsonObject node || (node["extras"] as JsonObject)?[Key] is not JsonObject engine) continue;
-            // Without a name, the engine name is the empty one the node states.
-            if (Text(engine["name"]) is "") { engine.Remove("name"); node.Remove("name"); }
-            var (passed, owner) = parents[i] >= 0 ? zones[parents[i]] : (null, -1);
-            bool marked = engine.Remove(ZoneFromLoad);
-            if (StatedZone(engine) is { } own)
-            {
-                if (own == passed && engine["zone"] != null && engine["zoneWord"] == null && engine["zonePadding"] == null)
-                engine.Remove("zone");
-            }
-            else if (marked && passed is { } zone && !marks[owner])
-                throw new InvalidDataException($"{path}: {JsonData.ShownText(EngineName(node))} took its zone from what loads the file; under {JsonData.ShownText(EngineName((JsonObject)nodes[parents[i]]!))} it would take zone {zone} instead. Give it a zone of its own (custom property recoil → zone, 'any' for any zone) or move it back.");
-            // A node that had no engine values gets none.
-            if (engine.Count == 0 && node["extras"] is JsonObject extras) { extras.Remove(Key); if (extras.Count == 0) node.Remove("extras"); }
-        }
-    }
-
-    /// <summary>
-    /// Makes the engine name a node records follow a rename made in the editor, in a file it wrote back (a Blender export of
-    /// a checkout). A node records its name (<c>extras.recoil.name</c>) where the name repeats, looks like a Blender copy or,
-    /// in a checkout, is empty, and import reads that record, not the node's name, so a node renamed in Blender would keep
-    /// its old name. Names are compared without the editor's copy suffix (<c>.001</c>). A node is renamed when its name is
-    /// neither the name it records nor one a node of the model as the project holds it (<paramref name="project"/>) has with
-    /// that record, while the record is one the project's model has, or empty for its unnamed nodes: a record changed in the
-    /// editor (recoil → name, also to name an unnamed node) is the artist's and stays. An unnamed node keeps no name while
-    /// the editor shows the name it makes up for one (Blender's <c>Node_459</c>, or the name of the node's mesh). The record
-    /// becomes the name without the suffix; a name the engine cannot store is refused, saying to rename the node. Returns
-    /// each rename (old and new engine name) in the order of the file's nodes.
-    /// </summary>
-    public static IReadOnlyList<(string Old, string New)> FollowShownNames(JsonObject root, JsonObject project, string path)
-    {
-        if (root["nodes"] is not JsonArray nodes) return [];
-        var meshes = root["meshes"] as JsonArray ?? [];
-        // The records the project's model gives its nodes, and the names it gives them with: a record among them is the
-        // checkout's, not one typed in the editor, and a name the project gives it with is no rename.
-        HashSet<string> recorded = new(StringComparer.Ordinal);
-        HashSet<(string Name, string Record)> given = [];
-        foreach (var item in project["nodes"] as JsonArray ?? [])
-        {
-            if (item is not JsonObject node) continue;
-            string name = Text(node["name"]) ?? "";
-            if (Text(((node["extras"] as JsonObject)?[Key] as JsonObject)?["name"]) is { } record) { recorded.Add(record); given.Add((BlenderSuffix().Replace(name, ""), record)); }
-            else if (name.Length == 0) recorded.Add("");
-        }
-        List<(string, string)> renamed = [];
-        foreach (var item in nodes)
-        {
-            if (item is not JsonObject node || (node["extras"] as JsonObject)?[Key] is not JsonObject engine || Text(engine["name"]) is not { } old
-                || !recorded.Contains(old) || Text(node["name"]) is not { Length: > 0 } name) continue;
-            string shown = BlenderSuffix().Replace(name, "");
-            if (shown.Length == 0 || shown == BlenderSuffix().Replace(old, "") || given.Contains((shown, old))) continue;
-            // The name Blender gives a node without one: Node_ and its place in the file, or a mesh object's mesh name.
-            if (old.Length == 0 && (MadeUpName().IsMatch(shown)
-                || Index(node["mesh"], meshes.Count) is { } mesh && Text((meshes[mesh] as JsonObject)?["name"]) is { } meshName && BlenderSuffix().Replace(meshName, "") == shown)) continue;
-            if (!IsEngineName(shown))
-                throw new InvalidDataException($"{path}: node {JsonData.ShownText(name)} was renamed in Blender (from {(old.Length == 0 ? "an unnamed node" : JsonData.ShownText(old))}), but the engine stores names of at most 35 Latin-1 characters without NUL. Give it a shorter name in Blender and export again.");
-            engine["name"] = shown;
-            renamed.Add((old, shown));
-        }
-        return renamed;
-    }
-    [GeneratedRegex(@"\ANode_\d+\z")] private static partial Regex MadeUpName();
-
     /// <summary>The nodes in the order import reaches them: the scene's roots in order, each node before its children.</summary>
     internal static List<int> ImportOrder(JsonObject root, JsonArray nodes)
     {
@@ -164,40 +43,6 @@ public static partial class WorldGltf
                 if (Index(child, nodes.Count) is { } c && c != i && parents[c] < 0) parents[c] = i;
         return parents;
     }
-    /// <summary>
-    /// The zone each node has from the file (its own or its nearest ancestor's) and the node that states it, or null and −1
-    /// when it comes from what loads the file.
-    /// </summary>
-    private static (uint? Zone, int Owner)[] FileZones(JsonArray nodes, int[] parents)
-    {
-        var stated = nodes.Select(n => StatedZone(((n as JsonObject)?["extras"] as JsonObject)?[Key])).ToArray();
-        var zones = new (uint? Zone, int Owner)[nodes.Count]; var done = new bool[nodes.Count]; var walked = new int[nodes.Count]; Array.Fill(walked, -1);
-        List<int> chain = [];
-        for (int i = 0; i < nodes.Count; i++)
-        {
-            if (done[i]) continue;
-            // Up to a node already known, one that states a zone, or a root (whose zone comes from what loads the file); a
-            // cycle (invalid glTF) ends where it closes.
-            chain.Clear(); (uint? Zone, int Owner) inherited = (null, -1);
-            for (int at = i; at >= 0 && walked[at] != i; at = parents[at])
-            {
-                if (done[at]) { inherited = zones[at]; break; }
-                walked[at] = i; chain.Add(at);
-                if (stated[at] != null) break;
-            }
-            for (int k = chain.Count - 1; k >= 0; k--) { int at = chain[k]; zones[at] = inherited = stated[at] is { } own ? (own, at) : inherited; done[at] = true; }
-        }
-        return zones;
-    }
-    /// <summary>A node's engine values, made when it has none; null when its extras have another shape.</summary>
-    private static JsonObject? Engine(JsonObject node)
-    {
-        if (node["extras"] is null) node["extras"] = new JsonObject();
-        if (node["extras"] is not JsonObject extras) return null;
-        if (extras[Key] is null) extras[Key] = new JsonObject();
-        return extras[Key] as JsonObject;
-    }
-
     /// <summary>
     /// Refuses a file whose copies of a shared node (<c>extras.recoil.instance</c>) differ in anything import reads: name,
     /// engine values, zone, transform, mesh or children, compared copy against first copy below the copies themselves.
@@ -283,7 +128,7 @@ public static partial class WorldGltf
             if (!JsonNode.DeepEquals(value, other)) return false;
         }
         return compared == y.Count(p => !Ignored(p.Key));
-        static bool Ignored(string key) => key is "zone" or "instance" or "name" or ZoneFromLoad || NodeFlagFields.Contains(key);
+        static bool Ignored(string key) => key is "zone" or "instance" or "name" || NodeFlagFields.Contains(key);
     }
     private static bool SameMatrix(Matrix4x4 a, Matrix4x4 b)
     {

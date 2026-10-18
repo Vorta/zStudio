@@ -1,10 +1,10 @@
 using System.Buffers.Binary;
 using System.Text;
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Core.Formats;
+using zStudio.Core;
+using zStudio.Core.Formats;
 using Xunit;
 
-namespace Recoil.Zbd.Tests;
+namespace zStudio.Tests;
 
 public sealed class ResourceEditingTests
 {
@@ -80,7 +80,7 @@ public sealed class ResourceEditingTests
         var tree = Assert.IsType<ZrdNode>(Assert.Single(valid.Assets).Content);
         var edits = new ResourceEditSession(valid);
         Assert.Same(tree, edits.Tree(Assert.Single(edits.Current.Members), token));
-        var uncheckedDocument = new ZbdDocument("malformed.zrd", new(4, DateTime.MinValue), valid.Probe, new byte[] { 1,0,0,0 });
+        var uncheckedDocument = new AssetDocument("malformed.zrd", new(4, DateTime.MinValue), valid.Probe, new byte[] { 1,0,0,0 });
         Assert.Throws<InvalidDataException>(() => new ResourceEditSession(uncheckedDocument));
         using var cancellation = new CancellationTokenSource(); cancellation.Cancel();
         Assert.Throws<OperationCanceledException>(() => FormatRegistry.Default.OpenBytes("valid.zrd", valid.Bytes.ToArray(), token: cancellation.Token));

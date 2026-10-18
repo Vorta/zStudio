@@ -1,9 +1,9 @@
 using System.Numerics;
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Core.Formats;
+using zStudio.Core;
+using zStudio.Core.Formats;
 using Xunit;
 
-namespace Recoil.Zbd.Tests;
+namespace zStudio.Tests;
 
 public sealed class MissionSessionIdentityTests
 {
@@ -193,7 +193,7 @@ public sealed class MissionSessionIdentityTests
 
     private static MissionPickupSource Copy(MissionPickupSource source) => source with
     { ArchivePath = new(source.ArchivePath.ToCharArray()), ResourceName = new(source.ResourceName.ToCharArray()) };
-    private static ZbdDocument Archive(string path, params (string Name, ZrdNode Root)[] entries) =>
+    private static AssetDocument Archive(string path, params (string Name, ZrdNode Root)[] entries) =>
         FormatRegistry.Default.OpenBytes(Path.GetFullPath(path), ResourceEditingTests.Archive(entries.Select(e => (e.Name, ZrdWriter.Write(e.Root, Token))).ToArray()), token: Token);
     private static ZrdNode Pickups(params float[] xs) => A(A(xs.Select(x => A(S("NANITE"), I(1), A(F(x), F(2), F(3)), A(F(0), F(0), F(0)), F(0))).ToArray()));
     private static ZrdNode Actor(float x) => A(I(0), A(F(x), F(2), F(3)), F(0));

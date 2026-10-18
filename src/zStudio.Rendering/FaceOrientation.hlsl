@@ -1,6 +1,8 @@
 // Rasterized winding includes instance, animation and mirrored transforms.
-// Deliberately independent of vertex normals, lighting, textures and opacity.
-float4 PSMain(bool front : SV_IsFrontFace) : SV_TARGET
+// Tint the normal appearance once, retaining authored alpha and texture holes.
+float4 PSOrientation(TintPixel input, bool front : SV_IsFrontFace) : SV_TARGET
 {
-    return front ? float4(0, 0, 1, 1) : float4(1, 0, 0, 1);
+    float4 result = NormalAppearance(input);
+    result.rgb = lerp(result.rgb, front ? float3(0, 0, 1) : float3(1, 0, 0), .5);
+    return result;
 }

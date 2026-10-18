@@ -1,8 +1,8 @@
 using System.Windows;
 using System.Windows.Threading;
-using Recoil.Zbd.Rendering;
+using zStudio.Rendering;
 
-namespace Recoil.Zbd.Desktop;
+namespace zStudio.Desktop;
 
 public partial class MainWindow
 {
@@ -28,7 +28,9 @@ public partial class MainWindow
         {
             if (request != flyRequest || FlyEnabled.IsChecked != true) return;
             if (flyCamera == null) { SynchronizeFly(); return; }
-            if (!flyCamera.TryStart(out string? error)) { ViewModel.Status = error ?? "Fly camera unavailable."; SynchronizeFly(); }
+            bool painting = scene?.ZonePaintActive == true;
+            if (!flyCamera.TryStart(out string? error)) { Notice(error ?? "Fly camera unavailable."); SynchronizeFly(); }
+            else if (painting) RefreshZoneDraftView(); // Flycam ended zone painting.
         });
     }
 
@@ -41,6 +43,8 @@ public partial class MainWindow
             FlyEnabled.IsChecked = active;
             FlyHint.Visibility = active ? Visibility.Visible : Visibility.Collapsed;
             if (active) FlyHintText.Text = $"Fly camera · {scene!.FlySpeed:0.##} units/s\nWASD move · Space/C up/down · Mouse look · Wheel speed · Esc exit";
+            // A source map shows the Flycam banner and an accent frame instead.
+            RefreshViewportChips();
         }
         finally { synchronizingFly = false; }
     }

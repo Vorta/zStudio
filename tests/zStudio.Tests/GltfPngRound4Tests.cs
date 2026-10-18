@@ -4,11 +4,11 @@ using System.IO.Compression;
 using System.Numerics;
 using System.Text;
 using System.Text.Json.Nodes;
-using Recoil.Zbd.Core.Export;
-using Recoil.Zbd.Core.Gltf;
+using zStudio.Core.Export;
+using zStudio.Core.Gltf;
 using Xunit;
 
-namespace Recoil.Zbd.Tests;
+namespace zStudio.Tests;
 
 /// <summary>
 /// glTF extensions the reader implements (KHR_mesh_quantization required by a file, KHR_texture_transform on the base-colour

@@ -8,15 +8,15 @@ using HelixToolkit;
 using HelixToolkit.Maths;
 using HelixToolkit.SharpDX;
 using HelixToolkit.Wpf.SharpDX;
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Core.Animation;
-using Recoil.Zbd.Core.Formats;
+using zStudio.Core;
+using zStudio.Core.Animation;
+using zStudio.Core.Formats;
 using SharpDX.Direct3D11;
 using DiffuseMaterial = HelixToolkit.Wpf.SharpDX.DiffuseMaterial;
 using MeshGeometry3D = HelixToolkit.SharpDX.MeshGeometry3D;
 using HCamera = HelixToolkit.Wpf.SharpDX.PerspectiveCamera;
 
-namespace Recoil.Zbd.Rendering;
+namespace zStudio.Rendering;
 
 public sealed partial class SceneViewport
 {
@@ -65,7 +65,9 @@ public sealed partial class SceneViewport
         else { Clear(); AttachEffects(); QueueRenderSize(); }
         token.ThrowIfCancellationRequested();
         if (generation != expectedGeneration) return;
-        previewTextures ??= new PreviewTextureCache(textureMemory, resolver.BeginTextureLookup(context.World.Path), masks: false);
+        previewTextures ??= context.World is zStudio.Core.Sources.SourceSceneSnapshot source
+            ? new PreviewTextureCache(textureMemory, source, false)
+            : new PreviewTextureCache(textureMemory, resolver.BeginTextureLookup(context.World.Path), masks: false);
         animationContext = context; animationResolver = resolver; animationToken = token;
         Mission = context.Mission; PreviewScene = context.Scene; InspectionNodes = context.InspectionNodes; InspectionSourcePath = context.World.Path; horizonEnabled = showHorizon; ConfigureHorizon(context.Scene);
         // Helix 3.1.2's OIT paths drop the unlit DiffuseMaterial effect cards.
@@ -293,7 +295,8 @@ public sealed partial class SceneViewport
         {
             RegisterInspectionMesh(mesh, part.MaterialIndex, pose.Id, pose.SourceNode, pose.Model);
             inspectionPolygons[mesh] = part.VertexPolygons;
-            int source = pose.SourceNode; mesh.MouseDown3D += (_, e) =>
+            // The horizon is backdrop: clicking the sky selects nothing.
+            int source = pose.SourceNode; if (!horizon) mesh.MouseDown3D += (_, e) =>
             {
                 if (!IsPickupDragging && e is MouseDown3DEventArgs { OriginalInputEventArgs: System.Windows.Input.MouseButtonEventArgs { ChangedButton: System.Windows.Input.MouseButton.Left } })
                 { SelectFramingNode(source); NodeSelected?.Invoke(source); }

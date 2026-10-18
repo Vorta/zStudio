@@ -205,27 +205,27 @@
         "resolved": "9.0.0",
         "contentHash": "hyJB4UlpAi19Xr9AXzu2NuagKC4lPfHObNMEAA0HmqFz2rX7wKgzeYzO/jM/eBHDhnUGFFEjk5cOoJaxqg5J4A=="
       },
-      "Recoil.Zbd.Application": {
+      "zStudio.Application": {
         "type": "Project"
       },
-      "Recoil.Zbd.Core": {
+      "zStudio.Core": {
         "type": "Project",
         "dependencies": {
           "Clipper2": "[2.0.0, )"
         }
       },
-      "Recoil.Zbd.Mcp": {
+      "zStudio.Mcp": {
         "type": "Project",
         "dependencies": {
           "ModelContextProtocol.Core": "[2.2.0, )",
-          "Recoil.Zbd.Application": "[0.8.0, )"
+          "zStudio.Application": "[0.8.0, )"
         }
       },
-      "Recoil.Zbd.Rendering": {
+      "zStudio.Rendering": {
         "type": "Project",
         "dependencies": {
           "HelixToolkit.Wpf.SharpDX": "[3.1.2, )",
-          "Recoil.Zbd.Core": "[0.8.0, )"
+          "zStudio.Core": "[0.8.0, )"
         }
       },
       "Clipper2": {

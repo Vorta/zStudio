@@ -1,11 +1,11 @@
 using System.Security.Cryptography;
 using System.Text.Json;
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Core.Export;
-using Recoil.Zbd.Core.Formats;
+using zStudio.Core;
+using zStudio.Core.Export;
+using zStudio.Core.Formats;
 using Xunit;
 
-namespace Recoil.Zbd.Tests;
+namespace zStudio.Tests;
 
 public sealed class ModelReplacementTests
 {
@@ -13,7 +13,7 @@ public sealed class ModelReplacementTests
     public void TextureAppendRejectsOversizedOutputBeforeReadingOrAllocatingIt()
     {
         using var memory = new LengthOnlyMemory((int)FormatRegistry.MaximumDocumentBytes - 1);
-        var source = new ZbdDocument("texture.zbd", new(memory.Bytes.Length, DateTime.MinValue), new(FormatFamily.TexturePack, 1, Recognition.Supported, "size boundary"), memory.Bytes);
+        var source = new AssetDocument("texture.zbd", new(memory.Bytes.Length, DateTime.MinValue), new(FormatFamily.TexturePack, 1, Recognition.Supported, "size boundary"), memory.Bytes);
         long allocated = GC.GetAllocatedBytesForCurrentThread();
         var error = Assert.Throws<InvalidDataException>(() => TexturePackWriter.Append(source, "new", Image, TestContext.Current.CancellationToken));
         allocated = GC.GetAllocatedBytesForCurrentThread() - allocated;
@@ -81,7 +81,7 @@ public sealed class ModelReplacementTests
         var source = FormatRegistry.Default.OpenBytes("gamez.zbd",bytes,token:TestContext.Current.CancellationToken);
         Assert.Throws<InvalidDataException>(()=>ModelReplacementWriter.Replace(source,new Dictionary<int,ImportedMesh> { [1]=ModelFixture.Mesh },"new",TestContext.Current.CancellationToken));
     }
-    private static (float[] Node, float[] Model, float[] Child, byte[] Sphere) NodeBounds(ZbdDocument document, int node)
+    private static (float[] Node, float[] Model, float[] Child, byte[] Sphere) NodeBounds(AssetDocument document, int node)
     {
         byte[] header = document.Slice(document.GameZLayout!.NodeOffset + node * 196L, 196).ToArray();
         float[] Box(int offset) => Enumerable.Range(0,6).Select(i=>System.Buffers.Binary.BinaryPrimitives.ReadSingleLittleEndian(header.AsSpan(offset + i * 4))).ToArray();

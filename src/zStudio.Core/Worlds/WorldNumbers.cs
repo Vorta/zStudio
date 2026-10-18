@@ -1,5 +1,5 @@
 using System.Numerics;
-namespace Recoil.Zbd.Core.Worlds;
+namespace zStudio.Core.Worlds;
 
 /// <summary>Finite stored and derived values required by the source compiler and world writer.</summary>
 internal static class WorldNumbers

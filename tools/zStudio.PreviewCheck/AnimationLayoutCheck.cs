@@ -11,15 +11,15 @@ using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
-using Recoil.Zbd.Core.Animation;
-using Recoil.Zbd.Desktop;
+using zStudio.Core.Animation;
+using zStudio.Desktop;
 
 internal static class AnimationLayoutCheck
 {
     public static int Run(string root, bool treeOnly = false, bool propertiesOnly = false, bool toolbarOnly = false)
     {
         string output = Path.Combine(Path.GetTempPath(), "zstudio-fluent-" + DateTime.Now.ToString("yyyyMMdd-HHmmss")); Directory.CreateDirectory(output);
-        string settings = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "RecoilZbdStudio", "settings.json");
+        string settings = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "zStudio", "settings.json");
         byte[]? original = File.Exists(settings) ? File.ReadAllBytes(settings) : null;
         var app = new App { ShutdownMode = ShutdownMode.OnExplicitShutdown, ProcessCommandLine = false }; app.InitializeComponent(); int exit = 0;
         app.Startup += async (_, _) =>
@@ -270,12 +270,6 @@ internal static class AnimationLayoutCheck
                     layout.Preset = preset; window.Width -= 1; window.UpdateLayout(); window.Width += 1; await Task.Delay(80,timeout.Token);
                     Require(ReferenceEquals(preserved,editor.CurrentFrame) && Equals(camera,editor.Viewport.CaptureView()),"Preset reset player or camera");
                 }
-                // MenuItem children outside an open popup are logical, so use the menu model.
-                var viewMenu = ((Menu)window.FindName("AppMenu")).Items.OfType<MenuItem>().Single(m => m.Header.ToString() == "_View");
-                var density = viewMenu.Items.OfType<MenuItem>().Single(m => m.Header.ToString() == "Density");
-                density.Items.OfType<MenuItem>().Single(m => m.Header.ToString() == "Comfortable").RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
-                await Capture("comfortable"); Require(window.FontSize == 15,"Comfortable density did not apply");
-                density.Items.OfType<MenuItem>().Single(m => m.Header.ToString() == "Compact").RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
                 // Resize the actual quaternion form with an incomplete draft. The existing
                 // controls must reflow, preserving precision/caret and one logical undo.
                 var keyEntry = document.AnimationEdits.Package.Entries.First(e => e.Sequences.Any(s => s.Events.Any(v => v.Type == 12)));

@@ -3,25 +3,16 @@ using System.IO;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Core.Formats;
+using zStudio.Core;
+using zStudio.Core.Formats;
 using Microsoft.Win32;
 
-namespace Recoil.Zbd.Desktop;
+namespace zStudio.Desktop;
 
 public partial class MainWindow
 {
     private void InitializeResourceMenus()
     {
-        MenuItem archive = new() { Header = "Archive members" }, zrd = new() { Header = "ZRD nodes" };
-        EditMenu.Items.Add(new Separator()); EditMenu.Items.Add(archive); EditMenu.Items.Add(zrd);
-        EditMenu.SubmenuOpened += (_, e) =>
-        {
-            if (e.OriginalSource != EditMenu) return;
-            var doc = ViewModel.SelectedDocument; var member = doc?.SelectedAsset?.ResourceId;
-            PopulateArchiveMenu(archive.Items, doc, member); archive.IsEnabled = doc?.ResourceEdits?.IsArchive == true;
-            PopulateZrdMenu(zrd.Items, doc, member, CentralTree.SelectedItem as ResourceTreeItem); zrd.IsEnabled = doc?.ResourceEdits != null && CentralTree.SelectedItem is ResourceTreeItem;
-        };
         MenuItem context = new() { Header = "Edit archive member" }; AssetGrid.ContextMenu.Items.Add(context);
         AssetGrid.ContextMenu.Opened += (_, _) =>
         { var doc = assetContextDocument; context.Visibility = doc?.ResourceEdits?.IsArchive == true ? Visibility.Visible : Visibility.Collapsed; PopulateArchiveMenu(context.Items, doc, contextAsset?.ResourceId); };

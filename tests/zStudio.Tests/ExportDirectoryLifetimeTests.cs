@@ -1,9 +1,9 @@
 using System.Text.Json.Nodes;
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Core.Export;
+using zStudio.Core;
+using zStudio.Core.Export;
 using Xunit;
 
-namespace Recoil.Zbd.Tests;
+namespace zStudio.Tests;
 
 public sealed class ExportDirectoryLifetimeTests
 {
@@ -18,7 +18,7 @@ public sealed class ExportDirectoryLifetimeTests
         try
         {
             using AssetResolver resolver = new(source);
-            ZbdDocument document = new(Path.Combine(source, "input.zbd"), new(2, DateTime.UtcNow), new(FormatFamily.Unknown, null, Recognition.Unknown, "fixture"), new byte[] { 10, 20 });
+            AssetDocument document = new(Path.Combine(source, "input.zbd"), new(2, DateTime.UtcNow), new(FormatFamily.Unknown, null, Recognition.Unknown, "fixture"), new byte[] { 10, 20 });
             document.Add(AssetKind.Raw, 0, "one.bin", 0, 1); document.Add(AssetKind.Raw, 1, "two.bin", 1, 1);
             bool challenged = false;
             var result = await new ExportService(resolver).ExportAsync(document, document.Assets, destination, jsonOnly, progress: new OnReport(p =>

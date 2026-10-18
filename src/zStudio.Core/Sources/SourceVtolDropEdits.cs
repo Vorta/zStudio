@@ -1,9 +1,8 @@
-using System.Buffers.Binary;
-using Recoil.Zbd.Core.Animation;
-using Recoil.Zbd.Core.Formats;
-using Recoil.Zbd.Core.Worlds;
+using zStudio.Core.Animation;
+using zStudio.Core.Formats;
+using zStudio.Core.Worlds;
 
-namespace Recoil.Zbd.Core.Sources;
+namespace zStudio.Core.Sources;
 
 /// <summary>Moves one existing release window by changing only its source CALL_ANIMATION start token.</summary>
 public static class SourceVtolDropEdits
@@ -17,16 +16,16 @@ public static class SourceVtolDropEdits
         return Prepare(new WorkspaceFiles(preparedWorkspace, token), SourceBuilder.AnimationRoot(mission), worldNodes, currentPackage, plan, token);
     }
 
-    /// <summary>Compiles both source versions and admits only the selected threshold's four-byte delta.</summary>
+    /// <summary>Evaluates both source versions and admits only the selected threshold's semantic delta.</summary>
     public static IReadOnlyList<(string Relative, byte[] Content)> Prepare(IProjectFiles files, string animationRoot,
         IReadOnlyList<string> worldNodes, AnimationPackage currentPackage, VtolDropMovePlan plan, CancellationToken token = default)
     {
         VtolDropWindows.ValidatePlan(currentPackage, plan, token);
         VtolDropWindows.RequireVerifiedMove(plan);
         if (plan.NewStart == plan.Window.Start) return [];
-        // The compiler already bounds source reads, syntax expansion and output before allocation. Retain only two
-        // compilations, and use the first output itself as the expected threshold-only result (no package clone).
-        var before = AnimationCompiler.Compile(files, animationRoot, worldNodes, null, VtolDropWindows.MaximumPackageBytes,
+        // The evaluator bounds source reads and expansion. Its private first package becomes the expected
+        // threshold-only result; neither archive serialization nor a third package clone is needed.
+        var before = AnimationCompiler.Evaluate(files, animationRoot, worldNodes, null, VtolDropWindows.MaximumPackageBytes,
             token, captureSourceBindings: true);
         if (before.EngineRejection is { } rejection) throw Refusal($"The animation sources cannot be built: {JsonData.ShownText(rejection)}");
         VerifyCurrent(currentPackage, before.Package, token);
@@ -68,10 +67,10 @@ public static class SourceVtolDropEdits
         var scalar = timing.Scalars[1];
         byte[] changed = ZrdTextSyntax.Encode(syntax.ReplaceScalars(new Dictionary<Guid, ZrdNode>
         { [scalar.Id] = SourceResourceEdits.Float(plan.NewStart) }, token));
-        var after = AnimationCompiler.Compile(new ChangedFiles(files, binding.File, changed), animationRoot, worldNodes, null,
+        var after = AnimationCompiler.Evaluate(new ChangedFiles(files, binding.File, changed), animationRoot, worldNodes, null,
             VtolDropWindows.MaximumPackageBytes, token);
-        BinaryPrimitives.WriteSingleLittleEndian(before.Bytes.AsSpan(checked((int)compiledEvent.SourceOffset + 8), 4), plan.NewStart);
-        if (!Same(before.Bytes, after.Bytes, token))
+        compiledEvent.Threshold = plan.NewStart;
+        if (after.EngineRejection != null || !Same(before.Package, after.Package, token))
             throw Refusal("The source change also changes another animation value; this window cannot be moved independently.");
         VtolDropWindows.ValidatePlan(currentPackage, plan, token);
         return [(binding.File, changed)];
@@ -90,21 +89,21 @@ public static class SourceVtolDropEdits
         }
     }
 
-    private static bool Same(byte[] expected, byte[] actual, CancellationToken token)
+    private static bool Same(AnimationPackage expected, AnimationPackage actual, CancellationToken token)
     {
-        if (expected.Length != actual.Length) return false;
-        for (int offset = 0; offset < expected.Length; offset += 4096)
+        if (expected.Version != actual.Version || expected.Entries.Count != actual.Entries.Count ||
+            !expected.Prefix.AsSpan().SequenceEqual(actual.Prefix) || !expected.Tail.AsSpan().SequenceEqual(actual.Tail)) return false;
+        for (int i = 0; i < expected.Entries.Count; i++)
         {
             token.ThrowIfCancellationRequested();
-            int count = Math.Min(4096, expected.Length - offset);
-            if (!expected.AsSpan(offset, count).SequenceEqual(actual.AsSpan(offset, count))) return false;
+            if (AnimationComparer.Difference(expected.Entries[i], actual.Entries[i], token) != null) return false;
         }
         return true;
     }
 
     private static InvalidDataException Refusal(string message) => new(message);
 
-    private sealed class WorkspaceFiles(SourceWorkspace workspace, CancellationToken operationToken) : IProjectFiles
+    internal sealed class WorkspaceFiles(SourceWorkspace workspace, CancellationToken operationToken) : IProjectFiles
     {
         public bool Exists(string relative) => workspace.Exists(relative, operationToken);
         public byte[] Read(string relative, CancellationToken token, ProjectReadLimits limits) => workspace.Read(relative, token, limits)

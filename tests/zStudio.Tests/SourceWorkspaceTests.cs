@@ -1,9 +1,9 @@
 using System.IO;
 using System.Text;
-using Recoil.Zbd.Core.Sources;
+using zStudio.Core.Sources;
 using Xunit;
 
-namespace Recoil.Zbd.Tests;
+namespace zStudio.Tests;
 
 /// <summary>The project-wide workspace: one history over every source file, dirty state against the disk, save and external changes.</summary>
 public sealed class SourceWorkspaceTests : IDisposable
@@ -314,10 +314,16 @@ public sealed class SourceWorkspaceTests : IDisposable
     public void AFailedSaveKeepsTheEditsAndTheFiles()
     {
         int calls = 0;
-        SourceWorkspace workspace = new(root, (writes, description, token) => { calls++; throw new IOException("disk full"); });
+        SourceWorkspace workspace = new(root, (writes, description, token, validation) => { calls++; throw new IOException("disk full"); });
         workspace.Apply("Edit", [("gamegen/m1.gs", Bytes("Quit\r\n"))], Token);
         Assert.Throws<IOException>(() => workspace.Save(Token));
         Assert.Equal(1, calls); Assert.True(workspace.IsDirty); Assert.False(workspace.IsSaving);
         Assert.Equal("set worldName world\r\nQuit\r\n", File.ReadAllText(At("gamegen/m1.gs")));
+
+        SourceWorkspace bypass = new(root, (_, _, _, _) => []);
+        bypass.Apply("Edit", [("gamegen/m1.gs", Bytes("Quit\r\n"))], Token);
+        Assert.Contains("did not run publication validation", Assert.Throws<InvalidOperationException>(() => bypass.Save(Token)).Message);
+        Assert.True(bypass.IsDirty);
+        Assert.False(bypass.IsSaving);
     }
 }

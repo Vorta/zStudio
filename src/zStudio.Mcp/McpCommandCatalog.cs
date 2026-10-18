@@ -1,8 +1,8 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
-using Recoil.Zbd.Automation;
+using zStudio.Automation;
 
-namespace Recoil.Zbd.Mcp;
+namespace zStudio.Mcp;
 
 /// <summary>Generated discovery metadata; execution always belongs to the visible workspace.</summary>
 public static class McpCommandCatalog
@@ -15,7 +15,7 @@ public static class McpCommandCatalog
 
     public static StudioCommands Create(Func<string, JsonObject, CancellationToken, Task<StudioResult>> execute)
     {
-        using var stream = typeof(McpCommandCatalog).Assembly.GetManifestResourceStream("Recoil.Zbd.Mcp.CommandCatalog.json")
+        using var stream = typeof(McpCommandCatalog).Assembly.GetManifestResourceStream("zStudio.Mcp.CommandCatalog.json")
             ?? throw new InvalidOperationException("MCP discovery catalog is missing.");
         var definitions = JsonSerializer.Deserialize<Definition[]>(stream) ?? throw new InvalidDataException("Invalid MCP catalog.");
         StudioCommands commands = new();

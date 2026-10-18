@@ -1,6 +1,6 @@
 using System.Numerics;
 
-namespace Recoil.Zbd.Core;
+namespace zStudio.Core;
 
 /// <summary>World-axis transforms of authored AI positions about the selection centre.</summary>
 public static class AiPathTransforms

@@ -4,9 +4,11 @@ Model replacement preparation admits original texture-pack bytes and complete re
 
 zStudio can export a GameZ node hierarchy for Blender and replace its existing model records with solid textured meshes. The animation continues to refer to the same nodes and model indices. Edits are accepted in the visible document, use Undo/Redo, and remain unsaved until an explicit verified Save.
 
+Editing compiled ZBD assets is being retired in favour of [source projects](source-project.md). A compiled root opens only through MCP `open_root` (the GUI opens only source projects); model export and replacement are available there through MCP only (`zstudio_model_bundle_export`, `zstudio_model_replace`).
+
 ## Export and prepare in Blender
 
-Select an animation, a GameZ node, or a node-bound model and choose **File → Export referenced models…**. An animation resolves its authored root in the matching mission GameZ; ambiguous roots require an explicit `rootNode` through MCP. The bundle includes:
+Select an animation, a GameZ node, or a node-bound model and run `zstudio_model_bundle_export`. An animation resolves its authored root in the matching mission GameZ; ambiguous roots require an explicit `rootNode` through MCP. The bundle includes:
 
 - `assembled.obj`, MTL and decoded PNG textures for spatial reference.
 - `local/model_INDEX.obj` for every distinct model, without node transforms baked into its vertices.
@@ -37,7 +39,7 @@ Create a separate version-1 replacement manifest next to the Blender exports:
 }
 ```
 
-Open the matching **GameZ** document and choose **File → Replace models…**. The entire batch is validated before publication. Names are labels: explicit indices and the source SHA-256 identify the target. Export a fresh bundle before a subsequent import against an edited snapshot. A single local OBJ can target several model indices; their existing node placements remain independent.
+Open the matching **GameZ** document and run `zstudio_model_replace` with the manifest path. The entire batch is validated before publication. Names are labels: explicit indices and the source SHA-256 identify the target. Export a fresh bundle before a subsequent import against an edited snapshot. A single local OBJ can target several model indices; their existing node placements remain independent.
 
 The importer supports one opaque diffuse texture per batch, power-of-two dimensions up to 512×512, and a new ASCII texture name of 1–19 letters/digits/underscores. PNG input uses the shared decoder, including supported greyscale, indexed and RGB/RGBA formats and Adam7 interlacing, and is converted to RGBA8; the resulting diffuse texture must be fully opaque. Retail textures stop at 256×256, and 512 is supported only on hardware that reports it:
 - The retail loader stores 16-bit sizes and allocates by pixel count (`0x46ED70`), and the software renderer's spans cover 512.
@@ -83,7 +85,7 @@ After Save As, **Reload / F5** opens the saved GameZ destination and its local d
 - `zstudio_undo_redo` shares GUI history and awaits the model preview refresh.
 - `zstudio_save_document(document, revision, modelDirectory?)` saves model dependencies; `modelDirectory` requests Save As. Existing animation/pickup parameters continue to work.
 
-These tools share the GUI workspace and existing opt-in named-pipe host. Initialization and discovery remain windowless. Model export is cancellable; replacement/save publication uses explicit operation results and is not canceled by the toolbar's export/validation command.
+These tools share the GUI workspace and existing opt-in named-pipe host. Initialization and discovery remain windowless. Model export is cancellable; replacement/save publication uses explicit operation results and is not canceled by Escape, which stops only a running export or validation.
 
 ## Format evidence
 

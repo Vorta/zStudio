@@ -8,13 +8,13 @@ using System.Windows.Controls;
 using System.Windows.Media;
 using ModelContextProtocol.Client;
 using ModelContextProtocol.Protocol;
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Core.Formats;
-using Recoil.Zbd.Desktop;
-using Recoil.Zbd.Mcp;
+using zStudio.Core;
+using zStudio.Core.Formats;
+using zStudio.Desktop;
+using zStudio.Mcp;
 using Xunit;
 
-namespace Recoil.Zbd.Desktop.Tests;
+namespace zStudio.Desktop.Tests;
 
 internal static class ResourceEditingMcpChecks
 {
@@ -89,8 +89,6 @@ internal static class ResourceEditingMcpChecks
             await Job("save_document", Args()); Assert.False(doc.IsDirty);
             var saved = await FormatRegistry.Default.OpenAsync(copy, token); Assert.Equal("renamed.bin", saved.Assets[0].Name); Assert.Equal(AssetKind.Zrd, saved.Assets[0].Kind);
             Assert.Equal(126u, ZrdDecoder.Read(saved.Slice(saved.Assets[0].Offset, saved.Assets[0].Length), token).FindByPath(1, 0).Bits);
-            var editMenu = (MenuItem)main.FindName("EditMenu"); editMenu.RaiseEvent(new RoutedEventArgs(MenuItem.SubmenuOpenedEvent, editMenu));
-            Assert.Contains(editMenu.Items.OfType<MenuItem>(), m => Equals(m.Header, "Archive members") && m.IsEnabled && m.Items.Count == 8);
             await Job("open_document", new() { ["path"] = copy });
             var openCopy = main.ViewModel.Documents.Single(d => d.Path == copy);
             Assert.Equal("destination_open", (await Job("reload_document", Args(), "failed"))["code"]!.GetValue<string>());
@@ -201,7 +199,7 @@ internal static class ResourceEditingMcpChecks
         BinaryPrimitives.WriteInt32LittleEndian(bytes.AsSpan(bytes.Length - 8), 1); BinaryPrimitives.WriteInt32LittleEndian(bytes.AsSpan(bytes.Length - 4), 1);
         string path = Path.Combine(folder, "zrdr.zbd"); await File.WriteAllBytesAsync(path, bytes, token);
         using AssetResolver resolver = new(folder);
-        DocumentModel Map() { var d = new DocumentModel(new ZbdDocument(Path.Combine(folder, "gamez.zbd"), new(0, DateTime.MinValue), new(FormatFamily.GameZ, 15, Recognition.Supported, "fixture"), ReadOnlyMemory<byte>.Empty)); d.AttachResolver(resolver); return d; }
+        DocumentModel Map() { var d = new DocumentModel(new AssetDocument(Path.Combine(folder, "gamez.zbd"), new(0, DateTime.MinValue), new(FormatFamily.GameZ, 15, Recognition.Supported, "fixture"), ReadOnlyMemory<byte>.Empty)); d.AttachResolver(resolver); return d; }
         using var archive = new DocumentModel(await FormatRegistry.Default.OpenAsync(path, token)); archive.AttachResolver(resolver);
         using var map = Map(); var pickups = await map.GetPickupEditsAsync(resolver, token); var placement = Assert.Single(pickups.Records);
         pickups.MoveTo(placement.Source, new(1,2,3)); pickups.Undo();

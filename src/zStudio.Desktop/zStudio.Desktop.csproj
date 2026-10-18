@@ -1,10 +1,10 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <RootNamespace>Recoil.Zbd.Desktop</RootNamespace>
+    <RootNamespace>zStudio.Desktop</RootNamespace>
   </PropertyGroup>
   <PropertyGroup>
     <OutputType>WinExe</OutputType><TargetFramework>net10.0-windows</TargetFramework><UseWPF>true</UseWPF>
-    <AssemblyName>Recoil.Zbd.Studio</AssemblyName><ApplicationManifest>app.manifest</ApplicationManifest>
+    <AssemblyName>zStudio.Desktop</AssemblyName><ApplicationManifest>app.manifest</ApplicationManifest>
     <AssemblyTitle>zStudio</AssemblyTitle>
     <ApplicationIcon>Assets/studio.ico</ApplicationIcon>
     <PublishTrimmed>false</PublishTrimmed><PublishReadyToRun>true</PublishReadyToRun>

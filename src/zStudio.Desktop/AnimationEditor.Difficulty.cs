@@ -1,8 +1,8 @@
 using System.ComponentModel;
 using System.Windows.Controls;
-using Recoil.Zbd.Core;
+using zStudio.Core;
 
-namespace Recoil.Zbd.Desktop;
+namespace zStudio.Desktop;
 
 public partial class AnimationEditor
 {

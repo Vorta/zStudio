@@ -1,12 +1,12 @@
 using System.Runtime.InteropServices;
 using System.Text;
 using Microsoft.Win32.SafeHandles;
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Core.Sources;
+using zStudio.Core;
+using zStudio.Core.Sources;
 using Xunit;
-using State = Recoil.Zbd.Core.Sources.SourceRecoveryFileState;
+using State = zStudio.Core.Sources.SourceRecoveryFileState;
 
-namespace Recoil.Zbd.Tests;
+namespace zStudio.Tests;
 
 /// <summary>
 /// Saves and their recovery decide a file of another length than the journal's without reading it, and read one of the

@@ -1,10 +1,10 @@
 using System.Globalization;
 using System.IO;
 using System.Text.Json;
-using Recoil.Zbd.Core.Animation;
+using zStudio.Core.Animation;
 using Xunit;
 
-namespace Recoil.Zbd.Desktop.Tests;
+namespace zStudio.Desktop.Tests;
 
 public sealed class WorkspaceStateTests
 {
@@ -45,35 +45,36 @@ public sealed class WorkspaceStateTests
         Assert.True(draft.Commit()); Assert.Equal(1, commits);
     }
     [Fact]
-    public void OldLayoutMigratesWithoutReusingObsoleteSectionHeights()
+    public void UnsupportedWorkspaceUsesDefaultsWithoutDiscardingCurrentGlobalSettings()
     {
-        var old = JsonSerializer.Deserialize<StudioSettings>("""{"PropertiesWidth":410,"AnimationSidebarWidth":460,"AnimationSectionHeights":{"StatusSection":900},"Theme":"Dark","LastRoot":"fixture","CreateBackupOnSave":true}""")!;
-        var layout = old.GetWorkspace();
-        Assert.Equal(410, layout.InspectorWidth); Assert.Equal(294, layout.NavigatorWidth); Assert.Equal(180, layout.ToolsHeight);
-        Assert.Equal("Dark", old.Theme); Assert.Equal("fixture", old.LastRoot); Assert.True(old.CreateBackupOnSave);
+        foreach (string workspace in new[] { "null", "{}", "{\"Version\":3,\"InspectorWidth\":410}", "{\"Version\":5,\"InspectorWidth\":410}" })
+        {
+            var settings = JsonSerializer.Deserialize<StudioSettings>($$"""{"Workspace":{{workspace}},"Theme":"Dark","LastRoot":"fixture","CreateBackupOnSave":true}""")!;
+            var defaults = settings.GetWorkspace();
+            Assert.Equal(4, defaults.Version); Assert.Equal(352, defaults.InspectorWidth);
+            Assert.Equal("Dark", settings.Theme); Assert.Equal("fixture", settings.LastRoot); Assert.True(settings.CreateBackupOnSave);
+            Assert.False(settings.McpEnabled);
+        }
+        var current = new StudioSettings(); var layout = current.GetWorkspace();
+        Assert.False(current.McpEnabled);
+        Assert.Equal(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "zStudio", "settings.json"), StudioSettings.SettingsPath);
         layout.NavigatorWidth = double.NaN; layout.InspectorWidth = 1; layout.ToolsHeight = double.PositiveInfinity; layout.Preset = "corrupt"; layout.Groups = null!;
         layout.Normalize(); Assert.Equal(294, layout.NavigatorWidth); Assert.Equal(320, layout.InspectorWidth); Assert.Equal(180, layout.ToolsHeight); Assert.Equal("Edit",layout.Preset); Assert.NotNull(layout.Groups);
-        Assert.Equal(layout.InspectorWidth, JsonSerializer.Deserialize<StudioSettings>(JsonSerializer.Serialize(old))!.GetWorkspace().InspectorWidth);
+        Assert.Equal(layout.InspectorWidth, JsonSerializer.Deserialize<StudioSettings>(JsonSerializer.Serialize(current))!.GetWorkspace().InspectorWidth);
     }
     [Fact]
-    public void InspectorOrderMigratesOnceAndFloatingBoundsIgnoreOldPaneHeight()
+    public void CurrentFloatingBoundsAndInspectorTabSurviveRoundTrip()
     {
-        foreach (var (stored, expected) in new[] { (0,0), (1,2), (2,1), (3,0) })
-        {
-            var layout = JsonSerializer.Deserialize<WorkspaceLayout>($$"""{"Version":2,"BrowserTab":2,"InspectorTab":{{stored}},"PropertiesHeight":999,"ProgramHeight":999,"ProgramResized":true}""")!;
-            layout.Normalize(); Assert.Equal(4,layout.Version); Assert.Equal(2,layout.BrowserTab); Assert.Equal(2,layout.ContentBrowserTab);
-            Assert.Equal(expected,layout.InspectorTab); Assert.Equal(720,layout.PropertiesWindow.Height);
-            layout.PropertiesWindow.Height = 830; layout.PropertiesWindow.Left = -100;
-            var restored = JsonSerializer.Deserialize<WorkspaceLayout>(JsonSerializer.Serialize(layout))!;
-            restored.Normalize(); Assert.Equal(expected,restored.InspectorTab); Assert.Equal(830,restored.PropertiesWindow.Height); Assert.Equal(-100,restored.PropertiesWindow.Left);
-        }
+        var layout = new WorkspaceLayout { InspectorTab = 2, PropertiesWindow = new() { Height = 830, Left = -100 } };
+        var restored = JsonSerializer.Deserialize<WorkspaceLayout>(JsonSerializer.Serialize(layout))!;
+        restored.Normalize(); Assert.Equal(2, restored.InspectorTab); Assert.Equal(830,restored.PropertiesWindow.Height); Assert.Equal(-100,restored.PropertiesWindow.Left);
         var invalid = new WorkspaceLayout { PropertiesWindow = new() { Height = double.NaN, Width = double.PositiveInfinity, Left = double.NaN, Top = double.PositiveInfinity }, InspectorTab = 99 };
         invalid.Normalize(); Assert.Equal(720,invalid.PropertiesWindow.Height); Assert.Equal(640, invalid.PropertiesWindow.Width); Assert.Null(invalid.PropertiesWindow.Left); Assert.Null(invalid.PropertiesWindow.Top); Assert.Equal(2,invalid.InspectorTab);
     }
     [Fact]
-    public void ResponsiveFilesPreferencesMigrateAndRetainIndependentWidths()
+    public void ResponsiveFilesPreferencesRetainIndependentWidths()
     {
-        var layout = JsonSerializer.Deserialize<WorkspaceLayout>("""{"Version":3,"NavigatorWidth":350,"BrowserTab":3}""")!;
+        var layout = JsonSerializer.Deserialize<WorkspaceLayout>("""{"Version":4,"NavigatorWidth":350,"BrowserTab":3,"ContentBrowserTab":3}""")!;
         layout.Normalize(); Assert.Equal(240,layout.FilesWidth); Assert.Equal(350,layout.NavigatorWidth); Assert.Equal(3,layout.ContentBrowserTab);
         layout.FilesWidth = 275; layout.BrowserTab = 0;
         var restored = JsonSerializer.Deserialize<WorkspaceLayout>(JsonSerializer.Serialize(layout))!;

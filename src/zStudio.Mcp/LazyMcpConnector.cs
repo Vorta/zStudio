@@ -2,9 +2,9 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using ModelContextProtocol.Client;
 using ModelContextProtocol.Protocol;
-using Recoil.Zbd.Automation;
+using zStudio.Automation;
 
-namespace Recoil.Zbd.Mcp;
+namespace zStudio.Mcp;
 
 /// <summary>Discovery never opens a window. The first workspace request connects once.</summary>
 public sealed class LazyMcpConnector(Func<CancellationToken, Task<McpClient>> connect, Func<bool> enabled) : IAsyncDisposable

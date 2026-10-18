@@ -1,9 +1,9 @@
 using System.Windows;
 using System.Windows.Controls;
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Core.Sources;
+using zStudio.Core;
+using zStudio.Core.Sources;
 
-namespace Recoil.Zbd.Desktop;
+namespace zStudio.Desktop;
 
 /// <summary>
 /// Chooses the export Update from Blender export applies: every checkout with exports in its outbox and, of each, the

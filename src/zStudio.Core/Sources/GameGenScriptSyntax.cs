@@ -1,6 +1,6 @@
 using System.Text;
 
-namespace Recoil.Zbd.Core.Sources;
+namespace zStudio.Core.Sources;
 
 /// <summary>One physical line of a gamegen script: its 1-based number, where it lies in the text, and its tokens with their places.</summary>
 public sealed record GameGenScriptLine(int Number, int Start, int Length, IReadOnlyList<string> Tokens, IReadOnlyList<TextSpan> Spans)

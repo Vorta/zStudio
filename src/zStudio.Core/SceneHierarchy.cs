@@ -1,4 +1,4 @@
-namespace Recoil.Zbd.Core;
+namespace zStudio.Core;
 
 public sealed record SceneHierarchyEdge(int Node, string Kind);
 

@@ -1,9 +1,9 @@
 using System.Globalization;
 using System.Numerics;
 using System.Text.Json.Nodes;
-using Recoil.Zbd.Core.Animation;
+using zStudio.Core.Animation;
 
-namespace Recoil.Zbd.Core;
+namespace zStudio.Core;
 
 public static partial class MissionSceneLoader
 {
@@ -80,7 +80,7 @@ public static partial class MissionSceneLoader
                 budget.Take(scene.Nodes[root].Parents.Length);
                 scene.Nodes[root] = scene.Nodes[root] with { Parents = [.. scene.Nodes[root].Parents, worldRoot] };
                 placement.Attach(root, aiv: false);
-                normalizedSource ??= new(budget.SourceIdentity(resource.ArchivePath), resource.AssetIndex, budget.SourceIdentity(resource.ResourceName));
+                normalizedSource ??= new(budget.SourceIdentity(resource.ArchivePath, fullPath: true), resource.AssetIndex, budget.SourceIdentity(resource.ResourceName));
                 budget.TextCopy(layout.PickupResource.Length + name.Length + 64L);
                 Add(root, type, amount, position, rotation, delay,
                     new(normalizedSource.ArchivePath, normalizedSource.AssetIndex, normalizedSource.ResourceName, index),

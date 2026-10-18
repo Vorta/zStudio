@@ -1,12 +1,12 @@
 using System.Numerics;
 using System.Text.Json.Nodes;
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Core.Animation;
-using Recoil.Zbd.Core.Formats;
-using Recoil.Zbd.Core.Export;
+using zStudio.Core;
+using zStudio.Core.Animation;
+using zStudio.Core.Formats;
+using zStudio.Core.Export;
 using Xunit;
 
-namespace Recoil.Zbd.Tests;
+namespace zStudio.Tests;
 
 public sealed class MechWarrior3Tests
 {
@@ -39,7 +39,7 @@ public sealed class MechWarrior3Tests
         var duplicate = new MotionClip { Header = clip.Header, LoopTime = clip.LoopTime, FrameCount = clip.FrameCount, Parts = [clip.Parts[0], clip.Parts[0]] };
         GameScene scene = new(); scene.Models.Add(new(0, [], [], [], [], []));
         scene.Nodes.Add(new(0, "body", "object3d", 0, [], [], new() { ["flags"] = 4 }, new() { ["flags"] = 8 }));
-        var library = new ZbdDocument("library.zbd", new(0, DateTime.MinValue), new(FormatFamily.Archive, 1, Recognition.Supported, "fixture"), ReadOnlyMemory<byte>.Empty) { Scene = scene };
+        var library = new AssetDocument("library.zbd", new(0, DateTime.MinValue), new(FormatFamily.Archive, 1, Recognition.Supported, "fixture"), ReadOnlyMemory<byte>.Empty) { Scene = scene };
         var preview = new MotionPreview(duplicate, library, new(0, 0, 1, 0, 1));
         Assert.Equal(Matrix4x4.Identity, Assert.Single(preview.At(.5, token: TestContext.Current.CancellationToken).Nodes).Transform);
         Assert.Equal(2, preview.Diagnostics.Count(d => d.Contains("ambiguous node")));
@@ -65,7 +65,7 @@ public sealed class MechWarrior3Tests
                 new() { ["transform"] = new JsonArray(1, 0, 0, 0, 1, 0, 0, 0, 1, 100, 0, 0) }));
             int actorIndex = nested ? 2 : 1;
             scene.Nodes.Add(new(actorIndex, "actor_01", "object3d", 0, [nested ? 1 : 0], [], new() { ["flags"] = 4 }, new() { ["flags"] = 8 }));
-            var world = new ZbdDocument(Path.Combine(folder, "gamez.zbd"), new(0, DateTime.MinValue), new(FormatFamily.GameZ, 27, Recognition.Supported, "fixture"), ReadOnlyMemory<byte>.Empty) { Scene = scene };
+            var world = new AssetDocument(Path.Combine(folder, "gamez.zbd"), new(0, DateTime.MinValue), new(FormatFamily.GameZ, 27, Recognition.Supported, "fixture"), ReadOnlyMemory<byte>.Empty) { Scene = scene };
             byte[] worldHeader = new byte[36]; System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(worldHeader, 0x02971222); System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(worldHeader.AsSpan(4), 27);
             await File.WriteAllBytesAsync(world.Path, worldHeader, token);
             using AssetResolver resolver = new(folder);

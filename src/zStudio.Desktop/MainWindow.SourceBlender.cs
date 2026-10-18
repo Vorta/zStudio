@@ -2,10 +2,10 @@ using System.Diagnostics;
 using System.IO;
 using System.Text.Json.Nodes;
 using System.Windows;
-using Recoil.Zbd.Automation;
-using Recoil.Zbd.Core.Sources;
+using zStudio.Automation;
+using zStudio.Core.Sources;
 
-namespace Recoil.Zbd.Desktop;
+namespace zStudio.Desktop;
 
 /// <summary>
 /// The Blender round trip of a source project: Edit in Blender copies a model into the project's zstudio/export folder;
@@ -14,12 +14,19 @@ namespace Recoil.Zbd.Desktop;
 /// </summary>
 public partial class MainWindow
 {
-    private static void RequireSourceBlenderAvailable() => throw new StudioCommandException("unsupported", SourceBlender.UnavailableMessage);
-
     /// <summary>The model a source world's object comes from: its own glTF node, or the file its script loaded.</summary>
     private string? SourceObjectModel(DocumentModel doc, int node)
     {
-        var origin = DescribeSourceObject(doc, node).Origin;
+        if (doc.SourceWorld == null || doc.SourceBuild is not { } build)
+            throw new StudioCommandException("unsupported", "This document is not a source world.");
+        // Geometry checkout follows the physical referenced model, not the source placement wrapper's file.
+        // A runtime clone first resolves its template; resource placement text is never a glTF path.
+        if (doc == shownDocument && scene?.Mission is { } mission && node >= 0 && node < mission.SourceNodes.Count)
+            node = mission.SourceNodes[node];
+        var selection = SourceWorldModel(doc).Selection;
+        int owner = selection.Owners.GetValueOrDefault(node, node);
+        if (selection.Boundaries.GetValueOrDefault(owner)?.Source is { } model) return model;
+        if (!build.Provenance.TryGetValue(node, out var origin)) return null;
         // A helper script can load different models from the same line; the root records its own resolved file,
         // including when that model has an empty scene. Imported nodes keep their own model-file identity.
         return origin.ModelFile ?? origin.LoadedFile;
@@ -28,7 +35,6 @@ public partial class MainWindow
     internal Func<SourceWorkspace, string, CancellationToken, BlenderCheckout> CheckoutSourceModel { get; set; } = SourceBlender.Checkout;
     private async Task<BlenderCheckout> CheckoutForBlenderAsync(string model, CancellationToken token)
     {
-        RequireSourceBlenderAvailable();
         string root = SourceProjectRoot ?? throw new StudioCommandException("no_project", "Open a source project (a folder with data and gamegen) first.");
         var workspace = SourceWorkspaceFor(root);
         if (sourceWorkspaceBusy) throw new StudioCommandException("busy", "A world of this source project is rebuilding after an edit; check the model out once it is shown.");
@@ -64,7 +70,6 @@ public partial class MainWindow
     private async Task<(DocumentModel Document, BlenderUpdatePlan Plan, IReadOnlyList<string> Files)> UpdateFromBlenderAsync(DocumentModel doc, string checkoutId, string? export, bool force, CancellationToken token,
         Func<BlenderConflictException, CancellationToken, bool>? confirmConflict = null)
     {
-        RequireSourceBlenderAvailable();
         var session = doc.SourceWorld ?? throw new StudioCommandException("unsupported", "Open a mission world of the source project to update it from Blender.");
         RequireSourceWorldIdle(session);
         BlenderCheckout checkout;
@@ -87,10 +92,10 @@ public partial class MainWindow
                 plan = confirmConflict == null ? SourceBlender.PlanUpdate(workspace, checkout, export, force, ct)
                     : SourceBlender.PlanUpdate(workspace, checkout, export, confirmConflict, ct);
                 // Scripts that turn or scale a node whose rotation or scale the export changes (theirs replace it), here or in other missions.
-                if (plan.Changes.FirstOrDefault(c => c.Relative.Equals(checkout.Model, StringComparison.OrdinalIgnoreCase)) is { Content: { } content }
-                    && workspace.Read(checkout.Model, ct, Recoil.Zbd.Core.Gltf.GltfDocument.MaximumJsonBytes) is { } current
-                    && SourceObjectEdits.ScriptTransformsReached(workspace, mission, checkout.Model, current, content, provenance, ct) is { Count: > 0 } reached)
-                    plan = plan with { Notes = [.. plan.Notes, .. reached] };
+                foreach (var (path, content) in plan.Changes.Where(c => c.Relative.EndsWith(".gltf", StringComparison.OrdinalIgnoreCase)))
+                    if (workspace.Read(path, ct, zStudio.Core.Gltf.GltfDocument.MaximumJsonBytes) is { } current
+                        && SourceObjectEdits.ScriptTransformsReached(workspace, mission, path, current, content, provenance, ct) is { Count: > 0 } reached)
+                        plan = plan with { Notes = [.. plan.Notes, .. reached] };
             }
             catch (BlenderConflictException ex) { throw new StudioCommandException("conflict", ex.Message); }
             if (workspace.Apply(plan.Label, plan.Changes.Select(c => (c.Relative, (byte[]?)c.Content)), ct) is not { } t) return null;
@@ -112,12 +117,14 @@ public partial class MainWindow
     private static (object Value, long Characters) CheckoutProjection(BlenderCheckout checkout, IReadOnlyList<BlenderExport> exports)
     {
         string input = checkout.Input, outbox = checkout.Outbox;
-        long characters = checkout.Id.Length + (long)checkout.Folder.Length + checkout.Model.Length + input.Length + outbox.Length + 256;
+        long characters = checkout.Id.Length + (long)checkout.Folder.Length + checkout.Model.Length + input.Length + outbox.Length
+            + AppContext.BaseDirectory.Length + (Environment.ProcessPath?.Length ?? 0) + 856;
         bool Fits(long cost) { if (characters + cost > 140_000) return false; characters += cost; return true; }
         var shownExports = exports.Take(16).TakeWhile(e => Fits(e.Relative.Length + 128L)).Select(e => new { path = e.Relative, written = e.WrittenUtc, bytes = e.Bytes }).ToArray();
         var shownFiles = checkout.Files.Take(64).TakeWhile(f => Fits(f.Project.Length + (long)f.Checkout.Length + 64)).Select(f => new { project = f.Project, checkout = f.Checkout }).ToArray();
         return (new
         {
+            version = checkout.Version, extension = BlenderExtensionInfo(),
             id = checkout.Id, folder = checkout.Folder, model = checkout.Model, input, outbox, created = checkout.CreatedUtc,
             files = shownFiles, fileCount = checkout.Files.Count, exports = shownExports, exportCount = exports.Count
         }, characters);
@@ -157,14 +164,28 @@ public partial class MainWindow
     }
 
     /// <summary>GUI: Edit in Blender for the object selected in a source world (its model), then show the checkout folder.</summary>
+    private bool blenderCheckoutRunning;
     private void EditInBlenderClick(object sender, RoutedEventArgs e) => _ = RunUi(async () =>
     {
-        RequireSourceBlenderAvailable();
-        if (ViewModel.SelectedDocument is not { SourceWorld: not null } doc) throw new StudioCommandException("unsupported", "Open a mission world of the source project and select an object first.");
-        if (selectedNode is not int node || SourceObjectNode(node) is not int sourceNode) throw new StudioCommandException("not_ready", "Select an object of the world first.");
-        string model = SourceObjectModel(doc, sourceNode) ?? throw new StudioCommandException("unsupported", "The selected object was not loaded from a model file.");
-        var checkout = await CheckoutForBlenderAsync(model, shutdownToken);
-        string message = $"{model} is checked out for Blender.\n\n1. In Blender, import:\n{checkout.Input}\n2. Export it as glTF 2.0, format glTF Separate (.gltf + .bin + textures), with Custom Properties, into:\n{checkout.Outbox}\n3. Choose Tools → Update from Blender export.\n\nOpen the checkout folder now?";
+        string root = SourceProjectRoot ?? throw new StudioCommandException("no_project", "Open a source project first.");
+        // The copy can take seconds with nothing else showing it: a second request waits for the first (before choosing).
+        if (blenderCheckoutRunning) { Notice("A checkout for Blender is still being copied; wait for it to finish."); return; }
+        string? selected = ViewModel.SelectedDocument is { SourceWorld: not null } doc && selectedNode is int node && SourceObjectNode(node) is int sourceNode
+            ? SourceObjectModel(doc, sourceNode) : null;
+        var picker = new Microsoft.Win32.OpenFileDialog { Title = "Choose source glTF for Blender", Filter = "RECOIL glTF (*.gltf)|*.gltf",
+            InitialDirectory = selected == null ? Path.Combine(root, "data") : Path.GetDirectoryName(Path.Combine(root, selected)),
+            FileName = selected == null ? "" : Path.GetFileName(selected), CheckFileExists = true };
+        if (picker.ShowDialog(this) != true) return;
+        if (SourceProjectRoot != root) throw new StudioCommandException("context_changed", "The source project changed while choosing the model.");
+        string model = Path.GetRelativePath(root, picker.FileName).Replace('\\', '/');
+        if (blenderCheckoutRunning) { Notice("A checkout for Blender is still being copied; wait for it to finish."); return; }
+        blenderCheckoutRunning = true;
+        BlenderCheckout checkout;
+        try { checkout = await CheckoutForBlenderAsync(model, shutdownToken); }
+        // A project that changed during the copy leaves the copy unusable: say so (and where it is) rather than nothing.
+        catch (StudioCommandException ex) when (ex.Code == "context_changed") { Report(ex); return; }
+        finally { blenderCheckoutRunning = false; }
+        string message = $"{model} is checked out for Blender.\n\nInstall the bundled extension from dependencies/blender in Blender 5.2 LTS Preferences → Get Extensions → Install from Disk. Set its zStudio executable preference.\n\n1. Use File → Import → RECOIL glTF:\n{checkout.Input}\n2. Use Export RECOIL glTF to:\n{checkout.Outbox}\n3. Choose Tools → Update from Blender export in zStudio. Review the update, then Save to write the source files.\n\nOpen the checkout folder now?";
         if (MessageBox.Show(this, message, "Edit in Blender", MessageBoxButton.YesNo, MessageBoxImage.Information) == MessageBoxResult.Yes)
             Process.Start(new ProcessStartInfo { FileName = checkout.Folder, UseShellExecute = true });
     });
@@ -175,21 +196,28 @@ public partial class MainWindow
     /// </summary>
     private void UpdateFromBlenderClick(object sender, RoutedEventArgs e) => _ = RunUi(async () =>
     {
-        RequireSourceBlenderAvailable();
         if (ViewModel.SelectedDocument is not { SourceWorld: { } session } doc) throw new StudioCommandException("unsupported", "Open a mission world of the source project first.");
         var listed = await CheckoutExportsAsync(session.Root, shutdownToken);
-        // The world may have closed while the checkouts were listed.
+        // An edit may have rebuilt the world meanwhile (its replacement is the session's owner); it may also have closed.
+        if (doc.IsDisposed && session.Owner is { IsDisposed: false } rebuilt) doc = rebuilt;
         if (doc.IsDisposed || !ViewModel.Documents.Contains(doc)) throw new StudioCommandException("context_changed", "The world was closed while the Blender exports were listed.");
         var candidates = listed.Where(c => c.Exports.Count > 0).ToArray();
         if (candidates.Length == 0) throw new StudioCommandException("not_ready", "No Blender export was found in the project's zstudio/export folder. Use Edit in Blender first.");
         BlenderUpdateDialog dialog = new(candidates) { Owner = this };
         if (dialog.ShowDialog() != true) return;
         var (checkout, export) = dialog.Chosen;
-        // The world may also have closed while the export was chosen.
+        // The world may also have been rebuilt or closed while the export was chosen.
+        if (doc.IsDisposed && session.Owner is { IsDisposed: false } replaced) doc = replaced;
         if (doc.IsDisposed || !ViewModel.Documents.Contains(doc)) throw new StudioCommandException("context_changed", "The world was closed while the Blender export was chosen.");
         if (await UpdateFromBlenderWithConsentAsync(doc, checkout.Id, export.Relative, shutdownToken) is not { } result) return;
         int count = result.Files.Count;
-        ViewModel.Status = count == 0 ? $"{checkout.Model} already matches the Blender export." : $"Updated {checkout.Model} from Blender: {count} file{(count == 1 ? "" : "s")} changed" + (result.Plan.Notes.Count > 0 ? $"; {result.Plan.Notes.Count} notes in Problems" : "");
+        int notes = result.Plan.Notes.Count;
+        string outcome = (count == 0 ? $"{checkout.Model} already matches the Blender export" : $"Updated {checkout.Model} from Blender: {count} file{(count == 1 ? "" : "s")} changed")
+            + (notes > 0 ? $"; {notes} note{(notes == 1 ? " is" : "s are")} listed in Diagnostics" : "") + ".";
+        // A source map's status bar shows no messages: the outcome is shown, and notes open Diagnostics.
+        ViewModel.Status = outcome;
+        if (result.Plan.Notes.Count > 0) SetToolsVisible(true, problems: true);
+        System.Windows.MessageBox.Show(this, outcome, "Update from Blender export");
     });
 
     internal Func<string, bool>? ConfirmBlenderUpdate { get; set; }
@@ -224,11 +252,12 @@ public partial class MainWindow
 
     private void RegisterSourceBlenderCommands(StudioCommands r)
     {
+        Register(r, "source_blender_extension", "Locate the bundled Blender 5.2 LTS RECOIL extension and its compatible windowless helper. Does not install it or enable automation.", false,
+            [], (a, token) => Task.FromResult(Result(BlenderExtensionInfo())));
         // A job like the other long source operations: the copy and the texture decoding run off the UI thread, and can be cancelled.
-        RegisterJob(r, "source_blender_checkout", SourceBlender.UnavailableMessage,
+        RegisterJob(r, "source_blender_checkout", "Create a reference-aware Blender checkout of a source glTF and its complete dependency graph, from the current shared workspace. Requires the bundled RECOIL Blender extension. The project remains unchanged.",
             [P("model", "string", "Project path of a .gltf model, for example data/m2/models/bft/ltank.gltf."), DocumentParameter with { Required = false }, new("node", "integer", "Scene node of the document whose model to check out.", Minimum: 0, Maximum: int.MaxValue)], true, async (a, token) =>
         {
-            RequireSourceBlenderAvailable();
             string model;
             if (a["model"] != null) { if (a["node"] != null) throw new StudioCommandException("invalid_argument", "Give a model or a node, not both."); model = Text(a, "model"); }
             else
@@ -249,17 +278,24 @@ public partial class MainWindow
             var listed = await CheckoutExportsAsync(root, token);
             return CheckoutPage(listed, Int(a, "offset"));
         });
-        RegisterJob(r, "source_blender_update", SourceBlender.UnavailableMessage,
+        RegisterJob(r, "source_blender_update", "Validate and accept one completed RECOIL Blender graph export as a shared, undoable source transaction. All linked files and placement assignments are validated before publication. Older flattened checkouts are refused.",
             [DocumentParameter, RevisionParameter, P("checkout", "string", "Checkout id from source_blender_checkout or source_blender_checkouts.", true), P("export", "string", "Export path relative to the outbox; default the newest."),
-             P("force", "boolean", "Apply despite a conflict (files changed since the checkout or outside it, or dropped engine attributes); default false.")], true,
+             P("force", "boolean", "Apply despite a reported external-file or shared-texture conflict; default false. Invalid or missing required metadata can never be forced.")], true,
             async (a, token) =>
             {
-                RequireSourceBlenderAvailable();
                 var d = TargetDocument(a, true);
                 var (next, plan, files) = await UpdateFromBlenderAsync(d, Text(a, "checkout"), a["export"] == null ? null : Text(a, "export"), Flag(a, "force"), token);
                 long characters = 0;
                 var shownFiles = files.Take(256).TakeWhile(f => (characters += f.Length) <= 64_000).ToArray();
                 return Result(new { document = DocumentState(next), files = shownFiles, fileCount = files.Count, notes = plan.Notes.Take(32).Select(n => Bounded(n, 512)).ToArray(), noteCount = plan.Notes.Count, @sealed = plan.Sealed });
             });
+    }
+
+    private static object BlenderExtensionInfo()
+    {
+        string version = System.Reflection.CustomAttributeExtensions.GetCustomAttribute<System.Reflection.AssemblyInformationalVersionAttribute>(typeof(MainWindow).Assembly)!.InformationalVersion.Split('+')[0];
+        string archive = Path.Combine(AppContext.BaseDirectory, "blender", $"zstudio_recoil-{version}.zip");
+        return new { archive, available = File.Exists(archive), blenderMin = "5.2.0", blenderMaxExclusive = "5.3.0", protocol = SourceBlender.GraphProtocol,
+            helper = Environment.ProcessPath, install = "Blender Preferences → Get Extensions → Install from Disk; select the archive, then set the extension's zStudio executable preference." };
     }
 }

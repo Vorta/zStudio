@@ -1,9 +1,9 @@
 using System.Text;
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Core.Formats;
+using zStudio.Core;
+using zStudio.Core.Formats;
 using Xunit;
 
-namespace Recoil.Zbd.Tests;
+namespace zStudio.Tests;
 
 /// <summary>The resource editor on a text .zrd source: edits keep the file's comments and layout, changing only what they change.</summary>
 public sealed class SourceTextEditingTests
@@ -38,8 +38,8 @@ public sealed class SourceTextEditingTests
         Assert.Contains("\r\n\r\n  # reinforcements\r\n", text);
         Assert.Equal(7, edits.Tree(edits.Current.Members.Single(), Token).Children[0].Children.Count);
         // The edited file parses to the edited tree.
-        var reread = Recoil.Zbd.Core.Sources.ZrdText.Parse(text, Token);
-        Assert.True(Recoil.Zbd.Core.Sources.ZrdTextSyntax.StructurallyEqual(reread, edits.Tree(edits.Current.Members.Single(), Token)));
+        var reread = zStudio.Core.Sources.ZrdText.Parse(text, Token);
+        Assert.True(zStudio.Core.Sources.ZrdTextSyntax.StructurallyEqual(reread, edits.Tree(edits.Current.Members.Single(), Token)));
         // Undo restores the exact original text.
         edits.UndoRedo(false);
         Assert.Equal(Source, Encoding.Latin1.GetString(edits.Current.Document.Bytes.Span));

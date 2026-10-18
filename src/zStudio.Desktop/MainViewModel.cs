@@ -3,12 +3,12 @@ using System.Globalization;
 using System.IO;
 using System.ComponentModel;
 using CommunityToolkit.Mvvm.ComponentModel;
-using Recoil.Zbd.Automation;
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Core.Formats;
-using Recoil.Zbd.Core.Sources;
+using zStudio.Automation;
+using zStudio.Core;
+using zStudio.Core.Formats;
+using zStudio.Core.Sources;
 
-namespace Recoil.Zbd.Desktop;
+namespace zStudio.Desktop;
 
 public sealed partial class MainViewModel : ObservableObject, IDisposable
 {
@@ -50,11 +50,11 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     internal long NavigationGeneration => navigationGeneration;
     internal long WorkspaceGeneration { get; private set; }
     internal long WorkspaceNavigationGeneration { get; private set; }
-    internal Func<string, CancellationToken, Task<ZbdDocument>> LoadDocumentAsync { get; set; } =
+    internal Func<string, CancellationToken, Task<AssetDocument>> LoadDocumentAsync { get; set; } =
         static (path, token) => Task.Run(() => FormatRegistry.Default.OpenAsync(path, token), token).WaitAsync(token);
     // Invoked on the preparation worker, before constructing any UI-bound views.
-    internal Action<ZbdDocument, CancellationToken>? PreparingDocument { get; set; }
-    private async Task<PreparedDocument> PrepareDocumentAsync(ZbdDocument document, CancellationToken token)
+    internal Action<AssetDocument, CancellationToken>? PreparingDocument { get; set; }
+    private async Task<PreparedDocument> PrepareDocumentAsync(AssetDocument document, CancellationToken token)
     {
         var preparing = PreparingDocument;
         using var preparation = CancellationTokenSource.CreateLinkedTokenSource(token);
@@ -135,6 +135,35 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         Settings.Difficulty = value;
         try { Settings.Save(); }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { AddProblem("Could not save mission difficulty: " + ex.Message); }
+        // A source project remembers the difficulty it was last viewed at (its own, restored when it opens).
+        if (IsSourceProject && HasRoot && !applyingProjectView) RememberProjectSetting(root => SourceProjectSettings.WriteDifficulty(root, value));
+    }
+    /// <summary>How the open source project was last viewed (.zstudio/settings.json), read before it was published; null for other roots.</summary>
+    public SourceProjectView? ProjectView { get; private set; }
+    private bool applyingProjectView;
+    private Task projectSettingsWrites = Task.CompletedTask;
+    /// <summary>Completes once every remembered project setting asked so far is written (or reported).</summary>
+    internal Task ProjectSettingsWritten => projectSettingsWrites;
+    /// <summary>
+    /// Remembers a view setting of the open source project in its .zstudio folder, off the UI thread and in the order asked;
+    /// a failure is a warning in Problems, never a refusal of the change itself.
+    /// </summary>
+    public void RememberProjectSetting(Action<string> write)
+    {
+        if (!IsSourceProject || !HasRoot) return;
+        string root = RootPath;
+        projectSettingsWrites = Write(projectSettingsWrites);
+        async Task Write(Task previous)
+        {
+            // One failed write never stops the ones after it.
+            try { await previous; } catch (Exception) { }
+            try { await Task.Run(() => write(root)); }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException)
+            {
+                string message = "Could not remember how the project is viewed: " + ex.Message;
+                if (RootPath == root && HasRoot && !Problems.Any(p => p.File == root && p.Message == message)) AddProblem(message, "Warning", root);
+            }
+        }
     }
     public Func<DocumentModel, Task<bool>>? ConfirmDiscardAsync { get; set; }
     /// <summary>Raised once a root (also the same one again) is open, with its path and HasRoot set.</summary>
@@ -168,6 +197,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     [ObservableProperty] private DocumentModel? selectedDocument;
     [ObservableProperty] private string globalQuery = "";
     [ObservableProperty] private bool hasRoot;
+    [ObservableProperty] private bool isSourceProject;
     [ObservableProperty] private bool searchIsLimited;
     public async Task OpenRootAsync(string root, CancellationToken cancellationToken = default, Action? beforePublish = null)
     {
@@ -175,10 +205,11 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         if (beforePublish == null && ResolveDraftsAsync != null && !await ResolveDraftsAsync()) return;
         long generation = AdvanceNavigation();
         RequireCurrentNavigation(generation);
-        root = Path.GetFullPath(root);
+        // One spelling of the root (no trailing separator), as the source workspace and its checks compare it.
+        root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(root));
         // Directory checks can block on unavailable network shares. Keep that work off
         // the dispatcher and abandon the wait on shutdown; it has no workspace effects.
-        bool exists;
+        bool exists, sourceProject = false;
         using (var preflight = CancellationTokenSource.CreateLinkedTokenSource(workspace.Token, cancellationToken))
         {
             try
@@ -186,7 +217,8 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
                 exists = await CheckRootExistsAsync(root, preflight.Token);
                 if (exists) await Task.Run(() =>
                 {
-                    if (SourceProject.IsProject(root)) SourceProject.RequireCurrentFormat(root, preflight.Token);
+                    sourceProject = SourceProject.IsProject(root);
+                    if (sourceProject) SourceProject.RequireCurrentFormat(root, preflight.Token);
                 }, preflight.Token).WaitAsync(preflight.Token);
             }
             catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
@@ -217,10 +249,17 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         using (var scan = CancellationTokenSource.CreateLinkedTokenSource(workspace.Token, cancellationToken))
         {
             var scanToken = scan.Token;
-            try { scanned = await Task.Run(() => ReadRootInventory(root, scanToken), scanToken).WaitAsync(scanToken); }
+            try { scanned = sourceProject ? new([], new(Path.GetFileName(root), root), new(StringComparer.OrdinalIgnoreCase))
+                : await Task.Run(() => ReadRootInventory(root, scanToken), scanToken).WaitAsync(scanToken); }
             catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
             { throw new StudioCommandException("context_changed", "The workspace changed while scanning the requested folder."); }
         }
+        cancellationToken.ThrowIfCancellationRequested(); RequireCurrentNavigation(generation);
+        // How a source project was last viewed applies as it opens, before a map can be chosen.
+        SourceProjectView? view = null;
+        if (sourceProject)
+            try { view = await Task.Run(() => SourceProjectSettings.ReadView(root), cancellationToken).WaitAsync(cancellationToken); }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
         cancellationToken.ThrowIfCancellationRequested(); RequireCurrentNavigation(generation);
         // Publication closes every document: one changed after its decision, or opened and edited since, keeps the workspace.
         if (acceptedRevisions.Any(pair => pair.Key.IsDisposed || pair.Key.Revision != pair.Value)
@@ -245,14 +284,29 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
             catch (Exception ex) when (ex is ArgumentException or InvalidDataException or NotSupportedException or IOException or UnauthorizedAccessException) { }
         Files = []; Folders.Clear(); fileNodes.Clear(); otherOpenFiles = null; Diagnostics.Clear(); Problems.Clear(); SearchResults.Clear(); index.Clear();
         SearchIndexComplete = false; SearchIndexNotice = "Asset names are still being indexed; search and related results are incomplete.";
-        RootPath = root; HasRoot = true; IsBusy = true; WorkspaceNavigationGeneration = navigationGeneration; Status = "Scanning files…";
+        IsSourceProject = sourceProject; ProjectView = view;
+        if (view?.Difficulty is { } remembered && remembered != Difficulty)
+        {
+            applyingProjectView = true;
+            try { Difficulty = remembered; }
+            finally { applyingProjectView = false; }
+        }
+        RootPath = root; HasRoot = true; IsBusy = true; WorkspaceNavigationGeneration = navigationGeneration; Status = sourceProject ? "Choose a map" : "Scanning files…";
         RootOpenedWithoutPrompts = beforePublish != null;
+        // A project viewed for the first time remembers the difficulty it is viewed at, even before it changes.
+        if (sourceProject && view?.Difficulty == null) { var current = Difficulty; RememberProjectSetting(r => SourceProjectSettings.WriteDifficulty(r, current)); }
         RootPublished?.Invoke();
-        Settings.LastRoot = root; Settings.RecentRoots.RemoveAll(p => p.Equals(root, StringComparison.OrdinalIgnoreCase)); Settings.RecentRoots.Insert(0, root); Settings.RecentRoots = Settings.RecentRoots.Take(8).ToList();
+        Settings.LastRoot = root; Settings.RecentRoots.RemoveAll(p => Path.TrimEndingDirectorySeparator(p).Equals(root, StringComparison.OrdinalIgnoreCase)); Settings.RecentRoots.Insert(0, root); Settings.RecentRoots = Settings.RecentRoots.Take(8).ToList();
         try
         {
             // The scanned listing belongs to the published root, so it is shown even when the request is canceled now.
             workspaceToken.ThrowIfCancellationRequested();
+            if (sourceProject)
+            {
+                SearchIndexComplete = true;
+                SearchIndexNotice = "Source projects use the map picker; file and asset search is unavailable.";
+                return;
+            }
             Files = scanned.Files;
             foreach (var pair in scanned.FileNodes) fileNodes.Add(pair.Key, pair.Value);
             Folders.Add(scanned.Root);
@@ -317,6 +371,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     public async Task<DocumentModel?> OpenFileAsync(string path, CancellationToken cancellationToken = default, Action? beforePublish = null, bool activate = true, bool reportStatus = true)
     {
         cancellationToken.ThrowIfCancellationRequested();
+        if (IsSourceProject) throw new StudioCommandException("source_map_required", "Source projects open maps from the map picker.");
         long generation = AdvanceNavigation();
         RequireCurrentNavigation(generation);
         path = Path.GetFullPath(path);
@@ -381,7 +436,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         foreach (var doc in Documents)
         {
             // While a save replaces the project's files they differ from what the workspace last read; the save's end is the next state.
-            if (doc.SourceWorld != null) { if (!doc.SourceWorld.Workspace.IsSaving) pending.Add(CheckSourceWorldAsync(doc)); continue; }
+            if (doc.SourceWorld != null) { if (!doc.SourceWorld.Workspace.IsSaving && !doc.SourceWorld.IsRebuilding) pending.Add(CheckSourceWorldAsync(doc)); continue; }
             try { doc.IsStale = (doc.ContentEdits is { } content ? content.HasExternalChanges() : doc.ResourceEdits is { } resources ? FileStamp.Read(resources.TargetPath) != resources.TargetStamp : doc.ModelEdits?.HasExternalChanges() ?? FileStamp.Read(doc.Path) != doc.Document.Stamp) || doc.PickupEdits?.HasExternalChanges() == true; }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException) { doc.IsStale = true; }
         }
@@ -403,7 +458,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
                 try { stale = await Task.Run(() => doc.SourceInputsChanged()); }
                 catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException) { stale = true; }
                 // An edit, save or rebuild during the check makes its result obsolete; the next check reads the new state.
-                if (!doc.IsDisposed && doc.Revision == revision && doc.SourceWorld?.Workspace.IsSaving != true) doc.IsStale = stale;
+                if (!doc.IsDisposed && doc.Revision == revision && doc.SourceWorld?.Workspace.IsSaving != true && doc.SourceWorld?.IsRebuilding != true) doc.IsStale = stale;
             }
             finally { sourceWorldChecks.Remove(doc); done.SetResult(); }
         }

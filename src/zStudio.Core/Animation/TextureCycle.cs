@@ -1,4 +1,4 @@
-namespace Recoil.Zbd.Core.Animation;
+namespace zStudio.Core.Animation;
 
 public sealed record TextureCycle(IReadOnlyList<string> Textures, float Speed, bool Loop, float InitialFrame = 0)
 {

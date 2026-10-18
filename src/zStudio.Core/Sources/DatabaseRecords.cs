@@ -1,7 +1,7 @@
 using System.Buffers.Binary;
-using Recoil.Zbd.Core.Worlds;
+using zStudio.Core.Worlds;
 
-namespace Recoil.Zbd.Core.Sources;
+namespace zStudio.Core.Sources;
 
 /// <summary>
 /// Recovers a mission database's files from a shipped world: the database and the parts it referenced (files of their

@@ -1,8 +1,8 @@
-using Recoil.Zbd.Core.Sources;
+using zStudio.Core.Sources;
 using System.Text.Json.Nodes;
 using Xunit;
 
-namespace Recoil.Zbd.Tests;
+namespace zStudio.Tests;
 
 public sealed partial class SourcePublisherTests
 {

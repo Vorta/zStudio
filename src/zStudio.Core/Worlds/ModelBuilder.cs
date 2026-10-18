@@ -1,6 +1,6 @@
 using System.Numerics;
 
-namespace Recoil.Zbd.Core.Worlds;
+namespace zStudio.Core.Worlds;
 
 /// <summary>A polygon to add: corners in order, with UVs, normals and morph target positions when present.</summary>
 public sealed record PolygonInput(Vector3[] Points, Vector2[] Uvs, Vector3[] Normals, Vector3[] Targets, WorldMaterial Material, int Priority = 0, bool ShowBackFace = false, uint Zone = 0xFFFFFF00);

@@ -4,7 +4,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 
-namespace Recoil.Zbd.Core.Formats;
+namespace zStudio.Core.Formats;
 
 public enum ZrdKind { Int = 1, Float = 2, String = 3, Array = 4 }
 
@@ -90,7 +90,7 @@ public sealed record ZrdNode(Guid Id, ZrdKind Kind, uint Bits, string Text, IRea
 public static partial class ZrdDecoder
 {
     /// <summary>Reads a resource's parsed tree or its recorded source representation, honoring shared typed-decoding refusals.</summary>
-    public static ZrdNode ReadAsset(ZbdDocument document, AssetRecord asset, CancellationToken token)
+    public static ZrdNode ReadAsset(AssetDocument document, AssetRecord asset, CancellationToken token)
     {
         token.ThrowIfCancellationRequested();
         if (asset.Metadata["typed_decode_limited"]?.GetValue<bool>() == true)

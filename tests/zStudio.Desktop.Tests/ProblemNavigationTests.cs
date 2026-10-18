@@ -1,7 +1,7 @@
-using Recoil.Zbd.Core;
+using zStudio.Core;
 using Xunit;
 
-namespace Recoil.Zbd.Desktop.Tests;
+namespace zStudio.Desktop.Tests;
 
 public sealed class ProblemNavigationTests
 {

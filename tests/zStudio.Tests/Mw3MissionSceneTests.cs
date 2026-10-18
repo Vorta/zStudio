@@ -1,9 +1,9 @@
 using System.Text.Json.Nodes;
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Core.Formats;
+using zStudio.Core;
+using zStudio.Core.Formats;
 using Xunit;
 
-namespace Recoil.Zbd.Tests;
+namespace zStudio.Tests;
 
 [Collection("Allocation-sensitive")]
 public sealed class Mw3MissionSceneTests
@@ -25,7 +25,7 @@ public sealed class Mw3MissionSceneTests
     {
         using var fixture = new Mw3MissionFixture("actor_01", "actor_02"); var token = TestContext.Current.CancellationToken;
         var archive = await FormatRegistry.Default.OpenAsync(fixture.ReaderPath, token);
-        var root = (Recoil.Zbd.Core.Formats.ZrdNode)archive.Assets[0].Content!;
+        var root = (zStudio.Core.Formats.ZrdNode)archive.Assets[0].Content!;
         var edits = new ResourceEditSession(archive); var member = edits.Current.Members[0];
         var node = edits.Tree(member, token).Children[1].Children[1].Children[0];
         edits.Accept(await edits.PrepareZrdAsync(member.Id, node.Id, "set", value: position.ToString("R", System.Globalization.CultureInfo.InvariantCulture), token: token));
@@ -123,7 +123,7 @@ public sealed class Mw3MissionSceneTests
         Assert.Equal("actor", fixture.World.Scene!.Nodes[1].Name);
         Assert.Equal(fixture.ReaderBytes, await File.ReadAllBytesAsync(fixture.ReaderPath, token));
         var archive = await fixture.Resolver.OpenCachedAsync(fixture.ReaderPath, token);
-        var aiv = Assert.IsType<Recoil.Zbd.Core.Formats.ZrdNode>(Assert.Single(archive.Assets).Content);
+        var aiv = Assert.IsType<zStudio.Core.Formats.ZrdNode>(Assert.Single(archive.Assets).Content);
         Assert.Equal(name + "a", aiv.Children[0].Text); Assert.Equal(name + "b", aiv.Children[2].Text);
     }
 

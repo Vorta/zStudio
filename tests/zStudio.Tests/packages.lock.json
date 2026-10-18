@@ -163,7 +163,7 @@
           "xunit.v3.runner.common": "[4.0.1]"
         }
       },
-      "Recoil.Zbd.Core": {
+      "zStudio.Core": {
         "type": "Project",
         "dependencies": {
           "Clipper2": "[2.0.0, )"

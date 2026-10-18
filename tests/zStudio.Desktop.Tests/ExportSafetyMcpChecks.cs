@@ -5,15 +5,15 @@ using System.Windows;
 using System.Windows.Controls;
 using ModelContextProtocol.Client;
 using ModelContextProtocol.Protocol;
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Core.Formats;
-using Recoil.Zbd.Core.Sources;
-using Recoil.Zbd.Desktop;
-using Recoil.Zbd.Mcp;
-using Recoil.Zbd.Tests;
+using zStudio.Core;
+using zStudio.Core.Formats;
+using zStudio.Core.Sources;
+using zStudio.Desktop;
+using zStudio.Mcp;
+using zStudio.Tests;
 using Xunit;
 
-namespace Recoil.Zbd.Desktop.Tests;
+namespace zStudio.Desktop.Tests;
 
 /// <summary>
 /// What the GUI and MCP promise around exports and source projects: path arguments are full paths, the Blender checkout is
@@ -131,13 +131,13 @@ internal static class ExportSafetyMcpChecks
         // The root changes while the GUI's off-thread output plan/destination confirmation is pending.
         await main.ViewModel.OpenRootAsync(replacement.Project, token);
         string destination = Path.Combine(replacement.Project, "..", "unexpected-export");
-        var error = await Assert.ThrowsAsync<Recoil.Zbd.Automation.StudioCommandException>(() =>
+        var error = await Assert.ThrowsAsync<zStudio.Automation.StudioCommandException>(() =>
             main.ExportSourceProjectAsync(destination, ["m1/gamez.zbd"], true, token, expectedGeneration: generation));
         Assert.Equal("context_changed", error.Code);
         Assert.False(Directory.Exists(destination));
         // Returning to the same path must not revive the stale confirmation either.
         await main.ViewModel.OpenRootAsync(original.Project, token);
-        await Assert.ThrowsAsync<Recoil.Zbd.Automation.StudioCommandException>(() =>
+        await Assert.ThrowsAsync<zStudio.Automation.StudioCommandException>(() =>
             main.ExportSourceProjectAsync(destination, ["m1/gamez.zbd"], true, token, expectedGeneration: generation));
     }
 
@@ -223,8 +223,9 @@ internal static class ExportSafetyMcpChecks
     private static async Task LookupBaselineChecks(MainWindow main, Func<string, Dictionary<string, object?>, Task<JsonNode>> call, Func<string, Dictionary<string, object?>, string, Task<JsonNode>> job, CancellationToken token)
     {
         using var fixture = new SourceWorldFixture();
-        // m1 and m2 both load m1's database, whose part (a crate with a lid) it copies twice; each mission's texture effects find the lid.
-        fixture.WritePartDatabase();
+        // Both missions load m1's database. Two selectable crate holders reference the same lid file;
+        // copying the whole holder changes each mission's lid lookup without editing inside an external source boundary.
+        fixture.WriteReferencingDatabase(twice: true);
         foreach (string mission in new[] { "m1", "m2" })
         {
             fixture.Write($"gamegen/{mission}_zbd.gs", $"source support\\tex_fx{mission}.gw\r\nQuit\r\n");
@@ -233,22 +234,22 @@ internal static class ExportSafetyMcpChecks
         fixture.Write("gamegen/m2.gs", string.Join("\r\n", "set worldName world", "SetModelDirectory ..\\data\\m1\\models", "SetTextureDirectory ..\\data\\m1\\textures",
             "NewWorld %worldName%", "FindNode %worldName%", "GameGenSetWorld %worldName%", "FindNode %worldName%", "WorldOrigin 0.0 512.0", "WorldExtents 512.0 -512.0", "WorldPartition 256 -256",
             "LoadGameGen m1.flt m1.flt", "DeleteTree m1.flt", "GameZWriteZBDFile ..\\m2\\gamez.zbd", "Quit", ""));
-        // A profile file written for looser rules blocks only itself: source_status and Tools → Build profile list it with the
+        // A profile file written for looser rules blocks only itself: source_status and Export → Build profile list it with the
         // reason, and the project's default profile stays usable.
         fixture.Write("gamegen/build-profiles/old.json", """{ "format": "recoil-build-profile", "version": 1, "texturePacks": [ { "file": "rtexture4.zbd" }, { "file": "texturemax.zbd", "maximumDimension": 2048 } ] }""");
         await job("open_root", new() { ["path"] = fixture.Project }, "completed");
         var status = await job("source_status", new(), "completed");
         Assert.Equal("modern", status["profile"]!.GetValue<string>());
         Assert.Contains("software renderer", status["profiles"]!.AsArray().Single(p => p!["name"]!.GetValue<string>() == "old")!["error"]!.GetValue<string>());
-        typeof(MainWindow).GetMethod("ToolsMenuOpened", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.Invoke(main, [main, new RoutedEventArgs(MenuItem.SubmenuOpenedEvent, main)]);
+        typeof(MainWindow).GetMethod("ExportMenuOpened", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.Invoke(main, [main, new RoutedEventArgs(MenuItem.SubmenuOpenedEvent, main)]);
         while (((MenuItem)main.FindName("SourceProfileMenu")).Items.Count != 3) await Task.Delay(10, token);
         var profiles = ((MenuItem)main.FindName("SourceProfileMenu")).Items.Cast<MenuItem>().ToArray();
         Assert.False(profiles.Single(i => System.Windows.Automation.AutomationProperties.GetName(i) == "old").IsEnabled);
         Assert.True(profiles.Single(i => System.Windows.Automation.AutomationProperties.GetName(i) == "modern").IsChecked);
-        // The profile chosen in Tools → Build profile can break later: source_status still answers, listing the profiles with
+        // The profile chosen in Export → Build profile can break later: source_status still answers, listing the profiles with
         // the chosen one's error, so another can be named.
         fixture.Write("gamegen/build-profiles/fine.json", """{ "format": "recoil-build-profile", "version": 1, "texturePacks": [ { "file": "rtexture4.zbd" } ] }""");
-        typeof(MainWindow).GetMethod("ToolsMenuOpened", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.Invoke(main, [main, new RoutedEventArgs(MenuItem.SubmenuOpenedEvent, main)]);
+        typeof(MainWindow).GetMethod("ExportMenuOpened", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.Invoke(main, [main, new RoutedEventArgs(MenuItem.SubmenuOpenedEvent, main)]);
         while (((MenuItem)main.FindName("SourceProfileMenu")).Items.Count != 4) await Task.Delay(10, token);
         ((MenuItem)main.FindName("SourceProfileMenu")).Items.Cast<MenuItem>().Single(i => System.Windows.Automation.AutomationProperties.GetName(i) == "fine").RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
         while (!((MenuItem)main.FindName("SourceProfileMenu")).Items.Cast<MenuItem>().Single(i => System.Windows.Automation.AutomationProperties.GetName(i) == "fine").IsChecked) await Task.Delay(10, token);
@@ -265,50 +266,84 @@ internal static class ExportSafetyMcpChecks
         File.Delete(fixture.Path("gamegen/build-profiles/broken.json"));
         await job("source_profile", new(), "completed");
 
-        // Checkout and update are unavailable until the reference-aware plugin can preserve the new hierarchy.
-        var started = await call("source_blender_checkout", new() { ["model"] = "data/m1/models/m1.gltf" });
-        Assert.Equal(("source_blender_checkout", (bool?)true), (started["Name"]?.GetValue<string>(), started["Cancellable"]?.GetValue<bool>()));
-        var operation = started;
-        while (operation["State"]!.GetValue<string>() is "queued" or "running") { await Task.Delay(10, token); operation = await call("operation", new() { ["id"] = started["id"]!.GetValue<string>() }); }
-        Assert.Equal("failed", operation["State"]!.GetValue<string>());
-        Assert.Equal(SourceBlender.UnavailableMessage, operation["result"]!["message"]!.GetValue<string>());
-        var refusedUpdate = await call("source_blender_update", new() { ["document"] = Guid.NewGuid().ToString(), ["revision"] = 0, ["checkout"] = "old" });
-        while (refusedUpdate["State"]!.GetValue<string>() is "queued" or "running")
-        {
-            await Task.Delay(10, token);
-            refusedUpdate = await call("operation", new() { ["id"] = refusedUpdate["id"]!.GetValue<string>() });
-        }
-        Assert.Equal("failed", refusedUpdate["State"]!.GetValue<string>());
-        Assert.Equal(SourceBlender.UnavailableMessage, refusedUpdate["result"]!["message"]!.GetValue<string>());
-        Assert.False(Directory.Exists(Path.Combine(fixture.Project, "zstudio", "export")));
-        foreach (string name in new[] { "EditInBlenderMenu", "UpdateFromBlenderMenu" })
-        {
-            var menu = (MenuItem)main.FindName(name);
-            Assert.False(menu.IsEnabled);
-            Assert.Equal(SourceBlender.UnavailableMessage, menu.ToolTip);
-            Assert.True(ToolTipService.GetShowOnDisabled(menu));
-        }
-
-        var m1 = Document((await job("source_world_open", new() { ["mission"] = "m1" }, "completed"))["document"]!);
+        // The real shared command creates a graph checkout without changing source history.
+        var checkout = await job("source_blender_checkout", new() { ["model"] = "data/m1/models/m1.gltf" }, "completed");
+        Assert.Equal(2, checkout["version"]!.GetValue<int>());
+        Assert.True(File.Exists(checkout["input"]!.GetValue<string>()));
+        var extension = await call("source_blender_extension", new());
+        Assert.Equal("5.2.0", extension["blenderMin"]!.GetValue<string>());
+        var listedCheckouts = await call("source_blender_checkouts", new());
+        Assert.Equal(1, listedCheckouts["checkoutCount"]!.GetValue<int>());
         var m2 = Document((await job("source_world_open", new() { ["mission"] = "m2" }, "completed"))["document"]!);
+        var m1 = Document((await job("source_world_open", new() { ["mission"] = "m1" }, "completed"))["document"]!);
+        Assert.True(m2.IsDisposed); Assert.Same(m1, Assert.Single(main.ViewModel.Documents));
+        var checkedOut = SourceBlender.Find(fixture.Project, checkout["id"]!.GetValue<string>());
+        string blenderSession = Path.Combine(fixture.Root, "blender-session");
+        SourceBlender.PrepareBlenderImport(Path.Combine(checkedOut.Folder, "input"), checkedOut.Model, blenderSession, token);
+        var manifest = JsonNode.Parse(File.ReadAllBytes(Path.Combine(blenderSession, "session.json")))!;
+        JsonArray exportedModels = [];
+        foreach (var entry in manifest["models"]!.AsArray())
+        {
+            string path = entry!["path"]!.GetValue<string>();
+            string input = Path.Combine(blenderSession, "input", path);
+            var json = JsonNode.Parse(File.ReadAllBytes(input))!;
+            foreach (string kind in new[] { "nodes", "meshes", "materials" })
+                foreach (var item in json[kind] as JsonArray ?? []) item!["extras"]!["recoil"] ??= new JsonObject();
+            json["scenes"]![0]!["extras"] ??= new JsonObject();
+            json["scenes"]![0]!["extras"]!["recoil"] ??= new JsonObject();
+            var metadata = JsonNode.Parse(File.ReadAllBytes(Path.Combine(blenderSession, entry["metadata"]!.GetValue<string>())))!;
+            foreach (var mesh in metadata["meshes"]!.AsArray())
+            {
+                int index = mesh!["index"]!.GetValue<int>(), polygon = 0, face = 0, primitive = 0;
+                foreach (var item in mesh["primitives"]!.AsArray())
+                {
+                    JsonArray origins = [], zones = [], faces = [];
+                    foreach (var count in item!["triangles"]!.AsArray())
+                    {
+                        for (int i = 0; i < count!.GetValue<int>(); i++)
+                        { origins.Add(polygon); zones.Add(mesh["zones"]!["polygonZones"]![polygon]!.DeepClone()); faces.Add(++face); }
+                        polygon++;
+                    }
+                    var primitiveJson = json["meshes"]![index]!["primitives"]![primitive++]!;
+                    primitiveJson["extras"] ??= new JsonObject();
+                    primitiveJson["extras"]!["zstudio_blender"] =
+                        new JsonObject { ["origins"] = origins, ["zones"] = zones, ["faces"] = faces };
+                }
+            }
+            if (path == checkedOut.Model)
+            {
+                json["scenes"]![0]!["extras"] ??= new JsonObject();
+                json["scenes"]![0]!["extras"]!["recoil"] ??= new JsonObject();
+                json["scenes"]![0]!["extras"]!["recoil"]!["loadRoot"] ??= new JsonObject { ["zone"] = "any" };
+                json["scenes"]![0]!["extras"]!["recoil"]!["loadRoot"]!["landmark"] = true;
+            }
+            File.WriteAllText(input, json.ToJsonString()); exportedModels.Add(new JsonObject { ["path"] = path });
+        }
+        string edits = Path.Combine(blenderSession, "input", "edit.json");
+        File.WriteAllText(edits, new JsonObject { ["protocol"] = 1, ["session"] = blenderSession, ["models"] = exportedModels }.ToJsonString());
+        SourceBlender.PrepareBlenderExport(edits, checkedOut.Outbox, token);
+        byte[] beforeBlender = File.ReadAllBytes(fixture.Path(checkedOut.Model));
+        m1 = Document((await job("source_blender_update", new() { ["document"] = Id(m1), ["revision"] = m1.Revision, ["checkout"] = checkedOut.Id }, "completed"))["document"]!);
+        Assert.True(m1.IsDirty); Assert.Equal(beforeBlender, File.ReadAllBytes(fixture.Path(checkedOut.Model)));
+        m1 = Document(await call("undo_redo", new() { ["document"] = Id(m1), ["revision"] = m1.Revision, ["action"] = "undo" }));
         Assert.DoesNotContain(main.ViewModel.Problems, p => Changed(p, "m1") || Changed(p, "m2"));
-        // Copying the crate in m1 copies its lid, which FindNode lid then finds; m2 reads the same database and is now stale.
-        m1 = await Duplicate(m1, "crate", "crate2");
+        // Copy the last holder: the new lid follows every prior lid, so the runtime lookup changes.
+        m1 = await Duplicate(m1, "crate_b", "crate2");
         Assert.Contains(main.ViewModel.Problems, p => Changed(p, "m1") && p.Message.Contains("crate2/lid", StringComparison.Ordinal));
-        Assert.True(m2.SourceInputsChanged());
 
-        // Saved while another program holds the shown build's world file: the baseline is the world the document holds.
-        using (new FileStream(m1.SourceBuild!.WorldPath, FileMode.Open, FileAccess.Read, FileShare.None))
-            await job("save_document", new() { ["document"] = Id(m1), ["revision"] = m1.Revision }, "completed");
+        // Saving persists source edits and establishes its in-memory lookup baseline without generated archives.
+        await job("save_document", new() { ["document"] = Id(m1), ["revision"] = m1.Revision }, "completed");
         Assert.DoesNotContain(main.ViewModel.Problems, p => Changed(p, "m1") || Changed(p, "m2"));
 
-        // Another edit of the database keeps the project unsaved; m2 reloaded with it finds the saved copy's lid, which is no
-        // change since the save (m2 showed a build from before it, so nothing is compared until a build reads saved sources alone).
+        // Switching to m2 after the verified save establishes its baseline from saved sources.
+        m2 = Document((await job("source_world_open", new() { ["mission"] = "m2" }, "completed"))["document"]!);
+        Assert.True(m1.IsDisposed); Assert.DoesNotContain(main.ViewModel.Problems, p => Changed(p, "m2"));
+        m1 = Document((await job("source_world_open", new() { ["mission"] = "m1" }, "completed"))["document"]!);
+        // Another edit remains local; changing maps cannot silently carry it into a different document.
         int ground = m1.PreviewDocument.Scene!.Nodes.First(n => n.Name == "ground" && m1.SourceBuild!.Provenance.ContainsKey(n.Index)).Index;
         m1 = Document((await job("source_world_object_edit", new() { ["document"] = Id(m1), ["revision"] = m1.Revision, ["node"] = ground, ["position"] = new Dictionary<string, object?> { ["x"] = 5, ["y"] = 0, ["z"] = -5 } }, "completed"))["document"]!);
-        m2 = main.ViewModel.Documents.Single(d => d.SourceWorld?.Mission == "m2");
-        m2 = Document((await job("reload_document", new() { ["document"] = Id(m2), ["revision"] = m2.Revision }, "completed"))!);
-        Assert.DoesNotContain(main.ViewModel.Problems, p => Changed(p, "m2"));
+        Assert.Equal("unsaved_changes", (await job("source_world_open", new() { ["mission"] = "m2" }, "failed"))["code"]!.GetValue<string>());
+        Assert.Same(m1, Assert.Single(main.ViewModel.Documents));
         // m1's next copy, of crate2, is compared with what was saved: its lid is found now, not crate2's.
         m1 = await Duplicate(m1, "crate2", "crate3");
         Assert.Contains(main.ViewModel.Problems, p => Changed(p, "m1") && p.Message.Contains("crate3/lid", StringComparison.Ordinal));

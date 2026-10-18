@@ -1,8 +1,8 @@
 using System.Buffers.Binary;
 using System.Numerics;
-using Recoil.Zbd.Core.Formats;
+using zStudio.Core.Formats;
 
-namespace Recoil.Zbd.Core.Animation;
+namespace zStudio.Core.Animation;
 
 /// <summary>
 /// Turns a compiled animation entry back into its definition (<c>ANIMATION_DEFINITION</c>), the inverse of

@@ -1,7 +1,7 @@
 using System.Buffers.Binary;
 using System.Numerics;
 
-namespace Recoil.Zbd.Core.Worlds;
+namespace zStudio.Core.Worlds;
 
 /// <summary>
 /// Computes what the engine derives before it writes a world (CZClass::gwNodeUpdateAll): model bounds and spheres,
@@ -128,15 +128,15 @@ public static class WorldUpdate
     public static void RebuildBounds(GameZWorld world, CancellationToken token = default) => RebuildBoundsCore(world, token);
 
     /// <summary>Returns the number of distinct models rebuilt; geometry shared by nodes is measured only once per pass.</summary>
-    internal static int RebuildBoundsCore(GameZWorld world, CancellationToken token)
+    internal static int RebuildBoundsCore(GameZWorld world, CancellationToken token, IReadOnlyDictionary<WorldModel, WorldBox>? retainedBounds = null)
     {
         token.ThrowIfCancellationRequested();
         Dictionary<WorldModel, WorldBox> models = new(ReferenceEqualityComparer.Instance);
         WorldBox Bounds(WorldModel model)
         {
             if (models.TryGetValue(model, out var known)) return known;
-            var box = ModelBounds(model, token);
-            (model.BoundsCentre, model.BoundsRadius) = Sphere(box);
+            var box = retainedBounds != null ? retainedBounds[model] : ModelBounds(model, token);
+            if (retainedBounds == null) (model.BoundsCentre, model.BoundsRadius) = Sphere(box);
             models.Add(model, box);
             return box;
         }

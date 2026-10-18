@@ -7,9 +7,9 @@ using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Core.Animation;
-using Recoil.Zbd.Desktop;
+using zStudio.Core;
+using zStudio.Core.Animation;
+using zStudio.Desktop;
 using NAudio.Wave;
 using NAudio.CoreAudioApi;
 
@@ -19,7 +19,7 @@ internal static class AnimationCheck
     {
         root = Path.GetFullPath(root); int exit = 0;
         string output = Path.Combine(Path.GetTempPath(),"zstudio-animation-" + Guid.NewGuid().ToString("N")); Directory.CreateDirectory(output);
-        string settings = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"RecoilZbdStudio","settings.json");
+        string settings = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"zStudio","settings.json");
         byte[]? originalSettings = File.Exists(settings) ? File.ReadAllBytes(settings) : null;
         var app = new App { ShutdownMode = ShutdownMode.OnExplicitShutdown, ProcessCommandLine = false }; app.InitializeComponent();
         app.Startup += async (_, _) =>
@@ -220,9 +220,9 @@ internal static class AnimationCheck
         string status = window.ViewModel.Status;
         var escape = new KeyEventArgs(Keyboard.PrimaryDevice, PresentationSource.FromVisual(window), Environment.TickCount, Key.Escape) { RoutedEvent = Keyboard.PreviewKeyDownEvent };
         row.RaiseEvent(escape);
-        var cancel = (MenuItem)window.FindName("CancelOperationItem");
-        if (escape.Handled || cancel.IsEnabled || window.ViewModel.Status != status) throw new InvalidDataException("Idle cancellation is still exposed or changes the status.");
-        cancel.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
+        if (escape.Handled || window.OperationRunning || window.ViewModel.Status != status) throw new InvalidDataException("Idle cancellation reports a running operation or changes the status.");
+        window.CancelRunningOperation();
+        if (window.ViewModel.Status != status) throw new InvalidDataException("Idle cancellation changed the status.");
         await editor.SeekAsync(.1);
         if (Math.Abs(editor.CurrentFrame!.Time - .1) > 1e-8) throw new InvalidDataException("Idle cancellation invalidated animation seeking.");
         foreach (string name in new[] { "Seed", "Condition", "Mute", "Speed", "SeekSlider", "PlayButton" })

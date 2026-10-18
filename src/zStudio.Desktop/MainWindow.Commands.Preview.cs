@@ -6,11 +6,11 @@ using System.Windows.Controls;
 using System.Windows.Media.Imaging;
 using System.Windows.Media.Media3D;
 using NAudio.Wave;
-using Recoil.Zbd.Automation;
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Rendering;
+using zStudio.Automation;
+using zStudio.Core;
+using zStudio.Rendering;
 
-namespace Recoil.Zbd.Desktop;
+namespace zStudio.Desktop;
 
 public partial class MainWindow
 {
@@ -23,6 +23,8 @@ public partial class MainWindow
     {
         RequirePreview(a);
         if (EmptyPreview.Visibility == Visibility.Visible) throw new StudioCommandException("not_ready", EmptyPreview.Text);
+        // The rebuilt world's scene is still loading behind the frozen one it replaces.
+        if (retiringScene != null) throw new StudioCommandException("not_ready", "The view is reloading after a source edit; read zstudio_state again shortly.");
         return motion?.Viewport ?? animation?.Viewport ?? (SceneHost.Visibility == Visibility.Visible ? scene : null) ?? throw new StudioCommandException("unsupported", "No 3D viewport is active.");
     }
     private AnimationEditor TargetAnimation(JsonObject a)
@@ -54,18 +56,19 @@ public partial class MainWindow
             }
             return Result(new { header = asset.Metadata, palette = Page(colors, a, color => System.Text.Json.JsonSerializer.Serialize(color)).Data });
         });
-        Register(r, "preview_state", "Read active preview options, camera and playback state. texturePacks retains full choice names and paths on a bounded page (offset/limit, default 100, maximum 200); follow texturePackNextOffset and texturePackCount. Long or escaped paths shorten the page.", false,
+        Register(r, "preview_state", "Read active preview options, camera and playback state. reloading is true while a replacement presentation loads over the frozen previous scene; viewport commands answer not_ready until it is published. Source edits evaluate in memory without archives; ordinary transform updates retain the viewport. objectTransformPreviewNode identifies an object currently drawn with a provisional transform while its source change is evaluated. texturePacks retains full choice names and paths on a bounded page (offset/limit, default 100, maximum 200); follow texturePackNextOffset and texturePackCount. Long or escaped paths shorten the page.", false,
             [PreviewParameter, new("offset", "integer", "Zero-based texture-pack choice offset; default 0.", Minimum: 0, Maximum: int.MaxValue), new("limit", "integer", "Texture-pack page size, 1–200; default 100.", Minimum: 1, Maximum: 200)], a =>
         {
             RequirePreview(a);
             var packs = Page(animation == null && SceneHost.Visibility == Visibility.Visible ? TexturePackCombo.Items.Cast<PackChoice>() : [], a,
                 maximumRowBytes: p => InspectionResultBudget.Pack(p.Name, p.Path)).Data;
-            return Result(new { preview = previewId, asset = shownAsset?.Id, animation = animation?.PreviewState(), motion = motion?.State,
-                camera = motion?.Viewport.CaptureView() ?? animation?.Viewport.CaptureView() ?? (SceneHost.Visibility == Visibility.Visible ? scene?.CaptureView() : null),
+            return Result(new { preview = previewId, asset = shownAsset?.Id, reloading = IsViewReloading, objectTransformPreviewNode = (retiringScene ?? scene)?.ObjectTransformPreviewNode,
+                animation = animation?.PreviewState(), motion = motion?.State,
+                camera = motion?.Viewport.CaptureView() ?? animation?.Viewport.CaptureView() ?? (SceneHost.Visibility == Visibility.Visible ? (retiringScene ?? scene)?.CaptureView() : null),
                 framingSelection = motion?.Viewport.FramingSelection ?? animation?.Viewport.FramingSelection ?? (SceneHost.Visibility == Visibility.Visible ? scene?.FramingSelection : null),
                 ai = AiPreviewState(),
                 parachute = ParachuteState(),
-                presentation = new { fullscreen=PresentationState.Fullscreen, uiHidden=PresentationState.UiHidden, available=PresentationState.Available },
+                presentation = new { fullscreen=PresentationState.Fullscreen, available=PresentationState.Available },
                 lod = motion?.Lod ?? animation?.PreviewLod ?? (SceneHost.Visibility == Visibility.Visible ? (int?)LodCombo.SelectedIndex : null), difficulty = MissionWorldPath != null || motion != null ? null : ViewModel.Difficulty.ToString(),
                 mission = animation?.MissionArchive ?? scene?.Mission?.Layout.MissionArchive,
                 texturePacks = packs["items"], texturePackCount = packs["total"], texturePackOffset = packs["offset"], texturePackNextOffset = packs["nextOffset"],
@@ -85,14 +88,14 @@ public partial class MainWindow
                 project: n => new { n.Index,n.Name,n.Class, Metadata = JsonData.PreviewObject(n.Metadata, 64, 1024), actor = viewport.ActorAt(n.Index) },
                 maximumRowBytes: n => InspectionResultBudget.SceneNode(n.Name, n.Class, viewport.ActorAt(n.Index)));
         });
-        Register(r, "scene_selection", "Select/inspect a scene node with bounded metadata and inspection_truncated. Isolate includes its descendants; isolate and show_all are available only in static model/Whole world previews, matching the GUI.", true, [PreviewParameter, P("action","string","Selection operation; isolate/show_all require a static model or Whole world preview.",true,"select","isolate","show_all"), P("node","integer","Node index.")], a =>
+        Register(r, "scene_selection", "Select/inspect a scene node with bounded metadata and inspection_truncated. Isolate includes its descendants; isolate and show_all are available only in static model/Whole world previews, matching the GUI. show_all also shows what scene_tree hide hid.", true, [PreviewParameter, P("action","string","Selection operation; isolate/show_all require a static model or Whole world preview.",true,"select","isolate","show_all"), P("node","integer","Node index.")], a =>
         {
             RequireNoDrafts(); var viewport = TargetViewport(a); string action = Text(a,"action");
             if ((animation != null || motion != null) && action is "isolate" or "show_all")
                 throw new StudioCommandException("unsupported", "Isolation is available only in model and Whole world previews. Animation scenes remain fully visible.");
             if (viewport.IsPickupDragging || viewport.IsFlyActive)
                 throw new StudioCommandException("busy", "Finish the pickup drag or exit Fly before changing scene selection.");
-            if (action == "show_all") { viewport.Isolate(null); isolatedNode = null; }
+            if (action == "show_all") { viewport.Isolate(null); isolatedNode = null; hiddenRows.Clear(); pendingHidden = null; ApplyHiddenRows(); CurrentInspectionCard?.Refresh(); }
             else
             {
                 int node = Int(a,"node",-1); if (!viewport.CanInspectNode(node)) throw new StudioCommandException("stale_record","Scene node unavailable.");
@@ -100,7 +103,12 @@ public partial class MainWindow
                 {
                     // A picked pickup mesh represents its whole placed instance,
                     // matching the GUI's selection and subsequent Isolate command.
-                    node = viewport.PickupAt(node)?.Root ?? node;
+                    node = viewport.SelectionOwner?.Invoke(node) ?? viewport.PickupAt(node)?.Root ?? node;
+                    if (node < 0)
+                    {
+                        RefreshSceneTree();
+                        if (sceneTree?.Reveal(node) == null) throw new StudioCommandException("stale_record", "Source selection owner is not in the current scene hierarchy.");
+                    }
                     InspectNode(node);
                 }
                 if (action == "select")
@@ -113,15 +121,21 @@ public partial class MainWindow
                     RevealSceneNode(node);
                 }
                 viewport.SelectFramingNode(node);
-                if (action == "isolate") { viewport.Isolate(node); isolatedNode = node; }
+                if (action == "isolate") { viewport.Isolate(node); isolatedNode = node; CurrentInspectionCard?.Refresh(); }
+                if (node < 0 && sceneTree?.Reveal(node) is { Synthetic: true } sourceRow)
+                    return Result(SceneTreeProperties(sourceRow));
+                if (node < 0) throw new StudioCommandException("stale_record", "Source selection owner is not in the current scene hierarchy.");
                 return Result(JsonData.PreviewObject(viewport.PreviewScene!.Nodes[node].Metadata));
             }
             return Result(new { visible = "all" });
         });
-        RegisterJob(r, "scene_options", "Set static model/world options: lod(integer), difficulty(Easy/Medium/Hard; RECOIL only, MW3 uses missions), textures/wireframe/faceOrientation/bounds/horizon(boolean), texturePack(path or empty for automatic), highlight(none/nonDefaultSoils/canModify/clipTo/zones), aiNodes/aiThroughGeometry(boolean), aiNetwork(all or ID with aiSnapshot). Highlights and AI are Whole world only.", [PreviewParameter,SceneChanges], false, async (a, token) =>
+        RegisterJob(r, "scene_options", "Set static model/world options: lod(integer), difficulty(Easy/Medium/Hard; RECOIL only, MW3 uses missions), textures/wireframe/faceOrientation/bounds/horizon(boolean), texturePack(path or empty for automatic), highlight(none/nonDefaultSoils/canModify/clipTo/canModifyAndClipTo/zones/polygonZones/landmarks), aiNodes/aiThroughGeometry(boolean), aiNetwork(all or ID with aiSnapshot). Highlights and AI are Whole world only.", [PreviewParameter,SceneChanges], false, async (a, token) =>
         {
             RequirePreview(a); RequireNoDrafts(shownDocument); if (animation != null || motion != null) throw new StudioCommandException("unsupported","Use animation_options or motion_preview.");
-            TargetViewport(a); var doc = shownDocument!; var asset = shownAsset!;
+            TargetViewport(a);
+            if (shownDocument?.SourceWorld is { } sourceWorld && (sourceWorld.IsRebuilding || sourceWorkspaceBusy))
+                throw new StudioCommandException("busy", "The source scene is being evaluated; change its presentation options when it is ready.");
+            var doc = shownDocument!; var asset = shownAsset!;
             var changes = (JsonObject)a["changes"]!;
             bool changesAi = changes.Any(p => p.Key is "aiNodes" or "aiThroughGeometry" or "aiNetwork" or "aiSnapshot");
             string? requestedAiNetwork = changes.ContainsKey("aiNetwork") ? Text(changes, "aiNetwork") == "all" ? null : Text(changes, "aiNetwork") : aiNetworkFilter;
@@ -203,7 +217,10 @@ public partial class MainWindow
                     "nonDefaultSoils" => WorldHighlightMode.NonDefaultSoils,
                     "canModify" => WorldHighlightMode.CanModify,
                     "clipTo" => WorldHighlightMode.ClipTo,
+                    "canModifyAndClipTo" => WorldHighlightMode.CanModifyAndClipTo,
                     "zones" => WorldHighlightMode.Zones,
+                    "polygonZones" => WorldHighlightMode.PolygonZones,
+                    "landmarks" => WorldHighlightMode.Landmarks,
                     _ => WorldHighlightMode.None
                 });
             }
@@ -258,7 +275,7 @@ public partial class MainWindow
             if (target == "preview") RequirePreview(a);
             if(target=="window" || target=="properties") image=StudioCapture.Window(target=="window" ? this : propertiesWindow ?? throw new StudioCommandException("not_ready","Properties is closed."));
             else if(decoded!=null) image=MakeBitmap(decoded,ChannelCombo.SelectedIndex);
-            else { int w=Int(a,"width",1280),h=Int(a,"height",720); if(w is <1 or >4096 || h is <1 or >4096) throw new StudioCommandException("invalid_argument","Capture dimensions must be 1–4096."); image=(motion?.Viewport ?? animation?.Viewport ?? (SceneHost.Visibility == Visibility.Visible ? scene : null) ?? throw new StudioCommandException("not_ready","No image/3D preview is loaded. Use target=window for other viewers.")).RenderImage(w,h,preserveAspect:true); }
+            else { int w=Int(a,"width",1280),h=Int(a,"height",720); if(w is <1 or >4096 || h is <1 or >4096) throw new StudioCommandException("invalid_argument","Capture dimensions must be 1–4096."); image=(motion?.Viewport ?? animation?.Viewport ?? (SceneHost.Visibility == Visibility.Visible ? retiringScene ?? scene : null) ?? throw new StudioCommandException("not_ready","No image/3D preview is loaded. Use target=window for other viewers.")).RenderImage(w,h,preserveAspect:true); }
             using MemoryStream bytes=new(); PngBitmapEncoder encoder=new(); encoder.Frames.Add(BitmapFrame.Create(image)); encoder.Save(bytes);
             return new(Result(new { image.PixelWidth,image.PixelHeight,mimeType="image/png", preview = target == "preview" ? (Guid?)previewId : null, asset = target == "preview" ? shownAsset?.Id : null }).Data,bytes.ToArray());
         });

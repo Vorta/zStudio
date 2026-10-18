@@ -1,12 +1,12 @@
 using System.Buffers.Binary;
 using System.Text;
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Core.Animation;
-using Recoil.Zbd.Core.Formats;
-using Recoil.Zbd.Core.Worlds;
+using zStudio.Core;
+using zStudio.Core.Animation;
+using zStudio.Core.Formats;
+using zStudio.Core.Worlds;
 using Xunit;
 
-namespace Recoil.Zbd.Tests;
+namespace zStudio.Tests;
 
 public sealed class AnimationTextureOperandWorkTests
 {
@@ -129,7 +129,7 @@ public sealed class AnimationTextureOperandWorkTests
         scene.Nodes.Add(new(0, "world", "world", null, [], [1], new(), new()));
         scene.Nodes.Add(new(1, "n1", "object3d", 0, [0], [], new(), new()));
         scene.Models.Add(new(0, [], [], [], [new(0, 0, [], [], [], [])], new()));
-        var world = new ZbdDocument("world.zbd", new(0, DateTime.MinValue), new(FormatFamily.GameZ, 15, Recognition.Supported, "fixture"), ReadOnlyMemory<byte>.Empty) { Scene = scene };
+        var world = new AssetDocument("world.zbd", new(0, DateTime.MinValue), new(FormatFamily.GameZ, 15, Recognition.Supported, "fixture"), ReadOnlyMemory<byte>.Empty) { Scene = scene };
         return new() { Package = new() { Prefix = [], Tail = [] }, World = world };
     }
 

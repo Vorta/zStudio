@@ -4,9 +4,9 @@ using System.Numerics;
 using System.Text.Json.Nodes;
 using System.Windows;
 using System.Windows.Controls;
-using Recoil.Zbd.Core;
+using zStudio.Core;
 
-namespace Recoil.Zbd.Desktop;
+namespace zStudio.Desktop;
 
 /// <summary>Coordinates are bound to a placement source, never the viewport's current selection.</summary>
 public sealed class PickupPropertiesEditor : FieldEditor, IDisposable
@@ -48,7 +48,7 @@ public sealed class PickupPropertiesEditor : FieldEditor, IDisposable
         RefreshProperties();
     }
     private void DocumentChanged(object? sender, PropertyChangedEventArgs e)
-    { if (e.PropertyName is nameof(DocumentModel.PickupsLocked) or nameof(DocumentModel.PickupEdits)) RefreshProperties(); }
+    { if (e.PropertyName is nameof(DocumentModel.EditingLocked) or nameof(DocumentModel.PickupEdits)) RefreshProperties(); }
     // Reads and commits use the document's current session, never one captured when the form was built: a clean session
     // is replaced when other documents publish changes, and a replaced one is no longer shown, undone or saved.
     private PickupPlacementEditSession Session() => document.PickupEdits is { } edits && edits.Find(source) != null ? edits
@@ -61,9 +61,9 @@ public sealed class PickupPropertiesEditor : FieldEditor, IDisposable
         if (document.PickupEdits is not { } edits) return;
         var record = edits.Find(source);
         // Unfinished input stays visible (its commit is refused) until it is resolved.
-        if (record == null ? !shownGone && !HasPendingDrafts : shownGone || locked != document.PickupsLocked)
+        if (record == null ? !shownGone && !HasPendingDrafts : shownGone || locked != document.EditingLocked)
         {
-            shownGone = record == null; locked = shownGone ? null : document.PickupsLocked; draftInputs.Clear(); ClearAutomationFields("properties"); valueRefresh.Clear();
+            shownGone = record == null; locked = shownGone ? null : document.EditingLocked; draftInputs.Clear(); ClearAutomationFields("properties"); valueRefresh.Clear();
             if (details.Parent is Panel previous) previous.Children.Remove(details);
             DockPanel panel = new(); Content = panel;
             StackPanel form = new() { Margin = new(12) }; DockPanel.SetDock(form, Dock.Top); panel.Children.Add(form);
@@ -85,7 +85,7 @@ public sealed class PickupPropertiesEditor : FieldEditor, IDisposable
             }
             Vector3 Parse(string text)
             {
-                if (document.PickupsLocked) throw new InvalidOperationException("This document's coordinate editing is locked.");
+                if (document.EditingLocked) throw new InvalidOperationException("This document's coordinate editing is locked.");
                 string[] parts = text.Split([',', ' ', '\t'], StringSplitOptions.RemoveEmptyEntries);
                 if (parts.Length != 3) throw new FormatException("Enter finite X, Y and Z coordinates.");
                 float[] values = parts.Select(v => float.Parse(v, CultureInfo.InvariantCulture)).ToArray();

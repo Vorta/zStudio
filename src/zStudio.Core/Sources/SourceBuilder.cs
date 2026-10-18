@@ -1,8 +1,8 @@
 using System.Text;
-using Recoil.Zbd.Core.Formats;
-using Recoil.Zbd.Core.Worlds;
+using zStudio.Core.Formats;
+using zStudio.Core.Worlds;
 
-namespace Recoil.Zbd.Core.Sources;
+namespace zStudio.Core.Sources;
 
 /// <summary>A game file that the source tree can build, and the source files it is built from.</summary>
 public sealed record SourceOutputPlan(string Path, string Family, IReadOnlyList<string> Inputs)
@@ -31,6 +31,8 @@ public sealed record SourceExportReport(string? Destination, IReadOnlyList<Sourc
 {
     /// <summary>The build profile the outputs were built with.</summary>
     public string Profile { get; init; } = BuildProfiles.Modern.Name;
+    /// <summary>How the texture packs converted colours.</summary>
+    public TextureDithering Dithering { get; init; }
     /// <summary>Findings about the destination as a whole, such as larger texture packs there that the game would prefer.</summary>
     public IReadOnlyList<string> Notes { get; init; } = [];
     /// <summary>
@@ -188,7 +190,7 @@ public static partial class SourceBuilder
                 bool promised = false, planned = false;
                 foreach (var pack in profile.TexturePacks.Where(pack => pack.Builds(name)))
                 {
-                    if (!pack.Automatic) { packs.Add(new($"{name}/{pack.File}", "textures", textures) { Pack = pack.Variant, Images = images }); continue; }
+                    if (!pack.Automatic) { packs.Add(new($"{name}/{pack.File}", "textures", textures) { Pack = pack.Variant with { Dithering = profile.Dithering }, Images = images }); continue; }
                     if (!automaticPacks) continue;
                     promised = true;
                     // The automatic pack is named for the texture memory the mission's textures need at full size.
@@ -197,7 +199,7 @@ public static partial class SourceBuilder
                     planned = true;
                     packs.Add(new($"{name}/{automatic.FileName}", "textures", textures)
                     {
-                        Pack = automatic, Automatic = true, FullSize = true, Images = images,
+                        Pack = automatic with { Dithering = profile.Dithering }, Automatic = true, FullSize = true, Images = images,
                         Notes = memory > budget
                             ? [$"The {name} textures need {(memory + (1 << 20) - 1) >> 20} MB of texture memory at full size, more than the {budget >> 20} MB the profile's automatic rtexture pack may hold; {automatic.FileName} holds them reduced to fit."] : [],
                     });
@@ -236,7 +238,7 @@ public static partial class SourceBuilder
     /// </summary>
     internal sealed class Snapshot(string root, IReadOnlyDictionary<string, byte[]>? overlay = null, Func<string, Exception>? changed = null,
         long maximumRetainedBytes = SourceExtractor.MaximumRetainedBytes, EffectLimits? effectLimits = null,
-        long inventoryLimit = InventoryBudget.MaximumUnits, CancellationToken inventoryToken = default)
+        long inventoryLimit = InventoryBudget.MaximumUnits, CancellationToken inventoryToken = default, bool retainModelSources = false)
     {
         private readonly (InventoryBudget Budget, PendingInventory Added) inventory = CapturePending(root, overlay, inventoryLimit, inventoryToken);
         internal InventoryBudget Inventory => inventory.Budget;
@@ -322,6 +324,21 @@ public static partial class SourceBuilder
         }
         private readonly Dictionary<string, (string Sha, FileStamp Stamp)> files = new(StringComparer.OrdinalIgnoreCase);
         internal IReadOnlyDictionary<string, string> Hashes() => files.ToDictionary(p => p.Key, p => p.Value.Sha, StringComparer.OrdinalIgnoreCase);
+        private readonly Dictionary<string, string> pendingHashes = new(StringComparer.OrdinalIgnoreCase);
+        internal Dictionary<string, byte[]> ModelSources { get; } = new(StringComparer.OrdinalIgnoreCase);
+        private byte[] RetainModelSource(string path, byte[] bytes)
+        {
+            if (retainModelSources && (path.EndsWith(".gltf", StringComparison.OrdinalIgnoreCase) || path.EndsWith(".glb", StringComparison.OrdinalIgnoreCase)) && !ModelSources.ContainsKey(path))
+            { Retain(bytes.LongLength); ModelSources.Add(path, bytes); }
+            return bytes;
+        }
+        /// <summary>Frozen bytes actually read, including accepted unsaved workspace sources.</summary>
+        internal IReadOnlyDictionary<string, string> ReadHashes()
+        {
+            Dictionary<string, string> result = new(pendingHashes, StringComparer.OrdinalIgnoreCase);
+            foreach (var (path, value) in files) result.Add(path, value.Sha);
+            return result;
+        }
         // Negative lookups affect compilation too (optional definitions, search paths and fallback resources).
         private readonly Dictionary<string, FileStamp?> probes = new(StringComparer.OrdinalIgnoreCase);
         /// <summary>Every project file the run read or asked about, from the overlay or the disk: what its outputs depend on.</summary>
@@ -414,7 +431,8 @@ public static partial class SourceBuilder
             if (overlay?.TryGetValue(relative, out var pending) == true)
             {
                 limits.Validate(pending);
-                return pending;
+                if (!pendingHashes.ContainsKey(relative)) { Retain(160); pendingHashes.Add(relative, SourceProject.Sha256(pending)); }
+                return RetainModelSource(relative, pending);
             }
             if (!Exists(relative)) throw new FileNotFoundException($"{relative} does not exist.");
             string path = SourceProject.Resolve(root, relative);
@@ -422,7 +440,7 @@ public static partial class SourceBuilder
             byte[] bytes = SourceRead.All(path, limits, token); string sha = SourceProject.Sha256(bytes);
             if (FileStamp.Read(path) != stamp) throw Changed(relative, $"{relative} changed while it was read; export again.");
             if (files.TryGetValue(relative, out var first) && (first.Sha != sha || first.Stamp != stamp)) throw Changed(relative, $"{relative} changed while exporting; export again.");
-            files[relative] = (sha, stamp); return bytes;
+            files[relative] = (sha, stamp); return RetainModelSource(relative, bytes);
         }
         /// <summary>The error for a project file that changed during the run: the run's own (see the constructor), else an export's <paramref name="message"/>.</summary>
         internal Exception Changed(string relative, string message) => changed?.Invoke(relative) ?? new InvalidDataException(message);
@@ -497,8 +515,11 @@ public static partial class SourceBuilder
         internal sealed record AssembledWorld(GameZWorld World, IReadOnlyList<string> Warnings, IReadOnlyDictionary<string, string> TextureFiles, IReadOnlyDictionary<string, int> TextureAddressing, IReadOnlyList<WorldNode> LoadedRoots)
         {
             public IReadOnlyDictionary<WorldNode, WorldNodeProvenance> Provenance { get; init; } = new Dictionary<WorldNode, WorldNodeProvenance>();
+            public SourceAuthoredHierarchy AuthoredHierarchy { get; init; } = SourceAuthoredHierarchy.Empty;
             public IReadOnlyDictionary<(string Script, int Line), int> Executions { get; init; } = new Dictionary<(string, int), int>();
             public SourceInstruction? WriteInstruction { get; init; }
+            public IReadOnlyDictionary<WorldNode, WorldNode[]> WorldChildOrder { get; init; } = new Dictionary<WorldNode, WorldNode[]>();
+            public IReadOnlySet<string> TerrainModelInputs { get; init; } = new HashSet<string>();
             /// <summary>The texture cycles the world's scripts set up after writing it, with the materials they are shown on.</summary>
             public IReadOnlyList<CycledTextures> TextureCycles { get; init; } = [];
         }
@@ -513,11 +534,12 @@ public static partial class SourceBuilder
                     WorldAssembler assembler = new(new ProjectFiles(this, root, overlay), token);
                     var world = assembler.Assemble($"{mission}.gs");
                     // Include per-node provenance and its applied instruction references, beside decoded geometry.
-                    Retain(SourceExtractor.Footprint(world) + 512L * assembler.Provenance.Count + 256L * assembler.Executions.Count
+                    Retain(SourceExtractor.Footprint(world) + 512L * assembler.Provenance.Count + 256L * assembler.Executions.Count + assembler.AuthoredHierarchyFootprint
                         + assembler.Provenance.Values.Sum(p => 128L * p.Applied.Count) + assembler.TextureCycles.Sum(c => 64L + 16L * c.Frames.Count));
                     cached = (new(world, assembler.Warnings, new Dictionary<string, string>(assembler.TextureFiles, StringComparer.OrdinalIgnoreCase),
                         new Dictionary<string, int>(assembler.TextureAddressing, StringComparer.OrdinalIgnoreCase), [.. assembler.LoadedRoots])
-                    { Provenance = assembler.Provenance, Executions = assembler.Executions, WriteInstruction = assembler.WriteInstruction, TextureCycles = assembler.TextureCycles }, null);
+                    { Provenance = assembler.Provenance, AuthoredHierarchy = assembler.AuthoredHierarchy(GameZWriter.NodeSlots(world, token)),
+                        Executions = assembler.Executions, WriteInstruction = assembler.WriteInstruction, TextureCycles = assembler.TextureCycles, WorldChildOrder = assembler.WorldChildOrder, TerrainModelInputs = assembler.TerrainModelInputs }, null);
                 }
                 catch (Exception ex) when (IsBuildFailure(ex)) { cached = (null, ex); }
                 worlds[mission] = cached;
@@ -578,8 +600,9 @@ public static partial class SourceBuilder
     internal static bool IsBuildFailure(Exception ex) => ex is not (OperationCanceledException or OutOfMemoryException);
 
     /// <summary>Build the selected outputs (all when null) in memory and report problems without writing anything.</summary>
-    public static Task<SourceExportReport> CheckAsync(string root, IReadOnlyCollection<string>? outputs = null, IProgress<SourceProgress>? progress = null, CancellationToken token = default, string? profile = null)
-        => RunAsync(root, null, outputs, false, progress, token, profile);
+    public static Task<SourceExportReport> CheckAsync(string root, IReadOnlyCollection<string>? outputs = null, IProgress<SourceProgress>? progress = null, CancellationToken token = default, string? profile = null,
+        TextureDithering dithering = TextureDithering.None)
+        => RunAsync(root, null, outputs, false, progress, token, profile, dithering: dithering);
 
     /// <summary>
     /// Build the selected outputs (all when null) into <paramref name="destination"/>. Existing game files there are replaced
@@ -589,18 +612,22 @@ public static partial class SourceBuilder
     /// fails, and nothing is written if any output fails.
     /// </summary>
     public static Task<SourceExportReport> ExportAsync(string root, string destination, IReadOnlyCollection<string>? outputs = null, bool overwrite = false, IProgress<SourceProgress>? progress = null, CancellationToken token = default, string? profile = null,
-        Func<IReadOnlyList<string>, CancellationToken, Task<bool>>? confirmReplace = null)
-        => RunAsync(root, destination, outputs, overwrite, progress, token, profile, confirmReplace: confirmReplace);
+        Func<IReadOnlyList<string>, CancellationToken, Task<bool>>? confirmReplace = null, TextureDithering dithering = TextureDithering.None)
+        => RunAsync(root, destination, outputs, overwrite, progress, token, profile, confirmReplace: confirmReplace, dithering: dithering);
 
-    /// <summary><paramref name="profileName"/> selects the build profile (the project's default when null).</summary>
+    /// <summary>
+    /// <paramref name="profileName"/> selects the build profile (the project's default when null); <paramref name="dithering"/>
+    /// is how its texture packs convert colours.
+    /// </summary>
     internal static async Task<SourceExportReport> RunAsync(string root, string? destination, IReadOnlyCollection<string>? outputs, bool overwrite, IProgress<SourceProgress>? progress, CancellationToken token, string? profileName, EffectLimits? effectLimits = null,
-        long inventoryLimit = InventoryBudget.MaximumUnits, Func<IReadOnlyList<string>, CancellationToken, Task<bool>>? confirmReplace = null)
+        long inventoryLimit = InventoryBudget.MaximumUnits, Func<IReadOnlyList<string>, CancellationToken, Task<bool>>? confirmReplace = null,
+        TextureDithering dithering = TextureDithering.None)
     {
         root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(root));
         // The run's view of the project starts before planning: the profile is read through it, so a change to its file is
         // refused like a changed source, and the plan is made again before publishing (see CheckPlanUnchanged).
         Snapshot snapshot = new(root, effectLimits: effectLimits, inventoryLimit: inventoryLimit, inventoryToken: token);
-        var profile = await Task.Run(() => FindProfile(root, profileName, snapshot, token), token);
+        var profile = await Task.Run(() => FindProfile(root, profileName, snapshot, token), token) with { Dithering = dithering };
         // An export of every output names the automatic packs from the textures as their builds count them.
         var all = await Task.Run(() => Plan(root, null, profile, true, token, snapshot, countPacks: outputs == null), token);
         var selected = outputs == null ? all : outputs.Select(o => all.FirstOrDefault(p => p.Path.Equals(o.Replace('\\', '/'), StringComparison.OrdinalIgnoreCase))
@@ -686,7 +713,7 @@ public static partial class SourceBuilder
                 if (results.Any(r => r.Status == "failed")) throw new InvalidDataException(FailedOutputs(results, token));
                 Publish(staging, destination, [.. results.Select(r => (r.Path, contents[r.Path]))], overwrite, token, captured: directories, replace: confirmed);
             }
-            return new(destination, results) { Profile = profile.Name, Notes = reportNotes, Lookups = lookups, LookupChanges = changes };
+            return new(destination, results) { Profile = profile.Name, Dithering = profile.Dithering, Notes = reportNotes, Lookups = lookups, LookupChanges = changes };
         }
         // A staging folder another program holds must not replace the export's own result or error.
         finally
@@ -743,7 +770,7 @@ public static partial class SourceBuilder
     {
         token.ThrowIfCancellationRequested();
         BuildProfile again; IReadOnlyList<SourceOutputPlan> now;
-        try { again = FindProfile(root, profileName, snapshot, token); now = Plan(root, null, again, true, token, snapshot, countPacks: selected == null); }
+        try { again = FindProfile(root, profileName, snapshot, token) with { Dithering = profile.Dithering }; now = Plan(root, null, again, true, token, snapshot, countPacks: selected == null); }
         catch (InventoryCapacityException) { throw; }
         catch (Exception ex) when (ex is InvalidDataException or IOException or UnauthorizedAccessException)
         { throw new InvalidDataException($"The project changed while exporting; nothing was written. Export again. ({ex.Message})", ex); }
@@ -1229,15 +1256,20 @@ public static partial class SourceBuilder
     /// </summary>
     private static (List<(string Input, string Name)> Inputs, IReadOnlyDictionary<string, int> Addressing, List<string> Warnings) PackInputs(SourceOutputPlan plan, Snapshot snapshot, CancellationToken token)
     {
-        List<(string Input, string Name)> inputs = [.. plan.Inputs.Select(input => (input, TextureName(input)))];
-        List<string> warnings = [];
         string mission = plan.Path.Split('/')[0];
-        if (!snapshot.HasWorld(mission)) return (inputs, new Dictionary<string, int>(), warnings);
+        return (TextureInputs(plan.Inputs, mission, snapshot, token), snapshot.HasWorld(mission) ? snapshot.TextureAddressing(mission, token) : new Dictionary<string, int>(), []);
+    }
+
+    /// <summary>Resolve physical texture identity identically for source display and game export.</summary>
+    internal static List<(string Input, string Name)> TextureInputs(IReadOnlyList<string> inputs, string mission, Snapshot snapshot, CancellationToken token)
+    {
+        List<(string Input, string Name)> resolved = [.. inputs.Select(input => (input, TextureName(input)))];
+        if (!snapshot.HasWorld(mission)) return resolved;
         var world = snapshot.World(mission, token);
-        HashSet<string> names = new(inputs.Select(i => i.Name), StringComparer.OrdinalIgnoreCase);
+        HashSet<string> names = new(resolved.Select(i => i.Name), StringComparer.OrdinalIgnoreCase);
         foreach (var (name, file) in world.TextureFiles.OrderBy(t => t.Key, StringComparer.Ordinal))
-            if (names.Add(name)) inputs.Add((file, name.ToLowerInvariant()));
-        return (inputs, snapshot.TextureAddressing(mission, token), warnings);
+            if (names.Add(name)) resolved.Add((file, name.ToLowerInvariant()));
+        return resolved;
     }
 
     /// <summary>

@@ -1,8 +1,8 @@
 using System.Security.Cryptography;
 using System.Text.Json;
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Core.Export;
-using Recoil.Zbd.Core.Formats;
+using zStudio.Core;
+using zStudio.Core.Export;
+using zStudio.Core.Formats;
 
 if (args.Length < 2) { Console.Error.WriteLine("Usage: ExportCheck <output-directory> <dataset-root> [...]"); return 2; }
 string output = Path.GetFullPath(args[0]); Directory.CreateDirectory(output); List<object> samples = []; int errors = 0, complete = 0;

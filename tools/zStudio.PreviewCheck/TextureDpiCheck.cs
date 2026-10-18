@@ -4,8 +4,8 @@ using System.Windows.Controls;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Desktop;
+using zStudio.Core;
+using zStudio.Desktop;
 
 internal static class TextureDpiCheck
 {

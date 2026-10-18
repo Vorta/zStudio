@@ -3,12 +3,12 @@ using System.IO.Pipes;
 using System.Text.Json.Nodes;
 using ModelContextProtocol.Client;
 using ModelContextProtocol.Protocol;
-using Recoil.Zbd.Desktop;
-using Recoil.Zbd.Mcp;
-using Recoil.Zbd.Tests;
+using zStudio.Desktop;
+using zStudio.Mcp;
+using zStudio.Tests;
 using Xunit;
 
-namespace Recoil.Zbd.Desktop.Tests;
+namespace zStudio.Desktop.Tests;
 
 /// <summary>
 /// Lookups by name through the GUI and MCP: Check lists the names several nodes share that a mission looks up, and an edit
@@ -19,8 +19,8 @@ internal static class LookupMcpChecks
     internal static async Task Run()
     {
         using var fixture = new SourceWorldFixture();
-        // The database copies a part (a crate with a lid, and a post) twice; the mission's texture effects find the lid.
-        fixture.WritePartDatabase();
+        // Two independently editable map-authored crates have lids of the same name; texture effects find the newer lid.
+        fixture.WriteNestedDatabase(lookupEdits: true);
         fixture.Write("gamegen/m1_zbd.gs", "source support\\tex_fxm1.gw\r\nQuit\r\n");
         fixture.Write("gamegen/support/tex_fxm1.gw", "FindNode lid\r\nQuit\r\n");
         using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(90)); var token = deadline.Token;
@@ -48,7 +48,11 @@ internal static class LookupMcpChecks
             var doc = Document(opened);
             int crate = doc.PreviewDocument.Scene!.Nodes.First(n => n.Name == "crate" && doc.SourceBuild!.Provenance.ContainsKey(n.Index)).Index;
             Assert.DoesNotContain(main.ViewModel.Problems, Changed);
-            var copied = Document((await Job("source_world_object_edit", new() { ["document"] = Id(doc), ["revision"] = doc.Revision, ["node"] = crate, ["action"] = "duplicate", ["name"] = "crate2" }))["document"]!);
+            // Placed beside the crate, as the card's Copy does: X moves by the crate's width, Y and Z stay.
+            var before = zStudio.Core.SceneBuilder.LocalTransform(doc.PreviewDocument.Scene!.Nodes[crate]).Translation;
+            var copied = Document((await Job("source_world_object_edit", new() { ["document"] = Id(doc), ["revision"] = doc.Revision, ["node"] = crate, ["action"] = "duplicate", ["name"] = "crate2", ["beside"] = true }))["document"]!);
+            var beside = zStudio.Core.SceneBuilder.LocalTransform(copied.PreviewDocument.Scene!.Nodes.First(n => n.Name == "crate2" && copied.SourceBuild!.Provenance.ContainsKey(n.Index))).Translation;
+            Assert.True(beside.X > before.X); Assert.Equal((before.Y, before.Z), (beside.Y, beside.Z));
             var warning = Assert.Single(main.ViewModel.Problems, Changed);
             Assert.Equal("Warning", warning.Severity);
             Assert.Contains("crate2/lid", warning.Message);
@@ -57,23 +61,29 @@ internal static class LookupMcpChecks
             // Saved, the copy is what later edits compare with: the warning is settled.
             await Job("save_document", new() { ["document"] = Id(copied), ["revision"] = copied.Revision });
             Assert.DoesNotContain(main.ViewModel.Problems, Changed);
-            // Properties takes a parent by name: the copies of one node of the part are one parent to the part's file, while
-            // a name nothing has is refused.
+            // Properties takes an unambiguous parent by name, while a name nothing has is refused.
             var shown = main.ViewModel.Documents.Single(d => d.SourceWorld != null);
             var named = typeof(MainWindow).GetMethod("SourceWorldNodeNamed", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!;
-            Assert.Equal("crate", ((Recoil.Zbd.Core.Worlds.WorldNode)named.Invoke(main, [shown, "crate"])!).Name);
-            Assert.IsType<Recoil.Zbd.Automation.StudioCommandException>(Assert.Throws<System.Reflection.TargetInvocationException>(() => named.Invoke(main, [shown, "nothing"])).InnerException);
+            Assert.Equal("crate", ((zStudio.Core.Worlds.WorldNode)named.Invoke(main, [shown, "crate"])!).Name);
+            Assert.IsType<zStudio.Automation.StudioCommandException>(Assert.Throws<System.Reflection.TargetInvocationException>(() => named.Invoke(main, [shown, "nothing"])).InnerException);
             // The crate's lids and its copy's are different nodes of one name: the Parent field lists each with its scene node
             // number and takes "#index" (or "name #index"), the index source_world_object_edit's parent takes.
             var parentOf = typeof(MainWindow).GetMethod("SourceParentNode", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!;
             int[] lids = [.. shown.PreviewDocument.Scene!.Nodes.Where(n => n.Name == "lid" && shown.SourceBuild!.Provenance.ContainsKey(n.Index)).Select(n => n.Index)];
             int moved = shown.PreviewDocument.Scene!.Nodes.First(n => n.Name == "crate2" && shown.SourceBuild!.Provenance.ContainsKey(n.Index)).Index;
             Assert.True(lids.Length > 2);
-            var several = Assert.IsType<Recoil.Zbd.Automation.StudioCommandException>(Assert.Throws<System.Reflection.TargetInvocationException>(() => parentOf.Invoke(main, [shown, "lid", moved])).InnerException);
+            var several = Assert.IsType<zStudio.Automation.StudioCommandException>(Assert.Throws<System.Reflection.TargetInvocationException>(() => parentOf.Invoke(main, [shown, "lid", moved])).InnerException);
             Assert.All(lids, l => Assert.Contains($"#{l} under ", several.Message, StringComparison.Ordinal));
             Assert.Equal(lids[^1], (int)parentOf.Invoke(main, [shown, $"#{lids[^1]}", moved])!);
             Assert.Equal(lids[0], (int)parentOf.Invoke(main, [shown, $"lid #{lids[0]}", moved])!);
-            Assert.Equal("invalid_argument", Assert.IsType<Recoil.Zbd.Automation.StudioCommandException>(Assert.Throws<System.Reflection.TargetInvocationException>(() => parentOf.Invoke(main, [shown, $"crate #{lids[0]}", moved])).InnerException).Code);
+            Assert.Equal("invalid_argument", Assert.IsType<zStudio.Automation.StudioCommandException>(Assert.Throws<System.Reflection.TargetInvocationException>(() => parentOf.Invoke(main, [shown, $"crate #{lids[0]}", moved])).InnerException).Code);
+            // Renamed through MCP; its lid is authored in the database itself, so it references no model file.
+            var renamed = await Job("source_world_object_edit", new() { ["document"] = Id(shown), ["revision"] = shown.Revision, ["node"] = moved, ["action"] = "rename", ["name"] = "crate3" });
+            var described = (await Call("source_world_object", new() { ["document"] = renamed["document"]!["id"]!.GetValue<string>(), ["node"] = renamed["node"]!.GetValue<int>() }))["object"]!;
+            Assert.Equal("crate3", described["name"]!.GetValue<string>());
+            Assert.Null(described["model"]);
+            var renamedDocument = Document(renamed["document"]!);
+            await Job("save_document", new() { ["document"] = Id(renamedDocument), ["revision"] = renamedDocument.Revision });
 
             static bool Changed(StudioProblem p) => p.Message.Contains("FindNode lid in gamegen/support/tex_fxm1.gw finds", StringComparison.Ordinal) && p.Message.Contains("when the world was opened or last saved", StringComparison.Ordinal);
             DocumentModel Document(JsonNode state) => main.ViewModel.Documents.Single(d => d.SessionId.ToString() == state["id"]!.GetValue<string>());

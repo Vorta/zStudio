@@ -1,7 +1,7 @@
 using System.Text;
-using Recoil.Zbd.Core.Formats;
+using zStudio.Core.Formats;
 
-namespace Recoil.Zbd.Core.Sources;
+namespace zStudio.Core.Sources;
 
 /// <summary>A range of source text: the index of its first character and its length, both in characters.</summary>
 public readonly record struct TextSpan(int Start, int Length)

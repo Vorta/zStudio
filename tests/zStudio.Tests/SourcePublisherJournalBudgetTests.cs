@@ -1,10 +1,10 @@
 using System.Security.Cryptography;
 using System.Text;
-using Recoil.Zbd.Core;
-using Recoil.Zbd.Core.Sources;
+using zStudio.Core;
+using zStudio.Core.Sources;
 using Xunit;
 
-namespace Recoil.Zbd.Tests;
+namespace zStudio.Tests;
 
 public sealed partial class SourcePublisherTests
 {
@@ -27,15 +27,18 @@ public sealed partial class SourcePublisherTests
     }
 
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public void JournalBudgetsRefuseBeforeCreatingWorkingDataOrSources(bool bytes)
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    public void JournalBudgetsRefuseBeforeCreatingWorkingDataOrSources(bool bytes, bool validate)
     {
         using Project project = new();
         var before = project.Sources();
         SourcePublisher publisher = bytes ? new(project.Root) { ManifestBytesLimit = 2048 } : new(project.Root) { JournalFoldersLimit = 2 };
         string description = bytes ? new string('\u2603', 512) : "folders";
-        var error = Assert.Throws<InvalidDataException>(() => publisher.Publish([new("data/a/b/c/file.zrd", null, [1])], description, Token));
+        var error = Assert.Throws<InvalidDataException>(() => publisher.Publish([new("data/a/b/c/file.zrd", null, [1])], description, Token,
+            validate ? _ => new SourcePublishValidation(null, []) : null));
         Assert.Contains(bytes ? "byte budget" : "folders", error.Message);
         Assert.Equal(before, project.Sources()); Assert.False(Directory.Exists(project.Full("zstudio")));
         new SourcePublisher(project.Root).Publish(ScriptChange(project), "valid next save", Token);

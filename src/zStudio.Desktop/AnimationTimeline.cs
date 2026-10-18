@@ -6,9 +6,9 @@ using System.Windows.Controls;
 using System.Windows.Data;
 using System.Windows.Automation;
 using System.Windows.Automation.Peers;
-using Recoil.Zbd.Core.Animation;
+using zStudio.Core.Animation;
 
-namespace Recoil.Zbd.Desktop;
+namespace zStudio.Desktop;
 
 /// <summary>Actual dispatch times from the deterministic simulation, not guessed absolute thresholds.</summary>
 public sealed class AnimationTimeline : FrameworkElement

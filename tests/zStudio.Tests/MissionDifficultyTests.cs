@@ -1,9 +1,9 @@
 using System.Text;
 using System.Text.Json.Nodes;
-using Recoil.Zbd.Core;
+using zStudio.Core;
 using Xunit;
 
-namespace Recoil.Zbd.Tests;
+namespace zStudio.Tests;
 
 public sealed partial class AnimationTests
 {
@@ -16,7 +16,7 @@ public sealed partial class AnimationTests
         {
             string path = Path.Combine(resolver.Root, "resources.zbd"); byte[] original = await File.ReadAllBytesAsync(path, token);
             var before = await MissionSceneLoader.LoadAsync(world, resolver, token: token);
-            var edited = Recoil.Zbd.Core.Formats.FormatRegistry.Default.OpenBytes(path, ResourceEditingTests.Archive(("aiv.zrd", Zrd(Arr(Str("animated_02"), Spawn(40, 5, 6, 0)))), ("vehicle.zrd", definitions)), token: token);
+            var edited = zStudio.Core.Formats.FormatRegistry.Default.OpenBytes(path, ResourceEditingTests.Archive(("aiv.zrd", Zrd(Arr(Str("animated_02"), Spawn(40, 5, 6, 0)))), ("vehicle.zrd", definitions)), token: token);
             Guid owner = Guid.NewGuid(); resolver.SetWorkspaceSnapshots(owner, [edited]);
             var after = await MissionSceneLoader.LoadAsync(world, resolver, token: token);
             Assert.Equal("animated_02", Assert.Single(after.Actors).Name);
@@ -138,7 +138,7 @@ public sealed partial class AnimationTests
         Assert.Equal(-1, duplicate.RemapNodeFrom(before, before.Actors[0].Root));
         Assert.Equal(-1, before.RemapNodeFrom(duplicate, duplicate.Actors[0].Root));
     }
-    private static async Task WithMissionArchiveAsync(Dictionary<string, byte[]> resources, Func<ZbdDocument, AssetResolver, Task> test)
+    private static async Task WithMissionArchiveAsync(Dictionary<string, byte[]> resources, Func<AssetDocument, AssetResolver, Task> test)
     {
         string directory = Path.Combine(Path.GetTempPath(), "zbd-difficulty-test-" + Guid.NewGuid().ToString("N")); Directory.CreateDirectory(directory);
         try
@@ -151,8 +151,8 @@ public sealed partial class AnimationTests
                 writer.Write(offsets[i++]); writer.Write(bytes.Length); byte[] record = new byte[140]; Encoding.Latin1.GetBytes(name).CopyTo(record, 0); writer.Write(record);
             }
             writer.Write(1); writer.Write(resources.Count); File.WriteAllBytes(Path.Combine(directory, "resources.zbd"), data.ToArray());
-            var source = MissionFixture(false).World;
-            var world = new ZbdDocument(Path.Combine(directory, "gamez.zbd"), source.Stamp, source.Probe, source.Bytes) { Scene = source.Scene };
+            var source = (AssetDocument)MissionFixture(false).World;
+            var world = new AssetDocument(Path.Combine(directory, "gamez.zbd"), source.Stamp, source.Probe, source.Bytes) { Scene = source.Scene };
             using var resolver = new AssetResolver(directory); await test(world, resolver);
         }
         finally { Directory.Delete(directory, true); }
