@@ -49,7 +49,7 @@ internal sealed partial class SourceObjectCardEditor : FieldEditor
                 "On or off. " + AltitudeZoneCheckHelp);
             zonePart.Body.Children.Add(ZoneRow());
             var gate = FlagBox("altitudeZoneCheck", "Altitude zone check (ground only while its zone is current)", true);
-            gate.ToolTip = AltitudeZoneCheckHelp;
+            gate.ToolTip = AltitudeZoneCheckToolTip();
             zonePart.Body.Children.Add(gate);
             zonePart.Body.Children.Add(polygonZones);
             zoneSection = zonePart;
@@ -168,6 +168,22 @@ internal sealed partial class SourceObjectCardEditor : FieldEditor
     /// altitude probes test it; drawing, collision and the other queries test the zone either way.
     /// </summary>
     private const string AltitudeZoneCheckHelp = "Vehicles and the camera find this object's ground height only while their current zones include its zone. Off, it is ground in every zone, even where it is not drawn. Drawing and collision follow the zone either way.";
+    /// <summary>The hover explanation of the altitude zone check: what on and off change, what they leave alone, and where it matters.</summary>
+    private static readonly string[] AltitudeZoneCheckDetails =
+    [
+        "On: vehicles (AI vehicles too) and the camera find this object's ground height only while its zone is one of their current zones.",
+        "Off: it is ground in every zone, even while it is not drawn.",
+        "Either way, drawing, collision, line of sight, camera obstruction, proximity and turrets follow the object's zone; only finding the ground changes.",
+        "It matters where surfaces overlap in plan view (stacked floors, tunnels, interiors, bridges). The ground found there also sets the current zones of the vehicle or camera standing on it, from its polygons.",
+        "An object whose zone is Any behaves the same either way. A parent with the check on whose zone is not current keeps everything below it from being found, whatever their own setting.",
+    ];
+    private static object AltitudeZoneCheckToolTip()
+    {
+        StackPanel text = new() { MaxWidth = 380 };
+        for (int i = 0; i < AltitudeZoneCheckDetails.Length; i++)
+            text.Children.Add(new TextBlock { Text = AltitudeZoneCheckDetails[i], TextWrapping = System.Windows.TextWrapping.Wrap, Margin = new(0, i == 0 ? 0 : 6, 0, 0) });
+        return text;
+    }
     /// <summary>A read-only value beside its caption: plain text (no field look, caret or focus), with an optional hint below.</summary>
     private static System.Windows.FrameworkElement InfoRow(string label, string value, string? hint = null)
     {
