@@ -343,7 +343,9 @@ internal sealed partial class SceneInspectionCard : Grid
     {
         if (value is JsonObject vector && new[] { "x", "y", "z" }.All(k => vector[k] is JsonValue))
             return string.Join("   ", new[] { "x", "y", "z" }.Select(k => k.ToUpperInvariant() + " " + (degrees ? vector[k]!.GetValue<double>().ToString("R", CultureInfo.InvariantCulture) : JsonData.Scalar(vector[k], float.NaN).ToString("R", CultureInfo.InvariantCulture))));
-        // A list of lines (polygon zone sets, parents) reads one per line rather than as JSON.
+        // Polygon zone counts read as their rows (cards without the source-object Zone section list them as a detail).
+        if (ZoneReadout.PolygonZoneLines(value) is { } zoneLines) return zoneLines;
+        // A list of lines (parents) reads one per line rather than as JSON.
         if (value is JsonArray lines && lines.Count > 0 && lines.All(line => line is JsonValue v && v.TryGetValue<string>(out _)))
             return string.Join('\n', lines.Select(line => line!.GetValue<string>()));
         return value is JsonValue scalar && scalar.TryGetValue<string>(out var text) ? text : value?.ToJsonString() ?? "Unavailable";

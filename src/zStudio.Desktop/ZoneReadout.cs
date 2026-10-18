@@ -31,6 +31,35 @@ internal static class ZoneReadout
             : supplier.ModelNodeName is { } name ? JsonData.ShownText(name, 160) : "its parent";
         return $"{zone} · inherited from {from}";
     }
+    /// <summary>
+    /// scene_inspect's <c>Object polygon zones</c> as lines in the card's wording ("Zone 7: 89 polygons", "Zones 7, 9: 14
+    /// polygons", "Any: 3 polygons", "No zones: 2 polygons"), for cards without the source-object Zone section; null for
+    /// another value.
+    /// </summary>
+    internal static string? PolygonZoneLines(JsonNode? value)
+    {
+        if (value is not JsonObject { } data || data["rows"] is not JsonArray rows) return null;
+        static long Number(JsonNode? node) => node is JsonValue v ? v.TryGetValue<long>(out long wide) ? wide : v.TryGetValue<int>(out int narrow) ? narrow : 0 : 0;
+        static string Polygons(long count) => count == 1 ? "1 polygon" : count.ToString("N0", CultureInfo.CurrentCulture) + " polygons";
+        if (rows.Count == 0) return "No polygons here or below";
+        List<string> lines = [];
+        foreach (var row in rows.OfType<JsonObject>())
+        {
+            string name;
+            if (row["moreSets"] is JsonValue) { long sets = Number(row["moreSets"]); name = sets == 1 ? "1 more zone set" : $"{sets.ToString("N0", CultureInfo.CurrentCulture)} more zone sets"; }
+            else if (row["unknown"] is JsonValue) name = "Unknown zones";
+            else
+            {
+                int[] zones = row["zones"] is JsonArray ids ? [.. ids.Select(id => (int)Number(id))] : [];
+                name = zones.Length == 0 ? "No zones" : zones is [255] ? "Any"
+                    : (zones.Length == 1 ? "Zone " : "Zones ") + string.Join(", ", zones.Select(z => z == 255 ? "Any" : z.ToString(CultureInfo.InvariantCulture)));
+            }
+            lines.Add($"{name}: {Polygons(Number(row["polygons"]))}");
+        }
+        if (data["truncated"] is JsonValue truncated && truncated.TryGetValue<string>(out var kind))
+            lines.Add(kind == "objects" ? $"(counted the first {4096.ToString("N0", CultureInfo.CurrentCulture)} objects only)" : $"(counted the first {200_000.ToString("N0", CultureInfo.CurrentCulture)} polygons only)");
+        return string.Join('\n', lines);
+    }
     /// <summary>A polygon's stored zone IDs (255 is Any; empty has no zones), or null when the set is unreadable.</summary>
     internal static int[]? PolygonZoneIds(JsonNode? set)
         => set is JsonArray ids ? [.. ids.Select(id => (int)JsonData.Scalar(id) & 0xFF)] : null;

@@ -32,14 +32,13 @@ Every capability is also available through MCP, on the same commands, undo and s
      gamegen\                sources: build scripts
        build-profiles\       target profiles (original, modern)
      .zstudio\               zStudio's settings and working data, created when first needed
+       settings.json         how the project was last viewed, and its texture dithering
        export\               Blender exchange, one folder per checkout
        recovery\             save journal with the previous file contents
        staging\              files being prepared for a save
-       cache\                derived data, safe to delete (worlds\: the mission worlds being shown)
-       diagnostics\          measurements and reports
    ```
 
-   Only `cache\` is always safe to delete. Recovery data from an interrupted save, and Blender exports not yet applied, may be the only copies. Leave `.zstudio\` out when sharing a project.
+   Recovery data from an interrupted save, and Blender exports not yet applied, may be the only copies. Leave `.zstudio\` out when sharing a project.
 6. **Lossless source editing.** Untouched bytes, comments, ordering, scalar kinds and token spelling survive every edit; normalization is an explicit command.
 7. **Preview contexts are labelled.** Authored assembly, mission-start preview and animation sandbox are distinct; the editor never bakes runtime state (startup animations, cleanup, difficulty fallbacks) into sources.
 
