@@ -220,7 +220,7 @@ public partial class MainWindow
     /// Another tool (AI path or VTOL route editing) takes the pointer: the polygon zone tool ends. It waits for the strokes
     /// still applying, also those released before the tool was left.
     /// </summary>
-    private const string ZoneOperationRunning = "another operation (an export, a check or terrain planning) is running; paint again when it has finished.";
+    private const string ZoneOperationRunning = "another operation (such as an export, a check or terrain planning) is running; paint again when it has finished.";
 
     private void EndZoneToolFor(string tool)
     {
@@ -579,6 +579,7 @@ public partial class MainWindow
         {
             viewport.ResolveZoneStroke(stroke.Id);
             string busy = $"A polygon zone stroke was not applied: {ZoneOperationRunning}";
+            zoneTool.LastStroke = null; zoneTool.SkippedShown = false; viewport.ShowZoneSkipped([]);
             zoneTool.LastResult = (busy, 0, 0, false); Report(busy); return;
         }
         zoneTool.LastStroke = stroke;
