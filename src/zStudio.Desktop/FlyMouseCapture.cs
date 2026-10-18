@@ -12,7 +12,7 @@ internal sealed partial class FlyMouseCapture : IDisposable
     private readonly FrameworkElement target;
     private readonly HwndSource source;
     private readonly DispatcherTimer pointerTimer;
-    private bool registered, clipped, disposed;
+    private bool registered, clipped, hidden, disposed;
     private bool fallbackPending;
     private long relativeGeneration, pointerGeneration;
     private PointI pointerCenter;
@@ -33,6 +33,9 @@ internal sealed partial class FlyMouseCapture : IDisposable
             registered = true;
             source.AddHook(OnMessage);
             UpdateBounds();
+            // WPF applies the viewer's empty cursor only when it next queries one, which a captured, recentred
+            // pointer may never trigger; the thread's display count hides it until the capture ends.
+            ShowCursor(false); hidden = true;
             pointerTimer.Start();
         }
         catch { Dispose(); throw; }
@@ -124,7 +127,11 @@ internal sealed partial class FlyMouseCapture : IDisposable
                 RegisterRawInputDevices(ref device, 1, (uint)Marshal.SizeOf<RawDevice>()); registered = false;
             }
         }
-        finally { if (clipped) { ReleaseClip(0); clipped = false; } }
+        finally
+        {
+            if (hidden) { ShowCursor(true); hidden = false; }
+            if (clipped) { ReleaseClip(0); clipped = false; }
+        }
     }
 
     [StructLayout(LayoutKind.Sequential)] private struct RawDevice { public ushort Page, Usage; public uint Flags; public nint Target; }
@@ -143,6 +150,7 @@ internal sealed partial class FlyMouseCapture : IDisposable
     [LibraryImport("user32.dll", SetLastError = true)] private static partial uint GetRawInputData(nint input, uint command, out RawInput data, ref uint size, uint headerSize);
     [LibraryImport("user32.dll", SetLastError = true)] [return: MarshalAs(UnmanagedType.Bool)] private static partial bool ClipCursor(ref RectI rect);
     [LibraryImport("user32.dll", EntryPoint = "ClipCursor")] [return: MarshalAs(UnmanagedType.Bool)] private static partial bool ReleaseClip(nint rect);
+    [LibraryImport("user32.dll")] private static partial int ShowCursor([MarshalAs(UnmanagedType.Bool)] bool show);
     [LibraryImport("user32.dll")] [return: MarshalAs(UnmanagedType.Bool)] internal static partial bool GetCursorPos(out PointI point);
     [LibraryImport("user32.dll")] [return: MarshalAs(UnmanagedType.Bool)] internal static partial bool SetCursorPos(int x, int y);
 }

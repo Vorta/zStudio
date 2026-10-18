@@ -2,6 +2,10 @@
 
 Version numbers follow `MAJOR.MINOR.PATCH`; the 0.x series is under active development. Release tags and downloadable archives use the same version.
 
+## 0.9.1 — unreleased
+
+- Fly camera hides the mouse pointer for as long as it is on; before, the pointer could stay visible in the middle of the view.
+
 ## 0.9.0 — 2026-10-18
 
 - The GUI works on source projects only (compiled-asset editing is being retired): the welcome screen offers only Work with source project; File has Open workspace… (Ctrl+O, explaining what is wrong with another folder) in place of Open folder…, and Open workspace…, Recent folders, a dropped folder and a folder given on the command line all refuse a folder that is not a source project (dropped or command-line files are refused). Compiled roots open only through MCP `open_root` without `project`, where their compiled-asset views and context-menu editors still work. File loses Open file…, the four Export… commands, Replace models…, Copy selected event JSON and Create backup on Save (and Ctrl+E; the stored backup choice, MCP `workspace_view` `backupOnSave`, still applies to compiled pickup saves); Edit keeps Undo and Redo; View loses 3D Navigation (a source map's Perspective chip has it; the numpad shortcuts remain), Properties…, Inspector, Bottom tools and Navigator; Tools loses Resolve interrupted save… (opening a project still asks about each interrupted save: Roll back, Complete, Keep files or Later, and Save asks again after Later), Open mission world (the map picker opens maps) and Cancel export or validation (Escape cancels). Hide UI (Ctrl+Shift+H) and the Density setting are removed: the workbench is always compact (MCP: `presentation` has only `fullscreen`, `workspace_view` no `density`). Help describes the source workflow.
