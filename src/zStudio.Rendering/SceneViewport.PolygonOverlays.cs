@@ -61,7 +61,7 @@ public sealed partial class SceneViewport
             if (!polygonEdgeGeometries.TryGetValue(geometry, out var edges)) polygonEdgeGeometries[geometry] = edges = PolygonEdgeGeometry(geometry, source.Part, source.Model);
             if (edges.Indices == null || edges.Indices.Count == 0) continue;
             // The core sits nearer than its halo, so it wins the depth test whichever is drawn first.
-            var halo = Outline(mesh, edges, PolygonEdgeHalo, 3, -100); var core = Outline(mesh, edges, PolygonEdgeCore, 1, -200);
+            var halo = Outline(mesh, edges, PolygonEdgeHalo, 2, -100); var core = Outline(mesh, edges, PolygonEdgeCore, 1, -200);
             viewport.Items.Add(halo); viewport.Items.Add(core); polygonEdges[mesh] = (halo, core);
         }
         viewport.InvalidateRender();

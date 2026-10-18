@@ -84,7 +84,7 @@ public partial class MainWindow
         if (scene?.InspectionContent is SceneInspectionCard card)
         {
             card.IsSourceWorld = shownDocument?.SourceWorld != null;
-            if (!sourceChromeActive) { card.WorldRebuilding = null; card.FrameSelection = null; card.CategoryOf = null; card.RecentSelections = null; card.PickRecent = null; card.WorldSummary = null; }
+            if (!sourceChromeActive) { card.WorldRebuilding = null; card.CategoryOf = null; card.ZoneLabel = null; card.RecentSelections = null; card.PickRecent = null; card.WorldSummary = null; }
         }
         RefreshSourceChrome();
     }
@@ -311,8 +311,8 @@ public partial class MainWindow
         if (card != null)
         {
             card.WorldRebuilding = () => rebuildEvaluating;
-            card.FrameSelection = () => RunCameraNavigation("frameSelected");
             card.CategoryOf = SelectionCategory;
+            card.ZoneLabel = zone => shownDocument?.SourceWorld is { IsDisposed: false } world ? ZoneLabels(world).GetValueOrDefault(zone) : null;
             card.RecentSelections = () => recentDocument == shownDocument ? recentSelections : [];
             card.PickRecent = PickRecentSelection;
             card.WorldSummary = WorldSummary;
@@ -559,6 +559,30 @@ public partial class MainWindow
         try { SetRowHidden(row, index, !row.IsHidden); }
         catch (StudioCommandException ex) { Report(ex); }
     }
+    // Middle-click on the eye: show only this object (what Isolate did), or everything again on the isolated one.
+    private void OutlinerEyeMiddleClick(object sender, System.Windows.Input.MouseButtonEventArgs e)
+    {
+        if (e.ChangedButton != System.Windows.Input.MouseButton.Middle) return;
+        e.Handled = true;
+        if ((sender as FrameworkElement)?.Tag is not SceneTreeItem { CanHide: true, Index: int index } row) return;
+        try { ToggleRowIsolation(row, index); }
+        catch (StudioCommandException ex) { Report(ex); }
+    }
+    internal void ToggleRowIsolation(SceneTreeItem row, int index)
+    {
+        if (scene == null || row.Owner != sceneTree) throw new StudioCommandException("stale_record", "The tree node is no longer available.");
+        if (scene.IsPickupDragging || scene.IsFlyActive) throw new StudioCommandException("busy", "Finish the transform drag or exit Fly first.");
+        int node = scene.PickupAt(index)?.Root ?? index;
+        if (isolatedNode == node) { isolatedNode = null; scene.Isolate(null); }
+        else
+        {
+            if (CurrentInspectionCard?.HasDraft == true) throw new StudioCommandException("pending_drafts", "Apply or discard the edit first.");
+            isolatedNode = node; scene.Isolate(node);
+        }
+        CurrentInspectionCard?.Refresh(); RefreshRowEyes();
+    }
+    /// <summary>The rows' eyes follow what is hidden and isolated.</summary>
+    private void RefreshRowEyes() { if (sceneTree != null) foreach (var row in sceneTree.CreatedRows) row.NotifyHidden(); }
     internal void SetRowHidden(SceneTreeItem row, int index, bool hidden)
     {
         if (scene == null || row.Owner != sceneTree) throw new StudioCommandException("stale_record", "The tree node is no longer available.");
@@ -646,6 +670,6 @@ public partial class MainWindow
         if (sceneTree == null) return;
         HashSet<int> hidden = hiddenRows.Values.SelectMany(n => n).ToHashSet();
         sceneTree.IsHiddenNode = hidden.Contains;
-        foreach (var row in sceneTree.CreatedRows) row.NotifyHidden();
+        RefreshRowEyes();
     }
 }

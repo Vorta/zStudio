@@ -9,6 +9,9 @@ Version numbers follow `MAJOR.MINOR.PATCH`; the 0.x series is under active devel
 - The selected object's Zone section counts Polygon zones for placed objects and groups too (all their polygons); the Clicked polygon row is gone.
 - Wireframe draws light lines on a dark halo, visible on bright and dark ground alike (it was dark only).
 - A source project keeps everything zStudio writes in its one hidden `.zstudio` folder: save journals and staging and Blender checkouts move there from the separate `zstudio` folder. An existing `zstudio` folder is no longer used; move unfinished Blender checkouts from `zstudio/export` to `.zstudio/export` (or check them out again), then delete it.
+- World tree: middle-clicking a row's eye hides every other object (isolation; again shows them), and the docked Properties pane drops its Frame selection and Isolate buttons, which the row's buttons replace.
+- Altitude zone check reads "Ground only while its zone is current", with a tooltip on what it changes.
+- The Zone section's Polygon zones is a list under its own sub-header: one row per zone set with the zones' colour swatch, name ("Zone 7", "Zones 7, 9", "Any", "No zones"), labels and polygon count, and a total; it is plain text (right-click copies it), as is a read-only object zone. An inherited zone's hint is shorter ("Zone 3 · inherited from g101"). MCP `scene_inspect` reports `Object polygon zones` as structured rows.
 - Fly camera hides the mouse pointer for as long as it is on; before, the pointer could stay visible in the middle of the view.
 
 ## 0.9.0 — 2026-10-18

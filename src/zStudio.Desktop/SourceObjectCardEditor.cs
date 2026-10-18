@@ -12,7 +12,7 @@ using zStudio.Core.Worlds;
 namespace zStudio.Desktop;
 
 /// <summary>One explicitly accepted object draft. Field focus never writes sources.</summary>
-internal sealed class SourceObjectCardEditor : FieldEditor
+internal sealed partial class SourceObjectCardEditor : FieldEditor
 {
     private readonly SourceObjectState state;
     private readonly Dictionary<string, DraftInput> inputs = [];
@@ -46,9 +46,11 @@ internal sealed class SourceObjectCardEditor : FieldEditor
             target = new StackPanel { Visibility = System.Windows.Visibility.Collapsed }; zonePart.Body.Children.Add(target);
             Add("zone", "Zone", state.ZoneText, true, "Inherit (the parent's zone), Any, or a zone number from 0 to 254.");
             Add("altitudeZoneCheck", "Altitude zone check", (state.Flags & WorldGltf.ZoneGate) != 0 ? "on" : "off", true,
-                "On or off. When on, the object is only standable from inside its zone.");
+                "On or off. " + AltitudeZoneCheckHelp);
             zonePart.Body.Children.Add(ZoneRow());
-            zonePart.Body.Children.Add(FlagBox("altitudeZoneCheck", "Altitude zone check (only standable inside its zone)", true));
+            var gate = FlagBox("altitudeZoneCheck", "Altitude zone check (ground only while its zone is current)", true);
+            gate.ToolTip = AltitudeZoneCheckHelp;
+            zonePart.Body.Children.Add(gate);
             zonePart.Body.Children.Add(polygonZones);
             zoneSection = zonePart;
         }
@@ -56,7 +58,7 @@ internal sealed class SourceObjectCardEditor : FieldEditor
         {
             acceptedFields["Zone"] = ZoneReadout.Zone(state.Zone);
             zonePart.Summary = ZoneReadout.Zone(state.Zone);
-            zonePart.Body.Children.Add(InfoRow("Object zone", ZoneReadout.Zone(state.Zone) + (state.Origin.Terrain != null ? " · set in Terrain properties" : "")));
+            zonePart.Body.Children.Add(InfoRow("Object zone", ZoneReadout.ShortZone(state.Zone, state.Origin.ImportedZoneInherited), state.Origin.Terrain != null ? "Set in Terrain properties" : null));
             zonePart.Body.Children.Add(polygonZones);
         }
         // Flags are check boxes; each keeps its "on"/"off" draft field (hidden) for drafts, MCP fields and Apply.
@@ -139,7 +141,7 @@ internal sealed class SourceObjectCardEditor : FieldEditor
             foot.SetResourceReference(TextBlock.ForegroundProperty, "TextFillColorTertiaryBrush");
             zoneBox.Items.Add(new ComboBoxItem { Content = foot, IsEnabled = false, Focusable = false });
             zoneBox.Text = state.ZoneText;
-            System.Windows.Automation.AutomationProperties.SetName(zoneBox, "Zone");
+            System.Windows.Automation.AutomationProperties.SetName(zoneBox, "Object zone");
             zoneBox.AddHandler(System.Windows.Controls.Primitives.TextBoxBase.TextChangedEvent, new TextChangedEventHandler((_, _) => ZoneTyped()));
             zoneBox.SelectionChanged += (_, _) => Dispatcher.BeginInvoke(ZoneTyped);
             zoneHelp.SetResourceReference(TextBlock.ForegroundProperty, "TextFillColorSecondaryBrush");
@@ -161,24 +163,34 @@ internal sealed class SourceObjectCardEditor : FieldEditor
         void Vector(string key, string label, Vector3 value, string hint) => Add(key, label,
             string.Join(", ", new[] { value.X, value.Y, value.Z }.Select(v => v.ToString("R", CultureInfo.InvariantCulture))), true, hint, ["X", "Y", "Z"]);
     }
-    private static System.Windows.FrameworkElement InfoRow(string label, string value)
+    /// <summary>
+    /// What the altitude zone check does (engine evidence in the world editor plan, "Zone gate and filters"): only the
+    /// altitude probes test it; drawing, collision and the other queries test the zone either way.
+    /// </summary>
+    private const string AltitudeZoneCheckHelp = "Vehicles and the camera find this object's ground height only while their current zones include its zone. Off, it is ground in every zone, even where it is not drawn. Drawing and collision follow the zone either way.";
+    /// <summary>A read-only value beside its caption: plain text (no field look, caret or focus), with an optional hint below.</summary>
+    private static System.Windows.FrameworkElement InfoRow(string label, string value, string? hint = null)
     {
         Grid row = new() { Margin = new(0, 3, 0, 3) };
         row.ColumnDefinitions.Add(new() { Width = new(76) }); row.ColumnDefinitions.Add(new());
         TextBlock caption = new() { Text = label, FontSize = 13, TextWrapping = System.Windows.TextWrapping.Wrap, Margin = new(0, 0, 6, 0) };
         caption.SetResourceReference(TextBlock.ForegroundProperty, "TextFillColorSecondaryBrush");
-        TextBox shown = new() { Text = value, IsReadOnly = true, BorderThickness = new(0), Background = System.Windows.Media.Brushes.Transparent, Padding = new(0), FontSize = 13, TextWrapping = System.Windows.TextWrapping.Wrap };
+        StackPanel shown = new();
+        TextBlock text = new() { Text = value, FontSize = 13, TextWrapping = System.Windows.TextWrapping.Wrap };
+        text.SetResourceReference(TextBlock.ForegroundProperty, "TextFillColorPrimaryBrush");
+        shown.Children.Add(text);
+        if (hint != null)
+        {
+            TextBlock below = new() { Text = hint, FontSize = 11.5, Margin = new(0, 3, 0, 0), TextWrapping = System.Windows.TextWrapping.Wrap };
+            below.SetResourceReference(TextBlock.ForegroundProperty, "TextFillColorSecondaryBrush");
+            shown.Children.Add(below);
+        }
+        System.Windows.Automation.AutomationProperties.SetName(shown, $"{label}: {value}");
         Grid.SetColumn(shown, 1); row.Children.Add(caption); row.Children.Add(shown);
         return row;
     }
     /// <summary>The Zone section's polygon zones, apart from the object zone above them: how many of the object's polygons carry each zone set.</summary>
-    private readonly StackPanel polygonZones = new() { Margin = new(0, 4, 0, 0) };
-    /// <summary>Shows the polygon zones: one line per zone set of the object's polygons (its own and those below it), with its count; null when unknown.</summary>
-    internal void ShowPolygonZones(string? objectZones)
-    {
-        polygonZones.Children.Clear();
-        if (objectZones != null) polygonZones.Children.Add(InfoRow("Polygon zones", objectZones));
-    }
+    private readonly StackPanel polygonZones = new() { Background = System.Windows.Media.Brushes.Transparent };
     private readonly ComboBox zoneBox = new() { IsEditable = true, HorizontalAlignment = System.Windows.HorizontalAlignment.Stretch, MinWidth = 0 };
     private readonly TextBlock zoneHelp = new() { FontSize = 11.5, TextWrapping = System.Windows.TextWrapping.Wrap, Margin = new(0, 3, 0, 2) };
     private CardSection? zoneSection;
@@ -203,9 +215,13 @@ internal sealed class SourceObjectCardEditor : FieldEditor
         bool valid = parsed.Valid;
         // An inherited zone names the zone it resolves to and what supplied it, until the field is changed.
         bool inherited = valid && state.Origin.ImportedZoneInherited == true && text.Trim().Equals(state.ZoneText, StringComparison.OrdinalIgnoreCase);
-        zoneHelp.Text = inherited ? ZoneReadout.Zone(state.Zone, true) + (ZoneReadout.Source(state.Origin) is { } source ? " · " + source : "")
+        // The combo box already says Inherit: the hint names what that resolves to and who supplies it, briefly, with the
+        // full source in its tooltip.
+        zoneHelp.Text = inherited ? ZoneReadout.InheritedHint(state.Zone, state.Origin)
             : valid ? state.ZoneCanInherit ? "Zone 0–254, Any or Inherit" : "Zone 0–254 or Any" :
             state.ZoneCanInherit ? "Enter 0–254, Any or Inherit" : "Enter 0–254 or Any";
+        zoneHelp.ToolTip = inherited ? ZoneReadout.Source(state.Origin) : null;
+        System.Windows.Automation.AutomationProperties.SetHelpText(zoneBox, zoneHelp.Text);
         if (zoneSection != null) zoneSection.Summary = text.Trim();
         if (valid) zoneHelp.SetResourceReference(TextBlock.ForegroundProperty, "TextFillColorSecondaryBrush");
         else zoneHelp.SetResourceReference(TextBlock.ForegroundProperty, "SystemFillColorCriticalBrush");

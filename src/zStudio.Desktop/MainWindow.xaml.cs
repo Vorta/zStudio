@@ -715,7 +715,7 @@ public partial class MainWindow : Window
     {
         if (selectedNode is not int node) { ViewModel.Status = "Select a node in the scene or scene tree first"; return; }
         isolatedNode = scene?.PickupAt(node)?.Root ?? node;
-        scene?.Isolate(isolatedNode); CurrentInspectionCard?.Refresh();
+        scene?.Isolate(isolatedNode); CurrentInspectionCard?.Refresh(); RefreshRowEyes();
     }
     private void ShowAllClick(object sender, RoutedEventArgs e) { isolatedNode = null; scene?.Isolate(null); hiddenRows.Clear(); pendingHidden = null; ApplyHiddenRows(); CurrentInspectionCard?.Refresh(); }
     private void InspectNode(int index)

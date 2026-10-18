@@ -121,7 +121,7 @@ public partial class MainWindow
                     RevealSceneNode(node);
                 }
                 viewport.SelectFramingNode(node);
-                if (action == "isolate") { viewport.Isolate(node); isolatedNode = node; CurrentInspectionCard?.Refresh(); }
+                if (action == "isolate") { viewport.Isolate(node); isolatedNode = node; CurrentInspectionCard?.Refresh(); RefreshRowEyes(); }
                 if (node < 0 && sceneTree?.Reveal(node) is { Synthetic: true } sourceRow)
                     return Result(SceneTreeProperties(sourceRow));
                 if (node < 0) throw new StudioCommandException("stale_record", "Source selection owner is not in the current scene hierarchy.");

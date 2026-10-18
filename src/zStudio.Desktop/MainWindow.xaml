@@ -47,7 +47,7 @@
      <DockPanel><TextBlock Text="{Binding Glyph}" Opacity="0.7" Margin="0,0,6,0"/><TextBlock Text="{Binding Label}" TextTrimming="CharacterEllipsis"/></DockPanel>
     </Border>
     <DockPanel x:Name="SourceRow" Visibility="Collapsed" Height="28" Background="Transparent" local:OutlinerRowStretch.Enabled="True">
-     <Button x:Name="RowEye" DockPanel.Dock="Right" Style="{StaticResource OutlinerEye}" Visibility="Hidden" Click="OutlinerEyeClick" Tag="{Binding}" ToolTip="{Binding EyeToolTip}" AutomationProperties.Name="{Binding EyeToolTip}"><local:PreviewIcon Kind="{Binding EyeIcon}" Width="14" Height="14"/></Button>
+     <Button x:Name="RowEye" DockPanel.Dock="Right" Style="{StaticResource OutlinerEye}" Visibility="Hidden" Click="OutlinerEyeClick" PreviewMouseUp="OutlinerEyeMiddleClick" Tag="{Binding}" ToolTip="{Binding EyeToolTip}" AutomationProperties.Name="{Binding EyeToolTip}"><local:PreviewIcon Kind="{Binding EyeIcon}" Width="14" Height="14"/></Button>
      <Button x:Name="RowFrame" DockPanel.Dock="Right" Style="{StaticResource OutlinerEye}" Visibility="Hidden" Click="OutlinerFrameClick" Tag="{Binding}" ToolTip="Frame selection" AutomationProperties.Name="Frame selection"><local:PreviewIcon Kind="FrameSelection" Width="14" Height="14"/></Button>
      <TextBlock DockPanel.Dock="Right" Text="{Binding Meta}" ToolTip="{Binding MetaToolTip}" FontSize="11" Margin="6,0,10,0" VerticalAlignment="Center" Foreground="{DynamicResource TextFillColorTertiaryBrush}"/>
      <local:PreviewIcon Kind="{Binding OutlinerIcon}" TextElement.Foreground="{Binding OutlinerBrush}" Width="15" Height="15" Margin="0,0,8,0" VerticalAlignment="Center"/>
@@ -64,6 +64,7 @@
     <DataTrigger Binding="{Binding IsMouseOver,ElementName=SourceRow}" Value="True"><Setter TargetName="RowEye" Property="Visibility" Value="Visible"/><Setter TargetName="RowFrame" Property="Visibility" Value="Visible"/></DataTrigger>
     <DataTrigger Binding="{Binding IsSelected}" Value="True"><Setter TargetName="RowEye" Property="Visibility" Value="Visible"/><Setter TargetName="RowFrame" Property="Visibility" Value="Visible"/></DataTrigger>
     <DataTrigger Binding="{Binding IsHidden}" Value="True"><Setter TargetName="RowEye" Property="Visibility" Value="Visible"/><Setter TargetName="SourceRow" Property="Opacity" Value="0.55"/></DataTrigger>
+    <DataTrigger Binding="{Binding IsIsolated}" Value="True"><Setter TargetName="RowEye" Property="Visibility" Value="Visible"/></DataTrigger>
     <DataTrigger Binding="{Binding CanHide}" Value="False"><Setter TargetName="RowEye" Property="Visibility" Value="Collapsed"/></DataTrigger>
     <DataTrigger Binding="{Binding CanFrame}" Value="False"><Setter TargetName="RowFrame" Property="Visibility" Value="Collapsed"/></DataTrigger>
     <!-- A unit or pickup only other difficulties place: dimmed, with its difficulties lined up with the others'. -->

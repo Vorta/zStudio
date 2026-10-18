@@ -63,7 +63,7 @@ public partial class MainWindow
                 }
                 sceneTree = new(data, source, true, state, TreeIdentities(data, viewport.Mission, doc.PickupEdits), viewport.InspectionNodes, SourceSelection(doc, data));
             }
-            if (sceneTree != null) { sceneTree.Collapsing += SceneTreeCollapsing; var hidden = hiddenRows.Values.SelectMany(n => n).ToHashSet(); sceneTree.IsHiddenNode = hidden.Contains; }
+            if (sceneTree != null) { sceneTree.Collapsing += SceneTreeCollapsing; var hidden = hiddenRows.Values.SelectMany(n => n).ToHashSet(); sceneTree.IsHiddenNode = hidden.Contains; sceneTree.IsIsolatedNode = node => isolatedNode == node; }
             DocumentSceneTree.ItemsSource = sceneTree?.Roots;
             // Renderer replacement clears its framing identity. Restore it from
             // the tree's provenance match, together with source inspection, without
