@@ -14,6 +14,8 @@ public sealed partial class SceneViewport
 {
     /// <summary>A static mesh geometry's source: its part (each vertex's polygon) and the model those polygons belong to.</summary>
     private readonly Dictionary<MeshGeometry3D, (MeshPart Part, GameModel Model)> polygonSources = [];
+    /// <summary>The static mesh geometries of each scene model, for a model replaced with other polygon zones.</summary>
+    private readonly Dictionary<int, List<MeshGeometry3D>> polygonGeometries = [];
     private readonly Dictionary<MeshGeometry3D, (Color4Collection? Normal, Color4Collection Zones)> polygonZoneColors = [];
     private readonly Dictionary<MeshGeometry3D, LineGeometry3D> polygonEdgeGeometries = [];
     private readonly Dictionary<MeshGeometryModel3D, LineGeometryModel3D> polygonEdges = [];
@@ -21,8 +23,31 @@ public sealed partial class SceneViewport
 
     private void RegisterPolygonSource(MeshGeometry3D geometry, MeshPart part, IReadOnlyList<GameModel> models, int model)
     {
-        if (part.VertexPolygons.Length == part.Positions.Length && part.Positions.Length > 0 && model >= 0 && model < models.Count)
-            polygonSources.TryAdd(geometry, (part, models[model]));
+        if (part.VertexPolygons.Length == part.Positions.Length && part.Positions.Length > 0 && model >= 0 && model < models.Count && polygonSources.TryAdd(geometry, (part, models[model])))
+        {
+            if (!polygonGeometries.TryGetValue(model, out var list)) polygonGeometries[model] = list = [];
+            list.Add(geometry);
+        }
+    }
+    /// <summary>
+    /// Models a source update replaced with other polygon zones (the same geometry): their zone colours come from the shown
+    /// scene's models from now on, recomputed at once when they are shown.
+    /// </summary>
+    private void RefreshPolygonZoneModels(IReadOnlySet<int> models)
+    {
+        if (PreviewScene is not { } scene) return;
+        foreach (int model in models)
+        {
+            if (model < 0 || model >= scene.Models.Count || !polygonGeometries.TryGetValue(model, out var geometries)) continue;
+            foreach (var geometry in geometries)
+            {
+                var (part, _) = polygonSources[geometry];
+                polygonSources[geometry] = (part, scene.Models[model]);
+                if (polygonZoneColors.Remove(geometry, out var colors) && !ReferenceEquals(geometry.Colors, colors.Normal)) geometry.Colors = colors.Normal;
+            }
+        }
+        ShowPolygonZoneColors(HighlightMode == WorldHighlightMode.PolygonZones || zonePaintActive);
+        viewport.InvalidateRender();
     }
 
     /// <summary>Outlines every polygon of the static meshes (not their triangles), following each mesh's shown instances.</summary>
@@ -108,6 +133,6 @@ public sealed partial class SceneViewport
     private void ClearPolygonOverlays()
     {
         RemovePolygonEdges();
-        polygonSources.Clear(); polygonZoneColors.Clear(); polygonEdgeGeometries.Clear();
+        polygonSources.Clear(); polygonGeometries.Clear(); polygonZoneColors.Clear(); polygonEdgeGeometries.Clear();
     }
 }

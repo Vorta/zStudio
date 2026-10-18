@@ -1,3 +1,5 @@
+using zStudio.Core.Worlds;
+
 namespace zStudio.Core.Sources;
 
 /// <summary>
@@ -17,7 +19,23 @@ public static partial class SourceZoneEdits
     /// there take polygon zone edits. Models in <c>data/common</c> and in subfolders are shared or mission vehicles.
     /// </summary>
     public static string PaintableFolder(SourceWorkspace workspace, string mission, CancellationToken token = default)
-        => Folder(new SourceEmbeddedZones(workspace, token).ReadMission(mission, includeEntries: false).MasterPath);
+        => Folder(MasterPath(workspace, mission, token));
+    /// <summary>The mission's master world model (the database the script loads after GameGenSetWorld), which holds the zone labels.</summary>
+    public static string MasterPath(SourceWorkspace workspace, string mission, CancellationToken token = default)
+        => new SourceEmbeddedZones(workspace, token).ReadMission(mission, includeEntries: false).MasterPath;
+    /// <summary>The folder of a project path (<c>data/m1/models</c> for <c>data/m1/models/m1.gltf</c>).</summary>
+    public static string FolderOf(string path) => Folder(SourceWorkspace.Normalize(path));
+
+    /// <summary>The map's zone labels (Any included), read from its master model alone.</summary>
+    public static IReadOnlyList<SourceMapZoneLabel> Labels(SourceWorkspace workspace, string mission, CancellationToken token = default)
+        => new SourceEmbeddedZones(workspace, token).ReadMission(mission, includeEntries: false).Labels;
+
+    /// <summary>
+    /// The assignment site a node's polygons are painted at (its placement, or its file's own geometry), with its mesh: nodes
+    /// with one site change together. Null for a node without source polygons.
+    /// </summary>
+    public static string? PolygonSite(WorldNodeProvenance origin) => origin.ModelFile is { } model && origin.ZoneMesh >= 0 && origin.Terrain == null
+        ? Key(origin, model) + "#" + origin.ZoneMesh.ToString(System.Globalization.CultureInfo.InvariantCulture) : null;
 
     /// <summary>Null when the node's polygons take polygon zone edits; otherwise why they do not.</summary>
     public static string? PolygonZoneRefusal(SourceSceneState build, string folder, int sceneNode)
@@ -114,7 +132,7 @@ public static partial class SourceZoneEdits
                 }
                 words[target.Polygon] = ZoneWord(after);
             }
-            if (meshes != null) context.Sources.Set(context.Assets[group.Key], profile with { MeshPolygons = meshes });
+            if (meshes != null) context.Sources.Set(context.Assets[group.Key], profile with { MeshPolygons = meshes }, polygonsOnly: true);
         }
         string name = zone == 255 ? "Any" : $"zone {zone}";
         string polygons = changed == 1 ? "1 polygon" : $"{changed:N0} polygons";

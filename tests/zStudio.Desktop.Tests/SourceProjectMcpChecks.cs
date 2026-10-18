@@ -36,7 +36,7 @@ internal static class SourceProjectMcpChecks
             Assert.Equal(Path.GetFullPath(Path.Combine(fixture.Root, "initialized")), Path.GetFullPath(main.ViewModel.RootPath!));
             var reopened = await Job("open_root", new() { ["path"] = Path.Combine(fixture.Root, "initialized"), ["project"] = true });
             Assert.Equal(Path.GetFullPath(Path.Combine(fixture.Root, "initialized")), Path.GetFullPath(reopened["RootPath"]!.GetValue<string>()));
-            Assert.Equal(["MCP integration…", "Compare worlds…", "-", "Add model to world…", "Edit in Blender…", "Update from Blender export…", "Edit map zones…", "Create terrain…", "Convert to editable terrain…", "-", "Validate source file on disk", "Reload current file"], ToolsMenu(main));
+            Assert.Equal(["MCP integration…", "Compare worlds…", "-", "Add model to world…", "Edit in Blender…", "Update from Blender export…", "Paint polygon zones", "Erase polygon zones", "Create terrain…", "Convert to editable terrain…", "-", "Validate source file on disk", "Reload current file"], ToolsMenu(main));
             // The export commands and the texture dithering choice have their own menu, between Tools and Help.
             Assert.Equal(["Export all ZBD files…", "Export ZBD file", "Check source project", "Build profile", "-", "Texture dithering"], ToolsMenu(main, "ExportMenu", "ExportMenuOpened"));
             // Project preflight also precedes navigation: a slow folder check must not replace a newer clean root.

@@ -89,6 +89,7 @@ public partial class MainWindow
         if (target.Nodes.Count == 0 || target.Nodes.Count > AiPathTransforms.MaximumNodes)
             throw new StudioCommandException("unsupported", $"Edit mode supports 1–{AiPathTransforms.MaximumNodes:N0} nodes in one network.");
         SetAiOptions(true, aiThroughGeometry, network);
+        EndZoneToolFor("editing an AI path");
         selectedNode = null; inspectedSceneSource = null;
         scene.SetAiPathEditing(network, scene.SelectedAiNode is { } id ? [id] : []);
         UpdateAiPathPanel();

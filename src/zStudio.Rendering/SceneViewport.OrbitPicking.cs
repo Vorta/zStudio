@@ -28,7 +28,8 @@ public sealed partial class SceneViewport
         if (!TrySceneSurface(point, out var hit)) return false;
         surface = new(hit!.PointHit.X, hit.PointHit.Y, hit.PointHit.Z); return true;
     }
-    private bool TrySceneSurface(Point point, out HitTestResult? surface)
+    /// <param name="accept">Skips hits it declines (the polygon zone tool looks through what it cannot paint).</param>
+    private bool TrySceneSurface(Point point, out HitTestResult? surface, Func<HitTestResult, bool>? accept = null)
     {
         surface = null;
         if (!IsOrbitPickingReady || viewport.Camera is not ProjectionCamera camera
@@ -46,7 +47,7 @@ public sealed partial class SceneViewport
         foreach (var element in viewport.Items) element.HitTest(context, ref hits);
         foreach (var hit in hits.OrderBy(h => h.Distance))
         {
-            if (!hit.IsValid || hit.ModelHit is not MeshGeometryModel3D mesh || !IsOrbitSurface(mesh, hit.Tag)) continue;
+            if (!hit.IsValid || hit.ModelHit is not MeshGeometryModel3D mesh || !IsOrbitSurface(mesh, hit.Tag) || accept?.Invoke(hit) == false) continue;
             var candidate = new Point3D(hit.PointHit.X, hit.PointHit.Y, hit.PointHit.Z);
             if (!double.IsFinite(candidate.X) || !double.IsFinite(candidate.Y) || !double.IsFinite(candidate.Z)
                 || Vector3D.DotProduct(candidate - camera.Position, forward) < 1e-6) continue;

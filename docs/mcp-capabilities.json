@@ -253,20 +253,34 @@
       "note": "While the brush is on, a left-button drag over a source world collects the surface points under the pointer; on release the stroke's plan-view path and the brush radius paint or erase the brush's region as one undoable change (source_terrain_edit paint with path and radius). Escape or lost capture drops a stroke in progress; MCP never synthesizes pointer input."
     },
     {
-      "gui": "ZonePropertiesEditor:Fields",
+      "gui": "ZonePicker:Controls",
       "tools": [
-        "zstudio_source_zones",
-        "zstudio_source_zone_draft"
+        "zstudio_source_zone_tool",
+        "zstudio_source_zone_label"
       ],
-      "note": "Map zone catalog, object gate and exact polygon assignments share the source zone service. Catalog reports MasterPath; inspection reports MasterPath and SourcePaths, with OwnerPath and OwnerReferences on exact targets instead of an external manifest identity. Draft begin/set/add/apply/cancel/label use the pinned source world, revision and draft token; shared assignments require explicit sharedScope, including shared model defaults consumed by other missions. Inspection and edit plans disclose AffectedMissions and AffectedSources (32 each) with AffectedMissionCount and AffectedSourceCount totals; reference-placement overrides remain isolated from unrelated occurrences. Replacing a removed label across another mission's shared defaults is refused with guidance to apply an explicit shared-scope assignment edit first. Cancel with the current document revision and owned draft token also discards targets made stale by another source edit; editing those stale targets remains refused. Native zone Properties fields and actions are exposed through these dedicated zone commands. Applying accepts one undoable edit to the owning glTF attributes, retaining geometry buffers; Save uses the existing verified source workspace save."
+      "note": "The zone picker's text box (0–254, Any or a label; Enter picks), arrow keys and rows choose the zone (source_zone_tool engage with zone; state lists the map's zones with labels and polygon counts as placed in the world). A row's pencil renames its label in place: Enter, Tab or closing the picker saves, Escape restores, empty removes; each is one undoable change (source_zone_label)."
     },
     {
       "gui": "SceneViewport.Zones:Strokes",
       "tools": [
-        "zstudio_source_zones",
-        "zstudio_source_zone_draft"
+        "zstudio_source_polygon_zones",
+        "zstudio_source_zone_tool"
       ],
-      "note": "Explicit face/object brush strokes collect exact scene-node and source polygon identities (a picked built face is recorded as the source polygon it comes from, the index source_zones inspection returns), bounded to 4096 targets. Release adds targets to the shared draft; Apply remains explicit. MCP add supplies those identities without capturing physical input; paint only toggles the visible brush. The targets add takes are the brush's and Add selected surface or object's: one exact scene node and, for faces, source polygon per hit, accepted by the same draft check, so any face or object a view shows can be targeted and add's explicit polygon indices need no other GUI control. Terrain recipe painting retains source_terrain_edit semantics."
+      "note": "While the tool is engaged, a left-button drag paints or erases its zone on each paintable source polygon the pointer crosses (looking through models the tool cannot paint); release applies the stroke as one undoable change: source_polygon_zones with the source polygons source_zones inspection returns. Ctrl held inverts the mode for a stroke, Shift+click picks a zone of the polygon under the pointer and [ ] step through the used zones (source_zone_tool engage with mode or zone), and Esc drops a stroke in progress. MCP never synthesizes pointer input."
+    },
+    {
+      "gui": "MainWindow.SourceZones:Notices",
+      "tools": [
+        "zstudio_source_zone_tool"
+      ],
+      "note": "After a stroke, notices under the tool banner report the full polygons it skipped, with Show/Hide outlining them (source_zone_tool showSkipped or hideSkipped; state lastStroke lists them), editable terrain it crossed and its polygon limit; ✕ dismisses a notice."
+    },
+    {
+      "gui": "MainWindow.SourceZones:ZoneToolKey",
+      "tools": [
+        "zstudio_source_zone_tool"
+      ],
+      "note": "Outside text fields, P and E engage the tool in Paint or Erase (or switch its mode), [ and ] step through the zones the map uses, and Esc leaves the tool once no stroke is in progress (a stroke in progress is dropped first): source_zone_tool engage or exit. Ctrl and Shift only change the cursor and banner until a stroke or click uses them."
     },
     {
       "gui": "SourceModelDialog:Controls",
@@ -1260,11 +1274,46 @@
       "note": "Tools > Create terrain chooses a glTF file in the project, then opens the Create terrain dialog (TerrainCreateDialog:Controls) for its meshes and recipe path; Create makes the recipe and the database marker as one undoable change (source_terrain_create with model, surfaces and recipe) and shows the recipe in Properties."
     },
     {
-      "gui": "MainWindow.xaml:EditZonesClick",
+      "gui": "MainWindow.xaml:PaintZonesClick",
       "tools": [
-        "zstudio_source_zone_draft"
+        "zstudio_source_zone_tool"
       ],
-      "note": "Open the pinned source-world zone editor using action begin."
+      "note": "Tools > Paint polygon zones (P) engages the polygon zone tool in Paint on the shown source map, or switches an engaged tool to Paint: source_zone_tool with action engage and mode paint."
+    },
+    {
+      "gui": "MainWindow.xaml:EraseZonesClick",
+      "tools": [
+        "zstudio_source_zone_tool"
+      ],
+      "note": "Tools > Erase polygon zones (E) engages the tool in Erase, or switches it to Erase: source_zone_tool with action engage and mode erase."
+    },
+    {
+      "gui": "MainWindow.xaml:PolygonZoneToolClick",
+      "tools": [
+        "zstudio_source_zone_tool"
+      ],
+      "note": "The Paint group's Polygon zones toggle engages the tool (in its last mode and zone) or leaves it: source_zone_tool engage or exit. Engaging turns on the Polygon zones overlay; leaving restores the overlays unless they were changed meanwhile (scene_options highlight)."
+    },
+    {
+      "gui": "MainWindow.xaml:ZoneModeChecked",
+      "tools": [
+        "zstudio_source_zone_tool"
+      ],
+      "note": "The Paint | Erase switch beside the engaged toggle sets the mode: source_zone_tool engage with mode."
+    },
+    {
+      "gui": "MainWindow.xaml:ZonePickerClick",
+      "tools": [
+        "zstudio_source_zone_tool"
+      ],
+      "note": "The zone dropdown opens the zone picker (ZonePicker:Controls); source_zone_tool state lists the same zones with labels and polygon counts as placed in the world."
+    },
+    {
+      "gui": "MainWindow.xaml:ZoneToolExitClick",
+      "tools": [
+        "zstudio_source_zone_tool"
+      ],
+      "note": "The tool banner's Exit leaves the tool, as Esc does: source_zone_tool exit."
     },
     {
       "gui": "MainWindow.xaml:ConvertTerrainClick",

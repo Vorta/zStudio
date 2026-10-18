@@ -41,10 +41,8 @@ public partial class MainWindow
             SaveRequested = SaveCurrentAsync,
             UndoRequested = UndoDocument,
             Editing = doc => { if (doc == shownDocument) animation?.Pause(); },
-            // Closing discards the zone draft (Closed below); it is decided first, so declining asks nothing more.
-            ResolveClosingDrafts = ResolveZoneDrafts,
         };
-        window.Closed += (_, _) => { if (propertiesWindow == window) { CancelZoneDraft(close: true); propertiesWindow = null; ++propertyRequest; } };
+        window.Closed += (_, _) => { if (propertiesWindow == window) { propertiesWindow = null; ++propertyRequest; } };
         window.Retargeted += UpdateSourceInputBlock;
         propertiesWindow = window; return window;
     }
@@ -56,23 +54,18 @@ public partial class MainWindow
         if (window.WindowState == WindowState.Minimized) window.WindowState = WindowState.Normal;
         window.Activate();
     }
-    /// <summary>
-    /// Refuses (MCP, without a dialog) while Properties holds unfinished input or a map zone draft, which retargeting or
-    /// closing it would otherwise ask about or discard.
-    /// </summary>
+    /// <summary>Refuses (MCP, without a dialog) while Properties holds unfinished input, which retargeting or closing it would otherwise ask about.</summary>
     private void RequireNoPropertiesDrafts(string message)
     {
         if (propertiesWindow?.HasPendingDrafts == true) throw new StudioCommandException("pending_drafts", message);
-        if (HasZoneDraft) throw new StudioCommandException("pending_drafts", "Apply or cancel the map zone draft before continuing.");
     }
-    internal bool ResolvePropertiesDrafts(DocumentModel? doc = null) => ResolveZoneDrafts(doc) && ResolveInspectionDrafts(doc) && (propertiesWindow == null || doc != null && propertiesWindow.Document != doc || propertiesWindow.ResolvePendingDrafts());
+    internal bool ResolvePropertiesDrafts(DocumentModel? doc = null) => ResolveInspectionDrafts(doc) && (propertiesWindow == null || doc != null && propertiesWindow.Document != doc || propertiesWindow.ResolvePendingDrafts());
     /// <summary>
     /// Before choosing another object (the world tree, search, Recently selected, a row's Frame): only the selection's own
-    /// draft is resolved, as a viewport click does. Choosing does not retarget Properties, so a map zone draft (which
-    /// collects the chosen objects) and Properties input stay.
+    /// draft is resolved, as a viewport click does. Choosing does not retarget Properties, so Properties input stays.
     /// </summary>
     internal bool ResolveSelectionDrafts(DocumentModel? doc = null) => ResolveInspectionDrafts(doc);
-    internal async Task<bool> ResolvePropertiesDraftsAsync(DocumentModel? doc = null) => ResolveZoneDrafts(doc) && await ResolveInspectionDraftsAsync(doc) && (propertiesWindow == null || doc != null && propertiesWindow.Document != doc || await propertiesWindow.ResolvePendingDraftsAsync());
+    internal async Task<bool> ResolvePropertiesDraftsAsync(DocumentModel? doc = null) => await ResolveInspectionDraftsAsync(doc) && (propertiesWindow == null || doc != null && propertiesWindow.Document != doc || await propertiesWindow.ResolvePendingDraftsAsync());
     private void UndoDocument(DocumentModel doc, bool redo)
     {
         doc = LiveDocument(doc);

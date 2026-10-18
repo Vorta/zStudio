@@ -14,6 +14,7 @@ public partial class MainWindow
     private void ConfigurePickupScene(SceneViewport viewport)
     {
         ConfigureTerrainScene(viewport);
+        ConfigureZoneScene(viewport);
         // A source object's fields are editable without a draft: its handles open one first, as typing does.
         viewport.CanStartPickupEdit = () => CurrentInspectionCard is { ObjectApplying: false } card &&
             pickupDocument is { EditingLocked: false } doc && (card.HasDraft || card.ObjectEditor != null && card.OpenObjectDraftForGesture()) &&

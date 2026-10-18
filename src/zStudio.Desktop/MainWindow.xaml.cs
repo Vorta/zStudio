@@ -89,7 +89,7 @@ public partial class MainWindow : Window
         InitializeContentEditors();
         InitializeSourceEditor();
         ApplyTheme(s.Theme); UpdateRecent(); ready = true;
-        PreviewKeyDown += Keyboard;
+        PreviewKeyDown += Keyboard; PreviewKeyUp += ZoneToolKeyUp;
         // After the focused control: a dropdown, a field's restore, a stroke or a grip uses Escape first.
         KeyDown += (_, e) => { if (!e.Handled) SourceEscape(e); };
         PreviewKeyUp += (_, e) => flyCamera?.HandleKey(e, false);
@@ -450,7 +450,7 @@ public partial class MainWindow : Window
                 if (mission != null) { await doc.GetPickupEditsAsync(ViewModel.Resolver, token); await PopulateWorldMissionsAsync(doc, token); }
                 if (mission != null) await PrepareSourceMapSelectionAsync(doc, mission.Scene, mission, token);
                 ConfigureSourceMapPresentation(scene, doc, mission);
-                await scene.ShowAsync(doc.PreviewDocument, asset, ViewModel.Resolver, PreferredPack, LodCombo.SelectedIndex, token, BackdropEnabled.IsChecked == true, mission); token.ThrowIfCancellationRequested(); ApplySceneOptions(); RefreshZoneDraftView();
+                await scene.ShowAsync(doc.PreviewDocument, asset, ViewModel.Resolver, PreferredPack, LodCombo.SelectedIndex, token, BackdropEnabled.IsChecked == true, mission); token.ThrowIfCancellationRequested(); ApplySceneOptions(); RefreshZoneToolScene();
                 PublishSourceMapParts(scene, doc);
                 CompleteSceneHandoff();
                 // A rebuilt source world keeps the camera of the build it replaced.
@@ -855,7 +855,7 @@ public partial class MainWindow : Window
         SaveWorkspacePreferences();
     }
     private void CopyPropertiesClick(object sender, RoutedEventArgs e) { if (animation?.ResolvePendingDrafts() == false) return; if (properties != null) Clipboard.SetText(properties.ToJsonString(JsonData.Options)); }
-    private void HelpClick(object sender, RoutedEventArgs e) => MessageBox.Show(this, "Workspace: Initialize unpacks the retail ZBD files once into a source project (a folder with data and gamegen); File > Open workspace (Ctrl+O) opens one. Choose a map to edit it; the back arrow returns to the maps. Ctrl+Z/Ctrl+Y undo and redo, Ctrl+S saves the project's changed files, Ctrl+W closes the map. Export builds game files from the sources into a folder outside the project.\n\nView: middle drag orbits; Shift+middle drag pans; Ctrl+middle drag or the wheel zooms toward the pointer (orthographic views scale about it); Ctrl+Shift+middle drag dollies. Numpad 1/3/7 selects front/right/top (Ctrl for the opposite views), Numpad 5 toggles perspective/orthographic, Home frames everything and Numpad decimal frames the selection; the Perspective chip offers the same. F11 toggles fullscreen. Flycam: WASD moves along the view, Space/C moves up/down, the mouse looks around and the wheel changes speed; Escape returns to normal controls.\n\nObjects: click one in the view or the World tree to select it; its Properties pane edits it. Move and Rotate show handles; Apply accepts the changes as one undo step, Revert discards them. Escape or a click on empty space clears the selection. Copy… asks for the copy's name and places it beside the original (in place when it shows nothing with a width).", "Controls and formats");
+    private void HelpClick(object sender, RoutedEventArgs e) => MessageBox.Show(this, "Workspace: Initialize unpacks the retail ZBD files once into a source project (a folder with data and gamegen); File > Open workspace (Ctrl+O) opens one. Choose a map to edit it; the back arrow returns to the maps. Ctrl+Z/Ctrl+Y undo and redo, Ctrl+S saves the project's changed files, Ctrl+W closes the map. Export builds game files from the sources into a folder outside the project.\n\nView: middle drag orbits; Shift+middle drag pans; Ctrl+middle drag or the wheel zooms toward the pointer (orthographic views scale about it); Ctrl+Shift+middle drag dollies. Numpad 1/3/7 selects front/right/top (Ctrl for the opposite views), Numpad 5 toggles perspective/orthographic, Home frames everything and Numpad decimal frames the selection; the Perspective chip offers the same. F11 toggles fullscreen. Flycam: WASD moves along the view, Space/C moves up/down, the mouse looks around and the wheel changes speed; Escape returns to normal controls.\n\nObjects: click one in the view or the World tree to select it; its Properties pane edits it. Move and Rotate show handles; Apply accepts the changes as one undo step, Revert discards them. Escape or a click on empty space clears the selection. Copy… asks for the copy's name and places it beside the original (in place when it shows nothing with a width).\n\nPolygon zones: the Paint group's Polygon zones tool (P paints, E erases) adds a zone to, or removes it from, every polygon you drag over in the map's own models; Ctrl inverts it for a stroke, Shift+click picks a polygon's zone, [ and ] step through the map's zones, and Escape leaves the tool. The zone picker names zones.", "Controls and formats");
     private void AboutClick(object sender, RoutedEventArgs e)
     {
         var assembly = typeof(MainWindow).Assembly;
@@ -867,6 +867,7 @@ public partial class MainWindow : Window
     {
         if (PresentationKey(e)) return;
         if (flyCamera?.HandleKey(e, true) == true) return;
+        if (ZoneToolKey(e)) return;
         if (ParachuteKeyboard(e)) return;
         if (AiPathKeyboard(e)) return;
         if (CameraKeyboard(e)) return;
@@ -904,14 +905,14 @@ public partial class MainWindow : Window
             if (sourceWorkspaceBusy) { CancelSourceBuilds(); ViewModel.Status = "Cancelling the rebuild so the application can close…"; }
             return;
         }
-        if (automationCloseRequested && (ViewModel.Documents.Any(d => d.IsDirty) || HasZoneDraft || HasInspectionDraft || HasAiPathDraft || parachuteDraft != null || animation?.HasAutomationDrafts == true || propertiesWindow?.HasPendingDrafts == true || scene?.IsPickupDragging == true))
+        if (automationCloseRequested && (ViewModel.Documents.Any(d => d.IsDirty) || HasInspectionDraft || HasAiPathDraft || parachuteDraft != null || animation?.HasAutomationDrafts == true || propertiesWindow?.HasPendingDrafts == true || scene?.IsPickupDragging == true))
         {
             automationCloseRequested = false; e.Cancel = true;
             ViewModel.Status = "Close canceled: the workspace has new edits or unfinished input. Resolve them before closing.";
             return;
         }
         System.Windows.Input.Keyboard.ClearFocus();
-        if (!allowClose && (ViewModel.Documents.Any(d => d.IsDirty) || HasZoneDraft || HasInspectionDraft || HasAiPathDraft || parachuteDraft != null || animation?.HasPendingDrafts == true || propertiesWindow?.HasPendingDrafts == true))
+        if (!allowClose && (ViewModel.Documents.Any(d => d.IsDirty) || HasInspectionDraft || HasAiPathDraft || parachuteDraft != null || animation?.HasPendingDrafts == true || propertiesWindow?.HasPendingDrafts == true))
         {
             e.Cancel = true; resolvingClose = true;
             try

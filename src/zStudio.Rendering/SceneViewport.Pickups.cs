@@ -69,7 +69,7 @@ public sealed partial class SceneViewport
                 if ((e.GetPosition(viewport) - start).Length <= 4 && !IsFlyActive && !IsPickupDragging) EmptySpaceClicked?.Invoke();
             }
         };
-        MouseLeave += (_, _) => { emptyClickStart = null; if (!pickupPresentationRebase) CancelPickupDrag(); SetPickupHover(false); hoveredAiNode = null; PublishAiLabel(); };
+        MouseLeave += (_, _) => { emptyClickStart = null; if (!pickupPresentationRebase) CancelPickupDrag(); SetPickupHover(false); hoveredAiNode = null; PublishAiLabel(); LeaveZoneHover(); };
         viewport.LostMouseCapture += (_, _) => { emptyClickStart = null; if (IsPickupDragging) CancelPickupDrag(); CancelTerrainStroke(); CancelZoneGesture(); CancelAiPathBox(); };
         viewport.PreviewKeyDown += (_, e) => { if (e.Key == Key.Escape && (CancelAiPathBox() || CancelPickupDrag() || CancelTerrainStroke() || CancelZoneGesture())) e.Handled = true; };
     }

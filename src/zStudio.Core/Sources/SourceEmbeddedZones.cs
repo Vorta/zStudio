@@ -278,11 +278,12 @@ internal sealed class SourceEmbeddedZones
         return scope as JsonObject;
     }
 
-    internal void Set(Entry entry, WorldZoneProfile profile, GltfDocument? expectedDocument = null)
+    /// <param name="polygonsOnly">Only polygon zones changed: a file's own node and load-root attributes keep their stored form.</param>
+    internal void Set(Entry entry, WorldZoneProfile profile, GltfDocument? expectedDocument = null, bool polygonsOnly = false)
     {
         var owner = File(entry.OwnerPath);
         WorldGltf.ValidateZoneProfile(expectedDocument ?? File(entry.ModelPath).Document, profile, token);
-        if (entry.ReferenceChain.Count == 0) WorldGltf.PatchEmbeddedZones(owner.Root, owner.Document, profile, token);
+        if (entry.ReferenceChain.Count == 0) WorldGltf.PatchEmbeddedZones(owner.Root, owner.Document, profile, token, polygonsOnly);
         else
         {
             var at = Object(Object(Object(ReferenceNode(owner, entry.ReferenceChain[0]), "extras"), WorldGltf.Key), "zoneOverrides");

@@ -285,13 +285,11 @@ public partial class MainWindow
     {
         if (brush != null)
         {
-            // Changing tools must not discard selected zone targets or a stroke in progress.
-            // An empty zone draft can remain pinned, but it must stop consuming terrain input.
-            if (HasZoneDraft) throw new StudioCommandException("pending_drafts", "Apply or cancel the map zone draft before painting terrain.");
-            if (scene?.IsZonePainting == true) throw new StudioCommandException("busy", "Finish or cancel the zone stroke before painting terrain.");
+            // Changing tools must not discard a stroke in progress; the polygon zone tool otherwise ends.
+            if (scene?.IsZonePainting == true || zoneTool.Applying) throw new StudioCommandException("busy", "Finish the polygon zone stroke before painting terrain.");
             if (scene is { } shown && TerrainBrushBlocked(shown))
                 throw new StudioCommandException("busy", "Finish the AI path or drop-window editing before painting terrain.");
-            if (scene?.ZonePaintActive == true) { scene.ZonePaintActive = false; RefreshZoneDraftView(); }
+            LeaveZoneTool();
         }
         if (terrainBrush != brush) scene?.CancelTerrainStroke();
         terrainBrush = brush;

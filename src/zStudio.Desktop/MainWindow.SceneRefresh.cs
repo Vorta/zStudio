@@ -113,7 +113,7 @@ public partial class MainWindow
             ConfigurePickupScene(scene); ConfigureFlyScene(scene);
             SceneHost.Content = scene;
             ApplySceneOptions();
-            RefreshZoneDraftView();
+            RefreshZoneToolScene();
             if (asset.Kind == AssetKind.World) AttachPickupEditor(doc);
             scene.SetValveOptions(previous.ValveOverlayVisible,
                 mission?.Layout.MissionArchive == previous.Mission?.Layout.MissionArchive ? previous.ValveFilter : null);

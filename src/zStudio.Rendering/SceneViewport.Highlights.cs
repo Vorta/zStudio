@@ -39,6 +39,8 @@ public sealed partial class SceneViewport
             }
             PreviewMaterials.SetOverlay(surface.Normal, tint);
         }
+        // The polygon zone tool keeps its zones shown whatever the overlay.
+        if (zonePaintActive) ApplyZoneEmphasis();
         viewport.InvalidateRender();
     }
 

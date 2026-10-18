@@ -284,7 +284,12 @@ public partial class MainWindow
         }
         ViewModeChip.Visibility = shown && !flying ? Visibility.Visible : Visibility.Collapsed;
         RefreshViewMode();
-        FlyBanner.Visibility = FlyFrame.Visibility = shown && flying ? Visibility.Visible : Visibility.Collapsed;
+        FlyBanner.Visibility = shown && flying ? Visibility.Visible : Visibility.Collapsed;
+        // Paint tools work in a source map's Whole world.
+        SourcePaintGroup.Visibility = shownAsset?.Kind == zStudio.Core.AssetKind.World && shownDocument?.SourceWorld != null ? Visibility.Visible : Visibility.Collapsed;
+        // The polygon zone tool frames the view as Flycam does, with its own banner.
+        FlyFrame.Visibility = shown && (flying || ZoneToolEngaged) ? Visibility.Visible : Visibility.Collapsed;
+        RefreshZoneBanner();
         FlyHint.Visibility = !sourceChromeActive && flying ? Visibility.Visible : Visibility.Collapsed;
         if (flying && scene != null) FlyBannerSpeed.Text = $"· {scene.FlySpeed:0.##} units/s";
         AiChip.Visibility = shown && aiVisible && IsAiWorld ? Visibility.Visible : Visibility.Collapsed;
