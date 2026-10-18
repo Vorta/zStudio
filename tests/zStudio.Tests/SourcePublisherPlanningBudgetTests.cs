@@ -19,7 +19,7 @@ public sealed partial class SourcePublisherTests
         Assert.Contains("planning budget", error.Message);
         Assert.True(allocated < 4L * 1024 * 1024, $"Rejected planning allocated {allocated:N0} bytes.");
         Assert.Equal(before, project.Sources());
-        Assert.False(Directory.Exists(project.Full("zstudio")));
+        Assert.False(Directory.Exists(project.Full(".zstudio")));
         publisher.Publish(ScriptChange(project), "valid after refusal", Token);
         Assert.Empty(publisher.FindInterrupted(Token));
     }
@@ -38,7 +38,7 @@ public sealed partial class SourcePublisherTests
             .Publish(writes, "existing paths", Token));
         Assert.Contains("planning budget", error.Message);
         Assert.Equal(before, project.Sources());
-        Assert.False(Directory.Exists(project.Full("zstudio")));
+        Assert.False(Directory.Exists(project.Full(".zstudio")));
     }
 
     [Fact]

@@ -218,7 +218,7 @@ public sealed class ScriptScanRound6Tests
     /// <summary>A checkout folder as Edit in Blender writes it, with <paramref name="files"/> listed in its manifest and <paramref name="exports"/> in its outbox.</summary>
     private static string FakeCheckout(string project, string id, int exports, JsonArray? files = null)
     {
-        string folder = Path.Combine(project, "zstudio", "export", id);
+        string folder = Path.Combine(project, ".zstudio", "export", id);
         Directory.CreateDirectory(Path.Combine(folder, "outbox", "nested"));
         JsonObject manifest = new() { ["format"] = "zstudio-blender-checkout", ["version"] = 2, ["id"] = id, ["model"] = "data/m1/models/m1.gltf", ["created"] = "2026-01-01T00:00:00.0000000Z", ["files"] = files ?? [] };
         File.WriteAllText(Path.Combine(folder, "manifest.json"), manifest.ToJsonString());
@@ -243,7 +243,7 @@ public sealed class ScriptScanRound6Tests
         // The listing budget includes each export's generation folder and manifest, plus the other outbox entries.
         Assert.Equal(3, SourceBlender.CheckoutExports(fixture.Project, 33, Token).Count);
         var error = Assert.Throws<IOException>(() => SourceBlender.CheckoutExports(fixture.Project, 32, Token));
-        Assert.Contains("zstudio/export holds more than 32 files and folders", error.Message, StringComparison.Ordinal);
+        Assert.Contains(".zstudio/export holds more than 32 files and folders", error.Message, StringComparison.Ordinal);
         // The files a manifest lists count before they are read.
         FakeCheckout(fixture.Project, "listed", 0, new JsonArray([.. Enumerable.Range(0, 40).Select(_ => (JsonNode?)0)]));
         Assert.Throws<IOException>(() => SourceBlender.CheckoutExports(fixture.Project, 60, Token));

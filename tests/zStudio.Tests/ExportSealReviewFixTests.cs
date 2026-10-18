@@ -214,7 +214,7 @@ public sealed class ExportSealReviewFixTests
                 Fault = (step, index) =>
                 {
                     if (step != "intent" || index != 1) return;
-                    File.WriteAllText(Assert.Single(Directory.GetFiles(Path.Combine(root, "zstudio", "staging"), "1.tmp", SearchOption.AllDirectories)), "ANOTHER PROGRAM");
+                    File.WriteAllText(Assert.Single(Directory.GetFiles(Path.Combine(root, ".zstudio", "staging"), "1.tmp", SearchOption.AllDirectories)), "ANOTHER PROGRAM");
                 },
             };
             var error = Assert.ThrowsAny<IOException>(() => publisher.Publish(writes, "seal", Token));
@@ -222,14 +222,14 @@ public sealed class ExportSealReviewFixTests
             // The save was undone: the first file has its original content and the second was never created.
             Assert.Equal(original, File.ReadAllBytes(ai));
             Assert.False(File.Exists(added));
-            Assert.Empty(Directory.GetDirectories(Path.Combine(root, "zstudio", "recovery")));
+            Assert.Empty(Directory.GetDirectories(Path.Combine(root, ".zstudio", "recovery")));
 
             // While a staged copy is being installed, no other program can change it.
             List<string> refused = [];
             publisher.Fault = (step, index) =>
             {
                 if (step != "install" || index != 1) return;
-                try { Overwrite(Assert.Single(Directory.GetFiles(Path.Combine(root, "zstudio", "staging"), "1.tmp", SearchOption.AllDirectories)), "ANOTHER PROGRAM"); }
+                try { Overwrite(Assert.Single(Directory.GetFiles(Path.Combine(root, ".zstudio", "staging"), "1.tmp", SearchOption.AllDirectories)), "ANOTHER PROGRAM"); }
                 catch (IOException ex) { refused.Add(ex.Message); }
             };
             publisher.Publish(writes, "seal", Token);

@@ -28,7 +28,7 @@ public sealed partial class SourcePublisherTests
         Assert.True(allocated < 32 * 1024, $"Cold collection refusal allocated {allocated:N0} bytes.");
         var valid = PathManifest("data/new/child/value.zrd") with { Folders = ["data/new", "data/new/child"] };
         Assert.Equal(2, limited.ParseManifest(ColdManifest(valid), valid.SaveId, Token).Folders.Count);
-        Assert.False(Directory.Exists(project.Full("zstudio")));
+        Assert.False(Directory.Exists(project.Full(".zstudio")));
     }
 
     [Fact]
@@ -59,7 +59,7 @@ public sealed partial class SourcePublisherTests
         byte[] bytes = Encoding.UTF8.GetBytes(json);
         var error = Assert.Throws<InvalidDataException>(() => new SourcePublisher(project.Root).ParseManifest(bytes, PathBudgetSaveId, Token));
         Assert.Contains(diagnostic, error.Message); Assert.InRange(error.Message.Length, 1, 128);
-        Assert.False(Directory.Exists(project.Full("zstudio")));
+        Assert.False(Directory.Exists(project.Full(".zstudio")));
     }
 
     [Fact]
@@ -98,7 +98,7 @@ public sealed partial class SourcePublisherTests
         Assert.Equal(description, parsed.Description); Assert.Equal(manifest.SaveId, parsed.SaveId); Assert.Equal(1, parsed.Format);
         Assert.Contains("planning budget", Assert.Throws<InvalidDataException>(() =>
             new SourcePublisher(project.Root) { PlanningPathBytesLimit = exact - 1 }.ParseManifest(bytes, manifest.SaveId, Token)).Message);
-        Assert.False(Directory.Exists(project.Full("zstudio")));
+        Assert.False(Directory.Exists(project.Full(".zstudio")));
     }
 
     [Theory]
@@ -126,7 +126,7 @@ public sealed partial class SourcePublisherTests
         using CancellationTokenSource cancellation = new(); cancellation.Cancel();
         Assert.ThrowsAny<OperationCanceledException>(() => publisher.ParseManifest(bytes, PathBudgetSaveId, cancellation.Token));
         Assert.Equal(Script, Assert.Single(publisher.ParseManifest(bytes, PathBudgetSaveId, Token).Files).Relative);
-        Assert.False(Directory.Exists(project.Full("zstudio")));
+        Assert.False(Directory.Exists(project.Full(".zstudio")));
     }
 
     [Fact]
@@ -136,7 +136,7 @@ public sealed partial class SourcePublisherTests
         var original = project.Sources();
         Assert.Throws<SourcePublisher.Crash>(() => Failing(project, "commit", -1, () => new SourcePublisher.Crash()).Publish(ScriptChange(project), "cold admission", Token));
         string id = Assert.Single(new SourcePublisher(project.Root).FindInterrupted(Token)).SaveId;
-        string folder = project.Full($"zstudio/recovery/{id}"), path = Path.Combine(folder, "manifest.json");
+        string folder = project.Full($".zstudio/recovery/{id}"), path = Path.Combine(folder, "manifest.json");
         byte[] valid = File.ReadAllBytes(path);
         var json = JsonNode.Parse(valid)!; json["folders"] = new JsonArray("", "", "");
         File.WriteAllText(path, json.ToJsonString());

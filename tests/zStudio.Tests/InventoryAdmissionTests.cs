@@ -134,17 +134,17 @@ public sealed class InventoryAdmissionTests
         using Project project = new();
         foreach (string id in new[] { "older", "newer" })
         {
-            project.Write($"zstudio/export/{id}/manifest.json", new JsonObject
+            project.Write($".zstudio/export/{id}/manifest.json", new JsonObject
             {
                 ["format"] = "zstudio-blender-checkout", ["version"] = 2, ["id"] = id,
                 ["model"] = "data/model.gltf", ["created"] = id == "older" ? "2026-01-01T00:00:00Z" : "2026-02-01T00:00:00Z", ["files"] = new JsonArray()
             }.ToJsonString());
-            project.Write($"zstudio/export/{id}/outbox/recoil-export.json", "{}");
+            project.Write($".zstudio/export/{id}/outbox/recoil-export.json", "{}");
         }
         long exact = 0;
         foreach (string id in new[] { "older", "newer" })
         {
-            string folder = project.Full($"zstudio/export/{id}");
+            string folder = project.Full($".zstudio/export/{id}");
             exact += PathUnits(folder) + 256 + 8L * (folder.Length + "data/model.gltf".Length)
                 + 256 + 8L * (folder.Length + 7) + PathUnits(Path.Combine(folder, "outbox", "recoil-export.json")) + 3 * 64;
         }

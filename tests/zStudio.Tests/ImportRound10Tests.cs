@@ -21,9 +21,9 @@ public sealed class ImportRound10Tests
         File.WriteAllText(Path.Combine(fixture.Project, path), json.ToJsonString());
         var report = await SourceBuilder.CheckAsync(fixture.Project, ["m1/gamez.zbd"], token: Token);
         Assert.Contains(report.Outputs, o => o.Error?.Contains("authoritative source", StringComparison.Ordinal) == true);
-        var files = new SourceWorlds.DiskFiles(fixture.Project, new Dictionary<string, byte[]> { ["zstudio/export/id/input/mesh.bin"] = [1] });
-        Assert.Throws<InvalidDataException>(() => files.Exists("zstudio/export/id/input/mesh.bin"));
-        Assert.Throws<InvalidDataException>(() => files.Read("zstudio/export/id/input/mesh.bin", Token));
+        var files = new SourceWorlds.DiskFiles(fixture.Project, new Dictionary<string, byte[]> { [".zstudio/export/id/input/mesh.bin"] = [1] });
+        Assert.Throws<InvalidDataException>(() => files.Exists(".zstudio/export/id/input/mesh.bin"));
+        Assert.Throws<InvalidDataException>(() => files.Read(".zstudio/export/id/input/mesh.bin", Token));
     }
     [Theory]
     [InlineData("\"pbrMetallicRoughness\":{\"metallicFactor\":0.5}")]

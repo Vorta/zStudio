@@ -59,7 +59,7 @@ public sealed class WorkspaceSaveReviewFixTests : IDisposable
             Assert.Contains("is a link", Assert.Throws<IOException>(() => new SourceWorkspace(linked)).Message);
             Assert.Contains("is a link", Assert.Throws<IOException>(() => new SourcePublisher(linked)).Message);
         }
-        Assert.False(Directory.Exists(At(project, "zstudio")));
+        Assert.False(Directory.Exists(At(project, ".zstudio")));
         Assert.Equal(Text("GRAVITY ( -9.8 )\n"), File.ReadAllBytes(At(project, Ai)));
         // The folder itself is a project like any other.
         SourceWorkspace workspace = new(project);
@@ -82,7 +82,7 @@ public sealed class WorkspaceSaveReviewFixTests : IDisposable
         Assert.Contains("is a link", Assert.Throws<IOException>(() => workspace.Save(Token)).Message);
         Assert.True(workspace.IsDirty);
         Assert.Equal(Text("GRAVITY ( -9.8 )\n"), File.ReadAllBytes(At(moved, Ai)));
-        Assert.False(Directory.Exists(At(moved, "zstudio")));
+        Assert.False(Directory.Exists(At(moved, ".zstudio")));
     }
 
     // ---- The baseline recorded by a save ----

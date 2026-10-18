@@ -8,6 +8,7 @@ Version numbers follow `MAJOR.MINOR.PATCH`; the 0.x series is under active devel
 - While Edit zones is engaged it draws its own zone view (the chosen zone strong, the others faint) and leaves the overlay buttons as they were, disabled and paused until the tool is left. The zone overlay buttons read **Show/hide object zones** and **Show/hide polygon zones**.
 - The selected object's Zone section counts Polygon zones for placed objects and groups too (all their polygons); the Clicked polygon row is gone.
 - Wireframe draws light lines on a dark halo, visible on bright and dark ground alike (it was dark only).
+- A source project keeps everything zStudio writes in its one hidden `.zstudio` folder: save journals and staging and Blender checkouts move there from the separate `zstudio` folder. An existing `zstudio` folder is no longer used; move unfinished Blender checkouts from `zstudio/export` to `.zstudio/export` (or check them out again), then delete it.
 - Fly camera hides the mouse pointer for as long as it is on; before, the pointer could stay visible in the middle of the view.
 
 ## 0.9.0 — 2026-10-18

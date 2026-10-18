@@ -21,7 +21,7 @@ public sealed partial class SourcePublisherTests
         Assert.InRange(error.Message.Length, 1, 256);
         Assert.True(allocated < 32_768, $"Formatting a clipped identity allocated {allocated:N0} bytes.");
         Assert.Equal(65_536, wide.SaveId.Length);
-        Assert.False(Directory.Exists(project.Full("zstudio")));
+        Assert.False(Directory.Exists(project.Full(".zstudio")));
     }
 
     [Theory]
@@ -34,7 +34,7 @@ public sealed partial class SourcePublisherTests
         Assert.Throws<SourcePublisher.Crash>(() => Failing(project, "commit", -1, () => new SourcePublisher.Crash())
             .Publish(ScriptChange(project), "diagnostic", Token));
         string id = Assert.Single(new SourcePublisher(project.Root).FindInterrupted(Token)).SaveId;
-        string folder = project.Full($"zstudio/recovery/{id}"), path = Path.Combine(folder, "manifest.json");
+        string folder = project.Full($".zstudio/recovery/{id}"), path = Path.Combine(folder, "manifest.json");
         byte[] valid = File.ReadAllBytes(path);
         var json = JsonNode.Parse(valid)!;
         string wrong = new('x', length);
@@ -63,7 +63,7 @@ public sealed partial class SourcePublisherTests
         Assert.Throws<SourcePublisher.Crash>(() => Failing(project, "prepared", -1, () => new SourcePublisher.Crash())
             .Publish(ScriptChange(project), "serializer diagnostic", Token));
         string id = Assert.Single(new SourcePublisher(project.Root).FindInterrupted(Token)).SaveId;
-        string folder = project.Full($"zstudio/recovery/{id}"), path = Path.Combine(folder, "manifest.json");
+        string folder = project.Full($".zstudio/recovery/{id}"), path = Path.Combine(folder, "manifest.json");
         var json = JsonNode.Parse(File.ReadAllBytes(path))!;
         json[new string('x', 4096)] = 1; // Valid small JSON, rejected by UnmappedMemberHandling.Disallow.
         File.WriteAllText(path, json.ToJsonString());
@@ -100,7 +100,7 @@ public sealed partial class SourcePublisherTests
         var error = Assert.Throws<InvalidDataException>(() => new SourcePublisher(project.Root).ValidateManifest(manifest, manifest.SaveId, Token));
         Assert.InRange(error.Message.Length, 1, 768);
         Assert.Contains("…", error.Message);
-        Assert.False(Directory.Exists(project.Full("zstudio")));
+        Assert.False(Directory.Exists(project.Full(".zstudio")));
     }
 
     [Fact]
@@ -113,7 +113,7 @@ public sealed partial class SourcePublisherTests
         Assert.Equal("saveId", error.ParamName);
         Assert.InRange(error.Message.Length, 1, 256);
         Assert.Equal(before, project.Sources());
-        Assert.False(Directory.Exists(project.Full("zstudio")));
+        Assert.False(Directory.Exists(project.Full(".zstudio")));
     }
 
     [Fact]

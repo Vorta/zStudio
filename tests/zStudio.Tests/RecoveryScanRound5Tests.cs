@@ -58,7 +58,7 @@ public sealed partial class RecoveryScanRound5Tests
         }
         public string Root { get; } = Path.Combine(Path.GetTempPath(), "zstudio-recovery5-" + Guid.NewGuid().ToString("N"));
         public string SaveId { get; }
-        public string Journal => Full($"zstudio/recovery/{SaveId}");
+        public string Journal => Full($".zstudio/recovery/{SaveId}");
         public string Full(string relative) => Path.Combine(Root, relative.Replace('/', Path.DirectorySeparatorChar));
         public byte[] Read(string relative) => File.ReadAllBytes(Full(relative));
         /// <summary>Another program replaces a file of the save with a terabyte.</summary>

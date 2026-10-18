@@ -13,9 +13,9 @@ public sealed partial class SourcePublisherTests
         var crashing = Failing(project, "commit", -1, () => new SourcePublisher.Crash());
         Assert.Throws<SourcePublisher.Crash>(() => crashing.Publish(ScriptChange(project), "crash", Token));
         string id = Assert.Single(new SourcePublisher(project.Root).FindInterrupted(Token)).SaveId;
-        string original = project.Full($"zstudio/recovery/{id}");
+        string original = project.Full($".zstudio/recovery/{id}");
         string secondId = id[..^8] + (id.EndsWith("00000000", StringComparison.Ordinal) ? "00000001" : "00000000");
-        string second = project.Full($"zstudio/recovery/{secondId}"); Directory.CreateDirectory(second);
+        string second = project.Full($".zstudio/recovery/{secondId}"); Directory.CreateDirectory(second);
         var json = JsonNode.Parse(File.ReadAllText(Path.Combine(original, "manifest.json")))!; json["saveId"] = secondId;
         File.WriteAllText(Path.Combine(second, "manifest.json"), json.ToJsonString());
         File.Copy(Path.Combine(original, "events.log"), Path.Combine(second, "events.log"));
@@ -37,8 +37,8 @@ public sealed partial class SourcePublisherTests
         string foreign = outside.Full("20260101T000000000Z-1234abcd");
         Directory.CreateDirectory(foreign);
         string sentinel = Path.Combine(foreign, "sentinel.txt"); File.WriteAllText(sentinel, "keep");
-        Directory.CreateDirectory(project.Full("zstudio"));
-        string link = project.Full("zstudio/" + folder);
+        Directory.CreateDirectory(project.Full(".zstudio"));
+        string link = project.Full(".zstudio/" + folder);
         var before = project.Sources();
         Directory.CreateSymbolicLink(link, outside.Root);
         try
@@ -60,7 +60,7 @@ public sealed partial class SourcePublisherTests
         Assert.Throws<SourcePublisher.Crash>(() => publisher.Publish(ScriptChange(project), "crash", Token));
         publisher.Fault = null;
         string id = Assert.Single(publisher.FindInterrupted(Token)).SaveId;
-        string held = project.Full($"zstudio/recovery/{id}/held/0.bin");
+        string held = project.Full($".zstudio/recovery/{id}/held/0.bin");
         if (missing) File.Delete(held); else File.WriteAllText(held, "corrupt");
         byte[] installed = project.Read(Script);
         var result = publisher.Resolve(id, SourceRecoveryAction.RollBack, Token);
@@ -68,7 +68,7 @@ public sealed partial class SourcePublisherTests
         Assert.NotEmpty(result.Conflicts);
         Assert.Empty(result.Changed);
         Assert.Equal(installed, project.Read(Script));
-        Assert.True(Directory.Exists(project.Full($"zstudio/recovery/{id}")));
+        Assert.True(Directory.Exists(project.Full($".zstudio/recovery/{id}")));
     }
 
     [Theory]
@@ -85,11 +85,11 @@ public sealed partial class SourcePublisherTests
         if (stagedFile)
         {
             File.WriteAllText(foreign, "sentinel");
-            link = project.Full($"zstudio/staging/{id}/0.tmp"); File.Delete(link); File.CreateSymbolicLink(link, foreign);
+            link = project.Full($".zstudio/staging/{id}/0.tmp"); File.Delete(link); File.CreateSymbolicLink(link, foreign);
         }
         else
         {
-            link = project.Full($"zstudio/recovery/{id}/held");
+            link = project.Full($".zstudio/recovery/{id}/held");
             File.Move(Path.Combine(link, "0.bin"), foreign); Directory.Delete(link); Directory.CreateSymbolicLink(link, outside.Root);
         }
         byte[] expected = File.ReadAllBytes(foreign);

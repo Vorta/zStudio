@@ -23,7 +23,7 @@ Every capability is also available through MCP, on the same commands, undo and s
 4. **The full rebuild is the correctness reference.** Previews get faster first through gesture overrides and caching; incremental builds come last and must always match a clean build.
 5. **No zStudio metadata among the sources.**
    - `data\` and `gamegen\` hold only sources, and builds read nothing else.
-   - zStudio's working data lives in the project's `zstudio\` folder. No build reads it, and a model, script or recipe that refers into it is rejected.
+   - zStudio's working data lives in the project's hidden `.zstudio\` folder. No build reads it, and a model, script or recipe that refers into it is rejected.
    - Editor identities live only in memory. Names, content hashes and line numbers are not identities.
 
    ```
@@ -31,7 +31,7 @@ Every capability is also available through MCP, on the same commands, undo and s
      data\                   sources: models, terrain recipes, textures, resources, animations, sounds
      gamegen\                sources: build scripts
        build-profiles\       target profiles (original, modern)
-     zstudio\                zStudio's working data, created when first needed
+     .zstudio\               zStudio's settings and working data, created when first needed
        export\               Blender exchange, one folder per checkout
        recovery\             save journal with the previous file contents
        staging\              files being prepared for a save
@@ -39,7 +39,7 @@ Every capability is also available through MCP, on the same commands, undo and s
        diagnostics\          measurements and reports
    ```
 
-   Only `cache\` is always safe to delete. Recovery data from an interrupted save, and Blender exports not yet applied, may be the only copies. Leave `zstudio\` out when sharing a project.
+   Only `cache\` is always safe to delete. Recovery data from an interrupted save, and Blender exports not yet applied, may be the only copies. Leave `.zstudio\` out when sharing a project.
 6. **Lossless source editing.** Untouched bytes, comments, ordering, scalar kinds and token spelling survive every edit; normalization is an explicit command.
 7. **Preview contexts are labelled.** Authored assembly, mission-start preview and animation sandbox are distinct; the editor never bakes runtime state (startup animations, cleanup, difficulty fallbacks) into sources.
 
@@ -115,8 +115,8 @@ New script-created objects are ordinary readable blocks in the mission's scripts
 - **One project-wide history.** Two missions can share a model, definition or resource, so undo is per source project, not per mission; mission views show the relevant part.
 - **Save is project-wide at first.** Save in any source-project document saves all accepted source changes in the project and says which files. It never saves half a transaction.
 - **Recoverable multi-file publication**, in this order:
-  1. Stage and verify every output in `zstudio\staging\`. It is on the same drive as the sources, so originals can be moved aside instead of copied.
-  2. Record the preimages and the intent in the journal in `zstudio\recovery\`.
+  1. Stage and verify every output in `.zstudio\staging\`. It is on the same drive as the sources, so originals can be moved aside instead of copied.
+  2. Record the preimages and the intent in the journal in `.zstudio\recovery\`.
   3. With the files guarded against other writers, move each original aside and install its replacement only if the name is still free.
   4. Mark the save committed.
 - **Rollback and startup recovery** only undo what this save provably wrote. They never overwrite an external edit or recreate a file that went missing for unknown reasons. An incomplete rollback leaves the project in *Recovery required*, with source writes and export blocked until it is reconciled.
@@ -128,10 +128,10 @@ File-based exchange is the baseline; an optional add-on makes it safer and quick
 
 ### Checkout
 
-*Edit model*, *Edit referenced asset* or *Edit terrain selection* creates a checkout in the project's `zstudio\export\` folder:
+*Edit model*, *Edit referenced asset* or *Edit terrain selection* creates a checkout in the project's `.zstudio\export\` folder:
 
 ```
-zstudio\export\<checkout-id>\
+.zstudio\export\<checkout-id>\
   manifest.json            the checkout contract (fixed once created)
   baseline\project\…       the frozen source files
   input\                   editable glTF, buffers, textures, referenced assets
@@ -567,7 +567,7 @@ A playable deployment (ZBD files) and an editable source package (the project) a
 | Phase | Scope | Acceptance |
 | --- | --- | --- |
 | 0. Engine and target contracts | Ordered animation-binding reports, dependency-resolution traces, an evidence ledger, preview-context labels; crater and zone-probe characterization, engine limits, measurements of the modern target, vehicle lifecycle hooks (`start_anims`, death, restore) | Executable-qualified evidence and small deterministic characterization tests; traced and untraced builds agree; unknown behaviour is named, not guessed |
-| 1. Source foundation | `SourceWorkspace`, lossless ZRD/script syntax, project-wide undo, recoverable multi-file save in `zstudio\`, *Update from export*; vertical slice: moving pickups (with linked difficulty variants) in text `puppies*.zrd` | GUI and MCP produce identical patches; undo restores exact bytes; failure injection at every publication step leaves no partial transaction; a moved pickup works in the game |
+| 1. Source foundation | `SourceWorkspace`, lossless ZRD/script syntax, project-wide undo, recoverable multi-file save in `.zstudio\`, *Update from export*; vertical slice: moving pickups (with linked difficulty variants) in text `puppies*.zrd` | GUI and MCP produce identical patches; undo restores exact bytes; failure injection at every publication step leaves no partial transaction; a moved pickup works in the game |
 | 2. World objects and profiles | Move, rotate, duplicate, delete, hierarchy, flags, script-owned environment properties; Blender checkout; target profiles in `gamegen\build-profiles\`; texture and geometry budgets | Database and script objects survive edit → save → reopen → export; unrelated sources and bindings unchanged; test packs load as the profile predicts |
 | 3. Terrain source and splitter | Recipe format, shapes, surface selection, brushes, inclusion, deterministic splitting; *Convert to editable terrain* | Converted M1 terrain reproduces its geometry and attributes before any artistic change |
 | 4. Complete terrain behaviour | Caves, stacked surfaces, underwater layers, multi-zone transitions, CanModify and ClipTo, quicksand, crater reload | M1, then the M5/M6 underwater and zone cases, pass source editing, Blender update, export and in-game tests, one change at a time |
@@ -594,7 +594,7 @@ Phase 1 is complete when all three hold:
 | A | Python is allowed in an optional Blender add-on (and optional validation); Core, the application, builds and tests stay C#-only and never need Python or Blender. | The current rule allows Python only for optional export validation. | Approved |
 | B | One `SourceWorkspace` and one project-wide undo history per source project; Save in source mode saves all accepted source changes and says which files. Direct-mode documents are unchanged. | Shared files and multi-file edits cannot be owned by per-mission histories. | Approved |
 | C | Text `.zrd`, `.gs`, `.gw` and `.zan` edits preserve untouched bytes, comments, order, scalar kinds and spelling; formatting is an explicit command. | Today a text `.zrd` save replaces comments and formatting with the canonical layout. | Approved |
-| D | zStudio's working data (recovery journal, save staging, Blender exchange in `zstudio\export\`) lives in the project's `zstudio\` folder beside `data\` and `gamegen\`. Builds never read it, and unfinished recovery data or Blender work is never deleted silently. | Recoverability and controlled interchange without metadata among the sources. | Approved |
+| D | zStudio's working data (recovery journal, save staging, Blender exchange in `.zstudio\export\`) lives in the project's hidden `.zstudio\` folder beside `data\` and `gamegen\`, with its settings. Builds never read it, and unfinished recovery data or Blender work is never deleted silently. | Recoverability and controlled interchange without metadata among the sources. | Approved |
 | E | Source saves are recoverable, not simultaneously visible; a file name may briefly be absent; publication never replaces an unexpected file; incomplete rollback blocks writes until reconciled. | Preserving external work is preferred over an unqualified atomic-save claim. | Approved |
 | F | Blender changes come in only when the user chooses *Update from export*, through sealed candidate generations and the shared plan/apply path. The add-on uses the existing user-enabled MCP connector and never writes project or game files. | One acceptance boundary; the existing MCP policy stays intact. | Approved |
 | G | Evidence names the operation it establishes: runtime routines do not define the missing build tool's behaviour; animation-binding reports keep logical targets and resolution order, not names or slots, as identity. | See [Verified corrections](#verified-corrections). | Adopted |

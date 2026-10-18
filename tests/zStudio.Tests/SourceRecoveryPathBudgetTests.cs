@@ -28,7 +28,7 @@ public sealed partial class SourcePublisherTests
         Assert.Contains("planning budget", error.Message);
         new SourcePublisher(project.Root) { PlanningPathBytesLimit = exact }.ValidateManifest(manifest, manifest.SaveId, Token);
         Assert.Equal(before, project.Sources());
-        Assert.False(Directory.Exists(project.Full("zstudio")));
+        Assert.False(Directory.Exists(project.Full(".zstudio")));
     }
 
     [Fact]
@@ -44,7 +44,7 @@ public sealed partial class SourcePublisherTests
         Assert.Contains("planning budget", error.Message);
         var syntax = Assert.Throws<InvalidDataException>(() => new SourcePublisher(project.Root).ValidateManifest(manifest, manifest.SaveId, Token));
         Assert.DoesNotContain("planning budget", syntax.Message);
-        Assert.False(Directory.Exists(project.Full("zstudio")));
+        Assert.False(Directory.Exists(project.Full(".zstudio")));
     }
 
     [Fact]
@@ -58,7 +58,7 @@ public sealed partial class SourcePublisherTests
         cancellation.Cancel();
         Assert.ThrowsAny<OperationCanceledException>(() => publisher.ValidateManifest(manifest, manifest.SaveId, cancellation.Token));
         publisher.ValidateManifest(manifest, manifest.SaveId, Token);
-        Assert.False(Directory.Exists(project.Full("zstudio")));
+        Assert.False(Directory.Exists(project.Full(".zstudio")));
     }
 
     [Fact]
@@ -72,7 +72,7 @@ public sealed partial class SourcePublisherTests
             .Publish([new(relative, null, [1])], "folder budget", Token));
         Assert.Contains("planning budget", error.Message);
         Assert.Equal(before, project.Sources());
-        Assert.False(Directory.Exists(project.Full("zstudio")));
+        Assert.False(Directory.Exists(project.Full(".zstudio")));
         new SourcePublisher(project.Root) { PlanningPathBytesLimit = exact }.Publish([new(relative, null, [1])], "exact fit", Token);
         Assert.Equal(new byte[] { 1 }, project.Read(relative));
     }
@@ -85,7 +85,7 @@ public sealed partial class SourcePublisherTests
         Assert.Throws<SourcePublisher.Crash>(() => Failing(project, "commit", -1, () => new SourcePublisher.Crash())
             .Publish(ScriptChange(project), "shallow recovery", Token));
         string id = Assert.Single(new SourcePublisher(project.Root).FindInterrupted(Token)).SaveId;
-        string folder = project.Full($"zstudio/recovery/{id}");
+        string folder = project.Full($".zstudio/recovery/{id}");
         var sources = project.Sources();
         var journal = JournalContents(folder);
         SourcePublisher limited = new(project.Root) { PlanningPathBytesLimit = PathCharge(project, Script) - 1 };
@@ -107,9 +107,9 @@ public sealed partial class SourcePublisherTests
         Assert.Throws<SourcePublisher.Crash>(() => Failing(project, "prepared", -1, () => new SourcePublisher.Crash())
             .Publish(ScriptChange(project), "two short journals", Token));
         string id = Assert.Single(new SourcePublisher(project.Root).FindInterrupted(Token)).SaveId;
-        string original = project.Full($"zstudio/recovery/{id}");
+        string original = project.Full($".zstudio/recovery/{id}");
         string secondId = id[..^8] + (id.EndsWith("00000000", StringComparison.Ordinal) ? "00000001" : "00000000");
-        string second = project.Full($"zstudio/recovery/{secondId}");
+        string second = project.Full($".zstudio/recovery/{secondId}");
         Directory.CreateDirectory(second);
         var manifest = JsonNode.Parse(File.ReadAllText(Path.Combine(original, "manifest.json")))!;
         manifest["saveId"] = secondId;

@@ -63,7 +63,7 @@ internal static class LinkedSourceProjectChecks
                         string error = await Error(command);
                         Assert.Contains("io_failed", error); Assert.Contains("is a link", error);
                     }
-                    Assert.False(Directory.Exists(Path.Combine(fixture.Project, "zstudio")));
+                    Assert.False(Directory.Exists(Path.Combine(fixture.Project, ".zstudio")));
                 }
 
                 // The project's own folder is a project like any other.

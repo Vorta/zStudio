@@ -177,7 +177,7 @@ public sealed class SourceWorldTests
         string listBefore = await File.ReadAllTextAsync(list, Token);
         Assert.Equal(["data/m1/zrdr/anim.zad", "gamegen/m1.gs"], workspace.Save(Token).Order(StringComparer.Ordinal));
         Assert.False(workspace.IsDirty); Assert.Empty(workspace.Save(Token));
-        Assert.False(Directory.Exists(Path.Combine(root, "zstudio", "staging")) && Directory.EnumerateFileSystemEntries(Path.Combine(root, "zstudio", "staging")).Any());
+        Assert.False(Directory.Exists(Path.Combine(root, ".zstudio", "staging")) && Directory.EnumerateFileSystemEntries(Path.Combine(root, ".zstudio", "staging")).Any());
         string saved = await File.ReadAllTextAsync(script, Token);
         Assert.Contains("SetModelDirectory ..\\data\\m2\\models\\bft\r\nLoadGameGen tank.gltf tank\r\n", saved);
         Assert.EndsWith("AddChild tank_wreck\r\nGameZWriteZBDFile ..\\m1\\gamez.zbd\r\nQuit\r\n", saved);

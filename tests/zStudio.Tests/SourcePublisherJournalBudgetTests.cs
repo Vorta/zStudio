@@ -40,7 +40,7 @@ public sealed partial class SourcePublisherTests
         var error = Assert.Throws<InvalidDataException>(() => publisher.Publish([new("data/a/b/c/file.zrd", null, [1])], description, Token,
             validate ? _ => new SourcePublishValidation(null, []) : null));
         Assert.Contains(bytes ? "byte budget" : "folders", error.Message);
-        Assert.Equal(before, project.Sources()); Assert.False(Directory.Exists(project.Full("zstudio")));
+        Assert.Equal(before, project.Sources()); Assert.False(Directory.Exists(project.Full(".zstudio")));
         new SourcePublisher(project.Root).Publish(ScriptChange(project), "valid next save", Token);
         Assert.Empty(project.Leftovers());
     }
@@ -53,11 +53,11 @@ public sealed partial class SourcePublisherTests
         Assert.Throws<SourcePublisher.Crash>(() => Failing(project, "prepared", -1, () => new SourcePublisher.Crash()).Publish(ScriptChange(project), "retry", Token));
         SourcePublisher publisher = new(project.Root);
         string id = Assert.Single(publisher.FindInterrupted(Token)).SaveId;
-        string log = project.Full($"zstudio/recovery/{id}/events.log");
+        string log = project.Full($".zstudio/recovery/{id}/events.log");
         FileStream? blocker = null;
         publisher.Fault = (step, _) =>
         {
-            if (step == "complete") blocker = new(project.Full($"zstudio/staging/{id}/0.tmp"), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
+            if (step == "complete") blocker = new(project.Full($".zstudio/staging/{id}/0.tmp"), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
         };
         long? firstLength = null;
         for (int attempt = 0; attempt < 8; attempt++)
@@ -87,7 +87,7 @@ public sealed partial class SourcePublisherTests
         var before = project.Sources();
         Assert.Throws<SourcePublisher.Crash>(() => Failing(project, "commit", -1, () => new SourcePublisher.Crash()).Publish(ScriptChange(project), "retry undo", Token));
         SourcePublisher publisher = new(project.Root) { Fault = (step, _) => { if (step == "undo") throw new IOException("temporary conflict"); } };
-        string id = Assert.Single(publisher.FindInterrupted(Token)).SaveId, log = project.Full($"zstudio/recovery/{id}/events.log");
+        string id = Assert.Single(publisher.FindInterrupted(Token)).SaveId, log = project.Full($".zstudio/recovery/{id}/events.log");
         long? firstLength = null;
         for (int attempt = 0; attempt < 8; attempt++)
         {
@@ -109,7 +109,7 @@ public sealed partial class SourcePublisherTests
         using Project project = new();
         Assert.Throws<SourcePublisher.Crash>(() => Failing(project, "commit", -1, () => new SourcePublisher.Crash()).Publish(ScriptChange(project), "commit transition", Token));
         SourcePublisher publisher = new(project.Root);
-        string id = Assert.Single(publisher.FindInterrupted(Token)).SaveId, journal = project.Full($"zstudio/recovery/{id}");
+        string id = Assert.Single(publisher.FindInterrupted(Token)).SaveId, journal = project.Full($".zstudio/recovery/{id}");
         string log = Path.Combine(journal, "events.log");
         int count = File.ReadAllLines(log).Length;
         File.AppendAllText(log, Record(++count, "committed") + Record(++count, "rollback"));

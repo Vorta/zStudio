@@ -113,7 +113,7 @@ internal static class SourceRecoveryMcpChecks
                 for (int j = 0; j < 32; j++)
                 {
                     string id = $"20260101T000000000Z-{j:x8}";
-                    string folder = fixture.Path($"zstudio/recovery/{id}"); Directory.CreateDirectory(folder); budgetFolders.Add(folder);
+                    string folder = fixture.Path($".zstudio/recovery/{id}"); Directory.CreateDirectory(folder); budgetFolders.Add(folder);
                     var files = new JsonArray(Enumerable.Range(0, 64).Select(i => (JsonNode)new JsonObject
                     {
                         ["relative"] = $"{prefix}/{j}-{i}.zrd", ["expected"] = null,

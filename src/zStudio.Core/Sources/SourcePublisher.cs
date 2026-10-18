@@ -29,7 +29,7 @@ public sealed class SourceConflictException(string message, IReadOnlyList<string
 }
 
 /// <summary>
-/// A save whose journal remains in <c>zstudio/recovery</c> because it was interrupted, could not be fully undone or cannot be
+/// A save whose journal remains in <c>.zstudio/recovery</c> because it was interrupted, could not be fully undone or cannot be
 /// read. Source saves stay blocked until it is resolved with <see cref="SourcePublisher.Resolve"/>.
 /// </summary>
 public sealed class SourceRecoveryRequiredException(string message, string saveId, IReadOnlyList<string> files, Exception? inner = null) : IOException(message, inner)
@@ -61,7 +61,7 @@ public sealed class SourceRecoveryNotFoundException(string message, string saveI
 public sealed partial class SourcePublisher
 {
     /// <summary>zStudio's working data beside <c>data</c> and <c>gamegen</c>; builds never read it.</summary>
-    public const string WorkingFolder = "zstudio";
+    public const string WorkingFolder = SourceProjectSettings.Folder;
     public const string RecoveryFolder = WorkingFolder + "/recovery", StagingFolder = WorkingFolder + "/staging", AbandonedFolder = RecoveryFolder + "/abandoned";
     /// <summary>Coordination only: opening this file to probe content can prevent an exclusive save/recovery lock.</summary>
     public const string LockFile = RecoveryFolder + "/" + LockName;
@@ -454,6 +454,7 @@ public sealed partial class SourcePublisher
         if (PickupPlacementEditSession.IsProtectedPath(folder) || PickupPlacementEditSession.IsProtectedPath(directories.CapturedPath(folder)))
             throw new IOException("Source projects inside the protected zbd_1998/zbd_1999 folders cannot be saved.");
        directories.Hold(folder, create: true);
+        SourceProjectSettings.HideFolderOf(folder);
         try { return directories.OpenFile(Path.Combine(folder, LockName), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None); }
         catch (IOException ex) when (ex.HResult is unchecked((int)0x80070020) or unchecked((int)0x80070021)
             || ex.InnerException is System.ComponentModel.Win32Exception { NativeErrorCode: 32 or 33 })

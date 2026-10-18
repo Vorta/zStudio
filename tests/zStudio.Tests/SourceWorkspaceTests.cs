@@ -204,7 +204,7 @@ public sealed class SourceWorkspaceTests : IDisposable
     public void OnlySourceFilesCanBeChanged()
     {
         SourceWorkspace workspace = new(root);
-        foreach (string path in new[] { "zstudio/recovery/x.json", "readme.txt", "data/../gamegen/m1.gs", "../outside.zrd", "C:/abs.zrd" })
+        foreach (string path in new[] { ".zstudio/recovery/x.json", "readme.txt", "data/../gamegen/m1.gs", "../outside.zrd", "C:/abs.zrd" })
             Assert.ThrowsAny<Exception>(() => workspace.Apply("bad", [(path, Bytes("x"))], Token));
         Assert.Throws<InvalidDataException>(() => workspace.Apply("twice", [("gamegen/m1.gs", Bytes("a")), ("gamegen/M1.gs", Bytes("b"))], Token));
         // A name no save can write (a Windows device name, which a Blender export can give a new texture) is refused when the

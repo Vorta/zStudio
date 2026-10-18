@@ -19,12 +19,12 @@ public sealed class SourceProjectTests
     {
         using SourceWorldFixture fixture = new();
         var workspace = new SourceWorkspace(fixture.Project);
-        var checkout = new BlenderCheckout("old", Path.Combine(fixture.Project, "zstudio", "export", "old"), fixture.Tank, DateTime.UtcNow, []) { Version = 1 };
+        var checkout = new BlenderCheckout("old", Path.Combine(fixture.Project, ".zstudio", "export", "old"), fixture.Tank, DateTime.UtcNow, []) { Version = 1 };
         Assert.Contains("Create a new checkout", Assert.Throws<InvalidDataException>(() => SourceBlender.PlanUpdate(workspace, checkout, token: Token)).Message);
         bool prompted = false;
         Assert.Throws<InvalidDataException>(() => SourceBlender.PlanUpdate(workspace, checkout, null, (_, _) => { prompted = true; return true; }, Token));
         Assert.False(prompted);
-        Assert.False(Directory.Exists(Path.Combine(fixture.Project, "zstudio")));
+        Assert.False(Directory.Exists(Path.Combine(fixture.Project, ".zstudio")));
         // Even an empty old sidecar denotes unsupported storage. Similar unrelated JSON is not a version marker.
         fixture.Write("data/m1/notes/zones.json", "{}");
         SourceProject.RequireCurrentFormat(fixture.Project, Token);
