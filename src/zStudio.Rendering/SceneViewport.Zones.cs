@@ -426,7 +426,7 @@ public sealed partial class SceneViewport
         zoneGhosts.Clear(); zoneGhostMaterials.Clear();
     }
 
-    /// <summary>While engaged, the chosen zone is drawn strongly and the others faintly (not at all with the overlay off).</summary>
+    /// <summary>While engaged, the chosen zone is drawn strongly and the others faintly, whatever overlay is chosen.</summary>
     private void ApplyZoneEmphasis()
     {
         bool overlay = HighlightMode == WorldHighlightMode.PolygonZones;
@@ -435,7 +435,7 @@ public sealed partial class SceneViewport
         {
             if (surface.Horizon) continue;
             PreviewMaterials.SetPolygonZones(surface.Normal, overlay || zonePaintActive);
-            if (zonePaintActive) PreviewMaterials.SetZoneEmphasis(surface.Normal, PreviewMaterials.ZoneEmphasis.Emphasis, paintZone, ZoneStrong, overlay ? ZoneWeak : 0);
+            if (zonePaintActive) PreviewMaterials.SetZoneEmphasis(surface.Normal, PreviewMaterials.ZoneEmphasis.Emphasis, paintZone, ZoneStrong, ZoneWeak);
             else PreviewMaterials.SetZoneEmphasis(surface.Normal, PreviewMaterials.ZoneEmphasis.None, 0, 0, 0);
         }
         SyncZoneGhosts();

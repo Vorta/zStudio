@@ -120,8 +120,8 @@ public partial class MainWindow
         Restyle(HighlightSoils, "CommandToggle", "Non-default soils — water, lava, sand");
         Restyle(HighlightCanModify, "CommandToggle", "CanModify");
         Restyle(HighlightClipTo, "CommandToggle", "ClipTo");
-        Restyle(HighlightZones, "CommandToggle", "Object zones — the zone that decides whether each object is drawn");
-        Restyle(HighlightPolygonZones, "CommandToggle", "Polygon zones — the zones each polygon makes current when the camera or a vehicle is on it; striped where it has several");
+        Restyle(HighlightZones, "CommandToggle", "Show/hide object zones — the zone that decides whether each object is drawn");
+        Restyle(HighlightPolygonZones, "CommandToggle", "Show/hide polygon zones — the zones each polygon makes current when the camera or a vehicle is on it; striped where it has several");
         Restyle(HighlightLandmarks, "CommandToggle", "Landmarks — geometry and objects that are never culled");
         Move(FaceOrientation, SourceOverlayItems, "CommandToggle", "Face orientation — show normal direction");
         // The zone overlays lead the Zones group, before the tool that edits them.

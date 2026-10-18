@@ -64,12 +64,14 @@ internal static class SourceZoneMcpChecks
             Assert.Equal(geometry, exactTarget["OwnerPath"]!.GetValue<string>());
             Assert.Empty(exactTarget["OwnerReferences"]!.AsArray());
 
-            // The tool: engaging shows the polygon zones and lists the map's zones as placed in the world.
+            // The tool: engaging pauses the chosen overlay (it draws its own zone view) and lists the map's zones as placed in the world.
+            var setHighlight = typeof(MainWindow).GetMethod("SetWorldHighlightMode", fields)!;
+            setHighlight.Invoke(main, [zStudio.Core.WorldHighlightMode.Landmarks]);
             var tool = await Call("source_zone_tool", new() { ["document"] = doc.SessionId.ToString(), ["action"] = "engage", ["mode"] = "paint", ["zone"] = 7 });
             Assert.True(tool["engaged"]!.GetValue<bool>()); Assert.Equal(7, tool["zone"]!.GetValue<int>());
             Assert.Equal(4, tool["zones"]!.AsArray().Single(z => z!["zone"]!.GetValue<int>() == 3)!["polygons"]!.GetValue<long>());
             Assert.Equal(1, tool["zones"]!.AsArray().Single(z => z!["zone"]!.GetValue<int>() == 255)!["polygons"]!.GetValue<long>());
-            Assert.True(view.ZonePaintActive); Assert.Equal(zStudio.Core.WorldHighlightMode.PolygonZones, view.HighlightMode);
+            Assert.True(view.ZonePaintActive); Assert.Equal(zStudio.Core.WorldHighlightMode.None, view.HighlightMode);
             // What the tool cannot paint lets the pointer through to the polygon behind it.
             var realBrush = view.ZoneBrush!;
             view.SetZoneBrush(new PolygonZoneBrush { Reach = n => n == upper ? PolygonZoneReach.PassThrough : realBrush.Reach(n), SourcePolygons = realBrush.SourcePolygons, Site = realBrush.Site, SiteNodes = realBrush.SiteNodes });
@@ -148,10 +150,11 @@ internal static class SourceZoneMcpChecks
             Assert.Equal(originalBuffer, File.ReadAllBytes(fixture.Path(buffer)));
             Assert.False(File.Exists(fixture.Path("data/m1/meta/zones.json")));
 
-            // Leaving the tool restores the overlays it changed.
+            // Leaving the tool resumes the chosen overlay.
             tool = await Call("source_zone_tool", new() { ["document"] = doc.SessionId.ToString(), ["action"] = "exit" });
             Assert.False(tool["engaged"]!.GetValue<bool>()); Assert.False(view.ZonePaintActive);
-            Assert.Equal(zStudio.Core.WorldHighlightMode.None, view.HighlightMode);
+            Assert.Equal(zStudio.Core.WorldHighlightMode.Landmarks, view.HighlightMode);
+            setHighlight.Invoke(main, [zStudio.Core.WorldHighlightMode.None]);
 
             // A dependency edit stales the build's exact identities until the world is reloaded.
             node = doc.SourceBuild!.Provenance.First(p => p.Value.ModelNodeName == "flat_a").Key;

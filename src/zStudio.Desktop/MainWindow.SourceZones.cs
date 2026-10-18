@@ -26,8 +26,6 @@ public partial class MainWindow
         internal byte Zone { get; set; }
         internal bool ZoneChosen { get; set; }
         internal bool Erase { get; set; }
-        internal WorldHighlightMode RestoreHighlight { get; set; }
-        internal long HighlightGeneration { get; set; }
         internal (SourceWorldSession Session, SourceSceneState Build, string Scripts, string Master)? Master { get; set; }
         internal (SourceSceneState Build, Dictionary<string, int[]> Sites)? Sites { get; set; }
         internal (object Snapshot, IReadOnlyList<ZonePickerEntry> Zones)? Used { get; set; }
@@ -68,7 +66,6 @@ public partial class MainWindow
     private ZonePicker? zonePicker;
     private readonly System.Windows.Threading.DispatcherTimer zoneFlashTimer = new() { Interval = TimeSpan.FromSeconds(2.6) };
     private bool synchronizingZoneTool;
-    private string? polygonZonesTip;
     private DateTime zoneBannerRefreshed;
     private bool ZoneToolEngaged => zoneTool.Session != null;
 
@@ -205,12 +202,9 @@ public partial class MainWindow
         {
             try { viewport.SetZoneBrush(ZoneBrush(session)); }
             catch (InvalidOperationException ex) { throw new StudioCommandException("busy", ex.Message); }
-            // Engaged again (the view was replaced under it): the overlays it restores on leaving stay those from before.
-            if (zoneTool.Session != session) zoneTool.RestoreHighlight = worldHighlightMode;
             zoneTool.Session = session;
-            // Engaging shows the polygon zones; leaving restores the overlays unless they were changed meanwhile.
-            if (worldHighlightMode != WorldHighlightMode.PolygonZones) SetWorldHighlightMode(WorldHighlightMode.PolygonZones);
-            zoneTool.HighlightGeneration = worldHighlightGeneration;
+            // The tool draws its own zone view: the overlays pause (their buttons keep their state) until it is left.
+            ApplyOverlays();
             ClearZoneNotices();
             ViewModel.Status = "Polygon zones: drag over polygons to " + (zoneTool.Erase ? "erase " : "paint ") + ZoneName(zoneTool.Zone) + ".";
         }
@@ -235,7 +229,7 @@ public partial class MainWindow
         zoneTool.Session = null;
         if (scene?.ZoneBrush != null) scene.SetZoneBrush(null);
         zoneTool.Master = null; zoneTool.Sites = null; zoneTool.Used = null;
-        if (worldHighlightGeneration == zoneTool.HighlightGeneration && worldHighlightMode != zoneTool.RestoreHighlight) SetWorldHighlightMode(zoneTool.RestoreHighlight);
+        ApplyOverlays();
         ClearZoneNotices(); zoneTool.LastStroke = null; zoneTool.LastResult = null; zoneTool.Stroke = null; zoneTool.Flash = null;
         CurrentInspectionCard?.SetSurfaceDetail(null);
         RefreshZoneToolChrome();
@@ -395,8 +389,9 @@ public partial class MainWindow
             ZonePickerName.Text = ZoneName(zoneTool.Zone);
             string? label = zoneTool.Session is { } session && zoneTool.Zone != 255 ? ZoneLabels(session).GetValueOrDefault(zoneTool.Zone) : null;
             ZonePickerLabel.Text = label ?? ""; ZonePickerLabel.Visibility = label == null ? Visibility.Collapsed : Visibility.Visible;
-            polygonZonesTip ??= HighlightPolygonZones.ToolTip as string ?? "Polygon zones";
-            HighlightPolygonZones.ToolTip = engaged ? polygonZonesTip + " — while painting, other zones fade and the chosen zone stays" : polygonZonesTip;
+            // The overlays pause while the tool is engaged: their buttons are disabled meanwhile.
+            foreach (var overlay in new UIElement[] { HighlightSoils, HighlightCanModify, HighlightClipTo, HighlightLandmarks, FaceOrientation, HighlightZones, HighlightPolygonZones })
+                overlay.IsEnabled = !engaged;
         }
         finally { synchronizingZoneTool = false; }
         RefreshZoneBanner(); RefreshViewportChips(); UpdateDocumentCommands();

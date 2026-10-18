@@ -164,6 +164,9 @@ public partial class MainWindow
                 requestedPack = TexturePackCombo.Items.Cast<PackChoice>().FirstOrDefault(p => (p.Path ?? "").Equals(Text(changes, "texturePack"), StringComparison.OrdinalIgnoreCase))
                     ?? throw new StudioCommandException("invalid_argument", "Choose an available texture variant.");
             long highlightGeneration = worldHighlightGeneration;
+            // As in the GUI, whose overlay buttons are disabled while the polygon zone tool is engaged.
+            if (ZoneToolEngaged && (changes.ContainsKey("highlight") || changes.ContainsKey("faceOrientation")))
+                throw new StudioCommandException("busy", "The overlays pause while the polygon zone tool is engaged; leave it first.");
             foreach (var (name,value) in changes)
             {
                 token.ThrowIfCancellationRequested();

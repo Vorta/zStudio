@@ -171,14 +171,13 @@ internal sealed class SourceObjectCardEditor : FieldEditor
         Grid.SetColumn(shown, 1); row.Children.Add(caption); row.Children.Add(shown);
         return row;
     }
-    /// <summary>The Zone section's polygon zones, apart from the object zone above them: how many of the object's polygons carry each zone set, and the clicked polygon's.</summary>
+    /// <summary>The Zone section's polygon zones, apart from the object zone above them: how many of the object's polygons carry each zone set.</summary>
     private readonly StackPanel polygonZones = new() { Margin = new(0, 4, 0, 0) };
-    /// <summary>Shows the polygon zones: one line per zone set of the object's polygons, with its count, and the clicked polygon's; either may be unknown.</summary>
-    internal void ShowPolygonZones(string? objectZones, string? clickedPolygon)
+    /// <summary>Shows the polygon zones: one line per zone set of the object's polygons (its own and those below it), with its count; null when unknown.</summary>
+    internal void ShowPolygonZones(string? objectZones)
     {
         polygonZones.Children.Clear();
         if (objectZones != null) polygonZones.Children.Add(InfoRow("Polygon zones", objectZones));
-        if (clickedPolygon != null) polygonZones.Children.Add(InfoRow("Clicked polygon", clickedPolygon));
     }
     private readonly ComboBox zoneBox = new() { IsEditable = true, HorizontalAlignment = System.Windows.HorizontalAlignment.Stretch, MinWidth = 0 };
     private readonly TextBlock zoneHelp = new() { FontSize = 11.5, TextWrapping = System.Windows.TextWrapping.Wrap, Margin = new(0, 3, 0, 2) };

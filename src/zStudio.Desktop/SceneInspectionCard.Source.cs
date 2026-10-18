@@ -102,11 +102,10 @@ internal sealed partial class SceneInspectionCard
         RefreshModeControls();
         RefreshFooter(ObjectEditor.CanEdit || copyObject.Visibility == Visibility.Visible);
         surfaceRows.Children.Clear();
-        // Polygon zones belong with the object zone, in the Zone section, for geometry only: a placed model's polygons do not
-        // decide which zones are current.
-        bool geometry = Selection is { } chosen && CategoryOf?.Invoke(chosen) == "geometry";
-        ObjectEditor.ShowPolygonZones(geometry && details["Object polygon zones"] is JsonArray all ? string.Join('\n', all.Select(line => Display(line))) : null,
-            geometry && details["Polygon zones"] is { } clicked ? Display(clicked) : null);
+        // Polygon zones belong with the object zone, in the Zone section: every polygon of the object, its own and below it
+        // (the whole world is not counted).
+        bool counted = Selection is { } chosen && CategoryOf?.Invoke(chosen) is "geometry" or "object" or "group";
+        ObjectEditor.ShowPolygonZones(counted && details["Object polygon zones"] is JsonArray all ? string.Join('\n', all.Select(line => Display(line))) : null);
         foreach (string key in new[] { "Surface world XYZ", "Surface normal", "Surface zone", "Surface altitude zone check", "Soil", "Stored texture" })
             if (details[key] is { } value) surfaceRows.Children.Add(new TextBlock { Text = key + ": " + Display(value), TextWrapping = TextWrapping.Wrap, Margin = new(0, 3, 0, 3) });
         // A newly shown object keeps the handles the user has on.

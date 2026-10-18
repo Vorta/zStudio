@@ -18,8 +18,9 @@ public sealed partial class SceneViewport
     private readonly Dictionary<int, List<MeshGeometry3D>> polygonGeometries = [];
     private readonly Dictionary<MeshGeometry3D, (Color4Collection? Normal, Color4Collection Zones)> polygonZoneColors = [];
     private readonly Dictionary<MeshGeometry3D, LineGeometry3D> polygonEdgeGeometries = [];
-    private readonly Dictionary<MeshGeometryModel3D, LineGeometryModel3D> polygonEdges = [];
-    private static readonly System.Windows.Media.Color PolygonEdgeColor = System.Windows.Media.Color.FromRgb(16, 16, 16);
+    private readonly Dictionary<MeshGeometryModel3D, (LineGeometryModel3D Halo, LineGeometryModel3D Core)> polygonEdges = [];
+    /// <summary>A polygon outline is a light line on a dark halo, so it shows on bright and dark surfaces alike.</summary>
+    private static readonly System.Windows.Media.Color PolygonEdgeHalo = System.Windows.Media.Color.FromArgb(200, 12, 12, 12), PolygonEdgeCore = System.Windows.Media.Color.FromRgb(236, 236, 236);
 
     private void RegisterPolygonSource(MeshGeometry3D geometry, MeshPart part, IReadOnlyList<GameModel> models, int model)
     {
@@ -59,18 +60,26 @@ public sealed partial class SceneViewport
             if (polygonEdges.ContainsKey(mesh) || mesh.Geometry is not MeshGeometry3D geometry || !polygonSources.TryGetValue(geometry, out var source)) continue;
             if (!polygonEdgeGeometries.TryGetValue(geometry, out var edges)) polygonEdgeGeometries[geometry] = edges = PolygonEdgeGeometry(geometry, source.Part, source.Model);
             if (edges.Indices == null || edges.Indices.Count == 0) continue;
-            LineGeometryModel3D line = new() { Geometry = edges, Color = PolygonEdgeColor, Thickness = 1, IsHitTestVisible = false, DepthBias = -100 };
+            // The core sits nearer than its halo, so it wins the depth test whichever is drawn first.
+            var halo = Outline(mesh, edges, PolygonEdgeHalo, 3, -100); var core = Outline(mesh, edges, PolygonEdgeCore, 1, -200);
+            viewport.Items.Add(halo); viewport.Items.Add(core); polygonEdges[mesh] = (halo, core);
+        }
+        viewport.InvalidateRender();
+
+        static LineGeometryModel3D Outline(MeshGeometryModel3D mesh, LineGeometry3D edges, System.Windows.Media.Color color, double thickness, int depthBias)
+        {
+            LineGeometryModel3D line = new() { Geometry = edges, Color = color, Thickness = thickness, IsHitTestVisible = false, DepthBias = depthBias };
             // The outline shows exactly where its mesh does: hidden, isolated and moved placements included.
             line.SetBinding(GeometryModel3D.InstancesProperty, new Binding(nameof(MeshGeometryModel3D.Instances)) { Source = mesh, Mode = BindingMode.OneWay });
             // Helix's own Visibility (Element3D is no UIElement): a mesh without instances is collapsed, and an outline drawn then would sit at the origin.
             line.SetBinding(Element3D.VisibilityProperty, new Binding(nameof(MeshGeometryModel3D.Visibility)) { Source = mesh, Mode = BindingMode.OneWay });
-            viewport.Items.Add(line); polygonEdges[mesh] = line;
+            return line;
         }
-        viewport.InvalidateRender();
     }
     private void RemovePolygonEdges()
     {
-        foreach (var line in polygonEdges.Values) { viewport.Items.Remove(line); BindingOperations.ClearAllBindings(line); line.Dispose(); }
+        foreach (var (halo, core) in polygonEdges.Values)
+            foreach (var line in new[] { halo, core }) { viewport.Items.Remove(line); BindingOperations.ClearAllBindings(line); line.Dispose(); }
         polygonEdges.Clear();
     }
     /// <summary>Each polygon's closed outline; a strip's runs along its even vertices and back along its odd ones.</summary>
