@@ -73,7 +73,7 @@ public partial class MainWindow
         {
             // Ctrl+Z and Ctrl+Y wait while a polygon zone stroke is held or applying (its result would come after them).
             if (scene?.IsZonePainting == true) return;
-            if (zoneTool.Applying) { ViewModel.Status = "Undo and redo wait until the polygon zone strokes have applied."; return; }
+            if (zoneTool.Applying) { ShowZoneRefusal("Undo and redo wait until the polygon zone strokes have applied."); return; }
             if (world.IsRebuilding || sourceWorkspaceBusy) Notice("A world of this source project is still rebuilding; undo and redo are available when it is shown.");
             else if (redo ? world.Workspace.CanRedo : world.Workspace.CanUndo)
             {

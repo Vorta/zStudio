@@ -112,19 +112,24 @@ internal static class SourceZoneMcpChecks
             Assert.True(other.IsDisposed);
             Assert.Equal("stale_document", (await Job("source_polygon_zones", otherDocument, "failed"))["code"]!.GetValue<string>());
 
-            // A GUI stroke: released, it applies through the same edit, and Undo takes it back.
+            // GUI strokes: released while an earlier one applies, a stroke waits its turn, also when the tool is left
+            // meanwhile; each applies through the same edit, and Undo takes them back.
             evaluations.Clear();
             var finished = typeof(MainWindow).GetMethod("ZoneStrokeFinished", fields)!;
             finished.Invoke(main, [view, new ZonePaintStroke(1000, 5, false, [new(side, 0)], 1, 0, 0, [], false, false)]);
+            finished.Invoke(main, [view, new ZonePaintStroke(1001, 6, false, [new(side, 0)], 1, 0, 0, [], false, false)]);
+            Assert.False((await Call("source_zone_tool", new() { ["document"] = doc.SessionId.ToString(), ["action"] = "exit" }))["engaged"]!.GetValue<bool>());
             var toolState = typeof(MainWindow).GetField("zoneTool", fields)!.GetValue(main)!;
             var applying = toolState.GetType().GetProperty("Applying", fields)!;
             while ((bool)applying.GetValue(toolState)!) await Task.Delay(10, token);
             doc = main.ViewModel.SelectedDocument!;
-            Assert.Equal(new byte[] { 3, 5 }, Zones(side)); Assert.Equal(["incremental"], evaluations);
-            Assert.Equal("Paint zone 5 on 1 polygon", doc.SourceWorld!.Workspace.UndoLabel);
+            Assert.Equal(new byte[] { 3, 5, 6 }, Zones(side)); Assert.Equal(["incremental", "incremental"], evaluations);
+            Assert.Equal("Paint zone 6 on 1 polygon", doc.SourceWorld!.Workspace.UndoLabel);
             doc = Document(await Call("undo_redo", new() { ["document"] = doc.SessionId.ToString(), ["revision"] = doc.Revision, ["action"] = "undo" }));
-            Assert.Equal(new byte[] { 3 }, Zones(side)); Assert.Equal(["incremental", "incremental"], evaluations);
+            doc = Document(await Call("undo_redo", new() { ["document"] = doc.SessionId.ToString(), ["revision"] = doc.Revision, ["action"] = "undo" }));
+            Assert.Equal(new byte[] { 3 }, Zones(side)); Assert.Equal(4, evaluations.Count(e => e == "incremental"));
             main.SourceEditEvaluation = null;
+            await Call("source_zone_tool", new() { ["document"] = doc.SessionId.ToString(), ["action"] = "engage" });
 
             // Labels: named, renamed, removed (each one undoable change), and saved with the map.
             doc = Document((await Job("source_zone_label", new() { ["document"] = doc.SessionId.ToString(), ["revision"] = doc.Revision, ["zoneId"] = 7, ["label"] = "Upper platform" }))["document"]!);

@@ -30,6 +30,12 @@ public partial class MainWindow
             if (current != CurrentInspectionCard || shownDocument is not { SourceWorld: not null } doc || current.ObjectNode == null)
                 throw new StudioCommandException("context_changed", "The source object is no longer selected.");
             RequireSourceWorldIdle(doc.SourceWorld); RequireNoDrafts(doc, committing: true, committingCard: current);
+            // Editing the object takes over from the polygon zone tool (its strokes would wait on this draft).
+            if (ZoneToolEngaged)
+            {
+                if (scene?.IsZonePainting == true || zoneTool.Applying) throw new StudioCommandException("busy", "Finish the polygon zone strokes before editing the object.");
+                LeaveZoneTool();
+            }
             inspectionDraft = current;
         };
         card.BrowseModel = () =>

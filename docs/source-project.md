@@ -152,7 +152,7 @@ To read or change an object's zone, select it: the card's Zone section sets Inhe
 
 Terrain recipes retain their existing surface/region authority and viewport painting tools. Conversion reads effective embedded assignments and transfers polygon words to the new surface profile while remapping the remaining database. Structural object edits update the embedded attributes alongside their source nodes. External geometry edits must retain the polygon and node identities used by those attributes; a mismatched layout is refused rather than applying assignments to different geometry. The bundled RECOIL Blender extension preserves this hierarchy and its attributes; use its import/export commands with a graph checkout.
 
-The zone editor and its integration are under active validation. The [status record](status.md) distinguishes completed checks from pending rendered, protocol and adversarial acceptance.
+The [status record](status.md) lists the checks the polygon zone tool has passed and its remaining limitations.
 
 A stroke takes at most 4,096 polygons (a longer one keeps its first and says so) across at most 1,024 placements (more are refused). For a map-owned object, its altitude-probe gate is edited through the zone service (the card's Zone section); the ordinary glTF flag editor refuses a gate write that the map would override.
 

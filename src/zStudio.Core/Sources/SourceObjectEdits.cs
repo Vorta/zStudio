@@ -375,7 +375,7 @@ public static partial class SourceObjectEdits
         if (!HasFlags(node.Class)) throw new InvalidDataException($"{nodeName} is a {node.Class} node; only objects have flags to set here.");
         if (System.Numerics.BitOperations.PopCount(bit) != 1 || (bit & WorldGltf.CarriedFlags) == 0) throw new InvalidDataException($"0x{bit:X} is not one node flag a source can set.");
         if (bit == WorldGltf.ZoneGate && origin.ZoneOwnerPath != null)
-            throw new InvalidDataException("This object's altitude-probe gate belongs to its map zone assignments. Use the map zone editor to choose its shared scope and change the gate.");
+            throw new InvalidDataException("This object's altitude-probe gate belongs to its map zone assignments. Change it in the Zone section of the object's card (Altitude zone check), which chooses its shared scope.");
         string label = $"{(on ? "Set" : "Clear")} flag 0x{bit:X} of {nodeName}";
         // The built node has the value its sources give it (the engine update leaves these bits alone): asked again, nothing
         // changes, rather than a line repeating it.

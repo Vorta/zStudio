@@ -306,7 +306,8 @@ public sealed partial class SceneViewport
     {
         if (PreviewScene is not { } scene || zoneBrush is not { } brush) { RemoveZoneOverlay(); return; }
         Dictionary<(string, int), ZoneTouch> shown = new(zonePending.ToDictionary(p => p.Key, p => p.Value.Touch));
-        foreach (var (key, touch) in zoneStroke ?? []) if (touch.Outcome == PolygonZoneOutcome.Changed) shown[key] = touch; else shown.Remove(key);
+        // A touch that changes nothing leaves an earlier stroke's pending result as it is.
+        foreach (var (key, touch) in zoneStroke ?? []) if (touch.Outcome == PolygonZoneOutcome.Changed) shown[key] = touch;
         Vector3Collection positions = []; IntCollection indices = []; Color4Collection colors = [];
         foreach (var touch in shown.Values)
         {
@@ -460,8 +461,8 @@ public sealed partial class SceneViewport
     private void RefreshZoneModels(IReadOnlySet<int> models)
     {
         if (models.Count > 0) RefreshPolygonZoneModels(models);
+        // The meshes and their placements stay; the faded ones stay faded.
         ResetZoneIdentities();
-        if (zonePaintActive) ShowZoneGhosts();
     }
 
     private void ClearZonePainting()

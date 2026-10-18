@@ -37,17 +37,24 @@ public partial class MainWindow
         internal (int Changed, int Full)? Stroke { get; set; }
         internal bool Applying { get; set; }
         /// <summary>What the last applied stroke did (its undo label and counts), or why it was refused.</summary>
-        internal (string Label, int Changed, int Full)? LastResult { get; set; }
+        internal (string Label, int Changed, int Full, bool Applied)? LastResult { get; set; }
         internal (string Text, bool Success)? Flash { get; set; }
     }
     private readonly ZoneToolState zoneTool = new();
+    /// <summary>
+    /// A released stroke waiting to apply: its world, and its polygons as source polygons with the assignment site each
+    /// had in the build it was drawn on (checked again against the build it applies to).
+    /// </summary>
+    private sealed record QueuedZoneStroke(SceneViewport Viewport, ZonePaintStroke Stroke, SourceWorldSession Session,
+        SourceZoneSelection[] Selections, string?[] Sites);
     /// <summary>Released strokes waiting to apply, in order; painting goes on meanwhile (each keeps its preview until applied).</summary>
-    private readonly Queue<(SceneViewport Viewport, ZonePaintStroke Stroke)> zoneStrokes = new();
+    private readonly Queue<QueuedZoneStroke> zoneStrokes = new();
     private const int MaximumQueuedStrokes = 8;
     private ZonePicker? zonePicker;
     private readonly System.Windows.Threading.DispatcherTimer zoneFlashTimer = new() { Interval = TimeSpan.FromSeconds(2.6) };
     private bool synchronizingZoneTool;
     private string? polygonZonesTip;
+    private DateTime zoneBannerRefreshed;
     private bool ZoneToolEngaged => zoneTool.Session != null;
 
     private static string ZoneName(byte zone) => zone == 255 ? "Any" : "Zone " + zone.ToString(CultureInfo.InvariantCulture);
@@ -183,8 +190,9 @@ public partial class MainWindow
         {
             try { viewport.SetZoneBrush(ZoneBrush(session)); }
             catch (InvalidOperationException ex) { throw new StudioCommandException("busy", ex.Message); }
+            // Engaged again (the view was replaced under it): the overlays it restores on leaving stay those from before.
+            if (zoneTool.Session != session) zoneTool.RestoreHighlight = worldHighlightMode;
             zoneTool.Session = session;
-            zoneTool.RestoreHighlight = worldHighlightMode;
             // Engaging shows the polygon zones; leaving restores the overlays unless they were changed meanwhile.
             if (worldHighlightMode != WorldHighlightMode.PolygonZones) SetWorldHighlightMode(WorldHighlightMode.PolygonZones);
             zoneTool.HighlightGeneration = worldHighlightGeneration;
@@ -209,7 +217,7 @@ public partial class MainWindow
         if (scene?.ZoneBrush != null) scene.SetZoneBrush(null);
         zoneTool.Master = null; zoneTool.Sites = null; zoneTool.Used = null;
         if (worldHighlightGeneration == zoneTool.HighlightGeneration && worldHighlightMode != zoneTool.RestoreHighlight) SetWorldHighlightMode(zoneTool.RestoreHighlight);
-        ClearZoneNotices(); zoneTool.LastStroke = null; zoneTool.Stroke = null; zoneTool.Flash = null;
+        ClearZoneNotices(); zoneTool.LastStroke = null; zoneTool.LastResult = null; zoneTool.Stroke = null; zoneTool.Flash = null;
         CurrentInspectionCard?.SetSurfaceDetail(null);
         RefreshZoneToolChrome();
     }
@@ -224,6 +232,7 @@ public partial class MainWindow
             viewport.PaintZone = zoneTool.Zone; viewport.PaintErase = zoneTool.Erase;
             try { viewport.SetZoneBrush(ZoneBrush(session)); }
             catch (InvalidOperationException) { LeaveZoneTool(); return; }
+            if (zoneTool.SkippedShown) ShowZoneSkipped(true);
         }
         RefreshZoneToolChrome();
     }
@@ -236,7 +245,9 @@ public partial class MainWindow
             bool started = stroking && zoneTool.Stroke == null, ended = !stroking && zoneTool.Stroke != null;
             zoneTool.Stroke = stroking ? (changed, full) : null;
             if (started) { zoneTool.Flash = null; ClearZoneNotices(); }
-            RefreshZoneBanner();
+            // The counts change with every polygon: the banner follows at most every 50 ms during a stroke.
+            var now = DateTime.UtcNow;
+            if (started || ended || (now - zoneBannerRefreshed).TotalMilliseconds >= 50) { zoneBannerRefreshed = now; RefreshZoneBanner(); }
             // Undo and Redo wait while the button is held.
             if (started || ended) UpdateDocumentCommands();
         };
@@ -344,6 +355,8 @@ public partial class MainWindow
 
     private void RefreshZoneToolChrome()
     {
+        // A world that was closed takes the tool with it.
+        if (zoneTool.Session is { IsDisposed: true }) { LeaveZoneTool(); return; }
         synchronizingZoneTool = true;
         try
         {
@@ -502,8 +515,8 @@ public partial class MainWindow
         var key = e.Key == Key.System ? e.SystemKey : e.Key;
         if (key is Key.LeftCtrl or Key.RightCtrl or Key.LeftShift or Key.RightShift)
         { if (ZoneToolEngaged && !e.IsRepeat) { scene?.RefreshZoneTool(); RefreshZoneBanner(); } return false; }
-        // The zone picker handles its own keys (Escape closes it or ends a rename); nothing else here takes them.
-        if (ZonePickerPopup.IsOpen) return true;
+        // The zone picker handles its own keys: Escape closes it or ends a rename (it must not cancel a running edit).
+        if (ZonePickerPopup.IsOpen) return key == Key.Escape;
         bool typing = false; DependencyObject? root = null;
         for (var source = e.OriginalSource as DependencyObject; source != null && !typing; source = source is Visual ? VisualTreeHelper.GetParent(source) : LogicalTreeHelper.GetParent(source))
         {
@@ -538,11 +551,20 @@ public partial class MainWindow
     /// </summary>
     private async void ZoneStrokeFinished(SceneViewport viewport, ZonePaintStroke stroke)
     {
-        if (!ReferenceEquals(viewport, scene) || zoneTool.Session == null) { viewport.ResolveZoneStroke(stroke.Id); return; }
+        if (!ReferenceEquals(viewport, scene) || zoneTool.Session is not { Owner: { SourceBuild: { } build } } session) { viewport.ResolveZoneStroke(stroke.Id); return; }
         zoneTool.LastStroke = stroke; zoneTool.Stroke = null;
         ShowZoneNotices(stroke);
         if (stroke.Changed == 0) { viewport.ResolveZoneStroke(stroke.Id); ZoneFlash("Nothing changed", false); return; }
-        zoneStrokes.Enqueue((viewport, stroke));
+        // The stroke's polygons as source polygons of the build it was drawn on, now: a later build (one that replaced the
+        // view after an earlier stroke) is checked against them when it applies.
+        SourceZoneSelection[] selections; string?[] sites;
+        try
+        {
+            selections = [.. stroke.Targets.Select(t => SourceZoneEdits.FromCompiled(build, t.Node, t.Polygon))];
+            sites = [.. selections.Select(s => build.Provenance.TryGetValue(s.SceneNode, out var origin) ? SourceZoneEdits.PolygonSite(origin) : null)];
+        }
+        catch (InvalidDataException ex) { viewport.ResolveZoneStroke(stroke.Id); Report(ex); return; }
+        zoneStrokes.Enqueue(new(viewport, stroke, session, selections, sites));
         viewport.ZonePaintWaiting = zoneStrokes.Count >= MaximumQueuedStrokes;
         if (zoneTool.Applying) { RefreshZoneBanner(); return; }
         zoneTool.Applying = true; RefreshZoneBanner(); UpdateDocumentCommands();
@@ -550,26 +572,19 @@ public partial class MainWindow
         {
             while (zoneStrokes.TryDequeue(out var queued))
             {
-                var (shown, applying) = queued;
-                try
+                try { await ApplyQueuedStrokeAsync(queued); }
+                catch (Exception ex) when (ex is not (OutOfMemoryException or StackOverflowException))
                 {
-                    // A stroke made in a world that is no longer the tool's (closed, replaced by another map) is dropped.
-                    if (zoneTool.Session is not { Owner: { SourceBuild: { } build } document } || !ReferenceEquals(shown, scene)) continue;
-                    SourceZoneSelection[] selections;
-                    try { selections = [.. applying.Targets.Select(t => SourceZoneEdits.FromCompiled(build, t.Node, t.Polygon))]; }
-                    catch (InvalidDataException ex) { throw new StudioCommandException("invalid_argument", ex.Message); }
-                    var (_, plan) = await ApplyPolygonZonesAsync(document, selections, applying.Zone, applying.Erase, CancellationToken.None);
-                    string polygons = plan.Changed == 1 ? "1 polygon" : $"{plan.Changed:N0} polygons";
-                    zoneTool.LastResult = (plan.Label, plan.Changed, plan.Full.Count);
-                    if (zoneStrokes.Count == 0)
-                        ZoneFlash(plan.Changed == 0 ? "Nothing changed" : applying.Erase ? $"Erased {ZoneWord(applying.Zone)} from {polygons}" : $"Painted {ZoneWord(applying.Zone)} on {polygons}", plan.Changed > 0);
+                    zoneTool.LastResult = (ex.Message, 0, 0, false);
+                    if (ex is not OperationCanceledException) Report($"A polygon zone stroke was not applied: {ex.Message}");
+                    else Report("A polygon zone stroke was not applied: its edit was cancelled.");
                 }
-                catch (Exception ex) when (ex is StudioCommandException or InvalidDataException or OperationCanceledException)
+                finally
                 {
-                    zoneTool.LastResult = (ex.Message, 0, 0);
-                    if (ex is not OperationCanceledException) Report(ex);
+                    // Its preview gives way to the world (the view it was drawn in may have been replaced since).
+                    if (ReferenceEquals(queued.Viewport, scene)) queued.Viewport.ResolveZoneStroke(queued.Stroke.Id);
+                    if (scene is { } current) current.ZonePaintWaiting = zoneStrokes.Count >= MaximumQueuedStrokes;
                 }
-                finally { shown.ResolveZoneStroke(applying.Id); shown.ZonePaintWaiting = zoneStrokes.Count >= MaximumQueuedStrokes; }
             }
         }
         finally
@@ -577,6 +592,30 @@ public partial class MainWindow
             zoneTool.Applying = false;
             UpdateDocumentCommands(); RefreshZoneToolChrome(); RefreshZoneReadout();
         }
+    }
+    /// <summary>
+    /// Applies one queued stroke to its world as it is now: after the edits before it (other source edits are waited for),
+    /// every polygon must still have the assignment site it was drawn with; otherwise the stroke is refused, never retargeted.
+    /// </summary>
+    private async Task ApplyQueuedStrokeAsync(QueuedZoneStroke queued)
+    {
+        var session = queued.Session;
+        for (var waited = System.Diagnostics.Stopwatch.StartNew(); ; await Task.Delay(50))
+        {
+            if (session.IsDisposed || session.Owner is not { IsDisposed: false }) throw new StudioCommandException("context_changed", "its map was closed.");
+            if (!session.IsRebuilding && !sourceWorkspaceBusy && operation == null && !session.Workspace.IsSaving) break;
+            if (waited.Elapsed > TimeSpan.FromSeconds(60)) throw new StudioCommandException("busy", "another edit of the project did not finish.");
+        }
+        var document = session.Owner!;
+        var build = document.SourceBuild ?? throw new StudioCommandException("context_changed", "its map was closed.");
+        for (int i = 0; i < queued.Selections.Length; i++)
+            if (!build.Provenance.TryGetValue(queued.Selections[i].SceneNode, out var origin) || SourceZoneEdits.PolygonSite(origin) != queued.Sites[i])
+                throw new StudioCommandException("context_changed", "the map changed under it (an object it painted is no longer the same); paint it again.");
+        var (_, plan) = await ApplyPolygonZonesAsync(document, queued.Selections, queued.Stroke.Zone, queued.Stroke.Erase, CancellationToken.None);
+        zoneTool.LastResult = (plan.Label, plan.Changed, plan.Full.Count, true);
+        string polygons = plan.Changed == 1 ? "1 polygon" : $"{plan.Changed:N0} polygons";
+        if (zoneStrokes.Count == 0)
+            ZoneFlash(plan.Changed == 0 ? "Nothing changed" : queued.Stroke.Erase ? $"Erased {ZoneWord(queued.Stroke.Zone)} from {polygons}" : $"Painted {ZoneWord(queued.Stroke.Zone)} on {polygons}", plan.Changed > 0);
     }
     /// <summary>
     /// Paints or erases <paramref name="zone"/> on exact source polygons as one undoable change (GUI strokes and MCP alike).
@@ -633,7 +672,7 @@ public partial class MainWindow
             ["engaged"] = session != null && zoneTool.Session == session, ["mode"] = zoneTool.Erase ? "erase" : "paint", ["zone"] = zoneTool.Zone,
             ["label"] = session != null && zoneTool.Zone != 255 ? ZoneLabels(session).GetValueOrDefault(zoneTool.Zone) : zoneTool.Zone == 255 ? "Any" : null,
             ["stroking"] = scene?.IsZonePainting == true, ["applying"] = zoneTool.Applying, ["queuedStrokes"] = zoneStrokes.Count, ["skippedShown"] = zoneTool.SkippedShown,
-            ["lastApplied"] = zoneTool.LastResult is { } applied ? new JsonObject { ["label"] = applied.Label, ["changed"] = applied.Changed, ["full"] = applied.Full } : null,
+            ["lastApplied"] = zoneTool.LastResult is { } applied ? new JsonObject { ["applied"] = applied.Applied, [applied.Applied ? "label" : "refusal"] = applied.Label, ["changed"] = applied.Changed, ["full"] = applied.Full } : null,
             ["lastStroke"] = stroke == null ? null : new JsonObject
             {
                 ["zone"] = stroke.Zone, ["mode"] = stroke.Erase ? "erase" : "paint", ["changed"] = stroke.Changed, ["unchanged"] = stroke.Unchanged, ["full"] = stroke.Full,
@@ -666,7 +705,7 @@ public partial class MainWindow
                 if (targets.Length != 0) RequireCurrentZoneSources(document, verifyContent: false);
                 return Result(new { document = document.SessionId, revision = document.Revision, catalog = values.Item1, inspection = values.Item2 });
             });
-        RegisterJob(registry, "source_polygon_zones", "Paint or erase one zone on exact source polygons of the map's own models as one undoable change (the polygon zone tool's stroke). Paint adds the zone after a polygon's others and skips (reports) a polygon that already has three; painting Any (255) replaces a polygon's zones, and painting a numbered zone replaces Any. Erase removes the zone, keeping the others' order; erasing the last leaves no zones, which differs from Any. A placement of a model takes its own zones; a file's own geometry changes wherever the file is loaded. Polygons of models outside the map's own folder (data/common, mission subfolders), placed units and pickups and editable terrain are refused. Nothing to change accepts no edit (changed 0).",
+        RegisterJob(registry, "source_polygon_zones", "Paint or erase one zone on exact source polygons of the map's own models as one undoable change (the polygon zone tool's stroke). Paint adds the zone after a polygon's others and skips (reports) a polygon that already has three; painting Any (255) replaces a polygon's zones, and painting a numbered zone replaces Any. Erase removes the zone, keeping the others' order; erasing the last leaves no zones, which differs from Any. A placement of a model takes its own zones; a file's own geometry changes wherever the file is loaded. Polygons of models outside the map's own folder (data/common, mission subfolders), placed units and pickups, editable terrain and files another mission's scripts load are refused; at most 4,096 polygons across 1,024 placements; busy while a GUI stroke is held or applying. Nothing to change accepts no edit (changed 0).",
             [DocumentParameter, RevisionParameter, P("action", "string", "Paint or erase the zone.", true, "paint", "erase"),
              new("zone", "integer", "The zone: 0–254, or 255 for Any.", true, Minimum: 0, Maximum: 255), ZoneTargetsParameter(polygons: true)], true,
             async (args, token) =>

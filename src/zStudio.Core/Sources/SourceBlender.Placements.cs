@@ -25,7 +25,7 @@ public static partial class SourceBlender
             {
                 string previous = part!.GetValue<string>();
                 var matches = mappings[target].EditorNodes.Where(n => n.Value == previous).Take(2).ToArray();
-                if (matches.Length != 1) throw new InvalidDataException("A placement reference was deleted or duplicated ambiguously; reopen its zone editor.");
+                if (matches.Length != 1) throw new InvalidDataException("A placement reference was deleted or duplicated ambiguously; check the placement in the World outliner and export again.");
                 int index = matches[0].Key; string key = index.ToString(CultureInfo.InvariantCulture);
                 var nodeValues = roots[target]["nodes"]![index]!["extras"]![WorldGltf.Key]!.AsObject();
                 write["references"] ??= new JsonObject(); write["references"]![key] ??= new JsonObject();

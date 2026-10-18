@@ -46,8 +46,10 @@ public static partial class SourceZoneEdits
         if (origin.ModelFile is not { } model || origin.ZonePolygons == null || origin.ZoneMesh < 0)
             return "This object has no source polygons to zone.";
         string own = Folder(SourceWorkspace.Normalize(model));
-        if (!own.Equals(folder, StringComparison.OrdinalIgnoreCase) || !Folder(SourceWorkspace.Normalize(origin.ZoneOwnerPath ?? model)).Equals(folder, StringComparison.OrdinalIgnoreCase))
+        if (!own.Equals(folder, StringComparison.OrdinalIgnoreCase))
             return $"{JsonData.ShownText(model, 160)} is not in the map's own folder ({folder}); only models there take polygon zones.";
+        if (!Folder(SourceWorkspace.Normalize(origin.ZoneOwnerPath ?? model)).Equals(folder, StringComparison.OrdinalIgnoreCase))
+            return $"{JsonData.ShownText(model, 160)} is placed by {JsonData.ShownText(origin.ZoneOwnerPath!, 160)}, outside the map's own folder ({folder}); only placements made there take polygon zones.";
         return null;
     }
 
@@ -87,18 +89,22 @@ public static partial class SourceZoneEdits
         IReadOnlyList<SourceZoneSelection> selections, byte zone, bool erase, CancellationToken token = default)
     {
         if (selections.Count is < 1 or > MaximumSelections) throw Bad("A stroke takes between one and 4,096 polygons.");
-        var context = Prepare(workspace, build, selections, token, MaximumStrokeOccurrences, scanMissions: false);
-        string folder = Folder(context.Path);
+        SourceEmbeddedZones sources = new(workspace, token);
+        string folder = Folder(sources.TraceMission(build.Mission).Master);
+        HashSet<string> files = new(StringComparer.OrdinalIgnoreCase);
         foreach (var selection in selections)
         {
             token.ThrowIfCancellationRequested();
             if (selection.Polygon == null) throw Bad("Polygon zones are painted on polygons; name a polygon of each target.");
             if (PolygonZoneRefusal(build, folder, selection.SceneNode) is { } refusal) throw Bad(refusal);
+            var origin = build.Provenance[selection.SceneNode];
+            files.Add(SourceWorkspace.Normalize(origin.ModelFile!)); files.Add(SourceWorkspace.Normalize(origin.ZoneOwnerPath ?? origin.ModelFile!));
         }
-        // The map's own folder belongs to its mission: another mission's scripts loading a model from it would see these
-        // edits too. A mission that loads one refuses the stroke.
-        if (ForeignLoads(workspace, context.Sources, build, folder, token) is { } shared)
-            throw Bad($"{shared.Mission} also loads {JsonData.ShownText(shared.Root, 160)} from this map's folder; polygon zones are painted only on models no other mission loads.");
+        // The map's own folder belongs to its mission: another mission's scripts loading one of these files would see the
+        // edit too, and refuse the stroke.
+        if (ForeignLoads(workspace, sources, build, folder, token).FirstOrDefault(load => files.Contains(load.Root)) is { Mission: not null } shared)
+            throw Bad($"{shared.Mission} also loads {JsonData.ShownText(shared.Root, 160)}; polygon zones are painted only on models no other mission loads.");
+        var context = Prepare(workspace, build, selections, token, MaximumStrokeOccurrences, scanMissions: false);
         int changed = 0, unchanged = 0;
         List<SourceZoneSelection> full = [];
         HashSet<SourceZoneTarget> counted = [];
@@ -142,24 +148,28 @@ public static partial class SourceZoneEdits
             changed == 0 ? [] : context.Sources.Changes(), changed, unchanged, full);
     }
 
-    private static readonly Dictionary<string, (string Mission, string Root)?> foreignLoads = [];
+    private static readonly Dictionary<string, IReadOnlyList<(string Mission, string Root)>> foreignLoads = [];
     /// <summary>
-    /// The first load of a model from <paramref name="folder"/> by another mission's scripts (traced; no model is read).
-    /// Every mission script is an input of a world's build, so a result holds while the build's recorded scripts are the same.
+    /// The models other missions' scripts load from <paramref name="folder"/> (traced; no model is read). Every mission
+    /// script is an input of a world's build, so a result holds while the build's recorded scripts are the same. A mission
+    /// whose scripts cannot be traced (one being authored) loads nothing here.
     /// </summary>
-    private static (string Mission, string Root)? ForeignLoads(SourceWorkspace workspace, SourceEmbeddedZones sources, SourceSceneState build, string folder, CancellationToken token)
+    private static IReadOnlyList<(string Mission, string Root)> ForeignLoads(SourceWorkspace workspace, SourceEmbeddedZones sources, SourceSceneState build, string folder, CancellationToken token)
     {
         var scripts = build.ReadHashes.Where(p => p.Key.StartsWith(SourceProject.GameGenFolder + "/", StringComparison.OrdinalIgnoreCase))
             .OrderBy(p => p.Key, StringComparer.OrdinalIgnoreCase).Select(p => p.Key + "=" + p.Value).ToArray();
-        string? key = scripts.Length == 0 ? null : build.Mission + "|" + folder + "|" + string.Join("|", scripts);
+        string? key = scripts.Length == 0 ? null : workspace.Root + "|" + build.Mission + "|" + folder + "|" + string.Join("|", scripts);
         lock (foreignLoads) if (key != null && foreignLoads.TryGetValue(key, out var known)) return known;
-        (string Mission, string Root)? found = null;
+        List<(string Mission, string Root)> found = [];
         foreach (string other in Missions(workspace, token))
         {
             token.ThrowIfCancellationRequested();
             if (other.Equals(build.Mission, StringComparison.OrdinalIgnoreCase)) continue;
-            if (sources.TraceMission(other).Roots.FirstOrDefault(root => Folder(SourceWorkspace.Normalize(root)).Equals(folder, StringComparison.OrdinalIgnoreCase)) is { } root)
-            { found = (other, root); break; }
+            IReadOnlyList<string> roots;
+            try { roots = sources.TraceMission(other).Roots; }
+            catch (InvalidDataException) { continue; }
+            foreach (string root in roots)
+                if (Folder(SourceWorkspace.Normalize(root)).Equals(folder, StringComparison.OrdinalIgnoreCase)) found.Add((other, SourceWorkspace.Normalize(root)));
         }
         if (key != null) lock (foreignLoads) { if (foreignLoads.Count >= 8) foreignLoads.Clear(); foreignLoads[key] = found; }
         return found;
