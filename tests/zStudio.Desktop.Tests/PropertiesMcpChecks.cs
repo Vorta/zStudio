@@ -79,7 +79,8 @@ internal static class PropertiesMcpChecks
             // without opening the GUI's save/discard confirmation dialog.
             await main.Commands.ExecuteAsync("zstudio_window", new() { ["action"] = "close" }, deadline.Token);
             doc.AnimationEdits!.Apply(0, "Edit during close", e => e.SetInt(164, 1));
-            await Task.Delay(350, deadline.Token);
+            // The deferred close runs once its response is sent: wait for its refusal rather than a fixed time.
+            for (int attempt = 0; attempt < 100 && !main.ViewModel.Status.StartsWith("Close canceled:", StringComparison.Ordinal); attempt++) await Task.Delay(50, deadline.Token);
             Assert.True(main.IsVisible); Assert.StartsWith("Close canceled:", main.ViewModel.Status);
             doc.AnimationEdits.Undo();
             main.OpenAnimationProperties(doc, 0, Guid.Empty, Guid.Empty); main.OpenPropertiesWindow!.UpdateLayout();

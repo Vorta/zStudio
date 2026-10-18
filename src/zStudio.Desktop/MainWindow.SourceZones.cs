@@ -18,7 +18,7 @@ public partial class MainWindow
 {
     /// <summary>
     /// The polygon zone tool: the source world it paints (null while it is off), the zone and mode, what the map's zones are,
-    /// and what its last stroke did. Strokes apply one at a time; the view waits while one applies.
+    /// and what its last stroke did. Released strokes queue and apply one at a time while painting goes on.
     /// </summary>
     private sealed class ZoneToolState
     {
@@ -28,7 +28,7 @@ public partial class MainWindow
         internal bool Erase { get; set; }
         internal WorldHighlightMode RestoreHighlight { get; set; }
         internal long HighlightGeneration { get; set; }
-        internal (SourceSceneState Build, string Scripts, string Master)? Master { get; set; }
+        internal (SourceWorldSession Session, SourceSceneState Build, string Scripts, string Master)? Master { get; set; }
         internal (SourceSceneState Build, Dictionary<string, int[]> Sites)? Sites { get; set; }
         internal (object Snapshot, IReadOnlyList<ZonePickerEntry> Zones)? Used { get; set; }
         internal (string Key, IReadOnlyDictionary<byte, string> Labels)? Labels { get; set; }
@@ -45,8 +45,15 @@ public partial class MainWindow
     /// A released stroke waiting to apply: its world, and its polygons as source polygons with the assignment site each
     /// had in the build it was drawn on (checked again against the build it applies to).
     /// </summary>
+    /// <remarks>
+    /// <see cref="Revision"/> is the project content the stroke was drawn against; the queue's own zone edits carry it
+    /// forward (they keep every node). Any other accepted edit (a deletion can renumber the nodes after it) refuses it.
+    /// </remarks>
     private sealed record QueuedZoneStroke(SceneViewport Viewport, ZonePaintStroke Stroke, SourceWorldSession Session,
-        SourceZoneSelection[] Selections, string?[] Sites);
+        SourceZoneSelection[] Selections, string?[] Sites)
+    {
+        internal long Revision { get; set; }
+    }
     /// <summary>Released strokes waiting to apply, in order; painting goes on meanwhile (each keeps its preview until applied).</summary>
     private readonly Queue<QueuedZoneStroke> zoneStrokes = new();
     private const int MaximumQueuedStrokes = 8;
@@ -75,12 +82,12 @@ public partial class MainWindow
         // The master comes from the scripts alone: a stroke, which changes models, keeps it.
         string scripts = string.Join("|", build.ReadHashes.Where(p => p.Key.StartsWith(SourceProject.GameGenFolder + "/", StringComparison.OrdinalIgnoreCase))
             .OrderBy(p => p.Key, StringComparer.OrdinalIgnoreCase).Select(p => p.Key + "=" + p.Value));
-        if (zoneTool.Master is { } same && same.Scripts == scripts && scripts.Length > 0) { zoneTool.Master = (build, scripts, same.Master); return same.Master; }
+        if (zoneTool.Master is { } same && same.Session == session && same.Scripts == scripts && scripts.Length > 0) { zoneTool.Master = (session, build, scripts, same.Master); return same.Master; }
         string master;
         try { master = SourceZoneEdits.MasterPath(session.Workspace, session.Mission); }
         catch (Exception ex) when (ex is InvalidDataException or IOException or UnauthorizedAccessException)
         { throw new StudioCommandException("invalid_argument", "The map's master model could not be read: " + ex.Message); }
-        zoneTool.Master = (build, scripts, master);
+        zoneTool.Master = (session, build, scripts, master);
         return master;
     }
     private string ZoneFolder(SourceWorldSession session, SourceSceneState build) => SourceZoneEdits.FolderOf(ZoneMaster(session, build));
@@ -233,6 +240,7 @@ public partial class MainWindow
             try { viewport.SetZoneBrush(ZoneBrush(session)); }
             catch (InvalidOperationException) { LeaveZoneTool(); return; }
             if (zoneTool.SkippedShown) ShowZoneSkipped(true);
+            viewport.ZonePaintWaiting = zoneStrokes.Count >= MaximumQueuedStrokes;
         }
         RefreshZoneToolChrome();
     }
@@ -554,7 +562,7 @@ public partial class MainWindow
         if (!ReferenceEquals(viewport, scene) || zoneTool.Session is not { Owner: { SourceBuild: { } build } } session) { viewport.ResolveZoneStroke(stroke.Id); return; }
         zoneTool.LastStroke = stroke; zoneTool.Stroke = null;
         ShowZoneNotices(stroke);
-        if (stroke.Changed == 0) { viewport.ResolveZoneStroke(stroke.Id); ZoneFlash("Nothing changed", false); return; }
+        if (stroke.Changed == 0) { viewport.ResolveZoneStroke(stroke.Id); zoneTool.LastResult = ("Nothing changed", 0, stroke.Full, false); ZoneFlash("Nothing changed", false); return; }
         // The stroke's polygons as source polygons of the build it was drawn on, now: a later build (one that replaced the
         // view after an earlier stroke) is checked against them when it applies.
         SourceZoneSelection[] selections; string?[] sites;
@@ -563,8 +571,8 @@ public partial class MainWindow
             selections = [.. stroke.Targets.Select(t => SourceZoneEdits.FromCompiled(build, t.Node, t.Polygon))];
             sites = [.. selections.Select(s => build.Provenance.TryGetValue(s.SceneNode, out var origin) ? SourceZoneEdits.PolygonSite(origin) : null)];
         }
-        catch (InvalidDataException ex) { viewport.ResolveZoneStroke(stroke.Id); Report(ex); return; }
-        zoneStrokes.Enqueue(new(viewport, stroke, session, selections, sites));
+        catch (InvalidDataException ex) { viewport.ResolveZoneStroke(stroke.Id); zoneTool.LastResult = (ex.Message, 0, 0, false); Report(ex); return; }
+        zoneStrokes.Enqueue(new(viewport, stroke, session, selections, sites) { Revision = session.Workspace.ContentRevision });
         viewport.ZonePaintWaiting = zoneStrokes.Count >= MaximumQueuedStrokes;
         if (zoneTool.Applying) { RefreshZoneBanner(); return; }
         zoneTool.Applying = true; RefreshZoneBanner(); UpdateDocumentCommands();
@@ -576,8 +584,9 @@ public partial class MainWindow
                 catch (Exception ex) when (ex is not (OutOfMemoryException or StackOverflowException))
                 {
                     zoneTool.LastResult = (ex.Message, 0, 0, false);
-                    if (ex is not OperationCanceledException) Report($"A polygon zone stroke was not applied: {ex.Message}");
-                    else Report("A polygon zone stroke was not applied: its edit was cancelled.");
+                    // Closing zStudio cancels what is left: that is said once by the close, not per stroke.
+                    if (!shutdownToken.IsCancellationRequested)
+                        Report(ex is OperationCanceledException ? "A polygon zone stroke was not applied: its edit was cancelled." : $"A polygon zone stroke was not applied: {ex.Message}");
                 }
                 finally
                 {
@@ -603,16 +612,22 @@ public partial class MainWindow
         for (var waited = System.Diagnostics.Stopwatch.StartNew(); ; await Task.Delay(50))
         {
             if (session.IsDisposed || session.Owner is not { IsDisposed: false }) throw new StudioCommandException("context_changed", "its map was closed.");
-            if (!session.IsRebuilding && !sourceWorkspaceBusy && operation == null && !session.Workspace.IsSaving) break;
-            if (waited.Elapsed > TimeSpan.FromSeconds(60)) throw new StudioCommandException("busy", "another edit of the project did not finish.");
+            if (!session.IsRebuilding && !sourceWorkspaceBusy && operation == null && !session.Workspace.IsSaving && (session.Owner != shownDocument || staticRefresh == null)) break;
+            if (waited.Elapsed > TimeSpan.FromSeconds(60)) throw new StudioCommandException("busy", "the project stayed busy (an export, a check or another edit) for a minute.");
         }
         var document = session.Owner!;
         var build = document.SourceBuild ?? throw new StudioCommandException("context_changed", "its map was closed.");
+        // Another edit since the stroke was drawn may have renumbered the objects it names.
+        if (session.Workspace.ContentRevision != queued.Revision)
+            throw new StudioCommandException("context_changed", "the map was edited after it was drawn; paint it again.");
         for (int i = 0; i < queued.Selections.Length; i++)
             if (!build.Provenance.TryGetValue(queued.Selections[i].SceneNode, out var origin) || SourceZoneEdits.PolygonSite(origin) != queued.Sites[i])
                 throw new StudioCommandException("context_changed", "the map changed under it (an object it painted is no longer the same); paint it again.");
+        long before = session.Workspace.ContentRevision;
         var (_, plan) = await ApplyPolygonZonesAsync(document, queued.Selections, queued.Stroke.Zone, queued.Stroke.Erase, CancellationToken.None);
-        zoneTool.LastResult = (plan.Label, plan.Changed, plan.Full.Count, true);
+        // This zone edit keeps every node: strokes drawn before it still name the same objects.
+        foreach (var waiting in zoneStrokes) if (waiting.Session == session && waiting.Revision == before) waiting.Revision = session.Workspace.ContentRevision;
+        zoneTool.LastResult = plan.Changed == 0 ? ("Nothing changed", 0, plan.Full.Count, false) : (plan.Label, plan.Changed, plan.Full.Count, true);
         string polygons = plan.Changed == 1 ? "1 polygon" : $"{plan.Changed:N0} polygons";
         if (zoneStrokes.Count == 0)
             ZoneFlash(plan.Changed == 0 ? "Nothing changed" : queued.Stroke.Erase ? $"Erased {ZoneWord(queued.Stroke.Zone)} from {polygons}" : $"Painted {ZoneWord(queued.Stroke.Zone)} on {polygons}", plan.Changed > 0);

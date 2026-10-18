@@ -118,7 +118,9 @@ internal static class SourceZoneMcpChecks
             var finished = typeof(MainWindow).GetMethod("ZoneStrokeFinished", fields)!;
             finished.Invoke(main, [view, new ZonePaintStroke(1000, 5, false, [new(side, 0)], 1, 0, 0, [], false, false)]);
             finished.Invoke(main, [view, new ZonePaintStroke(1001, 6, false, [new(side, 0)], 1, 0, 0, [], false, false)]);
-            Assert.False((await Call("source_zone_tool", new() { ["document"] = doc.SessionId.ToString(), ["action"] = "exit" }))["engaged"]!.GetValue<bool>());
+            // Leaving the tool at once (the second stroke still waits) keeps the queue.
+            Assert.Single((System.Collections.IEnumerable)typeof(MainWindow).GetField("zoneStrokes", fields)!.GetValue(main)!);
+            typeof(MainWindow).GetMethod("LeaveZoneTool", fields)!.Invoke(main, []);
             var toolState = typeof(MainWindow).GetField("zoneTool", fields)!.GetValue(main)!;
             var applying = toolState.GetType().GetProperty("Applying", fields)!;
             while ((bool)applying.GetValue(toolState)!) await Task.Delay(10, token);

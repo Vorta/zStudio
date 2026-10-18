@@ -155,7 +155,7 @@ public static partial class SourceZoneEdits
             }
             context.Sources.Set(context.Assets[group.Key], profile with { Nodes = nodes ?? profile.Nodes, MeshPolygons = meshes ?? profile.MeshPolygons, LoadRoot = root });
         }
-        return new("Edit map zones", context.Sources.Changes(), context.Affected.Take(MaximumAffectedShown).ToArray(), context.Affected.Count, context.Shared,
+        return new("Edit zones", context.Sources.Changes(), context.Affected.Take(MaximumAffectedShown).ToArray(), context.Affected.Count, context.Shared,
             context.Missions.Take(MaximumAffectedPathsShown).ToArray(), context.Missions.Count,
             context.AffectedSources.Take(MaximumAffectedPathsShown).ToArray(), context.AffectedSources.Count);
     }
@@ -213,7 +213,7 @@ public static partial class SourceZoneEdits
                 if (other.Equals(mission, StringComparison.OrdinalIgnoreCase)) continue;
                 foreach (var occurrence in sources.ReadMission(other).Entries)
                     if ((occurrence.AssignmentSites ?? [occurrence.Key]).Any(changedSites.Contains))
-                        throw Bad($"Replacing this zone also changes source assignments used by {other}. Change those assignments with the explicit shared-scope zone editor first, then remove the unused label.");
+                        throw Bad($"Replacing this zone also changes source assignments used by {other}. Change those assignments with an explicit shared-scope zone edit first, then remove the unused label.");
             }
         sources.SetLabels(map.MasterPath, map.Labels.Where(x => x.Id != id));
         return new("Remove map zone", sources.Changes(), [], 0, replacement != null);

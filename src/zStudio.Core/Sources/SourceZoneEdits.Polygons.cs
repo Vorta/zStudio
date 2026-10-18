@@ -161,17 +161,19 @@ public static partial class SourceZoneEdits
         string? key = scripts.Length == 0 ? null : workspace.Root + "|" + build.Mission + "|" + folder + "|" + string.Join("|", scripts);
         lock (foreignLoads) if (key != null && foreignLoads.TryGetValue(key, out var known)) return known;
         List<(string Mission, string Root)> found = [];
+        bool skipped = false;
         foreach (string other in Missions(workspace, token))
         {
             token.ThrowIfCancellationRequested();
             if (other.Equals(build.Mission, StringComparison.OrdinalIgnoreCase)) continue;
             IReadOnlyList<string> roots;
             try { roots = sources.TraceMission(other).Roots; }
-            catch (InvalidDataException) { continue; }
+            catch (InvalidDataException) { skipped = true; continue; }
             foreach (string root in roots)
                 if (Folder(SourceWorkspace.Normalize(root)).Equals(folder, StringComparison.OrdinalIgnoreCase)) found.Add((other, SourceWorkspace.Normalize(root)));
         }
-        if (key != null) lock (foreignLoads) { if (foreignLoads.Count >= 8) foreignLoads.Clear(); foreignLoads[key] = found; }
+        // A mission skipped now (a model it loads missing) may trace once the project is fixed: it is not remembered.
+        if (key != null && !skipped) lock (foreignLoads) { if (foreignLoads.Count >= 8) foreignLoads.Clear(); foreignLoads[key] = found; }
         return found;
     }
 

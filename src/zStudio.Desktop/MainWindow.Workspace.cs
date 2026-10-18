@@ -66,6 +66,8 @@ public partial class MainWindow
     }
     private void UpdateDocumentCommands()
     {
+        // The polygon zone tool ends with its map (closed, or another one chosen).
+        if (zoneTool.Session is { } zoneSession && (zoneSession.IsDisposed || ViewModel.SelectedDocument is { } selected && selected.SourceWorld != zoneSession)) LeaveZoneTool();
         RefreshPresentation();
         UpdateSourceInputBlock();
         RefreshSceneTree();

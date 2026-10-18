@@ -881,7 +881,7 @@ public partial class MainWindow : Window
             if (!e.IsRepeat) { if (motion != null) motion.TogglePlayback(); else if (animation != null) animation.TogglePlayback(); else pendingAnimationPlay = !pendingAnimationPlay; }
             return;
         }
-        bool ctrl = KeyboardModifiers(); if (ctrl && e.Key == Key.O) OpenWorkspaceClick(this, e); else if (ctrl && e.Key == Key.S) { if ((System.Windows.Input.Keyboard.Modifiers & ModifierKeys.Shift) != 0) SaveCurrentAsClick(this, e); else SaveCurrentClick(this, e); } else if (ctrl && e.Key == Key.Z && e.OriginalSource is not TextBoxBase) UndoAnimationClick(this, e); else if (ctrl && e.Key == Key.Y && e.OriginalSource is not TextBoxBase) RedoAnimationClick(this, e); else if (ctrl && e.Key == Key.W) CloseCurrentClick(this, e); else if (e.Key == Key.F5) ReloadClick(this, e); else if (e.Key == Key.Escape && OperationRunning) CancelRunningOperation(); else return; e.Handled = true;
+        bool ctrl = KeyboardModifiers(); if (ctrl && e.Key == Key.O) OpenWorkspaceClick(this, e); else if (ctrl && e.Key == Key.S) { if ((System.Windows.Input.Keyboard.Modifiers & ModifierKeys.Shift) != 0) SaveCurrentAsClick(this, e); else SaveCurrentClick(this, e); } else if (ctrl && e.Key == Key.Z && e.OriginalSource is not TextBoxBase) UndoAnimationClick(this, e); else if (ctrl && e.Key == Key.Y && e.OriginalSource is not TextBoxBase) RedoAnimationClick(this, e); else if (ctrl && e.Key == Key.W) CloseCurrentClick(this, e); else if (e.Key == Key.F5) ReloadClick(this, e); else if (e.Key == Key.Escape && OperationRunning && !zoneTool.Applying) CancelRunningOperation(); else return; e.Handled = true;
     }
     private bool AnimationSpaceTarget(DependencyObject? source)
     {
@@ -912,6 +912,8 @@ public partial class MainWindow : Window
             return;
         }
         System.Windows.Input.Keyboard.ClearFocus();
+        // Released polygon zone strokes apply first (a second or two): closing would discard them.
+        if (!allowClose && (scene?.IsZonePainting == true || zoneTool.Applying)) { e.Cancel = true; ShowZoneRefusal("Polygon zone strokes are still applying; close again when they are done."); return; }
         if (!allowClose && (ViewModel.Documents.Any(d => d.IsDirty) || HasInspectionDraft || HasAiPathDraft || parachuteDraft != null || animation?.HasPendingDrafts == true || propertiesWindow?.HasPendingDrafts == true))
         {
             e.Cancel = true; resolvingClose = true;

@@ -51,6 +51,9 @@ public sealed partial class SceneViewport
     private Dictionary<(string Site, int Source), ZoneTouch>? zoneStroke;
     private bool zoneStrokeErase, zoneStrokeBlocked, zoneStrokeLimited;
     private int zoneStrokeChanged, zoneStrokeFull;
+    private readonly HashSet<string> zoneStrokeSites = new(StringComparer.Ordinal);
+    /// <summary>The placements one stroke may reach (SourceZoneEdits.MaximumStrokeOccurrences).</summary>
+    public const int MaximumZonePaintPlacements = 1024;
     private Point? zoneStrokePoint;
     private long zoneStrokeSerial;
     private readonly Dictionary<(string Site, int Source), (long Stroke, ZoneTouch Touch)> zonePending = [];
@@ -97,7 +100,7 @@ public sealed partial class SceneViewport
     /// <summary>Whether the stroke in progress erases (its mode is fixed when it starts, Ctrl included).</summary>
     public bool ZoneStrokeErase => zoneStroke != null && zoneStrokeErase;
     private bool zonePaintWaiting;
-    /// <summary>While the owner applies the last stroke, clicks start no new stroke and select nothing.</summary>
+    /// <summary>While the owner's queue of released strokes is full, clicks start no new stroke and select nothing.</summary>
     public bool ZonePaintWaiting { get => zonePaintWaiting; set { zonePaintWaiting = value; RefreshZoneCursor(); } }
     public event Action? ZonePaintActiveChanged;
     /// <summary>A stroke's running counts changed (changed, full), or it ended.</summary>
@@ -144,7 +147,7 @@ public sealed partial class SceneViewport
         viewport.Focus();
         if (zonePaintWaiting) return true;
         if ((Keyboard.Modifiers & ModifierKeys.Shift) != 0) { ZonePickRequested?.Invoke(ProbeZone(point, out _)); return true; }
-        zoneStroke = []; zoneStrokeErase = ZoneErase; zoneStrokeBlocked = zoneStrokeLimited = false; zoneStrokeChanged = zoneStrokeFull = 0; zonePresentationSuspended = false;
+        zoneStroke = []; zoneStrokeErase = ZoneErase; zoneStrokeBlocked = zoneStrokeLimited = false; zoneStrokeChanged = zoneStrokeFull = 0; zoneStrokeSites.Clear(); zonePresentationSuspended = false;
         zoneStrokePoint = point; ZoneHover = null; ZoneHoverChanged?.Invoke();
         TouchZone(point); viewport.CaptureMouse(); RefreshZoneCursor(); return true;
     }
@@ -200,8 +203,9 @@ public sealed partial class SceneViewport
         var hover = ProbeZone(point, out bool blocked, zoneStrokeErase);
         if (blocked) zoneStrokeBlocked = true;
         if (hover == null || zoneBrush.Site(hover.Node) is not { } site || zoneStroke.ContainsKey((site, hover.Source))) return;
-        // A polygon past the limit is left out, and the stroke says so.
-        if (zoneStroke.Count >= MaximumZonePaintTargets) { zoneStrokeLimited = true; return; }
+        // A polygon past the limits (the planner's: polygons, and placements of models) is left out, and the stroke says so.
+        if (zoneStroke.Count >= MaximumZonePaintTargets || !zoneStrokeSites.Contains(site) && zoneStrokeSites.Count >= MaximumZonePaintPlacements) { zoneStrokeLimited = true; return; }
+        zoneStrokeSites.Add(site);
         var after = SourceZoneEdits.PaintedPolygonZones(hover.Zones, paintZone, zoneStrokeErase);
         ZoneTouch touch = new(hover.Node, hover.Polygon, hover.Source, site, hover.Zones, after);
         zoneStroke.Add((site, hover.Source), touch);
@@ -338,7 +342,7 @@ public sealed partial class SceneViewport
         foreach (var touch in zoneStroke?.Values ?? Enumerable.Empty<ZoneTouch>())
             (touch.Outcome switch { PolygonZoneOutcome.Changed => white, PolygonZoneOutcome.Unchanged => grey, _ => yellow }).Add((touch.Node, touch.Source, -1));
         foreach (var skipped in zoneShownSkipped)
-            if (brush.SourcePolygons(skipped.Node) is { } mapping && skipped.Polygon >= 0 && skipped.Polygon < mapping.Count) yellow.Add((skipped.Node, mapping[skipped.Polygon], -1));
+            if (brush.SourcePolygons(skipped.Node) is { } mapping && skipped.Polygon >= 0 && skipped.Polygon < mapping.Count && mapping[skipped.Polygon] >= 0) yellow.Add((skipped.Node, mapping[skipped.Polygon], -1));
         ShowZoneLines("changed", white, Colors.White, 2);
         ShowZoneLines("unchanged", grey, System.Windows.Media.Color.FromArgb(140, 255, 255, 255), 1.5);
         ShowZoneLines("full", yellow, System.Windows.Media.Color.FromRgb(0xFC, 0xE1, 0x00), 2);

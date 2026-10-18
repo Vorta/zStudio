@@ -47,10 +47,10 @@ public sealed partial class SceneViewport
         foreach (var element in viewport.Items) element.HitTest(context, ref hits);
         foreach (var hit in hits.OrderBy(h => h.Distance))
         {
-            if (!hit.IsValid || hit.ModelHit is not MeshGeometryModel3D mesh || !IsOrbitSurface(mesh, hit.Tag) || accept?.Invoke(hit) == false) continue;
+            if (!hit.IsValid || hit.ModelHit is not MeshGeometryModel3D mesh || !IsOrbitSurface(mesh, hit.Tag)) continue;
             var candidate = new Point3D(hit.PointHit.X, hit.PointHit.Y, hit.PointHit.Z);
             if (!double.IsFinite(candidate.X) || !double.IsFinite(candidate.Y) || !double.IsFinite(candidate.Z)
-                || Vector3D.DotProduct(candidate - camera.Position, forward) < 1e-6) continue;
+                || Vector3D.DotProduct(candidate - camera.Position, forward) < 1e-6 || accept?.Invoke(hit) == false) continue;
             surface = hit; return true;
         }
         return false;
