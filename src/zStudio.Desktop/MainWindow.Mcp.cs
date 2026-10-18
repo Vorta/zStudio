@@ -116,8 +116,7 @@ public partial class MainWindow
     }
     /// <summary>
     /// Before choosing another object (MCP select, as the GUI's tree, search and viewport selection): the drafts a selection
-    /// resolves. A map zone draft (which collects chosen objects) and Properties input stay, since choosing never retargets
-    /// Properties.
+    /// resolves. Properties input stays, since choosing never retargets Properties.
     /// </summary>
     private void RequireNoSelectionDrafts(DocumentModel? doc = null)
     {

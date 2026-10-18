@@ -101,7 +101,8 @@ float4 PSPolygonZones(TintPixel input) : SV_TARGET
     uint mode = (uint)round(vMaterialSpecular.w);
     float4 result = mode == 2 ? float4(0, 0, 0, 0) : Appearance(input, false);
     uint count = (uint)round(saturate(input.color.a) * 3);
-    if (count == 0) return result;
+    // The stroke preview of a polygon left with no zones: a dark fill over its old tint.
+    if (count == 0) return mode == 2 ? float4(.08, .08, .08, .55) : result;
     uint band = (uint)floor((input.position.x + input.position.y) / (6 * max(DpiScale, 1)));
     uint index = band % count;
     float id = index == 0 ? input.color.r : index == 1 ? input.color.g : input.color.b;

@@ -905,7 +905,7 @@ public partial class MainWindow : Window
             if (sourceWorkspaceBusy) { CancelSourceBuilds(); ViewModel.Status = "Cancelling the rebuild so the application can close…"; }
             return;
         }
-        if (automationCloseRequested && (ViewModel.Documents.Any(d => d.IsDirty) || HasInspectionDraft || HasAiPathDraft || parachuteDraft != null || animation?.HasAutomationDrafts == true || propertiesWindow?.HasPendingDrafts == true || scene?.IsPickupDragging == true))
+        if (automationCloseRequested && (ViewModel.Documents.Any(d => d.IsDirty) || HasInspectionDraft || HasAiPathDraft || parachuteDraft != null || animation?.HasAutomationDrafts == true || propertiesWindow?.HasPendingDrafts == true || scene?.IsPickupDragging == true || scene?.IsZonePainting == true))
         {
             automationCloseRequested = false; e.Cancel = true;
             ViewModel.Status = "Close canceled: the workspace has new edits or unfinished input. Resolve them before closing.";

@@ -71,7 +71,7 @@ public partial class MainWindow
             if (shownDocument is not { SourceWorld: not null } doc || card.Selection is not { } selected) return;
             var state = DescribeSourceObject(doc, EditableSourceSelectionNode(doc, selected.Node));
             if (state.Origin.Terrain is not { } recipe) return;
-            // Properties leaves what it shows (a map zone draft, pending input) only once that is resolved.
+            // Properties leaves what it shows (pending input) only once that is resolved.
             if (!await ResolvePropertiesDraftsAsync()) return;
             await ShowTerrainPropertiesAsync(doc, recipe, state.Origin.TerrainSurface, null, null, CancellationToken.None);
         });

@@ -233,8 +233,8 @@ public sealed class PropertiesWindow : Window
     /// <summary>The window was dismissed (X, Alt+F4, properties_close), rather than closed by its document's replacement.</summary>
     internal bool ClosedByUser { get; private set; }
     /// <summary>
-    /// Decides drafts the owner keeps for this window's content (a map zone draft, which closing discards) before any
-    /// close, explicit ones included; false keeps the window open.
+    /// Decides drafts the owner keeps for this window's content before any close, explicit ones included; false keeps the
+    /// window open.
     /// </summary>
     internal Func<DocumentModel?, bool>? ResolveClosingDrafts { get; set; }
     private void OnClosing(object? sender, CancelEventArgs e)

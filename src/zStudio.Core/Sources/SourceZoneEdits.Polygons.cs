@@ -22,7 +22,7 @@ public static partial class SourceZoneEdits
         => Folder(MasterPath(workspace, mission, token));
     /// <summary>The mission's master world model (the database the script loads after GameGenSetWorld), which holds the zone labels.</summary>
     public static string MasterPath(SourceWorkspace workspace, string mission, CancellationToken token = default)
-        => new SourceEmbeddedZones(workspace, token).ReadMission(mission, includeEntries: false).MasterPath;
+        => new SourceEmbeddedZones(workspace, token).TraceMission(mission).Master;
     /// <summary>The folder of a project path (<c>data/m1/models</c> for <c>data/m1/models/m1.gltf</c>).</summary>
     public static string FolderOf(string path) => Folder(SourceWorkspace.Normalize(path));
 
@@ -87,16 +87,18 @@ public static partial class SourceZoneEdits
         IReadOnlyList<SourceZoneSelection> selections, byte zone, bool erase, CancellationToken token = default)
     {
         if (selections.Count is < 1 or > MaximumSelections) throw Bad("A stroke takes between one and 4,096 polygons.");
-        string folder = PaintableFolder(workspace, build.Mission, token);
+        var context = Prepare(workspace, build, selections, token, MaximumStrokeOccurrences, scanMissions: false);
+        string folder = Folder(context.Path);
         foreach (var selection in selections)
         {
             token.ThrowIfCancellationRequested();
             if (selection.Polygon == null) throw Bad("Polygon zones are painted on polygons; name a polygon of each target.");
             if (PolygonZoneRefusal(build, folder, selection.SceneNode) is { } refusal) throw Bad(refusal);
         }
-        var context = Prepare(workspace, build, selections, token, MaximumStrokeOccurrences);
-        if (context.Missions.Count > 1)
-            throw Bad($"These polygons are also used by {string.Join(", ", context.Missions.Where(m => !m.Equals(build.Mission, StringComparison.OrdinalIgnoreCase)).Take(8))}; only models no other mission uses take polygon zones.");
+        // The map's own folder belongs to its mission: another mission's scripts loading a model from it would see these
+        // edits too. A mission that loads one refuses the stroke.
+        if (ForeignLoads(workspace, context.Sources, build, folder, token) is { } shared)
+            throw Bad($"{shared.Mission} also loads {JsonData.ShownText(shared.Root, 160)} from this map's folder; polygon zones are painted only on models no other mission loads.");
         int changed = 0, unchanged = 0;
         List<SourceZoneSelection> full = [];
         HashSet<SourceZoneTarget> counted = [];
@@ -138,6 +140,29 @@ public static partial class SourceZoneEdits
         string polygons = changed == 1 ? "1 polygon" : $"{changed:N0} polygons";
         return new(erase ? $"Erase {name} from {polygons}" : $"Paint {name} on {polygons}",
             changed == 0 ? [] : context.Sources.Changes(), changed, unchanged, full);
+    }
+
+    private static readonly Dictionary<string, (string Mission, string Root)?> foreignLoads = [];
+    /// <summary>
+    /// The first load of a model from <paramref name="folder"/> by another mission's scripts (traced; no model is read).
+    /// Every mission script is an input of a world's build, so a result holds while the build's recorded scripts are the same.
+    /// </summary>
+    private static (string Mission, string Root)? ForeignLoads(SourceWorkspace workspace, SourceEmbeddedZones sources, SourceSceneState build, string folder, CancellationToken token)
+    {
+        var scripts = build.ReadHashes.Where(p => p.Key.StartsWith(SourceProject.GameGenFolder + "/", StringComparison.OrdinalIgnoreCase))
+            .OrderBy(p => p.Key, StringComparer.OrdinalIgnoreCase).Select(p => p.Key + "=" + p.Value).ToArray();
+        string? key = scripts.Length == 0 ? null : build.Mission + "|" + folder + "|" + string.Join("|", scripts);
+        lock (foreignLoads) if (key != null && foreignLoads.TryGetValue(key, out var known)) return known;
+        (string Mission, string Root)? found = null;
+        foreach (string other in Missions(workspace, token))
+        {
+            token.ThrowIfCancellationRequested();
+            if (other.Equals(build.Mission, StringComparison.OrdinalIgnoreCase)) continue;
+            if (sources.TraceMission(other).Roots.FirstOrDefault(root => Folder(SourceWorkspace.Normalize(root)).Equals(folder, StringComparison.OrdinalIgnoreCase)) is { } root)
+            { found = (other, root); break; }
+        }
+        if (key != null) lock (foreignLoads) { if (foreignLoads.Count >= 8) foreignLoads.Clear(); foreignLoads[key] = found; }
+        return found;
     }
 
     private static string Folder(string path)

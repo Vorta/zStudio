@@ -56,6 +56,7 @@ internal sealed class ZonePicker : Border
         query.Text = ""; highlighted = -1; Rebuild();
         Dispatcher.BeginInvoke(() => { query.Focus(); Keyboard.Focus(query); }, System.Windows.Threading.DispatcherPriority.Input);
     }
+    internal bool IsRenaming => renaming != null;
     /// <summary>Saves a label being renamed (a deliberate boundary: the picker closes).</summary>
     internal void Commit() { if (renaming is { Tag: byte zone } box) { renaming = null; _ = rename(zone, box.Text.Trim()); } }
 
@@ -81,6 +82,7 @@ internal sealed class ZonePicker : Border
         string text = query.Text.Trim(); valid = true;
         if (text.Length == 0) return null;
         if (text.Equals("any", StringComparison.OrdinalIgnoreCase)) return 255;
+        if (text.StartsWith("zone ", StringComparison.OrdinalIgnoreCase)) text = text[5..].Trim();
         if (int.TryParse(text, NumberStyles.None, CultureInfo.InvariantCulture, out int number)) { valid = number <= 254; return valid ? (byte)number : null; }
         var matches = labels.Where(l => l.Key != 255 && l.Value.Contains(text, StringComparison.CurrentCultureIgnoreCase)).Select(l => l.Key).Take(2).ToArray();
         valid = matches.Length > 0;
@@ -90,6 +92,7 @@ internal sealed class ZonePicker : Border
     {
         string text = query.Text.Trim();
         if (text.Length == 0) return true;
+        if (text.StartsWith("zone ", StringComparison.OrdinalIgnoreCase) && int.TryParse(text[5..].Trim(), NumberStyles.None, CultureInfo.InvariantCulture, out _)) text = text[5..].Trim();
         if (int.TryParse(text, NumberStyles.None, CultureInfo.InvariantCulture, out _)) return zone != 255 && zone.ToString(CultureInfo.InvariantCulture).StartsWith(text, StringComparison.Ordinal);
         return ZoneName(zone).Contains(text, StringComparison.OrdinalIgnoreCase) || labels.TryGetValue(zone, out var label) && label.Contains(text, StringComparison.CurrentCultureIgnoreCase)
             || zone == 255 && "any".StartsWith(text, StringComparison.OrdinalIgnoreCase);

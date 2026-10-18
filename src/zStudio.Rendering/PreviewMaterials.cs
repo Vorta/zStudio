@@ -87,6 +87,13 @@ internal static class PreviewMaterials
         target.Overlay = core.Overlay; target.PolygonZones = core.PolygonZones; target.Emphasis = core.Emphasis; target.Fade = core.Fade;
         return copy;
     }
+    /// <summary>Gives a copy made by <see cref="Copy"/> its source's current appearance again, keeping the copy's fade.</summary>
+    internal static void CopyTo(DiffuseMaterial material, DiffuseMaterial copy)
+    {
+        var (core, target) = (OverlayMaterial(material), OverlayMaterial(copy));
+        copy.DiffuseColor = material.DiffuseColor; copy.DiffuseMap = material.DiffuseMap; copy.EnableUnLit = material.EnableUnLit; copy.VertexColorBlendingFactor = material.VertexColorBlendingFactor;
+        target.Overlay = core.Overlay; target.PolygonZones = core.PolygonZones; target.Emphasis = core.Emphasis;
+    }
     internal enum ZoneEmphasis { None = 0, Emphasis = 1, Preview = 2 }
     private sealed class PreviewMaterialCore(bool horizon, bool vertexTint, OrientationState? orientation) : DiffuseMaterialCore
     {

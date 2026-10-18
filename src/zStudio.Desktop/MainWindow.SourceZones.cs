@@ -28,7 +28,7 @@ public partial class MainWindow
         internal bool Erase { get; set; }
         internal WorldHighlightMode RestoreHighlight { get; set; }
         internal long HighlightGeneration { get; set; }
-        internal (SourceSceneState Build, string Master)? Master { get; set; }
+        internal (SourceSceneState Build, string Scripts, string Master)? Master { get; set; }
         internal (SourceSceneState Build, Dictionary<string, int[]> Sites)? Sites { get; set; }
         internal (object Snapshot, IReadOnlyList<ZonePickerEntry> Zones)? Used { get; set; }
         internal (string Key, IReadOnlyDictionary<byte, string> Labels)? Labels { get; set; }
@@ -36,9 +36,14 @@ public partial class MainWindow
         internal bool SkippedShown { get; set; }
         internal (int Changed, int Full)? Stroke { get; set; }
         internal bool Applying { get; set; }
+        /// <summary>What the last applied stroke did (its undo label and counts), or why it was refused.</summary>
+        internal (string Label, int Changed, int Full)? LastResult { get; set; }
         internal (string Text, bool Success)? Flash { get; set; }
     }
     private readonly ZoneToolState zoneTool = new();
+    /// <summary>Released strokes waiting to apply, in order; painting goes on meanwhile (each keeps its preview until applied).</summary>
+    private readonly Queue<(SceneViewport Viewport, ZonePaintStroke Stroke)> zoneStrokes = new();
+    private const int MaximumQueuedStrokes = 8;
     private ZonePicker? zonePicker;
     private readonly System.Windows.Threading.DispatcherTimer zoneFlashTimer = new() { Interval = TimeSpan.FromSeconds(2.6) };
     private bool synchronizingZoneTool;
@@ -46,6 +51,8 @@ public partial class MainWindow
     private bool ZoneToolEngaged => zoneTool.Session != null;
 
     private static string ZoneName(byte zone) => zone == 255 ? "Any" : "Zone " + zone.ToString(CultureInfo.InvariantCulture);
+    /// <summary>A zone inside a sentence ("Painted zone 1 on …", "Painted Any on …").</summary>
+    private static string ZoneWord(byte zone) => zone == 255 ? "Any" : "zone " + zone.ToString(CultureInfo.InvariantCulture);
     private static void RequireCurrentZoneSources(DocumentModel document, CancellationToken token = default, bool verifyContent = true)
     {
         if (document.SourceInputsChanged(token, verifyContent))
@@ -58,11 +65,15 @@ public partial class MainWindow
     private string ZoneMaster(SourceWorldSession session, SourceSceneState build)
     {
         if (zoneTool.Master is { } known && ReferenceEquals(known.Build, build)) return known.Master;
+        // The master comes from the scripts alone: a stroke, which changes models, keeps it.
+        string scripts = string.Join("|", build.ReadHashes.Where(p => p.Key.StartsWith(SourceProject.GameGenFolder + "/", StringComparison.OrdinalIgnoreCase))
+            .OrderBy(p => p.Key, StringComparer.OrdinalIgnoreCase).Select(p => p.Key + "=" + p.Value));
+        if (zoneTool.Master is { } same && same.Scripts == scripts && scripts.Length > 0) { zoneTool.Master = (build, scripts, same.Master); return same.Master; }
         string master;
         try { master = SourceZoneEdits.MasterPath(session.Workspace, session.Mission); }
         catch (Exception ex) when (ex is InvalidDataException or IOException or UnauthorizedAccessException)
         { throw new StudioCommandException("invalid_argument", "The map's master model could not be read: " + ex.Message); }
-        zoneTool.Master = (build, master);
+        zoneTool.Master = (build, scripts, master);
         return master;
     }
     private string ZoneFolder(SourceWorldSession session, SourceSceneState build) => SourceZoneEdits.FolderOf(ZoneMaster(session, build));
@@ -150,6 +161,8 @@ public partial class MainWindow
         bool engaged = zoneTool.Session == session && viewport.ZonePaintActive;
         if (!engaged)
         {
+            // A stroke rebuilds the world: unfinished input (the object card's changes, Properties fields) is decided first.
+            RequireNoDrafts(document);
             if (viewport.IsPickupDragging || viewport.IsTerrainStroking || viewport.IsAiPathPointerTransform || viewport.IsParachutePointerMoving)
                 throw new StudioCommandException("busy", "Finish the current drag first.");
             if (viewport.AiPathEditingNetwork != null || viewport.HasParachutePreview)
@@ -190,9 +203,11 @@ public partial class MainWindow
     private void LeaveZoneTool()
     {
         if (zoneTool.Session == null) return;
-        zoneTool.Session = null;
+        // Closing the picker saves a label being renamed, while the tool still knows its world.
         ZonePickerPopup.IsOpen = false;
+        zoneTool.Session = null;
         if (scene?.ZoneBrush != null) scene.SetZoneBrush(null);
+        zoneTool.Master = null; zoneTool.Sites = null; zoneTool.Used = null;
         if (worldHighlightGeneration == zoneTool.HighlightGeneration && worldHighlightMode != zoneTool.RestoreHighlight) SetWorldHighlightMode(zoneTool.RestoreHighlight);
         ClearZoneNotices(); zoneTool.LastStroke = null; zoneTool.Stroke = null; zoneTool.Flash = null;
         CurrentInspectionCard?.SetSurfaceDetail(null);
@@ -203,6 +218,7 @@ public partial class MainWindow
     {
         if (zoneTool.Session is not { } session) return;
         if (scene is not { } viewport || shownDocument?.SourceWorld != session || shownAsset?.Kind != AssetKind.World) { LeaveZoneTool(); return; }
+        if (!viewport.IsZonePainting) zoneTool.Stroke = null;
         if (viewport.ZoneBrush == null)
         {
             viewport.PaintZone = zoneTool.Zone; viewport.PaintErase = zoneTool.Erase;
@@ -248,7 +264,20 @@ public partial class MainWindow
     private void RunZoneTool(Action action)
     {
         try { action(); }
-        catch (StudioCommandException ex) { Notice(ex.Message); RefreshZoneToolChrome(); }
+        catch (StudioCommandException ex) { ShowZoneRefusal(ex.Message); RefreshZoneToolChrome(); }
+    }
+    private System.Windows.Controls.ToolTip? zoneRefusal;
+    /// <summary>Why the tool did not engage, briefly by its toggle (an edit that did not happen is no problem to list).</summary>
+    private void ShowZoneRefusal(string message)
+    {
+        if (zoneRefusal != null) zoneRefusal.IsOpen = false;
+        var target = SourcePaintGroup.IsVisible ? (UIElement)PolygonZoneToolButton : PreviewHost;
+        zoneRefusal = new() { Content = message, PlacementTarget = target, Placement = PlacementMode.Bottom, StaysOpen = false, IsOpen = true };
+        var tip = zoneRefusal;
+        System.Windows.Threading.DispatcherTimer timer = new() { Interval = TimeSpan.FromSeconds(3) };
+        timer.Tick += (_, _) => { timer.Stop(); tip.IsOpen = false; };
+        timer.Start();
+        ViewModel.Status = message;
     }
     private void ChooseZone(byte zone)
     {
@@ -261,18 +290,23 @@ public partial class MainWindow
         if (zoneTool.Session is not { } session) return;
         var zones = UsedZones(session).Select(z => z.Zone).OrderBy(z => z == 255 ? 256 : z).ToList();
         if (zones.Count == 0) return;
+        int Order(byte zone) => zone == 255 ? 256 : zone;
         int at = zones.IndexOf(zoneTool.Zone);
-        int next = at < 0 ? (step > 0 ? 0 : zones.Count - 1) : ((at + step) % zones.Count + zones.Count) % zones.Count;
+        int next = at >= 0 ? ((at + step) % zones.Count + zones.Count) % zones.Count
+            : step > 0 ? Math.Max(0, zones.FindIndex(z => Order(z) > Order(zoneTool.Zone))) : zones.FindLastIndex(z => Order(z) < Order(zoneTool.Zone)) is int below and >= 0 ? below : zones.Count - 1;
         ChooseZone(zones[next]);
     }
+    private DateTime zonePickerClosed;
     private void ZonePickerClick(object sender, RoutedEventArgs e)
     {
         if (zoneTool.Session is not { } session) return;
+        // The press that closed the open picker (it closes when clicked outside) is this same click: it stays closed.
+        if ((DateTime.UtcNow - zonePickerClosed).TotalMilliseconds < 300) return;
         if (zonePicker == null)
         {
             zonePicker = new(ChooseZone, RenameZoneAsync, () => ZonePickerPopup.IsOpen = false);
             ZonePickerPopup.Child = zonePicker;
-            ZonePickerPopup.Closed += (_, _) => zonePicker.Commit();
+            ZonePickerPopup.Closed += (_, _) => { zonePickerClosed = DateTime.UtcNow; zonePicker.Commit(); };
         }
         zonePicker.Open(UsedZones(session), ZoneLabels(session), zoneTool.Zone);
         ZonePickerPopup.IsOpen = true;
@@ -282,8 +316,10 @@ public partial class MainWindow
         if (zoneTool.Session is not { Owner: { } document } session) return;
         if (label == (ZoneLabels(session).GetValueOrDefault(zone) ?? "")) return;
         try { await NameZoneAsync(document, zone, label, CancellationToken.None); }
-        catch (Exception ex) when (ex is StudioCommandException or InvalidDataException) { Report(ex); }
-        if (ZonePickerPopup.IsOpen && zoneTool.Session is { } current) zonePicker?.Open(UsedZones(current), ZoneLabels(current), zoneTool.Zone);
+        catch (Exception ex) when (ex is not (OutOfMemoryException or StackOverflowException or OperationCanceledException)) { Report(ex); }
+        catch (OperationCanceledException) { }
+        // The picker shows the new label, unless another rename began meanwhile.
+        if (ZonePickerPopup.IsOpen && zonePicker is { IsRenaming: false } && zoneTool.Session is { } current) zonePicker.Open(UsedZones(current), ZoneLabels(current), zoneTool.Zone);
         RefreshZoneToolChrome();
     }
     /// <summary>Shift+click: a polygon's only zone is chosen; with several, a menu at the pointer offers them.</summary>
@@ -352,7 +388,7 @@ public partial class MainWindow
         ZoneToolNotices.Visibility = shown ? Visibility.Visible : Visibility.Collapsed;
         if (!shown) return;
         bool ctrl = (System.Windows.Input.Keyboard.Modifiers & ModifierKeys.Control) != 0;
-        bool erase = zoneTool.Erase ^ (ctrl && zoneTool.Stroke == null);
+        bool erase = zoneTool.Stroke != null ? scene?.ZoneStrokeErase == true : zoneTool.Erase ^ ctrl;
         ZoneBannerIcon.Kind = erase ? "Eraser" : "Brush";
         var content = ZoneBannerContent.Children; content.Clear();
         content.Add(BannerText(zoneTool.Stroke != null ? (erase ? "Erasing" : "Painting") : erase ? "Erase" : "Paint", bold: true));
@@ -393,10 +429,18 @@ public partial class MainWindow
     }
     private void ZoneFlashEnded(object? sender, EventArgs e) { zoneFlashTimer.Stop(); zoneTool.Flash = null; RefreshZoneBanner(); }
 
+    private Button? zoneSkipButton;
     private void ClearZoneNotices()
     {
-        ZoneToolNotices.Children.Clear();
+        ZoneToolNotices.Children.Clear(); zoneSkipButton = null;
         if (zoneTool.SkippedShown) { zoneTool.SkippedShown = false; scene?.ShowZoneSkipped([]); }
+    }
+    /// <summary>Outlines (or no longer) the full polygons the last stroke skipped; the notice's button follows.</summary>
+    private void ShowZoneSkipped(bool shown)
+    {
+        zoneTool.SkippedShown = shown && zoneTool.LastStroke != null;
+        scene?.ShowZoneSkipped(zoneTool.SkippedShown ? zoneTool.LastStroke!.FullTargets : []);
+        if (zoneSkipButton != null) zoneSkipButton.Content = zoneTool.SkippedShown ? "Hide" : "Show";
     }
     /// <summary>After a stroke: the full polygons it skipped (with Show), editable terrain it crossed, and its limit.</summary>
     private void ShowZoneNotices(ZonePaintStroke stroke)
@@ -406,12 +450,8 @@ public partial class MainWindow
         {
             Button show = new() { Content = "Show", Height = 26, Padding = new(10, 0, 10, 0), Margin = new(8, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center };
             System.Windows.Automation.AutomationProperties.SetName(show, "Show the polygons that were left as they are");
-            show.Click += (_, _) =>
-            {
-                zoneTool.SkippedShown = !zoneTool.SkippedShown;
-                scene?.ShowZoneSkipped(zoneTool.SkippedShown ? stroke.FullTargets : []);
-                show.Content = zoneTool.SkippedShown ? "Hide" : "Show";
-            };
+            zoneSkipButton = show;
+            show.Click += (_, _) => ShowZoneSkipped(!zoneTool.SkippedShown);
             AddZoneNotice("Warning", "#FCE100", stroke.Full == 1 ? "1 polygon already has three zones and was left as it is." : $"{stroke.Full:N0} polygons already have three zones and were left as they are.", show);
         }
         if (stroke.CrossedBlocked)
@@ -460,11 +500,18 @@ public partial class MainWindow
     private bool ZoneToolKey(KeyEventArgs e)
     {
         var key = e.Key == Key.System ? e.SystemKey : e.Key;
-        if (key is Key.LeftCtrl or Key.RightCtrl or Key.LeftShift or Key.RightShift) { if (ZoneToolEngaged) { scene?.RefreshZoneTool(); RefreshZoneBanner(); } return false; }
-        if (ZonePickerPopup.IsOpen) return false;
-        bool typing = false;
+        if (key is Key.LeftCtrl or Key.RightCtrl or Key.LeftShift or Key.RightShift)
+        { if (ZoneToolEngaged && !e.IsRepeat) { scene?.RefreshZoneTool(); RefreshZoneBanner(); } return false; }
+        // The zone picker handles its own keys (Escape closes it or ends a rename); nothing else here takes them.
+        if (ZonePickerPopup.IsOpen) return true;
+        bool typing = false; DependencyObject? root = null;
         for (var source = e.OriginalSource as DependencyObject; source != null && !typing; source = source is Visual ? VisualTreeHelper.GetParent(source) : LogicalTreeHelper.GetParent(source))
+        {
             typing = source is System.Windows.Controls.Primitives.TextBoxBase or PasswordBox or ComboBox { IsEditable: true } or MenuItem;
+            root = source;
+        }
+        // Keys in another window or a popup (an open drop-down, a menu) belong to it.
+        if (!typing && root != this) typing = true;
         if (key == Key.Escape && ZoneToolEngaged)
         {
             if (scene?.CancelZoneGesture() == true) { ZoneFlash("Stroke cancelled", false); e.Handled = true; return true; }
@@ -480,34 +527,54 @@ public partial class MainWindow
     }
     private void ZoneToolKeyUp(object sender, KeyEventArgs e)
     {
-        if (ZoneToolEngaged && e.Key is Key.LeftCtrl or Key.RightCtrl or Key.LeftShift or Key.RightShift) { scene?.RefreshZoneTool(); RefreshZoneBanner(); }
+        if (ZoneToolEngaged && e.Key is Key.LeftCtrl or Key.RightCtrl or Key.LeftShift or Key.RightShift && !e.IsRepeat) { scene?.RefreshZoneTool(); RefreshZoneBanner(); }
     }
 
     // ---------------------------------------------------------------- strokes
 
-    /// <summary>A released stroke applies as one undoable change; the view waits until it is published.</summary>
+    /// <summary>
+    /// A released stroke applies as one undoable change. Strokes queue while earlier ones apply, so painting goes on; each
+    /// keeps its preview until its edit is published (or refused). A long queue makes the view wait.
+    /// </summary>
     private async void ZoneStrokeFinished(SceneViewport viewport, ZonePaintStroke stroke)
     {
-        if (!ReferenceEquals(viewport, scene) || zoneTool.Session is not { Owner: { SourceBuild: { } build } document })
-        { viewport.ResolveZoneStroke(stroke.Id); return; }
+        if (!ReferenceEquals(viewport, scene) || zoneTool.Session == null) { viewport.ResolveZoneStroke(stroke.Id); return; }
         zoneTool.LastStroke = stroke; zoneTool.Stroke = null;
         ShowZoneNotices(stroke);
         if (stroke.Changed == 0) { viewport.ResolveZoneStroke(stroke.Id); ZoneFlash("Nothing changed", false); return; }
-        viewport.ZonePaintWaiting = true; zoneTool.Applying = true; RefreshZoneBanner(); UpdateDocumentCommands();
+        zoneStrokes.Enqueue((viewport, stroke));
+        viewport.ZonePaintWaiting = zoneStrokes.Count >= MaximumQueuedStrokes;
+        if (zoneTool.Applying) { RefreshZoneBanner(); return; }
+        zoneTool.Applying = true; RefreshZoneBanner(); UpdateDocumentCommands();
         try
         {
-            SourceZoneSelection[] selections;
-            try { selections = [.. stroke.Targets.Select(t => SourceZoneEdits.FromCompiled(build, t.Node, t.Polygon))]; }
-            catch (InvalidDataException ex) { throw new StudioCommandException("invalid_argument", ex.Message); }
-            var (_, plan) = await ApplyPolygonZonesAsync(document, selections, stroke.Zone, stroke.Erase, CancellationToken.None);
-            string polygons = plan.Changed == 1 ? "1 polygon" : $"{plan.Changed:N0} polygons";
-            ZoneFlash(plan.Changed == 0 ? "Nothing changed" : stroke.Erase ? $"Erased {ZoneName(stroke.Zone)} from {polygons}" : $"Painted {ZoneName(stroke.Zone)} on {polygons}", plan.Changed > 0);
+            while (zoneStrokes.TryDequeue(out var queued))
+            {
+                var (shown, applying) = queued;
+                try
+                {
+                    // A stroke made in a world that is no longer the tool's (closed, replaced by another map) is dropped.
+                    if (zoneTool.Session is not { Owner: { SourceBuild: { } build } document } || !ReferenceEquals(shown, scene)) continue;
+                    SourceZoneSelection[] selections;
+                    try { selections = [.. applying.Targets.Select(t => SourceZoneEdits.FromCompiled(build, t.Node, t.Polygon))]; }
+                    catch (InvalidDataException ex) { throw new StudioCommandException("invalid_argument", ex.Message); }
+                    var (_, plan) = await ApplyPolygonZonesAsync(document, selections, applying.Zone, applying.Erase, CancellationToken.None);
+                    string polygons = plan.Changed == 1 ? "1 polygon" : $"{plan.Changed:N0} polygons";
+                    zoneTool.LastResult = (plan.Label, plan.Changed, plan.Full.Count);
+                    if (zoneStrokes.Count == 0)
+                        ZoneFlash(plan.Changed == 0 ? "Nothing changed" : applying.Erase ? $"Erased {ZoneWord(applying.Zone)} from {polygons}" : $"Painted {ZoneWord(applying.Zone)} on {polygons}", plan.Changed > 0);
+                }
+                catch (Exception ex) when (ex is StudioCommandException or InvalidDataException or OperationCanceledException)
+                {
+                    zoneTool.LastResult = (ex.Message, 0, 0);
+                    if (ex is not OperationCanceledException) Report(ex);
+                }
+                finally { shown.ResolveZoneStroke(applying.Id); shown.ZonePaintWaiting = zoneStrokes.Count >= MaximumQueuedStrokes; }
+            }
         }
-        catch (Exception ex) when (ex is StudioCommandException or InvalidDataException or OperationCanceledException)
-        { if (ex is not OperationCanceledException) Report(ex); }
         finally
         {
-            zoneTool.Applying = false; viewport.ZonePaintWaiting = false; viewport.ResolveZoneStroke(stroke.Id);
+            zoneTool.Applying = false;
             UpdateDocumentCommands(); RefreshZoneToolChrome(); RefreshZoneReadout();
         }
     }
@@ -527,7 +594,7 @@ public partial class MainWindow
                 planned = SourceZoneEdits.PlanPolygonZones(workspace, build, selections, zone, erase, ct);
                 if (planned.Changes.Count == 0) throw new StudioCommandException("unchanged", "Nothing changed.");
                 return workspace.Apply(planned.Label, planned.Changes.Select(c => (c.Relative, (byte[]?)c.Content)), ct);
-            }, token, quiet: true);
+            }, token, zoneEdit: true);
             return (next, planned!);
         }
         catch (StudioCommandException ex) when (ex.Code == "unchanged" && planned != null)
@@ -539,12 +606,14 @@ public partial class MainWindow
     private async Task<DocumentModel> NameZoneAsync(DocumentModel document, byte id, string label, CancellationToken token)
     {
         RequireNoDrafts(document, committing: true);
-        string mission = SourceWorldOf(document).Mission;
+        var session = SourceWorldOf(document); string mission = session.Mission;
+        // The label it already has changes nothing (and adds no undo step).
+        if ((ZoneLabels(session).GetValueOrDefault(id) ?? "") == label) return document;
         return await PrepareSourceWorldEditAsync(document, "Naming map zone", (workspace, ct) =>
         {
             var plan = SourceZoneEdits.PlanLabel(workspace, mission, id, label, ct);
             return workspace.Apply(plan.Label, plan.Changes.Select(change => (change.Relative, (byte[]?)change.Content)), ct);
-        }, token, quiet: true);
+        }, token, zoneEdit: true);
     }
 
     // ---------------------------------------------------------------- MCP
@@ -563,7 +632,8 @@ public partial class MainWindow
         {
             ["engaged"] = session != null && zoneTool.Session == session, ["mode"] = zoneTool.Erase ? "erase" : "paint", ["zone"] = zoneTool.Zone,
             ["label"] = session != null && zoneTool.Zone != 255 ? ZoneLabels(session).GetValueOrDefault(zoneTool.Zone) : zoneTool.Zone == 255 ? "Any" : null,
-            ["stroking"] = scene?.IsZonePainting == true, ["applying"] = zoneTool.Applying, ["skippedShown"] = zoneTool.SkippedShown,
+            ["stroking"] = scene?.IsZonePainting == true, ["applying"] = zoneTool.Applying, ["queuedStrokes"] = zoneStrokes.Count, ["skippedShown"] = zoneTool.SkippedShown,
+            ["lastApplied"] = zoneTool.LastResult is { } applied ? new JsonObject { ["label"] = applied.Label, ["changed"] = applied.Changed, ["full"] = applied.Full } : null,
             ["lastStroke"] = stroke == null ? null : new JsonObject
             {
                 ["zone"] = stroke.Zone, ["mode"] = stroke.Erase ? "erase" : "paint", ["changed"] = stroke.Changed, ["unchanged"] = stroke.Unchanged, ["full"] = stroke.Full,
@@ -629,9 +699,8 @@ public partial class MainWindow
                         if (scene?.IsZonePainting == true) throw new StudioCommandException("busy", "A stroke is in progress in the view.");
                         LeaveZoneTool(); break;
                     case "showSkipped" or "hideSkipped":
-                        if (!ZoneToolEngaged || zoneTool.LastStroke is not { } stroke) throw new StudioCommandException("not_ready", "No stroke of the engaged tool skipped polygons.");
-                        zoneTool.SkippedShown = Text(args, "action") == "showSkipped";
-                        scene?.ShowZoneSkipped(zoneTool.SkippedShown ? stroke.FullTargets : []);
+                        if (!ZoneToolEngaged || zoneTool.LastStroke is not { Full: > 0 }) throw new StudioCommandException("not_ready", "No stroke of the engaged tool skipped polygons.");
+                        ShowZoneSkipped(Text(args, "action") == "showSkipped");
                         break;
                 }
                 return Result(ZoneToolJson(document));

@@ -199,7 +199,21 @@ internal sealed class SourceEmbeddedZones
 
     internal Mission ReadMission(string mission, bool includeEntries = true)
     {
+        var (master, roots) = TraceMission(mission);
+        List<Entry> entries = [];
+        if (includeEntries) foreach (var root in roots) entries.AddRange(Closure(root));
+        return new(master, entries, Labels(File(master).Root));
+    }
+
+    private readonly Dictionary<string, (string Master, IReadOnlyList<string> Roots)> traced = new(StringComparer.OrdinalIgnoreCase);
+    /// <summary>
+    /// The mission's master world model (the load after GameGenSetWorld) and every model its scripts load, from the scripts
+    /// alone: no model file is read.
+    /// </summary>
+    internal (string Master, IReadOnlyList<string> Roots) TraceMission(string mission)
+    {
         if (!SourceProject.MissionName().IsMatch(mission)) throw Bad("The mission name is invalid.");
+        if (traced.TryGetValue(mission, out var known)) return known;
         List<string> roots = []; HashSet<string> seenRoots = new(StringComparer.OrdinalIgnoreCase);
         string? master = null; bool database = false;
         ScriptTrace.Visit(Script, mission + ".gs", step =>
@@ -213,9 +227,7 @@ internal sealed class SourceEmbeddedZones
             if (seenRoots.Add(path)) roots.Add(path);
         }, token, budget: traceBudget);
         if (master == null) throw Bad("The mission script does not identify a master world model.");
-        List<Entry> entries = [];
-        if (includeEntries) foreach (var root in roots) entries.AddRange(Closure(root));
-        return new(master, entries, Labels(File(master).Root));
+        return traced[mission] = (master, roots);
         IReadOnlyList<IReadOnlyList<string>>? Script(string name)
         {
             string path = "gamegen/" + name.Replace('\\', '/');

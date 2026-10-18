@@ -476,6 +476,7 @@ public sealed partial class SceneViewport : UserControl, IDisposable
             material.DiffuseMap = enabled ? texture : null;
             material.EnableUnLit = enabled;
         }
+        SyncZoneGhosts();
     }
     private bool boundsEnabled;
     public void SetBounds(bool enabled) { boundsEnabled = enabled; RefreshBoundsBoxes(); }
@@ -533,7 +534,7 @@ public sealed partial class SceneViewport : UserControl, IDisposable
         foreach (var mesh in meshes) { var shown = placements[mesh].Where(IsShownPlacement).ToArray(); visiblePlacements[mesh] = shown; mesh.Instances = shown.Select(p => p.Transform).ToList(); mesh.Visibility = shown.Length == 0 ? Visibility.Collapsed : Visibility.Visible; }
         RefreshBoundsBoxes();
         // The camera stays where it is; Frame all is a separate, explicit command. The horizon follows it again next frame.
-        RecalculateSceneBounds(); RefreshPickupSelection();
+        RecalculateSceneBounds(); RefreshPickupSelection(); RefreshZoneVisibility();
         cameraPoseDirty = true; viewport.InvalidateRender();
     }
     private void RecalculateSceneBounds()

@@ -49,7 +49,8 @@ public sealed partial class SceneViewport
     private PolygonZoneBrush? zoneBrush;
     private bool zonePaintActive;
     private Dictionary<(string Site, int Source), ZoneTouch>? zoneStroke;
-    private bool zoneStrokeErase, zoneStrokeBlocked;
+    private bool zoneStrokeErase, zoneStrokeBlocked, zoneStrokeLimited;
+    private int zoneStrokeChanged, zoneStrokeFull;
     private Point? zoneStrokePoint;
     private long zoneStrokeSerial;
     private readonly Dictionary<(string Site, int Source), (long Stroke, ZoneTouch Touch)> zonePending = [];
@@ -65,10 +66,10 @@ public sealed partial class SceneViewport
     private DateTime zoneHoverTick;
 
     /// <summary>The zone the tool paints or erases.</summary>
-    public byte PaintZone { get => paintZone; set { paintZone = value; RefreshZoneTool(); } }
+    public byte PaintZone { get => paintZone; set { if (paintZone == value) return; paintZone = value; RefreshZoneTool(); } }
     private byte paintZone;
     /// <summary>Erase instead of paint (Ctrl held inverts it for a stroke).</summary>
-    public bool PaintErase { get => paintErase; set { paintErase = value; RefreshZoneTool(); } }
+    public bool PaintErase { get => paintErase; set { if (paintErase == value) return; paintErase = value; RefreshZoneTool(); } }
     private bool paintErase;
     public PolygonZoneBrush? ZoneBrush => zoneBrush;
     /// <summary>The polygon a click would paint, or null (none under the pointer, or a stroke in progress).</summary>
@@ -93,6 +94,8 @@ public sealed partial class SceneViewport
         }
     }
     public bool IsZonePainting => zoneStroke != null;
+    /// <summary>Whether the stroke in progress erases (its mode is fixed when it starts, Ctrl included).</summary>
+    public bool ZoneStrokeErase => zoneStroke != null && zoneStrokeErase;
     private bool zonePaintWaiting;
     /// <summary>While the owner applies the last stroke, clicks start no new stroke and select nothing.</summary>
     public bool ZonePaintWaiting { get => zonePaintWaiting; set { zonePaintWaiting = value; RefreshZoneCursor(); } }
@@ -109,9 +112,11 @@ public sealed partial class SceneViewport
     {
         if (brush == null) { ZonePaintActive = false; zoneBrush = null; ResetZoneIdentities(); return; }
         if (zonePaintActive) ClearZoneToolPresentation();
+        var previous = zoneBrush;
         zoneBrush = brush; ResetZoneIdentities();
-        if (zonePaintActive) { ShowZoneGhosts(); ApplyZoneEmphasis(); }
-        ZonePaintActive = true;
+        if (zonePaintActive) { ShowZoneGhosts(); ApplyZoneEmphasis(); return; }
+        try { ZonePaintActive = true; }
+        catch { zoneBrush = previous; throw; }
     }
 
     private bool ZoneErase => paintErase ^ (Keyboard.Modifiers & ModifierKeys.Control) != 0;
@@ -139,7 +144,7 @@ public sealed partial class SceneViewport
         viewport.Focus();
         if (zonePaintWaiting) return true;
         if ((Keyboard.Modifiers & ModifierKeys.Shift) != 0) { ZonePickRequested?.Invoke(ProbeZone(point, out _)); return true; }
-        zoneStroke = []; zoneStrokeErase = ZoneErase; zoneStrokeBlocked = false; zonePresentationSuspended = false;
+        zoneStroke = []; zoneStrokeErase = ZoneErase; zoneStrokeBlocked = zoneStrokeLimited = false; zoneStrokeChanged = zoneStrokeFull = 0; zonePresentationSuspended = false;
         zoneStrokePoint = point; ZoneHover = null; ZoneHoverChanged?.Invoke();
         TouchZone(point); viewport.CaptureMouse(); RefreshZoneCursor(); return true;
     }
@@ -163,7 +168,7 @@ public sealed partial class SceneViewport
         var stroke = new ZonePaintStroke(id, paintZone, zoneStrokeErase, touches.Select(t => new ZonePaintTarget(t.Node, t.Polygon)).ToArray(),
             touches.Count(t => t.Outcome == PolygonZoneOutcome.Changed), touches.Count(t => t.Outcome == PolygonZoneOutcome.Unchanged),
             touches.Count(t => t.Outcome == PolygonZoneOutcome.Full), touches.Where(t => t.Outcome == PolygonZoneOutcome.Full).Select(t => new ZonePaintTarget(t.Node, t.Polygon)).ToArray(),
-            zoneStrokeBlocked, touches.Length >= MaximumZonePaintTargets);
+            zoneStrokeBlocked, zoneStrokeLimited);
         // The stroke's result stays shown until its owner publishes (or drops) the edit.
         foreach (var touch in touches.Where(t => t.Outcome == PolygonZoneOutcome.Changed)) zonePending[(touch.Site, touch.Source)] = (id, touch);
         zoneStroke = null; zoneStrokePoint = null; zonePresentationSuspended = false; zoneOverlayDirty = true;
@@ -191,14 +196,19 @@ public sealed partial class SceneViewport
 
     private void TouchZone(Point point)
     {
-        if (zoneStroke == null || zoneBrush == null || zoneStroke.Count >= MaximumZonePaintTargets) return;
+        if (zoneStroke == null || zoneBrush == null) return;
         var hover = ProbeZone(point, out bool blocked, zoneStrokeErase);
         if (blocked) zoneStrokeBlocked = true;
         if (hover == null || zoneBrush.Site(hover.Node) is not { } site || zoneStroke.ContainsKey((site, hover.Source))) return;
+        // A polygon past the limit is left out, and the stroke says so.
+        if (zoneStroke.Count >= MaximumZonePaintTargets) { zoneStrokeLimited = true; return; }
         var after = SourceZoneEdits.PaintedPolygonZones(hover.Zones, paintZone, zoneStrokeErase);
-        zoneStroke.Add((site, hover.Source), new(hover.Node, hover.Polygon, hover.Source, site, hover.Zones, after));
+        ZoneTouch touch = new(hover.Node, hover.Polygon, hover.Source, site, hover.Zones, after);
+        zoneStroke.Add((site, hover.Source), touch);
+        if (touch.Outcome == PolygonZoneOutcome.Changed) zoneStrokeChanged++;
+        else if (touch.Outcome == PolygonZoneOutcome.Full) zoneStrokeFull++;
         zoneOverlayDirty = true; viewport.InvalidateRender();
-        ZoneStrokeProgress?.Invoke(zoneStroke.Values.Count(t => t.Outcome == PolygonZoneOutcome.Changed), zoneStroke.Values.Count(t => t.Outcome == PolygonZoneOutcome.Full), true);
+        ZoneStrokeProgress?.Invoke(zoneStrokeChanged, zoneStrokeFull, true);
     }
 
     /// <summary>
@@ -243,11 +253,13 @@ public sealed partial class SceneViewport
         if (!force && (now - zoneHoverTick).TotalMilliseconds < 40) return;
         zoneHoverTick = now;
         var hover = ProbeZone(point, out bool blocked);
-        if (!force && hover == ZoneHover && blocked == ZoneHoverBlocked) return;
+        if (!force && blocked == ZoneHoverBlocked && SameHover(hover, ZoneHover)) return;
         ZoneHover = hover; ZoneHoverBlocked = blocked; zoneOverlayDirty = true;
         RefreshZoneCursor(); ZoneHoverChanged?.Invoke(); viewport.InvalidateRender();
     }
 
+    private static bool SameHover(ZonePaintHover? a, ZonePaintHover? b) => a == null || b == null ? a == b
+        : a.Node == b.Node && a.Polygon == b.Polygon && a.Outcome == b.Outcome && a.Zones.SequenceEqual(b.Zones);
     private void LeaveZoneHover()
     {
         zoneHoverPoint = null;
@@ -298,11 +310,11 @@ public sealed partial class SceneViewport
         Vector3Collection positions = []; IntCollection indices = []; Color4Collection colors = [];
         foreach (var touch in shown.Values)
         {
-            var color = PolygonZoneColor(new System.Text.Json.Nodes.JsonArray(touch.After!.Select(z => (System.Text.Json.Nodes.JsonNode?)(int)z).ToArray()));
+            var color = ZoneSetColor(touch.After!);
             foreach (int node in brush.SiteNodes(touch.Node).Append(touch.Node).Distinct())
                 foreach (var (model, transform) in ZoneRows(node))
                     foreach (int polygon in BuiltPolygons(node, touch.Source))
-                        if (positions.Count < 400_000) AddZoneTriangles(scene, model, polygon, transform, color, positions, indices, colors);
+                        if (positions.Count < 400_000) AddZoneTriangles(model, polygon, transform, color, positions, indices, colors);
         }
         if (positions.Count == 0) { if (zonePreviewMesh != null) { viewport.Items.Remove(zonePreviewMesh); zonePreviewMesh.Dispose(); zonePreviewMesh = null; } }
         else
@@ -332,21 +344,27 @@ public sealed partial class SceneViewport
         ShowZoneLines("others", dim, System.Windows.Media.Color.FromArgb(170, 255, 255, 255), 1);
         viewport.InvalidateRender();
     }
-    private static void AddZoneTriangles(GameScene scene, int model, int polygon, Matrix4x4 transform, Color4 color, Vector3Collection positions, IntCollection indices, Color4Collection colors)
+    /// <summary>A zone set as the polygon zone pass reads it; no zones draws the preview's "cleared" fill.</summary>
+    private static Color4 ZoneSetColor(IReadOnlyList<byte> zones) => zones.Count == 0 ? new(0, 0, 0, 0)
+        : PolygonZoneColor(new System.Text.Json.Nodes.JsonArray(zones.Select(z => (System.Text.Json.Nodes.JsonNode?)(int)z).ToArray()));
+    private readonly Dictionary<MeshPart, ILookup<int, int>> zonePartTriangles = new(ReferenceEqualityComparer.Instance);
+    /// <summary>The triangles the scene built for a polygon (its own triangulation, ear-clipped or stripped), placed by the row.</summary>
+    private void AddZoneTriangles(int model, int polygon, Matrix4x4 transform, Color4 color, Vector3Collection positions, IntCollection indices, Color4Collection colors)
     {
-        if (model < 0 || model >= scene.Models.Count || polygon < 0 || polygon >= scene.Models[model].Polygons.Length) return;
-        var built = scene.Models[model]; var face = built.Polygons[polygon];
-        int start = positions.Count, n = face.Vertices.Length;
-        foreach (int vertex in face.Vertices)
+        if (!polygonGeometries.TryGetValue(model, out var geometries)) return;
+        foreach (var geometry in geometries)
         {
-            positions.Add(vertex >= 0 && vertex < built.Vertices.Length ? Vector3.Transform(built.Vertices[vertex], transform) : Vector3.Zero);
-            colors.Add(color);
-        }
-        bool strip = (face.Flags & 1024) != 0;
-        for (int i = 0; i + 2 < n; i++)
-        {
-            if (strip) { indices.Add(start + i); indices.Add(start + i + 1); indices.Add(start + i + 2); }
-            else { indices.Add(start); indices.Add(start + i + 1); indices.Add(start + i + 2); }
+            var part = polygonSources[geometry].Part;
+            if (part.TrianglePolygons.Length * 3 != part.Indices.Length) continue;
+            if (!zonePartTriangles.TryGetValue(part, out var triangles))
+                zonePartTriangles[part] = triangles = Enumerable.Range(0, part.TrianglePolygons.Length).ToLookup(t => part.TrianglePolygons[t]);
+            foreach (int triangle in triangles[polygon])
+                for (int corner = 0; corner < 3; corner++)
+                {
+                    int vertex = part.Indices[triangle * 3 + corner];
+                    if (vertex < 0 || vertex >= part.Positions.Length) continue;
+                    indices.Add(positions.Count); positions.Add(Vector3.Transform(part.Positions[vertex], transform)); colors.Add(color);
+                }
         }
     }
     private void ShowZoneLines(string name, List<(int Node, int Source, int Model)> polygons, System.Windows.Media.Color color, double thickness)
@@ -402,14 +420,6 @@ public sealed partial class SceneViewport
         foreach (var (mesh, (material, transparent)) in zoneGhosts) { mesh.Material = material; mesh.IsTransparent = transparent; }
         zoneGhosts.Clear(); zoneGhostMaterials.Clear();
     }
-    /// <summary>A faded copy follows its material's overlay settings.</summary>
-    private void SyncZoneGhost(DiffuseMaterial material)
-    {
-        if (!zoneGhostMaterials.TryGetValue(material, out var ghost)) return;
-        var copy = PreviewMaterials.Copy(material); PreviewMaterials.SetFade(copy, ZoneFade);
-        foreach (var (mesh, saved) in zoneGhosts) if (ReferenceEquals(saved.Material, material)) mesh.Material = copy;
-        zoneGhostMaterials[material] = copy;
-    }
 
     /// <summary>While engaged, the chosen zone is drawn strongly and the others faintly (not at all with the overlay off).</summary>
     private void ApplyZoneEmphasis()
@@ -421,9 +431,9 @@ public sealed partial class SceneViewport
             if (surface.Horizon) continue;
             PreviewMaterials.SetPolygonZones(surface.Normal, overlay || zonePaintActive);
             if (zonePaintActive) PreviewMaterials.SetZoneEmphasis(surface.Normal, PreviewMaterials.ZoneEmphasis.Emphasis, paintZone, ZoneStrong, overlay ? ZoneWeak : 0);
-            else PreviewMaterials.SetZoneEmphasis(surface.Normal, PreviewMaterials.ZoneEmphasis.None);
-            SyncZoneGhost(surface.Normal);
+            else PreviewMaterials.SetZoneEmphasis(surface.Normal, PreviewMaterials.ZoneEmphasis.None, 0, 0, 0);
         }
+        SyncZoneGhosts();
         viewport.InvalidateRender();
     }
 
@@ -435,6 +445,17 @@ public sealed partial class SceneViewport
         ZoneHoverChanged?.Invoke();
     }
 
+    /// <summary>Hiding, isolating or showing objects while engaged: the outlines, preview and fading follow what the view shows.</summary>
+    private void RefreshZoneVisibility()
+    {
+        if (!zonePaintActive) return;
+        ResetZoneIdentities(); ShowZoneGhosts();
+    }
+    /// <summary>The faded copies follow a change of their materials (textures on or off).</summary>
+    private void SyncZoneGhosts()
+    {
+        foreach (var (material, ghost) in zoneGhostMaterials) PreviewMaterials.CopyTo(material, ghost);
+    }
     /// <summary>After a source update replaced models with other polygon zones: the overlay colours and identities follow.</summary>
     private void RefreshZoneModels(IReadOnlySet<int> models)
     {
@@ -445,9 +466,14 @@ public sealed partial class SceneViewport
 
     private void ClearZonePainting()
     {
+        bool stroking = zoneStroke != null;
         zonePaintActive = false; zoneStroke = null; zoneStrokePoint = null; zonePresentationSuspended = false;
-        zonePending.Clear(); zoneGhosts.Clear(); zoneGhostMaterials.Clear(); zoneShownSkipped = [];
-        zonePreviewMesh = null; zoneLines.Clear(); zoneBrush = null; ResetZoneIdentities();
+        if (stroking && viewport.IsMouseCaptured) viewport.ReleaseMouseCapture();
+        zonePending.Clear(); zoneGhosts.Clear(); zoneGhostMaterials.Clear(); zoneShownSkipped = []; zonePartTriangles.Clear();
+        zonePreviewMesh?.Dispose(); zonePreviewMesh = null;
+        foreach (var line in zoneLines.Values) line.Dispose();
+        zoneLines.Clear(); zoneBrush = null; ResetZoneIdentities();
+        if (stroking) ZoneStrokeProgress?.Invoke(0, 0, false);
         ZoneHover = null; ZoneHoverBlocked = false; zoneHoverPoint = null;
         if (Cursor == PolygonZoneCursors.Paint || Cursor == PolygonZoneCursors.Erase || Cursor == PolygonZoneCursors.Pick || Cursor == Cursors.No) Cursor = null;
     }

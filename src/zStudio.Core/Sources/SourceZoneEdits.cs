@@ -285,15 +285,18 @@ public static partial class SourceZoneEdits
         internal List<int> Scope(SourceZoneTarget target) => Scopes[Key(target)][(target.Kind, target.Index)];
     }
 
+    /// <param name="scanMissions">
+    /// Read every other mission's sources to find their uses of the selected assignments (AffectedMissions, SharedSource).
+    /// A polygon zone stroke, limited to the map's own models, checks the other missions' loads itself instead.
+    /// </param>
     private static Context Prepare(SourceWorkspace workspace, SourceSceneState build, IReadOnlyList<SourceZoneSelection> selections, CancellationToken token,
-        int maximumAssets = MaximumSelectedAssets)
+        int maximumAssets = MaximumSelectedAssets, bool scanMissions = true)
     {
         if (selections.Count is < 1 or > MaximumSelections) throw Bad("Select between one and 4,096 exact zone targets.");
         if (build.Provenance.Count > SourceEmbeddedZones.MaximumTargets || build.Freed.Count > SourceEmbeddedZones.MaximumTargets)
             throw Bad("The source world has too many zone occurrences.");
         SourceEmbeddedZones sources = new(workspace, token);
-        var mission = sources.ReadMission(build.Mission, includeEntries: false);
-        Context context = new(mission.MasterPath, sources);
+        Context context = new(sources.TraceMission(build.Mission).Master, sources);
         HashSet<(string Key, SourceZoneTargetKind Kind, int Index, int Polygon)> targets = [];
         BuiltPolygons built = new();
         var loadRoots = ImportedLoadRoots(build, selections, token);
@@ -307,7 +310,7 @@ public static partial class SourceZoneEdits
             string key = Key(origin, model);
             if (!context.Assets.TryGetValue(key, out var asset))
             {
-                if (context.Assets.Count >= maximumAssets) throw Bad($"Select at most {maximumAssets:N0} source occurrences per zone edit.");
+                if (context.Assets.Count >= maximumAssets) throw Bad($"A zone edit reaches at most {maximumAssets:N0} placements of source models; edit them in parts.");
                 asset = sources.Resolve(origin.ZoneOwnerPath ?? model, origin.ZoneOwnerReferences, model);
                 context.Assets.Add(key, asset);
             }
@@ -385,6 +388,7 @@ public static partial class SourceZoneEdits
                 else { Add(SourceZoneTargetKind.Node, origin.ZoneNode); Add(SourceZoneTargetKind.Polygon, origin.ZoneMesh); }
             }
         }
+        if (!scanMissions) { token.ThrowIfCancellationRequested(); return context; }
         // The storage file may itself be loaded or referenced by another mission. An outer full
         // override shields that placement; missing overrides intentionally depend on these defaults.
         foreach (string missionName in Missions(workspace, token))

@@ -118,7 +118,7 @@ internal static class SourceZoneMcpChecks
             finished.Invoke(main, [view, new ZonePaintStroke(1000, 5, false, [new(side, 0)], 1, 0, 0, [], false, false)]);
             var toolState = typeof(MainWindow).GetField("zoneTool", fields)!.GetValue(main)!;
             var applying = toolState.GetType().GetProperty("Applying", fields)!;
-            for (int attempt = 0; attempt < 400 && (bool)applying.GetValue(toolState)!; attempt++) await Task.Delay(10, token);
+            while ((bool)applying.GetValue(toolState)!) await Task.Delay(10, token);
             doc = main.ViewModel.SelectedDocument!;
             Assert.Equal(new byte[] { 3, 5 }, Zones(side)); Assert.Equal(["incremental"], evaluations);
             Assert.Equal("Paint zone 5 on 1 polygon", doc.SourceWorld!.Workspace.UndoLabel);
