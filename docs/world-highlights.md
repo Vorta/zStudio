@@ -1,6 +1,6 @@
 # Whole world surface highlights
 
-The six icon buttons after **Bounds** (in a source map, the command bar's **Overlay** group) identify stored game surface properties:
+The six icon buttons after **Bounds** (in a source map, the command bar's **Overlay** group, with Object zones and Polygon zones in its **Zones** group) identify stored game surface properties:
 
 | Button | Color | What it shows |
 | --- | --- | --- |

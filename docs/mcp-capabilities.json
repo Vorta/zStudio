@@ -1293,7 +1293,7 @@
       "tools": [
         "zstudio_source_zone_tool"
       ],
-      "note": "The Paint group's Polygon zones toggle engages the tool (in its last mode and zone) or leaves it: source_zone_tool engage or exit. Engaging turns on the Polygon zones overlay; leaving restores the overlays unless they were changed meanwhile (scene_options highlight)."
+      "note": "The Zones group's Edit zones toggle engages the tool (in its last mode and zone) or leaves it: source_zone_tool engage or exit. Engaging turns on the Polygon zones overlay; leaving restores the overlays unless they were changed meanwhile (scene_options highlight)."
     },
     {
       "gui": "MainWindow.xaml:ZoneModeChecked",

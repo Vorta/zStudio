@@ -113,7 +113,6 @@ public partial class MainWindow
         Move(FrameScene, SourceCameraItems, "CommandGroupButton", "Frame all — fit all visible geometry in view");
         Move(FlyEnabled, SourceCameraItems, "CommandToggle", "Flycam — Esc restores normal controls");
         Move(Wireframe, SourceDisplayItems, "CommandToggle", "Wireframe — outline each polygon over the surfaces");
-        Move(FaceOrientation, SourceDisplayItems, "CommandToggle", "Face orientation — show normal direction");
         Move(TexturesEnabled, SourceDisplayItems, "CommandToggle", "Textures");
         Move(BoundsEnabled, SourceDisplayItems, "CommandToggle", "Bounds — object bounding boxes");
         Move(BackdropEnabled, SourceDisplayItems, "CommandToggle", "Horizon");
@@ -124,6 +123,10 @@ public partial class MainWindow
         Restyle(HighlightZones, "CommandToggle", "Object zones — the zone that decides whether each object is drawn");
         Restyle(HighlightPolygonZones, "CommandToggle", "Polygon zones — the zones each polygon makes current when the camera or a vehicle is on it; striped where it has several");
         Restyle(HighlightLandmarks, "CommandToggle", "Landmarks — geometry and objects that are never culled");
+        Move(FaceOrientation, SourceOverlayItems, "CommandToggle", "Face orientation — show normal direction");
+        // The zone overlays lead the Zones group, before the tool that edits them.
+        Move(HighlightZones, SourceZoneOverlayItems);
+        Move(HighlightPolygonZones, SourceZoneOverlayItems);
         Move(ParachuteButton, SourceShowItems, "CommandGroupButton", "VTOL route");
         Move(AiTools, SourceShowItems);
         Restyle(AiEnabled, "CommandToggle", "AI nodes");
@@ -285,8 +288,8 @@ public partial class MainWindow
         ViewModeChip.Visibility = shown && !flying ? Visibility.Visible : Visibility.Collapsed;
         RefreshViewMode();
         FlyBanner.Visibility = shown && flying ? Visibility.Visible : Visibility.Collapsed;
-        // Paint tools work in a source map's Whole world.
-        SourcePaintGroup.Visibility = shownAsset?.Kind == zStudio.Core.AssetKind.World && shownDocument?.SourceWorld != null ? Visibility.Visible : Visibility.Collapsed;
+        // The Zones group's overlays and tool work in a source map's Whole world.
+        SourceZonesGroup.Visibility = shownAsset?.Kind == zStudio.Core.AssetKind.World && shownDocument?.SourceWorld != null ? Visibility.Visible : Visibility.Collapsed;
         // The polygon zone tool frames the view as Flycam does, with its own banner.
         FlyFrame.Visibility = shown && (flying || ZoneToolEngaged) ? Visibility.Visible : Visibility.Collapsed;
         RefreshZoneBanner();

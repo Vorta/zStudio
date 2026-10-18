@@ -158,9 +158,10 @@
     <Border x:Name="SourceDisplayGroup" Style="{StaticResource CommandGroup}" AutomationProperties.Name="Display"><StackPanel Orientation="Horizontal"><TextBlock Text="Display" Style="{StaticResource CommandGroupLabel}"/><StackPanel x:Name="SourceDisplayItems" Orientation="Horizontal"/></StackPanel></Border>
     <Border x:Name="SourceOverlayGroup" Style="{StaticResource CommandGroup}" AutomationProperties.Name="Color overlays"><StackPanel Orientation="Horizontal"><TextBlock Text="Overlay" Style="{StaticResource CommandGroupLabel}"/><StackPanel x:Name="SourceOverlayItems" Orientation="Horizontal"/></StackPanel></Border>
     <Border x:Name="SourceShowGroup" Style="{StaticResource CommandGroup}" AutomationProperties.Name="Show helpers"><StackPanel Orientation="Horizontal"><TextBlock Text="Show" Style="{StaticResource CommandGroupLabel}"/><StackPanel x:Name="SourceShowItems" Orientation="Horizontal"/></StackPanel></Border>
-    <!-- Paint tools: one engaged at a time, its options after a divider. -->
-    <Border x:Name="SourcePaintGroup" Style="{StaticResource CommandGroup}" AutomationProperties.Name="Paint tools"><StackPanel Orientation="Horizontal"><TextBlock Text="Paint" Style="{StaticResource CommandGroupLabel}"/>
-     <ToggleButton x:Name="PolygonZoneToolButton" Style="{StaticResource CommandToggle}" Click="PolygonZoneToolClick" AutomationProperties.Name="Polygon zone tool" ToolTip="Polygon zones — paint or erase a zone on the polygons you drag over (P)"><local:PreviewIcon Kind="ZoneTool" Width="16" Height="16"/></ToggleButton>
+    <!-- Zones: the zone overlays, then the zone tool with its options after a divider. -->
+    <Border x:Name="SourceZonesGroup" Style="{StaticResource CommandGroup}" AutomationProperties.Name="Zones"><StackPanel Orientation="Horizontal"><TextBlock Text="Zones" Style="{StaticResource CommandGroupLabel}"/>
+     <StackPanel x:Name="SourceZoneOverlayItems" Orientation="Horizontal"/>
+     <ToggleButton x:Name="PolygonZoneToolButton" Style="{StaticResource CommandToggle}" Click="PolygonZoneToolClick" AutomationProperties.Name="Edit zones" ToolTip="Edit zones — paint or erase a polygon zone on the polygons you drag over (P)"><local:PreviewIcon Kind="ZoneTool" Width="16" Height="16"/></ToggleButton>
      <StackPanel x:Name="ZoneToolOptions" Orientation="Horizontal" Visibility="Collapsed">
       <Border Width="1" Height="20" Margin="6,0" VerticalAlignment="Center" Background="{DynamicResource DividerStrokeColorDefaultBrush}"/>
       <Border CornerRadius="5" Padding="2" BorderThickness="1" Background="#38000000" BorderBrush="{DynamicResource DividerStrokeColorDefaultBrush}" VerticalAlignment="Center" AutomationProperties.Name="Paint or erase"><StackPanel Orientation="Horizontal">
