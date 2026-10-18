@@ -25,6 +25,11 @@ internal sealed partial class SourceObjectCardEditor
     /// </summary>
     internal void ShowPolygonZones(JsonObject? data, Func<byte, string?>? label, string objectName)
     {
+        // The card refreshes with hover and camera motion: the same counts and labels keep their rows (and any open tooltip).
+        var zones = data?["rows"] is JsonArray listed ? listed.OfType<JsonObject>().SelectMany(r => r["zones"] is JsonArray ids ? ids.Select(id => (byte)Number(id)) : []).Distinct() : [];
+        string shown = (data?.ToJsonString() ?? "") + "\u0001" + objectName + "\u0001" + string.Join("\u0002", zones.Select(z => z + "=" + label?.Invoke(z)));
+        if (shown == shownPolygonZones) return;
+        shownPolygonZones = shown;
         polygonZones.Children.Clear(); polygonZones.ContextMenu = null;
         if (data?["rows"] is not JsonArray rows) return;
         long total = Number(data["total"]);
@@ -80,6 +85,8 @@ internal sealed partial class SourceObjectCardEditor
         item.Click += (_, _) => { try { Clipboard.SetText(clipboard); } catch (System.Runtime.InteropServices.ExternalException) { } };
         polygonZones.ContextMenu = new ContextMenu { Items = { item } };
     }
+
+    private string? shownPolygonZones;
 
     private static FrameworkElement Row(JsonObject row, long count, Func<byte, string?>? label, StringBuilder copy)
     {
