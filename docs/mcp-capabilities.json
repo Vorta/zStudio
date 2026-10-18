@@ -264,7 +264,8 @@
       "gui": "SceneViewport.Zones:Strokes",
       "tools": [
         "zstudio_source_polygon_zones",
-        "zstudio_source_zone_tool"
+        "zstudio_source_zone_tool",
+        "zstudio_source_zones"
       ],
       "note": "While the tool is engaged, a left-button drag paints or erases its zone on each paintable source polygon the pointer crosses (looking through models the tool cannot paint); release applies the stroke as one undoable change: source_polygon_zones with the source polygons source_zones inspection returns. Ctrl held inverts the mode for a stroke, Shift+click picks a zone of the polygon under the pointer and [ ] step through the used zones (source_zone_tool engage with mode or zone), and Esc drops a stroke in progress. MCP never synthesizes pointer input."
     },

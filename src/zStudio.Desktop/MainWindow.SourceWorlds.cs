@@ -902,9 +902,9 @@ public partial class MainWindow
         // A rebuild or save in progress says so (the history cannot move while the project is saved).
         RequireSourceWorldIdle(session);
         if (scene?.IsZonePainting == true || zoneTool.Applying) throw new StudioCommandException("busy", "A polygon zone stroke is in progress; undo and redo wait until it has applied.");
+        if (redo ? !workspace.CanRedo : !workspace.CanUndo) throw new StudioCommandException("unsupported", redo ? "Nothing to redo." : "Nothing to undo.");
         // The notices of the last stroke describe what undo takes back.
         if (ZoneToolEngaged) { ClearZoneNotices(); zoneTool.LastStroke = null; }
-        if (redo ? !workspace.CanRedo : !workspace.CanUndo) throw new StudioCommandException("unsupported", redo ? "Nothing to redo." : "Nothing to undo.");
         return PrepareSourceWorldEditAsync(doc, redo ? "Redo" : "Undo", (w, ct) =>
         {
             ct.ThrowIfCancellationRequested();
