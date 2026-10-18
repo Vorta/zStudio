@@ -143,9 +143,8 @@ internal static class ResponsiveNavigatorChecks
             var input = Descendants(form).OfType<TextBox>().Single(t => AutomationProperties.GetName(t) == "Reset delay (s)");
             input.Text = "-";
             foreach (string theme in new[] { "Light","Dark","System" })
-            foreach (string density in new[] { "Compact","Comfortable" })
             {
-                await Changes(new() { ["theme"] = theme, ["density"] = density });
+                await Changes(new() { ["theme"] = theme });
                 await Resize(1080,"tabbed"); await Resize(1600,"split");
                 Assert.Equal("-",input.Text); Assert.True(form.HasPendingDrafts);
                 Assert.Same(form,main.OpenPropertiesWindow.AnimationFields);

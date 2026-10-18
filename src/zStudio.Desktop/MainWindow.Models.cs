@@ -29,7 +29,7 @@ public partial class MainWindow
     {
         if (operation != null) throw new StudioCommandException("busy", "An export or validation is already running.");
         var resolver = ViewModel.Resolver ?? throw new StudioCommandException("no_workspace", "Open a root first.");
-        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(token, doc.Lifetime.Token); operation = cancellation; CancelOperationItem.IsEnabled = true;
+        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(token, doc.Lifetime.Token); operation = cancellation;
         try
         {
             var world = doc.PreviewDocument; int root;
@@ -44,7 +44,7 @@ public partial class MainWindow
             var result = await Task.Run(() => new ExportService(resolver).ExportModelBundleAsync(world, root, destination, pack, cancellation.Token), cancellation.Token);
             ViewModel.Status = $"Exported {result.Models} models to {result.Directory}"; return result;
         }
-        finally { operation = null; CancelOperationItem.IsEnabled = false; }
+        finally { operation = null; }
     }
     private async Task ReplaceModelsAsync(DocumentModel doc, string manifest, long revision, CancellationToken token)
     {
@@ -97,24 +97,6 @@ public partial class MainWindow
         doc.IsStale = false;
         ViewModel.Status = $"Saved and verified {result.SavedPaths.Count} files";
         return result;
-    }
-    private async void ExportModelBundleClick(object sender, RoutedEventArgs e)
-    {
-        if (ViewModel.SelectedDocument is not { SelectedAsset: { } asset } doc) return;
-        OpenFolderDialog dialog = new() { Title = "Export referenced models" }; if (dialog.ShowDialog(this) != true) return;
-        try { await ExportModelBundleAsync(doc, asset.Record, dialog.FolderName, null, PreferredPack, CancellationToken.None); }
-        catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException) { Report(ex); MessageBox.Show(this, ex.Message, "Model export"); }
-    }
-    private async void ReplaceModelsClick(object sender, RoutedEventArgs e)
-    {
-        if (ViewModel.SelectedDocument is not { } doc || !ResolvePropertiesDrafts(doc)) return;
-        if (doc.SelectedAsset?.Record.Content is zStudio.Core.Formats.MechAssembly)
-        { await ResourceUiAsync(() => ReplaceMechModelDialogAsync(doc)); return; }
-        if (doc.ModelEdits == null) return;
-        if (doc.ModelEdits.UnavailableReason is { } unavailable) { MessageBox.Show(this, unavailable, "Model replacement"); return; }
-        OpenFileDialog dialog = new() { Title = "Replace models · select replacement manifest", Filter = "Replacement manifest|*.json" }; if (dialog.ShowDialog(this) != true) return;
-        try { await ReplaceModelsAsync(doc, dialog.FileName, doc.Revision, CancellationToken.None); }
-        catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException) { Report(ex); MessageBox.Show(this, ex.Message, "Model replacement"); }
     }
     private async Task<bool> SaveModelDocumentAsync(DocumentModel doc, bool saveAs)
     {

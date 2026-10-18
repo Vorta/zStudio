@@ -60,16 +60,13 @@ internal static class GuiReviewCapture
                             await Select(document,document.Assets.First(a => a.Record.Kind == AssetKind.Texture));
                         }
                         foreach (string theme in new[] { "Dark", "Light", "System" })
-                        foreach (string density in new[] { "Compact", "Comfortable" })
                         {
                             Theme(theme);
-                            var view = ((Menu)window.FindName("AppMenu")).Items.OfType<MenuItem>().First(m => Equals(m.Header,"_View"));
-                            view.Items.OfType<MenuItem>().First(m => Equals(m.Header,"Density")).Items.OfType<MenuItem>().First(m => Equals(m.Header,density)).RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
                             foreach (var (width,state) in new[] { (1600,WindowState.Normal), (1080,WindowState.Normal), (1600,WindowState.Maximized) })
                             {
                                 window.Width = width;
                                 window.WindowState = state;
-                                string sample = $"header-{(loaded ? "loaded" : "startup")}-{theme}-{density}-{width}-{state}";
+                                string sample = $"header-{(loaded ? "loaded" : "startup")}-{theme}-{width}-{state}";
                                 await Capture(sample);
                                 CheckHeader(window);
                                 var dpi = VisualTreeHelper.GetDpi(title);
@@ -104,13 +101,10 @@ internal static class GuiReviewCapture
                     var responsiveFrame = responsiveEditor.CurrentFrame;
                     var responsiveCamera = responsiveEditor.Viewport.CaptureView();
                     foreach (string theme in new[] { "Dark","Light","System" })
-                    foreach (string density in new[] { "Compact","Comfortable" })
                     foreach (int width in new[] { 1600,1080,1600 })
                     {
                         Theme(theme);
-                        var view = ((Menu)window.FindName("AppMenu")).Items.OfType<MenuItem>().First(m => Equals(m.Header,"_View"));
-                        view.Items.OfType<MenuItem>().First(m => Equals(m.Header,"Density")).Items.OfType<MenuItem>().First(m => Equals(m.Header,density)).RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
-                        window.Width = width; await Capture($"files-animation-{theme}-{density}-{width}");
+                        window.Width = width; await Capture($"files-animation-{theme}-{width}");
                         Require(window.NavigatorMode == (width == 1600 ? "split" : "tabbed"),"Animation responsive Files mode is incorrect");
                         Require(((FrameworkElement)window.FindName("InspectorHost")).IsVisible,"Files detachment displaced the animation Inspector");
                         Require(ReferenceEquals(responsiveEditor,((ContentControl)window.FindName("AnimationHost")).Content) && ReferenceEquals(responsiveFrame,responsiveEditor.CurrentFrame) && Equals(responsiveCamera,responsiveEditor.Viewport.CaptureView()),"Responsive layout replaced the editor or changed frame/camera");
@@ -119,7 +113,7 @@ internal static class GuiReviewCapture
                     window.Width = 1080; await Dispatcher.Yield(DispatcherPriority.ApplicationIdle);
                     window.Width = 1600; await Dispatcher.Yield(DispatcherPriority.ApplicationIdle);
                     Require(responsiveEditor.IsPlaying,"Files detachment interrupted playback"); responsiveEditor.Pause();
-                    Console.WriteLine("PASS: 36 header combinations; responsive Files with world, Document scene and 18 animation theme/density/width transitions; native corners/caption bounds, retained editor/frame/camera and uninterrupted playback."); return;
+                    Console.WriteLine("PASS: 18 header combinations; responsive Files with world, Document scene and 9 animation theme/width transitions; native corners/caption bounds, retained editor/frame/camera and uninterrupted playback."); return;
                 }
                 CheckHeader(window);
                 var fileMenu = ((Menu)window.FindName("AppMenu")).Items.OfType<MenuItem>().First();
@@ -453,8 +447,6 @@ internal static class GuiReviewCapture
         bool animationOpen = ((ContentControl)window.FindName("AnimationHost")).Content is AnimationEditor;
         Require((((TabItem)window.FindName("ProgramTab")).Visibility == Visibility.Visible) == animationOpen,"Program tab availability does not follow the active animation");
         Require(window.FindName("PropertiesPane") == null,"Docked Properties still exists");
-
-        Require(((MenuItem)window.FindName("PropertiesMenu")).IsEnabled == hasDocument,"Properties command availability is incorrect");
         if (!animationOpen) Require(((FrameworkElement)window.FindName("InspectorHost")).Visibility == Visibility.Collapsed,"An empty inspector still consumes space outside animations");
 
         var title = (FrameworkElement)window.FindName("TitleArea");

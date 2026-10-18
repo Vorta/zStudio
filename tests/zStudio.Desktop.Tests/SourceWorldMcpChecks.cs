@@ -148,12 +148,10 @@ internal static class SourceWorldMcpChecks
                 }
             }
 
-            // Tools lists the project's worlds.
+            // Tools shows the source commands (maps open from the map picker).
             typeof(MainWindow).GetMethod("ToolsMenuOpened", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(main, [main, new RoutedEventArgs(MenuItem.SubmenuOpenedEvent, main)]);
-            var worlds = (MenuItem)main.FindName("SourceWorldMenu");
-            Assert.Equal(Visibility.Visible, worlds.Visibility); Assert.False(((MenuItem)main.FindName("AddSourceModelMenu")).IsEnabled);
-            while (worlds.Items.Count != 2 || worlds.Items[0] is MenuItem { IsEnabled: false }) { token.ThrowIfCancellationRequested(); await Task.Delay(10, token); }
-            Assert.Equal(["m1", "m2"], worlds.Items.Cast<MenuItem>().Select(i => ((TextBlock)i.Header).Text));
+            var addModel = (MenuItem)main.FindName("AddSourceModelMenu");
+            Assert.Equal(Visibility.Visible, addModel.Visibility); Assert.False(addModel.IsEnabled);
 
             // The world is evaluated from sources with source editing tools.
             var opened = (await Job("source_world_open", new() { ["mission"] = "m1" }))["document"]!;
@@ -358,10 +356,10 @@ internal static class SourceWorldMcpChecks
                 await File.AppendAllTextAsync(script, "# elsewhere\r\n", t); File.SetLastWriteTimeUtc(script, DateTime.UtcNow.AddMinutes(3));
                 return await rebuild(d, accepted, t);
             };
-            try { await main.ViewModel.ReloadAsync(); }
+            // A source map's reload failure goes to its caller (the GUI lists it and opens Diagnostics).
+            try { Assert.Contains("changed on disk while the workspace holds unsaved edits", (await Assert.ThrowsAsync<zStudio.Automation.StudioCommandException>(() => main.ViewModel.ReloadAsync())).Message); }
             finally { main.ViewModel.ReloadSourceWorld = rebuild; }
             Assert.False(pending.IsDisposed); Assert.True(pending.SourceWorld!.Workspace.IsFileDirty("gamegen/m1.gs"));
-            Assert.Contains(main.ViewModel.Problems, p => p.Message.Contains("changed on disk while the workspace holds unsaved edits", StringComparison.Ordinal));
             var refused = await Job("reload_document", new() { ["document"] = Id(pending), ["revision"] = pending.Revision }, "failed");
             Assert.Equal("unsaved_changes", refused["code"]!.GetValue<string>());
             var conflict = await Job("save_document", new() { ["document"] = Id(pending), ["revision"] = pending.Revision }, "failed");

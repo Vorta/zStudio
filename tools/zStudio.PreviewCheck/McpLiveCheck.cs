@@ -61,14 +61,11 @@ internal static class McpLiveCheck
                 File.Copy(Path.Combine(output, "preview.png"), Path.Combine(output, "ai-card.png"), true);
                 Equal(1, (await Call("scene_card", new { preview, action = "copy" }))["text"]!.GetValue<string>()
                     .Split(Environment.NewLine).Count(line => line.StartsWith("Attack strategy: ")), "copy all includes strategy once");
-                foreach (string density in new[] { "Compact", "Comfortable" })
-                {
-                    await Call("workspace_view", new { changes = new { density, tools = true, inspectionPanelHeight = 216 } });
-                    await Call("capture", new { target = "window", width = 1600, height = 1000 });
-                    File.Copy(Path.Combine(output, "preview.png"), Path.Combine(output, "ai-card-minimum-" + density + ".png"), true);
-                }
-                await Call("workspace_view", new { changes = new { density = originalLayout["layout"]!["Density"]!.GetValue<string>(),
-                    tools = originalLayout["layout"]!["ToolsVisible"]!.GetValue<bool>(), inspectionPanelHeight = originalLayout["layout"]!["InspectionPanelHeight"]!.GetValue<double>() } });
+                await Call("workspace_view", new { changes = new { tools = true, inspectionPanelHeight = 216 } });
+                await Call("capture", new { target = "window", width = 1600, height = 1000 });
+                File.Copy(Path.Combine(output, "preview.png"), Path.Combine(output, "ai-card-minimum.png"), true);
+                await Call("workspace_view", new { changes = new { tools = originalLayout["layout"]!["ToolsVisible"]!.GetValue<bool>(),
+                    inspectionPanelHeight = originalLayout["layout"]!["InspectionPanelHeight"]!.GetValue<double>() } });
                 await EditSelected("ai");
                 foreach (string label in new[] { "tank", "pickup" })
                 {
@@ -312,7 +309,7 @@ internal static class McpLiveCheck
             foreach (var doc in state["documents"]!.AsArray())
                 await Call("close_document", new { document = doc!["id"]!.GetValue<string>(), revision = doc["Revision"]!.GetValue<long>(), discard = true });
             await Call("workspace_view", new { changes = new { theme = originalLayout["theme"]!.GetValue<string>(),
-                density = originalLayout["layout"]!["Density"]!.GetValue<string>(), tools = originalLayout["layout"]!["ToolsVisible"]!.GetValue<bool>(),
+                tools = originalLayout["layout"]!["ToolsVisible"]!.GetValue<bool>(),
                 inspectionPanelHeight = originalLayout["layout"]!["InspectionPanelHeight"]!.GetValue<double>() } });
         }
 

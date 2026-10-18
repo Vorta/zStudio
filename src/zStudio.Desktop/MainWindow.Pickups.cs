@@ -95,12 +95,6 @@ public partial class MainWindow
         ViewModel.Status = "Some document changes remain unsaved.";
         return false;
     }
-    private void BackupOnSaveChanged(object sender, RoutedEventArgs e)
-    {
-        if (!ready) return;
-        ViewModel.Settings.CreateBackupOnSave = BackupOnSave.IsChecked;
-        try { ViewModel.Settings.Save(); } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { Report(ex); }
-    }
     private async Task<bool> SavePickupsAsync(DocumentModel document, bool saveAs)
     {
         if (document.PickupEdits is not { } edits || !ResolvePropertiesDrafts(document)) return false;

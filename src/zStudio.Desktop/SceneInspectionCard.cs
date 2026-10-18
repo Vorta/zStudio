@@ -67,7 +67,7 @@ internal sealed partial class SceneInspectionCard : Grid
     internal event Action? DraftClosed;
     internal string DraftToken => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes($"{draftId}|{DraftDocument?.SessionId}|{DraftRevision}|{DraftTarget}|{ObjectIdentityToken}|{transformMode}|{(ObjectEditor != null ? ObjectEditor.DraftToken : string.Join('|', DraftStrings))}")));
     internal SceneInspection? Selection => treeSelection ?? viewport.SelectedInspection;
-    private readonly Button close, dock, frame;
+    private readonly Button close, frame;
     private readonly Border objectIcon;
     private readonly PreviewIcon objectGlyph = new() { Kind = "Cube", Width = 17, Height = 17, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center };
     private readonly System.Windows.Shapes.Rectangle emptyTileOutline = new() { RadiusX = 6, RadiusY = 6, StrokeThickness = 1, StrokeDashArray = [3, 2], Visibility = Visibility.Collapsed };
@@ -79,8 +79,6 @@ internal sealed partial class SceneInspectionCard : Grid
     internal bool Docked { get; private set; }
     /// <summary>The panel to host in the docked pane.</summary>
     internal Border PanelRoot => panel;
-    /// <summary>Asks to dock (true) or pop out (false); null hides the button (outside source maps).</summary>
-    internal Action<bool>? DockRequested { get; set; }
     internal Action? FrameSelection { get; set; }
     /// <summary>The outliner type of a selection (world, group, geometry, object or node), for its icon.</summary>
     internal Func<SceneInspection, string>? CategoryOf { get; set; }
@@ -127,10 +125,6 @@ internal sealed partial class SceneInspectionCard : Grid
         close = IconButton("Close", "Close node card", () => ClearSelection());
         close.SetResourceReference(StyleProperty, "CardCloseButton");
         DockPanel.SetDock(close, Dock.Right); title.Children.Add(close);
-        // A source map's docked pane pops out into this floating card, which docks back again.
-        dock = IconButton("PopOut", "Pop out as floating window", () => DockRequested?.Invoke(!Docked));
-        dock.Visibility = Visibility.Collapsed;
-        DockPanel.SetDock(dock, Dock.Right); title.Children.Add(dock);
         frame = IconButton("FrameSelection", "Frame selection", () => FrameSelection?.Invoke());
         frame.Visibility = Visibility.Collapsed;
         DockPanel.SetDock(frame, Dock.Right); title.Children.Add(frame);
@@ -141,6 +135,10 @@ internal sealed partial class SceneInspectionCard : Grid
         DockPanel.SetDock(isolate, Dock.Right); title.Children.Add(isolate);
         edit = FooterButton("Apply", "Apply", "Apply changes", "AccentButtonStyle", () => Try(Apply));
         cancel = FooterButton("Discard", "Revert", "Revert changes", "DefaultButtonStyle", () => Try(() => CancelDraft()));
+        // A source object's Copy… and Delete stand left of Revert and Apply.
+        copyObject = FooterButton("Copy", "Copy…", "Copy object", "DefaultButtonStyle", () => _ = ObjectAction("duplicate"));
+        deleteObject = FooterButton("Delete", "Delete", "Delete object", "DefaultButtonStyle", () => _ = ObjectAction("delete"));
+        copyObject.Visibility = deleteObject.Visibility = Visibility.Collapsed;
         objectIcon = new() { Width = 34, Height = 34, CornerRadius = new(6), BorderThickness = new(1), Margin = new(0, 0, 10, 0), VerticalAlignment = VerticalAlignment.Center };
         // Nothing selected shows a dashed tile with a pointer instead of the object's type.
         Grid tile = new(); tile.Children.Add(emptyTileOutline); tile.Children.Add(objectGlyph); objectIcon.Child = tile;
@@ -151,10 +149,11 @@ internal sealed partial class SceneInspectionCard : Grid
         StackPanel names = new() { VerticalAlignment = VerticalAlignment.Center }; names.Children.Add(heading); names.Children.Add(subtitle);
         title.Children.Add(names);
         layout.Children.Add(title);
-        // Footer: the draft's status, Revert and Apply (the accent action), enabled once something changes.
+        // Footer: the draft's status; Copy… and Delete (a source object's), then Revert and Apply (the accent action), enabled once something changes.
         DockPanel foot = new();
-        DockPanel.SetDock(edit, Dock.Right); DockPanel.SetDock(cancel, Dock.Right); edit.Margin = new(8, 0, 0, 0);
-        foot.Children.Add(edit); foot.Children.Add(cancel);
+        foreach (var button in new[] { edit, cancel, deleteObject, copyObject }) DockPanel.SetDock(button, Dock.Right);
+        edit.Margin = new(6, 0, 0, 0); cancel.Margin = new(6, 0, 0, 0); deleteObject.Margin = new(6, 0, 0, 0);
+        foot.Children.Add(edit); foot.Children.Add(cancel); foot.Children.Add(deleteObject); foot.Children.Add(copyObject);
         footerStatus.SetResourceReference(TextBlock.ForegroundProperty, "TextFillColorSecondaryBrush");
         StackPanel status = new() { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center }; status.Children.Add(footerDot); status.Children.Add(footerStatus);
         foot.Children.Add(status);
@@ -212,17 +211,16 @@ internal sealed partial class SceneInspectionCard : Grid
         if (modesFrame.Parent is Border holder) holder.Child = null;
         target.Trailing = modesFrame;
     }
-    /// <summary>A footer action: an icon and text, named for automation.</summary>
+    /// <summary>A footer action: an icon whose tooltip names it at once (also while disabled), named for automation.</summary>
     private static Button FooterButton(string kind, string text, string name, string style, Action action)
     {
-        StackPanel content = new() { Orientation = Orientation.Horizontal };
-        content.Children.Add(new PreviewIcon { Kind = kind, Width = 14, Height = 14, Margin = new(0, 0, 6, 0), VerticalAlignment = VerticalAlignment.Center });
-        content.Children.Add(new TextBlock { Text = text, VerticalAlignment = VerticalAlignment.Center });
-        Button button = new() { Content = content, Height = 30, Padding = new(12, 0, 12, 0), IsEnabled = false };
+        Button button = new() { Content = new PreviewIcon { Kind = kind, Width = 16, Height = 16 }, Width = 36, Height = 30, Padding = new(0), IsEnabled = false, ToolTip = text };
         button.SetResourceReference(StyleProperty, style);
+        ToolTipService.SetInitialShowDelay(button, 0); ToolTipService.SetBetweenShowDelay(button, 0); ToolTipService.SetShowOnDisabled(button, true);
         System.Windows.Automation.AutomationProperties.SetName(button, name);
         button.Click += (_, _) => action(); return button;
     }
+    private readonly Button copyObject, deleteObject;
     /// <summary>Shows the footer for editable selections, enabling Revert and Apply once the draft changes something.</summary>
     private void RefreshFooter(bool editable)
     {
@@ -240,7 +238,7 @@ internal sealed partial class SceneInspectionCard : Grid
         button.Click += (_, _) => action(); return button;
     }
     private void Try(Action action)
-    { try { action(); error.Text = ""; error.Visibility = Visibility.Collapsed; } catch (Exception ex) when (ex is InvalidOperationException or ArgumentException or System.IO.IOException or System.IO.InvalidDataException or StudioCommandException or System.Runtime.InteropServices.ExternalException) { error.Text = ex.Message; error.Visibility = Visibility.Visible; } }
+    { error.Text = ""; error.Visibility = Visibility.Collapsed; try { action(); } catch (Exception ex) when (ex is InvalidOperationException or ArgumentException or System.IO.IOException or System.IO.InvalidDataException or StudioCommandException or System.Runtime.InteropServices.ExternalException) { error.Text = ex.Message; error.Visibility = Visibility.Visible; } }
     internal void StartDraft(DocumentModel document, MissionPickupSource source, Vector3 position)
     {
         Refresh();
@@ -324,7 +322,7 @@ internal sealed partial class SceneInspectionCard : Grid
         if (applying is { IsCompleted: false } running) { await running; return !HasDraft; }
         var answer = MessageBox.Show(Window.GetWindow(this), (ObjectEditor != null ? "Apply the pending object changes?" : "Apply the pending position and rotation?") + "\nYes: apply · No: discard · Cancel: keep editing", ObjectEditor != null ? "Object edit draft" : "Node transform draft", MessageBoxButton.YesNoCancel, MessageBoxImage.Question);
         if (answer == MessageBoxResult.Cancel) return false;
-        if (answer == MessageBoxResult.No) { CancelDraft(); return true; }
+        if (answer == MessageBoxResult.No) { Try(() => CancelDraft()); return !HasDraft; }
         Try(Apply);
         if (applying is { IsCompleted: false } started) await started;
         return !HasDraft;
@@ -349,6 +347,9 @@ internal sealed partial class SceneInspectionCard : Grid
     {
         if (value is JsonObject vector && new[] { "x", "y", "z" }.All(k => vector[k] is JsonValue))
             return string.Join("   ", new[] { "x", "y", "z" }.Select(k => k.ToUpperInvariant() + " " + (degrees ? vector[k]!.GetValue<double>().ToString("R", CultureInfo.InvariantCulture) : JsonData.Scalar(vector[k], float.NaN).ToString("R", CultureInfo.InvariantCulture))));
+        // A list of lines (polygon zone sets, parents) reads one per line rather than as JSON.
+        if (value is JsonArray lines && lines.Count > 0 && lines.All(line => line is JsonValue v && v.TryGetValue<string>(out _)))
+            return string.Join('\n', lines.Select(line => line!.GetValue<string>()));
         return value is JsonValue scalar && scalar.TryGetValue<string>(out var text) ? text : value?.ToJsonString() ?? "Unavailable";
     }
     /// <summary>After every refresh: the selection's label may have changed.</summary>
@@ -368,7 +369,6 @@ internal sealed partial class SceneInspectionCard : Grid
         scroll.Visibility = empty ? Visibility.Collapsed : Visibility.Visible;
         emptyView.Visibility = empty ? Visibility.Visible : Visibility.Collapsed;
         frame.Visibility = !empty && FrameSelection != null ? Visibility.Visible : Visibility.Collapsed;
-        dock.Visibility = !empty && DockRequested != null ? Visibility.Visible : Visibility.Collapsed;
         close.Visibility = empty ? Visibility.Collapsed : Visibility.Visible;
         close.ToolTip = Docked ? "Clear selection (Esc)" : "Close node card";
         System.Windows.Automation.AutomationProperties.SetName(close, Docked ? "Clear selection" : "Close node card");

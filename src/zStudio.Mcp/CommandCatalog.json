@@ -1111,7 +1111,7 @@
   },
   {
     "Name": "zstudio_scene_options",
-    "Description": "Set static model/world options: lod(integer), difficulty(Easy/Medium/Hard; RECOIL only, MW3 uses missions), textures/wireframe/faceOrientation/bounds/horizon(boolean), texturePack(path or empty for automatic), highlight(none/nonDefaultSoils/canModify/clipTo/canModifyAndClipTo/zones/landmarks), aiNodes/aiThroughGeometry(boolean), aiNetwork(all or ID with aiSnapshot). Highlights and AI are Whole world only. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Description": "Set static model/world options: lod(integer), difficulty(Easy/Medium/Hard; RECOIL only, MW3 uses missions), textures/wireframe/faceOrientation/bounds/horizon(boolean), texturePack(path or empty for automatic), highlight(none/nonDefaultSoils/canModify/clipTo/canModifyAndClipTo/zones/polygonZones/landmarks), aiNodes/aiThroughGeometry(boolean), aiNetwork(all or ID with aiSnapshot). Highlights and AI are Whole world only. Returns an operation ID; use zstudio_operation to await/read the result.",
     "Mutates": true,
     "Parameters": [
       {
@@ -1204,7 +1204,7 @@
           {
             "Name": "highlight",
             "Type": "string",
-            "Description": "Whole world only: 50% colour overlays for yellow non-default soils, green CanModify, red ClipTo, combined CanModify/ClipTo (red wins overlap), node zones (grey for any), or magenta landmarks (never culled, with everything below a landmark object); none restores normal appearance.",
+            "Description": "Whole world only: 50% colour overlays for yellow non-default soils, green CanModify, red ClipTo, combined CanModify/ClipTo (red wins overlap), object (node) zones (grey for any), polygon zones (each polygon\u0027s zone set, striped where it has several), or magenta landmarks (never culled, with everything below a landmark object); none restores normal appearance.",
             "Required": false,
             "Choices": [
               "none",
@@ -1213,6 +1213,7 @@
               "clipTo",
               "canModifyAndClipTo",
               "zones",
+              "polygonZones",
               "landmarks"
             ],
             "Properties": null
@@ -1805,7 +1806,7 @@
   },
   {
     "Name": "zstudio_presentation",
-    "Description": "Read or set independent temporary fullscreen and Hide UI modes for the current 3D preview. Preserves drafts, layout preferences, camera and playback. Enabling requires a 3D preview; disabling always works. Leaving 3D clears Hide UI and retains fullscreen. Neither mode is saved.",
+    "Description": "Read or set temporary fullscreen for the current 3D preview. Preserves drafts, layout preferences, camera and playback. Enabling requires a 3D preview; disabling always works. Leaving 3D retains fullscreen. It is not saved.",
     "Mutates": true,
     "Parameters": [
       {
@@ -1815,20 +1816,12 @@
         "Required": false,
         "Choices": null,
         "Properties": null
-      },
-      {
-        "Name": "uiHidden",
-        "Type": "boolean",
-        "Description": "Temporarily hide workbench chrome and editor guides.",
-        "Required": false,
-        "Choices": null,
-        "Properties": null
       }
     ]
   },
   {
     "Name": "zstudio_workspace_view",
-    "Description": "Read or set presentation preferences and read effective navigatorMode (hidden, tabbed, split). In a source map, navigator/inspector and navigatorWidth/inspectorWidth show, hide and size its World tree (left) and docked Properties pane (right) for the session, without overwriting compiled-explorer preferences, and tools/toolsHeight show, hide and size its Diagnostics pane (the problems alone, no toolsTab) the same way; propertiesDocked pops Properties out into the floating card or docks it. Supports theme, density, preset, pane visibility/dimensions and stable section indices, including detached Files. Does not commit drafts.",
+    "Description": "Read or set presentation preferences and read effective navigatorMode (hidden, tabbed, split). In a source map, navigator/inspector and navigatorWidth/inspectorWidth show, hide and size its World tree (left) and docked Properties pane (right) for the session, without overwriting compiled-explorer preferences, and tools/toolsHeight show, hide and size its Diagnostics pane (the problems alone, no toolsTab) the same way. Supports theme, preset, pane visibility/dimensions and stable section indices, including detached Files. Does not commit drafts.",
     "Mutates": true,
     "Parameters": [
       {
@@ -1899,17 +1892,6 @@
             "Properties": null
           },
           {
-            "Name": "density",
-            "Type": "string",
-            "Description": "Density.",
-            "Required": false,
-            "Choices": [
-              "Compact",
-              "Comfortable"
-            ],
-            "Properties": null
-          },
-          {
             "Name": "preset",
             "Type": "string",
             "Description": "Workspace preset.",
@@ -1920,14 +1902,6 @@
               "Debug",
               "Focus preview"
             ],
-            "Properties": null
-          },
-          {
-            "Name": "propertiesDocked",
-            "Type": "boolean",
-            "Description": "Source maps: true docks Properties as the right pane; false pops it out into the card floating over the view.",
-            "Required": false,
-            "Choices": null,
             "Properties": null
           },
           {
@@ -2089,7 +2063,7 @@
   },
   {
     "Name": "zstudio_scene_properties",
-    "Description": "Inspect a scene object, focus its source-world floating editor, or open the shared Properties window in other viewers, including editable mission pickups. Source-map parts resolve to their complete selection owner; synthetic reference groups return Index=null and a signed selectionOwner with read-only properties. Physical mesh/polygon inspection remains available through inspection commands. Metadata is bounded to 512 JSON nodes/8192 text characters with inspection_truncated. MW3 actor labels use 128-character prefixes; source data and JSON exports remain intact.",
+    "Description": "Inspect a scene object, focus its source-world object panel, or open the shared Properties window in other viewers, including editable mission pickups. Source-map parts resolve to their complete selection owner; synthetic reference groups return Index=null and a signed selectionOwner with read-only properties. Physical mesh/polygon inspection remains available through inspection commands. Metadata is bounded to 512 JSON nodes/8192 text characters with inspection_truncated. MW3 actor labels use 128-character prefixes; source data and JSON exports remain intact.",
     "Mutates": true,
     "Parameters": [
       {
@@ -2870,7 +2844,7 @@
   },
   {
     "Name": "zstudio_scene_inspect",
-    "Description": "Read independent hover/selection information from the fixed top-right inspection panel (a source map docks it as the Properties pane, with the hover readout as the surface chip over the view), or query an explicit viewport point/target without moving the mouse. Parent(s) describes the selected object or authored source-tree occurrence; Surface node and Surface parent(s) separately describe a clicked internal mesh. glTF node indices and compiled source slots are distinct. The permanent hover readout clears its coordinates over empty space. Coordinates distinguish triangle hits, object origins and authored placement positions. Zone is the selected object\u0027s built zone ID (Any is 255), as Inherit (ID) when its source node inherits it, with its altitude zone check; Surface zone and Polygon zones separately describe a clicked internal mesh and its polygon (an empty polygon set has no zones). In source worlds, Zone source names the glTF node, reference placement, ancestor or load root that supplied it. AI results include attackStrategy/hoverAttackStrategy with stored value, status, key, character count, truncation and network RGB hex color. Panel state includes preferred/effective heights, viewport limits, expanded state and whether a source map docks it as the Properties pane. In a source map, recentSelections lists the empty pane\u0027s Recently selected objects (newest first) with the node scene_tree select takes for each (null when it is no longer in the world).",
+    "Description": "Read independent hover/selection information from the fixed top-right inspection panel (a source map docks it as the Properties pane, with the hover readout as the surface chip over the view), or query an explicit viewport point/target without moving the mouse. Parent(s) describes the selected object or authored source-tree occurrence; Surface node and Surface parent(s) separately describe a clicked internal mesh. glTF node indices and compiled source slots are distinct. The permanent hover readout clears its coordinates over empty space. Coordinates distinguish triangle hits, object origins and authored placement positions. Zone is the selected object\u0027s built zone ID (Any is 255), as Inherit (ID) when its source node inherits it, with its altitude zone check; Surface zone and Polygon zones separately describe a clicked internal mesh and its polygon (an empty polygon set has no zones); Object polygon zones (the selection only) lists each zone set of the object\u0027s polygons with how many carry it. In source worlds, Zone source names the glTF node, reference placement, ancestor or load root that supplied it. AI results include attackStrategy/hoverAttackStrategy with stored value, status, key, character count, truncation and network RGB hex color. Panel state includes preferred/effective heights, viewport limits, expanded state and whether a source map docks it as the Properties pane. In a source map, recentSelections lists the empty pane\u0027s Recently selected objects (newest first) with the node scene_tree select takes for each (null when it is no longer in the world).",
     "Mutates": false,
     "Parameters": [
       {
@@ -5545,7 +5519,7 @@
       {
         "Name": "profile",
         "Type": "string",
-        "Description": "Build profile (zstudio_source_status lists them): which texture packs to build, with what budgets and largest texture side. Default: the profile checked in Tools \u2192 Build profile (source_status selected), which is the project\u0027s default unless the user chose another.",
+        "Description": "Build profile (zstudio_source_status lists them): which texture packs to build, with what budgets and largest texture side. Default: the profile checked in Export \u2192 Build profile (source_status selected), which is the project\u0027s default unless the user chose another.",
         "Required": false,
         "Choices": null,
         "Properties": null
@@ -5554,7 +5528,7 @@
   },
   {
     "Name": "zstudio_source_profile",
-    "Description": "Choose the open source project\u0027s shared Tools \u003E Build profile selection for subsequent GUI and MCP checks/exports. Omit profile to restore the project default. source_status lists valid profiles. Invalid choices leave the selection unchanged. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Description": "Choose the open source project\u0027s shared Export \u003E Build profile selection for subsequent GUI and MCP checks/exports. Omit profile to restore the project default. source_status lists valid profiles. Invalid choices leave the selection unchanged. Returns an operation ID; use zstudio_operation to await/read the result.",
     "Mutates": true,
     "Parameters": [
       {
@@ -5563,6 +5537,25 @@
         "Description": "Profile name; omit to restore the project\u0027s default.",
         "Required": false,
         "Choices": null,
+        "Properties": null
+      }
+    ]
+  },
+  {
+    "Name": "zstudio_source_dithering",
+    "Description": "Read or set the open source project\u0027s Export \u003E Texture dithering: how exports and checks convert texture colours to the packs\u0027 RGB565 or palette colours. none rounds each texel; ordered uses a fixed 4x4 pattern (seamless for tiling textures); diffusion is Floyd-Steinberg error diffusion. Colours the packs already hold exactly are kept unless diffused error reaches them, so a texture of only such colours builds the same with every choice. Saved in the project\u0027s hidden .zstudio/settings.json; omit textureDithering to read it. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Mutates": true,
+    "Parameters": [
+      {
+        "Name": "textureDithering",
+        "Type": "string",
+        "Description": "none, ordered or diffusion; omit to read the current choice.",
+        "Required": false,
+        "Choices": [
+          "none",
+          "ordered",
+          "diffusion"
+        ],
         "Properties": null
       }
     ]
@@ -5603,7 +5596,7 @@
       {
         "Name": "profile",
         "Type": "string",
-        "Description": "Build profile whose texture packs are listed; default: the profile chosen in Tools \u2192 Build profile, else the project\u0027s default.",
+        "Description": "Build profile whose texture packs are listed; default: the profile chosen in Export \u2192 Build profile, else the project\u0027s default.",
         "Required": false,
         "Choices": null,
         "Properties": null
@@ -5976,7 +5969,7 @@
   },
   {
     "Name": "zstudio_source_world_object_edit",
-    "Description": "Edit a world object of a source world as one undoable change of the project\u0027s workspace: move, rotate or scale it, set or clear one of its node flags, copy it, delete it, move it under another parent, rename a mission database object (rename; a group or reference holder the build removes, shown only in the source tree, is renamed by sourceFile and gltfNode instead of node; refused while a script finds it by name, or while one of the mission\u0027s animations is bound to its name, such as destroy_turret, whose NAME list binds to the first listed name the world has, until the new name is added to that list), or make one reference another glTF model (model: the reference it or its one referencing child holds, keeping name, place, flags and zone; the placement\u0027s zone overrides for the previous model are removed). The edit changes the source that placed the object: the transform or extras of its glTF node (the mission database or one of its parts, which every copy of the part uses, or a model file, which every load of it uses), or the script instruction that set the value (refused when it ran more than once or takes the value from a macro); a value nothing set yet is added as an instruction after the one that created the object. Copying, deleting and re-parenting apply to the whole object: a node of a model a script loaded stands for that load (zstudio_source_world_object names it). A mission database object is copied, deleted or moved in its glTF file; a script\u0027s object is deleted by turning its instructions into comments, copied by loading it again before the world is written, and moved by attaching it there. The scene is evaluated in memory and the result is the accepted document/revision (with the copy\u0027s node index); a change that cannot be evaluated is refused. Save writes the owning sources; no archives are created. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Description": "Edit a world object of a source world as one undoable change of the project\u0027s workspace: move, rotate or scale it, set or clear one of its node flags, copy it, delete it, move it under another parent, rename a mission database object (rename; a group or reference holder the build removes, shown only in the source tree, is renamed by sourceFile and gltfNode instead of node; refused while a script finds it by name, or while one of the mission\u0027s animations is bound to its name, such as destroy_turret, whose NAME list binds to the first listed name the world has, until the new name is added to that list; also while the mission\u0027s animations, compiled with the new name, would be rejected), or make one reference another glTF model (model: the reference it or its one referencing child holds, keeping name, place, flags and zone; the placement\u0027s zone overrides for the previous model are removed). The edit changes the source that placed the object: the transform or extras of its glTF node (the mission database or one of its parts, which every copy of the part uses, or a model file, which every load of it uses), or the script instruction that set the value (refused when it ran more than once or takes the value from a macro); a value nothing set yet is added as an instruction after the one that created the object. Copying, deleting and re-parenting apply to the whole object: a node of a model a script loaded stands for that load (zstudio_source_world_object names it). A mission database object is copied, deleted or moved in its glTF file; a script\u0027s object is deleted by turning its instructions into comments, copied by loading it again before the world is written, and moved by attaching it there. The scene is evaluated in memory and the result is the accepted document/revision (with the copy\u0027s node index); a change that cannot be evaluated is refused. Save writes the owning sources; no archives are created. Returns an operation ID; use zstudio_operation to await/read the result.",
     "Mutates": true,
     "Parameters": [
       {
@@ -6166,6 +6159,14 @@
         "Properties": null
       },
       {
+        "Name": "beside",
+        "Type": "boolean",
+        "Description": "duplicate: place the copy beside the original, as the card\u0027s Copy does (its local X plus the object\u0027s width along its parent\u0027s X, rotation and scale kept); not with position, rotationDegrees or scale.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
         "Name": "name",
         "Type": "string",
         "Description": "The copy\u0027s node name (duplicate) or the object\u0027s new name (rename): 1\u201332 printable characters without spaces, commas, quotes or # % ;, used by no node of the world.",
@@ -6306,7 +6307,7 @@
   },
   {
     "Name": "zstudio_source_recovery_resolve",
-    "Description": "Resolve an interrupted save of the open source project: roll_back restores every file the save had replaced (a file changed by another program since is left alone and reported), complete finishes the save, and abandon keeps the files as they are and moves the journal (with any original it kept) to zstudio/recovery/abandoned. It runs off the UI thread with the workspace disabled as during a save. Cancelling stops it between two files, never during one: the journal records what it did, the save still needs a decision (any action resolves it from there), and a cancellation after files changed says which. Returns at most 64 changed paths and conflicts with total counts. Paths keep 256 characters, with pathsTruncated for changed paths and fileTruncated on conflicts. Refused while a world of the project opens or rebuilds, and while the project has unsaved edits of a file the save involves (undo them, or close the worlds discarding them). Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Description": "Resolve an interrupted save of the open source project: roll_back restores every file the save had replaced (a file changed by another program since is left alone and reported), complete finishes the save, and abandon keeps the files as they are and moves the journal (with any original it kept) to zstudio/recovery/abandoned. It runs off the UI thread with the workspace disabled as during a save. Cancelling stops it between two files, never during one: the journal records what it did, the save still needs a decision (any action resolves it from there), and a cancellation after files changed says which. Returns at most 64 changed paths and conflicts with total counts. Paths keep 256 characters, with pathsTruncated for changed paths and fileTruncated on conflicts. Refused while a world of the project opens or rebuilds; roll_back and complete are also refused while the project has unsaved edits of a file the save involves (undo them, or close the worlds discarding them), while abandon, which changes no file, is not. Returns an operation ID; use zstudio_operation to await/read the result.",
     "Mutates": true,
     "Parameters": [
       {

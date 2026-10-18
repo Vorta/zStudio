@@ -89,8 +89,6 @@ internal static class ResourceEditingMcpChecks
             await Job("save_document", Args()); Assert.False(doc.IsDirty);
             var saved = await FormatRegistry.Default.OpenAsync(copy, token); Assert.Equal("renamed.bin", saved.Assets[0].Name); Assert.Equal(AssetKind.Zrd, saved.Assets[0].Kind);
             Assert.Equal(126u, ZrdDecoder.Read(saved.Slice(saved.Assets[0].Offset, saved.Assets[0].Length), token).FindByPath(1, 0).Bits);
-            var editMenu = (MenuItem)main.FindName("EditMenu"); editMenu.RaiseEvent(new RoutedEventArgs(MenuItem.SubmenuOpenedEvent, editMenu));
-            Assert.Contains(editMenu.Items.OfType<MenuItem>(), m => Equals(m.Header, "Archive members") && m.IsEnabled && m.Items.Count == 8);
             await Job("open_document", new() { ["path"] = copy });
             var openCopy = main.ViewModel.Documents.Single(d => d.Path == copy);
             Assert.Equal("destination_open", (await Job("reload_document", Args(), "failed"))["code"]!.GetValue<string>());

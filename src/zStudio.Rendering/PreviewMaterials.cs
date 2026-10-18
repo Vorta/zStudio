@@ -13,8 +13,9 @@ internal static class PreviewMaterials
     private const string TintPass = "ZbdVertexTint";
     private const string OverlayPass = "ZbdOverlay";
     private const string OrientationPass = "ZbdFaceOrientation";
+    private const string PolygonZonePass = "ZbdPolygonZones";
     internal sealed class OrientationState { public volatile bool Enabled; }
-    private static readonly Lazy<(byte[] Normal, byte[] Overlay, byte[] Orientation)> Shaders = new(() =>
+    private static readonly Lazy<(byte[] Normal, byte[] Overlay, byte[] Orientation, byte[] PolygonZones)> Shaders = new(() =>
     {
         string Read(string name)
         {
@@ -28,7 +29,7 @@ internal static class PreviewMaterials
             using var shader = SharpDX.D3DCompiler.ShaderBytecode.Compile(source, entry, "ps_5_0", SharpDX.D3DCompiler.ShaderFlags.OptimizationLevel3);
             return shader.Bytecode.Data;
         }
-        return (Compile(common, "PSMain"), Compile(common, "PSOverlay"), Compile(common + Read("FaceOrientation.hlsl"), "PSOrientation"));
+        return (Compile(common, "PSMain"), Compile(common, "PSOverlay"), Compile(common + Read("FaceOrientation.hlsl"), "PSOrientation"), Compile(common, "PSPolygonZones"));
     });
     public static DefaultEffectsManager CreateEffects() => PreviewResourceLifetime.Create<DefaultEffectsManager>(
         static () => new PreviewEffectsManager(), InstallPasses);
@@ -36,7 +37,7 @@ internal static class PreviewMaterials
     private static void InstallPasses(DefaultEffectsManager manager)
     {
         GroundGridShader.Install(manager);
-        foreach (string prefix in new[] { "", TintPass, OverlayPass, OrientationPass })
+        foreach (string prefix in new[] { "", TintPass, OverlayPass, OrientationPass, PolygonZonePass })
         foreach (string suffix in new[] { "", AlphaPass, HorizonPass })
         {
             if (prefix.Length == 0 && suffix.Length == 0) continue; // Retain the exact stock normal diffuse pass.
@@ -45,6 +46,7 @@ internal static class PreviewMaterials
                 TintPass => new ShaderDescription("ZbdVertexTintPS", ShaderStage.Pixel, Shaders.Value.Normal),
                 OverlayPass => new ShaderDescription("ZbdOverlayPS", ShaderStage.Pixel, Shaders.Value.Overlay),
                 OrientationPass => new ShaderDescription("ZbdFaceOrientationPS", ShaderStage.Pixel, Shaders.Value.Orientation),
+                PolygonZonePass => new ShaderDescription("ZbdPolygonZonesPS", ShaderStage.Pixel, Shaders.Value.PolygonZones),
                 _ => DefaultPSShaderDescriptions.PSMeshDiffuseMap
             };
             manager[DefaultRenderTechniqueNames.Mesh]!.AddPass(new ShaderPassDescription(prefix + suffix)
@@ -62,10 +64,14 @@ internal static class PreviewMaterials
         material.Core as PreviewMaterialCore ?? throw new InvalidOperationException("Diagnostic overlays require a preview material.");
     internal static void SetOverlay(DiffuseMaterial material, Color4 color) => OverlayMaterial(material).Overlay = color;
     internal static Color4 OverlayColor(DiffuseMaterial material) => OverlayMaterial(material).Overlay;
+    /// <summary>Tints each polygon by the zone set its geometry's vertex colours then carry (see SceneViewport.PolygonOverlays).</summary>
+    internal static void SetPolygonZones(DiffuseMaterial material, bool enabled) => OverlayMaterial(material).PolygonZones = enabled;
     private sealed class PreviewMaterialCore(bool horizon, bool vertexTint, OrientationState? orientation) : DiffuseMaterialCore
     {
         private Color4 overlay;
         public Color4 Overlay { get => overlay; set => Set(ref overlay, value); }
+        private bool polygonZones;
+        public bool PolygonZones { get => polygonZones; set => Set(ref polygonZones, value); }
         public override MaterialVariable CreateMaterialVariables(IEffectsManager manager, IRenderTechnique technique) => new Variables(manager, technique, this, horizon, vertexTint, orientation);
     }
     private sealed class Variables : DiffuseMaterialVariables
@@ -88,7 +94,7 @@ internal static class PreviewMaterials
         // Each diagnostic pass retains the normal opaque/alpha/horizon depth policy.
         public override ShaderPass GetPass(RenderType renderType, RenderContext context)
         {
-            string prefix = orientation?.Enabled == true ? OrientationPass : material.Overlay.Alpha > 0 ? OverlayPass : normalPrefix;
+            string prefix = orientation?.Enabled == true ? OrientationPass : material.PolygonZones ? PolygonZonePass : material.Overlay.Alpha > 0 ? OverlayPass : normalPrefix;
             string suffix = horizon ? HorizonPass : renderType == RenderType.Transparent ? AlphaPass : "";
             return prefix.Length == 0 && suffix.Length == 0 ? base.GetPass(renderType, context) : technique[prefix + suffix];
         }

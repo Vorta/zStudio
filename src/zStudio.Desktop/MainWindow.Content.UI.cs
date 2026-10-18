@@ -27,16 +27,6 @@ public partial class MainWindow
         ScriptRow? pointer = null;
         scriptGrid.PreviewMouseRightButtonDown += (_, e) => pointer = PropertyContext.FindAncestor<DataGridRow>(e.OriginalSource as DependencyObject)?.Item as ScriptRow;
         instructions.Opened += (_, _) => { PopulateInstructionMenu(instructions.Items, shownDocument, shownDocument?.SelectedAsset?.ResourceId, pointer ?? scriptGrid.SelectedItem as ScriptRow); pointer = null; };
-        MenuItem textures = new() { Header = "Textures" }, scripts = new() { Header = "Scripts" }, tokens = new() { Header = "Instructions" };
-        EditMenu.Items.Add(textures); EditMenu.Items.Add(scripts); EditMenu.Items.Add(tokens);
-        EditMenu.SubmenuOpened += (_, e) =>
-        {
-            if (e.OriginalSource != EditMenu) return;
-            var doc = ViewModel.SelectedDocument;
-            PopulateTextureMenu(textures.Items, doc, doc?.SelectedAsset); textures.IsEnabled = doc?.TextureEdits != null && !doc.IsContentMirror;
-            PopulateScriptMenu(scripts.Items, doc, doc?.SelectedAsset?.ResourceId); scripts.IsEnabled = doc?.ScriptEdits != null;
-            PopulateInstructionMenu(tokens.Items, doc, doc?.SelectedAsset?.ResourceId, scriptGrid.SelectedItem as ScriptRow); tokens.IsEnabled = doc?.ScriptEdits != null && doc.SelectedAsset != null;
-        };
         MenuItem textureContext = new() { Header = "Edit texture" }, scriptContext = new() { Header = "Edit script" };
         AssetGrid.ContextMenu.Items.Add(textureContext); AssetGrid.ContextMenu.Items.Add(scriptContext);
         AssetGrid.ContextMenu.Opened += (_, _) =>

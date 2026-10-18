@@ -223,9 +223,6 @@ internal sealed partial class SceneInspectionCard
         panel.VerticalAlignment = docked ? VerticalAlignment.Stretch : VerticalAlignment.Top;
         contents.RowDefinitions[1].Height = docked ? new(1, GridUnitType.Star) : GridLength.Auto;
         card.Padding = docked ? new(12, 12, 8, 10) : new(12, 12, 6, 10);
-        dock.ToolTip = docked ? "Pop out as floating window" : "Dock as the Properties pane";
-        AutomationProperties.SetName(dock, docked ? "Pop out" : "Dock");
-        ((PreviewIcon)dock.Content).Kind = docked ? "PopOut" : "DockRight";
         viewport.NavigationCubeTopRight = docked; viewport.ShowAxes = !docked;
         Refresh();
     }

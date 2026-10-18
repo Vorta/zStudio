@@ -21,7 +21,7 @@ namespace zStudio.Desktop.Tests;
 /// one would act on none. The shown world, the workspace with its
 /// undo and redo steps, and Problems stay as they were; the status says the edit was taken back (as it says that a world
 /// did not open or reload). An accepted copy shows its notes, and the lookup by name it changed is counted as well as
-/// listed in Problems.
+/// listed in Diagnostics.
 /// </summary>
 internal static class SourceTakeBackMcpChecks
 {

@@ -1,6 +1,7 @@
 namespace zStudio.Core;
 
-public enum WorldHighlightMode { None, NonDefaultSoils, CanModify, ClipTo, Zones, CanModifyAndClipTo, Landmarks }
+/// <summary>Zones tints by each node's (object's) zone; PolygonZones by each polygon's zone set, striped where it has several.</summary>
+public enum WorldHighlightMode { None, NonDefaultSoils, CanModify, ClipTo, Zones, CanModifyAndClipTo, Landmarks, PolygonZones }
 
 [Flags]
 public enum WorldSurfaceKind { Default = 0, NonDefaultSoil = 1, CanModify = 2, ClipTo = 4, Landmark = 8 }
@@ -62,6 +63,7 @@ public static class WorldSurfaceHighlights
         WorldHighlightMode.ClipTo => (kind & WorldSurfaceKind.ClipTo) != 0,
         WorldHighlightMode.CanModifyAndClipTo => (kind & (WorldSurfaceKind.CanModify | WorldSurfaceKind.ClipTo)) != 0,
         WorldHighlightMode.Zones => true,
+        WorldHighlightMode.PolygonZones => false, // per polygon, not per node
         WorldHighlightMode.Landmarks => (kind & WorldSurfaceKind.Landmark) != 0,
         _ => throw new ArgumentOutOfRangeException(nameof(mode))
     };

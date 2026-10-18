@@ -13,6 +13,15 @@ public static partial class SourceBlender
         internal Dictionary<int, string> EditorMeshes { get; init; } = [];
         internal Dictionary<int, int[][]> Faces { get; init; } = [];
         internal Dictionary<int, int[][]> PolygonSources { get; init; } = [];
+        /// <summary>Per polygon, the faces its faces were split from in Blender, nearest first (empty when none).</summary>
+        internal Dictionary<int, int[][]> FaceParents { get; init; } = [];
+        /// <summary>
+        /// Per polygon, the earlier mesh its sources are in, where that is not the mesh <see cref="Meshes"/> names (faces
+        /// joined back from a mesh separated in an earlier generation).
+        /// </summary>
+        internal Dictionary<int, int[]> PolygonMeshes { get; init; } = [];
+        /// <summary>Per copied node, the editor identity of the object it was copied from in Blender.</summary>
+        internal Dictionary<int, string> CopiedNodes { get; init; } = [];
     }
 
     public static JsonObject PrepareBlenderExport(string edits, string destination, CancellationToken token = default)
@@ -28,6 +37,13 @@ public static partial class SourceBlender
         if (outputRoot.Equals(sourceRoot, StringComparison.OrdinalIgnoreCase) || outputRoot.StartsWith(sourceRoot + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
             throw new InvalidDataException("Choose an export folder outside the imported sources; a checkout's outbox is beside its input folder.");
         string root = manifest["root"]!.GetValue<string>();
+        // The Blender import this export came from: an update accepts as its own only what that same import applied before.
+        static bool Plain(string? text, int maximum) => text != null && text.Length > 0 && text.Length <= maximum && text.All(c => c is >= ' ' and <= '~');
+        string? import = request["import"] is JsonValue named && named.TryGetValue(out string? text) && Plain(text, 128) ? text : null;
+        // The generations this Blender file exported before (absent from older extensions: then only the import is compared).
+        JsonArray? lineage = request["lineage"] is JsonArray earlier
+            ? new JsonArray(earlier.TakeLast(256).Select(g => g is JsonValue v && v.TryGetValue(out string? name) && Plain(name, 64) ? (JsonNode?)JsonValue.Create(name) : null).OfType<JsonNode>().ToArray())
+            : null;
         Graph original = new((path, maximum) => SourceRead.All(GraphPath(session, "baseline/" + path), maximum, token), token);
         original.Load(root);
         if (manifest["files"]!.AsArray().Count != original.Files.Count) throw new InvalidDataException("The Blender baseline inventory changed; import the source again.");
@@ -81,6 +97,8 @@ public static partial class SourceBlender
             var mapping = ReadMapping(before, exported, json, token);
             faceIds[path] = (json["meshes"] as JsonArray ?? []).Select((mesh, index) => (index, Faces: mesh!["primitives"]!.AsArray()
                 .SelectMany(p => p!["extras"]![BridgeKey]!["faces"]!.AsArray().Select(v => v!.GetValue<int>())).ToArray())).ToDictionary(p => p.index, p => p.Faces);
+            var triangleOrigins = (json["meshes"] as JsonArray ?? []).Select((mesh, index) => (index, Origins: mesh!["primitives"]!.AsArray()
+                .SelectMany(p => p!["extras"]![BridgeKey]!["origins"]!.AsArray().Select(v => v!.GetValue<int>())).ToArray())).ToDictionary(p => p.index, p => p.Origins);
             bool geometry = row["geometryChanged"]?.GetValue<bool>() == true || StructuralChange(before.Json, json, mapping);
             geometry |= ChangedPolygonZones(before, exported, json, mapping, token);
             var result = geometry ? json : MergeMetadata(before, json, mapping, token);
@@ -157,9 +175,16 @@ public static partial class SourceBlender
                 {
                     int originalIndex = indices[mesh];
                     int exportedIndex = mapping.Meshes.Single(m => m.Value.Mesh == originalIndex).Key;
-                    int offset = 0;
-                    identity.Faces[originalIndex] = mesh.Primitives.SelectMany(p => layout.Triangles[p]).Select(count =>
-                    { var faces = rawFaces[exportedIndex].Skip(offset).Take(count).Distinct().ToArray(); offset += count; return faces; }).ToArray();
+                    // Blender orders the triangles its own way (by material): each polygon's faces are those of the triangles
+                    // that came from it.
+                    int polygons = mesh.Primitives.SelectMany(p => layout.Triangles[p]).Count();
+                    var grouped = Enumerable.Range(0, polygons).Select(_ => new List<int>()).ToArray();
+                    var faces = rawFaces[exportedIndex]; var origins = triangleOrigins[exportedIndex];
+                    if (origins.Length != faces.Length) throw new InvalidDataException("Exported polygon identities do not match the geometry.");
+                    for (int t = 0; t < faces.Length; t++)
+                        if (origins[t] >= 0 && origins[t] < polygons && !grouped[origins[t]].Contains(faces[t])) grouped[origins[t]].Add(faces[t]);
+                    if (grouped.Any(g => g.Count == 0)) throw new InvalidDataException("An unchanged mesh no longer has a face for each polygon.");
+                    identity.Faces[originalIndex] = grouped.Select(g => g.ToArray()).ToArray();
                     faceIds[path][originalIndex] = identity.Faces[originalIndex].Select(f => f[0]).ToArray();
                 }
                 mapping = identity;
@@ -206,7 +231,7 @@ public static partial class SourceBlender
         foreach (var (path, bytes) in updated.Files) written.Write(GraphPath(folder, path), bytes);
         JsonObject complete = new()
         {
-            ["format"] = "zstudio-recoil-export", ["version"] = GraphProtocol, ["root"] = root,
+            ["format"] = "zstudio-recoil-export", ["version"] = GraphProtocol, ["root"] = root, ["import"] = import, ["generation"] = generation, ["lineage"] = lineage,
             ["files"] = new JsonArray(updated.Files.Select(p => (JsonNode)new JsonObject { ["path"] = p.Key, ["sha256"] = SourceProject.Sha256(p.Value) }).ToArray()),
             ["models"] = new JsonArray(mappings.Select(p => (JsonNode)new JsonObject
             {
@@ -214,10 +239,14 @@ public static partial class SourceBlender
                 ["fingerprint"] = WorldGltf.LayoutFingerprint(documents[p.Key], token),
                 ["editorNodes"] = new JsonObject(p.Value.EditorNodes.Select(n => KeyValuePair.Create<string, JsonNode?>(n.Key.ToString(CultureInfo.InvariantCulture), JsonValue.Create(n.Value)))),
                 ["editorMeshes"] = new JsonObject(p.Value.EditorMeshes.Select(n => KeyValuePair.Create<string, JsonNode?>(n.Key.ToString(CultureInfo.InvariantCulture), JsonValue.Create(n.Value)))),
+                ["copiedNodes"] = p.Value.CopiedNodes.Count == 0 ? null
+                    : new JsonObject(p.Value.CopiedNodes.Select(n => KeyValuePair.Create<string, JsonNode?>(n.Key.ToString(CultureInfo.InvariantCulture), JsonValue.Create(n.Value)))),
                 ["nodes"] = new JsonObject(p.Value.Nodes.Select(n => KeyValuePair.Create<string, JsonNode?>(n.Key.ToString(CultureInfo.InvariantCulture), JsonValue.Create(n.Value)))),
                 ["meshes"] = new JsonObject(p.Value.Meshes.Select(m => KeyValuePair.Create<string, JsonNode?>(m.Key.ToString(CultureInfo.InvariantCulture), new JsonObject
                 { ["mesh"] = m.Value.Mesh, ["polygons"] = new JsonArray(m.Value.Polygons.Select(v => (JsonNode)JsonValue.Create(v)!).ToArray()),
-                    ["faces"] = new JsonArray(p.Value.Faces[m.Key].Select(f => (JsonNode)new JsonArray(f.Select(v => (JsonNode)JsonValue.Create(v)!).ToArray())).ToArray()) }))),
+                    ["faces"] = new JsonArray(p.Value.Faces[m.Key].Select(f => (JsonNode)new JsonArray(f.Select(v => (JsonNode)JsonValue.Create(v)!).ToArray())).ToArray()),
+                    ["parents"] = p.Value.FaceParents.TryGetValue(m.Key, out var split) && split.Any(f => f.Length > 0)
+                        ? new JsonArray(split.Select(f => (JsonNode)new JsonArray(f.Select(v => (JsonNode)JsonValue.Create(v)!).ToArray())).ToArray()) : null }))),
             }).ToArray()),
         };
         // The completion manifest is last. Listings never offer a partially written generation.
@@ -241,7 +270,7 @@ public static partial class SourceBlender
     private static GraphMapping ReadMapping(GraphModel before, GltfDocument after, JsonObject json, CancellationToken token)
     {
         Dictionary<int, int> nodes = []; Dictionary<int, (int, int[])> meshes = [];
-        Dictionary<int, string> editorNodes = [], editorMeshes = [];
+        Dictionary<int, string> editorNodes = [], editorMeshes = [], copiedNodes = [];
         string Identity(JsonNode? values, int index, string prefix)
         {
             string id = values?["zstudio_editor_id"]?.GetValue<string>() ?? prefix + index.ToString(CultureInfo.InvariantCulture);
@@ -256,6 +285,12 @@ public static partial class SourceBlender
             if (origin < -1 || origin >= oldCount) throw new InvalidDataException("Invalid exported node provenance.");
             nodes.Add(node.Index, origin);
             editorNodes.Add(node.Index, Identity(json["nodes"]![node.Index]?["extras"], node.Index, "n"));
+            if (json["nodes"]![node.Index]?["extras"]?["zstudio_copy_of"] is JsonNode copied)
+            {
+                string from = copied.GetValue<string>();
+                if (from.Length is < 1 or > 64 || from.Any(c => !char.IsAsciiLetterOrDigit(c))) throw new InvalidDataException("Invalid Blender copy identity.");
+                copiedNodes.Add(node.Index, from);
+            }
         }
         var array = json["meshes"] as JsonArray ?? [];
         for (int i = 0; i < array.Count; i++)
@@ -273,7 +308,7 @@ public static partial class SourceBlender
         }
         if (editorNodes.Values.Distinct().Count() != editorNodes.Count || editorMeshes.Values.Distinct().Count() != editorMeshes.Count)
             throw new InvalidDataException("Copied objects or meshes have ambiguous editor identities. Reopen their placement zones or make the edited mesh single-user before exporting.");
-        return new(nodes, meshes) { EditorNodes = editorNodes, EditorMeshes = editorMeshes };
+        return new(nodes, meshes) { EditorNodes = editorNodes, EditorMeshes = editorMeshes, CopiedNodes = copiedNodes };
     }
 
     private static bool StructuralChange(JsonObject before, JsonObject after, GraphMapping mapping)
@@ -323,7 +358,11 @@ public static partial class SourceBlender
 
     private static void SetRecoil(JsonObject target, JsonNode? value)
     {
-        if (value is not JsonObject) throw new InvalidDataException("The export lost required RECOIL properties.");
+        // The same properties (Blender may reorder keys or respell numbers): the source keeps its own text.
+        if (value is JsonObject && target["extras"]?[WorldGltf.Key] is JsonObject existing && JsonNode.DeepEquals(existing, value)) return;
+        if (value is not JsonObject properties) throw new InvalidDataException("The export lost required RECOIL properties.");
+        // No properties where the source had none: the file is left as it was.
+        if (properties.Count == 0 && target["extras"]?[WorldGltf.Key] == null) return;
         if (target["extras"] == null) target["extras"] = new JsonObject();
         target["extras"]![WorldGltf.Key] = value.DeepClone();
     }
@@ -368,12 +407,19 @@ public static partial class SourceBlender
             var parsed = parsedMeshes[index]; var primitives = json["meshes"]![index]!["primitives"]!.AsArray();
             int oldFaces = mapped.Mesh < 0 ? 0 : oldMeshes[mapped.Mesh].Primitives.Sum(p => oldLayout.Polygons[p].Count);
             var oldCounts = mapped.Mesh < 0 ? [] : oldMeshes[mapped.Mesh].Primitives.SelectMany(p => oldLayout.Triangles[p]).ToArray();
-            List<int> remapped = [], retainedFaces = []; List<int[]> faceGroups = [];
+            // Blender imported each triangle as a face numbered from 1 in this order: a polygon's own triangles carry the
+            // face identities (first, first + count].
+            var firstFace = new int[oldCounts.Length];
+            for (int i = 1; i < oldCounts.Length; i++) firstFace[i] = firstFace[i - 1] + oldCounts[i - 1];
+            List<int> remapped = [], retainedFaces = []; List<int[]> faceGroups = [], parentGroups = [];
             for (int j = 0; j < primitives.Count; j++)
             {
                 var primitive = primitives[j]!.AsObject(); var metadata = primitive["extras"]![BridgeKey]!;
                 var origins = metadata["origins"]!.AsArray(); var zones = metadata["zones"]!.AsArray();
                 var identities = metadata["faces"]!.AsArray(); var partitions = metadata["partitions"] as JsonArray;
+                var parents = metadata["parents"] as JsonArray;
+                if (parents != null && (parents.Count != identities.Count || parents.Any(p => p is not JsonArray chain || chain.Count > 64)))
+                    throw new InvalidDataException("Exported face ancestry does not match the geometry.");
                 if (origins.Count != parsed.Primitives[j].Indices.Count / 3 || zones.Count != origins.Count) throw new InvalidDataException("Exported polygon identities do not match the geometry.");
                 JsonArray polygons = []; List<uint> words = [];
                 bool patch = false;
@@ -383,9 +429,12 @@ public static partial class SourceBlender
                     if (origin < -1 || origin >= oldFaces) throw new InvalidDataException("An exported face has invalid source provenance.");
                     int count = origin < 0 ? 1 : oldCounts[origin];
                     bool complete = count > 1 && k + count <= origins.Count;
-                    for (int c = 1; complete && c < count; c++)
+                    // Only the polygon's own triangles are written as one polygon again; faces split or added in Blender
+                    // stay separate polygons, so how they group never depends on the triangle order or shape.
+                    for (int c = 0; complete && c < count; c++)
                         complete = origins[k + c]!.GetValue<int>() == origin && JsonNode.DeepEquals(zones[k], zones[k + c])
-                            && (partitions == null || JsonNode.DeepEquals(partitions[k], partitions[k + c]));
+                            && (partitions == null || JsonNode.DeepEquals(partitions[k], partitions[k + c]))
+                            && identities[k + c]!.GetValue<int>() is int face && face > firstFace[origin] && face <= firstFace[origin] + count;
                     var corners = complete ? ExportBoundary(parsed.Primitives[j], k, count, work) : null;
                     polygons.Add(corners == null ? JsonValue.Create(1) : new JsonObject
                     { ["triangles"] = count, ["corners"] = new JsonArray(corners.Select(c => (JsonNode)JsonValue.Create(c)!).ToArray()) });
@@ -397,6 +446,9 @@ public static partial class SourceBlender
                     }
                     words.Add(word); remapped.Add(origin); retainedFaces.Add(identities[k]!.GetValue<int>());
                     faceGroups.Add(identities.Skip(k).Take(corners == null ? 1 : count).Select(f => f!.GetValue<int>()).Distinct().ToArray());
+                    var chains = parents == null ? [] : parents.Skip(k).Take(corners == null ? 1 : count).Select(p => p!.AsArray().Select(f => f!.GetValue<int>()).ToArray()).ToArray();
+                    parentGroups.Add(Enumerable.Range(0, chains.Length == 0 ? 0 : chains.Max(c => c.Length))
+                        .SelectMany(level => chains.Where(c => level < c.Length).Select(c => c[level])).Where(f => f > 0).Distinct().ToArray());
                     if (corners != null) { k += count - 1; patch = true; }
                 }
                 JsonObject properties = new() { ["polygons"] = polygons };
@@ -408,6 +460,7 @@ public static partial class SourceBlender
             mapping.Meshes[index] = (mapped.Mesh, remapped.ToArray());
             faceIds[index] = retainedFaces.ToArray();
             mapping.Faces[index] = faceGroups.ToArray();
+            mapping.FaceParents[index] = parentGroups.ToArray();
         }
         return patches;
     }
@@ -419,7 +472,7 @@ public static partial class SourceBlender
             if (node?["extras"] is not JsonObject extras || extras[WorldGltf.Key] is not JsonObject values) throw new InvalidDataException("An exported node lost its RECOIL attributes.");
             WorldGltf.WriteNodeFlags(values, WorldGltf.StoredNodeFlags(values));
             extras.Remove(BridgeKey); extras.Remove("zstudio_transform_changed");
-            extras.Remove("zstudio_editor_id");
+            extras.Remove("zstudio_editor_id"); extras.Remove("zstudio_copy_of");
         }
         foreach (string kind in new[] { "meshes", "materials" })
             foreach (var item in json[kind] as JsonArray ?? [])
@@ -537,9 +590,11 @@ public static partial class SourceBlender
                 int index = newIndices[mesh];
                 var mapped = mapping.Meshes[index];
                 var fallback = defaults.MeshPolygons[meshes.Count];
-                var old = mapped.Mesh < 0 ? null : profile.MeshPolygons[oldMeshes[mapped.Mesh]];
+                var sourceMeshes = mapping.PolygonMeshes.GetValueOrDefault(index);
                 meshes.Add(mapped.Polygons.Select((p, i) =>
                 {
+                    int source = sourceMeshes?[i] ?? mapped.Mesh;
+                    var old = source < 0 ? null : profile.MeshPolygons[oldMeshes[source]];
                     if (old == null || p < 0) return fallback[i];
                     var candidates = mapping.PolygonSources.TryGetValue(index, out var sources) ? sources[i] : [p];
                     if (candidates.Any(c => old[c] != old[p])) throw new InvalidDataException("A geometry merge combines different placement zones. Keep these faces separate or create a fresh checkout after resolving their assignments.");

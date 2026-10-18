@@ -12,31 +12,28 @@ namespace zStudio.Desktop;
 
 public partial class MainWindow
 {
-    internal sealed record PresentationStatus(bool Fullscreen, bool UiHidden, bool Available);
-    private bool presentationFullscreen, presentationUiHidden, refreshingPresentation, fullscreenBoundsQueued;
-    private PropertiesWindow? presentationProperties;
+    internal sealed record PresentationStatus(bool Fullscreen, bool Available);
+    private bool presentationFullscreen, refreshingPresentation, fullscreenBoundsQueued;
     private WindowPresentation? ordinaryWindow;
     private int layoutLeases;
     internal bool IsChangingLayout => layoutLeases != 0;
-    internal PresentationStatus PresentationState => new(presentationFullscreen, presentationUiHidden, ActiveNavigationViewport != null);
+    internal PresentationStatus PresentationState => new(presentationFullscreen, ActiveNavigationViewport != null);
 
-    internal PresentationStatus SetPresentation(bool? fullscreen = null, bool? uiHidden = null)
+    internal PresentationStatus SetPresentation(bool? fullscreen = null)
     {
         Dispatcher.VerifyAccess();
-        if (fullscreen == null && uiHidden == null) return PresentationState;
-        if ((fullscreen == true || uiHidden == true) && ActiveNavigationViewport == null)
-            throw new StudioCommandException("preview_unavailable", "Open a 3D preview before enabling presentation modes.");
+        if (fullscreen == null) return PresentationState;
+        if (fullscreen == true && ActiveNavigationViewport == null)
+            throw new StudioCommandException("preview_unavailable", "Open a 3D preview before enabling fullscreen.");
         using var lease = BeginLayoutChange();
         if (fullscreen is bool full && full != presentationFullscreen) SetFullscreen(full);
-        if (uiHidden is bool hidden) presentationUiHidden = hidden;
         RefreshPresentation();
         ArrangeWorkspace();
         return PresentationState;
     }
 
     internal static string? PresentationShortcut(Key key, ModifierKeys modifiers) =>
-        key == Key.F11 && modifiers == ModifierKeys.None ? "fullscreen" :
-        key == Key.H && modifiers == (ModifierKeys.Control | ModifierKeys.Shift) ? "uiHidden" : null;
+        key == Key.F11 && modifiers == ModifierKeys.None ? "fullscreen" : null;
 
     internal bool PresentationKey(KeyEventArgs e)
     {
@@ -50,67 +47,28 @@ public partial class MainWindow
     private void PresentationActionClick(object sender, RoutedEventArgs e) => TogglePresentation((string)((MenuItem)sender).Tag);
     private void TogglePresentation(string action)
     {
-        try { SetPresentation(action == "fullscreen" ? !presentationFullscreen : null, action == "uiHidden" ? !presentationUiHidden : null); }
+        try { SetPresentation(action == "fullscreen" ? !presentationFullscreen : null); }
         catch (Exception ex) when (ex is StudioCommandException or Win32Exception) { ViewModel.Status = ex.Message; RefreshPresentation(); }
     }
 
-    private void RefreshPresentation(bool previewSettled = false)
+    private void RefreshPresentation()
     {
         if (refreshingPresentation) return;
         refreshingPresentation = true;
         using var lease = BeginLayoutChange();
         try
         {
-            // Loading temporarily removes the viewport. Only a completed selection decides
-            // whether navigation left 3D; a 3D replacement inherits the current override.
-            if (previewSettled && ActiveNavigationViewport == null) presentationUiHidden = false;
-            bool hidden = presentationUiHidden;
             FullscreenMenu.IsChecked = presentationFullscreen;
-            HideUiMenu.IsChecked = hidden;
             FullscreenMenu.IsEnabled = presentationFullscreen || ActiveNavigationViewport != null;
-            HideUiMenu.IsEnabled = hidden || ActiveNavigationViewport != null;
             CaptionMaximize.IsEnabled = !presentationFullscreen;
-            foreach (var chrome in new UIElement[] { TitleArea, PresentationStatusBar, PreviewHeading, PreviewFooter, PreviewToolbarHost, PreviewOverlayChrome })
-                chrome.Visibility = hidden ? Visibility.Collapsed : Visibility.Visible;
             RefreshStaleBanner();
-            Workbench.Margin = hidden ? new(0) : new(6, 0, 6, 4);
-            PreviewInner.Margin = hidden ? new(0) : new(4);
-            ApplyRetainedPresentation();
-            if (hidden && propertiesWindow?.IsVisible == true)
-            {
-                presentationProperties = propertiesWindow;
-                propertiesWindow.Hide();
-            }
-            else if (!hidden && presentationProperties is { } popup)
-            {
-                presentationProperties = null;
-                if (popup == propertiesWindow && popup.Document?.IsDisposed == false)
-                {
-                    // Showing restores the same draft and owner without activating an MCP request.
-                    bool activate = popup.ShowActivated;
-                    popup.ShowActivated = false;
-                    popup.Show();
-                    popup.ShowActivated = activate;
-                }
-            }
         }
         finally { refreshingPresentation = false; }
         // A source map's chrome keeps its own toolbar and footer hidden.
         RefreshSourceChrome();
     }
 
-    private void ApplyRetainedPresentation()
-    {
-        // Availability excludes loading previews, but their retained controls can already be
-        // attached and rendering. Apply before attachment and on mode changes during loading.
-        animation?.SetPresentationUiHidden(presentationUiHidden);
-        motion?.SetPresentationUiHidden(presentationUiHidden);
-        scene?.SetPresentationUiHidden(presentationUiHidden);
-        animation?.Viewport.SetPresentationUiHidden(presentationUiHidden);
-        motion?.Viewport.SetPresentationUiHidden(presentationUiHidden);
-    }
-
-    internal bool IsPropertiesPresented(PropertiesWindow window) => window.IsVisible || ReferenceEquals(window, presentationProperties);
+    internal bool IsPropertiesPresented(PropertiesWindow window) => window.IsVisible;
 
     private IDisposable BeginLayoutChange()
     {

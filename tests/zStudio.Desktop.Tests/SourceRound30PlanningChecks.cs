@@ -128,7 +128,7 @@ internal static class SourceRound30PlanningChecks
                 Assert.False(workspace.CanUndo); Assert.False(workspace.CanRedo); Assert.False(workspace.IsDirty);
                 Assert.Empty(workspace.Overlay()); Assert.Same(doc, main.ViewModel.SelectedDocument);
                 Assert.Same(preview, doc.PreviewDocument); Assert.False(doc.IsDisposed);
-                Assert.False(main.CancelOperationItem.IsEnabled);
+                Assert.False(main.OperationRunning);
                 foreach (var (path, bytes) in original) if (path != (locked == null ? null : fixture.Path(locked))) Assert.Equal(bytes, File.ReadAllBytes(path));
             }
             async Task<JsonNode> Call(string name, Dictionary<string, object?> arguments)

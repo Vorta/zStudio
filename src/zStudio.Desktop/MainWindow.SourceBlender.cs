@@ -164,9 +164,12 @@ public partial class MainWindow
     }
 
     /// <summary>GUI: Edit in Blender for the object selected in a source world (its model), then show the checkout folder.</summary>
+    private bool blenderCheckoutRunning;
     private void EditInBlenderClick(object sender, RoutedEventArgs e) => _ = RunUi(async () =>
     {
         string root = SourceProjectRoot ?? throw new StudioCommandException("no_project", "Open a source project first.");
+        // The copy can take seconds with nothing else showing it: a second request waits for the first (before choosing).
+        if (blenderCheckoutRunning) { Notice("A checkout for Blender is still being copied; wait for it to finish."); return; }
         string? selected = ViewModel.SelectedDocument is { SourceWorld: not null } doc && selectedNode is int node && SourceObjectNode(node) is int sourceNode
             ? SourceObjectModel(doc, sourceNode) : null;
         var picker = new Microsoft.Win32.OpenFileDialog { Title = "Choose source glTF for Blender", Filter = "RECOIL glTF (*.gltf)|*.gltf",
@@ -175,7 +178,13 @@ public partial class MainWindow
         if (picker.ShowDialog(this) != true) return;
         if (SourceProjectRoot != root) throw new StudioCommandException("context_changed", "The source project changed while choosing the model.");
         string model = Path.GetRelativePath(root, picker.FileName).Replace('\\', '/');
-        var checkout = await CheckoutForBlenderAsync(model, shutdownToken);
+        if (blenderCheckoutRunning) { Notice("A checkout for Blender is still being copied; wait for it to finish."); return; }
+        blenderCheckoutRunning = true;
+        BlenderCheckout checkout;
+        try { checkout = await CheckoutForBlenderAsync(model, shutdownToken); }
+        // A project that changed during the copy leaves the copy unusable: say so (and where it is) rather than nothing.
+        catch (StudioCommandException ex) when (ex.Code == "context_changed") { Report(ex); return; }
+        finally { blenderCheckoutRunning = false; }
         string message = $"{model} is checked out for Blender.\n\nInstall the bundled extension from dependencies/blender in Blender 5.2 LTS Preferences → Get Extensions → Install from Disk. Set its zStudio executable preference.\n\n1. Use File → Import → RECOIL glTF:\n{checkout.Input}\n2. Use Export RECOIL glTF to:\n{checkout.Outbox}\n3. Choose Tools → Update from Blender export in zStudio. Review the update, then Save to write the source files.\n\nOpen the checkout folder now?";
         if (MessageBox.Show(this, message, "Edit in Blender", MessageBoxButton.YesNo, MessageBoxImage.Information) == MessageBoxResult.Yes)
             Process.Start(new ProcessStartInfo { FileName = checkout.Folder, UseShellExecute = true });
@@ -189,18 +198,26 @@ public partial class MainWindow
     {
         if (ViewModel.SelectedDocument is not { SourceWorld: { } session } doc) throw new StudioCommandException("unsupported", "Open a mission world of the source project first.");
         var listed = await CheckoutExportsAsync(session.Root, shutdownToken);
-        // The world may have closed while the checkouts were listed.
+        // An edit may have rebuilt the world meanwhile (its replacement is the session's owner); it may also have closed.
+        if (doc.IsDisposed && session.Owner is { IsDisposed: false } rebuilt) doc = rebuilt;
         if (doc.IsDisposed || !ViewModel.Documents.Contains(doc)) throw new StudioCommandException("context_changed", "The world was closed while the Blender exports were listed.");
         var candidates = listed.Where(c => c.Exports.Count > 0).ToArray();
         if (candidates.Length == 0) throw new StudioCommandException("not_ready", "No Blender export was found in the project's zstudio/export folder. Use Edit in Blender first.");
         BlenderUpdateDialog dialog = new(candidates) { Owner = this };
         if (dialog.ShowDialog() != true) return;
         var (checkout, export) = dialog.Chosen;
-        // The world may also have closed while the export was chosen.
+        // The world may also have been rebuilt or closed while the export was chosen.
+        if (doc.IsDisposed && session.Owner is { IsDisposed: false } replaced) doc = replaced;
         if (doc.IsDisposed || !ViewModel.Documents.Contains(doc)) throw new StudioCommandException("context_changed", "The world was closed while the Blender export was chosen.");
         if (await UpdateFromBlenderWithConsentAsync(doc, checkout.Id, export.Relative, shutdownToken) is not { } result) return;
         int count = result.Files.Count;
-        ViewModel.Status = count == 0 ? $"{checkout.Model} already matches the Blender export." : $"Updated {checkout.Model} from Blender: {count} file{(count == 1 ? "" : "s")} changed" + (result.Plan.Notes.Count > 0 ? $"; {result.Plan.Notes.Count} notes in Problems" : "");
+        int notes = result.Plan.Notes.Count;
+        string outcome = (count == 0 ? $"{checkout.Model} already matches the Blender export" : $"Updated {checkout.Model} from Blender: {count} file{(count == 1 ? "" : "s")} changed")
+            + (notes > 0 ? $"; {notes} note{(notes == 1 ? " is" : "s are")} listed in Diagnostics" : "") + ".";
+        // A source map's status bar shows no messages: the outcome is shown, and notes open Diagnostics.
+        ViewModel.Status = outcome;
+        if (result.Plan.Notes.Count > 0) SetToolsVisible(true, problems: true);
+        System.Windows.MessageBox.Show(this, outcome, "Update from Blender export");
     });
 
     internal Func<string, bool>? ConfirmBlenderUpdate { get; set; }

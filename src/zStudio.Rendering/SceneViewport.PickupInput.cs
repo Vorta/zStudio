@@ -22,7 +22,7 @@ public sealed partial class SceneViewport
 
     private HitTestResult? PickPickupHandle(Point point)
     {
-        if (PresentationUiHidden || !CanManipulate ||
+        if (!CanManipulate ||
             pickupManipulator?.Visibility != Visibility.Visible || viewport.Camera is not HelixToolkit.Wpf.SharpDX.ProjectionCamera camera ||
             !IsInsidePickupViewport(point)) return null;
         var origin = transformDraft.Position;
@@ -112,7 +112,6 @@ public sealed partial class SceneViewport
 
     internal bool HandlePickupPointerMove(Point point)
     {
-        if (PresentationUiHidden) return IsPickupDragging;
         if (IsFlyActive) return true;
         if (IsPickupDragging && activePickupHandle?.ModelHit is MeshGeometryModel3D arrow)
         {
@@ -140,7 +139,7 @@ public sealed partial class SceneViewport
     {
         if (IsFlyActive) return true;
         if (!IsPickupDragging || e.ChangedButton != MouseButton.Left) return false;
-        if (!PresentationUiHidden && !IsInsidePickupViewport(point)) { CancelPickupDrag(); return true; }
+        if (!IsInsidePickupViewport(point)) { CancelPickupDrag(); return true; }
         if (TransformMode == "move" && objectDraftNode == null && activePickupHandle?.ModelHit is MeshGeometryModel3D arrow)
             arrow.RaiseEvent(new MouseUp3DEventArgs(arrow, activePickupHandle, point, viewport, e));
         activePickupHandle = null; IsPickupDragging = false;

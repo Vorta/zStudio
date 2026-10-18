@@ -114,6 +114,22 @@ public partial class MainWindow
         if (write) RequireNoDrafts(doc);
         return doc;
     }
+    /// <summary>
+    /// Before choosing another object (MCP select, as the GUI's tree, search and viewport selection): the drafts a selection
+    /// resolves. A map zone draft (which collects chosen objects) and Properties input stay, since choosing never retargets
+    /// Properties.
+    /// </summary>
+    private void RequireNoSelectionDrafts(DocumentModel? doc = null)
+    {
+        if (parachuteDraft is { } drop && (doc == null || doc == drop.Session.World || doc == drop.Session.Owner))
+            throw new StudioCommandException("pending_drafts", "Confirm or cancel the Parachute move before continuing.");
+        if (HasAiPathDraft && (doc == null || aiPathDraft!.Document == doc))
+            throw new StudioCommandException("pending_drafts", "Confirm or cancel the AI path transform with ai_path before continuing.");
+        if (HasInspectionDraft && (doc == null || inspectionDraft!.DraftDocument == doc))
+            throw new StudioCommandException("pending_drafts", "Resolve the scene card draft explicitly before continuing.");
+        if ((doc == null || shownDocument == doc) && animation?.HasAutomationDrafts == true)
+            throw new StudioCommandException("pending_drafts", "Unfinished GUI input is retained. Inspect and explicitly resolve drafts before continuing.");
+    }
     /// <remarks>With <paramref name="committing"/>, drafts whose commit is running (and called this) do not count.</remarks>
     private void RequireNoDrafts(DocumentModel? doc = null, bool committing = false, SceneInspectionCard? committingCard = null, ZoneDraft? committingZones = null, AiPathDraft? committingAiPath = null, ParachuteDraft? committingParachute = null)
     {

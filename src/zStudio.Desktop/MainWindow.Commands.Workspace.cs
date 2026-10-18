@@ -58,7 +58,8 @@ public partial class MainWindow
             RequireRootPublication();
             // A relative folder would resolve against zStudio's own folder, not the client's.
             if (!Path.IsPathFullyQualified(Text(a, "path"))) throw new StudioCommandException("invalid_argument", "Give the folder as a full path.");
-            string path = Path.GetFullPath(Text(a,"path"));
+            // The root as OpenRootAsync publishes it (no trailing separator).
+            string path = Path.TrimEndingDirectorySeparator(Path.GetFullPath(Text(a,"path")));
             if (Flag(a, "project")) { await RequireSourceProjectAsync(path, token); RequireRootPublication(); }
             long workspaceGeneration = ViewModel.WorkspaceGeneration + 1;
             await ViewModel.OpenRootAsync(path, token, RequireRootPublication);

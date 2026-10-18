@@ -48,7 +48,11 @@ internal static class LookupMcpChecks
             var doc = Document(opened);
             int crate = doc.PreviewDocument.Scene!.Nodes.First(n => n.Name == "crate" && doc.SourceBuild!.Provenance.ContainsKey(n.Index)).Index;
             Assert.DoesNotContain(main.ViewModel.Problems, Changed);
-            var copied = Document((await Job("source_world_object_edit", new() { ["document"] = Id(doc), ["revision"] = doc.Revision, ["node"] = crate, ["action"] = "duplicate", ["name"] = "crate2" }))["document"]!);
+            // Placed beside the crate, as the card's Copy does: X moves by the crate's width, Y and Z stay.
+            var before = zStudio.Core.SceneBuilder.LocalTransform(doc.PreviewDocument.Scene!.Nodes[crate]).Translation;
+            var copied = Document((await Job("source_world_object_edit", new() { ["document"] = Id(doc), ["revision"] = doc.Revision, ["node"] = crate, ["action"] = "duplicate", ["name"] = "crate2", ["beside"] = true }))["document"]!);
+            var beside = zStudio.Core.SceneBuilder.LocalTransform(copied.PreviewDocument.Scene!.Nodes.First(n => n.Name == "crate2" && copied.SourceBuild!.Provenance.ContainsKey(n.Index))).Translation;
+            Assert.True(beside.X > before.X); Assert.Equal((before.Y, before.Z), (beside.Y, beside.Z));
             var warning = Assert.Single(main.ViewModel.Problems, Changed);
             Assert.Equal("Warning", warning.Severity);
             Assert.Contains("crate2/lid", warning.Message);

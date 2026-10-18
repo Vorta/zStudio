@@ -21,6 +21,9 @@ public static partial class SourceBlender
         var receipt = Parse(receiptBytes, selected.Relative, token);
         if (receipt["format"]?.GetValue<string>() != "zstudio-recoil-export" || receipt["version"]?.GetValue<int>() != GraphProtocol || receipt["root"]?.GetValue<string>() != checkout.Model)
             throw new InvalidDataException("The Blender export belongs to another source graph or extension version.");
+        string? import = receipt["import"]?.GetValue<string>(), exportGeneration = receipt["generation"]?.GetValue<string>();
+        // The generations the exporting Blender file made before this one; null from extensions that do not record them.
+        HashSet<string>? lineage = receipt["lineage"] is JsonArray earlier ? earlier.Select(g => g!.GetValue<string>()).ToHashSet(StringComparer.Ordinal) : null;
         Graph exported = new((path, maximum) => SourceRead.All(GraphPath(generation, path), maximum, token), token);
         exported.Load(checkout.Model);
         var exportedModels = receipt["models"] as JsonArray ?? throw new InvalidDataException("The export has no physical source inventory.");
@@ -80,7 +83,7 @@ public static partial class SourceBlender
             if (depth > GltfDocument.MaximumDepth) throw new InvalidDataException("A placement override exceeds the hierarchy allowance.");
             if (mappings.ContainsKey(target))
             {
-                history ??= GraphHistory(view, checkout, original, exported, mappings, token);
+                history ??= GraphHistory(view, checkout, original, exported, mappings, import, lineage, token);
                 RemapScope(scope, target, history.Value.Before, documents, roots, history.Value.Mappings, token, scopeBudget); return;
             }
             if (scope["references"] is not JsonObject nested) return;
@@ -96,7 +99,10 @@ public static partial class SourceBlender
                 RemapExternal(child, WorldAssembler.Relative(target, uri), depth + 1);
             }
         }
-        var accepted = checkout.Files.Concat(checkout.Applied).GroupBy(f => f.Project, StringComparer.OrdinalIgnoreCase)
+        // States an earlier update applied count as the checkout's own only for exports that descend from that update: the
+        // same Blender import, and (when the extension records it) an export this Blender file made before. Another import of
+        // the checkout, or an older save of this one, starts from before that update; replacing what it applied would undo it.
+        var accepted = checkout.Files.Concat(checkout.Applied.Where(f => f.Import == import && (lineage == null || f.Generation != null && lineage.Contains(f.Generation)))).GroupBy(f => f.Project, StringComparer.OrdinalIgnoreCase)
             .ToDictionary(g => g.Key, g => g.Select(f => f.Sha256).ToHashSet(StringComparer.OrdinalIgnoreCase), StringComparer.OrdinalIgnoreCase);
         var hashes = view.ReadEditHashes(changes.Keys, token);
         List<string> conflicts = []; Dictionary<string, string?> expected = new(StringComparer.OrdinalIgnoreCase);
@@ -130,13 +136,31 @@ public static partial class SourceBlender
         }
         if (!force && (conflicts.Count > 0 || shadows.Count > 0))
         {
+            // States an update applied from another import, or from a later save of this Blender file, are named as such.
+            bool applied = conflicts.Any(path => checkout.Applied.Any(f => f.Project.Equals(path, StringComparison.OrdinalIgnoreCase) && f.Sha256.Equals(hashes[path], StringComparison.OrdinalIgnoreCase)));
             string reason = "The Blender graph would replace project changes or shared textures. " +
+                (applied ? "An update from another Blender import or a later save of this Blender file changed them since this file's last export; export from that file, or replace them knowingly. " : "") +
                 string.Join("; ", conflicts.Take(8)) + " " + string.Join("; ", shadows.Take(8).Select(s => s.Reason));
             var conflict = new BlenderConflictException(conflicts, reason);
             if (confirm == null) throw conflict;
             if (!confirm(conflict, token)) throw new OperationCanceledException("The Blender update was declined.", token);
         }
         foreach (string model in original.Models.Keys.Where(changes.ContainsKey)) notes.Add("Shared source updated: " + JsonData.ShownText(model, 512));
+        // Scripts and animations find objects by name, and a Blender rename or delete does not change them: say which names
+        // went (a zStudio rename refuses while a script or animation of the mission needs the name).
+        foreach (string model in exported.Models.Keys.Where(changes.ContainsKey))
+        {
+            if (view.Read(model, token) is not { } before) continue;
+            // Engine names (extras.recoil.name first), as the built world and its lookups see them; a name another node still
+            // has is not gone.
+            static HashSet<string> Names(JsonNode? json) => (json?["nodes"] as JsonArray ?? []).OfType<JsonObject>()
+                .Select(WorldGltf.EngineName).Where(n => n.Length > 0).ToHashSet(StringComparer.Ordinal);
+            var left = Names(exported.Models[model].Json);
+            var gone = Names(JsonNode.Parse(before)).Where(name => !left.Contains(name)).Order(StringComparer.Ordinal).ToArray();
+            if (gone.Length > 0)
+                notes.Add($"{JsonData.ShownText(model, 512)}: no node is named {string.Join(", ", gone.Take(8).Select(g => JsonData.ShownText(g, 64)))}"
+                    + (gone.Length > 8 ? $" and {gone.Length - 8} more" : "") + " any more. Scripts and animations that name them are not changed; check the missions that use this file.");
+        }
         var proposed = changes.Select(p => (Relative: p.Key, Content: p.Value)).ToArray();
         var changedModels = changes.Keys.Where(ModelPath).ToArray();
         if (changedModels.Length > 0)
@@ -146,7 +170,7 @@ public static partial class SourceBlender
         foreach (var (path, bytes) in exported.Files) written.Write(GraphPath(sealedFolder, path), bytes);
         written.Write(Path.Combine(sealedFolder, GraphManifest), receiptBytes);
         var planned = proposed;
-        _ = AppliedManifest(checkout, planned);
+        _ = AppliedManifest(checkout, planned, import, exportGeneration);
         view.TrackMapZoneOwners(changedModels, token);
         view.TrackMapZoneSources(changedModels, proposed, token);
         if (prepared != null) workspace.ValidatePreparedEdit(prepared, token);
@@ -159,7 +183,7 @@ public static partial class SourceBlender
         }
         if (prepared != null) workspace.CopyMapZoneOwnersFrom(view, changedModels);
         written.Keep();
-        return new("Update RECOIL graph from Blender", planned, notes, sealedFolder) { Expected = expected };
+        return new("Update RECOIL graph from Blender", planned, notes, sealedFolder) { Expected = expected, Import = import, Generation = exportGeneration };
     }
 
     private static Dictionary<string, GraphMapping> ReadReceiptMappings(JsonObject receipt, Graph before, Graph after, CancellationToken token)
@@ -209,12 +233,25 @@ public static partial class SourceBlender
             }
             Identities("editorNodes", mapping.EditorNodes, nodes.Keys);
             Identities("editorMeshes", mapping.EditorMeshes, meshes.Keys);
+            if (item["copiedNodes"] is JsonObject copied)
+                foreach (var (key, value) in copied)
+                {
+                    string from = value!.GetValue<string>(); int node = int.Parse(key, CultureInfo.InvariantCulture);
+                    if (from.Length is < 1 or > 64 || from.Any(c => !char.IsAsciiLetterOrDigit(c)) || !nodes.ContainsKey(node)) throw new InvalidDataException("Invalid copy identity in the receipt.");
+                    mapping.CopiedNodes.Add(node, from);
+                }
             foreach (var (key, value) in item["meshes"]!.AsObject())
             {
                 int index = int.Parse(key, CultureInfo.InvariantCulture);
                 var faces = value!["faces"]!.AsArray().Select(f => f!.AsArray().Select(v => v!.GetValue<int>()).ToArray()).ToArray();
                 if (faces.Length != meshes[index].Item2.Length || faces.Any(f => f.Length == 0 || f.Any(v => v <= 0))) throw new InvalidDataException("Invalid face identities in the receipt.");
                 mapping.Faces[index] = faces;
+                if (value["parents"] is JsonArray parents)
+                {
+                    var split = parents.Select(f => f!.AsArray().Select(v => v!.GetValue<int>()).ToArray()).ToArray();
+                    if (split.Length != faces.Length || split.Any(f => f.Any(v => v <= 0))) throw new InvalidDataException("Invalid face parents in the receipt.");
+                    mapping.FaceParents[index] = split;
+                }
             }
             result.Add(path, mapping);
         }

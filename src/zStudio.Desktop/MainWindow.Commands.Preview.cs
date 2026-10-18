@@ -68,7 +68,7 @@ public partial class MainWindow
                 framingSelection = motion?.Viewport.FramingSelection ?? animation?.Viewport.FramingSelection ?? (SceneHost.Visibility == Visibility.Visible ? scene?.FramingSelection : null),
                 ai = AiPreviewState(),
                 parachute = ParachuteState(),
-                presentation = new { fullscreen=PresentationState.Fullscreen, uiHidden=PresentationState.UiHidden, available=PresentationState.Available },
+                presentation = new { fullscreen=PresentationState.Fullscreen, available=PresentationState.Available },
                 lod = motion?.Lod ?? animation?.PreviewLod ?? (SceneHost.Visibility == Visibility.Visible ? (int?)LodCombo.SelectedIndex : null), difficulty = MissionWorldPath != null || motion != null ? null : ViewModel.Difficulty.ToString(),
                 mission = animation?.MissionArchive ?? scene?.Mission?.Layout.MissionArchive,
                 texturePacks = packs["items"], texturePackCount = packs["total"], texturePackOffset = packs["offset"], texturePackNextOffset = packs["nextOffset"],
@@ -129,7 +129,7 @@ public partial class MainWindow
             }
             return Result(new { visible = "all" });
         });
-        RegisterJob(r, "scene_options", "Set static model/world options: lod(integer), difficulty(Easy/Medium/Hard; RECOIL only, MW3 uses missions), textures/wireframe/faceOrientation/bounds/horizon(boolean), texturePack(path or empty for automatic), highlight(none/nonDefaultSoils/canModify/clipTo/canModifyAndClipTo/zones/landmarks), aiNodes/aiThroughGeometry(boolean), aiNetwork(all or ID with aiSnapshot). Highlights and AI are Whole world only.", [PreviewParameter,SceneChanges], false, async (a, token) =>
+        RegisterJob(r, "scene_options", "Set static model/world options: lod(integer), difficulty(Easy/Medium/Hard; RECOIL only, MW3 uses missions), textures/wireframe/faceOrientation/bounds/horizon(boolean), texturePack(path or empty for automatic), highlight(none/nonDefaultSoils/canModify/clipTo/canModifyAndClipTo/zones/polygonZones/landmarks), aiNodes/aiThroughGeometry(boolean), aiNetwork(all or ID with aiSnapshot). Highlights and AI are Whole world only.", [PreviewParameter,SceneChanges], false, async (a, token) =>
         {
             RequirePreview(a); RequireNoDrafts(shownDocument); if (animation != null || motion != null) throw new StudioCommandException("unsupported","Use animation_options or motion_preview.");
             TargetViewport(a);
@@ -219,6 +219,7 @@ public partial class MainWindow
                     "clipTo" => WorldHighlightMode.ClipTo,
                     "canModifyAndClipTo" => WorldHighlightMode.CanModifyAndClipTo,
                     "zones" => WorldHighlightMode.Zones,
+                    "polygonZones" => WorldHighlightMode.PolygonZones,
                     "landmarks" => WorldHighlightMode.Landmarks,
                     _ => WorldHighlightMode.None
                 });

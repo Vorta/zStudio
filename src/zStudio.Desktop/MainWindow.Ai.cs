@@ -35,7 +35,7 @@ public partial class MainWindow
             { await RunUi(OpenAiPathPropertiesAsync); return; }
             if (scene != viewport || viewport.SelectedAiNode is not { } id) return;
             try { await OpenAiPropertiesAsync(id, false); }
-            catch (StudioCommandException ex) { ViewModel.Status = ex.Message; }
+            catch (StudioCommandException ex) { Report(ex); }
         };
         viewport.AiLabelChanged += text =>
         {

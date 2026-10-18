@@ -24,16 +24,31 @@ public partial class MainWindow
     private bool sourceChromeActive;
     private Grid? difficultyPrefix;
     private Border? aiExtrasDivider;
-    private bool sourceOutlinerVisible = true, sourcePropertiesVisible = true, sourcePropertiesDocked = true;
-    // Diagnostics (the bottom pane) is a session pane too: it starts as the compiled explorer's Tools preference and never changes it.
+    private bool sourceOutlinerVisible = true, sourcePropertiesVisible = true;
+    // Diagnostics (the bottom pane) is the project's: shown or hidden, and its height, as the project was last viewed
+    // (.zstudio/settings.json); without that, the compiled explorer's Tools preference, which it never changes.
     private bool? sourceToolsVisible; private double? sourceToolsHeight;
     private bool SourceToolsVisible => sourceToolsVisible ?? Layout.ToolsVisible;
-    /// <summary>Shows or hides the bottom tools: a source map's session Diagnostics pane, or the compiled explorer's Tools (optionally on Problems).</summary>
+    /// <summary>Shows or hides the bottom tools: a source project's Diagnostics pane, or the compiled explorer's Tools (optionally on Problems).</summary>
     private void SetToolsVisible(bool visible, bool problems = false)
     {
-        if (ViewModel.IsSourceProject) sourceToolsVisible = visible;
+        // Only a change is remembered: a report that shows the open pane again writes nothing.
+        if (ViewModel.IsSourceProject) { bool changed = SourceToolsVisible != visible; sourceToolsVisible = visible; if (changed) RememberSourceTools(); }
         else { Layout.ToolsVisible = visible; if (problems) ToolTabs.SelectedIndex = 2; }
         ArrangeWorkspace();
+    }
+    /// <summary>Remembers the project's Diagnostics pane as it now is.</summary>
+    private void RememberSourceTools()
+    {
+        bool shown = SourceToolsVisible; double? height = sourceToolsHeight;
+        ViewModel.RememberProjectSetting(root => zStudio.Core.Sources.SourceProjectSettings.WriteDiagnostics(root, shown, height));
+    }
+    /// <summary>A source project opens with Diagnostics as it was last viewed.</summary>
+    private void ApplyProjectView()
+    {
+        var view = ViewModel.IsSourceProject ? ViewModel.ProjectView : null;
+        sourceToolsVisible = view?.Diagnostics;
+        sourceToolsHeight = view?.DiagnosticsHeight is double height ? Math.Clamp(height, 100, 700) : null;
     }
     private double sourceOutlinerWidth = 320, sourcePropertiesWidth = 340;
     private SceneInspectionCard? dockedCard;
@@ -69,7 +84,7 @@ public partial class MainWindow
         if (scene?.InspectionContent is SceneInspectionCard card)
         {
             card.IsSourceWorld = shownDocument?.SourceWorld != null;
-            if (!sourceChromeActive) { card.DockRequested = null; card.FrameSelection = null; card.CategoryOf = null; card.RecentSelections = null; card.PickRecent = null; card.WorldSummary = null; }
+            if (!sourceChromeActive) { card.WorldRebuilding = null; card.FrameSelection = null; card.CategoryOf = null; card.RecentSelections = null; card.PickRecent = null; card.WorldSummary = null; }
         }
         RefreshSourceChrome();
     }
@@ -97,7 +112,7 @@ public partial class MainWindow
         // The viewport's commands, in labelled groups.
         Move(FrameScene, SourceCameraItems, "CommandGroupButton", "Frame all — fit all visible geometry in view");
         Move(FlyEnabled, SourceCameraItems, "CommandToggle", "Flycam — Esc restores normal controls");
-        Move(Wireframe, SourceDisplayItems, "CommandToggle", "Wireframe");
+        Move(Wireframe, SourceDisplayItems, "CommandToggle", "Wireframe — outline each polygon over the surfaces");
         Move(FaceOrientation, SourceDisplayItems, "CommandToggle", "Face orientation — show normal direction");
         Move(TexturesEnabled, SourceDisplayItems, "CommandToggle", "Textures");
         Move(BoundsEnabled, SourceDisplayItems, "CommandToggle", "Bounds — object bounding boxes");
@@ -106,7 +121,8 @@ public partial class MainWindow
         Restyle(HighlightSoils, "CommandToggle", "Non-default soils — water, lava, sand");
         Restyle(HighlightCanModify, "CommandToggle", "CanModify");
         Restyle(HighlightClipTo, "CommandToggle", "ClipTo");
-        Restyle(HighlightZones, "CommandToggle", "Zones — culling zone of each piece of geometry");
+        Restyle(HighlightZones, "CommandToggle", "Object zones — the zone that decides whether each object is drawn");
+        Restyle(HighlightPolygonZones, "CommandToggle", "Polygon zones — the zones each polygon makes current when the camera or a vehicle is on it; striped where it has several");
         Restyle(HighlightLandmarks, "CommandToggle", "Landmarks — geometry and objects that are never culled");
         Move(ParachuteButton, SourceShowItems, "CommandGroupButton", "VTOL route");
         Move(AiTools, SourceShowItems);
@@ -181,7 +197,7 @@ public partial class MainWindow
         if (viewModeViewport != null) { viewModeViewport.ViewModeChanged -= RefreshViewMode; viewModeViewport = null; }
         SourceCommandBar.Visibility = ViewModeChip.Visibility = AiChip.Visibility = FlyBanner.Visibility = FlyFrame.Visibility = Visibility.Collapsed;
         PreviewToolbarHost.ClearValue(VisibilityProperty); PreviewFooter.ClearValue(VisibilityProperty);
-        PreviewInner.Margin = new(presentationUiHidden ? 0 : 4);
+        PreviewInner.Margin = new(4);
         SynchronizeFly();
     }
 
@@ -233,17 +249,16 @@ public partial class MainWindow
     private void RefreshSourceChrome()
     {
         if (!sourceChromeActive) return;
-        bool hidden = presentationUiHidden;
-        SourceCommandBar.Visibility = hidden ? Visibility.Collapsed : Visibility.Visible;
+        SourceCommandBar.Visibility = Visibility.Visible;
         PreviewToolbarHost.Visibility = PreviewFooter.Visibility = Visibility.Collapsed;
         PreviewInner.Margin = new(0);
         RefreshCommandGroups();
         var doc = ViewModel.SelectedDocument;
         SourceDocumentTitle.Text = doc?.SourceWorld?.Label ?? "";
         EditedPill.Visibility = doc?.IsDirty == true ? Visibility.Visible : Visibility.Collapsed;
-        OutlinerPaneToggle.IsChecked = sourceOutlinerVisible; PropertiesPaneToggle.IsChecked = sourcePropertiesVisible && sourcePropertiesDocked;
-        PropertiesPaneToggle.ToolTip = sourcePropertiesDocked ? "Show or hide the Properties pane" : "Properties floats over the view; dock it as the right pane";
-        ToolsPaneToggle.IsChecked = BottomTools.Visibility == Visibility.Visible;
+        OutlinerPaneToggle.IsChecked = sourceOutlinerVisible; PropertiesPaneToggle.IsChecked = sourcePropertiesVisible;
+        // The preference: a window too short for the pane hides it without turning it off.
+        ToolsPaneToggle.IsChecked = SourceToolsVisible;
         CommandState.SetIsOn(ParachuteButton, parachutes != null);
         RefreshSourceStatus(); RefreshViewportChips(); ApplyCardDocking();
     }
@@ -259,7 +274,7 @@ public partial class MainWindow
     }
     private void RefreshViewportChips()
     {
-        bool shown = sourceChromeActive && !presentationUiHidden && scene != null && SceneHost.Visibility == Visibility.Visible;
+        bool shown = sourceChromeActive && scene != null && SceneHost.Visibility == Visibility.Visible;
         bool flying = flyCamera?.IsActive == true;
         if (scene != viewModeViewport)
         {
@@ -278,32 +293,29 @@ public partial class MainWindow
     }
     private void RefreshViewMode() { if (viewModeViewport != null) ViewModeLabel.Text = viewModeViewport.ViewMode; }
 
-    /// <summary>Hosts the current card's panel in the Properties pane (docked), or lets it float over the view.</summary>
+    /// <summary>Hosts the current card's panel in the Properties pane: a source map's card is always docked there (hiding the pane hides it).</summary>
     private void ApplyCardDocking()
     {
         var card = sourceChromeActive && SceneHost.Visibility == Visibility.Visible && scene?.InspectionContent is SceneInspectionCard current ? current : null;
         // While a rebuilt map replaces the shown one, the pane keeps the old card, disabled, until the new card docks.
         SourcePropertiesPane.IsEnabled = card != null || retiringScene == null;
-        if (card == null && retiringScene != null && dockedCard != null && sourceChromeActive && !presentationUiHidden) return;
+        if (card == null && retiringScene != null && dockedCard != null && sourceChromeActive) return;
         if (card != null)
         {
-            card.DockRequested = docked => RunCardDocking(docked);
+            card.WorldRebuilding = () => rebuildEvaluating;
             card.FrameSelection = () => RunCameraNavigation("frameSelected");
             card.CategoryOf = SelectionCategory;
             card.RecentSelections = () => recentDocument == shownDocument ? recentSelections : [];
             card.PickRecent = PickRecentSelection;
             card.WorldSummary = WorldSummary;
         }
-        bool dock = card != null && sourcePropertiesDocked && sourcePropertiesVisible && !presentationUiHidden;
-        if (dockedCard != null && (!dock || !ReferenceEquals(dockedCard, card))) UndockCard();
-        if (dock && dockedCard == null)
+        if (dockedCard != null && !ReferenceEquals(dockedCard, card)) UndockCard();
+        if (card != null && dockedCard == null)
         {
-            card!.SetDocked(true);
+            card.SetDocked(true);
             SourcePropertiesHost.Content = card.PanelRoot;
             dockedCard = card;
         }
-        // Popped out (or the pane hidden), the card floats over the view as it does elsewhere.
-        if (card != null && !dock && card.Docked) card.SetDocked(false);
     }
     private void UndockCard()
     {
@@ -311,12 +323,6 @@ public partial class MainWindow
         SourcePropertiesHost.Content = null;
         dockedCard.SetDocked(false);
         dockedCard = null;
-    }
-    private void RunCardDocking(bool docked)
-    {
-        sourcePropertiesDocked = docked;
-        if (docked) sourcePropertiesVisible = true;
-        ArrangeWorkspace();
     }
 
     /// <summary>The outliner type of a selection: from its tree row when the tree shows it, otherwise from its node.</summary>
@@ -356,12 +362,12 @@ public partial class MainWindow
         var row = RecentRow(entry);
         if (row == null)
         {
-            recentSelections.Remove(entry); ViewModel.Status = $"{entry.Name} is no longer in this world.";
+            recentSelections.Remove(entry); Notice($"{entry.Name} is no longer in this world.");
             CurrentInspectionCard?.Refresh(); return;
         }
-        if (!ResolvePropertiesDrafts(sceneTreeDocument)) return;
+        if (!ResolveSelectionDrafts(sceneTreeDocument)) return;
         try { SelectSceneTreeRow(row); }
-        catch (StudioCommandException ex) { ViewModel.Status = ex.Message; }
+        catch (StudioCommandException ex) { Report(ex); }
     }
     private IReadOnlyList<(string Label, string Value)> WorldSummary()
     {
@@ -390,7 +396,7 @@ public partial class MainWindow
 
     private void ArrangeSourcePanes(bool open)
     {
-        bool outliner = open && sourceOutlinerVisible, properties = open && sourcePropertiesVisible && sourcePropertiesDocked;
+        bool outliner = open && sourceOutlinerVisible, properties = open && sourcePropertiesVisible;
         double width = Workbench.ActualWidth;
         double outlinerWidth = Math.Min(sourceOutlinerWidth, Math.Max(200, width - 380 - (properties ? sourcePropertiesWidth + 6 : 0)));
         double propertiesWidth = Math.Min(sourcePropertiesWidth, Math.Max(260, width - 380 - (outliner ? outlinerWidth + 6 : 0)));
@@ -409,20 +415,10 @@ public partial class MainWindow
         switch ((sender as FrameworkElement)?.Tag as string)
         {
             case "outliner": sourceOutlinerVisible = !sourceOutlinerVisible; break;
-            case "properties": if (!sourcePropertiesDocked) { RunCardDocking(true); return; } sourcePropertiesVisible = !sourcePropertiesVisible; break;
-            case "tools": sourceToolsVisible = !SourceToolsVisible; break;
+            case "properties": sourcePropertiesVisible = !sourcePropertiesVisible; break;
+            case "tools": sourceToolsVisible = !SourceToolsVisible; RememberSourceTools(); break;
         }
         ArrangeWorkspace();
-    }
-
-    private void ViewportSettingsClick(object sender, RoutedEventArgs e)
-    {
-        // The texture variant and Isolate/Show all, from the compiled explorer's Scene and Selection menus.
-        ContextMenu menu = new() { PlacementTarget = ViewportSettingsButton, Placement = PlacementMode.Bottom };
-        var items = SceneMenus.Items.Cast<MenuItem>().ToArray();
-        foreach (var item in items) { SceneMenus.Items.Remove(item); menu.Items.Add(item); }
-        menu.Closed += (_, _) => { foreach (var item in items) { menu.Items.Remove(item); SceneMenus.Items.Add(item); } };
-        menu.IsOpen = true;
     }
 
     private void ViewModeClick(object sender, RoutedEventArgs e)
@@ -464,7 +460,7 @@ public partial class MainWindow
     private readonly System.Windows.Threading.DispatcherTimer outlinerSearchDelay = new() { Interval = TimeSpan.FromMilliseconds(180) };
     private void OutlinerSearchChanged(object sender, TextChangedEventArgs e)
     {
-        OutlinerSearchHint.Visibility = OutlinerSearch.Text.Length == 0 ? Visibility.Visible : Visibility.Collapsed;
+        OutlinerSearchHint.Visibility = OutlinerSearchIcon.Visibility = OutlinerSearch.Text.Length == 0 ? Visibility.Visible : Visibility.Collapsed;
         outlinerSearchDelay.Stop();
         if (outlinerSearchDelay.Tag == null) { outlinerSearchDelay.Tag = true; outlinerSearchDelay.Tick += (_, _) => { outlinerSearchDelay.Stop(); if (sourceChromeActive) RefreshOutlinerFilter(); }; }
         outlinerSearchDelay.Start();
@@ -496,7 +492,7 @@ public partial class MainWindow
     private void RefreshOutlinerFilter()
     {
         string query = OutlinerSearch.Text.Trim();
-        OutlinerSearchHint.Visibility = OutlinerSearch.Text.Length == 0 ? Visibility.Visible : Visibility.Collapsed;
+        OutlinerSearchHint.Visibility = OutlinerSearchIcon.Visibility = OutlinerSearch.Text.Length == 0 ? Visibility.Visible : Visibility.Collapsed;
         bool flat = query.Length > 0;
         DocumentSceneTree.Visibility = flat ? Visibility.Collapsed : Visibility.Visible;
         OutlinerResults.Visibility = flat ? Visibility.Visible : Visibility.Collapsed;
@@ -513,10 +509,10 @@ public partial class MainWindow
         if (showingOutlinerResults || OutlinerResults.SelectedItem is not OutlinerHit { Row: { Selectable: true } row }) return;
         try
         {
-            if (!ResolvePropertiesDrafts(sceneTreeDocument) || animation?.ResolvePendingDrafts() == false) return;
+            if (!ResolveSelectionDrafts(sceneTreeDocument) || animation?.ResolvePendingDrafts() == false) return;
             SelectSceneTreeRow(row);
         }
-        catch (StudioCommandException ex) { ViewModel.Status = ex.Message; }
+        catch (StudioCommandException ex) { Report(ex); }
         finally
         {
             // The list is a way to choose, not a second selection: clear it so the same match can be chosen again.
@@ -539,12 +535,12 @@ public partial class MainWindow
         {
             if (sceneTree?.Selected != row)
             {
-                if (!ResolvePropertiesDrafts(sceneTreeDocument) || animation?.ResolvePendingDrafts() == false) return;
+                if (!ResolveSelectionDrafts(sceneTreeDocument) || animation?.ResolvePendingDrafts() == false) return;
                 SelectSceneTreeRow(row);
             }
             RunCameraNavigation("frameSelected");
         }
-        catch (StudioCommandException ex) { ViewModel.Status = ex.Message; }
+        catch (StudioCommandException ex) { Report(ex); }
     }
 
     // Hide in viewport: presentation only, never a source edit.
@@ -553,7 +549,7 @@ public partial class MainWindow
         e.Handled = true;
         if ((sender as FrameworkElement)?.Tag is not SceneTreeItem { CanHide: true, Index: int index } row) return;
         try { SetRowHidden(row, index, !row.IsHidden); }
-        catch (StudioCommandException ex) { ViewModel.Status = ex.Message; }
+        catch (StudioCommandException ex) { Report(ex); }
     }
     internal void SetRowHidden(SceneTreeItem row, int index, bool hidden)
     {
@@ -576,15 +572,25 @@ public partial class MainWindow
                 if (seen.Add(edge.Node)) { nodes.Add(edge.Node); pending.Push(edge.Node); }
         return nodes.ToArray();
     }
-    /// <summary>What was hidden before a source rebuild replaced the map's document, by source identity (never by index or name).</summary>
-    private (string Path, string[] Keys)? pendingHidden;
+    /// <summary>
+    /// What was hidden before a source rebuild replaced the map's document: each hidden row's path of file and name (with the
+    /// occurrence among equally named siblings; an edit changes node indices and content identities, not these), or, for a row
+    /// that cannot be found, its source identity. A renamed or deleted object (or group) shows again.
+    /// </summary>
+    private (string Path, string[] Layout, string[] Keys)? pendingHidden;
     private void CaptureHiddenIdentities()
     {
         if (hiddenRows.Count == 0 || shownDocument?.SourceWorld == null || sceneTree?.Projection is not { } projection) return;
-        var keys = hiddenRows.Keys.Select(k => projection.Identities.GetValueOrDefault(projection.Owner(k))).OfType<string>().Distinct().ToArray();
-        pendingHidden = keys.Length == 0 ? null : (shownDocument.Path, keys);
+        Dictionary<SceneTreeItem, string> paths = [];
+        // Each hidden row is found (created if needed, nothing expanded): a row the tree never showed is kept too.
+        var rows = hiddenRows.Keys.Select(k => sceneTree.Reveal(k, expand: false)).OfType<SceneTreeItem>()
+            .Where(r => r.Index is int index && r.Problem == null && hiddenRows.ContainsKey(index)).Distinct().ToArray();
+        string[] layout = [.. rows.Select(r => HiddenPath(r, paths)).Distinct()];
+        HashSet<int> placed = [.. rows.Select(r => r.Index!.Value)];
+        string[] keys = [.. hiddenRows.Keys.Where(k => !placed.Contains(k)).Select(k => projection.Identities.GetValueOrDefault(projection.Owner(k))).OfType<string>().Distinct()];
+        pendingHidden = layout.Length == 0 && keys.Length == 0 ? null : (shownDocument.Path, layout, keys);
     }
-    /// <summary>Hides again, in the rebuilt map, the objects whose identity matches exactly one row; the rest show.</summary>
+    /// <summary>Hides again, in the rebuilt map, the rows found at the same layout paths and the objects whose identity matches exactly one row; the rest show.</summary>
     private void RestoreHiddenIdentities(DocumentModel? doc)
     {
         if (pendingHidden is not { } pending) return;
@@ -592,6 +598,25 @@ public partial class MainWindow
         if (!string.Equals(pending.Path, doc.Path, StringComparison.OrdinalIgnoreCase)) { pendingHidden = null; return; }
         if (sceneTree?.Projection is not { } projection || !sceneTree.IsPreview) return;
         pendingHidden = null;
+        // Walk only toward the remembered paths; children are created as needed, nothing is expanded.
+        HashSet<string> wanted = [.. pending.Layout];
+        // Every path that leads to a wanted one: a segment ends in "#n" before its "/" (a "/" inside a file name never does).
+        HashSet<string> leading = [];
+        foreach (string path in wanted)
+            for (int end = path.IndexOf('/'); end > 0; end = path.IndexOf('/', end + 1))
+                if (char.IsAsciiDigit(path[end - 1])) leading.Add(path[..end]);
+        Stack<(IReadOnlyList<SceneTreeItem> Rows, string Parent)> levels = new([(sceneTree.Roots, "")]);
+        while (wanted.Count > 0 && levels.TryPop(out var level))
+        {
+            Dictionary<string, int> occurrences = [];
+            foreach (var row in level.Rows)
+            {
+                string key = HiddenKey(row); int occurrence = occurrences.GetValueOrDefault(key); occurrences[key] = occurrence + 1;
+                string path = (level.Parent.Length == 0 ? "" : level.Parent + "/") + key + "#" + occurrence.ToString(System.Globalization.CultureInfo.InvariantCulture);
+                if (wanted.Remove(path) && row.Index is int index && row.Problem == null) hiddenRows[index] = HiddenNodesFor(sceneTree, index);
+                if (leading.Contains(path)) levels.Push((row.Children, path));
+            }
+        }
         foreach (string key in pending.Keys)
         {
             var matches = projection.Identities.Where(p => p.Value == key).Take(2).Select(p => p.Key).ToArray();

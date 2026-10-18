@@ -317,7 +317,6 @@ public sealed partial class SceneViewport : UserControl, IDisposable
                         Material = material,
                         Instances = batch.Select(i => i.Transform).ToList(),
                         CullMode = CullMode.None,
-                        FillMode = wireframe && !faceOrientation.Enabled ? FillMode.Wireframe : FillMode.Solid,
                         IsThrowingShadow = false,
                         IsTransparent = transparent && !group.Horizon,
                         RenderOrder = group.Horizon ? 0 : 1,
@@ -334,6 +333,7 @@ public sealed partial class SceneViewport : UserControl, IDisposable
                         }
                     };
                     meshes.Add(mesh); placements[mesh] = visiblePlacements[mesh] = batch;
+                    if (!group.Horizon) RegisterPolygonSource(geometry, part, scene.Models, group.Model);
                     RegisterInspectionMesh(mesh, part.MaterialIndex);
                     inspectionPolygons[mesh] = part.VertexPolygons;
                     if (asset.Kind == AssetKind.World)
@@ -365,11 +365,12 @@ public sealed partial class SceneViewport : UserControl, IDisposable
                 Vector3[] corners = [new(min.X, min.Y, min.Z), new(max.X, min.Y, min.Z), new(max.X, max.Y, min.Z), new(min.X, max.Y, min.Z), new(min.X, min.Y, max.Z), new(max.X, min.Y, max.Z), new(max.X, max.Y, max.Z), new(min.X, max.Y, max.Z)];
                 foreach (var instance in instances) foreach (var corner in corners) { var world = Vector3.Transform(corner, instance.Transform); sceneMin = Vector3.Min(sceneMin, world); sceneMax = Vector3.Max(sceneMax, world); }
                 LineGeometryModel3D box = new() { Geometry = new LineGeometry3D { Positions = new Vector3Collection(corners), Indices = new IntCollection([0, 1, 1, 2, 2, 3, 3, 0, 4, 5, 5, 6, 6, 7, 7, 4, 0, 4, 1, 5, 2, 6, 3, 7]) }, Color = Colors.Gold, Thickness = 1, Instances = instances.Select(i => i.Transform).ToList(), Visibility = Visibility.Collapsed, IsHitTestVisible = false };
-                PresentationGuide(box); bounds.Add(box); boundsPlacements[box] = instances; viewport.Items.Add(box);
+                bounds.Add(box); boundsPlacements[box] = instances; viewport.Items.Add(box);
             }
         }
         token.ThrowIfCancellationRequested(); if (current != generation) return;
         if (asset.Kind == AssetKind.World) ConfigurePickups();
+        if (wireframe) ShowPolygonEdges(true);
         FrameAll();
         RefreshHorizon();
         PreviewDiagnostics = packet.Notes.ToArray();
@@ -457,12 +458,15 @@ public sealed partial class SceneViewport : UserControl, IDisposable
     {
         ZoomBy(wheelDelta / 120.0, position);
     }
-    public void SetWireframe(bool enabled) { wireframe = enabled; foreach (var mesh in meshes) mesh.FillMode = enabled && !faceOrientation.Enabled ? FillMode.Wireframe : FillMode.Solid; }
+    /// <summary>Outlines each polygon over the normal appearance (textures, overlays and face orientation stay).</summary>
+    public void SetWireframe(bool enabled) { wireframe = enabled; ShowPolygonEdges(enabled); }
+    public bool Wireframe => wireframe;
+    /// <summary>How many meshes currently carry a polygon outline.</summary>
+    public int PolygonOutlineCount => polygonEdges.Count;
     /// <summary>Temporary winding visualization; authored materials and preview choices remain intact.</summary>
     public void SetFaceOrientation(bool enabled)
     {
         faceOrientation.Enabled = enabled;
-        SetWireframe(wireframe);
         viewport.InvalidateRender();
     }
     public void SetTextured(bool enabled)
@@ -553,7 +557,7 @@ public sealed partial class SceneViewport : UserControl, IDisposable
         groundGrid?.Dispose(); groundGrid = null;
         rotationVelocity = default; rotationPoint = null; cameraPoseDirty = true; authoredCameraPose = false;
         ClearAnimationResources();
-        ClearWorldHighlights();
+        ClearWorldHighlights(); ClearPolygonOverlays();
         ClearAi(); ClearParachutes();
         isolatedRoot = null; hiddenRoots = []; isolatedNodes = []; hiddenNodes = [];
         horizonNodes.Clear(); Mission = null; PreviewScene = null; InspectionNodes = null; VisibleSceneNodes = new HashSet<int>();

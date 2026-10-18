@@ -65,8 +65,18 @@ public static partial class SourceBlender
                 var words = profile.MeshPolygons[i].ToArray();
                 var identities = faceIds[target][index];
                 if (identities.Length != words.Length) throw new InvalidDataException("Placement face identities no longer match the exported surface.");
+                // A face split in Blender takes the assignment of the nearest face it was split from that has one.
+                var ancestry = mappings[target].FaceParents.GetValueOrDefault(index);
+                JsonNode? Assigned(int j)
+                {
+                    if (assignments[identities[j].ToString(CultureInfo.InvariantCulture)] is { } own) return own;
+                    if (ancestry != null && j < ancestry.Length)
+                        foreach (int ancestor in ancestry[j])
+                            if (assignments[ancestor.ToString(CultureInfo.InvariantCulture)] is { } inherited) return inherited;
+                    return null;
+                }
                 for (int j = 0; j < words.Length; j++)
-                    if (assignments[identities[j].ToString(CultureInfo.InvariantCulture)] is { } word)
+                    if (Assigned(j) is { } word)
                     {
                         JsonObject oldWord = new(); WorldGltf.WritePolygonZoneValue(oldWord, words[j]);
                         if (!JsonNode.DeepEquals(oldWord["zones"] ?? new JsonArray(), word))

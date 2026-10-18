@@ -28,7 +28,9 @@ public partial class MainWindow
         {
             if (request != flyRequest || FlyEnabled.IsChecked != true) return;
             if (flyCamera == null) { SynchronizeFly(); return; }
-            if (!flyCamera.TryStart(out string? error)) { ViewModel.Status = error ?? "Fly camera unavailable."; SynchronizeFly(); }
+            bool painting = scene?.ZonePaintActive == true;
+            if (!flyCamera.TryStart(out string? error)) { Notice(error ?? "Fly camera unavailable."); SynchronizeFly(); }
+            else if (painting) RefreshZoneDraftView(); // Flycam ended zone painting.
         });
     }
 

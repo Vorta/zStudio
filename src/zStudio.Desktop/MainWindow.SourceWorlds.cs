@@ -22,7 +22,6 @@ public partial class MainWindow
 {
     private Task sourceWorldWork = Task.CompletedTask;
     private (DocumentModel Document, SceneViewport.ViewPose View)? pendingSourceView;
-    private long sourceWorldMenuGeneration;
     private SourceWorkspace? sourceWorkspace;
     internal Action<CancellationToken>? SourceChangesReading { get; set; }
     internal Action<string, CancellationToken>? SourceProjectReading { get; set; }
@@ -310,7 +309,7 @@ public partial class MainWindow
     private void SetSourceRebuilding(SourceWorldSession session, bool rebuilding)
     {
         session.IsRebuilding = sourceWorkspaceBusy = rebuilding;
-        if (shownDocument?.SourceWorld != null) SceneToolbar.IsEnabled = !rebuilding && retiringScene == null;
+        if (shownDocument?.SourceWorld != null) SetSceneControlsEnabled(!rebuilding && retiringScene == null);
         if (rebuilding) sourceRebuild ??= new(TaskCreationOptions.RunContinuationsAsynchronously);
         else { var done = sourceRebuild; sourceRebuild = null; done?.TrySetResult(); }
         UpdateDocumentCommands();
@@ -318,6 +317,8 @@ public partial class MainWindow
         UpdateAiPathPanel();
         UpdateParachutePanel();
         UpdateReloadingView();
+        // The card's fields follow too, whoever started the rebuild (an MCP edit, Undo, a Blender update).
+        if (shownDocument?.SourceWorld == session && CurrentInspectionCard is { ObjectEditor: not null } card && !card.HasObjectDraft) card.Refresh();
     }
     /// <summary>
     /// Completes when no world of the project rebuilds (after a scene-card edit, undo, stroke, Properties or MCP edit) and no
@@ -325,7 +326,12 @@ public partial class MainWindow
     /// </summary>
     private async Task SourceWorldsIdleAsync()
     {
-        await sourceWorldWork;
+        // Only its end is awaited: its own caller reported how it ended, which must not fail every later wait.
+        for (Task work = sourceWorldWork; ; work = sourceWorldWork)
+        {
+            await work.ContinueWith(static _ => { }, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+            if (work == sourceWorldWork) break; // Work started meanwhile is waited for too.
+        }
         while (sourceRebuild is { } rebuilding) await rebuilding.Task;
         while (!sourceSaveWork.IsCompleted) await sourceSaveWork;
     }
@@ -724,13 +730,14 @@ public partial class MainWindow
         var previousMission = shownDocument == doc ? scene?.Mission : null;
         using var verification = new PreparedSourceVerification();
         session.Building = cancellation;
-        operation = cancellation; CancelOperationItem.IsEnabled = true;
+        operation = cancellation;
         // A new edit starts its own notice: what an earlier one left (still to be cleared at idle) does not carry over.
         EndRebuildNotice();
-        SetSourceRebuilding(session, true);
-        ViewModel.Status = $"Preparing {action}…";
         try
         {
+            // Inside the try: whatever stops it, the finally ends the rebuild state again.
+            SetSourceRebuilding(session, true);
+            ViewModel.Status = $"Preparing {action}…";
             preparationStarted?.Invoke(cancellation.Token);
             await Task.Run(async () =>
             {
@@ -800,9 +807,10 @@ public partial class MainWindow
         }
         finally
         {
+            // The operation first: nothing the view refresh below does may leave it claimed.
+            if (operation == cancellation) { operation = null; }
             if (session.Building == cancellation) session.Building = null;
             SetSourceRebuilding(session, false);
-            if (operation == cancellation) { operation = null; CancelOperationItem.IsEnabled = false; }
             ReleaseUnusedSourceWorkspace();
         }
         if (session.Workspace.Revision != revision) throw new StudioCommandException("context_changed", "The source workspace changed while the edit was prepared; try again.");
@@ -960,7 +968,7 @@ public partial class MainWindow
         }
         // The edit already applied; a superseded/failed Properties read must not report that edit as rejected.
         catch (Exception ex) when (ex is OperationCanceledException or IOException or UnauthorizedAccessException or InvalidDataException or StudioCommandException)
-        { if (!next.IsDisposed && !shutdownToken.IsCancellationRequested) ViewModel.Status = Bounded($"Placement changed; Properties could not follow it: {ex.Message}"); }
+        { if (!next.IsDisposed && !shutdownToken.IsCancellationRequested) Report(Bounded($"Placement changed; Properties could not follow it: {ex.Message}")); }
     };
 
     /// <summary>
@@ -977,9 +985,9 @@ public partial class MainWindow
         using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(token, doc.Lifetime.Token, ViewModel.WorkspaceToken, shutdownToken);
         token = cancellation.Token;
         long revision = workspace.Revision;
-        SetSourceRebuilding(session, true);
         try
         {
+            SetSourceRebuilding(session, true);
             var changed = await Task.Run(() => workspace.ExternalChanges(token), token);
             token.ThrowIfCancellationRequested();
             if (doc.IsDisposed || session.Owner != doc || workspace.Revision != revision)
@@ -1101,7 +1109,19 @@ public partial class MainWindow
     }
     private async Task<bool> SaveSourceWorldDocumentAsync(DocumentModel doc)
     {
-        try { await SaveSourceWorldAsync(doc, CancellationToken.None); return true; }
+        try
+        {
+            try { await SaveSourceWorldAsync(doc, CancellationToken.None); return true; }
+            // An interrupted save the user put off (Later) blocks saving: Save asks about it again and then saves once more.
+            catch (StudioCommandException ex) when (ex.Code == "recovery_required" && doc.SourceWorld is { } session && IsVisible && !automationCloseRequested)
+            {
+                // Saved again only once a decision resolved something; Later (or a refused decision) leaves the refusal as it was.
+                bool resolved = false;
+                await CheckSourceRecoveryAsync(session.Root, resolved: () => resolved = true);
+                if (!resolved) { ViewModel.Status = ex.Message; SetToolsVisible(true, problems: true); return false; }
+                await SaveSourceWorldAsync(doc, CancellationToken.None); return true;
+            }
+        }
         catch (StudioCommandException ex) { Report(ex); return false; }
         // Closing stopped it before any file was replaced; the status says so.
         catch (OperationCanceledException) { return false; }
@@ -1110,7 +1130,7 @@ public partial class MainWindow
     /// <summary>The GUI's Add model: choose a model, name, placement and animations, then rebuild.</summary>
     private async Task AddSourceModelInteractiveAsync()
     {
-        if (ViewModel.SelectedDocument is not { SourceWorld: { } session } doc) throw new StudioCommandException("unsupported", "Open a mission world of the source project first (Tools → Open mission world).");
+        if (ViewModel.SelectedDocument is not { SourceWorld: { } session } doc) throw new StudioCommandException("unsupported", "Open a map of the source project first.");
         RequireSourceWorldIdle(session);
         long generation = ViewModel.WorkspaceGeneration, revision = session.Workspace.Revision;
         using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(ViewModel.WorkspaceToken, shutdownToken);
@@ -1132,27 +1152,6 @@ public partial class MainWindow
         await AddSourceModelAsync(session.Owner ?? doc, result, CancellationToken.None);
     }
     private async void AddSourceModelClick(object sender, RoutedEventArgs e) => await RunUi(AddSourceModelInteractiveAsync);
-
-    /// <summary>Presentation only: lists the project's worlds off the UI thread; a newer menu opening or root supersedes it.</summary>
-    private async Task FillSourceWorldMenuAsync(string root)
-    {
-        long generation = ++sourceWorldMenuGeneration;
-        SourceWorldMenu.Items.Clear();
-        SourceWorldMenu.Items.Add(new MenuItem { Header = "Reading source project…", IsEnabled = false });
-        IReadOnlyList<string>? missions = null; string? error = null;
-        try { missions = await Task.Run(() => SourceWorlds.Missions(root)); }
-        catch (Exception ex) when (ex is InvalidDataException or IOException or UnauthorizedAccessException) { error = ex.Message; }
-        if (generation != sourceWorldMenuGeneration || SourceProjectRoot != root) return;
-        SourceWorldMenu.Items.Clear();
-        if (missions == null || missions.Count == 0) { SourceWorldMenu.Items.Add(new MenuItem { Header = new TextBlock { Text = error ?? "No map folders with matching gamegen/mN.gs scripts" }, IsEnabled = false }); return; }
-        foreach (string mission in missions)
-        {
-            MenuItem item = new() { Header = new TextBlock { Text = mission }, ToolTip = $"Open the {mission} world from gamegen/{mission}.gs and the project's sources" };
-            System.Windows.Automation.AutomationProperties.SetName(item, mission);
-            item.Click += async (_, _) => await RunUi(() => OpenSourceWorldAsync(mission, CancellationToken.None));
-            SourceWorldMenu.Items.Add(item);
-        }
-    }
 
     private static object? SourceWorldState(DocumentModel d) => d.SourceWorld is not { } world ? null : new
     {

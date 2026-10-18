@@ -31,6 +31,8 @@ public sealed record SourceExportReport(string? Destination, IReadOnlyList<Sourc
 {
     /// <summary>The build profile the outputs were built with.</summary>
     public string Profile { get; init; } = BuildProfiles.Modern.Name;
+    /// <summary>How the texture packs converted colours.</summary>
+    public TextureDithering Dithering { get; init; }
     /// <summary>Findings about the destination as a whole, such as larger texture packs there that the game would prefer.</summary>
     public IReadOnlyList<string> Notes { get; init; } = [];
     /// <summary>
@@ -188,7 +190,7 @@ public static partial class SourceBuilder
                 bool promised = false, planned = false;
                 foreach (var pack in profile.TexturePacks.Where(pack => pack.Builds(name)))
                 {
-                    if (!pack.Automatic) { packs.Add(new($"{name}/{pack.File}", "textures", textures) { Pack = pack.Variant, Images = images }); continue; }
+                    if (!pack.Automatic) { packs.Add(new($"{name}/{pack.File}", "textures", textures) { Pack = pack.Variant with { Dithering = profile.Dithering }, Images = images }); continue; }
                     if (!automaticPacks) continue;
                     promised = true;
                     // The automatic pack is named for the texture memory the mission's textures need at full size.
@@ -197,7 +199,7 @@ public static partial class SourceBuilder
                     planned = true;
                     packs.Add(new($"{name}/{automatic.FileName}", "textures", textures)
                     {
-                        Pack = automatic, Automatic = true, FullSize = true, Images = images,
+                        Pack = automatic with { Dithering = profile.Dithering }, Automatic = true, FullSize = true, Images = images,
                         Notes = memory > budget
                             ? [$"The {name} textures need {(memory + (1 << 20) - 1) >> 20} MB of texture memory at full size, more than the {budget >> 20} MB the profile's automatic rtexture pack may hold; {automatic.FileName} holds them reduced to fit."] : [],
                     });
@@ -598,8 +600,9 @@ public static partial class SourceBuilder
     internal static bool IsBuildFailure(Exception ex) => ex is not (OperationCanceledException or OutOfMemoryException);
 
     /// <summary>Build the selected outputs (all when null) in memory and report problems without writing anything.</summary>
-    public static Task<SourceExportReport> CheckAsync(string root, IReadOnlyCollection<string>? outputs = null, IProgress<SourceProgress>? progress = null, CancellationToken token = default, string? profile = null)
-        => RunAsync(root, null, outputs, false, progress, token, profile);
+    public static Task<SourceExportReport> CheckAsync(string root, IReadOnlyCollection<string>? outputs = null, IProgress<SourceProgress>? progress = null, CancellationToken token = default, string? profile = null,
+        TextureDithering dithering = TextureDithering.None)
+        => RunAsync(root, null, outputs, false, progress, token, profile, dithering: dithering);
 
     /// <summary>
     /// Build the selected outputs (all when null) into <paramref name="destination"/>. Existing game files there are replaced
@@ -609,18 +612,22 @@ public static partial class SourceBuilder
     /// fails, and nothing is written if any output fails.
     /// </summary>
     public static Task<SourceExportReport> ExportAsync(string root, string destination, IReadOnlyCollection<string>? outputs = null, bool overwrite = false, IProgress<SourceProgress>? progress = null, CancellationToken token = default, string? profile = null,
-        Func<IReadOnlyList<string>, CancellationToken, Task<bool>>? confirmReplace = null)
-        => RunAsync(root, destination, outputs, overwrite, progress, token, profile, confirmReplace: confirmReplace);
+        Func<IReadOnlyList<string>, CancellationToken, Task<bool>>? confirmReplace = null, TextureDithering dithering = TextureDithering.None)
+        => RunAsync(root, destination, outputs, overwrite, progress, token, profile, confirmReplace: confirmReplace, dithering: dithering);
 
-    /// <summary><paramref name="profileName"/> selects the build profile (the project's default when null).</summary>
+    /// <summary>
+    /// <paramref name="profileName"/> selects the build profile (the project's default when null); <paramref name="dithering"/>
+    /// is how its texture packs convert colours.
+    /// </summary>
     internal static async Task<SourceExportReport> RunAsync(string root, string? destination, IReadOnlyCollection<string>? outputs, bool overwrite, IProgress<SourceProgress>? progress, CancellationToken token, string? profileName, EffectLimits? effectLimits = null,
-        long inventoryLimit = InventoryBudget.MaximumUnits, Func<IReadOnlyList<string>, CancellationToken, Task<bool>>? confirmReplace = null)
+        long inventoryLimit = InventoryBudget.MaximumUnits, Func<IReadOnlyList<string>, CancellationToken, Task<bool>>? confirmReplace = null,
+        TextureDithering dithering = TextureDithering.None)
     {
         root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(root));
         // The run's view of the project starts before planning: the profile is read through it, so a change to its file is
         // refused like a changed source, and the plan is made again before publishing (see CheckPlanUnchanged).
         Snapshot snapshot = new(root, effectLimits: effectLimits, inventoryLimit: inventoryLimit, inventoryToken: token);
-        var profile = await Task.Run(() => FindProfile(root, profileName, snapshot, token), token);
+        var profile = await Task.Run(() => FindProfile(root, profileName, snapshot, token), token) with { Dithering = dithering };
         // An export of every output names the automatic packs from the textures as their builds count them.
         var all = await Task.Run(() => Plan(root, null, profile, true, token, snapshot, countPacks: outputs == null), token);
         var selected = outputs == null ? all : outputs.Select(o => all.FirstOrDefault(p => p.Path.Equals(o.Replace('\\', '/'), StringComparison.OrdinalIgnoreCase))
@@ -706,7 +713,7 @@ public static partial class SourceBuilder
                 if (results.Any(r => r.Status == "failed")) throw new InvalidDataException(FailedOutputs(results, token));
                 Publish(staging, destination, [.. results.Select(r => (r.Path, contents[r.Path]))], overwrite, token, captured: directories, replace: confirmed);
             }
-            return new(destination, results) { Profile = profile.Name, Notes = reportNotes, Lookups = lookups, LookupChanges = changes };
+            return new(destination, results) { Profile = profile.Name, Dithering = profile.Dithering, Notes = reportNotes, Lookups = lookups, LookupChanges = changes };
         }
         // A staging folder another program holds must not replace the export's own result or error.
         finally
@@ -763,7 +770,7 @@ public static partial class SourceBuilder
     {
         token.ThrowIfCancellationRequested();
         BuildProfile again; IReadOnlyList<SourceOutputPlan> now;
-        try { again = FindProfile(root, profileName, snapshot, token); now = Plan(root, null, again, true, token, snapshot, countPacks: selected == null); }
+        try { again = FindProfile(root, profileName, snapshot, token) with { Dithering = profile.Dithering }; now = Plan(root, null, again, true, token, snapshot, countPacks: selected == null); }
         catch (InventoryCapacityException) { throw; }
         catch (Exception ex) when (ex is InvalidDataException or IOException or UnauthorizedAccessException)
         { throw new InvalidDataException($"The project changed while exporting; nothing was written. Export again. ({ex.Message})", ex); }

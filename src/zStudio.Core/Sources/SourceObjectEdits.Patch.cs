@@ -156,4 +156,3 @@ public static partial class SourceObjectEdits
         return after?.DeepClone();
     }
 }
-

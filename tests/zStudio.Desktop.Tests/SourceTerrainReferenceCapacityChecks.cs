@@ -72,7 +72,7 @@ internal static class SourceTerrainReferenceCapacityChecks
             Unchanged();
 
             ((MenuItem)main.FindName("ConvertTerrainMenu")).RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
-            while (main.CancelOperationItem.IsEnabled || main.ViewModel.Status != refusal.Message) await Task.Delay(10, token);
+            while (main.OperationRunning || main.ViewModel.Status != refusal.Message) await Task.Delay(10, token);
             Assert.Contains(main.ViewModel.Problems, p => p.Message == refusal.Message);
             Unchanged();
 
@@ -95,7 +95,7 @@ internal static class SourceTerrainReferenceCapacityChecks
                 Assert.Empty(workspace.DirtyFiles); Assert.Empty(workspace.Overlay());
                 Assert.False(doc.IsDisposed); Assert.Same(doc, main.ViewModel.SelectedDocument);
                 Assert.Same(doc, main.ViewModel.Documents.Single(d => d.SourceWorld != null));
-                Assert.Same(preview, doc.PreviewDocument); Assert.False(main.CancelOperationItem.IsEnabled);
+                Assert.Same(preview, doc.PreviewDocument); Assert.False(main.OperationRunning);
                 foreach (var (path, bytes) in originalFiles) Assert.Equal(bytes, File.ReadAllBytes(path));
                 Assert.Empty(Directory.GetFiles(fixture.Path("data"), "*.terrain.json", SearchOption.AllDirectories));
             }

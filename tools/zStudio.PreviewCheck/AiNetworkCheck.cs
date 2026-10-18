@@ -51,27 +51,24 @@ internal static class AiNetworkCheck
                 Require(strategyField.IsReadOnly && strategyField.Text == network.AttackStrategy.Value, "Read-only stored strategy row");
                 Save(StudioCapture.Window(main), Path.Combine(output, "m1-controls.png"));
                 var card = (SceneInspectionCard)scene.InspectionContent!;
-                foreach (var density in new[] { "Compact", "Comfortable" })
-                {
-                    main.Width = 1080; main.Height = 650;
-                    await main.Commands.ExecuteAsync("zstudio_workspace_view", new JsonObject { ["changes"] = new JsonObject { ["density"] = density, ["tools"] = true, ["inspectionPanelHeight"] = 216 } });
-                    await Task.Delay(150);
-                    var panel = Descendants(card).OfType<Border>().Single(b => b.Name == "InspectionPanel");
-                    var grip = Descendants(card).OfType<Thumb>().Single(t => t.Name == "InspectionResize");
-                    var scroll = Descendants(card).OfType<ScrollViewer>().Single(s => s.Name == "InspectionScroll");
-                    var beforeScroll = scene.CaptureView();
-                    strategyField.BringIntoView(); await Task.Delay(100);
-                    Require(scroll.VerticalOffset > 0 && scene.CaptureView() == beforeScroll, "Strategy reveal must scroll the details without moving the camera");
-                    var top = strategyField.TranslatePoint(new(), card).Y;
-                    var bottom = strategyField.TranslatePoint(new(0, strategyField.ActualHeight), card).Y;
-                    Require(strategyField.IsVisible && strategyField.ActualWidth > 40 && top >= scroll.TranslatePoint(new(), card).Y - 1 && bottom <= grip.TranslatePoint(new(), card).Y,
-                        "Strategy clipped in minimum window: " + density);
-                    Save(StudioCapture.Window(main), Path.Combine(output, "m1-card-minimum-" + density + ".png"));
-                    // WPF rounds the logical maximum to the nearest device pixel.
-                    Require(panel.MaxHeight <= card.ActualHeight * .8 + 1e-6 &&
-                        panel.ActualHeight <= panel.MaxHeight + .5 / VisualTreeHelper.GetDpi(panel).DpiScaleY + 1e-6,
-                        $"Panel exceeded viewport cap: panel={panel.ActualHeight}, viewport={card.ActualHeight}, maximum={panel.MaxHeight}");
-                }
+                main.Width = 1080; main.Height = 650;
+                await main.Commands.ExecuteAsync("zstudio_workspace_view", new JsonObject { ["changes"] = new JsonObject { ["tools"] = true, ["inspectionPanelHeight"] = 216 } });
+                await Task.Delay(150);
+                var panel = Descendants(card).OfType<Border>().Single(b => b.Name == "InspectionPanel");
+                var grip = Descendants(card).OfType<Thumb>().Single(t => t.Name == "InspectionResize");
+                var scroll = Descendants(card).OfType<ScrollViewer>().Single(s => s.Name == "InspectionScroll");
+                var beforeScroll = scene.CaptureView();
+                strategyField.BringIntoView(); await Task.Delay(100);
+                Require(scroll.VerticalOffset > 0 && scene.CaptureView() == beforeScroll, "Strategy reveal must scroll the details without moving the camera");
+                var top = strategyField.TranslatePoint(new(), card).Y;
+                var bottom = strategyField.TranslatePoint(new(0, strategyField.ActualHeight), card).Y;
+                Require(strategyField.IsVisible && strategyField.ActualWidth > 40 && top >= scroll.TranslatePoint(new(), card).Y - 1 && bottom <= grip.TranslatePoint(new(), card).Y,
+                    "Strategy clipped in minimum window");
+                Save(StudioCapture.Window(main), Path.Combine(output, "m1-card-minimum.png"));
+                // WPF rounds the logical maximum to the nearest device pixel.
+                Require(panel.MaxHeight <= card.ActualHeight * .8 + 1e-6 &&
+                    panel.ActualHeight <= panel.MaxHeight + .5 / VisualTreeHelper.GetDpi(panel).DpiScaleY + 1e-6,
+                    $"Panel exceeded viewport cap: panel={panel.ActualHeight}, viewport={card.ActualHeight}, maximum={panel.MaxHeight}");
                 main.Width = 1250; main.Height = 850;
                 var pose = scene.CaptureView(); string snapshot = scene.AiNetworks.Id;
                 ((ToggleButton)main.FindName("HighlightSoils")).IsChecked = true;

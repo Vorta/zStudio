@@ -380,11 +380,13 @@ public static partial class MissionSceneLoader
         if (context != null)
             foreach (var entry in package!.Entries)
             {
-                bindings!.Reserve(1);
                 // Entry 0 is the reserved empty entry, which binds nothing.
                 if (entry.Index == 0 || string.IsNullOrEmpty(entry.Name)) continue;
+                // A presentation-only list: once the binding allowance runs out it stops, never failing the scene.
+                if (bindings!.Exhausted) break;
                 try
                 {
+                    bindings.Reserve(1);
                     int root = bindings.Root(entry);
                     if (root < 0 || root >= scene.Nodes.Count) continue;
                     if (!animationRoots.TryGetValue(root, out var names)) animationRoots[root] = names = new List<string>();
@@ -392,7 +394,8 @@ public static partial class MissionSceneLoader
                     if (list.Count < 8) { budget.Name(entry.Name); list.Add(entry.Name); }
                     else if (list.Count == 8) list.Add("…"); // More than eight: the list says so.
                 }
-                catch (InvalidDataException) when (!budget.Exhausted) { }
+                catch (InvalidDataException) when (!budget.Exhausted) { if (bindings.Exhausted) break; }
+                catch (IOException) when (bindings.Exhausted) { break; }
             }
         return new(scene, sources, actors, dormant, notes, selection, original.Nodes.Count, token)
         { InitializationTransforms = context?.InitializationTransforms ?? new(), AnimationRoots = animationRoots };

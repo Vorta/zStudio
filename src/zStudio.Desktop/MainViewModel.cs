@@ -135,6 +135,35 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         Settings.Difficulty = value;
         try { Settings.Save(); }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { AddProblem("Could not save mission difficulty: " + ex.Message); }
+        // A source project remembers the difficulty it was last viewed at (its own, restored when it opens).
+        if (IsSourceProject && HasRoot && !applyingProjectView) RememberProjectSetting(root => SourceProjectSettings.WriteDifficulty(root, value));
+    }
+    /// <summary>How the open source project was last viewed (.zstudio/settings.json), read before it was published; null for other roots.</summary>
+    public SourceProjectView? ProjectView { get; private set; }
+    private bool applyingProjectView;
+    private Task projectSettingsWrites = Task.CompletedTask;
+    /// <summary>Completes once every remembered project setting asked so far is written (or reported).</summary>
+    internal Task ProjectSettingsWritten => projectSettingsWrites;
+    /// <summary>
+    /// Remembers a view setting of the open source project in its .zstudio folder, off the UI thread and in the order asked;
+    /// a failure is a warning in Problems, never a refusal of the change itself.
+    /// </summary>
+    public void RememberProjectSetting(Action<string> write)
+    {
+        if (!IsSourceProject || !HasRoot) return;
+        string root = RootPath;
+        projectSettingsWrites = Write(projectSettingsWrites);
+        async Task Write(Task previous)
+        {
+            // One failed write never stops the ones after it.
+            try { await previous; } catch (Exception) { }
+            try { await Task.Run(() => write(root)); }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException)
+            {
+                string message = "Could not remember how the project is viewed: " + ex.Message;
+                if (RootPath == root && HasRoot && !Problems.Any(p => p.File == root && p.Message == message)) AddProblem(message, "Warning", root);
+            }
+        }
     }
     public Func<DocumentModel, Task<bool>>? ConfirmDiscardAsync { get; set; }
     /// <summary>Raised once a root (also the same one again) is open, with its path and HasRoot set.</summary>
@@ -176,7 +205,8 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         if (beforePublish == null && ResolveDraftsAsync != null && !await ResolveDraftsAsync()) return;
         long generation = AdvanceNavigation();
         RequireCurrentNavigation(generation);
-        root = Path.GetFullPath(root);
+        // One spelling of the root (no trailing separator), as the source workspace and its checks compare it.
+        root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(root));
         // Directory checks can block on unavailable network shares. Keep that work off
         // the dispatcher and abandon the wait on shutdown; it has no workspace effects.
         bool exists, sourceProject = false;
@@ -225,6 +255,12 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
             { throw new StudioCommandException("context_changed", "The workspace changed while scanning the requested folder."); }
         }
         cancellationToken.ThrowIfCancellationRequested(); RequireCurrentNavigation(generation);
+        // How a source project was last viewed applies as it opens, before a map can be chosen.
+        SourceProjectView? view = null;
+        if (sourceProject)
+            try { view = await Task.Run(() => SourceProjectSettings.ReadView(root), cancellationToken).WaitAsync(cancellationToken); }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+        cancellationToken.ThrowIfCancellationRequested(); RequireCurrentNavigation(generation);
         // Publication closes every document: one changed after its decision, or opened and edited since, keeps the workspace.
         if (acceptedRevisions.Any(pair => pair.Key.IsDisposed || pair.Key.Revision != pair.Value)
             || beforePublish == null && Documents.Any(d => d.IsDirty && !acceptedRevisions.ContainsKey(d)))
@@ -248,11 +284,19 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
             catch (Exception ex) when (ex is ArgumentException or InvalidDataException or NotSupportedException or IOException or UnauthorizedAccessException) { }
         Files = []; Folders.Clear(); fileNodes.Clear(); otherOpenFiles = null; Diagnostics.Clear(); Problems.Clear(); SearchResults.Clear(); index.Clear();
         SearchIndexComplete = false; SearchIndexNotice = "Asset names are still being indexed; search and related results are incomplete.";
-        IsSourceProject = sourceProject;
+        IsSourceProject = sourceProject; ProjectView = view;
+        if (view?.Difficulty is { } remembered && remembered != Difficulty)
+        {
+            applyingProjectView = true;
+            try { Difficulty = remembered; }
+            finally { applyingProjectView = false; }
+        }
         RootPath = root; HasRoot = true; IsBusy = true; WorkspaceNavigationGeneration = navigationGeneration; Status = sourceProject ? "Choose a map" : "Scanning files…";
         RootOpenedWithoutPrompts = beforePublish != null;
+        // A project viewed for the first time remembers the difficulty it is viewed at, even before it changes.
+        if (sourceProject && view?.Difficulty == null) { var current = Difficulty; RememberProjectSetting(r => SourceProjectSettings.WriteDifficulty(r, current)); }
         RootPublished?.Invoke();
-        Settings.LastRoot = root; Settings.RecentRoots.RemoveAll(p => p.Equals(root, StringComparison.OrdinalIgnoreCase)); Settings.RecentRoots.Insert(0, root); Settings.RecentRoots = Settings.RecentRoots.Take(8).ToList();
+        Settings.LastRoot = root; Settings.RecentRoots.RemoveAll(p => Path.TrimEndingDirectorySeparator(p).Equals(root, StringComparison.OrdinalIgnoreCase)); Settings.RecentRoots.Insert(0, root); Settings.RecentRoots = Settings.RecentRoots.Take(8).ToList();
         try
         {
             // The scanned listing belongs to the published root, so it is shown even when the request is canceled now.
@@ -327,7 +371,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     public async Task<DocumentModel?> OpenFileAsync(string path, CancellationToken cancellationToken = default, Action? beforePublish = null, bool activate = true, bool reportStatus = true)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        if (IsSourceProject) throw new StudioCommandException("source_map_required", "Source projects open maps from the map picker. Open a compiled ZBD folder to browse individual files.");
+        if (IsSourceProject) throw new StudioCommandException("source_map_required", "Source projects open maps from the map picker.");
         long generation = AdvanceNavigation();
         RequireCurrentNavigation(generation);
         path = Path.GetFullPath(path);

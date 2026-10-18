@@ -19,7 +19,11 @@ public partial class MainWindow
         SourceMapLoading.Visibility = sourceMapOpening != null ? Visibility.Visible : Visibility.Collapsed;
         if (source) Welcome.Visibility = Visibility.Collapsed;
         else Welcome.Visibility = ViewModel.SelectedDocument == null ? Visibility.Visible : Visibility.Collapsed;
-        NavigatorPaneButton.Visibility = InspectorPaneButton.Visibility = source ? Visibility.Collapsed : Visibility.Visible;
+        // A source project has its own pane toggles (World tree, Properties, Diagnostics) and layout; the compiled explorer's do nothing there.
+        NavigatorPaneButton.Visibility = InspectorPaneButton.Visibility = ToolsPaneButton.Visibility = source ? Visibility.Collapsed : Visibility.Visible;
+        WorkspacePresetMenu.Visibility = ResetLayoutMenu.Visibility = source || !ViewModel.HasRoot ? Visibility.Collapsed : Visibility.Visible;
+        CloseDocumentMenu.Header = source ? "_Close map" : "_Close file";
+        ExportMenu.Visibility = source ? Visibility.Visible : Visibility.Collapsed;
         // An open map moves the tree, the commands and the card into the source editor's chrome (see ApplySourceChrome).
         // Source layout never overwrites the compiled explorer's saved tab and pane preferences.
         ApplySourceChrome();
@@ -37,13 +41,13 @@ public partial class MainWindow
         InspectorHost.VerticalAlignment = VerticalAlignment.Stretch;
         InspectorHost.Height = double.NaN; InspectorHost.Margin = new(0);
         Workspace.Visibility = open ? Visibility.Visible : Visibility.Collapsed;
-        NavigatorVisibilityMenu.IsChecked = false; InspectorVisibilityMenu.IsChecked = open;
-        double available = Math.Max(0, Workbench.ActualHeight - 400);
-        bool tools = open && SourceToolsVisible && available >= 100;
+        // A map's failures are listed only there (its status bar shows no messages): Diagnostics fits on short screens too
+        // (1080p at 175%, 768p at 125%), leaving the view at least 250.
+        double available = Math.Max(0, Workbench.ActualHeight - 250);
+        bool tools = open && SourceToolsVisible && available >= 80;
         ToolsRow.Height = new(tools ? Math.Min(sourceToolsHeight ?? Layout.ToolsHeight, available) : 0);
         ToolsSplitterRow.Height = new(tools ? 6 : 0);
         BottomTools.Visibility = ToolsSplitter.Visibility = tools ? Visibility.Visible : Visibility.Collapsed;
-        ToolsVisibilityMenu.IsChecked = tools;
         RefreshSourceChrome();
     }
 
@@ -71,12 +75,16 @@ public partial class MainWindow
                 button.Click += async (_, _) => await RunUi(async () =>
                 {
                     if (!Current()) return;
-                    await OpenSourceWorldAsync(mission, CancellationToken.None);
+                    SourceMapPickerMessage.Text = "";
+                    // A map that cannot open says why on the picker itself (Diagnostics shows only with a map open).
+                    try { await OpenSourceWorldAsync(mission, CancellationToken.None); }
+                    catch (Exception ex) when (ex is StudioCommandException { Code: not "context_changed" } or InvalidDataException or IOException or UnauthorizedAccessException)
+                    { if (Current() && ViewModel.SelectedDocument == null) SourceMapPickerMessage.Text = $"Could not open {mission}: " + Bounded(ex.Message, 2048); throw; }
                 });
                 (MissionNumber(mission) is >= 1 and <= 6 ? single : multi).Children.Add(button);
             }
             var create = MapButton("New"); create.IsEnabled = false; create.Opacity = .45;
-            create.ToolTip = "Creating a new map is not available yet.";
+            create.ToolTip = "Creating a new map is not available yet."; ToolTipService.SetShowOnDisabled(create, true);
             multi.Children.Add(create);
             foreach (var grid in new[] { single, multi })
                 if (grid.Children.Count > 0) SourceMapButtons.Children.Add((UIElement)grid.Tag!);

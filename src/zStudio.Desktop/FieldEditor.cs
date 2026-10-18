@@ -161,7 +161,7 @@ public partial class FieldEditor : UserControl
         // After the drag, typing and Escape belong to the field again.
         handle.MouseLeftButtonUp += (_, e) => { if (!dragging) return; dragging = false; handle.ReleaseMouseCapture(); e.Handled = true; box.Focus(); };
         // Escape during a drag restores the value it started from.
-        handle.PreviewKeyDown += (_, e) => { if (dragging && e.Key == Key.Escape) { box.Text = originText; dragging = false; handle.ReleaseMouseCapture(); e.Handled = true; } };
+        handle.PreviewKeyDown += (_, e) => { if (dragging && e.Key == Key.Escape) { box.Text = originText; dragging = false; handle.ReleaseMouseCapture(); e.Handled = true; box.Focus(); } };
         handle.LostMouseCapture += (_, _) => dragging = false;
     }
     protected bool CanCommitFocus(FrameworkElement group)

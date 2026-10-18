@@ -49,13 +49,15 @@ internal sealed class SourceObjectCardEditor : FieldEditor
                 "On or off. When on, the object is only standable from inside its zone.");
             zonePart.Body.Children.Add(ZoneRow());
             zonePart.Body.Children.Add(FlagBox("altitudeZoneCheck", "Altitude zone check (only standable inside its zone)", true));
+            zonePart.Body.Children.Add(polygonZones);
             zoneSection = zonePart;
         }
         else
         {
             acceptedFields["Zone"] = ZoneReadout.Zone(state.Zone);
             zonePart.Summary = ZoneReadout.Zone(state.Zone);
-            zonePart.Body.Children.Add(InfoRow("Zone", ZoneReadout.Zone(state.Zone) + (state.Origin.Terrain != null ? " · set in Terrain properties" : "")));
+            zonePart.Body.Children.Add(InfoRow("Object zone", ZoneReadout.Zone(state.Zone) + (state.Origin.Terrain != null ? " · set in Terrain properties" : "")));
+            zonePart.Body.Children.Add(polygonZones);
         }
         // Flags are check boxes; each keeps its "on"/"off" draft field (hidden) for drafts, MCP fields and Apply.
         target = new StackPanel { Visibility = System.Windows.Visibility.Collapsed }; flagPart.Body.Children.Add(target);
@@ -123,22 +125,12 @@ internal sealed class SourceObjectCardEditor : FieldEditor
             flagBoxes[key] = box;
             return box;
         }
-        static System.Windows.FrameworkElement InfoRow(string label, string value)
-        {
-            Grid row = new() { Margin = new(0, 3, 0, 3) };
-            row.ColumnDefinitions.Add(new() { Width = new(76) }); row.ColumnDefinitions.Add(new());
-            TextBlock caption = new() { Text = label, FontSize = 13, TextWrapping = System.Windows.TextWrapping.Wrap, Margin = new(0, 0, 6, 0) };
-            caption.SetResourceReference(TextBlock.ForegroundProperty, "TextFillColorSecondaryBrush");
-            TextBox shown = new() { Text = value, IsReadOnly = true, BorderThickness = new(0), Background = System.Windows.Media.Brushes.Transparent, Padding = new(0), FontSize = 13, TextWrapping = System.Windows.TextWrapping.Wrap };
-            Grid.SetColumn(shown, 1); row.Children.Add(caption); row.Children.Add(shown);
-            return row;
-        }
         System.Windows.FrameworkElement ZoneRow()
         {
             // An editable combo box: pick Inherit or Any, or type a zone number. A hint (or the input's problem) sits below it.
             Grid row = new() { Margin = new(0, 2, 0, 2) };
             row.ColumnDefinitions.Add(new() { Width = new(76) }); row.ColumnDefinitions.Add(new());
-            TextBlock caption = new() { Text = "Zone", FontSize = 13, VerticalAlignment = System.Windows.VerticalAlignment.Top, Margin = new(0, 7, 6, 0) };
+            TextBlock caption = new() { Text = "Object zone", FontSize = 13, TextWrapping = System.Windows.TextWrapping.Wrap, VerticalAlignment = System.Windows.VerticalAlignment.Top, Margin = new(0, 7, 6, 0) };
             caption.SetResourceReference(TextBlock.ForegroundProperty, "TextFillColorSecondaryBrush");
             if (state.ZoneCanInherit) zoneBox.Items.Add(ZoneOption("Inherit", "From parent"));
             zoneBox.Items.Add(ZoneOption("Any", "No zone limit"));
@@ -169,6 +161,25 @@ internal sealed class SourceObjectCardEditor : FieldEditor
         void Vector(string key, string label, Vector3 value, string hint) => Add(key, label,
             string.Join(", ", new[] { value.X, value.Y, value.Z }.Select(v => v.ToString("R", CultureInfo.InvariantCulture))), true, hint, ["X", "Y", "Z"]);
     }
+    private static System.Windows.FrameworkElement InfoRow(string label, string value)
+    {
+        Grid row = new() { Margin = new(0, 3, 0, 3) };
+        row.ColumnDefinitions.Add(new() { Width = new(76) }); row.ColumnDefinitions.Add(new());
+        TextBlock caption = new() { Text = label, FontSize = 13, TextWrapping = System.Windows.TextWrapping.Wrap, Margin = new(0, 0, 6, 0) };
+        caption.SetResourceReference(TextBlock.ForegroundProperty, "TextFillColorSecondaryBrush");
+        TextBox shown = new() { Text = value, IsReadOnly = true, BorderThickness = new(0), Background = System.Windows.Media.Brushes.Transparent, Padding = new(0), FontSize = 13, TextWrapping = System.Windows.TextWrapping.Wrap };
+        Grid.SetColumn(shown, 1); row.Children.Add(caption); row.Children.Add(shown);
+        return row;
+    }
+    /// <summary>The Zone section's polygon zones, apart from the object zone above them: how many of the object's polygons carry each zone set, and the clicked polygon's.</summary>
+    private readonly StackPanel polygonZones = new() { Margin = new(0, 4, 0, 0) };
+    /// <summary>Shows the polygon zones: one line per zone set of the object's polygons, with its count, and the clicked polygon's; either may be unknown.</summary>
+    internal void ShowPolygonZones(string? objectZones, string? clickedPolygon)
+    {
+        polygonZones.Children.Clear();
+        if (objectZones != null) polygonZones.Children.Add(InfoRow("Polygon zones", objectZones));
+        if (clickedPolygon != null) polygonZones.Children.Add(InfoRow("Clicked polygon", clickedPolygon));
+    }
     private readonly ComboBox zoneBox = new() { IsEditable = true, HorizontalAlignment = System.Windows.HorizontalAlignment.Stretch, MinWidth = 0 };
     private readonly TextBlock zoneHelp = new() { FontSize = 11.5, TextWrapping = System.Windows.TextWrapping.Wrap, Margin = new(0, 3, 0, 2) };
     private CardSection? zoneSection;
@@ -191,7 +202,10 @@ internal sealed class SourceObjectCardEditor : FieldEditor
         if (zoneBox.Text != text) { showingZone = true; try { zoneBox.Text = text; } finally { showingZone = false; } }
         var parsed = ParseZone(text);
         bool valid = parsed.Valid;
-        zoneHelp.Text = valid ? state.ZoneCanInherit ? "Zone 0–254, Any or Inherit" : "Zone 0–254 or Any" :
+        // An inherited zone names the zone it resolves to and what supplied it, until the field is changed.
+        bool inherited = valid && state.Origin.ImportedZoneInherited == true && text.Trim().Equals(state.ZoneText, StringComparison.OrdinalIgnoreCase);
+        zoneHelp.Text = inherited ? ZoneReadout.Zone(state.Zone, true) + (ZoneReadout.Source(state.Origin) is { } source ? " · " + source : "")
+            : valid ? state.ZoneCanInherit ? "Zone 0–254, Any or Inherit" : "Zone 0–254 or Any" :
             state.ZoneCanInherit ? "Enter 0–254, Any or Inherit" : "Enter 0–254 or Any";
         if (zoneSection != null) zoneSection.Summary = text.Trim();
         if (valid) zoneHelp.SetResourceReference(TextBlock.ForegroundProperty, "TextFillColorSecondaryBrush");
@@ -380,7 +394,13 @@ internal sealed class SourceObjectCardEditor : FieldEditor
         RefreshFlags();
         Changed?.Invoke();
     }
+    /// <summary>The draft as an edit; input it cannot hold is refused as invalid_draft (shown on the card).</summary>
     internal SourceObjectPatch Patch(Func<string, WorldNode?> parent)
+    {
+        try { return PatchCore(parent); }
+        catch (Exception ex) when (ex is FormatException or System.IO.InvalidDataException) { throw new StudioCommandException("invalid_draft", ex.Message); }
+    }
+    private SourceObjectPatch PatchCore(Func<string, WorldNode?> parent)
     {
         if (inputs.Values.Any(i => i.Draft.Text.Length > 4096)) throw new StudioCommandException("invalid_draft", "Object field input is limited to 4096 characters.");
         string? Required(string key)

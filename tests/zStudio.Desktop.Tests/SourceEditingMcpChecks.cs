@@ -579,23 +579,18 @@ internal static class SourceEditingMcpChecks
                 var zoneCard = (SceneInspectionCard)turretViewport.InspectionContent!;
                 var zoneBox = Descendants(zoneCard.ObjectEditor!).OfType<System.Windows.Controls.ComboBox>().Single(b => System.Windows.Automation.AutomationProperties.GetName(b) == "Zone");
                 Assert.Equal("Inherit", zoneBox.Text); Assert.False(TurretZone().ContainsKey("zone"));
-                // A source map docks the card as its Properties pane; popped out it floats over the view again. There the open list
-                // is in its own popup window over the scene: a click on its items belongs to the card, not the scene below.
+                // A source map always docks the card as its Properties pane: hiding the pane hides it, never floating it over the view.
                 Assert.True(zoneCard.Docked); Assert.Same(zoneCard.PanelRoot, ((System.Windows.Controls.ContentControl)main.FindName("SourcePropertiesHost")).Content);
-                Assert.False((await Call("workspace_view", new() { ["changes"] = new System.Text.Json.Nodes.JsonObject { ["propertiesDocked"] = false } }))["sourceMap"]!["propertiesDocked"]!.GetValue<bool>());
-                Assert.False(zoneCard.Docked); Assert.Contains(zoneCard.PanelRoot, zoneCard.Children.Cast<System.Windows.UIElement>());
-                zoneBox.IsDropDownOpen = true;
-                await System.Windows.Threading.Dispatcher.Yield(System.Windows.Threading.DispatcherPriority.ApplicationIdle);
-                var listed = Assert.IsType<System.Windows.Controls.ComboBoxItem>(zoneBox.ItemContainerGenerator.ContainerFromIndex(0));
-                var listClick = new System.Windows.Input.MouseButtonEventArgs(System.Windows.Input.Mouse.PrimaryDevice, 0, System.Windows.Input.MouseButton.Left) { RoutedEvent = System.Windows.Input.Mouse.PreviewMouseDownEvent, Source = listed };
-                Assert.False(turretViewport.HandleScenePointerDown(new(turretViewport.ActualWidth / 2, turretViewport.ActualHeight / 2), listClick));
-                zoneBox.IsDropDownOpen = false;
-                await Call("workspace_view", new() { ["changes"] = new System.Text.Json.Nodes.JsonObject { ["propertiesDocked"] = true } });
-                Assert.True(zoneCard.Docked);
+                await Call("workspace_view", new() { ["changes"] = new System.Text.Json.Nodes.JsonObject { ["inspector"] = false } });
+                Assert.True(zoneCard.Docked); Assert.DoesNotContain(zoneCard.PanelRoot, zoneCard.Children.Cast<System.Windows.UIElement>());
+                await Call("workspace_view", new() { ["changes"] = new System.Text.Json.Nodes.JsonObject { ["inspector"] = true } });
                 // Diagnostics is a session pane: toggling it never changes the compiled explorer's saved Tools preference.
                 bool savedTools = main.ViewModel.Settings.GetWorkspace().ToolsVisible;
                 var diagnostics = await Call("workspace_view", new() { ["changes"] = new System.Text.Json.Nodes.JsonObject { ["tools"] = !savedTools } });
                 Assert.Equal(!savedTools, diagnostics["sourceMap"]!["diagnostics"]!.GetValue<bool>()); Assert.Equal(savedTools, main.ViewModel.Settings.GetWorkspace().ToolsVisible);
+                // The project remembers it (.zstudio/settings.json), so it opens that way next time.
+                await main.ViewModel.ProjectSettingsWritten;
+                Assert.Equal(!savedTools, zStudio.Core.Sources.SourceProjectSettings.ReadView(fixture.Project).Diagnostics);
                 await Call("workspace_view", new() { ["changes"] = new System.Text.Json.Nodes.JsonObject { ["tools"] = savedTools } });
                 zoneBox.Text = "255";
                 // 255 is Any's number, never typed as a zone: Apply refuses it and keeps the draft.

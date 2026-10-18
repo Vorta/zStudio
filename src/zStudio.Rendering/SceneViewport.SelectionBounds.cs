@@ -15,13 +15,63 @@ public sealed partial class SceneViewport
         return transform;
     }
 
-    private Matrix3D SelectionBoundsFrame(HashSet<int> selectedNodes)
+    /// <summary>
+    /// The bounds of a node's shown meshes (its own and those below it) along the axes of its parent, in which its local
+    /// position is given: a copy placed beside it moves that position by the width. Null when nothing of it shows or its
+    /// frame cannot be inverted.
+    /// </summary>
+    public (Vector3 Min, Vector3 Max)? BoundsInParentFrame(int node)
     {
-        if (PreviewScene == null || SelectedInspection is not { Node: >= 0 } selected || selectedNodes.Count == 0)
+        if (PreviewScene == null || node < 0 || node >= PreviewScene.Nodes.Count) return null;
+        HashSet<int> nodes = []; Stack<int> pending = new([node]);
+        while (pending.TryPop(out int index))
+        {
+            if (index < 0 || index >= PreviewScene.Nodes.Count || !nodes.Add(index)) continue;
+            foreach (int child in SceneBuilder.Children(PreviewScene.Nodes[index])) pending.Push(child);
+        }
+        // The parent's frame is the node's own (as its selection box finds it) without its local transform.
+        Matrix4x4 nodeLocal;
+        try { nodeLocal = SceneBuilder.LocalTransform(PreviewScene.Nodes[node]); }
+        catch (System.IO.InvalidDataException) { return null; }
+        if (!Matrix4x4.Invert(nodeLocal, out var inverseLocal)) return null;
+        var parentFrame = ToWpf(inverseLocal); parentFrame.Append(SelectionBoundsFrame(nodes, node));
+        if (!UsableSelectionFrame(parentFrame)) return null;
+        parentFrame.Invert();
+        Vector3 min = new(float.PositiveInfinity), max = new(float.NegativeInfinity);
+        foreach (var (mesh, items) in visiblePlacements)
+        {
+            if (!mesh.IsRendering || mesh.Visibility != Visibility.Visible || !mesh.IsDepthClipEnabled ||
+                mesh.Geometry is not HelixToolkit.SharpDX.MeshGeometry3D geometry ||
+                !staticMeshBounds.TryGetValue(geometry, out var local) || !Finite(local.Min) || !Finite(local.Max)) continue;
+            for (int i = 0; i < items.Length; i++)
+            {
+                if (!nodes.Contains(items[i].NodeIndex)) continue;
+                var transform = SelectionPlacementTransform(mesh, items, i);
+                transform.Append(parentFrame);
+                for (int c = 0; c < 8; c++)
+                {
+                    var point = transform.Transform(new Point3D((c & 1) == 0 ? local.Min.X : local.Max.X,
+                        (c & 2) == 0 ? local.Min.Y : local.Max.Y, (c & 4) == 0 ? local.Min.Z : local.Max.Z));
+                    Vector3 v = new((float)point.X, (float)point.Y, (float)point.Z);
+                    min = Vector3.Min(min, v); max = Vector3.Max(max, v);
+                }
+            }
+        }
+        return Finite(min) && Finite(max) ? (min, max) : null;
+    }
+
+    /// <summary>The selection's frame, or with <paramref name="ownerNode"/> that node's frame, as rendered.</summary>
+    private Matrix3D SelectionBoundsFrame(HashSet<int> selectedNodes, int? ownerNode = null)
+    {
+        if (PreviewScene == null || ownerNode == null && SelectedInspection is not { Node: >= 0 } || selectedNodes.Count == 0)
             return Matrix3D.Identity; // AI markers deliberately retain their world-aligned box.
-        int owner = selected.SelectionNode;
-        if (owner >= 0) owner = ActorAt(owner)?.Root ?? owner;
-        else owner = CommonSelectionAncestor(selectedNodes);
+        int owner;
+        if (ownerNode is int given) owner = given;
+        else
+        {
+            owner = SelectedInspection!.SelectionNode;
+            owner = owner >= 0 ? ActorAt(owner)?.Root ?? owner : CommonSelectionAncestor(selectedNodes);
+        }
         if (owner < 0 || owner >= PreviewScene.Nodes.Count) return Matrix3D.Identity;
 
         // Recover the owner's effective frame from a rendered descendant, rather

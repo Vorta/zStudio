@@ -18,6 +18,8 @@ public enum TexturePackKind
 /// <summary>A pack file and its texel budget (texel plus alpha-plane bytes; null keeps every texture at full size).</summary>
 public sealed record TexturePackVariant(string FileName, TexturePackKind Kind, long? BudgetBytes, int MaximumDimension)
 {
+    /// <summary>How the pack converts colours to its texels or palette entries; the export's choice (Export → Texture dithering).</summary>
+    public TextureDithering Dithering { get; init; }
     /// <summary>
     /// Pack names the engine looks for (zVidTexturePackEnsureBuiltinTexturePacksLoaded, retail 0x46DF50): hardware tries
     /// <c>rtexture&lt;MB of texture memory&gt;</c> and counts down; software starts from its TextureMemory option.
@@ -198,7 +200,7 @@ public static class TexturePackBuilder
             var image = images[i] ?? Final(i);
             // Written: no longer kept.
             images[i] = null;
-            WriteImage(w, image, modes[i], ordered[i].Addressing, pageOf[i] >= 0 ? pages[pageOf[i]] : null, token);
+            WriteImage(w, image, modes[i], ordered[i].Addressing, pageOf[i] >= 0 ? pages[pageOf[i]] : null, variant.Kind == TexturePackKind.Interface ? TextureDithering.None : variant.Dithering, token);
             long end = output.Position; output.Position = tableStart + i * 40L;
             byte[] name = new byte[32]; Encoding.Latin1.GetBytes(ordered[i].Name.ToLowerInvariant()).CopyTo(name, 0);
             w.Write(name); w.Write((int)offset); w.Write(pageOf[i]); output.Position = end;
@@ -533,7 +535,7 @@ public static class TexturePackBuilder
         return (ushort)(color == 0 ? 0x0001 : color);
     }
 
-    private static void WriteImage(BinaryWriter w, DecodedImage image, TextureTransparency mode, int addressing, ushort[]? palette, CancellationToken token)
+    private static void WriteImage(BinaryWriter w, DecodedImage image, TextureTransparency mode, int addressing, ushort[]? palette, TextureDithering dithering, CancellationToken token)
     {
         int count = image.Width * image.Height;
         // Format bits: 0x01 16-bit colour words, 0x02 transparent, 0x04 opaque marker, 0x08 alpha plane, 0x10 page palette.
@@ -542,7 +544,11 @@ public static class TexturePackBuilder
         w.Write((ushort)image.Width); w.Write((ushort)image.Height); w.Write(0u);
         w.Write((ushort)(palette == null ? 0 : 256)); w.Write((ushort)(addressing & 3));
         bool Opaque(int p) => mode switch { TextureTransparency.Opaque => true, TextureTransparency.Keyed => image.Rgba[p * 4 + 3] >= 128, _ => image.Rgba[p * 4 + 3] > 0 };
-        if (palette == null)
+        if (dithering != TextureDithering.None && palette == null)
+            foreach (ushort color in TextureDither.Direct(image, Opaque, mode == TextureTransparency.Keyed, dithering, token)) w.Write(color);
+        else if (dithering != TextureDithering.None)
+            w.Write(TextureDither.Indexed(image, Opaque, palette!, color => Nearest(palette!, color), dithering, token));
+        else if (palette == null)
             for (int p = 0; p < count; p++)
             {
                 if ((p & 4095) == 0) token.ThrowIfCancellationRequested();

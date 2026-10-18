@@ -105,7 +105,7 @@ public partial class MainWindow
     {
         if (!Dispatcher.CheckAccess()) { Dispatcher.BeginInvoke(ParachuteResourcesChanged); return; }
         if (!acceptingParachute && parachutes is { } state && state.Resolver.SnapshotRevision != state.ResolverRevision)
-        { CloseParachutes(); ViewModel.Status = "Mission resources changed; reopen Parachute to analyze the current flight."; }
+        { CloseParachutes(); ViewModel.Status = "Mission resources changed; reopen the route editor to analyze the current flight."; }
     }
     private ParachuteSession RequireParachutes(string? snapshot = null, bool edit = false)
     {
@@ -114,7 +114,7 @@ public partial class MainWindow
         if (!IsAiWorld || shownDocument != state.World || scene != state.Viewport || state.World.IsDisposed || state.Owner?.IsDisposed == true ||
             state.World.Revision != state.WorldRevision || (state.Owner?.Revision ?? state.World.Revision) != state.OwnerRevision ||
             ViewModel.Resolver?.SnapshotRevision != state.ResolverRevision)
-            throw new StudioCommandException("context_changed", "The world or animation changed; close and reopen Parachute.");
+            throw new StudioCommandException("context_changed", "The world or animation changed; close and reopen the route editor.");
         if (edit)
         {
             if (state.World.EditingLocked) throw new StudioCommandException("locked", "Unlock editing before moving drop windows.");
@@ -416,7 +416,7 @@ public partial class MainWindow
         token.ThrowIfCancellationRequested(); acceptingParachute = true;
         try { VtolDropWindows.Apply(owner.AnimationEdits!, plan); ReleaseParachuteDraft(AiPathDraftLifetime.Completed); CommitRunningJob(); }
         finally { acceptingParachute = false; }
-        await RefreshAcceptedParachuteAsync(entry, "Drop-window move accepted; reopen Parachute to refresh: ");
+        await RefreshAcceptedParachuteAsync(entry, "Drop-window move accepted; reopen the route editor to refresh: ");
         UpdateDocumentCommands(); return owner;
     }
     private async Task ParachuteHistoryAsync(bool redo, CancellationToken token)
@@ -432,7 +432,7 @@ public partial class MainWindow
             UpdateDocumentCommands(); CommitRunningJob();
         }
         finally { acceptingParachute = false; }
-        await RefreshAcceptedParachuteAsync(entry >= 0 ? entry : null, "Animation history changed; reopen Parachute to refresh: ");
+        await RefreshAcceptedParachuteAsync(entry >= 0 ? entry : null, "Animation history changed; reopen the route editor to refresh: ");
     }
     private async Task RefreshAcceptedParachuteAsync(int? entry, string failureMessage)
     {

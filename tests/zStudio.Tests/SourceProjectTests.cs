@@ -339,4 +339,30 @@ public sealed class SourceProjectTests
         Assert.Equal("failed", failed.Status);
         Assert.Contains("data/common/zrdr/old.zrd", failed.Error); Assert.Contains("holds animation definitions", failed.Error);
     }
+
+    [Fact]
+    public void ProjectSettingsAreRememberedInAHiddenFolderAndToleratedWhenDamaged()
+    {
+        using SourceWorldFixture fixture = new();
+        // Nothing remembered: the view is empty and exports do not dither.
+        Assert.Equal(new SourceProjectView(null, null, null), SourceProjectSettings.ReadView(fixture.Project));
+        SourceProjectSettings.WriteDithering(fixture.Project, TextureDithering.Ordered);
+        SourceProjectSettings.WriteDiagnostics(fixture.Project, false, 240);
+        SourceProjectSettings.WriteDifficulty(fixture.Project, MissionDifficulty.Hard);
+        // Each write keeps the others.
+        Assert.Equal(new SourceProjectView(false, 240, MissionDifficulty.Hard), SourceProjectSettings.ReadView(fixture.Project));
+        Assert.Equal(TextureDithering.Ordered, SourceProjectSettings.ReadDithering(fixture.Project));
+        var folder = new DirectoryInfo(Path.Combine(fixture.Project, ".zstudio"));
+        Assert.True(folder.Attributes.HasFlag(FileAttributes.Hidden));
+        // A damaged file remembers no view (the project still opens), while an export refuses to guess its dithering.
+        File.WriteAllText(Path.Combine(folder.FullName, "settings.json"), "{ not json");
+        Assert.Equal(new SourceProjectView(null, null, null), SourceProjectSettings.ReadView(fixture.Project));
+        Assert.Throws<InvalidDataException>(() => SourceProjectSettings.ReadDithering(fixture.Project));
+        // Remembering the view never replaces it (its dithering would be lost); choosing the dithering does.
+        Assert.Throws<InvalidDataException>(() => SourceProjectSettings.WriteDifficulty(fixture.Project, MissionDifficulty.Easy));
+        SourceProjectSettings.WriteDithering(fixture.Project, TextureDithering.Diffusion);
+        SourceProjectSettings.WriteDifficulty(fixture.Project, MissionDifficulty.Easy);
+        Assert.Equal(MissionDifficulty.Easy, SourceProjectSettings.ReadView(fixture.Project).Difficulty);
+        Assert.Equal(TextureDithering.Diffusion, SourceProjectSettings.ReadDithering(fixture.Project));
+    }
 }

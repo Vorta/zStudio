@@ -16,8 +16,12 @@ public sealed partial class SceneViewport
     {
         if (!Enum.IsDefined(mode)) throw new ArgumentOutOfRangeException(nameof(mode));
         HighlightMode = mode;
+        // Polygon zones tint per polygon from the geometry's vertex colours rather than one colour per node.
+        bool polygonZones = mode == WorldHighlightMode.PolygonZones;
+        ShowPolygonZoneColors(polygonZones);
         foreach (var surface in surfaceAppearances.Values)
         {
+            PreviewMaterials.SetPolygonZones(surface.Normal, polygonZones && !surface.Horizon);
             Color4 tint = default;
             // The horizon is a landmark too, but tinting the whole sky would hide the landmarks seen against it.
             if (WorldSurfaceHighlights.Matches(surface.Kind, mode) && !(mode == WorldHighlightMode.Landmarks && surface.Horizon))

@@ -166,7 +166,7 @@ public partial class MainWindow
         if (operation != null) throw new StudioCommandException("busy", "An export or validation is already running.");
         if (ViewModel.Resolver is not { } resolver) throw new StudioCommandException("no_workspace", "Open a root first.");
         if (lod < 0) throw new StudioCommandException("invalid_argument", "LOD cannot be negative.");
-        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(token, doc.Lifetime.Token); operation = cancellation; CancelOperationItem.IsEnabled = true;
+        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(token, doc.Lifetime.Token); operation = cancellation;
         try
         {
             var progress = new Progress<ExportProgress>(p =>
@@ -182,12 +182,12 @@ public partial class MainWindow
             foreach (string error in result.Errors) ViewModel.AddProblem(error, file: doc.Path);
             ViewModel.Status = $"Exported {result.Completed}/{assets.Length} assets to {result.Directory}"; return result;
         }
-        finally { operation = null; CancelOperationItem.IsEnabled = false; }
+        finally { operation = null; }
     }
     private async Task<List<StudioProblem>> ValidateDocumentSourceAsync(DocumentModel selected, CancellationToken token)
     {
         if (operation != null) throw new StudioCommandException("busy", "An export or validation is already running.");
-        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(token, selected.Lifetime.Token); operation = cancellation; CancelOperationItem.IsEnabled = true;
+        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(token, selected.Lifetime.Token); operation = cancellation;
         try
         {
             ViewModel.Status = "Validating source file on disk…";
@@ -219,6 +219,6 @@ public partial class MainWindow
             foreach (var note in notes) ViewModel.AddProblem(note.Message, note.Severity, note.File, note.AssetIndex, note.Offset);
             ViewModel.Status = $"Source-file validation finished: {notes.Count} diagnostics"; return notes;
         }
-        finally { operation = null; CancelOperationItem.IsEnabled = false; }
+        finally { operation = null; }
     }
 }

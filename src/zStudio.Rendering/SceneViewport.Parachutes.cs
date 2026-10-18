@@ -78,7 +78,7 @@ public sealed partial class SceneViewport
             if (frozenPath[i].Position != frozenPath[i + 1].Position) moving = i;
             parachuteNextMoving[i] = moving;
         }
-        parachuteOverlay = new(); PresentationGuide(parachuteOverlay); viewport.Items.Add(parachuteOverlay);
+        parachuteOverlay = new(); viewport.Items.Add(parachuteOverlay);
         parachuteLine = new()
         {
             Geometry = new LineGeometry3D { Positions = new(parachutePath.Select(p => p.Position)),
@@ -221,7 +221,7 @@ public sealed partial class SceneViewport
     }
     private bool HandleParachuteDown(Point point, MouseButtonEventArgs e)
     {
-        if (PresentationUiHidden || parachuteOverlay == null || !IsInsidePickupViewport(point)) return false;
+        if (parachuteOverlay == null || !IsInsidePickupViewport(point)) return false;
         if (e.ChangedButton is not (MouseButton.Left or MouseButton.Right)) return IsParachutePointerMoving;
         if (IsParachutePointerMoving)
         {
@@ -257,7 +257,6 @@ public sealed partial class SceneViewport
     internal bool MoveParachutePointer(Point point)
     {
         if (!IsParachutePointerMoving) return false;
-        if (PresentationUiHidden) return true;
         if (!IsInsidePickupViewport(point)) return false;
         if (parachutePresentationRebase)
         {

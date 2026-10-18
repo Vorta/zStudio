@@ -220,9 +220,9 @@ internal static class AnimationCheck
         string status = window.ViewModel.Status;
         var escape = new KeyEventArgs(Keyboard.PrimaryDevice, PresentationSource.FromVisual(window), Environment.TickCount, Key.Escape) { RoutedEvent = Keyboard.PreviewKeyDownEvent };
         row.RaiseEvent(escape);
-        var cancel = (MenuItem)window.FindName("CancelOperationItem");
-        if (escape.Handled || cancel.IsEnabled || window.ViewModel.Status != status) throw new InvalidDataException("Idle cancellation is still exposed or changes the status.");
-        cancel.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
+        if (escape.Handled || window.OperationRunning || window.ViewModel.Status != status) throw new InvalidDataException("Idle cancellation reports a running operation or changes the status.");
+        window.CancelRunningOperation();
+        if (window.ViewModel.Status != status) throw new InvalidDataException("Idle cancellation changed the status.");
         await editor.SeekAsync(.1);
         if (Math.Abs(editor.CurrentFrame!.Time - .1) > 1e-8) throw new InvalidDataException("Idle cancellation invalidated animation seeking.");
         foreach (string name in new[] { "Seed", "Condition", "Mute", "Speed", "SeekSlider", "PlayButton" })

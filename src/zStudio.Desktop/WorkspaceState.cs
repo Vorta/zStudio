@@ -20,7 +20,6 @@ public sealed class WorkspaceLayout : System.Text.Json.Serialization.IJsonOnDese
     public bool InspectorVisible { get; set; } = true;
     public bool ToolsVisible { get; set; } = true;
     public string Preset { get; set; } = "Edit";
-    public string Density { get; set; } = "Compact";
     public int BrowserTab { get; set; }
     public int ContentBrowserTab { get; set; } = 1;
     public int InspectorTab { get; set; }
@@ -36,7 +35,6 @@ public sealed class WorkspaceLayout : System.Text.Json.Serialization.IJsonOnDese
         BrowserTab = Math.Clamp(BrowserTab, 0, 3); InspectorTab = Math.Clamp(InspectorTab, 0, 2); ToolTab = Math.Clamp(ToolTab, 0, 5);
         ContentBrowserTab = Math.Clamp(ContentBrowserTab, 1, 3);
         if (Preset is not ("Inspect" or "Edit" or "Debug" or "Focus preview")) Preset = "Edit";
-        if (Density is not ("Compact" or "Comfortable")) Density = "Compact";
         Groups ??= [];
         PropertiesWindow ??= new(); PropertiesWindow.Normalize();
     }

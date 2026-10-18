@@ -386,10 +386,9 @@ internal static class BlenderNavigationChecks
             await using var client = await McpClient.CreateAsync(new StreamClientTransport(pipe, pipe), cancellationToken: deadline.Token);
             scene.RestoreView(initial); await Call("view", new() { ["view"] = "top" }); Assert.Equal("top", scene.CaptureView().AxisView);
             var top = scene.CaptureView();
-            var menu = (MenuItem)typeof(MainWindow).GetField("cameraNavigationMenu", Fields)!.GetValue(main)!;
-            var menuItems = menu.Items.Cast<MenuItem>().ToDictionary(i => (string)i.Tag);
-            Assert.Equal(new[] { "back", "bottom", "follow", "frameAll", "frameSelected", "front", "left", "opposite", "orthographic", "perspective", "right", "top" }, menuItems.Keys.Order());
-            menuItems["front"].RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent)); var gui = scene.CaptureView(); Assert.Equal("front", gui.AxisView);
+            // The view chip's named views run the same command as camera view.
+            typeof(MainWindow).GetMethod("CameraNavigationClick", Fields)!.Invoke(main, [new MenuItem { Tag = "front" }, new RoutedEventArgs(MenuItem.ClickEvent)]);
+            var gui = scene.CaptureView(); Assert.Equal("front", gui.AxisView);
             scene.RestoreView(top); await Call("view", new() { ["view"] = "front" }); Assert.Equal(gui, scene.CaptureView());
             await Call("projection", new() { ["projection"] = "orthographic", ["width"] = .5 }); Assert.Equal(.5, scene.CaptureView().OrthographicWidth);
             foreach (string projection in new[] { "perspective", "orthographic", "perspective" })

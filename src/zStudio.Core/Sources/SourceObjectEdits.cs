@@ -620,7 +620,7 @@ public static partial class SourceObjectEdits
         Generated(origin, node.Name);
         CheckName(name);
         if (node.Class is not (WorldNodeClass.Object3D or WorldNodeClass.Lod)) throw new InvalidDataException($"{node.Name} is a {node.Class} node; only objects can be copied here.");
-        if (target.World.Nodes.Any(n => n.Name == name)) throw new InvalidDataException($"The world already has a node named {name}; choose another name.");
+        if (target.World.Nodes.Any(n => n.Name == name)) throw new InvalidDataException(NameTaken(name));
         // Only the values that differ from the original's shown transform (as PlanTransform): a copy of a node built at the
         // limit (a scale reading back as 1000000.06) can still take a new rotation.
         if (transform is { } requested)
@@ -969,6 +969,14 @@ public static partial class SourceObjectEdits
         int count = target.World.Nodes.Count(n => n.Name == name);
         if (count != 1) throw new InvalidDataException($"{count} nodes are named {name}, so a script line cannot find {what} by name; rename them first.");
     }
+    /// <summary>Why <paramref name="name"/> cannot name a copy in <paramref name="world"/> (as <see cref="PlanDuplicate"/> refuses it), or null.</summary>
+    public static string? CopyNameProblem(Worlds.GameZWorld world, string name)
+    {
+        try { CheckName(name); }
+        catch (InvalidDataException ex) { return ex.Message; }
+        return world.Nodes.Any(n => n.Name == name) ? NameTaken(name) : null;
+    }
+    private static string NameTaken(string name) => $"The world already has a node named {name}; choose another name.";
     private static void CheckName(string name)
     {
         if (name.Length is 0 or > 32 || name.Any(c => c <= ' ' || c > '~' || c is '#' or '%' or ',' or ';' or '"'))

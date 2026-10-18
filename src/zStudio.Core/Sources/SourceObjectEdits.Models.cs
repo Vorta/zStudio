@@ -174,17 +174,36 @@ public static partial class SourceObjectEdits
     private static void RefuseAnimationRoots(SourceObjectTarget target, string old, string name, CancellationToken token)
     {
         var names = target.World.Nodes.Select(n => n.Name).ToHashSet(StringComparer.Ordinal);
-        // Another node keeps the name: what binds by it still finds a node.
-        if (target.World.Nodes.Count(n => n.Name == old) > 1) return;
-        var after = new HashSet<string>(names, StringComparer.Ordinal) { name }; after.Remove(old);
+        var after = new HashSet<string>(names, StringComparer.Ordinal) { name };
+        // Another node keeps the name: what binds by it still finds a node, but the new name may complete a pattern.
+        if (target.World.Nodes.Count(n => n.Name == old) > 1) { RefuseAnimationNames(); return; }
+        after.Remove(old);
         IReadOnlyList<(string File, string Animation, IReadOnlyList<string> Roots)> bound;
         try { bound = SourceWorlds.AnimationsBoundTo(target.Workspace.Root, target.Mission, old, names, after, target.Workspace.Overlay(), token); }
         catch (IOException ex) { throw new InvalidDataException($"The mission's animation definitions could not be checked for {old}: {ex.Message}", ex); }
         var lost = bound.Where(b => !b.Roots.Contains(name)).ToList();
-        if (lost.Count == 0) return;
+        if (lost.Count == 0) { RefuseAnimationNames(); return; }
         throw new InvalidDataException($"{string.Join("; ", lost.Take(4).Select(b => $"{b.Animation} ({b.File}) is bound to {old}" + (b.Roots.Count == 0 ? ", and no other name it lists is in this world" : $" and would bind to {b.Roots[0]} instead")))}"
             + (lost.Count > 4 ? $"; and {lost.Count - 4} more" : "")
             + $". Renamed, the mission would {(lost.All(b => b.Roots.Count == 0) ? "lose" : "move")} the animation (a turret's destroy animation also resets the destroyed parts of every turret that uses it). Add {name} to its NAME list, in a definition this mission lists, before renaming.");
+
+        // A definition can also name the node elsewhere (the node it attaches to, the nodes its events act on, through
+        // patterns too), or the new name can complete one: the mission's animations are compiled with the renamed world,
+        // and a rejection the current world does not have refuses the rename.
+        void RefuseAnimationNames()
+        {
+            var files = new SourceVtolDropEdits.WorkspaceFiles(target.Workspace, token);
+            string root = SourceBuilder.AnimationRoot(target.Mission);
+            string? rejection;
+            try
+            {
+                if (!files.Exists(root) || Animation.AnimationCompiler.Evaluate(files, root, after.ToArray(), null, token).EngineRejection is not { } renamed) return;
+                if (Animation.AnimationCompiler.Evaluate(files, root, names.ToArray(), null, token).EngineRejection != null) return;
+                rejection = renamed;
+            }
+            catch (Exception ex) when (ex is IOException or InvalidDataException) { throw new InvalidDataException($"The mission's animation definitions could not be checked for {old}: {ex.Message}", ex); }
+            throw new InvalidDataException($"Renamed, the game would reject the mission's animation file: {JsonData.ShownText(rejection, 512)} Change those definitions first, or choose another name.");
+        }
     }
 
     private static JsonObject Recoil(JsonObject node)

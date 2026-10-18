@@ -31,6 +31,11 @@ public sealed record BuildProfile(string Name, string Description, string Status
 {
     /// <summary>Why the project's file of this profile cannot be used (null when it can); such a profile has no packs and is not the default.</summary>
     public string? Error { get; init; }
+    /// <summary>
+    /// How its texture packs convert colours: the export's choice (Export → Texture dithering, kept in the project's hidden
+    /// .zstudio folder by the workspace), not part of a profile file, so builds never read it from the project.
+    /// </summary>
+    public Formats.TextureDithering Dithering { get; init; }
 }
 
 public static class BuildProfiles

@@ -77,7 +77,7 @@ public sealed partial class SceneViewport
         ClearAiDrawables();
         RenderedAiNodes = RenderedAiLinks = 0; AiRenderTruncated = false; aiRendered.Clear();
         if (!AiVisible) { PublishAiLabel(); return; }
-        aiOverlay = new(); PresentationGuide(aiOverlay); viewport.Items.Add(aiOverlay);
+        aiOverlay = new(); viewport.Items.Add(aiOverlay);
         foreach (var network in VisibleAiNetworks)
         {
             var color = AiNetworkColors.Color(network.AttackStrategy);
@@ -202,7 +202,7 @@ public sealed partial class SceneViewport
     }
     internal string? PickAiNode(Point point)
     {
-        if (PresentationUiHidden || !AiVisible || IsFlyActive || IsPickupDragging || !IsInsidePickupViewport(point) || viewport.RenderContext == null) return null;
+        if (!AiVisible || IsFlyActive || IsPickupDragging || !IsInsidePickupViewport(point) || viewport.RenderContext == null) return null;
         double nearest = 81, chosenDepth = double.PositiveInfinity; string? chosen = null;
         // Only drawn markers are pickable; the complete graph stays selectable through inspection commands.
         foreach (var node in aiRendered)

@@ -345,6 +345,8 @@ public sealed class SourceObjectStructureTests
         SourceWorkspace workspace = new(fixture.Project);
         var (build, world) = await BuildAsync(fixture, workspace, "m1");
         Assert.Contains("break_crate (data/m1/zrdr/gates.zad) is bound to crate", Assert.Throws<InvalidDataException>(() => SourceObjectEdits.PlanRename(Target(workspace, "m1", build, world, "crate"), "crate_x", Token)).Message);
+        // A node its events name is needed too: renamed, the game would reject the animation file.
+        Assert.Contains("break_crate names node ground", Assert.Throws<InvalidDataException>(() => SourceObjectEdits.PlanRename(Target(workspace, "m1", build, world, "ground"), "ground_x", Token)).Message);
         // Listing the new name keeps the binding, so the rename is accepted.
         fixture.Write("data/m1/zrdr/gates.zad", Definition("absent crate crate_x"));
         workspace = new(fixture.Project);

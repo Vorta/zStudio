@@ -164,7 +164,7 @@ public static partial class SourceBlender
     {
         if (entry["extras"] == null) entry["extras"] = new JsonObject();
         var extras = entry["extras"]!.AsObject();
-        if (extras.ContainsKey(BridgeKey) || extras.ContainsKey("zstudio_editor_id")) throw new InvalidDataException("A source file contains reserved Blender transport metadata.");
+        if (extras.ContainsKey(BridgeKey) || extras.ContainsKey("zstudio_editor_id") || extras.ContainsKey("zstudio_copy_of")) throw new InvalidDataException("A source file contains reserved Blender transport metadata.");
         extras[BridgeKey] = index;
     }
 

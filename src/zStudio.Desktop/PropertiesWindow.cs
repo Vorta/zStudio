@@ -93,8 +93,8 @@ public sealed class PropertiesWindow : Window
 
     public void ApplyAppearance()
     {
-        FontSize = preferences.Settings.GetWorkspace().Density == "Comfortable" ? 15 : 13;
-        Resources["WorkspaceControlPadding"] = preferences.Settings.GetWorkspace().Density == "Comfortable" ? new Thickness(12, 8, 12, 8) : new Thickness(8, 4, 8, 4);
+        FontSize = 13;
+        Resources["WorkspaceControlPadding"] = new Thickness(8, 4, 8, 4);
     }
     public bool SetAnimation(DocumentModel document, int entry, Guid sequence, Guid ev)
     {
@@ -262,7 +262,7 @@ public sealed class PropertiesWindow : Window
     internal void Dismiss() { ClosedByUser = true; CloseResolved(); }
     private void RememberBounds()
     {
-        // A Properties request made during Hide UI can pin a window without ever showing it.
+        // A Properties window can be pinned to a document without ever being shown.
         // Its uninitialized HWND coordinates must not replace the last useful popup bounds.
         if (!hasBeenShown) return;
         Rect bounds = WindowState == WindowState.Normal ? new(Left, Top, ActualWidth, ActualHeight) : RestoreBounds;

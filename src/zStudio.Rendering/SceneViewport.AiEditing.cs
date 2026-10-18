@@ -132,7 +132,7 @@ public sealed partial class SceneViewport
 
     private bool HandleAiPathDown(Point point, MouseButtonEventArgs e)
     {
-        if (PresentationUiHidden || AiPathEditingNetwork == null || !IsInsidePickupViewport(point)) return false;
+        if (AiPathEditingNetwork == null || !IsInsidePickupViewport(point)) return false;
         if (e.ChangedButton is not (MouseButton.Left or MouseButton.Right)) return IsAiPathPointerTransform;
         // Returning from a numeric field to the viewport restores modal keyboard commands,
         // even when the draft vetoes selection. This click does not accept a numeric draft.
@@ -166,7 +166,6 @@ public sealed partial class SceneViewport
 
     private bool HandleAiPathMove(Point point)
     {
-        if (PresentationUiHidden) return IsAiPathPointerTransform || aiPathBoxStart != null;
         if (aiPathPointerStart is { } origin)
         {
             if (aiPresentationRebase)

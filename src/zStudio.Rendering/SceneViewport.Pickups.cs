@@ -53,13 +53,6 @@ public sealed partial class SceneViewport
         };
         PreviewMouseMove += (_, e) =>
         {
-            if (PresentationUiHidden)
-            {
-                // Do not let Helix's class handler advance an already active native handle.
-                e.Handled = IsPickupDragging || IsAiPathPointerTransform || IsParachutePointerMoving ||
-                    IsTerrainStroking || IsZonePainting || aiPathBoxStart != null;
-                return;
-            }
             if (InspectionContent is DependencyObject panel && IsInspectionInput(e.OriginalSource as DependencyObject, panel)) return;
             if (MoveParachutePointer(e.GetPosition(viewport)) || HandleAiPathMove(e.GetPosition(viewport))) { e.Handled = true; return; }
             if (HandleZoneMove(e.GetPosition(viewport)) || HandleTerrainBrushMove(e.GetPosition(viewport))) { e.Handled = true; return; }
@@ -68,16 +61,6 @@ public sealed partial class SceneViewport
         };
         PreviewMouseUp += (_, e) =>
         {
-            if (PresentationUiHidden)
-            {
-                // Releasing a hidden marquee ends only that transient selection gesture.
-                // Do not select against its old rectangle after the viewport has resized.
-                if (aiPathBoxStart != null && e.ChangedButton == MouseButton.Left)
-                { CancelAiPathBox(); e.Handled = true; return; }
-                emptyClickStart = null;
-                if (HandleZoneUp(e) || HandleTerrainBrushUp(e) || HandlePickupPointerUp(e.GetPosition(viewport), e)) e.Handled = true;
-                return;
-            }
             if (HandleAiPathUp(e.GetPosition(viewport), e) || HandleZoneUp(e) || HandleTerrainBrushUp(e) || HandlePickupPointerUp(e.GetPosition(viewport), e)) e.Handled = true;
             else if (e.ChangedButton == MouseButton.Left && emptyClickStart is { } start)
             {
@@ -86,7 +69,7 @@ public sealed partial class SceneViewport
                 if ((e.GetPosition(viewport) - start).Length <= 4 && !IsFlyActive && !IsPickupDragging) EmptySpaceClicked?.Invoke();
             }
         };
-        MouseLeave += (_, _) => { emptyClickStart = null; if (!PresentationUiHidden && !pickupPresentationRebase) CancelPickupDrag(); SetPickupHover(false); hoveredAiNode = null; PublishAiLabel(); };
+        MouseLeave += (_, _) => { emptyClickStart = null; if (!pickupPresentationRebase) CancelPickupDrag(); SetPickupHover(false); hoveredAiNode = null; PublishAiLabel(); };
         viewport.LostMouseCapture += (_, _) => { emptyClickStart = null; if (IsPickupDragging) CancelPickupDrag(); CancelTerrainStroke(); CancelZoneGesture(); CancelAiPathBox(); };
         viewport.PreviewKeyDown += (_, e) => { if (e.Key == Key.Escape && (CancelAiPathBox() || CancelPickupDrag() || CancelTerrainStroke() || CancelZoneGesture())) e.Handled = true; };
     }
@@ -96,7 +79,6 @@ public sealed partial class SceneViewport
     internal bool HandleScenePointerDown(Point point, MouseButtonEventArgs e)
     {
         emptyClickStart = null;
-        if (PresentationUiHidden) return e.ChangedButton is MouseButton.Left or MouseButton.Right;
         if (e.Handled ||
             InspectionContent is DependencyObject panel && IsInspectionInput(e.OriginalSource as DependencyObject, panel)) return false;
         if (IsFlyActive || IsPickupDragging) return true;
@@ -126,7 +108,7 @@ public sealed partial class SceneViewport
         pickupTarget = new GroupModel3D(); viewport.Items.Add(pickupTarget);
         pickupTransformDescriptor = DependencyPropertyDescriptor.FromProperty(Element3D.TransformProperty, typeof(GroupModel3D));
         pickupTransformDescriptor.AddValueChanged(pickupTarget, PickupTargetChanged);
-        pickupOverlay = new TopMostGroup3D(); PresentationGuide(pickupOverlay); viewport.Items.Add(pickupOverlay);
+        pickupOverlay = new TopMostGroup3D(); viewport.Items.Add(pickupOverlay);
         selectionBox = new() { Color = Colors.Gold, Thickness = 1.5, IsHitTestVisible = false, Visibility = Visibility.Collapsed };
         pickupOverlay.Children.Add(selectionBox);
         CreatePickupManipulator();

@@ -26,7 +26,7 @@ public partial class MainWindow
         };
         NavigationTabs.SelectedIndex = layout.BrowserTab; InspectorTabs.SelectedIndex = layout.InspectorTab; ToolTabs.SelectedIndex = layout.ToolTab;
         InitializeResponsiveNavigator();
-        InitializeChrome(); ApplyDensity();
+        InitializeChrome(); ApplyMetrics();
         foreach (var submenu in new[] { RecentMenu,ExportSourceFileMenu })
             submenu.Loaded += (_,_) =>
             {
@@ -55,8 +55,9 @@ public partial class MainWindow
         };
         // An interrupted save of a source project is reported, and resolved only on the user's decision. A root an MCP request
         // opened is not followed by a dialog (it would hold the workspace from that client): Problems lists the saves, and
-        // source_recovery / source_recovery_resolve (or Tools → Resolve interrupted save) decide them.
+        // source_recovery / source_recovery_resolve (or Save, which asks again) decide them.
         ViewModel.RootPublished += () => { if (SourceProjectRoot is { } project) _ = CheckSourceRecoveryAsync(project, ask: !ViewModel.RootOpenedWithoutPrompts); };
+        ViewModel.RootPublished += ApplyProjectView;
         ViewModel.RootPublished += () => _ = RefreshSourceMapPickerAsync();
         ViewModel.SearchResults.CollectionChanged += (_, _) => UpdateSearchHint();
         ViewModel.Problems.CollectionChanged += (_, _) => UpdateDocumentCommands();
@@ -75,22 +76,18 @@ public partial class MainWindow
         // Move off an unavailable page before collapsing its tab. Preserve Files
         // and Search selections when the document context changes.
         UpdateNavigatorAvailability();
-        InspectorVisibilityMenu.IsEnabled = InspectorPaneButton.IsEnabled = !ViewModel.IsSourceProject && animation != null;
-        NavigatorVisibilityMenu.IsEnabled = NavigatorPaneButton.IsEnabled = !ViewModel.IsSourceProject && ViewModel.HasRoot;
-        PropertiesMenu.IsEnabled = hasDocument;
-        ToolsVisibilityMenu.IsEnabled = ToolsPaneButton.IsEnabled = hasDocument || ViewModel.Problems.Count > 0;
+        InspectorPaneButton.IsEnabled = !ViewModel.IsSourceProject && animation != null;
+        NavigatorPaneButton.IsEnabled = !ViewModel.IsSourceProject && ViewModel.HasRoot;
+        ToolsPaneButton.IsEnabled = hasDocument || ViewModel.Problems.Count > 0;
         DocumentCommands.Visibility = hasDocument ? Visibility.Visible : Visibility.Collapsed;
-        ExportSelectedMenu.IsEnabled = ExportAllMenu.IsEnabled = ExportJsonMenu.IsEnabled = CloseDocumentMenu.IsEnabled = ValidateMenu.IsEnabled = ReloadMenu.IsEnabled = hasDocument;
-        BackupOnSave.IsEnabled = doc?.PickupEdits != null;
-        ExportModelsMenu.IsEnabled = doc?.SelectedAsset?.Record.Kind is zStudio.Core.AssetKind.Animation or zStudio.Core.AssetKind.Node or zStudio.Core.AssetKind.Model;
-        ReplaceModelsMenu.IsEnabled = doc?.ModelEdits != null || doc?.SelectedAsset?.Record.Content is zStudio.Core.Formats.MechAssembly;
+        CloseDocumentMenu.IsEnabled = ValidateMenu.IsEnabled = ReloadMenu.IsEnabled = hasDocument;
         WelcomeTitle.Text = ViewModel.HasRoot ? "Choose a file to inspect" : "Explore Recoil’s assets";
         WelcomeDescription.Text = ViewModel.HasRoot ? "Open a ZBD file from Files, or search for an asset across this folder." : "Textures, worlds, models, audio, scripts, and animation sequences — together in one workspace.";
         WelcomeChoices.Visibility = ViewModel.HasRoot ? Visibility.Collapsed : Visibility.Visible;
-        WelcomeHelp.Text = ViewModel.HasRoot ? "Double-click a file or select it and press Enter.\nUse File → Open folder to change your ZBD root." : "You can also drop a ZBD folder or file here.";
+        WelcomeHelp.Text = ViewModel.HasRoot ? "Double-click a file or select it and press Enter.\nUse File → Open workspace to open a source project." : "";
+        WelcomeHelp.Visibility = WelcomeHelp.Text.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
         WelcomeHelp.Margin = new(0, ViewModel.HasRoot ? 24 : 8, 0, 0);
         AnimationMenu.IsEnabled = animation != null;
-        CopyEventJsonMenu.IsEnabled = animation != null;
         foreach (var column in AssetGrid.Columns.Skip(1)) column.Visibility = doc?.AnimationEdits != null ? Visibility.Visible : Visibility.Collapsed;
         foreach (var item in AnimationMenu.Items.OfType<MenuItem>()) if (item.Tag is string command) item.IsEnabled = animation?.CanRunCommand(command) == true;
         // A rebuilding source world accepts no other edit or save until the rebuilt world is shown.
@@ -187,16 +184,6 @@ public partial class MainWindow
         {
             RefreshPresentation();
             UpdateSourceMapPresentation();
-            if (presentationUiHidden)
-            {
-                NavigatorHost.Visibility = NavigatorSplitter.Visibility = InspectorHost.Visibility = InspectorSplitter.Visibility = BottomTools.Visibility = ToolsSplitter.Visibility = Visibility.Collapsed;
-                SourceOutlinerPane.Visibility = SourcePropertiesPane.Visibility = Visibility.Collapsed; RefreshSourceChrome();
-                FilesColumn.Width = NavigatorSplitterColumn.Width = PropertiesColumn.Width = PropertiesSplitterColumn.Width = new(0);
-                ToolsRow.Height = ToolsSplitterRow.Height = new(0);
-                animation?.ShowInspectorReplacement(false);
-                Workspace.Visibility = Visibility.Visible;
-                return;
-            }
             if (ViewModel.IsSourceProject) { ArrangeSourceMapWorkspace(); return; }
             var layout = Layout; bool focus = layout.Preset == "Focus preview";
             double width = Workbench.ActualWidth;
@@ -216,7 +203,6 @@ public partial class MainWindow
             NavigatorContentColumn.Width = new(1,GridUnitType.Star);
             bool replacement = inspector && width - navWidth - layout.InspectorWidth - 12 < 360;
             if (replacement && !inspectorTemporary) inspector = false;
-            NavigatorVisibilityMenu.IsChecked = nav; InspectorVisibilityMenu.IsChecked = inspector;
             NavigatorHost.Visibility = nav ? Visibility.Visible : Visibility.Collapsed;
             NavigatorSplitter.Visibility = nav ? Visibility.Visible : Visibility.Collapsed;
             FilesColumn.Width = new(navWidth); NavigatorSplitterColumn.Width = new(nav ? 6 : 0);
@@ -238,7 +224,6 @@ public partial class MainWindow
             ToolsRow.Height = new(tools ? Math.Min(toolsMaximized ? availableTools : layout.ToolsHeight, availableTools) : 0);
             ToolsSplitterRow.Height = new(tools ? 6 : 0);
             BottomTools.Visibility = ToolsSplitter.Visibility = tools ? Visibility.Visible : Visibility.Collapsed;
-            ToolsVisibilityMenu.IsChecked = tools;
         }
         finally
         {
@@ -254,7 +239,7 @@ public partial class MainWindow
         if (ViewModel.IsSourceProject && sender == NavigatorSplitter)
         { sourceOutlinerWidth = Math.Clamp(FilesColumn.ActualWidth, 200, 650); ArrangeWorkspace(); return; }
         if (ViewModel.IsSourceProject && sender == ToolsSplitter)
-        { sourceToolsHeight = Math.Clamp(ToolsRow.ActualHeight, 100, 700); ArrangeWorkspace(); return; }
+        { sourceToolsHeight = Math.Clamp(ToolsRow.ActualHeight, 100, 700); RememberSourceTools(); ArrangeWorkspace(); return; }
         var layout = Layout;
         if (sender == NavigatorSplitter) layout.NavigatorWidth = FilesColumn.ActualWidth - (filesDetached ? layout.FilesWidth + 6 : 0);
         if (sender == FilesSplitter) { layout.FilesWidth = DetachedFilesColumn.ActualWidth; layout.NavigatorWidth = NavigatorContentColumn.ActualWidth; }
@@ -268,7 +253,6 @@ public partial class MainWindow
         if (animation != null && ProgramHost.Content != null && InspectorTabs.SelectedIndex >= 0) Layout.InspectorTab = InspectorTabs.SelectedIndex;
         Layout.ToolTab = Math.Max(0, ToolTabs.SelectedIndex);
     }
-    private void NavigatorClick(object sender, RoutedEventArgs e) { Layout.NavigatorVisible = ((MenuItem)sender).IsChecked; navigatorTemporary = Layout.NavigatorVisible; ArrangeWorkspace(); }
     private void NavigatorButtonClick(object sender, RoutedEventArgs e)
     {
         if (Layout.Preset == "Focus preview") Layout.Preset = previousPreset;
@@ -298,15 +282,15 @@ public partial class MainWindow
         if (preset == "Debug") { Layout.ToolsHeight = 300; ToolTabs.SelectedIndex = 2; }
         ArrangeWorkspace();
     }
-    private void DensityClick(object sender, RoutedEventArgs e) { Layout.Density = ((MenuItem)sender).Header.ToString()!; ApplyDensity(); }
-    private void ApplyDensity()
+    /// <summary>The workbench's compact metrics: 13-point text, 32-DIP controls with 16-DIP icons.</summary>
+    private void ApplyMetrics()
     {
         using var lease = BeginLayoutChange();
         propertiesWindow?.ApplyAppearance();
-        FontSize = Layout.Density == "Comfortable" ? 15 : 13;
-        Resources["PreviewControlSize"] = Layout.Density == "Comfortable" ? 40d : 32d;
-        Resources["PreviewIconSize"] = Layout.Density == "Comfortable" ? 20d : 16d;
-        Resources["WorkspaceControlPadding"] = Layout.Density == "Comfortable" ? new Thickness(12, 8, 12, 8) : new Thickness(8, 4, 8, 4);
+        FontSize = 13;
+        Resources["PreviewControlSize"] = 32d;
+        Resources["PreviewIconSize"] = 16d;
+        Resources["WorkspaceControlPadding"] = new Thickness(8, 4, 8, 4);
     }
     private void InspectorSelectionChanged(object sender, SelectionChangedEventArgs e) { if (ready && e.Source == InspectorTabs) SaveWorkspacePreferences(); }
     private void ToolSelectionChanged(object sender, SelectionChangedEventArgs e) { if (ready && e.Source == ToolTabs) SaveWorkspacePreferences(); }
@@ -319,10 +303,17 @@ public partial class MainWindow
     private void AnimationDuplicateClick(object sender, RoutedEventArgs e) => animation?.DuplicateRecord();
     private void AnimationDeleteClick(object sender, RoutedEventArgs e) => animation?.DeleteRecord();
     private void PreviewSetupClick(object sender, RoutedEventArgs e) { if (animation != null) { Layout.InspectorVisible = true; inspectorTemporary = true; InspectorTabs.SelectedItem = PreviewSetupTab; ArrangeWorkspace(); } }
-    private void CopyEventJsonClick(object sender, RoutedEventArgs e) => animation?.CopySelectedEvent();
-    private async void FileProblemDoubleClick(object sender, MouseButtonEventArgs e) { if (FileProblems.SelectedItem is StudioProblem problem) await NavigateProblemAsync(problem); }
+    private async void FileProblemDoubleClick(object sender, MouseButtonEventArgs e)
+    {
+        bool row = false;
+        for (var source = e.OriginalSource as DependencyObject; source != null && !row; source = source is System.Windows.Media.Visual or System.Windows.Media.Media3D.Visual3D ? System.Windows.Media.VisualTreeHelper.GetParent(source) : LogicalTreeHelper.GetParent(source))
+            row = source is DataGridRow;
+        if (row && FileProblems.SelectedItem is StudioProblem problem) await NavigateProblemAsync(problem);
+    }
     internal async Task NavigateProblemAsync(StudioProblem problem)
     {
+        // A source project opens no individual files (and hides the status text): the problem's whole text is what there is to see.
+        if (ViewModel.IsSourceProject) { DetailDialog.Show(this, "Diagnostics", $"{problem.Severity} · {problem.Category}\n{problem.Message}\n\n{problem.Details}"); return; }
         if (problem.File == null) { ViewModel.Status = problem.Details; return; }
         await RunUi(async () =>
         {

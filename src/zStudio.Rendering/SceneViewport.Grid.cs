@@ -22,7 +22,7 @@ public sealed partial class SceneViewport
                 PlaneColor = Colors.Transparent, GridColor = Color.FromArgb(155, 145, 161, 180),
                 RenderShadowMap = false, IsHitTestVisible = false
             };
-            PresentationGuide(groundGrid); viewport.Items.Add(groundGrid);
+            viewport.Items.Add(groundGrid);
         }
         if (groundGrid != null) groundGrid.Visibility = visible ? Visibility.Visible : Visibility.Collapsed;
     }

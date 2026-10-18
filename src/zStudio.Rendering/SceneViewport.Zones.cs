@@ -42,7 +42,7 @@ public sealed partial class SceneViewport
     private bool HandleZoneMove(Point point)
     {
         if (zoneGesture == null) return false;
-        if (zonePresentationSuspended || PresentationUiHidden) return true;
+        if (zonePresentationSuspended) return true;
         AddZoneHit(point); return true;
     }
     private void AddZoneHit(Point point)
@@ -119,7 +119,7 @@ public sealed partial class SceneViewport
             Geometry = new LineGeometry3D { Positions = new Vector3Collection(points), Indices = indices },
             Color = System.Windows.Media.Colors.OrangeRed, Thickness = 2, IsHitTestVisible = false, DepthBias = -100,
         };
-        PresentationGuide(zoneOutline); viewport.Items.Add(zoneOutline);
+        viewport.Items.Add(zoneOutline);
     }
     private void ClearZonePainting()
     {

@@ -47,6 +47,9 @@ assert [o.recoil.zone_id for o in holders] == [3, 7]
 refs = [o for o in world.objects if o.instance_type == "COLLECTION"]
 assert len(refs) == 2 and all(o.instance_collection == part for o in refs)
 assert bpy.ops.recoil.export_gltf(directory=str(output / "unchanged")) == {"FINISHED"}
+# A no-op round trip leaves transforms as the source wrote them (the matrix is not rewritten as Blender's TRS).
+unchanged = json.loads(next((output / "unchanged").glob("*/world.gltf")).read_text())
+assert "matrix" in unchanged["nodes"][1] and "translation" not in unchanged["nodes"][1], unchanged["nodes"][1]
 mesh_object = next(o for o in part.objects if o.type == "MESH" and addon.state(o)["zs_origin"] == 0)
 assert mesh_object.recoil.altitudeSurface
 material = mesh_object.active_material
@@ -655,4 +658,30 @@ for value in proxies[0].data.attributes['_recoil_zone0'].data: value.value = 11
 assert bpy.ops.recoil.accept_placement() == {'FINISHED'}
 assert bpy.ops.recoil.export_gltf(directory=str(output / 'placement-independent')) == {'FINISHED'}
 assert split_zones(output / 'placement-independent') == [[[9]], [[11]]]
+# Checks that split faces take identities never used before in their mesh (none is reused once its face is gone)
+# and keep their whole ancestry, so an update maps a face split twice to the polygon it came from.
+split_mesh = bpy.data.meshes.new('split ancestry')
+split_mesh.from_pydata([(0, 0, 0), (1, 0, 0), (0, 1, 0), (1, 1, 0), (2, 0, 0), (2, 1, 0)], [], [(0, 1, 2), (1, 3, 2), (1, 4, 3), (4, 5, 3)])
+addon.face_attribute(split_mesh, '_recoil_face', [1, 2, 3, 3])
+addon.state(split_mesh)['zs_face_next'] = 4
+addon.ensure_face_ids(split_mesh)
+addon.face_attribute(split_mesh, '_recoil_face', [1, 2, 4, 4])
+addon.ensure_face_ids(split_mesh)
+assert [v.value for v in split_mesh.attributes['_recoil_face'].data] == [1, 2, 4, 5]
+assert addon.face_ancestors(json.loads(addon.state(split_mesh)['zs_face_tree']), 5) == [4, 3]
+assert addon.state(split_mesh)['zs_face_next'] == 6
+# Faces joined in from another RECOIL mesh keep that mesh's polygon identities: the export refuses them.
+addon.face_attribute(split_mesh, '_recoil_origin', [1, 2, 3, 3])
+addon.state(split_mesh)['zs_mesh_tag'] = 7
+addon.face_attribute(split_mesh, '_recoil_mesh', [7, 7, 7, 7])
+joined = bpy.data.objects.new('joined faces', split_mesh)
+addon.require_own_faces(joined)
+addon.face_attribute(split_mesh, '_recoil_mesh', [7, 7, 9, 9])
+try:
+    addon.require_own_faces(joined)
+    raise AssertionError('joined faces were accepted')
+except ValueError as error:
+    assert 'joined from another RECOIL mesh' in str(error)
+bpy.data.objects.remove(joined)
+bpy.data.meshes.remove(split_mesh)
 print("ZSTUDIO_BLENDER_ROUNDTRIP_PASS")

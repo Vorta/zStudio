@@ -45,8 +45,7 @@ internal static class TerrainCreationCompletionChecks
             entered = new(TaskCreationOptions.RunContinuationsAsynchronously);
             var gui = main.CreateTerrainAsync(doc, model, ["land"], null, token);
             await entered.Task.WaitAsync(token);
-            await main.Dispatcher.InvokeAsync(() => ((MenuItem)main.FindName("CancelOperationItem"))
-                .RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent)));
+            await main.Dispatcher.InvokeAsync(main.CancelRunningOperation);
             await Assert.ThrowsAnyAsync<OperationCanceledException>(() => gui); Unchanged();
 
             // A listing error after the isolated source edit still precedes acceptance in the owning workspace.

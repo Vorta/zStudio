@@ -37,7 +37,7 @@ public partial class MainWindow
         if (doc.SourceWorld != null && (sourceWorkspaceBusy || doc.SourceWorld.IsRebuilding))
         {
             if (publishedStaticOptions != null) RestoreStaticSceneOptions(publishedStaticOptions);
-            ViewModel.Status = "Wait for source evaluation before changing scene options.";
+            Notice("Wait for source evaluation before changing scene options.");
             return Task.FromResult<Guid?>(null);
         }
         if (!ResolveInspectionDrafts(doc)) { if (publishedStaticOptions != null) RestoreStaticSceneOptions(publishedStaticOptions); return Task.FromResult<Guid?>(null); }
@@ -111,9 +111,9 @@ public partial class MainWindow
             scene.NodeSelected += InspectNode;
             ConfigureAiScene(scene);
             ConfigurePickupScene(scene); ConfigureFlyScene(scene);
-            ApplyRetainedPresentation();
             SceneHost.Content = scene;
             ApplySceneOptions();
+            RefreshZoneDraftView();
             if (asset.Kind == AssetKind.World) AttachPickupEditor(doc);
             scene.SetValveOptions(previous.ValveOverlayVisible,
                 mission?.Layout.MissionArchive == previous.Mission?.Layout.MissionArchive ? previous.ValveFilter : null);
@@ -127,7 +127,13 @@ public partial class MainWindow
             selectedNode = mission != null && previous.Mission != null
                 ? RemapPickupSelection(pickup, mission) ?? (selection is int oldSelection ? Remap(oldSelection) : null)
                 : selection;
-            if (selectedNode is int node) { InspectNode(node); scene.SelectInspectionNode(node); }
+            if (selectedNode is int node)
+            {
+                InspectNode(node);
+                // A source map's tree-only selection (a light, a hidden object) has nothing to pick in the view: the card selects it.
+                if (!scene.SelectInspectionNode(node) && doc.SourceWorld != null)
+                    try { FocusSourceObjectCard(doc, node); } catch (zStudio.Automation.StudioCommandException) { }
+            }
             if (aiSelection != null && previous.AiNetworks.Find(aiSelection) is { } oldAi && scene.AiNetworks.Find(aiSelection) is { } newAi &&
                 oldAi.Node.SourceOffset == newAi.Node.SourceOffset) scene.SelectAiNode(aiSelection);
             publishedStaticOptions = requested with { Mission = mission?.Layout.MissionArchive ?? requested.Mission }; previewId = Guid.NewGuid();
@@ -137,7 +143,7 @@ public partial class MainWindow
             if (mission != null) WorldDifficulty.ToolTip = mission.Layout.Description;
             ShowStaticPreviewProblems(doc, asset);
             EmptyPreview.Visibility = Visibility.Collapsed;
-            RefreshPresentation(previewSettled: true);
+            RefreshPresentation();
             RefreshSceneTree();
             if (selectedNode is int retainedNode) RevealSceneNode(retainedNode);
             previous.Dispose(); SynchronizeFly();

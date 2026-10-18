@@ -346,6 +346,23 @@ public partial class MainWindow
         EditSourceStructureAsync(doc, node, (target, ct) => SourceObjectEdits.PlanDelete(target, ct), token);
     private Task<DocumentModel> DuplicateSourceObjectAsync(DocumentModel doc, int node, string name, ObjectTransform? transform, CancellationToken token, bool keepBasis = false) =>
         EditSourceStructureAsync(doc, node, (target, ct) => SourceObjectEdits.PlanDuplicate(target, name, transform, ct, keepBasis), token, keepsNodes: true);
+    /// <summary>
+    /// Where Copy places a copy: beside the object, its local X plus the object's width along its parent's X (the extent of
+    /// its shown meshes, in the parent's coordinates its position is given in). The copy keeps its rotation and scale (only
+    /// the position is taken). Null, a copy in place, when the object has no transform or shows nothing in the view.
+    /// </summary>
+    private ObjectTransform? BesideTransform(DocumentModel doc, int node)
+    {
+        if (scene == null || shownDocument != doc) return null;
+        var whole = SourceObjectTargetFor(doc, node, SourceWorldOf(doc).Workspace).Node;
+        int wholeNode = SourceWorldModel(doc).Slots.First(p => ReferenceEquals(p.Value, whole)).Key;
+        if (DescribeSourceObject(doc, wholeNode).Transform is not { } accepted || scene.BoundsInParentFrame(wholeNode) is not { } bounds) return null;
+        float width = bounds.Max.X - bounds.Min.X;
+        if (!float.IsFinite(width) || width <= 0) return null;
+        // Only X changes: Y and Z stay exactly as authored.
+        float x = ObjectTransform.SnapPosition(accepted.Position + new Vector3(width, 0, 0)).X;
+        return float.IsFinite(x) ? accepted with { Position = accepted.Position with { X = x } } : null;
+    }
     /// <summary>Moves the object under <paramref name="parent"/> (a scene node index; null for the world).</summary>
     private Task<DocumentModel> ReparentSourceObjectAsync(DocumentModel doc, int node, int? parent, CancellationToken token)
     {
@@ -462,7 +479,7 @@ public partial class MainWindow
         // A terrain piece is compiled from its recipe; Properties edits the recipe.
         if (state.Origin.Terrain is { } recipe)
             return await ShowTerrainPropertiesAsync(doc, recipe, state.Origin.TerrainSurface, $"Piece {state.Name}: surface {state.Origin.TerrainSurface}, cell {state.Origin.TerrainCell.Column}, {state.Origin.TerrainCell.Row}", null, token);
-        return FocusSourceObjectCard(doc, node);
+        return FocusSourceObjectCard(doc, node, focus: true);
     }
 
     /// <summary>
@@ -504,7 +521,7 @@ public partial class MainWindow
                 var args = (a["arguments"] as JsonArray)!.Select(v => v!.GetValue<string>()).ToArray();
                 return Result(new { document = DocumentState(await CommandSourceObjectAsync(d, Int(a, "node"), Text(a, "command"), args, token)) });
             });
-        RegisterJob(r, "source_world_object_edit", "Edit a world object of a source world as one undoable change of the project's workspace: move, rotate or scale it, set or clear one of its node flags, copy it, delete it, move it under another parent, rename a mission database object (rename; a group or reference holder the build removes, shown only in the source tree, is renamed by sourceFile and gltfNode instead of node; refused while a script finds it by name, or while one of the mission's animations is bound to its name, such as destroy_turret, whose NAME list binds to the first listed name the world has, until the new name is added to that list), or make one reference another glTF model (model: the reference it or its one referencing child holds, keeping name, place, flags and zone; the placement's zone overrides for the previous model are removed). The edit changes the source that placed the object: the transform or extras of its glTF node (the mission database or one of its parts, which every copy of the part uses, or a model file, which every load of it uses), or the script instruction that set the value (refused when it ran more than once or takes the value from a macro); a value nothing set yet is added as an instruction after the one that created the object. Copying, deleting and re-parenting apply to the whole object: a node of a model a script loaded stands for that load (zstudio_source_world_object names it). A mission database object is copied, deleted or moved in its glTF file; a script's object is deleted by turning its instructions into comments, copied by loading it again before the world is written, and moved by attaching it there. The scene is evaluated in memory and the result is the accepted document/revision (with the copy's node index); a change that cannot be evaluated is refused. Save writes the owning sources; no archives are created.",
+        RegisterJob(r, "source_world_object_edit", "Edit a world object of a source world as one undoable change of the project's workspace: move, rotate or scale it, set or clear one of its node flags, copy it, delete it, move it under another parent, rename a mission database object (rename; a group or reference holder the build removes, shown only in the source tree, is renamed by sourceFile and gltfNode instead of node; refused while a script finds it by name, or while one of the mission's animations is bound to its name, such as destroy_turret, whose NAME list binds to the first listed name the world has, until the new name is added to that list; also while the mission's animations, compiled with the new name, would be rejected), or make one reference another glTF model (model: the reference it or its one referencing child holds, keeping name, place, flags and zone; the placement's zone overrides for the previous model are removed). The edit changes the source that placed the object: the transform or extras of its glTF node (the mission database or one of its parts, which every copy of the part uses, or a model file, which every load of it uses), or the script instruction that set the value (refused when it ran more than once or takes the value from a macro); a value nothing set yet is added as an instruction after the one that created the object. Copying, deleting and re-parenting apply to the whole object: a node of a model a script loaded stands for that load (zstudio_source_world_object names it). A mission database object is copied, deleted or moved in its glTF file; a script's object is deleted by turning its instructions into comments, copied by loading it again before the world is written, and moved by attaching it there. The scene is evaluated in memory and the result is the accepted document/revision (with the copy's node index); a change that cannot be evaluated is refused. Save writes the owning sources; no archives are created.",
             [DocumentParameter, RevisionParameter, new("node", "integer", "Scene node index. Omit it to rename a source-only node (sourceFile with gltfNode).", Minimum: 0, Maximum: int.MaxValue),
              P("sourceFile", "string", "rename without node: the project path of the glTF file holding a source-only node, as scene_tree's sourceFile gives it (a group or reference holder the build removes, so the game never uses its name)."),
              new("gltfNode", "integer", "rename without node: that node's glTF index (scene_tree's gltfNode).", Minimum: 0, Maximum: int.MaxValue),
@@ -514,6 +531,7 @@ public partial class MainWindow
              new("scale", "object", "New local scale.", Properties: [P("x", "number", "X.", true), P("y", "number", "Y.", true), P("z", "number", "Z.", true)]),
              P("flag", "string", "Node flag to set or clear. Enabling CanModify (0x10000) or ClipTo (0x20000) clears the other mode atomically; a source that cannot express that change is refused.", false, SourceObjectFields.EditableFlags.Select(f => $"0x{f.Bit:X}").ToArray()),
              P("on", "boolean", "Whether the flag is set; required with flag. Clearing the selected crater mode leaves neither mode. For a glTF-owned mode this removes declient; a script-owned setting changes its instruction."),
+             P("beside", "boolean", "duplicate: place the copy beside the original, as the card's Copy does (its local X plus the object's width along its parent's X, rotation and scale kept); not with position, rotationDegrees or scale."),
              new("name", "string", "The copy's node name (duplicate) or the object's new name (rename): 1–32 printable characters without spaces, commas, quotes or # % ;, used by no node of the world."),
              new("model", "string", "Project path of a .gltf model under data/ the object should reference (model), as zstudio_source_world_models lists it, for example data/common/models/sonictur.gltf."),
              new("parent", "integer", "The new parent's scene node index (parent); -1 or the world's node makes it a root of the world (a node of a part of the mission database: a root of the part).", Minimum: -1, Maximum: int.MaxValue)], true,
@@ -536,7 +554,10 @@ public partial class MainWindow
                     if (a["name"] is null) throw new StudioCommandException("invalid_argument", "Give the copy's name.");
                     string name = Text(a, "name");
                     ObjectTransform? placed = null;
-                    if (moves)
+                    bool beside = a["beside"] != null && Flag(a, "beside");
+                    if (beside && moves) throw new StudioCommandException("invalid_argument", "Give beside or a transform for the copy, not both.");
+                    if (beside) placed = BesideTransform(d, node) ?? throw new StudioCommandException("unsupported", "This object shows nothing in the view to place a copy beside; give its position.");
+                    else if (moves)
                     {
                         // Omitted values come from the object copied (a part stands for the object that loaded it).
                         var whole = SourceObjectTargetFor(d, node, SourceWorldOf(d).Workspace).Node;
@@ -545,7 +566,7 @@ public partial class MainWindow
                         placed = new(Vector(a, "position") ?? current.Position, Vector(a, "rotationDegrees") ?? Rounded(current.RotationDegrees), Vector(a, "scale") ?? Rounded(current.Scale));
                     }
                     // Only a position: a copy in the database keeps the original's exact basis (and any mirroring).
-                    bool keepBasis = moves && a["rotationDegrees"] is null && a["scale"] is null;
+                    bool keepBasis = beside || moves && a["rotationDegrees"] is null && a["scale"] is null;
                     var copyOrigin = SourceCopyOrigin(d, node);
                     next = await DuplicateSourceObjectAsync(d, node, name, placed, token, keepBasis);
                     // A part's copy is made in every copy of the part: copy is the one beside the object edited, copies all.

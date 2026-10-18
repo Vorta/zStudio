@@ -64,10 +64,7 @@ public partial class MainWindow
     private void TouchZoneDraft(ZoneDraft draft)
     {
         draft.Token = Guid.NewGuid().ToString("N");
-        // Targets name source polygons; the outline shows every built face that comes from one.
-        var build = draft.Document.SourceBuild;
-        scene?.ShowZoneTargets(draft.Targets.Select(t => new ZonePaintTarget(t.SceneNode, t.Polygon)),
-            node => build != null && build.Provenance.TryGetValue(node, out var origin) ? origin.ZonePolygons : null);
+        ShowZoneDraft(draft);
         if (propertiesWindow?.Document == draft.Document && propertiesWindow.SourceFields is ZonePropertiesEditor fields)
             fields.RefreshState(ZoneDraftState());
         UpdateDocumentCommands();
@@ -88,7 +85,8 @@ public partial class MainWindow
         if (!HasZoneDraft || document != null && zoneDraft!.Document != document) return true;
         var answer = MessageBox.Show(this, "A map zone draft is pending. Discard it and continue?\nChoose No to return to the zone editor and Apply the draft.",
             "Map zone draft", MessageBoxButton.YesNo, MessageBoxImage.Question);
-        if (answer != MessageBoxResult.Yes) return false;
+        // No: the zone editor is shown again, where the draft can be applied.
+        if (answer != MessageBoxResult.Yes) { PresentZoneEditor(); return false; }
         CancelZoneDraft(close: true); return true;
     }
     private async Task OpenZoneEditorAsync(DocumentModel document, CancellationToken token, bool automation = false)
@@ -101,6 +99,7 @@ public partial class MainWindow
         if (!automation && !await ResolvePropertiesDraftsAsync()) return;
         // The zone editor and pinned Properties are shared across documents.
         RequireNoDrafts();
+        if (scene?.IsTerrainStroking == true) throw new StudioCommandException("busy", "Finish the terrain stroke before editing map zones.");
         long revision = session.Workspace.ContentRevision;
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(token, document.Lifetime.Token, ViewModel.WorkspaceToken, shutdownToken);
         var catalog = await Task.Run(() =>
@@ -116,12 +115,18 @@ public partial class MainWindow
         RequireCurrentZoneSources(document, verifyContent: false);
         RequireSourceWorldIdle(session);
         RequireNoDrafts();
+        if (scene?.IsTerrainStroking == true) throw new StudioCommandException("busy", "Finish the terrain stroke before editing map zones.");
+        // Its targets are picked with clicks the terrain brush would take as strokes: the editor ends the brush, as zone
+        // painting does.
+        if (terrainBrush != null) SetTerrainBrush(null);
         CancelZoneDraft(close: true); zoneDraft = new(document); zoneCatalog = catalog;
         zoneDraft.Disposing = () => { if (zoneDraft?.Document == document) CancelZoneDraft(close: true); };
         document.Disposing += zoneDraft.Disposing;
         PresentZoneEditor();
     }
-    private void PresentZoneEditor()
+    /// <param name="activate">Bring Properties forward (a user's zone action); a refresh of what it shows leaves the
+    /// windows and their focus as they are (activating Properties would end Flycam).</param>
+    private void PresentZoneEditor(bool activate = true)
     {
         if (zoneDraft is not { } draft || zoneCatalog == null || draft.Document.IsDisposed) return;
         // A completed viewport stroke can arrive while native Properties input is partial.
@@ -145,7 +150,30 @@ public partial class MainWindow
             async () => { await ApplyZoneDraftAsync(draft.Document, draft.Token, CancellationToken.None); },
             () => { CancelZoneDraft(); PresentZoneEditor(); },
             async (id, label) => { await NameZoneAsync(draft.Document, id, label, CancellationToken.None); }));
-        var window = GetPropertiesWindow(); PresentProperties(window, window.SetSourceObject(draft.Document, fields));
+        var window = GetPropertiesWindow(); bool accepted = window.SetSourceObject(draft.Document, fields);
+        if (activate) PresentProperties(window, accepted);
+    }
+    /// <summary>The draft in the view: the brush's mode and the outline of its targets.</summary>
+    private void ShowZoneDraft(ZoneDraft draft)
+    {
+        // Only the draft's own world shows it (its targets index that world's nodes); showing it again redraws it.
+        if (scene == null || shownDocument != draft.Document) return;
+        // The brush collects what the draft takes (faces or objects), also after Target changed while painting.
+        scene.ZonePaintFaces = draft.Faces;
+        // Targets name source polygons; the outline shows every built face that comes from one.
+        var build = draft.Document.SourceBuild;
+        scene.ShowZoneTargets(draft.Targets.Select(t => new ZonePaintTarget(t.SceneNode, t.Polygon)),
+            node => build != null && build.Provenance.TryGetValue(node, out var origin) ? origin.ZonePolygons : null);
+    }
+    /// <summary>
+    /// After the view changed under the draft (a refreshed preview, Flycam or the terrain brush ending zone painting):
+    /// its outline again, and its editor's Paint button following whether the view still paints. Its token stays.
+    /// </summary>
+    private void RefreshZoneDraftView()
+    {
+        if (zoneDraft is not { } draft || draft.Document.IsDisposed || shownDocument != draft.Document) return;
+        ShowZoneDraft(draft);
+        if (propertiesWindow?.Document == draft.Document && propertiesWindow.SourceFields is ZonePropertiesEditor) PresentZoneEditor(activate: false);
     }
     private void ToggleZonePainting(ZoneDraft draft)
     {
@@ -158,6 +186,8 @@ public partial class MainWindow
         {
             if (scene.IsFlyActive || scene.IsPickupDragging || scene.IsTerrainStroking)
                 throw new StudioCommandException("busy", "Finish the active navigation or editing gesture before painting zones.");
+            if (scene.AiPathEditingNetwork != null || scene.HasParachutePreview || scene.IsParachutePointerMoving)
+                throw new StudioCommandException("busy", "Finish the AI path or drop-window editing before painting zones.");
             // Clear the retained terrain tool as well as its renderer flag, so preview refreshes
             // cannot reactivate it underneath the zone tool. Its recipe and edits stay intact.
             SetTerrainBrush(null);
@@ -168,11 +198,17 @@ public partial class MainWindow
     }
     private void AddSelectedZoneTarget(ZoneDraft draft)
     {
-        if (shownDocument != draft.Document || scene?.SelectedInspection is not { Active: true, Node: >= 0 } hit)
-            throw new StudioCommandException("not_ready", "Select a visible source surface or object first.");
-        if (draft.Faces && hit.Polygon == null) throw new StudioCommandException("not_ready", "Click a face in the viewport to select an exact polygon.");
+        if (shownDocument != draft.Document) throw new StudioCommandException("not_ready", "Select a visible source surface or object first.");
+        var hit = scene?.SelectedInspection is { Active: true, Node: >= 0 } shown ? shown : null;
+        if (hit?.RuntimeInstance != null || hit != null && hit.Polygon != null && !draft.Document.SourceBuild!.Provenance.ContainsKey(hit.Node))
+            throw new StudioCommandException("unsupported", "A placed pickup or vehicle takes no source zone; its placement comes from the mission's resources.");
+        if (draft.Faces && hit?.Polygon == null) throw new StudioCommandException("not_ready", "Click a face in the viewport to select an exact polygon.");
+        // An object chosen in the World tree (no face was clicked) is the object its card shows, a reference placement
+        // rather than one of its parts; a click in the view takes the object it hit.
+        int? node = draft.Faces || hit?.Polygon != null ? hit!.Node : CurrentInspectionCard?.ObjectNode;
+        if (node is not >= 0) throw new StudioCommandException("not_ready", "This selection has no source object of its own to zone (a group the build removes, an actor an animation places, or a placed pickup or vehicle). Select one of its parts in the view, or a source object.");
         RequireZoneDraft(draft.Document);
-        AddZoneTargets(draft, [PickedZoneTarget(draft, new(hit.Node, draft.Faces ? hit.Polygon : null))]);
+        AddZoneTargets(draft, [PickedZoneTarget(draft, new(node.Value, draft.Faces ? hit!.Polygon : null))]);
     }
     private void ZoneStrokeCompleted(IReadOnlyList<ZonePaintTarget> targets)
     {
@@ -180,7 +216,21 @@ public partial class MainWindow
         try
         {
             RequireZoneDraft(draft.Document);
-            AddZoneTargets(draft, targets.Select(t => PickedZoneTarget(draft, t)).ToArray()); PresentZoneEditor();
+            // A stroke crossing what takes no source zone here (placed pickups and vehicles, converted terrain) keeps the rest.
+            var build = draft.Document.SourceBuild!;
+            List<SourceZoneSelection> picked = [];
+            foreach (var hit in targets)
+            {
+                // Each target in the draft's mode (an object stroke names objects; a face stroke needs the face).
+                if (draft.Faces && hit.Polygon == null) continue;
+                var target = draft.Faces ? hit : hit with { Polygon = null };
+                if (!build.Provenance.TryGetValue(target.Node, out var origin) || origin.Terrain != null) continue;
+                try { picked.Add(PickedZoneTarget(draft, target)); } catch (StudioCommandException) { }
+            }
+            int skipped = targets.Count - picked.Count;
+            if (picked.Count > 0) { AddZoneTargets(draft, picked); PresentZoneEditor(); }
+            else ShowZoneDraft(draft); // The stroke's own outline gives way to the draft's again.
+            if (skipped > 0) Notice($"{skipped} of the stroke's {targets.Count} targets take no source zone here (placed pickups or vehicles, or converted terrain, which its Terrain properties zone) and were left out.");
         }
         catch (Exception ex) when (ex is StudioCommandException or InvalidDataException) { Report(ex); }
     }

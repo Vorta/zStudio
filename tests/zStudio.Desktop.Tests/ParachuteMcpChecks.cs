@@ -172,7 +172,7 @@ internal static class ParachuteMcpChecks
                 try
                 {
                     await preparingCancel.Task.WaitAsync(token);
-                    ((MenuItem)main.FindName("CancelOperationItem")).RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
+                    main.CancelRunningOperation();
                     await GuiConfirmFinished();
                     Assert.Equal("VTOL drop-window move canceled.", main.ViewModel.Status);
                     Assert.Equal(problems, main.ViewModel.Problems.Count);

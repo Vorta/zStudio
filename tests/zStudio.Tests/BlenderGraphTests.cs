@@ -31,6 +31,8 @@ public sealed class BlenderGraphTests
         {
             process.StartInfo = new(blender) { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true };
             process.StartInfo.Environment["BLENDER_USER_RESOURCES"] = Path.Combine(folder, "preferences");
+            // The extension keeps its import sessions in the temporary folder: this run's go with the fixture.
+            process.StartInfo.Environment["TEMP"] = process.StartInfo.Environment["TMP"] = Directory.CreateDirectory(Path.Combine(folder, "temp")).FullName;
             foreach (string arg in new[] { "--background", "--factory-startup", "--python-exit-code", "1", "--python", Path.Combine(repository.FullName, "tools", "blender-roundtrip.py"), "--", repository.FullName, helper, Path.Combine(folder, "source"), Path.Combine(folder, "output") }) process.StartInfo.ArgumentList.Add(arg);
             started = process.Start(); Assert.True(started);
             var stdout = process.StandardOutput.ReadToEndAsync(TestContext.Current.CancellationToken);
@@ -95,6 +97,11 @@ public sealed class BlenderGraphTests
         painted["nodes"]![0]!["extras"]!["recoil"]!["zoneOverrides"]!["meshes"]![0]!["polygonZones"]![1] = new JsonArray(10);
         workspace.Apply("Paint another placement", [(other, Encoding.UTF8.GetBytes(painted.ToJsonString()))], token);
         json["nodes"]![0]!["extras"]!["recoil"]!["landmark"] = false;
+        // Separate (or a duplicate) gives the mesh and its object new editor identities while its faces keep theirs: the
+        // placement still finds the polygons they came from.
+        json["meshes"]![0]!["extras"]!["zstudio_editor_id"] = "separatedmesh";
+        foreach (var holder in json["nodes"]!.AsArray().Where(n => n?["mesh"]?.GetValue<int>() == 0))
+        { holder!["extras"]!["zstudio_editor_id"] = "separatedobject"; holder["name"] = "separated"; }
         File.WriteAllText(Path.Combine(raw, part), json.ToJsonString());
         SourceBlender.PrepareBlenderExport(edit, checkout.Outbox, token);
         checkout = SourceBlender.Find(fixture.Project, checkout.Id);
@@ -103,15 +110,39 @@ public sealed class BlenderGraphTests
         Assert.Equal(new JsonArray(new JsonArray(9), new JsonArray(10)).ToJsonString(),
             JsonNode.Parse(workspace.Read(other, token)!)!["nodes"]![0]!["extras"]!["recoil"]!["zoneOverrides"]!["meshes"]![0]!["polygonZones"]!.ToJsonString());
         SourceBlender.RecordApplied(checkout, again);
+        // Another Blender import of the checkout starts from its input again: replacing what an update applied since would undo it.
+        json["nodes"]![0]!["extras"]!["recoil"]!["landmark"] = true;
+        File.WriteAllText(Path.Combine(raw, part), json.ToJsonString());
+        var reimport = JsonNode.Parse(File.ReadAllText(edit))!; reimport["import"] = "RECOIL second import";
+        string second = Path.Combine(raw, "edit-second.json"); File.WriteAllText(second, reimport.ToJsonString());
+        SourceBlender.PrepareBlenderExport(second, checkout.Outbox, token);
+        // Its placement geometry changed under another import's update: a fresh checkout is required.
+        Assert.Contains("outside this Blender file's exports", Assert.Throws<InvalidDataException>(() => SourceBlender.PlanUpdate(workspace, SourceBlender.Find(fixture.Project, checkout.Id), token: token)).Message);
+        json["nodes"]![0]!["extras"]!["recoil"]!["landmark"] = false;
+        File.WriteAllText(Path.Combine(raw, part), json.ToJsonString());
         // A completed generation cannot be altered after its receipt was written, even with force.
         var selected = SourceBlender.Exports(checkout, token)[0];
         File.AppendAllText(Path.Combine(Path.GetDirectoryName(selected.Gltf)!, part), " ");
-        Assert.Throws<InvalidDataException>(() => SourceBlender.PlanUpdate(workspace, checkout, force: true, token: token));
+        Assert.Contains("changed after graph validation", Assert.Throws<InvalidDataException>(() => SourceBlender.PlanUpdate(workspace, checkout, force: true, token: token)).Message);
         json["meshes"]![0]!["primitives"]![0]!["extras"]!["zstudio_blender"]!["zones"] = new JsonArray(new JsonArray(3), new JsonArray(3));
         File.WriteAllText(Path.Combine(raw, part), json.ToJsonString());
         SourceBlender.PrepareBlenderExport(edit, checkout.Outbox, token);
         var ambiguous = Assert.Throws<InvalidDataException>(() => SourceBlender.PlanUpdate(workspace, SourceBlender.Find(fixture.Project, checkout.Id), token: token));
         Assert.Contains("different placement zones", ambiguous.Message);
+        // An older save of the same import (its exports name no generation an update applied since) would undo that update;
+        // an export from the file that made the applied generation replaces it.
+        json["meshes"]![0]!["primitives"]![0]!["extras"]!["zstudio_blender"]!["zones"] = new JsonArray(new JsonArray(3), new JsonArray(4));
+        json["nodes"]![0]!["extras"]!["recoil"]!["landmark"] = true;
+        File.WriteAllText(Path.Combine(raw, part), json.ToJsonString());
+        var saved = JsonNode.Parse(File.ReadAllText(edit))!; string savedEdit = Path.Combine(raw, "edit-saved.json");
+        foreach (var lineage in new[] { new JsonArray(), new JsonArray(again.Generation) })
+        {
+            saved["lineage"] = lineage; File.WriteAllText(savedEdit, saved.ToJsonString());
+            SourceBlender.PrepareBlenderExport(savedEdit, checkout.Outbox, token);
+            // Its placement owners' history is not this file's: refused (a fresh checkout), never silently replaced.
+            if (lineage.Count == 0) Assert.Contains("outside this Blender file's exports", Assert.Throws<InvalidDataException>(() => SourceBlender.PlanUpdate(workspace, SourceBlender.Find(fixture.Project, checkout.Id), token: token)).Message);
+            else Assert.Contains(SourceBlender.PlanUpdate(workspace, SourceBlender.Find(fixture.Project, checkout.Id), token: token).Changes, c => c.Relative == part);
+        }
     }
 
     [Fact]

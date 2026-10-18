@@ -19,17 +19,24 @@ public partial class MainWindow
         row.Pass != null ? row.Kind :
         row.Authored is { } authored ? "a:" + authored.File.ToUpperInvariant() + ":" + authored.SourceNode.ToString(CultureInfo.InvariantCulture) :
         row.Kind == "unlinked" ? "unlinked" : "n:" + row.NodeType + ":" + row.DisplayName;
+    /// <summary>
+    /// A hidden row's key: an authored row by its file and name (a delete renumbers the file's nodes, so an index could name
+    /// another object); the occurrence among equally named siblings tells copies apart. A renamed object shows again.
+    /// </summary>
+    private static string HiddenKey(SceneTreeItem row) =>
+        row.Authored is { } authored ? "a:" + authored.File.ToUpperInvariant() + ":" + row.DisplayName : LayoutKey(row);
     /// <summary>The row's layout path: each level's key with its occurrence among siblings that share it.</summary>
-    private static string LayoutPath(SceneTreeItem row, Dictionary<SceneTreeItem, string>? paths = null)
+    private static string LayoutPath(SceneTreeItem row, Dictionary<SceneTreeItem, string>? paths = null) => RowPath(row, LayoutKey, paths ?? []);
+    private static string HiddenPath(SceneTreeItem row, Dictionary<SceneTreeItem, string> paths) => RowPath(row, HiddenKey, paths);
+    private static string RowPath(SceneTreeItem row, Func<SceneTreeItem, string> keyOf, Dictionary<SceneTreeItem, string> paths)
     {
-        paths ??= [];
         if (paths.TryGetValue(row, out var known)) return known;
-        string parent = row.Parent == null ? "" : LayoutPath(row.Parent, paths) + "/";
+        string parent = row.Parent == null ? "" : RowPath(row.Parent, keyOf, paths) + "/";
         // Each level's segments are worked out once, for all its rows (a world can have thousands of siblings).
         Dictionary<string, int> occurrences = [];
         foreach (var sibling in row.Parent?.Children ?? row.Owner.Roots)
         {
-            string key = LayoutKey(sibling); int occurrence = occurrences.GetValueOrDefault(key); occurrences[key] = occurrence + 1;
+            string key = keyOf(sibling); int occurrence = occurrences.GetValueOrDefault(key); occurrences[key] = occurrence + 1;
             paths[sibling] = parent + key + "#" + occurrence.ToString(CultureInfo.InvariantCulture);
         }
         return paths[row];

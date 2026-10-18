@@ -92,7 +92,6 @@ internal static class MotionMcpChecks
             }
             var editor = (MotionEditor)typeof(MainWindow).GetField("motion", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(main)!;
             Assert.NotNull(editor); await editor.SelectAssemblyAsync(3, token); editor.Seek(1);
-            await PresentationMcpChecks.CheckMotion(main, editor);
             string preview = (await Call("state", new()))["preview"]!.GetValue<string>();
             var visibleNodes = (await Call("scene_nodes", new() { ["preview"] = preview }))["items"]!.AsArray();
             Assert.Single(visibleNodes); Assert.Equal(0, visibleNodes[0]!["Index"]!.GetValue<int>());

@@ -35,7 +35,7 @@ public partial class MainWindow
         retiringScene.CancelPickupDrag(); retiringScene.SetAiPathEditing(null); retiringScene.CancelNavigation();
         // Disabled, it takes no mouse or keyboard input (focus leaves it) while it stays drawn.
         retiringScene.IsHitTestVisible = false; retiringScene.IsEnabled = false;
-        SceneToolbar.IsEnabled = false;
+        SetSceneControlsEnabled(false);
         UpdateReloadingView();
     }
 
@@ -48,7 +48,8 @@ public partial class MainWindow
         rebuildEvaluating = rebuildNoticeDue = false; rebuildNoticeDelay?.Stop();
         if (ReferenceEquals(SceneHost.Content, retiring)) SceneHost.Content = scene;
         retiring.Dispose();
-        SceneToolbar.IsEnabled = true;
+        // Still disabled while the project evaluates (the rebuild's own end enables them).
+        SetSceneControlsEnabled(!(sourceWorkspaceBusy || shownDocument?.SourceWorld?.IsRebuilding == true));
         UpdateReloadingView();
     }
 
@@ -104,5 +105,5 @@ public partial class MainWindow
     }
     /// <summary>The "Source file changed on disk" banner gives way to the reload notice (and hides with the UI).</summary>
     private void RefreshStaleBanner() =>
-        SourceStaleHost.Visibility = presentationUiHidden || ReloadingView.Visibility == Visibility.Visible ? Visibility.Collapsed : Visibility.Visible;
+        SourceStaleHost.Visibility = ReloadingView.Visibility == Visibility.Visible ? Visibility.Collapsed : Visibility.Visible;
 }

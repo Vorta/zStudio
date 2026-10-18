@@ -129,7 +129,7 @@ internal static class SourceTerrainMcpChecks
             var canceledEdit = Job("source_terrain_edit", new() { ["document"] = Id(doc), ["revision"] = doc.Revision, ["recipe"] = Recipe, ["action"] = "add_region", ["region"] = "canceled" }, "canceled");
             await editEntered.Task.WaitAsync(token);
             await Call("state", new());
-            ((System.Windows.Controls.MenuItem)main.FindName("CancelOperationItem")).RaiseEvent(new System.Windows.RoutedEventArgs(System.Windows.Controls.MenuItem.ClickEvent));
+            main.CancelRunningOperation();
             await canceledEdit;
             Assert.Equal(historyBefore, workspace.History.Count);
             Assert.DoesNotContain(SourceTerrain.Read(workspace, Recipe, token).Regions, r => r.Name == "canceled");
@@ -374,23 +374,22 @@ internal static class SourceTerrainMcpChecks
             try
             {
                 var convertClick = typeof(MainWindow).GetMethod("ConvertTerrainClick", BindingFlags.Instance | BindingFlags.NonPublic)!;
-                var cancelClick = typeof(MainWindow).GetMethod("CancelClick", BindingFlags.Instance | BindingFlags.NonPublic)!;
                 async Task ClickConvert()
                 {
                     convertClick.Invoke(main, [main, new System.Windows.RoutedEventArgs()]);
                     Assert.True(await planEntered.WaitAsync(TimeSpan.FromSeconds(10), token), "The conversion was not planned off the UI thread: " + main.ViewModel.Status);
                     Assert.False(planOnUi);
-                    Assert.True(main.CancelOperationItem.IsEnabled);
+                    Assert.True(main.OperationRunning);
                     Assert.NotNull(await Call("state", new()));
                 }
                 async Task Shown(string status)
                 {
-                    for (int wait = 0; wait < 1000 && (main.CancelOperationItem.IsEnabled || !main.ViewModel.Status.Contains(status, StringComparison.Ordinal)); wait++) await Task.Delay(10, token);
+                    for (int wait = 0; wait < 1000 && (main.OperationRunning || !main.ViewModel.Status.Contains(status, StringComparison.Ordinal)); wait++) await Task.Delay(10, token);
                     Assert.Contains(status, main.ViewModel.Status);
-                    Assert.False(main.CancelOperationItem.IsEnabled);
+                    Assert.False(main.OperationRunning);
                 }
                 await ClickConvert();
-                cancelClick.Invoke(main, [main, new System.Windows.RoutedEventArgs()]);
+                main.CancelRunningOperation();
                 planProceed.Release();
                 await Shown("Operation canceled");
                 Assert.False(workspace.IsDirty);
@@ -409,7 +408,7 @@ internal static class SourceTerrainMcpChecks
                 var blockedHistory = await Call("undo_redo", new() { ["document"] = Id(doc), ["revision"] = doc.Revision, ["action"] = "redo" }, error: true);
                 Assert.Contains("busy", blockedHistory.GetValue<string>());
                 Assert.False(doc.IsDisposed); Assert.Equal(planningRevision, doc.Revision); Assert.False(workspace.IsDirty);
-                cancelClick.Invoke(main, [main, new System.Windows.RoutedEventArgs()]);
+                main.CancelRunningOperation();
                 planProceed.Release();
                 await Shown("Operation canceled");
 

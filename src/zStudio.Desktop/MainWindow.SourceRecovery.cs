@@ -17,21 +17,13 @@ public partial class MainWindow
     private long recoveryCheckGeneration;
 
     private const string RecoveryProblem = "An interrupted save of the source project needs a decision";
-    /// <summary>GUI: Tools → Resolve interrupted save… checks the open project now and offers the decisions.</summary>
-    private void SourceRecoveryClick(object sender, RoutedEventArgs e) => _ = RunUi(async () =>
-    {
-        string root = SourceProjectRoot ?? throw new StudioCommandException("no_project", "Open a source project (a folder with data and gamegen) first.");
-        int found = await CheckSourceRecoveryAsync(root, everySave: true);
-        ViewModel.Status = found == 0 ? "No save of this source project was interrupted." : found == -1 ? "The project's interrupted saves could not be checked; Problems says why." : ViewModel.Status;
-    });
-
     /// <summary>After a source project opens (or on request): report interrupted saves and offer to resolve them; returns how many there are, -1 when they could not be checked, or -2 when a newer check took over (or closing stopped it).</summary>
     /// <remarks>
     /// On opening, only saves that need a decision ask; a save that finished but was not cleaned up is reported in
-    /// Problems, and <paramref name="everySave"/> (Tools → Resolve interrupted save) asks about it too. Without
+    /// Problems, and <paramref name="everySave"/> asks about it too. Save asks again when one blocks it. Without
     /// <paramref name="ask"/> (a root an MCP request opened) every save is only reported.
     /// </remarks>
-    private async Task<int> CheckSourceRecoveryAsync(string root, bool everySave = false, bool ask = true)
+    private async Task<int> CheckSourceRecoveryAsync(string root, bool everySave = false, bool ask = true, Action? resolved = null)
     {
         long generation = ++recoveryCheckGeneration;
         IReadOnlyList<SourceRecoveryCase> cases;
@@ -52,7 +44,7 @@ public partial class MainWindow
         foreach (var old in ViewModel.Problems.Where(p => p.File == root && p.Message.StartsWith(RecoveryProblem, StringComparison.Ordinal)).ToArray()) ViewModel.Problems.Remove(old);
         if (cases.Count == 0) return 0;
         foreach (var c in cases)
-            ViewModel.AddProblem(Bounded($"{RecoveryProblem} ({c.SaveId}, {Bounded(c.Description, 256)}): {RecoveryFilesText(c.Files, detailed: false)}." + (c.Committed ? " It finished; only its journal remains to clean up (Tools → Resolve interrupted save, or zstudio_source_recovery_resolve complete)." : " Use Tools → Resolve interrupted save, or zstudio_source_recovery.")), c.Committed ? "Warning" : "Error", root);
+            ViewModel.AddProblem(Bounded($"{RecoveryProblem} ({c.SaveId}, {Bounded(c.Description, 256)}): {RecoveryFilesText(c.Files, detailed: false)}." + (c.Committed ? " It finished; only its journal remains, and the next save cleans it up (or zstudio_source_recovery_resolve complete)." : " Saving edits asks what to do with it again, as does reopening the project (or zstudio_source_recovery).")), c.Committed ? "Warning" : "Error", root);
         if (!ask || automationCloseRequested || !IsVisible) return cases.Count;
         foreach (var c in cases.Where(c => everySave || !c.Committed))
         {
@@ -69,6 +61,7 @@ public partial class MainWindow
                 var result = await ResolveSourceRecoveryAsync(root, c.SaveId, action, shutdownToken);
                 if (shutdownToken.IsCancellationRequested) break;
                 ViewModel.Status = result.Resolved ? "The interrupted save was resolved." : "The interrupted save still needs a decision.";
+                if (result.Resolved) resolved?.Invoke();
                 MessageBox.Show(this, result.Resolved ? $"Done: {result.Changed.Count} files changed." : $"Not finished: {RecoveryConflictsText(result.Conflicts)}", "Interrupted save", MessageBoxButton.OK, result.Resolved ? MessageBoxImage.Information : MessageBoxImage.Warning);
             }
             catch (StudioCommandException ex) { Report(ex); }
@@ -187,12 +180,12 @@ public partial class MainWindow
         using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(token, ViewModel.WorkspaceToken, shutdownToken);
         try
         {
-            if (workspace != null)
+            if (workspace != null && action != SourceRecoveryAction.Abandon)
             {
-                // Only edits of the save's own files would be overtaken by resolving it.
+                // Only edits of the save's own files would be overtaken by resolving it; Keep files changes no file.
                 var journal = await Task.Run(() => new SourcePublisher(root).SaveFiles(saveId), cancellation.Token);
                 if (workspace.DirtyFiles.Intersect(journal, StringComparer.OrdinalIgnoreCase).ToArray() is { Length: > 0 } overlap)
-                    throw new StudioCommandException("unsaved_changes", $"The project's unsaved edits change {overlap.Length:N0} files{(overlap.Length > 6 ? $" ({overlap.Length - 6:N0} more not shown)" : "")}: {string.Join(", ", overlap.Take(6).Select(f => Bounded(f, 256)))}, which the interrupted save also wrote; save or undo those edits first.");
+                    throw new StudioCommandException("unsaved_changes", $"The project's unsaved edits change {overlap.Length:N0} files{(overlap.Length > 6 ? $" ({overlap.Length - 6:N0} more not shown)" : "")}: {string.Join(", ", overlap.Take(6).Select(f => Bounded(f, 256)))}, which the interrupted save also wrote; undo those edits first, or choose Keep files (MCP: abandon).");
             }
             var resolve = ResolveSourceSave;
             var work = Task.Run(() => resolve(root, saveId, action, cancellation.Token), cancellation.Token);
@@ -237,7 +230,7 @@ public partial class MainWindow
                 saveCount = cases.Count
             });
         });
-        RegisterJob(r, "source_recovery_resolve", "Resolve an interrupted save of the open source project: roll_back restores every file the save had replaced (a file changed by another program since is left alone and reported), complete finishes the save, and abandon keeps the files as they are and moves the journal (with any original it kept) to zstudio/recovery/abandoned. It runs off the UI thread with the workspace disabled as during a save. Cancelling stops it between two files, never during one: the journal records what it did, the save still needs a decision (any action resolves it from there), and a cancellation after files changed says which. Returns at most 64 changed paths and conflicts with total counts. Paths keep 256 characters, with pathsTruncated for changed paths and fileTruncated on conflicts. Refused while a world of the project opens or rebuilds, and while the project has unsaved edits of a file the save involves (undo them, or close the worlds discarding them).",
+        RegisterJob(r, "source_recovery_resolve", "Resolve an interrupted save of the open source project: roll_back restores every file the save had replaced (a file changed by another program since is left alone and reported), complete finishes the save, and abandon keeps the files as they are and moves the journal (with any original it kept) to zstudio/recovery/abandoned. It runs off the UI thread with the workspace disabled as during a save. Cancelling stops it between two files, never during one: the journal records what it did, the save still needs a decision (any action resolves it from there), and a cancellation after files changed says which. Returns at most 64 changed paths and conflicts with total counts. Paths keep 256 characters, with pathsTruncated for changed paths and fileTruncated on conflicts. Refused while a world of the project opens or rebuilds; roll_back and complete are also refused while the project has unsaved edits of a file the save involves (undo them, or close the worlds discarding them), while abandon, which changes no file, is not.",
             [P("save", "string", "Save id from zstudio_source_recovery.", true), P("action", "string", "What to do.", true, "roll_back", "complete", "abandon")], true, async (a, token) =>
         {
             string root = SourceProjectRoot ?? throw new StudioCommandException("no_project", "Open a source project (a folder with data and gamegen) first.");

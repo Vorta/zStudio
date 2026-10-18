@@ -9,41 +9,8 @@ namespace zStudio.Desktop;
 
 public partial class MainWindow
 {
-    private readonly MenuItem cameraNavigationMenu = new() { Header = "3D Navigation" };
     private SceneViewport? ActiveNavigationViewport => EmptyPreview.Visibility == Visibility.Visible || retiringScene != null ? null
         : motion?.Viewport ?? animation?.Viewport ?? (SceneHost.Visibility == Visibility.Visible ? scene : null);
-    private void InitializeCameraNavigation()
-    {
-        var viewMenu = (MenuItem)PropertiesMenu.Parent;
-        viewMenu.Items.Insert(1, cameraNavigationMenu);
-        foreach (var (title, action, shortcut) in new (string, string, string)[]
-        {
-            ("Front", "front", "Numpad 1"), ("Back", "back", "Ctrl+Numpad 1"),
-            ("Right", "right", "Numpad 3"), ("Left", "left", "Ctrl+Numpad 3"),
-            ("Top", "top", "Numpad 7"), ("Bottom", "bottom", "Ctrl+Numpad 7"),
-            ("Opposite", "opposite", "Numpad 9"), ("Perspective", "perspective", "Numpad 5"),
-            ("Orthographic", "orthographic", "Numpad 5"), ("Frame all", "frameAll", "Home"),
-            ("Frame selected", "frameSelected", "Numpad ."), ("Follow animation camera", "follow", "Numpad 0")
-        })
-        {
-            var item = new MenuItem { Header = title, Tag = action, InputGestureText = shortcut,
-                IsCheckable = action is "perspective" or "orthographic" or "follow" };
-            item.Click += CameraNavigationClick; cameraNavigationMenu.Items.Add(item);
-        }
-        viewMenu.SubmenuOpened += (_, e) =>
-        {
-            if (e.OriginalSource != viewMenu && e.OriginalSource != cameraNavigationMenu) return;
-            cameraNavigationMenu.Visibility = ViewModel.HasRoot ? Visibility.Visible : Visibility.Collapsed;
-            var active = ActiveNavigationViewport;
-            cameraNavigationMenu.IsEnabled = active != null && !active.IsPickupDragging && !active.IsFlyActive && !active.IsAiPathPointerTransform && !active.IsParachutePointerMoving;
-            foreach (MenuItem item in cameraNavigationMenu.Items)
-            {
-                string action = (string)item.Tag;
-                item.IsChecked = action == active?.CaptureView().Projection || action == "follow" && animation?.Options.FollowCamera == true;
-                item.IsEnabled = action != "follow" || animation != null;
-            }
-        };
-    }
     private void CameraNavigationClick(object sender, RoutedEventArgs e)
     {
         if (sender is MenuItem { Tag: string action }) RunCameraNavigation(action);
@@ -61,7 +28,7 @@ public partial class MainWindow
             case "opposite": active.OppositeView(); break;
             case "frameAll": case "frameSelected": case "frameAsset":
                 if (!active.TryFrame(action == "frameAll" ? "all" : action == "frameAsset" ? "asset" : "selected"))
-                    ViewModel.Status = "No visible geometry is available to frame.";
+                    Notice("No visible geometry is available to frame.");
                 break;
             case "follow": if (animation == null) return false; animation.ToggleCameraFollow(); break;
             case "orbitLeft": active.OrbitStep(-15, 0); break;

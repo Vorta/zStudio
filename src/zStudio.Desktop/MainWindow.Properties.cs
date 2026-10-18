@@ -44,7 +44,7 @@ public partial class MainWindow
             // Closing discards the zone draft (Closed below); it is decided first, so declining asks nothing more.
             ResolveClosingDrafts = ResolveZoneDrafts,
         };
-        window.Closed += (_, _) => { if (presentationProperties == window) presentationProperties = null; if (propertiesWindow == window) { CancelZoneDraft(close: true); propertiesWindow = null; ++propertyRequest; } };
+        window.Closed += (_, _) => { if (propertiesWindow == window) { CancelZoneDraft(close: true); propertiesWindow = null; ++propertyRequest; } };
         window.Retargeted += UpdateSourceInputBlock;
         propertiesWindow = window; return window;
     }
@@ -52,7 +52,6 @@ public partial class MainWindow
     {
         if (!accepted) return;
         using var lease = BeginLayoutChange();
-        if (presentationUiHidden) { presentationProperties = window; if (window.IsVisible) window.Hide(); return; }
         if (!window.IsVisible) window.Show();
         if (window.WindowState == WindowState.Minimized) window.WindowState = WindowState.Normal;
         window.Activate();
@@ -67,13 +66,19 @@ public partial class MainWindow
         if (HasZoneDraft) throw new StudioCommandException("pending_drafts", "Apply or cancel the map zone draft before continuing.");
     }
     internal bool ResolvePropertiesDrafts(DocumentModel? doc = null) => ResolveZoneDrafts(doc) && ResolveInspectionDrafts(doc) && (propertiesWindow == null || doc != null && propertiesWindow.Document != doc || propertiesWindow.ResolvePendingDrafts());
+    /// <summary>
+    /// Before choosing another object (the world tree, search, Recently selected, a row's Frame): only the selection's own
+    /// draft is resolved, as a viewport click does. Choosing does not retarget Properties, so a map zone draft (which
+    /// collects the chosen objects) and Properties input stay.
+    /// </summary>
+    internal bool ResolveSelectionDrafts(DocumentModel? doc = null) => ResolveInspectionDrafts(doc);
     internal async Task<bool> ResolvePropertiesDraftsAsync(DocumentModel? doc = null) => ResolveZoneDrafts(doc) && await ResolveInspectionDraftsAsync(doc) && (propertiesWindow == null || doc != null && propertiesWindow.Document != doc || await propertiesWindow.ResolvePendingDraftsAsync());
     private void UndoDocument(DocumentModel doc, bool redo)
     {
         doc = LiveDocument(doc);
         if (doc.SourceWorld is { } world)
         {
-            if (world.IsRebuilding || sourceWorkspaceBusy) ViewModel.Status = "A world of this source project is still rebuilding; undo and redo are available when it is shown.";
+            if (world.IsRebuilding || sourceWorkspaceBusy) Notice("A world of this source project is still rebuilding; undo and redo are available when it is shown.");
             else if (redo ? world.Workspace.CanRedo : world.Workspace.CanUndo)
             {
                 // An object's edit mode without a change does not hold history back.
@@ -139,20 +144,38 @@ public partial class MainWindow
         catch (Exception ex) when (!automation && ex is IOException or InvalidDataException or ArgumentException or StudioCommandException) { Report(ex); }
         return null;
     }
-    private void PropertiesClick(object sender, RoutedEventArgs e) => OpenCurrentProperties();
     internal async void OpenCurrentProperties()
     {
         if (ViewModel.SelectedDocument is not { } doc) return;
         if (!await ResolvePropertiesDraftsAsync()) return;
-        if (doc.SourceWorld != null && CurrentInspectionCard?.ObjectNode is int sourceObject) { FocusSourceObjectCard(doc, sourceObject); return; }
+        if (doc.SourceWorld != null && CurrentInspectionCard?.ObjectNode is int sourceObject)
+        {
+            // A drag or Flycam keeps the selection; Problems says why instead of an error dialog.
+            try { FocusSourceObjectCard(doc, sourceObject, focus: true); }
+            catch (StudioCommandException ex) when (ex.Code == "busy") { Notice(ex.Message); }
+            catch (StudioCommandException ex) { Report(ex); }
+            return;
+        }
         if (scriptGrid.IsKeyboardFocusWithin && scriptGrid.SelectedItem is ScriptRow scriptRow && doc.SelectedAsset?.ResourceId is Guid script)
         { await OpenScriptPropertiesAsync(doc, script, scriptRow.Id); return; }
         if (CentralTree.IsKeyboardFocusWithin && CentralTree.SelectedItem is ResourceTreeItem resource && doc.SelectedAsset?.ResourceId is Guid member)
         { await OpenResourcePropertiesAsync(doc, member, resource.Node.Id); return; }
         if (AssetGrid.IsKeyboardFocusWithin && doc.SelectedAsset is { } asset) { await OpenAssetPropertiesAsync(doc, asset.Record); return; }
         if (DocumentSceneTree.IsKeyboardFocusWithin && sceneTree?.Selected is { Selectable: true } selectedRow)
-        { await OpenScenePropertiesAsync(doc, selectedRow); return; }
-        if (inspectedSceneSource is { } item) { await OpenScenePropertiesAsync(doc, item); return; }
+        {
+            // A drag or Flycam keeps the selection; the status says why instead of an error dialog.
+            try { await OpenScenePropertiesAsync(doc, selectedRow); }
+            catch (StudioCommandException ex) when (ex.Code == "busy") { Notice(ex.Message); }
+            catch (Exception ex) when (ex is StudioCommandException or IOException or UnauthorizedAccessException) { Report(ex); }
+            return;
+        }
+        if (inspectedSceneSource is { } item)
+        {
+            try { await OpenScenePropertiesAsync(doc, item); }
+            catch (StudioCommandException ex) when (ex.Code == "busy") { Notice(ex.Message); }
+            catch (Exception ex) when (ex is StudioCommandException or IOException or UnauthorizedAccessException) { Report(ex); }
+            return;
+        }
         if (IsAiWorld && scene?.AiPathEditingNetwork != null) { await OpenAiPathPropertiesAsync(); return; }
         if (IsAiWorld && scene?.SelectedAiNode is { } aiNode) { await OpenAiPropertiesAsync(aiNode, false); return; }
         if (animation is { } editor)
@@ -166,7 +189,12 @@ public partial class MainWindow
             string name = (motion?.Viewport.PreviewScene ?? scene?.PreviewScene ?? doc.Document.Scene)?.Nodes.ElementAtOrDefault(node)?.Name ?? "Scene object";
             // A source world's own objects (not placed copies) edit their sources.
             if (doc.SourceWorld != null && scene?.PickupAt(node) == null && SourceObjectNode(node) is int sourceNode && doc.SourceBuild?.Provenance.ContainsKey(sourceNode) == true)
-            { await ShowSourceObjectPropertiesAsync(doc, sourceNode); return; }
+            {
+                try { await ShowSourceObjectPropertiesAsync(doc, sourceNode); }
+                catch (StudioCommandException ex) when (ex.Code == "busy") { Notice(ex.Message); }
+                catch (Exception ex) when (ex is StudioCommandException or IOException or UnauthorizedAccessException) { Report(ex); }
+                return;
+            }
             bool opened = scene?.PickupAt(node)?.Pickup is { } pickup && doc.PickupEdits?.Find(pickup.Source) != null
                 ? window.SetPickup(doc, pickup.Source, $"{name} · node #{node}", properties, SourcePickupMove(doc))
                 : window.SetReadOnly(doc, $"{name} · node #{node}", properties);
@@ -182,7 +210,7 @@ public partial class MainWindow
         if (doc.SourceWorld != null)
         {
             if (IsSourceTerrain(doc, item.Index)) return await OpenSourceTerrainAsync(doc, item.Index!.Value, token) ? propertiesWindow : null;
-            if (item.Index is int sourceIndex) FocusSourceObjectCard(doc, sourceIndex);
+            if (item.Index is int sourceIndex) FocusSourceObjectCard(doc, sourceIndex, focus: true);
             return null;
         }
         if (item.Synthetic || item.ReadOnlyReason != null)

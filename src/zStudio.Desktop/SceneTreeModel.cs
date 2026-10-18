@@ -87,10 +87,11 @@ internal sealed class SceneTreeModel
         Stack<string> path = new(); for (var current = row; current != null; current = current.Parent) path.Push(current.StateKey);
         State.SelectionPath = path.ToArray();
     }
-    internal SceneTreeItem? Reveal(int node)
+    /// <summary>The row of a node, created along its path if needed; with <paramref name="expand"/> its ancestors open.</summary>
+    internal SceneTreeItem? Reveal(int node, bool expand = true)
     {
         node = Projection?.Owner(node) ?? node;
-        if (Selected?.Index == node) { ExpandAncestors(Selected); return Selected; }
+        if (Selected?.Index == node) { if (expand) ExpandAncestors(Selected); return Selected; }
         var path = Projection?.Path(node) ?? Hierarchy.PathTo(node);
         if (path.Count == 0) return null;
         int unlinkedDepth = Projection == null && Hierarchy.UnlinkedRoots.Contains(path[0]) || Projection?.PassOf(path[0]) != null ? 1 : 0;
@@ -98,19 +99,20 @@ internal sealed class SceneTreeModel
         if (depth > SceneHierarchy.MaximumDepth || depth == SceneHierarchy.MaximumDepth && Children(node).Count > 0) return null;
         var root = Roots.FirstOrDefault(r => r.Index == path[0]);
         if (root == null && Projection?.PassOf(path[0]) is { } pass && Roots.FirstOrDefault(r => r.Kind == "pass:" + pass.Kind) is { } group)
-        { group.IsExpanded = true; root = group.Children.FirstOrDefault(r => r.Index == path[0]); }
+        { if (expand) group.IsExpanded = true; root = group.Children.FirstOrDefault(r => r.Index == path[0]); }
         if (root == null && Roots.FirstOrDefault(r => r.Kind == "unlinked") is { } unlinked)
-        { unlinked.IsExpanded = true; root = unlinked.Children.FirstOrDefault(r => r.Index == path[0]); }
+        { if (expand) unlinked.IsExpanded = true; root = unlinked.Children.FirstOrDefault(r => r.Index == path[0]); }
         if (root == null) return null;
         var current = root;
         foreach (int child in path.Skip(1))
         {
-            current.IsExpanded = true;
+            if (expand) current.IsExpanded = true;
             var next = current.Children.FirstOrDefault(r => r.Index == child && r.Problem == null);
             if (next == null) return null;
             current = next;
         }
-        ExpandAncestors(current); return current;
+        if (expand) ExpandAncestors(current);
+        return current;
     }
     internal static void ExpandAncestors(SceneTreeItem row)
     { for (var parent = row.Parent; parent != null; parent = parent.Parent) parent.IsExpanded = true; }

@@ -15,6 +15,10 @@ internal sealed partial class SceneInspectionCard
     internal Func<ObjectBinding?>? SourceObject { get; set; }
     internal Action<SceneInspectionCard>? SourceDraftStarted { get; set; }
     internal Func<string, string?, Task>? SourceAction { get; set; }
+    /// <summary>Whether the world has started evaluating an accepted edit (after its plan was accepted): Copy object closes then.</summary>
+    internal Func<bool>? WorldRebuilding { get; set; }
+    /// <summary>Why a name cannot name the selected object's copy (the copy's own checks), or null; Copy object checks it as it is typed.</summary>
+    internal Func<string, string?>? CheckCopyName { get; set; }
     internal Action? EditTerrain { get; set; }
     /// <summary>Chooses a model file for the Model field (its project path), or null.</summary>
     internal Func<string?>? BrowseModel { get; set; }
@@ -63,6 +67,8 @@ internal sealed partial class SceneInspectionCard
             if (DraftDocument != null && DraftSource == null) { DraftDocument = null; DraftTarget = null; draftId = Guid.Empty; DraftClosed?.Invoke(); }
             EndObjectHandles();
             ObjectEditor = null; objectBinding = null; sourceRows.Children.Clear();
+            // An error belongs to the object it was about.
+            if (objectTarget != Selection?.Target) { error.Text = ""; error.Visibility = Visibility.Collapsed; objectTarget = Selection?.Target; }
             var binding = SourceObject();
             if (binding != null)
             {
@@ -73,15 +79,6 @@ internal sealed partial class SceneInspectionCard
                 ObjectEditor.Changed += ObjectChanged;
                 rebound = true;
                 sourceRows.Children.Add(ObjectEditor);
-                if (binding.State.Class is "Object3D" or "Lod")
-                {
-                    StackPanel actions = new() { Orientation = Orientation.Horizontal, Margin = new(0, 0, 0, 8) };
-                    var copy = new Button { Content = "Copy…", Margin = new(0, 4, 6, 4) };
-                    var delete = new Button { Content = "Delete", Margin = new(0, 4, 0, 4) };
-                    copy.Click += async (_, _) => await ObjectAction("duplicate");
-                    delete.Click += async (_, _) => await ObjectAction("delete");
-                    actions.Children.Add(copy); actions.Children.Add(delete); sourceRows.Children.Add(actions);
-                }
                 CardSection surface = new("Surface", expanded: false);
                 if (surfaceRows.Parent is Panel previous) previous.Children.Remove(surfaceRows); // The rows outlive the editor they were shown with.
                 surface.Body.Children.Add(surfaceRows);
@@ -90,11 +87,12 @@ internal sealed partial class SceneInspectionCard
         }
         terrainEdit.Visibility = TerrainAvailable ? Visibility.Visible : Visibility.Collapsed;
         sourceRows.Visibility = ObjectEditor == null ? Visibility.Collapsed : Visibility.Visible;
+        copyObject.Visibility = deleteObject.Visibility = objectBinding?.State.Class is "Object3D" or "Lod" ? Visibility.Visible : Visibility.Collapsed;
         if (ObjectEditor == null) { detailsSection.Visibility = Visibility.Visible; return false; }
         detailsSection.Visibility = Visibility.Collapsed; valves.Visibility = Visibility.Collapsed;
         if (ObjectEditor.TransformSection is { } transformSection) PlaceModes(transformSection);
         ObjectEditor.IsEnabled = !objectBinding!.Document.SourceWorld!.IsRebuilding && !ObjectApplying;
-        foreach (var actions in sourceRows.Children.OfType<StackPanel>()) actions.IsEnabled = ObjectEditor.IsEnabled;
+        copyObject.IsEnabled = deleteObject.IsEnabled = ObjectEditor.IsEnabled;
         heading.Text = objectBinding.State.Name; heading.ToolTip = objectBinding.State.Name; selectionName.Text = heading.Text;
         // The node's type and its built node, as the header's second line; the tooltip names the model (or the file holding it).
         var state = objectBinding.State;
@@ -102,9 +100,14 @@ internal sealed partial class SceneInspectionCard
         subtitle.ToolTip = subtitle.Text + (state.Model != null ? "\n" + state.Model : state.Origin.ModelFile is { } file ? "\nIn " + file : "");
         scope.Text = ""; scope.Visibility = Visibility.Collapsed;
         RefreshModeControls();
-        RefreshFooter(ObjectEditor.CanEdit);
+        RefreshFooter(ObjectEditor.CanEdit || copyObject.Visibility == Visibility.Visible);
         surfaceRows.Children.Clear();
-        foreach (string key in new[] { "Surface world XYZ", "Surface normal", "Surface zone", "Surface altitude zone check", "Polygon zones", "Soil", "Stored texture" })
+        // Polygon zones belong with the object zone, in the Zone section, for geometry only: a placed model's polygons do not
+        // decide which zones are current.
+        bool geometry = Selection is { } chosen && CategoryOf?.Invoke(chosen) == "geometry";
+        ObjectEditor.ShowPolygonZones(geometry && details["Object polygon zones"] is JsonArray all ? string.Join('\n', all.Select(line => Display(line))) : null,
+            geometry && details["Polygon zones"] is { } clicked ? Display(clicked) : null);
+        foreach (string key in new[] { "Surface world XYZ", "Surface normal", "Surface zone", "Surface altitude zone check", "Soil", "Stored texture" })
             if (details[key] is { } value) surfaceRows.Children.Add(new TextBlock { Text = key + ": " + Display(value), TextWrapping = TextWrapping.Wrap, Margin = new(0, 3, 0, 3) });
         // A newly shown object keeps the handles the user has on.
         if (rebound) { rebound = false; UpdateObjectHandles(); }
@@ -245,19 +248,63 @@ internal sealed partial class SceneInspectionCard
         try
         {
             if (!await ResolvePendingAsync()) return;
-            string? name = null;
-            if (action == "duplicate")
-            {
-                TextBox input = new() { MinWidth = 240, Margin = new(12) };
-                Button accept = new() { Content = "Copy", IsDefault = true, Margin = new(12), HorizontalAlignment = HorizontalAlignment.Right };
-                StackPanel body = new(); body.Children.Add(new TextBlock { Text = "Copy as", Margin = new(12, 12, 12, 0) }); body.Children.Add(input); body.Children.Add(accept);
-                Window dialog = new() { Owner = Window.GetWindow(this), Title = "Copy object", Content = body, SizeToContent = SizeToContent.WidthAndHeight, WindowStartupLocation = WindowStartupLocation.CenterOwner };
-                accept.Click += (_, _) => { if (!string.IsNullOrWhiteSpace(input.Text)) dialog.DialogResult = true; };
-                if (dialog.ShowDialog() != true) return;
-                name = input.Text.Trim();
-            }
-            if (SourceAction != null) await SourceAction(action, name);
+            if (action == "duplicate") { CopyObjectDialog(); return; }
+            if (SourceAction != null) await SourceAction(action, null);
         }
+        catch (OperationCanceledException) { }
+        catch (Exception ex) when (ex is StudioCommandException or InvalidOperationException or System.IO.InvalidDataException) { ShowSourceError(ex.Message); }
+    }
+    /// <summary>
+    /// Copy object: the name is checked as it is typed, the copy's own refusal is shown below the name too, and the window
+    /// closes only once the copy is made.
+    /// </summary>
+    private void CopyObjectDialog()
+    {
+        TextBox input = new() { MinWidth = 260, Margin = new(12, 6, 12, 0) };
+        System.Windows.Automation.AutomationProperties.SetName(input, "Copy name");
+        TextBlock problem = new() { Margin = new(12, 6, 12, 0), MaxWidth = 320, TextWrapping = TextWrapping.Wrap, Visibility = Visibility.Collapsed };
+        problem.SetResourceReference(TextBlock.ForegroundProperty, "SystemFillColorCriticalBrush");
+        Button accept = new() { Content = "Copy", IsDefault = true, IsEnabled = false, MinWidth = 80, Margin = new(0, 0, 8, 0) };
+        Button cancel = new() { Content = "Cancel", IsCancel = true, MinWidth = 80 };
+        StackPanel buttons = new() { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, Margin = new(12) };
+        buttons.Children.Add(accept); buttons.Children.Add(cancel);
+        StackPanel body = new();
+        body.Children.Add(new TextBlock { Text = "Copy as", Margin = new(12, 12, 12, 0) }); body.Children.Add(input); body.Children.Add(problem); body.Children.Add(buttons);
+        Window dialog = new() { Owner = Window.GetWindow(this), Title = "Copy object", Content = body, SizeToContent = SizeToContent.WidthAndHeight, ResizeMode = ResizeMode.NoResize,
+            WindowStartupLocation = WindowStartupLocation.CenterOwner, ShowInTaskbar = false };
+        bool copying = false;
+        void Show(string? message)
+        {
+            problem.Text = message ?? ""; problem.Visibility = message == null ? Visibility.Collapsed : Visibility.Visible;
+            // A refused copy (the world was busy, say) can be tried again with the same name.
+            accept.IsEnabled = !copying && input.Text.Trim() is { Length: > 0 } name && Check(name) == null;
+        }
+        string? Check(string name) => name.Length == 0 ? null : CheckCopyName?.Invoke(name);
+        input.TextChanged += (_, _) => { if (!copying) Show(Check(input.Text.Trim())); };
+        dialog.Closing += (_, e) => e.Cancel = copying; // A copy being made finishes first.
+        accept.Click += async (_, _) =>
+        {
+            string name = input.Text.Trim();
+            if (copying || name.Length == 0 || Check(name) is not null) { Show(Check(name)); return; }
+            copying = true; input.IsEnabled = cancel.IsEnabled = false; Show(null); accept.Content = "Copying…";
+            string? failure = null;
+            var work = SourceAction?.Invoke("duplicate", name) ?? Task.CompletedTask;
+            // The copy's refusals (its plan) show here; once the world rebuilds with it, the window closes and the card shows the rest.
+            while (!work.IsCompleted && WorldRebuilding?.Invoke() != true) await Task.WhenAny(work, Task.Delay(50));
+            if (!work.IsCompleted) { copying = false; dialog.DialogResult = true; _ = FinishOnCard(work); return; }
+            try { await work; }
+            catch (OperationCanceledException) { failure = "The copy was canceled."; }
+            catch (Exception ex) when (ex is StudioCommandException or InvalidOperationException or System.IO.InvalidDataException) { failure = ex.Message; }
+            copying = false; accept.Content = "Copy"; input.IsEnabled = cancel.IsEnabled = true;
+            if (failure == null) { dialog.DialogResult = true; return; }
+            Show(failure); input.Focus(); input.SelectAll();
+        };
+        dialog.Loaded += (_, _) => input.Focus();
+        dialog.ShowDialog();
+    }
+    private async Task FinishOnCard(Task work)
+    {
+        try { await work; }
         catch (OperationCanceledException) { }
         catch (Exception ex) when (ex is StudioCommandException or InvalidOperationException or System.IO.InvalidDataException) { ShowSourceError(ex.Message); }
     }

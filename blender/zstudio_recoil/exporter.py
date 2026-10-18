@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: MIT
 import json
+import shutil
 import sys
 import tempfile
 from pathlib import Path
@@ -24,17 +25,31 @@ class glTF2ExportUserExtension:
             raise ValueError("A reference display helper reached the source exporter")
         node.extras = {"recoil": api().collect(obj), "zstudio_blender": int(api().state(obj).get("zs_origin", -1)),
                        "zstudio_editor_id": api().state(obj)["zs_uid"],
-                       "zstudio_transform_changed": json.dumps([list(row) for row in obj.matrix_local]) != api().state(obj).get("zs_transform", "")}
+                       "zstudio_transform_changed": api().transform_changed(obj)}
         node.name = obj.recoil.engine_name if "zs_file" in api().state(obj) else obj.name
         if "zs_placements" in api().state(obj):
             node.extras["zstudio_placements"] = json.loads(api().state(obj)["zs_placements"])
+        if "zs_copy_of" in api().state(obj):
+            node.extras["zstudio_copy_of"] = api().state(obj)["zs_copy_of"]
 
     def gather_mesh_hook(self, mesh, blender_mesh, obj, vertex_groups, modifiers, materials, settings):
         if api()._exporting is not None:
-            api().require_graph(blender_mesh, api().state(api()._exporting)["zs_session"])
-            mesh.extras = {"recoil": json.loads(api().state(blender_mesh).get("zs_recoil", "{}")),
-                           "zstudio_editor_id": api().state(blender_mesh).get("zs_export_uid", api().state(blender_mesh)["zs_uid"] + (api().state(obj)["zs_uid"] if obj and obj.modifiers else "")),
-                           "zstudio_blender": int(api().state(blender_mesh).get("zs_origin", -1)) if api().state(blender_mesh).get("zs_file") == api().state(api()._exporting)["zs_path"] else -1}
+            # With modifiers the exporter passes an evaluated mesh without bookkeeping: the staged copy holds it.
+            # (Blender passes no object for an unskinned mesh; the modifiers belong to the staged copy.)
+            if "zs_uid" in api().state(blender_mesh):
+                source = blender_mesh
+            else:
+                staged = obj if obj is not None else getattr(modifiers, "id_data", None)
+                source = getattr(staged, "data", None)
+                if source is None or "zs_uid" not in api().state(source):
+                    raise ValueError("Only meshes can be exported to RECOIL; convert or remove other objects first")
+            api().require_graph(source, api().state(api()._exporting)["zs_session"])
+            values = api().state(source)
+            mesh.extras = {"recoil": json.loads(values.get("zs_recoil", "{}")),
+                           "zstudio_editor_id": values.get("zs_export_uid", values["zs_uid"] + (api().state(obj)["zs_uid"] if obj and obj.modifiers else "")),
+                           "zstudio_blender": int(values.get("zs_origin", -1)) if values.get("zs_file") == api().state(api()._exporting)["zs_path"] else -1,
+                           "zstudio_face_tree": json.loads(values.get("zs_face_tree", "{}")),
+                           "zstudio_mesh_tag": values.get("zs_mesh_tag")}
 
     def gather_material_hook(self, material, blender_material, settings):
         if api()._exporting is not None:
@@ -89,6 +104,9 @@ def annotate_polygons(path):
         reader.checks()
         root = bridge.read_json(path)
         for m, mesh in enumerate(reader.data.meshes or []):
+            tree = root["meshes"][m].get("extras", {}).pop("zstudio_face_tree", {})
+            # The evaluated mesh (a Boolean's operand included) may hold faces of another RECOIL mesh.
+            tag = root["meshes"][m].get("extras", {}).pop("zstudio_mesh_tag", None)
             for p, primitive in enumerate(mesh.primitives):
                 indices = BinaryData.decode_accessor(reader, primitive.indices).reshape(-1).tolist()
                 attributes = {}
@@ -97,7 +115,7 @@ def annotate_polygons(path):
                         attributes[name.lower()] = BinaryData.decode_accessor(reader, accessor).reshape(-1).tolist()
                 if (mesh.extras or {}).get("zstudio_blender", -1) >= 0 and not all(name in attributes for name in ("_recoil_origin", "_recoil_face", "_recoil_count")):
                     raise ValueError("A modifier removed polygon identities or zones. Apply the geometry change explicitly and assign its new faces before exporting")
-                origins, zones, faces, partitions = [], [], [], []
+                origins, zones, faces, partitions, parents = [], [], [], [], []
                 def attribute(name, vertex):
                     data = attributes.get(name)
                     return data[vertex] if data is not None else 0
@@ -115,14 +133,17 @@ def annotate_polygons(path):
                         values.append((int(origin) - 1, [int(v) for v in word]))
                     if values[1:] != values[:1] * 2:
                         raise ValueError("A polygon combines incompatible identities or zones; assign its faces explicitly")
+                    if tag is not None and "_recoil_mesh" in attributes and values[0][0] >= 0 and int(attribute("_recoil_mesh", triangle[0])) != tag:
+                        raise ValueError(f"{mesh.name or 'A mesh'} holds {api().JOINED_FACES}")
                     origins.append(values[0][0] if (mesh.extras or {}).get("zstudio_blender", -1) >= 0 else -1); zones.append(values[0][1])
                     identities = [attribute("_recoil_face", v) for v in triangle]
                     if any(v != int(v) for v in identities) or len(set(identities)) != 1:
                         raise ValueError("An edit destroyed face identity; resolve the affected geometry before export")
                     faces.append(int(identities[0]))
                     partitions.append(int(attribute("_recoil_partition", triangle[0])))
+                    parents.append(api().face_ancestors(tree, int(identities[0])))
                 out = root["meshes"][m]["primitives"][p]
-                out.setdefault("extras", {})["zstudio_blender"] = {"origins": origins, "zones": zones, "faces": faces, "partitions": partitions}
+                out.setdefault("extras", {})["zstudio_blender"] = {"origins": origins, "zones": zones, "faces": faces, "partitions": partitions, "parents": parents}
                 for name in list(out["attributes"]):
                     if name.lower().startswith("_recoil_"):
                         del out["attributes"][name]
@@ -135,7 +156,8 @@ def annotate_polygons(path):
 class RECOIL_OT_export(bpy.types.Operator):
     bl_idname = "recoil.export_gltf"
     bl_label = "Export RECOIL glTF"
-    bl_options = {"REGISTER"}
+    # Undoable: the editor identities the export assigns and the generation it records are kept, saved and undone together.
+    bl_options = {"REGISTER", "UNDO"}
     directory: StringProperty(name="Export Folder", subtype="DIR_PATH")
 
     def execute(self, context):
@@ -145,6 +167,7 @@ class RECOIL_OT_export(bpy.types.Operator):
         staging_scene = None
         staged_objects, staged_meshes = [], []
         bindings = []
+        scratch = None
         try:
             _, data = api().session(context)
             if any(api().state(s).get("zs_session") == data["id"] and "zs_placement" in api().state(s) for s in bpy.data.scenes):
@@ -155,7 +178,7 @@ class RECOIL_OT_export(bpy.types.Operator):
             if not str(self.directory or data["outbox"]):
                 raise ValueError("Choose a separate export destination")
             scratch = Path(tempfile.mkdtemp(prefix="zstudio-blender-export-"))
-            payload = {"protocol": bridge.PROTOCOL, "session": data["folder"], "models": []}
+            payload = {"protocol": bridge.PROTOCOL, "session": data["folder"], "import": data["id"], "lineage": list(data.get("exports", []))[-256:], "models": []}
             # Binding one file can remap accepted zones on references in another.
             # Snapshot the entire graph before the first file changes anything.
             bindings = api().binding_snapshot([api().asset_collection(data, item["path"]) for item in data["models"]])
@@ -188,6 +211,7 @@ class RECOIL_OT_export(bpy.types.Operator):
                     staging_scene.collection.objects.link(copied)
                     if obj.type == "MESH":
                         api().ensure_face_ids(obj.data)
+                        api().require_own_faces(obj)
                         object_material = any(s.link == "OBJECT" for s in obj.material_slots)
                         separate_mesh = object_material or bool(obj.modifiers)
                         mesh_key = (obj.data, obj if separate_mesh else None)
@@ -229,6 +253,11 @@ class RECOIL_OT_export(bpy.types.Operator):
                 bpy.data.scenes.remove(staging_scene); staging_scene = None
             bridge.write_json(scratch / "edit.json", payload)
             result = bridge.call(api().executable(context), "export", edits=str(scratch / "edit.json"), destination=str(destination))
+            # Saved with the .blend: an update accepts what earlier updates applied only from exports this file (or its
+            # later saves) made, so reopening an older save cannot silently undo an update applied since.
+            text, data = api().session(context)
+            data["exports"] = (list(data.get("exports", [])) + [Path(result["manifest"]).parent.name])[-256:]
+            text.clear(); text.write(json.dumps(data))
             self.report({"INFO"}, "Exported RECOIL graph to " + result["root"])
             return {"FINISHED"}
         except Exception as error:
@@ -237,6 +266,9 @@ class RECOIL_OT_export(bpy.types.Operator):
             return {"CANCELLED"}
         finally:
             api()._exporting = None
+            # The helper copied the export into its generation folder; the staging files are not needed again.
+            if scratch is not None:
+                shutil.rmtree(scratch, ignore_errors=True)
             for obj in staged_objects:
                 bpy.data.objects.remove(obj, do_unlink=True)
             for mesh in staged_meshes:
@@ -260,20 +292,17 @@ class RECOIL_OT_export(bpy.types.Operator):
 
 def placement_assignments(data):
     """Faces with different placement assignments must remain separate source polygons."""
-    from .placement import target_path
+    from .placement import resolve_chain
     assignments = {}
-    collections = {item["path"]: api().asset_collection(data, item["path"]) for item in data["models"]}
     for item in data["models"]:
-        owner_collection = collections[item["path"]]
-        for owner in api().source_objects(owner_collection):
-            for edit in json.loads(api().state(owner).get("zs_placements", "[]")):
-                target = target_path(data, owner)
-                for origin in edit["chain"]:
-                    nested = collections[target]
-                    holders = [o for o in api().source_objects(nested) if api().state(o).get("zs_uid") == origin]
-                    if len(holders) != 1:
-                        raise ValueError("An edited reference was duplicated or removed; reopen its placement zones")
-                    target = target_path(data, holders[0])
+        for owner in api().source_objects(api().asset_collection(data, item["path"])):
+            edits = json.loads(api().state(owner).get("zs_placements", "[]"))
+            # A placement edit through a reference removed since went with that reference.
+            kept = [(edit, resolve_chain(data, owner, edit["chain"])) for edit in edits]
+            kept = [(edit, target) for edit, target in kept if target is not None]
+            if len(kept) != len(edits):
+                api().state(owner)["zs_placements"] = json.dumps([edit for edit, _ in kept])
+            for edit, target in kept:
                 for mesh, words in edit["meshes"].items():
                     assignments.setdefault((target, mesh), []).append(words)
     return assignments
@@ -281,8 +310,9 @@ def placement_assignments(data):
 
 def partition_faces(assignments, mesh):
     groups, values = {}, []
+    tree = api().face_tree(mesh)
     for face in mesh.polygons:
-        identity = str(mesh.attributes["_recoil_face"].data[face.index].value)
-        key = json.dumps([a.get(identity) for a in assignments])
+        identity = mesh.attributes["_recoil_face"].data[face.index].value
+        key = json.dumps([api().assigned_word(a, tree, identity) for a in assignments])
         values.append(groups.setdefault(key, len(groups) + 1))
     api().face_attribute(mesh, "_recoil_partition", values)

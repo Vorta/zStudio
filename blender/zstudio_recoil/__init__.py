@@ -52,6 +52,20 @@ LEGACY_KEYS = frozenset("""zs_active_file zs_engine_name zs_export_uid zs_file z
 FRESH_IMPORT = "RECOIL internal state is missing or obsolete. Make a fresh import with this extension before editing or exporting"
 
 
+def local_matrix(obj):
+    """An object's transform relative to its parent, from its own channels (no scene evaluation needed)."""
+    return [list(row) for row in (obj.matrix_parent_inverse @ obj.matrix_basis)]
+
+
+def transform_changed(obj):
+    """Whether the object moved since it was imported; float noise of the round trip is not a change."""
+    stored = state(obj).get("zs_transform")
+    if not stored:
+        return True
+    return any(abs(a - b) > 1e-6 * max(1.0, abs(a))
+               for old, new in zip(json.loads(stored), local_matrix(obj)) for a, b in zip(old, new))
+
+
 def state(owner):
     """Internal saved fields; never read legacy top-level properties as a fallback."""
     return owner.recoil_internal
@@ -248,6 +262,8 @@ def bind_objects(collection):
         previous = state(obj).get("zs_uid")
         if previous and previous != uid:
             node_copies.setdefault(previous, []).append(uid)
+            # The object it was copied from, which an earlier export knows: an update maps the copy through it.
+            state(obj)["zs_copy_of"] = previous
     for mesh, uid in pending_meshes:
         previous = state(mesh).get("zs_uid")
         if previous and previous != uid:
@@ -498,13 +514,75 @@ def ensure_face_ids(mesh):
             if name not in mesh.attributes:
                 mesh.attributes.new(name=name, type="INT", domain="FACE")
     attr = mesh.attributes.get("_recoil_face") or mesh.attributes.new(name="_recoil_face", type="INT", domain="FACE")
-    next_id = max((v.value for v in attr.data), default=0) + 1
-    seen = set()
-    for value in attr.data:
-        if value.value <= 0 or value.value in seen:
+    # A face split from another (subdivide, knife, extrude) repeats its identity: each further piece gets one never used
+    # before in this mesh, and the mesh remembers which face it was split from, so an update maps it (and its placement
+    # zones) to the nearest ancestor that update knows.
+    # Only a piece of the same face (the same mesh and source polygon) counts as split from it: a face joined in from
+    # another mesh that happens to repeat an identity gets a fresh one and keeps its own zones.
+    values = state(mesh)
+    if "zs_mesh_tag" not in values:
+        values["zs_mesh_tag"] = uuid.uuid4().int & 0x7FFFFF or 1
+    tag = values["zs_mesh_tag"]
+    marks = mesh.attributes.get("_recoil_mesh") or mesh.attributes.new(name="_recoil_mesh", type="INT", domain="FACE")
+    origins = mesh.attributes.get("_recoil_origin")
+    tree = json.loads(values.get("zs_face_tree", "{}"))
+    next_id = max(int(values.get("zs_face_next", 0)), max((v.value for v in attr.data), default=0) + 1)
+    kept = {}
+    for index, value in enumerate(attr.data):
+        source = (marks.data[index].value, origins.data[index].value if origins else 0)
+        if value.value <= 0 or value.value in kept:
+            if value.value > 0 and kept[value.value] == source:
+                tree[str(next_id)] = value.value
             value.value = next_id
             next_id += 1
-        seen.add(value.value)
+        kept[value.value] = source
+    # Faces made in this mesh belong to it from now on.
+    for mark in marks.data:
+        if mark.value == 0:
+            mark.value = tag
+    values["zs_face_next"] = next_id
+    values["zs_face_tree"] = json.dumps(tree, separators=(",", ":"))
+
+
+JOINED_FACES = ("faces joined from another RECOIL mesh (Ctrl+J, or a Boolean modifier's operand), whose polygon identities "
+                "and placement zones belong to that mesh. Undo the join, delete those faces, or apply the modifier and "
+                "delete them, before exporting")
+
+
+def require_own_faces(obj):
+    """Refuses faces joined in from another RECOIL mesh: their polygon identities belong to that mesh."""
+    mesh = obj.data
+    tag = state(mesh).get("zs_mesh_tag")
+    marks, origins = mesh.attributes.get("_recoil_mesh"), mesh.attributes.get("_recoil_origin")
+    if tag is None or marks is None or origins is None:
+        return
+    if any(o.value > 0 and m.value != tag for m, o in zip(marks.data, origins.data)):
+        raise ValueError(f"{obj.name} holds {JOINED_FACES}")
+
+
+def face_tree(mesh):
+    return json.loads(state(mesh).get("zs_face_tree", "{}"))
+
+
+def assigned_word(assigned, tree, face):
+    """A face's placement assignment, or that of the nearest face it was split from that has one."""
+    for identity in [face] + face_ancestors(tree, face):
+        word = assigned.get(str(identity))
+        if word is not None:
+            return word
+    return None
+
+
+def face_ancestors(tree, face):
+    """The faces a face was split from, nearest first."""
+    result, seen = [], {face}
+    while str(face) in tree and len(result) < 64:
+        face = int(tree[str(face)])
+        if face in seen:
+            break
+        seen.add(face)
+        result.append(face)
+    return result
 
 
 class RecoilInternalState(bpy.types.PropertyGroup):
@@ -591,7 +669,6 @@ class glTF2ImportUserExtension:
         state(obj)["zs_uid"] = uuid.uuid4().hex
         remove_transport_properties(obj, metadata=True)
         populate(obj, (gltf_node.extras or {}).get("recoil", {}))
-        state(obj)["zs_transform"] = json.dumps([list(row) for row in obj.matrix_local])
 
     def gather_import_mesh_after_hook(self, pymesh, mesh, gltf):
         if _importing is None:
@@ -622,6 +699,10 @@ class glTF2ImportUserExtension:
             raise ValueError(f"Blender changed polygon count for mesh {index}: {len(mesh.polygons)} of {len(origins)}; assignments cannot be attached safely")
         face_attribute(mesh, "_recoil_origin", origins)
         face_attribute(mesh, "_recoil_face", list(range(1, len(origins) + 1)))
+        state(mesh)["zs_face_next"] = len(origins) + 1
+        # Which imported mesh each face came from, so faces joined in from another one are recognised.
+        state(mesh)["zs_mesh_tag"] = uuid.uuid4().int & 0x7FFFFF or 1
+        face_attribute(mesh, "_recoil_mesh", [state(mesh)["zs_mesh_tag"]] * len(origins))
         face_attribute(mesh, "_recoil_count", counts)
         for i in range(3):
             face_attribute(mesh, "_recoil_zone" + str(i), zones[i])
@@ -693,6 +774,9 @@ class RECOIL_OT_import(bpy.types.Operator, ImportHelper):
                     for old in list(obj.users_collection):
                         old.objects.unlink(obj)
                     collection.objects.link(obj)
+                    # The importer sets an object's transform after its node hook: the transform as imported is read here.
+                    if "zs_origin" in state(obj):
+                        state(obj)["zs_transform"] = json.dumps(local_matrix(obj))
             _importing = None
             # Reference helpers are presentation only; source holders retain their own children and properties.
             by_path = {state(c)["zs_path"].lower(): c for c in created}

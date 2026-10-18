@@ -52,7 +52,9 @@ internal static class WorldHighlightCheck
                     var pose = preview.CaptureView(); var data = preview.PreviewScene;
                     var meshIds = Meshes((Viewport3DX)preview.RenderSurface).ToArray();
                     var buttons = new[] { "HighlightSoils", "HighlightCanModify", "HighlightClipTo" }.Select(n => (ToggleButton)main.FindName(n)).ToArray();
-                    Require(((FrameworkElement)main.FindName("WorldHighlights")).IsVisible, "Whole world highlight controls missing");
+                    var group = (FrameworkElement)main.FindName("WorldHighlights");
+                    // Shown on the toolbar or, when it is narrow, in its native overflow.
+                    Require(group.Visibility == Visibility.Visible && (group.IsVisible || ToolBar.GetIsOverflowItem(group)), $"Whole world highlight controls missing in {mission}");
                     for (int i = 0; i < buttons.Length; i++)
                     {
                         await PresentedAfter((Viewport3DX)preview.RenderSurface, () => buttons[i].IsChecked = true);
@@ -93,7 +95,7 @@ internal static class WorldHighlightCheck
                         input.Text = original; popup.Close();
                         ((ToggleButton)main.FindName("EditingUnlocked")).IsChecked = false;
                     }
-                    // Native overflow, theme and density retain the selected mode.
+                    // Native overflow and theme retain the selected mode.
                     main.Width = 740;
                     var toolbar = (ToolBar)main.FindName("SceneToolbar");
                     toolbar.Width = 380; toolbar.UpdateLayout(); toolbar.IsOverflowOpen = true;
@@ -101,7 +103,7 @@ internal static class WorldHighlightCheck
                     buttons[1].IsChecked = true;
                     toolbar.IsOverflowOpen = false; toolbar.Width = double.NaN;
                     foreach (string theme in new[] { "Dark", "Light" })
-                        await main.Commands.ExecuteAsync("zstudio_workspace_view", new() { ["changes"] = new JsonObject { ["theme"] = theme, ["density"] = "Compact" } });
+                        await main.Commands.ExecuteAsync("zstudio_workspace_view", new() { ["changes"] = new JsonObject { ["theme"] = theme } });
                     Require(preview.HighlightMode == WorldHighlightMode.CanModify && ReferenceEquals(host.Content, preview), "Presentation replaced highlight renderer");
                     main.Width = 1200;
                     var retained = preview.HighlightMode;
@@ -117,7 +119,7 @@ internal static class WorldHighlightCheck
                     Require(doc.Revision == 0 && !doc.IsDirty && hash.SequenceEqual(SHA256.HashData(File.ReadAllBytes(path))), "Highlight changed source document");
                     main.ViewModel.CloseResolved(doc);
                 }
-                Console.WriteLine("PASS: half-tint highlights, shared instances, mixed soils, alpha/cutouts, restoration, picking, isolation, overflow/theme/density, difficulty/navigation retention and source hashes. " + output);
+                Console.WriteLine("PASS: half-tint highlights, shared instances, mixed soils, alpha/cutouts, restoration, picking, isolation, overflow/theme, difficulty/navigation retention and source hashes. " + output);
             }
             catch (Exception ex) { Console.Error.WriteLine(ex); exit = 1; }
             finally
@@ -196,7 +198,7 @@ internal static class WorldHighlightCheck
                 await PresentedAfter(viewport, () =>
                 {
                     preview.SetTextured(true);
-                    preview.SetWireframe(true); Require(meshes.All(m => m.FillMode == SharpDX.Direct3D11.FillMode.Wireframe), "Wireframe lost highlighted meshes"); preview.SetWireframe(false);
+                    preview.SetWireframe(true); Require(preview.PolygonOutlineCount > 0 && meshes.All(m => m.FillMode == SharpDX.Direct3D11.FillMode.Solid), "Wireframe lost highlighted meshes"); preview.SetWireframe(false);
                 });
                 var ray = new HelixToolkit.Maths.Ray(new(0,0,12), Vector3.Normalize(new(-3.5f,1.3f,-12)));
                 var hitContext = new HitTestContext(viewport.RenderContext, ray, Vector2.Zero);

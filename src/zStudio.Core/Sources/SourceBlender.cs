@@ -19,7 +19,13 @@ public sealed record BlenderCheckout(string Id, string Folder, string Model, Dat
     public string Outbox => Path.Combine(Folder, "outbox");
 }
 /// <summary>A project file a checkout copied: its project path, its path in the checkout and its SHA-256 then.</summary>
-public sealed record BlenderCheckoutFile(string Project, string Checkout, string Sha256);
+/// <summary>A checkout file state; an applied state also names the Blender import whose export wrote it (null before 0.9.0).</summary>
+public sealed record BlenderCheckoutFile(string Project, string Checkout, string Sha256)
+{
+    public string? Import { get; init; }
+    /// <summary>The export generation whose update applied the state (null before 0.9.0).</summary>
+    public string? Generation { get; init; }
+}
 /// <summary>An export Blender wrote into a checkout's outbox.</summary>
 public sealed record BlenderExport(string Gltf, string Relative, DateTime WrittenUtc, long Bytes);
 /// <summary>
@@ -29,6 +35,10 @@ public sealed record BlenderExport(string Gltf, string Relative, DateTime Writte
 public sealed record BlenderUpdatePlan(string Label, IReadOnlyList<(string Relative, byte[] Content)> Changes, IReadOnlyList<string> Notes, string Sealed)
 {
     public IReadOnlyDictionary<string, string?> Expected { get; init; } = new Dictionary<string, string?>();
+    /// <summary>The Blender import the export came from, recorded with the states this update applies.</summary>
+    public string? Import { get; init; }
+    /// <summary>The export generation, recorded with the states this update applies.</summary>
+    public string? Generation { get; init; }
 }
 /// <summary>An update refused because project files it would replace changed since the checkout (another edit, or another update).</summary>
 public sealed class BlenderConflictException(IReadOnlyList<string> files, string? reason = null) : IOException(reason ??
@@ -185,7 +195,8 @@ public static partial class SourceBlender
                     inventory.Path((long)row!["project"]!.GetValue<string>().Length + (key == "files" ? row["checkout"]!.GetValue<string>().Length : 0) + row["sha256"]!.GetValue<string>().Length, budget?.Token ?? default);
             inventory.Path((long)folder.Length + manifest["model"]!.GetValue<string>().Length, budget?.Token ?? default);
             var files = (manifest["files"] as JsonArray ?? []).Select(f => new BlenderCheckoutFile(f!["project"]!.GetValue<string>(), f["checkout"]!.GetValue<string>(), f["sha256"]!.GetValue<string>())).ToArray();
-            var applied = (manifest["applied"] as JsonArray ?? []).Select(f => new BlenderCheckoutFile(f!["project"]!.GetValue<string>(), "", f["sha256"]!.GetValue<string>())).ToArray();
+            var applied = (manifest["applied"] as JsonArray ?? []).Select(f => new BlenderCheckoutFile(f!["project"]!.GetValue<string>(), "", f["sha256"]!.GetValue<string>())
+            { Import = f["import"]?.GetValue<string>(), Generation = f["generation"]?.GetValue<string>() }).ToArray();
             string model = manifest["model"]!.GetValue<string>();
             // These fields identify Windows paths, not arbitrary text. Bound them before path composition or presentation.
             if (model.Length > 32767 || Path.GetFileName(model).Length > 255 || files.Concat(applied).Any(f => f.Project.Length > 32767 || f.Checkout.Length > 32767 || f.Sha256.Length > 64)) return null;
@@ -227,7 +238,7 @@ public static partial class SourceBlender
         string path = Path.Combine(checkout.Folder, ManifestName);
         using DirectoryLease directories = new();
         directories.Parent(path);
-        byte[] writtenManifest = AppliedManifest(checkout, plan.Changes, directories);
+        byte[] writtenManifest = AppliedManifest(checkout, plan.Changes, plan.Import, plan.Generation, directories);
         string temporary = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
         SourceProject.RejectLinks(checkout.Folder);
         using var sealedFile = SealedFile.Create(temporary, writtenManifest, directories);
@@ -237,7 +248,7 @@ public static partial class SourceBlender
     }
 
     // Also run while planning, before accepting any edit: a manifest limit must refuse the update, never omit states.
-    private static byte[] AppliedManifest(BlenderCheckout checkout, IReadOnlyList<(string Relative, byte[] Content)> changes, DirectoryLease? directories = null)
+    private static byte[] AppliedManifest(BlenderCheckout checkout, IReadOnlyList<(string Relative, byte[] Content)> changes, string? import, string? generation, DirectoryLease? directories = null)
     {
         using DirectoryLease? owned = directories == null ? new() : null;
         directories ??= owned!;
@@ -251,15 +262,15 @@ public static partial class SourceBlender
         if (manifest["format"]?.GetValue<string>() != "zstudio-blender-checkout" || manifest["version"]?.GetValue<int>() != CheckoutVersion)
             throw new InvalidDataException("This Blender checkout is unsupported. Create a new checkout.");
         var applied = manifest["applied"] as JsonArray ?? (JsonArray)(manifest["applied"] = new JsonArray());
-        var known = applied.Select(f => (f!["project"]!.GetValue<string>().ToUpperInvariant(), f["sha256"]!.GetValue<string>().ToUpperInvariant())).ToHashSet();
+        var known = applied.Select(f => (f!["project"]!.GetValue<string>().ToUpperInvariant(), f["sha256"]!.GetValue<string>().ToUpperInvariant(), f["import"]?.GetValue<string>(), f["generation"]?.GetValue<string>())).ToHashSet();
         long estimatedBytes = previous.Length;
         foreach (var (relative, content) in changes)
         {
             string sha = SourceProject.Sha256(content);
-            if (!known.Add((relative.ToUpperInvariant(), sha.ToUpperInvariant()))) continue;
+            if (!known.Add((relative.ToUpperInvariant(), sha.ToUpperInvariant(), import, generation))) continue;
             // Charge escaped paths before appending or serializing thousands of records.
-            if ((estimatedBytes += 6L * relative.Length + 128) > MaximumCheckoutManifestBytes) throw new InvalidDataException("The checkout manifest would exceed 4 MiB; create a new checkout.");
-            applied.Add(new JsonObject { ["project"] = relative, ["sha256"] = sha });
+            if ((estimatedBytes += 6L * relative.Length + 6L * (import?.Length ?? 0) + 6L * (generation?.Length ?? 0) + 160) > MaximumCheckoutManifestBytes) throw new InvalidDataException("The checkout manifest would exceed 4 MiB; create a new checkout.");
+            applied.Add(new JsonObject { ["project"] = relative, ["sha256"] = sha, ["import"] = import, ["generation"] = generation });
         }
         byte[] writtenManifest = JsonSerializer.SerializeToUtf8Bytes(manifest, new JsonSerializerOptions { WriteIndented = true });
         if (writtenManifest.Length > MaximumCheckoutManifestBytes) throw new InvalidDataException("The checkout manifest would exceed 4 MiB; create a new checkout.");

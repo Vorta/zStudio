@@ -73,7 +73,8 @@ internal static class FaceOrientationCheck
                     preview.SetFaceOrientation(false);
                     if (preview.CaptureView() != pose) throw new InvalidOperationException("Appearance changed camera state.");
 
-                    if (surface.Items.OfType<MeshGeometryModel3D>().Any(m => m.FillMode != SharpDX.Direct3D11.FillMode.Wireframe)) throw new InvalidOperationException("Wireframe choice was lost.");
+                    // Wireframe outlines the static meshes' polygons; it never replaces their fill.
+                    if (!preview.Wireframe || !animated && preview.PolygonOutlineCount == 0 || surface.Items.OfType<MeshGeometryModel3D>().Any(m => m.FillMode != SharpDX.Direct3D11.FillMode.Solid)) throw new InvalidOperationException("Wireframe choice was lost.");
                 }
                 Console.WriteLine("PASS: static and animated winding, wrong normals, mirrored transforms, opaque depth in both submission orders, mesh replacement, half-tint priority and wireframe restoration.");
                 byte[] Pixel()

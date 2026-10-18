@@ -30,6 +30,17 @@ public partial class MainWindow
         var data = viewport?.PreviewScene ?? doc?.PreviewDocument.Scene;
         bool active = data != null && viewport?.PreviewScene == data;
         if (doc?.IsDisposed == true) { doc = null; data = null; }
+        // A source map shows only its projected World tree: while a rebuild replaces the view (or its projection is prepared),
+        // the shown tree stays, disabled, rather than the stored scene's compiled list.
+        bool sourceMap = doc?.SourceWorld != null;
+        if (sourceMap && (!active || SourceSelection(doc!, data) == null))
+        {
+            // The same map's tree (a rebuild replaces its document) stays until the rebuilt one is shown.
+            if (sceneTree?.Projection != null && (sceneTreeDocument == doc || sceneTreeDocument?.SourceWorld is { } shownWorld && shownWorld.Workspace == doc!.SourceWorld!.Workspace && shownWorld.Mission == doc.SourceWorld.Mission))
+            { DocumentSceneTree.IsEnabled = OutlinerResults.IsEnabled = OutlinerShowAll.IsEnabled = false; return; }
+            data = null;
+        }
+        DocumentSceneTree.IsEnabled = OutlinerResults.IsEnabled = OutlinerShowAll.IsEnabled = true;
         if (sceneTreeDocument == doc && sceneTree?.Hierarchy.Scene == data && sceneTree?.IsPreview == active && ReferenceEquals(sceneTree?.Hierarchy.Included, active ? viewport?.InspectionNodes : null)) return;
         changingSceneTree = true;
         try
@@ -164,9 +175,9 @@ public partial class MainWindow
             for (var parent = previous.Parent; parent != null; parent = parent.Parent)
                 if (parent == row) { Restore(); return; }
         if (!row.Selectable) { Restore(); return; }
-        if (!ResolvePropertiesDrafts(sceneTreeDocument) || animation?.ResolvePendingDrafts() == false) { Restore(); return; }
+        if (!ResolveSelectionDrafts(sceneTreeDocument) || animation?.ResolvePendingDrafts() == false) { Restore(); return; }
         try { SelectSceneTreeRow(row); }
-        catch (StudioCommandException ex) { ViewModel.Status = ex.Message; Restore(); }
+        catch (StudioCommandException ex) { Notice(ex.Message); Restore(); }
         void Restore()
         {
             // A click selects its row while WPF is still moving keyboard focus to it. Selecting another row inside that
@@ -304,7 +315,7 @@ public partial class MainWindow
             {
                 if (action is "select" or "properties")
                 {
-                    RequireNoDrafts(action == "properties" ? null : doc);
+                    if (action == "properties") RequireNoDrafts(); else RequireNoSelectionDrafts(doc);
                     if (sceneTree.IsPreview && TreeViewport is { } viewport && (viewport.IsPickupDragging || viewport.IsFlyActive))
                         throw new StudioCommandException("busy", "Finish the pickup drag or exit Fly before selecting a node.");
                 }

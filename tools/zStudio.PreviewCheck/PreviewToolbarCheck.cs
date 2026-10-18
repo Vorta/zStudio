@@ -64,14 +64,8 @@ internal static class PreviewToolbarCheck
         Application.Current.ThemeMode = ThemeMode.Light; await Idle(); await capture("toolbar-light");
         Application.Current.ThemeMode = ThemeMode.Dark; await Idle();
 #pragma warning restore WPF0001
-        var view = ((Menu)window.FindName("AppMenu")).Items.OfType<MenuItem>().Single(m => Equals(m.Header,"_View"));
-        var density = view.Items.OfType<MenuItem>().Single(m => Equals(m.Header,"Density"));
-        density.Items.OfType<MenuItem>().Single(m => Equals(m.Header,"Comfortable")).RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
-        await Idle(); Require(grid.ActualWidth == 40 && ((PreviewIcon)grid.Content).ActualWidth == 20, "Comfortable icon hit targets did not scale");
-        await capture("toolbar-comfortable");
-        density.Items.OfType<MenuItem>().Single(m => Equals(m.Header,"Compact")).RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
-        await Idle(); Require(grid.ActualWidth == 32 && ((PreviewIcon)grid.Content).ActualWidth == 16, "Compact icon hit targets did not scale");
-        Console.WriteLine("PASS: one home per setting, compact/full LOD labels, native accessible toggle states/tooltips/checked marker, theme backgrounds, independent grid/collision, grouped overflow with focused partial Height/caret, Escape restoration, both densities and unchanged preview.");
+        Require(grid.ActualWidth == 32 && ((PreviewIcon)grid.Content).ActualWidth == 16, "Icon hit targets are not 32 DIP with 16 DIP glyphs");
+        Console.WriteLine("PASS: one home per setting, compact/full LOD labels, native accessible toggle states/tooltips/checked marker, theme backgrounds, independent grid/collision, grouped overflow with focused partial Height/caret, Escape restoration, 32 DIP hit targets and unchanged preview.");
     }
     private static async Task Idle() { await Dispatcher.Yield(DispatcherPriority.ApplicationIdle); await Task.Delay(150); }
     private static void Require(bool value, string message) { if (!value) throw new InvalidDataException(message); }

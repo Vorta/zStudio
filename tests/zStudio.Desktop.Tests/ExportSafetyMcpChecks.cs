@@ -234,22 +234,22 @@ internal static class ExportSafetyMcpChecks
         fixture.Write("gamegen/m2.gs", string.Join("\r\n", "set worldName world", "SetModelDirectory ..\\data\\m1\\models", "SetTextureDirectory ..\\data\\m1\\textures",
             "NewWorld %worldName%", "FindNode %worldName%", "GameGenSetWorld %worldName%", "FindNode %worldName%", "WorldOrigin 0.0 512.0", "WorldExtents 512.0 -512.0", "WorldPartition 256 -256",
             "LoadGameGen m1.flt m1.flt", "DeleteTree m1.flt", "GameZWriteZBDFile ..\\m2\\gamez.zbd", "Quit", ""));
-        // A profile file written for looser rules blocks only itself: source_status and Tools → Build profile list it with the
+        // A profile file written for looser rules blocks only itself: source_status and Export → Build profile list it with the
         // reason, and the project's default profile stays usable.
         fixture.Write("gamegen/build-profiles/old.json", """{ "format": "recoil-build-profile", "version": 1, "texturePacks": [ { "file": "rtexture4.zbd" }, { "file": "texturemax.zbd", "maximumDimension": 2048 } ] }""");
         await job("open_root", new() { ["path"] = fixture.Project }, "completed");
         var status = await job("source_status", new(), "completed");
         Assert.Equal("modern", status["profile"]!.GetValue<string>());
         Assert.Contains("software renderer", status["profiles"]!.AsArray().Single(p => p!["name"]!.GetValue<string>() == "old")!["error"]!.GetValue<string>());
-        typeof(MainWindow).GetMethod("ToolsMenuOpened", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.Invoke(main, [main, new RoutedEventArgs(MenuItem.SubmenuOpenedEvent, main)]);
+        typeof(MainWindow).GetMethod("ExportMenuOpened", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.Invoke(main, [main, new RoutedEventArgs(MenuItem.SubmenuOpenedEvent, main)]);
         while (((MenuItem)main.FindName("SourceProfileMenu")).Items.Count != 3) await Task.Delay(10, token);
         var profiles = ((MenuItem)main.FindName("SourceProfileMenu")).Items.Cast<MenuItem>().ToArray();
         Assert.False(profiles.Single(i => System.Windows.Automation.AutomationProperties.GetName(i) == "old").IsEnabled);
         Assert.True(profiles.Single(i => System.Windows.Automation.AutomationProperties.GetName(i) == "modern").IsChecked);
-        // The profile chosen in Tools → Build profile can break later: source_status still answers, listing the profiles with
+        // The profile chosen in Export → Build profile can break later: source_status still answers, listing the profiles with
         // the chosen one's error, so another can be named.
         fixture.Write("gamegen/build-profiles/fine.json", """{ "format": "recoil-build-profile", "version": 1, "texturePacks": [ { "file": "rtexture4.zbd" } ] }""");
-        typeof(MainWindow).GetMethod("ToolsMenuOpened", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.Invoke(main, [main, new RoutedEventArgs(MenuItem.SubmenuOpenedEvent, main)]);
+        typeof(MainWindow).GetMethod("ExportMenuOpened", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.Invoke(main, [main, new RoutedEventArgs(MenuItem.SubmenuOpenedEvent, main)]);
         while (((MenuItem)main.FindName("SourceProfileMenu")).Items.Count != 4) await Task.Delay(10, token);
         ((MenuItem)main.FindName("SourceProfileMenu")).Items.Cast<MenuItem>().Single(i => System.Windows.Automation.AutomationProperties.GetName(i) == "fine").RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
         while (!((MenuItem)main.FindName("SourceProfileMenu")).Items.Cast<MenuItem>().Single(i => System.Windows.Automation.AutomationProperties.GetName(i) == "fine").IsChecked) await Task.Delay(10, token);

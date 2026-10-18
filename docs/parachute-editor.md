@@ -1,12 +1,12 @@
 # VTOL drop windows
 
-Open a mission in **Whole world**, then choose **Parachute** above the viewport. The flight selector identifies an animation entry and its bound root. The blue line shows one flight cycle with the initial segment from the pre-flight pose omitted; start markers identify existing drop windows, and release markers show eligible callback positions. These are authored release positions, not parachute landing predictions. Range conditions and other game state still determine whether an item is released in the game.
+Open a mission in **Whole world**, then choose **Parachute** above the viewport in a compiled world, or **VTOL route** in a source map's Show group. Editing compiled ZBD assets is being retired in favour of [source projects](source-project.md). A compiled root opens only through MCP `open_root` (the GUI opens only source projects); a source map has no editing lock. The flight selector identifies an animation entry and its bound root. The blue line shows one flight cycle with the initial segment from the pre-flight pose omitted; start markers identify existing drop windows, and release markers show eligible callback positions. These are authored release positions, not parachute landing predictions. Range conditions and other game state still determine whether an item is released in the game.
 
 Analysis uses an independent, frozen instance of the existing animation runtime. It does not move the visible player, play audio, alter the mission's starting scene or change source data. A root without a visible mesh is sampled at its own transform, including its parents. Unsupported programs and exhausted analysis limits report why the flight cannot be analyzed; an incomplete path is never presented as complete. A flight that cannot be analyzed keeps its refusal message and the flight selector available, so another discovered flight can still be opened.
 
 ## Move a window
 
-1. Unlock editing and select a drop window in the list or at its start marker.
+1. In a compiled world, unlock editing first. Select a drop window in the list or at its start marker.
 2. Choose **Move along path** to follow the pointer along adjoining path segments, or **Set start time** to enter a local cycle time in seconds.
 3. Inspect the proposed release markers. **Confirm** accepts one undo step; **Cancel** restores the original markers. Enter and Escape perform these actions from the viewport; native text controls retain their own keyboard behavior.
 
@@ -24,7 +24,7 @@ In a compiled world, the actual companion `anim.zbd` document opens in Files whi
 
 If mission-coordinate inspection attaches a coordinate edit session to the animation document, ordinary document Save still writes the animation copy and also saves any modified coordinates. Save-and-close keeps the document open if any changes remain unsaved. Ordinary Undo/Redo use the animation's available steps first, then coordinate history when the animation has no step in that direction. The dedicated Parachute history controls always target animation history.
 
-In a source-project world, the edit changes one `START_TIME` scalar in the owning `.zad` definition. Existing compiler provenance and a complete before/after compilation verify that only the selected threshold changed. A shared definition that would also alter other entries cannot be edited independently through this panel. Acceptance uses the existing project transaction, world rebuild, rollback and undo. Save writes the project's sources; cached `anim.zbd` files are never edited. A successful rebuild closes the old analysis; reopen Parachute in the replacement world to continue.
+In a source-project world, the edit changes one `START_TIME` scalar in the owning `.zad` definition. Existing compiler provenance and a complete before/after compilation verify that only the selected threshold changed. A shared definition that would also alter other entries cannot be edited independently through this panel. Acceptance uses the existing project transaction, world rebuild, rollback and undo. Save writes the project's sources; no `anim.zbd` is created or edited (only export compiles one). A successful rebuild closes the old analysis; reopen **VTOL route** in the replacement world to continue.
 
 ## MCP parity
 

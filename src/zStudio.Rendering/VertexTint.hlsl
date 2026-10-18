@@ -50,9 +50,8 @@ struct TintPixel
 };
 // Both source paths share their ordinary appearance. Authored vertex colors
 // modulate textures; materials without vertex colors use the stock diffuse path.
-float4 NormalAppearance(TintPixel input)
+float4 Appearance(TintPixel input, bool vertexTint)
 {
-    bool vertexTint = vertColorBlending != 0;
     float4 result = vertexTint ? input.color : input.diffuse;
     if (bHasDiffuseMap) result *= texDiffuseMap.Sample(samplerSurface, input.uv);
     // DiffuseMaterialVariables binds EnableUnLit to bHasNormalMap.
@@ -64,6 +63,10 @@ float4 NormalAppearance(TintPixel input)
     }
     return result;
 }
+float4 NormalAppearance(TintPixel input)
+{
+    return Appearance(input, vertColorBlending != 0);
+}
 float4 PSMain(TintPixel input) : SV_TARGET
 {
     return NormalAppearance(input);
@@ -74,5 +77,29 @@ float4 PSOverlay(TintPixel input) : SV_TARGET
     // RGB only: normal alpha, cutouts and opaque/transparent depth stay intact.
     // A diagnostic color is constant per material; no vertex interpolation is needed.
     result.rgb = lerp(result.rgb, vMaterialEmissive.rgb, vMaterialEmissive.a);
+    return result;
+}
+// WorldSurfaceHighlights.ZoneColor: a golden-ratio hue per zone, grey for any.
+float3 ZoneColor(uint zone)
+{
+    if (zone == 255) return float3(.8, .8, .8);
+    float hue = frac(zone * 0.618033988749895) * 6;
+    uint sector = min((uint)hue, 5);
+    float f = hue - sector, v = .95, s = .75;
+    float p = v * (1 - s), q = v * (1 - s * f), t = v * (1 - s * (1 - f));
+    float3 colors[6] = { float3(v, t, p), float3(q, v, p), float3(p, v, t), float3(p, q, v), float3(t, p, v), float3(v, p, q) };
+    return colors[sector];
+}
+// COLOR0 carries the polygon's zone set here (ids in RGB as n/255, count in A as n/3), never an authored tint.
+// One zone tints the polygon; two or three alternate in diagonal screen stripes. Without zones it looks normal.
+float4 PSPolygonZones(TintPixel input) : SV_TARGET
+{
+    float4 result = Appearance(input, false);
+    uint count = (uint)round(saturate(input.color.a) * 3);
+    if (count == 0) return result;
+    uint band = (uint)floor((input.position.x + input.position.y) / (6 * max(DpiScale, 1)));
+    uint index = band % count;
+    float id = index == 0 ? input.color.r : index == 1 ? input.color.g : input.color.b;
+    result.rgb = lerp(result.rgb, ZoneColor((uint)round(saturate(id) * 255)), .5);
     return result;
 }

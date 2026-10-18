@@ -103,7 +103,7 @@ public static class SourceVtolDropEdits
 
     private static InvalidDataException Refusal(string message) => new(message);
 
-    private sealed class WorkspaceFiles(SourceWorkspace workspace, CancellationToken operationToken) : IProjectFiles
+    internal sealed class WorkspaceFiles(SourceWorkspace workspace, CancellationToken operationToken) : IProjectFiles
     {
         public bool Exists(string relative) => workspace.Exists(relative, operationToken);
         public byte[] Read(string relative, CancellationToken token, ProjectReadLimits limits) => workspace.Read(relative, token, limits)

@@ -41,9 +41,9 @@ public sealed class SourceWarningPresentationTests
         [new("m1/gamez.zbd", "world", "built", 0, 0, Enumerable.Repeat("a", 70).ToArray()),
          new("m2/gamez.zbd", "world", "failed", 0, 0, ["b", "c"], "failure")])
         { Notes = Enumerable.Repeat("note", 65).ToArray() };
-        Assert.Equal("\nFailures are listed in Problems.\n130 of 137 warnings are listed in Problems; 7 more not shown.", MainWindow.ExportProblemSummary(report));
+        Assert.Equal("\nFailures are listed in Diagnostics.\n130 of 137 warnings are listed in Diagnostics; 7 more not shown.", MainWindow.ExportProblemSummary(report));
         Assert.Equal("", MainWindow.ExportProblemSummary(new(null, [])));
-        Assert.Equal("\n1 warning is listed in Problems.", MainWindow.ExportProblemSummary(new(null, [new("m1/gamez.zbd", "world", "built", 0, 0, ["one"])])));
+        Assert.Equal("\n1 warning is listed in Diagnostics.", MainWindow.ExportProblemSummary(new(null, [new("m1/gamez.zbd", "world", "built", 0, 0, ["one"])])));
     }
 
     [Fact]
@@ -52,6 +52,6 @@ public sealed class SourceWarningPresentationTests
         Assert.Equal(["ordinary note"], MainWindow.SourceWarningMessages(["ordinary note"], "", 256, "notes"));
         var shown = MainWindow.SourceWarningMessages(Enumerable.Repeat("note", 257).ToArray(), "", 256, "notes").ToArray();
         Assert.Equal(257, shown.Length); Assert.Equal("Showing 256 of 257 notes; 1 more not shown.", shown[^1]);
-        Assert.Equal("\n256 of 257 notes are listed in Problems; 1 more not shown.", MainWindow.SourceWarningSummary(257, 256, "notes"));
+        Assert.Equal("\n256 of 257 notes are listed in Diagnostics; 1 more not shown.", MainWindow.SourceWarningSummary(257, 256, "notes"));
     }
 }

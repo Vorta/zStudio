@@ -127,7 +127,7 @@ public partial class MainWindow
     /// <summary>
     /// What converting this world's mission database to editable terrain would do (references come from the files its build
     /// read), with the workspace's content revision it holds for. The sources are read, decoded and matched off the UI thread,
-    /// as a source operation Tools → Cancel (Escape) stops, like closing the world or zStudio; a plan whose world was replaced
+    /// as a source operation Escape stops, like closing the world or zStudio; a plan whose world was replaced
     /// or whose project changed meanwhile is never returned.
     /// </summary>
     private async Task<(TerrainConversionPlan Plan, long Revision)> PlanTerrainConversionAsync(DocumentModel doc, CancellationToken token)
@@ -141,7 +141,7 @@ public partial class MainWindow
         var workspace = session.Workspace; var dependencies = build.Dependencies; var plan = PlanSourceTerrainConversion;
         long revision = workspace.ContentRevision;
         using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(token, doc.Lifetime.Token, ViewModel.WorkspaceToken, shutdownToken);
-        operation = cancellation; CancelOperationItem.IsEnabled = true;
+        operation = cancellation;
         ViewModel.Status = $"Planning the conversion of {database} to editable terrain…";
         TerrainConversionPlan planned;
         try { planned = await Task.Run(() => plan(workspace, database, dependencies, $"gamegen/{build.Mission}.gs", cancellation.Token), cancellation.Token); }
@@ -150,7 +150,7 @@ public partial class MainWindow
         // The world was replaced or closed while the plan was made: the plan was for a world no longer shown.
         catch (OperationCanceledException) when (!token.IsCancellationRequested && !shutdownToken.IsCancellationRequested && (doc.IsDisposed || session.Owner != doc))
         { throw new StudioCommandException("stale_document", "The world was rebuilt or closed while the conversion was planned; read zstudio_state for its current document."); }
-        finally { if (operation == cancellation) { operation = null; CancelOperationItem.IsEnabled = false; } }
+        finally { if (operation == cancellation) { operation = null; } }
         if (doc.IsDisposed || session.Owner != doc) throw new StudioCommandException("stale_document", "The world was rebuilt or closed while the conversion was planned; read zstudio_state for its current document.");
         // The workspace changes on this thread: an edit, undo or reload made while the sources were read could mix two states.
         if (workspace.ContentRevision != revision) { ViewModel.Status = TerrainPlanChanged; throw new StudioCommandException("context_changed", TerrainPlanChanged); }
@@ -202,20 +202,20 @@ public partial class MainWindow
     private void ConvertTerrainClick(object sender, System.Windows.RoutedEventArgs e) => _ = RunUi(async () =>
     {
         if (ViewModel.SelectedDocument is not { SourceWorld: not null } doc) throw new StudioCommandException("unsupported", "Open a mission world of a source project first.");
-        // Planned off the UI thread; Tools → Cancel (Escape) stops it, and a plan the project changed under is not shown.
+        // Planned off the UI thread; Escape stops it, and a plan the project changed under is not shown.
         (TerrainConversionPlan Plan, long Revision) planned;
         try { planned = await PlanTerrainConversionAsync(doc, CancellationToken.None); }
-        catch (StudioCommandException ex) when (ex.Code == "context_changed") { ViewModel.Status = ex.Message; return; }
+        catch (StudioCommandException ex) when (ex.Code == "context_changed") { Report(ex); return; }
         var plan = planned.Plan;
         var reasons = plan.Kept.GroupBy(k => k.Reason).OrderByDescending(g => g.Count()).ToArray();
         string kept = string.Join("\n", reasons.Take(32).Select(g => $"  {g.Count()} {Bounded(g.Key, 256)}")) + (reasons.Length > 32 ? $"\n  … ({reasons.Length} distinct reasons)" : "");
         if (plan.Converted == 0) { System.Windows.MessageBox.Show(this, $"No piece of {plan.Database} can become terrain:\n{kept}", "Convert to editable terrain"); return; }
         var recipePaths = plan.Recipes;
         string recipes = string.Join("\n", recipePaths.Take(32).Select(path => "  " + Bounded(path, 256)))
-            + (recipePaths.Count > 32 ? $"\n  … ({recipePaths.Count} recipes; all appear in Files after conversion)" : "");
+            + (recipePaths.Count > 32 ? $"\n  … ({recipePaths.Count} recipes)" : "");
         if (System.Windows.MessageBox.Show(this, $"{plan.Converted} pieces of {plan.Database} become {plan.Groups.Count} terrain surfaces in {plan.Surfaces}, painted by {recipePaths.Count} terrain recipes in encounter order:\n{recipes}\n\nKept as objects:\n{kept}\n\nThe pieces are rebuilt along the grid's cell lines; their polygons, materials, zones, soils and flags stay. Convert?",
             "Convert to editable terrain", System.Windows.MessageBoxButton.YesNo, System.Windows.MessageBoxImage.Question) != System.Windows.MessageBoxResult.Yes) return;
-        if (!doc.IsDisposed && doc.SourceWorld?.Workspace.ContentRevision != planned.Revision) { ViewModel.Status = TerrainPlanChanged; return; }
+        if (!doc.IsDisposed && doc.SourceWorld?.Workspace.ContentRevision != planned.Revision) { Report(TerrainPlanChanged); return; }
         var (next, _, compared) = await ConvertTerrainAsync(doc, 8, CancellationToken.None, planned);
         if (compared == null || !compared.Complete)
         {
@@ -278,7 +278,7 @@ public partial class MainWindow
         var window = propertiesWindow;
         var next = await edit();
         if (!next.IsDisposed && FollowsProperties(window, next))
-            try { await ShowTerrainPropertiesAsync(next, recipe, surface, null, region); } catch (StudioCommandException ex) { ViewModel.Status = ex.Message; }
+            try { await ShowTerrainPropertiesAsync(next, recipe, surface, null, region); } catch (StudioCommandException ex) { Report(ex); }
     }
     /// <summary>Turns the viewport brush on (painting or erasing one region) or off.</summary>
     private void SetTerrainBrush(TerrainBrushState? brush)
@@ -289,7 +289,9 @@ public partial class MainWindow
             // An empty zone draft can remain pinned, but it must stop consuming terrain input.
             if (HasZoneDraft) throw new StudioCommandException("pending_drafts", "Apply or cancel the map zone draft before painting terrain.");
             if (scene?.IsZonePainting == true) throw new StudioCommandException("busy", "Finish or cancel the zone stroke before painting terrain.");
-            if (scene?.ZonePaintActive == true) scene.ZonePaintActive = false;
+            if (scene is { } shown && TerrainBrushBlocked(shown))
+                throw new StudioCommandException("busy", "Finish the AI path or drop-window editing before painting terrain.");
+            if (scene?.ZonePaintActive == true) { scene.ZonePaintActive = false; RefreshZoneDraftView(); }
         }
         if (terrainBrush != brush) scene?.CancelTerrainStroke();
         terrainBrush = brush;
@@ -332,11 +334,14 @@ public partial class MainWindow
     private void ApplyTerrainBrush(SceneViewport? viewport)
     {
         if (viewport == null) return;
-        bool on = TerrainBrushApplies(viewport, terrainBrush);
+        // Never while another tool owns the pointer (the viewport refuses it): the brush waits instead.
+        bool on = TerrainBrushApplies(viewport, terrainBrush) && !viewport.ZonePaintActive && !TerrainBrushBlocked(viewport);
         viewport.TerrainBrushRadius = terrainBrush?.Radius ?? 8;
         viewport.TerrainBrushWaiting = sourceWorkspaceBusy;
         viewport.TerrainBrushActive = on;
     }
+    private static bool TerrainBrushBlocked(SceneViewport viewport) =>
+        viewport.AiPathEditingNetwork != null || viewport.HasParachutePreview || viewport.IsParachutePointerMoving;
     private void ConfigureTerrainScene(SceneViewport viewport)
     {
         ApplyTerrainBrush(viewport);
@@ -347,7 +352,7 @@ public partial class MainWindow
     {
         if (terrainBrush is not { } brush || ViewModel.SelectedDocument is not { SourceWorld: not null } doc) return;
         if (!TerrainBrushApplies(scene, brush) || sourceWorkspaceBusy)
-        { ViewModel.Status = "The terrain brush paints the published Whole world or a generated terrain piece; return to that preview before painting."; return; }
+        { Report("The terrain brush paints the published Whole world or a generated terrain piece; return to that preview before painting."); return; }
         // Properties closes with the replaced document; when it showed this recipe, it shows it again for the rebuilt world.
         var window = propertiesWindow;
         var shown = window?.SourceFields as TerrainPropertiesEditor;
@@ -358,7 +363,7 @@ public partial class MainWindow
             if (follow && !next.IsDisposed && FollowsProperties(window, next))
                 await ShowTerrainPropertiesAsync(next, brush.Recipe, shown!.Surface, null, brush.Region);
         }
-        catch (StudioCommandException ex) { ViewModel.Status = ex.Message; }
+        catch (StudioCommandException ex) { Report(ex); }
     }
 
     /// <summary>GUI: Create terrain from meshes of a glTF file in the project, then show its recipe in Properties.</summary>
@@ -388,7 +393,7 @@ public partial class MainWindow
         if (!created.Document.IsDisposed)
             try { await ShowTerrainPropertiesAsync(created.Document, created.Recipe, null, null, null); }
             catch (Exception ex) when (ex is StudioCommandException or IOException or UnauthorizedAccessException or OperationCanceledException)
-            { ViewModel.Status = Bounded($"Terrain was created, but Properties could not be opened: {ex.Message}"); }
+            { Report(Bounded($"Terrain was created, but Properties could not be opened: {ex.Message}")); }
     });
 
     // ---------------------------------------------------------------- MCP

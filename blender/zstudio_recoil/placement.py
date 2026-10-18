@@ -90,12 +90,27 @@ def target_path(data, holder):
     return api().state(api().asset_collection(data, relative))["zs_path"]
 
 
+def resolve_chain(data, owner, chain):
+    """The file a placement edit's reference chain leads to, or None when a reference on it was removed."""
+    target = target_path(data, owner)
+    for identity in chain:
+        holders = [o for o in api().source_objects(api().asset_collection(data, target)) if api().state(o).get("zs_uid") == identity]
+        if not holders:
+            return None
+        if len(holders) > 1:
+            raise ValueError("An edited reference was duplicated; reopen its placement zones")
+        target = target_path(data, holders[0])
+    return target
+
+
 def profile_for(data, owner, chain):
     scopes = [api().collect(owner).get("zoneOverrides", {})]
     target = target_path(data, owner)
     for identity in chain:
         collection = api().asset_collection(data, target)
-        holder = next(o for o in api().source_objects(collection) if api().state(o).get("zs_uid") == identity)
+        holder = next((o for o in api().source_objects(collection) if api().state(o).get("zs_uid") == identity), None)
+        if holder is None:
+            raise ValueError("A reference this placement passes through was removed; its placement zones went with it")
         index = api().state(holder).get("zs_origin", -1)
         scopes = [s.get("references", {}).get(str(index), {}) for s in scopes]
         scopes.append(api().collect(holder).get("zoneOverrides", {}))
@@ -398,7 +413,12 @@ class RECOIL_OT_edit_placement(bpy.types.Operator):
                     if copied.type == "MESH" and api().state(copied.data).get("zs_origin", -1) >= 0:
                         mesh_ordinal = next(i for i, m in enumerate(descriptor["meshes"]) if m["index"] == api().state(copied.data)["zs_origin"])
                         zones = profile["meshes"][mesh_ordinal]["polygonZones"]
-                        assigned = [(zones[v.value - 1] or []) if 0 < v.value <= len(zones) else [] for v in copied.data.attributes["_recoil_origin"].data]
+                        # A face made in Blender (no source polygon) keeps the zones it was given there.
+                        attrs = copied.data.attributes
+                        def own(face):
+                            count = attrs["_recoil_count"].data[face].value if "_recoil_count" in attrs else 0
+                            return [attrs["_recoil_zone" + str(i)].data[face].value for i in range(min(count, 3)) if "_recoil_zone" + str(i) in attrs]
+                        assigned = [(zones[v.value - 1] or []) if 0 < v.value <= len(zones) else own(f) for f, v in enumerate(attrs["_recoil_origin"].data)]
                         api().face_attribute(copied.data, "_recoil_count", [len(z) for z in assigned])
                         for i in range(3):
                             api().face_attribute(copied.data, "_recoil_zone" + str(i), [z[i] if len(z) > i else 0 for z in assigned])
@@ -422,8 +442,9 @@ class RECOIL_OT_edit_placement(bpy.types.Operator):
                     if copied.type == "MESH":
                         assigned = previous_edit["meshes"].get(api().state(copied.data)["zs_uid"], {})
                         face_ids = copied.data.attributes["_recoil_face"]
+                        tree = api().face_tree(copied.data)
                         for face in copied.data.polygons:
-                            word = assigned.get(str(face_ids.data[face.index].value))
+                            word = api().assigned_word(assigned, tree, face_ids.data[face.index].value)
                             if word is None:
                                 continue
                             copied.data.attributes["_recoil_count"].data[face.index].value = len(word)
@@ -504,7 +525,8 @@ class RECOIL_OT_accept_placement(bpy.types.Operator):
             field = "zs_pending_placements" if nested else "zs_placements"
             if api().state(target).get(field, "[]") != api().state(context.scene)["zs_pending_baseline"]:
                 raise ValueError("The placement was edited in another workspace. Cancel and reopen this draft")
-            pending = [p for p in json.loads(api().state(context.scene)["zs_pending_placements"]) if p["chain"] != state["chain"]]
+            # Edits through a reference removed meanwhile went with it.
+            pending = [p for p in json.loads(api().state(context.scene)["zs_pending_placements"]) if p["chain"] != state["chain"] and resolve_chain(data, owner, p["chain"]) is not None]
             pending.append(edit)
             if not nested:
                 # Only the outermost Accept publishes the entire draft and its split requirements.
