@@ -3098,7 +3098,7 @@
       {
         "Name": "action",
         "Type": "string",
-        "Description": "Tree action; default read. Properties focuses the source-object card; other viewers open the same pinned window as the row context menu. hide/show (source maps) change only what the view draws.",
+        "Description": "Tree action; default read. Properties focuses the source-object card; other viewers open the same pinned window as the row context menu. hide/show (source maps) change only what the view draws; isolate (source maps) shows only the row's object, or everything again on the isolated row, as a middle-click on its eye.",
         "Required": false,
         "Choices": [
           "read",
@@ -3108,7 +3108,8 @@
           "select",
           "properties",
           "hide",
-          "show"
+          "show",
+          "isolate"
         ],
         "Properties": null
       },

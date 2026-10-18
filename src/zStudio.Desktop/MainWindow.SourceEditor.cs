@@ -573,14 +573,28 @@ public partial class MainWindow
         if (scene == null || row.Owner != sceneTree) throw new StudioCommandException("stale_record", "The tree node is no longer available.");
         if (scene.IsPickupDragging || scene.IsFlyActive) throw new StudioCommandException("busy", "Finish the transform drag or exit Fly first.");
         int node = scene.PickupAt(index)?.Root ?? index;
-        if (isolatedNode == node) { isolatedNode = null; scene.Isolate(null); }
+        if (isolatedNode == node) isolatedNode = null;
         else
         {
             if (CurrentInspectionCard?.HasDraft == true) throw new StudioCommandException("pending_drafts", "Apply or discard the edit first.");
-            isolatedNode = node; scene.Isolate(node);
+            isolatedNode = node;
         }
-        CurrentInspectionCard?.Refresh(); RefreshRowEyes();
+        ApplyIsolation(); CurrentInspectionCard?.Refresh(); RefreshRowEyes();
     }
+    /// <summary>
+    /// Shows only the isolated object, or everything again: a source group, which owns no node of its own, brings the
+    /// objects the tree shows below it, the same ones its eye hides.
+    /// </summary>
+    private void ApplyIsolation(SceneViewport? viewport = null)
+    {
+        viewport ??= scene;
+        if (viewport == null) return;
+        int[]? members = isolatedNode is int node && node < 0 && viewport == scene && sceneTree?.Reveal(node, expand: false) is { Synthetic: true } ? HiddenNodesFor(sceneTree, node) : null;
+        isolatedGroup = members != null;
+        viewport.Isolate(isolatedNode, members);
+    }
+    /// <summary>Whether the isolation is a source group's: its members come from the tree, so a replaced scene ends it.</summary>
+    private bool isolatedGroup;
     /// <summary>The rows' eyes follow what is hidden and isolated.</summary>
     private void RefreshRowEyes() { if (sceneTree != null) foreach (var row in sceneTree.CreatedRows) row.NotifyHidden(); }
     internal void SetRowHidden(SceneTreeItem row, int index, bool hidden)

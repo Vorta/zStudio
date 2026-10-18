@@ -1433,9 +1433,10 @@
     {
       "gui": "MainWindow.xaml:OutlinerEyeMiddleClick",
       "tools": [
+        "zstudio_scene_tree",
         "zstudio_scene_selection"
       ],
-      "note": "Middle-clicking a row's eye isolates its object (scene_selection isolate with the row's node); middle-clicking the isolated row's eye shows everything again (scene_selection show_all, which also shows rows hidden with the eye)."
+      "note": "Middle-clicking a row's eye isolates its object (scene_tree isolate on the row, which rows report as isolated; for an object, the same as scene_selection isolate with its node); middle-clicking the isolated row's eye shows everything again (scene_selection show_all, which also shows rows hidden with the eye)."
     },
     {
       "gui": "MainWindow.xaml:OpenWorkspaceClick",

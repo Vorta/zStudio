@@ -189,7 +189,7 @@ public sealed class SceneTreeItem : INotifyPropertyChanged
     public bool CanFrame => IsSourceMap && Index is int && Selectable && !SourceGroup;
     public bool IsHidden => Index is int i && Owner.IsHiddenNode?.Invoke(i) == true;
     public bool IsIsolated => Index is int i && Owner.IsIsolatedNode?.Invoke(i) == true;
-    public string EyeIcon => IsIsolated ? "Isolate" : IsHidden ? "EyeOff" : "Eye";
+    public string EyeIcon => IsHidden ? "EyeOff" : IsIsolated ? "Isolate" : "Eye";
     public string EyeToolTip => (IsHidden ? "Show in viewport" : "Hide in viewport") + (IsIsolated ? "\nMiddle-click: show all objects again" : "\nMiddle-click: hide all other objects");
     internal void NotifyHidden() { Changed(nameof(IsHidden)); Changed(nameof(IsIsolated)); Changed(nameof(EyeIcon)); Changed(nameof(EyeToolTip)); }
     public string ToolTip => (Pass is { } pass ? pass.Description : IsOtherDifficulty ? OtherDifficultyToolTip : ToolTipCore) + (Animations is { } animations ? "\nAnimations: " + string.Join(", ", animations.Select(a => Short(a, 64))) : "");

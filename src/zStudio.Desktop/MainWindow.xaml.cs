@@ -464,8 +464,8 @@ public partial class MainWindow : Window
                 {
                     if (previousMission != null && previousView != null)
                     {
-                        isolatedNode = previousIsolate is int oldIsolate && mission.RemapNodeFrom(previousMission, oldIsolate) is >= 0 and int mappedIsolate ? mappedIsolate : null;
-                        if (isolatedNode != null) scene.Isolate(isolatedNode);
+                        isolatedNode = !isolatedGroup && previousIsolate is int oldIsolate && mission.RemapNodeFrom(previousMission, oldIsolate) is >= 0 and int mappedIsolate ? mappedIsolate : null;
+                        ApplyIsolation(); RefreshRowEyes();
                         RemapHidden(previousHidden, old => mission.RemapNodeFrom(previousMission, old) is >= 0 and int mappedHidden ? mappedHidden : null);
                         scene.RestoreView(previousView);
                         selectedNode = RemapPickupSelection(previousPickup, mission) ?? (previousSelection is int oldSelection && mission.RemapNodeFrom(previousMission, oldSelection) is >= 0 and int mapped ? mapped : null);
@@ -715,7 +715,7 @@ public partial class MainWindow : Window
     {
         if (selectedNode is not int node) { ViewModel.Status = "Select a node in the scene or scene tree first"; return; }
         isolatedNode = scene?.PickupAt(node)?.Root ?? node;
-        scene?.Isolate(isolatedNode); CurrentInspectionCard?.Refresh(); RefreshRowEyes();
+        ApplyIsolation(); CurrentInspectionCard?.Refresh(); RefreshRowEyes();
     }
     private void ShowAllClick(object sender, RoutedEventArgs e) { isolatedNode = null; scene?.Isolate(null); hiddenRows.Clear(); pendingHidden = null; ApplyHiddenRows(); CurrentInspectionCard?.Refresh(); }
     private void InspectNode(int index)

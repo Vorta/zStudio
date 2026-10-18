@@ -160,6 +160,11 @@ internal static class SceneTreeMcpChecks
             string firstGroupRow = firstGroup["row"]!.GetValue<string>();
             await Call(Args("select", firstGroupRow)); Assert.Null(viewport.FramingSelection);
             await Call(Args("properties", firstGroupRow)); Assert.False(properties.CurrentJson!["editable"]!.GetValue<bool>());
+            // Isolating a source group (no node of its own) shows what the tree holds below it, not an empty view.
+            await Call(Args("isolate", firstGroupRow));
+            var isolatedNodes = (HashSet<int>)typeof(SceneViewport).GetField("isolatedNodes", flags)!.GetValue(viewport)!;
+            Assert.Contains(1, isolatedNodes); Assert.Contains(2, isolatedNodes);
+            await Call(Args("isolate", firstGroupRow)); Assert.Null(Get("isolatedNode"));
             Assert.Equal("world", properties.CurrentJson["parent"]!.GetValue<string>());
             var secondGroup = Assert.Single((await Call(Args("read", firstGroupRow)))["children"]!["items"]!.AsArray())!;
             string secondGroupRow = secondGroup["row"]!.GetValue<string>();

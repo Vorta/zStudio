@@ -51,7 +51,7 @@ internal sealed partial class SourceObjectCardEditor
 
         if (rows.Count == 0)
         {
-            TextBlock none = new() { Text = "No polygons here or below.", FontSize = 12, Margin = new(0, 2, 0, 2) };
+            TextBlock none = new() { Text = truncated == null ? "No polygons here or below." : $"No polygons among the first {Count(4096)} objects.", FontSize = 12, Margin = new(0, 2, 0, 2) };
             none.SetResourceReference(TextBlock.ForegroundProperty, "TextFillColorTertiaryBrush");
             polygonZones.Children.Add(none);
             return;
@@ -70,7 +70,7 @@ internal sealed partial class SourceObjectCardEditor
         {
             StackPanel note = new() { Orientation = Orientation.Horizontal, Margin = new(0, 4, 0, 0) };
             note.Children.Add(Glyph("", new(0, 0, 6, 0)));
-            TextBlock text = new() { Text = truncated == "objects" ? "Counted the first 4,096 objects only." : "Counted the first 200,000 polygons only.", FontSize = 11.5, TextWrapping = TextWrapping.Wrap };
+            TextBlock text = new() { Text = truncated == "objects" ? $"Counted the first {Count(4096)} objects only." : $"Counted the first {Count(200_000)} polygons only.", FontSize = 11.5, TextWrapping = TextWrapping.Wrap };
             text.SetResourceReference(TextBlock.ForegroundProperty, "TextFillColorTertiaryBrush");
             note.Children.Add(text); polygonZones.Children.Add(note);
         }

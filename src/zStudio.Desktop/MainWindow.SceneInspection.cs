@@ -49,7 +49,7 @@ public partial class MainWindow
         if (card.Selection is not { AiNode: null } selected) throw new StudioCommandException("not_ready", "Select an object first.");
         int node = selected.SelectionNode;
         node = viewport.PickupAt(node)?.Root ?? node;
-        isolatedNode = node; viewport.Isolate(node); RefreshRowEyes();
+        isolatedNode = node; ApplyIsolation(viewport); RefreshRowEyes();
     }
     private bool ResolveInspectionDrafts(DocumentModel? doc = null)
         => ResolveParachuteDraft(doc) && ResolveAiPathDraft(doc) && (!HasInspectionDraft || doc != null && inspectionDraft!.DraftDocument != doc || inspectionDraft!.ResolvePending());
