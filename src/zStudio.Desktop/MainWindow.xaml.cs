@@ -137,7 +137,7 @@ public partial class MainWindow : Window
     private void SetSceneControlsEnabled(bool enabled)
     {
         SceneToolbar.IsEnabled = enabled;
-        foreach (var part in new FrameworkElement[] { SourcePickers, SourceCameraGroup, SourceDisplayGroup, SourceOverlayGroup, SourceShowGroup }) part.IsEnabled = enabled;
+        foreach (var part in new FrameworkElement[] { SourcePickers, SourceCameraGroup, SourceDisplayGroup, SourceOverlayGroup, SourceShowGroup, SourceZoneOverlayItems }) part.IsEnabled = enabled;
     }
     /// <summary>
     /// A failure the user must see: in Problems (and Diagnostics in a map), not only in the status, which a source map's
