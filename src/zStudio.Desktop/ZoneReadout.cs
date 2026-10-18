@@ -41,7 +41,8 @@ internal static class ZoneReadout
         if (value is not JsonObject { } data || data["rows"] is not JsonArray rows) return null;
         static long Number(JsonNode? node) => node is JsonValue v ? v.TryGetValue<long>(out long wide) ? wide : v.TryGetValue<int>(out int narrow) ? narrow : 0 : 0;
         static string Polygons(long count) => count == 1 ? "1 polygon" : count.ToString("N0", CultureInfo.CurrentCulture) + " polygons";
-        if (rows.Count == 0) return "No polygons here or below";
+        string? kind = data["truncated"] is JsonValue truncated && truncated.TryGetValue<string>(out var stopped) ? stopped : null;
+        if (rows.Count == 0) return kind == null ? "No polygons here or below" : $"No polygons among the first {4096.ToString("N0", CultureInfo.CurrentCulture)} objects";
         List<string> lines = [];
         foreach (var row in rows.OfType<JsonObject>())
         {
@@ -56,7 +57,8 @@ internal static class ZoneReadout
             }
             lines.Add($"{name}: {Polygons(Number(row["polygons"]))}");
         }
-        if (data["truncated"] is JsonValue truncated && truncated.TryGetValue<string>(out var kind))
+        if (rows.Count >= 2) lines.Add($"Total: {Number(data["total"]).ToString("N0", CultureInfo.CurrentCulture)}{(kind != null ? "+" : "")} polygons");
+        if (kind != null)
             lines.Add(kind == "objects" ? $"(counted the first {4096.ToString("N0", CultureInfo.CurrentCulture)} objects only)" : $"(counted the first {200_000.ToString("N0", CultureInfo.CurrentCulture)} polygons only)");
         return string.Join('\n', lines);
     }
