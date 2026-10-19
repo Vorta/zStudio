@@ -136,8 +136,12 @@ internal static partial class WorldSources
             int database = decomposed.FindIndex(l => l.Database);
             List<WorldNode> databaseReferences = [];
             DatabaseRecords.Records? records = null;
+            // A freed slot keeps the name of the node freed there last. The inference replays only the loads whose nodes the
+            // world still holds, so once the scripts delete anything but the database, no kept name is evidence.
+            bool keptNames = database >= 0 && !trace.Skip(decomposed[database].Step + 1)
+                .Any(i => i.Command == "DeleteTree" && (i.Args.Count == 0 || i.Args[0] != decomposed[database].NodeName));
             // A world the inference cannot replay (its caches exceed what a load can hold) keeps its order, like any other.
-            try { if (database >= 0) records = DatabaseRecords.Infer(mission.World, decomposition, node => IsReference(node) && !roots.Contains(node), $"m{mission.Mission}", notes, token); }
+            try { if (database >= 0) records = DatabaseRecords.Infer(mission.World, decomposition, node => IsReference(node) && !roots.Contains(node), $"m{mission.Mission}", notes, token, keptNames: keptNames); }
             catch (InvalidDataException ex) { diagnostics.Add($"m{mission.Mission}: the mission database keeps the world's object order without its groups: {ex.Message}"); }
             if (records != null)
             {
@@ -187,8 +191,8 @@ internal static partial class WorldSources
             // A root's flags are the file's only when the script left them alone, so they are not part of its identity.
             foreach (var load in decomposed) traced.Add((mission, load, Stem(load.File), Hash(load.Content, 0xFF)));
         }
-        // Only an evidenced external filename creates a file. Deleted groups may retain a later cache's old name;
-        // they and unnamed inferred sections are never external-file evidence.
+        // Only an evidenced external filename creates a file. Deleted groups, whatever name they keep, and unnamed
+        // inferred sections are never external-file evidence.
         bool Reference(WorldNode node) => IsReference(node) && !roots.Contains(node) && !groups.Contains(node);
         // A file's references in record order, not looking inside their content.
         List<WorldNode> OwnReferences(IReadOnlyList<WorldNode> records)

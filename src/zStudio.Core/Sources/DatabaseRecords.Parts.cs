@@ -1350,11 +1350,11 @@ internal static partial class DatabaseRecords
 
         /// <summary>
         /// The names the caches left where no later node took their slots (a world that kept slots free, m6): a slot
-        /// keeps the name of the node freed there last, so where that was a cache's copy of a deleted group, it holds the
-        /// group's name in its part's file, which the database's copy lost when a later node took its slot. The cache copies
-        /// the part's first reference in record order, which is also the copy the source writes for every copy unless the
-        /// part is first referenced inside another part (then that name is not written). Nothing is named when such a slot
-        /// of an object holds another name than the object's.
+        /// keeps the name of the node freed there last, so where that was the cache's node of a deleted group, it holds the
+        /// group's name in its part's file, which the database's copy lost when a later node took its slot. The cache is
+        /// mirrored from the part's first reference in record order, whose names the source writes for every copy unless
+        /// the part is first referenced inside another part (then those names are not written). Nothing is named when such
+        /// a slot of an object holds another name than the object's.
         /// </summary>
         /// <param name="untaken">The slots of the deletion's free list that no later node took.</param>
         /// <param name="kept">The names the world's freed slots kept, by slot.</param>

@@ -36,7 +36,8 @@ internal static class OriginalLoader
     /// How many nodes caches may mirror before the work is refused. Each outermost load (its nested caches included) may
     /// mirror <see cref="MaximumCachedNodes"/>, as the build has it; the database inference also counts every load it
     /// simulates, in every reading it tries, against one budget for the whole inference (<see cref="Load"/>), so that a
-    /// refusal stops the inference once rather than one reading at a time.
+    /// refusal stops the inference once rather than one reading at a time (except the replay that names a kept reading's
+    /// groups, which counts only against its own load's limit).
     /// </summary>
     internal sealed class MirrorBudget(int limit, Func<int, string> refusal, MirrorBudget? total = null)
     {
