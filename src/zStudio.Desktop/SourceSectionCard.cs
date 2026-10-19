@@ -45,11 +45,12 @@ internal sealed class SourceSectionCard : Border
     /// <summary>The draft opened, changed or closed (the window's draft guards and footer follow).</summary>
     internal event Action? DraftChanged;
 
-    // The zone's label field and the network's fields: each with the text it started from.
+    // The zone's label field and the network's fields: each with the text it started from, what is stored and, when the
+    // edit would refuse it, why it is fixed in a text editor instead. A network's rows: one per value (a pair has two).
     private TextBox? label;
     private string labelInitial = "";
     private readonly List<NetworkInput> inputs = [];
-    private sealed record NetworkInput(SourceAiNetworkEdits.Field Field, Control[] Boxes, string[] Initial, TextBlock Problem)
+    private sealed record NetworkInput(SourceAiNetworkEdits.Field Field, Control[] Boxes, string[] Initial, SourceAiNetworkEdits.StoredField? Stored, string? Locked)
     {
         internal string[] Values => [.. Boxes.Select(Value)];
         internal bool Changed => !Values.SequenceEqual(Initial);
@@ -61,6 +62,12 @@ internal sealed class SourceSectionCard : Border
             _ => "",
         };
     }
+    private sealed record NetworkRow(NetworkInput Input, int Part, TextBlock Label, TextBlock Help);
+    private readonly List<NetworkRow> networkRows = [];
+    private Border? buddiesBar;
+    private bool activateWritten;
+    private string networkNumber = "";
+    private const double NetworkLabelWidth = 116;
     private Guid draftId = Guid.NewGuid();
 
     internal SourceSectionCard()
@@ -155,54 +162,78 @@ internal sealed class SourceSectionCard : Border
         Finish(editable: zone.Zone != 255);
     }
 
-    /// <summary>An AI network: its header settings as stored, each a field of one draft.</summary>
+    /// <summary>
+    /// An AI network: its header settings as stored, each a field of one draft, named as the developers' Net Edit dialog
+    /// names them; the line under each says what it does in play, following the draft's type and strategy.
+    /// </summary>
     internal void ShowNetwork(DocumentModel document, AiNetwork network, SourceAiNetworkEdits.Header header, bool text)
     {
         bool same = Entry is NetworkEntry previous && previous.Network.Id == network.Id && ReferenceEquals(Document, document);
         Dictionary<string, string[]> kept = same && HasDraft ? inputs.Where(i => i.Changed).ToDictionary(i => i.Field.Key, i => i.Values) : [];
         Begin(new NetworkEntry(network), document);
         string stem = SourceMapSections.NetworkStem(network);
+        networkNumber = stem.StartsWith("net_", StringComparison.OrdinalIgnoreCase) ? stem[4..] : stem;
         heading.Text = stem;
         subtitle.Text = $"AI network · {network.Nodes.Count} node{(network.Nodes.Count == 1 ? "" : "s")}";
-        subtitle.ToolTip = network.Id;
-        var color = OutlinerKinds.Frozen(zStudio.Rendering.AiNetworkColors.Hex(network.AttackStrategy));
+        subtitle.ToolTip = $"{network.Id} · network ID " + (int.TryParse(networkNumber, NumberStyles.None, CultureInfo.InvariantCulture, out int number) ? number.ToString(CultureInfo.InvariantCulture) : networkNumber);
+        // The tile and the Behaviour summary show the applied strategy, as the map's markers do.
+        var applied = network.AttackStrategy;
+        var appliedKind = applied.Kind == AiAttackStrategyKind.Unknown ? AiAttackStrategyKind.HEA : applied.Kind;
         tile.Child = new PreviewIcon { Kind = "AiNodes", Width = 17, Height = 17, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center };
-        ((PreviewIcon)tile.Child).SetValue(TextElement.ForegroundProperty, color);
-        if (!text) Error($"{network.Id} is stored as binary zReader data; its settings can be edited only in a text source.");
+        ((PreviewIcon)tile.Child).SetValue(TextElement.ForegroundProperty, TileBrush(zStudio.Rendering.AiNetworkColors.Hex(applied)));
+        if (!text) Error($"{System.IO.Path.GetFileName(network.Id)} is stored as binary zReader data, so its settings can be edited only in a text source.");
         var main = Section("Network");
-        TextBlock file = Plain(network.Id); file.FontFamily = new("Cascadia Mono, Consolas"); file.FontSize = 11.5; file.TextWrapping = TextWrapping.Wrap;
-        file.ToolTip = $"The network ID is the file's number ({stem.Replace("net_", "", StringComparison.OrdinalIgnoreCase)}). AI vehicles name it in aiv.zrd, so it is not edited here.";
-        main.Body.Children.Add(Row("File", file));
-        Field(main, "name", header, text, kept, help: $"name · up to {SourceAiNetworkEdits.MaximumNameLength} characters");
-        Field(main, "type", header, text, kept, help: "type · the game reads the first two letters");
-        var attack = Section("Attack");
-        attack.Summary = OutlinerKinds.StrategyName(network.AttackStrategy.Kind);
-        Field(attack, "attack_strategy", header, text, kept, help: "attack_strategy · missing or unknown: head-on");
-        Field(attack, "attack_rad", header, text, kept, caption: "Radius", help: "attack_rad · 0 → about 38.7");
-        Field(attack, "attack_dwell", header, text, kept, caption: "Dwell", help: "attack_dwell · seconds; 0 → 10 s");
-        Field(attack, "attack_buddy", header, text, kept, help: "attack_buddy · vehicles on this network alert each other");
-        var movement = Section("Movement");
-        Field(movement, "path_width", header, text, kept, caption: "Path width", help: "path_width · default 10", placeholder: "10");
-        Field(movement, "activate_rad", header, text, kept, caption: "Activation", help: "activate_rad · activation radius");
-        Field(movement, "pursuit_params", header, text, kept, caption: "Pursuit", help: (header.Fields["pursuit_params"]?.Key ?? "pursuit_params") + " · two values");
-        Field(movement, "not_pursuit_dwell", header, text, kept, caption: "Not-pursuit dwell", help: "not_pursuit_dwell");
-        Field(movement, "return_range", header, text, kept, caption: "Return range", help: "return_range");
-        Field(movement, "hide_times", header, text, kept, caption: "Hide times", help: "hide_times · when not stored: 8 and 4", placeholders: ["8", "4"]);
+        TextBlock file = Mono(network.Id);
+        file.ToolTip = $"The network ID is the file's number ({networkNumber}). AI vehicles name it in aiv.zrd, so it is not edited here.";
+        main.Body.Children.Add(Row("File", file, NetworkLabelWidth));
+        NetworkField(main, "name", header, text, kept);
+        var behaviour = Section("Behaviour");
+        string appliedType = AiNetworkCardText.TypeName(AiNetworkCardText.GameType(header.Fields["type"]?.Text()));
+        string appliedStrategy = AiNetworkCardText.StrategyName(appliedKind);
+        behaviour.SummaryWithSwatch(appliedType + " · ", OutlinerKinds.Frozen(zStudio.Rendering.AiNetworkColors.Hex(applied)), appliedStrategy,
+            $"Net Type {appliedType} · Attack Strategy {appliedStrategy}" + (applied.State == AiAttackStrategyState.Missing ? " (not stored: the game attacks head-on)" : ""));
+        NetworkField(behaviour, "type", header, text, kept);
+        NetworkField(behaviour, "attack_strategy", header, text, kept);
+        NetworkField(behaviour, "pursuit_params", header, text, kept);
+        Divider(behaviour);
+        NetworkField(behaviour, "activate_rad", header, text, kept);
+        NetworkField(behaviour, "attack_rad", header, text, kept);
+        NetworkField(behaviour, "return_range", header, text, kept);
+        Divider(behaviour);
+        NetworkField(behaviour, "attack_dwell", header, text, kept);
+        NetworkField(behaviour, "not_pursuit_dwell", header, text, kept);
+        Divider(behaviour);
+        NetworkField(behaviour, "attack_buddy", header, text, kept);
+        buddiesBar = BuddiesBar(text);
+        behaviour.Body.Children.Add(buddiesBar);
+        Divider(behaviour);
+        StackPanel unused = new() { Orientation = Orientation.Horizontal, Margin = new(0, 0, 0, 6) };
+        unused.Children.Add(new TextBlock { Text = "No effect in play", FontSize = 12, FontWeight = FontWeights.SemiBold, Opacity = .7, VerticalAlignment = VerticalAlignment.Center });
+        var info = new PreviewIcon { Kind = "Info", Width = 12, Height = 12, Margin = new(6, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center };
+        info.SetResourceReference(TextElement.ForegroundProperty, "TextFillColorTertiaryBrush");
+        unused.Children.Add(new Border { Background = Brushes.Transparent, Child = info, ToolTip = AiNetworkCardText.NoEffectInfo });
+        ToolTipService.SetInitialShowDelay(unused.Children[1], 0);
+        behaviour.Body.Children.Add(unused);
+        NetworkField(behaviour, "activate_buddy", header, text, kept);
+        NetworkField(behaviour, "path_width", header, text, kept);
+        NetworkField(behaviour, "hide_times", header, text, kept);
         var nodes = Section("Nodes");
         nodes.Summary = $"{network.Nodes.Count} node{(network.Nodes.Count == 1 ? "" : "s")}";
         int links = network.Nodes.Sum(n => n.PreviewLinks.Count(l => l.Target != null)); long slots = network.Nodes.Sum(n => (long)n.LinkCount);
-        nodes.Body.Children.Add(Row("Nodes", Plain(network.Nodes.Count.ToString("N0", CultureInfo.CurrentCulture))));
-        nodes.Body.Children.Add(Row("Links", Plain($"{links:N0} of {slots:N0} slots")));
+        nodes.Body.Children.Add(Row("Nodes", Plain(network.Nodes.Count.ToString("N0", CultureInfo.CurrentCulture)), NetworkLabelWidth));
+        nodes.Body.Children.Add(Row("Links", Plain($"{links:N0} of {slots:N0} slots"), NetworkLabelWidth));
         nodes.Body.Children.Add(Row("Diagnostics", Plain(network.Diagnostics.Count == 0 ? "None" :
-            string.Join("\n", network.Diagnostics.Take(8).Select(d => JsonData.ShownText(d.Message, 240))) + (network.Diagnostics.Count > 8 ? $"\n{network.Diagnostics.Count - 8} more" : ""))));
-        nodes.Body.Children.Add(Help("Move nodes by selecting them in the view."));
+            string.Join("\n", network.Diagnostics.Take(8).Select(d => JsonData.ShownText(d.Message, 240))) + (network.Diagnostics.Count > 8 ? $"\n{network.Diagnostics.Count - 8} more" : "")), NetworkLabelWidth));
+        HelpLine(nodes).Text = "Move nodes by selecting them in the view.";
         if (header.Other.Count > 0)
         {
             var other = Section("Other stored keys", expanded: false);
-            foreach (var (key, value) in header.Other)
-                other.Body.Children.Add(Row(key, Plain(key == "activate_buddy" ? value + " (the game never reads it)" : value)));
+            other.Summary = header.Other.Count.ToString(CultureInfo.CurrentCulture);
+            foreach (var (key, value) in header.Other) other.Body.Children.Add(Row(key, Plain(value), NetworkLabelWidth));
+            HelpLine(other).Text = "Kept as they are. The game ignores them, except version.";
         }
         Finish(editable: text);
+        RefreshNetwork();
     }
 
     /// <summary>An animation definition, read-only: its source, what it binds to, its settings, sequences and notes.</summary>
@@ -292,6 +323,16 @@ internal sealed class SourceSectionCard : Border
         target = Entry?.Key, revision = Document?.Revision, applying = Applying,
         label = Entry is ZoneEntry ? label?.Text : null,
         fields = Entry is NetworkEntry ? inputs.Select(i => new { key = i.Field.Key, values = i.Values, stored = i.Initial, changed = i.Changed }).ToArray() : null,
+        // What each row shows: its label, help line (or the message of an invalid value), grey hint, and any warning.
+        rows = Entry is NetworkEntry ? networkRows.Select(r => new
+        {
+            key = r.Input.Field.Key, part = r.Input.Field.Kind == SourceAiNetworkEdits.FieldKind.Pair ? r.Part : (int?)null, label = r.Input.Field.Part(r.Part),
+            help = r.Help.Text, error = Problem(r) != null,
+            hint = r.Input.Stored == null && r.Input.Boxes[r.Part] is TextBox ? AiNetworkCardText.Hint(r.Input.Field.Key, r.Part) : null,
+            inactive = r.Input.Field.Key == "pursuit_params" && AiNetworkCardText.PursuitHelp(AiNetworkCardText.GameStrategy(Draft("attack_strategy")), r.Part).Inactive,
+            enabled = r.Input.Boxes[r.Part].IsEnabled,
+            warning = r.Input.Locked ?? (r.Input.Field.Key == "attack_buddy" && buddiesBar?.Visibility == Visibility.Visible ? AiNetworkCardText.BuddiesIgnored + "Store it checks Buddies Activate." : null),
+        }).ToArray() : null,
     };
     internal void RequireDraft(string token) { if (!HasDraft || token != DraftToken) throw new StudioCommandException("draft_conflict", "The section card draft changed. Read it again."); }
     /// <summary>Restores every field to what is stored.</summary>
@@ -324,11 +365,19 @@ internal sealed class SourceSectionCard : Border
     private void Adopt()
     {
         if (label != null) labelInitial = label.Text.Trim();
+        // The edit stored Buddies Activate when it was checked, or when Buddies Attack was turned on (Plan adds it then).
+        var attack = inputs.FirstOrDefault(i => i.Field.Key == "attack_buddy");
+        if (inputs.FirstOrDefault(i => i.Field.Key == "activate_buddy") is { Stored: null } activate && (activate.Changed || attack is { Changed: true } && attack.Values[0] == "1"))
+            activateWritten = true;
         for (int i = 0; i < inputs.Count; i++)
         {
-            inputs[i] = inputs[i] with { Initial = inputs[i].Values };
-            foreach (var box in inputs[i].Boxes.OfType<TextBox>()) box.Tag = box.Text.Trim();
+            var adopted = inputs[i] with { Initial = inputs[i].Values };
+            for (int r = 0; r < networkRows.Count; r++)
+                if (ReferenceEquals(networkRows[r].Input, inputs[i])) networkRows[r] = networkRows[r] with { Input = adopted };
+            inputs[i] = adopted;
+            foreach (var box in adopted.Boxes.OfType<TextBox>()) box.Tag = box.Text.Trim();
         }
+        RefreshNetwork();
     }
     /// <summary>Asks about a pending draft: Yes applies it, No discards it, Cancel keeps editing (an edit being accepted holds nothing back).</summary>
     internal async Task<bool> ResolvePendingAsync()
@@ -350,7 +399,7 @@ internal sealed class SourceSectionCard : Border
     {
         if (Entry?.Key != entry.Key || !ReferenceEquals(Document, document)) draftId = Guid.NewGuid();
         Entry = entry; Document = document;
-        body.Children.Clear(); inputs.Clear(); label = null; labelInitial = "";
+        body.Children.Clear(); inputs.Clear(); networkRows.Clear(); buddiesBar = null; activateWritten = false; label = null; labelInitial = "";
         if (!Applying) Error(null);
     }
     private void Finish(bool editable)
@@ -360,7 +409,7 @@ internal sealed class SourceSectionCard : Border
     }
     private void Changed()
     {
-        foreach (var input in inputs) Validate(input);
+        RefreshNetwork();
         RefreshFooter(); DraftChanged?.Invoke();
     }
     private void RefreshFooter()
@@ -373,103 +422,278 @@ internal sealed class SourceSectionCard : Border
     }
     private void Error(string? message) { error.Text = message ?? ""; error.Visibility = message == null ? Visibility.Collapsed : Visibility.Visible; }
 
-    /// <summary>One header field: its control(s), as stored (or empty with the game's value as a hint), and its help line.</summary>
-    private void Field(CardSection section, string key, SourceAiNetworkEdits.Header header, bool editable, Dictionary<string, string[]> kept,
-        string? caption = null, string help = "", string? placeholder = null, string[]? placeholders = null)
+    /// <summary>
+    /// One header field as stored (or as the kept draft): a dropdown with its label above, a check box, or a labelled box per
+    /// value (a pair's values are two rows), each followed by its help line. An empty box shows the game's value as a hint.
+    /// </summary>
+    private void NetworkField(CardSection section, string key, SourceAiNetworkEdits.Header header, bool editable, Dictionary<string, string[]> kept)
     {
         var field = SourceAiNetworkEdits.FieldOf(key)!;
         var stored = header.Fields[key];
-        string[] initial = field.Kind == SourceAiNetworkEdits.FieldKind.Pair ? [stored?.Text(0) ?? "", stored?.Text(1) ?? ""] : [stored?.Text() ?? ""];
-        if (field.Kind == SourceAiNetworkEdits.FieldKind.Flag) initial = [stored?.Text() is "1" ? "1" : "0"];
-        if (field.Kind == SourceAiNetworkEdits.FieldKind.Text && key is "type" or "attack_strategy") initial = [stored?.Text() ?? ""];
-        string[] values = kept.TryGetValue(key, out var draft) ? draft : initial;
-        TextBlock problem = new() { FontSize = 11.5, TextWrapping = TextWrapping.Wrap, Visibility = Visibility.Collapsed, Margin = new(76, 2, 0, 0) };
-        problem.SetResourceReference(TextBlock.ForegroundProperty, "SystemFillColorCriticalBrush");
-        Control[] boxes;
-        FrameworkElement shown;
-        string title = caption ?? char.ToUpperInvariant(field.Caption[0]) + field.Caption[1..];
+        int count = field.Kind == SourceAiNetworkEdits.FieldKind.Pair ? 2 : 1;
+        string[] initial = field.Kind switch
+        {
+            SourceAiNetworkEdits.FieldKind.Pair => [stored?.Text(0) ?? "", stored?.Text(1) ?? ""],
+            SourceAiNetworkEdits.FieldKind.Flag => [stored?.On == true ? "1" : "0"],
+            _ => [stored?.Text() ?? ""],
+        };
+        // A value the edit would refuse is fixed in a text editor: its field is read-only here, and keeps no draft.
+        string? locked = stored == null ? null
+            : stored.BothNames ? "Stored under both of its names. Fix it in a text editor to edit Min and Max here."
+            : stored.Repeated ? "Stored twice in the file; the game reads the first. Fix it in a text editor to edit it here."
+            : stored.Values.Count != count || stored.Values.Any(v => v.Kind is not (zStudio.Core.Formats.ZrdKind.String or zStudio.Core.Formats.ZrdKind.Int or zStudio.Core.Formats.ZrdKind.Float))
+                ? "Not stored as plain values. Fix it in a text editor to edit it here." : null;
+        string[] values = locked == null && kept.TryGetValue(key, out var draft) ? draft : initial;
+        bool enabled = editable && locked == null, unused = AiNetworkCardText.NoEffect(key);
+        Control[] boxes = new Control[count];
+        List<(int Part, TextBlock Label, TextBlock Help)> made = [];
         switch (field.Kind)
         {
-            case SourceAiNetworkEdits.FieldKind.Flag:
-            {
-                CheckBox check = new() { Content = "Attack buddy", IsChecked = values[0] == "1", IsEnabled = editable };
-                check.Checked += (_, _) => Changed(); check.Unchecked += (_, _) => Changed();
-                AutomationProperties.SetName(check, "Attack buddy");
-                boxes = [check]; shown = check; title = "";
-                break;
-            }
             case SourceAiNetworkEdits.FieldKind.Text when key is "type" or "attack_strategy":
             {
-                ComboBox combo = new() { Height = 32, MinWidth = 180, HorizontalAlignment = HorizontalAlignment.Left, IsEnabled = editable };
+                var caption = Caption(field.Caption, Tip(field, stored, 0), unused);
+                caption.Margin = new(0, 0, 0, 5);
+                ComboBox combo = new() { Height = 32, HorizontalAlignment = HorizontalAlignment.Stretch, HorizontalContentAlignment = HorizontalAlignment.Left, IsEnabled = enabled };
                 var known = key == "type" ? SourceAiNetworkEdits.Types : SourceAiNetworkEdits.Strategies;
-                // A stored value that is none of them stays first, as it is, until another is chosen.
-                if (!known.Contains(values[0]))
-                    combo.Items.Add(Item(values[0], key == "type" ? (values[0].Length == 0 ? "Not stored · runs as Standard" : $"{JsonData.ShownText(values[0], 32)} · runs as Standard")
-                        : values[0].Length == 0 ? "Not stored · game: head-on" : $"“{JsonData.ShownText(values[0], 32)}” · game: head-on", key == "attack_strategy" ? stored == null ? "#FF6666" : "#A0A0A0" : null));
-                foreach (string value in known) combo.Items.Add(Item(value, ValueName(key, value), key == "attack_strategy" ? zStudio.Rendering.AiNetworkColors.Hex(AiAttackStrategy.Stored(value)) : null));
-                combo.SelectedItem = combo.Items.Cast<ComboBoxItem>().First(i => (string)i.Tag == values[0]);
+                // A stored value that is none of them (or no value) stays first, as it is, with what the game makes of it.
+                if (!known.Contains(initial[0]))
+                {
+                    string? value = stored == null ? null : initial[0];
+                    string game = key == "type" ? AiNetworkCardText.GameType(value) : AiNetworkCardText.StrategyName(AiNetworkCardText.GameStrategy(value)).ToLowerInvariant();
+                    combo.Items.Add(Item(initial[0], value == null ? "Not stored" : $"“{JsonData.ShownText(value, 32)}”", " · game: " + game,
+                        key == "attack_strategy" ? zStudio.Rendering.AiNetworkColors.Hex(value == null ? AiAttackStrategy.Missing : AiAttackStrategy.Stored(value)) : null));
+                }
+                foreach (string value in known)
+                    combo.Items.Add(Item(value, key == "type" ? AiNetworkCardText.TypeName(value) : AiNetworkCardText.StrategyName(value), null,
+                        key == "attack_strategy" ? zStudio.Rendering.AiNetworkColors.Hex(AiAttackStrategy.Stored(value)) : null));
+                combo.SelectedItem = combo.Items.Cast<ComboBoxItem>().FirstOrDefault(i => (string)i.Tag == values[0]) ?? combo.Items[0];
                 combo.SelectionChanged += (_, _) => Changed();
-                AutomationProperties.SetName(combo, title);
-                boxes = [combo]; shown = combo;
+                AutomationProperties.SetName(combo, field.Caption);
+                section.Body.Children.Add(caption); section.Body.Children.Add(combo);
+                boxes[0] = combo;
+                made.Add((0, caption, HelpLine(section)));
                 break;
             }
-            case SourceAiNetworkEdits.FieldKind.Pair:
+            case SourceAiNetworkEdits.FieldKind.Flag:
             {
-                StackPanel pair = new() { Orientation = Orientation.Horizontal };
-                boxes = [.. Enumerable.Range(0, 2).Select(i => (Control)Box(values[i], placeholders?[i], $"{title}, {(i == 0 ? "first" : "second")} value", editable))];
-                // Each box sits in its hint's grid: the grids line up side by side.
-                foreach (var box in boxes)
-                    if (box.Parent is Grid holder) { holder.Margin = new(0, 0, 6, 0); pair.Children.Add(holder); }
-                shown = pair;
+                TextBlock caption = new() { Text = field.Caption, FontSize = 13 };
+                if (unused) caption.SetResourceReference(TextBlock.ForegroundProperty, "TextFillColorTertiaryBrush");
+                CheckBox check = new() { Content = caption, IsChecked = values[0] == "1", IsEnabled = enabled, MinHeight = 32, ToolTip = Tip(field, stored, 0) };
+                ToolTipService.SetInitialShowDelay(check, 0);
+                check.Checked += (_, _) => Changed(); check.Unchecked += (_, _) => Changed();
+                AutomationProperties.SetName(check, field.Caption);
+                section.Body.Children.Add(check);
+                boxes[0] = check;
+                var help = HelpLine(section); help.Margin = new(28, 0, 0, 10);
+                made.Add((0, caption, help));
                 break;
             }
             default:
-            {
-                var box = Box(values[0], placeholder, title, editable, key == "name" ? SourceAiNetworkEdits.MaximumNameLength : 32);
-                boxes = [box]; shown = (FrameworkElement)box.Parent ?? box;
+                for (int part = 0; part < count; part++)
+                {
+                    var caption = Caption(field.Part(part), Tip(field, stored, part), unused);
+                    var box = NetworkBox(values[part], initial[part], stored == null ? AiNetworkCardText.Hint(key, part) : "", field.Part(part), enabled,
+                        key == "name" ? SourceAiNetworkEdits.MaximumNameLength : 32, AiNetworkCardText.Seconds(key));
+                    Grid row = new() { MinHeight = 32 };
+                    row.ColumnDefinitions.Add(new() { Width = new(NetworkLabelWidth) }); row.ColumnDefinitions.Add(new());
+                    row.Children.Add(caption);
+                    var holder = (FrameworkElement)box.Parent;
+                    Grid.SetColumn(holder, 1); row.Children.Add(holder);
+                    section.Body.Children.Add(row);
+                    boxes[part] = box;
+                    made.Add((part, caption, HelpLine(section)));
+                }
                 break;
-            }
         }
-        // Escape in a box restores what is stored, also when the box shows a kept draft.
-        for (int i = 0; i < boxes.Length; i++) if (boxes[i] is TextBox storedBox) storedBox.Tag = initial[i];
-        NetworkInput input = new(field, boxes, initial, problem);
+        NetworkInput input = new(field, boxes, initial, stored, locked);
         inputs.Add(input);
-        section.Body.Children.Add(title.Length == 0 ? Indented(shown) : Row(title, shown));
-        section.Body.Children.Add(problem);
-        string note = help + (stored == null && field.Kind != SourceAiNetworkEdits.FieldKind.Flag ? " · not stored" : stored?.Repeated == true ? " · stored more than once" : "");
-        section.Body.Children.Add(Help(note, mono: true));
-        Validate(input);
+        foreach (var (part, caption, help) in made) networkRows.Add(new(input, part, caption, help));
+        if (locked != null) section.Body.Children.Add(Caution(locked));
 
-        TextBox Box(string value, string? hint, string name, bool enabled, int maximum = 32)
+        ValueTextBox NetworkBox(string value, string storedText, string hint, string name, bool enabled, int maximum, bool seconds)
         {
-            TextBox box = new() { Text = value, Height = 32, MinWidth = 90, MaxLength = maximum, HorizontalAlignment = HorizontalAlignment.Left, IsEnabled = enabled };
+            ValueTextBox box = new() { Text = value, Height = 32, MaxLength = maximum, HorizontalAlignment = HorizontalAlignment.Stretch, IsEnabled = enabled,
+                VerticalContentAlignment = VerticalAlignment.Center, Padding = new(10, 0, seconds ? 26 : 10, 0) };
             AutomationProperties.SetName(box, name);
             box.TextChanged += (_, _) => Changed();
+            // Escape restores what is stored, also when the box shows a kept draft; Enter applies the draft.
             box.PreviewKeyDown += (_, e) =>
             {
                 if (e.Key == Key.Escape && Entry is NetworkEntry && box.Text != (string)box.Tag!) { e.Handled = true; box.Text = (string)box.Tag!; }
                 else if (e.Key == Key.Enter && Entry is NetworkEntry && HasDraft) { e.Handled = true; _ = ApplyAsync(); }
             };
-            box.Tag = value;
-            WithHint(box, hint ?? (value.Length == 0 ? "Not stored" : ""));
+            // A value the chosen strategy ignores is drawn softer, except while it is being typed.
+            box.GotKeyboardFocus += (_, _) => RefreshNetwork(); box.LostKeyboardFocus += (_, _) => RefreshNetwork(); box.IsEnabledChanged += (_, _) => RefreshNetwork();
+            box.Tag = storedText;
+            var grid = WithHint(box, hint, stretch: true);
+            if (seconds)
+            {
+                TextBlock unit = new() { Text = "s", FontSize = 12, HorizontalAlignment = HorizontalAlignment.Right, VerticalAlignment = VerticalAlignment.Center, Margin = new(0, 0, 10, 0), IsHitTestVisible = false };
+                unit.SetResourceReference(TextBlock.ForegroundProperty, "TextFillColorTertiaryBrush");
+                grid.Children.Add(unit);
+            }
             return box;
         }
-        static ComboBoxItem Item(string value, string text, string? swatch)
+    }
+    /// <summary>A network field's label: secondary, or tertiary for the fields the game never uses; its tooltip says how it is stored.</summary>
+    private static TextBlock Caption(string text, string toolTip, bool unused)
+    {
+        TextBlock caption = new() { Text = text, FontSize = 12.5, VerticalAlignment = VerticalAlignment.Center, TextWrapping = TextWrapping.WrapWithOverflow,
+            TextTrimming = TextTrimming.CharacterEllipsis, Margin = new(0, 0, 8, 0), ToolTip = toolTip };
+        caption.SetResourceReference(TextBlock.ForegroundProperty, unused ? "TextFillColorTertiaryBrush" : "TextFillColorSecondaryBrush");
+        ToolTipService.SetInitialShowDelay(caption, 0);
+        return caption;
+    }
+    private static string Tip(SourceAiNetworkEdits.Field field, SourceAiNetworkEdits.StoredField? stored, int part)
+    {
+        if (stored == null) return $"Not stored · Apply writes {field.Key}";
+        if (stored.BothNames) return $"Stored as both {field.Key} and {field.Alias}";
+        if (stored.Repeated) return $"Stored twice as {stored.Key}";
+        string what = field.Key switch
         {
-            StackPanel content = new() { Orientation = Orientation.Horizontal };
-            if (swatch != null) content.Children.Add(new Border { Width = 12, Height = 12, CornerRadius = new(3), Margin = new(0, 0, 8, 0), VerticalAlignment = VerticalAlignment.Center, Background = OutlinerKinds.Frozen(swatch) });
-            content.Children.Add(new TextBlock { Text = text, VerticalAlignment = VerticalAlignment.Center });
-            return new() { Content = content, Tag = value };
+            "type" => " · the game reads its first two letters", "attack_strategy" => " · the game reads its first three letters",
+            "name" or "attack_buddy" or "activate_buddy" => "",
+            _ => AiNetworkCardText.Seconds(field.Key) ? " · seconds" : " · a distance in game units",
+        };
+        return $"Stored as {stored.Key}" + (field.Kind == SourceAiNetworkEdits.FieldKind.Pair ? $", {(part == 0 ? "first" : "second")} value" : "") + what;
+    }
+    /// <summary>A help line across the block, under its field.</summary>
+    private static TextBlock HelpLine(CardSection section)
+    {
+        TextBlock help = new() { FontSize = 11.5, LineHeight = 15, TextWrapping = TextWrapping.Wrap, Margin = new(0, 3, 0, 10) };
+        help.SetResourceReference(TextBlock.ForegroundProperty, "TextFillColorTertiaryBrush");
+        section.Body.Children.Add(help);
+        return help;
+    }
+    private static void Divider(CardSection section)
+    {
+        Border line = new() { Height = 1, Margin = new(0, 2, 0, 12) };
+        line.SetResourceReference(Border.BackgroundProperty, "DividerStrokeColorDefaultBrush");
+        section.Body.Children.Add(line);
+    }
+    /// <summary>A caution under a field's help line: a glyph and its text.</summary>
+    private static Grid Caution(string text)
+    {
+        Grid line = new() { Margin = new(0, -6, 0, 10) };
+        line.ColumnDefinitions.Add(new() { Width = GridLength.Auto }); line.ColumnDefinitions.Add(new());
+        var glyph = new PreviewIcon { Kind = "Warning", Width = 12, Height = 12, Margin = new(0, 1, 6, 0), VerticalAlignment = VerticalAlignment.Top };
+        glyph.SetResourceReference(TextElement.ForegroundProperty, "SystemFillColorCautionBrush");
+        line.Children.Add(glyph);
+        TextBlock message = new() { Text = text, FontSize = 11.5, TextWrapping = TextWrapping.Wrap };
+        Grid.SetColumn(message, 1); line.Children.Add(message);
+        return line;
+    }
+    /// <summary>The bar under Buddies Attack while the game ignores it: Store it checks Buddies Activate in the draft.</summary>
+    private Border BuddiesBar(bool editable)
+    {
+        Grid content = new();
+        content.ColumnDefinitions.Add(new() { Width = GridLength.Auto }); content.ColumnDefinitions.Add(new());
+        var glyph = new PreviewIcon { Kind = "Warning", Width = 14, Height = 14, Margin = new(0, 0, 8, 0), VerticalAlignment = VerticalAlignment.Top };
+        glyph.SetResourceReference(TextElement.ForegroundProperty, "SystemFillColorCautionBrush");
+        content.Children.Add(glyph);
+        Hyperlink store = new(new Run("Store it")) { IsEnabled = editable };
+        AutomationProperties.SetName(store, "Store Buddies Activate");
+        // The bar goes away with its link: the keyboard moves on to the check box.
+        store.Click += (_, _) => { if (inputs.FirstOrDefault(i => i.Field.Key == "activate_buddy")?.Boxes[0] is CheckBox { IsEnabled: true } check) { check.IsChecked = true; check.Focus(); } };
+        TextBlock message = new() { FontSize = 12, TextWrapping = TextWrapping.Wrap };
+        message.Inlines.Add(new Run(AiNetworkCardText.BuddiesIgnored)); message.Inlines.Add(store);
+        Grid.SetColumn(message, 1); content.Children.Add(message);
+        Border bar = new() { CornerRadius = new(4), Padding = new(8, 6, 8, 6), Margin = new(0, -4, 0, 10), Child = content, Visibility = Visibility.Collapsed };
+        bar.SetResourceReference(Border.BackgroundProperty, "SystemFillColorCautionBackgroundBrush");
+        return bar;
+    }
+    private string? Draft(string key) => inputs.FirstOrDefault(i => i.Field.Key == key)?.Values[0];
+    /// <summary>
+    /// The network rows' help lines and styles, following the draft's type and strategy (a value the strategy ignores is
+    /// drawn softer); an invalid value's message replaces its line. Buddies Attack's bar shows while the game would ignore it.
+    /// </summary>
+    private void RefreshNetwork()
+    {
+        if (Entry is not NetworkEntry) return;
+        string type = AiNetworkCardText.GameType(Draft("type"));
+        var strategy = AiNetworkCardText.GameStrategy(Draft("attack_strategy"));
+        var attack = inputs.FirstOrDefault(i => i.Field.Key == "attack_buddy");
+        var activate = inputs.FirstOrDefault(i => i.Field.Key == "activate_buddy");
+        bool attackOn = attack?.Values[0] == "1", activateStored = activate?.Stored != null || activateWritten;
+        // Apply stores Buddies Activate when it is checked, or when the draft turns Buddies Attack on (the edit adds it then).
+        bool storing = activate?.Values[0] == "1" || attack is { Changed: true } && attackOn;
+        foreach (var row in networkRows)
+        {
+            string key = row.Input.Field.Key;
+            var (help, inactive) = key switch
+            {
+                "name" => (AiNetworkCardText.NameHelp(networkNumber), false),
+                "type" => (AiNetworkCardText.TypeHelp(type), false),
+                "attack_strategy" => (AiNetworkCardText.StrategyHelp(strategy), false),
+                "pursuit_params" => AiNetworkCardText.PursuitHelp(strategy, row.Part),
+                "activate_buddy" => (AiNetworkCardText.BuddiesActivateHelp(activateStored, storing), false),
+                _ => (AiNetworkCardText.FieldHelp(key, row.Part), false),
+            };
+            string? problem = Problem(row);
+            row.Help.Text = problem ?? help;
+            row.Help.SetResourceReference(TextBlock.ForegroundProperty, problem != null ? "SystemFillColorCriticalBrush" : "TextFillColorTertiaryBrush");
+            var box = row.Input.Boxes[row.Part];
+            if (key == "pursuit_params")
+            {
+                row.Label.SetResourceReference(TextBlock.ForegroundProperty, inactive ? "TextFillColorTertiaryBrush" : "TextFillColorSecondaryBrush");
+                // A disabled box keeps the theme's disabled text.
+                if (inactive && box.IsEnabled && !box.IsKeyboardFocusWithin) box.SetResourceReference(Control.ForegroundProperty, "TextFillColorSecondaryBrush");
+                else box.ClearValue(Control.ForegroundProperty);
+            }
+            AutomationProperties.SetHelpText(box, problem ?? help);
+        }
+        if (buddiesBar != null)
+            buddiesBar.Visibility = attackOn && attack!.Initial[0] == "1" && !activateStored && !storing ? Visibility.Visible : Visibility.Collapsed;
+    }
+    /// <summary>Why a row's changed value cannot be applied (as the edit would refuse it), or null.</summary>
+    private static string? Problem(NetworkRow row)
+    {
+        var input = row.Input;
+        if (!input.Changed) return null;
+        var field = input.Field;
+        string[] values = input.Values;
+        // A pair is stored together: a half-filled one that is not stored asks for its other value.
+        if (field.Kind == SourceAiNetworkEdits.FieldKind.Pair && input.Stored == null && values.Count(v => v.Length == 0) == 1)
+        {
+            if (values[row.Part].Length == 0) return $"Enter {field.Part(row.Part)} too: both are stored together.";
+            // The filled half is checked on its own (beside a valid other half).
+            try { SourceAiNetworkEdits.Check(field, row.Part == 0 ? [values[0], "0"] : ["0", values[1]]); return null; }
+            catch (System.IO.InvalidDataException ex) { return ex.Message; }
+        }
+        try { SourceAiNetworkEdits.Check(field, values); return null; }
+        catch (System.IO.InvalidDataException ex)
+        {
+            if (field.Kind != SourceAiNetworkEdits.FieldKind.Pair) return ex.Message;
+            // The message names the value it is about.
+            int part = ex.Message.Contains(field.Part(1), StringComparison.Ordinal) ? 1 : 0;
+            return part == row.Part ? ex.Message : null;
         }
     }
-    private static string ValueName(string key, string value) => key == "type" ? value switch
+    private static Brush TileBrush(string hex)
     {
-        "standard" => "Standard", "hide" => "Hide", "fixed" => "Fixed", "defilade" => "Defilade", _ => value,
-    } : value switch
+        // On the light theme the glyph is the strategy's colour darkened, so yellow and green stay readable.
+        var color = (Color)ColorConverter.ConvertFromString(hex);
+        if (OutlinerKinds.LightTheme) color = Color.FromRgb((byte)(color.R * .55), (byte)(color.G * .55), (byte)(color.B * .55));
+        SolidColorBrush brush = new(color); brush.Freeze();
+        return brush;
+    }
+    private static ComboBoxItem Item(string value, string text, string? after, string? swatch)
     {
-        "head_on" => "Head-on · head_on", "circle" => "Circle · circle", "back_forth" => "Back and forth · back_forth", "follow_net" => "Follow network · follow_net",
-        "zigzag" => "Zigzag · zigzag", "sit" => "Sit · sit", _ => value,
-    };
+        StackPanel content = new() { Orientation = Orientation.Horizontal };
+        if (swatch != null) content.Children.Add(new Border { Width = 12, Height = 12, CornerRadius = new(3), Margin = new(0, 0, 8, 0), VerticalAlignment = VerticalAlignment.Center, Background = OutlinerKinds.Frozen(swatch) });
+        TextBlock name = new() { Text = text, VerticalAlignment = VerticalAlignment.Center };
+        if (after != null)
+        {
+            Run rest = new(after);
+            rest.SetResourceReference(TextElement.ForegroundProperty, "TextFillColorTertiaryBrush");
+            name.Inlines.Add(rest);
+        }
+        content.Children.Add(name);
+        ComboBoxItem item = new() { Content = content, Tag = value };
+        AutomationProperties.SetName(item, text + after);
+        TextSearch.SetText(item, text);
+        return item;
+    }
     private static void Restore(Control box, string value)
     {
         switch (box)
@@ -478,15 +702,6 @@ internal sealed class SourceSectionCard : Border
             case CheckBox check: check.IsChecked = value == "1"; break;
             case ComboBox combo: combo.SelectedItem = combo.Items.Cast<ComboBoxItem>().FirstOrDefault(i => (string)i.Tag == value); break;
         }
-    }
-    /// <summary>Marks a field the game could not take, as Apply would refuse it.</summary>
-    private static void Validate(NetworkInput input)
-    {
-        string? problem = null;
-        if (input.Changed)
-            try { SourceAiNetworkEdits.Check(input.Field, input.Values); }
-            catch (System.IO.InvalidDataException ex) { problem = ex.Message; }
-        input.Problem.Text = problem ?? ""; input.Problem.Visibility = problem == null ? Visibility.Collapsed : Visibility.Visible;
     }
 
     private CardSection Section(string title, bool expanded = true, string? info = null)
@@ -502,10 +717,10 @@ internal sealed class SourceSectionCard : Border
         body.Children.Add(section);
         return section;
     }
-    private static Grid Row(string caption, UIElement value)
+    private static Grid Row(string caption, UIElement value, double width = 76)
     {
         Grid row = new() { Margin = new(0, 3, 0, 3) };
-        row.ColumnDefinitions.Add(new() { Width = new(76) }); row.ColumnDefinitions.Add(new());
+        row.ColumnDefinitions.Add(new() { Width = new(width) }); row.ColumnDefinitions.Add(new());
         // A caption wraps between words; a word too long for the column (a sequence's name) is trimmed, whole in its tooltip.
         TextBlock key = new() { Text = caption, FontSize = 12.5, VerticalAlignment = VerticalAlignment.Center, TextWrapping = TextWrapping.WrapWithOverflow,
             TextTrimming = TextTrimming.CharacterEllipsis, Margin = new(0, 0, 8, 0), ToolTip = caption };
@@ -514,13 +729,11 @@ internal sealed class SourceSectionCard : Border
         Grid.SetColumn((UIElement)value, 1); row.Children.Add(value);
         return row;
     }
-    private static FrameworkElement Indented(FrameworkElement value) { value.Margin = new(76, 3, 0, 3); return value; }
     private static TextBlock Plain(string text) => new() { Text = text, FontSize = 12.5, TextWrapping = TextWrapping.Wrap, VerticalAlignment = VerticalAlignment.Center };
     private static TextBlock Mono(string text) { var block = Plain(text); block.FontFamily = new("Cascadia Mono, Consolas"); block.FontSize = 11.5; return block; }
-    private static TextBlock Help(string text, bool mono = false)
+    private static TextBlock Help(string text)
     {
         TextBlock help = new() { Text = text, FontSize = 11.5, TextWrapping = TextWrapping.Wrap, Margin = new(76, 1, 0, 4) };
-        if (mono) help.FontFamily = new("Cascadia Mono, Segoe UI");
         help.SetResourceReference(TextBlock.ForegroundProperty, "TextFillColorTertiaryBrush");
         return help;
     }

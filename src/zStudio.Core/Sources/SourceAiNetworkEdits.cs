@@ -12,16 +12,24 @@ namespace zStudio.Core.Sources;
 public static class SourceAiNetworkEdits
 {
     public enum FieldKind { Text, Number, Pair, Flag }
-    /// <summary>A header field: its stored key (and an alias the game also reads), its kind and its plain-word caption.</summary>
-    public sealed record Field(string Key, FieldKind Kind, string Caption, string? Alias = null);
+    /// <summary>
+    /// A header field: its stored key (and an alias the game also reads), its kind, and its name as the developers' own Net Edit
+    /// dialog labels it (kept in the game's executable), with a name for each value of a pair.
+    /// </summary>
+    public sealed record Field(string Key, FieldKind Kind, string Caption, string? Alias = null, IReadOnlyList<string>? Parts = null)
+    {
+        public string Part(int index) => Parts != null && index < Parts.Count ? Parts[index] : Caption;
+    }
 
     public static IReadOnlyList<Field> Fields { get; } =
     [
-        new("name", FieldKind.Text, "name"), new("type", FieldKind.Text, "type"), new("attack_strategy", FieldKind.Text, "attack strategy"),
-        new("attack_rad", FieldKind.Number, "attack radius"), new("attack_dwell", FieldKind.Number, "attack dwell"), new("attack_buddy", FieldKind.Flag, "attack buddy"),
-        new("path_width", FieldKind.Number, "path width"), new("activate_rad", FieldKind.Number, "activation radius"),
-        new("pursuit_params", FieldKind.Pair, "pursuit", "pursuit_range"), new("not_pursuit_dwell", FieldKind.Number, "not-pursuit dwell"),
-        new("return_range", FieldKind.Number, "return range"), new("hide_times", FieldKind.Pair, "hide times"),
+        new("name", FieldKind.Text, "Net Name"), new("type", FieldKind.Text, "Net Type"), new("attack_strategy", FieldKind.Text, "Attack Strategy"),
+        new("attack_rad", FieldKind.Number, "Attack Radius"), new("attack_dwell", FieldKind.Number, "Attack Dwell"), new("attack_buddy", FieldKind.Flag, "Buddies Attack"),
+        new("activate_buddy", FieldKind.Flag, "Buddies Activate"),
+        new("path_width", FieldKind.Number, "Path Width"), new("activate_rad", FieldKind.Number, "Activation Radius"),
+        new("pursuit_params", FieldKind.Pair, "Pursuit Radius", "pursuit_range", ["Pursuit Radius Min", "Pursuit Radius Max"]),
+        new("not_pursuit_dwell", FieldKind.Number, "Post Attack Dwell"), new("return_range", FieldKind.Number, "Return Radius"),
+        new("hide_times", FieldKind.Pair, "Hide Times", Parts: ["Hide Time 1", "Hide Time 2"]),
     ];
     public static Field? FieldOf(string key) => Fields.FirstOrDefault(f => f.Key == key);
 
@@ -34,7 +42,11 @@ public static class SourceAiNetworkEdits
     /// <summary>A stored field: the key it is stored under, its values as written, and whether the key is stored more than once.</summary>
     public sealed record StoredField(string Key, IReadOnlyList<ZrdNode> Values, bool Repeated)
     {
+        /// <summary>Stored under both its key and its alias (a kind of repetition).</summary>
+        public bool BothNames { get; init; }
         public string Text(int index = 0) => index < Values.Count ? Values[index].Kind == ZrdKind.String ? Values[index].Text : Values[index].Value : "";
+        /// <summary>A flag is on when its first value's bits are not zero (the game reads them as an integer).</summary>
+        public bool On => Values.Count > 0 && Values[0].Kind is ZrdKind.Int or ZrdKind.Float && Values[0].Bits != 0;
     }
 
     /// <summary>The header as stored: each known field (by its key; null when not stored), and the other keys before the nodes.</summary>
@@ -57,7 +69,8 @@ public static class SourceAiNetworkEdits
         foreach (var field in Fields)
         {
             string? key = keys.ContainsKey(field.Key) ? field.Key : field.Alias != null && keys.ContainsKey(field.Alias) ? field.Alias : null;
-            fields[field.Key] = key == null ? null : new(key, keys[key][0].Children, keys[key].Count > 1 || field.Alias != null && keys.ContainsKey(field.Key) && keys.ContainsKey(field.Alias));
+            bool both = field.Alias != null && keys.ContainsKey(field.Key) && keys.ContainsKey(field.Alias);
+            fields[field.Key] = key == null ? null : new(key, keys[key][0].Children, keys[key].Count > 1 || both) { BothNames = both };
         }
         return new(fields, other);
     }
@@ -94,6 +107,13 @@ public static class SourceAiNetworkEdits
             changed.Add(field.Caption);
             if (stored == null) { added.Add((field.Key, values)); continue; }
             for (int i = 0; i < values.Length; i++) replacements[stored.Values[i].Id] = values[i];
+        }
+        // The game keeps attack_buddy only when activate_buddy is stored too (it zeroes the first when the second is missing),
+        // so turning Buddies Attack on stores Buddies Activate, which the game reads for nothing else.
+        if (changes.Any(c => c.Key == "attack_buddy" && c.Values[0].Trim() == "1") && header.Fields["activate_buddy"] == null && !named.Contains("activate_buddy"))
+        {
+            added.Add(("activate_buddy", [Integer("0")]));
+            changed.Add(FieldOf("activate_buddy")!.Caption);
         }
         if (changed.Count == 0) throw new InvalidOperationException("Nothing changed.");
         string text = syntax.ReplaceScalars(replacements, token);
@@ -132,7 +152,7 @@ public static class SourceAiNetworkEdits
         {
             FieldKind.Text => [Text(field, values[0].Trim())],
             FieldKind.Flag => values[0].Trim() is "0" or "1" ? [Integer(values[0].Trim())] : throw new InvalidDataException($"{field.Caption} is 0 or 1."),
-            _ => [.. values.Select(v => Number(field, v))],
+            _ => [.. values.Select((v, i) => Number(field, v, i))],
         };
     }
     private static ZrdNode Text(Field field, string value)
@@ -157,12 +177,12 @@ public static class SourceAiNetworkEdits
         }
         return ZrdNode.Create(ZrdKind.String, System.Text.Json.JsonSerializer.Serialize(value));
     }
-    private static ZrdNode Number(Field field, string text)
+    private static ZrdNode Number(Field field, string text, int index)
     {
         if (!float.TryParse(text.Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out float value) || !float.IsFinite(value))
-            throw new InvalidDataException($"Enter a number for {field.Caption} (use a decimal point).");
-        if (value < 0) throw new InvalidDataException($"Enter 0 or more for {field.Caption}.");
-        if (field.Key == "path_width" && value <= 0) throw new InvalidDataException("Enter a path width above 0.");
+            throw new InvalidDataException($"Enter a number for {field.Part(index)} (use a decimal point).");
+        if (value < 0) throw new InvalidDataException($"Enter 0 or more for {field.Part(index)}.");
+        if (field.Key == "path_width" && value <= 0) throw new InvalidDataException("Enter a Path Width above 0.");
         return ZrdNode.Create(ZrdKind.Float, value.ToString("R", CultureInfo.InvariantCulture));
     }
     private static ZrdNode Integer(string text) => ZrdNode.Create(ZrdKind.Int, text);

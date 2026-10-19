@@ -44,7 +44,9 @@ internal static class OutlinerKinds
     internal static string Label(string category) => category switch { "world" => "World", "group" => "Group", "geometry" => "Geometry", "empty" => "Empty", "object" => "Object", _ => "Node" };
     // Empty nodes are slate: lighter on the dark theme, darker on the light one.
     private static readonly Brush EmptyDarkBrush = Frozen(0x9F, 0xB0, 0xC2), EmptyLightBrush = Frozen(0x5B, 0x6B, 0x7C);
-    private static Brush EmptyBrush => Application.Current?.TryFindResource("TextFillColorPrimaryBrush") is SolidColorBrush { Color: var text } && text.R + text.G + text.B < 384 ? EmptyLightBrush : EmptyDarkBrush;
+    private static Brush EmptyBrush => LightTheme ? EmptyLightBrush : EmptyDarkBrush;
+    /// <summary>The light theme is on (its primary text is dark).</summary>
+    internal static bool LightTheme => Application.Current?.TryFindResource("TextFillColorPrimaryBrush") is SolidColorBrush { Color: var text } && text.R + text.G + text.B < 384;
     internal static Brush Brush(string category) => category switch
     {
         "group" => GroupBrush, "geometry" => GeometryBrush, "empty" => EmptyBrush, "node" => NodeBrush, "zone" => ZonesBrush, "network" => VehicleBrush, "definition" => AnimationBrush,

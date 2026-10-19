@@ -21,7 +21,7 @@ public sealed class AiNetworkTests
         // A stored value is replaced in place and a missing key goes before the nodes; the comment, layout and nodes stay.
         var edit = zStudio.Core.Sources.SourceAiNetworkEdits.Plan(path, source, [new("attack_rad", ["150"]), new("attack_strategy", ["circle"]), new("name", ["net_05"])], token);
         string after = System.Text.Encoding.Latin1.GetString(edit.Content);
-        Assert.Equal("Edit net_05: attack radius, attack strategy", edit.Label);
+        Assert.Equal("Edit net_05: Attack Radius, Attack Strategy", edit.Label);
         Assert.Contains("# keep this comment", after);
         Assert.StartsWith("( version ( 105 ) name ( net_05 ) type ( standard ) path_width ( 10.0 )\r\n", after);
         Assert.True(after.IndexOf("attack_strategy", StringComparison.Ordinal) < after.IndexOf("node_00", StringComparison.Ordinal));
@@ -30,6 +30,10 @@ public sealed class AiNetworkTests
         Assert.Equal("150", header.Fields["attack_rad"]!.Text());
         Assert.Equal("circle", header.Fields["attack_strategy"]!.Text());
         Assert.Equal("0.7", header.Fields["attack_dwell"]!.Text());
+        // The game keeps attack_buddy only while activate_buddy is stored, so turning it on stores both.
+        var buddies = zStudio.Core.Sources.SourceAiNetworkEdits.Read(zStudio.Core.Sources.ZrdText.Parse(System.Text.Encoding.Latin1.GetString(
+            zStudio.Core.Sources.SourceAiNetworkEdits.Plan(path, source, [new("attack_buddy", ["1"])], token).Content), token));
+        Assert.True(buddies.Fields["attack_buddy"]!.On && buddies.Fields["activate_buddy"] is { On: false });
         // Values the game cannot take, a binary source and an edit that changes nothing are refused.
         Assert.Throws<InvalidDataException>(() => zStudio.Core.Sources.SourceAiNetworkEdits.Plan(path, source, [new("attack_strategy", ["evade"])], token));
         Assert.Throws<InvalidDataException>(() => zStudio.Core.Sources.SourceAiNetworkEdits.Plan(path, source, [new("name", [new string('n', 20)])], token));

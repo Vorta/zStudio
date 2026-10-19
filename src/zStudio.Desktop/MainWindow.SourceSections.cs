@@ -510,10 +510,10 @@ public partial class MainWindow : ISourceSectionState
 
     private void RegisterSourceSectionCommands(StudioCommands registry)
     {
-        RegisterJob(registry, "source_ai_network", "Read or edit an AI network's header in its source file (data/mN/zrdr/aipath/net_NN.zrd): name (at most 19 characters: letters, digits, _ - .), type (standard, hide, fixed, defilade; the game reads the first two letters), attack_strategy (head_on, circle, back_forth, follow_net, zigzag, sit; missing or unknown means head-on), attack_rad, attack_dwell, attack_buddy (0 or 1), path_width (above 0), activate_rad, pursuit_params (two numbers; a stored pursuit_range alias is kept), not_pursuit_dwell, return_range and hide_times (two numbers). The World tree's AI network card edits the same fields. Only the edited values change: a stored value is replaced in place and a missing key is added before the nodes, keeping comments and layout; one undoable change; the file (the network's ID, which vehicles name) is never renamed. Read returns the stored values (null when not stored). A binary source, a key stored twice and an invalid value are refused; nothing to change accepts no edit.",
+        RegisterJob(registry, "source_ai_network", "Read or edit an AI network's header in its source file (data/mN/zrdr/aipath/net_NN.zrd): name (at most 19 characters: letters, digits, _ - .), type (standard, hide, fixed, defilade; the game reads the first two letters), attack_strategy (head_on, circle, back_forth, follow_net, zigzag, sit; missing or unknown means head-on), attack_rad, attack_dwell, attack_buddy (0 or 1; turning it on also stores activate_buddy, without which the game ignores it), activate_buddy (0 or 1; the game reads only that it is stored), path_width (above 0), activate_rad, pursuit_params (two numbers; a stored pursuit_range alias is kept), not_pursuit_dwell, return_range and hide_times (two numbers). The World tree's AI network card edits the same fields; each read field gives the label the card shows (the developers' Net Edit dialog names, such as Attack Radius or Pursuit Radius Min and Max). Only the edited values change: a stored value is replaced in place and a missing key is added before the nodes, keeping comments and layout; one undoable change; the file (the network's ID, which vehicles name) is never renamed. Read returns each field's label, the names of a pair's two values, and what is stored (null when not stored). A binary source, a key stored twice and an invalid value are refused; nothing to change accepts no edit.",
             [DocumentParameter, RevisionParameter with { Required = false }, P("network", "string", "The network's ID: its project path, as ai_networks and scene_tree rows give it.", true),
              new("changes", "array", "edit: the fields to change (omit to read).", Items: new("", "object", "One field.", Properties: [P("key", "string", "The stored key.", true, [.. SourceAiNetworkEdits.Fields.Select(f => f.Key)]),
-                new("values", "array", "Its value(s) as text: one, two for a pair, 0 or 1 for attack_buddy.", true, Items: new("", "string", "A value."), MaxItems: 2)]), MaxItems: 16)], false,
+                new("values", "array", "Its value(s) as text: one, two for a pair, 0 or 1 for attack_buddy and activate_buddy.", true, Items: new("", "string", "A value."), MaxItems: 2)]), MaxItems: 16)], false,
             async (args, token) =>
             {
                 var document = TargetDocument(args);
@@ -533,10 +533,14 @@ public partial class MainWindow : ISourceSectionState
         if (network.Source is not { } source) return fields;
         var header = SourceAiNetworkEdits.Read(source);
         foreach (var field in SourceAiNetworkEdits.Fields)
-            fields[field.Key] = header.Fields[field.Key] is { } stored ? new JsonObject
+            fields[field.Key] = new JsonObject
             {
-                ["storedKey"] = stored.Key, ["values"] = new JsonArray([.. stored.Values.Select((_, i) => (JsonNode?)JsonData.ShownText(stored.Text(i), 256))]), ["repeated"] = stored.Repeated ? true : null,
-            } : null;
+                ["label"] = field.Caption, ["parts"] = field.Parts is { } parts ? new JsonArray([.. parts.Select(p => (JsonNode?)p)]) : null,
+                ["stored"] = header.Fields[field.Key] is { } stored ? new JsonObject
+                {
+                    ["storedKey"] = stored.Key, ["values"] = new JsonArray([.. stored.Values.Select((_, i) => (JsonNode?)JsonData.ShownText(stored.Text(i), 256))]), ["repeated"] = stored.Repeated ? true : null,
+                } : null,
+            };
         return fields;
     }
     /// <summary>The section a scene_tree row reports: its kind and identity, what it shows and its eye.</summary>

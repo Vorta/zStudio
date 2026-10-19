@@ -6977,7 +6977,7 @@
   },
   {
     "Name": "zstudio_source_ai_network",
-    "Description": "Read or edit an AI network\u0027s header in its source file (data/mN/zrdr/aipath/net_NN.zrd): name (at most 19 characters: letters, digits, _ - .), type (standard, hide, fixed, defilade; the game reads the first two letters), attack_strategy (head_on, circle, back_forth, follow_net, zigzag, sit; missing or unknown means head-on), attack_rad, attack_dwell, attack_buddy (0 or 1), path_width (above 0), activate_rad, pursuit_params (two numbers; a stored pursuit_range alias is kept), not_pursuit_dwell, return_range and hide_times (two numbers). The World tree\u0027s AI network card edits the same fields. Only the edited values change: a stored value is replaced in place and a missing key is added before the nodes, keeping comments and layout; one undoable change; the file (the network\u0027s ID, which vehicles name) is never renamed. Read returns the stored values (null when not stored). A binary source, a key stored twice and an invalid value are refused; nothing to change accepts no edit. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Description": "Read or edit an AI network\u0027s header in its source file (data/mN/zrdr/aipath/net_NN.zrd): name (at most 19 characters: letters, digits, _ - .), type (standard, hide, fixed, defilade; the game reads the first two letters), attack_strategy (head_on, circle, back_forth, follow_net, zigzag, sit; missing or unknown means head-on), attack_rad, attack_dwell, attack_buddy (0 or 1; turning it on also stores activate_buddy, without which the game ignores it), activate_buddy (0 or 1; the game reads only that it is stored), path_width (above 0), activate_rad, pursuit_params (two numbers; a stored pursuit_range alias is kept), not_pursuit_dwell, return_range and hide_times (two numbers). The World tree\u0027s AI network card edits the same fields; each read field gives the label the card shows (the developers\u0027 Net Edit dialog names, such as Attack Radius or Pursuit Radius Min and Max). Only the edited values change: a stored value is replaced in place and a missing key is added before the nodes, keeping comments and layout; one undoable change; the file (the network\u0027s ID, which vehicles name) is never renamed. Read returns each field\u0027s label, the names of a pair\u0027s two values, and what is stored (null when not stored). A binary source, a key stored twice and an invalid value are refused; nothing to change accepts no edit. Returns an operation ID; use zstudio_operation to await/read the result.",
     "Mutates": true,
     "Parameters": [
       {
@@ -7032,6 +7032,7 @@
                 "attack_rad",
                 "attack_dwell",
                 "attack_buddy",
+                "activate_buddy",
                 "path_width",
                 "activate_rad",
                 "pursuit_params",
@@ -7044,7 +7045,7 @@
             {
               "Name": "values",
               "Type": "array",
-              "Description": "Its value(s) as text: one, two for a pair, 0 or 1 for attack_buddy.",
+              "Description": "Its value(s) as text: one, two for a pair, 0 or 1 for attack_buddy and activate_buddy.",
               "Required": true,
               "Choices": null,
               "Properties": null,

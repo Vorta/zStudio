@@ -227,7 +227,7 @@ internal static class SourceEditingMcpChecks
             await Preview();
             string strategyEdited = Text(doc.SourceWorld!.Workspace.Read("data/m1/zrdr/net_01.zrd"));
             Assert.Contains("attack_strategy", strategyEdited); Assert.Contains(aiSource, strategyEdited);
-            Assert.Equal("Edit net_01: attack strategy", doc.SourceWorld.Workspace.UndoLabel);
+            Assert.Equal("Edit net_01: Attack Strategy", doc.SourceWorld.Workspace.UndoLabel);
             string rebuiltPreview = ((Guid)typeof(MainWindow).GetField("previewId", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(main)!).ToString();
             Assert.Equal("network", (await Call("preview_state", new() { ["preview"] = rebuiltPreview }))["sections"]!["selection"]!["kind"]!.GetValue<string>());
             doc = Document(await Call("undo_redo", new() { ["document"] = Id(doc), ["revision"] = doc.Revision, ["action"] = "undo" }));

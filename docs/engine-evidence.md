@@ -367,11 +367,18 @@ These are the keys the game reads. Anything else in a file is ignored. Types are
   - **`version`:** must be the integer 105 or be absent, otherwise the whole network is dropped silently.
   - **`name`:** copied unchecked into 20 bytes.
   - **`type`:** the first two letters ST/HI/FI/DE; anything else is standard.
-  - **Floats:** `path_width` (default 10), `activate_rad`, `attack_rad` (0 → radius about 38.7), `attack_dwell` (0 → 10 s), `not_pursuit_dwell`, `return_range`.
-  - **`pursuit_params`** (or `pursuit_range`): two floats.
-  - **`hide_times`:** 8/4 only when absent.
-  - **`attack_strategy`:** the first three letters FOL/CIR/HEA/BAC/ZIG/SIT. **Missing or unrecognised means head-on (HEA).**
-  - **`attack_buddy`:** a flag; vehicles with the same network ID alert each other. `activate_buddy` is never read.
+  - **Floats:** `path_width` (default 10), `activate_rad`, `attack_rad` (0 → radius about 38.7), `attack_dwell` (0 → 10 s), `not_pursuit_dwell`, `return_range`. A vehicle takes them when it starts (`Player::InitStateFromNameAndMasterCommonData` 0x420d10 [BN]); a zero `activate_rad`, `not_pursuit_dwell` or `return_range` stays 0. The `vehicle.zrd` values the developers' dialog says these override (`common_mode` `not_pursuit_dwell` and `return_range`) are loaded but never applied [BN].
+  - **What they do** [BN, static reading]:
+    - **`activate_rad`:** a vehicle acts only while the player is within this horizontal distance or it is alerted, and is frozen otherwise (`PlayerMgr::TickAllPlayers` 0x426625); 0 wakes it only when alerted.
+    - **`attack_rad`:** an attack starts when the player is within it (3D, between target points) in line of sight (0x401b20); no attack starts in a vehicle's first 10 s (0x4210d9).
+    - **`attack_dwell`:** the length of each burst of fire; **`not_pursuit_dwell`:** the pause between bursts and the cooldown after a chase before another can start (`AiEnterPursuit` 0x401c60, 0x402250, 0x401b3e). Neither ends a chase.
+    - **`return_range`:** a chase ends when the vehicle is farther than this from the route node it was heading to when the attack began, or when the player dies (0x401913); 0 ends every chase at once (inferred).
+    - **`path_width`** only feeds per-link probe data that nothing reads (0x403550, 0x403620), and **`hide_times`** (8 and 4 only when absent) are copied (0x420fe3) and never read: neither changes play. Defilade uses fixed 4 s and 14 s waits (0x402c85, 0x402e05).
+  - **`type`** (`TickAiTopLevel` 0x401060 [BN]): standard drives its route and returns to it after an attack; hide (0x402090) and fixed (0x402170) stay where they are and turn to face the player (they differ only in a step with no lasting effect found); defilade (0x402b70) drives from its home node (the nearest to where it is placed) to that node's first link, waits 4 s, backs home, waits 14 s and repeats, keeping itself awake.
+  - **`pursuit_params`** (or `pursuit_range`): two floats, used by the attack strategy (`TickAiPursuit` 0x401710, jump table 0x401948 [BN]): head-on backs off nearer than the first and closes in farther than the second (`UpdateAiTargetRangeSteering` 0x401970); circle orbits at the first (`UpdateAiOffsetTargetSteering` 0x4026d0); back-and-forth charges to the first, backs out to twice it and swings sideways by the second (`UpdateAiDynamicOffsetTargetSteering` 0x4028c0); the others use neither.
+  - **`attack_strategy`:** the first three letters FOL/CIR/HEA/BAC/ZIG/SIT. **Missing or unrecognised means head-on (HEA).** Follow-net keeps driving its route and shoots; sit stops and turns to face the player (a vehicle that hits obstacles more than six times switches to sit); **zigzag has no steering**: the vehicle keeps its last controls [BN].
+  - **`attack_buddy`:** an integer used as a flag: when it is not 0, a vehicle that starts pursuing (`AiTryEnterPursuitIfLineOfSight` 0x401b20 [BN]) or is hit (0x43bb3e [BN]) alerts the vehicles of its ring (`AiAlertAttackBuddies` 0x401c00 [BN]): every active vehicle on the same network (`BuildAiPeerRingsByAiNetId` 0x403750 [BN]), each joining the attack and staying awake 10 s. A hit vehicle joins the attack and stays awake 5 s whatever the flag. **A missing `activate_buddy` zeroes it** (the loader's branch for an absent `activate_buddy` stores 0 into `attack_buddy`'s field, 0x403329 [BN]); `activate_buddy` itself is read into a field nothing uses. Shipped: every file that stores `attack_buddy` stores 0 [D].
+  - **The developers' Net Edit dialog** survives in the executable's resources [BN]: Net Name, Net Type, Path Width, Activation Radius, Attack Radius, Return Radius\*, Attack Dwell, Post Attack Dwell\* (`not_pursuit_dwell`), Pursuit Rad Min, Pursuit Rad Max, AttackStrategy, Buddies Activate and Buddies Attack, noting "\* These parameters override vehicle.zrd defaults". Its pursuit labels follow the strategy (`AiPropertyDlg::UpdatePropertyLabels` 0x41c170 [BN]): Min/Max Pursuit Rng for head-on, Attack Range and Unused for circle, Attack Range and Movement for back-and-forth, Unused for the rest. zStudio's network card uses these names.
   - **`node_00`–`node_98`** are read in index order: an integer (never read), XYZ and three links. **A link to a missing node crashes at mission load** (0x403550 [B]). Shipped: 470 networks, none with a dangling link or a self-link [D].
 - **`aiv.zrd`** (0x41fe90 [BN]; only `aiv.zrd`, never `aiv_easy` or `aiv_hard`) is a list of name and record pairs: `name ( netId:int ( x y z :float ) yawDegrees:float )`.
   - **Names:** at most 27 characters; the template is derived as in [Vehicles](#vehicles).
@@ -491,7 +498,7 @@ Run on a disposable copy of the game (for example `D:\RecoilTest`), exporting in
 
 **Resources**
 
-- **T16.** Remove `activate_rad` from one M1 network: does its vehicle move before being shot?
+- **T16.** Remove `activate_rad` from one M1 network: does its vehicle move before being shot? Predicted from the code: no (it wakes only when alerted).
 - **T17.** Complete M3's objective 5 and open the objectives panel. Predicted heading: "INACTIVE".
 - **T18.** Delete `READ_SOUND` from M1 objective 3, complete objective 3 before objective 2, then review. Predicted: a crash.
 
