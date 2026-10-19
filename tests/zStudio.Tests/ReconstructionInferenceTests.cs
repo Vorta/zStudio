@@ -99,7 +99,7 @@ public sealed class ReconstructionInferenceTests
         return GameZWorldReader.FromDocument(FormatRegistry.Default.OpenBytes("gamez.zbd", GameZWriter.Write(world, Token), token: Token), Token);
     }
 
-    /// <summary>Each slot's class and name, freed slots by their kept name.</summary>
+    /// <summary>Each slot's class and name; a freed slot only as freed, without the name it keeps.</summary>
     private static List<string> Slots(GameZWorld world)
     {
         var slots = GameZWriter.NodeSlots(world, TestContext.Current.CancellationToken).ToDictionary(p => p.Value, p => p.Key);

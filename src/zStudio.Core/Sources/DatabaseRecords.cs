@@ -74,7 +74,7 @@ internal static partial class DatabaseRecords
 
     /// <summary>
     /// The most nodes the caches the inference simulates may mirror in all: every load it replays, in every reading it tries,
-    /// except the replay that names a kept reading's groups (the build's own limit, <see cref="OriginalLoader.MaximumCachedNodes"/>,
+    /// except the replay that names the accepted reading's groups (the build's own limit, <see cref="OriginalLoader.MaximumCachedNodes"/>,
     /// holds for one load). The shipped databases need at most 2.7 million (1999 and 1998 m2; m6 1.9 million, the others far
     /// fewer).
     /// </summary>
@@ -152,9 +152,10 @@ internal static partial class DatabaseRecords
 
     /// <param name="isReference">Whether a node of the shipped world is an external reference (its children a referenced file's content).</param>
     /// <param name="mirrorLimit">The most nodes the simulated caches may mirror in all (see <see cref="MaximumMirroredNodes"/>); beyond it the inference stops.</param>
-    /// <param name="keptNames">Whether the names freed slots keep can name deleted groups: false after any <c>DeleteTree</c>
-    /// but the database's own deletion, whatever it frees. The inference does not replay those deletions, and their nodes'
-    /// names can sit in slots it takes for untaken.</param>
+    /// <param name="keptNames">Whether the names freed slots keep can name deleted groups: false unless the database's deletion
+    /// is the instruction right after its load and the scripts free nothing else later (<c>DeleteTree</c>, <c>FreeNode</c>),
+    /// whatever those free. The inference does not replay such frees, and their nodes' names can sit in slots it takes for
+    /// untaken.</param>
     /// <exception cref="InvalidDataException">The inference would mirror more cached nodes than <paramref name="mirrorLimit"/>; the database's nodes keep the world's child order.</exception>
     public static Records? Infer(GameZWorld world, WorldDecomposition build, Func<WorldNode, bool> isReference, string mission, List<string> notes, CancellationToken token, int mirrorLimit = MaximumMirroredNodes,
         int matchingLimit = MaximumRetainedWork, bool keptNames = true)
@@ -202,7 +203,7 @@ internal static partial class DatabaseRecords
         HashSet<int> freedSet = [.. freed];
         var freedSlots = world.FreedSlots;
         // How many entries at the bottom of each free list no later node took: their slots keep the names of the nodes freed
-        // there last (by the database's load or its deletion, unless the scripts ran another DeleteTree; see Infer).
+        // there last (by the database's load or its deletion, unless the scripts free other nodes; see Infer).
         Dictionary<List<int>, int> untakenCounts = new(ReferenceEqualityComparer.Instance);
         var first = FreeList(steps, out string? failure);
         if (first == null) return Fail(failure!);
@@ -237,7 +238,7 @@ internal static partial class DatabaseRecords
         Dictionary<int, string> kept = [];
         foreach (var (s, bytes) in freedSlots) if (NameOf(bytes) is { Length: > 0 } name) kept[s] = name;
         // The kept names a deleted record can take: those of slots no later node took (one a later load took and freed again
-        // holds that load's name), none when the scripts deleted other nodes (see Infer).
+        // holds that load's name), none when the scripts free other nodes (see Infer).
         Dictionary<int, string> Named()
         {
             if (!keptNames) return [];
