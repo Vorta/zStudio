@@ -126,12 +126,16 @@ public partial class MainWindow
             throw new StudioCommandException("pending_drafts", "Confirm or cancel the AI path transform with ai_path before continuing.");
         if (HasInspectionDraft && (doc == null || inspectionDraft!.DraftDocument == doc))
             throw new StudioCommandException("pending_drafts", "Resolve the scene card draft explicitly before continuing.");
+        if (HasSectionDraft(doc))
+            throw new StudioCommandException("pending_drafts", "Apply or revert the zone or AI network card's changes (drafts target section) before continuing.");
         if ((doc == null || shownDocument == doc) && animation?.HasAutomationDrafts == true)
             throw new StudioCommandException("pending_drafts", "Unfinished GUI input is retained. Inspect and explicitly resolve drafts before continuing.");
     }
     /// <remarks>With <paramref name="committing"/>, drafts whose commit is running (and called this) do not count.</remarks>
-    private void RequireNoDrafts(DocumentModel? doc = null, bool committing = false, SceneInspectionCard? committingCard = null, AiPathDraft? committingAiPath = null, ParachuteDraft? committingParachute = null)
+    private void RequireNoDrafts(DocumentModel? doc = null, bool committing = false, SceneInspectionCard? committingCard = null, AiPathDraft? committingAiPath = null, ParachuteDraft? committingParachute = null, bool committingSection = false)
     {
+        if (!committingSection && HasSectionDraft(doc))
+            throw new StudioCommandException("pending_drafts", "Apply or revert the zone or AI network card's changes (drafts target section) before continuing.");
         if (parachuteDraft is { } drop && drop != committingParachute && (doc == null || doc == drop.Session.World || doc == drop.Session.Owner || doc.ResourceEdits != null || doc.ContentEdits != null))
             throw new StudioCommandException("pending_drafts", "Confirm or cancel the Parachute move before continuing.");
         if (HasAiPathDraft && aiPathDraft != committingAiPath && (doc == null || aiPathDraft!.Document == doc || doc.ResourceEdits != null || doc.ContentEdits != null))
@@ -218,7 +222,7 @@ public partial class MainWindow
         RegisterSourceWorldCommands(registry);
         RegisterSourceObjectCommands(registry);
         RegisterSourceBlenderCommands(registry);
-        RegisterSourceRecoveryCommands(registry); RegisterSourceTerrainCommands(registry); RegisterSourceZoneCommands(registry);
+        RegisterSourceRecoveryCommands(registry); RegisterSourceTerrainCommands(registry); RegisterSourceZoneCommands(registry); RegisterSourceSectionCommands(registry);
         RegisterWorldCompareCommands(registry);
         return registry;
     }

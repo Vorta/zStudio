@@ -43,6 +43,29 @@ public sealed class AnimationCompilerTests
         Assert.InRange(GC.GetAllocatedBytesForCurrentThread() - before, 0, 20_000);
     }
 
+    [Fact]
+    public void DefinitionSummaryKeepsEachListingAndWhatItBinds()
+    {
+        // A file listed twice compiles twice; a missing listed file is skipped; a definition whose root the world lacks binds nothing.
+        string root = "ANIMATION_DEFINITIONS ( ANIMATION_LIST ( ANIMATION_DEFINITION_FILE ( \"gate.zad\" ) ANIMATION_DEFINITION_FILE ( \"gate.zad\" ) ANIMATION_DEFINITION_FILE ( \"missing.zad\" ) ) )";
+        string gate = "ANIMATION_DEFINITIONS ( ANIMATION_LIST ( ANIMATION_DEFINITION ( NAME ( gate ) ANIMATION_NAME ( open_gate ) ACTIVATION ( ON_CALL ) SEQUENCE_DEFINITION ( NAME ( open ) OBJECT_ACTIVE_STATE ( NAME ( gate ) STATE ( ACTIVE ) ) ) ) ANIMATION_DEFINITION ( NAME ( ghost ) ) ) )";
+        var files = new MemoryFiles(new() { ["data/m1/zrdr/anim.zad"] = Encoding.ASCII.GetBytes(root), ["data/m1/zrdr/gate.zad"] = Encoding.ASCII.GetBytes(gate) });
+        var evaluated = AnimationCompiler.Evaluate(files, "data/m1/zrdr/anim.zad", ["gate"], null, zStudio.Core.Formats.FormatRegistry.MaximumDocumentBytes, Token, captureSourceBindings: true);
+        var summary = SourceAnimationDefinitions.Summarize(evaluated.Definitions!, evaluated.SourceBindings, evaluated.EngineRejection, Token);
+        Assert.Equal(["data/m1/zrdr/anim.zad", "data/m1/zrdr/gate.zad", "data/m1/zrdr/gate.zad", "missing.zad"], summary.Listings.Select(l => l.File));
+        Assert.Equal([0, 0, 1, 0], summary.Listings.Select(l => l.Occurrence));
+        Assert.True(summary.Listings[3].Missing); Assert.Equal("data/m1/zrdr/anim.zad", summary.Listings[3].ListedBy);
+        Assert.Equal([1, 1, 2, 2], summary.Definitions.Select(d => d.Listing));
+        Assert.Equal(["open_gate", "ghost", "open_gate", "ghost"], summary.Definitions.Select(d => d.Name));
+        // Each listing of gate produced its own entry; ghost binds to nothing in this world.
+        Assert.Single(summary.Definitions[0].Entries); Assert.Single(summary.Definitions[2].Entries);
+        Assert.NotEqual(summary.Definitions[0].Entries[0], summary.Definitions[2].Entries[0]);
+        Assert.Empty(summary.Definitions[1].Entries);
+        Assert.Equal("ON_CALL", summary.Definitions[0].Activation);
+        Assert.Equal(1, summary.Definitions[0].SequenceCount); Assert.Equal(1, summary.Definitions[0].Sequences[0].Events);
+        Assert.True(summary.BindingKnown);
+    }
+
     private sealed class MemoryFiles(Dictionary<string, byte[]> files) : IProjectFiles
     {
         public Dictionary<string, byte[]> Files { get; } = files;

@@ -12,7 +12,7 @@ internal sealed record ZonePickerEntry(byte Zone, string? Label, long Polygons);
 
 /// <summary>
 /// The polygon zone tool's zone picker: a text box that takes 0–254, Any or a label, the zones the map uses (with their
-/// labels and polygon counts) and a zone it does not use yet; a row's pencil renames its label in place.
+/// labels and polygon counts) and a zone it does not use yet. Zones are named in the World tree (a zone's card).
 /// </summary>
 internal sealed class ZonePicker : Border
 {
@@ -20,18 +20,16 @@ internal sealed class ZonePicker : Border
     private readonly TextBlock help = new() { FontSize = 11.5, Margin = new(2, 4, 0, 6) };
     private readonly StackPanel rows = new();
     private readonly Action<byte> choose;
-    private readonly Func<byte, string, Task> rename;
     private readonly Action close;
     private IReadOnlyList<ZonePickerEntry> used = [];
     private IReadOnlyDictionary<byte, string> labels = new Dictionary<byte, string>();
     private byte current;
     private int highlighted = -1;
     private readonly List<(Border Row, byte Zone)> shown = [];
-    private TextBox? renaming;
 
-    internal ZonePicker(Action<byte> choose, Func<byte, string, Task> rename, Action close)
+    internal ZonePicker(Action<byte> choose, Action close)
     {
-        this.choose = choose; this.rename = rename; this.close = close;
+        this.choose = choose; this.close = close;
         Width = 340; CornerRadius = new(8); BorderThickness = new(1); Padding = new(8);
         SetResourceReference(BackgroundProperty, "SolidBackgroundFillColorQuarternaryBrush");
         SetResourceReference(BorderBrushProperty, "SurfaceStrokeColorFlyoutBrush");
@@ -43,7 +41,7 @@ internal sealed class ZonePicker : Border
         StackPanel content = new();
         content.Children.Add(WithHint(query, "Type a zone number, Any or a label")); content.Children.Add(help);
         content.Children.Add(new ScrollViewer { Content = rows, MaxHeight = 360, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, Focusable = false });
-        TextBlock footer = new() { Text = "Labels are saved with the map. Point at a zone and choose ✎ to name it.", FontSize = 11.5, TextWrapping = TextWrapping.Wrap, Margin = new(2, 8, 2, 0) };
+        TextBlock footer = new() { Text = "Name zones in the World tree: select one under Zones.", FontSize = 11.5, TextWrapping = TextWrapping.Wrap, Margin = new(2, 8, 2, 0) };
         footer.SetResourceReference(TextBlock.ForegroundProperty, "TextFillColorTertiaryBrush");
         content.Children.Add(footer);
         Child = content;
@@ -52,13 +50,10 @@ internal sealed class ZonePicker : Border
     /// <summary>Shows the map's zones with <paramref name="zone"/> chosen and the text box empty and focused.</summary>
     internal void Open(IReadOnlyList<ZonePickerEntry> zones, IReadOnlyDictionary<byte, string> names, byte zone)
     {
-        used = zones; labels = names; current = zone; renaming = null;
+        used = zones; labels = names; current = zone;
         query.Text = ""; highlighted = -1; Rebuild();
         Dispatcher.BeginInvoke(() => { query.Focus(); Keyboard.Focus(query); }, System.Windows.Threading.DispatcherPriority.Input);
     }
-    internal bool IsRenaming => renaming != null;
-    /// <summary>Saves a label being renamed (a deliberate boundary: the picker closes).</summary>
-    internal void Commit() { if (renaming is { Tag: byte zone } box) { renaming = null; _ = rename(zone, box.Text.Trim()); } }
 
     /// <summary>A text box with its hint shown while it is empty.</summary>
     private static Grid WithHint(TextBox box, string text)
@@ -147,7 +142,7 @@ internal sealed class ZonePicker : Border
     private void Row(byte zone, long? polygons)
     {
         Grid grid = new();
-        foreach (var width in new[] { GridLength.Auto, new GridLength(66), new GridLength(1, GridUnitType.Star), GridLength.Auto, new GridLength(30) }) grid.ColumnDefinitions.Add(new() { Width = width });
+        foreach (var width in new[] { GridLength.Auto, new GridLength(66), new GridLength(1, GridUnitType.Star), GridLength.Auto }) grid.ColumnDefinitions.Add(new() { Width = width });
         Border pill = new() { Width = 3, Height = 16, CornerRadius = new(1.5), Margin = new(0, 0, 7, 0), VerticalAlignment = VerticalAlignment.Center, Visibility = zone == current ? Visibility.Visible : Visibility.Hidden };
         pill.SetResourceReference(BackgroundProperty, "AccentFillColorDefaultBrush");
         StackPanel lead = new() { Orientation = Orientation.Horizontal };
@@ -168,41 +163,9 @@ internal sealed class ZonePicker : Border
             Grid.SetColumn(text, 3); grid.Children.Add(text);
         }
         Border row = new() { Height = 32, CornerRadius = new(4), Padding = new(4, 0, 2, 0), Child = grid, Background = Brushes.Transparent, Cursor = Cursors.Hand };
-        if (zone != 255)
-        {
-            Button pencil = new() { Width = 28, Height = 26, Padding = new(0), Background = Brushes.Transparent, BorderThickness = new(0), Content = new PreviewIcon { Kind = "Edit", Width = 13, Height = 13 },
-                ToolTip = $"Rename zone {zone}", Visibility = zone == current ? Visibility.Visible : Visibility.Hidden, Focusable = true };
-            System.Windows.Automation.AutomationProperties.SetName(pencil, $"Rename zone {zone}");
-            pencil.Click += (_, e) => { e.Handled = true; StartRename(zone, labelText, grid); };
-            Grid.SetColumn(pencil, 4); grid.Children.Add(pencil);
-            row.MouseEnter += (_, _) => pencil.Visibility = Visibility.Visible;
-            row.MouseLeave += (_, _) => { if (zone != current && !pencil.IsKeyboardFocused) pencil.Visibility = Visibility.Hidden; };
-        }
         row.MouseEnter += (_, _) => { if (shown.FindIndex(s => s.Row == row) is int at and >= 0) { highlighted = at; Highlight(); } };
-        row.MouseLeftButtonUp += (_, e) => { if (e.OriginalSource is DependencyObject source && FindTextBox(source) == null) { e.Handled = true; Choose(zone); } };
+        row.MouseLeftButtonUp += (_, e) => { e.Handled = true; Choose(zone); };
         rows.Children.Add(row); shown.Add((row, zone));
-    }
-    private static TextBox? FindTextBox(DependencyObject source)
-    {
-        for (var at = source; at != null; at = VisualTreeHelper.GetParent(at)) if (at is TextBox box) return box;
-        return null;
-    }
-    private void StartRename(byte zone, TextBlock label, Grid grid)
-    {
-        Commit();
-        TextBox box = new() { Text = labels.TryGetValue(zone, out var current) ? current : "", Height = 28, FontSize = 12.5, MaxLength = 256, Tag = zone, VerticalAlignment = VerticalAlignment.Center };
-        System.Windows.Automation.AutomationProperties.SetName(box, $"Label for zone {zone}");
-        var editor = WithHint(box, $"Label for zone {zone}");
-        Grid.SetColumn(editor, 2); Grid.SetColumnSpan(editor, 2);
-        label.Visibility = Visibility.Collapsed; grid.Children.Add(editor); renaming = box;
-        void Restore() { renaming = null; grid.Children.Remove(editor); label.Visibility = Visibility.Visible; query.Focus(); }
-        box.PreviewKeyDown += (_, e) =>
-        {
-            if (e.Key is Key.Enter or Key.Tab) { e.Handled = true; string text = box.Text.Trim(); Restore(); _ = rename(zone, text); }
-            else if (e.Key == Key.Escape) { e.Handled = true; Restore(); }
-        };
-        box.LostKeyboardFocus += (_, e) => { if (renaming == box && e.NewFocus is DependencyObject next && IsAncestorOf(next)) { string text = box.Text.Trim(); Restore(); _ = rename(zone, text); } };
-        Dispatcher.BeginInvoke(() => { box.Focus(); box.SelectAll(); }, System.Windows.Threading.DispatcherPriority.Input);
     }
     private void Highlight()
     {
@@ -213,7 +176,7 @@ internal sealed class ZonePicker : Border
             else row.Background = Brushes.Transparent;
         }
     }
-    private void Choose(byte zone) { Commit(); choose(zone); }
+    private void Choose(byte zone) => choose(zone);
     private void QueryKey(object sender, KeyEventArgs e)
     {
         if (e.Key == Key.Down || e.Key == Key.Up)

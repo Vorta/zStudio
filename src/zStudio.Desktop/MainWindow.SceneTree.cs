@@ -37,15 +37,23 @@ public partial class MainWindow
         {
             // The same map's tree (a rebuild replaces its document) stays until the rebuilt one is shown.
             if (sceneTree?.Projection != null && (sceneTreeDocument == doc || sceneTreeDocument?.SourceWorld is { } shownWorld && shownWorld.Workspace == doc!.SourceWorld!.Workspace && shownWorld.Mission == doc.SourceWorld.Mission))
-            { DocumentSceneTree.IsEnabled = OutlinerResults.IsEnabled = OutlinerShowAll.IsEnabled = false; return; }
+            {
+                if (DocumentSceneTree.IsKeyboardFocusWithin) outlinerFocusPending = true;
+                DocumentSceneTree.IsEnabled = OutlinerResults.IsEnabled = OutlinerShowAll.IsEnabled = false; return;
+            }
             data = null;
         }
         DocumentSceneTree.IsEnabled = OutlinerResults.IsEnabled = OutlinerShowAll.IsEnabled = true;
-        if (sceneTreeDocument == doc && sceneTree?.Hierarchy.Scene == data && sceneTree?.IsPreview == active && ReferenceEquals(sceneTree?.Hierarchy.Included, active ? viewport?.InspectionNodes : null)) return;
+        if (sceneTreeDocument == doc && sceneTree?.Hierarchy.Scene == data && sceneTree?.IsPreview == active && ReferenceEquals(sceneTree?.Hierarchy.Included, active ? viewport?.InspectionNodes : null))
+        {
+            // A rebuild that kept this tree gives the keyboard back to it too.
+            if (outlinerFocusPending) ScheduleSceneTreeReveal();
+            return;
+        }
         changingSceneTree = true;
         try
         {
-            if (sceneTree != null) sceneTree.Collapsing -= SceneTreeCollapsing;
+            if (sceneTree != null) { sceneTree.Collapsing -= SceneTreeCollapsing; sceneTree.SelectionChanged -= SceneTreeSelectionChanged; }
             collapsingSceneRows.Clear();
             sceneTreeDocument = doc; treeInspectionTarget = null; inspectedSceneSource = null;
             if (doc == null || data == null) sceneTree = null;
@@ -61,9 +69,11 @@ public partial class MainWindow
                     if (states.Count >= 16) states.Remove(states.Keys.First());
                     states[key] = state = new();
                 }
-                sceneTree = new(data, source, true, state, TreeIdentities(data, viewport.Mission, doc.PickupEdits), viewport.InspectionNodes, SourceSelection(doc, data));
+                var projection = SourceSelection(doc, data);
+                sceneTree = new(data, source, true, state, TreeIdentities(data, viewport.Mission, doc.PickupEdits), viewport.InspectionNodes, projection,
+                    projection != null ? MapSections(doc, data, viewport.Mission, projection) : null) { SectionState = this };
             }
-            if (sceneTree != null) { sceneTree.Collapsing += SceneTreeCollapsing; var hidden = hiddenRows.Values.SelectMany(n => n).ToHashSet(); sceneTree.IsHiddenNode = hidden.Contains; sceneTree.IsIsolatedNode = node => isolatedNode == node; }
+            if (sceneTree != null) { sceneTree.Collapsing += SceneTreeCollapsing; sceneTree.SelectionChanged += SceneTreeSelectionChanged; var hidden = hiddenRows.Values.SelectMany(n => n).ToHashSet(); sceneTree.IsHiddenNode = hidden.Contains; sceneTree.IsIsolatedNode = node => isolatedNode == node; }
             DocumentSceneTree.ItemsSource = sceneTree?.Roots;
             // Renderer replacement clears its framing identity. Restore it from
             // the tree's provenance match, together with source inspection, without
@@ -82,7 +92,7 @@ public partial class MainWindow
         ScheduleSceneTreeReveal();
         RestoreHiddenIdentities(doc);
         RestoreTreeLayout(doc);
-        if (sourceChromeActive) RefreshOutlinerFilter();
+        if (sourceChromeActive) { RefreshOutlinerFilter(); SceneTreeSelectionChanged(); }
     }
 
     internal static Func<int, SceneTreeIdentity> TreeIdentities(GameScene data, MissionSceneContext? mission, PickupPlacementEditSession? edits)
@@ -176,7 +186,7 @@ public partial class MainWindow
                 if (parent == row) { Restore(); return; }
         if (!row.Selectable) { Restore(); return; }
         if (!ResolveSelectionDrafts(sceneTreeDocument) || animation?.ResolvePendingDrafts() == false) { Restore(); return; }
-        try { SelectSceneTreeRow(row); }
+        try { if (row.IsSectionItem) SelectSectionRow(row); else SelectSceneTreeRow(row); }
         catch (StudioCommandException ex) { Notice(ex.Message); Restore(); }
         void Restore()
         {
@@ -194,6 +204,7 @@ public partial class MainWindow
     }
     private void SelectSceneTreeRow(SceneTreeItem row)
     {
+        if (row.IsSectionItem) { SelectSectionRow(row); return; }
         if (row.Owner != sceneTree || row.Index is not int node || !row.Selectable || sceneTreeDocument is not { IsDisposed: false } doc)
             throw new StudioCommandException("stale_record", "The tree node is no longer available.");
         var viewport = sceneTree.IsPreview ? TreeViewport : null;
@@ -254,7 +265,7 @@ public partial class MainWindow
     {
         var model = sceneTree; var selected = reveal ?? model?.Selected;
         int generation = ++sceneTreeRevealGeneration;
-        if (selected == null || !DocumentSceneTree.IsVisible) return;
+        if (selected == null || !DocumentSceneTree.IsVisible) { outlinerFocusPending = false; return; }
         Dispatcher.BeginInvoke(DispatcherPriority.Loaded, () =>
         {
             if (sceneTree != model || generation != sceneTreeRevealGeneration || !DocumentSceneTree.IsVisible) return;
@@ -274,7 +285,7 @@ public partial class MainWindow
                         parent.UpdateLayout();
                     }
                     if (parent.ItemContainerGenerator.ContainerFromItem(item) is not TreeViewItem container) break;
-                    if (item == selected) { if (model!.Selected == item) container.IsSelected = true; container.BringIntoView(); }
+                    if (item == selected) { if (model!.Selected == item) container.IsSelected = true; container.BringIntoView(); RestoreOutlinerFocus(container); }
                     parent = container;
                 }
             }
@@ -294,10 +305,10 @@ public partial class MainWindow
     }
     private void RegisterSceneTreeCommand(StudioCommands commands)
     {
-        Register(commands, "scene_tree", "Read the Document scene hierarchy, including stable preview placements, shared/partition references and disconnected nodes. Source maps show the authored glTF hierarchy, including groups removed by compilation, under the world root; objects later passes add follow as top-level pass rows (pass aiv: units the AIV resources place; puppies: their pickups; anim: objects startup animations place or hide until placed), each listing its objects. The aiv and puppies passes list every difficulty's units and pickups with the difficulties placing each; those the shown difficulty does not place have otherDifficulty=true, node=null and a placement summary, and cannot be selected. animations lists the mission animations bound to an object by name (at most eight, then an ellipsis). sourceFile/gltfNode identify authored nodes, sourceOccurrence identifies a tree path, and compiledNode is an optional built slot. selectionOwner for source_map_parts is a signed current-preview identity; source-only authored groups have node=null and selectionOwner=null and support read-only row inspection. properties focuses the source-object card, or opens pinned Properties in other viewers. Read returns roots or a row's direct children, optionally filtered before paging; in a source map, search and/or types read the whole hierarchy as a flat list of matches with their parent paths, as the outliner's search box does (types narrows it by the legend's categories). A row's zone is null in the aiv and puppies passes. Source map rows carry category (world, group, geometry, object, node), zone and hidden. Expand/collapse/reveal only change tree presentation; hide/show hide a row's object (a removed group: what it holds) in the view only, like the outliner's eye; select shares scene inspection and draft guards. Runtime parenting is not represented.", true,
+        Register(commands, "scene_tree", "Read the Document scene hierarchy, including stable preview placements, shared/partition references and disconnected nodes. Source maps show the World tree: the authored glTF hierarchy, including groups removed by compilation, under the World root, then section rows (sectionRow.section) and pass rows in a fixed order: World, Zones, AI Vehicles (pass aiv: units the AIV resources place), AI Networks, Pickups (pass puppies), Animations (keyframed) (pass anim: objects startup animations place or hide until placed) and Animations (definitions). Zones lists the map's zones (sectionRow zoneId, label, polygons, placements, models, objects, used) and polygons without a zone; AI Networks lists the mission's networks (sectionRow network = the file's project path, name, nodes, attackStrategy); Animations (definitions) lists the .zad files the mission's anim.zad names, by folder and file, with each definition (sectionRow definitionFile, ordinal, occurrence, name, rootName, roots/bound: what it binds in this world, null when unknown) and listed files that are missing. Header rows report the overlay: Zones visible/kind (objects or polygons)/paused while Edit zones is on, AI Networks visible/throughGeometry. The aiv and puppies passes list every difficulty's units and pickups with the difficulties placing each; those the shown difficulty does not place have otherDifficulty=true, node=null and a placement summary, and cannot be selected. animations lists the mission animations bound to an object by name (at most eight, then an ellipsis). sourceFile/gltfNode identify authored nodes, sourceOccurrence identifies a tree path, and compiledNode is an optional built slot. selectionOwner for source_map_parts is a signed current-preview identity; source-only authored groups have node=null and selectionOwner=null and support read-only row inspection. properties focuses the source-object card, or opens pinned Properties in other viewers. Read returns roots or a row's direct children, optionally filtered before paging; in a source map, search and/or types read the whole hierarchy as a flat list of matches with their parent paths, as the outliner's search box does (types narrows it by the legend's categories). A row's zone is null in the aiv and puppies passes. Source map rows carry category (world, group, geometry, empty: an Object3D without a model or children, which draws nothing and cannot be hidden or framed; object, node, zone, network, definition), zone and hidden. Expand/collapse/reveal only change tree presentation; hide/show hide a row's object (a removed group: what it holds) in the view only, like the outliner's eye; on a section header they turn its overlay off or on, on a zone its colour, on a network its markers (preview_state sections reports them); isolate on a zone or network shows only it, or everything again on the isolated one. select shares scene inspection and draft guards; selecting a zone, network or definition ends the object selection and opens its card in the Properties pane (a network is shown and emphasised, a definition's bound objects outlined; drafts target section), and properties also focuses the card's first field. Runtime parenting is not represented.", true,
             [DocumentParameter, P("action", "string", "Tree action; default read. Properties focuses the source-object card; other viewers open the same pinned window as the row context menu. hide/show (source maps) change only what the view draws; isolate (source maps) shows only the row's object, or everything again on the isolated row, as a middle-click on its eye.", false, "read", "expand", "collapse", "reveal", "select", "properties", "hide", "show", "isolate"),
                 P("search", "string", "Source maps: case-insensitive name search across the whole hierarchy (read without row); results are flat rows with path."),
-                P("types", "string", "Source maps: comma-separated categories the flat read includes (group, geometry, object, node); default all."),
+                P("types", "string", "Source maps: comma-separated categories the flat read includes (group, geometry, empty, object, node, zone, network, definition); default all."),
                 P("context", "string", "Current hierarchy context from read; required for all actions and row queries."),
                 P("preview", "string", "Current preview ID from read; required for actions on a preview hierarchy."),
                 P("row", "string", "Opaque row ID for child queries or actions."), new("node", "integer", "Scene node index or signed selectionOwner for reveal/select/properties instead of row, scoped to the current hierarchy.", Minimum: int.MinValue, Maximum: int.MaxValue), .. PageParameters], async (a, token) =>
@@ -328,18 +339,32 @@ public partial class MainWindow
                 }
                 if (row == null) throw new StudioCommandException("stale_record", "Supply an available tree row or node.");
                 if (row.Pass != null && action is "select" or "properties") throw new StudioCommandException("invalid_argument", "A pass row groups the objects a later pass adds; select one of them.");
+                if (row.Section != null && !row.IsSectionItem && action is "select" or "properties") throw new StudioCommandException("invalid_argument", "A section, scope or file row groups other rows; select one of them.");
+                if (row.Section != null && action is "hide" or "show" or "isolate")
+                {
+                    if (!row.CanHide) throw new StudioCommandException("unsupported", "This row has nothing to hide in the view.");
+                    if (action == "isolate") ToggleSectionIsolation(row); else ToggleSectionEye(row, action == "hide");
+                    var described = DescribeTreeRow(row);
+                    return Result(new { context = sceneTree.Context, document = doc.SessionId, revision = doc.Revision, row = described });
+                }
+                if (row.IsSectionItem && action is "select" or "properties")
+                {
+                    SelectSectionRow(row);
+                    if (action == "properties") sectionCard?.FocusFirst();
+                    return Result(new { context = sceneTree.Context, document = doc.SessionId, revision = doc.Revision, row = DescribeTreeRow(row) });
+                }
                 if (row.IsOtherDifficulty && action is "select" or "properties")
                     throw new StudioCommandException("invalid_argument", row.Placement!.Difficulties.Count == 1
                         ? $"Only {row.Placement.Difficulties[0]} places this; choose that difficulty (zstudio_scene_options difficulty) to select it."
                         : $"Only {string.Join(", ", row.Placement.Difficulties)} place this; choose one of them (zstudio_scene_options difficulty) to select it.");
                 if (action is "hide" or "show")
                 {
-                    if (!row.CanHide || row.Index is not int hiddenIndex) throw new StudioCommandException("unsupported", "Only a source map's object rows can be hidden in the view.");
+                    if (!row.CanHide || row.Index is not int hiddenIndex) throw new StudioCommandException("unsupported", row.IsEmptyNode ? "An empty node draws nothing: there is nothing to hide." : "Only a source map's object rows can be hidden in the view.");
                     SetRowHidden(row, hiddenIndex, action == "hide");
                 }
                 if (action == "isolate")
                 {
-                    if (!row.CanHide || row.Index is not int isolatedIndex) throw new StudioCommandException("unsupported", "Only a source map's object rows can be isolated in the view.");
+                    if (!row.CanHide || row.Index is not int isolatedIndex) throw new StudioCommandException("unsupported", row.IsEmptyNode ? "An empty node draws nothing: there is nothing to isolate." : "Only a source map's object rows can be isolated in the view.");
                     ToggleRowIsolation(row, isolatedIndex);
                 }
                 if (action == "properties")
@@ -370,7 +395,7 @@ public partial class MainWindow
                 string search = Text(a, "search").Trim();
                 if (search.Length > 256) throw new StudioCommandException("invalid_argument", "Search text is limited to 256 characters.");
                 var types = a["types"] == null ? OutlinerKinds.Categories.ToHashSet() : Text(a, "types").Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToHashSet();
-                if (types.Count == 0 || types.Any(t => !OutlinerKinds.Categories.Contains(t))) throw new StudioCommandException("invalid_argument", "types lists group, geometry, object and/or node.");
+                if (types.Count == 0 || types.Any(t => !OutlinerKinds.Categories.Contains(t))) throw new StudioCommandException("invalid_argument", "types lists group, geometry, empty, object, node, zone, network and/or definition.");
                 var hits = OutlinerMatches(sceneTree, search, types, 10_000, out bool truncated);
                 var found = Page(hits, a, h => h.Row.Label, h => new { path = h.Path, item = DescribeTreeRow(h.Row) },
                     maximumRowBytes: h => 2048 + 6L * (h.Path.Length + h.Row.Label.Length + (h.Row.Authored?.File.Length ?? 0) + (h.Row.Animations?.Sum(n => n.Length + 4) ?? 0) + (h.Row.ReadOnlyReason?.Length ?? 0) + (h.Row.Placement?.Detail.Length ?? 0)));
@@ -386,7 +411,7 @@ public partial class MainWindow
                 row = row == null ? null : DescribeTreeRow(row), children = page.Data });
         });
     }
-    private static object DescribeTreeRow(SceneTreeItem row) => new { row = row.Id, node = row.Synthetic ? null : row.Index, row.Label,
+    private object DescribeTreeRow(SceneTreeItem row) => new { row = row.Id, node = row.Synthetic ? null : row.Index, row.Label,
         selectionOwner = row.Owner.Projection != null && row.Selectable && !row.SourceGroup ? row.Index : null,
         nodeType = row.NodeType,
         parent = row.Parent?.Id, relation = row.Kind, row.Shared, row.Problem, row.ChildCount, row.IsExpanded, row.IsSelected,
@@ -398,5 +423,6 @@ public partial class MainWindow
         pass = row.Pass?.Kind, passDescription = row.Pass?.Description, animations = row.Animations,
         category = row.IsSourceMap ? row.Category : null, zone = row.IsSourceMap ? row.Zone : null, hidden = row.IsSourceMap ? row.IsHidden : (bool?)null, isolated = row.IsSourceMap && row.IsIsolated ? true : (bool?)null,
         difficulties = row.Placement is { Difficulties.Count: > 0 } placement ? placement.Difficulties.Select(d => d.ToString()).ToArray() : null,
-        otherDifficulty = row.IsOtherDifficulty ? true : (bool?)null, placement = row.IsOtherDifficulty ? row.Placement!.Detail : null };
+        otherDifficulty = row.IsOtherDifficulty ? true : (bool?)null, placement = row.IsOtherDifficulty ? row.Placement!.Detail : null,
+        sectionRow = row.Section == null ? null : DescribeSectionRow(row) };
 }

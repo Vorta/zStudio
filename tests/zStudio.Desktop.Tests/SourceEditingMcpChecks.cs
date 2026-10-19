@@ -202,6 +202,33 @@ internal static class SourceEditingMcpChecks
             doc = Document(await Call("undo_redo", new() { ["document"] = Id(transformedPath), ["revision"] = transformedPath.Revision, ["action"] = "undo" }));
             await Preview();
             Assert.False(doc.IsDirty); Assert.Equal(aiSource, Text(doc.SourceWorld!.Workspace.Read("data/m1/zrdr/net_01.zrd")));
+            // The World tree's sections follow the world in a fixed order. Selecting an AI network shows it (the overlay turns on,
+            // the network is emphasised and its card opens); its header fields edit its file as one undoable change.
+            var sectionRoots = await Call("scene_tree", new() { ["document"] = Id(doc) });
+            string sectionContext = sectionRoots["context"]!.GetValue<string>(), sectionPreview = sectionRoots["preview"]!.GetValue<string>();
+            var sectionRows = sectionRoots["children"]!["items"]!.AsArray();
+            Assert.Equal(["World", "Zones", "AI Vehicles", "AI Networks", "Pickups", "Animations (keyframed)", "Animations (definitions)"],
+                sectionRows.Select(r => r!["Label"]!.GetValue<string>().Split(" · ")[0]));
+            var networksRow = sectionRows.Single(r => r!["sectionRow"]?["section"]?.GetValue<string>() == "aiNetworks")!;
+            var netRow = (await Call("scene_tree", new() { ["document"] = Id(doc), ["context"] = sectionContext, ["row"] = networksRow["row"]!.GetValue<string>() }))["children"]!["items"]![0]!;
+            Assert.Equal("data/m1/zrdr/net_01.zrd", netRow["sectionRow"]!["network"]!.GetValue<string>());
+            Assert.Equal(2, netRow["sectionRow"]!["nodes"]!.GetValue<int>());
+            await Call("scene_tree", new() { ["document"] = Id(doc), ["context"] = sectionContext, ["preview"] = sectionPreview, ["action"] = "select", ["row"] = netRow["row"]!.GetValue<string>() });
+            var sectionState = await Call("preview_state", new() { ["preview"] = sectionPreview });
+            Assert.True(sectionState["ai"]!["visible"]!.GetValue<bool>());
+            Assert.Equal("data/m1/zrdr/net_01.zrd", sectionState["sections"]!["networks"]!["emphasis"]!.GetValue<string>());
+            Assert.Equal("network", (await Call("drafts", new() { ["target"] = "section" }))["drafts"]!["kind"]!.GetValue<string>());
+            doc = Document((await Job("source_ai_network", new() { ["document"] = Id(doc), ["revision"] = doc.Revision, ["network"] = "data/m1/zrdr/net_01.zrd",
+                ["changes"] = new[] { new { key = "attack_strategy", values = new[] { "circle" } } } }))["document"]!);
+            await Preview();
+            string strategyEdited = Text(doc.SourceWorld!.Workspace.Read("data/m1/zrdr/net_01.zrd"));
+            Assert.Contains("attack_strategy", strategyEdited); Assert.Contains(aiSource, strategyEdited);
+            Assert.Equal("Edit net_01: attack strategy", doc.SourceWorld.Workspace.UndoLabel);
+            string rebuiltPreview = ((Guid)typeof(MainWindow).GetField("previewId", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(main)!).ToString();
+            Assert.Equal("network", (await Call("preview_state", new() { ["preview"] = rebuiltPreview }))["sections"]!["selection"]!["kind"]!.GetValue<string>());
+            doc = Document(await Call("undo_redo", new() { ["document"] = Id(doc), ["revision"] = doc.Revision, ["action"] = "undo" }));
+            await Preview();
+            Assert.Equal(aiSource, Text(doc.SourceWorld!.Workspace.Read("data/m1/zrdr/net_01.zrd")));
             // Subsequent editing must use the rebuilt document's source identities.
             pickups = await Job("pickups", new() { ["document"] = Id(doc) });
             ammo = pickups["items"]!.AsArray().First(p => p!["Type"]!.GetValue<string>() == "HEMORTAR_AMMO" && p["source"]!["ResourceName"]!.GetValue<string>() == "PUPPIES.ZRD")!;
@@ -422,7 +449,7 @@ internal static class SourceEditingMcpChecks
             var aivRow = rootRows.Single(r => r!["pass"]?.GetValue<string>() == "aiv")!;
             Assert.Equal([tankActor.Root], await TreeNodes(aivRow));
             // The pass keeps its name whatever the difficulty, and each unit names the difficulties placing it (aiv.zrd serves all three here).
-            Assert.Equal("aiv · 1", aivRow["Label"]!.GetValue<string>());
+            Assert.Equal("AI Vehicles · 1", aivRow["Label"]!.GetValue<string>());
             var tankListed = (await Call("scene_tree", new() { ["document"] = Id(second), ["context"] = treeContext, ["row"] = aivRow["row"]!.GetValue<string>() }))["children"]!["items"]![0]!;
             Assert.Equal(["Easy", "Medium", "Hard"], tankListed["difficulties"]!.AsArray().Select(d => d!.GetValue<string>()));
             Assert.DoesNotContain(tankActor.Root, await TreeNodes(rootRows.First(r => r!["pass"] == null)!));
@@ -445,7 +472,7 @@ internal static class SourceEditingMcpChecks
             var sceneTree = (System.Windows.Controls.TreeView)main.FindName("DocumentSceneTree");
             await System.Windows.Threading.Dispatcher.Yield(System.Windows.Threading.DispatcherPriority.ApplicationIdle);
             var tankRow = Assert.IsType<SceneTreeItem>(sceneTree.SelectedItem);
-            var passRow = (System.Windows.Controls.TreeViewItem)sceneTree.ItemContainerGenerator.ContainerFromItem(sceneTree.Items.OfType<SceneTreeItem>().Single(r => r.Pass != null && r.Label.StartsWith("aiv", StringComparison.Ordinal)));
+            var passRow = (System.Windows.Controls.TreeViewItem)sceneTree.ItemContainerGenerator.ContainerFromItem(sceneTree.Items.OfType<SceneTreeItem>().Single(r => r.Pass != null && r.Label.StartsWith("AI Vehicles", StringComparison.Ordinal)));
             foreach (bool focusable in new[] { false, true })
             {
                 passRow.Focusable = focusable; // A focusable row stands for any refused selection.

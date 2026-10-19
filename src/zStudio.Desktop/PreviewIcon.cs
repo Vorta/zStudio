@@ -57,6 +57,9 @@ public sealed class PreviewIcon : FrameworkElement
         ["Tank"] = "M3.5,9.5 H12.5 A2,2 0 0 1 12.5,13.5 H3.5 A2,2 0 0 1 3.5,9.5 Z M5,9.5 V7.5 A1,1 0 0 1 6,6.5 H9.5 A1,1 0 0 1 10.5,7.5 V9.5 M10.5,7.5 H14.5 M5.5,11.5 H10.5",
         ["Pickup"] = "M2,8 A6,6 0 1 0 14,8 A6,6 0 1 0 2,8 M8.9,4 L6.2,8.4 H9.8 L7.1,12",
         ["Animation"] = "M3,2.5 H13 A0.5,0.5 0 0 1 13.5,3 V13 A0.5,0.5 0 0 1 13,13.5 H3 A0.5,0.5 0 0 1 2.5,13 V3 A0.5,0.5 0 0 1 3,2.5 Z M5,2.5 V13.5 M11,2.5 V13.5 M2.5,5.5 H5 M2.5,8 H5 M2.5,10.5 H5 M11,5.5 H13.5 M11,8 H13.5 M11,10.5 H13.5",
+        // Animation definitions: a .zad file (a page with lines) and a definition (a page with a play mark).
+        ["DefinitionFile"] = "M4,1.5 H9.5 L12.5,4.5 V14 A0.5,0.5 0 0 1 12,14.5 H4 A0.5,0.5 0 0 1 3.5,14 V2 A0.5,0.5 0 0 1 4,1.5 Z M9.5,1.5 V4.5 H12.5 M5.5,7.5 H10.5 M5.5,10 H10.5 M5.5,12.5 H8.5",
+        ["Definition"] = "M4,1.5 H9.5 L12.5,4.5 V14 A0.5,0.5 0 0 1 12,14.5 H4 A0.5,0.5 0 0 1 3.5,14 V2 A0.5,0.5 0 0 1 4,1.5 Z M9.5,1.5 V4.5 H12.5 M6.5,7.5 V12.5 L10.5,10 Z",
         ["Info"] = "M2,8 A6,6 0 1 0 14,8 A6,6 0 1 0 2,8 M8,7.3 V11.2 M8,4.9 V5",
         // An object a mission animation binds to: a moving ball with speed lines.
         ["Animated"] = "M8.5,8 A3,3 0 1 0 14.5,8 A3,3 0 1 0 8.5,8 M1.5,5.5 H6 M1,8 H5.5 M1.5,10.5 H6",
@@ -69,6 +72,8 @@ public sealed class PreviewIcon : FrameworkElement
         ["Warning"] = "M8,2 L14.5,13.5 H1.5 Z M8,6.5 V9.5 M8,11.5 V11.6",
         // Card glyphs: the object, edit, discard, apply, close, a section chevron and the surface probe.
         ["Cube"] = "M8,1.5 L14,4.75 V11.25 L8,14.5 L2,11.25 V4.75 Z M2,4.75 L8,8 L14,4.75 M8,8 V14.5",
+        // An empty node: the cube in dashes (no geometry, no children).
+        ["Empty"] = "M9.98,2.57 L12.02,3.68 M14,7 V9 M12.02,12.32 L9.98,13.43 M6.02,13.43 L3.98,12.32 M2,9 V7 M3.98,3.68 L6.02,2.57 M5.52,6.66 L8,8 10.48,6.66 M8,8 V10.5",
         ["Edit"] = "M10.5,2.5 L13.5,5.5 L5.5,13.5 H2.5 V10.5 Z M9,4 L12,7",
         ["Discard"] = "M5.5,3.5 L2.5,6.5 L5.5,9.5 M2.5,6.5 H9.5 A3.5,3.5 0 0 1 9.5,13.5 H7",
         ["Apply"] = "M3,8.5 L6,11.5 L13,4.5",

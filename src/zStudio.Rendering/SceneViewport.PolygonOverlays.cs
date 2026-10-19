@@ -17,6 +17,8 @@ public sealed partial class SceneViewport
     /// <summary>The static mesh geometries of each scene model, for a model replaced with other polygon zones.</summary>
     private readonly Dictionary<int, List<MeshGeometry3D>> polygonGeometries = [];
     private readonly Dictionary<MeshGeometry3D, (Color4Collection? Normal, Color4Collection Zones)> polygonZoneColors = [];
+    /// <summary>The zone colours without the hidden zones (<see cref="HiddenZones"/>), made when they are first shown.</summary>
+    private readonly Dictionary<MeshGeometry3D, Color4Collection> filteredZoneColors = [];
     private readonly Dictionary<MeshGeometry3D, LineGeometry3D> polygonEdgeGeometries = [];
     private readonly Dictionary<MeshGeometryModel3D, (LineGeometryModel3D Halo, LineGeometryModel3D Core)> polygonEdges = [];
     /// <summary>A polygon outline is a light line on a dark halo, so it shows on bright and dark surfaces alike.</summary>
@@ -45,6 +47,7 @@ public sealed partial class SceneViewport
                 var (part, _) = polygonSources[geometry];
                 polygonSources[geometry] = (part, scene.Models[model]);
                 if (polygonZoneColors.Remove(geometry, out var colors) && !ReferenceEquals(geometry.Colors, colors.Normal)) geometry.Colors = colors.Normal;
+                filteredZoneColors.Remove(geometry);
             }
         }
         ShowPolygonZoneColors(HighlightMode == WorldHighlightMode.PolygonZones || zonePaintActive);
@@ -112,36 +115,51 @@ public sealed partial class SceneViewport
             if (surface.Horizon || mesh.Geometry is not MeshGeometry3D geometry || !polygonSources.TryGetValue(geometry, out var source)) continue;
             if (enabled)
             {
-                if (!polygonZoneColors.TryGetValue(geometry, out var colors)) polygonZoneColors[geometry] = colors = (geometry.Colors, PolygonZoneColors(source.Part, source.Model));
-                if (!ReferenceEquals(geometry.Colors, colors.Zones)) geometry.Colors = colors.Zones;
+                if (!polygonZoneColors.TryGetValue(geometry, out var colors)) polygonZoneColors[geometry] = colors = (geometry.Colors, PolygonZoneColors(source.Part, source.Model, null));
+                // The overlay leaves hidden zones out; the polygon zone tool shows them all.
+                var shown = colors.Zones;
+                if (hiddenZones.Count > 0 && !zonePaintActive && !filteredZoneColors.TryGetValue(geometry, out shown!))
+                    filteredZoneColors[geometry] = shown = PolygonZoneColors(source.Part, source.Model, hiddenZones);
+                if (!ReferenceEquals(geometry.Colors, shown)) geometry.Colors = shown;
             }
             else if (polygonZoneColors.TryGetValue(geometry, out var colors) && !ReferenceEquals(geometry.Colors, colors.Normal)) geometry.Colors = colors.Normal;
         }
     }
-    private static Color4Collection PolygonZoneColors(MeshPart part, GameModel model)
+    private static Color4Collection PolygonZoneColors(MeshPart part, GameModel model, IReadOnlySet<byte>? hidden)
     {
         Dictionary<int, Color4> byPolygon = [];
         Color4Collection colors = new(part.VertexPolygons.Length);
         foreach (int polygon in part.VertexPolygons)
         {
             if (!byPolygon.TryGetValue(polygon, out var color))
-                byPolygon[polygon] = color = PolygonZoneColor(polygon >= 0 && polygon < model.Polygons.Length ? model.Polygons[polygon].Metadata["zone_set"] : null);
+                byPolygon[polygon] = color = PolygonZoneColor(polygon >= 0 && polygon < model.Polygons.Length ? model.Polygons[polygon].Metadata["zone_set"] : null, hidden);
             colors.Add(color);
         }
         return colors;
     }
-    /// <summary>Up to three zone ids as n/255 in RGB and their count as n/3 in A; no zones is all zero. Any (255) is stored as -1.</summary>
-    internal static Color4 PolygonZoneColor(JsonNode? set)
+    /// <summary>
+    /// Up to three zone ids as n/255 in RGB and their count as n/3 in A; no zones is all zero. Any (255) is stored as -1.
+    /// <paramref name="hidden"/> zones are left out (a polygon whose zones are all hidden reads as one without zones).
+    /// </summary>
+    internal static Color4 PolygonZoneColor(JsonNode? set, IReadOnlySet<byte>? hidden = null)
     {
         if (set is not JsonArray ids || ids.Count == 0) return default;
-        int count = Math.Min(ids.Count, 3);
-        float Id(int i) => i < count ? unchecked((byte)(int)JsonData.Scalar(ids[i])) / 255f : 0;
-        return new(Id(0), Id(1), Id(2), count / 3f);
+        // Only the first three are stored; hidden ones drop out of the stripes.
+        byte a = 0, b = 0, c = 0; int count = 0;
+        for (int i = 0; i < ids.Count && i < 3; i++)
+        {
+            byte id = unchecked((byte)(int)JsonData.Scalar(ids[i]));
+            if (hidden?.Contains(id) == true) continue;
+            if (count == 0) a = id; else if (count == 1) b = id; else c = id;
+            count++;
+        }
+        if (count == 0) return default;
+        return new(a / 255f, count > 1 ? b / 255f : 0, count > 2 ? c / 255f : 0, count / 3f);
     }
 
     private void ClearPolygonOverlays()
     {
         RemovePolygonEdges();
-        polygonSources.Clear(); polygonGeometries.Clear(); polygonZoneColors.Clear(); polygonEdgeGeometries.Clear();
+        polygonSources.Clear(); polygonGeometries.Clear(); polygonZoneColors.Clear(); filteredZoneColors.Clear(); polygonEdgeGeometries.Clear();
     }
 }

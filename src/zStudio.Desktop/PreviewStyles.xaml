@@ -196,6 +196,22 @@
     </ControlTemplate.Triggers>
    </ControlTemplate></Setter.Value></Setter>
   </Style>
-  <!-- A row's hide-in-view eye: shown while the row is pointed at or the object is hidden. -->
-  <Style x:Key="OutlinerEye" TargetType="Button" BasedOn="{StaticResource CommandButton}"><Setter Property="Width" Value="22"/><Setter Property="Height" Value="24"/><Setter Property="Margin" Value="0"/><Setter Property="Foreground" Value="{DynamicResource TextFillColorTertiaryBrush}"/></Style>
+  <!-- The World tree's keyboard focus: Fluent's two-tone ring, drawn inside a row's button (Frame and the eye touch) or its row. -->
+  <Style x:Key="OutlinerFocusRing">
+   <Setter Property="Control.Template"><Setter.Value><ControlTemplate>
+    <Border BorderThickness="2" CornerRadius="4" BorderBrush="{DynamicResource FocusStrokeColorOuterBrush}" SnapsToDevicePixels="True"><Border BorderThickness="1" CornerRadius="2" BorderBrush="{DynamicResource FocusStrokeColorInnerBrush}"/></Border>
+   </ControlTemplate></Setter.Value></Setter>
+  </Style>
+  <Style x:Key="OutlinerSegmentFocusRing">
+   <Setter Property="Control.Template"><Setter.Value><ControlTemplate>
+    <Border BorderThickness="2" CornerRadius="3" BorderBrush="{DynamicResource FocusStrokeColorOuterBrush}" SnapsToDevicePixels="True"><Border BorderThickness="1" CornerRadius="1" BorderBrush="{DynamicResource FocusStrokeColorInnerBrush}"/></Border>
+   </ControlTemplate></Setter.Value></Setter>
+  </Style>
+  <!-- A row's hide-in-view eye: shown while the row is pointed at or the object is hidden. It takes focus only from the keyboard
+       (Left/Right), showing its tooltip at once. -->
+  <Style x:Key="OutlinerEye" TargetType="Button" BasedOn="{StaticResource CommandButton}"><Setter Property="Width" Value="22"/><Setter Property="Height" Value="24"/><Setter Property="Margin" Value="0"/><Setter Property="Foreground" Value="{DynamicResource TextFillColorTertiaryBrush}"/>
+   <Setter Property="FocusVisualStyle" Value="{StaticResource OutlinerFocusRing}"/><Setter Property="ToolTipService.ShowsToolTipOnKeyboardFocus" Value="True"/></Style>
+  <!-- A segment of a World tree section's Objects | Polygons switch. -->
+  <Style x:Key="OutlinerSegment" TargetType="Button" BasedOn="{StaticResource CommandButton}"><Setter Property="Width" Value="22"/><Setter Property="Height" Value="20"/><Setter Property="Margin" Value="0"/><Setter Property="Padding" Value="0"/><Setter Property="Foreground" Value="{DynamicResource TextFillColorTertiaryBrush}"/>
+   <Setter Property="FocusVisualStyle" Value="{StaticResource OutlinerSegmentFocusRing}"/><Setter Property="ToolTipService.ShowsToolTipOnKeyboardFocus" Value="True"/></Style>
 </ResourceDictionary>
