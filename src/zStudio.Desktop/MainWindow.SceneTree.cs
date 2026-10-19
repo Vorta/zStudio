@@ -267,10 +267,13 @@ public partial class MainWindow
     {
         var model = sceneTree; var selected = reveal ?? model?.Selected;
         int generation = ++sceneTreeRevealGeneration;
-        if (selected == null || !DocumentSceneTree.IsVisible) return;
+        if (selected == null) return;
+        // A hidden tree has no row to give the keyboard back to after a rebuild.
+        if (!DocumentSceneTree.IsVisible) { outlinerFocusPending = false; return; }
         Dispatcher.BeginInvoke(DispatcherPriority.Loaded, () =>
         {
-            if (sceneTree != model || generation != sceneTreeRevealGeneration || !DocumentSceneTree.IsVisible) return;
+            if (sceneTree != model || generation != sceneTreeRevealGeneration) return;
+            if (!DocumentSceneTree.IsVisible) { outlinerFocusPending = false; return; }
             changingSceneTree = true;
             try
             {
@@ -287,7 +290,14 @@ public partial class MainWindow
                         parent.UpdateLayout();
                     }
                     if (parent.ItemContainerGenerator.ContainerFromItem(item) is not TreeViewItem container) break;
-                    if (item == selected) { if (model!.Selected == item) container.IsSelected = true; container.BringIntoView(); RestoreOutlinerFocus(container); }
+                    if (item == selected)
+                    {
+                        bool chosen = model!.Selected == item;
+                        if (chosen) container.IsSelected = true;
+                        container.BringIntoView();
+                        // Only the selected row takes the keyboard back (a revealed row that is not selected would turn selected).
+                        if (chosen) RestoreOutlinerFocus(container);
+                    }
                     parent = container;
                 }
             }

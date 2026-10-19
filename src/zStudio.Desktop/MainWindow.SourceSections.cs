@@ -137,7 +137,7 @@ public partial class MainWindow : ISourceSectionState
         // A selected network, or the network of a selected node, is emphasised.
         string? network = SectionSelection?.Section is NetworkEntry selectedNetwork ? selectedNetwork.Network.Id
             : viewport.SelectedAiNode is { } node && viewport.AiNetworks.Find(node) is { } found ? found.Network.Id : null;
-        viewport.SetAiNetworkPresentation(hiddenNetworks, network != null && hiddenNetworks.Contains(network) ? null : network);
+        viewport.SetAiNetworkPresentation(hiddenNetworks, network != null && (hiddenNetworks.Contains(network) || aiNetworkFilter != null && aiNetworkFilter != network) ? null : network);
         int[] outlined = SectionSelection?.Section is DefinitionEntry definition && sceneTree?.Sections?.DefinitionRoots.GetValueOrDefault(definition.Definition.Index) is { } roots
             ? [.. roots.Take(SceneViewport.MaximumOutlinedNodes)] : [];
         if (!outlined.SequenceEqual(viewport.OutlinedNodes)) viewport.SetOutlinedNodes(outlined);
@@ -176,7 +176,7 @@ public partial class MainWindow : ISourceSectionState
                 if (hide ?? !hiddenNetworks.Contains(id))
                 {
                     // Hiding ends AI path editing on it: its pending transform is decided first.
-                    if (HasAiPathDraft) throw new StudioCommandException("pending_drafts", "Confirm or cancel the AI path transform before hiding a network.");
+                    if (HasAiPathDraft && !hiddenNetworks.Contains(id)) throw new StudioCommandException("pending_drafts", "Confirm or cancel the AI path transform before hiding a network.");
                     hiddenNetworks.Add(id);
                     // Hiding the isolated network ends its isolation.
                     if (aiNetworkFilter == id) SetAiOptions(aiVisible, aiThroughGeometry, null);
@@ -199,6 +199,8 @@ public partial class MainWindow : ISourceSectionState
                 break;
             case NetworkEntry network:
                 string id = network.Network.Id;
+                // Changing the isolated network ends AI path editing: its pending transform is decided first.
+                if (HasAiPathDraft) throw new StudioCommandException("pending_drafts", "Confirm or cancel the AI path transform before isolating a network.");
                 if (aiNetworkFilter == id) SetAiOptions(aiVisible, aiThroughGeometry, null);
                 else { hiddenNetworks.Remove(id); SetAiOptions(aiVisible, aiThroughGeometry, id); }
                 break;
