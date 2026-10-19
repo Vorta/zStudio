@@ -1347,5 +1347,49 @@ internal static partial class DatabaseRecords
             if (list.Count < left.Count || !list.Skip(list.Count - left.Count).SequenceEqual(left))
                 Inexact ??= "its caches free their slots in another order than the shipped free list shows";
         }
+
+        /// <summary>
+        /// The names the caches left where no later node took their slots (a world that kept slots free, m6): a slot
+        /// keeps the name of the node freed there last, so where that was the cache's node of a deleted group, it holds the
+        /// group's name in its part's file, which the database's copy lost when a later node took its slot. The cache is
+        /// mirrored from the part's first reference in record order, whose names the source writes for every copy unless
+        /// the part is first referenced inside another part (then those names are not written). Nothing is named when such
+        /// a slot of an object holds another name than the object's.
+        /// </summary>
+        /// <param name="untaken">The slots of the deletion's free list that no later node took.</param>
+        /// <param name="kept">The names the world's freed slots kept, by slot.</param>
+        public Dictionary<WorldNode, string> CacheNames(Table before, IEnumerable<int> untaken, IReadOnlyDictionary<int, string> kept)
+        {
+            Dictionary<WorldNode, string> names = new(ReferenceEqualityComparer.Instance);
+            if (kept.Count == 0) return names;
+            // The load replayed: a cache's node is read right after it is made, as the record it copies. The reading's own
+            // replay already made this load within the build's limit, so the names cost none of the inference's budgets:
+            // running them out here would refuse a reading already found.
+            Slots t = new() { Free = [.. before.Free.Reverse()], Next = before.Next };
+            Dictionary<WorldNode, int> taken = new(ReferenceEqualityComparer.Instance);
+            Dictionary<WorldNode, WorldNode> records = new(ReferenceEqualityComparer.Instance);
+            Dictionary<int, WorldNode> freedLast = [];
+            WorldNode? made = null;
+            OriginalLoader.Load(Root, Root.Children.ToList(), Root.Children.ToList(), new()
+            {
+                Allocate = n => { taken[n] = t.Take(); made = n; },
+                Read = record => { if (made != null && !ReferenceEquals(made, record)) records[made] = record; },
+                Free = n => { t.Push(taken[n]); freedLast[taken[n]] = n; },
+                Content = ContentOf,
+                File = Key,
+                IsReference = Cached,
+                Token = token, Mirrored = OriginalLoader.MirrorBudget.PerLoad(),
+            });
+            // What the load left free its records did not take again, and only the later loads could.
+            HashSet<int> left = [.. t.Free];
+            foreach (int s in untaken)
+            {
+                token.ThrowIfCancellationRequested();
+                if (!left.Contains(s) || !kept.TryGetValue(s, out var name) || !freedLast.TryGetValue(s, out var node) || !records.TryGetValue(node, out var record)) continue;
+                if (!Made.ContainsKey(record)) { if (record.Name != name) return new(ReferenceEqualityComparer.Instance); }
+                else if (!Content.ContainsKey(record)) names[record] = name;
+            }
+            return names;
+        }
     }
 }

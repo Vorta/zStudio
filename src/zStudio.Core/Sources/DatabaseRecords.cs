@@ -73,9 +73,10 @@ internal static partial class DatabaseRecords
     }
 
     /// <summary>
-    /// The most nodes the caches the inference simulates may mirror in all: every load it replays, in every reading it tries
-    /// (the build's own limit, <see cref="OriginalLoader.MaximumCachedNodes"/>, holds for one load). The shipped databases
-    /// need at most 2.7 million (1999 and 1998 m2; m6 1.9 million, the others far fewer).
+    /// The most nodes the caches the inference simulates may mirror in all: every load it replays, in every reading it tries,
+    /// except the replay that names the accepted reading's groups (the build's own limit, <see cref="OriginalLoader.MaximumCachedNodes"/>,
+    /// holds for one load). The shipped databases need at most 2.7 million (1999 and 1998 m2; m6 1.9 million, the others far
+    /// fewer).
     /// </summary>
     public const int MaximumMirroredNodes = 1 << 24;
 
@@ -151,21 +152,26 @@ internal static partial class DatabaseRecords
 
     /// <param name="isReference">Whether a node of the shipped world is an external reference (its children a referenced file's content).</param>
     /// <param name="mirrorLimit">The most nodes the simulated caches may mirror in all (see <see cref="MaximumMirroredNodes"/>); beyond it the inference stops.</param>
+    /// <param name="keptNames">Whether the names freed slots keep can name deleted groups: false unless the database's deletion
+    /// is the instruction right after its load and no other <c>DeleteTree</c> or <c>FreeNode</c> follows, whatever those free,
+    /// in a trace that misses no script. Anything between the load and the deletion could attach or rename nodes the deletion
+    /// frees with their names, and the inference replays no later <c>DeleteTree</c> or <c>FreeNode</c>, so the names of the
+    /// nodes those free can sit in slots it takes for untaken.</param>
     /// <exception cref="InvalidDataException">The inference would mirror more cached nodes than <paramref name="mirrorLimit"/>; the database's nodes keep the world's child order.</exception>
     public static Records? Infer(GameZWorld world, WorldDecomposition build, Func<WorldNode, bool> isReference, string mission, List<string> notes, CancellationToken token, int mirrorLimit = MaximumMirroredNodes,
-        int matchingLimit = MaximumRetainedWork)
+        int matchingLimit = MaximumRetainedWork, bool keptNames = true)
     {
         var database = build.Loads.FirstOrDefault(l => l.Database);
         if (database == null || database.Content.Count == 0) return null;
         ChildOrder shipped = new(WorldAssembler.Subtree(database.Content));
         OriginalLoader.MirrorBudget budget = new(mirrorLimit, limit => $"reading its files from the slots would make the loader's caches mirror more than {limit:N0} nodes in all.");
         RetainedMatchBudget retained = new(matchingLimit);
-        try { return Read(world, build, database, isReference, mission, notes, shipped, budget, retained, token); }
+        try { return Read(world, build, database, isReference, mission, notes, shipped, budget, retained, token, keptNames); }
         catch { shipped.Restore(); throw; }
     }
 
     private static Records? Read(GameZWorld world, WorldDecomposition build, LoadedModel database, Func<WorldNode, bool> isReference, string mission, List<string> notes,
-        ChildOrder shipped, OriginalLoader.MirrorBudget budget, RetainedMatchBudget retained, CancellationToken token)
+        ChildOrder shipped, OriginalLoader.MirrorBudget budget, RetainedMatchBudget retained, CancellationToken token, bool keptNames)
     {
         var slot = GameZWriter.NodeSlots(world);
         Records? Fail(string reason) { shipped.Restore(); notes.Add($"{mission}: the mission database keeps the world's object order without its groups: {reason}"); return null; }
@@ -197,6 +203,9 @@ internal static partial class DatabaseRecords
         List<int> freed = [.. Enumerable.Range(0, end).Where(s => !objectSlots.Contains(s) && !liveBefore.Contains(s))];
         HashSet<int> freedSet = [.. freed];
         var freedSlots = world.FreedSlots;
+        // How many entries at the bottom of each free list no later node took: their slots keep the names of the nodes freed
+        // there last (by the database's load or its deletion, when keptNames holds; see Infer).
+        Dictionary<List<int>, int> untakenCounts = new(ReferenceEqualityComparer.Instance);
         var first = FreeList(steps, out string? failure);
         if (first == null) return Fail(failure!);
         if (first.Count == 0) return Fail("the deletion freed no slot for its records.");
@@ -229,6 +238,14 @@ internal static partial class DatabaseRecords
         // A world that kept slots free keeps their last names (1999 m6): the first cache its database's load made, freed first.
         Dictionary<int, string> kept = [];
         foreach (var (s, bytes) in freedSlots) if (NameOf(bytes) is { Length: > 0 } name) kept[s] = name;
+        // The kept names a deleted record can take: those of slots no later node took (one a later load took and freed again
+        // holds that load's name); none when keptNames is off (see Infer).
+        Dictionary<int, string> Named()
+        {
+            if (!keptNames) return [];
+            HashSet<int> untaken = [.. list.TakeLast(untakenCounts[list])];
+            return kept.Where(p => untaken.Contains(p.Key)).ToDictionary();
+        }
         Parts? parts = null;
         List<(string LoadFile, string Reference, int Occurrence)> laterPaths = [];
         foreach (bool search in new[] { false, true })
@@ -260,8 +277,11 @@ internal static partial class DatabaseRecords
         Records Accept(Parts reading)
         {
             shipped.Restore(); reading.OrderChildren();
+            // Only an exact replay shows which cache node each slot held last.
+            var named = Named();
+            var cacheNames = reading.Inexact == null && keptNames ? reading.CacheNames(before, list.TakeLast(untakenCounts[list]), kept) : null;
             reading.FollowModels();
-            return FromParts(reading, world, mission) with { LaterPaths = [.. followed, .. reading.FilePaths] };
+            return FromParts(reading, named, cacheNames) with { LaterPaths = [.. followed, .. reading.FilePaths] };
         }
 
         // 5. Otherwise the slots alone: the objects and a group at every slot the deletion freed, in slot order. An object
@@ -274,10 +294,11 @@ internal static partial class DatabaseRecords
             int groupCount = 0;
             List<(int Slot, WorldNode Node)> sequence = [.. database.Content.Select(o => (slot[o], o))];
             HashSet<WorldNode> placeholders = new(ReferenceEqualityComparer.Instance);
+            var named = Named();
             foreach (int s in freed)
             {
                 var group = Group();
-                group.Name = freedSlots.TryGetValue(s, out var bytes) && NameOf(bytes) is { Length: > 0 } kept ? kept : $"group{++groupCount}";
+                group.Name = named.TryGetValue(s, out var name) ? name : $"group{++groupCount}";
                 placeholders.Add(group); sequence.Add((s, group));
             }
             return new([.. sequence.OrderBy(e => e.Slot).Select(e => e.Node)], placeholders, new Dictionary<WorldNode, IReadOnlyList<WorldNode>>(ReferenceEqualityComparer.Instance), new Dictionary<WorldNode, int>(ReferenceEqualityComparer.Instance));
@@ -389,7 +410,9 @@ internal static partial class DatabaseRecords
         List<int> untaken = [.. chain.Skip(leftover.Count).Take(freed.Count - taken)];
         if (untaken.Count != freed.Count - taken || untaken.Any(s => !freedSet.Contains(s) || !claimed.Add(s))) { failure = "the file's free list does not hold the freed slots no later node took."; return null; }
         // The list the deletion left, from its top.
-        return [.. Enumerable.Range(0, taken).Select(k => entries[k]), .. untaken];
+        List<int> deletion = [.. Enumerable.Range(0, taken).Select(k => entries[k]), .. untaken];
+        untakenCounts[deletion] = untaken.Count;
+        return deletion;
         }
 
         Records? Single(out string? reason)
@@ -466,11 +489,12 @@ internal static partial class DatabaseRecords
                 return j == d;
             }
             // 5. The records nested as they were made: an object belongs to the innermost group open when it was made. A
-            //    group left free in the file keeps the name it had there.
+            //    group whose slot no later node took keeps the name the slot holds (see Named).
             Dictionary<int, WorldNode> groupAt = groups.ToDictionary(g => table.Slots[g]);
             int count = 0;
+            var named = Named();
             foreach (var group in groups)
-                group.Name = freedSlots.TryGetValue(table.Slots[group], out var bytes) && NameOf(bytes) is { Length: > 0 } name ? name : $"group{++count}";
+                group.Name = named.TryGetValue(table.Slots[group], out var name) ? name : $"group{++count}";
             int rootSlot = table.Slots[root];
             WorldNode Holder(int s) => s == rootSlot ? root : groupAt[s];
             Stack<int> open = new([rootSlot]);
@@ -493,14 +517,15 @@ internal static partial class DatabaseRecords
     }
 
     /// <summary>
-    /// The records of the parts model. Deleted nodes keep the names their freed slots still hold, else <c>groupN</c>; a
-    /// unnamed part keeps an explicit inline cache identity. A reconstructed filename would claim evidence the
-    /// shipped world no longer contains; the content stays inside its owning glTF instead.
+    /// The records of the parts model. Deleted groups keep the names their freed slots still hold where no later node took the
+    /// slot (<paramref name="named"/>), or a slot of their part's cache still holds (<paramref name="cacheNames"/>), else
+    /// <c>groupN</c>; a reference to an unnamed part is <c>groupN</c> and keeps an explicit inline cache identity. A
+    /// reconstructed filename would claim evidence the shipped world no longer contains; the content stays inside its
+    /// owning glTF instead.
     /// </summary>
-    private static Records FromParts(Parts parts, GameZWorld world, string mission)
+    private static Records FromParts(Parts parts, IReadOnlyDictionary<int, string> named, IReadOnlyDictionary<WorldNode, string>? cacheNames)
     {
         parts.OrderChildren();
-        var freedSlots = world.FreedSlots;
         int groupCount = 0;
         var made = parts.Made.Where(p => !ReferenceEquals(p.Key, parts.Root) && p.Key.Name != "end").OrderBy(p => p.Value).ToList();
         // Which references copy one cache, before any of the copies' groups is renamed.
@@ -518,7 +543,7 @@ internal static partial class DatabaseRecords
                 inlineSources[node] = name;
                 node.Name = $"group{++groupCount}";
             }
-            else node.Name = freedSlots.TryGetValue(at, out var bytes) && NameOf(bytes) is { Length: > 0 } kept ? kept : $"group{++groupCount}";
+            else node.Name = named.TryGetValue(at, out var kept) ? kept : cacheNames?.GetValueOrDefault(node) is { } cached ? cached : $"group{++groupCount}";
             // A deleted record: an object3d with no geometry and no transform, carrying the default flags.
             var shape = Group(); node.Flags = shape.Flags; node.Zone = shape.Zone; node.BoundsFlags = shape.BoundsFlags; node.SetPayloadInt(0, 0x28);
         }

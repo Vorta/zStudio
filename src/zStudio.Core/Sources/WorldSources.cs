@@ -51,6 +51,18 @@ internal static partial class WorldSources
     /// </summary>
     public static bool IsReference(WorldNode node) => node.Class == WorldNodeClass.Object3D && node.Model == null && node.Name.EndsWith(".flt", StringComparison.OrdinalIgnoreCase);
     private static string Stem(string file) => System.IO.Path.GetFileNameWithoutExtension(file.Replace('\\', '/')).ToLowerInvariant();
+
+    /// <summary>
+    /// Whether the database's deletion (DeleteTree naming its root) is the very next instruction after its load and no other
+    /// DeleteTree or FreeNode follows. Anything between the load and the deletion could attach nodes under the database or
+    /// rename them, and the deletion would free them with their names; the inference replays no other DeleteTree or FreeNode.
+    /// </summary>
+    private static bool OnlyDatabaseDeleted(IReadOnlyList<TracedInstruction> trace, LoadedModel database)
+    {
+        var after = trace.Skip(database.Step + 1).ToList();
+        if (after.Count == 0 || after[0].Command != "DeleteTree" || after[0].Args.Count == 0 || after[0].Args[0] != database.NodeName) return false;
+        return !after.Skip(1).Any(i => i.Command is "DeleteTree" or "FreeNode");
+    }
     /// <summary>
     /// What tells a file's canonical content apart: the first 16 hex digits of the SHA-256 of its glTF JSON followed by its
     /// binary buffer, hashed as written rather than copied into one buffer.
@@ -123,7 +135,9 @@ internal static partial class WorldSources
         foreach (var mission in missions)
         {
             token.ThrowIfCancellationRequested();
-            var trace = ScriptTrace.Trace(scripts, $"m{mission.Mission}.gs", notes, traceBudget, diagnostics, token);
+            // A script the build ran but the archive lacks hides what it did from the trace (see keptNames below).
+            bool missingScript = false;
+            var trace = ScriptTrace.Trace(name => { var lines = scripts(name); missingScript |= lines == null; return lines; }, $"m{mission.Mission}.gs", notes, traceBudget, diagnostics, token);
             foreach (var instruction in trace)
             {
                 if (!scriptMissions.TryGetValue(instruction.Script, out var runs)) scriptMissions[instruction.Script] = runs = [];
@@ -136,8 +150,13 @@ internal static partial class WorldSources
             int database = decomposed.FindIndex(l => l.Database);
             List<WorldNode> databaseReferences = [];
             DatabaseRecords.Records? records = null;
+            // A freed slot keeps the name of the node freed there last. The database's deletion also frees whatever the scripts
+            // attached or renamed under the database before the deletion, and the inference replays only the loads and created
+            // nodes the world still holds; so unless the deletion is the next instruction after the database's load and no other
+            // DeleteTree or FreeNode follows, in a trace that misses no script, no kept name may name a deleted group.
+            bool keptNames = database >= 0 && !missingScript && OnlyDatabaseDeleted(trace, decomposed[database]);
             // A world the inference cannot replay (its caches exceed what a load can hold) keeps its order, like any other.
-            try { if (database >= 0) records = DatabaseRecords.Infer(mission.World, decomposition, node => IsReference(node) && !roots.Contains(node), $"m{mission.Mission}", notes, token); }
+            try { if (database >= 0) records = DatabaseRecords.Infer(mission.World, decomposition, node => IsReference(node) && !roots.Contains(node), $"m{mission.Mission}", notes, token, keptNames: keptNames); }
             catch (InvalidDataException ex) { diagnostics.Add($"m{mission.Mission}: the mission database keeps the world's object order without its groups: {ex.Message}"); }
             if (records != null)
             {
@@ -187,8 +206,8 @@ internal static partial class WorldSources
             // A root's flags are the file's only when the script left them alone, so they are not part of its identity.
             foreach (var load in decomposed) traced.Add((mission, load, Stem(load.File), Hash(load.Content, 0xFF)));
         }
-        // Only an evidenced external filename creates a file. Deleted groups may retain a later cache's old name;
-        // they and unnamed inferred sections are never external-file evidence.
+        // Only an evidenced external filename creates a file. Deleted groups, whatever name they keep, and unnamed
+        // inferred sections are never external-file evidence.
         bool Reference(WorldNode node) => IsReference(node) && !roots.Contains(node) && !groups.Contains(node);
         // A file's references in record order, not looking inside their content.
         List<WorldNode> OwnReferences(IReadOnlyList<WorldNode> records)
