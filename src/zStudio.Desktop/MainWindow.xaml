@@ -47,7 +47,7 @@
      <DockPanel><TextBlock Text="{Binding Glyph}" Opacity="0.7" Margin="0,0,6,0"/><TextBlock Text="{Binding Label}" TextTrimming="CharacterEllipsis"/></DockPanel>
     </Border>
     <DockPanel x:Name="SourceRow" Visibility="Collapsed" Height="28" Background="Transparent" local:OutlinerRowStretch.Enabled="True" MouseLeftButtonDown="OutlinerRowMouseDown" FocusVisualStyle="{StaticResource OutlinerFocusRing}">
-     <Button x:Name="RowEye" DockPanel.Dock="Right" Style="{StaticResource OutlinerEye}" Focusable="False" Visibility="Hidden" Click="OutlinerEyeClick" PreviewMouseUp="OutlinerEyeMiddleClick" Tag="{Binding}" ToolTip="{Binding EyeToolTip}" ToolTipService.ShowOnDisabled="True" ToolTipService.InitialShowDelay="0" AutomationProperties.Name="{Binding EyeToolTip}"><local:PreviewIcon Kind="{Binding EyeIcon}" Width="14" Height="14"/></Button>
+     <Button x:Name="RowEye" DockPanel.Dock="Right" Style="{StaticResource OutlinerEye}" Focusable="False" Click="OutlinerEyeClick" PreviewMouseUp="OutlinerEyeMiddleClick" Tag="{Binding}" ToolTip="{Binding EyeToolTip}" ToolTipService.ShowOnDisabled="True" ToolTipService.InitialShowDelay="0" AutomationProperties.Name="{Binding EyeToolTip}"><local:PreviewIcon Kind="{Binding EyeIcon}" Width="14" Height="14"/></Button>
      <!-- The Zones row's Objects | Polygons switch: the kind of colour its shown zones take. -->
      <Border x:Name="ZoneHeaderControls" DockPanel.Dock="Right" Visibility="Collapsed" Padding="2" Margin="0,0,4,0" CornerRadius="5" BorderThickness="1" Background="#38000000" BorderBrush="#10FFFFFF" VerticalAlignment="Center" ToolTipService.ShowOnDisabled="True" ToolTip="{Binding ZoneKindsToolTip}" AutomationProperties.Name="Colour zones by">
       <StackPanel Orientation="Horizontal">
@@ -55,7 +55,7 @@
        <Button x:Name="ZoneKindPolygons" Style="{StaticResource OutlinerSegment}" Focusable="False" Click="OutlinerZoneKindClick" Tag="{Binding}" ToolTipService.InitialShowDelay="0" ToolTip="Polygon zones — colour each polygon by the zones it makes current when the camera or a vehicle is on it; striped where it has several" AutomationProperties.Name="Polygon zones"><local:PreviewIcon Kind="PolygonZones" Width="14" Height="14"/></Button>
       </StackPanel>
      </Border>
-     <Button x:Name="RowFrame" DockPanel.Dock="Right" Style="{StaticResource OutlinerEye}" Focusable="False" Visibility="Hidden" Click="OutlinerFrameClick" Tag="{Binding}" ToolTip="Frame selection" AutomationProperties.Name="Frame selection"><local:PreviewIcon Kind="FrameSelection" Width="14" Height="14"/></Button>
+     <Button x:Name="RowFrame" DockPanel.Dock="Right" Style="{StaticResource OutlinerEye}" Focusable="False" Click="OutlinerFrameClick" Tag="{Binding}" ToolTip="Frame selection" AutomationProperties.Name="Frame selection"><local:PreviewIcon Kind="FrameSelection" Width="14" Height="14"/></Button>
      <TextBlock x:Name="RowMeta" DockPanel.Dock="Right" Text="{Binding Meta}" ToolTip="{Binding MetaToolTip}" FontSize="11" Margin="6,0,10,0" VerticalAlignment="Center" Foreground="{DynamicResource TextFillColorTertiaryBrush}" Typography.NumeralAlignment="Tabular"/>
      <!-- The type icon, or a zone's or network's colour square (dashed for polygons without a zone). -->
      <Grid Width="15" Height="15" Margin="0,0,8,0" VerticalAlignment="Center">
@@ -78,8 +78,6 @@
    </Grid>
    <HierarchicalDataTemplate.Triggers>
     <DataTrigger Binding="{Binding IsSourceMap}" Value="True"><Setter TargetName="CompiledRow" Property="Visibility" Value="Collapsed"/><Setter TargetName="SourceRow" Property="Visibility" Value="Visible"/></DataTrigger>
-    <DataTrigger Binding="{Binding IsMouseOver,ElementName=SourceRow}" Value="True"><Setter TargetName="RowEye" Property="Visibility" Value="Visible"/><Setter TargetName="RowFrame" Property="Visibility" Value="Visible"/></DataTrigger>
-    <DataTrigger Binding="{Binding IsSelected}" Value="True"><Setter TargetName="RowEye" Property="Visibility" Value="Visible"/><Setter TargetName="RowFrame" Property="Visibility" Value="Visible"/></DataTrigger>
     <DataTrigger Binding="{Binding IsHidden}" Value="True"><Setter TargetName="RowEye" Property="Visibility" Value="Visible"/></DataTrigger>
     <DataTrigger Binding="{Binding IsFaded}" Value="True"><Setter TargetName="SourceRow" Property="Opacity" Value="0.55"/></DataTrigger>
     <DataTrigger Binding="{Binding IsIsolated}" Value="True"><Setter TargetName="RowEye" Property="Visibility" Value="Visible"/></DataTrigger>
@@ -96,10 +94,9 @@
     <MultiDataTrigger><MultiDataTrigger.Conditions><Condition Binding="{Binding HasSwatch}" Value="True"/><Condition Binding="{Binding SwatchDashed}" Value="False"/></MultiDataTrigger.Conditions><Setter TargetName="RowSwatch" Property="Visibility" Value="Visible"/></MultiDataTrigger>
     <DataTrigger Binding="{Binding IsDimmed}" Value="True"><Setter TargetName="SourceRow" Property="Opacity" Value="0.45"/></DataTrigger>
     <DataTrigger Binding="{Binding IsNote}" Value="True"><Setter TargetName="RowIcon" Property="Visibility" Value="Collapsed"/><Setter TargetName="RowName" Property="FontSize" Value="12"/><Setter TargetName="RowName" Property="Foreground" Value="{DynamicResource TextFillColorTertiaryBrush}"/></DataTrigger>
-    <!-- The Zones, AI Networks, AI Vehicles and Pickups rows keep their master eye in sight; a zone or network overlay that is on lights it. -->
+    <!-- The Zones, AI Networks, AI Vehicles and Pickups rows always have their master eye. -->
     <DataTrigger Binding="{Binding HasMasterEye}" Value="True"><Setter TargetName="RowEye" Property="Visibility" Value="Visible"/></DataTrigger>
     <DataTrigger Binding="{Binding SectionKind}" Value="zones"><Setter TargetName="ZoneHeaderControls" Property="Visibility" Value="Visible"/></DataTrigger>
-    <DataTrigger Binding="{Binding HeaderActive}" Value="True"><Setter TargetName="RowEye" Property="Background" Value="#29FF9A4D"/><Setter TargetName="RowEye" Property="Foreground" Value="{DynamicResource AccentTextFillColorPrimaryBrush}"/></DataTrigger>
     <MultiDataTrigger><MultiDataTrigger.Conditions><Condition Binding="{Binding ZoneKindPolygons}" Value="True"/><Condition Binding="{Binding HeaderActive}" Value="True"/></MultiDataTrigger.Conditions><Setter TargetName="ZoneKindPolygons" Property="Background" Value="{DynamicResource AccentFillColorDefaultBrush}"/><Setter TargetName="ZoneKindPolygons" Property="Foreground" Value="{DynamicResource TextOnAccentFillColorPrimaryBrush}"/></MultiDataTrigger>
     <MultiDataTrigger><MultiDataTrigger.Conditions><Condition Binding="{Binding ZoneKindPolygons}" Value="False"/><Condition Binding="{Binding HeaderActive}" Value="True"/></MultiDataTrigger.Conditions><Setter TargetName="ZoneKindObjects" Property="Background" Value="{DynamicResource AccentFillColorDefaultBrush}"/><Setter TargetName="ZoneKindObjects" Property="Foreground" Value="{DynamicResource TextOnAccentFillColorPrimaryBrush}"/></MultiDataTrigger>
     <MultiDataTrigger><MultiDataTrigger.Conditions><Condition Binding="{Binding ZoneKindPolygons}" Value="True"/><Condition Binding="{Binding HeaderActive}" Value="False"/></MultiDataTrigger.Conditions><Setter TargetName="ZoneKindPolygons" Property="Background" Value="#15FFFFFF"/><Setter TargetName="ZoneKindPolygons" Property="Foreground" Value="{DynamicResource TextFillColorPrimaryBrush}"/></MultiDataTrigger>
@@ -493,8 +490,8 @@
       <ListBox x:Name="OutlinerResults" Visibility="Collapsed" Margin="6,0,6,8" Background="Transparent" BorderThickness="0" SelectionChanged="OutlinerResultSelected" HorizontalContentAlignment="Stretch" ScrollViewer.HorizontalScrollBarVisibility="Disabled" VirtualizingPanel.IsVirtualizing="True" VirtualizingPanel.VirtualizationMode="Recycling" AutomationProperties.Name="Matching nodes">
        <ListBox.ItemTemplate><DataTemplate>
         <DockPanel x:Name="MatchRow" Height="28" ToolTip="{Binding Row.ToolTip}" Background="Transparent" Margin="0,0,10,0">
-         <Button x:Name="MatchEye" DockPanel.Dock="Right" Style="{StaticResource OutlinerEye}" Visibility="Hidden" Click="OutlinerEyeClick" Tag="{Binding Row}" ToolTip="{Binding Row.EyeToolTip}" AutomationProperties.Name="{Binding Row.EyeToolTip}"><local:PreviewIcon Kind="{Binding Row.EyeIcon}" Width="14" Height="14"/></Button>
-         <Button x:Name="MatchFrame" DockPanel.Dock="Right" Style="{StaticResource OutlinerEye}" Visibility="Hidden" Click="OutlinerFrameClick" Tag="{Binding Row}" ToolTip="Frame selection" AutomationProperties.Name="Frame selection"><local:PreviewIcon Kind="FrameSelection" Width="14" Height="14"/></Button>
+         <Button x:Name="MatchEye" DockPanel.Dock="Right" Style="{StaticResource OutlinerEye}" Click="OutlinerEyeClick" Tag="{Binding Row}" ToolTip="{Binding Row.EyeToolTip}" AutomationProperties.Name="{Binding Row.EyeToolTip}"><local:PreviewIcon Kind="{Binding Row.EyeIcon}" Width="14" Height="14"/></Button>
+         <Button x:Name="MatchFrame" DockPanel.Dock="Right" Style="{StaticResource OutlinerEye}" Click="OutlinerFrameClick" Tag="{Binding Row}" ToolTip="Frame selection" AutomationProperties.Name="Frame selection"><local:PreviewIcon Kind="FrameSelection" Width="14" Height="14"/></Button>
          <TextBlock DockPanel.Dock="Right" Text="{Binding Row.Meta}" FontSize="11" Margin="6,0,10,0" VerticalAlignment="Center" Foreground="{DynamicResource TextFillColorTertiaryBrush}"/>
          <Grid Width="15" Height="15" Margin="0,0,8,0" VerticalAlignment="Center">
           <local:PreviewIcon x:Name="MatchIcon" Kind="{Binding Row.OutlinerIcon}" TextElement.Foreground="{Binding Row.OutlinerBrush}"/>
@@ -505,8 +502,6 @@
          <TextBlock Text="{Binding Path}" FontSize="11" Margin="8,0,0,0" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" Foreground="{DynamicResource TextFillColorTertiaryBrush}"/>
         </DockPanel>
         <DataTemplate.Triggers>
-         <DataTrigger Binding="{Binding IsMouseOver,ElementName=MatchRow}" Value="True"><Setter TargetName="MatchEye" Property="Visibility" Value="Visible"/><Setter TargetName="MatchFrame" Property="Visibility" Value="Visible"/></DataTrigger>
-         <DataTrigger Binding="{Binding Row.IsSelected}" Value="True"><Setter TargetName="MatchEye" Property="Visibility" Value="Visible"/><Setter TargetName="MatchFrame" Property="Visibility" Value="Visible"/></DataTrigger>
          <DataTrigger Binding="{Binding Row.IsHidden}" Value="True"><Setter TargetName="MatchEye" Property="Visibility" Value="Visible"/><Setter TargetName="MatchRow" Property="Opacity" Value="0.55"/></DataTrigger>
          <DataTrigger Binding="{Binding Row.CanHide}" Value="False"><Setter TargetName="MatchEye" Property="Visibility" Value="Collapsed"/></DataTrigger>
          <DataTrigger Binding="{Binding Row.CanFrame}" Value="False"><Setter TargetName="MatchFrame" Property="Visibility" Value="Collapsed"/></DataTrigger>
