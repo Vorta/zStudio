@@ -2,7 +2,7 @@
 
 Version numbers follow `MAJOR.MINOR.PATCH`; the 0.x series is under active development. Release tags and downloadable archives use the same version.
 
-## 0.9.3 — unreleased
+## 0.9.3 — 2026-10-19
 
 - The World tree's sections are renamed **World**, **AI Vehicles**, **Pickups** and **Animations (keyframed)** (MCP keeps the pass kinds `aiv`, `puppies` and `anim`), and three are added, in a fixed order: **Zones** after World, **AI Networks** after AI Vehicles and **Animations (definitions)** last. A section, folder or file row opens or closes with a click and is never the selection.
 - **Zones** lists the map's zones with their colour, label and polygon count (as placed), and polygons without a zone. Each zone's colour is shown on its own with its eye, and all start hidden; while any shows, the zone overlay is on, in the kind the row's **Objects | Polygons** switch chooses (disabled while none shows; the zone overlays leave the command bar), and another overlay hides every zone. Selecting a shown zone draws it strong, the others faint, and selecting a zone opens its card in Properties: its label (one undo step; the zone picker no longer renames), what uses it and **Paint with this zone**. While Edit zones is on, selecting a zone makes it the zone to paint.
