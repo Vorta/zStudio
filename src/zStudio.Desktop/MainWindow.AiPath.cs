@@ -100,6 +100,8 @@ public partial class MainWindow
         SetAiOptions(true, aiThroughGeometry, network);
         selectedNode = null; inspectedSceneSource = null;
         scene.SetAiPathEditing(network, scene.SelectedAiNode is { } id ? [id] : []);
+        // The edited network shows in the view (it may have been hidden), filtered to it while editing.
+        if (sourceChromeActive && shownDocument?.SourceWorld != null) ApplySectionPresentation();
         UpdateAiPathPanel();
     }
     private void BeginAiPathTransform(string mode, bool pointer = false)

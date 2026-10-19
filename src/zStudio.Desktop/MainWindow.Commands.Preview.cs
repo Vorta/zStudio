@@ -160,6 +160,8 @@ public partial class MainWindow
             }
             if (changes.ContainsKey("highlight") && asset.Kind != AssetKind.World)
                 throw new StudioCommandException("unsupported", "Surface highlighting is available only in Whole world.");
+            if (changes.ContainsKey("highlight") && sourceChromeActive && doc.SourceWorld != null && Text(changes, "highlight") is "zones" or "polygonZones" && sceneTree?.Sections?.Zones.Any(z => z.Used) != true)
+                throw new StudioCommandException("unsupported", "This map has no zones to colour yet.");
             // MW3 previews select an authored mission; the shared RECOIL difficulty preference does not apply.
             if (changes.ContainsKey("difficulty") && (doc.PreviewDocument.Game == GameVariant.MechWarrior3 || scene?.Mission is { } shown && (!shown.Layout.DifficultyApplies || shown.Layout.MissionArchive != null)))
                 throw new StudioCommandException("unsupported", "MechWarrior 3 previews use missions instead of difficulty.");

@@ -182,7 +182,7 @@ internal static class SourceZoneMcpChecks
             await Call("scene_tree", new() { ["document"] = doc.SessionId.ToString(), ["context"] = zoneContext, ["preview"] = zonePreview, ["action"] = "show", ["row"] = upperZone["row"]!.GetValue<string>() });
             zoneState = await ZoneState();
             Assert.Equal([7], zoneState["shown"]!.AsArray().Select(z => z!.GetValue<int>())); Assert.True(zoneState["overlay"]!.GetValue<bool>());
-            Assert.DoesNotContain((byte)7, view.HiddenZones); Assert.Contains((byte)6, view.HiddenZones);
+            Assert.DoesNotContain((byte)7, view.HiddenZones); Assert.Contains((byte)8, view.HiddenZones);
             string zonesRowId = zonesRow["row"]!.GetValue<string>();
             await Call("scene_tree", new() { ["document"] = doc.SessionId.ToString(), ["context"] = zoneContext, ["preview"] = zonePreview, ["action"] = "show", ["row"] = zonesRowId });
             zoneState = await ZoneState();

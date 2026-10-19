@@ -130,8 +130,11 @@ internal static class SourceEditingMcpChecks
 
             // AI path confirmation uses the actual source preparation/rebuild pipeline, retaining both node edits
             // as one source history step. Its new document is returned and stale preview/edit identities expire.
+            // Entering it shows a hidden network: path editing needs its nodes drawn.
+            await Job("scene_options", new() { ["preview"] = cardPreview, ["changes"] = new Dictionary<string, object?> { ["aiNodes"] = false } });
             var pathArgs = PathArguments("enter"); pathArgs["network"] = scene.AiNetworks.Networks[0].Id;
             await Job("ai_path", pathArgs);
+            Assert.True(scene.RenderedAiNodes > 0);
             pathArgs = PathArguments("select"); pathArgs["nodes"] = scene.AiNetworks.Networks[0].Nodes.Select(n => n.Id).ToArray();
             await Job("ai_path", pathArgs);
             pathArgs = PathArguments("begin"); pathArgs["mode"] = "move";

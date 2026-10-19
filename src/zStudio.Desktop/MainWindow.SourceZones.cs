@@ -230,6 +230,8 @@ public partial class MainWindow
         if (scene?.ZoneBrush != null) scene.SetZoneBrush(null);
         zoneTool.Master = null; zoneTool.Sites = null; zoneTool.Used = null;
         ApplyOverlays();
+        // The zone overlay follows the zones shown again (a stroke may have erased the only one shown).
+        if (sourceChromeActive) ApplySectionPresentation();
         ClearZoneNotices(); zoneTool.LastStroke = null; zoneTool.LastResult = null; zoneTool.Stroke = null; zoneTool.Flash = null;
         CurrentInspectionCard?.SetSurfaceDetail(null);
         RefreshZoneToolChrome();

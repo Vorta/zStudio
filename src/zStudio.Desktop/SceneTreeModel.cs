@@ -265,7 +265,7 @@ public sealed class SceneTreeItem : INotifyPropertyChanged
     internal void NotifyHidden()
     {
         foreach (string name in new[] { nameof(IsHidden), nameof(IsIsolated), nameof(IsFaded), nameof(EyeIcon), nameof(EyeToolTip), nameof(HeaderActive), nameof(HeaderPaused),
-            nameof(ZoneKindPolygons), nameof(ZoneKindsEnabled), nameof(IsPaintZone), nameof(HeaderControlsToolTip) }) Changed(name);
+            nameof(ZoneKindPolygons), nameof(ZoneKindsEnabled), nameof(ZoneKindsToolTip), nameof(IsPaintZone), nameof(HeaderControlsToolTip) }) Changed(name);
     }
     public string ToolTip => (Section != null ? SectionToolTip : Pass is { } pass ? pass.Description : IsOtherDifficulty ? OtherDifficultyToolTip : ToolTipCore) + (Animations is { } animations ? "\nAnimations: " + string.Join(", ", animations.Select(a => Short(a, 64))) : "");
     private string ToolTipCore => Authored is { } authored ? $"{Short(DisplayName, 2048)} · {(IsEmptyNode ? "empty\n" + OutlinerKinds.EmptyNote : NodeType)}\nSource: {Short(authored.File, 2048)} · glTF node #{authored.SourceNode}\n" +
@@ -441,6 +441,8 @@ public sealed class SceneTreeItem : INotifyPropertyChanged
             : Owner.Sections?.Zones.Count is null or 0 ? "No zones yet: paint polygon zones with Edit zones" : null
         : Section is SectionHeader { Section: "aiNetworks" } && Owner.Sections?.Networks.Count is null or 0 ? "No AI networks in this mission" : null;
     public bool ZoneKindPolygons => State?.ZoneOverlayPolygons != false;
+    /// <summary>Why the Objects | Polygons switch waits, or null when it takes input.</summary>
+    public string? ZoneKindsToolTip => HeaderControlsToolTip ?? (State?.ZoneOverlayOn != true ? "Show a zone (its eye, or the eye on Zones) to colour zones by object or by polygon" : null);
     /// <summary>The Objects | Polygons switch takes input while a zone's colour shows (and Edit zones is off).</summary>
     public bool ZoneKindsEnabled => State?.ZoneOverlayOn == true && !HeaderPaused;
     /// <summary>The zone Edit zones paints with (its row shows the brush).</summary>

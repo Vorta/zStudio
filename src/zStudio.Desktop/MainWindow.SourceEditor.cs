@@ -295,7 +295,8 @@ public partial class MainWindow
         ZonesChip.Visibility = zones ? Visibility.Visible : Visibility.Collapsed;
         ZonesChipText.Text = (worldHighlightMode == zStudio.Core.WorldHighlightMode.PolygonZones ? "Polygon zones" : "Object zones");
         int usedZones = sceneTree?.Sections?.Zones.Count(z => z.Used) ?? 0;
-        ZonesChipMode.Text = shownZones.Count >= usedZones ? $"· all {usedZones}" : $"· {shownZones.Count} of {usedZones}";
+        int shownUsed = sceneTree?.Sections?.Zones.Count(z => z.Used && shownZones.Contains(z.Zone)) ?? 0;
+        ZonesChipMode.Text = shownUsed >= usedZones ? $"· all {usedZones}" : $"· {shownUsed} of {usedZones}";
         AiChip.Visibility = shown && aiVisible && IsAiWorld ? Visibility.Visible : Visibility.Collapsed;
         AiChip.Margin = new(10, zones ? 102 : 56, 10, 10);
         int networks = scene?.AiNetworks.Networks.Count ?? 0, shownCount = scene?.AiNetworks.Networks.Count(n => shownNetworks.Contains(n.Id)) ?? 0;

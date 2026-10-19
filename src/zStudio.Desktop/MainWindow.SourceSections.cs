@@ -34,7 +34,7 @@ public partial class MainWindow : ISourceSectionState
     /// <summary>The map (its path) the zone and network eyes belong to: another map starts with every zone and network hidden.</summary>
     private string? sectionStateMap;
     private SourceSectionCard? sectionCard;
-    private bool applyingSectionPresentation;
+    private bool applyingSectionPresentation, sectionPresentationAgain;
 
     // ---------------------------------------------------------------- what the rows show
 
@@ -178,20 +178,37 @@ public partial class MainWindow : ISourceSectionState
     /// <summary>Applies the zone and network eyes, the selection's emphasis and a definition's outlines to the view; the rows follow.</summary>
     private void ApplySectionPresentation()
     {
-        // The overlays it turns on or off come back here: the outer pass finishes with their state.
-        if (applyingSectionPresentation) return;
+        // The overlays and editing it changes come back here: the outer pass runs again once (at most twice more) instead.
+        if (applyingSectionPresentation) { sectionPresentationAgain = true; return; }
         applyingSectionPresentation = true;
         try
         {
+            for (int pass = 0; pass < 3; pass++)
+            {
+                sectionPresentationAgain = false;
+                ApplySectionPresentationOnce();
+                if (!sectionPresentationAgain) break;
+            }
+        }
+        finally { applyingSectionPresentation = sectionPresentationAgain = false; }
+    }
+    private void ApplySectionPresentationOnce()
+    {
+        {
             ResetSectionStateFor(shownDocument);
             if (scene is not { } viewport || shownDocument?.SourceWorld == null || !sourceChromeActive) { RefreshRowEyes(); return; }
-            // Zones and networks no longer in the map drop out.
-            HashSet<string> networkIds = new(viewport.AiNetworks.Networks.Select(n => n.Id), StringComparer.Ordinal);
-            shownNetworks.RemoveWhere(id => !networkIds.Contains(id));
-            if (sceneTree?.Sections is { } sections) shownZones.RemoveWhere(z => sections.Zone(z) == null);
+            // Zones and networks no longer in the map (or no longer used) drop out; the tree's sections are the shown map's
+            // (a rebuild's viewport is not shown yet and has no networks).
+            var sections = sceneTree?.Sections;
+            if (sections != null)
+            {
+                shownNetworks.RemoveWhere(id => sections.Network(id) == null);
+                shownZones.RemoveWhere(z => sections.Zone(z) is not { Used: true });
+            }
             if (!ZoneToolEngaged) SyncZoneOverlay();
             SyncSourceAiOverlay();
-            HashSet<byte> hidden = [.. Enumerable.Range(0, 256).Select(z => (byte)z).Where(z => !shownZones.Contains(z))];
+            // The listed zones not shown are hidden; a zone only units or pickups carry is not listed, and keeps its colour.
+            HashSet<byte> hidden = [.. (sections?.Zones ?? []).Where(z => z.Used && !shownZones.Contains(z.Zone)).Select(z => z.Zone)];
             // A hidden zone or network is not emphasised (the others would all turn faint around nothing).
             byte? zone = ZoneOverlayOn && SectionSelection?.Section is ZoneEntry selectedZone && shownZones.Contains(selectedZone.Zone.Zone) ? selectedZone.Zone.Zone : null;
             viewport.SetZonePresentation(hidden, zone);
@@ -205,7 +222,6 @@ public partial class MainWindow : ISourceSectionState
             if (!outlined.SequenceEqual(viewport.OutlinedNodes)) viewport.SetOutlinedNodes(outlined);
             RefreshRowEyes(); RefreshViewportChips();
         }
-        finally { applyingSectionPresentation = false; }
     }
 
     // ---------------------------------------------------------------- eyes and header controls
@@ -261,7 +277,8 @@ public partial class MainWindow : ISourceSectionState
                         string id = network.Network.Id;
                         if (hide ?? shownNetworks.Contains(id))
                         {
-                            if (shownNetworks.Contains(id) && !AiOverlayMayEnd(shownNetworks.Count == 1)) return;
+                            bool endsSelection = shownNetworks.Count == 1 || scene?.SelectedAiNode is { } selectedNode && scene.AiNetworks.Find(selectedNode)?.Network.Id == id;
+                            if (shownNetworks.Contains(id) && !AiOverlayMayEnd(endsSelection)) return;
                             shownNetworks.Remove(id);
                         }
                         else shownNetworks.Add(id);
@@ -287,9 +304,9 @@ public partial class MainWindow : ISourceSectionState
         return true;
     }
     /// <summary>
-    /// Hiding a network ends AI path editing on it, and hiding the last one ends the AI node selection: a pending AI path
-    /// transform is decided first (refused), and a node's unfinished input is asked about (false: kept, nothing changes;
-    /// MCP refuses unfinished input before it comes here).
+    /// Hiding a network ends AI path editing on it, and hiding the last one (or the selected node's) ends the AI node
+    /// selection: a pending AI path transform is decided first (refused), and a node's unfinished input is asked about (false:
+    /// kept, nothing changes; MCP refuses unfinished input before it comes here).
     /// </summary>
     private bool AiOverlayMayEnd(bool overlayEnds = true)
     {
