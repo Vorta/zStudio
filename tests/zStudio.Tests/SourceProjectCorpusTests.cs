@@ -45,18 +45,21 @@ public sealed class SourceProjectCorpusTests
             }
             // Animation definitions shipped in another version than the animations were compiled from are rebuilt from
             // them; nothing else is noted. Definitions that name a sequence twice compile as shipped (the last name).
-            const string Rebuilt = " is not the version the shipped animations were compiled from; it was rebuilt from anim.zbd.";
+            const string Rebuilt = " was rebuilt from anim.zbd, which the game uses: it was compiled from a newer version of this definition";
             // A mission database is noted when its rebuilt world does not give every node its shipped slot (the original
             // tool attached some records elsewhere, or its files are not all known); these missions' databases are exact.
             const string Database = ": the mission database ";
             const string Inline = "inferred load sections are unrecoverable; their content and cache boundaries remain embedded in the mission master glTF.";
-            Assert.All(report.Notes, n => Assert.True(n.EndsWith(Rebuilt, StringComparison.Ordinal) || n.Contains(Database, StringComparison.Ordinal) || n.EndsWith(Inline, StringComparison.Ordinal), n));
+            Assert.All(report.Notes, n => Assert.True(n.Contains(Rebuilt, StringComparison.Ordinal) || n.Contains(Database, StringComparison.Ordinal) || n.EndsWith(Inline, StringComparison.Ordinal), n));
             var inexact = report.Notes.Where(n => n.Contains(Database, StringComparison.Ordinal)).Select(n => n[..n.IndexOf(':')]).ToHashSet();
             string[] exact = ["m1", "m2", "m3", "m4", "m5", "m6", "m7", "m8", "m9", "m10", "m11", "m12", "m13"];
             foreach (string mission in exact)
                 if (Directory.Exists(Path.Combine(corpus, mission))) Assert.DoesNotContain(mission, inexact);
-            var rebuilt = report.Notes.Where(n => n.EndsWith(Rebuilt, StringComparison.Ordinal)).Select(n => Path.GetFileName(n[..n.IndexOf(':')])).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var rebuilt = report.Notes.Where(n => n.Contains(Rebuilt, StringComparison.Ordinal)).Select(n => Path.GetFileName(n[..n.IndexOf(':')])).ToHashSet(StringComparer.OrdinalIgnoreCase);
             Assert.DoesNotContain("sbarm.zad", rebuilt); Assert.DoesNotContain("deathmulti.zad", rebuilt);
+            // The note dates the newer version anim.zbd was compiled from and says what it changed.
+            Assert.Contains(report.Notes, n => n.StartsWith("data/common/zrdr/vtol/gen_vtol.zad: ", StringComparison.Ordinal)
+                && n.Contains("(saved 4 Nov 1998)", StringComparison.Ordinal) && n.Contains("RESET_TIME ( 0.5 ) → ( 0 )", StringComparison.Ordinal));
             Assert.Equal(1, report.Families["scripts"]); Assert.Equal(3, report.Families["sounds"]);
             Assert.Equal(Directory.GetFiles(corpus, "gamez.zbd", SearchOption.AllDirectories).Length, report.Families["worlds"]);
             Assert.Equal(Directory.GetFiles(corpus, "anim.zbd", SearchOption.AllDirectories).Length, report.Families["animations"]);

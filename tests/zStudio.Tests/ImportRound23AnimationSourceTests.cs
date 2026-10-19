@@ -49,7 +49,8 @@ public sealed class ImportRound23AnimationSourceTests
         Assert.Equal(original, files.Files[Definition]);
         List<string> notes = [];
         var output = AnimationSources.Reconstruct([new(1, shipped, [], world)], files, notes, Token, maximumRepairWork: 10_000_000);
-        Assert.Equal(world.Length, notes.Count(n => n.Contains("it was rebuilt from anim.zbd")));
+        // Each note says the game uses the newer version and what it changed (the archived text's 2 was 1 when compiled).
+        Assert.Equal(world.Length, notes.Count(n => n.Contains("was rebuilt from anim.zbd, which the game uses") && n.Contains("VALUE ( 2 ) → ( 1 )")));
         foreach (var file in output) files.Files[file.Path] = file.Bytes;
         var rebuilt = AnimationCompiler.Compile(files, Root, world, Token).Package;
         Assert.Equal(shipped.Entries.Count, rebuilt.Entries.Count);
