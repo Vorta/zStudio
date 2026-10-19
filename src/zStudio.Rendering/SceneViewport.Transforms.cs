@@ -21,8 +21,8 @@ public sealed partial class SceneViewport
     private bool PlacementEditingEnabled => !worldInspection || !editingLocked;
     public string TransformMode { get; private set; } = "move";
     public bool HasTransformDraft => transformSource != null || objectDraftNode != null;
-    public bool TransformHandlesVisible => pickupManipulator?.Visibility == Visibility.Visible;
-    public bool SelectionBoundsVisible => selectionBox?.Visibility == Visibility.Visible;
+    public bool TransformHandlesVisible => !PresentationUiHidden && pickupManipulator?.Visibility == Visibility.Visible;
+    public bool SelectionBoundsVisible => !PresentationUiHidden && selectionBox?.Visibility == Visibility.Visible;
     public event Action<PlacementTransform>? TransformDraftChanged;
     /// <summary>
     /// A source object's handle gesture, relative to where it started: <see cref="ObjectDrag.Translation"/> is the change of its

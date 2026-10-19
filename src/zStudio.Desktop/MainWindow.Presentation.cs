@@ -26,11 +26,17 @@ public partial class MainWindow
         if (fullscreen == null && uiHidden == null) return PresentationState;
         if ((fullscreen == true || uiHidden == true) && ActiveNavigationViewport == null)
             throw new StudioCommandException("preview_unavailable", "Open a 3D preview before enabling presentation modes.");
-        // The polygon zone tool's banner and picker are UI: hiding it leaves the tool (refused during a stroke).
-        if (uiHidden == true && !presentationUiHidden) EndZoneToolFor("hiding the UI");
+        // The polygon zone tool's banner and picker are UI: hiding it leaves the tool (refused during a stroke;
+        // released strokes still apply, as when the tool is left otherwise).
+        if (uiHidden == true && !presentationUiHidden && scene?.IsZonePainting == true)
+            throw new StudioCommandException("busy", "Finish the polygon zone stroke before hiding the UI.");
         using var lease = BeginLayoutChange();
         if (fullscreen is bool full && full != presentationFullscreen) SetFullscreen(full);
-        if (uiHidden is bool hidden) presentationUiHidden = hidden;
+        if (uiHidden is bool hidden)
+        {
+            if (hidden && ZoneToolEngaged) LeaveZoneTool();
+            presentationUiHidden = hidden;
+        }
         RefreshPresentation();
         ArrangeWorkspace();
         return PresentationState;
@@ -88,7 +94,8 @@ public partial class MainWindow
             // The title row is gone: its strip of the view takes the pointer instead of moving the window.
             foreach (var chrome in new[] { WindowChrome.GetWindowChrome(this), ordinaryWindow?.Chrome })
                 if (chrome != null) chrome.CaptionHeight = hidden ? 0 : TitleArea.Height;
-            RefreshStaleBanner();
+            UpdateReloadingView();
+            if (sourceChromeActive) ClipPreviewHost(null, null);
             ApplyRetainedPresentation();
             if (hidden && propertiesWindow?.IsVisible == true)
             {

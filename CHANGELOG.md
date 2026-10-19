@@ -4,7 +4,7 @@ Version numbers follow `MAJOR.MINOR.PATCH`; the 0.x series is under active devel
 
 ## 0.9.2 — 2026-10-19
 
-- **Hide UI** is back, on **F10** (View → Hide UI), next to **F11** fullscreen: together they show the 3D view alone on the whole screen, for footage (#31). It hides the menus, a source map's command bar, World tree, Properties pane and status bar, Diagnostics, banners (Flycam's too), an open Properties window and the editor guides (grid, axes, view cube, bounds, selection, handles, outlines); wireframe, textures and overlays stay as chosen. Clicks select and edit nothing while it lasts; navigation and Fly work as usual. Hiding the UI leaves Edit zones. F10 shows everything again as it was, and leaving the 3D view does so too. MCP `presentation` adds `uiHidden`.
+- **Hide UI** is back, on **F10** (View → Hide UI), next to **F11** fullscreen: together they show the 3D view alone on the whole screen, for footage (#31). It hides the menus, a source map's command bar, World tree, Properties pane and status bar, Diagnostics, banners (Flycam's too), an open Properties window and the editor guides (grid, axes, view cube, bounds, selection, handles, outlines, AI nodes and VTOL routes); wireframe, textures and the Overlay highlights stay as chosen. Clicks select and edit nothing while it lasts; navigation and Fly work as usual. Hiding the UI leaves Edit zones. F10 shows everything again as it was, and leaving the 3D view does so too. MCP `presentation` adds `uiHidden`.
 
 ## 0.9.1 — 2026-10-19
 

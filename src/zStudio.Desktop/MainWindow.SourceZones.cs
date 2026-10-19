@@ -759,7 +759,7 @@ public partial class MainWindow
                     fullTargets = plan.Full.Take(64).Select(t => new { node = t.SceneNode, polygon = t.Polygon }).ToArray(),
                 });
             });
-        Register(registry, "source_zone_tool", "Read or set the polygon zone tool of the shown source map (GUI state; it synthesizes no pointer input): engage it in a mode with a zone (the Zones group's Edit zones toggle, Paint | Erase and zone picker, Tools > Paint/Erase polygon zones, P/E, [ ], Shift+click), exit it, or show/hide the polygons the last stroke skipped. State lists the zones the map's polygons carry as placed in the world (with labels and polygon counts) and what the last GUI stroke did.", true,
+        Register(registry, "source_zone_tool", "Read or set the polygon zone tool of the shown source map (GUI state; it synthesizes no pointer input): engage it in a mode with a zone (the Zones group's Edit zones toggle, Paint | Erase and zone picker, Tools > Paint/Erase polygon zones, P/E, [ ], Shift+click), exit it, or show/hide the polygons the last stroke skipped. Engaging returns busy while Hide UI is on. State lists the zones the map's polygons carry as placed in the world (with labels and polygon counts) and what the last GUI stroke did.", true,
             [DocumentParameter, P("action", "string", "state reads; engage engages (or changes mode/zone); exit leaves; showSkipped/hideSkipped outline the last stroke's full polygons.", true, "state", "engage", "exit", "showSkipped", "hideSkipped"),
              P("mode", "string", "engage: paint or erase (default: as before).", false, "paint", "erase"), new("zone", "integer", "engage: the zone, 0–254 or 255 for Any (default: as before).", Minimum: 0, Maximum: 255)],
             args =>

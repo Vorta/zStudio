@@ -257,7 +257,7 @@ public partial class MainWindow : Window
             }
             // Preparation can finish before ShowAssetCore (for example canceled texture discovery).
             // The whole current transition has settled now, including any same-document asset retries.
-            RefreshPresentation();
+            RefreshPresentation(previewSettled: generation == documentPreviewGeneration && ViewModel.SelectedDocument == doc && shownDocument == doc);
             ArrangeWorkspace();
         }
     }
@@ -442,6 +442,7 @@ public partial class MainWindow : Window
                     // During a handoff the retiring scene stays in the host until this one has loaded.
                     if (retiringScene == null) SceneHost.Content = scene;
                     ConfigureFlyScene(scene);
+                    scene.SetPresentationUiHidden(presentationUiHidden);
                 }
                 if (asset.Kind == AssetKind.World) await PopulateWorldMissionsAsync(doc, token);
                 string? exactMission = ExactMissionFor(doc.Path, ViewModel.Resolver.SelectedMission(doc.Path));
@@ -482,6 +483,8 @@ public partial class MainWindow : Window
                     library => ViewModel.Documents.Select(d => d.ResourceEdits is { } e && e.SnapshotFor(library) is { } s ? (e, s) : ((ResourceEditSession, ResourceSnapshot)?)null).SingleOrDefault(p => p != null)); motion = editor;
                 editor.SceneChanged += () => { AttachInspection(editor.Viewport); editor.Viewport.NodeSelected -= InspectNode; editor.Viewport.NodeSelected += InspectNode; RefreshSceneTree(); };
                 editor.StatusChanged += text => { if (!previewLifetime.IsCancellationRequested) ViewModel.Status = text; };
+                // Hide UI applies before the editor shows its first frame.
+                ApplyRetainedPresentation();
                 AnimationHost.Content = editor; AnimationHost.Visibility = Visibility.Visible;
                 await editor.InitializeAsync(token);
             }
@@ -492,6 +495,7 @@ public partial class MainWindow : Window
                 editor.StatusChanged += text => { if (!previewLifetime.IsCancellationRequested) ViewModel.Status = text; };
                 editor.InspectionChanged += (json, data) => { if (previewLifetime.IsCancellationRequested) return; properties = json; var source = editor.SourceByteSelection(); RawText.Text = source.Scope + "\n\n" + (source.Offset >= 0 ? Hex(source.Bytes.Span,source.Offset) : "") + (source.Length > 4096 ? "\n… first 4,096 source bytes shown." : ""); };
                 editor.SaveRequested += async () => { await SaveAnimationAsync(doc); };
+                ApplyRetainedPresentation();
                 AnimationHost.Content = editor; AttachAnimationWorkspace(editor);
                 AnimationHost.Visibility = Visibility.Visible;
                 await editor.InitializeAsync();
@@ -532,7 +536,7 @@ public partial class MainWindow : Window
                 if (!EmptyPreview.Text.StartsWith("Preview unavailable", StringComparison.Ordinal)) EmptyPreview.Text = "Loading preview…";
             }
             UpdateReloadingView();
-            RefreshPresentation();
+            RefreshPresentation(previewSettled: !token.IsCancellationRequested && shownDocument == doc && shownAsset?.Id == asset?.Id);
             ArrangeWorkspace();
         }
     }

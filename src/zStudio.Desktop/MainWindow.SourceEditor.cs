@@ -244,8 +244,8 @@ public partial class MainWindow
     }
     private void ClipPreviewHost(object? sender, SizeChangedEventArgs? e)
     {
-        // The view is a rounded frame between the panes.
-        PreviewHost.Clip = PreviewHost.ActualWidth > 0 && PreviewHost.ActualHeight > 0 ? new RectangleGeometry(new Rect(0, 0, PreviewHost.ActualWidth, PreviewHost.ActualHeight), 8, 8) : null;
+        // The view is a rounded frame between the panes (alone, with the UI hidden, it fills the window).
+        PreviewHost.Clip = !presentationUiHidden && PreviewHost.ActualWidth > 0 && PreviewHost.ActualHeight > 0 ? new RectangleGeometry(new Rect(0, 0, PreviewHost.ActualWidth, PreviewHost.ActualHeight), 8, 8) : null;
     }
 
     /// <summary>Shows the chrome's current state: visibility, title, status, overlays and the docked card.</summary>

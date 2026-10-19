@@ -93,7 +93,8 @@ public partial class MainWindow
         ReloadingTitle.Text = retiringScene != null ? "Loading the rebuilt world…" : rebuildEvaluating ? "Rebuilding the world…" : "Applying the edit…";
         if (reloading) ReloadingView.SetResourceReference(System.Windows.Controls.Panel.BackgroundProperty, "ReloadingShade");
         else ReloadingView.Background = System.Windows.Media.Brushes.Transparent;
-        ReloadingView.Visibility = shown ? Visibility.Visible : Visibility.Collapsed;
+        // Hidden UI shows the view alone: no notice or shade over it.
+        ReloadingView.Visibility = shown && !presentationUiHidden ? Visibility.Visible : Visibility.Collapsed;
         RefreshStaleBanner();
     }
     private void RebuildNoticeDue(object? sender, EventArgs e) { rebuildNoticeDelay?.Stop(); rebuildNoticeDue = true; UpdateReloadingView(); }

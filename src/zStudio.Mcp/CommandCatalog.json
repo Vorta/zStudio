@@ -6882,7 +6882,7 @@
   },
   {
     "Name": "zstudio_source_zone_tool",
-    "Description": "Read or set the polygon zone tool of the shown source map (GUI state; it synthesizes no pointer input): engage it in a mode with a zone (the Zones group\u0027s Edit zones toggle, Paint | Erase and zone picker, Tools \u003E Paint/Erase polygon zones, P/E, [ ], Shift\u002Bclick), exit it, or show/hide the polygons the last stroke skipped. State lists the zones the map\u0027s polygons carry as placed in the world (with labels and polygon counts) and what the last GUI stroke did.",
+    "Description": "Read or set the polygon zone tool of the shown source map (GUI state; it synthesizes no pointer input): engage it in a mode with a zone (the Zones group\u0027s Edit zones toggle, Paint | Erase and zone picker, Tools \u003E Paint/Erase polygon zones, P/E, [ ], Shift\u002Bclick), exit it, or show/hide the polygons the last stroke skipped. Engaging returns busy while Hide UI is on. State lists the zones the map\u0027s polygons carry as placed in the world (with labels and polygon counts) and what the last GUI stroke did.",
     "Mutates": true,
     "Parameters": [
       {

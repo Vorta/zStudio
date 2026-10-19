@@ -22,7 +22,7 @@ public sealed partial class SceneViewport
 
     private HitTestResult? PickPickupHandle(Point point)
     {
-        if (!CanManipulate ||
+        if (PresentationUiHidden || !CanManipulate ||
             pickupManipulator?.Visibility != Visibility.Visible || viewport.Camera is not HelixToolkit.Wpf.SharpDX.ProjectionCamera camera ||
             !IsInsidePickupViewport(point)) return null;
         var origin = transformDraft.Position;

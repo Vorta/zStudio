@@ -84,8 +84,9 @@ public sealed partial class SceneViewport
         if (e.Handled ||
             InspectionContent is DependencyObject panel && IsInspectionInput(e.OriginalSource as DependencyObject, panel)) return false;
         if (IsFlyActive || IsPickupDragging) return true;
-        // Hidden UI shows the view only: clicks select and edit nothing (middle-button navigation goes on).
-        if (PresentationUiHidden) return e.ChangedButton is MouseButton.Left or MouseButton.Right;
+        // Hidden UI shows the view only: clicks select and edit nothing (middle-button navigation goes on,
+        // except during a keyboard AI path transform or route move, which keep the view where it is).
+        if (PresentationUiHidden) return e.ChangedButton is MouseButton.Left or MouseButton.Right || IsAiPathPointerTransform || IsParachutePointerMoving;
         // The screen-space cube owns its clicks, even over scene geometry or
         // handles. Resolve it before the editing lock can consume a scene click.
         if (!IsAiPathPointerTransform && !IsParachutePointerMoving && aiPathBoxStart == null && e.ChangedButton == MouseButton.Left && NavigateCubeAt(point)) return true;
