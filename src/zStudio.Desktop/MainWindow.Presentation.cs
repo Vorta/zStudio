@@ -26,19 +26,27 @@ public partial class MainWindow
         if (fullscreen == null && uiHidden == null) return PresentationState;
         if ((fullscreen == true || uiHidden == true) && ActiveNavigationViewport == null)
             throw new StudioCommandException("preview_unavailable", "Open a 3D preview before enabling presentation modes.");
-        // The polygon zone tool's banner and picker are UI: hiding it leaves the tool (refused during a stroke;
-        // released strokes still apply, as when the tool is left otherwise).
-        if (uiHidden == true && !presentationUiHidden && scene?.IsZonePainting == true)
-            throw new StudioCommandException("busy", "Finish the polygon zone stroke before hiding the UI.");
+        // The polygon zone tool and the terrain brush are UI: hiding it leaves them (refused during a stroke;
+        // released zone strokes still apply, as when the tool is left otherwise).
+        if (uiHidden == true && !presentationUiHidden && (scene?.IsZonePainting == true || scene?.IsTerrainStroking == true))
+            throw new StudioCommandException("busy", "Finish the stroke before hiding the UI.");
         using var lease = BeginLayoutChange();
         if (fullscreen is bool full && full != presentationFullscreen) SetFullscreen(full);
         if (uiHidden is bool hidden)
         {
-            if (hidden && ZoneToolEngaged) LeaveZoneTool();
+            if (hidden && !presentationUiHidden)
+            {
+                if (ZoneToolEngaged) LeaveZoneTool();
+                if (terrainBrush != null) SetTerrainBrush(null);
+                OutlinerLegend.IsOpen = false;
+            }
             presentationUiHidden = hidden;
         }
         RefreshPresentation();
         ArrangeWorkspace();
+        // Focus in chrome that hid moves to the view, so its keys (Space, navigation, Fly) keep working.
+        if (presentationUiHidden && ActiveNavigationViewport is { } view && System.Windows.Input.Keyboard.FocusedElement is DependencyObject focused &&
+            !(focused is System.Windows.Media.Visual visual && view.IsAncestorOf(visual))) view.FocusView();
         return PresentationState;
     }
 
@@ -95,7 +103,8 @@ public partial class MainWindow
             foreach (var chrome in new[] { WindowChrome.GetWindowChrome(this), ordinaryWindow?.Chrome })
                 if (chrome != null) chrome.CaptionHeight = hidden ? 0 : TitleArea.Height;
             UpdateReloadingView();
-            if (sourceChromeActive) ClipPreviewHost(null, null);
+            // The view's rounded corners go with the UI (and come back with it).
+            if (sourceChromeActive && (PreviewHost.Clip == null) != hidden) ClipPreviewHost(null, null);
             ApplyRetainedPresentation();
             if (hidden && propertiesWindow?.IsVisible == true)
             {
@@ -129,6 +138,8 @@ public partial class MainWindow
         scene?.SetPresentationUiHidden(presentationUiHidden);
         animation?.Viewport.SetPresentationUiHidden(presentationUiHidden);
         motion?.Viewport.SetPresentationUiHidden(presentationUiHidden);
+        // A rebuild's previous view stays shown until the new one has loaded.
+        retiringScene?.SetPresentationUiHidden(presentationUiHidden);
     }
 
     internal bool IsPropertiesPresented(PropertiesWindow window) => window.IsVisible || ReferenceEquals(window, presentationProperties);

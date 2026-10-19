@@ -189,7 +189,6 @@ public partial class MainWindow
             if (presentationUiHidden)
             {
                 // The view alone: no panes or splitters (their preferences stay as they are).
-                SetFilesDetached(false);
                 if (ViewModel.IsSourceProject) ArrangeSourcePanes(false);
                 NavigatorHost.Visibility = NavigatorSplitter.Visibility = InspectorHost.Visibility = InspectorSplitter.Visibility = BottomTools.Visibility = ToolsSplitter.Visibility = Visibility.Collapsed;
                 FilesColumn.Width = NavigatorSplitterColumn.Width = PropertiesColumn.Width = PropertiesSplitterColumn.Width = new(0);

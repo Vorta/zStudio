@@ -40,6 +40,9 @@ public sealed partial class SceneViewport
         viewport.InvalidateRender();
     }
 
+    /// <summary>Gives the view keyboard focus (Hide UI moves it here from chrome that hides).</summary>
+    public void FocusView() => viewport.Focus();
+
     // IsRendering is independent of each guide's normal Visibility. Refreshes may change that
     // preference while hidden, and newly created guides inherit the override before publication.
     private void PresentationGuide(Element3D guide) => BindingOperations.SetBinding(guide, Element3D.IsRenderingProperty,

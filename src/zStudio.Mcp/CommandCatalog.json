@@ -1806,7 +1806,7 @@
   },
   {
     "Name": "zstudio_presentation",
-    "Description": "Read or set independent temporary fullscreen (F11) and Hide UI (F10) modes for the current 3D preview. Hide UI leaves the view alone: menus, command bar, panes, status bar, banners, Properties and editor guides (grid, axes, bounds, handles, outlines) hide, clicks select and edit nothing, and navigation and Fly go on; it leaves the polygon zone tool (refused during a stroke) and the tool cannot be engaged while it lasts. Preserves drafts, layout preferences, camera and playback. Enabling requires a 3D preview; disabling always works. Leaving 3D clears Hide UI and retains fullscreen. Neither mode is saved.",
+    "Description": "Read or set independent temporary fullscreen (F11) and Hide UI (F10) modes for the current 3D preview. Hide UI leaves the view alone: menus, command bar, panes, status bar, banners, Properties and editor guides (grid, axes, bounds, handles, outlines) hide, clicks select and edit nothing, and navigation and Fly go on; it leaves the polygon zone tool and the terrain brush (refused during a stroke) and the zone tool cannot be engaged while it lasts. Preserves drafts, layout preferences, camera and playback. Enabling requires a 3D preview; disabling always works. Leaving 3D clears Hide UI and retains fullscreen. Neither mode is saved.",
     "Mutates": true,
     "Parameters": [
       {
