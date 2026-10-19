@@ -47,7 +47,7 @@ public partial class MainWindow
         if (sceneTreeDocument == doc && sceneTree?.Hierarchy.Scene == data && sceneTree?.IsPreview == active && ReferenceEquals(sceneTree?.Hierarchy.Included, active ? viewport?.InspectionNodes : null))
         {
             // A rebuild that kept this tree gives the keyboard back to it too.
-            if (outlinerFocusPending) ScheduleSceneTreeReveal();
+            if (outlinerFocusPending) { if (sceneTree?.Selected == null) outlinerFocusPending = false; else ScheduleSceneTreeReveal(); }
             return;
         }
         changingSceneTree = true;
@@ -92,6 +92,8 @@ public partial class MainWindow
         ScheduleSceneTreeReveal();
         RestoreHiddenIdentities(doc);
         RestoreTreeLayout(doc);
+        // The keyboard goes back to a selected row (a restored zone, network or definition too); without one it stays where it went.
+        if (sceneTree?.Selected == null) outlinerFocusPending = false;
         if (sourceChromeActive) { RefreshOutlinerFilter(); SceneTreeSelectionChanged(); }
     }
 
@@ -265,7 +267,7 @@ public partial class MainWindow
     {
         var model = sceneTree; var selected = reveal ?? model?.Selected;
         int generation = ++sceneTreeRevealGeneration;
-        if (selected == null || !DocumentSceneTree.IsVisible) { outlinerFocusPending = false; return; }
+        if (selected == null || !DocumentSceneTree.IsVisible) return;
         Dispatcher.BeginInvoke(DispatcherPriority.Loaded, () =>
         {
             if (sceneTree != model || generation != sceneTreeRevealGeneration || !DocumentSceneTree.IsVisible) return;

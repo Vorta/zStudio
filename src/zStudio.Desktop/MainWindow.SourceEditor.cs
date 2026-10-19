@@ -155,6 +155,8 @@ public partial class MainWindow
     private void LeaveSourceChrome()
     {
         OutlinerLegend.IsOpen = false;
+        // The World tree's zone and network eyes and a definition's outlines belong to the source map, not to the next world.
+        scene?.SetZonePresentation(new HashSet<byte>(), null); scene?.SetAiNetworkPresentation(new HashSet<string>(StringComparer.Ordinal), null); scene?.SetOutlinedNodes([]);
         UndockCard();
         PreviewHost.SizeChanged -= ClipPreviewHost; PreviewHost.Clip = null;
         SourceTreeHost.Content = null; DocumentSceneTab.Content = DocumentSceneTree;
@@ -570,7 +572,7 @@ public partial class MainWindow
         }
         catch (StudioCommandException ex) { Report(ex); }
     }
-    /// <summary>Frames a network (all of its shown nodes) or what a definition binds to; false when nothing shown is there.</summary>
+    /// <summary>Frames a network (all of its nodes) or what a definition binds to; false when nothing shown is there.</summary>
     internal bool TryFrameSection(SceneTreeItem row)
     {
         if (scene is not { } viewport) return false;

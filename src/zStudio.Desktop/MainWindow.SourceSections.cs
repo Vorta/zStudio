@@ -131,13 +131,15 @@ public partial class MainWindow : ISourceSectionState
             if (isolatedZone is byte isolated && sections.Zone(isolated) == null) isolatedZone = null;
         }
         HashSet<byte> hidden = isolatedZone is byte only ? [.. Enumerable.Range(0, 256).Select(z => (byte)z).Where(z => z != only)] : [.. hiddenZones];
-        byte? zone = ZoneOverlayOn && SectionSelection?.Section is ZoneEntry selectedZone ? selectedZone.Zone.Zone : null;
+        // A hidden zone or network is not emphasised (the others would all turn faint around nothing).
+        byte? zone = ZoneOverlayOn && SectionSelection?.Section is ZoneEntry selectedZone && !hidden.Contains(selectedZone.Zone.Zone) ? selectedZone.Zone.Zone : null;
         viewport.SetZonePresentation(hidden, zone);
         // A selected network, or the network of a selected node, is emphasised.
         string? network = SectionSelection?.Section is NetworkEntry selectedNetwork ? selectedNetwork.Network.Id
             : viewport.SelectedAiNode is { } node && viewport.AiNetworks.Find(node) is { } found ? found.Network.Id : null;
-        viewport.SetAiNetworkPresentation(hiddenNetworks, network);
-        int[] outlined = SectionSelection?.Section is DefinitionEntry definition && sceneTree?.Sections?.DefinitionRoots.GetValueOrDefault(definition.Definition.Index) is { } roots ? roots : [];
+        viewport.SetAiNetworkPresentation(hiddenNetworks, network != null && hiddenNetworks.Contains(network) ? null : network);
+        int[] outlined = SectionSelection?.Section is DefinitionEntry definition && sceneTree?.Sections?.DefinitionRoots.GetValueOrDefault(definition.Definition.Index) is { } roots
+            ? [.. roots.Take(SceneViewport.MaximumOutlinedNodes)] : [];
         if (!outlined.SequenceEqual(viewport.OutlinedNodes)) viewport.SetOutlinedNodes(outlined);
         RefreshRowEyes(); RefreshViewportChips();
     }
@@ -173,6 +175,8 @@ public partial class MainWindow : ISourceSectionState
                 string id = network.Network.Id;
                 if (hide ?? !hiddenNetworks.Contains(id))
                 {
+                    // Hiding ends AI path editing on it: its pending transform is decided first.
+                    if (HasAiPathDraft) throw new StudioCommandException("pending_drafts", "Confirm or cancel the AI path transform before hiding a network.");
                     hiddenNetworks.Add(id);
                     // Hiding the isolated network ends its isolation.
                     if (aiNetworkFilter == id) SetAiOptions(aiVisible, aiThroughGeometry, null);
@@ -306,7 +310,7 @@ public partial class MainWindow : ISourceSectionState
     private SourceSectionCard SectionCard()
     {
         if (sectionCard != null) return sectionCard;
-        sectionCard = new SourceSectionCard();
+        sectionCard = new SourceSectionCard { IsEnabled = !sourceWorkspaceBusy };
         sectionCard.CloseRequested = () => ClearSectionSelection();
         sectionCard.ApplyLabel = async (zone, label) =>
         {
