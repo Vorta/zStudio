@@ -285,6 +285,7 @@ public partial class MainWindow
     {
         if (brush != null)
         {
+            if (presentationUiHidden) throw new StudioCommandException("busy", "Show the UI (F10) before painting terrain.");
             // Changing tools must not discard a stroke in progress; the polygon zone tool otherwise ends.
             if (scene?.IsZonePainting == true || zoneTool.Applying) throw new StudioCommandException("busy", "Finish the polygon zone stroke before painting terrain.");
             if (scene is { } shown && TerrainBrushBlocked(shown))

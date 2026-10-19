@@ -44,9 +44,9 @@ public partial class MainWindow
         }
         RefreshPresentation();
         ArrangeWorkspace();
-        // Focus in chrome that hid moves to the view, so its keys (Space, navigation, Fly) keep working.
-        if (presentationUiHidden && ActiveNavigationViewport is { } view && System.Windows.Input.Keyboard.FocusedElement is DependencyObject focused &&
-            !(focused is System.Windows.Media.Visual visual && view.IsAncestorOf(visual))) view.FocusView();
+        // Focus in chrome that hid (here or in Properties) moves to the view, so its keys (Space, navigation, Fly) keep working.
+        if (uiHidden == true && presentationUiHidden && ActiveNavigationViewport is { } view && System.Windows.Input.Keyboard.FocusedElement is DependencyObject focused &&
+            Window.GetWindow(focused) is MainWindow or PropertiesWindow && !(focused is System.Windows.Media.Visual visual && view.IsAncestorOf(visual))) view.FocusView();
         return PresentationState;
     }
 
