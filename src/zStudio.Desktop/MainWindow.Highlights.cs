@@ -44,8 +44,9 @@ public partial class MainWindow
     {
         ++worldHighlightGeneration;
         worldHighlightMode = mode;
-        // The Zones row's switch remembers the zone overlay last shown.
+        // The Zones row's switch remembers the zone overlay last shown; in a source map the zones shown follow the overlay.
         if (mode is WorldHighlightMode.Zones or WorldHighlightMode.PolygonZones) zoneOverlayKind = mode;
+        ZoneOverlayChosen(mode);
         synchronizingWorldHighlight = true;
         try
         {

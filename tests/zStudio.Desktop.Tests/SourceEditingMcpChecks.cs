@@ -101,8 +101,9 @@ internal static class SourceEditingMcpChecks
             Assert.False(await Task.Run(() => doc.SourceInputsChanged(token), token));
             // Hold actual scene-card source preparation, then type newer GUI input: stale work must retain that draft.
             var scene = (zStudio.Rendering.SceneViewport)typeof(MainWindow).GetField("scene", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(main)!;
-            scene.SetAiOptions(true, true, null);
             string cardPreview = ((Guid)typeof(MainWindow).GetField("previewId", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(main)!).ToString();
+            // A source map's networks start hidden: show them all (the AI Networks row's master eye).
+            await Job("scene_options", new() { ["preview"] = cardPreview, ["changes"] = new Dictionary<string, object?> { ["aiNodes"] = true } });
             string target = "ai:" + scene.AiNetworks.Id + ":" + scene.AiNetworks.Networks[0].Nodes[0].Id;
             await Call("scene_card", new() { ["preview"] = cardPreview, ["action"] = "select", ["target"] = target });
             await Call("scene_card", new() { ["preview"] = cardPreview, ["action"] = "begin", ["document"] = Id(doc), ["revision"] = doc.Revision });
@@ -465,6 +466,13 @@ internal static class SourceEditingMcpChecks
             Assert.True((await Call("scene_tree", new() { ["document"] = Id(second), ["search"] = "tank", ["types"] = "object" }))["matches"]!["items"]![0]!["item"]!["hidden"]!.GetValue<bool>());
             await Call("scene_selection", new() { ["preview"] = found["preview"]!.GetValue<string>(), ["action"] = "show_all" });
             Assert.Empty(tankViewport.HiddenNodes);
+            // The AI Vehicles row's master eye hides every unit; showing them again one by one turns it back.
+            Assert.True(aivRow["master"]!.GetValue<bool>());
+            async Task<bool> AivMaster() => (await Call("scene_tree", new() { ["document"] = Id(second) }))["children"]!["items"]!.AsArray().Single(r => r!["pass"]?.GetValue<string>() == "aiv")!["master"]!.GetValue<bool>();
+            await Call("scene_tree", new() { ["document"] = Id(second), ["context"] = treeContext, ["preview"] = found["preview"]!.GetValue<string>(), ["action"] = "hide", ["row"] = aivRow["row"]!.GetValue<string>() });
+            Assert.Contains(tankActor.Root, tankViewport.HiddenNodes); Assert.False(await AivMaster());
+            await Call("scene_tree", new() { ["document"] = Id(second), ["context"] = treeContext, ["preview"] = found["preview"]!.GetValue<string>(), ["action"] = "show", ["row"] = tankListed["row"]!.GetValue<string>() });
+            Assert.Empty(tankViewport.HiddenNodes); Assert.True(await AivMaster());
             Assert.True(tankViewport.SelectInspectionNode(tankActor.Root));
             string tankTarget = tankViewport.SelectedInspection!.Target;
             // Clicking the pass row (no object of its own) keeps the selected unit. A refused click restores the previous row only

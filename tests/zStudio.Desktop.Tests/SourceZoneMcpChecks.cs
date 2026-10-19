@@ -167,7 +167,8 @@ internal static class SourceZoneMcpChecks
             Assert.All(new[] { "SourceCommandBar", "SourceOutlinerPane", "SourcePropertiesPane" }, name => Assert.Equal(Visibility.Visible, ((UIElement)main.FindName(name)).Visibility));
 
             // The World tree's Zones section lists the map's zones with their labels; a zone's eye hides only its colour, and
-            // selecting a zone opens its card (the label is its draft). Show all shows every zone's colour again.
+            // selecting a zone opens its card (the label is its draft). Zones start hidden: a zone's eye shows its colour alone (the
+            // zone overlay turns on), and the Zones row's master eye shows or hides every zone.
             var zoneRoots = await Call("scene_tree", new() { ["document"] = doc.SessionId.ToString() });
             string zoneContext = zoneRoots["context"]!.GetValue<string>(), zonePreview = zoneRoots["preview"]!.GetValue<string>();
             var zonesRow = zoneRoots["children"]!["items"]!.AsArray().Single(r => r!["sectionRow"]?["section"]?.GetValue<string>() == "zones")!;
@@ -175,14 +176,23 @@ internal static class SourceZoneMcpChecks
             var upperZone = zoneRows.Single(z => z!["sectionRow"]?["zoneId"]?.GetValue<int>() == 7)!;
             Assert.Equal("Upper platform", upperZone["sectionRow"]!["label"]!.GetValue<string>());
             Assert.True(upperZone["sectionRow"]!["polygons"]!.GetValue<long>() > 0);
-            await Call("scene_tree", new() { ["document"] = doc.SessionId.ToString(), ["context"] = zoneContext, ["preview"] = zonePreview, ["action"] = "hide", ["row"] = upperZone["row"]!.GetValue<string>() });
-            Assert.Equal([7], (await Call("preview_state", new() { ["preview"] = zonePreview }))["sections"]!["zones"]!["hidden"]!.AsArray().Select(z => z!.GetValue<int>()));
-            Assert.Contains((byte)7, view.HiddenZones);
+            async Task<JsonNode> ZoneState() => (await Call("preview_state", new() { ["preview"] = zonePreview }))["sections"]!["zones"]!;
+            var zoneState = await ZoneState();
+            Assert.Empty(zoneState["shown"]!.AsArray()); Assert.False(zoneState["master"]!.GetValue<bool>()); Assert.False(zoneState["overlay"]!.GetValue<bool>());
+            await Call("scene_tree", new() { ["document"] = doc.SessionId.ToString(), ["context"] = zoneContext, ["preview"] = zonePreview, ["action"] = "show", ["row"] = upperZone["row"]!.GetValue<string>() });
+            zoneState = await ZoneState();
+            Assert.Equal([7], zoneState["shown"]!.AsArray().Select(z => z!.GetValue<int>())); Assert.True(zoneState["overlay"]!.GetValue<bool>());
+            Assert.DoesNotContain((byte)7, view.HiddenZones); Assert.Contains((byte)6, view.HiddenZones);
+            string zonesRowId = zonesRow["row"]!.GetValue<string>();
+            await Call("scene_tree", new() { ["document"] = doc.SessionId.ToString(), ["context"] = zoneContext, ["preview"] = zonePreview, ["action"] = "show", ["row"] = zonesRowId });
+            zoneState = await ZoneState();
+            Assert.True(zoneState["master"]!.GetValue<bool>()); Assert.Contains(7, zoneState["shown"]!.AsArray().Select(z => z!.GetValue<int>()));
+            await Call("scene_tree", new() { ["document"] = doc.SessionId.ToString(), ["context"] = zoneContext, ["preview"] = zonePreview, ["action"] = "hide", ["row"] = zonesRowId });
+            zoneState = await ZoneState();
+            Assert.Empty(zoneState["shown"]!.AsArray()); Assert.False(zoneState["master"]!.GetValue<bool>()); Assert.False(zoneState["overlay"]!.GetValue<bool>());
             await Call("scene_tree", new() { ["document"] = doc.SessionId.ToString(), ["context"] = zoneContext, ["preview"] = zonePreview, ["action"] = "select", ["row"] = upperZone["row"]!.GetValue<string>() });
             var zoneDraft = (await Call("drafts", new() { ["target"] = "section" }))["drafts"]!;
             Assert.Equal("zone", zoneDraft["kind"]!.GetValue<string>()); Assert.Equal("Upper platform", zoneDraft["label"]!.GetValue<string>());
-            await Call("scene_selection", new() { ["preview"] = zonePreview, ["action"] = "show_all" });
-            Assert.Empty(view.HiddenZones);
             // The card's Apply accepts its label as one undoable change; the rebuilt map selects the zone again, its card
             // showing the stored label with nothing pending.
             var card = typeof(MainWindow).GetField("sectionCard", fields)!.GetValue(main)!;

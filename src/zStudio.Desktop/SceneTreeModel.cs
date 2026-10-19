@@ -29,19 +29,23 @@ internal sealed record SceneTreeIdentity(string Key, int SourceNode, string? Pla
     private static string Clip(string value, int maximum) => value.Length <= maximum ? value : value[..maximum] + "…";
 }
 
-/// <summary>The presentation state the World tree's section rows show: the zone and AI overlays and their row eyes.</summary>
+/// <summary>
+/// The presentation state the World tree's section rows show: which zones and AI networks the view shows (each on its own;
+/// all hidden at first), the zone overlay's kind, and the master eyes of Zones, AI Networks, AI Vehicles and Pickups.
+/// </summary>
 internal interface ISourceSectionState
 {
+    /// <summary>A zone's colour shows (the zone overlay is on).</summary>
     bool ZoneOverlayOn { get; }
     bool ZoneOverlayPolygons { get; }
     bool ZoneToolEngaged { get; }
     byte? PaintZone { get; }
-    bool ZoneHidden(byte zone);
-    bool ZoneIsolated(byte zone);
-    bool AiOn { get; }
-    bool AiSeeThrough { get; }
-    bool NetworkHidden(string network);
-    bool NetworkIsolated(string network);
+    bool ZoneShown(byte zone);
+    /// <summary>A network shows (the AI overlay is on).</summary>
+    bool AnyNetworkShown { get; }
+    bool NetworkShown(string network);
+    /// <summary>The master eye of a section ("zones", "aiNetworks") or pass ("aiv", "puppies"): shown or hidden.</summary>
+    bool MasterShown(string section);
 }
 
 internal sealed class SceneTreeModel
@@ -242,17 +246,26 @@ public sealed class SceneTreeItem : INotifyPropertyChanged
         : Placement is { Difficulties.Count: > 0 } placement ? "Placed on " + string.Join(", ", placement.Difficulties) : null;
     private static long? ZoneWord(System.Text.Json.Nodes.JsonValue value) =>
         value.TryGetValue<uint>(out uint word) ? word : value.TryGetValue<int>(out int signed) ? signed : value.TryGetValue<long>(out long wide) ? wide : null;
-    public bool CanHide => IsSourceMap && Problem == null && (Section != null ? SectionCanHide : Index is int && !IsEmptyNode);
+    public bool CanHide => IsSourceMap && Problem == null && (Section != null ? SectionCanHide : HasMasterEye || Index is int && !IsEmptyNode);
+    /// <summary>The Zones, AI Networks, AI Vehicles and Pickups rows: their eye shows or hides everything below them.</summary>
+    public bool HasMasterEye => IsSourceMap && (Section is SectionHeader { Section: "zones" or "aiNetworks" } || Pass is { Kind: "aiv" or "puppies" });
+    /// <summary>The section or pass whose master eye this row is.</summary>
+    internal string? MasterKey => Section is SectionHeader { Section: "zones" or "aiNetworks" } header ? header.Section : Pass is { Kind: "aiv" or "puppies" } pass ? pass.Kind : null;
+    /// <summary>A unit or pickup the mission places after the world loads: hidden and shown one by one (no isolation).</summary>
+    public bool IsPassObject => addedPass != null;
     /// <summary>The row's Frame selection button: a selectable object, piece of geometry or node (not a group the build removes), an AI network or a bound definition.</summary>
     public bool CanFrame => IsSourceMap && (Section != null ? Section is NetworkEntry || Section is DefinitionEntry { Roots: > 0 } : Index is int && Selectable && !SourceGroup && !IsEmptyNode);
-    public bool IsHidden => Section != null ? SectionHidden : Index is int i && Owner.IsHiddenNode?.Invoke(i) == true;
-    public bool IsIsolated => Section != null ? SectionIsolated : Index is int i && Owner.IsIsolatedNode?.Invoke(i) == true;
-    public string EyeIcon => Section is SectionHeader ? (IsHidden ? "EyeOff" : "Eye") : IsHidden ? "EyeOff" : IsIsolated ? "Isolate" : "Eye";
-    public string EyeToolTip => Section != null ? SectionEyeToolTip : (IsHidden ? "Show in viewport" : "Hide in viewport") + (IsIsolated ? "\nMiddle-click: show all objects again" : "\nMiddle-click: hide all other objects");
+    public bool IsHidden => MasterKey is { } master ? State?.MasterShown(master) != true : Section != null ? SectionHidden : Index is int i && Owner.IsHiddenNode?.Invoke(i) == true;
+    public bool IsIsolated => Section == null && !IsPassObject && Index is int i && Owner.IsIsolatedNode?.Invoke(i) == true;
+    /// <summary>A hidden row drawn faint: never a section or pass row, whose master eye shows only what pressing it does.</summary>
+    public bool IsFaded => IsHidden && !IsSectionHeader;
+    public string EyeIcon => IsHidden ? "EyeOff" : IsIsolated ? "Isolate" : "Eye";
+    public string EyeToolTip => Section != null || HasMasterEye ? SectionEyeToolTip : IsPassObject ? (IsHidden ? "Show in viewport" : "Hide in viewport")
+        : (IsHidden ? "Show in viewport" : "Hide in viewport") + (IsIsolated ? "\nMiddle-click: show all objects again" : "\nMiddle-click: hide all other objects");
     internal void NotifyHidden()
     {
-        foreach (string name in new[] { nameof(IsHidden), nameof(IsIsolated), nameof(EyeIcon), nameof(EyeToolTip), nameof(HeaderActive), nameof(EyeDimmed), nameof(HeaderPaused),
-            nameof(ZoneKindPolygons), nameof(SeeThrough), nameof(IsPaintZone), nameof(HeaderControlsToolTip) }) Changed(name);
+        foreach (string name in new[] { nameof(IsHidden), nameof(IsIsolated), nameof(IsFaded), nameof(EyeIcon), nameof(EyeToolTip), nameof(HeaderActive), nameof(HeaderPaused),
+            nameof(ZoneKindPolygons), nameof(ZoneKindsEnabled), nameof(IsPaintZone), nameof(HeaderControlsToolTip) }) Changed(name);
     }
     public string ToolTip => (Section != null ? SectionToolTip : Pass is { } pass ? pass.Description : IsOtherDifficulty ? OtherDifficultyToolTip : ToolTipCore) + (Animations is { } animations ? "\nAnimations: " + string.Join(", ", animations.Select(a => Short(a, 64))) : "");
     private string ToolTipCore => Authored is { } authored ? $"{Short(DisplayName, 2048)} · {(IsEmptyNode ? "empty\n" + OutlinerKinds.EmptyNote : NodeType)}\nSource: {Short(authored.File, 2048)} · glTF node #{authored.SourceNode}\n" +
@@ -417,10 +430,10 @@ public sealed class SceneTreeItem : INotifyPropertyChanged
         MissingFileEntry missing => $"Listed by {missing.Listing.ListedBy} but not in the project: the build skips it.",
         _ => null,
     };
-    /// <summary>Which header controls the row shows: "zones" (Objects | Polygons and the eye) or "aiNetworks" (See-through and the eye).</summary>
+    /// <summary>Which header controls the row shows: "zones" (Objects | Polygons) or "aiNetworks" (none besides its eye).</summary>
     public string? SectionKind => Section is SectionHeader { Section: "zones" or "aiNetworks" } header ? header.Section : null;
-    /// <summary>The header's overlay is on (its eye is lit).</summary>
-    public bool HeaderActive => Section is SectionHeader header && (header.Section == "zones" ? State?.ZoneOverlayOn == true : header.Section == "aiNetworks" && State?.AiOn == true);
+    /// <summary>The header's overlay is on: some zone or network shows (its eye is lit).</summary>
+    public bool HeaderActive => Section is SectionHeader header && (header.Section == "zones" ? State?.ZoneOverlayOn == true : header.Section == "aiNetworks" && State?.AnyNetworkShown == true);
     /// <summary>The header's controls wait while Edit zones shows its own zone view, or have nothing to show.</summary>
     public bool HeaderPaused => Section is ZoneEntry ? State?.ZoneToolEngaged == true : Section is SectionHeader { Section: "zones" } ? State?.ZoneToolEngaged == true || Owner.Sections?.Zones.Count is null or 0
         : Section is SectionHeader { Section: "aiNetworks" } && Owner.Sections?.Networks.Count is null or 0;
@@ -428,9 +441,8 @@ public sealed class SceneTreeItem : INotifyPropertyChanged
             : Owner.Sections?.Zones.Count is null or 0 ? "No zones yet: paint polygon zones with Edit zones" : null
         : Section is SectionHeader { Section: "aiNetworks" } && Owner.Sections?.Networks.Count is null or 0 ? "No AI networks in this mission" : null;
     public bool ZoneKindPolygons => State?.ZoneOverlayPolygons != false;
-    public bool SeeThrough => State?.AiSeeThrough != false;
-    /// <summary>A zone or network row's eye while its section's overlay is off: it changes only its own state, drawn faint.</summary>
-    public bool EyeDimmed => Section is ZoneEntry && State?.ZoneOverlayOn != true || Section is NetworkEntry && State?.AiOn != true;
+    /// <summary>The Objects | Polygons switch takes input while a zone's colour shows (and Edit zones is off).</summary>
+    public bool ZoneKindsEnabled => State?.ZoneOverlayOn == true && !HeaderPaused;
     /// <summary>The zone Edit zones paints with (its row shows the brush).</summary>
     public bool IsPaintZone => Section is ZoneEntry zone && State?.ZoneToolEngaged == true && State.PaintZone == zone.Zone.Zone;
     private bool SectionCanHide => Section switch
@@ -442,30 +454,22 @@ public sealed class SceneTreeItem : INotifyPropertyChanged
     };
     private bool SectionHidden => Section switch
     {
-        SectionHeader { Section: "zones" } => State?.ZoneOverlayOn != true,
-        SectionHeader { Section: "aiNetworks" } => State?.AiOn != true,
-        ZoneEntry zone => State?.ZoneHidden(zone.Zone.Zone) == true,
-        NetworkEntry network => State?.NetworkHidden(network.Network.Id) == true,
+        ZoneEntry zone => State?.ZoneShown(zone.Zone.Zone) != true,
+        NetworkEntry network => State?.NetworkShown(network.Network.Id) != true,
         _ => false,
     };
-    private bool SectionIsolated => Section switch
+    private string SectionEyeToolTip => MasterKey switch
     {
-        ZoneEntry zone => State?.ZoneIsolated(zone.Zone.Zone) == true,
-        NetworkEntry network => State?.NetworkIsolated(network.Network.Id) == true,
-        _ => false,
-    };
-    private string SectionEyeToolTip => Section switch
-    {
-        SectionHeader { Section: "zones" } => HeaderControlsToolTip ?? (State?.ZoneOverlayOn == true ? "Hide zone colours"
-            : $"Show zone colours ({(ZoneKindPolygons ? "polygon zones" : "object zones")}). Replaces Soils, CanModify, ClipTo and Landmarks"),
-        SectionHeader { Section: "aiNetworks" } => HeaderControlsToolTip ?? (State?.AiOn == true ? "Hide AI networks" : "Show AI networks: every network's nodes and links in its attack-strategy colour"),
-        ZoneEntry zone => (IsHidden ? $"Show {ZoneName(zone.Zone.Zone).ToLowerInvariant()}'s colour" : $"Hide {ZoneName(zone.Zone.Zone).ToLowerInvariant()}'s colour")
-            + (IsIsolated ? "\nMiddle-click: show every zone's colour again" : "\nMiddle-click: show only this zone's colour")
-            + (State?.ZoneOverlayOn != true ? "\nZone colours are off: turn them on with the eye on Zones." : ""),
-        NetworkEntry network => (IsHidden ? $"Show {SourceMapSections.NetworkStem(network.Network)} in the view" : $"Hide {SourceMapSections.NetworkStem(network.Network)} in the view")
-            + (IsIsolated ? "\nMiddle-click: show every network again" : "\nMiddle-click: show only this network")
-            + (State?.AiOn != true ? "\nAI networks are off: turn them on with the eye on AI Networks." : ""),
-        _ => "",
+        "zones" => HeaderControlsToolTip ?? (IsHidden ? $"Show every zone's colour ({(ZoneKindPolygons ? "polygon zones" : "object zones")}). Replaces Soils, CanModify, ClipTo and Landmarks" : "Hide every zone's colour"),
+        "aiNetworks" => HeaderControlsToolTip ?? (IsHidden ? "Show every AI network: its nodes and links in its attack-strategy colour" : "Hide every AI network"),
+        "aiv" => IsHidden ? "Show every AI vehicle" : "Hide every AI vehicle",
+        "puppies" => IsHidden ? "Show every pickup" : "Hide every pickup",
+        _ => Section switch
+        {
+            ZoneEntry zone => IsHidden ? $"Show {ZoneName(zone.Zone.Zone).ToLowerInvariant()}'s colour" : $"Hide {ZoneName(zone.Zone.Zone).ToLowerInvariant()}'s colour",
+            NetworkEntry network => IsHidden ? $"Show {SourceMapSections.NetworkStem(network.Network)} in the view" : $"Hide {SourceMapSections.NetworkStem(network.Network)} in the view",
+            _ => "",
+        },
     };
     private string SectionToolTip => Section switch
     {

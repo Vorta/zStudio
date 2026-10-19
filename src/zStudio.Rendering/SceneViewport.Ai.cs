@@ -160,15 +160,30 @@ public sealed partial class SceneViewport
             }
         }
         BuildValveOverlay();
-        aiSelectionMarker = AiMesh(AiOctahedron(), new(1, 1, 1, 1));
+        aiSelectionMarker = AiMesh(AiOctahedron(), new(1, 1, 1, 1), twin: false);
         RefreshAiSelection(); UpdateAiMarkers(); viewport.InvalidateRender();
     }
-    private MeshGeometryModel3D AiMesh(MeshGeometry3D geometry, Color4 color)
+    /// <summary>How strongly the overlay shows through geometry that hides it.</summary>
+    public const float AiBehindGeometry = .5f;
+    /// <summary>Each see-through mesh's twin, drawn without depth at <see cref="AiBehindGeometry"/> strength.</summary>
+    private readonly Dictionary<MeshGeometryModel3D, MeshGeometryModel3D> aiBehind = [];
+    /// <summary>
+    /// An overlay mesh. Seen through geometry, it is drawn at full strength where nothing hides it and, by a depth-free twin,
+    /// at half strength where geometry does; <paramref name="twin"/> false draws it through geometry at full strength (the
+    /// selection marker). Without see-through, geometry hides it.
+    /// </summary>
+    private MeshGeometryModel3D AiMesh(MeshGeometry3D geometry, Color4 color, bool twin = true)
     {
-        var material = PreviewMaterials.Create(AiThroughGeometry); material.DiffuseColor = color; material.EnableUnLit = true;
-        var mesh = new MeshGeometryModel3D { Geometry = geometry, Material = material, IsTransparent = true, IsHitTestVisible = false,
-            CullMode = SharpDX.Direct3D11.CullMode.None, RenderOrder = 10, IsDepthClipEnabled = !AiThroughGeometry };
-        aiDrawables.Add(mesh); aiOverlay!.Children.Add(mesh); return mesh;
+        var mesh = Mesh(color, AiThroughGeometry && !twin);
+        if (AiThroughGeometry && twin) aiBehind[mesh] = Mesh(new(color.Red, color.Green, color.Blue, color.Alpha * AiBehindGeometry), true);
+        return mesh;
+        MeshGeometryModel3D Mesh(Color4 tint, bool through)
+        {
+            var material = PreviewMaterials.Create(through); material.DiffuseColor = tint; material.EnableUnLit = true;
+            var drawn = new MeshGeometryModel3D { Geometry = geometry, Material = material, IsTransparent = true, IsHitTestVisible = false,
+                CullMode = SharpDX.Direct3D11.CullMode.None, RenderOrder = 10, IsDepthClipEnabled = !through };
+            aiDrawables.Add(drawn); aiOverlay!.Children.Add(drawn); return drawn;
+        }
     }
     private static MeshGeometry3D AiOctahedron() => new()
     {
@@ -189,8 +204,18 @@ public sealed partial class SceneViewport
         var pose = CaptureView();
         if (aiMarkerPose == pose && aiMarkerWidth == viewport.ActualWidth && aiMarkerHeight == viewport.ActualHeight) return;
         aiMarkerPose = pose; aiMarkerWidth = viewport.ActualWidth; aiMarkerHeight = viewport.ActualHeight;
-        foreach (var (mesh, nodes, pixels) in aiMarkers) mesh.Instances = nodes.Select(n => Matrix4x4.CreateScale(AiScale(AiPosition(n), pixels)) * Matrix4x4.CreateTranslation(AiPosition(n))).ToArray();
-        foreach (var (mesh, build) in aiLinks) mesh.Geometry = build();
+        foreach (var (mesh, nodes, pixels) in aiMarkers)
+        {
+            var instances = nodes.Select(n => Matrix4x4.CreateScale(AiScale(AiPosition(n), pixels)) * Matrix4x4.CreateTranslation(AiPosition(n))).ToArray();
+            mesh.Instances = instances;
+            if (aiBehind.TryGetValue(mesh, out var behind)) behind.Instances = instances;
+        }
+        foreach (var (mesh, build) in aiLinks)
+        {
+            var geometry = build();
+            mesh.Geometry = geometry;
+            if (aiBehind.TryGetValue(mesh, out var behind)) behind.Geometry = geometry;
+        }
         RefreshAiSelection();
     }
     private void RefreshAiSelection()
@@ -275,7 +300,7 @@ public sealed partial class SceneViewport
     private void ClearAiDrawables()
     {
         if (aiOverlay != null) { viewport.Items.Remove(aiOverlay); aiOverlay.Children.Clear(); aiOverlay.Dispose(); aiOverlay = null; }
-        foreach (var mesh in aiDrawables) mesh.Dispose(); aiDrawables.Clear(); aiMarkers.Clear(); aiLinks.Clear(); aiSelectionMarker = null; aiMarkerPose = null;
+        foreach (var mesh in aiDrawables) mesh.Dispose(); aiDrawables.Clear(); aiMarkers.Clear(); aiLinks.Clear(); aiBehind.Clear(); aiSelectionMarker = null; aiMarkerPose = null;
     }
     private void ClearAi()
     {

@@ -294,15 +294,16 @@ public partial class MainWindow
         bool zones = shown && !flying && ZoneOverlayOn && !ZoneToolEngaged && shownDocument?.SourceWorld != null;
         ZonesChip.Visibility = zones ? Visibility.Visible : Visibility.Collapsed;
         ZonesChipText.Text = (worldHighlightMode == zStudio.Core.WorldHighlightMode.PolygonZones ? "Polygon zones" : "Object zones");
-        ZonesChipMode.Text = isolatedZone is byte only ? $"· {(only == 255 ? "Any" : "zone " + only.ToString(CultureInfo.InvariantCulture))} only" : hiddenZones.Count > 0 ? $"· {hiddenZones.Count} hidden" : "";
+        int usedZones = sceneTree?.Sections?.Zones.Count(z => z.Used) ?? 0;
+        ZonesChipMode.Text = shownZones.Count >= usedZones ? $"· all {usedZones}" : $"· {shownZones.Count} of {usedZones}";
         AiChip.Visibility = shown && aiVisible && IsAiWorld ? Visibility.Visible : Visibility.Collapsed;
         AiChip.Margin = new(10, zones ? 102 : 56, 10, 10);
-        int networks = scene?.AiNetworks.Networks.Count ?? 0, shownNetworks = scene?.AiNetworks.Networks.Count(n => !hiddenNetworks.Contains(n.Id)) ?? 0;
+        int networks = scene?.AiNetworks.Networks.Count ?? 0, shownCount = scene?.AiNetworks.Networks.Count(n => shownNetworks.Contains(n.Id)) ?? 0;
         AiChipText.Text = sourceChromeActive
             ? "AI networks · " + (aiNetworkFilter != null && scene?.AiNetworks.Networks.FirstOrDefault(n => n.Id == aiNetworkFilter) is { } isolatedNetwork ? SourceMapSections.NetworkStem(isolatedNetwork) + " only"
-                : networks == 0 ? "none in this map" : shownNetworks == networks ? $"all {networks}" : $"{shownNetworks} of {networks}")
+                : networks == 0 ? "none in this map" : shownCount == networks ? $"all {networks}" : $"{shownCount} of {networks}")
             : "AI nodes · " + ((AiNetworkCombo.SelectedItem as AiNetworkChoice)?.Label.Split(" · ")[0] ?? "All networks");
-        AiChipMode.Text = aiThroughGeometry ? "· see-through" : "";
+        AiChipMode.Text = aiThroughGeometry && !sourceChromeActive ? "· see-through" : "";
     }
     private void RefreshViewMode() { if (viewModeViewport != null) ViewModeLabel.Text = viewModeViewport.ViewMode; }
 
@@ -547,13 +548,11 @@ public partial class MainWindow
         if (sceneTree == null) return;
         foreach (var row in sceneTree.CreatedRows.ToArray()) row.IsExpanded = false;
     }
-    /// <summary>Show all: every hidden object, zone colour and AI network shows, and isolation ends (the overlays stay as they are).</summary>
-    private void ShowAllSections()
-    {
-        hiddenZones.Clear(); isolatedZone = null; hiddenNetworks.Clear();
-        if (aiNetworkFilter != null) SetAiOptions(aiVisible, aiThroughGeometry, null);
-        ApplySectionPresentation();
-    }
+    /// <summary>
+    /// Show all shows every hidden object (units and pickups too) and ends isolation; zones and AI networks keep their own eyes.
+    /// The AI Vehicles and Pickups master eyes follow.
+    /// </summary>
+    private void ShowAllSections() => ApplySectionPresentation();
 
     // A row's Frame selection: selects the row (resolving pending input first) and frames it, like the card's button.
     private void OutlinerFrameClick(object sender, RoutedEventArgs e)
@@ -588,7 +587,7 @@ public partial class MainWindow
     private void OutlinerEyeClick(object sender, RoutedEventArgs e)
     {
         e.Handled = true;
-        if ((sender as FrameworkElement)?.Tag is SceneTreeItem { Section: not null, CanHide: true } section)
+        if ((sender as FrameworkElement)?.Tag is SceneTreeItem { CanHide: true } section && (section.Section != null || section.HasMasterEye))
         {
             try { ToggleSectionEye(section); }
             catch (StudioCommandException ex) { Report(ex); }
@@ -598,18 +597,13 @@ public partial class MainWindow
         try { SetRowHidden(row, index, !row.IsHidden); }
         catch (StudioCommandException ex) { Report(ex); }
     }
-    // Middle-click on the eye: show only this object (what Isolate did), or everything again on the isolated one.
+    // Middle-click on a world object's eye: show only this object (what Isolate did), or everything again on the isolated one.
+    // Zones, networks, units and pickups are shown and hidden one by one, and their sections' rows show or hide them all.
     private void OutlinerEyeMiddleClick(object sender, System.Windows.Input.MouseButtonEventArgs e)
     {
         if (e.ChangedButton != System.Windows.Input.MouseButton.Middle) return;
         e.Handled = true;
-        if ((sender as FrameworkElement)?.Tag is SceneTreeItem { Section: ZoneEntry or NetworkEntry, CanHide: true } section)
-        {
-            try { ToggleSectionIsolation(section); }
-            catch (StudioCommandException ex) { Report(ex); }
-            return;
-        }
-        if ((sender as FrameworkElement)?.Tag is not SceneTreeItem { CanHide: true, Index: int index } row) return;
+        if ((sender as FrameworkElement)?.Tag is not SceneTreeItem { CanHide: true, Index: int index, Section: null, HasMasterEye: false, IsPassObject: false } row) return;
         try { ToggleRowIsolation(row, index); }
         catch (StudioCommandException ex) { Report(ex); }
     }
@@ -641,7 +635,12 @@ public partial class MainWindow
     /// <summary>Whether the isolation is a source group's: its members come from the tree, so a replaced scene ends it.</summary>
     private bool isolatedGroup;
     /// <summary>The rows' eyes follow what is hidden and isolated.</summary>
-    private void RefreshRowEyes() { if (sceneTree != null) foreach (var row in sceneTree.CreatedRows) row.NotifyHidden(); }
+    private void RefreshRowEyes()
+    {
+        if (sceneTree == null) return;
+        if (sourceChromeActive) ReconcileMasters();
+        foreach (var row in sceneTree.CreatedRows) row.NotifyHidden();
+    }
     internal void SetRowHidden(SceneTreeItem row, int index, bool hidden)
     {
         if (scene == null || row.Owner != sceneTree) throw new StudioCommandException("stale_record", "The tree node is no longer available.");

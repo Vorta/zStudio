@@ -39,7 +39,13 @@ public partial class MainWindow
     {
         viewport.AiPathSelectionChanging = () => !HasAiPathDraft && ResolvePropertiesDrafts();
         viewport.AiPathSelectionChanged += () => { if (scene == viewport) UpdateAiPathPanel(); };
-        viewport.AiPathEditingChanged += () => { if (scene == viewport) UpdateAiPathPanel(); };
+        viewport.AiPathEditingChanged += () =>
+        {
+            if (scene != viewport) return;
+            UpdateAiPathPanel();
+            // A source map shows its networks by their eyes again once path editing (which shows only its network) ends.
+            if (sourceChromeActive && viewport.AiPathEditingNetwork == null) ApplySectionPresentation();
+        };
         viewport.AiPathPointerMoved += (delta, x, y) =>
         {
             if (scene != viewport || aiPathDraft is not { } draft) return;
@@ -89,6 +95,8 @@ public partial class MainWindow
         if (target.Nodes.Count == 0 || target.Nodes.Count > AiPathTransforms.MaximumNodes)
             throw new StudioCommandException("unsupported", $"Edit mode supports 1–{AiPathTransforms.MaximumNodes:N0} nodes in one network.");
         EndZoneToolFor("editing an AI path");
+        // In a source map the edited network shows (its eye opens), and stays shown after editing.
+        if (sourceChromeActive && shownDocument?.SourceWorld != null) { ResetSectionStateFor(shownDocument); shownNetworks.Add(network); ReconcileMasters(); }
         SetAiOptions(true, aiThroughGeometry, network);
         selectedNode = null; inspectedSceneSource = null;
         scene.SetAiPathEditing(network, scene.SelectedAiNode is { } id ? [id] : []);

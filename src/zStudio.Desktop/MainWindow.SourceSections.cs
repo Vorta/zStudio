@@ -20,12 +20,21 @@ public partial class MainWindow : ISourceSectionState
     private readonly ConditionalWeakTable<GameScene, SourceMapSections> mapSections = new();
     /// <summary>The zone overlay shown when the Zones eye turns on: polygon zones until another kind is chosen.</summary>
     private WorldHighlightMode zoneOverlayKind = WorldHighlightMode.PolygonZones;
-    private readonly HashSet<byte> hiddenZones = [];
-    private byte? isolatedZone;
-    private readonly HashSet<string> hiddenNetworks = new(StringComparer.Ordinal);
-    /// <summary>The map (its path) the zone and network eyes belong to: another map starts with every zone and network shown.</summary>
+    /// <summary>The zones whose colour the view shows, each on its own (all hidden at first); any shown turns the zone overlay on.</summary>
+    private readonly HashSet<byte> shownZones = [];
+    /// <summary>The AI networks the view shows, each on its own (all hidden at first); any shown turns the AI overlay on.</summary>
+    private readonly HashSet<string> shownNetworks = new(StringComparer.Ordinal);
+    /// <summary>
+    /// The master eyes of Zones, AI Networks, AI Vehicles and Pickups: what pressing them does next. One changes when pressed,
+    /// or when everything below it comes to be shown (or hidden) one by one; a mix leaves it as it was.
+    /// </summary>
+    private readonly Dictionary<string, bool> masterShown = new(StringComparer.Ordinal);
+    private static readonly IReadOnlyDictionary<string, bool> InitialMasters = new Dictionary<string, bool>
+        { ["zones"] = false, ["aiNetworks"] = false, ["aiv"] = true, ["puppies"] = true };
+    /// <summary>The map (its path) the zone and network eyes belong to: another map starts with every zone and network hidden.</summary>
     private string? sectionStateMap;
     private SourceSectionCard? sectionCard;
+    private bool applyingSectionPresentation;
 
     // ---------------------------------------------------------------- what the rows show
 
@@ -34,12 +43,11 @@ public partial class MainWindow : ISourceSectionState
     bool ISourceSectionState.ZoneOverlayPolygons => (ZoneOverlayOn ? worldHighlightMode : zoneOverlayKind) == WorldHighlightMode.PolygonZones;
     bool ISourceSectionState.ZoneToolEngaged => ZoneToolEngaged;
     byte? ISourceSectionState.PaintZone => ZoneToolEngaged ? zoneTool.Zone : null;
-    bool ISourceSectionState.ZoneHidden(byte zone) => hiddenZones.Contains(zone);
-    bool ISourceSectionState.ZoneIsolated(byte zone) => isolatedZone == zone;
-    bool ISourceSectionState.AiOn => aiVisible;
-    bool ISourceSectionState.AiSeeThrough => aiThroughGeometry;
-    bool ISourceSectionState.NetworkHidden(string network) => hiddenNetworks.Contains(network);
-    bool ISourceSectionState.NetworkIsolated(string network) => aiNetworkFilter == network;
+    bool ISourceSectionState.ZoneShown(byte zone) => shownZones.Contains(zone);
+    bool ISourceSectionState.AnyNetworkShown => shownNetworks.Count > 0;
+    bool ISourceSectionState.NetworkShown(string network) => shownNetworks.Contains(network);
+    bool ISourceSectionState.MasterShown(string section) => MasterShown(section);
+    private bool MasterShown(string section) => masterShown.TryGetValue(section, out bool shown) ? shown : InitialMasters.GetValueOrDefault(section);
 
     private SceneTreeItem? SectionSelection => sceneTree?.Selected is { IsSectionItem: true } row ? row : null;
 
@@ -111,110 +119,190 @@ public partial class MainWindow : ISourceSectionState
 
     // ---------------------------------------------------------------- presentation
 
-    /// <summary>A map's zone and network eyes are its own: another map starts with everything shown.</summary>
+    /// <summary>
+    /// A map's zone and network eyes are its own: another map starts with every zone and network hidden. Whatever changes them
+    /// calls this first, so a change is never taken back by the reset of a map it was made in.
+    /// </summary>
     private void ResetSectionStateFor(DocumentModel? doc)
     {
         string? map = doc?.SourceWorld != null ? doc.Path : null;
         if (string.Equals(map, sectionStateMap, StringComparison.OrdinalIgnoreCase)) return;
-        sectionStateMap = map; hiddenZones.Clear(); isolatedZone = null; hiddenNetworks.Clear();
+        sectionStateMap = map; shownZones.Clear(); shownNetworks.Clear(); masterShown.Clear();
+    }
+
+    /// <summary>
+    /// The zone overlay is on while a zone shows (in the kind the Zones row's switch chose) and off otherwise; another overlay
+    /// chosen meanwhile (Soils, CanModify…) hid every zone (see <see cref="ZoneOverlayChosen"/>).
+    /// </summary>
+    private void SyncZoneOverlay()
+    {
+        if (shownZones.Count > 0 && !ZoneOverlayOn) SetWorldHighlightMode(zoneOverlayKind);
+        else if (shownZones.Count == 0 && ZoneOverlayOn) SetWorldHighlightMode(WorldHighlightMode.None);
+    }
+    /// <summary>
+    /// A source map's overlay was chosen (the Overlay group, MCP scene_options): a zone overlay with no zone shown shows every
+    /// zone, as the overlay always did; any other overlay replaces the zones', so every zone hides.
+    /// </summary>
+    private void ZoneOverlayChosen(WorldHighlightMode mode)
+    {
+        if (!sourceChromeActive || shownDocument?.SourceWorld == null) return;
+        ResetSectionStateFor(shownDocument);
+        if (mode is not (WorldHighlightMode.Zones or WorldHighlightMode.PolygonZones)) { shownZones.Clear(); return; }
+        if (shownZones.Count == 0) foreach (var zone in sceneTree?.Sections?.Zones ?? []) if (zone.Used) shownZones.Add(zone.Zone);
+    }
+    /// <summary>The AI overlay is on while a network shows (or one is being path-edited, which keeps its own filter).</summary>
+    private void SyncSourceAiOverlay()
+    {
+        string? editing = scene?.AiPathEditingNetwork;
+        bool visible = shownNetworks.Count > 0 || editing != null;
+        if (aiVisible != visible || !aiThroughGeometry || aiNetworkFilter != editing) SetAiOptions(visible, true, editing);
+    }
+    /// <summary>A master eye follows what is below it once all of that is shown, or all hidden.</summary>
+    private void ReconcileMasters()
+    {
+        if (sceneTree is { Projection: not null, Sections: { } sections })
+        {
+            Reconcile("zones", sections.Zones.Where(z => z.Used).Select(z => shownZones.Contains(z.Zone)));
+        }
+        Reconcile("aiNetworks", (scene?.AiNetworks.Networks ?? []).Select(n => shownNetworks.Contains(n.Id)));
+        foreach (var pass in sceneTree is { Projection: not null } tree ? tree.Roots.Where(r => r.Pass is { Kind: "aiv" or "puppies" }) : [])
+            Reconcile(pass.Pass!.Kind, pass.Children.Where(c => c.CanHide && c.Index is int).Select(c => !c.IsHidden));
+        void Reconcile(string section, IEnumerable<bool> shown)
+        {
+            bool any = false, all = true, none = true;
+            foreach (bool one in shown) { any = true; all &= one; none &= !one; }
+            if (any && (all || none)) masterShown[section] = all;
+        }
     }
 
     /// <summary>Applies the zone and network eyes, the selection's emphasis and a definition's outlines to the view; the rows follow.</summary>
     private void ApplySectionPresentation()
     {
-        ResetSectionStateFor(shownDocument);
-        if (scene is not { } viewport || shownDocument?.SourceWorld == null) { RefreshRowEyes(); return; }
-        // Zones and networks no longer in the map drop out.
-        if (sceneTree?.Sections is { } sections)
+        // The overlays it turns on or off come back here: the outer pass finishes with their state.
+        if (applyingSectionPresentation) return;
+        applyingSectionPresentation = true;
+        try
         {
-            hiddenNetworks.RemoveWhere(id => sections.Network(id) == null);
-            if (isolatedZone is byte isolated && sections.Zone(isolated) == null) isolatedZone = null;
+            ResetSectionStateFor(shownDocument);
+            if (scene is not { } viewport || shownDocument?.SourceWorld == null || !sourceChromeActive) { RefreshRowEyes(); return; }
+            // Zones and networks no longer in the map drop out.
+            HashSet<string> networkIds = new(viewport.AiNetworks.Networks.Select(n => n.Id), StringComparer.Ordinal);
+            shownNetworks.RemoveWhere(id => !networkIds.Contains(id));
+            if (sceneTree?.Sections is { } sections) shownZones.RemoveWhere(z => sections.Zone(z) == null);
+            if (!ZoneToolEngaged) SyncZoneOverlay();
+            SyncSourceAiOverlay();
+            HashSet<byte> hidden = [.. Enumerable.Range(0, 256).Select(z => (byte)z).Where(z => !shownZones.Contains(z))];
+            // A hidden zone or network is not emphasised (the others would all turn faint around nothing).
+            byte? zone = ZoneOverlayOn && SectionSelection?.Section is ZoneEntry selectedZone && shownZones.Contains(selectedZone.Zone.Zone) ? selectedZone.Zone.Zone : null;
+            viewport.SetZonePresentation(hidden, zone);
+            // A selected network, or the network of a selected node, is emphasised.
+            HashSet<string> hiddenNetworks = new(viewport.AiNetworks.Networks.Select(n => n.Id).Where(id => !shownNetworks.Contains(id)), StringComparer.Ordinal);
+            string? network = SectionSelection?.Section is NetworkEntry selectedNetwork ? selectedNetwork.Network.Id
+                : viewport.SelectedAiNode is { } node && viewport.AiNetworks.Find(node) is { } found ? found.Network.Id : null;
+            viewport.SetAiNetworkPresentation(hiddenNetworks, network != null && (hiddenNetworks.Contains(network) || aiNetworkFilter != null && aiNetworkFilter != network) ? null : network);
+            int[] outlined = SectionSelection?.Section is DefinitionEntry definition && sceneTree?.Sections?.DefinitionRoots.GetValueOrDefault(definition.Definition.Index) is { } roots
+                ? [.. roots.Take(SceneViewport.MaximumOutlinedNodes)] : [];
+            if (!outlined.SequenceEqual(viewport.OutlinedNodes)) viewport.SetOutlinedNodes(outlined);
+            RefreshRowEyes(); RefreshViewportChips();
         }
-        HashSet<byte> hidden = isolatedZone is byte only ? [.. Enumerable.Range(0, 256).Select(z => (byte)z).Where(z => z != only)] : [.. hiddenZones];
-        // A hidden zone or network is not emphasised (the others would all turn faint around nothing).
-        byte? zone = ZoneOverlayOn && SectionSelection?.Section is ZoneEntry selectedZone && !hidden.Contains(selectedZone.Zone.Zone) ? selectedZone.Zone.Zone : null;
-        viewport.SetZonePresentation(hidden, zone);
-        // A selected network, or the network of a selected node, is emphasised.
-        string? network = SectionSelection?.Section is NetworkEntry selectedNetwork ? selectedNetwork.Network.Id
-            : viewport.SelectedAiNode is { } node && viewport.AiNetworks.Find(node) is { } found ? found.Network.Id : null;
-        viewport.SetAiNetworkPresentation(hiddenNetworks, network != null && (hiddenNetworks.Contains(network) || aiNetworkFilter != null && aiNetworkFilter != network) ? null : network);
-        int[] outlined = SectionSelection?.Section is DefinitionEntry definition && sceneTree?.Sections?.DefinitionRoots.GetValueOrDefault(definition.Definition.Index) is { } roots
-            ? [.. roots.Take(SceneViewport.MaximumOutlinedNodes)] : [];
-        if (!outlined.SequenceEqual(viewport.OutlinedNodes)) viewport.SetOutlinedNodes(outlined);
-        RefreshRowEyes(); RefreshViewportChips();
+        finally { applyingSectionPresentation = false; }
     }
 
     // ---------------------------------------------------------------- eyes and header controls
 
-    /// <summary>A section row's eye: the Zones or AI Networks overlay on or off, a zone's colour or a network's markers.</summary>
+    /// <summary>
+    /// A section row's eye. A zone's shows or hides its colour and a network's its nodes and links, each on its own; the master
+    /// eye of Zones, AI Networks, AI Vehicles or Pickups shows or hides everything below it (<paramref name="hide"/>: what to
+    /// do; null: what the master eye does next).
+    /// </summary>
     internal void ToggleSectionEye(SceneTreeItem row, bool? hide = null)
     {
         if (row.Owner != sceneTree) throw new StudioCommandException("stale_record", "The tree row is no longer available.");
-        switch (row.Section)
+        ResetSectionStateFor(shownDocument);
+        var sections = sceneTree.Sections;
+        switch (row.MasterKey)
         {
-            case SectionHeader { Section: "zones" }:
+            case "zones":
+            {
                 if (ZoneToolEngaged) throw new StudioCommandException("busy", "Zone colours are paused while Edit zones is on: the tool shows its own zone view.");
-                bool on = !(hide ?? ZoneOverlayOn);
-                if (on != ZoneOverlayOn) SetWorldHighlightMode(on ? zoneOverlayKind : WorldHighlightMode.None);
+                bool hideAll = hide ?? MasterShown("zones");
+                shownZones.Clear();
+                if (!hideAll) foreach (var zone in sections?.Zones ?? []) if (zone.Used) shownZones.Add(zone.Zone);
+                masterShown["zones"] = !hideAll;
                 break;
-            case SectionHeader { Section: "aiNetworks" }:
-                bool visible = !(hide ?? aiVisible);
-                if (visible != aiVisible) { if (!ResolveInspectionDrafts()) return; SetAiOptions(visible, aiThroughGeometry, aiNetworkFilter); }
+            }
+            case "aiNetworks":
+                if (!ShowAllNetworks(!(hide ?? MasterShown("aiNetworks")))) return;
                 break;
-            case ZoneEntry zone:
-                if (ZoneToolEngaged) throw new StudioCommandException("busy", "Zone colours are paused while Edit zones is on.");
-                if (hide ?? !hiddenZones.Contains(zone.Zone.Zone))
+            case "aiv" or "puppies":
+            {
+                if (scene == null) throw new StudioCommandException("not_ready", "Show the map first.");
+                if (scene.IsPickupDragging || scene.IsFlyActive) throw new StudioCommandException("busy", "Finish the transform drag or exit Fly first.");
+                bool hideAll = hide ?? MasterShown(row.MasterKey);
+                foreach (var child in row.Children)
                 {
-                    hiddenZones.Add(zone.Zone.Zone);
-                    // Hiding the isolated zone ends its isolation (as for a network).
-                    if (isolatedZone == zone.Zone.Zone) isolatedZone = null;
+                    if (!child.CanHide || child.Index is not int index) continue;
+                    if (hideAll) hiddenRows[index] = HiddenNodesFor(sceneTree, index); else hiddenRows.Remove(index);
                 }
-                else hiddenZones.Remove(zone.Zone.Zone);
+                masterShown[row.MasterKey] = !hideAll;
+                pendingHidden = null;
+                ApplyHiddenRows();
                 break;
-            case NetworkEntry network:
-                string id = network.Network.Id;
-                if (hide ?? !hiddenNetworks.Contains(id))
+            }
+            default:
+                switch (row.Section)
                 {
-                    // Hiding ends AI path editing on it: its pending transform is decided first.
-                    if (HasAiPathDraft && !hiddenNetworks.Contains(id)) throw new StudioCommandException("pending_drafts", "Confirm or cancel the AI path transform before hiding a network.");
-                    hiddenNetworks.Add(id);
-                    // Hiding the isolated network ends its isolation.
-                    if (aiNetworkFilter == id) SetAiOptions(aiVisible, aiThroughGeometry, null);
+                    case ZoneEntry zone:
+                        if (ZoneToolEngaged) throw new StudioCommandException("busy", "Zone colours are paused while Edit zones is on.");
+                        if (!zone.Zone.Used) throw new StudioCommandException("unsupported", "No polygon or object uses this zone: it has no colour to show.");
+                        if (hide ?? shownZones.Contains(zone.Zone.Zone)) shownZones.Remove(zone.Zone.Zone); else shownZones.Add(zone.Zone.Zone);
+                        break;
+                    case NetworkEntry network:
+                        string id = network.Network.Id;
+                        if (hide ?? shownNetworks.Contains(id))
+                        {
+                            if (shownNetworks.Contains(id) && !AiOverlayMayEnd(shownNetworks.Count == 1)) return;
+                            shownNetworks.Remove(id);
+                        }
+                        else shownNetworks.Add(id);
+                        break;
+                    default: throw new StudioCommandException("unsupported", "This row has nothing to hide in the view.");
                 }
-                else hiddenNetworks.Remove(id);
                 break;
-            default: throw new StudioCommandException("unsupported", "This row has nothing to hide in the view.");
         }
+        ReconcileMasters();
         ApplySectionPresentation();
     }
-    /// <summary>Middle-click on a zone's or network's eye: only its colour or markers, or everything again on the isolated one.</summary>
-    internal void ToggleSectionIsolation(SceneTreeItem row)
+    /// <summary>
+    /// The AI Networks row's master eye (and MCP scene_options aiNodes): every network of the view shown, or hidden. False when
+    /// the user kept a node's unfinished input (nothing changed).
+    /// </summary>
+    private bool ShowAllNetworks(bool show)
     {
-        if (row.Owner != sceneTree) throw new StudioCommandException("stale_record", "The tree row is no longer available.");
-        switch (row.Section)
-        {
-            case ZoneEntry zone:
-                if (ZoneToolEngaged) throw new StudioCommandException("busy", "Zone colours are paused while Edit zones is on.");
-                isolatedZone = isolatedZone == zone.Zone.Zone ? null : zone.Zone.Zone;
-                break;
-            case NetworkEntry network:
-                string id = network.Network.Id;
-                // Changing the isolated network ends AI path editing: its pending transform is decided first.
-                if (HasAiPathDraft) throw new StudioCommandException("pending_drafts", "Confirm or cancel the AI path transform before isolating a network.");
-                if (aiNetworkFilter == id) SetAiOptions(aiVisible, aiThroughGeometry, null);
-                else { hiddenNetworks.Remove(id); SetAiOptions(aiVisible, aiThroughGeometry, id); }
-                break;
-            default: throw new StudioCommandException("unsupported", "Only a zone's or an AI network's row can be isolated.");
-        }
-        ApplySectionPresentation();
+        ResetSectionStateFor(shownDocument);
+        if (!show && shownNetworks.Count > 0 && !AiOverlayMayEnd()) return false;
+        shownNetworks.Clear();
+        if (show) foreach (var network in scene?.AiNetworks.Networks ?? []) shownNetworks.Add(network.Id);
+        masterShown["aiNetworks"] = show;
+        return true;
     }
-    /// <summary>The Zones header's Objects | Polygons switch: chooses the overlay, turning it on when it was off.</summary>
+    /// <summary>
+    /// Hiding a network ends AI path editing on it, and hiding the last one ends the AI node selection: a pending AI path
+    /// transform is decided first (refused), and a node's unfinished input is asked about (false: kept, nothing changes;
+    /// MCP refuses unfinished input before it comes here).
+    /// </summary>
+    private bool AiOverlayMayEnd(bool overlayEnds = true)
+    {
+        if (HasAiPathDraft) throw new StudioCommandException("pending_drafts", "Confirm or cancel the AI path transform before hiding AI networks.");
+        return !overlayEnds || ResolveInspectionDrafts();
+    }
+    /// <summary>The Zones header's Objects | Polygons switch: the overlay kind the shown zones are coloured by.</summary>
     internal void ChooseZoneOverlay(bool polygons)
     {
         if (ZoneToolEngaged) throw new StudioCommandException("busy", "Zone colours are paused while Edit zones is on.");
         var mode = polygons ? WorldHighlightMode.PolygonZones : WorldHighlightMode.Zones;
         zoneOverlayKind = mode;
-        if (worldHighlightMode != mode) SetWorldHighlightMode(mode);
+        if (ZoneOverlayOn && worldHighlightMode != mode) SetWorldHighlightMode(mode);
         else ApplySectionPresentation();
     }
     private void OutlinerZoneKindClick(object sender, RoutedEventArgs e)
@@ -222,13 +310,6 @@ public partial class MainWindow : ISourceSectionState
         e.Handled = true;
         try { ChooseZoneOverlay((sender as FrameworkElement)?.Name == "ZoneKindPolygons"); }
         catch (StudioCommandException ex) { Report(ex); }
-    }
-    private void OutlinerSeeThroughClick(object sender, RoutedEventArgs e)
-    {
-        e.Handled = true;
-        if (!ResolveInspectionDrafts()) { RefreshRowEyes(); return; }
-        SetAiOptions(aiVisible, !aiThroughGeometry, aiNetworkFilter);
-        ApplySectionPresentation();
     }
     /// <summary>A click on a section, scope or file row opens or closes it; those rows are never the selection.</summary>
     private void OutlinerRowMouseDown(object sender, MouseButtonEventArgs e)
@@ -271,10 +352,9 @@ public partial class MainWindow : ISourceSectionState
         finally { changingSceneTree = false; }
         switch (restoring ? null : row.Section)
         {
-            // Selecting a network shows it: the overlay turns on, its eye opens and another network's isolation ends.
+            // Selecting a network shows it (its eye opens and the AI overlay turns on).
             case NetworkEntry network:
-                hiddenNetworks.Remove(network.Network.Id);
-                if (!aiVisible || aiNetworkFilter != null && aiNetworkFilter != network.Network.Id) SetAiOptions(true, aiThroughGeometry, aiNetworkFilter == network.Network.Id ? aiNetworkFilter : null);
+                ResetSectionStateFor(shownDocument); shownNetworks.Add(network.Network.Id); ReconcileMasters();
                 ViewModel.Status = $"Selected AI network {SourceMapSections.NetworkStem(network.Network)}";
                 break;
             // While Edit zones is engaged, a zone row is the zone to paint.
@@ -445,13 +525,14 @@ public partial class MainWindow : ISourceSectionState
     /// <summary>The section a scene_tree row reports: its kind and identity, what it shows and its eye.</summary>
     private object? DescribeSectionRow(SceneTreeItem row) => row.Section switch
     {
-        SectionHeader { Section: "zones" } => new { section = "zones", overlay = new { visible = ZoneOverlayOn, kind = (ZoneOverlayOn ? worldHighlightMode : zoneOverlayKind) == WorldHighlightMode.PolygonZones ? "polygons" : "objects", paused = ZoneToolEngaged } },
-        SectionHeader { Section: "aiNetworks" } => new { section = "aiNetworks", ai = new { visible = aiVisible, throughGeometry = aiThroughGeometry } },
+        SectionHeader { Section: "zones" } => new { section = "zones", master = MasterShown("zones"), shown = shownZones.Count,
+            overlay = new { visible = ZoneOverlayOn, kind = (ZoneOverlayOn ? worldHighlightMode : zoneOverlayKind) == WorldHighlightMode.PolygonZones ? "polygons" : "objects", paused = ZoneToolEngaged } },
+        SectionHeader { Section: "aiNetworks" } => new { section = "aiNetworks", master = MasterShown("aiNetworks"), shown = shownNetworks.Count, ai = new { visible = aiVisible } },
         SectionHeader header => new { section = header.Section },
         ZoneEntry zone => new { zoneId = zone.Zone.Zone, label = zone.Zone.Label is { } text ? JsonData.ShownText(text, 256) : null, polygons = zone.Zone.Polygons, placements = zone.Zone.Placements, models = zone.Zone.Models,
-            objects = zone.Zone.Objects, ownObjects = zone.Zone.OwnObjects, inheritedObjects = zone.Zone.InheritedObjects, emptyObjects = zone.Zone.EmptyObjects, used = zone.Zone.Used },
+            objects = zone.Zone.Objects, ownObjects = zone.Zone.OwnObjects, inheritedObjects = zone.Zone.InheritedObjects, emptyObjects = zone.Zone.EmptyObjects, used = zone.Zone.Used, shown = shownZones.Contains(zone.Zone.Zone) },
         NoZonesEntry none => new { noZones = true, polygons = none.Polygons },
-        NetworkEntry network => new { network = network.Network.Id, name = JsonData.ShownText(network.Network.Name, 256), nodes = network.Network.Nodes.Count, attackStrategy = DescribeAiStrategy(network.Network), diagnosticCount = network.Network.Diagnostics.Count },
+        NetworkEntry network => new { network = network.Network.Id, name = JsonData.ShownText(network.Network.Name, 256), nodes = network.Network.Nodes.Count, attackStrategy = DescribeAiStrategy(network.Network), diagnosticCount = network.Network.Diagnostics.Count, shown = shownNetworks.Contains(network.Network.Id) },
         DefinitionScopeEntry scope => new { definitionScope = scope.Name, folder = scope.Folder, definitions = scope.Count },
         DefinitionFileEntry file => new { definitionFile = file.Listing.File, occurrence = file.Listing.Occurrence, listedBy = file.Listing.ListedBy, definitions = file.Definitions.Count },
         DefinitionEntry definition => new { definitionFile = definition.Definition.File, ordinal = definition.Definition.Ordinal, occurrence = definition.Listing.Occurrence, name = definition.Definition.Name,
@@ -461,12 +542,16 @@ public partial class MainWindow : ISourceSectionState
         NoteEntry note => new { note = note.Text },
         _ => null,
     };
-    /// <summary>preview_state's view of the sections: the zone eyes, the network eyes and the selection's emphasis or outlines.</summary>
+    /// <summary>
+    /// preview_state's view of the sections: the zones and networks shown, the master eyes (true: shown, so pressing hides),
+    /// and the selection's emphasis or outlines.
+    /// </summary>
     private object? SectionPreviewState() => scene is not { } viewport || shownDocument?.SourceWorld == null ? null : new
     {
         zones = new { overlay = ZoneOverlayOn, kind = (ZoneOverlayOn ? worldHighlightMode : zoneOverlayKind) == WorldHighlightMode.PolygonZones ? "polygons" : "objects", paused = ZoneToolEngaged,
-            hidden = hiddenZones.Order().Select(z => (int)z).ToArray(), isolated = (int?)isolatedZone, emphasis = (int?)viewport.ZoneSelection },
-        networks = new { hidden = hiddenNetworks.Order(StringComparer.Ordinal).Take(256).ToArray(), hiddenCount = hiddenNetworks.Count, isolated = aiNetworkFilter, emphasis = viewport.AiEmphasizedNetwork },
+            shown = shownZones.Order().Select(z => (int)z).ToArray(), master = MasterShown("zones"), emphasis = (int?)viewport.ZoneSelection },
+        networks = new { shown = shownNetworks.Order(StringComparer.Ordinal).Take(256).ToArray(), shownCount = shownNetworks.Count, master = MasterShown("aiNetworks"), emphasis = viewport.AiEmphasizedNetwork },
+        passes = new { aiv = MasterShown("aiv"), puppies = MasterShown("puppies") },
         outlines = new { roots = viewport.OutlinedNodes.Count, boxes = viewport.OutlinedBoxes },
         selection = SectionSelection is { } row ? new { row = row.Id, kind = row.Category, key = row.Section!.Key } : null,
     };

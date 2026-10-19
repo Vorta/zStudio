@@ -1,6 +1,6 @@
 # Whole world surface highlights
 
-The six icon buttons after **Bounds** identify stored game surface properties. In a source map the command bar's **Overlay** group holds the others, while Object zones and Polygon zones are the World tree's **Zones** row: its eye turns the zone colours on and off and its **Objects | Polygons** switch chooses which, each zone's eye hides that zone's colour (middle-click shows only it) and a selected zone is drawn strong, the others faint ([source map editor](scene-inspection.md#source-map-editor)):
+The six icon buttons after **Bounds** identify stored game surface properties. In a source map the command bar's **Overlay** group holds the others, while Object zones and Polygon zones are the World tree's **Zones** row: each zone's colour is shown on its own with its eye (all start hidden; any shown turns the overlay on), the row's master eye shows or hides every zone and its **Objects | Polygons** switch chooses the kind; another overlay hides every zone, and a selected shown zone is drawn strong, the others faint ([source map editor](scene-inspection.md#source-map-editor)):
 
 | Button | Color | What it shows |
 | --- | --- | --- |
