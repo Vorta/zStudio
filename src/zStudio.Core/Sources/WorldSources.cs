@@ -51,6 +51,22 @@ internal static partial class WorldSources
     /// </summary>
     public static bool IsReference(WorldNode node) => node.Class == WorldNodeClass.Object3D && node.Model == null && node.Name.EndsWith(".flt", StringComparison.OrdinalIgnoreCase);
     private static string Stem(string file) => System.IO.Path.GetFileNameWithoutExtension(file.Replace('\\', '/')).ToLowerInvariant();
+
+    /// <summary>
+    /// Whether the only DeleteTree after the database's load is its own deletion: the first, naming its root, with no
+    /// instruction between them naming that root too (FindNode and DeleteTree take the newest node of a name).
+    /// </summary>
+    private static bool OnlyDatabaseDeleted(IReadOnlyList<TracedInstruction> trace, LoadedModel database)
+    {
+        bool named = false, deleted = false;
+        foreach (var instruction in trace.Skip(database.Step + 1))
+        {
+            if (instruction.Command != "DeleteTree") { named |= !deleted && instruction.Args.Contains(database.NodeName); continue; }
+            if (deleted || named || instruction.Args.Count == 0 || instruction.Args[0] != database.NodeName) return false;
+            deleted = true;
+        }
+        return true;
+    }
     /// <summary>
     /// What tells a file's canonical content apart: the first 16 hex digits of the SHA-256 of its glTF JSON followed by its
     /// binary buffer, hashed as written rather than copied into one buffer.
@@ -137,9 +153,9 @@ internal static partial class WorldSources
             List<WorldNode> databaseReferences = [];
             DatabaseRecords.Records? records = null;
             // A freed slot keeps the name of the node freed there last. The inference replays only the loads whose nodes the
-            // world still holds, so once the scripts delete anything but the database, no kept name is evidence.
-            bool keptNames = database >= 0 && !trace.Skip(decomposed[database].Step + 1)
-                .Any(i => i.Command == "DeleteTree" && (i.Args.Count == 0 || i.Args[0] != decomposed[database].NodeName));
+            // world still holds, so after any DeleteTree but the database's own deletion, whatever it frees, no kept name may
+            // name a deleted group.
+            bool keptNames = database >= 0 && OnlyDatabaseDeleted(trace, decomposed[database]);
             // A world the inference cannot replay (its caches exceed what a load can hold) keeps its order, like any other.
             try { if (database >= 0) records = DatabaseRecords.Infer(mission.World, decomposition, node => IsReference(node) && !roots.Contains(node), $"m{mission.Mission}", notes, token, keptNames: keptNames); }
             catch (InvalidDataException ex) { diagnostics.Add($"m{mission.Mission}: the mission database keeps the world's object order without its groups: {ex.Message}"); }

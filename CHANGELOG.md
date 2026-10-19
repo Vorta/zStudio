@@ -4,7 +4,7 @@ Version numbers follow `MAJOR.MINOR.PATCH`; the 0.x series is under active devel
 
 ## Unreleased
 
-- Reconstruction also names a group the build deleted from the slot its part's cached copy left free: m6's city part names five groups `street`, `ramps`, `bwall`, `phones` and `hydrants` instead of `groupN` (both releases). A new reconstruction numbers m6's other 75 deleted groups `group1`–`group75`, so all but `group1` change number. To get the names in a project reconstructed before, rename the five with the world tree's right-click **Rename…** (`group7` is `street`, `group3` `ramps`, `group2` `bwall`, `group8` `phones` and `group9` `hydrants`); the game never uses these names.
+- Reconstruction also takes the name of a group the build deleted from a free slot of its part's cache: five groups of m6's city part are now `street`, `ramps`, `bwall`, `phones` and `hydrants` instead of `groupN` (both releases). A new reconstruction numbers m6's other 75 deleted groups `group1`–`group75`, so all but `group1` change number. To get the names in a project reconstructed before, rename the five with the world tree's right-click **Rename…** (`group7` is `street`, `group3` `ramps`, `group2` `bwall`, `group8` `phones` and `group9` `hydrants`); the game never uses these names.
 
 ## 0.9.2 — 2026-10-19
 

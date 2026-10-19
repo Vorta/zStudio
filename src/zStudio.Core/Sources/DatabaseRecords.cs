@@ -75,8 +75,8 @@ internal static partial class DatabaseRecords
     /// <summary>
     /// The most nodes the caches the inference simulates may mirror in all: every load it replays, in every reading it tries,
     /// except the replay that names a kept reading's groups (the build's own limit, <see cref="OriginalLoader.MaximumCachedNodes"/>,
-    /// holds for one load). The shipped databases
-    /// need at most 2.7 million (1999 and 1998 m2; m6 1.9 million, the others far fewer).
+    /// holds for one load). The shipped databases need at most 2.7 million (1999 and 1998 m2; m6 1.9 million, the others far
+    /// fewer).
     /// </summary>
     public const int MaximumMirroredNodes = 1 << 24;
 
@@ -152,8 +152,9 @@ internal static partial class DatabaseRecords
 
     /// <param name="isReference">Whether a node of the shipped world is an external reference (its children a referenced file's content).</param>
     /// <param name="mirrorLimit">The most nodes the simulated caches may mirror in all (see <see cref="MaximumMirroredNodes"/>); beyond it the inference stops.</param>
-    /// <param name="keptNames">Whether the names freed slots keep can name deleted groups: false when the scripts deleted nodes
-    /// after the database's own deletion, which left their names in slots the free list cannot show.</param>
+    /// <param name="keptNames">Whether the names freed slots keep can name deleted groups: false after any <c>DeleteTree</c>
+    /// but the database's own deletion, whatever it frees. The inference does not replay those deletions, and their nodes'
+    /// names can sit in slots it takes for untaken.</param>
     /// <exception cref="InvalidDataException">The inference would mirror more cached nodes than <paramref name="mirrorLimit"/>; the database's nodes keep the world's child order.</exception>
     public static Records? Infer(GameZWorld world, WorldDecomposition build, Func<WorldNode, bool> isReference, string mission, List<string> notes, CancellationToken token, int mirrorLimit = MaximumMirroredNodes,
         int matchingLimit = MaximumRetainedWork, bool keptNames = true)
@@ -201,7 +202,7 @@ internal static partial class DatabaseRecords
         HashSet<int> freedSet = [.. freed];
         var freedSlots = world.FreedSlots;
         // How many entries at the bottom of each free list no later node took: their slots keep the names of the nodes freed
-        // there last (by the database's load or its deletion).
+        // there last (by the database's load or its deletion, unless the scripts ran another DeleteTree; see Infer).
         Dictionary<List<int>, int> untakenCounts = new(ReferenceEqualityComparer.Instance);
         var first = FreeList(steps, out string? failure);
         if (first == null) return Fail(failure!);
@@ -486,7 +487,7 @@ internal static partial class DatabaseRecords
                 return j == d;
             }
             // 5. The records nested as they were made: an object belongs to the innermost group open when it was made. A
-            //    group left free in the file keeps the name it had there.
+            //    group whose slot no later node took keeps the name the slot holds (see Named).
             Dictionary<int, WorldNode> groupAt = groups.ToDictionary(g => table.Slots[g]);
             int count = 0;
             var named = Named();
@@ -514,10 +515,11 @@ internal static partial class DatabaseRecords
     }
 
     /// <summary>
-    /// The records of the parts model. Deleted groups keep the names their freed slots still hold (<paramref name="named"/>),
-    /// or a slot of their part's cache still holds (<paramref name="cacheNames"/>), else <c>groupN</c>; a reference to an
-    /// unnamed part is <c>groupN</c> and keeps an explicit inline cache identity. A reconstructed filename would claim
-    /// evidence the shipped world no longer contains; the content stays inside its owning glTF instead.
+    /// The records of the parts model. Deleted groups keep the names their freed slots still hold where no later node took the
+    /// slot (<paramref name="named"/>), or a slot of their part's cache still holds (<paramref name="cacheNames"/>), else
+    /// <c>groupN</c>; a reference to an unnamed part is <c>groupN</c> and keeps an explicit inline cache identity. A
+    /// reconstructed filename would claim evidence the shipped world no longer contains; the content stays inside its
+    /// owning glTF instead.
     /// </summary>
     private static Records FromParts(Parts parts, IReadOnlyDictionary<int, string> named, IReadOnlyDictionary<WorldNode, string>? cacheNames)
     {
