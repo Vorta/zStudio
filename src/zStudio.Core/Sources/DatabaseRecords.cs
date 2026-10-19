@@ -155,8 +155,8 @@ internal static partial class DatabaseRecords
     /// <param name="keptNames">Whether the names freed slots keep can name deleted groups: false unless the database's deletion
     /// is the instruction right after its load and no other <c>DeleteTree</c> or <c>FreeNode</c> follows, whatever those free,
     /// in a trace that misses no script. Anything between the load and the deletion could attach or rename nodes the deletion
-    /// frees with their names, and the inference does not replay later frees, whose nodes' names can sit in slots it takes
-    /// for untaken.</param>
+    /// frees with their names, and the inference replays no later <c>DeleteTree</c> or <c>FreeNode</c>, whose nodes' names can
+    /// sit in slots it takes for untaken.</param>
     /// <exception cref="InvalidDataException">The inference would mirror more cached nodes than <paramref name="mirrorLimit"/>; the database's nodes keep the world's child order.</exception>
     public static Records? Infer(GameZWorld world, WorldDecomposition build, Func<WorldNode, bool> isReference, string mission, List<string> notes, CancellationToken token, int mirrorLimit = MaximumMirroredNodes,
         int matchingLimit = MaximumRetainedWork, bool keptNames = true)

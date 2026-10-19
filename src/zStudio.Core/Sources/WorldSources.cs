@@ -150,9 +150,9 @@ internal static partial class WorldSources
             int database = decomposed.FindIndex(l => l.Database);
             List<WorldNode> databaseReferences = [];
             DatabaseRecords.Records? records = null;
-            // A freed slot keeps the name of the node freed there last. The database's deletion also frees what the scripts
-            // attached or renamed under it before it, and the inference replays only the loads whose nodes the world still
-            // holds; so unless the deletion is the next instruction after the database's load and no other DeleteTree or
+            // A freed slot keeps the name of the node freed there last. The database's deletion also frees whatever the scripts
+            // attached or renamed under the database before the deletion, and the inference replays only the loads and created
+            // nodes the world still holds; so unless the deletion is the next instruction after the database's load and no other DeleteTree or
             // FreeNode follows, in a trace that misses no script, no kept name may name a deleted group.
             bool keptNames = database >= 0 && !missingScript && OnlyDatabaseDeleted(trace, decomposed[database]);
             // A world the inference cannot replay (its caches exceed what a load can hold) keeps its order, like any other.
