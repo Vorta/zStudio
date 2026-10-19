@@ -108,13 +108,16 @@ public sealed class ReconstructionInferenceTests
     }
 
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public void CopiesOfOneUnknownPartShareAnInlineCacheWhateverTheirGroupsKeptOfTheirNames(bool edited)
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    public void CopiesOfOneUnknownPartShareAnInlineCacheWhateverTheirGroupsKeptOfTheirNames(bool edited, bool cacheOnly)
     {
         // A database referencing one part twice; the part's group holds a crate and a post. A load after the deletion takes
         // the slots of the second copy's group (its name is lost), while the first copy's group keeps its name. When
-        // edited, the script then marks the newest crate (the second copy's) a landmark, so the copies differ too.
+        // edited, the script then marks the newest crate (the second copy's) a landmark, so the copies differ too. When
+        // cacheOnly, the load takes both copies' groups' slots, and only the part's cache, freed below them, keeps the
+        // group's name (as 1999 m6's city part keeps street, ramps and bwall).
         string loads = "LoadGameGen lamp.flt lamp1" + (edited ? "\nFindNode crate\nSetLandmark on" : "");
         Dictionary<string, byte[]> files = new(StringComparer.Ordinal) { ["gamegen/m1.gs"] = Encoding.ASCII.GetBytes(Script(1, loads)) };
         var group = Node("g", null, Node("crate", Quad(4, 1)), Node("post", Quad(1, 0)));
@@ -124,7 +127,7 @@ public sealed class ReconstructionInferenceTests
         Gltf(files, "data/m1/models", "m1", [Node("ground", Quad(64, 0)), first, second],
             new Dictionary<WorldNode, string>(ReferenceEqualityComparer.Instance) { [first] = "m1_01.gltf", [second] = "m1_01.gltf" },
             new HashSet<WorldNode>(ReferenceEqualityComparer.Instance) { first, second });
-        Gltf(files, "data/m1/models", "lamp", [Node("base", Quad(1, 0)), Node("bulb", Quad(1, 2))]);
+        Gltf(files, "data/m1/models", "lamp", [Node("base", Quad(1, 0)), Node("bulb", Quad(1, 2)), .. cacheOnly ? [Node("shade", Quad(1, 3)), Node("cord", Quad(1, 1))] : Array.Empty<WorldNode>()]);
 
         var (outputs, notes, shipped) = Reconstruct(files, 1);
         Assert.Single(notes, n => n.Contains("inferred load sections are unrecoverable", StringComparison.Ordinal));
@@ -134,6 +137,8 @@ public sealed class ReconstructionInferenceTests
         var master = System.Text.Json.Nodes.JsonNode.Parse(outputs.Single(o => o.Path == "data/m1/models/m1.gltf").Bytes)!;
         var inline = master["nodes"]!.AsArray().Select(n => (string?)n?["extras"]?["recoil"]?["inlineSource"]?["id"]).OfType<string>().ToArray();
         Assert.Equal(2, inline.Length); Assert.Equal(inline[0], inline[1]);
+        // Both copies keep the name the part's file gave its group.
+        Assert.Equal(2, master["nodes"]!.AsArray().Count(n => (string?)n?["name"] == "g" && n?["extras"]?["recoil"]?["group"] is not null));
         var rebuilt = Rebuild(files, outputs, 1);
         Assert.Equal(Slots(shipped(1)), Slots(rebuilt));
         Assert.Empty(WorldComparer.Compare(shipped(1), rebuilt));

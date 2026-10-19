@@ -197,6 +197,8 @@ internal static partial class DatabaseRecords
         List<int> freed = [.. Enumerable.Range(0, end).Where(s => !objectSlots.Contains(s) && !liveBefore.Contains(s))];
         HashSet<int> freedSet = [.. freed];
         var freedSlots = world.FreedSlots;
+        // How many entries at the bottom of each free list no later node took: their slots keep the names the database's load left.
+        Dictionary<List<int>, int> untakenCounts = new(ReferenceEqualityComparer.Instance);
         var first = FreeList(steps, out string? failure);
         if (first == null) return Fail(failure!);
         if (first.Count == 0) return Fail("the deletion freed no slot for its records.");
@@ -260,8 +262,10 @@ internal static partial class DatabaseRecords
         Records Accept(Parts reading)
         {
             shipped.Restore(); reading.OrderChildren();
+            // Only an exact replay shows which cache node each slot held last.
+            var cacheNames = reading.Inexact == null ? reading.CacheNames(before, list.TakeLast(untakenCounts[list]), kept) : null;
             reading.FollowModels();
-            return FromParts(reading, world, mission) with { LaterPaths = [.. followed, .. reading.FilePaths] };
+            return FromParts(reading, world, mission, cacheNames) with { LaterPaths = [.. followed, .. reading.FilePaths] };
         }
 
         // 5. Otherwise the slots alone: the objects and a group at every slot the deletion freed, in slot order. An object
@@ -389,7 +393,9 @@ internal static partial class DatabaseRecords
         List<int> untaken = [.. chain.Skip(leftover.Count).Take(freed.Count - taken)];
         if (untaken.Count != freed.Count - taken || untaken.Any(s => !freedSet.Contains(s) || !claimed.Add(s))) { failure = "the file's free list does not hold the freed slots no later node took."; return null; }
         // The list the deletion left, from its top.
-        return [.. Enumerable.Range(0, taken).Select(k => entries[k]), .. untaken];
+        List<int> deletion = [.. Enumerable.Range(0, taken).Select(k => entries[k]), .. untaken];
+        untakenCounts[deletion] = untaken.Count;
+        return deletion;
         }
 
         Records? Single(out string? reason)
@@ -493,11 +499,12 @@ internal static partial class DatabaseRecords
     }
 
     /// <summary>
-    /// The records of the parts model. Deleted nodes keep the names their freed slots still hold, else <c>groupN</c>; a
-    /// unnamed part keeps an explicit inline cache identity. A reconstructed filename would claim evidence the
-    /// shipped world no longer contains; the content stays inside its owning glTF instead.
+    /// The records of the parts model. Deleted nodes keep the names their freed slots still hold, or a slot of their
+    /// part's cache still holds (<paramref name="cacheNames"/>), else <c>groupN</c>; a unnamed part keeps an explicit
+    /// inline cache identity. A reconstructed filename would claim evidence the shipped world no longer contains; the
+    /// content stays inside its owning glTF instead.
     /// </summary>
-    private static Records FromParts(Parts parts, GameZWorld world, string mission)
+    private static Records FromParts(Parts parts, GameZWorld world, string mission, IReadOnlyDictionary<WorldNode, string>? cacheNames = null)
     {
         parts.OrderChildren();
         var freedSlots = world.FreedSlots;
@@ -518,7 +525,8 @@ internal static partial class DatabaseRecords
                 inlineSources[node] = name;
                 node.Name = $"group{++groupCount}";
             }
-            else node.Name = freedSlots.TryGetValue(at, out var bytes) && NameOf(bytes) is { Length: > 0 } kept ? kept : $"group{++groupCount}";
+            else node.Name = freedSlots.TryGetValue(at, out var bytes) && NameOf(bytes) is { Length: > 0 } kept ? kept
+                : cacheNames?.GetValueOrDefault(node) is { } cached ? cached : $"group{++groupCount}";
             // A deleted record: an object3d with no geometry and no transform, carrying the default flags.
             var shape = Group(); node.Flags = shape.Flags; node.Zone = shape.Zone; node.BoundsFlags = shape.BoundsFlags; node.SetPayloadInt(0, 0x28);
         }
