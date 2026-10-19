@@ -4,7 +4,7 @@ Version numbers follow `MAJOR.MINOR.PATCH`; the 0.x series is under active devel
 
 ## Unreleased
 
-- Reconstruction recovers original names of groups the build deleted from the slots the world kept free: m6's city part names five groups `street`, `ramps`, `bwall`, `phones` and `hydrants` instead of `groupN` placeholders, from the copy of the part the build cached. Reconstruct a project again to get them (or rename the groups with Rename…).
+- Reconstruction recovers original names of groups the build deleted from the slots the world kept free: m6's city part names five groups `street`, `ramps`, `bwall`, `phones` and `hydrants` instead of `groupN` placeholders, from the copy of the part the build cached. A new reconstruction numbers m6's other 75 placeholders `group1`–`group75`, so most of them change number. In a project reconstructed before, rename them with Rename… (`group7` is `street`, `group3` `ramps`, `group2` `bwall`, `group8` `phones` and `group9` `hydrants`).
 
 ## 0.9.2 — 2026-10-19
 

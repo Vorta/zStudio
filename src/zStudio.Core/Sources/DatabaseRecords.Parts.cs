@@ -1349,7 +1349,7 @@ internal static partial class DatabaseRecords
         }
 
         /// <summary>
-        /// The names the caches left where no later node took their slots (a world that kept slots free, 1999 m6): a slot
+        /// The names the caches left where no later node took their slots (a world that kept slots free, m6): a slot
         /// keeps the name of the node freed there last, so where that was a cache's copy of a deleted group, it holds the
         /// group's name in its part's file, which the database's copy lost when a later node took its slot. The cache copies
         /// the part's first reference in record order, which is also the copy the source writes for every copy unless the
@@ -1362,7 +1362,9 @@ internal static partial class DatabaseRecords
         {
             Dictionary<WorldNode, string> names = new(ReferenceEqualityComparer.Instance);
             if (kept.Count == 0) return names;
-            // The load replayed: a cache's node is read right after it is made, as the record it copies.
+            // The load replayed: a cache's node is read right after it is made, as the record it copies. The reading's own
+            // replay already made this load within the build's limit, so the names cost none of the inference's budgets:
+            // running them out here would refuse a reading already found.
             Slots t = new() { Free = [.. before.Free.Reverse()], Next = before.Next };
             Dictionary<WorldNode, int> taken = new(ReferenceEqualityComparer.Instance);
             Dictionary<WorldNode, WorldNode> records = new(ReferenceEqualityComparer.Instance);
@@ -1376,13 +1378,13 @@ internal static partial class DatabaseRecords
                 Content = ContentOf,
                 File = Key,
                 IsReference = Cached,
-                Token = token, Mirrored = budget.Load(),
+                Token = token, Mirrored = OriginalLoader.MirrorBudget.PerLoad(),
             });
             // What the load left free its records did not take again, and only the later loads could.
             HashSet<int> left = [.. t.Free];
             foreach (int s in untaken)
             {
-                CandidateWork();
+                token.ThrowIfCancellationRequested();
                 if (!left.Contains(s) || !kept.TryGetValue(s, out var name) || !freedLast.TryGetValue(s, out var node) || !records.TryGetValue(node, out var record)) continue;
                 if (!Made.ContainsKey(record)) { if (record.Name != name) return new(ReferenceEqualityComparer.Instance); }
                 else if (!Content.ContainsKey(record)) names[record] = name;

@@ -117,7 +117,7 @@ public sealed class ReconstructionInferenceTests
         // the slots of the second copy's group (its name is lost), while the first copy's group keeps its name. When
         // edited, the script then marks the newest crate (the second copy's) a landmark, so the copies differ too. When
         // cacheOnly, the load takes both copies' groups' slots, and only the part's cache, freed below them, keeps the
-        // group's name (as 1999 m6's city part keeps street, ramps and bwall).
+        // group's name (as m6's city part keeps street, ramps, bwall, phones and hydrants).
         string loads = "LoadGameGen lamp.flt lamp1" + (edited ? "\nFindNode crate\nSetLandmark on" : "");
         Dictionary<string, byte[]> files = new(StringComparer.Ordinal) { ["gamegen/m1.gs"] = Encoding.ASCII.GetBytes(Script(1, loads)) };
         var group = Node("g", null, Node("crate", Quad(4, 1)), Node("post", Quad(1, 0)));
