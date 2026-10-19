@@ -347,7 +347,11 @@ public partial class MainWindow
         if (shownDocument is { SourceWorld: not null } doc && SourceSelection(doc, data) is { } projection && projection.IsBoundary(projection.Owner(node))) return "object";
         if (data == null || node < 0 || node >= data.Nodes.Count) return "node";
         var n = data.Nodes[node];
-        return n.Class switch { "world" => "world", "object3d" => n.ModelIndex != null ? "geometry" : "group", "lod" => "group", _ => "node" };
+        return n.Class switch
+        {
+            "world" => "world", "object3d" => n.ModelIndex != null ? "geometry" : SourceSelection(shownDocument!, data) is { } tree && tree.Children(node).Count == 0 ? "empty" : "group",
+            "lod" => "group", _ => "node",
+        };
     }
     /// <summary>Remembers a tree selection for the empty pane's Recently selected (four, newest first).</summary>
     private void RememberSelection(SceneTreeItem row)
@@ -561,22 +565,21 @@ public partial class MainWindow
                 if (!ResolveSelectionDrafts(sceneTreeDocument) || animation?.ResolvePendingDrafts() == false) return;
                 SelectSceneTreeRow(row);
             }
-            if (row.IsSectionItem) FrameSection(row);
+            if (row.IsSectionItem) { if (!TryFrameSection(row)) ViewModel.Status = "Nothing shown to frame."; }
             else RunCameraNavigation("frameSelected");
         }
         catch (StudioCommandException ex) { Report(ex); }
     }
-    /// <summary>Frames a network (all of its nodes) or what a definition binds to.</summary>
-    internal void FrameSection(SceneTreeItem row)
+    /// <summary>Frames a network (all of its shown nodes) or what a definition binds to; false when nothing shown is there.</summary>
+    internal bool TryFrameSection(SceneTreeItem row)
     {
-        if (scene is not { } viewport) throw new StudioCommandException("not_ready", "Show the map first.");
-        bool framed = row.Section switch
+        if (scene is not { } viewport) return false;
+        return row.Section switch
         {
             NetworkEntry network => viewport.TryFrameAiNetwork(network.Network.Id),
             DefinitionEntry definition => sceneTree?.Sections?.DefinitionRoots.GetValueOrDefault(definition.Definition.Index) is { } roots && viewport.TryFrameNodes(roots.Take(4096).ToArray()),
             _ => false,
         };
-        if (!framed) ViewModel.Status = "Nothing shown to frame.";
     }
 
     // Hide in viewport: presentation only, never a source edit.

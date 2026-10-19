@@ -317,6 +317,8 @@ public partial class MainWindow
         UpdateAiPathPanel();
         UpdateParachutePanel();
         UpdateReloadingView();
+        // The zone or network card takes no input until the rebuilt world shows it again.
+        if (sectionCard != null) sectionCard.IsEnabled = !rebuilding;
         // The card's fields follow too, whoever started the rebuild (an MCP edit, Undo, a Blender update).
         if (shownDocument?.SourceWorld == session && CurrentInspectionCard is { ObjectEditor: not null } card && !card.HasObjectDraft) card.Refresh();
     }
@@ -860,6 +862,14 @@ public partial class MainWindow
             catch (SourceFileChangedException ex) { throw new StudioCommandException("external_change", ex.Message); }
             catch (InvalidDataException ex) { throw new StudioCommandException("invalid_argument", ex.Message); }
             committingCard.CancelDraft(accepting: true); UpdateDocumentCommands();
+        }
+        if (committingSection)
+        {
+            RequireNoDrafts(doc, committing: true, committingSection: true);
+            try { session.Workspace.ValidatePreparedEdit(prepared, cancellation.Token, verification.Value); }
+            catch (SourceFileChangedException ex) { throw new StudioCommandException("external_change", ex.Message); }
+            catch (InvalidDataException ex) { throw new StudioCommandException("invalid_argument", ex.Message); }
+            ReleaseSectionDraft(doc);
         }
         bool OwnsPreparationStatus() => !shutdownToken.IsCancellationRequested && operation == cancellation && session.Building == cancellation
             && !doc.IsDisposed && session.Owner == doc && sourceWorkspace == session.Workspace

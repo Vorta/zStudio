@@ -538,7 +538,7 @@ public partial class MainWindow
         if (key == Key.Escape && ZoneToolEngaged)
         {
             if (scene?.CancelZoneGesture() == true) { ZoneFlash("Stroke cancelled", false); e.Handled = true; return true; }
-            if (typing) return false;
+            if (typing || e.OriginalSource is System.Windows.Controls.Primitives.ButtonBase { IsKeyboardFocused: true } rowButton && DocumentSceneTree.IsAncestorOf(rowButton)) return false;
             LeaveZoneTool(); e.Handled = true; return true;
         }
         if (typing || presentationUiHidden || System.Windows.Input.Keyboard.Modifiers != ModifierKeys.None || !sourceChromeActive || e.OriginalSource is DependencyObject origin && Window.GetWindow(origin) is { } window && window != this) return false;

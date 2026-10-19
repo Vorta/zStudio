@@ -34,6 +34,9 @@ internal sealed class SourceSectionCard : Border
     internal SectionEntry? Entry { get; private set; }
     internal DocumentModel? Document { get; private set; }
     internal bool Applying { get; private set; }
+    /// <summary>The applied edit was prepared and checked: its draft is being accepted (it no longer holds anything back).</summary>
+    internal bool Accepting { get; private set; }
+    internal void ReleaseForAcceptance() { if (Applying) Accepting = true; }
     internal Func<byte, string, Task>? ApplyLabel { get; set; }
     internal Action<byte>? PaintZone { get; set; }
     internal Func<string, IReadOnlyList<SourceAiNetworkEdits.Change>, Task>? ApplyNetwork { get; set; }
@@ -279,7 +282,7 @@ internal sealed class SourceSectionCard : Border
     // ---------------------------------------------------------------- the draft
 
     /// <summary>The zone's label or a network's field differs from what is stored.</summary>
-    internal bool HasDraft => Entry is ZoneEntry && label != null && label.Text.Trim() != labelInitial || Entry is NetworkEntry && inputs.Any(i => i.Changed);
+    internal bool HasDraft => !Accepting && (Entry is ZoneEntry && label != null && label.Text.Trim() != labelInitial || Entry is NetworkEntry && inputs.Any(i => i.Changed));
     internal string DraftToken => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes($"{draftId}|{Document?.SessionId}|{Document?.Revision}|{Entry?.Key}|{(label?.Text ?? "")}|{string.Join("\u0001", inputs.Select(i => string.Join("\u0002", i.Values)))}")));
     /// <summary>The changes a network's draft makes, as requested values.</summary>
     internal IReadOnlyList<SourceAiNetworkEdits.Change> NetworkChanges => [.. inputs.Where(i => i.Changed).Select(i => new SourceAiNetworkEdits.Change(i.Field.Key, i.Values))];
@@ -305,19 +308,32 @@ internal sealed class SourceSectionCard : Border
     {
         if (!HasDraft || Applying) return;
         Applying = true; Error(null); RefreshFooter();
+        var applied = Entry;
         try
         {
             if (Entry is ZoneEntry zone && ApplyLabel != null) await ApplyLabel(zone.Zone.Zone, label!.Text.Trim());
             else if (Entry is NetworkEntry network && ApplyNetwork != null) await ApplyNetwork(network.Network.Id, NetworkChanges);
+            // Accepted: what was applied is now stored (until the rebuilt map shows the card again with its own values).
+            if (ReferenceEquals(Entry, applied)) Adopt();
         }
         catch (OperationCanceledException) { }
-        catch (Exception ex) when (ex is StudioCommandException or System.IO.InvalidDataException or InvalidOperationException) { Error(ex.Message); }
-        finally { Applying = false; RefreshFooter(); DraftChanged?.Invoke(); }
+        catch (Exception ex) when (ex is not (OutOfMemoryException or StackOverflowException)) { Error(ex.Message); }
+        finally { Applying = Accepting = false; RefreshFooter(); DraftChanged?.Invoke(); }
     }
-    /// <summary>Asks about a pending draft: Yes applies it, No discards it, Cancel keeps editing.</summary>
+    /// <summary>The shown values become the stored ones (after an accepted edit).</summary>
+    private void Adopt()
+    {
+        if (label != null) labelInitial = label.Text.Trim();
+        for (int i = 0; i < inputs.Count; i++)
+        {
+            inputs[i] = inputs[i] with { Initial = inputs[i].Values };
+            foreach (var box in inputs[i].Boxes.OfType<TextBox>()) box.Tag = box.Text.Trim();
+        }
+    }
+    /// <summary>Asks about a pending draft: Yes applies it, No discards it, Cancel keeps editing (an edit being accepted holds nothing back).</summary>
     internal async Task<bool> ResolvePendingAsync()
     {
-        if (Applying) return false;
+        if (Applying) return Accepting;
         if (!HasDraft) return true;
         var answer = MessageBox.Show(Window.GetWindow(this), (Entry is ZoneEntry ? "Apply the pending zone label?" : "Apply the pending network changes?") + "\nYes: apply · No: discard · Cancel: keep editing",
             Entry is ZoneEntry ? "Zone label draft" : "AI network draft", MessageBoxButton.YesNoCancel, MessageBoxImage.Question);
@@ -414,6 +430,8 @@ internal sealed class SourceSectionCard : Border
                 break;
             }
         }
+        // Escape in a box restores what is stored, also when the box shows a kept draft.
+        for (int i = 0; i < boxes.Length; i++) if (boxes[i] is TextBox storedBox) storedBox.Tag = initial[i];
         NetworkInput input = new(field, boxes, initial, problem);
         inputs.Add(input);
         section.Body.Children.Add(title.Length == 0 ? Indented(shown) : Row(title, shown));
@@ -427,7 +445,11 @@ internal sealed class SourceSectionCard : Border
             TextBox box = new() { Text = value, Height = 32, MinWidth = 90, MaxLength = maximum, HorizontalAlignment = HorizontalAlignment.Left, IsEnabled = enabled };
             AutomationProperties.SetName(box, name);
             box.TextChanged += (_, _) => Changed();
-            box.PreviewKeyDown += (_, e) => { if (e.Key == Key.Escape && Entry is NetworkEntry && box.Text != (string)box.Tag!) { e.Handled = true; box.Text = (string)box.Tag!; } };
+            box.PreviewKeyDown += (_, e) =>
+            {
+                if (e.Key == Key.Escape && Entry is NetworkEntry && box.Text != (string)box.Tag!) { e.Handled = true; box.Text = (string)box.Tag!; }
+                else if (e.Key == Key.Enter && Entry is NetworkEntry && HasDraft) { e.Handled = true; _ = ApplyAsync(); }
+            };
             box.Tag = value;
             WithHint(box, hint ?? (value.Length == 0 ? "Not stored" : ""));
             return box;

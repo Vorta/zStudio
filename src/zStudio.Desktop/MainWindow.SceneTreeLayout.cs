@@ -10,7 +10,7 @@ namespace zStudio.Desktop;
 /// </summary>
 public partial class MainWindow
 {
-    private sealed record TreeLayout(string Path, HashSet<string> Expanded, HashSet<string> Prefixes, string? Anchor);
+    private sealed record TreeLayout(string Path, HashSet<string> Expanded, HashSet<string> Prefixes, string? Anchor, string? Section);
     private TreeLayout? pendingTreeLayout;
     /// <summary>The row to scroll back to after the next rebuild (the renamed group), as a layout path.</summary>
     private string? pendingTreeAnchor;
@@ -56,7 +56,8 @@ public partial class MainWindow
             expanded.Add(path);
             for (int slash = path.IndexOf('/'); slash > 0; slash = path.IndexOf('/', slash + 1)) prefixes.Add(path[..slash]);
         }
-        pendingTreeLayout = new(shownDocument.Path, expanded, prefixes, anchor);
+        // A selected zone, network or definition is found again by its key (an object selection follows the view's).
+        pendingTreeLayout = new(shownDocument.Path, expanded, prefixes, anchor, tree.Selected is { IsSectionItem: true } section ? section.Section!.Key : null);
     }
 
     /// <summary>Opens again, in the rebuilt map's tree, the rows that were open; what no longer exists stays closed.</summary>
@@ -92,6 +93,11 @@ public partial class MainWindow
             }
         }
         finally { changingSceneTree = changing; }
+        if (layout.Section is { } key && tree.Selected == null && tree.FindSection(key) is { IsSectionItem: true } section)
+        {
+            try { SelectSectionRow(section, restoring: true); }
+            catch (zStudio.Automation.StudioCommandException) { }
+        }
         if (anchor != null && tree.Selected == null) ScheduleSceneTreeReveal(anchor);
     }
 }

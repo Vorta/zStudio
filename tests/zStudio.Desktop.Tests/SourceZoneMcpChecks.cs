@@ -183,6 +183,20 @@ internal static class SourceZoneMcpChecks
             Assert.Equal("zone", zoneDraft["kind"]!.GetValue<string>()); Assert.Equal("Upper platform", zoneDraft["label"]!.GetValue<string>());
             await Call("scene_selection", new() { ["preview"] = zonePreview, ["action"] = "show_all" });
             Assert.Empty(view.HiddenZones);
+            // The card's Apply accepts its label as one undoable change; the rebuilt map selects the zone again, its card
+            // showing the stored label with nothing pending.
+            var card = typeof(MainWindow).GetField("sectionCard", fields)!.GetValue(main)!;
+            ((System.Windows.Controls.TextBox)card.GetType().GetField("label", fields)!.GetValue(card)!).Text = "Upper deck";
+            var pending = (await Call("drafts", new() { ["target"] = "section" }))["drafts"]!;
+            Assert.True(pending["pending"]!.GetValue<bool>());
+            doc = Document(await Call("resolve_drafts", new() { ["document"] = doc.SessionId.ToString(), ["target"] = "section", ["token"] = pending["token"]!.GetValue<string>(), ["action"] = "apply" }));
+            Assert.Equal("Upper deck", ZoneLabel(7));
+            var applied = (await Call("drafts", new() { ["target"] = "section" }))["drafts"]!;
+            Assert.False(applied["pending"]!.GetValue<bool>()); Assert.Equal("Upper deck", applied["label"]!.GetValue<string>());
+            string appliedPreview = ((Guid)typeof(MainWindow).GetField("previewId", fields)!.GetValue(main)!).ToString();
+            Assert.Equal("zone", (await Call("preview_state", new() { ["preview"] = appliedPreview }))["sections"]!["selection"]!["kind"]!.GetValue<string>());
+            doc = Document(await Call("undo_redo", new() { ["document"] = doc.SessionId.ToString(), ["revision"] = doc.Revision, ["action"] = "undo" }));
+            Assert.Equal("Upper platform", ZoneLabel(7));
 
             // A dependency edit stales the build's exact identities until the world is reloaded.
             node = doc.SourceBuild!.Provenance.First(p => p.Value.ModelNodeName == "flat_a").Key;
@@ -192,6 +206,7 @@ internal static class SourceZoneMcpChecks
             Assert.Equal("stale_document", (await Job("source_polygon_zones", Paint("paint", 6, (node, 0)), "failed"))["code"]!.GetValue<string>());
             await Call("source_zones", new() { ["document"] = doc.SessionId.ToString(), ["targets"] = new[] { new { node, polygon = 0 } } }, "stale_document");
 
+            string? ZoneLabel(byte zone) => SourceZoneEdits.Catalog(doc.SourceWorld!.Workspace, "m1", token).Labels.SingleOrDefault(l => l.Id == zone)?.Label;
             byte[] Zones(int scene) => SourceZoneEdits.PolygonZoneIds(Assert.Single(SourceZoneEdits.Inspect(doc.SourceWorld!.Workspace, doc.SourceBuild!, [new(scene, 0)], token: token).Targets).Word)!;
             Dictionary<string, object?> Paint(string action, int zone, params (int Node, int Polygon)[] targets) => new()
             {

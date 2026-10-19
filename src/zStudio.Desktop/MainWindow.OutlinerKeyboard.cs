@@ -21,6 +21,8 @@ public partial class MainWindow
     private void OutlinerKeyDown(object sender, KeyEventArgs e)
     {
         if (!sourceChromeActive || sceneTree is not { Projection: not null } model || System.Windows.Input.Keyboard.Modifiers != ModifierKeys.None) return;
+        // The tree's context menu routes its keys through the tree: they are the menu's.
+        if (e.OriginalSource is not Visual source || !DocumentSceneTree.IsAncestorOf(source)) return;
         var focused = System.Windows.Input.Keyboard.FocusedElement as DependencyObject;
         var item = focused == null ? null : RowContainer(focused);
         var row = item?.DataContext as SceneTreeItem;
@@ -67,7 +69,7 @@ public partial class MainWindow
         }
         if (rows.Count == 0) return;
         int at = from == null ? -1 : rows.IndexOf(from);
-        int page = Math.Max(1, (int)((VisualChild<ScrollViewer>(DocumentSceneTree)?.ViewportHeight ?? 280) / 28) - 1);
+        int page = Math.Max(1, (int)(DocumentSceneTree.ActualHeight / 28) - 1);
         int target = at < 0 ? 0 : key switch
         {
             Key.Up => at - 1, Key.Down => at + 1, Key.Home => 0, Key.End => rows.Count - 1,

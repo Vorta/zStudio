@@ -161,7 +161,13 @@ public partial class MainWindow : ISourceSectionState
                 break;
             case ZoneEntry zone:
                 if (ZoneToolEngaged) throw new StudioCommandException("busy", "Zone colours are paused while Edit zones is on.");
-                if (hide ?? !hiddenZones.Contains(zone.Zone.Zone)) hiddenZones.Add(zone.Zone.Zone); else hiddenZones.Remove(zone.Zone.Zone);
+                if (hide ?? !hiddenZones.Contains(zone.Zone.Zone))
+                {
+                    hiddenZones.Add(zone.Zone.Zone);
+                    // Hiding the isolated zone ends its isolation (as for a network).
+                    if (isolatedZone == zone.Zone.Zone) isolatedZone = null;
+                }
+                else hiddenZones.Remove(zone.Zone.Zone);
                 break;
             case NetworkEntry network:
                 string id = network.Network.Id;
@@ -221,6 +227,10 @@ public partial class MainWindow : ISourceSectionState
     /// <summary>A click on a section, scope or file row opens or closes it; those rows are never the selection.</summary>
     private void OutlinerRowMouseDown(object sender, MouseButtonEventArgs e)
     {
+        // A press on a row's button (a disabled one does not take it) is not a click on the row; a double-click toggles once.
+        for (var at = e.OriginalSource as DependencyObject; at != null && at != sender; at = at is System.Windows.Media.Visual ? System.Windows.Media.VisualTreeHelper.GetParent(at) : LogicalTreeHelper.GetParent(at))
+            if (at is System.Windows.Controls.Primitives.ButtonBase) { e.Handled = true; return; }
+        if (e.ClickCount > 1 && (sender as FrameworkElement)?.DataContext is SceneTreeItem { IsSourceMap: true, Selectable: false }) { e.Handled = true; return; }
         if ((sender as FrameworkElement)?.DataContext is not SceneTreeItem { Section: SectionHeader or DefinitionScopeEntry or DefinitionFileEntry } row && (sender as FrameworkElement)?.DataContext is not SceneTreeItem { Pass: not null }) return;
         var item = (SceneTreeItem)((FrameworkElement)sender).DataContext;
         if (item.ChildCount == 0) return;
@@ -230,8 +240,11 @@ public partial class MainWindow : ISourceSectionState
 
     // ---------------------------------------------------------------- selection and the card
 
-    /// <summary>Selects a zone, network or definition row: the object selection ends and the row's card shows in Properties.</summary>
-    private void SelectSectionRow(SceneTreeItem row)
+    /// <summary>
+    /// Selects a zone, network or definition row: the object selection ends and the row's card shows in Properties. Restoring
+    /// the selection a rebuild replaced only selects it again (the view and the zone tool stay as they are).
+    /// </summary>
+    private void SelectSectionRow(SceneTreeItem row, bool restoring = false)
     {
         if (row.Owner != sceneTree || !row.IsSectionItem || sceneTreeDocument is not { IsDisposed: false } doc)
             throw new StudioCommandException("stale_record", "The tree row is no longer available.");
@@ -250,7 +263,7 @@ public partial class MainWindow : ISourceSectionState
             sceneTree.Select(row); SceneTreeModel.ExpandAncestors(row);
         }
         finally { changingSceneTree = false; }
-        switch (row.Section)
+        switch (restoring ? null : row.Section)
         {
             // Selecting a network shows it: the overlay turns on, its eye opens and another network's isolation ends.
             case NetworkEntry network:
@@ -269,7 +282,7 @@ public partial class MainWindow : ISourceSectionState
         }
         ShowSectionCard(row);
         ApplySectionPresentation();
-        RememberSelection(row);
+        if (!restoring) RememberSelection(row);
         ScheduleSceneTreeReveal();
     }
     /// <summary>Clears a zone, network or definition selection (Escape, a click on empty space, the card's ✕), asking about its draft first.</summary>
@@ -346,7 +359,7 @@ public partial class MainWindow : ISourceSectionState
     private bool ResolveSectionDraft(DocumentModel? doc = null)
     {
         if (sectionCard is not { } card || doc != null && card.Document != doc) return true;
-        if (card.Applying) return false;
+        if (card.Applying) return card.Accepting;
         if (!card.HasDraft) return true;
         var resolving = card.ResolvePendingAsync();
         return resolving.IsCompleted && resolving.GetAwaiter().GetResult();
@@ -356,7 +369,14 @@ public partial class MainWindow : ISourceSectionState
         if (sectionCard is not { } card || doc != null && card.Document != doc) return true;
         return await card.ResolvePendingAsync();
     }
-    private bool HasSectionDraft(DocumentModel? doc = null) => sectionCard is { } card && (card.HasDraft || card.Applying) && (doc == null || card.Document == doc);
+    private bool HasSectionDraft(DocumentModel? doc = null) => sectionCard is { } card && (card.HasDraft || card.Applying && !card.Accepting) && (doc == null || card.Document == doc);
+    /// <summary>After an edit's preparation: the card's draft is still the one being applied, now released for acceptance.</summary>
+    private void ReleaseSectionDraft(DocumentModel doc)
+    {
+        if (sectionCard is not { Applying: true } card || card.Document != doc)
+            throw new StudioCommandException("context_changed", "The zone or AI network card changed while the edit was prepared.");
+        card.ReleaseForAcceptance(); UpdateDocumentCommands();
+    }
 
     // ---------------------------------------------------------------- edits
 

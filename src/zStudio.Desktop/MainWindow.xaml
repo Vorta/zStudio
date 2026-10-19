@@ -42,7 +42,7 @@
    <TextBlock Text="{Binding Label}" ToolTip="{Binding Value}" TextTrimming="CharacterEllipsis"/>
   </HierarchicalDataTemplate>
   <HierarchicalDataTemplate DataType="{x:Type local:SceneTreeItem}" ItemsSource="{Binding Children}">
-   <Grid ToolTip="{Binding ToolTip}">
+   <Grid ToolTip="{Binding ToolTip}" ToolTipService.ShowsToolTipOnKeyboardFocus="False">
     <Border x:Name="CompiledRow" BorderThickness="1,0,0,0" BorderBrush="{DynamicResource {x:Static SystemColors.ControlDarkBrushKey}}" Padding="6,2,2,2">
      <DockPanel><TextBlock Text="{Binding Glyph}" Opacity="0.7" Margin="0,0,6,0"/><TextBlock Text="{Binding Label}" TextTrimming="CharacterEllipsis"/></DockPanel>
     </Border>

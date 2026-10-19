@@ -96,7 +96,7 @@ public partial class MainWindow
                 throw new StudioCommandException("unsupported", "Isolation is available only in model and Whole world previews. Animation scenes remain fully visible.");
             if (viewport.IsPickupDragging || viewport.IsFlyActive)
                 throw new StudioCommandException("busy", "Finish the pickup drag or exit Fly before changing scene selection.");
-            if (action == "show_all") { viewport.Isolate(null); isolatedNode = null; hiddenRows.Clear(); pendingHidden = null; ApplyHiddenRows(); CurrentInspectionCard?.Refresh(); }
+            if (action == "show_all") { viewport.Isolate(null); isolatedNode = null; hiddenRows.Clear(); pendingHidden = null; ApplyHiddenRows(); if (sourceChromeActive) ShowAllSections(); CurrentInspectionCard?.Refresh(); }
             else
             {
                 int node = Int(a,"node",-1); if (!viewport.CanInspectNode(node)) throw new StudioCommandException("stale_record","Scene node unavailable.");

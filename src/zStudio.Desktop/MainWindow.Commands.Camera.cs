@@ -64,6 +64,10 @@ public partial class MainWindow
                 flyCamera?.End();
                 switch (action)
                 {
+                    case "frame" when node == null && Text(a, "target", "asset") == "selected" && viewport == scene && SectionSelection is { Section: NetworkEntry or DefinitionEntry } section:
+                        // A selected AI network, or what a selected definition binds to, as the row's Frame button frames it.
+                        if (!TryFrameSection(section)) throw new StudioCommandException("not_ready", "No visible geometry is available to frame.");
+                        break;
                     case "frame":
                         if (!viewport.TryFrame(Text(a, "target", "asset"), node)) throw new StudioCommandException("not_ready", "No visible geometry is available to frame.");
                         break;
