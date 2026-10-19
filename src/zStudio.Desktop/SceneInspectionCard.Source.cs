@@ -98,8 +98,9 @@ internal sealed partial class SceneInspectionCard
         heading.Text = objectBinding.State.Name; heading.ToolTip = objectBinding.State.Name; selectionName.Text = heading.Text;
         // The node's type and its built node, as the header's second line; the tooltip names the model (or the file holding it).
         var state = objectBinding.State;
-        subtitle.Text = $"{state.Class} · node #{state.Node}";
-        subtitle.ToolTip = subtitle.Text + (state.Model != null ? "\n" + state.Model : state.Origin.ModelFile is { } file ? "\nIn " + file : "");
+        bool empty = Selection is { } shown && CategoryOf?.Invoke(shown) == "empty";
+        subtitle.Text = $"{(empty ? "Empty " : "")}{state.Class} · node #{state.Node}";
+        subtitle.ToolTip = subtitle.Text + (empty ? "\n" + OutlinerKinds.EmptyNote : "") + (state.Model != null ? "\n" + state.Model : state.Origin.ModelFile is { } file ? "\nIn " + file : "");
         scope.Text = ""; scope.Visibility = Visibility.Collapsed;
         RefreshModeControls();
         RefreshFooter(ObjectEditor.CanEdit || copyObject.Visibility == Visibility.Visible);

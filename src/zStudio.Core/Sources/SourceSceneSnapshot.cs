@@ -45,6 +45,8 @@ public sealed class SourceSceneSnapshot : AssetDocument
     public required IReadOnlyList<string> ResourceInputs { get; init; }
     public required IReadOnlyList<string> Notes { get; init; }
     public required IReadOnlyList<SourceLookup> Lookups { get; init; }
+    /// <summary>The map's animation definitions as its list reaches them, with what each binds to (read-only).</summary>
+    public SourceAnimationDefinitions AnimationDefinitions { get; init; } = SourceAnimationDefinitions.Empty;
     public SourceSceneState BuildState => new(Mission, Root, Inputs)
     {
         Notes = Notes, Dependencies = Dependencies, MissingInputs = MissingInputs, MissingFolders = MissingFolders, InputHashes = InputHashes,
@@ -123,18 +125,24 @@ public static partial class SourceWorlds
             resources.TryAdd(Path.GetFileName(input), new(input, bytes, tree, syntax));
         }
         AnimationPackage? animations = null;
+        var definitions = SourceAnimationDefinitions.Empty;
         if (snapshot.Exists(SourceBuilder.AnimationRoot(mission)))
         {
             try
             {
+                // The bindings say which definition produced each entry: the World tree lists definitions with what they bind to.
                 var evaluated = AnimationCompiler.Evaluate(snapshot.Files(), SourceBuilder.AnimationRoot(mission),
-                    assembled.World.Nodes.Select(n => n.Name).ToArray(), snapshot.Effects(mission, token), token);
+                    assembled.World.Nodes.Select(n => n.Name).ToArray(), snapshot.Effects(mission, token), FormatRegistry.MaximumDocumentBytes, token, captureSourceBindings: true);
                 if (evaluated.EngineRejection is { } rejected) notes.Add($"Animations: {rejected}");
                 else animations = evaluated.Package;
                 foreach (var warning in evaluated.Warnings) notes.Add($"{warning}");
+                if (evaluated.Definitions is { } set) definitions = SourceAnimationDefinitions.Summarize(set, evaluated.SourceBindings, evaluated.EngineRejection, token);
             }
             catch (Exception error) when (error is InvalidDataException && error is not SourceFileChangedException)
-            { notes.Add($"Animation definitions are unavailable: {error.Message}"); }
+            {
+                notes.Add($"Animation definitions are unavailable: {error.Message}");
+                definitions = SourceAnimationDefinitions.Empty with { BindingKnown = false, Rejection = SourceAnimationDefinitions.Short(error.Message, 1024) };
+            }
         }
         Dictionary<string, ScriptContent> scripts = new(StringComparer.OrdinalIgnoreCase);
         long scriptBytes = 0;
@@ -198,7 +206,8 @@ public static partial class SourceWorlds
             Sounds = sounds, TextureFiles = textureFiles, Textures = textures, TextureScripts = scripts, Animations = animations,
             Provenance = provenance, Freed = assembled.Provenance.Where(pair => !slots.ContainsKey(pair.Key) && (pair.Value.Applied.Count > 0 || pair.Value.Named.Count > 0)).Select(pair => pair.Value).ToArray(), AuthoredHierarchy = assembled.AuthoredHierarchy, Executions = assembled.Executions, WriteInstruction = assembled.WriteInstruction,
             Inputs = snapshot.Stamps(), ReadHashes = snapshot.ReadHashes(), InputHashes = snapshot.Hashes(), Dependencies = snapshot.Dependencies(),
-            MissingInputs = snapshot.Missing(), MissingFolders = snapshot.MissingFolders(), ResourceInputs = resourceInputs, TextureInputs = textureInputs, SoundInputs = soundInputs, ScriptInputs = scriptInputs, Notes = diagnostics, Lookups = lookups };
+            MissingInputs = snapshot.Missing(), MissingFolders = snapshot.MissingFolders(), ResourceInputs = resourceInputs, TextureInputs = textureInputs, SoundInputs = soundInputs, ScriptInputs = scriptInputs, Notes = diagnostics, Lookups = lookups,
+            AnimationDefinitions = definitions };
         result.Assets.Add(new() { Id = new(result.Path, AssetKind.World, 0), Name = "Whole world", Content = scene });
         foreach (var model in scene.Models) result.Assets.Add(new() { Id = new(result.Path, AssetKind.Model, model.Index), Name = $"Model {model.Index}", Content = model, Metadata = model.Metadata });
         foreach (var node in scene.Nodes) result.Assets.Add(new() { Id = new(result.Path, AssetKind.Node, node.Index), Name = node.Name, Content = node, Metadata = node.Metadata });

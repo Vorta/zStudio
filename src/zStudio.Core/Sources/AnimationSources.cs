@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text;
 using zStudio.Core.Animation;
 using zStudio.Core.Formats;
@@ -295,6 +296,8 @@ internal static class AnimationSources
         {
             token.ThrowIfCancellationRequested();
             var definition = bindings[group.First() - 1].Definition;
+            // What the archived text compiles to now, for the note's list of what the newer version changes.
+            var archivedEntry = group.First() < built.Entries.Count ? built.Entries[group.First()] : null;
             // A definition shared by several missions is rebuilt once; a failed attempt is not repeated.
             if (!attempted.Add((definition.File, definition.Ordinal))) continue;
             // Every entry of the definition must agree on one decompiled definition.
@@ -328,7 +331,13 @@ internal static class AnimationSources
             }
             catch (InvalidDataException ex) { remaining = ex.Message; }
             bool exact = remaining == null;
-            if (exact) notes.Add($"{definition.File}: {Name(definition)} is not the version the shipped animations were compiled from; it was rebuilt from anim.zbd.");
+            if (exact)
+            {
+                string? saved = SavedDate(mission, definition.File);
+                string? changes = archivedEntry == null ? null : NewerChanges(definition.Item, archivedEntry, mission.Package.Entries[group.First()], token);
+                notes.Add($"{definition.File}: {Name(definition)} was rebuilt from anim.zbd, which the game uses: it was compiled from a newer version of this definition"
+                    + (saved != null ? $" (saved {saved})" : "") + " than the archived text." + (changes != null ? $" Changes in the newer version: {changes}." : ""));
+            }
             else
             {
                 files.Written[definition.File] = original;
@@ -338,6 +347,96 @@ internal static class AnimationSources
     }
 
     private static string Name(AnimationDefinition definition) => definition.Item.TextOf("ANIMATION_NAME") ?? definition.Item.TextOf("NAME") ?? "(unnamed)";
+
+    /// <summary>The date anim.zbd records for a definition file it read (its stamps name the .zrd the definition was then).</summary>
+    private static string? SavedDate(MissionAnimation mission, string file)
+    {
+        string stem = Path.ChangeExtension(file, null);
+        foreach (var (stamp, time) in mission.Stamps)
+        {
+            string normalized = stamp.Replace('\\', '/'); while (normalized.Contains("//")) normalized = normalized.Replace("//", "/");
+            if (WorldAssembler.ProjectPath(normalized) is { } path && string.Equals(Path.ChangeExtension(path, null), stem, StringComparison.OrdinalIgnoreCase))
+                return DateTimeOffset.FromUnixTimeSeconds(time).UtcDateTime.ToString("d MMM yyyy", CultureInfo.InvariantCulture);
+        }
+        return null;
+    }
+
+    private const int MaximumNotedChanges = 6, ChangeSummaryNodes = 50_000;
+    /// <summary>
+    /// What the version anim.zbd was compiled from changes against the archived text: both decompiled from what they
+    /// compile to, so spelling (attribute order, written-out defaults, integer or float) is alike and only changes that
+    /// compile differently remain, as up to six phrases ("RESET_TIME ( 0.5 ) → ( 0.0 )", "SEQUENCE_DEFINITION genboom ›
+    /// added CALL_ANIMATION ( NAME ( x ) )"). Null when there is nothing to say or the comparison exceeds its own small
+    /// budget (the note then only says what is newer).
+    /// </summary>
+    internal static string? NewerChanges(AnimationItem original, AnimationEntry archived, AnimationEntry shipped, CancellationToken token)
+    {
+        List<string> changes = []; int more = 0;
+        try
+        {
+            AnimationDefinitionBudget budget = new(token, maximumNodes: ChangeSummaryNodes);
+            Compare([.. AnimationItem.Parse(Decompile(original, archived, budget, token), "")], [.. AnimationItem.Parse(Decompile(original, shipped, budget, token), "")], "");
+        }
+        catch (Exception ex) when (ex is InvalidDataException or IOException) { return null; }
+        if (changes.Count == 0) return null;
+        return string.Join("; ", changes) + (more > 0 ? $"; and {more} more" : "");
+
+        void Compare(IReadOnlyList<AnimationItem> older, IReadOnlyList<AnimationItem> newer, string path)
+        {
+            token.ThrowIfCancellationRequested();
+            if ((long)older.Count * newer.Count > 250_000) { Note(path + "changed"); return; }
+            string[] a = [.. older.Select(Shown)], b = [.. newer.Select(Shown)];
+            int[,] common = new int[a.Length + 1, b.Length + 1];
+            for (int i = a.Length - 1; i >= 0; i--)
+                for (int j = b.Length - 1; j >= 0; j--)
+                    common[i, j] = a[i] == b[j] ? common[i + 1, j + 1] + 1 : Math.Max(common[i + 1, j], common[i, j + 1]);
+            List<AnimationItem> removed = [], added = [];
+            for (int x = 0, y = 0; x < a.Length || y < b.Length;)
+            {
+                if (x < a.Length && y < b.Length && a[x] == b[y]) { Changed(removed, added, path); x++; y++; }
+                else if (y < b.Length && (x == a.Length || common[x, y + 1] >= common[x + 1, y])) added.Add(newer[y++]);
+                else removed.Add(older[x++]);
+            }
+            Changed(removed, added, path);
+        }
+        // A run of items one side has and the other not: an item of the same kind (and name) on both sides changed.
+        void Changed(List<AnimationItem> removed, List<AnimationItem> added, string path)
+        {
+            foreach (var item in removed)
+            {
+                int at = added.FindIndex(n => n.Key == item.Key && n.TextOf("NAME") == item.TextOf("NAME"));
+                if (at < 0) { Note($"{path}removed {Shown(item)}"); continue; }
+                var newer = added[at]; added.RemoveAt(at);
+                if (item.Items.Any() && newer.Items.Any() && Shown(Plain(item.Values)) == Shown(Plain(newer.Values)))
+                    Compare([.. item.Items], [.. newer.Items], path + item.Key + (item.TextOf("NAME") is { } name ? " " + name : "") + " › ");
+                else Note($"{path}{item.Key} {Shown(item.Values)} → {Shown(newer.Values)}");
+            }
+            foreach (var item in added) Note($"{path}added {Shown(item)}");
+            removed.Clear(); added.Clear();
+        }
+        void Note(string change) { if (changes.Count < MaximumNotedChanges) changes.Add(JsonData.ShownText(change, 160)); else more++; }
+        // An item's own values: not the keys of the items it holds (a name followed by its list).
+        static List<ZrdNode> Plain(ZrdNode? values)
+        {
+            List<ZrdNode> plain = [];
+            var children = values?.Children ?? [];
+            for (int i = 0; i < children.Count; i++)
+            {
+                if (children[i].Kind == ZrdKind.String && i + 1 < children.Count && children[i + 1].Kind == ZrdKind.Array) { i++; continue; }
+                if (children[i].Kind != ZrdKind.Array) plain.Add(children[i]);
+            }
+            return plain;
+        }
+        static string Shown(object? value) => value switch
+        {
+            AnimationItem item => item.Key + " " + Shown(item.Values),
+            IEnumerable<ZrdNode> scalars => string.Join(" ", scalars.Select(n => Shown(n))),
+            ZrdNode { Kind: ZrdKind.Array } node => "( " + string.Join(" ", node.Children.Select(n => Shown(n))) + " )",
+            ZrdNode { Kind: ZrdKind.String } node => node.Text,
+            ZrdNode node => node.Value,
+            _ => "( )",
+        };
+    }
 
     /// <summary>The entry decompiled, its keyframe events naming the script items of the original definition.</summary>
     private static ZrdNode Decompile(AnimationItem original, AnimationEntry entry, AnimationDefinitionBudget budget, CancellationToken token)

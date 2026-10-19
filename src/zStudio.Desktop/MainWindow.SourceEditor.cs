@@ -65,6 +65,8 @@ public partial class MainWindow
         // press (Closed follows only after the fade), so the button state is read there.
         DependencyPropertyDescriptor.FromProperty(Popup.IsOpenProperty, typeof(Popup)).AddValueChanged(OutlinerLegend, (_, _) =>
         { if (!OutlinerLegend.IsOpen && Mouse.LeftButton == MouseButtonState.Pressed) legendClosedAt = Environment.TickCount64; });
+        // The empty node's slate follows the theme.
+        OutlinerLegend.Opened += (_, _) => LegendEmptyIcon.SetValue(System.Windows.Documents.TextElement.ForegroundProperty, OutlinerKinds.Brush("empty"));
         // A replaced or shown scene brings its own card: dock it (or the next one) once the change settles.
         EventHandler sceneChanged = (_, _) => Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Loaded, RefreshSourceChrome);
         DependencyPropertyDescriptor.FromProperty(ContentControl.ContentProperty, typeof(ContentControl)).AddValueChanged(SceneHost, sceneChanged);
@@ -124,25 +126,12 @@ public partial class MainWindow
         Restyle(HighlightPolygonZones, "CommandToggle", "Show/hide polygon zones — the zones each polygon makes current when the camera or a vehicle is on it; striped where it has several");
         Restyle(HighlightLandmarks, "CommandToggle", "Landmarks — geometry and objects that are never culled");
         Move(FaceOrientation, SourceOverlayItems, "CommandToggle", "Face orientation — show normal direction");
-        // The zone overlays lead the Zones group, before the tool that edits them.
-        Move(HighlightZones, SourceZoneOverlayItems);
-        Move(HighlightPolygonZones, SourceZoneOverlayItems);
+        // The zone overlays and the AI overlay are the World tree's Zones and AI Networks rows (their eyes): the compiled
+        // toolbar keeps its own toggles, out of sight here; Show keeps VTOL route.
+        Restyle(HighlightZones, VisibilityProperty, Visibility.Collapsed);
+        Restyle(HighlightPolygonZones, VisibilityProperty, Visibility.Collapsed);
         Move(ParachuteButton, SourceShowItems, "CommandGroupButton", "VTOL route");
-        Move(AiTools, SourceShowItems);
-        Restyle(AiEnabled, "CommandToggle", "AI nodes");
-        Restyle(AiNetworkCombo, HeightProperty, 28d); Restyle(AiNetworkCombo, WidthProperty, 170d); Restyle(AiNetworkCombo, FontSizeProperty, 12d);
-        Restyle(AiNetworkCombo, MarginProperty, new Thickness(2, 0, 2, 0));
-        Restyle(AiThroughGeometry, "CommandPill", "Show AI nodes through geometry");
-        StackPanel through = new() { Orientation = Orientation.Horizontal };
-        through.Children.Add(new PreviewIcon { Kind = "AiThrough", Width = 14, Height = 14, Margin = new(0, 0, 6, 0), VerticalAlignment = VerticalAlignment.Center });
-        through.Children.Add(new TextBlock { Text = "See-through", VerticalAlignment = VerticalAlignment.Center });
-        Restyle(AiThroughGeometry, ContentControl.ContentProperty, through);
-        // AI's node set and see-through follow a divider inside the Show group.
-        aiExtrasDivider = new() { Width = 1, Height = 20, Margin = new(6, 0, 4, 0), VerticalAlignment = VerticalAlignment.Center };
-        aiExtrasDivider.SetResourceReference(Border.BackgroundProperty, "DividerStrokeColorDefaultBrush");
-        aiExtrasDivider.SetBinding(VisibilityProperty, new System.Windows.Data.Binding(nameof(Visibility)) { Source = AiNetworkCombo });
-        AiTools.Children.Insert(AiTools.Children.IndexOf(AiNetworkCombo), aiExtrasDivider);
-        foreach (var moved in new FrameworkElement[] { FrameScene, FlyEnabled, Wireframe, FaceOrientation, TexturesEnabled, BoundsEnabled, BackdropEnabled, WorldHighlights, ParachuteButton, AiTools })
+        foreach (var moved in new FrameworkElement[] { FrameScene, FlyEnabled, Wireframe, FaceOrientation, TexturesEnabled, BoundsEnabled, BackdropEnabled, WorldHighlights, ParachuteButton })
             Watch(moved);
         // The title keeps the map's name with an Edited pill; Save, Undo and Redo are in the command bar.
         ActiveDocumentTitle.Visibility = Visibility.Collapsed; SourceDocumentTitle.Visibility = Visibility.Visible;
@@ -166,6 +155,8 @@ public partial class MainWindow
     private void LeaveSourceChrome()
     {
         OutlinerLegend.IsOpen = false;
+        // The World tree's zone and network eyes and a definition's outlines belong to the source map, not to the next world.
+        scene?.SetZonePresentation(new HashSet<byte>(), null); scene?.SetAiNetworkPresentation(new HashSet<string>(StringComparer.Ordinal), null); scene?.SetOutlinedNodes([]);
         UndockCard();
         PreviewHost.SizeChanged -= ClipPreviewHost; PreviewHost.Clip = null;
         SourceTreeHost.Content = null; DocumentSceneTab.Content = DocumentSceneTree;
@@ -269,7 +260,11 @@ public partial class MainWindow
     {
         if (!sourceChromeActive) return;
         var card = CurrentInspectionCard;
-        StatusSelection.Text = card?.SelectionLabel ?? "No selection";
+        StatusSelection.Text = SectionSelection is { } section ? section.Section switch
+        {
+            NetworkEntry => section.OutlinerLabel + " · AI network", DefinitionEntry => section.OutlinerLabel + " · animation definition",
+            ZoneEntry zone => section.OutlinerLabel + (zone.Zone.Label is { } label ? " · " + label : ""), _ => section.OutlinerLabel,
+        } : card?.SelectionLabel ?? "No selection";
         StatusMission.Text = scene?.Mission?.Layout.Label ?? "";
         StatusCounts.Text = scene?.PreviewSummary ?? "";
         StatusNoticeCount.Text = staticPreviewProblems.Count.ToString(CultureInfo.InvariantCulture);
@@ -295,9 +290,21 @@ public partial class MainWindow
         RefreshZoneBanner();
         FlyHint.Visibility = !sourceChromeActive && flying ? Visibility.Visible : Visibility.Collapsed;
         if (flying && scene != null) FlyBannerSpeed.Text = $"· {scene.FlySpeed:0.##} units/s";
+        // Status chips for the overlays the World tree's section rows turn on: which zones and networks show.
+        bool zones = shown && !flying && ZoneOverlayOn && !ZoneToolEngaged && shownDocument?.SourceWorld != null;
+        ZonesChip.Visibility = zones ? Visibility.Visible : Visibility.Collapsed;
+        ZonesChipText.Text = (worldHighlightMode == zStudio.Core.WorldHighlightMode.PolygonZones ? "Polygon zones" : "Object zones");
+        int usedZones = sceneTree?.Sections?.Zones.Count(z => z.Used) ?? 0;
+        int shownUsed = sceneTree?.Sections?.Zones.Count(z => z.Used && shownZones.Contains(z.Zone)) ?? 0;
+        ZonesChipMode.Text = shownUsed >= usedZones ? $"· all {usedZones}" : $"· {shownUsed} of {usedZones}";
         AiChip.Visibility = shown && aiVisible && IsAiWorld ? Visibility.Visible : Visibility.Collapsed;
-        AiChipText.Text = "AI nodes · " + ((AiNetworkCombo.SelectedItem as AiNetworkChoice)?.Label.Split(" · ")[0] ?? "All networks");
-        AiChipMode.Text = aiThroughGeometry ? "· see-through" : "";
+        AiChip.Margin = new(10, zones ? 102 : 56, 10, 10);
+        int networks = scene?.AiNetworks.Networks.Count ?? 0, shownCount = scene?.AiNetworks.Networks.Count(n => shownNetworks.Contains(n.Id)) ?? 0;
+        AiChipText.Text = sourceChromeActive
+            ? "AI networks · " + (aiNetworkFilter != null && scene?.AiNetworks.Networks.FirstOrDefault(n => n.Id == aiNetworkFilter) is { } isolatedNetwork ? SourceMapSections.NetworkStem(isolatedNetwork) + " only"
+                : networks == 0 ? "none in this map" : shownCount == networks ? $"all {networks}" : $"{shownCount} of {networks}")
+            : "AI nodes · " + ((AiNetworkCombo.SelectedItem as AiNetworkChoice)?.Label.Split(" · ")[0] ?? "All networks");
+        AiChipMode.Text = aiThroughGeometry && !sourceChromeActive ? "· see-through" : "";
     }
     private void RefreshViewMode() { if (viewModeViewport != null) ViewModeLabel.Text = viewModeViewport.ViewMode; }
 
@@ -324,6 +331,9 @@ public partial class MainWindow
             SourcePropertiesHost.Content = card.PanelRoot;
             dockedCard = card;
         }
+        // A selected zone, network or definition shows its own card in the pane; the object card waits beside it.
+        object? shown = SectionSelection != null && sectionCard?.Entry != null ? sectionCard : dockedCard?.PanelRoot;
+        if (dockedCard != null && !ReferenceEquals(SourcePropertiesHost.Content, shown)) SourcePropertiesHost.Content = shown;
     }
     private void UndockCard()
     {
@@ -341,12 +351,16 @@ public partial class MainWindow
         if (shownDocument is { SourceWorld: not null } doc && SourceSelection(doc, data) is { } projection && projection.IsBoundary(projection.Owner(node))) return "object";
         if (data == null || node < 0 || node >= data.Nodes.Count) return "node";
         var n = data.Nodes[node];
-        return n.Class switch { "world" => "world", "object3d" => n.ModelIndex != null ? "geometry" : "group", "lod" => "group", _ => "node" };
+        return n.Class switch
+        {
+            "world" => "world", "object3d" => n.ModelIndex != null ? "geometry" : SourceSelection(shownDocument!, data) is { } tree && tree.Children(node).Count == 0 ? "empty" : "group",
+            "lod" => "group", _ => "node",
+        };
     }
     /// <summary>Remembers a tree selection for the empty pane's Recently selected (four, newest first).</summary>
     private void RememberSelection(SceneTreeItem row)
     {
-        if (!row.IsSourceMap || row.Index == null) return;
+        if (!row.IsSourceMap || row.Index == null && !row.IsSectionItem) return;
         if (recentDocument != sceneTreeDocument) { recentSelections.Clear(); recentDocument = sceneTreeDocument; }
         string[] path = row.Owner.State.SelectionPath.ToArray();
         recentSelections.RemoveAll(r => r.Path.SequenceEqual(path));
@@ -452,13 +466,15 @@ public partial class MainWindow
     {
         // The open icon legend holds the mouse capture: Escape closes it first.
         if (e.Key == Key.Escape && OutlinerLegend.IsOpen) { OutlinerLegend.IsOpen = false; e.Handled = true; return true; }
-        if (e.Key != Key.Escape || !sourceChromeActive || operation is { IsCancellationRequested: false } || Mouse.Captured != null || CurrentInspectionCard is not { Selection: not null } card) return false;
+        if (e.Key != Key.Escape || !sourceChromeActive || operation is { IsCancellationRequested: false } || Mouse.Captured != null) return false;
+        var card = CurrentInspectionCard;
+        if (card?.Selection == null && SectionSelection == null) return false;
         if (e.OriginalSource is DependencyObject origin && Window.GetWindow(origin) is { } window && window != this) return false;
         for (var source = e.OriginalSource as DependencyObject; source != null; source = source is Visual ? VisualTreeHelper.GetParent(source) : LogicalTreeHelper.GetParent(source))
             if (source is TextBoxBase or ComboBox or MenuItem or Popup) return false;
         if (scene?.IsPickupDragging == true || scene?.IsZonePainting == true || flyCamera?.IsActive == true) return false;
         e.Handled = true;
-        card.ClearSelection();
+        if (SectionSelection != null) ClearSectionSelection(); else card!.ClearSelection();
         return true;
     }
 
@@ -484,7 +500,7 @@ public partial class MainWindow
             // Bound the walk itself, not only the result, for a very large world.
             if (++visited > 200_000) { truncated = true; break; }
             var row = current.Row;
-            if (row.Category != "world" && types.Contains(row.Category) && (query.Length == 0 || row.DisplayName.Contains(query, StringComparison.OrdinalIgnoreCase) || row.Pass?.Label.Contains(query, StringComparison.OrdinalIgnoreCase) == true))
+            if (row.Category != "world" && types.Contains(row.Category) && (query.Length == 0 || row.SearchText.Contains(query, StringComparison.OrdinalIgnoreCase)))
             {
                 if (hits.Count == limit) { truncated = true; break; }
                 hits.Add((row, current.Path));
@@ -533,6 +549,11 @@ public partial class MainWindow
         if (sceneTree == null) return;
         foreach (var row in sceneTree.CreatedRows.ToArray()) row.IsExpanded = false;
     }
+    /// <summary>
+    /// Show all shows every hidden object (units and pickups too) and ends isolation; zones and AI networks keep their own eyes.
+    /// The AI Vehicles and Pickups master eyes follow.
+    /// </summary>
+    private void ShowAllSections() => ApplySectionPresentation();
 
     // A row's Frame selection: selects the row (resolving pending input first) and frames it, like the card's button.
     private void OutlinerFrameClick(object sender, RoutedEventArgs e)
@@ -546,25 +567,44 @@ public partial class MainWindow
                 if (!ResolveSelectionDrafts(sceneTreeDocument) || animation?.ResolvePendingDrafts() == false) return;
                 SelectSceneTreeRow(row);
             }
-            RunCameraNavigation("frameSelected");
+            if (row.IsSectionItem) { if (!TryFrameSection(row)) ViewModel.Status = "Nothing shown to frame."; }
+            else RunCameraNavigation("frameSelected");
         }
         catch (StudioCommandException ex) { Report(ex); }
+    }
+    /// <summary>Frames a network (all of its nodes) or what a definition binds to; false when nothing shown is there.</summary>
+    internal bool TryFrameSection(SceneTreeItem row)
+    {
+        if (scene is not { } viewport) return false;
+        return row.Section switch
+        {
+            NetworkEntry network => viewport.TryFrameAiNetwork(network.Network.Id),
+            DefinitionEntry definition => sceneTree?.Sections?.DefinitionRoots.GetValueOrDefault(definition.Definition.Index) is { } roots && viewport.TryFrameNodes(roots.Take(4096).ToArray()),
+            _ => false,
+        };
     }
 
     // Hide in viewport: presentation only, never a source edit.
     private void OutlinerEyeClick(object sender, RoutedEventArgs e)
     {
         e.Handled = true;
+        if ((sender as FrameworkElement)?.Tag is SceneTreeItem { CanHide: true } section && (section.Section != null || section.HasMasterEye))
+        {
+            try { ToggleSectionEye(section); }
+            catch (StudioCommandException ex) { Report(ex); }
+            return;
+        }
         if ((sender as FrameworkElement)?.Tag is not SceneTreeItem { CanHide: true, Index: int index } row) return;
         try { SetRowHidden(row, index, !row.IsHidden); }
         catch (StudioCommandException ex) { Report(ex); }
     }
-    // Middle-click on the eye: show only this object (what Isolate did), or everything again on the isolated one.
+    // Middle-click on a world object's eye: show only this object (what Isolate did), or everything again on the isolated one.
+    // Zones, networks, units and pickups are shown and hidden one by one, and their sections' rows show or hide them all.
     private void OutlinerEyeMiddleClick(object sender, System.Windows.Input.MouseButtonEventArgs e)
     {
         if (e.ChangedButton != System.Windows.Input.MouseButton.Middle) return;
         e.Handled = true;
-        if ((sender as FrameworkElement)?.Tag is not SceneTreeItem { CanHide: true, Index: int index } row) return;
+        if ((sender as FrameworkElement)?.Tag is not SceneTreeItem { CanHide: true, Index: int index, Section: null, HasMasterEye: false, IsPassObject: false } row) return;
         try { ToggleRowIsolation(row, index); }
         catch (StudioCommandException ex) { Report(ex); }
     }
@@ -596,7 +636,12 @@ public partial class MainWindow
     /// <summary>Whether the isolation is a source group's: its members come from the tree, so a replaced scene ends it.</summary>
     private bool isolatedGroup;
     /// <summary>The rows' eyes follow what is hidden and isolated.</summary>
-    private void RefreshRowEyes() { if (sceneTree != null) foreach (var row in sceneTree.CreatedRows) row.NotifyHidden(); }
+    private void RefreshRowEyes()
+    {
+        if (sceneTree == null) return;
+        if (sourceChromeActive) ReconcileMasters();
+        foreach (var row in sceneTree.CreatedRows) row.NotifyHidden();
+    }
     internal void SetRowHidden(SceneTreeItem row, int index, bool hidden)
     {
         if (scene == null || row.Owner != sceneTree) throw new StudioCommandException("stale_record", "The tree node is no longer available.");

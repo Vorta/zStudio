@@ -152,7 +152,7 @@
         "zstudio_scene_properties",
         "zstudio_properties_open"
       ],
-      "note": "Lazy hierarchy rows, bound expansion/selection and viewport reveal share context-scoped occurrence identities, source provenance and pending-draft guards. Source rows expose sourceFile/gltfNode/sourceOccurrence and optional compiledNode. Authored groups removed by compilation remain read-only sourceGroup rows with null node and selectionOwner; whole-reference owners retain framing; their editor-only Parts are MCP-only (source_map_parts). Preview hierarchy is stable during animation; stored nodes are the fallback. Motion previews scope tree/enumeration/selection/Properties/node framing to the selected assembly and retain original library indices. Expand/collapse/reveal only change presentation. MW3 mission labels use 128-character prefixes with actor NameCharacters/NameTruncated and node metadata name_characters/name_truncated, also available in scene_nodes, scene_properties and pinned Properties. Cards disclose shortened labels; original AIV names and instance identities remain intact."
+      "note": "Lazy hierarchy rows, bound expansion/selection and viewport reveal share context-scoped occurrence identities, source provenance and pending-draft guards. Source rows expose sourceFile/gltfNode/sourceOccurrence and optional compiledNode. Authored groups removed by compilation remain read-only sourceGroup rows with null node and selectionOwner; whole-reference owners retain framing; their editor-only Parts are MCP-only (source_map_parts). Preview hierarchy is stable during animation; stored nodes are the fallback. Motion previews scope tree/enumeration/selection/Properties/node framing to the selected assembly and retain original library indices. Expand/collapse/reveal only change presentation. MW3 mission labels use 128-character prefixes with actor NameCharacters/NameTruncated and node metadata name_characters/name_truncated, also available in scene_nodes, scene_properties and pinned Properties. Cards disclose shortened labels; original AIV names and instance identities remain intact. In a source map the World tree adds section rows (scene_tree sectionRow): Zones, AI Networks and Animations (definitions) list the map's zones, AI networks and .zad definitions; zones and networks are shown one by one with their eyes (all hidden at first), the Zones, AI Networks, AI Vehicles and Pickups rows' master eyes show or hide everything below them, and selecting one opens its card in the docked Properties pane (zone label: source_zone_label; network header: source_ai_network; definitions are read-only and outline what they bind). preview_state sections reports the eyes, emphasis, outlines and selection; drafts/resolve_drafts target section covers the card's pending input. Keyboard: Up/Down, Home/End and Page Up/Down move through every shown row (a selectable row becomes the selection; section, folder, file, pass and note rows only take focus), Left/Right reach the row's buttons, Space or Enter opens or closes a row with children or presses the focused button, Escape returns from a button to its row."
     },
     {
       "gui": "MotionEditor:Controls",
@@ -238,6 +238,19 @@
       "note": "Source-world object editing lives in the selected-object card: a source map always docks it as the Properties pane. The title is the object's name with its class and node number as read-only text (the model in its tooltip); Name and model (where they can change), local Position/Rotation/Scale, supported flags and class-specific commands share an explicit draft. Fields are editable at once: the first change opens the draft, the footer's Apply and Revert end it; focus and Enter do not commit. scene_card set also takes transformMode (move, rotate, none). scene_card set accepts up to 32 fields (field/value strings, 4096 characters each); scene_inspect and drafts target=scene expose the same fields and token. Apply/resolve_drafts accepts one source transaction and undo step, then updates the evaluated scene in memory; input it cannot accept is refused as invalid_draft, shown on the card with the draft kept. Copy/Delete resolve pending input first. scene_properties open focuses this panel; the source tree has no Properties menu. Terrain recipes retain Edit terrain and their dedicated editor. Source ownership, script provenance, rename protections and exclusive crater modes remain enforced. The Zone section's combo box (field zone: inherit, any or 0–254; a load root cannot inherit) and Altitude zone check (field altitudeZoneCheck) join the same draft and write where the occurrence keeps its zone (node, placement override or load root); a shared assignment asks in the GUI and needs scene_card apply sharedScope true over MCP (shared_scope otherwise). Under an unchanged inherited zone the field's hint reads Zone N · inherited from its supplier, with the full source (scene_inspect's Zone source) in its tooltip. The Zone section also shows the read-only Polygon zones of a placed object, group or geometry (one row per zone set with the count of all its polygons, scene_inspect Object polygon zones rows; right-click Copy polygon zones copies them as text); apart from the node number under the title, compiled-node metadata and competing world-origin coordinates are absent from the source-object GUI. The drag-to-scrub axis letters and the Model browse button only fill the same draft fields as scene_card set."
     },
     {
+      "gui": "SourceSectionCard:Fields",
+      "tools": [
+        "zstudio_scene_tree",
+        "zstudio_source_zone_label",
+        "zstudio_source_zone_tool",
+        "zstudio_source_ai_network",
+        "zstudio_drafts",
+        "zstudio_resolve_drafts",
+        "zstudio_preview_state"
+      ],
+      "note": "Selecting a zone, AI network or animation definition in the World tree docks its card as the Properties pane (scene_tree select; properties also focuses its first field; Alt+Enter and F2 focus it). A zone's label and a network's header fields are one draft (drafts/resolve_drafts target section) with inline validation: Enter or Apply accepts one undoable change (source_zone_label; source_ai_network edit with the changed keys), Revert or Escape discards it, and selecting elsewhere, saving or closing asks first. A network's card names its fields as the developers' Net Edit dialog does (Attack Radius, Pursuit Radius Min and Max, Buddies Attack…) and says what each does in play, following the chosen type and strategy; source_ai_network read returns each field's label and stored values, and the section draft (drafts target section) reports each row's label, help line, hint, inactive and warning. Store it (shown while Buddies Attack is on in the file without Buddies Activate, which the game then ignores) checks Buddies Activate in the draft; MCP stores it with source_ai_network activate_buddy 1. Paint with this zone engages Edit zones with that zone (source_zone_tool engage). A definition's card is read-only; its Bound to rows select the objects it binds (scene_tree select on their rows), which preview_state sections.outlines reports. Close (Esc) clears the selection."
+    },
+    {
       "gui": "TerrainPropertiesEditor:Fields",
       "tools": [
         "zstudio_source_terrain",
@@ -255,10 +268,9 @@
     {
       "gui": "ZonePicker:Controls",
       "tools": [
-        "zstudio_source_zone_tool",
-        "zstudio_source_zone_label"
+        "zstudio_source_zone_tool"
       ],
-      "note": "The zone picker's text box (0–254, Any or a label; Enter picks), arrow keys and rows choose the zone (source_zone_tool engage with zone; state lists the map's zones with labels and polygon counts as placed in the world). A row's pencil renames its label in place: Enter, Tab or closing the picker saves, Escape restores, empty removes; each is one undoable change (source_zone_label)."
+      "note": "The zone picker's text box (0–254, Any or a label; Enter picks), arrow keys and rows choose the zone (source_zone_tool engage with zone; state lists the map's zones with labels and polygon counts as placed in the world). Zones are named in the World tree's zone card (source_zone_label), not in the picker."
     },
     {
       "gui": "SceneViewport.Zones:Strokes",
@@ -1163,7 +1175,7 @@
       "tools": [
         "zstudio_scene_options"
       ],
-      "note": "Whole world 50% colour overlays preserve normal textures and transparency: changes.highlight accepts none, nonDefaultSoils (yellow), canModify (green), clipTo (red), canModifyAndClipTo (both, red takes precedence on overlap), zones (object/node zone colour, grey for any), polygonZones (each polygon's zone set, striped where it has several) or landmarks (magenta: landmark nodes and everything below a landmark object). preview_state reports highlight, null outside Whole world. Uses the GUI setter without replacing the preview, changing source data, or enabling local MCP. Entire option batches are validated first; requested highlights wait for successful refreshes and never overwrite newer GUI choices."
+      "note": "Whole world 50% colour overlays preserve normal textures and transparency: changes.highlight accepts none, nonDefaultSoils (yellow), canModify (green), clipTo (red), canModifyAndClipTo (both, red takes precedence on overlap), zones (object/node zone colour, grey for any), polygonZones (each polygon's zone set, striped where it has several) or landmarks (magenta: landmark nodes and everything below a landmark object). preview_state reports highlight, null outside Whole world. Uses the GUI setter without replacing the preview, changing source data, or enabling local MCP. Entire option batches are validated first; requested highlights wait for successful refreshes and never overwrite newer GUI choices. In a source map the zone overlays are not in the command bar: zones are shown one by one with the World tree's eyes (scene_tree show/hide on their rows; the Zones row shows or hides them all) and the Zones row's Objects | Polygons switch chooses the kind (highlight zones or polygonZones; every zone shows when none did); another highlight hides every zone."
     },
     {
       "gui": "MainWindow.xaml:ZoomChanged",
@@ -1178,7 +1190,7 @@
         "zstudio_scene_options",
         "zstudio_preview_state"
       ],
-      "note": "Whole world AI visibility, network filter and through-geometry drawing share scene options and preview state. AI controls form one native overflow group and coexist with surface highlights."
+      "note": "Whole world AI visibility, network filter and through-geometry drawing share scene options and preview state. AI controls form one native overflow group and coexist with surface highlights. In a source map they are not in the command bar: AI networks are shown one by one with the World tree's eyes (scene_tree show/hide on their rows; the AI Networks row shows or hides them all, as scene_options aiNodes does), always drawn through geometry at half strength where it hides them; aiNetwork filters and aiThroughGeometry false are refused there."
     },
     {
       "gui": "MainWindow.xaml:WorldMissionChanged",
@@ -1428,7 +1440,7 @@
         "zstudio_scene_tree",
         "zstudio_scene_selection"
       ],
-      "note": "A row's eye is scene_tree hide/show (view only, no source edit); scene_selection show_all shows everything again."
+      "note": "A row's eye is scene_tree hide/show (view only, no source edit). Zones and AI networks are shown one by one and start hidden: a zone's eye shows or hides its colour and a network's its nodes and links (any shown zone turns the zone overlay on, any shown network the AI overlay). The Zones, AI Networks, AI Vehicles and Pickups rows' master eye (scene_tree hide/show on that row; rows report master) hides or shows everything below them; it changes when pressed, or when everything below comes to be shown (or hidden) one by one. preview_state sections reports them. scene_selection show_all shows every hidden object (units and pickups too), not zones or networks."
     },
     {
       "gui": "MainWindow.xaml:OutlinerEyeMiddleClick",
@@ -1436,7 +1448,14 @@
         "zstudio_scene_tree",
         "zstudio_scene_selection"
       ],
-      "note": "Middle-clicking a row's eye isolates its object (scene_tree isolate on the row, which rows report as isolated; for an object, the same as scene_selection isolate with its node); middle-clicking the isolated row's eye shows everything again (scene_tree isolate on that row; rows hidden with the eye stay hidden, unlike scene_selection show_all)."
+      "note": "Middle-clicking a world object's eye isolates it (scene_tree isolate on the row, which rows report as isolated; for an object, the same as scene_selection isolate with its node); middle-clicking the isolated row's eye shows everything again (scene_tree isolate on that row; rows hidden with the eye stay hidden, unlike scene_selection show_all). Zones, AI networks, units and pickups have no isolation (scene_tree isolate refuses them)."
+    },
+    {
+      "gui": "MainWindow.xaml:OutlinerZoneKindClick",
+      "tools": [
+        "zstudio_scene_options"
+      ],
+      "note": "The Zones header's Objects | Polygons switch is scene_options changes.highlight zones or polygonZones: the kind of colour the shown zones take. It is disabled while no zone shows and paused while Edit zones is on (busy)."
     },
     {
       "gui": "MainWindow.xaml:OpenWorkspaceClick",

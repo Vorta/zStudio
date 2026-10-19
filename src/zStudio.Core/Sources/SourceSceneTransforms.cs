@@ -141,7 +141,7 @@ public static partial class SourceWorlds
         {
             World = world, Scene = scene, ModelSources = read.Sources, WorldChildOrder = accepted.WorldChildOrder, RetainedBytes = read.RetainedBytes, TerrainModelInputs = accepted.TerrainModelInputs,
             Resources = accepted.Resources, TextureFiles = accepted.TextureFiles, Textures = accepted.Textures, Sounds = accepted.Sounds,
-            TextureScripts = accepted.TextureScripts, Animations = accepted.Animations, Provenance = provenance,
+            TextureScripts = accepted.TextureScripts, Animations = accepted.Animations, AnimationDefinitions = accepted.AnimationDefinitions, Provenance = provenance,
             Freed = accepted.Freed.Select(Origin).ToArray(), AuthoredHierarchy = accepted.AuthoredHierarchy with
                 { Nodes = accepted.AuthoredHierarchy.Nodes.Select(node => node with { Origin = Origin(node.Origin) }).ToArray() },
             Executions = accepted.Executions, WriteInstruction = accepted.WriteInstruction, Inputs = read.Stamps, InputHashes = read.DiskHashes,

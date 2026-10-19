@@ -42,33 +42,68 @@
    <TextBlock Text="{Binding Label}" ToolTip="{Binding Value}" TextTrimming="CharacterEllipsis"/>
   </HierarchicalDataTemplate>
   <HierarchicalDataTemplate DataType="{x:Type local:SceneTreeItem}" ItemsSource="{Binding Children}">
-   <Grid ToolTip="{Binding ToolTip}">
+   <Grid ToolTip="{Binding ToolTip}" ToolTipService.ShowsToolTipOnKeyboardFocus="False">
     <Border x:Name="CompiledRow" BorderThickness="1,0,0,0" BorderBrush="{DynamicResource {x:Static SystemColors.ControlDarkBrushKey}}" Padding="6,2,2,2">
      <DockPanel><TextBlock Text="{Binding Glyph}" Opacity="0.7" Margin="0,0,6,0"/><TextBlock Text="{Binding Label}" TextTrimming="CharacterEllipsis"/></DockPanel>
     </Border>
-    <DockPanel x:Name="SourceRow" Visibility="Collapsed" Height="28" Background="Transparent" local:OutlinerRowStretch.Enabled="True">
-     <Button x:Name="RowEye" DockPanel.Dock="Right" Style="{StaticResource OutlinerEye}" Visibility="Hidden" Click="OutlinerEyeClick" PreviewMouseUp="OutlinerEyeMiddleClick" Tag="{Binding}" ToolTip="{Binding EyeToolTip}" AutomationProperties.Name="{Binding EyeToolTip}"><local:PreviewIcon Kind="{Binding EyeIcon}" Width="14" Height="14"/></Button>
-     <Button x:Name="RowFrame" DockPanel.Dock="Right" Style="{StaticResource OutlinerEye}" Visibility="Hidden" Click="OutlinerFrameClick" Tag="{Binding}" ToolTip="Frame selection" AutomationProperties.Name="Frame selection"><local:PreviewIcon Kind="FrameSelection" Width="14" Height="14"/></Button>
-     <TextBlock DockPanel.Dock="Right" Text="{Binding Meta}" ToolTip="{Binding MetaToolTip}" FontSize="11" Margin="6,0,10,0" VerticalAlignment="Center" Foreground="{DynamicResource TextFillColorTertiaryBrush}"/>
-     <local:PreviewIcon Kind="{Binding OutlinerIcon}" TextElement.Foreground="{Binding OutlinerBrush}" Width="15" Height="15" Margin="0,0,8,0" VerticalAlignment="Center"/>
-     <!-- The name, then (for an object a mission animation binds to) its icon; the name trims first. -->
-     <Grid HorizontalAlignment="Left"><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-      <TextBlock Text="{Binding OutlinerLabel}" FontSize="13" VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/>
-      <Border Grid.Column="1" Background="Transparent" Margin="6,0,0,0" VerticalAlignment="Center" Visibility="{Binding IsAnimated,Converter={StaticResource BoolVisibility}}" ToolTip="{Binding AnimationsToolTip}">
+    <DockPanel x:Name="SourceRow" Visibility="Collapsed" Height="28" Background="Transparent" local:OutlinerRowStretch.Enabled="True" MouseLeftButtonDown="OutlinerRowMouseDown" FocusVisualStyle="{StaticResource OutlinerFocusRing}">
+     <Button x:Name="RowEye" DockPanel.Dock="Right" Style="{StaticResource OutlinerEye}" Focusable="False" Click="OutlinerEyeClick" PreviewMouseUp="OutlinerEyeMiddleClick" Tag="{Binding}" ToolTip="{Binding EyeToolTip}" ToolTipService.ShowOnDisabled="True" ToolTipService.InitialShowDelay="0" AutomationProperties.Name="{Binding EyeToolTip}"><local:PreviewIcon Kind="{Binding EyeIcon}" Width="14" Height="14"/></Button>
+     <!-- The Zones row's Objects | Polygons switch: the kind of colour its shown zones take. -->
+     <Border x:Name="ZoneHeaderControls" DockPanel.Dock="Right" Visibility="Collapsed" Padding="2" Margin="0,0,4,0" CornerRadius="5" BorderThickness="1" Background="#38000000" BorderBrush="#10FFFFFF" VerticalAlignment="Center" ToolTipService.ShowOnDisabled="True" ToolTip="{Binding ZoneKindsToolTip}" AutomationProperties.Name="Colour zones by">
+      <StackPanel Orientation="Horizontal">
+       <Button x:Name="ZoneKindObjects" Style="{StaticResource OutlinerSegment}" Focusable="False" Click="OutlinerZoneKindClick" Tag="{Binding}" ToolTipService.InitialShowDelay="0" ToolTip="Object zones — colour each object by the zone that decides whether it is drawn" AutomationProperties.Name="Object zones"><local:PreviewIcon Kind="Zones" Width="14" Height="14"/></Button>
+       <Button x:Name="ZoneKindPolygons" Style="{StaticResource OutlinerSegment}" Focusable="False" Click="OutlinerZoneKindClick" Tag="{Binding}" ToolTipService.InitialShowDelay="0" ToolTip="Polygon zones — colour each polygon by the zones it makes current when the camera or a vehicle is on it; striped where it has several" AutomationProperties.Name="Polygon zones"><local:PreviewIcon Kind="PolygonZones" Width="14" Height="14"/></Button>
+      </StackPanel>
+     </Border>
+     <Button x:Name="RowFrame" DockPanel.Dock="Right" Style="{StaticResource OutlinerEye}" Focusable="False" Click="OutlinerFrameClick" Tag="{Binding}" ToolTip="Frame selection" AutomationProperties.Name="Frame selection"><local:PreviewIcon Kind="FrameSelection" Width="14" Height="14"/></Button>
+     <TextBlock x:Name="RowMeta" DockPanel.Dock="Right" Text="{Binding Meta}" ToolTip="{Binding MetaToolTip}" FontSize="11" Margin="6,0,10,0" VerticalAlignment="Center" Foreground="{DynamicResource TextFillColorTertiaryBrush}" Typography.NumeralAlignment="Tabular"/>
+     <!-- The type icon, or a zone's or network's colour square (dashed for polygons without a zone). -->
+     <Grid Width="15" Height="15" Margin="0,0,8,0" VerticalAlignment="Center">
+      <local:PreviewIcon x:Name="RowIcon" Kind="{Binding OutlinerIcon}" TextElement.Foreground="{Binding OutlinerBrush}"/>
+      <Border x:Name="RowSwatch" Visibility="Collapsed" Width="12" Height="12" CornerRadius="3" BorderThickness="1" BorderBrush="#47FFFFFF" Background="{Binding Swatch}"/>
+      <Rectangle x:Name="RowSwatchDashed" Visibility="Collapsed" Width="12" Height="12" RadiusX="3" RadiusY="3" StrokeThickness="1" StrokeDashArray="2,2" Stroke="{DynamicResource TextFillColorTertiaryBrush}"/>
+     </Grid>
+     <!-- The name, then a label, file or folder on the same line (it trims first), then marks (animations bind to it; a warning;
+          the zone being painted). -->
+     <Grid HorizontalAlignment="Left"><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+      <TextBlock x:Name="RowName" FontSize="13" VerticalAlignment="Center" TextTrimming="CharacterEllipsis"><Run Text="{Binding OutlinerLabel,Mode=OneWay}"/><Run Text="{Binding SecondaryRunText,Mode=OneWay}" FontSize="12" FontWeight="Normal" Foreground="{DynamicResource TextFillColorSecondaryBrush}"/></TextBlock>
+      <Border Grid.Column="2" Background="Transparent" Margin="6,0,0,0" VerticalAlignment="Center" Visibility="{Binding IsAnimated,Converter={StaticResource BoolVisibility}}" ToolTip="{Binding AnimationsToolTip}">
        <local:PreviewIcon Kind="Animated" Width="14" Height="14" TextElement.Foreground="#6FC8D6"/></Border>
+      <Border Grid.Column="3" Background="Transparent" Margin="6,0,0,0" VerticalAlignment="Center" Visibility="{Binding HasWarning,Converter={StaticResource BoolVisibility}}" ToolTip="{Binding WarningToolTip}">
+       <local:PreviewIcon Kind="Warning" Width="12" Height="12" TextElement.Foreground="#FCE100"/></Border>
+      <Border Grid.Column="4" Background="Transparent" Margin="6,0,0,0" VerticalAlignment="Center" Visibility="{Binding IsPaintZone,Converter={StaticResource BoolVisibility}}" ToolTip="Zone being painted">
+       <local:PreviewIcon Kind="Brush" Width="12" Height="12" TextElement.Foreground="{DynamicResource AccentTextFillColorPrimaryBrush}"/></Border>
      </Grid>
     </DockPanel>
    </Grid>
    <HierarchicalDataTemplate.Triggers>
     <DataTrigger Binding="{Binding IsSourceMap}" Value="True"><Setter TargetName="CompiledRow" Property="Visibility" Value="Collapsed"/><Setter TargetName="SourceRow" Property="Visibility" Value="Visible"/></DataTrigger>
-    <DataTrigger Binding="{Binding IsMouseOver,ElementName=SourceRow}" Value="True"><Setter TargetName="RowEye" Property="Visibility" Value="Visible"/><Setter TargetName="RowFrame" Property="Visibility" Value="Visible"/></DataTrigger>
-    <DataTrigger Binding="{Binding IsSelected}" Value="True"><Setter TargetName="RowEye" Property="Visibility" Value="Visible"/><Setter TargetName="RowFrame" Property="Visibility" Value="Visible"/></DataTrigger>
-    <DataTrigger Binding="{Binding IsHidden}" Value="True"><Setter TargetName="RowEye" Property="Visibility" Value="Visible"/><Setter TargetName="SourceRow" Property="Opacity" Value="0.55"/></DataTrigger>
+    <DataTrigger Binding="{Binding IsHidden}" Value="True"><Setter TargetName="RowEye" Property="Visibility" Value="Visible"/></DataTrigger>
+    <DataTrigger Binding="{Binding IsFaded}" Value="True"><Setter TargetName="SourceRow" Property="Opacity" Value="0.55"/></DataTrigger>
     <DataTrigger Binding="{Binding IsIsolated}" Value="True"><Setter TargetName="RowEye" Property="Visibility" Value="Visible"/></DataTrigger>
     <DataTrigger Binding="{Binding CanHide}" Value="False"><Setter TargetName="RowEye" Property="Visibility" Value="Collapsed"/></DataTrigger>
     <DataTrigger Binding="{Binding CanFrame}" Value="False"><Setter TargetName="RowFrame" Property="Visibility" Value="Collapsed"/></DataTrigger>
+    <!-- An empty node draws nothing: no Frame or eye, but their space stays so its zone lines up with its neighbours'. -->
+    <DataTrigger Binding="{Binding IsEmptyNode}" Value="True"><Setter TargetName="RowEye" Property="Visibility" Value="Hidden"/><Setter TargetName="RowFrame" Property="Visibility" Value="Hidden"/></DataTrigger>
     <!-- A unit or pickup only other difficulties place: dimmed, with its difficulties lined up with the others'. -->
     <DataTrigger Binding="{Binding IsOtherDifficulty}" Value="True"><Setter TargetName="RowEye" Property="Visibility" Value="Hidden"/><Setter TargetName="RowFrame" Property="Visibility" Value="Hidden"/><Setter TargetName="SourceRow" Property="Opacity" Value="0.45"/></DataTrigger>
+    <!-- Sections: a SemiBold name; a zone's or network's colour square; a dimmed unbound definition; a note in tertiary text. -->
+    <DataTrigger Binding="{Binding IsSectionHeader}" Value="True"><Setter TargetName="RowName" Property="FontWeight" Value="SemiBold"/></DataTrigger>
+    <DataTrigger Binding="{Binding HasSwatch}" Value="True"><Setter TargetName="RowIcon" Property="Visibility" Value="Collapsed"/></DataTrigger>
+    <DataTrigger Binding="{Binding SwatchDashed}" Value="True"><Setter TargetName="RowSwatchDashed" Property="Visibility" Value="Visible"/><Setter TargetName="RowName" Property="Foreground" Value="{DynamicResource TextFillColorSecondaryBrush}"/></DataTrigger>
+    <MultiDataTrigger><MultiDataTrigger.Conditions><Condition Binding="{Binding HasSwatch}" Value="True"/><Condition Binding="{Binding SwatchDashed}" Value="False"/></MultiDataTrigger.Conditions><Setter TargetName="RowSwatch" Property="Visibility" Value="Visible"/></MultiDataTrigger>
+    <DataTrigger Binding="{Binding IsDimmed}" Value="True"><Setter TargetName="SourceRow" Property="Opacity" Value="0.45"/></DataTrigger>
+    <DataTrigger Binding="{Binding IsNote}" Value="True"><Setter TargetName="RowIcon" Property="Visibility" Value="Collapsed"/><Setter TargetName="RowName" Property="FontSize" Value="12"/><Setter TargetName="RowName" Property="Foreground" Value="{DynamicResource TextFillColorTertiaryBrush}"/></DataTrigger>
+    <!-- The Zones, AI Networks, AI Vehicles and Pickups rows always have their master eye. -->
+    <DataTrigger Binding="{Binding HasMasterEye}" Value="True"><Setter TargetName="RowEye" Property="Visibility" Value="Visible"/></DataTrigger>
+    <DataTrigger Binding="{Binding SectionKind}" Value="zones"><Setter TargetName="ZoneHeaderControls" Property="Visibility" Value="Visible"/></DataTrigger>
+    <MultiDataTrigger><MultiDataTrigger.Conditions><Condition Binding="{Binding ZoneKindPolygons}" Value="True"/><Condition Binding="{Binding HeaderActive}" Value="True"/></MultiDataTrigger.Conditions><Setter TargetName="ZoneKindPolygons" Property="Background" Value="{DynamicResource AccentFillColorDefaultBrush}"/><Setter TargetName="ZoneKindPolygons" Property="Foreground" Value="{DynamicResource TextOnAccentFillColorPrimaryBrush}"/></MultiDataTrigger>
+    <MultiDataTrigger><MultiDataTrigger.Conditions><Condition Binding="{Binding ZoneKindPolygons}" Value="False"/><Condition Binding="{Binding HeaderActive}" Value="True"/></MultiDataTrigger.Conditions><Setter TargetName="ZoneKindObjects" Property="Background" Value="{DynamicResource AccentFillColorDefaultBrush}"/><Setter TargetName="ZoneKindObjects" Property="Foreground" Value="{DynamicResource TextOnAccentFillColorPrimaryBrush}"/></MultiDataTrigger>
+    <MultiDataTrigger><MultiDataTrigger.Conditions><Condition Binding="{Binding ZoneKindPolygons}" Value="True"/><Condition Binding="{Binding HeaderActive}" Value="False"/></MultiDataTrigger.Conditions><Setter TargetName="ZoneKindPolygons" Property="Background" Value="#15FFFFFF"/><Setter TargetName="ZoneKindPolygons" Property="Foreground" Value="{DynamicResource TextFillColorPrimaryBrush}"/></MultiDataTrigger>
+    <MultiDataTrigger><MultiDataTrigger.Conditions><Condition Binding="{Binding ZoneKindPolygons}" Value="False"/><Condition Binding="{Binding HeaderActive}" Value="False"/></MultiDataTrigger.Conditions><Setter TargetName="ZoneKindObjects" Property="Background" Value="#15FFFFFF"/><Setter TargetName="ZoneKindObjects" Property="Foreground" Value="{DynamicResource TextFillColorPrimaryBrush}"/></MultiDataTrigger>
+    <!-- Only the switch waits while no zone's colour shows; the row's icon and name never fade. -->
+    <MultiDataTrigger><MultiDataTrigger.Conditions><Condition Binding="{Binding SectionKind}" Value="zones"/><Condition Binding="{Binding ZoneKindsEnabled}" Value="False"/></MultiDataTrigger.Conditions><Setter TargetName="ZoneHeaderControls" Property="IsEnabled" Value="False"/><Setter TargetName="ZoneHeaderControls" Property="Opacity" Value="0.36"/></MultiDataTrigger>
+    <DataTrigger Binding="{Binding HeaderPaused}" Value="True"><Setter TargetName="RowEye" Property="IsEnabled" Value="False"/><Setter TargetName="RowEye" Property="Opacity" Value="0.36"/></DataTrigger>
    </HierarchicalDataTemplate.Triggers>
   </HierarchicalDataTemplate>
   <Style TargetType="TreeView" BasedOn="{StaticResource {x:Type TreeView}}"><Setter Property="BorderThickness" Value="0"/><Setter Property="VirtualizingStackPanel.IsVirtualizing" Value="True"/><Setter Property="VirtualizingStackPanel.VirtualizationMode" Value="Recycling"/></Style>
@@ -222,7 +257,7 @@
         </Grid>
      </Grid></TabItem>
      <TabItem x:Name="SearchTab" Header="Search"><DockPanel><Grid x:Name="GlobalSearchHost" DockPanel.Dock="Top" Margin="4"><TextBox x:Name="GlobalSearch" Text="{Binding GlobalQuery,UpdateSourceTrigger=PropertyChanged}" ToolTip="Search all assets in this root (at least two characters)" AutomationProperties.Name="Search all assets"/><TextBlock Text="Search all assets…" Margin="10,0" VerticalAlignment="Center" IsHitTestVisible="False" Opacity="0.6"><TextBlock.Style><Style TargetType="TextBlock"><Setter Property="Visibility" Value="Collapsed"/><Style.Triggers><DataTrigger Binding="{Binding Text,ElementName=GlobalSearch}" Value=""><Setter Property="Visibility" Value="Visible"/></DataTrigger></Style.Triggers></Style></TextBlock.Style></TextBlock></Grid><TextBlock x:Name="SearchHint" DockPanel.Dock="Top" TextWrapping="Wrap" Margin="8"/><ListBox x:Name="SearchList" ItemsSource="{Binding SearchResults}" MouseDoubleClick="SearchDoubleClick" KeyDown="SearchKeyDown" ScrollViewer.HorizontalScrollBarVisibility="Disabled"><ListBox.ItemTemplate><DataTemplate><StackPanel Margin="3,5" ToolTip="{Binding File}"><DockPanel><TextBlock Text="{Binding Identity}" DockPanel.Dock="Right" Margin="8,0,0,0"/><TextBlock Text="{Binding Name}" TextTrimming="CharacterEllipsis" FontWeight="SemiBold" ToolTip="{Binding Name}"/></DockPanel><TextBlock Text="{Binding Location}" TextTrimming="CharacterEllipsis" FontSize="11" /></StackPanel></DataTemplate></ListBox.ItemTemplate></ListBox></DockPanel></TabItem>
-     <TabItem x:Name="DocumentSceneTab" Header="Document scene" Visibility="Collapsed"><TreeView x:Name="DocumentSceneTree" SelectedItemChanged="SceneTreeSelected" PreviewMouseRightButtonDown="SceneContextTarget" ScrollViewer.HorizontalScrollBarVisibility="Auto" ScrollViewer.CanContentScroll="True"><TreeView.ItemContainerStyle><Style TargetType="TreeViewItem" BasedOn="{StaticResource {x:Type TreeViewItem}}"><Setter Property="IsExpanded" Value="{Binding IsExpanded,Mode=TwoWay}"/><Setter Property="IsSelected" Value="{Binding IsSelected,Mode=TwoWay}"/><Setter Property="Focusable" Value="{Binding Selectable,Mode=OneWay}"/><Setter Property="HorizontalContentAlignment" Value="Stretch"/></Style></TreeView.ItemContainerStyle><TreeView.ContextMenu><ContextMenu Opened="SceneContextOpening"><MenuItem x:Name="ScenePropertiesMenu" Header="Properties…" InputGestureText="Alt+Enter" Click="ScenePropertiesClick"/><MenuItem x:Name="SceneRenameMenu" Header="Rename…" Visibility="Collapsed" Click="SceneRenameClick" ToolTip="Rename a group or reference holder the build removes; the game never uses its name"/></ContextMenu></TreeView.ContextMenu></TreeView></TabItem>
+     <TabItem x:Name="DocumentSceneTab" Header="Document scene" Visibility="Collapsed"><TreeView x:Name="DocumentSceneTree" SelectedItemChanged="SceneTreeSelected" PreviewKeyDown="OutlinerKeyDown" PreviewMouseRightButtonDown="SceneContextTarget" ScrollViewer.HorizontalScrollBarVisibility="Auto" ScrollViewer.CanContentScroll="True"><TreeView.ItemContainerStyle><Style TargetType="TreeViewItem" BasedOn="{StaticResource {x:Type TreeViewItem}}"><Setter Property="IsExpanded" Value="{Binding IsExpanded,Mode=TwoWay}"/><Setter Property="IsSelected" Value="{Binding IsSelected,Mode=TwoWay}"/><Setter Property="Focusable" Value="{Binding Selectable,Mode=OneWay}"/><Setter Property="HorizontalContentAlignment" Value="Stretch"/></Style></TreeView.ItemContainerStyle><TreeView.ContextMenu><ContextMenu Opened="SceneContextOpening"><MenuItem x:Name="ScenePropertiesMenu" Header="Properties…" InputGestureText="Alt+Enter" Click="ScenePropertiesClick"/><MenuItem x:Name="SceneRenameMenu" Header="Rename…" Visibility="Collapsed" Click="SceneRenameClick" ToolTip="Rename a group or reference holder the build removes; the game never uses its name"/></ContextMenu></TreeView.ContextMenu></TreeView></TabItem>
     </TabControl>
 
    </Grid>
@@ -315,6 +350,10 @@
           <StackPanel Orientation="Horizontal"><TextBlock x:Name="ViewModeLabel" Text="Perspective" FontSize="12" VerticalAlignment="Center"/><local:PreviewIcon Kind="Chevron" Width="12" Height="12" Margin="6,0,0,0" VerticalAlignment="Center" Opacity="0.65"/></StackPanel>
          </Button>
         </local:ViewportChip>
+        <!-- While zone colours are on: which overlay, and which zones are hidden or shown alone (the World tree's Zones row). -->
+        <local:ViewportChip x:Name="ZonesChip" Visibility="Collapsed" IsHitTestVisible="False" HorizontalAlignment="Left" VerticalAlignment="Top" Margin="10,56,10,10">
+         <StackPanel Orientation="Horizontal"><local:PreviewIcon Kind="Zones" Width="14" Height="14" Margin="0,0,8,0" VerticalAlignment="Center" TextElement.Foreground="#F0A3C9"/><TextBlock x:Name="ZonesChipText" VerticalAlignment="Center"/><TextBlock x:Name="ZonesChipMode" Margin="4,0,0,0" VerticalAlignment="Center" Foreground="{DynamicResource TextFillColorTertiaryBrush}"/></StackPanel>
+        </local:ViewportChip>
         <local:ViewportChip x:Name="AiChip" Visibility="Collapsed" IsHitTestVisible="False" HorizontalAlignment="Left" VerticalAlignment="Top" Margin="10,56,10,10">
          <StackPanel Orientation="Horizontal"><local:PreviewIcon Kind="AiNodes" Width="14" Height="14" Margin="0,0,8,0" VerticalAlignment="Center" TextElement.Foreground="#C9A2FF"/><TextBlock x:Name="AiChipText" VerticalAlignment="Center"/><TextBlock x:Name="AiChipMode" Margin="4,0,0,0" VerticalAlignment="Center" Foreground="{DynamicResource TextFillColorTertiaryBrush}"/></StackPanel>
         </local:ViewportChip>
@@ -393,25 +432,49 @@
      <DockPanel DockPanel.Dock="Top" Margin="14,8,8,4">
       <Button x:Name="OutlinerNewGroup" DockPanel.Dock="Right" Style="{StaticResource CommandButton}" Width="30" Height="30" IsEnabled="False" ToolTip="New group · creating groups is not available yet" AutomationProperties.Name="New group"><local:PreviewIcon Kind="NewGroup"/></Button>
       <Button DockPanel.Dock="Right" Style="{StaticResource CommandButton}" Width="30" Height="30" Click="OutlinerCollapseAllClick" ToolTip="Collapse all" AutomationProperties.Name="Collapse all"><local:PreviewIcon Kind="CollapseAll"/></Button>
-      <Button x:Name="OutlinerShowAll" DockPanel.Dock="Right" Style="{StaticResource CommandButton}" Width="30" Height="30" Click="ShowAllClick" ToolTip="Show all · show every hidden object and end isolation" AutomationProperties.Name="Show all"><local:PreviewIcon Kind="Eye"/></Button>
+      <Button x:Name="OutlinerShowAll" DockPanel.Dock="Right" Style="{StaticResource CommandButton}" Width="30" Height="30" Click="ShowAllClick" ToolTip="Show all · show every hidden object, units and pickups too, and end isolation (zones and AI networks keep their own eyes)" AutomationProperties.Name="Show all"><local:PreviewIcon Kind="Eye"/></Button>
       <!-- What the outliner's icons mean: a legend that opens from the info button. -->
       <ToggleButton x:Name="OutlinerLegendButton" DockPanel.Dock="Right" Style="{StaticResource CommandButton}" Width="30" Height="30" ToolTip="What the icons mean" AutomationProperties.Name="Icon legend"
                     IsChecked="{Binding IsOpen,ElementName=OutlinerLegend,Mode=TwoWay}" IsHitTestVisible="{Binding IsOpen,ElementName=OutlinerLegend,Converter={StaticResource InverseBool}}"><local:PreviewIcon Kind="Info"/></ToggleButton>
       <Popup x:Name="OutlinerLegend" PlacementTarget="{Binding ElementName=OutlinerLegendButton}" Placement="Bottom" HorizontalOffset="-200" VerticalOffset="4" StaysOpen="False" AllowsTransparency="True" PopupAnimation="Fade">
        <Border Background="{DynamicResource SolidBackgroundFillColorBaseBrush}" BorderBrush="{DynamicResource DividerStrokeColorDefaultBrush}" BorderThickness="1" CornerRadius="8" Padding="14,10,16,12" MinWidth="230" AutomationProperties.Name="Icon legend">
         <StackPanel TextElement.FontSize="12">
-         <TextBlock Text="Icons" FontWeight="SemiBold" Margin="0,0,0,8"/>
+         <TextBlock Text="Icons" FontWeight="SemiBold" Margin="0,0,0,4"/>
+         <TextBlock Text="Types" FontSize="11.5" FontWeight="SemiBold" Margin="0,4,0,4" Foreground="{DynamicResource TextFillColorTertiaryBrush}"/>
          <StackPanel Orientation="Horizontal" Margin="0,3"><local:PreviewIcon Kind="World" Width="15" Height="15" Margin="0,0,10,0" TextElement.Foreground="{DynamicResource TextFillColorPrimaryBrush}"/><TextBlock Text="World"/></StackPanel>
          <StackPanel Orientation="Horizontal" Margin="0,3"><local:PreviewIcon Kind="Folder" Width="15" Height="15" Margin="0,0,10,0" TextElement.Foreground="#E8C26B"/><TextBlock Text="Groups (including level of detail)"/></StackPanel>
          <StackPanel Orientation="Horizontal" Margin="0,3"><local:PreviewIcon Kind="Geometry" Width="15" Height="15" Margin="0,0,10,0" TextElement.Foreground="#7FB8E8"/><TextBlock Text="Geometry"/></StackPanel>
+         <StackPanel Orientation="Horizontal" Margin="0,3"><local:PreviewIcon x:Name="LegendEmptyIcon" Kind="Empty" Width="15" Height="15" Margin="0,0,10,0"/><TextBlock Text="Empty nodes (no geometry or children)"/></StackPanel>
          <StackPanel Orientation="Horizontal" Margin="0,3"><local:PreviewIcon Kind="Cube" Width="15" Height="15" Margin="0,0,10,0" TextElement.Foreground="{DynamicResource AccentFillColorDefaultBrush}"/><TextBlock Text="Objects (placed models)"/></StackPanel>
          <StackPanel Orientation="Horizontal" Margin="0,3"><local:PreviewIcon Kind="Node" Width="15" Height="15" Margin="0,0,10,0" TextElement.Foreground="#C9A2FF"/><TextBlock Text="Other nodes (lights, cameras…)"/></StackPanel>
-         <StackPanel Orientation="Horizontal" Margin="0,3"><local:PreviewIcon Kind="Tank" Width="15" Height="15" Margin="0,0,10,0" TextElement.Foreground="#E8907F"/><TextBlock Text="AI vehicles list (aiv)"/></StackPanel>
-         <StackPanel Orientation="Horizontal" Margin="0,3"><local:PreviewIcon Kind="Pickup" Width="15" Height="15" Margin="0,0,10,0" TextElement.Foreground="#8FD18B"/><TextBlock Text="Pickups list (puppies)"/></StackPanel>
-         <StackPanel Orientation="Horizontal" Margin="0,3"><local:PreviewIcon Kind="Animation" Width="15" Height="15" Margin="0,0,10,0" TextElement.Foreground="#6FC8D6"/><TextBlock Text="Map animations list (anim)"/></StackPanel>
+         <TextBlock Text="Sections" FontSize="11.5" FontWeight="SemiBold" Margin="0,8,0,4" Foreground="{DynamicResource TextFillColorTertiaryBrush}"/>
+         <StackPanel Orientation="Horizontal" Margin="0,3"><local:PreviewIcon Kind="Zones" Width="15" Height="15" Margin="0,0,10,0" TextElement.Foreground="#F0A3C9"/><TextBlock Text="Zones"/></StackPanel>
+         <StackPanel Orientation="Horizontal" Margin="0,3"><local:PreviewIcon Kind="Tank" Width="15" Height="15" Margin="0,0,10,0" TextElement.Foreground="#E8907F"/><TextBlock Text="AI Vehicles (aiv)"/></StackPanel>
+         <StackPanel Orientation="Horizontal" Margin="0,3"><local:PreviewIcon Kind="AiNodes" Width="15" Height="15" Margin="0,0,10,0" TextElement.Foreground="#E8907F"/><TextBlock Text="AI Networks"/></StackPanel>
+         <StackPanel Orientation="Horizontal" Margin="0,3"><local:PreviewIcon Kind="Pickup" Width="15" Height="15" Margin="0,0,10,0" TextElement.Foreground="#8FD18B"/><TextBlock Text="Pickups (puppies)"/></StackPanel>
+         <StackPanel Orientation="Horizontal" Margin="0,3"><local:PreviewIcon Kind="Animation" Width="15" Height="15" Margin="0,0,10,0" TextElement.Foreground="#6FC8D6"/><TextBlock Text="Animations (keyframed): objects startup animations place (anim)"/></StackPanel>
+         <StackPanel Orientation="Horizontal" Margin="0,3"><local:PreviewIcon Kind="Definition" Width="15" Height="15" Margin="0,0,10,0" TextElement.Foreground="#6FC8D6"/><TextBlock Text="Animations (definitions)"/></StackPanel>
+         <StackPanel Orientation="Horizontal" Margin="0,3"><local:PreviewIcon Kind="DefinitionFile" Width="15" Height="15" Margin="0,0,10,0" TextElement.Foreground="{DynamicResource TextFillColorSecondaryBrush}"/><TextBlock Text="Definition file (.zad)"/></StackPanel>
+         <TextBlock Text="Marks" FontSize="11.5" FontWeight="SemiBold" Margin="0,8,0,4" Foreground="{DynamicResource TextFillColorTertiaryBrush}"/>
          <StackPanel Orientation="Horizontal" Margin="0,3"><local:PreviewIcon Kind="Animated" Width="15" Height="15" Margin="0,0,10,0" TextElement.Foreground="#6FC8D6"/><TextBlock Text="Bound to mission animations"/></StackPanel>
+         <StackPanel Orientation="Horizontal" Margin="0,3"><Border Width="12" Height="12" CornerRadius="3" Margin="1,0,12,0" Background="#E57373" BorderThickness="1" BorderBrush="#47FFFFFF"/><TextBlock Text="Zone colour, as in the view"/></StackPanel>
+         <StackPanel Orientation="Horizontal" Margin="0,3"><Rectangle Width="12" Height="12" RadiusX="3" RadiusY="3" Margin="1,0,12,0" StrokeThickness="1" StrokeDashArray="2,2" Stroke="{DynamicResource TextFillColorTertiaryBrush}"/><TextBlock Text="No zones: polygons without a zone"/></StackPanel>
+         <StackPanel Orientation="Horizontal" Margin="0,3" Opacity="0.45"><local:PreviewIcon Kind="Definition" Width="15" Height="15" Margin="0,0,10,0" TextElement.Foreground="#6FC8D6"/><TextBlock Text="Not placed on this difficulty, or not bound in this world"/></StackPanel>
+         <TextBlock Text="AI attack strategy" FontSize="11.5" FontWeight="SemiBold" Margin="0,8,0,4" Foreground="{DynamicResource TextFillColorTertiaryBrush}"/>
+         <WrapPanel MaxWidth="300">
+          <StackPanel Orientation="Horizontal" Margin="0,3,12,3"><Border Width="12" Height="12" CornerRadius="3" Margin="1,0,8,0" Background="#FFA640"/><TextBlock Text="Head-on"/></StackPanel>
+          <StackPanel Orientation="Horizontal" Margin="0,3,12,3"><Border Width="12" Height="12" CornerRadius="3" Margin="1,0,8,0" Background="#33D9FF"/><TextBlock Text="Circle"/></StackPanel>
+          <StackPanel Orientation="Horizontal" Margin="0,3,12,3"><Border Width="12" Height="12" CornerRadius="3" Margin="1,0,8,0" Background="#B380FF"/><TextBlock Text="Back and forth"/></StackPanel>
+          <StackPanel Orientation="Horizontal" Margin="0,3,12,3"><Border Width="12" Height="12" CornerRadius="3" Margin="1,0,8,0" Background="#4DFFA6"/><TextBlock Text="Follow network"/></StackPanel>
+          <StackPanel Orientation="Horizontal" Margin="0,3,12,3"><Border Width="12" Height="12" CornerRadius="3" Margin="1,0,8,0" Background="#FF66B3"/><TextBlock Text="Zigzag"/></StackPanel>
+          <StackPanel Orientation="Horizontal" Margin="0,3,12,3"><Border Width="12" Height="12" CornerRadius="3" Margin="1,0,8,0" Background="#F2F24D"/><TextBlock Text="Sit"/></StackPanel>
+          <StackPanel Orientation="Horizontal" Margin="0,3,12,3"><Border Width="12" Height="12" CornerRadius="3" Margin="1,0,8,0" Background="#FF6666"/><TextBlock Text="Not stored (game: head-on)"/></StackPanel>
+          <StackPanel Orientation="Horizontal" Margin="0,3,12,3"><Border Width="12" Height="12" CornerRadius="3" Margin="1,0,8,0" Background="#A0A0A0"/><TextBlock Text="Other (game: head-on)"/></StackPanel>
+         </WrapPanel>
+         <TextBlock Text="Buttons" FontSize="11.5" FontWeight="SemiBold" Margin="0,8,0,4" Foreground="{DynamicResource TextFillColorTertiaryBrush}"/>
          <StackPanel Orientation="Horizontal" Margin="0,3"><local:PreviewIcon Kind="FrameSelection" Width="15" Height="15" Margin="0,0,10,0" TextElement.Foreground="{DynamicResource TextFillColorSecondaryBrush}"/><TextBlock Text="Select it and frame it in the view"/></StackPanel>
-         <StackPanel Orientation="Horizontal" Margin="0,3"><local:PreviewIcon Kind="Eye" Width="15" Height="15" Margin="0,0,10,0" TextElement.Foreground="{DynamicResource TextFillColorSecondaryBrush}"/><TextBlock Text="Hide or show in the view (no source edit)"/></StackPanel>
+         <StackPanel Orientation="Horizontal" Margin="0,3"><local:PreviewIcon Kind="Eye" Width="15" Height="15" Margin="0,0,10,0" TextElement.Foreground="{DynamicResource TextFillColorSecondaryBrush}"/><TextBlock Text="Hide or show it in the view (no source edit); on Zones, AI Vehicles, AI Networks and Pickups, everything below them" TextWrapping="Wrap" MaxWidth="280"/></StackPanel>
+         <StackPanel Orientation="Horizontal" Margin="0,3"><local:PreviewIcon Kind="Isolate" Width="15" Height="15" Margin="0,0,10,0" TextElement.Foreground="{DynamicResource TextFillColorSecondaryBrush}"/><TextBlock Text="Middle-click a world object's eye: show only it"/></StackPanel>
         </StackPanel>
        </Border>
       </Popup>
@@ -427,24 +490,26 @@
       <ListBox x:Name="OutlinerResults" Visibility="Collapsed" Margin="6,0,6,8" Background="Transparent" BorderThickness="0" SelectionChanged="OutlinerResultSelected" HorizontalContentAlignment="Stretch" ScrollViewer.HorizontalScrollBarVisibility="Disabled" VirtualizingPanel.IsVirtualizing="True" VirtualizingPanel.VirtualizationMode="Recycling" AutomationProperties.Name="Matching nodes">
        <ListBox.ItemTemplate><DataTemplate>
         <DockPanel x:Name="MatchRow" Height="28" ToolTip="{Binding Row.ToolTip}" Background="Transparent" Margin="0,0,10,0">
-         <Button x:Name="MatchEye" DockPanel.Dock="Right" Style="{StaticResource OutlinerEye}" Visibility="Hidden" Click="OutlinerEyeClick" Tag="{Binding Row}" ToolTip="{Binding Row.EyeToolTip}" AutomationProperties.Name="{Binding Row.EyeToolTip}"><local:PreviewIcon Kind="{Binding Row.EyeIcon}" Width="14" Height="14"/></Button>
-         <Button x:Name="MatchFrame" DockPanel.Dock="Right" Style="{StaticResource OutlinerEye}" Visibility="Hidden" Click="OutlinerFrameClick" Tag="{Binding Row}" ToolTip="Frame selection" AutomationProperties.Name="Frame selection"><local:PreviewIcon Kind="FrameSelection" Width="14" Height="14"/></Button>
+         <Button x:Name="MatchEye" DockPanel.Dock="Right" Style="{StaticResource OutlinerEye}" Click="OutlinerEyeClick" Tag="{Binding Row}" ToolTip="{Binding Row.EyeToolTip}" AutomationProperties.Name="{Binding Row.EyeToolTip}"><local:PreviewIcon Kind="{Binding Row.EyeIcon}" Width="14" Height="14"/></Button>
+         <Button x:Name="MatchFrame" DockPanel.Dock="Right" Style="{StaticResource OutlinerEye}" Click="OutlinerFrameClick" Tag="{Binding Row}" ToolTip="Frame selection" AutomationProperties.Name="Frame selection"><local:PreviewIcon Kind="FrameSelection" Width="14" Height="14"/></Button>
          <TextBlock DockPanel.Dock="Right" Text="{Binding Row.Meta}" FontSize="11" Margin="6,0,10,0" VerticalAlignment="Center" Foreground="{DynamicResource TextFillColorTertiaryBrush}"/>
-         <local:PreviewIcon Kind="{Binding Row.OutlinerIcon}" TextElement.Foreground="{Binding Row.OutlinerBrush}" Width="15" Height="15" Margin="0,0,8,0" VerticalAlignment="Center"/>
-         <TextBlock Text="{Binding Row.OutlinerLabel}" FontSize="13" VerticalAlignment="Center" MaxWidth="150" TextTrimming="CharacterEllipsis"/>
+         <Grid Width="15" Height="15" Margin="0,0,8,0" VerticalAlignment="Center">
+          <local:PreviewIcon x:Name="MatchIcon" Kind="{Binding Row.OutlinerIcon}" TextElement.Foreground="{Binding Row.OutlinerBrush}"/>
+          <Border x:Name="MatchSwatch" Visibility="Collapsed" Width="12" Height="12" CornerRadius="3" BorderThickness="1" BorderBrush="#47FFFFFF" Background="{Binding Row.Swatch}"/>
+         </Grid>
+         <TextBlock FontSize="13" VerticalAlignment="Center" MaxWidth="240" TextTrimming="CharacterEllipsis"><Run Text="{Binding Row.OutlinerLabel,Mode=OneWay}"/><Run Text="{Binding Row.SecondaryRunText,Mode=OneWay}" FontSize="12" Foreground="{DynamicResource TextFillColorSecondaryBrush}"/></TextBlock>
          <local:PreviewIcon Kind="Animated" Visibility="{Binding Row.IsAnimated,Converter={StaticResource BoolVisibility}}" Width="14" Height="14" Margin="6,0,0,0" VerticalAlignment="Center" TextElement.Foreground="#6FC8D6"/>
          <TextBlock Text="{Binding Path}" FontSize="11" Margin="8,0,0,0" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" Foreground="{DynamicResource TextFillColorTertiaryBrush}"/>
         </DockPanel>
         <DataTemplate.Triggers>
-         <DataTrigger Binding="{Binding IsMouseOver,ElementName=MatchRow}" Value="True"><Setter TargetName="MatchEye" Property="Visibility" Value="Visible"/><Setter TargetName="MatchFrame" Property="Visibility" Value="Visible"/></DataTrigger>
-         <DataTrigger Binding="{Binding Row.IsSelected}" Value="True"><Setter TargetName="MatchEye" Property="Visibility" Value="Visible"/><Setter TargetName="MatchFrame" Property="Visibility" Value="Visible"/></DataTrigger>
          <DataTrigger Binding="{Binding Row.IsHidden}" Value="True"><Setter TargetName="MatchEye" Property="Visibility" Value="Visible"/><Setter TargetName="MatchRow" Property="Opacity" Value="0.55"/></DataTrigger>
          <DataTrigger Binding="{Binding Row.CanHide}" Value="False"><Setter TargetName="MatchEye" Property="Visibility" Value="Collapsed"/></DataTrigger>
          <DataTrigger Binding="{Binding Row.CanFrame}" Value="False"><Setter TargetName="MatchFrame" Property="Visibility" Value="Collapsed"/></DataTrigger>
+         <DataTrigger Binding="{Binding Row.HasSwatch}" Value="True"><Setter TargetName="MatchIcon" Property="Visibility" Value="Collapsed"/><Setter TargetName="MatchSwatch" Property="Visibility" Value="Visible"/></DataTrigger>
         </DataTemplate.Triggers>
        </DataTemplate></ListBox.ItemTemplate>
       </ListBox>
-      <TextBlock x:Name="OutlinerEmpty" Visibility="Collapsed" Text="No nodes match this search" Margin="16,12" FontSize="12" TextWrapping="Wrap" Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
+      <TextBlock x:Name="OutlinerEmpty" Visibility="Collapsed" Text="Nothing matches this search" Margin="16,12" FontSize="12" TextWrapping="Wrap" Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
      </Grid>
     </DockPanel>
    </Border>

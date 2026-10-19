@@ -31,7 +31,11 @@ public sealed partial class AnimationCompiler
         // Captured only for source editing, from the actual expansion that produced each entry.
         internal IReadOnlyList<SourceBinding>? SourceBindings { get; init; }
     }
-    internal sealed record SourceBinding(int EntryIndex, string File, int DefinitionOrdinal);
+    internal sealed record SourceBinding(int EntryIndex, string File, int DefinitionOrdinal)
+    {
+        /// <summary>The definition's position in <see cref="AnimationDefinitionSet.Definitions"/> (compile order).</summary>
+        public int Definition { get; init; }
+    }
     private List<SourceBinding>? sourceBindings;
 
     private readonly AnimationDefinitionSet definitions;
@@ -98,6 +102,8 @@ public sealed partial class AnimationCompiler
     {
         public string? EngineRejection { get; init; }
         internal IReadOnlyList<SourceBinding>? SourceBindings { get; init; }
+        /// <summary>The definitions read (with their listings), captured with the bindings.</summary>
+        internal AnimationDefinitionSet? Definitions { get; init; }
     }
 
     internal static Evaluation Evaluate(IProjectFiles files, string root, IReadOnlyCollection<string>? worldNodes,
@@ -112,7 +118,7 @@ public sealed partial class AnimationCompiler
         foreach (var warning in set.Warnings) compiler.Warn(warning);
         var package = compiler.Build();
         return new(package, compiler.diagnostics.Messages, set.Files.Distinct(StringComparer.OrdinalIgnoreCase).ToArray())
-        { EngineRejection = compiler.engineRejection, SourceBindings = compiler.sourceBindings };
+        { EngineRejection = compiler.engineRejection, SourceBindings = compiler.sourceBindings, Definitions = captureSourceBindings ? set : null };
     }
 
     /// <summary>
@@ -236,8 +242,9 @@ public sealed partial class AnimationCompiler
     private AnimationPackage Build()
     {
         List<AnimationEntry> entries = [Placeholder()];
-        foreach (var definition in definitions.Definitions)
+        for (int position = 0; position < definitions.Definitions.Count; position++)
         {
+            var definition = definitions.Definitions[position];
             token.ThrowIfCancellationRequested();
             foreach (var (root, bindings) in Roots(definition.Item))
             {
@@ -247,7 +254,7 @@ public sealed partial class AnimationCompiler
                 ReserveDefinition(definition.Item);
                 try { entries.Add(new EntryBuilder(this, Indexed(definition), root, bindings, entries.Count).Build()); }
                 catch (InvalidDataException ex) when (!ex.Message.StartsWith(definition.File, StringComparison.Ordinal)) { throw definition.Item.Error($"{JsonData.ShownText(Name(definition.Item))}: {ex.Message}"); }
-                sourceBindings?.Add(new(entries.Count - 1, definition.File, definition.Ordinal));
+                sourceBindings?.Add(new(entries.Count - 1, definition.File, definition.Ordinal) { Definition = position });
             }
         }
         // Prefix: signature, version, no source stamps, then the global state (entry count, default gravity).

@@ -10,15 +10,29 @@ public sealed partial class SceneViewport
 {
     internal Action<long>? StaticFramingMeasured { get; set; }
 
+    /// <summary>Frames an AI network: all of its nodes (the overlay needs not show it).</summary>
+    public bool TryFrameAiNetwork(string network)
+    {
+        if (IsPickupDragging || IsFlyActive || IsAiPathPointerTransform || IsParachutePointerMoving || viewport.Camera is not ProjectionCamera) return false;
+        if (AiNetworks.Networks.FirstOrDefault(n => n.Id == network) is not { Nodes.Count: > 0 } found) return false;
+        Rect3D bounds = Rect3D.Empty;
+        foreach (var item in found.Nodes) bounds.Union(new Rect3D(item.Position.X - 2, item.Position.Y - 2, item.Position.Z - 2, 4, 4, 4));
+        return FrameBounds(bounds, true);
+    }
+
+    /// <summary>Frames the shown objects of several roots (each with what it holds), such as the objects an animation binds to.</summary>
+    public bool TryFrameNodes(IReadOnlyCollection<int> roots) => roots.Count > 0 && TryFrame("selected", null, true, roots);
+
     /// <summary>Frame rendered geometry without changing source selection or animation time.</summary>
-    public bool TryFrame(string target, int? node = null, bool manual = true)
+    public bool TryFrame(string target, int? node = null, bool manual = true) => TryFrame(target, node, manual, null);
+    private bool TryFrame(string target, int? node, bool manual, IReadOnlyCollection<int>? roots)
     {
         if (target is not ("all" or "asset" or "selected")) throw new ArgumentException("Unknown framing target.", nameof(target));
         if (IsPickupDragging || IsFlyActive || IsAiPathPointerTransform || IsParachutePointerMoving || viewport.Camera is not ProjectionCamera) return false;
         long? selectedRuntime = target == "selected" && node == null && FramingSelection == SelectedInspection?.SelectionNode
             ? SelectedInspection?.RuntimeInstance : null;
         if (selectedRuntime != null && InspectTarget(SelectedInspection!.Target)?.Active != true) return false;
-        if (target == "selected" && node == null && AiVisible && SelectedAiNode is { } ai && AiNetworks.Find(ai) is { } selectedAi)
+        if (target == "selected" && node == null && roots == null && AiVisible && SelectedAiNode is { } ai && AiNetworks.Find(ai) is { } selectedAi)
         {
             Rect3D aiBounds = Rect3D.Empty;
             var targets = selectedAi.Node.Links.Where(l => l.Target != null).Select(l => l.Target).Append(ai).ToHashSet();
@@ -26,19 +40,17 @@ public sealed partial class SceneViewport
             aiBounds.Union(new Rect3D(selectedAi.Node.Position.X - 2, selectedAi.Node.Position.Y - 2, selectedAi.Node.Position.Z - 2, 4, 4, 4));
             return FrameBounds(aiBounds, manual);
         }
-        node ??= target == "selected" ? FramingSelection : null;
+        if (roots == null) node ??= target == "selected" ? FramingSelection : null;
         HashSet<int>? selected = null;
-        if (node is int root)
+        if (roots != null)
+        {
+            selected = [];
+            foreach (int each in roots) Subtree(each, selected);
+        }
+        else if (node is int root)
         {
             if (!CanInspectNode(root)) return false;
-            root = PickupAt(root)?.Root ?? root;
-            selected = []; Stack<int> pending = new(root < 0
-                ? PreviewScene!.Nodes.Where(n => SelectionNode(n.Index) == root).Select(n => n.Index) : [root]);
-            while (pending.TryPop(out int current))
-            {
-                if (!CanInspectNode(current) || !selected.Add(current)) continue;
-                foreach (int child in SceneBuilder.Children(PreviewScene!.Nodes[current])) pending.Push(child);
-            }
+            selected = []; Subtree(root, selected);
         }
         bool assetOnly = animationFrame != null && node == null && target != "all";
         Rect3D bounds = Rect3D.Empty;
@@ -93,6 +105,19 @@ public sealed partial class SceneViewport
             }
         }
     }
+    /// <summary>A root's nodes, with what it holds: a placed unit or pickup by its placement root, a source group by its members.</summary>
+    private void Subtree(int root, HashSet<int> selected)
+    {
+        if (PreviewScene == null || !CanInspectNode(root)) return;
+        root = PickupAt(root)?.Root ?? root;
+        Stack<int> pending = new(root < 0 ? PreviewScene.Nodes.Where(n => SelectionNode(n.Index) == root).Select(n => n.Index) : [root]);
+        while (pending.TryPop(out int current))
+        {
+            if (!CanInspectNode(current) || !selected.Add(current)) continue;
+            foreach (int child in SceneBuilder.Children(PreviewScene.Nodes[current])) pending.Push(child);
+        }
+    }
+
     private bool FrameBounds(Rect3D bounds, bool manual)
     {
         if (bounds.IsEmpty) return false;

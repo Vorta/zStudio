@@ -124,15 +124,24 @@ public partial class MainWindow
             if (d.SourceWorld != null) return Result(DocumentState(await MoveSourcePlacementAsync(d, source, edits.Transform(source) with { Position = position }, token)));
             edits.MoveTo(source, position); return Result(DocumentState(d));
         });
-        Register(r, "drafts", "Read pending GUI drafts and their conflict token without committing or changing focus.", false, [P("target", "string", "Draft owner.", true, "properties", "preview", "scene")], a =>
+        Register(r, "drafts", "Read pending GUI drafts and their conflict token without committing or changing focus. section is the source map's zone or AI network card (its label or header fields).", false, [P("target", "string", "Draft owner.", true, "properties", "preview", "scene", "section")], a =>
         {
+            if (Text(a, "target") == "section") return Result(new { document = sectionCard?.Document?.SessionId, drafts = sectionCard?.Entry == null ? null : sectionCard.Describe() });
             if (Text(a, "target") == "scene") return Result(new { document = inspectionDraft?.DraftDocument?.SessionId ?? shownDocument?.SessionId, drafts = (HasInspectionDraft ? inspectionDraft : CurrentInspectionCard)?.DescribeDraft() });
             var fields = DraftOwner(Text(a, "target")); return Result(new { document = Text(a, "target") == "properties" ? propertiesWindow?.Document?.SessionId : shownDocument?.SessionId, drafts = fields?.DescribeDrafts() });
         });
         Register(r, "resolve_drafts", "Explicitly apply or discard current GUI drafts. Invalid input is retained and returned as an error, without modal dialogs.", true,
-            [DocumentParameter, P("target", "string", "Draft owner.", true, "properties", "preview", "scene"), P("token", "string", "Current draft token.", true), P("action", "string", "Resolution.", true, "apply", "discard")], async (a, token) =>
+            [DocumentParameter, P("target", "string", "Draft owner.", true, "properties", "preview", "scene", "section"), P("token", "string", "Current draft token.", true), P("action", "string", "Resolution.", true, "apply", "discard")], async (a, token) =>
         {
             var d = TargetDocument(a); string target = Text(a, "target");
+            if (target == "section")
+            {
+                if (sectionCard is not { } card || card.Document != d) throw new StudioCommandException("context_changed", "Section draft owner changed.");
+                card.RequireDraft(Text(a, "token"));
+                if (Text(a, "action") == "apply") await card.ApplyAsync(); else card.Discard();
+                if (card.HasDraft && Text(a, "action") == "apply") throw new StudioCommandException("invalid_argument", "The section card refused its changes; read the draft and its message.");
+                return Result(DocumentState(LiveDocument(d)));
+            }
             if (target == "scene")
             {
                 if (!HasInspectionDraft || inspectionDraft!.DraftDocument != d) throw new StudioCommandException("context_changed", "Scene draft owner changed.");

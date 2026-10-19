@@ -44,6 +44,17 @@ internal sealed class CardSection : Border
     }
     /// <summary>A short note at the header's right, such as how many flags are on.</summary>
     internal string Summary { set { summary.Text = value; summary.Visibility = value.Length == 0 ? Visibility.Collapsed : Visibility.Visible; } }
+    /// <summary>A summary with a colour swatch before its last part ("Standard · ■ Head-on").</summary>
+    internal void SummaryWithSwatch(string lead, Brush swatch, string text, string? toolTip = null)
+    {
+        summary.Inlines.Clear();
+        summary.Inlines.Add(new System.Windows.Documents.Run(lead));
+        summary.Inlines.Add(new System.Windows.Documents.InlineUIContainer(new Border { Width = 10, Height = 10, CornerRadius = new(2), Background = swatch, Margin = new(0, 0, 5, 0) })
+            { BaselineAlignment = BaselineAlignment.Center });
+        summary.Inlines.Add(new System.Windows.Documents.Run(text));
+        summary.ToolTip = toolTip;
+        summary.Visibility = Visibility.Visible;
+    }
     /// <summary>A control at the header's right edge (detached from any earlier parent by the caller).</summary>
     internal UIElement? Trailing { get => trailing.Child; set => trailing.Child = value; }
     private void Apply()

@@ -166,6 +166,48 @@ internal static class SourceZoneMcpChecks
             await Call("presentation", new() { ["uiHidden"] = false });
             Assert.All(new[] { "SourceCommandBar", "SourceOutlinerPane", "SourcePropertiesPane" }, name => Assert.Equal(Visibility.Visible, ((UIElement)main.FindName(name)).Visibility));
 
+            // The World tree's Zones section lists the map's zones with their labels; a zone's eye hides only its colour, and
+            // selecting a zone opens its card (the label is its draft). Zones start hidden: a zone's eye shows its colour alone (the
+            // zone overlay turns on), and the Zones row's master eye shows or hides every zone.
+            var zoneRoots = await Call("scene_tree", new() { ["document"] = doc.SessionId.ToString() });
+            string zoneContext = zoneRoots["context"]!.GetValue<string>(), zonePreview = zoneRoots["preview"]!.GetValue<string>();
+            var zonesRow = zoneRoots["children"]!["items"]!.AsArray().Single(r => r!["sectionRow"]?["section"]?.GetValue<string>() == "zones")!;
+            var zoneRows = (await Call("scene_tree", new() { ["document"] = doc.SessionId.ToString(), ["context"] = zoneContext, ["row"] = zonesRow["row"]!.GetValue<string>() }))["children"]!["items"]!.AsArray();
+            var upperZone = zoneRows.Single(z => z!["sectionRow"]?["zoneId"]?.GetValue<int>() == 7)!;
+            Assert.Equal("Upper platform", upperZone["sectionRow"]!["label"]!.GetValue<string>());
+            Assert.True(upperZone["sectionRow"]!["polygons"]!.GetValue<long>() > 0);
+            async Task<JsonNode> ZoneState() => (await Call("preview_state", new() { ["preview"] = zonePreview }))["sections"]!["zones"]!;
+            var zoneState = await ZoneState();
+            Assert.Empty(zoneState["shown"]!.AsArray()); Assert.False(zoneState["master"]!.GetValue<bool>()); Assert.False(zoneState["overlay"]!.GetValue<bool>());
+            await Call("scene_tree", new() { ["document"] = doc.SessionId.ToString(), ["context"] = zoneContext, ["preview"] = zonePreview, ["action"] = "show", ["row"] = upperZone["row"]!.GetValue<string>() });
+            zoneState = await ZoneState();
+            Assert.Equal([7], zoneState["shown"]!.AsArray().Select(z => z!.GetValue<int>())); Assert.True(zoneState["overlay"]!.GetValue<bool>());
+            Assert.DoesNotContain((byte)7, view.HiddenZones); Assert.Contains((byte)8, view.HiddenZones);
+            string zonesRowId = zonesRow["row"]!.GetValue<string>();
+            await Call("scene_tree", new() { ["document"] = doc.SessionId.ToString(), ["context"] = zoneContext, ["preview"] = zonePreview, ["action"] = "show", ["row"] = zonesRowId });
+            zoneState = await ZoneState();
+            Assert.True(zoneState["master"]!.GetValue<bool>()); Assert.Contains(7, zoneState["shown"]!.AsArray().Select(z => z!.GetValue<int>()));
+            await Call("scene_tree", new() { ["document"] = doc.SessionId.ToString(), ["context"] = zoneContext, ["preview"] = zonePreview, ["action"] = "hide", ["row"] = zonesRowId });
+            zoneState = await ZoneState();
+            Assert.Empty(zoneState["shown"]!.AsArray()); Assert.False(zoneState["master"]!.GetValue<bool>()); Assert.False(zoneState["overlay"]!.GetValue<bool>());
+            await Call("scene_tree", new() { ["document"] = doc.SessionId.ToString(), ["context"] = zoneContext, ["preview"] = zonePreview, ["action"] = "select", ["row"] = upperZone["row"]!.GetValue<string>() });
+            var zoneDraft = (await Call("drafts", new() { ["target"] = "section" }))["drafts"]!;
+            Assert.Equal("zone", zoneDraft["kind"]!.GetValue<string>()); Assert.Equal("Upper platform", zoneDraft["label"]!.GetValue<string>());
+            // The card's Apply accepts its label as one undoable change; the rebuilt map selects the zone again, its card
+            // showing the stored label with nothing pending.
+            var card = typeof(MainWindow).GetField("sectionCard", fields)!.GetValue(main)!;
+            ((System.Windows.Controls.TextBox)card.GetType().GetField("label", fields)!.GetValue(card)!).Text = "Upper deck";
+            var pending = (await Call("drafts", new() { ["target"] = "section" }))["drafts"]!;
+            Assert.True(pending["pending"]!.GetValue<bool>());
+            doc = Document(await Call("resolve_drafts", new() { ["document"] = doc.SessionId.ToString(), ["target"] = "section", ["token"] = pending["token"]!.GetValue<string>(), ["action"] = "apply" }));
+            Assert.Equal("Upper deck", ZoneLabel(7));
+            var applied = (await Call("drafts", new() { ["target"] = "section" }))["drafts"]!;
+            Assert.False(applied["pending"]!.GetValue<bool>()); Assert.Equal("Upper deck", applied["label"]!.GetValue<string>());
+            string appliedPreview = ((Guid)typeof(MainWindow).GetField("previewId", fields)!.GetValue(main)!).ToString();
+            Assert.Equal("zone", (await Call("preview_state", new() { ["preview"] = appliedPreview }))["sections"]!["selection"]!["kind"]!.GetValue<string>());
+            doc = Document(await Call("undo_redo", new() { ["document"] = doc.SessionId.ToString(), ["revision"] = doc.Revision, ["action"] = "undo" }));
+            Assert.Equal("Upper platform", ZoneLabel(7));
+
             // A dependency edit stales the build's exact identities until the world is reloaded.
             node = doc.SourceBuild!.Provenance.First(p => p.Value.ModelNodeName == "flat_a").Key;
             byte[] dependency = doc.SourceWorld!.Workspace.Read("gamegen/m2.gs", token)!;
@@ -174,6 +216,7 @@ internal static class SourceZoneMcpChecks
             Assert.Equal("stale_document", (await Job("source_polygon_zones", Paint("paint", 6, (node, 0)), "failed"))["code"]!.GetValue<string>());
             await Call("source_zones", new() { ["document"] = doc.SessionId.ToString(), ["targets"] = new[] { new { node, polygon = 0 } } }, "stale_document");
 
+            string? ZoneLabel(byte zone) => SourceZoneEdits.Catalog(doc.SourceWorld!.Workspace, "m1", token).Labels.SingleOrDefault(l => l.Id == zone)?.Label;
             byte[] Zones(int scene) => SourceZoneEdits.PolygonZoneIds(Assert.Single(SourceZoneEdits.Inspect(doc.SourceWorld!.Workspace, doc.SourceBuild!, [new(scene, 0)], token: token).Targets).Word)!;
             Dictionary<string, object?> Paint(string action, int zone, params (int Node, int Polygon)[] targets) => new()
             {

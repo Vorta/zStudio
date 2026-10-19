@@ -145,6 +145,8 @@ public partial class MainWindow
     internal async void OpenCurrentProperties()
     {
         if (ViewModel.SelectedDocument is not { } doc) return;
+        // A selected zone, network or definition: its card is the docked pane (its own draft stays as it is).
+        if (doc.SourceWorld != null && SectionSelection != null) { sectionCard?.FocusFirst(); return; }
         if (!await ResolvePropertiesDraftsAsync()) return;
         if (doc.SourceWorld != null && CurrentInspectionCard?.ObjectNode is int sourceObject)
         {

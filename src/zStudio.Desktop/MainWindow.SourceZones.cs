@@ -225,12 +225,13 @@ public partial class MainWindow
     private void LeaveZoneTool()
     {
         if (zoneTool.Session == null) return;
-        // Closing the picker saves a label being renamed, while the tool still knows its world.
         ZonePickerPopup.IsOpen = false;
         zoneTool.Session = null;
         if (scene?.ZoneBrush != null) scene.SetZoneBrush(null);
         zoneTool.Master = null; zoneTool.Sites = null; zoneTool.Used = null;
         ApplyOverlays();
+        // The zone overlay follows the zones shown again (a stroke may have erased the only one shown).
+        if (sourceChromeActive) ApplySectionPresentation();
         ClearZoneNotices(); zoneTool.LastStroke = null; zoneTool.LastResult = null; zoneTool.Stroke = null; zoneTool.Flash = null;
         CurrentInspectionCard?.SetSurfaceDetail(null);
         RefreshZoneToolChrome();
@@ -330,23 +331,12 @@ public partial class MainWindow
         if ((DateTime.UtcNow - zonePickerClosed).TotalMilliseconds < 300) return;
         if (zonePicker == null)
         {
-            zonePicker = new(ChooseZone, RenameZoneAsync, () => ZonePickerPopup.IsOpen = false);
+            zonePicker = new(ChooseZone, () => ZonePickerPopup.IsOpen = false);
             ZonePickerPopup.Child = zonePicker;
-            ZonePickerPopup.Closed += (_, _) => { zonePickerClosed = DateTime.UtcNow; zonePicker.Commit(); };
+            ZonePickerPopup.Closed += (_, _) => zonePickerClosed = DateTime.UtcNow;
         }
         zonePicker.Open(UsedZones(session), ZoneLabels(session), zoneTool.Zone);
         ZonePickerPopup.IsOpen = true;
-    }
-    private async Task RenameZoneAsync(byte zone, string label)
-    {
-        if (zoneTool.Session is not { IsDisposed: false, Owner: { IsDisposed: false } document } session) return;
-        if (label == (ZoneLabels(session).GetValueOrDefault(zone) ?? "")) return;
-        try { await NameZoneAsync(document, zone, label, CancellationToken.None); }
-        catch (Exception ex) when (ex is not (OutOfMemoryException or StackOverflowException or OperationCanceledException)) { Report(ex); }
-        catch (OperationCanceledException) { }
-        // The picker shows the new label, unless another rename began meanwhile.
-        if (ZonePickerPopup.IsOpen && zonePicker is { IsRenaming: false } && zoneTool.Session is { } current) zonePicker.Open(UsedZones(current), ZoneLabels(current), zoneTool.Zone);
-        RefreshZoneToolChrome();
     }
     /// <summary>Shift+click: a polygon's only zone is chosen; with several, a menu at the pointer offers them.</summary>
     private void PickZone(ZonePaintHover? hover)
@@ -396,6 +386,12 @@ public partial class MainWindow
         }
         finally { synchronizingZoneTool = false; }
         RefreshZoneBanner(); RefreshViewportChips(); UpdateDocumentCommands();
+        // The Zones row's controls pause with the overlays, and the zone being painted shows its brush; a zone's card follows.
+        if (sourceChromeActive)
+        {
+            RefreshRowEyes();
+            if (SectionSelection is { Section: ZoneEntry } zoneRow && sectionCard is { HasDraft: false, Applying: false }) ShowSectionCard(zoneRow);
+        }
     }
     private static TextBlock BannerText(string text, string? brush = null, bool bold = false)
     {
@@ -544,7 +540,7 @@ public partial class MainWindow
         if (key == Key.Escape && ZoneToolEngaged)
         {
             if (scene?.CancelZoneGesture() == true) { ZoneFlash("Stroke cancelled", false); e.Handled = true; return true; }
-            if (typing) return false;
+            if (typing || e.OriginalSource is System.Windows.Controls.Primitives.ButtonBase { IsKeyboardFocused: true } rowButton && DocumentSceneTree.IsAncestorOf(rowButton)) return false;
             LeaveZoneTool(); e.Handled = true; return true;
         }
         if (typing || presentationUiHidden || System.Windows.Input.Keyboard.Modifiers != ModifierKeys.None || !sourceChromeActive || e.OriginalSource is DependencyObject origin && Window.GetWindow(origin) is { } window && window != this) return false;
@@ -679,9 +675,9 @@ public partial class MainWindow
             return (document, planned);
         }
     }
-    private async Task<DocumentModel> NameZoneAsync(DocumentModel document, byte id, string label, CancellationToken token)
+    private async Task<DocumentModel> NameZoneAsync(DocumentModel document, byte id, string label, CancellationToken token, bool committingSection = false)
     {
-        RequireNoDrafts(document, committing: true);
+        RequireNoDrafts(document, committing: true, committingSection: committingSection);
         var session = SourceWorldOf(document); string mission = session.Mission;
         // The label it already has changes nothing (and adds no undo step).
         if ((ZoneLabels(session).GetValueOrDefault(id) ?? "") == label) return document;
@@ -689,7 +685,7 @@ public partial class MainWindow
         {
             var plan = SourceZoneEdits.PlanLabel(workspace, mission, id, label, ct);
             return workspace.Apply(plan.Label, plan.Changes.Select(change => (change.Relative, (byte[]?)change.Content)), ct);
-        }, token, zoneEdit: true);
+        }, token, zoneEdit: true, committingSection: committingSection);
     }
 
     // ---------------------------------------------------------------- MCP
@@ -781,7 +777,7 @@ public partial class MainWindow
                 }
                 return Result(ZoneToolJson(document));
             });
-        RegisterJob(registry, "source_zone_label", "Name a map zone (the zone picker's rename): the label is stored in the map's master model and shown with the zone; an empty label removes it (the zone's assignments stay). One undoable change.",
+        RegisterJob(registry, "source_zone_label", "Name a map zone (the World tree's zone card): the label is stored in the map's master model and shown with the zone; an empty label removes it (the zone's assignments stay). One undoable change.",
             [DocumentParameter, RevisionParameter, new("zoneId", "integer", "The zone, 0–254 (Any is always Any).", true, Minimum: 0, Maximum: 254),
              new("label", "string", "The label, at most 256 characters; empty removes it.", true)], true,
             async (args, token) =>

@@ -25,7 +25,7 @@ internal sealed record SourceMapPassEntry(int? Row, string Key, string Name, IRe
 /// <summary>Immutable editor projection. Negative row IDs denote source-only groups, never scene slots.</summary>
 internal sealed class SourceMapSelection
 {
-    /// <summary>The later passes, in the order the mission adds them; empty passes are omitted.</summary>
+    /// <summary>The later passes, in the order the mission adds them; a source map always has all three (an empty one says so in the tree).</summary>
     internal IReadOnlyList<SourceMapPass> Passes { get; }
     private readonly Dictionary<int, SourceMapPass> passOf = [];
     /// <summary>The pass whose top-level row this is, or null for the world's rows.</summary>
@@ -52,7 +52,7 @@ internal sealed class SourceMapSelection
     internal int? Parent(int node) => predecessor.TryGetValue(Owner(node), out int parent) && parent != Owner(node) ? parent : null;
     internal int ParentCount(int node) => parentCounts.GetValueOrDefault(node);
     internal string DisplayName(int node) => AuthoredNodes.GetValueOrDefault(node)?.Name ?? Boundaries.GetValueOrDefault(node)?.Name
-        ?? (node >= 0 && node < Scene.Nodes.Count ? Scene.Nodes[node].Class == "world" ? "world" : Scene.Nodes[node].Name : "Source group");
+        ?? (node >= 0 && node < Scene.Nodes.Count ? Scene.Nodes[node].Class == "world" ? "World" : Scene.Nodes[node].Name : "Source group");
     internal IReadOnlyList<SceneHierarchyEdge> Children(int node) => children.GetValueOrDefault(node) ?? [];
     internal IReadOnlyList<int> Path(int node)
     {
@@ -202,11 +202,12 @@ internal sealed class SourceMapSelection
         // The aiv and puppies trees list every difficulty's units and pickups, whichever difficulty the view shows.
         var shown = mission?.Layout is { DifficultyApplies: true } layout ? layout.Difficulty : (MissionDifficulty?)null;
         var aivEntries = PassEntries(aiv, false); var pickupEntries = PassEntries(puppies, true);
-        if (aivEntries.Count > 0) passes.Add(new("aiv", "aiv",
-            $"Units the mission's AIV resources (aiv_easy, aiv, aiv_hard) place: the mission adds them after the world is loaded. The view shows {mission!.Layout.Difficulty}'s; the others are dimmed.", aiv, aivEntries));
-        if (pickupEntries.Count > 0) passes.Add(new("puppies", "puppies",
-            $"Pickups the mission's puppies resources (puppies_easy, puppies, puppies_hard) place. The view shows {mission!.Layout.Difficulty}'s; the others are dimmed.", puppies, pickupEntries));
-        if (animated.Count > 0) passes.Add(new("anim", "anim",
+        string shownDifficulty = mission?.Layout.Difficulty.ToString() ?? "the shown difficulty";
+        passes.Add(new("aiv", OutlinerKinds.SectionLabel("aiv"),
+            $"Units the mission's AIV resources (aiv_easy, aiv, aiv_hard) place: the mission adds them after the world is loaded. The view shows {shownDifficulty}'s; the others are dimmed.", aiv, aivEntries));
+        passes.Add(new("puppies", OutlinerKinds.SectionLabel("puppies"),
+            $"Pickups the mission's puppies resources (puppies_easy, puppies, puppies_hard) place. The view shows {shownDifficulty}'s; the others are dimmed.", puppies, pickupEntries));
+        passes.Add(new("anim", OutlinerKinds.SectionLabel("anim"),
             "Objects the mission's startup animations place, or hide until an animation places them. Their placement comes from the animations.", animated,
             animated.Select(row => new SourceMapPassEntry(row, "", DisplayName(row), [], "")).ToArray()));
         Passes = passes;

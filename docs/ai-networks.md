@@ -4,9 +4,9 @@ The viewport overlay draws at most 16,384 nodes and 32,768 links; `preview_state
 
 AI node queries match the first 70 characters of the network member/name or `node_NN`; network queries also match the type prefix or source archive path. Filtering precedes pagination and is skipped for an empty query. Node inspection caps displayed network name/type at 256 characters and exposes their original character counts and truncation flags.
 
-In a source map, turn on **AI nodes** in the command bar's Show group, which then adds the network picker and **See-through**. Editing compiled ZBD assets is being retired in favour of [source projects](source-project.md); a compiled root opens only through MCP `open_root` (the GUI opens only source projects). There, open a mission's `gamez.zbd`, select **Whole world**, and turn on **AI nodes** in the viewport toolbar; at narrow widths the AI button, network picker and **Show AI through geometry** button move together into its native overflow menu.
+In a source map, the World tree's **AI Networks** row shows them: each network is shown or hidden on its own with its eye (all start hidden), the row's master eye shows or hides them all, and they are always drawn through geometry (at half strength where it hides them); selecting a network shows it emphasised and opens its card, which edits the header settings in its `net_NN.zrd` ([source map editor](scene-inspection.md#source-map-editor); MCP `source_ai_network`). Editing compiled ZBD assets is being retired in favour of [source projects](source-project.md); a compiled root opens only through MCP `open_root` (the GUI opens only source projects). There, open a mission's `gamez.zbd`, select **Whole world**, and turn on **AI nodes** in the viewport toolbar; at narrow widths the AI button, network picker and **Show AI through geometry** button move together into its native overflow menu.
 
-- Visualization starts off. When enabled, it initially shows all networks through geometry. Disable **Show AI through geometry** for normal depth occlusion.
+- Visualization starts off. When enabled, it initially shows all networks through geometry: at full strength in front of it and at half strength where it hides them. Disable **Show AI through geometry** for normal depth occlusion.
 - Choose **All networks** or one resource. Entries include the member name, authored name, node count and archive record number. Identical names do not merge networks.
 - Diamonds mark nodes; arrows show outgoing connections. Reciprocal edges have arrows in both directions. Nodes and arrows share a fixed attack-strategy color; networks with the same strategy share the same color. The selected marker is white. Marker and connection sizes follow the view to remain compact when zooming.
 - Hover or select a marker to see its label. Click selects without opening or retargeting Properties. Right-click and choose **Properties**, or use **Alt+Enter** after selection.
@@ -69,7 +69,7 @@ Read `zstudio_preview_state` with the current preview ID. Its `ai` object contai
 | Option | Value |
 | --- | --- |
 | `aiNodes` | Boolean visibility |
-| `aiThroughGeometry` | Boolean; true ignores geometry occlusion |
+| `aiThroughGeometry` | Boolean; true draws nodes and links through geometry (full strength in front of it, half strength where it hides them); a source map is always true |
 | `aiNetwork` | `all` or a discovered network ID |
 | `aiSnapshot` | Expected graph snapshot; required with a specific network ID |
 

@@ -435,8 +435,7 @@ public sealed partial class SceneViewport
         {
             if (surface.Horizon) continue;
             PreviewMaterials.SetPolygonZones(surface.Normal, overlay || zonePaintActive);
-            if (zonePaintActive) PreviewMaterials.SetZoneEmphasis(surface.Normal, PreviewMaterials.ZoneEmphasis.Emphasis, paintZone, ZoneStrong, ZoneWeak);
-            else PreviewMaterials.SetZoneEmphasis(surface.Normal, PreviewMaterials.ZoneEmphasis.None, 0, 0, 0);
+            ApplySurfaceZoneEmphasis(surface.Normal);
         }
         SyncZoneGhosts();
         viewport.InvalidateRender();

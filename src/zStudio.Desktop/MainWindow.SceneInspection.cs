@@ -36,7 +36,8 @@ public partial class MainWindow
         {
             // The click that only dismissed the icon legend is not a click on the view.
             if (Environment.TickCount64 - legendClosedAt < 500) return;
-            if (sourceChromeActive && viewport == scene && card.Selection != null) card.ClearSelection();
+            if (sourceChromeActive && viewport == scene && SectionSelection != null) ClearSectionSelection();
+            else if (sourceChromeActive && viewport == scene && card.Selection != null) card.ClearSelection();
         };
     }
     /// <summary>The card's Isolate: shows only the selected object (a pickup's whole placement), or everything again.</summary>
@@ -52,10 +53,10 @@ public partial class MainWindow
         isolatedNode = node; ApplyIsolation(viewport); RefreshRowEyes();
     }
     private bool ResolveInspectionDrafts(DocumentModel? doc = null)
-        => ResolveParachuteDraft(doc) && ResolveAiPathDraft(doc) && (!HasInspectionDraft || doc != null && inspectionDraft!.DraftDocument != doc || inspectionDraft!.ResolvePending());
+        => ResolveParachuteDraft(doc) && ResolveAiPathDraft(doc) && (!HasInspectionDraft || doc != null && inspectionDraft!.DraftDocument != doc || inspectionDraft!.ResolvePending()) && ResolveSectionDraft(doc);
     /// <summary>Like <see cref="ResolveInspectionDrafts"/>, but a Yes that applies a source world's draft completes with that apply (its rebuild).</summary>
     private async Task<bool> ResolveInspectionDraftsAsync(DocumentModel? doc = null)
-        => ResolveParachuteDraft(doc) && ResolveAiPathDraft(doc) && (!HasInspectionDraft || doc != null && inspectionDraft!.DraftDocument != doc || await inspectionDraft!.ResolvePendingAsync());
+        => ResolveParachuteDraft(doc) && ResolveAiPathDraft(doc) && (!HasInspectionDraft || doc != null && inspectionDraft!.DraftDocument != doc || await inspectionDraft!.ResolvePendingAsync()) && await ResolveSectionDraftAsync(doc);
 
     private MissionPickupSource? InspectionSource(SceneViewport viewport, SceneInspection inspection)
     {
@@ -104,7 +105,7 @@ public partial class MainWindow
             }
             int? parent = sceneTreeDocument == sourceDocument && sceneTree?.Projection == selection && sceneTree.Selected?.Index == owner
                 ? sceneTree.Selected.Parent?.Index : selection.Parent(owner);
-            info["Parent"] = parent is int parentId ? SourceParent(parentId, selection) : selection.PassOf(owner) is { } pass ? pass.Label + " (added after the world loads)" : "None";
+            info["Parent"] = parent is int parentId ? SourceParent(parentId, selection) : selection.PassOf(owner) is { } pass ? pass.Label + " · placed after the world loads" : "None";
             if (selection.AuthoredNodes.TryGetValue(owner, out var authored))
             {
                 info["Source file"] = Short(authored.File);

@@ -11,6 +11,37 @@ namespace zStudio.Tests;
 [Collection("Allocation-sensitive")]
 public sealed class AiNetworkTests
 {
+    [Fact]
+    public void NetworkHeaderEditsChangeOnlyTheirTokens()
+    {
+        const string path = "data/m1/zrdr/aipath/net_05.zrd";
+        string text = "( version ( 105 ) name ( net_05 ) type ( standard ) path_width ( 10.0 )\r\n  # keep this comment\r\n  attack_rad ( 200.0 ) attack_dwell ( 0.7 )\r\n  node_00 ( 12 ( 1.0 2.0 3.0 ) ( -1 -1 -1 ) ) )\r\n";
+        byte[] source = System.Text.Encoding.Latin1.GetBytes(text);
+        var token = TestContext.Current.CancellationToken;
+        // A stored value is replaced in place and a missing key goes before the nodes; the comment, layout and nodes stay.
+        var edit = zStudio.Core.Sources.SourceAiNetworkEdits.Plan(path, source, [new("attack_rad", ["150"]), new("attack_strategy", ["circle"]), new("name", ["net_05"])], token);
+        string after = System.Text.Encoding.Latin1.GetString(edit.Content);
+        Assert.Equal("Edit net_05: Attack Radius, Attack Strategy", edit.Label);
+        Assert.Contains("# keep this comment", after);
+        Assert.StartsWith("( version ( 105 ) name ( net_05 ) type ( standard ) path_width ( 10.0 )\r\n", after);
+        Assert.True(after.IndexOf("attack_strategy", StringComparison.Ordinal) < after.IndexOf("node_00", StringComparison.Ordinal));
+        Assert.EndsWith("node_00 ( 12 ( 1.0 2.0 3.0 ) ( -1 -1 -1 ) ) )\r\n", after);
+        var header = zStudio.Core.Sources.SourceAiNetworkEdits.Read(zStudio.Core.Sources.ZrdText.Parse(after, token));
+        Assert.Equal("150", header.Fields["attack_rad"]!.Text());
+        Assert.Equal("circle", header.Fields["attack_strategy"]!.Text());
+        Assert.Equal("0.7", header.Fields["attack_dwell"]!.Text());
+        // The game keeps attack_buddy only while activate_buddy is stored, so turning it on stores both.
+        var buddies = zStudio.Core.Sources.SourceAiNetworkEdits.Read(zStudio.Core.Sources.ZrdText.Parse(System.Text.Encoding.Latin1.GetString(
+            zStudio.Core.Sources.SourceAiNetworkEdits.Plan(path, source, [new("attack_buddy", ["1"])], token).Content), token));
+        Assert.True(buddies.Fields["attack_buddy"]!.On && buddies.Fields["activate_buddy"] is { On: false });
+        // Values the game cannot take, a binary source and an edit that changes nothing are refused.
+        Assert.Throws<InvalidDataException>(() => zStudio.Core.Sources.SourceAiNetworkEdits.Plan(path, source, [new("attack_strategy", ["evade"])], token));
+        Assert.Throws<InvalidDataException>(() => zStudio.Core.Sources.SourceAiNetworkEdits.Plan(path, source, [new("name", [new string('n', 20)])], token));
+        Assert.Throws<InvalidDataException>(() => zStudio.Core.Sources.SourceAiNetworkEdits.Plan(path, source, [new("path_width", ["0"])], token));
+        Assert.Throws<InvalidDataException>(() => zStudio.Core.Sources.SourceAiNetworkEdits.Plan(path, ZrdWriter.Write(zStudio.Core.Sources.ZrdText.Parse(text, token), token), [new("attack_rad", ["1"])], token));
+        Assert.Throws<InvalidOperationException>(() => zStudio.Core.Sources.SourceAiNetworkEdits.Plan(path, source, [new("attack_rad", ["200"])], token));
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]

@@ -165,7 +165,7 @@ internal static class SceneTreeMcpChecks
             var isolatedNodes = (HashSet<int>)typeof(SceneViewport).GetField("isolatedNodes", flags)!.GetValue(viewport)!;
             Assert.Contains(1, isolatedNodes); Assert.Contains(2, isolatedNodes);
             await Call(Args("isolate", firstGroupRow)); Assert.Null(Get("isolatedNode"));
-            Assert.Equal("world", properties.CurrentJson["parent"]!.GetValue<string>());
+            Assert.Equal("World", properties.CurrentJson["parent"]!.GetValue<string>());
             var secondGroup = Assert.Single((await Call(Args("read", firstGroupRow)))["children"]!["items"]!.AsArray())!;
             string secondGroupRow = secondGroup["row"]!.GetValue<string>();
             var referenceRow = Assert.Single((await Call(Args("read", secondGroupRow)))["children"]!["items"]!.AsArray())!;

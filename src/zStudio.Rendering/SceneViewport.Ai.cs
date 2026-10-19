@@ -36,6 +36,11 @@ public sealed partial class SceneViewport
     public bool AiVisible { get; private set; }
     public bool AiThroughGeometry { get; private set; } = true;
     public string? AiNetworkFilter { get; private set; }
+    private HashSet<string> aiHiddenNetworks = new(StringComparer.Ordinal);
+    /// <summary>Networks the overlay leaves out (the World tree's network eyes): their markers, links, hover and picking.</summary>
+    public IReadOnlySet<string> AiHiddenNetworks => aiHiddenNetworks;
+    /// <summary>The network a selection emphasises (the others are drawn faint), or null.</summary>
+    public string? AiEmphasizedNetwork { get; private set; }
     public string? SelectedAiNode { get; private set; }
     public event Action<string?>? AiNodeSelected;
     public event Action? AiPropertiesRequested;
@@ -58,10 +63,20 @@ public sealed partial class SceneViewport
             SelectAiNode(null);
         hoveredAiNode = null; RebuildAiOverlay();
     }
+    /// <summary>Which networks the overlay leaves out and which one it emphasises; view only (vehicles and sources are untouched).</summary>
+    public void SetAiNetworkPresentation(IReadOnlySet<string> hidden, string? emphasized)
+    {
+        if (aiHiddenNetworks.SetEquals(hidden) && AiEmphasizedNetwork == emphasized) return;
+        aiHiddenNetworks = new(hidden, StringComparer.Ordinal); AiEmphasizedNetwork = emphasized;
+        // A hidden network's selected node (or path being edited) goes with it, as for a filter.
+        if (AiPathEditingNetwork != null && aiHiddenNetworks.Contains(AiPathEditingNetwork)) SetAiPathEditing(null);
+        if (SelectedAiNode is { } id && AiNetworks.Find(id) is { } found && aiHiddenNetworks.Contains(found.Network.Id)) SelectAiNode(null);
+        hoveredAiNode = null; RebuildAiOverlay();
+    }
     public bool SelectAiNode(string? id)
     {
         if (id != null && (!InspectionSelectionEnabled || IsPickupDragging || IsFlyActive || AiPathEditingNetwork != null)) return false;
-        if (id != null && (!AiVisible || AiNetworks.Find(id) is not { } found || AiNetworkFilter != null && found.Network.Id != AiNetworkFilter)) return false;
+        if (id != null && (!AiVisible || AiNetworks.Find(id) is not { } found || AiNetworkFilter != null && found.Network.Id != AiNetworkFilter || aiHiddenNetworks.Contains(found.Network.Id))) return false;
         if (id != null && CanChangeInspection?.Invoke() == false) return false;
         SelectedAiNode = id;
         if (id != null) SelectedInspection = InspectAi(id);
@@ -70,7 +85,7 @@ public sealed partial class SceneViewport
         if (id != null) { FramingSelection = null; SelectPickup(null, false, true); }
         RefreshPickupSelection(); RefreshAiSelection(); AiNodeSelected?.Invoke(id); return true;
     }
-    private IEnumerable<AiNetwork> VisibleAiNetworks => AiVisible ? AiNetworks.Networks.Where(n => AiNetworkFilter == null || n.Id == AiNetworkFilter) : [];
+    private IEnumerable<AiNetwork> VisibleAiNetworks => AiVisible ? AiNetworks.Networks.Where(n => (AiNetworkFilter == null || n.Id == AiNetworkFilter) && !aiHiddenNetworks.Contains(n.Id)) : [];
     private void RebuildAiOverlay()
     {
         ++inspectionSerial;
@@ -81,13 +96,17 @@ public sealed partial class SceneViewport
         foreach (var network in VisibleAiNetworks)
         {
             var color = AiNetworkColors.Color(network.AttackStrategy);
+            // A selected network is drawn larger and the others faint; nothing changes without one.
+            bool strong = AiEmphasizedNetwork == network.Id, faint = AiEmphasizedNetwork != null && !strong;
+            if (faint) color = new(color.Red, color.Green, color.Blue, color.Alpha * .35f);
+            float linkWidth = strong ? 1.28f : .8f;
             // Materialize only the budgeted nodes and links; later networks and links beyond it are disclosed, not drawn.
             var nodes = network.Nodes.Take(MaximumRenderedAiNodes - RenderedAiNodes).ToArray();
             if (nodes.Length < network.Nodes.Count) AiRenderTruncated = true;
             if (nodes.Length == 0) continue;
             RenderedAiNodes += nodes.Length; aiRendered.AddRange(nodes);
             var markers = AiMesh(AiOctahedron(), color);
-            aiMarkers.Add((markers, nodes, 4));
+            aiMarkers.Add((markers, nodes, strong ? 5 : 4));
             var byId = nodes.ToDictionary(n => n.Id);
             List<(AiNode Start, AiNode End)> edges = [];
             foreach (var node in nodes)
@@ -126,7 +145,7 @@ public sealed partial class SceneViewport
                 }
                 void Segment(Vector3 from, Vector3 to)
                 {
-                    var side = Side(Vector3.Normalize(to - from)) * AiScale(Vector3.Lerp(from, to, .5f), .8);
+                    var side = Side(Vector3.Normalize(to - from)) * AiScale(Vector3.Lerp(from, to, .5f), linkWidth);
                     Quad(from - side, from + side, to + side, to - side);
                 }
                 void Arrow(Vector3 from, Vector3 to, float size)
@@ -141,15 +160,30 @@ public sealed partial class SceneViewport
             }
         }
         BuildValveOverlay();
-        aiSelectionMarker = AiMesh(AiOctahedron(), new(1, 1, 1, 1));
+        aiSelectionMarker = AiMesh(AiOctahedron(), new(1, 1, 1, 1), twin: false);
         RefreshAiSelection(); UpdateAiMarkers(); viewport.InvalidateRender();
     }
-    private MeshGeometryModel3D AiMesh(MeshGeometry3D geometry, Color4 color)
+    /// <summary>How strongly the overlay shows through geometry that hides it.</summary>
+    public const float AiBehindGeometry = .5f;
+    /// <summary>Each see-through mesh's twin, drawn without depth at <see cref="AiBehindGeometry"/> strength.</summary>
+    private readonly Dictionary<MeshGeometryModel3D, MeshGeometryModel3D> aiBehind = [];
+    /// <summary>
+    /// An overlay mesh. Seen through geometry, it is drawn at full strength where nothing hides it and, by a depth-free twin,
+    /// at half strength where geometry does; <paramref name="twin"/> false draws it through geometry at full strength (the
+    /// selection marker). Without see-through, geometry hides it.
+    /// </summary>
+    private MeshGeometryModel3D AiMesh(MeshGeometry3D geometry, Color4 color, bool twin = true)
     {
-        var material = PreviewMaterials.Create(AiThroughGeometry); material.DiffuseColor = color; material.EnableUnLit = true;
-        var mesh = new MeshGeometryModel3D { Geometry = geometry, Material = material, IsTransparent = true, IsHitTestVisible = false,
-            CullMode = SharpDX.Direct3D11.CullMode.None, RenderOrder = 10, IsDepthClipEnabled = !AiThroughGeometry };
-        aiDrawables.Add(mesh); aiOverlay!.Children.Add(mesh); return mesh;
+        var mesh = Mesh(color, AiThroughGeometry && !twin);
+        if (AiThroughGeometry && twin) aiBehind[mesh] = Mesh(new(color.Red, color.Green, color.Blue, color.Alpha * AiBehindGeometry), true);
+        return mesh;
+        MeshGeometryModel3D Mesh(Color4 tint, bool through)
+        {
+            var material = PreviewMaterials.Create(through); material.DiffuseColor = tint; material.EnableUnLit = true;
+            var drawn = new MeshGeometryModel3D { Geometry = geometry, Material = material, IsTransparent = true, IsHitTestVisible = false,
+                CullMode = SharpDX.Direct3D11.CullMode.None, RenderOrder = 10, IsDepthClipEnabled = !through };
+            aiDrawables.Add(drawn); aiOverlay!.Children.Add(drawn); return drawn;
+        }
     }
     private static MeshGeometry3D AiOctahedron() => new()
     {
@@ -170,8 +204,18 @@ public sealed partial class SceneViewport
         var pose = CaptureView();
         if (aiMarkerPose == pose && aiMarkerWidth == viewport.ActualWidth && aiMarkerHeight == viewport.ActualHeight) return;
         aiMarkerPose = pose; aiMarkerWidth = viewport.ActualWidth; aiMarkerHeight = viewport.ActualHeight;
-        foreach (var (mesh, nodes, pixels) in aiMarkers) mesh.Instances = nodes.Select(n => Matrix4x4.CreateScale(AiScale(AiPosition(n), pixels)) * Matrix4x4.CreateTranslation(AiPosition(n))).ToArray();
-        foreach (var (mesh, build) in aiLinks) mesh.Geometry = build();
+        foreach (var (mesh, nodes, pixels) in aiMarkers)
+        {
+            var instances = nodes.Select(n => Matrix4x4.CreateScale(AiScale(AiPosition(n), pixels)) * Matrix4x4.CreateTranslation(AiPosition(n))).ToArray();
+            mesh.Instances = instances;
+            if (aiBehind.TryGetValue(mesh, out var behind)) behind.Instances = instances;
+        }
+        foreach (var (mesh, build) in aiLinks)
+        {
+            var geometry = build();
+            mesh.Geometry = geometry;
+            if (aiBehind.TryGetValue(mesh, out var behind)) behind.Geometry = geometry;
+        }
         RefreshAiSelection();
     }
     private void RefreshAiSelection()
@@ -256,7 +300,7 @@ public sealed partial class SceneViewport
     private void ClearAiDrawables()
     {
         if (aiOverlay != null) { viewport.Items.Remove(aiOverlay); aiOverlay.Children.Clear(); aiOverlay.Dispose(); aiOverlay = null; }
-        foreach (var mesh in aiDrawables) mesh.Dispose(); aiDrawables.Clear(); aiMarkers.Clear(); aiLinks.Clear(); aiSelectionMarker = null; aiMarkerPose = null;
+        foreach (var mesh in aiDrawables) mesh.Dispose(); aiDrawables.Clear(); aiMarkers.Clear(); aiLinks.Clear(); aiBehind.Clear(); aiSelectionMarker = null; aiMarkerPose = null;
     }
     private void ClearAi()
     {

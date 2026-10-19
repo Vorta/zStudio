@@ -112,7 +112,17 @@ public sealed class AnimationItem(string key, ZrdNode? values, string source)
 }
 
 /// <summary>An <c>ANIMATION_DEFINITION</c>, the file it was read from and its position among that file's definitions.</summary>
-public sealed record AnimationDefinition(AnimationItem Item, string File, int Ordinal);
+public sealed record AnimationDefinition(AnimationItem Item, string File, int Ordinal)
+{
+    /// <summary>Which read of its file (<see cref="AnimationDefinitionSet.Listings"/>): a file listed twice compiles twice.</summary>
+    public int Listing { get; init; }
+}
+
+/// <summary>
+/// One listing of a definition file, in the order the compiler read them: the file, the list that names it (null for the
+/// mission's root list), and whether it was missing (the compiler skips a listed file that does not exist).
+/// </summary>
+public sealed record AnimationDefinitionListing(string File, string? ListedBy, bool Missing);
 
 /// <summary>
 /// A mission's animation definitions as the original compiler read them: the root file (<c>data/mN/zrdr/anim.zad</c>)
@@ -145,6 +155,8 @@ public sealed class AnimationDefinitionSet
     public List<AnimationDefinition> Definitions { get; } = [];
     /// <summary>Every definition and script file read, in the order the compiler read them.</summary>
     public List<string> Files { get; } = [];
+    /// <summary>Every listing of a definition file, read or missing, in the order the lists name them (the root list first).</summary>
+    public List<AnimationDefinitionListing> Listings { get; } = [];
     public List<string> Warnings { get; } = [];
     private void Warn(string message) { if (Warnings.Count < 2000) Warnings.Add(message); }
     private readonly IProjectFiles files;
@@ -165,16 +177,17 @@ public sealed class AnimationDefinitionSet
         long maximumPathWork = MaximumPathWork)
     {
         AnimationDefinitionSet set = new(files, token, maximumSourceBytes, maximumSourceNodes, maximumPathWork);
-        set.Read(root, 0, true);
+        set.Read(root, 0, true, null);
         return set;
     }
 
-    private void Read(string path, int depth, bool root)
+    private void Read(string path, int depth, bool root, string? listedBy)
     {
         token.ThrowIfCancellationRequested();
         if (depth > MaximumFileDepth) throw new InvalidDataException($"{path}: definition files include each other more than {MaximumFileDepth} levels deep.");
         if (++reads > MaximumFileReads) throw new InvalidDataException($"{path}: the animation definitions list definition files more than {MaximumFileReads:N0} times.");
         Files.Add(path);
+        int listing = Listings.Count; Listings.Add(new(path, listedBy, false));
         var document = Parse(path); int ordinal = 0;
         foreach (var top in AnimationItem.Parse(document, path).Where(i => i.Key == "ANIMATION_DEFINITIONS"))
             foreach (var item in top.Items)
@@ -194,13 +207,18 @@ public sealed class AnimationDefinitionSet
                             {
                                 // The original compiler skipped files that did not exist (they have no source stamp).
                                 string? file = Resolve(entry.Text(), path);
-                                if (file == null) Warn($"{JsonData.ShownText(path)}: definition file {JsonData.ShownText(entry.Text())} does not exist; its animations are not compiled.");
-                                else Read(file, depth + 1, false);
+                                if (file == null)
+                                {
+                                    Warn($"{JsonData.ShownText(path)}: definition file {JsonData.ShownText(entry.Text())} does not exist; its animations are not compiled.");
+                                    if (++reads > MaximumFileReads) throw new InvalidDataException($"{path}: the animation definitions list definition files more than {MaximumFileReads:N0} times.");
+                                    Listings.Add(new(JsonData.ShownText(entry.Text()), path, true));
+                                }
+                                else Read(file, depth + 1, false, path);
                             }
                             else if (entry.Key == "ANIMATION_DEFINITION")
                             {
                                 if (Definitions.Count >= MaximumDefinitions) throw entry.Error($"more than {MaximumDefinitions} animation definitions.");
-                                Definitions.Add(new(entry, path, ordinal++));
+                                Definitions.Add(new(entry, path, ordinal++) { Listing = listing });
                             }
                         }
                         break;

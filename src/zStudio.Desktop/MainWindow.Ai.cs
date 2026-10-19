@@ -23,6 +23,8 @@ public partial class MainWindow
         ConfigureParachuteScene(viewport);
         viewport.AiNodeSelected += id =>
         {
+            // The node's network is emphasised while it is selected.
+            if (scene == viewport && sourceChromeActive) ApplySectionPresentation();
             if (scene != viewport || id == null) return;
             selectedNode = null; inspectedSceneSource = null;
             if (viewport.AiNetworks.Find(id) is not { } target) return;
@@ -65,7 +67,9 @@ public partial class MainWindow
         AiValveOverlay.Visibility = AiValves.Visibility;
         if (aiSnapshot != graph.Id)
         {
-            aiSnapshot = graph.Id; aiNetworkFilter = null;
+            // A source map's networks keep their IDs (their paths) across rebuilds: an isolated network stays isolated.
+            aiSnapshot = graph.Id;
+            if (shownDocument?.SourceWorld == null || !graph.Networks.Any(n => n.Id == aiNetworkFilter)) aiNetworkFilter = null;
             if (propertiesWindow is { } pinnedWindow && pinnedWindow.Document == shownDocument && pinnedWindow.CurrentJson?["ai_snapshot"]?.GetValue<string>() is { } pinned && pinned != graph.Id)
                 pinnedWindow.MarkAiSnapshotStale();
             synchronizingAi = true;
@@ -91,8 +95,10 @@ public partial class MainWindow
             string limit = $"The AI overlay draws {scene.RenderedAiNodes:N0} nodes and {scene.RenderedAiLinks:N0} links (limits {SceneViewport.MaximumRenderedAiNodes:N0} and {SceneViewport.MaximumRenderedAiLinks:N0}). Filter a network, or inspect the complete graph through AI node Properties or ai_nodes.";
             AiNetworkCombo.ToolTip += "\n" + limit; ViewModel.Status = limit;
         }
-        if (aiVisible && !graph.Networks.Any(n => n.Nodes.Count > 0))
+        // A source map says so in the World tree's AI Networks section instead.
+        if (aiVisible && !graph.Networks.Any(n => n.Nodes.Count > 0) && !sourceChromeActive)
         { AiLabelText.Text = "No supported AI nodes in this mission."; AiLabel.Visibility = Visibility.Visible; }
+        if (sourceChromeActive) RefreshRowEyes();
     }
     private static string ShortAiText(string text) => text.Length <= 70 ? text : text[..70] + "…";
     private string AiSourceLabel(string path) => string.IsNullOrEmpty(ViewModel.RootPath) ? Path.GetFullPath(path) : Path.GetRelativePath(ViewModel.RootPath, path);

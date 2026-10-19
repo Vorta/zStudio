@@ -489,6 +489,8 @@ public sealed partial class SceneViewport : UserControl, IDisposable
             box.Instances = shown.Select(p => AdjustPickupPlacement(p).Transform).ToList();
             box.Visibility = boundsEnabled && shown.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
         }
+        // Outlined objects follow what the view shows too.
+        if (OutlinedNodes.Count > 0) RefreshOutlines();
     }
     private int? isolatedRoot;
     private int[] isolatedMembers = [];
@@ -563,7 +565,7 @@ public sealed partial class SceneViewport : UserControl, IDisposable
         rotationVelocity = default; rotationPoint = null; cameraPoseDirty = true; authoredCameraPose = false;
         ClearAnimationResources();
         ClearWorldHighlights(); ClearPolygonOverlays();
-        ClearAi(); ClearParachutes();
+        ClearAi(); ClearParachutes(); ClearOutlines();
         isolatedRoot = null; isolatedMembers = []; hiddenRoots = []; isolatedNodes = []; hiddenNodes = [];
         horizonNodes.Clear(); Mission = null; PreviewScene = null; InspectionNodes = null; VisibleSceneNodes = new HashSet<int>();
         objectPreviewMeshes = null; objectPreviewBounds = null; objectPreviewOriginals = null; ObjectTransformPreviewNode = null; objectPreviewToken = 0;

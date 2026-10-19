@@ -67,6 +67,7 @@ public partial class MainWindow
                 camera = motion?.Viewport.CaptureView() ?? animation?.Viewport.CaptureView() ?? (SceneHost.Visibility == Visibility.Visible ? (retiringScene ?? scene)?.CaptureView() : null),
                 framingSelection = motion?.Viewport.FramingSelection ?? animation?.Viewport.FramingSelection ?? (SceneHost.Visibility == Visibility.Visible ? scene?.FramingSelection : null),
                 ai = AiPreviewState(),
+                sections = SectionPreviewState(),
                 parachute = ParachuteState(),
                 presentation = new { fullscreen=PresentationState.Fullscreen, uiHidden=PresentationState.UiHidden, available=PresentationState.Available },
                 lod = motion?.Lod ?? animation?.PreviewLod ?? (SceneHost.Visibility == Visibility.Visible ? (int?)LodCombo.SelectedIndex : null), difficulty = MissionWorldPath != null || motion != null ? null : ViewModel.Difficulty.ToString(),
@@ -95,7 +96,7 @@ public partial class MainWindow
                 throw new StudioCommandException("unsupported", "Isolation is available only in model and Whole world previews. Animation scenes remain fully visible.");
             if (viewport.IsPickupDragging || viewport.IsFlyActive)
                 throw new StudioCommandException("busy", "Finish the pickup drag or exit Fly before changing scene selection.");
-            if (action == "show_all") { viewport.Isolate(null); isolatedNode = null; hiddenRows.Clear(); pendingHidden = null; ApplyHiddenRows(); CurrentInspectionCard?.Refresh(); }
+            if (action == "show_all") { viewport.Isolate(null); isolatedNode = null; hiddenRows.Clear(); pendingHidden = null; ApplyHiddenRows(); if (sourceChromeActive) ShowAllSections(); CurrentInspectionCard?.Refresh(); }
             else
             {
                 int node = Int(a,"node",-1); if (!viewport.CanInspectNode(node)) throw new StudioCommandException("stale_record","Scene node unavailable.");
@@ -129,7 +130,7 @@ public partial class MainWindow
             }
             return Result(new { visible = "all" });
         });
-        RegisterJob(r, "scene_options", "Set static model/world options: lod(integer), difficulty(Easy/Medium/Hard; RECOIL only, MW3 uses missions), textures/wireframe/faceOrientation/bounds/horizon(boolean), texturePack(path or empty for automatic), highlight(none/nonDefaultSoils/canModify/clipTo/canModifyAndClipTo/zones/polygonZones/landmarks), aiNodes/aiThroughGeometry(boolean), aiNetwork(all or ID with aiSnapshot). Highlights and AI are Whole world only.", [PreviewParameter,SceneChanges], false, async (a, token) =>
+        RegisterJob(r, "scene_options", "Set static model/world options: lod(integer), difficulty(Easy/Medium/Hard; RECOIL only, MW3 uses missions), textures/wireframe/faceOrientation/bounds/horizon(boolean), texturePack(path or empty for automatic), highlight(none/nonDefaultSoils/canModify/clipTo/canModifyAndClipTo/zones/polygonZones/landmarks), aiNodes/aiThroughGeometry(boolean), aiNetwork(all or ID with aiSnapshot). Highlights and AI are Whole world only. In a source map zones and AI networks are shown one by one (scene_tree show/hide): highlight zones or polygonZones chooses the kind of zone colour (every zone shows when none did), another highlight hides every zone; aiNodes shows or hides every network; aiNetwork filters and aiThroughGeometry false are refused (networks are always drawn through geometry, at half strength where it hides them).", [PreviewParameter,SceneChanges], false, async (a, token) =>
         {
             RequirePreview(a); RequireNoDrafts(shownDocument); if (animation != null || motion != null) throw new StudioCommandException("unsupported","Use animation_options or motion_preview.");
             TargetViewport(a);
@@ -148,9 +149,19 @@ public partial class MainWindow
                     throw new StudioCommandException("stale_snapshot", "Supply the current aiSnapshot from preview_state.ai.");
                 if (requestedAiNetwork != null && !scene!.AiNetworks.Networks.Any(n => n.Id == requestedAiNetwork))
                     throw new StudioCommandException("stale_record", "AI network unavailable.");
+                // A source map shows its networks one by one (the World tree's eyes), always through geometry.
+                if (sourceChromeActive && doc.SourceWorld != null)
+                {
+                    if (changes.ContainsKey("aiNetwork") && requestedAiNetwork != null)
+                        throw new StudioCommandException("unsupported", "In a source map, show or hide AI networks one by one with scene_tree show/hide on their rows.");
+                    if (changes.ContainsKey("aiThroughGeometry") && !Flag(changes, "aiThroughGeometry", true))
+                        throw new StudioCommandException("unsupported", "A source map always draws AI networks through geometry (at half strength where geometry hides them).");
+                }
             }
             if (changes.ContainsKey("highlight") && asset.Kind != AssetKind.World)
                 throw new StudioCommandException("unsupported", "Surface highlighting is available only in Whole world.");
+            if (changes.ContainsKey("highlight") && sourceChromeActive && doc.SourceWorld != null && Text(changes, "highlight") is "zones" or "polygonZones" && sceneTree?.Sections?.Zones.Any(z => z.Used) != true)
+                throw new StudioCommandException("unsupported", "This map has no zones to colour yet.");
             // MW3 previews select an authored mission; the shared RECOIL difficulty preference does not apply.
             if (changes.ContainsKey("difficulty") && (doc.PreviewDocument.Game == GameVariant.MechWarrior3 || scene?.Mission is { } shown && (!shown.Layout.DifficultyApplies || shown.Layout.MissionArchive != null)))
                 throw new StudioCommandException("unsupported", "MechWarrior 3 previews use missions instead of difficulty.");
@@ -227,7 +238,12 @@ public partial class MainWindow
                     _ => WorldHighlightMode.None
                 });
             }
-            if (changesAi) SetAiOptions(Flag(changes, "aiNodes", aiVisible), Flag(changes, "aiThroughGeometry", aiThroughGeometry), requestedAiNetwork);
+            if (changesAi && sourceChromeActive && doc.SourceWorld != null)
+            {
+                // aiNodes is the AI Networks row's master eye: every network shown, or hidden.
+                if (changes.ContainsKey("aiNodes") && ShowAllNetworks(Flag(changes, "aiNodes", true))) { ReconcileMasters(); ApplySectionPresentation(); }
+            }
+            else if (changesAi) SetAiOptions(Flag(changes, "aiNodes", aiVisible), Flag(changes, "aiThroughGeometry", aiThroughGeometry), requestedAiNetwork);
             return Result(new { preview = previewId, ViewModel.Status });
         });
         RegisterJob(r, "animation_options", "Set animation options: map/grid/collision/horizon/faceOrientation/followCamera/effects/replay/mute/followLog(bool), height(-999..999), lod, difficulty(RECOIL only; MW3 uses missions), speed, volume, phase(runtime/cleanup), seed, condition(0/1/2), range/traceRange(seconds), autoRange/fitTrace(true), problemFilter(0..4), worldPath, root, activationOrigin/activationTarget(XYZ text or blank).", [PreviewParameter,AnimationChanges], false, async (a, _) =>

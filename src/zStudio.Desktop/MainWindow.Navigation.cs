@@ -26,6 +26,9 @@ public partial class MainWindow
             case "perspective": case "orthographic": active.SetProjection(action); break;
             case "projection": active.SetProjection(active.CaptureView().Projection == "perspective" ? "orthographic" : "perspective"); break;
             case "opposite": active.OppositeView(); break;
+            case "frameSelected" when active == scene && SectionSelection is { Section: NetworkEntry or DefinitionEntry } section:
+                if (!TryFrameSection(section)) Notice("No visible geometry is available to frame.");
+                break;
             case "frameAll": case "frameSelected": case "frameAsset":
                 if (!active.TryFrame(action == "frameAll" ? "all" : action == "frameAsset" ? "asset" : "selected"))
                     Notice("No visible geometry is available to frame.");

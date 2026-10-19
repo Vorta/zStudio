@@ -29,6 +29,8 @@ public sealed partial class MissionSceneContext
     /// the objects the animations act on, for presentation. Empty without animation definitions.
     /// </summary>
     public IReadOnlyDictionary<int, IReadOnlyList<string>> AnimationRoots { get; init; } = new Dictionary<int, IReadOnlyList<string>>();
+    /// <summary>The node each compiled animation entry binds to (by its index in the package), as far as the binding allowance reached.</summary>
+    public IReadOnlyDictionary<int, int> AnimationEntryRoots { get; init; } = new Dictionary<int, int>();
     public IReadOnlyList<string> Diagnostics { get; }
     public MissionLayoutSelection Layout { get; }
     public AiNetworkSnapshot AiNetworks { get; internal set; } = AiNetworkSnapshot.Empty;
@@ -377,6 +379,7 @@ public static partial class MissionSceneLoader
             if (scene.Nodes[root].Parents.Contains(worldRoot)) { placement.Actor(root); actors.Add(new(root, sources[root], scene.Nodes[root].Name, "Animation initialization")); }
         }
         Dictionary<int, IReadOnlyList<string>> animationRoots = [];
+        Dictionary<int, int> entryRoots = [];
         if (context != null)
             foreach (var entry in package!.Entries)
             {
@@ -389,6 +392,7 @@ public static partial class MissionSceneLoader
                     bindings.Reserve(1);
                     int root = bindings.Root(entry);
                     if (root < 0 || root >= scene.Nodes.Count) continue;
+                    entryRoots[entry.Index] = root;
                     if (!animationRoots.TryGetValue(root, out var names)) animationRoots[root] = names = new List<string>();
                     var list = (List<string>)names;
                     if (list.Count < 8) { budget.Name(entry.Name); list.Add(entry.Name); }
@@ -398,7 +402,7 @@ public static partial class MissionSceneLoader
                 catch (IOException) when (bindings.Exhausted) { break; }
             }
         return new(scene, sources, actors, dormant, notes, selection, original.Nodes.Count, token)
-        { InitializationTransforms = context?.InitializationTransforms ?? new(), AnimationRoots = animationRoots };
+        { InitializationTransforms = context?.InitializationTransforms ?? new(), AnimationRoots = animationRoots, AnimationEntryRoots = entryRoots };
 
         MissionPickupSource? CoordinateSource(int recordIndex)
         {
