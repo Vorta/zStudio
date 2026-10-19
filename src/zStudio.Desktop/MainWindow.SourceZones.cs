@@ -180,6 +180,7 @@ public partial class MainWindow
         bool engaged = zoneTool.Session == session && viewport.ZonePaintActive;
         if (!engaged)
         {
+            if (presentationUiHidden) throw new StudioCommandException("busy", "Show the UI (F10) before painting polygon zones.");
             // A stroke rebuilds the world: unfinished input (the object card's changes, Properties fields) is decided first.
             RequireNoDrafts(document);
             if (viewport.IsPickupDragging || viewport.IsTerrainStroking || viewport.IsAiPathPointerTransform || viewport.IsParachutePointerMoving)
@@ -546,7 +547,7 @@ public partial class MainWindow
             if (typing) return false;
             LeaveZoneTool(); e.Handled = true; return true;
         }
-        if (typing || System.Windows.Input.Keyboard.Modifiers != ModifierKeys.None || !sourceChromeActive || e.OriginalSource is DependencyObject origin && Window.GetWindow(origin) is { } window && window != this) return false;
+        if (typing || presentationUiHidden || System.Windows.Input.Keyboard.Modifiers != ModifierKeys.None || !sourceChromeActive || e.OriginalSource is DependencyObject origin && Window.GetWindow(origin) is { } window && window != this) return false;
         if (key is Key.P or Key.E && ViewModel.SelectedDocument is { SourceWorld: not null } document && shownAsset?.Kind == AssetKind.World && scene?.IsZonePainting != true)
         { e.Handled = true; RunZoneTool(() => EngageZoneTool(document, erase: key == Key.E)); return true; }
         if (key is Key.OemOpenBrackets or Key.OemCloseBrackets && ZoneToolEngaged && scene?.IsZonePainting != true)

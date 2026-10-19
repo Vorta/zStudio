@@ -252,7 +252,7 @@ public partial class MainWindow
     private void RefreshSourceChrome()
     {
         if (!sourceChromeActive) return;
-        SourceCommandBar.Visibility = Visibility.Visible;
+        SourceCommandBar.Visibility = presentationUiHidden ? Visibility.Collapsed : Visibility.Visible;
         PreviewToolbarHost.Visibility = PreviewFooter.Visibility = Visibility.Collapsed;
         PreviewInner.Margin = new(0);
         RefreshCommandGroups();

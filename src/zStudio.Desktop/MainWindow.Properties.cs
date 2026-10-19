@@ -42,7 +42,7 @@ public partial class MainWindow
             UndoRequested = UndoDocument,
             Editing = doc => { if (doc == shownDocument) animation?.Pause(); },
         };
-        window.Closed += (_, _) => { if (propertiesWindow == window) { propertiesWindow = null; ++propertyRequest; } };
+        window.Closed += (_, _) => { if (presentationProperties == window) presentationProperties = null; if (propertiesWindow == window) { propertiesWindow = null; ++propertyRequest; } };
         window.Retargeted += UpdateSourceInputBlock;
         propertiesWindow = window; return window;
     }
@@ -50,6 +50,8 @@ public partial class MainWindow
     {
         if (!accepted) return;
         using var lease = BeginLayoutChange();
+        // Hidden UI keeps the window for when the UI shows again.
+        if (presentationUiHidden) { presentationProperties = window; if (window.IsVisible) window.Hide(); return; }
         if (!window.IsVisible) window.Show();
         if (window.WindowState == WindowState.Minimized) window.WindowState = WindowState.Normal;
         window.Activate();

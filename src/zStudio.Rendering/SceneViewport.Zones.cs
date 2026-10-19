@@ -329,7 +329,7 @@ public sealed partial class SceneViewport
                 var material = PreviewMaterials.Create(vertexTint: true); material.EnableUnLit = true; material.VertexColorBlendingFactor = 1;
                 PreviewMaterials.SetPolygonZones(material, true); PreviewMaterials.SetZoneEmphasis(material, PreviewMaterials.ZoneEmphasis.Preview, strong: ZonePreview);
                 zonePreviewMesh = new() { Material = material, CullMode = SharpDX.Direct3D11.CullMode.None, IsTransparent = true, IsHitTestVisible = false, IsThrowingShadow = false, DepthBias = -200 };
-                viewport.Items.Add(zonePreviewMesh);
+                PresentationGuide(zonePreviewMesh); viewport.Items.Add(zonePreviewMesh);
             }
             zonePreviewMesh.Geometry = new MeshGeometry3D { Positions = positions, Indices = indices, Colors = colors, Normals = new Vector3Collection(Enumerable.Repeat(Vector3.UnitY, positions.Count)) };
         }
@@ -391,7 +391,7 @@ public sealed partial class SceneViewport
                 }
         if (points.Count == 0) return;
         LineGeometryModel3D line = new() { Geometry = new LineGeometry3D { Positions = new Vector3Collection(points), Indices = indices }, Color = color, Thickness = thickness, IsHitTestVisible = false, DepthBias = -300 };
-        viewport.Items.Add(line); zoneLines[name] = line;
+        PresentationGuide(line); viewport.Items.Add(line); zoneLines[name] = line;
     }
     private void RemoveZoneOverlay()
     {

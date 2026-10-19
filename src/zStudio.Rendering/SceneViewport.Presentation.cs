@@ -15,9 +15,38 @@ public sealed partial class SceneViewport
     public bool ShowAxes
     {
         get => showAxes;
-        set { showAxes = value; viewport.ShowCoordinateSystem = value; }
+        set { showAxes = value; viewport.ShowCoordinateSystem = value && !PresentationUiHidden; }
     }
     private readonly Grid presentationOverlays = new();
+    private static readonly DependencyProperty PresentationGuidesVisibleProperty = DependencyProperty.Register(
+        nameof(PresentationGuidesVisible), typeof(bool), typeof(SceneViewport), new PropertyMetadata(true));
+    public bool PresentationGuidesVisible => (bool)GetValue(PresentationGuidesVisibleProperty);
+    /// <summary>Hide UI: the view alone, for footage. Clicks select and edit nothing; navigation and Fly go on.</summary>
+    public bool PresentationUiHidden { get; private set; }
+
+    /// <summary>Transient editor chrome only. Guide preferences, geometry and editing sessions stay intact.</summary>
+    public void SetPresentationUiHidden(bool hidden)
+    {
+        if (PresentationUiHidden == hidden) return;
+        PresentationUiHidden = hidden;
+        SetValue(PresentationGuidesVisibleProperty, !hidden);
+        viewport.ShowViewCube = !hidden;
+        viewport.ShowCoordinateSystem = showAxes && !hidden;
+        presentationOverlays.Visibility = hidden ? Visibility.Collapsed : Visibility.Visible;
+        SetPickupHover(false);
+        hoveredAiNode = null; PublishAiLabel(); LeaveZoneHover();
+        RebasePresentationPointers();
+        ++inspectionSerial;
+        viewport.InvalidateRender();
+    }
+
+    // IsRendering is independent of each guide's normal Visibility. Refreshes may change that
+    // preference while hidden, and newly created guides inherit the override before publication.
+    private void PresentationGuide(Element3D guide) => BindingOperations.SetBinding(guide, Element3D.IsRenderingProperty,
+        new Binding(nameof(PresentationGuidesVisible)) { Source = this, Mode = BindingMode.OneWay });
+
+    /// <summary>A pointer gesture already under way, which keeps following the pointer when the UI hides.</summary>
+    private bool PointerGestureActive => IsPickupDragging || IsAiPathPointerTransform || IsParachutePointerMoving || IsTerrainStroking || IsZonePainting || aiPathBoxStart != null;
 
     private bool aiPresentationRebase, parachutePresentationRebase, pickupPresentationRebase, navigationPresentationRebase;
     private bool brushPresentationSuspended, zonePresentationSuspended, aiBoxPresentationRebase;

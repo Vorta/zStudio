@@ -78,7 +78,7 @@ public sealed partial class SceneViewport
             if (frozenPath[i].Position != frozenPath[i + 1].Position) moving = i;
             parachuteNextMoving[i] = moving;
         }
-        parachuteOverlay = new(); viewport.Items.Add(parachuteOverlay);
+        parachuteOverlay = new(); PresentationGuide(parachuteOverlay); viewport.Items.Add(parachuteOverlay);
         parachuteLine = new()
         {
             Geometry = new LineGeometry3D { Positions = new(parachutePath.Select(p => p.Position)),

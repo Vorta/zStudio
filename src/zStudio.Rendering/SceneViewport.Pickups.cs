@@ -54,6 +54,8 @@ public sealed partial class SceneViewport
         PreviewMouseMove += (_, e) =>
         {
             if (InspectionContent is DependencyObject panel && IsInspectionInput(e.OriginalSource as DependencyObject, panel)) return;
+            // Hidden UI: no hover outlines or labels; a gesture begun before keeps following the pointer.
+            if (PresentationUiHidden && !PointerGestureActive) return;
             if (MoveParachutePointer(e.GetPosition(viewport)) || HandleAiPathMove(e.GetPosition(viewport))) { e.Handled = true; return; }
             if (HandleZoneMove(e.GetPosition(viewport)) || HandleTerrainBrushMove(e.GetPosition(viewport))) { e.Handled = true; return; }
             if (HandlePickupPointerMove(e.GetPosition(viewport))) e.Handled = true;
@@ -82,6 +84,8 @@ public sealed partial class SceneViewport
         if (e.Handled ||
             InspectionContent is DependencyObject panel && IsInspectionInput(e.OriginalSource as DependencyObject, panel)) return false;
         if (IsFlyActive || IsPickupDragging) return true;
+        // Hidden UI shows the view only: clicks select and edit nothing (middle-button navigation goes on).
+        if (PresentationUiHidden) return e.ChangedButton is MouseButton.Left or MouseButton.Right;
         // The screen-space cube owns its clicks, even over scene geometry or
         // handles. Resolve it before the editing lock can consume a scene click.
         if (!IsAiPathPointerTransform && !IsParachutePointerMoving && aiPathBoxStart == null && e.ChangedButton == MouseButton.Left && NavigateCubeAt(point)) return true;
@@ -108,7 +112,7 @@ public sealed partial class SceneViewport
         pickupTarget = new GroupModel3D(); viewport.Items.Add(pickupTarget);
         pickupTransformDescriptor = DependencyPropertyDescriptor.FromProperty(Element3D.TransformProperty, typeof(GroupModel3D));
         pickupTransformDescriptor.AddValueChanged(pickupTarget, PickupTargetChanged);
-        pickupOverlay = new TopMostGroup3D(); viewport.Items.Add(pickupOverlay);
+        pickupOverlay = new TopMostGroup3D(); PresentationGuide(pickupOverlay); viewport.Items.Add(pickupOverlay);
         selectionBox = new() { Color = Colors.Gold, Thickness = 1.5, IsHitTestVisible = false, Visibility = Visibility.Collapsed };
         pickupOverlay.Children.Add(selectionBox);
         CreatePickupManipulator();

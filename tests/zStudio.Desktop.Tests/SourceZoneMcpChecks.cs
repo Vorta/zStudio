@@ -1,3 +1,4 @@
+using System.Windows;
 using System.IO;
 using System.IO.Pipes;
 using System.Reflection;
@@ -155,6 +156,15 @@ internal static class SourceZoneMcpChecks
             Assert.False(tool["engaged"]!.GetValue<bool>()); Assert.False(view.ZonePaintActive);
             Assert.Equal(zStudio.Core.WorldHighlightMode.Landmarks, view.HighlightMode);
             setHighlight.Invoke(main, [zStudio.Core.WorldHighlightMode.None]);
+
+            // Hide UI (F10) leaves the map's view alone: it leaves the tool, which waits until the UI shows again.
+            await Call("source_zone_tool", new() { ["document"] = doc.SessionId.ToString(), ["action"] = "engage" });
+            await Call("presentation", new() { ["uiHidden"] = true });
+            Assert.False(view.ZonePaintActive);
+            Assert.All(new[] { "SourceCommandBar", "SourceOutlinerPane", "SourcePropertiesPane" }, name => Assert.Equal(Visibility.Collapsed, ((UIElement)main.FindName(name)).Visibility));
+            await Call("source_zone_tool", new() { ["document"] = doc.SessionId.ToString(), ["action"] = "engage" }, "busy");
+            await Call("presentation", new() { ["uiHidden"] = false });
+            Assert.All(new[] { "SourceCommandBar", "SourceOutlinerPane", "SourcePropertiesPane" }, name => Assert.Equal(Visibility.Visible, ((UIElement)main.FindName(name)).Visibility));
 
             // A dependency edit stales the build's exact identities until the world is reloaded.
             node = doc.SourceBuild!.Provenance.First(p => p.Value.ModelNodeName == "flat_a").Key;

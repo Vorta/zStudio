@@ -364,7 +364,7 @@
       "tools": [
         "zstudio_presentation"
       ],
-      "note": "Unmodified F11 routes before Fly input from the workspace or owned Properties window. Repeats do not retoggle. Semantic presentation changes never capture physical input."
+      "note": "Unmodified F11 (fullscreen) and F10 (Hide UI) route before Fly input from the workspace or owned Properties window; F10's release is consumed so Windows does not enter menu mode. Repeats do not retoggle. Semantic presentation changes never capture physical input."
     },
     {
       "gui": "MainWindow.MapWorkspace:MapPicker",
@@ -381,7 +381,7 @@
       "tools": [
         "zstudio_presentation"
       ],
-      "note": "View Fullscreen is a transient presentation flag (there is no Hide UI mode). It preserves the retained preview, camera, playback, layout preferences and drafts; enabling requires a 3D preview and disabling remains available."
+      "note": "View Fullscreen and View Hide UI are independent transient presentation flags. They preserve the retained preview, camera, playback, layout preferences and drafts; enabling requires a 3D preview and disabling remains available. Hide UI hides chrome, panes, the Properties window and editor guides, makes clicks inert and leaves the polygon zone tool."
     },
     {
       "gui": "AnimationEditor.xaml:AddSequenceClick",
