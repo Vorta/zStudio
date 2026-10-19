@@ -10,11 +10,11 @@ public partial class MainWindow
     private bool automationCloseRequested;
     private void RegisterWorkspacePresentation(StudioCommands r)
     {
-        Register(r,"presentation","Read or set temporary fullscreen for the current 3D preview. Preserves drafts, layout preferences, camera and playback. Enabling requires a 3D preview; disabling always works. Leaving 3D retains fullscreen. It is not saved.",true,
-            [P("fullscreen","boolean","Use the full current monitor without window borders.")],a=>
+        Register(r,"presentation","Read or set independent temporary fullscreen (F11) and Hide UI (F10) modes for the current 3D preview. Hide UI leaves the view alone: menus, command bar, panes, status bar, banners, Properties and editor guides (grid, axes, bounds, handles, outlines) hide, clicks select and edit nothing, and navigation and Fly go on; it leaves the polygon zone tool and the terrain brush (refused during a stroke) and neither can be turned on while it lasts. Preserves drafts, layout preferences, camera and playback. Enabling requires a 3D preview; disabling always works. Leaving 3D clears Hide UI and retains fullscreen. Neither mode is saved.",true,
+            [P("fullscreen","boolean","Use the full current monitor without window borders."),P("uiHidden","boolean","Temporarily hide workbench chrome and editor guides.")],a=>
         {
-            var state = SetPresentation(a["fullscreen"]?.GetValue<bool>());
-            return Result(new { fullscreen=state.Fullscreen, available=state.Available });
+            var state = SetPresentation(a["fullscreen"]?.GetValue<bool>(), a["uiHidden"]?.GetValue<bool>());
+            return Result(new { fullscreen=state.Fullscreen, uiHidden=state.UiHidden, available=state.Available });
         });
         Register(r,"workspace_view","Read or set presentation preferences and read effective navigatorMode (hidden, tabbed, split). In a source map, navigator/inspector and navigatorWidth/inspectorWidth show, hide and size its World tree (left) and docked Properties pane (right) for the session, without overwriting compiled-explorer preferences, and tools/toolsHeight show, hide and size its Diagnostics pane (the problems alone, no toolsTab) the same way. Supports theme, preset, pane visibility/dimensions and stable section indices, including detached Files. Does not commit drafts.",true,
             [WorkspaceChanges],a=>

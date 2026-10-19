@@ -39,6 +39,7 @@ internal static class PresentationMcpChecks
         {
             Assert.Equal("fullscreen", MainWindow.PresentationShortcut(Key.F11, ModifierKeys.None));
             Assert.Null(MainWindow.PresentationShortcut(Key.F11, ModifierKeys.Control));
+            Assert.Equal("uiHidden", MainWindow.PresentationShortcut(Key.F10, ModifierKeys.None));
             Assert.Null(MainWindow.PresentationShortcut(Key.H, ModifierKeys.Control | ModifierKeys.Shift));
             Assert.Null(MainWindow.PresentationShortcut(Key.Escape, ModifierKeys.None));
             State(await Present(), false, false);
@@ -89,10 +90,30 @@ internal static class PresentationMcpChecks
             }
             main.WindowState = WindowState.Normal; await Idle();
 
-            // Leaving 3D keeps fullscreen, which can then be turned off.
+            // Hide UI (F10) leaves the view alone: chrome, guides and the title strip's window dragging go, and come back as they were.
+            var chromeElements = new[] { "TitleArea", "PresentationStatusBar", "PreviewOverlayChrome" }.Select(name => (UIElement)main.FindName(name)).ToArray();
+            Send(main, Key.F10); await Idle();
+            State(await Present(), false, true, hidden: true);
+            Assert.All(chromeElements, element => Assert.Equal(Visibility.Collapsed, element.Visibility));
+            Assert.True(viewport.PresentationUiHidden); Assert.False(viewport.PresentationGuidesVisible);
+            Assert.Equal(0, WindowChrome.GetWindowChrome(main).CaptionHeight);
+            // Fullscreen keeps the hidden UI's caption until it shows again.
+            await Present(fullscreen: true); await Present(fullscreen: false); await Idle();
+            Assert.Equal(0, WindowChrome.GetWindowChrome(main).CaptionHeight);
+            Send(main, Key.F10); await Idle();
+            State(await Present(), false, true);
+            Assert.All(chromeElements, element => Assert.Equal(Visibility.Visible, element.Visibility));
+            Assert.False(viewport.PresentationUiHidden); Assert.True(viewport.PresentationGuidesVisible);
+            Assert.Equal(((FrameworkElement)main.FindName("TitleArea")).Height, WindowChrome.GetWindowChrome(main).CaptionHeight);
+            Assert.Equal(layout, JsonSerializer.Serialize(main.ViewModel.Settings.GetWorkspace()));
+            Assert.Equal(view, viewport.CaptureView());
+
+            // Leaving 3D keeps fullscreen, which can then be turned off; it ends Hide UI.
+            await Present(uiHidden: true);
             await Present(fullscreen: true);
             main.ViewModel.SelectedDocument = null; await Preview(); await Idle();
             State(await Present(), true, false);
+            Assert.Equal(Visibility.Visible, chromeElements[0].Visibility);
             State(await Present(fullscreen: false), false, false);
             main.ViewModel.SelectedDocument = world; await Preview(); await Idle();
             main.Width += 37; main.Height += 19; await Idle();
@@ -109,8 +130,8 @@ internal static class PresentationMcpChecks
             finally { reopened.Close(); }
 
             async Task<JsonNode> Command(string name, JsonObject args) => (await main.Commands.ExecuteAsync("zstudio_" + name, args, token)).Data;
-            Task<JsonNode> Present(bool? fullscreen = null)
-            { JsonObject args = new(); if (fullscreen.HasValue) args["fullscreen"] = fullscreen.Value; return Command("presentation", args); }
+            Task<JsonNode> Present(bool? fullscreen = null, bool? uiHidden = null)
+            { JsonObject args = new(); if (fullscreen.HasValue) args["fullscreen"] = fullscreen.Value; if (uiHidden.HasValue) args["uiHidden"] = uiHidden.Value; return Command("presentation", args); }
             async Task Preview() => await ((Task)typeof(MainWindow).GetField("previewWork", Fields)!.GetValue(main)!).WaitAsync(token);
             void AssertFullscreen()
             {
@@ -125,7 +146,7 @@ internal static class PresentationMcpChecks
         {
             if (main.IsLoaded)
             {
-                main.SetPresentation(false);
+                main.SetPresentation(false, false);
                 main.Close(); await Idle();
             }
             Directory.Delete(folder, true);
@@ -133,8 +154,8 @@ internal static class PresentationMcpChecks
         Assert.DoesNotContain(app.Windows.Cast<Window>(), w => w.Title is "Resolve property input" or "Unsaved changes");
     }
 
-    private static void State(JsonNode state, bool fullscreen, bool available)
-    { Assert.Equal(fullscreen, state["fullscreen"]!.GetValue<bool>()); Assert.Equal(available, state["available"]!.GetValue<bool>()); }
+    private static void State(JsonNode state, bool fullscreen, bool available, bool hidden = false)
+    { Assert.Equal(fullscreen, state["fullscreen"]!.GetValue<bool>()); Assert.Equal(hidden, state["uiHidden"]!.GetValue<bool>()); Assert.Equal(available, state["available"]!.GetValue<bool>()); }
     private static async Task Idle() { await Dispatcher.Yield(DispatcherPriority.ApplicationIdle); await Task.Delay(20); }
     private static async Task CameraSettled(SceneViewport viewport)
     {

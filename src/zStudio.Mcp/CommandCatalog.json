@@ -1806,13 +1806,21 @@
   },
   {
     "Name": "zstudio_presentation",
-    "Description": "Read or set temporary fullscreen for the current 3D preview. Preserves drafts, layout preferences, camera and playback. Enabling requires a 3D preview; disabling always works. Leaving 3D retains fullscreen. It is not saved.",
+    "Description": "Read or set independent temporary fullscreen (F11) and Hide UI (F10) modes for the current 3D preview. Hide UI leaves the view alone: menus, command bar, panes, status bar, banners, Properties and editor guides (grid, axes, bounds, handles, outlines) hide, clicks select and edit nothing, and navigation and Fly go on; it leaves the polygon zone tool and the terrain brush (refused during a stroke) and neither can be turned on while it lasts. Preserves drafts, layout preferences, camera and playback. Enabling requires a 3D preview; disabling always works. Leaving 3D clears Hide UI and retains fullscreen. Neither mode is saved.",
     "Mutates": true,
     "Parameters": [
       {
         "Name": "fullscreen",
         "Type": "boolean",
         "Description": "Use the full current monitor without window borders.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "uiHidden",
+        "Type": "boolean",
+        "Description": "Temporarily hide workbench chrome and editor guides.",
         "Required": false,
         "Choices": null,
         "Properties": null
@@ -3098,7 +3106,7 @@
       {
         "Name": "action",
         "Type": "string",
-        "Description": "Tree action; default read. Properties focuses the source-object card; other viewers open the same pinned window as the row context menu. hide/show (source maps) change only what the view draws; isolate (source maps) shows only the row's object, or everything again on the isolated row, as a middle-click on its eye.",
+        "Description": "Tree action; default read. Properties focuses the source-object card; other viewers open the same pinned window as the row context menu. hide/show (source maps) change only what the view draws; isolate (source maps) shows only the row\u0027s object, or everything again on the isolated row, as a middle-click on its eye.",
         "Required": false,
         "Choices": [
           "read",
@@ -6874,7 +6882,7 @@
   },
   {
     "Name": "zstudio_source_zone_tool",
-    "Description": "Read or set the polygon zone tool of the shown source map (GUI state; it synthesizes no pointer input): engage it in a mode with a zone (the Zones group\u0027s Edit zones toggle, Paint | Erase and zone picker, Tools \u003E Paint/Erase polygon zones, P/E, [ ], Shift\u002Bclick), exit it, or show/hide the polygons the last stroke skipped. State lists the zones the map\u0027s polygons carry as placed in the world (with labels and polygon counts) and what the last GUI stroke did.",
+    "Description": "Read or set the polygon zone tool of the shown source map (GUI state; it synthesizes no pointer input): engage it in a mode with a zone (the Zones group\u0027s Edit zones toggle, Paint | Erase and zone picker, Tools \u003E Paint/Erase polygon zones, P/E, [ ], Shift\u002Bclick), exit it, or show/hide the polygons the last stroke skipped. Engaging returns busy while Hide UI is on. State lists the zones the map\u0027s polygons carry as placed in the world (with labels and polygon counts) and what the last GUI stroke did.",
     "Mutates": true,
     "Parameters": [
       {

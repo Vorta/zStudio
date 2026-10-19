@@ -70,7 +70,7 @@ public sealed class PropertiesWindow : Window
         DockPanel.SetDock(notice, Dock.Top); panel.Children.Add(notice);
         panel.Children.Add(body);
         undo.Click += (_, _) => RunUndo(false); redo.Click += (_, _) => RunUndo(true);
-        PreviewKeyDown += OnKey;
+        PreviewKeyDown += OnKey; PreviewKeyUp += (_, e) => MainWindow.PresentationKeyUp(e);
         Loaded += (_, _) => hasBeenShown = true;
         Closing += OnClosing;
         Closed += (_, _) => { RememberBounds(); Detach(); };

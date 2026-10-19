@@ -143,7 +143,7 @@ public partial class MainWindow
             if (mission != null) WorldDifficulty.ToolTip = mission.Layout.Description;
             ShowStaticPreviewProblems(doc, asset);
             EmptyPreview.Visibility = Visibility.Collapsed;
-            RefreshPresentation();
+            RefreshPresentation(previewSettled: true);
             RefreshSceneTree();
             if (selectedNode is int retainedNode) RevealSceneNode(retainedNode);
             previous.Dispose(); SynchronizeFly();

@@ -186,6 +186,17 @@ public partial class MainWindow
         {
             RefreshPresentation();
             UpdateSourceMapPresentation();
+            if (presentationUiHidden)
+            {
+                // The view alone: no panes or splitters (their preferences stay as they are).
+                if (ViewModel.IsSourceProject) ArrangeSourcePanes(false);
+                NavigatorHost.Visibility = NavigatorSplitter.Visibility = InspectorHost.Visibility = InspectorSplitter.Visibility = BottomTools.Visibility = ToolsSplitter.Visibility = Visibility.Collapsed;
+                FilesColumn.Width = NavigatorSplitterColumn.Width = PropertiesColumn.Width = PropertiesSplitterColumn.Width = new(0);
+                ToolsRow.Height = ToolsSplitterRow.Height = new(0);
+                animation?.ShowInspectorReplacement(false);
+                Workspace.Visibility = Visibility.Visible;
+                return;
+            }
             if (ViewModel.IsSourceProject) { ArrangeSourceMapWorkspace(); return; }
             var layout = Layout; bool focus = layout.Preset == "Focus preview";
             double width = Workbench.ActualWidth;

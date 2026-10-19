@@ -4,7 +4,7 @@
 
 ![zStudio screenshot](docs/images/zstudio-whole-world.png)
 
-zStudio is a native Windows desktop application built with C# 14, .NET 10, WPF Fluent and Direct3D 11. Reconstruct an editable source project from the retail game files, edit its maps in zStudio or in Blender through the bundled RECOIL extension, and export them back to game files. Compiled game folders open only through MCP, where assets can still be inspected, previewed and exported; direct editing of compiled archives, typed data, texture packs, scripts, models and animation programs is being retired and is reachable only in such MCP-opened roots. Download **[zStudio v0.9.1](https://github.com/Vorta/zStudio/releases/tag/v0.9.1)** for Windows x64.
+zStudio is a native Windows desktop application built with C# 14, .NET 10, WPF Fluent and Direct3D 11. Reconstruct an editable source project from the retail game files, edit its maps in zStudio or in Blender through the bundled RECOIL extension, and export them back to game files. Compiled game folders open only through MCP, where assets can still be inspected, previewed and exported; direct editing of compiled archives, typed data, texture packs, scripts, models and animation programs is being retired and is reachable only in such MCP-opened roots. Download **[zStudio v0.9.2](https://github.com/Vorta/zStudio/releases/tag/v0.9.2)** for Windows x64.
 
 [Download releases](https://github.com/Vorta/zStudio/releases) · [Report a bug or request a feature](https://github.com/Vorta/zStudio/issues/new/choose) · [Contribute](CONTRIBUTING.md) · [Changelog](CHANGELOG.md)
 

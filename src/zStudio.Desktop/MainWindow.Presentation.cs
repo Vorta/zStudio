@@ -12,28 +12,47 @@ namespace zStudio.Desktop;
 
 public partial class MainWindow
 {
-    internal sealed record PresentationStatus(bool Fullscreen, bool Available);
-    private bool presentationFullscreen, refreshingPresentation, fullscreenBoundsQueued;
+    internal sealed record PresentationStatus(bool Fullscreen, bool UiHidden, bool Available);
+    private bool presentationFullscreen, presentationUiHidden, refreshingPresentation, fullscreenBoundsQueued;
+    private PropertiesWindow? presentationProperties;
     private WindowPresentation? ordinaryWindow;
     private int layoutLeases;
     internal bool IsChangingLayout => layoutLeases != 0;
-    internal PresentationStatus PresentationState => new(presentationFullscreen, ActiveNavigationViewport != null);
+    internal PresentationStatus PresentationState => new(presentationFullscreen, presentationUiHidden, ActiveNavigationViewport != null);
 
-    internal PresentationStatus SetPresentation(bool? fullscreen = null)
+    internal PresentationStatus SetPresentation(bool? fullscreen = null, bool? uiHidden = null)
     {
         Dispatcher.VerifyAccess();
-        if (fullscreen == null) return PresentationState;
-        if (fullscreen == true && ActiveNavigationViewport == null)
-            throw new StudioCommandException("preview_unavailable", "Open a 3D preview before enabling fullscreen.");
+        if (fullscreen == null && uiHidden == null) return PresentationState;
+        if ((fullscreen == true || uiHidden == true) && ActiveNavigationViewport == null)
+            throw new StudioCommandException("preview_unavailable", "Open a 3D preview before enabling presentation modes.");
+        // The polygon zone tool and the terrain brush are UI: hiding it leaves them (refused during a stroke;
+        // released zone strokes still apply, as when the tool is left otherwise).
+        if (uiHidden == true && !presentationUiHidden && (scene?.IsZonePainting == true || scene?.IsTerrainStroking == true))
+            throw new StudioCommandException("busy", "Finish the stroke before hiding the UI.");
         using var lease = BeginLayoutChange();
         if (fullscreen is bool full && full != presentationFullscreen) SetFullscreen(full);
+        if (uiHidden is bool hidden)
+        {
+            if (hidden && !presentationUiHidden)
+            {
+                if (ZoneToolEngaged) LeaveZoneTool();
+                if (terrainBrush != null) SetTerrainBrush(null);
+                OutlinerLegend.IsOpen = false;
+            }
+            presentationUiHidden = hidden;
+        }
         RefreshPresentation();
         ArrangeWorkspace();
+        // Focus in chrome that hid (here or in Properties) moves to the view, so its keys (Space, navigation, Fly) keep working.
+        if (uiHidden == true && presentationUiHidden && ActiveNavigationViewport is { } view && System.Windows.Input.Keyboard.FocusedElement is DependencyObject focused &&
+            Window.GetWindow(focused) is MainWindow or PropertiesWindow && !(focused is System.Windows.Media.Visual visual && view.IsAncestorOf(visual))) view.FocusView();
         return PresentationState;
     }
 
     internal static string? PresentationShortcut(Key key, ModifierKeys modifiers) =>
-        key == Key.F11 && modifiers == ModifierKeys.None ? "fullscreen" : null;
+        key == Key.F11 && modifiers == ModifierKeys.None ? "fullscreen" :
+        key == Key.F10 && modifiers == ModifierKeys.None ? "uiHidden" : null;
 
     internal bool PresentationKey(KeyEventArgs e)
     {
@@ -44,31 +63,86 @@ public partial class MainWindow
         return true;
     }
 
+    /// <summary>F10's release: Windows would otherwise enter its own menu mode, which keeps the next keys and clicks.</summary>
+    internal static void PresentationKeyUp(KeyEventArgs e)
+    {
+        if (PresentationShortcut(e.Key == Key.System ? e.SystemKey : e.Key, System.Windows.Input.Keyboard.Modifiers) != null) e.Handled = true;
+    }
+
     private void PresentationActionClick(object sender, RoutedEventArgs e) => TogglePresentation((string)((MenuItem)sender).Tag);
     private void TogglePresentation(string action)
     {
-        try { SetPresentation(action == "fullscreen" ? !presentationFullscreen : null); }
+        try { SetPresentation(action == "fullscreen" ? !presentationFullscreen : null, action == "uiHidden" ? !presentationUiHidden : null); }
         catch (Exception ex) when (ex is StudioCommandException or Win32Exception) { ViewModel.Status = ex.Message; RefreshPresentation(); }
     }
 
-    private void RefreshPresentation()
+    private void RefreshPresentation(bool previewSettled = false)
     {
         if (refreshingPresentation) return;
         refreshingPresentation = true;
         using var lease = BeginLayoutChange();
         try
         {
+            // Loading temporarily removes the viewport. Only a completed selection decides
+            // whether navigation left 3D; a 3D replacement inherits the current override.
+            if (previewSettled && ActiveNavigationViewport == null) presentationUiHidden = false;
+            bool hidden = presentationUiHidden;
             FullscreenMenu.IsChecked = presentationFullscreen;
+            HideUiMenu.IsChecked = hidden;
             FullscreenMenu.IsEnabled = presentationFullscreen || ActiveNavigationViewport != null;
+            HideUiMenu.IsEnabled = hidden || ActiveNavigationViewport != null;
             CaptionMaximize.IsEnabled = !presentationFullscreen;
-            RefreshStaleBanner();
+            foreach (var chrome in new UIElement[] { TitleArea, PresentationStatusBar, PreviewHeading, PreviewOverlayChrome })
+                chrome.Visibility = hidden ? Visibility.Collapsed : Visibility.Visible;
+            // A source map's chrome keeps the compiled preview's toolbar and footer hidden (RefreshSourceChrome).
+            if (hidden) PreviewToolbarHost.Visibility = PreviewFooter.Visibility = Visibility.Collapsed;
+            else if (!sourceChromeActive) { PreviewToolbarHost.ClearValue(VisibilityProperty); PreviewFooter.ClearValue(VisibilityProperty); }
+            Workbench.Margin = hidden ? new(0) : new(6, 0, 6, 4);
+            PreviewInner.Margin = hidden || sourceChromeActive ? new(0) : new(4);
+            // The title row is gone: its strip of the view takes the pointer instead of moving the window.
+            foreach (var chrome in new[] { WindowChrome.GetWindowChrome(this), ordinaryWindow?.Chrome })
+                if (chrome != null) chrome.CaptionHeight = hidden ? 0 : TitleArea.Height;
+            UpdateReloadingView();
+            // The view's rounded corners go with the UI (and come back with it).
+            if (sourceChromeActive && (PreviewHost.Clip == null) != hidden) ClipPreviewHost(null, null);
+            ApplyRetainedPresentation();
+            if (hidden && propertiesWindow?.IsVisible == true)
+            {
+                presentationProperties = propertiesWindow;
+                propertiesWindow.Hide();
+            }
+            else if (!hidden && presentationProperties is { } popup)
+            {
+                presentationProperties = null;
+                if (popup == propertiesWindow && popup.Document?.IsDisposed == false)
+                {
+                    // Showing restores the same draft and owner without activating an MCP request.
+                    bool activate = popup.ShowActivated;
+                    popup.ShowActivated = false;
+                    popup.Show();
+                    popup.ShowActivated = activate;
+                }
+            }
         }
         finally { refreshingPresentation = false; }
         // A source map's chrome keeps its own toolbar and footer hidden.
         RefreshSourceChrome();
     }
 
-    internal bool IsPropertiesPresented(PropertiesWindow window) => window.IsVisible;
+    private void ApplyRetainedPresentation()
+    {
+        // Availability excludes loading previews, but their retained controls can already be
+        // attached and rendering. Apply before attachment and on mode changes during loading.
+        animation?.SetPresentationUiHidden(presentationUiHidden);
+        motion?.SetPresentationUiHidden(presentationUiHidden);
+        scene?.SetPresentationUiHidden(presentationUiHidden);
+        animation?.Viewport.SetPresentationUiHidden(presentationUiHidden);
+        motion?.Viewport.SetPresentationUiHidden(presentationUiHidden);
+        // A rebuild's previous view stays shown until the new one has loaded.
+        retiringScene?.SetPresentationUiHidden(presentationUiHidden);
+    }
+
+    internal bool IsPropertiesPresented(PropertiesWindow window) => window.IsVisible || ReferenceEquals(window, presentationProperties);
 
     private IDisposable BeginLayoutChange()
     {

@@ -93,7 +93,8 @@ public partial class MainWindow
         ReloadingTitle.Text = retiringScene != null ? "Loading the rebuilt world…" : rebuildEvaluating ? "Rebuilding the world…" : "Applying the edit…";
         if (reloading) ReloadingView.SetResourceReference(System.Windows.Controls.Panel.BackgroundProperty, "ReloadingShade");
         else ReloadingView.Background = System.Windows.Media.Brushes.Transparent;
-        ReloadingView.Visibility = shown ? Visibility.Visible : Visibility.Collapsed;
+        // Hidden UI shows the view alone: no notice or shade over it.
+        ReloadingView.Visibility = shown && !presentationUiHidden ? Visibility.Visible : Visibility.Collapsed;
         RefreshStaleBanner();
     }
     private void RebuildNoticeDue(object? sender, EventArgs e) { rebuildNoticeDelay?.Stop(); rebuildNoticeDue = true; UpdateReloadingView(); }
@@ -105,5 +106,5 @@ public partial class MainWindow
     }
     /// <summary>The "Source file changed on disk" banner gives way to the reload notice (and hides with the UI).</summary>
     private void RefreshStaleBanner() =>
-        SourceStaleHost.Visibility = ReloadingView.Visibility == Visibility.Visible ? Visibility.Collapsed : Visibility.Visible;
+        SourceStaleHost.Visibility = presentationUiHidden || ReloadingView.Visibility == Visibility.Visible ? Visibility.Collapsed : Visibility.Visible;
 }

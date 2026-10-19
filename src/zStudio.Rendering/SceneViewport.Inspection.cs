@@ -183,7 +183,7 @@ public sealed partial class SceneViewport
         var now = DateTime.UtcNow;
         if ((now - inspectionTick).TotalMilliseconds < 50) return;
         inspectionTick = now;
-        bool busy = IsFlyActive || IsPickupDragging || Mouse.LeftButton != MouseButtonState.Released || Mouse.MiddleButton != MouseButtonState.Released || Mouse.RightButton != MouseButtonState.Released;
+        bool busy = PresentationUiHidden || IsFlyActive || IsPickupDragging || Mouse.LeftButton != MouseButtonState.Released || Mouse.MiddleButton != MouseButtonState.Released || Mouse.RightButton != MouseButtonState.Released;
         var stamp = new InspectionStamp(inspectionPointer, CaptureView(), inspectionSerial, SelectedInspection?.Target, busy, viewport.ActualWidth, viewport.ActualHeight);
         if (stamp == inspectionStamp) return;
         inspectionStamp = stamp;

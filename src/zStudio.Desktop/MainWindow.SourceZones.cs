@@ -180,6 +180,7 @@ public partial class MainWindow
         bool engaged = zoneTool.Session == session && viewport.ZonePaintActive;
         if (!engaged)
         {
+            if (presentationUiHidden) throw new StudioCommandException("busy", "Show the UI (F10) before painting polygon zones.");
             // A stroke rebuilds the world: unfinished input (the object card's changes, Properties fields) is decided first.
             RequireNoDrafts(document);
             if (viewport.IsPickupDragging || viewport.IsTerrainStroking || viewport.IsAiPathPointerTransform || viewport.IsParachutePointerMoving)
@@ -546,7 +547,7 @@ public partial class MainWindow
             if (typing) return false;
             LeaveZoneTool(); e.Handled = true; return true;
         }
-        if (typing || System.Windows.Input.Keyboard.Modifiers != ModifierKeys.None || !sourceChromeActive || e.OriginalSource is DependencyObject origin && Window.GetWindow(origin) is { } window && window != this) return false;
+        if (typing || presentationUiHidden || System.Windows.Input.Keyboard.Modifiers != ModifierKeys.None || !sourceChromeActive || e.OriginalSource is DependencyObject origin && Window.GetWindow(origin) is { } window && window != this) return false;
         if (key is Key.P or Key.E && ViewModel.SelectedDocument is { SourceWorld: not null } document && shownAsset?.Kind == AssetKind.World && scene?.IsZonePainting != true)
         { e.Handled = true; RunZoneTool(() => EngageZoneTool(document, erase: key == Key.E)); return true; }
         if (key is Key.OemOpenBrackets or Key.OemCloseBrackets && ZoneToolEngaged && scene?.IsZonePainting != true)
@@ -758,7 +759,7 @@ public partial class MainWindow
                     fullTargets = plan.Full.Take(64).Select(t => new { node = t.SceneNode, polygon = t.Polygon }).ToArray(),
                 });
             });
-        Register(registry, "source_zone_tool", "Read or set the polygon zone tool of the shown source map (GUI state; it synthesizes no pointer input): engage it in a mode with a zone (the Zones group's Edit zones toggle, Paint | Erase and zone picker, Tools > Paint/Erase polygon zones, P/E, [ ], Shift+click), exit it, or show/hide the polygons the last stroke skipped. State lists the zones the map's polygons carry as placed in the world (with labels and polygon counts) and what the last GUI stroke did.", true,
+        Register(registry, "source_zone_tool", "Read or set the polygon zone tool of the shown source map (GUI state; it synthesizes no pointer input): engage it in a mode with a zone (the Zones group's Edit zones toggle, Paint | Erase and zone picker, Tools > Paint/Erase polygon zones, P/E, [ ], Shift+click), exit it, or show/hide the polygons the last stroke skipped. Engaging returns busy while Hide UI is on. State lists the zones the map's polygons carry as placed in the world (with labels and polygon counts) and what the last GUI stroke did.", true,
             [DocumentParameter, P("action", "string", "state reads; engage engages (or changes mode/zone); exit leaves; showSkipped/hideSkipped outline the last stroke's full polygons.", true, "state", "engage", "exit", "showSkipped", "hideSkipped"),
              P("mode", "string", "engage: paint or erase (default: as before).", false, "paint", "erase"), new("zone", "integer", "engage: the zone, 0–254 or 255 for Any (default: as before).", Minimum: 0, Maximum: 255)],
             args =>
