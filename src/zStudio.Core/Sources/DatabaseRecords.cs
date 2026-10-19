@@ -153,9 +153,10 @@ internal static partial class DatabaseRecords
     /// <param name="isReference">Whether a node of the shipped world is an external reference (its children a referenced file's content).</param>
     /// <param name="mirrorLimit">The most nodes the simulated caches may mirror in all (see <see cref="MaximumMirroredNodes"/>); beyond it the inference stops.</param>
     /// <param name="keptNames">Whether the names freed slots keep can name deleted groups: false unless the database's deletion
-    /// is the instruction right after its load and the scripts free nothing else later (<c>DeleteTree</c>, <c>FreeNode</c>),
-    /// whatever those free. The inference does not replay such frees, and their nodes' names can sit in slots it takes for
-    /// untaken.</param>
+    /// is the instruction right after its load and no other <c>DeleteTree</c> or <c>FreeNode</c> follows, whatever those free,
+    /// in a trace that misses no script. Anything between the load and the deletion could attach or rename nodes the deletion
+    /// frees with their names, and the inference does not replay later frees, whose nodes' names can sit in slots it takes
+    /// for untaken.</param>
     /// <exception cref="InvalidDataException">The inference would mirror more cached nodes than <paramref name="mirrorLimit"/>; the database's nodes keep the world's child order.</exception>
     public static Records? Infer(GameZWorld world, WorldDecomposition build, Func<WorldNode, bool> isReference, string mission, List<string> notes, CancellationToken token, int mirrorLimit = MaximumMirroredNodes,
         int matchingLimit = MaximumRetainedWork, bool keptNames = true)
@@ -203,7 +204,7 @@ internal static partial class DatabaseRecords
         HashSet<int> freedSet = [.. freed];
         var freedSlots = world.FreedSlots;
         // How many entries at the bottom of each free list no later node took: their slots keep the names of the nodes freed
-        // there last (by the database's load or its deletion, unless the scripts free other nodes; see Infer).
+        // there last (by the database's load or its deletion, when keptNames holds; see Infer).
         Dictionary<List<int>, int> untakenCounts = new(ReferenceEqualityComparer.Instance);
         var first = FreeList(steps, out string? failure);
         if (first == null) return Fail(failure!);
@@ -238,7 +239,7 @@ internal static partial class DatabaseRecords
         Dictionary<int, string> kept = [];
         foreach (var (s, bytes) in freedSlots) if (NameOf(bytes) is { Length: > 0 } name) kept[s] = name;
         // The kept names a deleted record can take: those of slots no later node took (one a later load took and freed again
-        // holds that load's name), none when the scripts free other nodes (see Infer).
+        // holds that load's name); none when keptNames is off (see Infer).
         Dictionary<int, string> Named()
         {
             if (!keptNames) return [];

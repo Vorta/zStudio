@@ -53,9 +53,9 @@ internal static partial class WorldSources
     private static string Stem(string file) => System.IO.Path.GetFileNameWithoutExtension(file.Replace('\\', '/')).ToLowerInvariant();
 
     /// <summary>
-    /// Whether the scripts free no node after the database's load but the database's own: its deletion (DeleteTree naming its
-    /// root) is the very next instruction, and no other DeleteTree or FreeNode follows. Anything between the load and the
-    /// deletion could attach nodes under the database or rename them, and the deletion would free them with their names.
+    /// Whether the database's deletion (DeleteTree naming its root) is the very next instruction after its load and no other
+    /// DeleteTree or FreeNode follows. Anything between the load and the deletion could attach nodes under the database or
+    /// rename them, and the deletion would free them with their names; the inference replays no other DeleteTree or FreeNode.
     /// </summary>
     private static bool OnlyDatabaseDeleted(IReadOnlyList<TracedInstruction> trace, LoadedModel database)
     {
@@ -135,7 +135,9 @@ internal static partial class WorldSources
         foreach (var mission in missions)
         {
             token.ThrowIfCancellationRequested();
-            var trace = ScriptTrace.Trace(scripts, $"m{mission.Mission}.gs", notes, traceBudget, diagnostics, token);
+            // A script the build ran but the archive lacks hides what it did from the trace (see keptNames below).
+            bool missingScript = false;
+            var trace = ScriptTrace.Trace(name => { var lines = scripts(name); missingScript |= lines == null; return lines; }, $"m{mission.Mission}.gs", notes, traceBudget, diagnostics, token);
             foreach (var instruction in trace)
             {
                 if (!scriptMissions.TryGetValue(instruction.Script, out var runs)) scriptMissions[instruction.Script] = runs = [];
@@ -148,10 +150,11 @@ internal static partial class WorldSources
             int database = decomposed.FindIndex(l => l.Database);
             List<WorldNode> databaseReferences = [];
             DatabaseRecords.Records? records = null;
-            // A freed slot keeps the name of the node freed there last. The inference replays only the loads whose nodes the
-            // world still holds, so unless the database's deletion comes right after its load and nothing else is freed
-            // later, no kept name may name a deleted group.
-            bool keptNames = database >= 0 && OnlyDatabaseDeleted(trace, decomposed[database]);
+            // A freed slot keeps the name of the node freed there last. The database's deletion also frees what the scripts
+            // attached or renamed under it before it, and the inference replays only the loads whose nodes the world still
+            // holds; so unless the deletion is the next instruction after the database's load and no other DeleteTree or
+            // FreeNode follows, in a trace that misses no script, no kept name may name a deleted group.
+            bool keptNames = database >= 0 && !missingScript && OnlyDatabaseDeleted(trace, decomposed[database]);
             // A world the inference cannot replay (its caches exceed what a load can hold) keeps its order, like any other.
             try { if (database >= 0) records = DatabaseRecords.Infer(mission.World, decomposition, node => IsReference(node) && !roots.Contains(node), $"m{mission.Mission}", notes, token, keptNames: keptNames); }
             catch (InvalidDataException ex) { diagnostics.Add($"m{mission.Mission}: the mission database keeps the world's object order without its groups: {ex.Message}"); }
