@@ -27,7 +27,7 @@ internal sealed record PickupPresentation(string Type, string Kind, string IconF
             11 or 28 => "ic_sonc1", 12 or 29 => "ic_arc1",
             13 or 30 => "ic_miss1", 14 or 31 => "ic_miss2",
             15 or 32 => "ic_nuke1", 16 or 33 => "ic_nuke2",
-            34 or 36 => "nanite", 35 => "nanite100",
+            34 => "nanocan", 35 => "nanite100", 36 => "nanite",
             37 => "amphchip", 38 => "hovchp01", 39 => "subchp01", _ => null,
         };
         return icon == null ? null : new(type.Name,
