@@ -172,6 +172,8 @@ AI discovery, node selection/Properties and scene inspection also expose authore
 
 ## Source projects
 
+Source-map `scene_tree` pickup rows expose `pickupType` (the catalog name) and `pickupKind` (`ammo`, `weapon`, `health`, `technology`), including entries with `otherDifficulty=true`; non-pickup rows return null. The GUI uses this same type for its embedded pickup icon and shows `A` or `W` immediately before the difficulty label for ammo or weapon pickups. Health and technology have no letter. Existing command arguments, row identities and difficulty lists are unchanged.
+
 GUI Initialize and `source_reconstruct` share the model-placement rules: new projects put m6's `lasdesig.gltf` in `data/common/models`, and m4's `train.gltf`, `rcar1.gltf`, `trnsplsh.gltf` and referenced `tturret.gltf` in `data/m4/models`. Recorded loading provenance, destination searchability and collision checks govern relocation; unsafe placement retains the script folder and reports a note. Relative glTF references and buffer/texture links follow the generated layout. Existing projects are not migrated. This changes neither command arguments nor result schemas.
 
 Reconstruction retains evidenced original FLT file boundaries as physical glTF files linked by relative `extras.recoil.ref` references, with the original master filename and embedded node/polygon attributes. Unrecoverable loader-section names remain inline rather than becoming invented physical files. Projects using the old `meta/zones.json` sidecar format are refused on opening or building through GUI and MCP; reconstruct a fresh project from original ZBD files. There is no implicit migration or sidecar fallback.

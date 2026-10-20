@@ -16,7 +16,7 @@ internal sealed record SourceMapPass(string Kind, string Label, string Descripti
 /// One unit or pickup of a pass: <paramref name="Row"/> is its object in the view, or null when the shown difficulty does not
 /// place it. <paramref name="Difficulties"/> are those whose resources place it (matched across them like placement edits).
 /// </summary>
-internal sealed record SourceMapPassEntry(int? Row, string Key, string Name, IReadOnlyList<MissionDifficulty> Difficulties, string Detail)
+internal sealed record SourceMapPassEntry(int? Row, string Key, string Name, IReadOnlyList<MissionDifficulty> Difficulties, string Detail, string? PickupType = null)
 {
     /// <summary>"E/M/H", "M/H", "H"…; empty when unknown.</summary>
     internal string Tag => string.Join("/", Difficulties.Select(d => d.ToString()[..1]));
@@ -187,6 +187,7 @@ internal sealed class SourceMapSelection
         List<int> aiv = [], puppies = [], animated = [];
         HashSet<int> assigned = [];
         Dictionary<int, MissionPickupSource> placedBy = [];
+        Dictionary<int, string> pickupTypes = [];
         foreach (var actor in mission?.Actors ?? [])
         {
             token.ThrowIfCancellationRequested();
@@ -194,6 +195,7 @@ internal sealed class SourceMapSelection
             var pass = actor.Pickup != null ? puppies : actor.CoordinateSource != null ? aiv : actor.PlacementSource == "Animation initialization" ? animated : null;
             if (pass == null || !assigned.Add(row)) continue;
             pass.Add(row);
+            if (actor.Pickup is { } pickup) pickupTypes[row] = pickup.LogicalName;
             if ((actor.Pickup?.Source ?? actor.CoordinateSource) is { } record) placedBy[row] = record;
         }
         foreach (int root in mission?.DormantRoots.Order() ?? Enumerable.Empty<int>())
@@ -246,12 +248,12 @@ internal sealed class SourceMapSelection
         List<SourceMapPassEntry> PassEntries(List<int> rows, bool pickups)
         {
             if (placements == null || shown is not MissionDifficulty current)
-                return rows.Select(row => new SourceMapPassEntry(row, "", DisplayName(row), [], "")).ToList();
+                return rows.Select(row => new SourceMapPassEntry(row, "", DisplayName(row), [], "", pickupTypes.GetValueOrDefault(row))).ToList();
             List<PassGroup> groups = [];
             Dictionary<MissionPickupSource, PassGroup> groupOf = new(placements.SourceComparer);
             var records = pickups
                 ? placements.Records.Select(r => new PassRecord(r.Source, r.Difficulties,
-                    MissionPickupType.Catalog.FirstOrDefault(t => t.Name == r.Type)?.TemplateName ?? r.Type, $"{r.Type} pickup · {Position(r.OriginalPosition)}", true))
+                    MissionPickupType.Catalog.FirstOrDefault(t => t.Name == r.Type)?.TemplateName ?? r.Type, $"{r.Type} pickup · {Position(r.OriginalPosition)}", true, r.Type))
                 : placements.OtherCoordinates.Where(c => c.Kind == "tank").Select(c => new PassRecord(c.Source, c.Difficulties, c.Name,
                     $"{c.Template} · {Position(c.OriginalPosition)} · heading {c.Rotation.Y.ToString("0.#", System.Globalization.CultureInfo.InvariantCulture)}°", c.TemplateSourceNode != null));
             foreach (var record in records)
@@ -270,7 +272,7 @@ internal sealed class SourceMapSelection
             {
                 var group = placedBy.TryGetValue(row, out var placed) ? groupOf.GetValueOrDefault(placed) : null;
                 if (group is { Row: null }) { group.Row = row; continue; }
-                entries.Add((new(row, "", DisplayName(row), [current], ""), ((int)current, placed?.RecordIndex ?? int.MaxValue, ordinal++)));
+                entries.Add((new(row, "", DisplayName(row), [current], "", pickupTypes.GetValueOrDefault(row)), ((int)current, placed?.RecordIndex ?? int.MaxValue, ordinal++)));
             }
             foreach (var group in groups)
             {
@@ -282,16 +284,16 @@ internal sealed class SourceMapSelection
                 string key = first.Source.ResourceName + ":" + (placements.SourcePresentationKey(first.Source) ?? "#" + first.Source.RecordIndex.ToString(System.Globalization.CultureInfo.InvariantCulture));
                 // A record the shown difficulty places that the view could not show (its notices say why) stays out, as does
                 // one whose template the world lacks: the game skips both.
-                if (group.Row is int row) entries.Add((new(row, key, DisplayName(row), difficulties, first.Detail), order));
+                if (group.Row is int row) entries.Add((new(row, key, DisplayName(row), difficulties, first.Detail, first.PickupType), order));
                 else if (!difficulties.Contains(current) && group.Records.Any(r => r.Placeable))
-                    entries.Add((new(null, key, first.Name, difficulties, first.Detail), order));
+                    entries.Add((new(null, key, first.Name, difficulties, first.Detail, first.PickupType), order));
             }
             return entries.OrderBy(e => e.Order).Select(e => e.Entry).ToList();
         }
         static string Position(System.Numerics.Vector3 p) => string.Create(System.Globalization.CultureInfo.InvariantCulture, $"X {p.X:0.#}, Y {p.Y:0.#}, Z {p.Z:0.#}");
     }
 
-    private sealed record PassRecord(MissionPickupSource Source, IReadOnlyList<MissionDifficulty> Difficulties, string Name, string Detail, bool Placeable);
+    private sealed record PassRecord(MissionPickupSource Source, IReadOnlyList<MissionDifficulty> Difficulties, string Name, string Detail, bool Placeable, string? PickupType = null);
     private sealed class PassGroup
     {
         internal List<PassRecord> Records { get; } = [];

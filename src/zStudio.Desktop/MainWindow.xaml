@@ -57,9 +57,11 @@
      </Border>
      <Button x:Name="RowFrame" DockPanel.Dock="Right" Style="{StaticResource OutlinerEye}" Focusable="False" Click="OutlinerFrameClick" Tag="{Binding}" ToolTip="Frame selection" AutomationProperties.Name="Frame selection"><local:PreviewIcon Kind="FrameSelection" Width="14" Height="14"/></Button>
      <TextBlock x:Name="RowMeta" DockPanel.Dock="Right" Text="{Binding Meta}" ToolTip="{Binding MetaToolTip}" FontSize="11" Margin="6,0,10,0" VerticalAlignment="Center" Foreground="{DynamicResource TextFillColorTertiaryBrush}" Typography.NumeralAlignment="Tabular"/>
+     <TextBlock x:Name="RowPickupBadge" DockPanel.Dock="Right" Text="{Binding PickupBadge}" ToolTip="{Binding PickupBadgeToolTip}" AutomationProperties.Name="{Binding PickupBadgeToolTip}" Visibility="{Binding HasPickupBadge,Converter={StaticResource BoolVisibility}}" FontSize="11" Margin="6,0,0,0" VerticalAlignment="Center" Foreground="{DynamicResource TextFillColorTertiaryBrush}"/>
      <!-- The type icon, or a zone's or network's colour square (dashed for polygons without a zone). -->
-     <Grid Width="15" Height="15" Margin="0,0,8,0" VerticalAlignment="Center">
+     <Grid x:Name="RowIconBox" Width="15" Height="15" Margin="0,0,8,0" VerticalAlignment="Center">
       <local:PreviewIcon x:Name="RowIcon" Kind="{Binding OutlinerIcon}" TextElement.Foreground="{Binding OutlinerBrush}"/>
+      <Image x:Name="RowPickupIcon" Visibility="Collapsed" Source="{Binding PickupImage}" Stretch="Uniform" RenderOptions.BitmapScalingMode="HighQuality" ToolTip="{Binding PickupType}" AutomationProperties.Name="{Binding PickupType}"/>
       <Border x:Name="RowSwatch" Visibility="Collapsed" Width="12" Height="12" CornerRadius="3" BorderThickness="1" BorderBrush="#47FFFFFF" Background="{Binding Swatch}"/>
       <Rectangle x:Name="RowSwatchDashed" Visibility="Collapsed" Width="12" Height="12" RadiusX="3" RadiusY="3" StrokeThickness="1" StrokeDashArray="2,2" Stroke="{DynamicResource TextFillColorTertiaryBrush}"/>
      </Grid>
@@ -78,6 +80,7 @@
    </Grid>
    <HierarchicalDataTemplate.Triggers>
     <DataTrigger Binding="{Binding IsSourceMap}" Value="True"><Setter TargetName="CompiledRow" Property="Visibility" Value="Collapsed"/><Setter TargetName="SourceRow" Property="Visibility" Value="Visible"/></DataTrigger>
+    <DataTrigger Binding="{Binding HasPickupIcon}" Value="True"><Setter TargetName="RowIcon" Property="Visibility" Value="Collapsed"/><Setter TargetName="RowPickupIcon" Property="Visibility" Value="Visible"/><Setter TargetName="RowIconBox" Property="Width" Value="20"/><Setter TargetName="RowIconBox" Property="Height" Value="20"/></DataTrigger>
     <DataTrigger Binding="{Binding IsHidden}" Value="True"><Setter TargetName="RowEye" Property="Visibility" Value="Visible"/></DataTrigger>
     <DataTrigger Binding="{Binding IsFaded}" Value="True"><Setter TargetName="SourceRow" Property="Opacity" Value="0.55"/></DataTrigger>
     <DataTrigger Binding="{Binding IsIsolated}" Value="True"><Setter TargetName="RowEye" Property="Visibility" Value="Visible"/></DataTrigger>

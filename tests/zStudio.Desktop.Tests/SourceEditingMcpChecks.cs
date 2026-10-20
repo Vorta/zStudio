@@ -785,6 +785,50 @@ internal static class SourceEditingMcpChecks
 
             await Call("close_document", new() { ["document"] = Id(pickupMap), ["revision"] = pickupMap.Revision });
 
+            // Type artwork and role badges use placement identity, including rows absent from the shown difficulty.
+            fixture.Write("gamegen/m1.gs", File.ReadAllText(fixture.Path("gamegen/m1.gs")).Replace("GameZWriteZBDFile",
+                "LoadGameGen chip.gltf pu000\r\nLoadGameGen chip.gltf pu017\r\nLoadGameGen chip.gltf pu034\r\nGameZWriteZBDFile", StringComparison.Ordinal));
+            const string iconRows = "( ERFPG_AMMO 1 ( 10 0 10 ) ( 0 0 0 ) 0 ) ( NANITE 50 ( 20 0 10 ) ( 0 0 0 ) 0 ) ( PUP_AMPHIB 1 ( 30 0 10 ) ( 0 0 0 ) 0 )";
+            fixture.Write("data/m1/zrdr/puppies.zrd", "( " + iconRows + " )");
+            fixture.Write("data/m1/zrdr/puppies_easy.zrd", "( " + iconRows + " ( ERFPG_WEAPON 1 ( 40 0 10 ) ( 0 0 0 ) 0 ) )");
+            await main.ViewModel.OpenRootAsync(fixture.Project, token);
+            pickupMap = Document((await Job("source_world_open", new() { ["mission"] = "m1" }))["document"]!);
+            await Preview();
+            var iconTree = await Call("scene_tree", new() { ["document"] = Id(pickupMap) });
+            await Job("scene_options", new() { ["preview"] = iconTree["preview"]!.GetValue<string>(),
+                ["changes"] = new Dictionary<string, object?> { ["difficulty"] = "Medium" } });
+            await Preview();
+            iconTree = await Call("scene_tree", new() { ["document"] = Id(pickupMap) });
+            var pickupSection = iconTree["children"]!["items"]!.AsArray().Single(r => r!["pass"]?.GetValue<string>() == "puppies")!;
+            Assert.Null(pickupSection["pickupType"]); Assert.Null(pickupSection["pickupKind"]);
+            var iconRowsJson = (await Call("scene_tree", new() { ["document"] = Id(pickupMap), ["context"] = iconTree["context"]!.GetValue<string>(),
+                ["row"] = pickupSection["row"]!.GetValue<string>() }))["children"]!["items"]!.AsArray();
+            var iconTreeModel = (SceneTreeModel)typeof(MainWindow).GetField("sceneTree", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(main)!;
+            var guiRows = iconTreeModel.Roots.Single(r => r.Pass?.Kind == "puppies").Children;
+            Assert.Equal(4, iconRowsJson.Count);
+            foreach (var (type, kind, badge) in new[] { ("ERFPG_AMMO", "ammo", "A"), ("ERFPG_WEAPON", "weapon", "W"),
+                ("NANITE", "health", ""), ("PUP_AMPHIB", "technology", "") })
+            {
+                var pickupRowJson = iconRowsJson.Single(r => r!["pickupType"]?.GetValue<string>() == type)!;
+                var gui = guiRows.Single(r => r.PickupType == type);
+                Assert.Equal(kind, pickupRowJson["pickupKind"]!.GetValue<string>()); Assert.Equal(kind, gui.PickupKind);
+                Assert.Equal(badge, gui.PickupBadge); Assert.Equal(badge.Length > 0, gui.HasPickupBadge);
+                Assert.True(gui.HasPickupIcon); Assert.NotNull(gui.PickupImage);
+                Assert.Equal(type == "ERFPG_WEAPON" ? ["Easy"] : new[] { "Easy", "Medium", "Hard" },
+                    pickupRowJson["difficulties"]!.AsArray().Select(d => d!.GetValue<string>()));
+                Assert.Equal(type == "ERFPG_WEAPON", gui.IsOtherDifficulty);
+                if (gui.IsOtherDifficulty) { Assert.True(pickupRowJson["otherDifficulty"]!.GetValue<bool>()); Assert.Null(pickupRowJson["node"]); }
+            }
+            Assert.Equal("ic_rfpg2.png", PickupPresentation.For("ERFPG_AMMO")!.IconFile);
+            Assert.Same(PickupPresentation.For("ERFPG_AMMO")!.Image, PickupPresentation.For("ERFPG_WEAPON")!.Image);
+            foreach (var type in zStudio.Core.MissionPickupType.Catalog)
+            {
+                var art = Assert.IsType<PickupPresentation>(PickupPresentation.For(type.Name));
+                Assert.True(art.Image.IsFrozen); // Every catalog icon resolves from an embedded resource.
+            }
+            Assert.Null(PickupPresentation.For("unknown"));
+            Assert.False(pickupMap.IsDirty);
+            await Call("close_document", new() { ["document"] = Id(pickupMap), ["revision"] = pickupMap.Revision });
 
             async Task Preview()
             {

@@ -1,3 +1,9 @@
+## Pickup type icons — 0.9.4 local development (2026-10-20)
+
+The source map's World tree uses supplied pickup artwork for all 40 catalog types, with `A` (ammo) or `W` (weapon) immediately before the difficulty label. Health and technology pickups have no letter. The 23 embedded PNGs keep their original pixels and proportions in a 20-DIP area; ammo/weapon variants share artwork. Classification follows actual placement types, including dimmed entries from other difficulties. MCP `scene_tree` exposes the same `pickupType` and `pickupKind`; the command documentation, capability map and embedded discovery catalog are updated.
+
+Validation: Release build with no warnings/errors; isolated Desktop 190/190, including catalog/GUI parity and the extended source-editing protocol check. All 40 icons resolve as frozen embedded resources; the supplied and embedded PNGs match byte for byte. The actual row template was rendered for all types in dark/light themes, at wide/narrow widths and 96/192 DPI; icons, role/difficulty labels and other-difficulty fading were visually checked. No source-project or game-export changes. Local scoped evidence is in `.agent/REVIEW-pickup-icons.md`.
+
 ## Single-mission model placement — 0.9.4 local development (2026-10-20)
 
 New source reconstructions place m6's `lasdesig.gltf` in `data/common/models`, and m4's `train.gltf`, `rcar1.gltf`, `trnsplsh.gltf` and their referenced `tturret.gltf` in `data/m4/models`, with buffers beside them and regenerated relative links. These explicit source-layout decisions require the recorded mission, script and model-folder context. Existing collision/search checks still apply; unrelated singleton models and mission-specific player tanks retain their normal placement. Existing projects are not migrated. GUI Initialize and MCP `source_reconstruct` use the same service and unchanged schemas.

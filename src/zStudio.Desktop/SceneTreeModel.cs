@@ -221,6 +221,14 @@ public sealed class SceneTreeItem : INotifyPropertyChanged
     public bool IsEmptyNode => IsSourceMap && Section == null && Pass == null && Problem == null && !SourceGroup && !ReferencedObject && !IsOtherDifficulty
         && Node is { Class: "object3d", ModelIndex: null } && ChildCount == 0;
     public string OutlinerIcon => Section != null ? OutlinerKinds.SectionIcon(Section) : Pass is { } pass ? OutlinerKinds.PassIcon(pass.Kind) : OutlinerKinds.Icon(Category);
+    public string? PickupType => Placement?.PickupType;
+    private PickupPresentation? Pickup => PickupPresentation.For(PickupType);
+    public string? PickupKind => Pickup?.Kind;
+    public bool HasPickupIcon => Pickup != null;
+    public System.Windows.Media.ImageSource? PickupImage => Pickup?.Image;
+    public string PickupBadge => Pickup?.Badge ?? "";
+    public bool HasPickupBadge => PickupBadge.Length != 0;
+    public string? PickupBadgeToolTip => Pickup?.BadgeToolTip;
     public System.Windows.Media.Brush OutlinerBrush => Section != null ? OutlinerKinds.SectionBrush(Section) : Pass is { } pass ? OutlinerKinds.PassBrush(pass.Kind) : OutlinerKinds.Brush(Category);
     /// <summary>The name alone: groups show no counts.</summary>
     public string OutlinerLabel => Section != null ? SectionLabel : Pass is { } pass ? pass.Label : Kind == "unlinked" ? "Unlinked nodes" : Problem != null && !IsOtherDifficulty ? Label : Short(DisplayName, 180);
