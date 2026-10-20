@@ -264,14 +264,18 @@ public partial class MainWindow
     {
         if (!scenePointerContext) { contextScene = DocumentSceneTree.SelectedItem as SceneTreeItem; sceneContextDocument = ViewModel.SelectedDocument; }
         scenePointerContext = false;
+        bool addPickup = sceneContextDocument is { SourceWorld: not null } && sceneContextDocument == shownDocument &&
+            contextScene?.Owner == sceneTree && contextScene?.Pass?.Kind == "puppies";
+        SceneAddPickupMenu.Visibility = addPickup ? Visibility.Visible : Visibility.Collapsed;
+        SceneAddPickupMenu.IsEnabled = addPickup && sceneContextDocument!.SourceWorld is { IsRebuilding: false } && !sourceWorkspaceBusy;
         if (sceneContextDocument?.SourceWorld != null)
         {
-            // Source worlds offer only Rename, for the source-only rows whose names the build removes.
+            // Source rows offer Rename, and the Pickups pass offers creation.
             ScenePropertiesMenu.Visibility = Visibility.Collapsed;
             bool rename = contextScene?.Authored is { } authored && CanRenameRemoved(sceneContextDocument, authored) && contextScene.Owner == sceneTree && sceneContextDocument == shownDocument;
             SceneRenameMenu.Visibility = rename ? Visibility.Visible : Visibility.Collapsed;
             SceneRenameMenu.IsEnabled = rename && sceneContextDocument.SourceWorld is { IsRebuilding: false } && !sourceWorkspaceBusy;
-            if (!rename && sender is ContextMenu menu) menu.IsOpen = false;
+            if (!rename && !addPickup && sender is ContextMenu menu) menu.IsOpen = false;
             e.Handled = true; return;
         }
         SceneRenameMenu.Visibility = Visibility.Collapsed;

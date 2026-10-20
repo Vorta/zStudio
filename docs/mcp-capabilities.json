@@ -305,6 +305,11 @@
       "note": "The Add model dialog (Tools > Add model to world, shown unavailable for now) lists project models (source_world_models) with a filter (a virtualized list of at most 2000 matches, with a note when the filter matches more), suggests the model's name as node name, offers unplaced or placed (position and heading, defaulting to the orbit pivot), and filters/pages all other missions' definition files for the name (source_world_definitions: query, offset, limit 1–64, nextOffset, filtered total and unfiltered fileCount). Full paths remain usable; large rows shorten MCP pages before projection. Model listing observes workspace cancellation and refuses a project replacement with context_changed. The GUI retains checked files across pages, selecting at most 64. Lists up to 64 start checked; larger lists start unchecked (source_world_add_model refuses to add such a list whole); Add maps to source_world_add_model with complete checked paths from any pages, including long project paths. Completion definitionFiles previews keep at most 64 paths of 512 characters with definitionFileCount and definitionFilesTruncated; discovery and editing retain full identities."
     },
     {
+      "gui": "SourcePickupDialog:Controls",
+      "tools": ["zstudio_source_pickup_add"],
+      "note": "Tools and the Pickups section context menu open the same dialog. Catalog type, explicit position, Euler degrees, amount, respawn and difficulty use the shared source append transaction; template spawning is verified before acceptance. Pending drafts and stale revisions refuse creation."
+    },
+    {
       "gui": "BlenderUpdateDialog:Controls",
       "tools": [
         "zstudio_source_blender_checkouts",
@@ -1255,6 +1260,11 @@
         "zstudio_source_export"
       ],
       "note": "Omit destination to build every output in memory and report failures and warnings without writing. Recognized but unimplemented world mutations report warnings in both this result and GUI Problems. Shared planning caps aggregate output inputs at 1,000,000 and pending/disk inventories at 50,000 files; imports refuse ambiguous glTF scene selection and malformed active world references."
+    },
+    {
+      "gui": "MainWindow.xaml:AddSourcePickupClick",
+      "tools": ["zstudio_source_pickup_add"],
+      "note": "Add one source pickup through the shared prepared transaction, with explicit placement and difficulty. All deduplicates fallback resources; exclusive changes materialize variants to preserve other layouts. Undo and Save use the source workspace."
     },
     {
       "gui": "MainWindow.xaml:AddSourceModelClick",

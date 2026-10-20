@@ -27,6 +27,7 @@ internal static class SourceEditingMcpChecks
     {
         using var fixture = new SourceWorldFixture();
         fixture.WriteReferencedTurretDatabase();
+        fixture.WritePickupTemplate();
         fixture.Write("data/m1/zrdr/puppies.zrd", Default); fixture.Write("data/m1/zrdr/puppies_easy.zrd", Easy);
         const string aiSource = "node_00 ( 12 ( 1.0 2.0 3.0 ) ( -7 -1 0 ) )\nnode_01 ( 23 ( 5.0 2.0 7.0 ) ( 0 -1 -1 ) )\n";
         fixture.Write("data/m1/zrdr/net_01.zrd", aiSource);
@@ -751,6 +752,39 @@ internal static class SourceEditingMcpChecks
             var reloaded = Document(await Job("reload_document", new() { ["document"] = Id(undone2), ["revision"] = undone2.Revision }));
             await Call("close_document", new() { ["document"] = Id(reloaded), ["revision"] = reloaded.Revision });
             Assert.Empty(main.ViewModel.Documents);
+
+            // Creation uses the actual prepared source workspace, including clone validation and verified saves.
+            main.SourceEditPreparing = null; main.SourceEditEvaluation = null;
+            var pickupMap = Document((await Job("source_world_open", new() { ["mission"] = "m1" }))["document"]!);
+            await Preview();
+            Dictionary<string, object?> Addition(string type) => new()
+            {
+                ["document"] = Id(pickupMap), ["revision"] = pickupMap.Revision, ["type"] = type, ["difficulty"] = "All",
+                ["position"] = new Dictionary<string, object?> { ["x"] = 31.0, ["y"] = 2.0, ["z"] = 21.0 }
+            };
+            long unchanged = pickupMap.SourceWorld!.Workspace.ContentRevision;
+            await Job("source_pickup_add", Addition("PUP_HOVER"), "failed"); // no template: nothing accepted
+            Assert.Equal(unchanged, pickupMap.SourceWorld.Workspace.ContentRevision);
+            Assert.False(pickupMap.IsDirty);
+            long oldRevision = pickupMap.Revision;
+            string oldId = Id(pickupMap);
+            var created = await Job("source_pickup_add", Addition("PUP_AMPHIB"));
+            pickupMap = Document(created["document"]!); await Preview();
+            Assert.Equal(3, created["added"]!.AsArray().Count); // Hard shares the default source.
+            var createdPickups = await Job("pickups", new() { ["document"] = Id(pickupMap) });
+            Assert.Equal(2, createdPickups["items"]!.AsArray().Count(p => p!["Type"]!.GetValue<string>() == "PUP_AMPHIB"));
+            var staleAddition = Addition("PUP_AMPHIB"); staleAddition["document"] = oldId; staleAddition["revision"] = oldRevision;
+            await Job("source_pickup_add", staleAddition, "failed");
+            pickupMap = Document(await Call("undo_redo", new() { ["document"] = Id(pickupMap), ["revision"] = pickupMap.Revision, ["action"] = "undo" }));
+            Assert.False(pickupMap.IsDirty);
+            pickupMap = Document(await Call("undo_redo", new() { ["document"] = Id(pickupMap), ["revision"] = pickupMap.Revision, ["action"] = "redo" }));
+            await Job("save_document", new() { ["document"] = Id(pickupMap), ["revision"] = pickupMap.Revision });
+            Assert.Contains("PUP_AMPHIB", File.ReadAllText(fixture.Path("data/m1/zrdr/puppies.zrd")));
+            Assert.Contains("PUP_AMPHIB", File.ReadAllText(fixture.Path("data/m1/zrdr/puppies_easy.zrd")));
+            Assert.False(File.Exists(fixture.Path("data/m1/zrdr/puppies_hard.zrd")));
+
+            await Call("close_document", new() { ["document"] = Id(pickupMap), ["revision"] = pickupMap.Revision });
+
 
             async Task Preview()
             {

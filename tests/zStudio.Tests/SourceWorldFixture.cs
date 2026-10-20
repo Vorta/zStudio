@@ -90,6 +90,13 @@ internal sealed class SourceWorldFixture : IDisposable
     public string Path(string relative) => System.IO.Path.Combine(Project, relative.Replace('/', System.IO.Path.DirectorySeparatorChar));
     public void Write(string relative, string text) => Write(relative, Encoding.ASCII.GetBytes(text));
     public void Write(string relative, byte[] bytes) { string path = Path(relative); Directory.CreateDirectory(System.IO.Path.GetDirectoryName(path)!); File.WriteAllBytes(path, bytes); }
+    public void WritePickupTemplate()
+    {
+        var (json, bin) = WorldGltf.Export([Node("chip", Quad(new() { Texture = new("rock"), Flags = 0x1FF }, 1, 1)),
+            Node("bvol", Quad(new(), 2, 0))], 0xFF, new() { Texture = _ => ("../textures/rock.png", 0) }).Write("chip.bin");
+        Write("data/m1/models/chip.gltf", json); Write("data/m1/models/chip.bin", bin);
+        Write("gamegen/m1.gs", File.ReadAllText(Path("gamegen/m1.gs")).Replace("GameZWriteZBDFile", "LoadGameGen chip.gltf pu037\r\nGameZWriteZBDFile", StringComparison.Ordinal));
+    }
     private void Png(string relative, byte r, byte g, byte b)
     {
         byte[] rgba = new byte[4 * 4 * 4];

@@ -2,6 +2,11 @@
 
 Version numbers follow `MAJOR.MINOR.PATCH`; the 0.x series is under active development. Release tags and downloadable archives use the same version.
 
+## 0.9.4 — Unreleased
+
+- Source maps can create pickups through Tools → Add pickup… or the Pickups section's context menu. Choose a catalog type, position, rotation, amount, respawn delay and one or all difficulties. The shared source workspace verifies that the template can spawn, supports undo/redo and saves the owning resource files without creating archives.
+- MCP `source_pickup_add` provides the same operation. Exclusive difficulty edits preserve layouts that use fallback resources; adding to all difficulties writes each effective resource once.
+
 ## 0.9.3 — 2026-10-19
 
 - The World tree's sections are renamed **World**, **AI Vehicles**, **Pickups** and **Animations (keyframed)** (MCP keeps the pass kinds `aiv`, `puppies` and `anim`), and three are added, in a fixed order: **Zones** after World, **AI Networks** after AI Vehicles and **Animations (definitions)** last. A section, folder or file row opens or closes with a click and is never the selection.

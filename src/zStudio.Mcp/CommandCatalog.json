@@ -5615,6 +5615,179 @@
     ]
   },
   {
+    "Name": "zstudio_source_pickup_add",
+    "Description": "Add one pickup to a source map as an undoable transaction. All appends once to each effective difficulty resource; a single difficulty materializes missing variants as needed to leave other layouts unchanged. Existing records and text are preserved. The template must actually spawn with a copyable bvol. Position is explicit; no automatic terrain snapping. Save writes owning sources. Returns an operation ID; use zstudio_operation to await/read the result. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Mutates": true,
+    "Parameters": [
+      {
+        "Name": "document",
+        "Type": "string",
+        "Description": "Document lifetime ID from zstudio_state.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "revision",
+        "Type": "integer",
+        "Description": "Expected current document revision. Read before editing.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": 0,
+        "Maximum": 9223372036854775807
+      },
+      {
+        "Name": "type",
+        "Type": "string",
+        "Description": "Pickup catalog type.",
+        "Required": true,
+        "Choices": [
+          "ERFPG_AMMO",
+          "HEMORTAR_AMMO",
+          "QMORTAR_AMMO",
+          "FREON_AMMO",
+          "NAPALM_AMMO",
+          "P_HEMINE_AMMO",
+          "P_QMINE_AMMO",
+          "R_HEMINE_AMMO",
+          "R_QMINE_AMMO",
+          "LOCKON_LASER_AMMO",
+          "LASER_SABRE_AMMO",
+          "SONIC_CANNON_AMMO",
+          "ARC_SABRE_AMMO",
+          "MISSILE_AMMO",
+          "GUIDED_MISSILE_AMMO",
+          "NUKE_AMMO",
+          "GUIDED_NUKE_AMMO",
+          "ERFPG_WEAPON",
+          "HEMORTAR_WEAPON",
+          "QMORTAR_WEAPON",
+          "FREON_WEAPON",
+          "NAPALM_WEAPON",
+          "P_HEMINE_WEAPON",
+          "P_QMINE_WEAPON",
+          "R_HEMINE_WEAPON",
+          "R_QMINE_WEAPON",
+          "LOCKON_LASER_WEAPON",
+          "LASER_SABRE_WEAPON",
+          "SONIC_CANNON_WEAPON",
+          "ARC_SABRE_WEAPON",
+          "MISSILE_WEAPON",
+          "GUIDED_MISSILE_WEAPON",
+          "NUKE_WEAPON",
+          "GUIDED_NUKE_WEAPON",
+          "NANITE",
+          "NANITE100",
+          "NANO-CANISTER",
+          "PUP_AMPHIB",
+          "PUP_HOVER",
+          "PUP_SUB"
+        ],
+        "Properties": null
+      },
+      {
+        "Name": "position",
+        "Type": "object",
+        "Description": "Authored world position.",
+        "Required": true,
+        "Choices": null,
+        "Properties": [
+          {
+            "Name": "x",
+            "Type": "number",
+            "Description": "X.",
+            "Required": true,
+            "Choices": null,
+            "Properties": null
+          },
+          {
+            "Name": "y",
+            "Type": "number",
+            "Description": "Y.",
+            "Required": true,
+            "Choices": null,
+            "Properties": null
+          },
+          {
+            "Name": "z",
+            "Type": "number",
+            "Description": "Z.",
+            "Required": true,
+            "Choices": null,
+            "Properties": null
+          }
+        ]
+      },
+      {
+        "Name": "difficulty",
+        "Type": "string",
+        "Description": "Layouts receiving the pickup.",
+        "Required": true,
+        "Choices": [
+          "All",
+          "Easy",
+          "Medium",
+          "Hard"
+        ],
+        "Properties": null
+      },
+      {
+        "Name": "rotationDegrees",
+        "Type": "object",
+        "Description": "Euler XYZ degrees; default zero.",
+        "Required": false,
+        "Choices": null,
+        "Properties": [
+          {
+            "Name": "x",
+            "Type": "number",
+            "Description": "X.",
+            "Required": true,
+            "Choices": null,
+            "Properties": null
+          },
+          {
+            "Name": "y",
+            "Type": "number",
+            "Description": "Y.",
+            "Required": true,
+            "Choices": null,
+            "Properties": null
+          },
+          {
+            "Name": "z",
+            "Type": "number",
+            "Description": "Z.",
+            "Required": true,
+            "Choices": null,
+            "Properties": null
+          }
+        ]
+      },
+      {
+        "Name": "amount",
+        "Type": "integer",
+        "Description": "Stored amount; default the catalog amount. Zero uses the game\u0027s default.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": 0,
+        "Maximum": 2147483647
+      },
+      {
+        "Name": "respawnDelay",
+        "Type": "number",
+        "Description": "Stored respawn delay; default zero.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": 0,
+        "Maximum": 1000000
+      }
+    ]
+  },
+  {
     "Name": "zstudio_source_world_list",
     "Description": "List source-project map folders with matching gamegen entry scripts, in numeric order. Broken or missing map assets do not hide a map; opening reports its evaluation problems.",
     "Mutates": false,
