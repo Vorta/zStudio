@@ -77,6 +77,20 @@ public sealed class SourceProjectCorpusTests
             Assert.True(File.Exists(Path.Combine(project, "data", "common", "models", "ntank.gltf")));
             Assert.False(File.Exists(Path.Combine(project, "data", "m1", "models", "bft", "ntank.gltf")));
             Assert.True(File.Exists(Path.Combine(project, "data", "m1", "models", "bft", "bft_m1.gltf")));
+            // Explicit source layout for the m6 designator and m4 train assembly, in both retail releases.
+            foreach (var (mission, model, destination) in new[]
+            {
+                (6, "lasdesig", "data/common/models"), (4, "train", "data/m4/models"),
+                (4, "rcar1", "data/m4/models"), (4, "trnsplsh", "data/m4/models"), (4, "tturret", "data/m4/models"),
+            })
+            {
+                if (!Directory.Exists(Path.Combine(corpus, $"m{mission}"))) continue;
+                foreach (string extension in new[] { "gltf", "bin" })
+                {
+                    Assert.True(File.Exists(Path.Combine(project, destination, $"{model}.{extension}")));
+                    Assert.False(File.Exists(Path.Combine(project, $"data/m{mission}/models/bft/{model}.{extension}")));
+                }
+            }
             Assert.NotEmpty(Directory.GetFiles(Path.Combine(project, "data", "common", "effects", "models"), "*.gltf"));
             Assert.NotEmpty(Directory.GetFiles(Path.Combine(project, "data", "common", "effects", "textures"), "*.png"));
             Assert.False(Directory.Exists(Path.Combine(project, "data", "effects")));

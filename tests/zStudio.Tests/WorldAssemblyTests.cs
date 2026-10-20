@@ -171,8 +171,10 @@ public sealed class WorldAssemblyTests
         Assert.Empty(WorldComparer.Compare(Shipped(), reassembled));
     }
 
-    [Fact]
-    public void SharedVehiclesAndEffectsAreKeptInTheCommonFolders()
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void SharedVehiclesAndEffectsAreKeptInTheCommonFolders(bool commonSearch)
     {
         // Each mission's vehicle script loads tank.flt from the mission's own folder; m1 and m2 hold the same tank, m3 another.
         // Every mission's weapons script loads an effect from data/effects/models.
@@ -180,12 +182,13 @@ public sealed class WorldAssemblyTests
         WorldMaterial paint = new() { Color = new(1, 2, 3), Flags = 0xFF };
         files["gamegen/support/weapons.gw"] = Encoding.ASCII.GetBytes("SetModelDirectory ..\\data\\effects\\models\nLoadGameGen spark.flt spark\n");
         files["data/effects/models/spark.gltf"] = Gltf([Node("flash", Quad(paint, 1, 2))], "spark", files, "data/effects/models");
-        for (int m = 1; m <= 3; m++)
+        int[] missions = [1, 2, 3, 4, 6];
+        foreach (int m in missions)
         {
             files[$"gamegen/m{m}.gs"] = Encoding.ASCII.GetBytes($"""
                 set worldName world
                 SetModelDirectory ..\data\m{m}\models
-                SetModelDirectory ..\data\common\models
+                {(m == 6 && !commonSearch ? "" : @"SetModelDirectory ..\data\common\models")}
                 SetModelDirectory ..\data\common\effects\models
                 SetModelDirectory ..\data\effects\models
                 NewWorld %worldName%
@@ -201,13 +204,26 @@ public sealed class WorldAssemblyTests
                 source support\bft{m}.gw
                 GameZWriteZBDFile ..\m{m}\gamez.zbd
                 """);
-            files[$"gamegen/support/bft{m}.gw"] = Encoding.ASCII.GetBytes($"SetModelDirectory ..\\data\\m{m}\\models\\bft\nLoadGameGen tank.flt tank\n");
+            string model = m <= 3 ? "tank" : $"bft_m{m}";
+            files[$"gamegen/support/bft{m}.gw"] = Encoding.ASCII.GetBytes($"SetModelDirectory ..\\data\\m{m}\\models\\bft\nLoadGameGen {model}.flt tank\n");
             files[$"data/m{m}/models/m{m}.gltf"] = Gltf([Node("ground", Quad(paint, 64, 0))], $"m{m}", files, $"data/m{m}/models");
-            files[$"data/m{m}/models/bft/tank.gltf"] = Gltf([Node("hull", Quad(paint, m == 3 ? 6 : 4, 1))], "tank", files, $"data/m{m}/models/bft");
+            files[$"data/m{m}/models/bft/{model}.gltf"] = Gltf([Node("hull", Quad(paint, m == 3 ? 6 : 4, 1))], model, files, $"data/m{m}/models/bft");
+        }
+        files["gamegen/support/bft6.gw"] = Encoding.ASCII.GetBytes(Encoding.ASCII.GetString(files["gamegen/support/bft6.gw"]) + "LoadGameGen lasdesig.flt ldestank\n");
+        files["data/m6/models/bft/lasdesig.gltf"] = Gltf([Node("designator", Quad(paint, 3, 2))], "lasdesig", files, "data/m6/models/bft");
+        files["gamegen/support/bft4.gw"] = Encoding.ASCII.GetBytes(Encoding.ASCII.GetString(files["gamegen/support/bft4.gw"]) +
+            "LoadGameGen trnsplsh.flt trnsplsh.flt\nLoadGameGen train.flt train01\nLoadGameGen rcar1.flt train02\nLoadGameGen rcar1.flt train03\nLoadGameGen rcar1.flt train04\n");
+        files["data/m4/models/bft/tturret.gltf"] = Gltf([Node("train_turret", Quad(paint, 2, 3))], "tturret", files, "data/m4/models/bft");
+        files["data/m4/models/bft/trnsplsh.gltf"] = Gltf([Node("splash", Quad(paint, 5, 0))], "trnsplsh", files, "data/m4/models/bft");
+        foreach (string stem in new[] { "train", "rcar1" })
+        {
+            var (json, bin) = WorldGltf.Export([Node(stem + "_body", Quad(paint, 8, 1)), Node("tturret.flt")], 0xFF,
+                new() { Texture = _ => ("", 0), Reference = n => n.Name == "tturret.flt" ? "tturret.gltf" : null }).Write(stem + ".bin", Token);
+            files[$"data/m4/models/bft/{stem}.gltf"] = json; files[$"data/m4/models/bft/{stem}.bin"] = bin;
         }
         MemoryFiles project = new(files);
-        byte[][] shipped = [.. Enumerable.Range(1, 3).Select(m => GameZWriter.Write(new WorldAssembler(project, Token).Assemble($"m{m}.gs"), Token))];
-        GameZWorld Shipped(int m) => GameZWorldReader.FromDocument(FormatRegistry.Default.OpenBytes("gamez.zbd", shipped[m - 1], token: Token), Token);
+        var shipped = missions.ToDictionary(m => m, m => GameZWriter.Write(new WorldAssembler(project, Token).Assemble($"m{m}.gs"), Token));
+        GameZWorld Shipped(int m) => GameZWorldReader.FromDocument(FormatRegistry.Default.OpenBytes("gamez.zbd", shipped[m], token: Token), Token);
         var scripts = files.Where(f => f.Key.StartsWith("gamegen/", StringComparison.Ordinal)).ToDictionary(f => f.Key["gamegen/".Length..].Replace('/', '\\'),
             f => GameGenScriptText.Tokenize(Encoding.ASCII.GetString(f.Value)), StringComparer.OrdinalIgnoreCase);
 
@@ -215,15 +231,21 @@ public sealed class WorldAssemblyTests
         // folders; m3's own version stays in its folder, found first. The effect is kept in data/common/effects/models,
         // which the weapons script's loads search after data/effects/models.
         List<string> notes = [];
-        var outputs = WorldSources.Reconstruct([.. Enumerable.Range(1, 3).Select(m => new WorldSources.MissionWorld(m, Shipped(m)))], n => scripts.GetValueOrDefault(n),
+        var outputs = WorldSources.Reconstruct([.. missions.Select(m => new WorldSources.MissionWorld(m, Shipped(m)))], n => scripts.GetValueOrDefault(n),
             (_, _) => null, new HashSet<string>(), _ => 0, notes, Token);
-        Assert.Empty(notes);
-        Assert.Equal(["data/common/effects/models/spark.gltf", "data/common/models/tank.gltf", "data/m1/models/m1.gltf", "data/m2/models/m2.gltf", "data/m3/models/bft/tank.gltf", "data/m3/models/m3.gltf"],
+        if (commonSearch) Assert.Empty(notes);
+        else Assert.Contains("lasdesig.gltf stays in its script folder", Assert.Single(notes));
+        string designatorFolder = commonSearch ? "data/common/models" : "data/m6/models/bft";
+        string[] expected = ["data/common/effects/models/spark.gltf", "data/common/models/tank.gltf", "data/m1/models/m1.gltf",
+            "data/m2/models/m2.gltf", "data/m3/models/bft/tank.gltf", "data/m3/models/m3.gltf", "data/m4/models/bft/bft_m4.gltf",
+            "data/m4/models/m4.gltf", "data/m4/models/train.gltf", "data/m4/models/rcar1.gltf", "data/m4/models/trnsplsh.gltf",
+            "data/m4/models/tturret.gltf", "data/m6/models/bft/bft_m6.gltf", "data/m6/models/m6.gltf", $"{designatorFolder}/lasdesig.gltf"];
+        Assert.Equal(expected.Order(StringComparer.Ordinal),
             outputs.Where(o => o.Path.EndsWith(".gltf", StringComparison.Ordinal)).Select(o => o.Path)
                 .Distinct(StringComparer.OrdinalIgnoreCase).Order(StringComparer.Ordinal));
         MemoryFiles rebuilt = new(files.Where(f => f.Key.StartsWith("gamegen/", StringComparison.Ordinal)).ToDictionary(f => f.Key, f => f.Value, StringComparer.Ordinal));
         foreach (var output in outputs) rebuilt.Files[output.Path] = output.Bytes;
-        for (int m = 1; m <= 3; m++)
+        foreach (int m in missions)
         {
             WorldAssembler again = new(rebuilt, Token);
             var world = again.Assemble($"m{m}.gs");

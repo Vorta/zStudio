@@ -16,7 +16,8 @@ namespace zStudio.Core.Sources;
 /// a file that a script several missions run loads identically (the pickups) goes to <c>data/common/models</c>, and a
 /// file a mission's own scripts load to that mission's <c>models</c> folder, a copy per mission. A vehicle that several
 /// missions' vehicle scripts load identically from their own folders is one file in <c>data/common/models</c> instead
-/// (see <c>ShareVehicles</c>), and effects are kept with their textures in <c>data/common/effects/models</c> (see
+/// (see <c>ShareVehicles</c>); the evidenced single-mission designator and train loads use the explicitly chosen layout
+/// in <c>PlaceMissionModels</c>. Effects are kept with their textures in <c>data/common/effects/models</c> (see
 /// <c>GatherEffects</c>). An external reference is written beside every file that references it, so missions
 /// sharing one keep a copy each, as they do textures; the turrets the databases reference are the exception, one file in
 /// <c>data/common/models</c> when their copies differ only in zones (see <c>ShareTurrets</c>).
@@ -338,6 +339,7 @@ internal static partial class WorldSources
                 f => f.ToHashSet(), StringComparer.OrdinalIgnoreCase), StringComparer.Ordinal);
         var loadIndices = loads.Select((load, index) => (load.Unit, Index: index)).GroupBy(l => l.Unit)
             .ToDictionary(g => g.Key, g => g.Select(l => l.Index).ToList());
+        PlaceMissionModels();
         ShareVehicles();
         GatherEffects();
         HashSet<Unit> pickupUnits = [.. loads.Where(l => WorldGltf.IsPickupName(l.Load.NodeName)).Select(l => l.Unit)];
@@ -447,6 +449,37 @@ internal static partial class WorldSources
         HashSet<Unit> copied = new(copies.Keys.Concat(sharedCopies.Keys).Select(k => k.Unit), ReferenceEqualityComparer.Instance);
         foreach (var unit in references.Values.Where(u => !copied.Contains(u)).OrderBy(u => u.Stem, StringComparer.Ordinal))
             diagnostics.Add($"External reference {unit.Stem}.flt is used by no loaded file and was not written.");
+        // Explicit source-layout decisions (2026-10-20), evidenced by bft4.gw/bft6.gw in both retail releases.
+        // These scripts also search the chosen folders. A singleton is not generally a shared vehicle: retain
+        // mission-specific player tanks and unrelated loads. References such as tturret follow their owning files.
+        void PlaceMissionModels()
+        {
+            var loadsOf = LoadsOf();
+            (int Mission, string Stem, string Destination)[] placements =
+            [
+                (6, "lasdesig", CommonModels),
+                (4, "train", "data/m4/models"),
+                (4, "rcar1", "data/m4/models"),
+                (4, "trnsplsh", "data/m4/models"),
+            ];
+            foreach (var (mission, stem, destination) in placements)
+            {
+                token.ThrowIfCancellationRequested();
+                string original = $"data/m{mission}/models/bft", script = $"support\\bft{mission}.gw";
+                if (!unitsByStem.TryGetValue(stem, out var folders) || !folders.TryGetValue(original, out var candidates)) continue;
+                // Do not choose arbitrarily among versions or relocate a same-named file from another script.
+                if (candidates.Count != 1 || candidates.Any(u => u.Missions.Count != 1 || !u.Missions.Contains(mission)
+                    || loadsOf[u].Any(l => l.Database || !original.Equals(l.Instruction.ScriptModelDirectory, StringComparison.OrdinalIgnoreCase)
+                        || !script.Equals(l.Instruction.Script.Replace('/', '\\'), StringComparison.OrdinalIgnoreCase))
+                    || loadsOf[u].Where(l => !l.RootEdited && l.Root != null).Select(l => l.Root!.Flags & WorldGltf.CarriedFlags).Distinct().Take(2).Count() > 1))
+                {
+                    diagnostics.Add($"{original}/{stem}.gltf stays in its script folder: its versions or loading provenance do not agree with the chosen source layout.");
+                    continue;
+                }
+                if (!MoveIfFound([candidates.Single()], destination, loadsOf))
+                    diagnostics.Add($"{original}/{stem}.gltf stays in its script folder: {destination} already holds that name or its loads cannot find it there without shadowing another model.");
+            }
+        }
         // The campaign's vehicle scripts (bft1.gw–bft6.gw) each set their mission's own folder and load the same enemy files.
         // Worlds record no file paths, a file in data/common/models (which those loads search too) builds the same world,
         // and the packs show the vehicles' textures were one shared copy in data/common/textures. So the version of a file
@@ -535,11 +568,11 @@ internal static partial class WorldSources
         Dictionary<Unit, List<LoadedModel>> LoadsOf() => loads.GroupBy(l => l.Unit).ToDictionary(g => g.Key, g => g.Select(l => l.Load).ToList());
         // Makes identical units one file in another folder when every load still finds it there: no file of the name is
         // there yet, each load searches the folder, and no folder it searches before holds another file of the name.
-        void MoveIfFound(IReadOnlyList<Unit> units, string folder, Dictionary<Unit, List<LoadedModel>> loadsOf)
+        bool MoveIfFound(IReadOnlyList<Unit> units, string folder, Dictionary<Unit, List<LoadedModel>> loadsOf)
         {
             string stem = units[0].Stem;
             var namedFolders = unitsByStem[stem];
-            if (namedFolders.ContainsKey(folder)) return;
+            if (namedFolders.ContainsKey(folder)) return false;
             HashSet<Unit> moving = [.. units];
             bool Finds(LoadedModel load)
             {
@@ -550,7 +583,7 @@ internal static partial class WorldSources
                 }
                 return false;
             }
-            if (!units.SelectMany(u => loadsOf[u]).All(Finds)) return;
+            if (!units.SelectMany(u => loadsOf[u]).All(Finds)) return false;
             var first = units.MinBy(u => u.Missions.Min)!;
             Unit moved = new(stem, first.Hash, first.Content, first.Zone)
             {
@@ -567,6 +600,7 @@ internal static partial class WorldSources
             }
             loadUnits[(folder, stem, moved.Hash)] = moved;
             namedFolders[folder] = [moved]; loadIndices[moved] = indices;
+            return true;
         }
         void Place(Unit unit, string folder)
         {
