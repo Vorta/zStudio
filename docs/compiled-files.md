@@ -30,7 +30,7 @@ A damaged record is reported in Problems; the other records of the file stay ava
 
 ## Whole world
 
-Open a mission's `gamez.zbd` and choose **Whole world**. The view shows the single-player starting layout: AI vehicles, pickups, turrets and the objects startup animations place. The toolbar begins with **LOD**, the difficulty picker (**Easy**, **Medium**, **Hard**; shared with animation previews and remembered) and **Frame**. Hover or click an object for its card and selection bounds; nothing can be moved or changed. The AI node overlay, pickup list and VTOL drop windows can be inspected. MCP: `zstudio_scene_inspect`, `zstudio_scene_card`, `zstudio_pickups`, `zstudio_ai_networks`, `zstudio_ai_nodes`, `zstudio_parachute`.
+Open a mission's `gamez.zbd` and choose **Whole world**. The view shows the single-player starting layout: AI vehicles, pickups, turrets and the objects startup animations place. The toolbar begins with **LOD**, the difficulty picker (**Easy**, **Medium**, **Hard**; shared with animation previews and remembered) and **Frame**. Hover or click an object for its card and selection bounds; nothing can be moved or changed. Navigate with the mouse or the [Fly camera](3d-navigation.md#fly-camera). The AI node overlay shows the authored networks, and the VTOL drop-window button shows a flight's conditional release positions, both for inspection. MCP: `zstudio_scene_inspect`, `zstudio_scene_card`, `zstudio_pickups`, `zstudio_ai_networks`, `zstudio_ai_nodes`, `zstudio_parachute`.
 
 ## Animation preview
 

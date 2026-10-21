@@ -66,7 +66,7 @@ Arguments are validated against their schemas before anything runs; a malformed 
 
 ## Operations
 
-Long tools return an operation object (`id`, `Name`, `State`, `Cancellable`, `result`), possibly already completed. Poll `zstudio_operation` until `completed`, `failed` or `canceled`, then read `result`. Exports, validation, source project and map operations and world comparisons can be cancelled with `zstudio_operation` `cancel`; opening another root or closing zStudio cancels obsolete work. Operations continue after the client disconnects; the newest 128 are kept.
+Long tools (those whose description says they return an operation ID, including `zstudio_ai_path` and VTOL route analysis) return an operation object (`id`, `Name`, `State`, `Cancellable`, `result`), possibly already completed. Poll `zstudio_operation` until `completed`, `failed` or `canceled`, then read `result`. Exports, validation, source project and map operations and world comparisons can be cancelled with `zstudio_operation` `cancel`; opening another root or closing zStudio cancels obsolete work. Operations continue after the client disconnects; the newest 128 are kept.
 
 ## Paging and limits
 
@@ -96,7 +96,7 @@ Long tools return an operation object (`id`, `Name`, `State`, `Cancellable`, `re
 
 ## Viewport
 
-The camera is moved semantically: `zstudio_camera` reads the pose and orbits, pans, zooms, dollies, frames or sets views, as the mouse does in the GUI ([3D navigation](3d-navigation.md)). MCP never captures your mouse or keyboard. Manual camera moves leave an animation's Follow camera. `zstudio_presentation` toggles Fullscreen (**F11**) and Hide UI (**F10**). `zstudio_preview_state` reports the shown preview's options, camera and playback.
+The camera is moved semantically: `zstudio_camera` reads the pose and orbits, pans, zooms, dollies, frames or sets views and projections, as the mouse does in the GUI ([3D navigation](3d-navigation.md)); an optional `screenPoint` picks the surface under that point as orbit pivot or zoom target. MCP never captures your mouse or keyboard. Manual camera moves leave an animation's Follow camera. `zstudio_presentation` toggles Fullscreen (**F11**) and Hide UI (**F10**). `zstudio_scene_options` sets what the toolbar sets (LOD, difficulty, textures, wireframe, face orientation, bounds, horizon, surface highlights, AI overlays). `zstudio_preview_state` reports the shown preview's options, camera, playback and the state of AI path editing and VTOL routes.
 
 ## Example
 
@@ -112,7 +112,7 @@ Move an object in a map and check that the project still builds:
 
 ## Tool areas
 
-All tools are named `zstudio_*`. "MCP only" marks tools without a GUI path.
+All tools are named `zstudio_*`. "MCP only" marks tools without a GUI path. The GUI side is described in [Source projects](source-project.md), [Map editor](map-editor.md) and [Compiled game files](compiled-files.md).
 
 | Area | Tools | In the GUI |
 | --- | --- | --- |
