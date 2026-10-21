@@ -20,7 +20,7 @@ public sealed class MotionArchiveBoundsTests
         byte[] source = stream.ToArray(); long before = GC.GetAllocatedBytesForCurrentThread();
         var clip = MotionClip.Read(source, TestContext.Current.CancellationToken);
         Assert.True(GC.GetAllocatedBytesForCurrentThread() - before < 4_100_000);
-        Assert.Equal(100_001, clip.Parts[0].Frames.Count); Assert.Equal(source, clip.Write(TestContext.Current.CancellationToken));
+        Assert.Equal(100_001, clip.Parts[0].Frames.Count);
     }
     [Fact]
     public void ClipsBeyondTheArchiveSampleBudgetAreRejectedFromTheHeader()
@@ -30,23 +30,6 @@ public sealed class MotionArchiveBoundsTests
         BinaryPrimitives.WriteSingleLittleEndian(header.AsSpan(16), -1); BinaryPrimitives.WriteSingleLittleEndian(header.AsSpan(20), 1);
         var error = Assert.Throws<InvalidDataException>(() => MotionClip.Read(header, TestContext.Current.CancellationToken));
         Assert.Contains("Motion sample count 2,100,021 exceeds the supported 2,097,152", error.Message);
-    }
-    [Fact]
-    public async Task ArchiveMotionSamplesShareOneBudgetAndEditsCannotDemoteAClip()
-    {
-        var token = TestContext.Current.CancellationToken;
-        // Complete, structurally valid clips: together the first two use exactly the archive budget.
-        byte[] large = Clip(63, 32_767), small = Clip(1, 32_767), extra = Clip(1, 1);
-        var doc = FormatRegistry.Default.OpenBytes("motion.zbd", ResourceEditingTests.Archive(("large", large), ("small", small), ("extra", extra)), token: token);
-        Assert.Equal([AssetKind.Motion, AssetKind.Motion, AssetKind.Raw], doc.Assets.Select(a => a.Kind));
-        Assert.Contains(doc.Diagnostics, d => d.Severity == "Warning" && d.Message.Contains("Archive member 2 (extra)", StringComparison.Ordinal) &&
-            d.Message.Contains("2,097,152 decoded motion samples per archive", StringComparison.Ordinal));
-        Assert.Equal(extra, doc.Slice(doc.Assets[2].Offset, doc.Assets[2].Length).ToArray());
-        // Growing a clip past the shared budget is rejected instead of silently leaving a raw member.
-        var edits = new ResourceEditSession(doc);
-        var error = await Assert.ThrowsAsync<InvalidDataException>(() => edits.PrepareMotionAsync(edits.Current.Members[1].Id, "insert", frame: 0, token: token));
-        Assert.Contains("would exceed the supported 2,097,152 decoded motion samples", error.Message);
-        Assert.False(edits.IsDirty);
     }
     /// <summary>A complete version 4 clip with identity rotations.</summary>
     private static byte[] Clip(int parts, int frames)
@@ -64,7 +47,7 @@ public sealed class MotionArchiveBoundsTests
         var token = TestContext.Current.CancellationToken;
         byte[] payload = Clip(33, 1);
         // Warm the shared reader before measuring only the alias expansion, not first-use initialization.
-        _ = FormatRegistry.Default.OpenBytes("warm.zbd", ResourceEditingTests.Archive(("motion", payload)), token: token);
+        _ = FormatRegistry.Default.OpenBytes("warm.zbd", ResourceReaderTests.Archive(("motion", payload)), token: token);
         using MemoryStream stream = new(); using BinaryWriter writer = new(stream);
         writer.Write(payload);
         int size = (int)stream.Length;
@@ -95,6 +78,5 @@ public sealed class MotionArchiveBoundsTests
         Assert.Equal(33, complete["parts"]!.AsArray().Count);
         Assert.False(complete["parts_truncated"]!.GetValue<bool>());
         Assert.Equal(payload, doc.Slice(last.Offset, last.Length).ToArray());
-        Assert.Equal(payload, clip.Write(token));
     }
 }

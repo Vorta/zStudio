@@ -72,7 +72,7 @@ public partial class AnimationEditor
             if (index >= Entry.References[t].Count) return;
             inputScope = "references";
             string Read() => Entry.References[t][index].Text(0,Math.Min(32,Entry.References[t][index].Bytes.Length));
-            Input(edit,$"[{index}] name",Read(),text => TryEdit(() => edits.RetargetReference(entryIndex,t,index,text)),t is 0 or 6 or 7 || index == 0,getter:Read);
+            Input(edit,$"[{index}] name",Read(),_ => { },true,getter:Read);
             inputScope = "properties";
         };
         category.SelectionChanged += (_,_) => { if (category.SelectedIndex == table) return; if (!ResolvePendingDrafts()) { category.SelectedIndex = table; return; } table = category.SelectedIndex; LoadTable(); };

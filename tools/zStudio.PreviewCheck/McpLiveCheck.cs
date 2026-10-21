@@ -28,8 +28,6 @@ internal static class McpLiveCheck
             string preview = (await Call("state", new { }))["preview"]!.GetValue<string>();
             await Call("scene_options", new { preview, changes = new { lod = 1, horizon = false } });
             preview = (await Call("state", new { }))["preview"]!.GetValue<string>();
-            await Call("scene_card", new { preview, action = "select", node = 0 }, "locked");
-            await Call("scene_lock", new { document = worldId, revision = 0, locked = false });
             await CheckSceneTree(worldId, preview);
             var graph = await Call("ai_networks", new { preview, limit = 1 });
             Equal(91, graph["total"]!.GetValue<int>(), "AI network count");
@@ -52,7 +50,7 @@ internal static class McpLiveCheck
                 Equal(true, JsonNode.DeepEquals(attackStrategy, inspected["attackStrategy"]), "card strategy metadata parity");
                 Equal(attackStrategy["value"]!.GetValue<string>(), inspected["inspection"]!["Attack strategy"]!.GetValue<string>(), "card stored strategy");
                 Equal("Attack strategy: " + attackStrategy["value"]!.GetValue<string>(), (await Call("scene_card", new { preview, action = "copy", field = "Attack strategy" }))["text"]!.GetValue<string>(), "copy strategy");
-                Equal(true, inspected["inspection"]!["Editable"]!.GetValue<bool>(), "AI editor unlocked");
+                Equal(false, inspected["inspection"]!["Editable"]!.GetValue<bool>(), "compiled AI node is read only");
                 Equal(false, inspected["draft"]!["handlesVisible"]!.GetValue<bool>(), "selection has no handles before Edit");
                 Equal(true, inspected["draft"]!["boundsVisible"]!.GetValue<bool>(), "selection bounds");
                 var copied = await Call("scene_card", new { preview, action = "copy", field = "Authored placement XYZ" });
@@ -66,7 +64,7 @@ internal static class McpLiveCheck
                 File.Copy(Path.Combine(output, "preview.png"), Path.Combine(output, "ai-card-minimum.png"), true);
                 await Call("workspace_view", new { changes = new { tools = originalLayout["layout"]!["ToolsVisible"]!.GetValue<bool>(),
                     inspectionPanelHeight = originalLayout["layout"]!["InspectionPanelHeight"]!.GetValue<double>() } });
-                await EditSelected("ai");
+                await RefuseEdit("ai");
                 foreach (string label in new[] { "tank", "pickup" })
                 {
                     bool found = false;
@@ -77,12 +75,10 @@ internal static class McpLiveCheck
                         {
                             try { await Call("scene_card", new { preview, action = "select", node = node!["Index"]!.GetValue<int>() }); }
                             catch (InvalidDataException ex) when (ex.Message.Contains("stale_record")) { continue; }
-                            var details = (await Call("scene_inspect", new { preview }))["inspection"]!;
-                            if (details["Editable"]?.GetValue<bool>() != true) continue;
                             await Call("camera", new { preview, action = "frame", target = "selected" });
                             await Call("capture", new { target = "window", width = 1400, height = 900 });
                             File.Copy(Path.Combine(output, "preview.png"), Path.Combine(output, label + "-card.png"), true);
-                            await EditSelected(label); found = true; break;
+                            await RefuseEdit(label); found = true; break;
                         }
                         if (nodes["nextOffset"] == null) break;
                         int next = nodes["nextOffset"]!.GetValue<int>();
@@ -90,83 +86,17 @@ internal static class McpLiveCheck
                         Equal(true, next > offset, "scene page progress");
                         offset = next;
                     }
-                    Equal(true, found, "rendered " + label + " was selectable and editable");
+                    Equal(true, found, "rendered " + label + " was selectable");
                 }
                 await Call("ai_selection", new { preview, snapshot = (await Call("preview_state", new { preview }))["ai"]!["snapshot"]!.GetValue<string>(), action = "select", node = aiNode });
                 await Call("camera", new { preview, action = "frame", target = "selected" });
-                async Task EditSelected(string label)
+                // A compiled world is read only: its cards inspect, and an edit is refused.
+                async Task RefuseEdit(string label)
                 {
                     var before = await Call("scene_inspect", new { preview }); long revision = before["revision"]!.GetValue<long>();
-                    string target = before["inspection"]!["Target"]!.GetValue<string>();
-                    var locked = await Call("scene_lock", new { document = worldId, revision, locked = true });
-                    Equal(true, locked["EditingLocked"]!.GetValue<bool>(), label + " lock state");
-                    Equal(true, (await Call("scene_inspect", new { preview }))["selected"] == null, label + " locked card closes");
-                    await Call("scene_card", new { preview, action = "select", target }, "locked");
-                    await Call("scene_card", new { preview, action = "begin", document = worldId, revision }, "locked");
-                    await Call("scene_lock", new { document = worldId, revision, locked = false });
-                    await Call("scene_card", new { preview, action = "select", target });
-                    Equal(true, (await Call("scene_inspect", new { preview }))["inspection"]!["Editable"]!.GetValue<bool>(), label + " unlocked card");
-                    var p = before["inspection"]!["Authored placement XYZ"]!;
-                    string[] xyz = new[] { p["x"]!.GetValue<float>() + 1.25f, p["y"]!.GetValue<float>(), p["z"]!.GetValue<float>() }
-                        .Select(v => v.ToString("R", System.Globalization.CultureInfo.InvariantCulture)).ToArray();
-                    var draft = await Call("scene_card", new { preview, action = "begin", document = worldId, revision });
-                    Equal(true, draft["draft"]!["handlesVisible"]!.GetValue<bool>(), label + " handles after Edit");
-                    draft = await Call("scene_card", new { preview, action = "set", document = worldId, revision, token = draft["draft"]!["token"]!.GetValue<string>(), position = xyz });
-                    string? rotationField = label == "pickup" ? "Authored rotation XYZ (degrees)" : label == "tank" ? "Heading degrees" : null;
-                    if (label == "pickup")
-                        draft = await Call("scene_card", new { preview, action = "set", document = worldId, revision, token = draft["draft"]!["token"]!.GetValue<string>(), rotationDegrees = new[] { "17.5", "45", "-12" }, transformMode = "rotate" });
-                    else if (label == "tank")
-                        draft = await Call("scene_card", new { preview, action = "set", document = worldId, revision, token = draft["draft"]!["token"]!.GetValue<string>(), headingDegrees = "132.5", transformMode = "rotate" });
-                    else await Call("scene_card", new { preview, action = "set", document = worldId, revision, token = draft["draft"]!["token"]!.GetValue<string>(), transformMode = "rotate" }, "read_only");
-                    foreach (double height in new[] { 216d, 620d })
-                    {
-                        await Call("workspace_view", new { changes = new { inspectionPanelHeight = height } });
-                        var resized = await Call("scene_inspect", new { preview });
-                        Equal(height, resized["panel"]!["preferredHeight"]!.GetValue<double>(), label + " preferred panel height");
-                        Equal(true, resized["panel"]!["effectiveHeight"]!.GetValue<double>() <= resized["panel"]!["maximumHeight"]!.GetValue<double>(), label + " bounded panel height");
-                        Equal(draft["draft"]!["token"]!.GetValue<string>(), resized["draft"]!["token"]!.GetValue<string>(), label + " resizing retains draft");
-                        Equal(revision, resized["revision"]!.GetValue<long>(), label + " resizing leaves revision unchanged");
-                    }
-                    await Call("scene_lock", new { document = worldId, revision, locked = true }, "pending_drafts");
-                    await Task.Delay(200);
-                    await Call("capture", new { target = "window", width = 1400, height = 900 });
-                    File.Copy(Path.Combine(output, "preview.png"), Path.Combine(output, label + "-edit.png"), true);
-                    var applied = await Call("scene_card", new { preview, action = "apply", document = worldId, revision, token = draft["draft"]!["token"]!.GetValue<string>() });
-                    Equal(revision + 1, applied["revision"]!.GetValue<long>(), label + " one revision per move");
-                    var changed = await Call("scene_inspect", new { preview });
-                    Equal(float.Parse(xyz[0], System.Globalization.CultureInfo.InvariantCulture), changed["inspection"]!["Authored placement XYZ"]!["x"]!.GetValue<float>(), label + " applied XYZ");
-                    if (rotationField != null) Equal(false, JsonNode.DeepEquals(before["inspection"]![rotationField], changed["inspection"]![rotationField]), label + " applied rotation");
-                    await Call("undo_redo", new { document = worldId, revision = revision + 1, action = "undo" });
-                    var undone = await Call("scene_inspect", new { preview });
-                    Equal(true, JsonNode.DeepEquals(p, undone["inspection"]!["Authored placement XYZ"]), label + " undo restores XYZ");
-                    if (rotationField != null) Equal(true, JsonNode.DeepEquals(before["inspection"]![rotationField], undone["inspection"]![rotationField]), label + " same undo restores rotation");
-                    await Call("undo_redo", new { document = worldId, revision = undone["revision"]!.GetValue<long>(), action = "redo" });
-                    var redone = await Call("scene_inspect", new { preview });
-                    string source = redone["inspection"]!["Source archive"]!.GetValue<string>();
-                    string copy = Path.Combine(output, label + "-coordinates.zbd");
-                    var saved = await Call("save_document", new { document = worldId, revision = redone["revision"]!.GetValue<long>(), destinations = new Dictionary<string, string> { [source] = copy } });
-                    Equal(0, saved["result"]!["Errors"]!.AsArray().Count, label + " coordinate Save As");
-                    var reopened = FormatRegistry.Default.OpenBytes(copy, await File.ReadAllBytesAsync(copy));
-                    Equal(false, reopened.Diagnostics.Any(d => d.Severity == "Error"), label + " saved archive reparses");
-                    var coordinates = PickupPlacementEditSession.Create(Enum.GetValues<MissionDifficulty>().SelectMany(difficulty =>
-                        reopened.Assets.Where(a => a.Name.Equals(MissionLayoutSelection.For(difficulty).PickupResource, StringComparison.OrdinalIgnoreCase))
-                            .Select(a => new PickupPlacementResource(difficulty, reopened, a))));
-                    coordinates.AddCoordinates(reopened.Assets.Select(a => (reopened, a)));
-                    var expected = new System.Numerics.Vector3(float.Parse(xyz[0], System.Globalization.CultureInfo.InvariantCulture), p["y"]!.GetValue<float>(), p["z"]!.GetValue<float>());
-                    Equal(true, label == "pickup" ? coordinates.Records.Any(c => c.OriginalPosition == expected)
-                        : coordinates.OtherCoordinates.Any(c => c.Kind == label && c.OriginalPosition == expected), label + " persisted XYZ survives reopen");
-                    if (label == "pickup") Equal(true, coordinates.Records.Any(c => c.OriginalPosition == expected && Math.Abs(c.Rotation.Y - Math.PI / 4) < 1e-6), "pickup radians survive reopen");
-                    if (label == "tank") Equal(true, coordinates.OtherCoordinates.Any(c => c.Kind == "tank" && c.OriginalPosition == expected && c.Rotation.Y == 132.5f), "tank heading survives reopen");
-                    var afterSave = await Call("scene_inspect", new { preview });
-                    Equal(copy, afterSave["inspection"]!["Save archive"]!.GetValue<string>(), label + " save target retargeted");
-                    await Call("undo_redo", new { document = worldId, revision = afterSave["revision"]!.GetValue<long>(), action = "undo" });
-                    var restored = await Call("scene_inspect", new { preview });
-                    saved = await Call("save_document", new { document = worldId, revision = restored["revision"]!.GetValue<long>() });
-                    Equal(0, saved["result"]!["Errors"]!.AsArray().Count, label + " ordinary Save after Save As");
-                    byte[] originalBytes = await File.ReadAllBytesAsync(source), copyBytes = await File.ReadAllBytesAsync(copy);
-                    Equal(true, originalBytes.SequenceEqual(copyBytes), label + " undo/save restores byte-exact archive at copy");
-                    var finalState = await Call("scene_inspect", new { preview });
-                    await Call("scene_lock", new { document = worldId, revision = finalState["revision"]!.GetValue<long>(), locked = false });
+                    Equal(false, before["inspection"]!["Editable"]!.GetValue<bool>(), label + " compiled card is read only");
+                    Equal(false, before["draft"]!["handlesVisible"]!.GetValue<bool>(), label + " read-only selection has no handles");
+                    await Call("scene_card", new { preview, action = "begin", document = worldId, revision }, "read_only");
                 }
             }
             var cameraBefore = await Call("camera", new { preview, action = "read" });
@@ -277,10 +207,7 @@ internal static class McpLiveCheck
             Equal(true, JsonNode.DeepEquals(layout, await Call("workspace_view", new { })), "rejected layout remains unchanged");
             await Call("camera", new { preview, action = "frame" });
             await Call("capture", new { target = "preview", preview, width = 800, height = 600 });
-            var fields = await Call("property_fields", new { document, entry });
-            string field = fields["fields"]!["fields"]![0]!["Id"]!.GetValue<string>();
-            var changed = await Call("property_edit", new { document, entry, revision = fields["Revision"]!.GetValue<long>(), field, value = "2.5" });
-            await Call("save_document", new { document, revision = changed["Revision"]!.GetValue<long>(), destination = Path.Combine(output, "edited-anim.zbd") });
+            await Call("save_document", new { document, revision = 0 }, "read_only");
             foreach (string path in new[] { "image.zbd", "soundsh.zbd", "interp.zbd", "m1/zrdr.zbd" })
             {
                 var doc = await Call("open_document", new { path = Path.Combine(root, path) });

@@ -114,7 +114,7 @@ public static partial class MissionSceneLoader
     {
         token.ThrowIfCancellationRequested();
         CompiledInventory inventory = new(token);
-        string inputs = resolver.SnapshotRevision + "|" + inventory.Fingerprint(ResourceFiles(world.Path, resolver, token, inventory));
+        string inputs = inventory.Fingerprint(ResourceFiles(world.Path, resolver, token, inventory));
         string Key(string? reader) => "mw3|" + reader?.ToUpperInvariant() + "|" + inputs;
         var cache = Cache.GetOrCreateValue(world);
         // An exact request may reuse only a context that loaded that reader; a fallback must still fail as before.

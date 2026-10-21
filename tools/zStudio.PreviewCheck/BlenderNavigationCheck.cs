@@ -48,11 +48,11 @@ internal static class BlenderNavigationCheck
                 await Preview(); var scene = (SceneViewport)((ContentControl)main.FindName("SceneHost")).Content;
                 await CheckViews(scene, "world");
                 var pickup = scene.Mission!.Actors.First(a => a.Pickup != null);
-                ((ToggleButton)main.FindName("EditingUnlocked")).IsChecked = true;
                 scene.SelectFramingNode(pickup.Root); scene.SelectPickup(pickup.Root, true, false);
                 var child = scene.Mission.Scene.Nodes.First(n => scene.PickupAt(n.Index)?.Root == pickup.Root && scene.SelectInspectionNode(n.Index));
-                var card = (SceneInspectionCard)scene.InspectionContent!;
-                typeof(MainWindow).GetMethod("BeginInspectionEdit", BindingFlags.NonPublic | BindingFlags.Instance)!.Invoke(main, [card]);
+                // The compiled world is read only; show the handles a source map's draft shows.
+                scene.SetPlacementEditing(true);
+                scene.PreviewTransformDraft(pickup.Pickup!.Source, new(pickup.Pickup.Position, pickup.Pickup.Rotation), PlacementRotationKind.EulerRadians, "move", true);
                 scene.SetAxisView("top"); Require(scene.TryFrame("selected"), "Pickup framing unavailable"); await Task.Delay(200);
                 var surface = (Viewport3DX)scene.RenderSurface;
                 var gizmo = (TransformManipulator3D)typeof(SceneViewport).GetField("pickupManipulator", BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(scene)!;
@@ -62,7 +62,7 @@ internal static class BlenderNavigationCheck
                 Save(Presented(surface), Path.Combine(output, "pickup-top.png"));
                 var point = surface.Project(new Point3D(scene.PickupPosition(pickup.Root).X, scene.PickupPosition(pickup.Root).Y, scene.PickupPosition(pickup.Root).Z));
                 Require(double.IsFinite(point.X) && double.IsFinite(point.Y), "Pickup projection invalid");
-                card.CancelDraft();
+                scene.EndTransformDraft(); scene.SetPlacementEditing(false);
                 Require(scene.SetOrbitPivot(scene.CaptureView().Position + scene.CaptureView().LookDirection * .8 + new Vector3D(1, 0, 2)), "World off-center pivot unavailable");
                 var saved = scene.CaptureView();
                 ((ComboBox)main.FindName("WorldDifficulty")).SelectedItem = MissionDifficulty.Hard;
@@ -311,10 +311,10 @@ internal static class BlenderNavigationCheck
             // physical input, CaptureMouse or native synthetic pointer events.
             typeof(SceneViewport).GetMethod("ConfigurePickups", fields)!.Invoke(view, []);
             await CheckLockedCubeInput(view, mesh);
-            view.SetEditingLocked(true);
-            Require(!view.SelectInspectionNode(0), "Locked world accepted a card");
-            view.SetEditingLocked(false); Require(view.SelectedInspection == null, "Unlock selected an object");
-            Require(view.SelectInspectionNode(0) && view.SelectionBoundsVisible && !view.TransformHandlesVisible, "Unlocked selection needs bounds without handles");
+            view.SetPlacementEditing(false);
+            Require(view.SelectInspectionNode(0) && view.SelectionBoundsVisible && !view.TransformHandlesVisible, "Read-only selection needs bounds without handles");
+            Require(view.SelectInspection(null) && view.SelectInspectionNode(0), "Selection did not reopen");
+            view.SetPlacementEditing(true);
             view.RestoreView(new(new(10, 8, 12), new(-10, -8, -12), new(0, 1, 0), 60)); await Task.Delay(100);
             var source = new MissionPickupSource("fixture", 0, "puppies.zrd", 0);
             var authored = new PlacementTransform(System.Numerics.Vector3.Zero, new(.2f, -.3f, .1f));
@@ -336,7 +336,7 @@ internal static class BlenderNavigationCheck
                 Require(Math.Abs(System.Numerics.Quaternion.Dot(expected, actual)) > .99999f, "Ring pointer changed the wrong rotation axis or angle");
             }
             view.EndTransformDraft(); Require(!view.TransformHandlesVisible && view.SelectionBoundsVisible, "Cancel did not hide handles while retaining selection");
-            view.SetEditingLocked(true); Require(!view.SelectionBoundsVisible && view.SelectedInspection == null && !viewport.IsMouseCaptured, "Lock did not close selection");
+            view.SetPlacementEditing(false); Require(!view.TransformHandlesVisible && !viewport.IsMouseCaptured, "Read only kept the transform handles");
             Console.WriteLine("PASS: rendered perspective/orthographic transformed instances, nearest surface, helper/horizon/hidden exclusions, empty-space fallback and orbit inertia");
         }
         finally { viewport.Items.Remove(helper); helper.Dispose(); window.Close(); }
@@ -352,13 +352,13 @@ internal static class BlenderNavigationCheck
         mesh.Instances = [System.Numerics.Matrix4x4.CreateScale(1000, 1000, 1) * System.Numerics.Matrix4x4.CreateTranslation(0, 0, -100)];
         try
         {
+            view.SetPlacementEditing(false);
             foreach (double height in new[] { 650d, 300d })
-            foreach (bool locked in new[] { true, false })
             foreach (double panelHeight in new[] { 216d, 432d, 2000d })
             {
                 window.Height = height;
                 card.SetPanelHeight(panelHeight);
-                view.SetEditingLocked(true); view.SetEditingLocked(locked);
+                view.SelectInspection(null);
                 view.SetAxisView("front"); view.SetProjection("perspective");
                 view.RestoreView(view.CaptureView() with { AxisView = null, AutoPerspective = false }); await Task.Delay(150);
                 var cubeBounds = view.NavigationCubeBounds;
@@ -367,15 +367,14 @@ internal static class BlenderNavigationCheck
                 Require(view.CaptureView().AxisView == null, "Cube regression needs an unnamed perspective view");
                 var click = new MouseButtonEventArgs(Mouse.PrimaryDevice, 0, MouseButton.Left);
                 Require(view.HandleScenePointerDown(cubePoint, click) && view.CaptureView().AxisView == "front",
-                    $"Scene input swallowed view-cube navigation while locked={locked}, height={height}, cube={cubeBounds}, axis={view.CaptureView().AxisView}");
+                    $"Scene input swallowed view-cube navigation at height={height}, cube={cubeBounds}, axis={view.CaptureView().AxisView}");
                 Require(view.SelectedInspection == null && !view.SelectionBoundsVisible && !viewport.IsMouseCaptured,
                     "Cube input selected geometry or captured the mouse");
-                // Outside the cube the lock still consumes scene clicks without
-                // opening a card; unlocking selects the same underlying object.
+                // Outside the cube a click selects the underlying object, read only.
                 var center = new Point(viewport.ActualWidth / 2, viewport.ActualHeight / 2);
                 Require(view.HandleScenePointerDown(center, new(Mouse.PrimaryDevice, 0, MouseButton.Left)), "Scene click was not consumed");
-                Require((view.SelectedInspection != null) == !locked && view.SelectionBoundsVisible == !locked,
-                    "Cube input routing bypassed the scene selection lock");
+                Require(view.SelectedInspection != null && view.SelectionBoundsVisible && !view.TransformHandlesVisible,
+                    "Scene click did not select the object behind the cube");
                 card.Refresh(); await Task.Delay(50);
                 var panel = (Border)typeof(SceneInspectionCard).GetField("panel", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(card)!;
                 var panelBounds = new Rect(panel.TranslatePoint(new(), view), panel.RenderSize);
@@ -398,9 +397,9 @@ internal static class BlenderNavigationCheck
                     return false;
                 }
             }
-            Console.WriteLine("PASS: shared pointer input prioritizes the view cube over geometry in locked/unlocked worlds, retaining the scene selection lock");
+            Console.WriteLine("PASS: shared pointer input prioritizes the view cube over geometry in read-only worlds");
         }
-        finally { view.SetEditingLocked(true); view.InspectionContent = previousInspection; window.Height = previousHeight; mesh.Instances = instances; view.RestoreView(pose); }
+        finally { view.SelectInspection(null); view.InspectionContent = previousInspection; window.Height = previousHeight; mesh.Instances = instances; view.RestoreView(pose); }
     }
     private static async Task CheckPointerZoom(SceneViewport view, MeshGeometryModel3D mesh, SceneViewport.ViewPose initial)
     {

@@ -95,7 +95,7 @@ internal static class AnimationCheck
                     if (name == "redsprks.flt")
                     {
                         var motionContext = await document.GetAnimationContextAsync(window.ViewModel.Resolver!, CancellationToken.None);
-                        var motionEntry = document.AnimationEdits!.Package.Entries[item.Index];
+                        var motionEntry = document.Document.Animations!.Entries[item.Index];
                         var gravityNodes = motionEntry.Sequences.SelectMany(s => s.Events)
                             .Where(e => e.Type == 10 && (e.U32(12) & 1) != 0 && e.F32(24) < 0)
                             .Select(e => motionContext.ResolveNode(motionEntry, e.I32(16))).ToHashSet();
@@ -123,17 +123,6 @@ internal static class AnimationCheck
                         ((Button)editor.FindName("PlayButton")).RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
                         double before = editor.CurrentFrame!.Time; await Task.Delay(600); editor.Pause();
                         if (editor.CurrentFrame!.Time <= before) throw new InvalidDataException("Quarter-speed playback stalled.");
-                        var entry = document.AnimationEdits!.Package.Entries[item.Index]; var sequence = entry.Sequences.First(s => s.Events.Count > 0); var ev = sequence.Events[0]; float threshold = ev.Threshold;
-                        document.AnimationEdits.Apply(item.Index,"UI integration edit",e => AnimationEditSession.FindSequence(e,sequence.Id).Events[0].Threshold = threshold + .125f);
-                        await Task.Delay(250);
-                        if (!document.Title.EndsWith(" *",StringComparison.Ordinal)) throw new InvalidDataException("Dirty indicator missing.");
-                        editor.Undo(); if (document.AnimationEdits.IsDirty) throw new InvalidDataException("Undo did not restore clean state.");
-                        editor.Redo(); if (!document.AnimationEdits.IsDirty) throw new InvalidDataException("Redo did not restore the edit.");
-                        string copy = Path.Combine(output,"edited-" + Guid.NewGuid().ToString("N") + ".zbd");
-                        await AnimationWriter.SaveAsAsync(document.AnimationEdits.Package,copy,path,root);
-                        var reopened = AnimationPackage.Read(File.ReadAllBytes(copy));
-                        if (reopened.Entries[item.Index].Sequences[entry.Sequences.IndexOf(sequence)].Events[0].Threshold != threshold + .125f) throw new InvalidDataException("Saved edit did not reopen.");
-                        document.AnimationEdits.MarkSaved();
                         await Task.Delay(200); window.UpdateLayout();
                         RenderTargetBitmap shot = new((int)window.ActualWidth,(int)window.ActualHeight,96,96,PixelFormats.Pbgra32); shot.Render(window); Save(shot,Path.Combine(output,"editor.png"));
                     }
@@ -143,7 +132,7 @@ internal static class AnimationCheck
                         await editor.Viewport.ShowAnimationAsync(context,editor.CurrentFrame!,window.ViewModel.Resolver!,true,CancellationToken.None);
                         await Task.Delay(300); Save(editor.Viewport.RenderImage(960,640),Path.Combine(output,"mission-context.png"));
                         var reset = new AnimationPlayer(context,item.Index,resetPhase:true).AdvanceTo(.5,true);
-                        if (reset.Trace.Any(t => t.Sequence != document.AnimationEdits!.Package.Entries[item.Index].Primary.Id)) throw new InvalidDataException("Runtime events leaked into reset phase.");
+                        if (reset.Trace.Any(t => t.Sequence != document.Document.Animations!.Entries[item.Index].Primary.Id)) throw new InvalidDataException("Runtime events leaked into reset phase.");
                         if (context.Sounds.Count == 0 || context.Effects.Count == 0) throw new InvalidDataException("No effects/sound templates were resolved.");
                         await using AnimationAudio audio = new() { Muted = false, Volume = 0 };
                         var sample = context.Sounds.Values.First(); var cue = new AnimationSoundCue(777,sample.Name,false,false,0,System.Numerics.Vector3.Zero);
@@ -168,20 +157,14 @@ internal static class AnimationCheck
                 var replacement = document.Assets.First(a => a.Name == "chutes"); document.SelectedAsset = replacement;
                 if ((await WaitEditor(window, replacement.Index)).IsPlaying) throw new InvalidDataException("Queued playback leaked to the next selection.");
                 if (!sourceHash.AsSpan().SequenceEqual(SHA256.HashData(File.ReadAllBytes(path)))) throw new InvalidDataException("Source file changed.");
-                var firstEntry = document.AnimationEdits!.Package.Entries.First(e => e.Sequences.Any(s => s.Events.Count > 0));
-                document.AnimationEdits.Apply(firstEntry.Index,"Close guard check",e => e.Sequences.First(s => s.Events.Count > 0).Events[0].Threshold += .1f);
-                window.ViewModel.ConfirmDiscardAsync = _ => Task.FromResult(false);
-                await window.ViewModel.CloseAsync(document); if (!window.ViewModel.Documents.Contains(document)) throw new InvalidDataException("Canceled close lost edits.");
-                await window.ViewModel.ReloadAsync(); if (!window.ViewModel.Documents.Contains(document)) throw new InvalidDataException("Canceled reload lost edits.");
-                await window.ViewModel.OpenRootAsync(root); if (!window.ViewModel.Documents.Contains(document)) throw new InvalidDataException("Canceled root switch lost edits.");
-                window.ViewModel.ConfirmDiscardAsync = _ => Task.FromResult(true); await window.ViewModel.CloseAsync(document);
+                await window.ViewModel.CloseAsync(document);
                 await Dispatcher.Yield(DispatcherPriority.ApplicationIdle);
                 if (((ContentControl)window.FindName("AnimationHost")).Content != null) throw new InvalidDataException("Closing retained the animation editor.");
                 File.WriteAllText(Path.Combine(output,"report.json"),JsonSerializer.Serialize(report,new JsonSerializerOptions { WriteIndented = true }));
-                Console.WriteLine("Animation UI, quarter-speed playback, seeking, edit/undo/redo, verified Save As and cleanup passed.");
+                Console.WriteLine("Animation UI, quarter-speed playback, seeking and cleanup passed.");
             }
             catch (Exception ex) { Console.Error.WriteLine(ex); exit = 1; }
-            finally { foreach (var d in window.ViewModel.Documents) d.AnimationEdits?.MarkSaved(); window.Close(); app.Shutdown(); }
+            finally { window.Close(); app.Shutdown(); }
         };
         try { app.Run(); }
         finally { if (originalSettings != null) File.WriteAllBytes(settings,originalSettings); else if (File.Exists(settings)) File.Delete(settings); }

@@ -44,30 +44,17 @@ public sealed class DemoWorldReadOnlyTests
     }
 
     [Fact]
-    public async Task ADemoWorldsPlacementsCanBeInspectedButNotEdited()
+    public async Task ADemoWorldsPlacementsCanBeInspected()
     {
         string demo = Mission(Demo()), release = Mission(GameZWriter.Write(GameZVersion13Tests.SampleWorld(), Token));
         try
         {
-            using (var resolver = new AssetResolver(demo))
+            foreach (string folder in new[] { demo, release })
             {
-                string archive = Path.Combine(demo, "zrdr.zbd"); byte[] before = File.ReadAllBytes(archive);
-                var edits = await PickupPlacementEditSession.LoadAsync(Path.Combine(demo, "gamez.zbd"), resolver, Token);
+                using var resolver = new AssetResolver(folder);
+                var edits = await PickupPlacementEditSession.LoadAsync(Path.Combine(folder, "gamez.zbd"), resolver, Token);
                 var record = Assert.Single(edits.Records);
-                Assert.Contains("1998 demo", edits.ReadOnlyReason);
-                Assert.Throws<InvalidOperationException>(() => edits.MoveTo(record.Source, record.OriginalPosition + Vector3.UnitY));
-                Assert.Equal(record.OriginalPosition, edits.Position(record.Source));
-                Assert.False(edits.IsDirty);
-                await Assert.ThrowsAsync<InvalidOperationException>(() => edits.SaveAsync(new Dictionary<string, string> { [archive] = Path.Combine(demo, "copy.zbd") }, token: Token));
-                Assert.Equal(before, File.ReadAllBytes(archive));
-                Assert.False(File.Exists(Path.Combine(demo, "copy.zbd")));
-            }
-            using (var resolver = new AssetResolver(release))
-            {
-                var edits = await PickupPlacementEditSession.LoadAsync(Path.Combine(release, "gamez.zbd"), resolver, Token);
-                var record = Assert.Single(edits.Records);
-                Assert.Null(edits.ReadOnlyReason);
-                Assert.True(edits.MoveTo(record.Source, record.OriginalPosition + Vector3.UnitY));
+                Assert.Equal(new Vector3(12, 8, -5), record.OriginalPosition); Assert.Equal(record.OriginalPosition, edits.Position(record.Source));
             }
         }
         finally { Directory.Delete(demo, true); Directory.Delete(release, true); }

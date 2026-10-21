@@ -35,7 +35,7 @@ public static class StudioMcpServer
                         var args = JsonSerializer.SerializeToNode(request.Params?.Arguments) as JsonObject ?? new();
                         var result = await commands.ExecuteAsync(name, args, token);
                         string json = result.Data.ToJsonString();
-                        if (json.Length > 4 * 1024 * 1024) throw new StudioCommandException("response_too_large", "Result exceeds 4 MiB. Use paged inspection, property_fields, source_bytes or JSON export.");
+                        if (json.Length > 4 * 1024 * 1024) throw new StudioCommandException("response_too_large", "Result exceeds 4 MiB. Use paged inspection, source_bytes or JSON export.");
                         activity?.Invoke(name + " · completed");
                         List<ContentBlock> content = [new TextContentBlock { Text = json }];
                         if (result.Image != null) content.Add(ImageContentBlock.FromBytes(result.Image, "image/png"));

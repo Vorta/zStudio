@@ -45,7 +45,7 @@ public partial class MainWindow
     private static AssetRecord TargetAsset(DocumentModel doc, JsonObject a)
     {
         if (!a.ContainsKey("index") || !Enum.TryParse<AssetKind>(Text(a, "kind"), out var kind) || !Enum.IsDefined(kind)) throw new StudioCommandException("invalid_argument", "Provide a valid asset kind and explicit index.");
-        return doc.PreviewDocument.Assets.SingleOrDefault(x => x.Kind == kind && x.Index == Int(a, "index")) ?? throw new StudioCommandException("stale_asset", "Asset not found in this document.");
+        return doc.Document.Assets.SingleOrDefault(x => x.Kind == kind && x.Index == Int(a, "index")) ?? throw new StudioCommandException("stale_asset", "Asset not found in this document.");
     }
     private static readonly StudioParameter[] AssetParameters = [DocumentParameter, P("kind", "string", "Asset kind returned by assets.", true), P("index", "integer", "Authored record index.", true)];
 
@@ -99,13 +99,12 @@ public partial class MainWindow
             if (doc.IsDisposed || ViewModel.SelectedDocument != doc) throw new StudioCommandException("context_changed","The active document changed while opening.");
             return Result(DocumentState(doc));
         });
-        Register(r, "assets", "List current edited assets by current kind/index. Resource member/script UUIDs remain stable through reordering. Offset/Length describe the edited snapshot; sourceOffset/sourceLength identify original bytes, or are null for newly added records.", false, [DocumentParameter, .. PageParameters], a =>
+        Register(r, "assets", "List a document's assets by kind/index. Resource member and script UUIDs stay stable while the document is open; Offset/Length locate each record's bytes.", false, [DocumentParameter, .. PageParameters], a =>
         {
             var doc = TargetDocument(a);
             return Page(doc.Assets, a, x => x.Name, x =>
             {
-                var source = doc.OriginalAsset(x.Record);
-                return new { x.Record.Kind, x.Index, x.Name, x.Record.Offset, x.Record.Length, x.Summary, member = doc.ResourceEdits == null ? (Guid?)null : x.ResourceId, script = doc.ScriptEdits == null ? (Guid?)null : x.ResourceId, sourceOffset = source?.Offset, sourceLength = source?.Length };
+                return new { x.Record.Kind, x.Index, x.Name, x.Record.Offset, x.Record.Length, x.Summary, member = doc.ResourceMembers == null ? (Guid?)null : x.ResourceId, script = doc.Document.Scripts == null ? (Guid?)null : x.ResourceId };
             });
         });
         RegisterJob(r, "select_asset", "Select an asset in the GUI and await its preview; does not retarget Properties.", AssetParameters, false, async (a, token) =>
@@ -117,7 +116,7 @@ public partial class MainWindow
             if (EmptyPreview.Visibility == System.Windows.Visibility.Visible) throw new StudioCommandException("preview_unavailable",EmptyPreview.Text);
             return Result(new { document = DocumentState(doc), asset = asset.Id, ViewModel.Status });
         });
-        Register(r, "inspect_asset", "Read original asset metadata/content and a separately frozen edited snapshot at one revision. ZRD/script inspection bounds nodes, instructions and strings. Model/world/sound lists preview 32 records; nested metadata has node/depth/text budgets with properties_truncated. Motion metadata previews up to 32 parts with 128-character names within a shared 4,096-part allowance per archive; motion_records pages all tracks. Animation inspection previews 4 records per reference table, 4 puffers and 16 sequence summaries; sequence Properties previews 8 events, event/tail raw previews use 256 bytes, and keyframe streams are omitted. Totals/truncation flags disclose omissions; animation_records/references/property_fields inspect individual records. JSON export retains complete data. Closed or changed documents reject stale results.", false, AssetParameters, async (a, token) =>
+        Register(r, "inspect_asset", "Read an asset's metadata/content at one revision. ZRD/script inspection bounds nodes, instructions and strings. Model/world/sound lists preview 32 records; nested metadata has node/depth/text budgets with properties_truncated. Motion metadata previews up to 32 parts with 128-character names within a shared 4,096-part allowance per archive; motion_records pages all tracks. Animation inspection previews 4 records per reference table, 4 puffers and 16 sequence summaries; sequence summaries preview 8 events, event/tail raw previews use 256 bytes, and keyframe streams are omitted. Totals/truncation flags disclose omissions; animation_records/references inspect individual records. JSON export retains complete data. Closed or changed documents reject stale results.", false, AssetParameters, async (a, token) =>
         {
             var doc = TargetDocument(a); var asset = TargetAsset(doc, a);
             return await InspectAssetAsync(doc, asset, token);
@@ -140,9 +139,9 @@ public partial class MainWindow
             if (doc.IsDirty && !Flag(a, "discard") && !OtherSourceWorldOpen(doc)) throw new StudioCommandException("unsaved_changes", doc.SourceWorld != null ? "Save or explicitly discard the source project's edits; this is its last open world." : "Save or explicitly discard this document.");
             ViewModel.CloseResolved(doc); return Result(new { closed = doc.SessionId });
         });
-        RegisterJob(r, "reload_document", "Stage and reparse a clean document before replacing it, using the current model/resource Save As destination. An already-open destination, failure or pre-publication cancellation retains the document and preview. Dirty documents must first be saved or explicitly closed. A source world instead evaluates the project's current sources and pending edits directly in memory, without creating archives. External changes to any dirty workspace source cause a conflict, including scripts, models, resources and animation definitions (.zad).", [DocumentParameter, RevisionParameter], false, async (a, token) =>
+        RegisterJob(r, "reload_document", "Stage and reparse a document before replacing it; failure or pre-publication cancellation retains the document and preview. A source world instead evaluates the project's current sources and pending edits directly in memory, without creating archives. External changes to any dirty workspace source cause a conflict, including scripts, models, resources and animation definitions (.zad).", [DocumentParameter, RevisionParameter], false, async (a, token) =>
         {
-            var doc = TargetDocument(a, true); if (doc.IsDirty && doc.SourceWorld == null) throw new StudioCommandException("unsaved_changes", "Save or explicitly close with discard before reloading.");
+            var doc = TargetDocument(a, true);
             bool active = ViewModel.SelectedDocument == doc;
             var selected = ViewModel.SelectedDocument;
             long generation = ViewModel.NavigationGeneration + 1;
@@ -165,75 +164,32 @@ public partial class MainWindow
                 throw;
             }
         });
-        Register(r, "undo_redo", "Undo or redo one accepted edit in the specified document.", true, [DocumentParameter, RevisionParameter, P("action", "string", "History direction.", true, "undo", "redo")], async (a, token) =>
+        Register(r, "undo_redo", "Undo or redo one accepted edit of a source map's project. Compiled documents are read only.", true, [DocumentParameter, RevisionParameter, P("action", "string", "History direction.", true, "undo", "redo")], async (a, token) =>
         {
             var d = TargetDocument(a, true);
-            if (d.SourceWorld != null) return Result(DocumentState(await UndoSourceWorldAsync(d, Text(a, "action") == "redo", token)));
-            UndoDocument(d, Text(a, "action") == "redo"); if (d.ContentEdits != null) await contentWork.WaitAsync(token); else if (d.ResourceEdits != null) await resourceWork.WaitAsync(token); else if (d.ModelEdits != null) await modelRefreshWork.WaitAsync(token); return Result(DocumentState(d));
+            if (d.SourceWorld == null) throw new StudioCommandException("read_only", "Compiled documents are read only: edit the source project instead.");
+            return Result(DocumentState(await UndoSourceWorldAsync(d, Text(a, "action") == "redo", token)));
         });
-        RegisterJob(r, "save_document", "Verified save: source worlds save every accepted project change to its owning glTF, script, ZRD or animation-definition source, creating no archives; animations require a NEW destination outside the source root; pickup/AI/tank coordinates save owning archives or explicit new destinations; model edits save all texture variants before GameZ; ZAR/ZRD, script and texture saves verify and atomically replace each working destination or create new Save As files. Batch results preview at most 64 saved/remaining paths and 32 errors, each at most 512 characters, with SavedPathCount/SavedPathsTruncated, RemainingPathCount/RemainingPathsTruncated and ErrorCount/ErrorsTruncated. Source saves return written with writtenCount/writtenTruncated under the same path bound. All files are still saved; truncated previews are not full path identities. Global state.contentEdits reports fileCount with empty files/filesTruncated; per-document command results preview affected paths and targets. Partial content/coordinate Save As retains every requested destination; ordinary Save retries unpublished copies without overwriting existing files.",
-            [DocumentParameter, RevisionParameter, P("destination", "string", "Full path of a new single-file Save As (animation, ZAR/ZRD, script or texture pack). Omit to save working files."), P("modelDirectory", "string", "Full path of the model Save As directory; all GameZ/texture destinations must be new. Omit for verified save to the working files."), new("destinations", "object", "Mission coordinate or texture batch source path to new Save As path map; cover every affected file.", AdditionalProperties: new("", "string", "New Save As full path for this source archive.")), P("backup", "boolean", "Mission coordinate backup preference; defaults to app setting.")], false, async (a, token) =>
+        RegisterJob(r, "save_document", "Verified save of a source map's project: every accepted change goes to its owning glTF, script, ZRD or animation-definition source; no archives are created. Results preview at most 64 written paths, each at most 512 characters, with writtenCount/writtenTruncated; all files are still saved. Compiled documents are read only.",
+            [DocumentParameter, RevisionParameter], false, async (a, token) =>
         {
             var d = TargetDocument(a, true);
-            // Save As paths are full paths, refused before anything is written (source keys name open files and are compared).
-            string destination = FullPath(a, "destination"), modelDirectory = FullPath(a, "modelDirectory");
-            if (a["destinations"] is JsonObject map) foreach (var (_, target) in map) FullPath(target?.GetValue<string>() ?? "", "every destinations path");
+            if (d.SourceWorld == null) throw new StudioCommandException("read_only", "Compiled documents are read only: edit the source project instead.");
             IsEnabled = false; if (propertiesWindow != null) propertiesWindow.IsEnabled = false;
             try
             {
-                if (d.SourceWorld != null)
-                {
-                    if (a.ContainsKey("destination") || a.ContainsKey("destinations") || a.ContainsKey("modelDirectory")) throw new StudioCommandException("invalid_argument", "A source world saves to its project's sources; it has no Save As.");
-                    var written = await SaveSourceWorldAsync(d, token);
-                    // The files were replaced: the job completes with them, even when MCP stops (and cancels it) meanwhile.
-                    CommitRunningJob();
-                    var preview = FileResultPreview.Paths(written, written.Count);
-                    return Result(new { document = DocumentState(d), written = preview.Values, writtenCount = preview.Count, writtenTruncated = preview.Truncated });
-                }
-                if (d.ContentEdits != null)
-                {
-                    var targets = (a["destinations"] as JsonObject)?.ToDictionary(p => p.Key, p => p.Value!.GetValue<string>(), StringComparer.OrdinalIgnoreCase);
-                    if (a.ContainsKey("destination"))
-                    {
-                        if (targets != null) throw new StudioCommandException("invalid_argument", "Use destination or destinations, not both.");
-                        targets = new(StringComparer.OrdinalIgnoreCase) { [d.Path] = destination };
-                    }
-                    var result = await SaveContentAsync(d, targets, token);
-                    return Result(new { document = DocumentState(d), result = FileResultPreview.Saved(result.SavedPaths, result.Errors, result.RemainingPaths) });
-                }
-                if (d.ResourceEdits != null)
-                { await SaveResourcesAsync(d, destination is { Length: > 0 } path ? path : null, token); return Result(DocumentState(d)); }
-                if (d.AnimationEdits != null)
-                {
-                    if (destination.Length == 0) throw new StudioCommandException("destination_required", "Animation Save As requires a new output path.");
-                    await SaveAnimationToPathAsync(d, destination, token);
-                    if (d.PickupEdits?.IsDirty == true)
-                    {
-                        var coordinateTargets = (a["destinations"] as JsonObject)?.ToDictionary(p => p.Key, p => p.Value?.GetValue<string>() ?? "", StringComparer.OrdinalIgnoreCase);
-                        var savedCoordinates = await SavePickupDestinationsAsync(d, coordinateTargets, Flag(a, "backup", ViewModel.Settings.CreateBackupOnSave), token);
-                        return Result(new { document = DocumentState(d), result = FileResultPreview.Saved(savedCoordinates.SavedPaths, savedCoordinates.Errors) });
-                    }
-                    return Result(DocumentState(d));
-                }
-                ModelSaveResult? models = null;
-                if (d.ModelEdits?.IsDirty == true || d.ModelEdits != null && a.ContainsKey("modelDirectory"))
-                {
-                    models = await SaveModelsAsync(d, modelDirectory is { Length: > 0 } directory ? directory : null, token);
-                    if (models.Errors.Count > 0 || d.PickupEdits?.IsDirty != true)
-                        return Result(new { document = DocumentState(d), models = FileResultPreview.Saved(models.SavedPaths, models.Errors) });
-                }
-                if (d.PickupEdits is not { } edits) throw new StudioCommandException("unsupported", "This document has no accepted unsaved edits.");
-                var destinations = (a["destinations"] as JsonObject)?.ToDictionary(p => p.Key, p => p.Value?.GetValue<string>() ?? "", StringComparer.OrdinalIgnoreCase);
-                var saved = await SavePickupDestinationsAsync(d, destinations, Flag(a, "backup", ViewModel.Settings.CreateBackupOnSave), token);
-                return Result(new { document = DocumentState(d), result = FileResultPreview.Saved(saved.SavedPaths, saved.Errors),
-                    models = models == null ? null : FileResultPreview.Saved(models.SavedPaths, models.Errors) });
+                var written = await SaveSourceWorldAsync(d, token);
+                // The files were replaced: the job completes with them, even when MCP stops (and cancels it) meanwhile.
+                CommitRunningJob();
+                var preview = FileResultPreview.Paths(written, written.Count);
+                return Result(new { document = DocumentState(d), written = preview.Values, writtenCount = preview.Count, writtenTruncated = preview.Truncated });
             }
             finally { IsEnabled = true; if (propertiesWindow != null) propertiesWindow.IsEnabled = true; }
         });
         RegisterJob(r, "export", "Export assets through the existing deterministic exporter into a new folder outside the source tree.",
             [DocumentParameter, P("destination", "string", "Full path of the destination directory.", true), new("assets", "array", "Optional list of {kind,index}; omitted exports all.", Items: new("", "object", "Asset identity.", Properties: [new("kind", "string", "Asset kind.", true, Enum.GetNames<AssetKind>()), P("index", "integer", "Authored record index.", true)])), P("jsonOnly", "boolean", "Export inspection JSON."), P("lod", "integer", "LOD rank; default 0."), P("texturePack", "string", "Optional preferred texture pack path.")], true, async (a, token) =>
         {
-            var d = TargetDocument(a); var assets = a["assets"] is JsonArray list ? list.Select(x => TargetAsset(d, x as JsonObject ?? throw new StudioCommandException("invalid_argument", "Asset must contain kind/index."))).ToArray() : d.PreviewDocument.Assets.ToArray();
+            var d = TargetDocument(a); var assets = a["assets"] is JsonArray list ? list.Select(x => TargetAsset(d, x as JsonObject ?? throw new StudioCommandException("invalid_argument", "Asset must contain kind/index."))).ToArray() : d.Document.Assets.ToArray();
             return Result(await ExportAssetsAsync(d, assets, FullPath(a, "destination"), Flag(a, "jsonOnly"), Text(a, "texturePack") is { Length: > 0 } pack ? pack : null, Int(a, "lod"), token));
         });
         RegisterJob(r, "validate", "Validate on-disk data, not pending edits: evaluate a source world directly from its project or validate a compiled archive. Creates no game archives. Returns structured diagnostics.", [DocumentParameter], true, async (a, token) => Result(await ValidateDocumentSourceAsync(TargetDocument(a), token)));

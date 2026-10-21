@@ -3,22 +3,16 @@ using zStudio.Core.Formats;
 
 namespace zStudio.Desktop;
 
-/// <summary>Non-WPF editor state prepared from the exact document that will be published.</summary>
-internal sealed record PreparedDocument(AssetDocument Document, ResourceEditSession? Resources, ModelEditSession? Models = null)
+/// <summary>Inspection state prepared off the dispatcher from the exact document that will be published.</summary>
+internal sealed record PreparedDocument(AssetDocument Document, ResourceMembers? Resources)
 {
     internal static PreparedDocument Create(AssetDocument document, CancellationToken token)
     {
         token.ThrowIfCancellationRequested();
-        ResourceEditSession? resources = null;
+        ResourceMembers? resources = null;
         if (document.Probe.Family is FormatFamily.Archive or FormatFamily.Zrd && !document.Diagnostics.Any(d => d.Severity == "Error"))
             resources = new(document, token);
         token.ThrowIfCancellationRequested();
-        // Measuring a whole decoded world for edit admission takes up to a second; never on the dispatcher.
-        ModelEditSession? models = EditsModels(document) ? new(document, token) : null;
-        token.ThrowIfCancellationRequested();
-        return new(document, resources, models);
+        return new(document, resources);
     }
-    /// <summary>Compiled GameZ files whose models can be replaced (source worlds change through their build instead).</summary>
-    internal static bool EditsModels(AssetDocument document) =>
-        document.GameZLayout != null && document.Probe.Version is 15 or 27 && !document.Diagnostics.Any(d => d.Severity == "Error");
 }

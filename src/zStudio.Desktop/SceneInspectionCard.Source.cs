@@ -91,7 +91,7 @@ internal sealed partial class SceneInspectionCard
         sourceRows.Visibility = ObjectEditor == null ? Visibility.Collapsed : Visibility.Visible;
         copyObject.Visibility = deleteObject.Visibility = objectBinding?.State.Class is "Object3D" or "Lod" ? Visibility.Visible : Visibility.Collapsed;
         if (ObjectEditor == null) { detailsSection.Visibility = Visibility.Visible; return false; }
-        detailsSection.Visibility = Visibility.Collapsed; valves.Visibility = Visibility.Collapsed;
+        detailsSection.Visibility = Visibility.Collapsed;
         if (ObjectEditor.TransformSection is { } transformSection) PlaceModes(transformSection);
         ObjectEditor.IsEnabled = !objectBinding!.Document.SourceWorld!.IsRebuilding && !ObjectApplying;
         copyObject.IsEnabled = deleteObject.IsEnabled = ObjectEditor.IsEnabled;

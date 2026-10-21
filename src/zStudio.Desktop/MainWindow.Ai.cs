@@ -59,12 +59,10 @@ public partial class MainWindow
     private void ApplyAiOptions()
     {
         bool world = IsAiWorld; AiTools.Visibility = world ? Visibility.Visible : Visibility.Collapsed;
-        AiPathEdit.Visibility = shownDocument?.SourceWorld == null ? Visibility.Visible : Visibility.Collapsed;
         UpdateParachutePanel();
         if (!world) { AiLabel.Visibility = Visibility.Collapsed; UpdateAiPathPanel(); RefreshViewportChips(); return; }
         var graph = scene!.AiNetworks;
-        AiValves.Visibility = graph.ValveSources.Count == 0 ? Visibility.Collapsed : Visibility.Visible;
-        AiValveOverlay.Visibility = AiValves.Visibility;
+        AiValveOverlay.Visibility = graph.ValveSources.Count == 0 ? Visibility.Collapsed : Visibility.Visible;
         if (aiSnapshot != graph.Id)
         {
             // A source map's networks keep their IDs (their paths) across rebuilds: an isolated network stays isolated.

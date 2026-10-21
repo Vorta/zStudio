@@ -43,7 +43,7 @@ public sealed partial class FolderNode(string name, string path, FileEntry? file
 }
 public sealed partial class AssetItem(AssetRecord record) : ObservableObject
 {
-    public Guid? ResourceId { get; init; }
+    public Guid? ResourceId { get; internal set; }
     public AssetRecord Record { get; private set; } = record;
     public string Name => Record.Name;
     public string Kind => Record.Kind.ToString();
@@ -108,77 +108,25 @@ public sealed partial class DocumentModel : ObservableObject, IDisposable
         }
         return false;
     }
-    public AnimationEditSession? AnimationEdits { get; }
-    public ModelEditSession? ModelEdits { get; }
-    public ResourceEditSession? ResourceEdits { get; }
-    public event Action? ResourceEditsChanged;
-    public AssetDocument PreviewDocument => contentMirror ?? ContentEdits?.Current.Documents.GetValueOrDefault(Path) ?? ResourceEdits?.Current.Document ?? ModelEdits?.Current.World ?? Document;
-    public AssetRecord? OriginalAsset(AssetRecord asset) => ResourceEdits is { } resources
-        ? resources.OriginalAsset(resources.Current.Members[asset.Index])
-        : ScriptEdits is { } scripts ? scripts.Package.Entries.ElementAtOrDefault(asset.Index)?.SourceIndex is int index ? Document.Assets.SingleOrDefault(a => a.Index == index) : null
-        : Document.Assets.SingleOrDefault(a => a.Kind == asset.Kind && a.Index == asset.Index);
-    public event Action? ModelEditsChanged;
-    // The order of model (true) and pickup/AI coordinate (false) steps, oldest first. Each kind's entries match
-    // its session's own undo/redo steps one for one, so every step changes the document.
-    private readonly List<bool> sceneUndo = [], sceneRedo = [];
-    private AssetResolver? workspaceResolver;
-    public bool CanUndoScene => CanStepScene(false);
-    public bool CanRedoScene => CanStepScene(true);
-    // A session cannot step while it saves; its entry then waits instead of being consumed.
-    private bool CanStepScene(bool redo) => (redo ? sceneRedo : sceneUndo) is { Count: > 0 } history &&
-        (history[^1] ? redo ? ModelEdits?.CanRedo : ModelEdits?.CanUndo : redo ? PickupEdits?.CanRedo : PickupEdits?.CanUndo) == true;
-    internal bool NextSceneEditIsModel(bool redo) => CanStepScene(redo) && (redo ? sceneRedo : sceneUndo)[^1];
-    private void RecordSceneEdit(bool model, int retired = 0)
-    {
-        // The model session retired its oldest steps: their entries are the oldest model entries.
-        if (retired > 0) sceneUndo.RemoveAll(entry => entry && retired-- > 0);
-        sceneUndo.Add(model); sceneRedo.Clear();
-        // A new edit of either kind ends both sessions' redo branches, as it ends the shared one.
-        if (model) PickupEdits?.ClearRedo(); else ModelEdits?.ClearRedo();
-    }
-    public void UndoScene(bool redo)
-    {
-        if (!CanStepScene(redo)) return;
-        var from = redo ? sceneRedo : sceneUndo; var to = redo ? sceneUndo : sceneRedo;
-        bool model = from[^1]; from.RemoveAt(from.Count - 1); to.Add(model);
-        if (model) { if (redo) ModelEdits!.Redo(); else ModelEdits!.Undo(); }
-        else { if (redo) PickupEdits!.Redo(); else PickupEdits!.Undo(); }
-    }
-    public void AttachResolver(AssetResolver? resolver)
-    {
-        if (workspaceResolver != null) workspaceResolver.WorkspaceSnapshotsChanged -= ContentSnapshotsChanged;
-        workspaceResolver = resolver;
-        if (resolver != null) resolver.WorkspaceSnapshotsChanged += ContentSnapshotsChanged;
-        ContentSnapshotsChanged();
-    }
+    /// <summary>The members of a compiled archive or standalone ZRD, read for inspection with stable identities.</summary>
+    public ResourceMembers? ResourceMembers { get; }
+    public AssetRecord? OriginalAsset(AssetRecord asset) => Document.Assets.SingleOrDefault(a => a.Kind == asset.Kind && a.Index == asset.Index);
     private PickupPlacementEditSession? pickupEdits;
-    /// <summary>
-    /// The placements this document shows, edits, undoes and saves. A clean session without history is replaced when other
-    /// documents publish changes (<see cref="InvalidateCleanPickupEdits"/>); editors resolve it when they read or commit.
-    /// </summary>
+    /// <summary>The placements this document shows: a source world's change through its sources, a compiled world's are read only.</summary>
     public PickupPlacementEditSession? PickupEdits { get => pickupEdits; private set => SetProperty(ref pickupEdits, value); }
     private Task<PickupPlacementEditSession>? pickupLoading;
-    private long pickupSnapshotRevision;
-    private bool editingLocked = true;
-    /// <summary>The compiled Whole world editing lock (Unlock editing). A source world has none: its card's Edit starts each edit.</summary>
-    public bool EditingLocked { get => editingLocked && SourceWorld == null; set => SetProperty(ref editingLocked, value); }
     public bool IsDisposed { get; private set; }
     public event Action? Disposing;
     public bool PickupDiagnosticsReported { get; set; }
-    /// <summary>Asked before a resource edit is accepted; throws to refuse it (a source project's workspace holds unsaved edits of the file).</summary>
-    internal Action<DocumentModel>? BeforeResourceEdit { get; set; }
     internal Dictionary<AssetId,Dictionary<string,bool>> DataTreeExpansion { get; } = [];
-    /// <summary>A source world's placements change through its source workspace and are persisted only by Save.</summary>
-    public bool IsDirty => SourceWorld?.Workspace.IsDirty == true || ContentEdits?.IsDirty == true || ResourceEdits?.IsDirty == true || AnimationEdits?.IsDirty == true || SourceWorld == null && PickupEdits?.IsDirty == true || ModelEdits?.IsDirty == true;
-    public void ClaimResourcePaths(IEnumerable<string> paths) => workspaceResolver?.EditOwnership.Acquire(SessionId, Title, paths);
-    public void InvalidateCleanPickupEdits()
+    /// <summary>Only a source world has unsaved changes: its edits are its project's, persisted only by Save. Compiled documents are read only.</summary>
+    public bool IsDirty => SourceWorld?.Workspace.IsDirty == true;
+    /// <summary>Forgets compiled placements read for an earlier preview, so the next read loads them again.</summary>
+    public void InvalidatePickupEdits()
     {
-        // A session that is saving reports no steps, but its history entries still belong to it. One saved as a copy keeps
-        // that copy as the target of later saves, like an edited archive keeps its own baseline.
-        if (PickupEdits is { IsDirty: false, CanUndo: false, CanRedo: false, HasCopyTargets: false } && !sceneUndo.Contains(false) && !sceneRedo.Contains(false) || PickupEdits == null)
-        { PickupEdits = null; pickupLoading = null; PickupDiagnosticsReported = false; }
+        if (SourceWorld != null) return;
+        PickupEdits = null; pickupLoading = null; PickupDiagnosticsReported = false;
     }
-    public event Action? PickupEditsChanged;
     public async Task<PickupPlacementEditSession> GetPickupEditsAsync(AssetResolver resolver, CancellationToken token)
     {
         token.ThrowIfCancellationRequested();
@@ -199,89 +147,25 @@ public sealed partial class DocumentModel : ObservableObject, IDisposable
             PickupEdits ??= sourceEdits;
             return PickupEdits;
         }
-        if (PickupEdits != null)
-        {
-            if (pickupSnapshotRevision != resolver.SnapshotRevision && !PickupEdits.CanUndo && !PickupEdits.CanRedo) InvalidateCleanPickupEdits();
-        }
-        // History retains the archives it edited. Readers it never edited follow other documents'
-        // published changes and saved files instead of blocking the map or showing stale positions, and so does
-        // the original of an archive a session without history saves to a copy (it keeps saving to that copy).
-        // Publications may continue while loading; a bounded number of passes cannot spin. An original the first pass could not
-        // follow (unreadable, or served by another document's working copy) is not reloaded again: the guard below reports it.
-        for (int pass = 0; pass < 3 && PickupEdits is { } current && (current.HasStaleBaselines(path => resolver.WorkspaceSnapshot(path, SessionId)) || pass == 0 && current.HasChangedCopySources()); pass++)
-        {
-            long revision = resolver.SnapshotRevision;
-            var fresh = await PickupPlacementEditSession.LoadAsync(Path, resolver, lifetime).WaitAsync(token);
-            token.ThrowIfCancellationRequested(); lifetime.ThrowIfCancellationRequested();
-            if (PickupEdits != current) continue;
-            if (PreviewDocument.Scene is { } scene) fresh.BindCoordinateTemplates(scene);
-            current.RebaseUntouched(fresh);
-            if (revision == resolver.SnapshotRevision) pickupSnapshotRevision = revision;
-        }
-        if (PickupEdits != null)
-        {
-            if (PickupEdits.HasSourceChanges()) throw new IOException("A pickup source archive changed outside zStudio. Save pending edits as a copy, then reload the map (F5) before rebuilding its preview.");
-            return PickupEdits;
-        }
+        if (PickupEdits != null) return PickupEdits;
         if (pickupLoading == null || pickupLoading.IsCanceled || pickupLoading.IsFaulted)
-        {
-            pickupSnapshotRevision = resolver.SnapshotRevision;
             pickupLoading = PickupPlacementEditSession.LoadAsync(Path, resolver, lifetime);
-        }
         var loading = pickupLoading;
         var edits = await loading.WaitAsync(token);
-        token.ThrowIfCancellationRequested();
-        lifetime.ThrowIfCancellationRequested();
-        // The placements were invalidated while this session loaded: it is stale, and installing it again would subscribe
-        // its events twice. Load the current one.
+        token.ThrowIfCancellationRequested(); lifetime.ThrowIfCancellationRequested();
+        // The placements were invalidated while this session loaded: it is stale. Load the current one.
         if (!ReferenceEquals(pickupLoading, loading)) return await GetPickupEditsAsync(resolver, token);
         if (PickupEdits == null)
         {
-            if (PreviewDocument.Scene is { } templateScene) edits.BindCoordinateTemplates(templateScene);
-            edits.BeforeEdit += archives =>
-            {
-                // A replaced session no longer reaches the scene, the shared history or Save: an editor still holding it
-                // must not move a placement there.
-                if (!ReferenceEquals(PickupEdits, edits)) throw new InvalidOperationException("This map's placements were reloaded. Edit the placement again in the current map.");
-                if (SourceWorld != null) throw new InvalidOperationException("A source world's placements change through its sources: use Edit on the scene card, Properties, or zstudio_pickup_move.");
-                // Only a session a refresh would replace is stale here; a kept one rebases its unedited readers instead.
-                if (pickupSnapshotRevision != resolver.SnapshotRevision && !edits.CanUndo && !edits.CanRedo && !edits.HasCopyTargets)
-                    throw new InvalidOperationException("Resource previews changed. Refresh this map before editing pickup placements.");
-                // Claim only the archives this edit changes. An unedited reader must still match
-                // the source currently served, or the transform would patch a stale baseline.
-                if (edits.HasStaleBaselines(path => resolver.WorkspaceSnapshot(path, SessionId), archives))
-                    throw new InvalidOperationException("Another document changed this mission archive. Refresh this map before editing its placements.");
-                ClaimResourcePaths(archives.Concat(archives.Select(edits.TargetPath)));
-            };
-            edits.EditAccepted += () => { if (ReferenceEquals(PickupEdits, edits)) RecordSceneEdit(false); };
-            edits.Changed += () =>
-            {
-                if (!ReferenceEquals(PickupEdits, edits)) return;
-                Revision++;
-                PublishSceneSnapshots(); pickupSnapshotRevision = resolver.SnapshotRevision;
-                InvalidateMissionContext();
-                OnPropertyChanged(nameof(Title)); OnPropertyChanged(nameof(IsDirty)); PickupEditsChanged?.Invoke();
-            };
+            if (Document.Scene is { } templateScene) edits.BindCoordinateTemplates(templateScene);
             PickupEdits = edits;
         }
-        return edits;
+        return PickupEdits;
     }
     public void InvalidateMissionContext()
     {
         contextLoading?.Cancel(); animationContext = null; MissionSceneLoader.Invalidate(Document);
-        if (!ReferenceEquals(PreviewDocument, Document)) MissionSceneLoader.Invalidate(PreviewDocument);
     }
-    private void PublishSceneSnapshots()
-    {
-        if (workspaceResolver == null) return;
-        var coordinates = PickupEdits is { CanUndo: true } or { CanRedo: true } or { IsDirty: true } ? PickupEdits.WorkingArchives(Lifetime.Token) : [];
-        var models = ModelEdits is { CanUndo: true } or { CanRedo: true } or { IsDirty: true } ? ModelEdits.Documents : [];
-        // The format families are disjoint: models publish GameZ/texture packs,
-        // coordinates publish ZAR archives. Keep the resolver's duplicate-owner
-        // protection; a name-based merge would hide an invalid cross-family edit.
-        workspaceResolver.SetWorkspaceSnapshots(SessionId, models.Concat(coordinates));
-    }
-    public string? LastSavedCopy { get; set; }
     private Task<AnimationPreviewContext>? animationContext;
     private string? animationWorldPath;
     private MissionDifficulty animationDifficulty = MissionDifficulty.Medium;
@@ -299,7 +183,7 @@ public sealed partial class DocumentModel : ObservableObject, IDisposable
             contextLoading?.Cancel(); contextLoading?.Dispose(); contextLoading = CancellationTokenSource.CreateLinkedTokenSource(Lifetime.Token);
             animationDifficulty = difficulty;
             animationContext = previous != null ? previous.WithDifficultyAsync(resolver, difficulty, contextLoading.Token, exactMission) :
-                AnimationPreviewContext.LoadAsync(AnimationEdits!.Package, Path, resolver, animationWorldPath, contextLoading.Token, difficulty, exactMission);
+                AnimationPreviewContext.LoadAsync(Document.Animations!, Path, resolver, animationWorldPath, contextLoading.Token, difficulty, exactMission);
         }
         return animationContext.WaitAsync(token);
     }
@@ -318,13 +202,11 @@ public sealed partial class DocumentModel : ObservableObject, IDisposable
     [ObservableProperty] private string query = "";
     [ObservableProperty] private string kindFilter = "All types";
     [ObservableProperty] private AssetItem? selectedAsset;
-    private Guid? lastResourceSelection;
-    partial void OnSelectedAssetChanged(AssetItem? value) { if (value?.ResourceId is Guid id) lastResourceSelection = id; }
     [ObservableProperty] private bool isStale;
     public string[] Kinds { get; private set; }
     public DocumentModel(AssetDocument doc) : this(doc, null, null) { }
-    internal DocumentModel(PreparedDocument prepared) : this(prepared.Document, null, null, 0, prepared) { }
-    internal DocumentModel(AssetDocument doc, SourceWorldSession? sourceWorld, zStudio.Core.Sources.SourceSceneState? sourceBuild, long sourceRevision = 0, PreparedDocument? prepared = null)
+    internal DocumentModel(PreparedDocument prepared) : this(prepared.Document, null, null, 0, prepared.Resources) { }
+    internal DocumentModel(AssetDocument doc, SourceWorldSession? sourceWorld, zStudio.Core.Sources.SourceSceneState? sourceBuild, long sourceRevision = 0, ResourceMembers? resources = null)
     {
         Document = doc;
         SourceWorld = sourceWorld; SourceBuild = sourceBuild; SourceRevision = sourceRevision;
@@ -332,42 +214,13 @@ public sealed partial class DocumentModel : ObservableObject, IDisposable
         Assets = new(doc.Assets.OrderBy(a => a.Kind == AssetKind.World ? -1 : (int)a.Kind).ThenBy(a => a.Index).Select(a => new AssetItem(a)));
         Kinds = ["All types", .. Assets.Select(a => a.Kind).Distinct().Order()];
         FilteredAssets = CollectionViewSource.GetDefaultView(Assets); FilteredAssets.Filter = Matches;
-        InitializeContentEdits(doc);
         if (doc.Probe.Family is FormatFamily.Archive or FormatFamily.Zrd && !doc.Diagnostics.Any(d => d.Severity == "Error"))
         {
-            ResourceEdits = prepared?.Resources ?? new(doc);
-            ResourceEdits.BeforeEdit += () => { BeforeResourceEdit?.Invoke(this); ClaimResourcePaths([Path, ResourceEdits.TargetPath]); };
-            RebuildResourceAssets();
-            ResourceEdits.Changed += () =>
-            {
-                Revision++; workspaceResolver?.SetWorkspaceSnapshots(SessionId, [ResourceEdits.Current.Document]);
-                RebuildResourceAssets(); InvalidateMissionContext();
-                OnPropertyChanged(nameof(Title)); OnPropertyChanged(nameof(IsDirty)); ResourceEditsChanged?.Invoke();
-            };
+            ResourceMembers = resources ?? new(doc);
+            foreach (var item in Assets) item.ResourceId = ResourceMembers.Members[item.Index].Id;
         }
-        // A source world's models change through its build script, never by editing the built file.
-        if (sourceWorld == null && PreparedDocument.EditsModels(doc))
-        {
-            ModelEdits = prepared?.Models ?? new(doc);
-            ModelEdits.BeforeEdit += ClaimResourcePaths;
-            ModelEdits.EditAccepted += retired => RecordSceneEdit(true, retired);
-            ModelEdits.Changed += () =>
-            {
-                Revision++; PublishSceneSnapshots();
-                RebuildModelAssets();
-                InvalidateMissionContext(); OnPropertyChanged(nameof(Title)); OnPropertyChanged(nameof(IsDirty)); ModelEditsChanged?.Invoke();
-            };
-        }
-        if (sourceWorld == null && doc.Animations is { } source)
-        {
-            // Accepted edits replace complete entry snapshots. Give that working
-            // set its own container so source inspection/export stays original;
-            // sharing initial entries is safe because edits clone before writing.
-            var working = new AnimationPackage { Prefix = source.Prefix, Tail = source.Tail };
-            working.Entries.AddRange(source.Entries); working.Diagnostics.AddRange(source.Diagnostics);
-            AnimationEdits = new(working);
-            AnimationEdits.Changed += () => { Revision++; contextLoading?.Cancel(); animationContext = null; OnPropertyChanged(nameof(Title)); OnPropertyChanged(nameof(IsDirty)); };
-        }
+        else if (doc.Scripts is { } scripts)
+            foreach (var item in Assets.Where(a => a.Record.Kind == AssetKind.Script)) item.ResourceId = scripts.Entries[item.Index].Id;
         if (doc.Scene is GameScene scene) ResetStoredSceneTree(scene);
     }
     internal void AcceptSourceScene(zStudio.Core.Sources.SourceSceneSnapshot source, long revision, PickupPlacementEditSession edits)
@@ -380,39 +233,6 @@ public sealed partial class DocumentModel : ObservableObject, IDisposable
         foreach (var item in Assets) if (records.TryGetValue(item.Record.Id, out var record)) item.UpdateRecord(record);
         ResetStoredSceneTree(source.Scene!);
         Revision++; OnPropertyChanged(nameof(Document)); OnPropertyChanged(nameof(Title)); OnPropertyChanged(nameof(IsDirty));
-    }
-    private void RebuildModelAssets()
-    {
-        var current = ModelEdits!.Current.World;
-        var selected = SelectedAsset?.Record.Id;
-        var existing = Assets.ToDictionary(a => a.Record.Id);
-        var records = current.Assets.OrderBy(a => a.Kind == AssetKind.World ? -1 : (int)a.Kind).ThenBy(a => a.Index).ToArray();
-        var retained = records.Select(a => a.Id).ToHashSet();
-        foreach (var row in Assets.Where(a => !retained.Contains(a.Record.Id)).ToArray()) Assets.Remove(row);
-        for (int i = 0; i < records.Length; i++)
-        {
-            var record = records[i];
-            if (existing.TryGetValue(record.Id, out var row)) row.UpdateRecord(record);
-            else { row = new(record); Assets.Insert(i, row); }
-        }
-        Kinds = ["All types", .. Assets.Select(a => a.Kind).Distinct().Order()]; OnPropertyChanged(nameof(Kinds));
-        if (!Kinds.Contains(KindFilter)) KindFilter = "All types";
-        SelectedAsset = Assets.FirstOrDefault(a => a.Record.Id == selected) ?? (selected == null ? null : Assets.FirstOrDefault());
-        ResetStoredSceneTree(current.Scene!);
-        OnPropertyChanged(nameof(Description));
-    }
-    private void RebuildResourceAssets()
-    {
-        if (ResourceEdits == null) return;
-        // A cleared or filtered selection keeps its last member identity (for example Undo of a deletion).
-        Guid? current = SelectedAsset?.ResourceId, selected = current ?? lastResourceSelection; int oldIndex = SelectedAsset?.Index ?? 0;
-        Assets.Clear();
-        foreach (var a in ResourceEdits.Current.Document.Assets) Assets.Add(new(a) { ResourceId = ResourceEdits.Current.Members[a.Index].Id });
-        Kinds = ["All types", .. Assets.Select(a => a.Kind).Distinct().Order()]; OnPropertyChanged(nameof(Kinds));
-        if (!Kinds.Contains(KindFilter)) KindFilter = "All types";
-        // Retarget a removed selection to its neighbor, but never turn a cleared/filtered selection into a new preview request.
-        SelectedAsset = Assets.FirstOrDefault(a => a.ResourceId == selected) ?? (current == null ? null : Assets.ElementAtOrDefault(Math.Clamp(oldIndex, 0, Math.Max(0, Assets.Count - 1))));
-        OnPropertyChanged(nameof(Description));
     }
     private bool Matches(object o) => o is AssetItem a && (KindFilter == "All types" || KindFilter == a.Kind) && (Query.Length == 0 || a.Name.Contains(Query, StringComparison.OrdinalIgnoreCase) || a.Identity.Contains(Query, StringComparison.OrdinalIgnoreCase));
     partial void OnQueryChanged(string value) => FilteredAssets.Refresh();
@@ -434,7 +254,7 @@ public sealed partial class DocumentModel : ObservableObject, IDisposable
             if (world.Owner == this) world.Dispose();
         }
     }
-    private void DisposeCore() { IsDisposed = true; if (workspaceResolver != null) workspaceResolver.WorkspaceSnapshotsChanged -= ContentSnapshotsChanged; workspaceResolver?.SetWorkspaceSnapshots(SessionId, []); workspaceResolver?.EditOwnership.Release(SessionId); Disposing?.Invoke(); Lifetime.Cancel(); contextLoading?.Cancel(); contextLoading?.Dispose(); Lifetime.Dispose(); foreach (var a in Assets) a.Thumbnail = null; GC.SuppressFinalize(this); }
+    private void DisposeCore() { IsDisposed = true; Disposing?.Invoke(); Lifetime.Cancel(); contextLoading?.Cancel(); contextLoading?.Dispose(); Lifetime.Dispose(); foreach (var a in Assets) a.Thumbnail = null; GC.SuppressFinalize(this); }
 }
 public sealed partial class InspectorNode : ObservableObject
 {
@@ -500,7 +320,6 @@ public sealed class StudioSettings
         if (Workspace?.Version != WorkspaceLayout.CurrentVersion) Workspace = new();
         Workspace.Normalize(); return Workspace;
     }
-    public bool CreateBackupOnSave { get; set; }
     private MissionDifficulty difficulty = MissionDifficulty.Medium;
     public MissionDifficulty Difficulty { get => difficulty; set => difficulty = Enum.IsDefined(value) ? value : MissionDifficulty.Medium; }
     private Dictionary<string, string> mw3Missions = new(StringComparer.OrdinalIgnoreCase);

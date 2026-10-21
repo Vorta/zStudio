@@ -75,7 +75,7 @@ public sealed partial class SceneViewport
     }
     public bool SelectAiNode(string? id)
     {
-        if (id != null && (!InspectionSelectionEnabled || IsPickupDragging || IsFlyActive || AiPathEditingNetwork != null)) return false;
+        if (id != null && (IsPickupDragging || IsFlyActive || AiPathEditingNetwork != null)) return false;
         if (id != null && (!AiVisible || AiNetworks.Find(id) is not { } found || AiNetworkFilter != null && found.Network.Id != AiNetworkFilter || aiHiddenNetworks.Contains(found.Network.Id))) return false;
         if (id != null && CanChangeInspection?.Invoke() == false) return false;
         SelectedAiNode = id;
@@ -231,7 +231,7 @@ public sealed partial class SceneViewport
             else
             {
                 var selected = SelectedAiNode == null ? null : AiNetworks.Find(SelectedAiNode);
-                aiSelectionMarker.Visibility = !InspectionSelectionEnabled || selected == null ? Visibility.Collapsed : Visibility.Visible;
+                aiSelectionMarker.Visibility = selected == null ? Visibility.Collapsed : Visibility.Visible;
                 if (selected is { } target) aiSelectionMarker.Instances = [Matrix4x4.CreateScale(AiScale(target.Node.Position, 5.5)) * Matrix4x4.CreateTranslation(target.Node.Position)];
             }
         }

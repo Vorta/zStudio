@@ -72,9 +72,8 @@ internal static class DocumentPreparationChecks
                 else
                 {
                     Assert.NotNull(opened); Assert.Same(source, opened.Document);
-                    Assert.Same(source, opened.ResourceEdits!.Current.Document);
-                    Assert.Equal(source.Bytes.ToArray(), opened.ResourceEdits.Current.Document.Bytes.ToArray());
-                    Assert.Equal(Assert.Single(opened.ResourceEdits.Current.Members).Id, Assert.Single(opened.Assets).ResourceId);
+                    Assert.Same(source, opened.ResourceMembers!.Document);
+                    Assert.Equal(Assert.Single(opened.ResourceMembers.Members).Id, Assert.Single(opened.Assets).ResourceId);
                 }
             }
             finally { release.Set(); }
@@ -89,14 +88,12 @@ internal static class DocumentPreparationChecks
     private static async Task ResourceReload(CancellationToken token)
     {
         var dispatcher = Dispatcher.CurrentDispatcher;
-        foreach (string scenario in new[] { "success", "cancel", "revision", "failure", "close" })
+        foreach (string scenario in new[] { "success", "cancel", "failure", "close" })
         {
             using var vm = new MainViewModel();
             var source = Resource("preparation-reload.zrd", token);
             var original = new DocumentModel(source); vm.Documents.Add(original); vm.SelectedDocument = original;
-            // Keep a cleared selection in the revision case, so the accepted edit changes the revision
-            // independently of a selection/navigation change (covered by the open case above).
-            if (scenario != "revision") original.SelectedAsset = original.Assets.Single();
+            original.SelectedAsset = original.Assets.Single();
             var replacement = Resource(source.Path, token);
             vm.LoadDocumentAsync = (_, _) => Task.FromResult(replacement);
             using var request = CancellationTokenSource.CreateLinkedTokenSource(token);
@@ -115,29 +112,22 @@ internal static class DocumentPreparationChecks
                 Assert.False(reload.IsCompleted); Assert.False(original.IsDisposed); Assert.Same(original, vm.SelectedDocument);
                 if (scenario == "cancel") request.Cancel();
                 if (scenario == "close") vm.CloseResolved(original);
-                if (scenario == "revision")
-                {
-                    var edits = original.ResourceEdits!; var member = Assert.Single(edits.Current.Members);
-                    var scalar = edits.Tree(member, token).Children[0].Children[1].Children[0];
-                    edits.Accept(await edits.PrepareZrdAsync(member.Id, scalar.Id, "set", value: "8", token: token));
-                }
                 release.Set();
                 if (scenario == "success")
                 {
                     var published = await reload.WaitAsync(token);
                     Assert.True(original.IsDisposed); Assert.Same(published, vm.SelectedDocument);
-                    Assert.Same(replacement, published.ResourceEdits!.Current.Document);
+                    Assert.Same(replacement, published.ResourceMembers!.Document);
                 }
                 else if (scenario == "cancel") await Assert.ThrowsAnyAsync<OperationCanceledException>(() => reload.WaitAsync(token));
                 else
                 {
                     var error = await Assert.ThrowsAsync<StudioCommandException>(() => reload.WaitAsync(token));
-                    Assert.Equal(scenario == "revision" ? "revision_conflict" : scenario == "close" ? "context_changed" : "open_failed", error.Code);
+                    Assert.Equal(scenario == "close" ? "context_changed" : "open_failed", error.Code);
                 }
                 if (scenario is not ("success" or "close"))
                 {
                     Assert.False(original.IsDisposed); Assert.Same(original, vm.SelectedDocument);
-                    Assert.Equal(scenario == "revision", original.IsDirty);
                 }
             }
             finally { release.Set(); }
@@ -178,9 +168,9 @@ internal static class DocumentPreparationChecks
             var model = getter.Invoke(main, [doc]);
             Assert.Same(model, getter.Invoke(main, [doc]));
             int node = doc.SourceBuild!.Provenance.Keys.First();
-            string name = doc.PreviewDocument.Scene!.Nodes.Single(n => n.Index == node).Name;
+            string name = doc.Document.Scene!.Nodes.Single(n => n.Index == node).Name;
             var copies = typeof(MainWindow).GetMethod("SourceCopiesNamed", BindingFlags.Instance | BindingFlags.NonPublic)!;
-            Assert.Equal(doc.PreviewDocument.Scene.Nodes.Where(n => n.Name == name).Select(n => n.Index).OrderDescending(),
+            Assert.Equal(doc.Document.Scene.Nodes.Where(n => n.Name == name).Select(n => n.Index).OrderDescending(),
                 (IEnumerable<int>)copies.Invoke(main, [doc, name, null])!);
             var result = await main.Commands.ExecuteAsync("zstudio_source_world_object", new JsonObject
             { ["document"] = doc.SessionId.ToString(), ["node"] = node }, token);

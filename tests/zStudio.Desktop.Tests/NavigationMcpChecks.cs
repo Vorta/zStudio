@@ -28,15 +28,11 @@ internal static class NavigationMcpChecks
             var second = new DocumentModel(Source(Path.Combine(root, "second.zbd")));
             main.ViewModel.Documents.Add(first); main.ViewModel.Documents.Add(second);
             main.ViewModel.SelectedDocument = first;
-            main.OpenAnimationProperties(first, 0, Guid.Empty, Guid.Empty);
-            main.OpenPropertiesWindow!.UpdateLayout();
-            var draft = Descendants(main.OpenPropertiesWindow.AnimationFields!).OfType<TextBox>()
-                .Single(t => AutomationProperties.GetName(t) == "Reset delay (s)");
             // MCP publication must reject unfinished work instead of invoking the
             // GUI save/discard callback after its original clean-workspace check.
             main.ViewModel.ConfirmDiscardAsync = _ => throw new InvalidOperationException("MCP opened a discard prompt");
 
-            foreach (string scenario in new[] { "selection", "failed_after_selection", "asset", "draft", "save", "success" })
+            foreach (string scenario in new[] { "selection", "failed_after_selection", "asset", "save", "success" })
             {
                 main.ViewModel.SelectedDocument = first; first.SelectedAsset = first.Assets[0];
                 TaskCompletionSource started = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -47,7 +43,6 @@ internal static class NavigationMcpChecks
                 await started.Task.WaitAsync(deadline.Token);
                 if (scenario is "selection" or "failed_after_selection") main.ViewModel.SelectedDocument = second;
                 if (scenario == "asset") first.SelectedAsset = first.Assets[1];
-                if (scenario == "draft") draft.Text = "-";
                 if (scenario == "save") main.IsEnabled = false;
                 int problems = main.ViewModel.Problems.Count;
                 if (scenario == "failed_after_selection") { main.ViewModel.Status = "Newer selection retained"; decoded.SetException(new FileNotFoundException("Obsolete open failed")); }
@@ -61,13 +56,12 @@ internal static class NavigationMcpChecks
                 else
                 {
                     Assert.Equal("failed", result["State"]!.GetValue<string>());
-                    Assert.Equal(scenario == "draft" ? "pending_drafts" : scenario == "save" ? "busy" : "context_changed", result["result"]!["code"]!.GetValue<string>());
+                    Assert.Equal(scenario == "save" ? "busy" : "context_changed", result["result"]!["code"]!.GetValue<string>());
                     Assert.DoesNotContain(main.ViewModel.Documents, d => d.Path == path);
                     Assert.Same(scenario is "selection" or "failed_after_selection" ? second : first, main.ViewModel.SelectedDocument);
                     if (scenario == "asset") Assert.Same(first.Assets[1], first.SelectedAsset);
                     if (scenario == "failed_after_selection") { Assert.Equal("Newer selection retained", main.ViewModel.Status); Assert.Equal(problems, main.ViewModel.Problems.Count); }
                 }
-                if (scenario == "draft") { Assert.Equal("-", draft.Text); draft.Text = "0"; }
                 main.IsEnabled = true;
             }
             // Exercise the GUI error wrapper as well as the service: an obsolete
@@ -83,39 +77,9 @@ internal static class NavigationMcpChecks
             await obsoleteGuiOpen.WaitAsync(deadline.Token);
             Assert.Equal("Newer GUI navigation", main.ViewModel.Status);
             Assert.Equal(oldProblemCount, main.ViewModel.Problems.Count);
-            // Ordinary browsing leaves an independently pinned Properties draft
-            // open and unchanged; it is only destructive root publication that
-            // needs to resolve every document's drafts.
-            var pinned = main.OpenPropertiesWindow;
-            draft.Text = "-";
-            main.ViewModel.LoadDocumentAsync = (path, _) => Task.FromResult(Source(path));
-            var browsed = await main.ViewModel.OpenFileAsync(Path.Combine(root, "gui-browse.zbd"), deadline.Token);
-            Assert.Same(browsed, main.ViewModel.SelectedDocument);
-            Assert.Same(pinned, main.OpenPropertiesWindow); Assert.Same(first, pinned!.Document); Assert.Equal("-", draft.Text);
-            draft.Text = "0";
             main.ViewModel.LoadDocumentAsync = originalLoad;
             main.ViewModel.SelectedDocument = first;
-            TaskCompletionSource secondDecision = new(TaskCreationOptions.RunContinuationsAsynchronously);
-            TaskCompletionSource<bool> acceptSecond = new(TaskCreationOptions.RunContinuationsAsynchronously);
-            main.ViewModel.ConfirmDiscardAsync = async document =>
-            {
-                if (document == second) { secondDecision.SetResult(); return await acceptSecond.Task.WaitAsync(deadline.Token); }
-                return true;
-            };
-            string guiRoot = Path.Combine(root, "gui-root"); Directory.CreateDirectory(guiRoot);
-            var guiOpen = main.ViewModel.OpenRootAsync(guiRoot, deadline.Token);
-            await secondDecision.Task.WaitAsync(deadline.Token);
-            first.AnimationEdits!.Apply(0, "Edit after accepted close", e => e.SetFloat(164, 2));
-            acceptSecond.SetResult(true);
-            var conflict = await Assert.ThrowsAsync<zStudio.Automation.StudioCommandException>(() => guiOpen);
-            Assert.Equal("revision_conflict", conflict.Code);
-            Assert.False(first.IsDisposed); Assert.True(first.IsDirty); Assert.Equal(root, main.ViewModel.RootPath);
-            first.AnimationEdits.Undo();
-            main.ViewModel.ConfirmDiscardAsync = _ => throw new InvalidOperationException("MCP opened a discard prompt");
-            main.OpenAnimationProperties(first, 0, Guid.Empty, Guid.Empty); main.OpenPropertiesWindow!.UpdateLayout();
-            draft = Descendants(main.OpenPropertiesWindow.AnimationFields!).OfType<TextBox>()
-                .Single(t => AutomationProperties.GetName(t) == "Reset delay (s)");
-            foreach (string scenario in new[] { "draft", "dirty", "save", "newer_root" })
+            foreach (string scenario in new[] { "save", "newer_root" })
             {
                 string requested = Path.Combine(root, "requested-" + scenario); Directory.CreateDirectory(requested);
                 TaskCompletionSource started = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -127,8 +91,6 @@ internal static class NavigationMcpChecks
                 };
                 var queued = await main.Commands.ExecuteAsync("zstudio_open_root", new() { ["path"] = requested }, deadline.Token);
                 await started.Task.WaitAsync(deadline.Token);
-                if (scenario == "draft") draft.Text = "-";
-                if (scenario == "dirty") first.AnimationEdits!.Apply(0, "Concurrent edit", e => e.SetFloat(164, 2));
                 if (scenario == "save") main.IsEnabled = false;
                 string expectedRoot = root;
                 if (scenario == "newer_root")
@@ -142,12 +104,9 @@ internal static class NavigationMcpChecks
                 exists.SetResult(true);
                 var result = await Finish(queued.Data["id"]!.GetValue<Guid>().ToString());
                 Assert.Equal("failed", result["State"]!.GetValue<string>());
-                Assert.Equal(scenario switch { "draft" => "pending_drafts", "dirty" => "unsaved_changes", "save" => "busy", _ => "context_changed" },
-                    result["result"]!["code"]!.GetValue<string>());
+                Assert.Equal(scenario == "save" ? "busy" : "context_changed", result["result"]!["code"]!.GetValue<string>());
                 Assert.Equal(expectedRoot, main.ViewModel.RootPath);
                 if (scenario != "newer_root") Assert.False(first.IsDisposed);
-                if (scenario == "draft") { Assert.Equal("-", draft.Text); draft.Text = "0"; }
-                if (scenario == "dirty") first.AnimationEdits!.Undo();
                 main.IsEnabled = true;
             }
 
@@ -232,7 +191,7 @@ internal static class NavigationMcpChecks
             main.IsEnabled = true;
             main.ViewModel.LoadDocumentAsync = originalLoad; main.ViewModel.CheckRootExistsAsync = originalExists;
             main.OpenPropertiesWindow?.CloseResolved();
-            foreach (var document in main.ViewModel.Documents.ToArray()) { document.AnimationEdits?.MarkSaved(); main.ViewModel.CloseResolved(document); }
+            foreach (var document in main.ViewModel.Documents.ToArray()) main.ViewModel.CloseResolved(document);
             main.Close(); Directory.Delete(root, true);
         }
 
@@ -252,11 +211,5 @@ internal static class NavigationMcpChecks
         package.Entries.Add(new(new byte[308], 0, 0));
         var source = new AssetDocument(path, new(0, DateTime.MinValue), new(FormatFamily.Unknown, null, Recognition.Unknown, "navigation fixture"), ReadOnlyMemory<byte>.Empty) { Animations = package };
         source.Add(AssetKind.Raw, 0, "first", 0, 0); source.Add(AssetKind.Raw, 1, "second", 0, 0); return source;
-    }
-    private static IEnumerable<DependencyObject> Descendants(DependencyObject root)
-    {
-        yield return root;
-        for (int i = 0; i < VisualTreeHelper.GetChildrenCount(root); i++)
-            foreach (var child in Descendants(VisualTreeHelper.GetChild(root, i))) yield return child;
     }
 }

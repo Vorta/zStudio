@@ -61,7 +61,7 @@ public sealed partial class SceneViewport
 
     private void RequireAiPathInteraction()
     {
-        if (!PlacementEditingEnabled) throw new InvalidOperationException("Unlock editing first.");
+        if (!PlacementEditingEnabled) throw new InvalidOperationException("This world is read only: edit its source project instead.");
         if (IsFlyActive || IsPickupDragging || HasTransformDraft || TerrainBrushActive || ZonePaintActive || HasParachutePreview || IsParachutePointerMoving)
             throw new InvalidOperationException("Finish the active navigation or editing operation before editing an AI path.");
     }

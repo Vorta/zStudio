@@ -53,7 +53,7 @@ internal static class InspectionResultMcpChecks
             var resolver = main.ViewModel.Resolver!;
             var world = new AssetDocument(worldPath, FileStamp.Read(worldPath), new(FormatFamily.GameZ, 15, Recognition.Supported, "bounded response fixture"), worldBytes) { Scene = new() };
             var asset = world.Add(AssetKind.World, 0, "Whole world", 0, worldBytes.Length);
-            using var doc = new DocumentModel(world); doc.AttachResolver(resolver); main.ViewModel.Documents.Add(doc);
+            using var doc = new DocumentModel(world); main.ViewModel.Documents.Add(doc);
             typeof(MainViewModel).GetField("selectedDocument", BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(main.ViewModel, doc);
             var edits = await doc.GetPickupEditsAsync(resolver, token);
             Assert.Equal(count, edits.Records.Count);
@@ -113,7 +113,7 @@ internal static class InspectionResultMcpChecks
             foreach (int? limit in new int?[] { 1, null, 200 })
             {
                 await AllPages("pickups", "items", "nextOffset", "total", count, limit,
-                    row => { Assert.Equal(sourceArchive, row["source"]!["ArchivePath"]!.GetValue<string>()); Assert.Equal(archivePath, row["target"]!.GetValue<string>()); return row["source"]!["RecordIndex"]!.GetValue<int>(); });
+                    row => { Assert.Equal(sourceArchive, row["source"]!["ArchivePath"]!.GetValue<string>()); return row["source"]!["RecordIndex"]!.GetValue<int>(); });
                 await AllPages("scene_nodes", "items", "nextOffset", "total", count, limit,
                     row => { Assert.Equal(sourceArchive, row["actor"]!["Pickup"]!["Source"]!["ArchivePath"]!.GetValue<string>()); return row["Index"]!.GetValue<int>(); });
                 List<string?> seen = []; int? offset = 0;
@@ -203,7 +203,7 @@ internal static class InspectionResultMcpChecks
             using (var editor = new AnimationEditor(animationDocument, 0, resolver, token))
             {
                 var flags = BindingFlags.Instance | BindingFlags.NonPublic;
-                typeof(AnimationEditor).GetField("context", flags)!.SetValue(editor, new AnimationPreviewContext { Package = animationDocument.AnimationEdits!.Package, World = world });
+                typeof(AnimationEditor).GetField("context", flags)!.SetValue(editor, new AnimationPreviewContext { Package = animationDocument.Document.Animations!, World = world });
                 typeof(AnimationEditor).GetField("frame", flags)!.SetValue(editor, new AnimationFrame(0, [], [], [], [], null, null, default, default, [], [], []));
                 editor.SetOperationDiagnostics(main.ViewModel.Problems);
                 Set("animation", editor);
@@ -225,7 +225,6 @@ internal static class InspectionResultMcpChecks
                 }
                 finally { Set("animation", null); }
             }
-            Assert.False(doc.IsDirty); Assert.False(edits.CanUndo);
             Assert.Equal(worldBytes, await File.ReadAllBytesAsync(worldPath, token));
 
             JsonObject Args(int offset, int? limit)

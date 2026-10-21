@@ -71,10 +71,9 @@ public partial class MainWindow
     {
         if (!IsAiWorld || shownDocument is not { IsDisposed: false } doc || doc.PickupEdits == null)
             throw new StudioCommandException("not_ready", "Open a Whole world with supported AI coordinate records.");
-        if (doc.EditingLocked) throw new StudioCommandException("locked", "Unlock editing before editing an AI path.");
+        if (doc.SourceWorld == null) throw new StudioCommandException("read_only", "This world is read only: edit its source project instead.");
         if (scene!.IsFlyActive || scene.IsPickupDragging || doc.SourceWorld?.IsRebuilding == true || sourceWorkspaceBusy)
             throw new StudioCommandException("busy", "Finish the active gesture or world operation first.");
-        if (doc.PickupEdits.HasExternalChanges()) throw new StudioCommandException("external_change", "An owning archive changed outside zStudio.");
     }
     private AiPathDraft RequireAiPathDraft(string? token = null)
     {
@@ -189,11 +188,7 @@ public partial class MainWindow
                 throw;
             }
         }
-        var selected = draft.Sources.Keys.ToArray();
-        draft.Document.PickupEdits!.MoveAiNodesTo(draft.After);
-        CancelAiPathDraft();
-        if (scene == draft.Viewport && scene.AiNetworks.Networks.Any(n => n.Id == draft.Network)) scene.SetAiPathEditing(draft.Network, selected);
-        UpdateAiPathPanel(); UpdateDocumentCommands(); return draft.Document;
+        throw new StudioCommandException("read_only", "This world is read only: edit its source project instead.");
     }
     private void CancelAiPathDraft()
         => ReleaseAiPathDraft(AiPathDraftLifetime.Canceled);
@@ -226,8 +221,6 @@ public partial class MainWindow
         bool editing = IsAiWorld && scene?.AiPathEditingNetwork != null;
         AiPathPanel.Visibility = editing ? Visibility.Visible : Visibility.Collapsed;
         AiPathPanel.IsEnabled = !sourceWorkspaceBusy;
-        AiPathEdit.Content = editing ? "Exit Edit (Tab)" : "Edit path (Tab)";
-        AiPathEdit.Visibility = shownDocument?.SourceWorld == null ? Visibility.Visible : Visibility.Collapsed;
         AiPathHeading.Text = $"AI path · {scene?.SelectedAiPathNodes.Count ?? 0} selected";
         AiPathFields.Visibility = aiPathDraft == null ? Visibility.Collapsed : Visibility.Visible;
         synchronizingAiPath = true;
@@ -264,14 +257,12 @@ public partial class MainWindow
     {
         if (!IsAiWorld || CameraInputIsNative(e.OriginalSource as DependencyObject) || CameraInputIsNative(System.Windows.Input.Keyboard.FocusedElement as DependencyObject)
             || System.Windows.Input.Keyboard.Modifiers != ModifierKeys.None) return false;
-        if (e.Key != Key.Tab && scene?.AiPathEditingNetwork == null) return false;
-        if (e.Key == Key.Tab && shownDocument?.SourceWorld != null) return false;
-        if (e.Key is not (Key.Tab or Key.G or Key.R or Key.S or Key.X or Key.Y or Key.Z or Key.Enter or Key.Escape)) return false;
+        if (scene?.AiPathEditingNetwork == null) return false;
+        if (e.Key is not (Key.G or Key.R or Key.S or Key.X or Key.Y or Key.Z or Key.Enter or Key.Escape)) return false;
         e.Handled = true; if (e.IsRepeat) return true;
         _ = ReportUi(async () =>
         {
-            if (e.Key == Key.Tab) { if (scene!.AiPathEditingNetwork == null) EnterAiPath(); else if (ResolveAiPathDraft()) scene.SetAiPathEditing(null); }
-            else if (e.Key == Key.Escape) { if (scene!.CancelAiPathBox()) return; if (HasAiPathDraft) CancelAiPathDraft(); else scene.SetAiPathEditing(null); }
+            if (e.Key == Key.Escape) { if (scene!.CancelAiPathBox()) return; if (HasAiPathDraft) CancelAiPathDraft(); else scene.SetAiPathEditing(null); }
             else if (e.Key == Key.Enter && HasAiPathDraft) await ApplyAiPathAsync(CancellationToken.None);
             else if (e.Key is Key.G or Key.R or Key.S) BeginAiPathTransform(e.Key == Key.G ? "move" : e.Key == Key.R ? "rotate" : "scale", true);
             else if (aiPathDraft is { } draft && e.Key is Key.X or Key.Y or Key.Z)

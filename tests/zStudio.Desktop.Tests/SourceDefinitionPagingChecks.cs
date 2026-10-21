@@ -55,7 +55,7 @@ internal static class SourceDefinitionPagingChecks
             string writtenPath = files[^1].Replace("/", @"\\", StringComparison.Ordinal);
             Assert.Contains(writtenPath, list); Assert.DoesNotContain("choice000.zad", list);
             Assert.DoesNotContain(writtenPath, File.ReadAllText(fixture.Path("data/m1/zrdr/anim.zad")));
-            Assert.Contains(current.PreviewDocument.Scene!.Nodes, n => n.Name == "tank");
+            Assert.Contains(current.Document.Scene!.Nodes, n => n.Name == "tank");
 
             async Task<JsonNode> Call(string name, Dictionary<string, object?> arguments)
             {

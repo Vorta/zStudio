@@ -28,7 +28,7 @@ public partial class MainWindow
     ]);
     private static StudioParameter WorkspaceChanges => new("changes", "object", "Optional presentation preferences.", Properties:
     [
-        .. new[] { "resetLayout", "navigator", "inspector", "tools", "toolsMaximized", "backupOnSave" }.Select(n=>P(n,"boolean",n)),
+        .. new[] { "resetLayout", "navigator", "inspector", "tools", "toolsMaximized" }.Select(n=>P(n,"boolean",n)),
         P("theme","string","Theme.",false,"System","Light","Dark"),
         P("preset","string","Workspace preset.",false,"Inspect","Edit","Debug","Focus preview"),
 

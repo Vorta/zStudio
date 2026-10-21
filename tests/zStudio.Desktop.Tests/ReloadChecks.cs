@@ -11,7 +11,7 @@ internal static class ReloadChecks
 {
     internal static async Task Run()
     {
-        foreach (string scenario in new[] { "missing", "parse", "unknown", "cancel", "revision", "draft", "navigation", "active", "background" })
+        foreach (string scenario in new[] { "missing", "parse", "unknown", "cancel", "draft", "navigation", "active", "background" })
         {
             using var vm = new MainViewModel();
             var original = new DocumentModel(Source("reload.zbd"));
@@ -29,7 +29,6 @@ internal static class ReloadChecks
             await started.Task;
             Assert.False(original.IsDisposed); Assert.Contains(original, vm.Documents);
             if (scenario == "cancel") cancellation.Cancel();
-            if (scenario == "revision") original.AnimationEdits!.Apply(0, "Concurrent edit", e => e.SetInt(164, 1));
             if (scenario == "draft") draft = true;
             if (scenario == "navigation") vm.SelectedDocument = other;
             var replacement = Source(original.Path);
@@ -51,26 +50,16 @@ internal static class ReloadChecks
                 if (scenario == "cancel") await Assert.ThrowsAnyAsync<OperationCanceledException>(() => pending);
                 else
                 {
-                    string code = scenario switch { "revision" => "revision_conflict", "draft" => "pending_drafts", "navigation" => "context_changed", _ => "open_failed" };
+                    string code = scenario switch { "draft" => "pending_drafts", "navigation" => "context_changed", _ => "open_failed" };
                     Assert.Equal(code, (await Assert.ThrowsAsync<StudioCommandException>(() => pending)).Code);
                 }
                 Assert.False(original.IsDisposed); Assert.Same(original, vm.Documents[0]);
                 Assert.Same(scenario == "navigation" ? other : original, vm.SelectedDocument);
-                if (scenario == "revision") Assert.True(original.IsDirty);
             }
         }
-        // GUI discard authorization applies only at successful publication.
+        // An obsolete reload failure does not report into a newer selection.
         using var gui = new MainViewModel();
-        var dirty = new DocumentModel(Source("dirty.zbd")); gui.Documents.Add(dirty); gui.SelectedDocument = dirty;
-        dirty.AnimationEdits!.Apply(0, "Before reload", e => e.SetInt(164, 1));
-        gui.ConfirmDiscardAsync = _ => Task.FromResult(true);
-        gui.LoadDocumentAsync = (_, _) => throw new FileNotFoundException("fixture disappeared");
-        await gui.ReloadAsync();
-        Assert.Same(dirty, gui.SelectedDocument); Assert.False(dirty.IsDisposed); Assert.True(dirty.IsDirty);
-        gui.LoadDocumentAsync = (_, _) => Task.FromResult(Source(dirty.Path));
-        await gui.ReloadAsync();
-        Assert.True(dirty.IsDisposed); Assert.NotSame(dirty, gui.SelectedDocument); Assert.False(gui.SelectedDocument!.IsDirty);
-
+        var reloaded = new DocumentModel(Source("reloaded.zbd")); gui.Documents.Add(reloaded); gui.SelectedDocument = reloaded;
         TaskCompletionSource parsing = new(TaskCreationOptions.RunContinuationsAsynchronously);
         TaskCompletionSource<AssetDocument> failedParse = new(TaskCreationOptions.RunContinuationsAsynchronously);
         gui.LoadDocumentAsync = (_, _) => { parsing.SetResult(); return failedParse.Task; };

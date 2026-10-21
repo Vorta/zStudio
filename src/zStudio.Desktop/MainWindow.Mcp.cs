@@ -136,26 +136,17 @@ public partial class MainWindow
     {
         if (!committingSection && HasSectionDraft(doc))
             throw new StudioCommandException("pending_drafts", "Apply or revert the zone or AI network card's changes (drafts target section) before continuing.");
-        if (parachuteDraft is { } drop && drop != committingParachute && (doc == null || doc == drop.Session.World || doc == drop.Session.Owner || doc.ResourceEdits != null || doc.ContentEdits != null))
+        if (parachuteDraft is { } drop && drop != committingParachute && (doc == null || doc == drop.Session.World || doc == drop.Session.Owner))
             throw new StudioCommandException("pending_drafts", "Confirm or cancel the Parachute move before continuing.");
-        if (HasAiPathDraft && aiPathDraft != committingAiPath && (doc == null || aiPathDraft!.Document == doc || doc.ResourceEdits != null || doc.ContentEdits != null))
+        if (HasAiPathDraft && aiPathDraft != committingAiPath && (doc == null || aiPathDraft!.Document == doc))
             throw new StudioCommandException("pending_drafts", "Confirm or cancel the AI path transform with ai_path before continuing.");
-        // Resource/content edits elsewhere refresh the shown preview, whose scene-card draft would otherwise need a modal decision mid-request.
-        if (HasInspectionDraft && inspectionDraft != committingCard && (doc == null || inspectionDraft!.DraftDocument == doc || doc != shownDocument && inspectionDraft.DraftDocument == shownDocument && (doc.ResourceEdits != null || doc.ContentEdits != null)))
+        if (HasInspectionDraft && inspectionDraft != committingCard && (doc == null || inspectionDraft!.DraftDocument == doc))
             throw new StudioCommandException("pending_drafts", "Resolve the scene card draft explicitly before continuing.");
         if ((doc == null || propertiesWindow?.Document == doc) && (committing ? propertiesWindow?.HasUncommittedDrafts : propertiesWindow?.HasPendingDrafts) == true || (doc == null || shownDocument == doc) && animation?.HasAutomationDrafts == true)
             throw new StudioCommandException("pending_drafts", "Unfinished GUI input is retained. Inspect and explicitly resolve drafts before continuing.");
         if (scene?.IsPickupDragging == true) throw new StudioCommandException("busy", "A pickup drag is in progress.");
     }
-    private static object DocumentState(DocumentModel d) => DocumentState(d, includeContentDetails: true);
-    internal static object DocumentState(DocumentModel d, bool includeContentDetails) => new { id = d.SessionId, d.Path, d.Revision, d.IsDirty, d.IsStale, d.EditingLocked, game = d.PreviewDocument.Game.ToString(), format = d.Document.Probe, assetCount = d.Assets.Count, selected = d.SelectedAsset?.Record.Id, d.LastSavedCopy, sourceWorld = SourceWorldState(d),
-        contentEdits = ContentState(d, includeContentDetails) };
-    private static object? ContentState(DocumentModel d, bool includeDetails)
-    {
-        if (d.ContentEdits == null) return null;
-        var files = FileResultPreview.Content(d.ContentEdits, includeDetails: includeDetails);
-        return new { d.IsContentMirror, files = files.Values, fileCount = files.Count, filesTruncated = files.Truncated };
-    }
+    internal static object DocumentState(DocumentModel d) => new { id = d.SessionId, d.Path, d.Revision, d.IsDirty, d.IsStale, game = d.Document.Game.ToString(), format = d.Document.Probe, assetCount = d.Assets.Count, selected = d.SelectedAsset?.Record.Id, sourceWorld = SourceWorldState(d) };
     private void Register(StudioCommands registry, string name, string description, bool mutates, StudioParameter[] parameters, Func<JsonObject, CancellationToken, Task<StudioResult>> action)
     {
         registry.Add(new("zstudio_" + name, description, mutates, parameters, async (args, token) =>
@@ -198,7 +189,7 @@ public partial class MainWindow
             return Result(new
             {
                 version = typeof(MainWindow).Assembly.GetName().Version?.ToString(), ViewModel.HasRoot, ViewModel.RootPath, Status = ViewModel.Status.Length <= 512 ? ViewModel.Status : Bounded(ViewModel.Status, 511), statusTruncated = ViewModel.Status.Length > 512, ViewModel.IsBusy,
-                documents = page.Documents.Select(d => DocumentState(d, includeContentDetails: false)).ToArray(), total = page.Total, offset = page.Offset, nextOffset = page.NextOffset, activeDocument = ViewModel.SelectedDocument?.SessionId,
+                documents = page.Documents.Select(DocumentState).ToArray(), total = page.Total, offset = page.Offset, nextOffset = page.NextOffset, activeDocument = ViewModel.SelectedDocument?.SessionId,
                 preview = previewId, selectedAsset = shownAsset?.Id, animationTime = animation?.CurrentFrame?.Time, animationPlaying = animation?.IsPlaying,
                 pendingPropertiesDrafts = propertiesWindow?.HasPendingDrafts == true, pendingPreviewDrafts = animation?.HasAutomationDrafts == true, pendingSceneDrafts = HasInspectionDraft, pendingAiPathDrafts = HasAiPathDraft,
             });

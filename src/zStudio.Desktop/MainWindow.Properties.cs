@@ -83,51 +83,20 @@ public partial class MainWindow
                 if (inspectionDraft is { ObjectEditing: true, HasObjectDraft: false, ObjectApplying: false } clean && clean.DraftDocument == doc) clean.CancelDraft();
                 sourceWorldWork = RunUi(() => UndoSourceWorldAsync(doc, redo, CancellationToken.None));
             }
-            return;
         }
-        if (doc.ContentEdits != null) { contentWork = UndoContentAsync(doc, redo); return; }
-        if (doc.ResourceEdits != null) { resourceWork = UndoResourcesAsync(doc, redo); return; }
-        if (doc.IsDisposed || !ResolvePropertiesDrafts(doc) || shownDocument == doc && animation?.ResolvePendingDrafts() == false) return;
-        if (shownDocument == doc) { animation?.Pause(); scene?.CancelPickupDrag(); }
-        // Auxiliary coordinate inspection/history must not shadow an animation document's own
-        // available steps. Coordinate history remains available when that primary direction is empty.
-        if (doc.AnimationEdits is { } edits && (redo ? edits.CanRedo : edits.CanUndo)) { if (redo) edits.Redo(); else edits.Undo(); }
-        else if (doc.ModelEdits != null || doc.PickupEdits != null)
-        { bool model = doc.NextSceneEditIsModel(redo); doc.UndoScene(redo); if (model) modelRefreshWork = RefreshModelDependentsAsync(doc); }
-        UpdateDocumentCommands();
-    }
-    internal PropertiesWindow? OpenAnimationProperties(DocumentModel doc, int entry, Guid sequence, Guid ev)
-    {
-        ++propertyRequest;
-        if (doc.IsDisposed) return null;
-        var window = GetPropertiesWindow(); bool accepted = window.SetAnimation(doc, entry, sequence, ev);
-        PresentProperties(window, accepted); return accepted ? window : null;
+        // A compiled document is read only: it has no history.
     }
     internal async Task<PropertiesWindow?> OpenAssetPropertiesAsync(DocumentModel doc, AssetRecord asset, CancellationToken cancellationToken = default, bool automation = false)
     {
-        Guid? resourceMember = doc.Assets.FirstOrDefault(row => ReferenceEquals(row.Record, asset))?.ResourceId;
         if (!automation && !await ResolvePropertiesDraftsAsync()) return null;
         long request = ++propertyRequest;
         if (doc.IsDisposed) return null;
         cancellationToken.ThrowIfCancellationRequested();
-        if (doc.ScriptEdits != null)
-        {
-            if (resourceMember == null) throw new StudioCommandException("stale_asset", "Read the current script identity before opening Properties.");
-            return await OpenScriptPropertiesAsync(doc, resourceMember.Value, null, automation);
-        }
-        if (doc.ResourceEdits != null)
-        {
-            if (resourceMember == null) throw new StudioCommandException("stale_asset", "Read the current member identity before opening Properties.");
-            bool valves = await UsesValvePropertiesAsync(doc, resourceMember.Value, cancellationToken);
-            if (request != propertyRequest || doc.IsDisposed) return null; // A newer Properties request or closing superseded this one.
-            return await OpenResourcePropertiesAsync(doc, resourceMember.Value, null, cancellationToken, automation, valves: valves);
-        }
-        if (asset.Kind == AssetKind.Animation && doc.AnimationEdits != null) return OpenAnimationProperties(doc, asset.Index, Guid.Empty, Guid.Empty);
         try
         {
             using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, doc.Lifetime.Token);
-            long revision = doc.Revision; var snapshot = doc.PreviewDocument;
-            asset = snapshot.Assets.SingleOrDefault(a => a.Id == asset.Id) ?? throw new StudioCommandException("stale_asset", "This record is absent from the current edit.");
+            long revision = doc.Revision; var snapshot = doc.Document;
+            asset = snapshot.Assets.SingleOrDefault(a => a.Id == asset.Id) ?? throw new StudioCommandException("stale_asset", "This record is no longer in the document.");
             var json = await LoadAssetPropertiesAsync(snapshot, asset, cancellation.Token);
             if (doc.IsDisposed || request != propertyRequest) return null;
             cancellation.Token.ThrowIfCancellationRequested();
@@ -156,10 +125,6 @@ public partial class MainWindow
             catch (StudioCommandException ex) { Report(ex); }
             return;
         }
-        if (scriptGrid.IsKeyboardFocusWithin && scriptGrid.SelectedItem is ScriptRow scriptRow && doc.SelectedAsset?.ResourceId is Guid script)
-        { await OpenScriptPropertiesAsync(doc, script, scriptRow.Id); return; }
-        if (CentralTree.IsKeyboardFocusWithin && CentralTree.SelectedItem is ResourceTreeItem resource && doc.SelectedAsset?.ResourceId is Guid member)
-        { await OpenResourcePropertiesAsync(doc, member, resource.Node.Id); return; }
         if (AssetGrid.IsKeyboardFocusWithin && doc.SelectedAsset is { } asset) { await OpenAssetPropertiesAsync(doc, asset.Record); return; }
         if (DocumentSceneTree.IsKeyboardFocusWithin && sceneTree?.Selected is { Selectable: true } selectedRow)
         {
@@ -178,10 +143,6 @@ public partial class MainWindow
         }
         if (IsAiWorld && scene?.AiPathEditingNetwork != null) { await OpenAiPathPropertiesAsync(); return; }
         if (IsAiWorld && scene?.SelectedAiNode is { } aiNode) { await OpenAiPropertiesAsync(aiNode, false); return; }
-        if (animation is { } editor)
-        {
-            var target = editor.PropertySelection; OpenAnimationProperties(doc, editor.EntryIndex, target.Sequence, target.Event); return;
-        }
         ++propertyRequest;
         var window = GetPropertiesWindow();
         if (selectedNode is int node && properties != null)
@@ -195,8 +156,8 @@ public partial class MainWindow
                 catch (Exception ex) when (ex is StudioCommandException or IOException or UnauthorizedAccessException) { Report(ex); }
                 return;
             }
-            bool opened = scene?.PickupAt(node)?.Pickup is { } pickup && doc.PickupEdits?.Find(pickup.Source) != null
-                ? window.SetPickup(doc, pickup.Source, $"{name} · node #{node}", properties, SourcePickupMove(doc))
+            bool opened = doc.SourceWorld != null && scene?.PickupAt(node)?.Pickup is { } pickup && doc.PickupEdits?.Find(pickup.Source) != null
+                ? window.SetPickup(doc, pickup.Source, $"{name} · node #{node}", properties, SourcePickupMove(doc)!)
                 : window.SetReadOnly(doc, $"{name} · node #{node}", properties);
             PresentProperties(window, opened);
         }
@@ -221,14 +182,14 @@ public partial class MainWindow
             PresentProperties(readOnlyWindow, shown); return shown ? readOnlyWindow : null;
         }
         var node = item.Node!;
-        if (!item.Owner.IsPreview && doc.PreviewDocument.Assets.FirstOrDefault(a => a.Kind == AssetKind.Node && a.Index == node.Index) is { } asset)
+        if (!item.Owner.IsPreview && doc.Document.Assets.FirstOrDefault(a => a.Kind == AssetKind.Node && a.Index == node.Index) is { } asset)
             return await OpenAssetPropertiesAsync(doc, asset, token, automation);
         ++propertyRequest;
         if (doc.SourceWorld != null && scene?.Mission?.ActorAt(node.Index) is { } actor)
         {
             var actorWindow = GetPropertiesWindow();
             bool shown = actor.Pickup is { } pickup && doc.PickupEdits?.Find(pickup.Source) != null
-                ? actorWindow.SetPickup(doc, pickup.Source, item.DisplayName, SceneTreeProperties(item), SourcePickupMove(doc))
+                ? actorWindow.SetPickup(doc, pickup.Source, item.DisplayName, SceneTreeProperties(item), SourcePickupMove(doc)!)
                 : actorWindow.SetReadOnly(doc, item.DisplayName, SceneTreeProperties(item));
             PresentProperties(actorWindow, shown); return shown ? actorWindow : null;
         }
@@ -250,10 +211,7 @@ public partial class MainWindow
     private async void AssetPropertiesClick(object sender, RoutedEventArgs e)
     {
         if (contextAsset is not { } asset || assetContextDocument is not { IsDisposed: false } doc) return;
-        if (doc.ResourceEdits != null && asset.ResourceId is Guid member)
-            await ResourceUiAsync(async () => { bool valves = await UsesValvePropertiesAsync(doc, member, doc.Lifetime.Token); if (!doc.IsDisposed) await OpenResourcePropertiesAsync(doc, member, null, valves: valves); });
-        else if (doc.ScriptEdits != null && asset.ResourceId is Guid script) await ResourceUiAsync(async () => { await OpenScriptPropertiesAsync(doc, script, null); });
-        else await OpenAssetPropertiesAsync(doc, asset.Record);
+        await OpenAssetPropertiesAsync(doc, asset.Record);
     }
     /// <summary>Whether, and on which row, the World tree had the keyboard when its context menu was opened (Group by type gives it back).</summary>
     private (bool Had, SceneTreeItem? Row) sceneMenuFocus;

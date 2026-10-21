@@ -14,12 +14,9 @@ public sealed record AiValveRecord(Guid Id, Guid Parent, int ChildIndex, ZrdNode
     public long SourceOffset => NameNode.SourceOffset;
 }
 public sealed record AiValveReference(Guid Record, Guid Operand, string Name, string Role);
-public sealed record AiValveEdit(string Action, Guid Record = default, Guid Operand = default,
-    string? Value = null, string? Kind = null, int Index = -1);
 public sealed record AiValveSource(string Archive, int MemberIndex, string Member, ZrdNode Root, ReadOnlyMemory<byte> Data);
-public sealed record AiValveTarget(Guid Id, string Name, long SourceOffset, bool Spatial);
 
-/// <summary>Semantic views over the shared ZRD tree. Occurrences, not names, identify editable records.</summary>
+/// <summary>Semantic views over the shared ZRD tree. Occurrences, not names, identify records.</summary>
 public static class MissionAiValves
 {
     public static AiNetworkSnapshot Attach(AiNetworkSnapshot graph, IEnumerable<AssetDocument> archives, CancellationToken token)
@@ -128,19 +125,6 @@ public static class MissionAiValves
         }
         return versions == 1;
     }
-    public static IEnumerable<AiValveTarget> Targets(ZrdNode root, CancellationToken token = default)
-    {
-        if (!IsNetwork(root)) yield break;
-        var c = Fields(root).Children;
-        for (int i = 0; i < c.Count; i += 2)
-        {
-            token.ThrowIfCancellationRequested();
-            if (!MissionAiNetworks.TryNodeIndex(c[i].Text, true, out _)) continue;
-            bool spatial = MissionAiNetworks.IsSpatial(c[i + 1], true, token);
-            if (spatial || MissionAiNetworks.IsConstraint(c[i + 1], token)) yield return new(c[i + 1].Id, c[i].Text, c[i + 1].SourceOffset, spatial);
-        }
-    }
-
     public static IEnumerable<AiValveRecord> Records(string member, ZrdNode root, CancellationToken token = default)
     {
         var fields = Fields(root);
@@ -249,116 +233,5 @@ public static class MissionAiValves
         }
         if (r.Kind == "objective" && r.Name == "set_valve" && (c.Count != 2 || c[0].Kind != ZrdKind.String || c[1].Kind != ZrdKind.Int)) return "Expected objective valve name and assigned integer.";
         return null;
-    }
-
-    private static ZrdNode S(string s) => ZrdNode.Create(ZrdKind.String, JsonSerializer.Serialize(s));
-    private static ZrdNode I(int n) => ZrdNode.Create(ZrdKind.Int, n.ToString(CultureInfo.InvariantCulture));
-    private static ZrdNode F() => ZrdNode.Create(ZrdKind.Float, "0");
-    private static ZrdNode A(params ZrdNode[] nodes) => ZrdNode.Create(ZrdKind.Array) with { Children = nodes };
-    public static ZrdNode Parameters(string kind) => kind switch
-    {
-        "valve" => A(I(1), S(""), I(1)), "valveunion" => A(Parameters("valve")), "valve_assign" or "set_valve" => A(S(""), I(1)),
-        "attack_strategy" or "shutdown" => A(S(""), I(0), I(1)), "destroy" or "sound" or "sound_once" => A(S(""), I(1)),
-        "delayupdate" => A(S(""), F()), "teleport" => A(S(""), A(F(), F(), F()), F(), I(1)),
-        _ => throw new InvalidDataException("Choose a supported valve action or attribute.")
-    };
-    public static ZrdNode Edit(string member, ZrdNode root, AiValveEdit edit, CancellationToken token = default)
-    {
-        token.ThrowIfCancellationRequested();
-        var record = edit.Record == Guid.Empty ? null : Records(member, root, token).FirstOrDefault(r => r.Id == edit.Record);
-        if (edit.Action == "add_record")
-        {
-            if (!member.Equals("valves.zrd", StringComparison.OrdinalIgnoreCase)) throw new InvalidDataException("Add valve records in valves.zrd.");
-            string name = edit.Value ?? ""; if (name.Length is < 1 or > 16384) throw new InvalidDataException("Enter a valve name of 1–16384 characters.");
-            string kind = edit.Kind ?? "delayupdate";
-            if (!Actions.Contains(kind) && !Conditions.Contains(kind)) throw new InvalidDataException("Choose a supported valve action or compound condition for a definition.");
-            var value = Conditions.Contains(kind) ? A(S(kind), S("namelist"), A(S(""))) : A(S(kind), Parameters(kind));
-            var fields = Fields(root);
-            if (fields.Kind != ZrdKind.Array || fields.Children.Count % 2 != 0 || fields.Children.Where((_, i) => i % 2 == 0).Any(n => n.Kind != ZrdKind.String)) throw new InvalidDataException("Repair the incomplete source name/value pairs before adding a record.");
-            return Change(root, fields.Id, n => n with { Children = [.. n.Children, S(name), value] }, token);
-        }
-        if (edit.Action == "add_binding")
-        {
-            if (!MissionAiNetworks.IsCandidate(member) || !IsNetwork(root)) throw new InvalidDataException("Valve bindings require a version-106 network.");
-            var target = Targets(root, token).FirstOrDefault(n => n.Id == edit.Operand) ?? throw new InvalidDataException("Choose an existing spatial node or edge record.");
-            bool spatial = target.Spatial;
-            var owner = Fields(root).Children.First(n => n.Id == target.Id);
-            if (owner.Children.Count % 2 != 1) throw new InvalidDataException("Repair the incomplete attribute pairs before adding a binding.");
-            string kind = edit.Kind ?? (spatial ? "valve" : "valve_assign");
-            if (spatial ? kind is not ("valve" or "valveunion") : kind != "valve_assign") throw new InvalidDataException("Attribute is not supported for this record kind.");
-            return Change(root, owner.Id, n => n with { Children = [.. n.Children, S(kind), Parameters(kind)] }, token);
-        }
-        if (record == null) throw new InvalidDataException("The valve record no longer exists. Refresh its source identity.");
-        if (edit.Action is "add_option" or "remove_option")
-        {
-            var tuple = record.Name == "valve" && record.Kind == "node" ? record.Value : record is { Kind: "node", Name: "valveunion" } ? record.Value.Children.FirstOrDefault(n => n.Id == edit.Operand) : null;
-            if (tuple?.Kind != ZrdKind.Array || tuple.Children.Count is not (2 or 3) || tuple.Children[0].Kind != ZrdKind.Int || tuple.Children[1].Kind != ZrdKind.String || tuple.Children.Count == 3 && tuple.Children[2].Kind != ZrdKind.Int)
-                throw new InvalidDataException("Choose a two/three-field node condition or union term.");
-            return Change(root, tuple.Id, n => n with { Children = edit.Action == "add_option" ? [n.Children[0], n.Children[1], n.Children.Count == 3 ? n.Children[2] : I(1)] : [n.Children[0], n.Children[1]] }, token);
-        }
-        if (edit.Action == "set")
-        {
-            var target = edit.Operand == record.NameNode.Id ? record.NameNode : record.Value.Find(edit.Operand);
-            if (target == null || target.Kind == ZrdKind.Array) throw new InvalidDataException("Choose a scalar operand in this valve record.");
-            if (target.Id == record.NameNode.Id && record.Kind != "definition") throw new InvalidDataException("The binding kind cannot be renamed; replace the attribute explicitly.");
-            if (edit.Value == null) throw new InvalidDataException("Specify the typed scalar value.");
-            return Change(root, target.Id, n => ZrdNode.Set(n, n.Kind, edit.Value), token);
-        }
-        if (edit.Action is "delete" or "duplicate" or "move")
-            return Change(root, record.Parent, parent =>
-            {
-                var children = parent.Children.ToList(); int at = record.ChildIndex;
-                var pair = children.GetRange(at, 2);
-                if (edit.Action == "duplicate") children.InsertRange(at + 2, pair.Select(n => n.Duplicate()));
-                else
-                {
-                    children.RemoveRange(at, 2);
-                    if (edit.Action == "move")
-                    {
-                        int first = record.Kind == "node" ? 3 : record.Kind == "edge" ? 1 : 0;
-                        long to = first + 2L * edit.Index;
-                        if (edit.Index < 0 || to > children.Count) throw new InvalidDataException("Destination pair index is outside its owner.");
-                        children.InsertRange((int)to, pair);
-                    }
-                }
-                return parent with { Children = children.ToArray() };
-            }, token);
-        if (edit.Action is "add_action" or "add_term")
-        {
-            if (edit.Action == "add_action" && (record.Kind != "definition" || record.Value.Kind != ZrdKind.Array || record.Value.Children.Count % 2 != 0 || record.Value.Children.Count != 0 && Problem(record, token) != null)) throw new InvalidDataException("Choose a recognized action block.");
-            Guid destination = record.Value.Id; ZrdNode[] appended;
-            if (edit.Action == "add_action") { var kind = edit.Kind ?? "delayupdate"; if (!Actions.Contains(kind)) throw new InvalidDataException("Choose a supported valve action."); appended = [S(kind), Parameters(kind)]; }
-            else if (record is { Kind: "node", Name: "valveunion", Value.Kind: ZrdKind.Array }) appended = [Parameters("valve")];
-            else if (record.Kind == "definition" && record.Value.Children.Count == 3 && record.Value.Children[1].Text == "namelist" && record.Value.Children[2].Kind == ZrdKind.Array && Conditions.Contains(record.Value.Children[0].Text)) { destination = record.Value.Children[2].Id; appended = [S(edit.Value ?? "")]; }
-            else throw new InvalidDataException("Choose a union or compound definition.");
-            return Change(root, destination, n => n with { Children = [.. n.Children, .. appended] }, token);
-        }
-        if (edit.Action is "delete_item" or "duplicate_item" or "move_item")
-        {
-            bool pair = record.Kind == "definition" && record.Value.Children.Count % 2 == 0 && Problem(record, token) == null;
-            ZrdNode container = record.Value;
-            if (!pair && record.Kind == "definition" && container.Children.Count == 3 && container.Children[1].Text == "namelist" && container.Children[2].Kind == ZrdKind.Array && Conditions.Contains(container.Children[0].Text)) container = container.Children[2];
-            else if (!pair && record is not { Kind: "node", Name: "valveunion" }) throw new InvalidDataException("Choose an action block, compound or union.");
-            int width = pair ? 2 : 1;
-            int at = container.Children.ToList().FindIndex(n => n.Id == edit.Operand);
-            if (at < 0 || at % width != 0 || at + width > container.Children.Count) throw new InvalidDataException("Choose an action name or term identity.");
-            return Change(root, container.Id, n =>
-            {
-                var list = n.Children.ToList(); var item = list.GetRange(at, width);
-                if (edit.Action == "duplicate_item") list.InsertRange(at + width, item.Select(c => c.Duplicate()));
-                else { list.RemoveRange(at, width); if (edit.Action == "move_item") { if (edit.Index < 0 || (long)edit.Index * width > list.Count) throw new InvalidDataException("Item index is outside the container."); list.InsertRange(edit.Index * width, item); } }
-                return n with { Children = list.ToArray() };
-            }, token);
-        }
-        throw new InvalidDataException("Unsupported valve edit.");
-    }
-    private static ZrdNode Change(ZrdNode root, Guid id, Func<ZrdNode, ZrdNode> edit, CancellationToken token)
-    {
-        token.ThrowIfCancellationRequested(); if (root.Id == id) return edit(root);
-        if (root.Kind != ZrdKind.Array) return root;
-        ZrdNode[]? changed = null;
-        for (int i = 0; i < root.Children.Count; i++)
-        { var next = Change(root.Children[i], id, edit, token); if (!ReferenceEquals(next, root.Children[i])) { changed ??= root.Children.ToArray(); changed[i] = next; } }
-        return changed == null ? root : root with { Children = changed };
     }
 }

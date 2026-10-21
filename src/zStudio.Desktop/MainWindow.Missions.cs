@@ -14,10 +14,10 @@ public partial class MainWindow
     private string? PendingExactMission(string worldPath) => exactMissionRequest is { } pending && pending.World.Equals(worldPath, StringComparison.OrdinalIgnoreCase) ? pending.Archive : null;
     private string? ExactMissionFor(string worldPath, string? archive) => exactMissionRequest is { } pending && archive != null &&
         pending.World.Equals(worldPath, StringComparison.OrdinalIgnoreCase) && pending.Archive.Equals(archive, StringComparison.OrdinalIgnoreCase) ? archive : null;
-    private string? MissionWorldPath => animation?.Mw3WorldPath ?? (shownAsset?.Kind == AssetKind.World && shownDocument?.PreviewDocument.Game == GameVariant.MechWarrior3 ? shownDocument.Path : null);
+    private string? MissionWorldPath => animation?.Mw3WorldPath ?? (shownAsset?.Kind == AssetKind.World && shownDocument?.Document.Game == GameVariant.MechWarrior3 ? shownDocument.Path : null);
     private async Task PopulateWorldMissionsAsync(DocumentModel doc, CancellationToken token)
     {
-        if (doc.PreviewDocument.Game != GameVariant.MechWarrior3 || ViewModel.Resolver == null) return;
+        if (doc.Document.Game != GameVariant.MechWarrior3 || ViewModel.Resolver == null) return;
         var catalog = await MissionSceneLoader.Mw3MissionCatalogAsync(doc.Path, ViewModel.Resolver, token);
         token.ThrowIfCancellationRequested(); bool wasUpdating = updating; updating = true;
         try

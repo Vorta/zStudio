@@ -12,56 +12,7 @@ public sealed class ResourceSessionPreparationTests
     private static CancellationToken Token => TestContext.Current.CancellationToken;
     private const string Text = "# untouched comment\r\n( VALUE ( 7 ) OTHER ( 9 ) )\r\n";
 
-    [Fact]
-    public async Task CancellationAfterSyntaxKeepsTheSourceAndRetryPreservesHistoryIdentities()
-    {
-        byte[] bytes = Encoding.ASCII.GetBytes(Text);
-        var document = FormatRegistry.Default.OpenBytes("values.zrd", bytes, token: Token);
-        Assert.Equal("zrd-text", document.SourceSyntax);
-        using var canceled = CancellationTokenSource.CreateLinkedTokenSource(Token);
-        bool hydrated = false;
-        var error = Assert.Throws<OperationCanceledException>(() => new ResourceEditSession(document, canceled.Token, () =>
-        {
-            hydrated = true;
-            canceled.Cancel();
-        }));
-        Assert.True(hydrated);
-        Assert.Equal(canceled.Token, error.CancellationToken);
-        Assert.Equal(bytes, document.Bytes.ToArray());
-
-        var session = new ResourceEditSession(document, Token);
-        Assert.Same(document, session.Current.Document);
-        Assert.Equal(Convert.ToHexString(SHA256.HashData(bytes)), session.Current.Hash);
-        var member = Assert.Single(session.Current.Members);
-        var tree = session.Tree(member, Token);
-        var value = tree.Children[0].Children[1].Children[0];
-        Assert.Equal(7u, value.Bits);
-        session.Accept(await session.PrepareZrdAsync(member.Id, value.Id, "set", value: "8", token: Token));
-        Assert.Equal(Text.Replace("( 7 )", "( 8 )"), Encoding.ASCII.GetString(session.Current.Document.Bytes.Span));
-        Assert.Equal(member.Id, Assert.Single(session.Current.Members).Id);
-        session.UndoRedo(false);
-        Assert.Equal(bytes, session.Current.Document.Bytes.ToArray());
-        Assert.False(session.IsDirty);
-        session.UndoRedo(true);
-        Assert.Equal(value.Id, session.Tree(Assert.Single(session.Current.Members), Token).Children[0].Children[1].Children[0].Id);
-        Assert.Equal(bytes, document.Bytes.ToArray());
-    }
-
-    [Fact]
-    public void BinaryResourcePreparationKeepsAuthoredPayloadAndRejectsCanceledWork()
-    {
-        byte[] bytes = ZrdWriter.Write(ZrdNode.Create(ZrdKind.Int, "17"), Token);
-        var document = FormatRegistry.Default.OpenBytes("values.zrd", bytes, token: Token);
-        using var canceled = CancellationTokenSource.CreateLinkedTokenSource(Token);
-        canceled.Cancel();
-        Assert.Throws<OperationCanceledException>(() => new ResourceEditSession(document, canceled.Token));
-        var session = new ResourceEditSession(document, Token);
-        Assert.Equal(bytes, Assert.Single(session.Current.Members).Data.ToArray());
-        Assert.Same(document.Assets.Single().Content, Assert.Single(session.Current.Members).Tree);
-        Assert.False(session.IsDirty);
-    }
-
-    [Fact]
+[Fact]
     public void CancellableSlotProjectionPreservesFreedSlotAndNodeIdentities()
     {
         GameZWorld world = new();

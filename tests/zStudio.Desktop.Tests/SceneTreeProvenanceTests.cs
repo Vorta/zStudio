@@ -84,7 +84,6 @@ public sealed class SceneTreeProvenanceTests
         Assert.DoesNotContain(matches, value => edits.SourceComparer.Equals(value, first with { ResourceName = "RENAMED.ZRD" }));
         var unrelated = Mission(other, other with { RecordIndex = 99 }, reverse: false);
         Assert.Null(Tree(unrelated, state, edits).Selected);
-        Assert.False(edits.IsDirty); Assert.False(edits.CanUndo);
     }
 
     [Fact]

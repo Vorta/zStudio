@@ -144,7 +144,6 @@ internal static class WorldCompareMcpChecks
                 await Job("select_asset", new() { ["document"] = document, ["kind"] = "World", ["index"] = whole["Index"]!.GetValue<int>() });
                 Assert.Same(main.ViewModel.SelectedDocument, main.ViewModel.Documents.Single(d => d.Path == demo));
                 Assert.Equal(Visibility.Collapsed, ((FrameworkElement)main.FindName("EmptyPreview")).Visibility);
-                Assert.Null(main.ViewModel.SelectedDocument!.ModelEdits);
                 await Call("close_document", new() { ["document"] = document, ["revision"] = opened["Revision"]!.GetValue<long>() });
             }
             finally { try { Directory.Delete(demoFolder, true); } catch (IOException) { } catch (UnauthorizedAccessException) { } }

@@ -1,11 +1,6 @@
-using System.IO;
 using System.Text.Json.Nodes;
-using System.Windows;
-using System.Windows.Controls;
-using Microsoft.Win32;
 using zStudio.Automation;
 using zStudio.Core;
-using zStudio.Core.Export;
 using zStudio.Core.Formats;
 
 namespace zStudio.Desktop;
@@ -14,57 +9,16 @@ public partial class MainWindow
 {
     private static MechAssembly MechMember(DocumentModel doc, Guid member)
     {
-        var snapshot = ResourceSession(doc).Current;
-        int index = snapshot.Members.ToList().FindIndex(m => m.Id == member);
-        return index >= 0 && snapshot.Document.Assets[index].Content is MechAssembly assembly ? assembly : throw new StudioCommandException("unsupported", "Choose a decoded mech assembly member.");
-    }
-    private async Task ReplaceMechModelAsync(DocumentModel doc, Guid member, int model, int material, string path, long revision, CancellationToken token)
-    {
-        _ = MechMember(doc, member);
-        var edits = ResourceSession(doc);
-        await ApplyResourceAsync(doc, async ct =>
-        {
-            await using FileStream input = new(path, FileMode.Open, FileAccess.Read, FileShare.Read);
-            if (input.Length > 16 * 1024 * 1024) throw new InvalidDataException("OBJ exceeds the 16 MiB input limit.");
-            using StreamReader reader = new(input); string text = await reader.ReadToEndAsync(ct);
-            var mesh = await Task.Run(() => ModelImport.ReadObj(text, ct), ct);
-            return await edits.PrepareMechModelAsync(member, model, mesh, material, ct);
-        }, revision, token);
-    }
-    private async Task ReplaceMechModelDialogAsync(DocumentModel doc)
-    {
-        if (!await ResolvePropertiesDraftsAsync(doc) || doc.SelectedAsset?.ResourceId is not Guid member) return;
-        long revision = doc.Revision; var assembly = MechMember(doc, member); var scene = doc.PreviewDocument.Scene!;
-        StackPanel body = new() { Margin = new(16) };
-        body.Children.Add(new TextBlock { Text = "Replace a member-local mesh with a triangulated OBJ. Choose an existing shared material. Edit its texture through the texture pack editor.", TextWrapping = TextWrapping.Wrap, Margin = new(0, 0, 0, 12) });
-        var nodesByModel = scene.Nodes.Skip(assembly.RootNode).Take(assembly.NodeCount).ToLookup(n => n.ModelIndex);
-        var models = Enumerable.Range(0, assembly.ModelCount).Select(i => new { Index = i, Label = $"Model {i} · " + string.Join(", ", nodesByModel[assembly.FirstModel + i].Take(8).Select(n => n.Name)) }).ToArray();
-        ComboBox model = new() { ItemsSource = models, DisplayMemberPath = "Label", SelectedValuePath = "Index", SelectedIndex = 0, Margin = new(0, 4, 0, 12) };
-        body.Children.Add(new TextBlock { Text = "Mesh part" }); body.Children.Add(model);
-        var materials = scene.Materials.Select((m, i) => new { Index = i, Label = $"Material {i} · " + (m.Int("texture_index", -1) is >= 0 and int t && t < scene.Textures.Count ? scene.Textures[t].Text("name") : "solid color") }).ToArray();
-        ComboBox material = new() { ItemsSource = materials, DisplayMemberPath = "Label", SelectedValuePath = "Index", MaxDropDownHeight = 300, Margin = new(0, 4, 0, 12) };
-        // Suggest the selected part's current material until the user chooses one explicitly.
-        bool materialChosen = false, suggesting = false;
-        void SuggestMaterial()
-        {
-            if (materialChosen || model.SelectedValue is not int local) return;
-            suggesting = true; material.SelectedValue = scene.Models[assembly.FirstModel + local].Polygons.FirstOrDefault()?.MaterialIndex ?? 0; suggesting = false;
-        }
-        SuggestMaterial(); model.SelectionChanged += (_, _) => SuggestMaterial(); material.SelectionChanged += (_, _) => { if (!suggesting) materialChosen = true; };
-        body.Children.Add(new TextBlock { Text = "Shared material" }); body.Children.Add(material);
-        var dialog = ResourceDialog("Replace mech part mesh", body); DialogButtons(dialog, body);
-        if (dialog.ShowDialog() != true) return;
-        if (model.SelectedValue is not int local || material.SelectedValue is not int mat) throw new InvalidDataException("Select a mesh part and shared material.");
-        OpenFileDialog input = new() { Title = "Choose a local-coordinate triangulated OBJ", Filter = "Wavefront OBJ|*.obj" };
-        if (input.ShowDialog(this) != true) return;
-        await ReplaceMechModelAsync(doc, member, local, mat, input.FileName, revision, CancellationToken.None);
+        var resources = ResourceSession(doc);
+        int index = resources.Members.ToList().FindIndex(m => m.Id == member);
+        return index >= 0 && resources.Document.Assets[index].Content is MechAssembly assembly ? assembly : throw new StudioCommandException("unsupported", "Choose a decoded mech assembly member.");
     }
     private void RegisterMechCommands(StudioCommands registry)
     {
         Register(registry, "mech_models", "Inspect member-local models, shared materials or node references. Model rows preview at most 32 nodes/material indices with totals and truncation flags; use section nodes/materials and localModel for complete paged lists. Node names may repeat. Queries filter model labels, node names or material labels before pagination.", false,
             [DocumentParameter, MemberParameter, P("section", "string", "List section; default models.", false, "models", "materials", "nodes"), P("localModel", "integer", "Member-local model index, required for nodes; optionally restrict models/materials."), .. PageParameters], a =>
         {
-            var doc = TargetDocument(a); var member = MechMember(doc, GuidArg(a, "member")); var scene = doc.PreviewDocument.Scene!;
+            var doc = TargetDocument(a); var member = MechMember(doc, GuidArg(a, "member")); var scene = doc.Document.Scene!;
             int? localModel = a.ContainsKey("localModel") ? Int(a, "localModel") : null;
             if (localModel is int local && (local < 0 || local >= member.ModelCount)) throw new StudioCommandException("invalid_argument", "localModel must identify a model in this member.");
             string section = Text(a, "section", "models");
@@ -101,8 +55,5 @@ public partial class MainWindow
                             nodes = references.Take(32).Select(n => new { localNode = n.Index - member.RootNode, n.Name }).ToArray(), nodeCount, nodesTruncated = nodeCount > 32 };
                     }).Data });
         });
-        RegisterJob(registry, "mech_model_replace", "Replace one member-local mech mesh from a triangulated local-coordinate OBJ with UVs/normals and optional RGB vertex colors. Explicit shared material index; textures use texture_import. One archive undo step, with hierarchy and unrelated members preserved. Refreshes active and dependent previews, retaining the camera. Save through save_document.",
-            [DocumentParameter, RevisionParameter, MemberParameter, P("localModel", "integer", "Local model index from mech_models.", true), P("material", "integer", "Shared material index from mech_models materials.", true), P("path", "string", "Full path of the OBJ file.", true)], false,
-            async (a, token) => { var doc = TargetDocument(a, true); await ReplaceMechModelAsync(doc, GuidArg(a, "member"), Int(a, "localModel"), Int(a, "material"), FullPath(a, "path"), doc.Revision, token); return Result(DocumentState(doc)); });
     }
 }

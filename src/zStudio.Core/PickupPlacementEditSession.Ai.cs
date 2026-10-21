@@ -23,12 +23,4 @@ public sealed partial class PickupPlacementEditSession
         }
         return after;
     }
-
-    /// <summary>Accept all selected AI positions as one coordinate edit and one undo operation.</summary>
-    public bool MoveAiNodesTo(IReadOnlyDictionary<MissionPickupSource, Vector3> values)
-    {
-        if (ReadOnlyReason is { } reason) throw new InvalidOperationException(reason);
-        if (saving) throw new InvalidOperationException("Wait for the current save to finish.");
-        return AcceptTransforms(PreviewAiPositions(values));
-    }
 }

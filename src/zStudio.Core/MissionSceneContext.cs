@@ -163,7 +163,7 @@ public static partial class MissionSceneLoader
         string directory = Path.GetDirectoryName(world.Path)!;
         CompiledInventory inventory = new(token);
         var files = ResourceFiles(world.Path, resolver, token, inventory);
-        string key = difficulty + "|" + resolver.SnapshotRevision + "|" + inventory.Fingerprint(files) + (package == null ? "" : Convert.ToHexString(SHA256.HashData(AnimationWriter.Write(package, token))));
+        string key = difficulty + "|" + inventory.Fingerprint(files) + (package == null ? "" : Convert.ToHexString(SHA256.HashData(AnimationWriter.Write(package, token))));
         var cache = Cache.GetOrCreateValue(world);
         // The key holds every input of the build (world identity, published snapshots, each file's stamp, difficulty
         // and animations): a private load's context was admitted with exactly these, so reuse it before any read or walk.

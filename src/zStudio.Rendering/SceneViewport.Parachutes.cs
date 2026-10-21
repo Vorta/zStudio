@@ -112,7 +112,7 @@ public sealed partial class SceneViewport
 
     private void RequireParachuteInteraction()
     {
-        if (!PlacementEditingEnabled) throw new InvalidOperationException("Unlock editing first.");
+        if (!PlacementEditingEnabled) throw new InvalidOperationException("This world is read only: edit its source project instead.");
         if (IsFlyActive || IsPickupDragging || HasTransformDraft || TerrainBrushActive || ZonePaintActive || AiPathEditingNetwork != null)
             throw new InvalidOperationException("Finish the active navigation or editing operation before editing drop windows.");
         if (parachutePath.Length < 2) throw new InvalidOperationException("Analyze a flight path first.");

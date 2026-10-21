@@ -20,115 +20,73 @@ namespace zStudio.Desktop.Tests;
 
 internal static class ShutdownMcpChecks
 {
-    internal static async Task Run(Application app)
+    internal static async Task Run()
     {
-        foreach (bool cancelClose in new[] { false, true })
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var main = new MainWindow { Left = -12000, ShowInTaskbar = false }; main.Show();
+        var package = new AnimationPackage { Prefix = new byte[72], Tail = [] };
+        package.Entries.Add(new(new byte[308], 0, 0));
+        var source = new AssetDocument(Path.Combine(Path.GetTempPath(), "shutdown-mcp.zbd"), new(0, DateTime.MinValue),
+            new(FormatFamily.Animation, 28, Recognition.Supported, "fixture"), ReadOnlyMemory<byte>.Empty) { Animations = package };
+        source.Add(AssetKind.Raw, 0, "first", 0, 0);
+        source.Add(AssetKind.Raw, 1, "blocked", 0, 0);
+        var doc = new DocumentModel(source);
+        main.ViewModel.Documents.Add(doc); main.ViewModel.SelectedDocument = doc;
+        var flags = BindingFlags.Instance | BindingFlags.NonPublic;
+        ((TabControl)main.FindName("NavigationTabs")).SelectedItem = main.FindName("AssetsTab");
+        await Dispatcher.Yield(DispatcherPriority.ApplicationIdle);
+        await ((Task)typeof(MainWindow).GetField("previewWork", flags)!.GetValue(main)!).WaitAsync(deadline.Token);
+        var loader = main.LoadAssetPropertiesAsync;
+        TaskCompletionSource loading = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        TaskCompletionSource recovering = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        TaskCompletionSource releaseRecovery = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        TaskCompletionSource closed = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        main.Closed += (_, _) => closed.TrySetResult();
+        int calls = 0;
+        CancellationToken loadToken = default;
+        main.LoadAssetPropertiesAsync = async (document, asset, token) =>
         {
-            using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-            var main = new MainWindow { Left = -12000, ShowInTaskbar = false }; main.Show();
-            var package = new AnimationPackage { Prefix = new byte[72], Tail = [] };
-            package.Entries.Add(new(new byte[308], 0, 0));
-            var source = new AssetDocument(Path.Combine(Path.GetTempPath(), "shutdown-mcp.zbd"), new(0, DateTime.MinValue),
-                new(FormatFamily.Animation, 28, Recognition.Supported, "fixture"), ReadOnlyMemory<byte>.Empty) { Animations = package };
-            source.Add(AssetKind.Raw, 0, "first", 0, 0);
-            source.Add(AssetKind.Raw, 1, "blocked", 0, 0);
-            var doc = new DocumentModel(source);
-            main.ViewModel.Documents.Add(doc); main.ViewModel.SelectedDocument = doc;
-            var flags = BindingFlags.Instance | BindingFlags.NonPublic;
-            ((TabControl)main.FindName("NavigationTabs")).SelectedItem = main.FindName("AssetsTab");
-            await Dispatcher.Yield(DispatcherPriority.ApplicationIdle);
-            await ((Task)typeof(MainWindow).GetField("previewWork", flags)!.GetValue(main)!).WaitAsync(deadline.Token);
-            var loader = main.LoadAssetPropertiesAsync;
-            TaskCompletionSource loading = new(TaskCreationOptions.RunContinuationsAsynchronously);
-            TaskCompletionSource recovering = new(TaskCreationOptions.RunContinuationsAsynchronously);
-            TaskCompletionSource releaseRecovery = new(TaskCreationOptions.RunContinuationsAsynchronously);
-            TaskCompletionSource closed = new(TaskCreationOptions.RunContinuationsAsynchronously);
-            main.Closed += (_, _) => closed.TrySetResult();
-            int calls = 0;
-            CancellationToken loadToken = default;
-            main.LoadAssetPropertiesAsync = async (document, asset, token) =>
+            if (++calls == 1)
             {
-                if (++calls == 1)
-                {
-                    loadToken = token; loading.SetResult();
-                    await Task.Delay(Timeout.Infinite, token);
-                }
-                // If accepted closing wrongly invokes operation-only recovery,
-                // it cannot finish until this independently controlled gate opens.
-                recovering.TrySetResult();
-                await releaseRecovery.Task.WaitAsync(token);
-                return await loader(document, asset, token);
-            };
-            var host = new LocalMcpHost(main.Commands, "test");
-            typeof(MainWindow).GetField("mcpHost", flags)!.SetValue(main, host);
-            var timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(10) };
-            TaskCompletionSource closeCanceled = new(TaskCreationOptions.RunContinuationsAsynchronously);
-            timer.Tick += (_, _) =>
-            {
-                var dialog = app.Windows.Cast<Window>().FirstOrDefault(w => w.Owner == main && w.Title == "Unsaved changes");
-                if (dialog == null) return;
-                var buttons = ((Grid)dialog.Content).Children.OfType<WrapPanel>().Single();
-                buttons.Children.OfType<Button>().Single(b => Equals(b.Content, "Cancel"))
-                    .RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
-                closeCanceled.TrySetResult(); timer.Stop();
-            };
-            try
-            {
-                await using var pipe = new NamedPipeClientStream(".", host.Instance.Pipe, PipeDirection.InOut, PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
-                await pipe.ConnectAsync(deadline.Token);
-                await using var client = await McpClient.CreateAsync(new StreamClientTransport(pipe, pipe), cancellationToken: deadline.Token);
-                var response = await client.CallToolAsync("zstudio_select_asset", new Dictionary<string, object?>
-                { ["document"] = doc.SessionId.ToString(), ["kind"] = "Raw", ["index"] = 1 }, cancellationToken: deadline.Token);
-                Assert.False(response.IsError == true);
-                string operationId = JsonNode.Parse(response.Content.OfType<TextContentBlock>().Single().Text)!["id"]!.GetValue<string>();
-                await loading.Task.WaitAsync(deadline.Token);
-                var previewLifetime = ((CancellationTokenSource)typeof(MainWindow).GetField("preview", flags)!.GetValue(main)!).Token;
-                if (cancelClose)
-                {
-                    doc.AnimationEdits!.Apply(0, "Unsaved fixture", e => e.SetFloat(164, 1));
-                    timer.Start(); main.Close();
-                    await closeCanceled.Task.WaitAsync(deadline.Token);
-                    await Dispatcher.Yield(DispatcherPriority.ApplicationIdle);
-                    Assert.False(closed.Task.IsCompleted);
-                    Assert.False(previewLifetime.IsCancellationRequested);
-                    Assert.False(loadToken.IsCancellationRequested);
-                    Assert.False(doc.IsDisposed);
-                    // Disabling MCP alone still recovers the retained GUI selection.
-                    var stopping = main.StopMcpAsync();
-                    await recovering.Task.WaitAsync(deadline.Token);
-                    Assert.Same(stopping, main.StopMcpAsync());
-                    Assert.False(((CancellationTokenSource)typeof(MainWindow).GetField("preview", flags)!.GetValue(main)!).IsCancellationRequested);
-                    releaseRecovery.SetResult();
-                    await stopping.WaitAsync(deadline.Token);
-                    Assert.Equal(2, calls);
-                    Assert.Equal(Visibility.Collapsed, ((TextBlock)main.FindName("EmptyPreview")).Visibility);
-                    var state = await main.Commands.ExecuteAsync("zstudio_operation", new JsonObject { ["id"] = operationId }, deadline.Token);
-                    Assert.Equal("canceled", state.Data["State"]!.GetValue<string>());
-                    doc.AnimationEdits.MarkSaved(); main.Close();
-                    await closed.Task.WaitAsync(deadline.Token);
-                }
-                else
-                {
-                    main.Close();
-                    Task winner = await Task.WhenAny(closed.Task, recovering.Task).WaitAsync(deadline.Token);
-                    Assert.Same(closed.Task, winner);
-                    Assert.True(previewLifetime.IsCancellationRequested);
-                    Assert.True(loadToken.IsCancellationRequested);
-                    Assert.True(doc.IsDisposed);
-                    Assert.Equal(1, calls);
-                }
+                loadToken = token; loading.SetResult();
+                await Task.Delay(Timeout.Infinite, token);
             }
-            finally
+            // If accepted closing wrongly invokes operation-only recovery,
+            // it cannot finish until this independently controlled gate opens.
+            recovering.TrySetResult();
+            await releaseRecovery.Task.WaitAsync(token);
+            return await loader(document, asset, token);
+        };
+        var host = new LocalMcpHost(main.Commands, "test");
+        typeof(MainWindow).GetField("mcpHost", flags)!.SetValue(main, host);
+        try
+        {
+            await using var pipe = new NamedPipeClientStream(".", host.Instance.Pipe, PipeDirection.InOut, PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
+            await pipe.ConnectAsync(deadline.Token);
+            await using var client = await McpClient.CreateAsync(new StreamClientTransport(pipe, pipe), cancellationToken: deadline.Token);
+            var response = await client.CallToolAsync("zstudio_select_asset", new Dictionary<string, object?>
+            { ["document"] = doc.SessionId.ToString(), ["kind"] = "Raw", ["index"] = 1 }, cancellationToken: deadline.Token);
+            Assert.False(response.IsError == true);
+            string operationId = JsonNode.Parse(response.Content.OfType<TextContentBlock>().Single().Text)!["id"]!.GetValue<string>();
+            await loading.Task.WaitAsync(deadline.Token);
+            var previewLifetime = ((CancellationTokenSource)typeof(MainWindow).GetField("preview", flags)!.GetValue(main)!).Token;
+            main.Close();
+            Task winner = await Task.WhenAny(closed.Task, recovering.Task).WaitAsync(deadline.Token);
+            Assert.Same(closed.Task, winner);
+            Assert.True(previewLifetime.IsCancellationRequested);
+            Assert.True(loadToken.IsCancellationRequested);
+            Assert.True(doc.IsDisposed);
+            Assert.Equal(1, calls);
+        }
+        finally
+        {
+            releaseRecovery.TrySetResult();
+            main.LoadAssetPropertiesAsync = loader;
+            if (!closed.Task.IsCompleted)
             {
-                timer.Stop(); releaseRecovery.TrySetResult();
-                main.LoadAssetPropertiesAsync = loader;
-                if (!doc.IsDisposed) doc.AnimationEdits!.MarkSaved();
-                if (!closed.Task.IsCompleted)
-                {
-                    await main.StopMcpAsync().WaitAsync(TimeSpan.FromSeconds(5));
-                    main.Close();
-                    await closed.Task.WaitAsync(TimeSpan.FromSeconds(5));
-                }
+                await main.StopMcpAsync().WaitAsync(TimeSpan.FromSeconds(5));
+                main.Close();
+                await closed.Task.WaitAsync(TimeSpan.FromSeconds(5));
             }
         }
         await CheckAnimationSeek();
@@ -145,7 +103,7 @@ internal static class ShutdownMcpChecks
             new(FormatFamily.Animation, 28, Recognition.Supported, "fixture"), ReadOnlyMemory<byte>.Empty) { Animations = package });
         main.ViewModel.Documents.Add(doc);
         using var resolver = new AssetResolver(Path.GetTempPath());
-        var context = new AnimationPreviewContext { Package = doc.AnimationEdits!.Package,
+        var context = new AnimationPreviewContext { Package = doc.Document.Animations!,
             World = new AssetDocument("world", new(0, DateTime.MinValue), new(FormatFamily.GameZ, 15, Recognition.Supported, "fixture"), ReadOnlyMemory<byte>.Empty) { Scene = new() } };
         var previewToken = ((CancellationTokenSource)typeof(MainWindow).GetField("preview", flags)!.GetValue(main)!).Token;
         using var audio = new AnimationAudio(() => new SilentOutput());

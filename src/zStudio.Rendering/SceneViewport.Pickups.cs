@@ -28,7 +28,7 @@ public sealed partial class SceneViewport
     private GroupModel3D? pickupTarget;
     private DependencyPropertyDescriptor? pickupTransformDescriptor;
     private int? selectedPickup;
-    private bool editingLocked = true, changingPickupTarget;
+    private bool placementEditing, changingPickupTarget;
     private double pickupGizmoSize;
     private bool pickupCameraInertia;
     private ViewPose? pickupCameraPose;
@@ -165,18 +165,15 @@ public sealed partial class SceneViewport
         selectedPickup = root is int r && pickupActors.ContainsKey(r) ? r : null;
         RefreshPickupSelection();
     }
-    public void SetEditingLocked(bool locked)
+    /// <summary>
+    /// Whether this Whole world's placements can be edited (a source map's). A compiled world is read only: its objects,
+    /// AI markers and drop windows can be selected and inspected, never moved.
+    /// </summary>
+    public void SetPlacementEditing(bool enabled)
     {
         worldInspection = true;
-        if (locked) { ResetParachuteSelection(); SetAiPathEditing(null); CancelPickupDrag(); EndTransformDraft(); }
-        editingLocked = locked;
-        if (locked && !AllowLockedInspection)
-        {
-            // Locking must also close the card during Fly; ordinary selection
-            // changes intentionally reject that interaction state.
-            SelectedInspection = null; SelectAiNode(null); SelectPickup(null, false, true);
-            FramingSelection = null; InspectionSelectionCleared?.Invoke();
-        }
+        if (!enabled) { ResetParachuteSelection(); SetAiPathEditing(null); CancelPickupDrag(); EndTransformDraft(); }
+        placementEditing = enabled;
         RefreshPickupSelection(); RefreshAiSelection();
         ++inspectionSerial; InspectionChanged?.Invoke(); viewport.InvalidateRender();
     }
@@ -219,7 +216,7 @@ public sealed partial class SceneViewport
     private void RefreshPickupSelection()
     {
         if (selectionBox == null || pickupManipulator == null || pickupTarget == null) return;
-        bool selected = worldInspection && InspectionSelectionEnabled && SelectedInspection is { Active: true };
+        bool selected = worldInspection && SelectedInspection is { Active: true };
         selectionBox.Visibility = selected ? Visibility.Visible : Visibility.Collapsed;
         pickupManipulator.Visibility = CanManipulate ? Visibility.Visible : Visibility.Collapsed;
         if (pickupManipulator.Visibility != Visibility.Visible) SetPickupHover(false);
@@ -341,7 +338,7 @@ public sealed partial class SceneViewport
         pickupTransformDescriptor = null; pickupManipulator?.Dispose(); selectionBox?.Dispose(); pickupOverlay?.Dispose(); pickupTarget?.Dispose();
         pickupManipulator = null; selectionBox = null; pickupOverlay = null; pickupTarget = null;
         pickupActors.Clear(); pickupRoots.Clear(); pickupPositions.Clear(); pickupBasePlacements.Clear(); boundsPlacements.Clear();
-        worldInspection = false; editingLocked = true; placementEdits = null; transformSource = null; transformOverrides = null; placementDeltas.Clear(); transformValid = false;
+        worldInspection = false; placementEditing = false; placementEdits = null; transformSource = null; transformOverrides = null; placementDeltas.Clear(); transformValid = false;
         transformTarget = null; TransformMode = "move"; transformRotation = PlacementRotationKind.None;
         objectDraftNode = null; objectDraftPreview = 0;
     }

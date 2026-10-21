@@ -222,7 +222,7 @@ internal static class GuiReviewCapture
                         selected = scene.SelectedPickupRoot == actor.Root;
                     }
                 Require(selected, "Could not select Nanite for review");
-                ((System.Windows.Controls.Primitives.ToggleButton)window.FindName("EditingUnlocked")).IsChecked = true; await Capture("09-pickup");
+                await Capture("09-pickup");
                 await Select(world, world.Assets.First(a => a.Record.Kind == AssetKind.Model && a.Record.Content is GameModel m && m.Vertices.Length > 100));
                 await Capture("10-model");
                 ((TabControl)window.FindName("NavigationTabs")).SelectedItem = window.FindName("DocumentSceneTab");
@@ -238,10 +238,10 @@ internal static class GuiReviewCapture
                 await Task.Delay(1000, timeout.Token); await editor.SeekAsync(1); editor.Viewport.FrameAnimation(editor.CurrentFrame!); await Capture("12-preview-setup");
                 inspector.SelectedItem = window.FindName("ReferencesTab"); await Capture("13-references");
                 editor = await Animation("redsprks.flt");
-                var entry = animationDoc.AnimationEdits!.Package.Entries[editor.EntryIndex];
+                var entry = animationDoc.Document.Animations!.Entries[editor.EntryIndex];
                 var sequence = entry.Sequences.First(s => s.Events.Any(e => e.Type == 10));
-                editor.SelectSource(sequence.Id); window.OpenAnimationProperties(animationDoc, editor.EntryIndex, sequence.Id, Guid.Empty); await Capture("14-sequence");
-                editor.SelectSource(sequence.Id, sequence.Events.First(e => e.Type == 10).Id); window.OpenAnimationProperties(animationDoc, editor.EntryIndex, sequence.Id, sequence.Events.First(e => e.Type == 10).Id);
+                editor.SelectSource(sequence.Id); await Capture("14-sequence");
+                editor.SelectSource(sequence.Id, sequence.Events.First(e => e.Type == 10).Id);
                 await editor.SeekAsync(.4); editor.Viewport.FrameAnimation(editor.CurrentFrame!); await Capture("15-procedural-event");
                 tools.SelectedIndex = 1; await Capture("16-event-log"); tools.SelectedIndex = 2; await Capture("17-problems");
                 tools.SelectedIndex = 3; await Capture("18-runtime"); tools.SelectedIndex = 5; await Capture("19-bytes"); tools.SelectedIndex = 0;
@@ -250,16 +250,11 @@ internal static class GuiReviewCapture
                 tools.SelectedIndex = 2; ((DataGrid)editor.FindName("Problems")).SelectedIndex = 0;
                 if (((DataGrid)editor.FindName("Problems")).SelectedItem != null) CaptureDetails("Problem details","28-problem-details",editor.ProblemsView,"Details…");
                 tools.SelectedIndex = 0;
-                foreach (var group in Descendants(window.OpenPropertiesWindow!.AnimationFields!).OfType<Expander>().Where(e => Equals(e.Header,"Scheduling") || Equals(e.Header,"Target and modes"))) group.IsExpanded = false;
-                Descendants(window.OpenPropertiesWindow!.AnimationFields!).OfType<Expander>().First(e => Equals(e.Header,"Launch ranges")).BringIntoView(); await Capture("29-procedural-ranges");
-                Descendants(window.OpenPropertiesWindow!.AnimationFields!).OfType<CheckBox>().First(e => Equals(e.Content,"Show all stored fields")).IsChecked = true;
-                await Dispatcher.Yield(DispatcherPriority.ApplicationIdle);
-                Descendants(window.OpenPropertiesWindow!.AnimationFields!).OfType<Expander>().First(e => e.Header?.ToString()?.StartsWith("Spin",StringComparison.Ordinal) == true).BringIntoView(); await Capture("30-procedural-stored-fields");
                 inspector.SelectedItem = window.FindName("ReferencesTab"); await Dispatcher.Yield(DispatcherPriority.ApplicationIdle); window.UpdateLayout();
-                Descendants(editor.ReferencesView).OfType<ListBox>().Single().SelectedIndex = 1; await Capture("31-editable-reference"); inspector.SelectedIndex = 0;
-                var keyEntry = animationDoc.AnimationEdits.Package.Entries.First(e => e.Sequences.Any(s => s.Events.Any(v => v.Type == 12)));
+                Descendants(editor.ReferencesView).OfType<ListBox>().Single().SelectedIndex = 1; await Capture("31-reference"); inspector.SelectedIndex = 0;
+                var keyEntry = animationDoc.Document.Animations!.Entries.First(e => e.Sequences.Any(s => s.Events.Any(v => v.Type == 12)));
                 editor = await Animation(animationDoc.Assets.First(a => a.Index == keyEntry.Index).Name);
-                var keySeq = keyEntry.Sequences.First(s => s.Events.Any(e => e.Type == 12)); editor.SelectSource(keySeq.Id, keySeq.Events.First(e => e.Type == 12).Id); window.OpenAnimationProperties(animationDoc, editor.EntryIndex, keySeq.Id, keySeq.Events.First(e => e.Type == 12).Id);
+                var keySeq = keyEntry.Sequences.First(s => s.Events.Any(e => e.Type == 12)); editor.SelectSource(keySeq.Id, keySeq.Events.First(e => e.Type == 12).Id);
                 await Capture("20-keyframes");
 #pragma warning disable WPF0001
                 var assetScroller = Descendants((DataGrid)window.FindName("AssetGrid")).OfType<ScrollViewer>().First();
@@ -286,11 +281,6 @@ internal static class GuiReviewCapture
                 window.Width = 1600; window.Height = 900;
                 await Dispatcher.Yield(DispatcherPriority.ApplicationIdle);
                 Require(((FrameworkElement)window.FindName("BottomTools")).IsVisible && ReferenceEquals(editor,((ContentControl)window.FindName("AnimationHost")).Content),"Restoring height lost tools preference or replaced editor");
-                foreach (var group in Descendants(window.OpenPropertiesWindow!.AnimationFields!).OfType<Expander>().Where(e => Equals(e.Header, "Scheduling"))) group.IsExpanded = false;
-                await Dispatcher.Yield(DispatcherPriority.ApplicationIdle);
-                var keyframes = Descendants(window.OpenPropertiesWindow!.AnimationFields!).OfType<Expander>().First(e => Equals(e.Header, "Keyframe segments"));
-                keyframes.BringIntoView(); await Capture("23-keyframe-fields");
-                Descendants(window.OpenPropertiesWindow!.AnimationFields!).OfType<ScrollViewer>().First().ScrollToBottom(); await Capture("32-keyframe-actions");
                 ((TabControl)window.FindName("NavigationTabs")).SelectedItem = window.FindName("SearchTab");
                 ((TextBox)window.FindName("GlobalSearch")).Text = "vtol";
                 await Task.Delay(2000, timeout.Token); await Capture("24-search");
@@ -300,39 +290,21 @@ internal static class GuiReviewCapture
                 ((TextBox)window.FindName("GlobalSearch")).Text = "__zstudio_no_matching_asset_942__"; await Capture("34-search-empty");
                 Require(window.ViewModel.SearchResults.Count == 0 && ((TextBlock)window.FindName("SearchHint")).Text.StartsWith("No matching",StringComparison.Ordinal),"Empty search is unexplained");
                 ((TextBox)window.FindName("GlobalSearch")).Text = "";
-                // An authored dirty document must remain identifiable across strip resizing.
-                animationDoc.AnimationEdits.Apply(editor.EntryIndex,"Review temporary reset delay",e => e.SetFloat(164,e.F32(164) + 1));
-                await Task.Delay(400,timeout.Token);
                 var sameEditor = editor;
                 foreach (double width in new[] { 1600d,1280d,1080d,1600d })
                 {
                     window.Width = width; await Dispatcher.Yield(DispatcherPriority.ApplicationIdle); await Task.Delay(120,timeout.Token); window.UpdateLayout();
                     var fileNode = window.ViewModel.Folders.SelectMany(Flatten).Single(n => n.Path == animationDoc.Path);
-                    Require(fileNode.IsOpen && fileNode.IsActive && fileNode.DisplayName.EndsWith(" *",StringComparison.Ordinal),"Files tree lost the active/dirty document state");
+                    Require(fileNode.IsOpen && fileNode.IsActive,"Files tree lost the active document state");
                     Require(((TextBlock)window.FindName("ActiveDocumentTitle")).Text == animationDoc.Title,"Active document label lost its identity");
                     Require(ReferenceEquals(sameEditor,((ContentControl)window.FindName("AnimationHost")).Content),"Resizing recreated animation editor");
-                    if (width == 1080) await Capture("35-dirty-narrow");
+                    if (width == 1080) await Capture("35-files-narrow");
                 }
-                ((Button)window.FindName("DocumentUndo")).RaiseEvent(new RoutedEventArgs(Button.ClickEvent)); await Task.Delay(150,timeout.Token);
-                Require(!animationDoc.IsDirty && ((Button)window.FindName("DocumentRedo")).IsEnabled,"Title-bar Undo did not restore the clean animation");
-                ((Button)window.FindName("DocumentRedo")).RaiseEvent(new RoutedEventArgs(Button.ClickEvent)); await Task.Delay(150,timeout.Token);
-                Require(animationDoc.IsDirty && ((Button)window.FindName("DocumentUndo")).IsEnabled,"Title-bar Redo did not reapply the animation edit");
-                ((Button)window.FindName("DocumentUndo")).RaiseEvent(new RoutedEventArgs(Button.ClickEvent)); await Task.Delay(150,timeout.Token);
                 NavigationFiles(); await Capture("38-files-open");
                 var fileTree = (TreeView)window.FindName("FileTree");
                 var fileRow = Descendants(fileTree).OfType<TreeViewItem>().First(t => t.DataContext is FolderNode n && n.Path == animationDoc.Path);
                 var closeFile = Descendants(fileRow).OfType<Button>().Single(b => ReferenceEquals(b.Tag,animationDoc));
                 Require(closeFile.IsVisible,"Open file did not expose its close button");
-                animationDoc.AnimationEdits.Apply(editor.EntryIndex,"Close-cancel fixture",e => e.SetFloat(164,e.F32(164) + 1));
-                var originalConfirm = window.ViewModel.ConfirmDiscardAsync;
-                try
-                {
-                    window.ViewModel.ConfirmDiscardAsync = _ => Task.FromResult(false);
-                    closeFile.RaiseEvent(new RoutedEventArgs(Button.ClickEvent)); await Task.Delay(200,timeout.Token);
-                    Require(window.ViewModel.Documents.Contains(animationDoc) && animationDoc.IsDirty,"Canceling a file-row close discarded the document");
-                }
-                finally { window.ViewModel.ConfirmDiscardAsync = originalConfirm; }
-                animationDoc.AnimationEdits.Undo(); await Task.Delay(200,timeout.Token);
                 var closedLifetime = animationDoc.Lifetime.Token;
                 closeFile.RaiseEvent(new RoutedEventArgs(Button.ClickEvent)); await Task.Delay(400,timeout.Token);
                 var closedNode = (FolderNode)fileRow.DataContext;
@@ -341,8 +313,8 @@ internal static class GuiReviewCapture
                 fileTree.RaiseEvent(new KeyEventArgs(Keyboard.PrimaryDevice,PresentationSource.FromVisual(window)!,Environment.TickCount,Key.Enter) { RoutedEvent = Keyboard.KeyDownEvent });
                 await Wait(() => window.ViewModel.SelectedDocument?.Path == animationDoc.Path && ((TabControl)window.FindName("NavigationTabs")).SelectedItem == window.FindName("AssetsTab"));
                 Require(closedNode.IsOpen && closedNode.IsActive && !ReferenceEquals(closedNode.Document,animationDoc),"Enter did not reopen the file in Assets");
-                Console.WriteLine("PASS: Files tree open/active/dirty identity, actual row close, canceled dirty close, and Enter reopening to Assets.");
-                Console.WriteLine("Additional captures: keyframe fields and root search.");
+                Console.WriteLine("PASS: Files tree open/active identity, actual row close and Enter reopening to Assets.");
+                Console.WriteLine("Additional captures: keyframes and root search.");
                 Require(!window.ViewModel.Documents.Any(d => d.IsDirty), "Capture changed serialized records");
                 foreach (var openDocument in window.ViewModel.Documents.ToArray()) await window.ViewModel.CloseAsync(openDocument);
                 await Capture("36-last-document-closed");

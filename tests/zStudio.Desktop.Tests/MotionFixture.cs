@@ -39,6 +39,20 @@ internal static class MotionFixture
         }
         w.Write(1); w.Write(members.Length); return s.ToArray();
     }
+    /// <summary>The bytes of <paramref name="clip"/> as a motion member stores them.</summary>
+    internal static byte[] Write(zStudio.Core.MotionClip clip)
+    {
+        using MemoryStream s = new(); using BinaryWriter w = new(s);
+        byte[] header = clip.Header.ToArray(); BinaryPrimitives.WriteSingleLittleEndian(header.AsSpan(4), clip.LoopTime);
+        Int(header, 8, clip.FrameCount); Int(header, 12, clip.Parts.Count); w.Write(header);
+        foreach (var part in clip.Parts)
+        {
+            w.Write(part.NameBytes.Span); w.Write(part.Flags);
+            foreach (var f in part.Frames) { w.Write(f.Translation.X); w.Write(f.Translation.Y); w.Write(f.Translation.Z); }
+            foreach (var f in part.Frames) { w.Write(f.Rotation.W); w.Write(f.Rotation.X); w.Write(f.Rotation.Y); w.Write(f.Rotation.Z); }
+        }
+        return s.ToArray();
+    }
     private static void Int(byte[] bytes, int offset, int value) => BinaryPrimitives.WriteInt32LittleEndian(bytes.AsSpan(offset), value);
     private static void Float(byte[] bytes, int offset, float value) => Int(bytes, offset, BitConverter.SingleToInt32Bits(value));
 }

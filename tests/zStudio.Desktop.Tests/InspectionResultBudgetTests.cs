@@ -59,19 +59,19 @@ public sealed class InspectionResultBudgetTests
     }
 
     [Fact]
-    public void PickupCostIncludesBothPathsAndSearchKeepsCrossFieldMatchingWithinItsAllowance()
+    public void PickupCostIncludesItsPathAndSearchKeepsCrossFieldMatchingWithinItsAllowance()
     {
         string path = new('&', 6000);
         var record = new PickupPlacementRecord(new(path, 0, "puppies.zrd", 1), "ERFPG_AMMO", Vector3.Zero, Vector3.Zero, []);
         string scope = "Applies to: Easy, Medium, Hard";
-        var value = new { source = record.Source, record.Type, position = Vector3.Zero, rotationRadians = Vector3.Zero, record.OriginalPosition, scope, target = path };
+        var value = new { source = record.Source, record.Type, position = Vector3.Zero, rotationRadians = Vector3.Zero, record.OriginalPosition, scope };
         var json = JsonSerializer.Serialize(value, new JsonSerializerOptions { IncludeFields = true });
-        Assert.True(json.Length < InspectionResultBudget.Pickup(record, path, scope));
+        Assert.True(json.Length < InspectionResultBudget.Pickup(record, scope));
         InspectionResultBudget.Search search = new();
-        Assert.True(search.Pickup(record, path, "ammo PUPPIES"));
-        Assert.False(search.Pickup(record, path, "not present"));
+        Assert.True(search.Pickup(record, "ammo PUPPIES"));
+        Assert.False(search.Pickup(record, "not present"));
         var excessive = new PickupPlacementRecord(new("short", 0, "puppies.zrd", 0), "ERFPG_AMMO", Vector3.Zero, Vector3.Zero, []);
-        Assert.Equal("too_large", Assert.Throws<StudioCommandException>(() => new InspectionResultBudget.Search(64).Pickup(excessive, "short", "a")).Code);
-        Assert.True(new InspectionResultBudget.Search().Pickup(excessive, "short", "short"));
+        Assert.Equal("too_large", Assert.Throws<StudioCommandException>(() => new InspectionResultBudget.Search(64).Pickup(excessive, "a")).Code);
+        Assert.True(new InspectionResultBudget.Search().Pickup(excessive, "short"));
     }
 }

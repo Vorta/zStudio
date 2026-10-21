@@ -240,33 +240,6 @@ public sealed class ExportSealReviewFixTests
         finally { try { Directory.Delete(root, true); } catch (IOException) { } }
     }
 
-    [Fact]
-    public async Task ADocumentSaveIsHeldFromItsVerificationUntilItIsInPlace()
-    {
-        string root = Path.Combine(Path.GetTempPath(), "zstudio-seal-document-" + Guid.NewGuid().ToString("N")); Directory.CreateDirectory(root);
-        try
-        {
-            string pack = Path.Combine(root, "texture1.zbd"), png = Path.Combine(root, "image.png");
-            await File.WriteAllBytesAsync(pack, ContentFixture.Texture(2, 1, true), Token);
-            await File.WriteAllBytesAsync(png, PngEncoder.Encode(new(2, 1, [0, 0, 255, 255, 0, 0, 255, 255]), Token), Token);
-            using AssetResolver resolver = new(root); var edits = new TextureEditSession(await resolver.OpenCachedAsync(pack, Token));
-            edits.Accept(await edits.PrepareAsync(png, 0, "", [new(pack, 0)], resolver, Token));
-            var publish = edits.PublishFile; List<string> refused = [];
-            // The verified temporary file of the in-place save cannot be changed while it is put in place.
-            edits.PublishFile = (file, target, createNew) =>
-            {
-                string temporary = Assert.Single(Directory.GetFiles(root, "*.tmp"));
-                try { Overwrite(temporary, "ANOTHER PROGRAM"); } catch (IOException ex) { refused.Add(ex.Message); }
-                publish(file, target, createNew);
-            };
-            var result = await edits.SaveAsync(token: Token);
-            Assert.Empty(result.Errors);
-            Assert.Single(refused);
-            Assert.Equal(edits.Current.Documents[pack].Bytes.ToArray(), await File.ReadAllBytesAsync(pack, Token));
-            Assert.Empty(Directory.GetFiles(root, "*.tmp"));
-        }
-        finally { Directory.Delete(root, true); }
-    }
 }
 
 /// <summary>

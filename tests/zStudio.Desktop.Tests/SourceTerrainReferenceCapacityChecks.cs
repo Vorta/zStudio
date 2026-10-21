@@ -49,7 +49,7 @@ internal static class SourceTerrainReferenceCapacityChecks
             long revision = workspace.Revision, contentRevision = workspace.ContentRevision, documentRevision = doc.Revision;
             var history = workspace.History.ToArray();
             bool canUndo = workspace.CanUndo, canRedo = workspace.CanRedo;
-            var preview = doc.PreviewDocument;
+            var preview = doc.Document;
 
             var warning = Assert.Single(doc.SourceBuild!.Notes, w => w.Contains("FindNode") && w.Contains("found no node"));
             Assert.InRange(warning.Length, 1, 1024);
@@ -95,7 +95,7 @@ internal static class SourceTerrainReferenceCapacityChecks
                 Assert.Empty(workspace.DirtyFiles); Assert.Empty(workspace.Overlay());
                 Assert.False(doc.IsDisposed); Assert.Same(doc, main.ViewModel.SelectedDocument);
                 Assert.Same(doc, main.ViewModel.Documents.Single(d => d.SourceWorld != null));
-                Assert.Same(preview, doc.PreviewDocument); Assert.False(main.OperationRunning);
+                Assert.Same(preview, doc.Document); Assert.False(main.OperationRunning);
                 foreach (var (path, bytes) in originalFiles) Assert.Equal(bytes, File.ReadAllBytes(path));
                 Assert.Empty(Directory.GetFiles(fixture.Path("data"), "*.terrain.json", SearchOption.AllDirectories));
             }

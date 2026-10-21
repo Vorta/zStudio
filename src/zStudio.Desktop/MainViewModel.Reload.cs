@@ -15,7 +15,7 @@ public sealed partial class MainViewModel
         if (original.SourceWorld != null && ReloadSourceWorld is { } rebuild) return await rebuild(original, discardAccepted, cancellationToken);
         long generation = AdvanceNavigation();
         var selected = SelectedDocument;
-        string reloadPath = original.ContentEdits?.TargetPath(original.Path) ?? original.ResourceEdits?.TargetPath ?? original.ModelEdits?.TargetPath(original.Path) ?? original.Path;
+        string reloadPath = original.Path;
         using var request = CancellationTokenSource.CreateLinkedTokenSource(workspace.Token, original.Lifetime.Token, cancellationToken);
         void Validate()
         {
@@ -24,8 +24,6 @@ public sealed partial class MainViewModel
                 throw new StudioCommandException("context_changed", "Reload was superseded; the existing document was retained where still open.");
             if (original.Revision != revision) throw new StudioCommandException("revision_conflict", "The document changed during reload; its current edits were retained.");
             if (!discardAccepted && original.IsDirty) throw new StudioCommandException("unsaved_changes", "Save or explicitly discard edits before reloading.");
-            if (Documents.Any(d => d != original && d.Path.Equals(reloadPath, StringComparison.OrdinalIgnoreCase)))
-                throw new StudioCommandException("destination_open", "The saved destination is already open. Close that document before reloading this saved copy.");
             ValidateReload?.Invoke(original);
         }
         Validate();
@@ -51,7 +49,6 @@ public sealed partial class MainViewModel
 
         Validate();
         var replacement = new DocumentModel(prepared) { Query = original.Query, KindFilter = original.KindFilter };
-        replacement.AttachResolver(Resolver);
         var asset = original.SelectedAsset?.Record;
         replacement.SelectedAsset = asset == null ? null : replacement.Assets.FirstOrDefault(a => a.Record.Kind == asset.Kind && a.Record.Index == asset.Index);
         // Parsing and every fallible asynchronous guard have finished. Publishing

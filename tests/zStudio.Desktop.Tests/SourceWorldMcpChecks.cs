@@ -164,14 +164,10 @@ internal static class SourceWorldMcpChecks
             Assert.Equal("m1 world (sources)", doc.Title);
             // The document identity is the actual mission script; no preview archive exists.
             Assert.Equal(fixture.Path("gamegen/m1.gs"), doc.Path, ignoreCase: true);
-            Assert.Null(doc.ModelEdits);
             await Preview();
-            // The map's back arrow replaces Maps; a source world has no Unlock editing, Scene or Selection menus: the card's Edit starts each edit.
+            // The map's back arrow replaces Maps; a source world has no Scene or Selection menus: the card's Edit starts each edit.
             Assert.Equal(Visibility.Visible, ((FrameworkElement)main.FindName("SourceMapsButton")).Visibility);
-            Assert.Equal(Visibility.Collapsed, ((FrameworkElement)main.FindName("PickupTools")).Visibility);
             Assert.Equal(Visibility.Collapsed, ((FrameworkElement)main.FindName("SceneMenus")).Visibility);
-            Assert.False(doc.EditingLocked);
-            Assert.Contains("unsupported", (await Call("scene_lock", new() { ["document"] = Id(doc), ["revision"] = doc.Revision, ["locked"] = true }, true)).GetValue<string>());
             // Validation must follow the referenced sources, not merely parse the entry script.
             string validationModel = fixture.Path("data/m1/models/m1.gltf");
             byte[] validationBytes = await File.ReadAllBytesAsync(validationModel, token);
@@ -205,7 +201,7 @@ internal static class SourceWorldMcpChecks
             Assert.True(added.IsDirty); Assert.Equal("m1 world (sources) *", added.Title);
             Assert.Equal("unsaved_changes", (await Job("source_world_open", new() { ["mission"] = "m2" }, "failed"))["code"]!.GetValue<string>());
             Assert.Same(added, Assert.Single(main.ViewModel.Documents));
-            Assert.Contains(added.PreviewDocument.Scene!.Nodes, n => n.Name == "tank");
+            Assert.Contains(added.Document.Scene!.Nodes, n => n.Name == "tank");
             // One change of the project's workspace: the script and the animation list.
             Assert.Equal(["data/m1/zrdr/anim.zad", "gamegen/m1.gs"], added.SourceWorld!.Workspace.History.Single().Files.Select(f => f.Relative).Order(StringComparer.Ordinal));
             Assert.Contains("enemies\\\\tank.zad", System.Text.Encoding.Latin1.GetString(added.SourceWorld.Workspace.Read("data/m1/zrdr/anim.zad")!));
@@ -219,10 +215,9 @@ internal static class SourceWorldMcpChecks
                 ["position"] = new Dictionary<string, object?> { ["x"] = 100, ["y"] = 0, ["z"] = -50 }, ["heading"] = 90, ["definitionFiles"] = Array.Empty<string>()
             }))["document"]!);
             await Preview();
-            Assert.Contains(placed.PreviewDocument.Scene!.Nodes, n => n.Name == "tank_wreck");
+            Assert.Contains(placed.Document.Scene!.Nodes, n => n.Name == "tank_wreck");
             // Parts is presentation-only across viewport replacement.
-            Assert.False(placed.EditingLocked);
-            int wreck = placed.PreviewDocument.Scene.Nodes.Single(n => n.Name == "tank_wreck").Index;
+            int wreck = placed.Document.Scene.Nodes.Single(n => n.Name == "tank_wreck").Index;
             string partsPreview = (await Call("state", new()))["preview"]!.GetValue<string>();
             var parts = await Call("source_map_parts", new() { ["preview"] = partsPreview, ["owner"] = wreck });
             var hull = Assert.Single(parts["children"]!["items"]!.AsArray())!;
@@ -299,13 +294,13 @@ internal static class SourceWorldMcpChecks
 
             // Undo and redo rebuild too.
             var undone = Document(await Call("undo_redo", new() { ["document"] = Id(placed), ["revision"] = placed.Revision, ["action"] = "undo" }));
-            Assert.DoesNotContain(undone.PreviewDocument.Scene!.Nodes, n => n.Name == "tank_wreck");
+            Assert.DoesNotContain(undone.Document.Scene!.Nodes, n => n.Name == "tank_wreck");
             var redone = Document(await Call("undo_redo", new() { ["document"] = Id(undone), ["revision"] = undone.Revision, ["action"] = "redo" }));
-            Assert.Contains(redone.PreviewDocument.Scene!.Nodes, n => n.Name == "tank_wreck");
+            Assert.Contains(redone.Document.Scene!.Nodes, n => n.Name == "tank_wreck");
 
             // Save writes the script and the animation list; there is no Save As.
-            var saveAs = await Job("save_document", new() { ["document"] = Id(redone), ["revision"] = redone.Revision, ["destination"] = Path.Combine(fixture.Root, "x.zbd") }, "failed");
-            Assert.Equal("invalid_argument", saveAs["code"]!.GetValue<string>());
+            var saveAs = await Call("save_document", new() { ["document"] = Id(redone), ["revision"] = redone.Revision, ["destination"] = Path.Combine(fixture.Root, "x.zbd") }, true);
+            Assert.Contains("invalid_argument", saveAs.GetValue<string>());
             var saved = await Job("save_document", new() { ["document"] = Id(redone), ["revision"] = redone.Revision });
             Assert.Equal(["data/m1/zrdr/anim.zad", "gamegen/m1.gs"], saved["written"]!.AsArray().Select(w => w!.GetValue<string>()).Order(StringComparer.Ordinal));
             Assert.Empty(new SourcePublisher(fixture.Project).FindInterrupted(token));
@@ -333,7 +328,7 @@ internal static class SourceWorldMcpChecks
             File.SetLastWriteTimeUtc(fixture.Path(fixture.Tank), DateTime.UtcNow.AddMinutes(2));
             await main.ViewModel.CheckExternalChangesAsync(); Assert.True(redone.IsStale);
             var reloaded = Document(await Job("reload_document", new() { ["document"] = Id(redone), ["revision"] = redone.Revision }));
-            Assert.False(reloaded.IsStale); Assert.Contains(reloaded.PreviewDocument.Scene!.Nodes, n => n.Name == "tank_wreck");
+            Assert.False(reloaded.IsStale); Assert.Contains(reloaded.Document.Scene!.Nodes, n => n.Name == "tank_wreck");
             // A touched, saved source can change without changing its file stamp. Reload must see its new authoritative bytes.
             var sourceStamp = File.GetLastWriteTimeUtc(script);
             string beforeSameStamp = await File.ReadAllTextAsync(script, token);
@@ -342,7 +337,7 @@ internal static class SourceWorldMcpChecks
             await File.WriteAllTextAsync(script, afterSameStamp, token); File.SetLastWriteTimeUtc(script, sourceStamp);
             Assert.Contains("gamegen/m1.gs", reloaded.SourceWorld!.Workspace.ExternalChanges());
             reloaded = Document(await Job("reload_document", new() { ["document"] = Id(reloaded), ["revision"] = reloaded.Revision }));
-            Assert.Contains(reloaded.PreviewDocument.Scene!.Nodes, n => n.Name == "other");
+            Assert.Contains(reloaded.Document.Scene!.Nodes, n => n.Name == "other");
             Assert.False(reloaded.IsStale);
 
             // After the script changes on disk, the pending edits cannot be kept and reloading starts from the file.
@@ -367,7 +362,7 @@ internal static class SourceWorldMcpChecks
             Assert.EndsWith("# elsewhere\r\n", await File.ReadAllTextAsync(script, token));
             var undoneExtra = Document(await Call("undo_redo", new() { ["document"] = Id(pending), ["revision"] = pending.Revision, ["action"] = "undo" }));
             var fresh = Document(await Job("reload_document", new() { ["document"] = Id(undoneExtra), ["revision"] = undoneExtra.Revision }));
-            Assert.False(fresh.SourceWorld!.Workspace.CanUndo); Assert.Contains(fresh.PreviewDocument.Scene!.Nodes, n => n.Name == "tank");
+            Assert.False(fresh.SourceWorld!.Workspace.CanUndo); Assert.Contains(fresh.Document.Scene!.Nodes, n => n.Name == "tank");
 
             // Closing the world removes its private files.
             await Call("close_document", new() { ["document"] = Id(fresh), ["revision"] = fresh.Revision });

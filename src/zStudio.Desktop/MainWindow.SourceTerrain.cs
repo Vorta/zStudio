@@ -304,7 +304,7 @@ public partial class MainWindow
     private static bool TerrainBrushCoordinates(DocumentModel doc, AssetRecord? asset)
     {
         if (asset?.Kind == AssetKind.World) return true;
-        if (asset == null || doc.PreviewDocument.Scene is not { } data || doc.SourceBuild is not { } build) return false;
+        if (asset == null || doc.Document.Scene is not { } data || doc.SourceBuild is not { } build) return false;
         int? root = SceneLods.PreviewRoot(data, asset);
         if (root == null && asset.Kind == AssetKind.Model)
         {

@@ -239,7 +239,7 @@ internal static class SourceEditingMcpChecks
             ammo = pickups["items"]!.AsArray().First(p => p!["Type"]!.GetValue<string>() == "HEMORTAR_AMMO" && p["source"]!["ResourceName"]!.GetValue<string>() == "PUPPIES.ZRD")!;
 
             var moved = Document(await Call("pickup_move", new() { ["document"] = Id(doc), ["revision"] = doc.Revision, ["source"] = ammo["source"]!.DeepClone(), ["x"] = 20.3, ["y"] = 8, ["z"] = -5 }));
-            Assert.Same(doc, moved); Assert.False(doc.IsDisposed); Assert.False(moved.EditingLocked);
+            Assert.Same(doc, moved); Assert.False(doc.IsDisposed);
             var workspace = moved.SourceWorld!.Workspace;
             Assert.Equal(["data/m1/zrdr/puppies.zrd", "data/m1/zrdr/puppies_easy.zrd"], workspace.DirtyFiles);
             Assert.Equal(Default.Replace("( 12 8 -5 )", "( 20.3 8 -5 )"), Text(workspace.Read("data/m1/zrdr/puppies.zrd")));
@@ -261,7 +261,7 @@ internal static class SourceEditingMcpChecks
             var window = (PropertiesWindow)typeof(MainWindow).GetMethod("GetPropertiesWindow", hidden)!.Invoke(main, [])!;
             var sourceMove = (Func<zStudio.Core.MissionPickupSource, System.Numerics.Vector3, Task>?)typeof(MainWindow).GetMethod("SourcePickupMove", hidden)!.Invoke(main, [moved]);
             var ammoSource = moved.PickupEdits!.Records.First(r => r.Type == "HEMORTAR_AMMO" && r.Source.ResourceName == "PUPPIES.ZRD").Source;
-            Assert.True(window.SetPickup(moved, ammoSource, "HEMORTAR_AMMO", new JsonObject(), sourceMove));
+            Assert.True(window.SetPickup(moved, ammoSource, "HEMORTAR_AMMO", new JsonObject(), sourceMove!));
             typeof(MainWindow).GetMethod("PresentProperties", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(main, [window, true]);
             // Wait for the window's layout to finish, so its fields exist.
             await main.Dispatcher.InvokeAsync(() => window.UpdateLayout(), System.Windows.Threading.DispatcherPriority.Loaded);
@@ -301,7 +301,7 @@ internal static class SourceEditingMcpChecks
                 && r.Source.ResourceName == ammoSource.ResourceName && r.Source.AssetIndex == ammoSource.AssetIndex && r.Source.RecordIndex == ammoSource.RecordIndex).Source;
             window = (PropertiesWindow)typeof(MainWindow).GetMethod("GetPropertiesWindow", hidden)!.Invoke(main, [])!;
             sourceMove = (Func<zStudio.Core.MissionPickupSource, System.Numerics.Vector3, Task>?)typeof(MainWindow).GetMethod("SourcePickupMove", hidden)!.Invoke(main, [moved]);
-            Assert.True(window.SetPickup(moved, undoneSource, "HEMORTAR_AMMO", new JsonObject(), sourceMove));
+            Assert.True(window.SetPickup(moved, undoneSource, "HEMORTAR_AMMO", new JsonObject(), sourceMove!));
             typeof(MainWindow).GetMethod("PresentProperties", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(main, [window, true]);
             var redoButton = (System.Windows.Controls.Button)typeof(PropertiesWindow).GetField("redo", hidden)!.GetValue(window)!;
             Assert.Equal(System.Windows.Visibility.Visible, redoButton.Visibility); Assert.True(redoButton.IsEnabled);
@@ -328,7 +328,7 @@ internal static class SourceEditingMcpChecks
             await Preview();
 
             // A world object: the database's ground knows its glTF node; moving and flagging it edit that node.
-            int ground = redone.PreviewDocument.Scene!.Nodes.First(n => n.Name == "ground").Index;
+            int ground = redone.Document.Scene!.Nodes.First(n => n.Name == "ground").Index;
             var described = await Call("source_world_object", new() { ["document"] = Id(redone), ["node"] = ground });
             Assert.Equal("data/m1/models/m1.gltf", described["origin"]!["modelFile"]!.GetValue<string>());
             Assert.True(described["origin"]!["database"]!.GetValue<bool>());
@@ -385,7 +385,7 @@ internal static class SourceEditingMcpChecks
             Assert.Same(sceneField.GetValue(main), main.SceneHost.Content);
             Assert.Null(typeof(MainWindow).GetField("retiringScene", hidden)!.GetValue(main));
             Assert.Contains("data/m1/models/m1.gltf", workspace.DirtyFiles);
-            int groundAfter = placed.PreviewDocument.Scene!.Nodes.First(n => n.Name == "ground").Index;
+            int groundAfter = placed.Document.Scene!.Nodes.First(n => n.Name == "ground").Index;
             var position = (await Call("source_world_object", new() { ["document"] = Id(placed), ["node"] = groundAfter }))["object"]!["position"]!;
             Assert.Equal([10f, 0f, -10f], new[] { "x", "y", "z" }.Select(c => position[c]!.GetValue<float>()));
             var flagged = Document((await Job("source_world_object_edit", new() { ["document"] = Id(placed), ["revision"] = placed.Revision, ["node"] = groundAfter, ["flag"] = "0x10000", ["on"] = true }))["document"]!);
@@ -398,25 +398,25 @@ internal static class SourceEditingMcpChecks
 
             // Fog the scripts never set is added after the instruction that created the world.
             await Preview();
-            int world = editedWorld.PreviewDocument.Scene!.Nodes.First(n => n.Name == "world").Index;
+            int world = editedWorld.Document.Scene!.Nodes.First(n => n.Name == "world").Index;
             var worldState = await Call("source_world_object", new() { ["document"] = Id(editedWorld), ["node"] = world });
             Assert.Contains(worldState["propertyCommands"]!.AsArray(), c => c!["command"]!.GetValue<string>() == "WorldSetFogColor");
             var fogged = Document((await Job("source_world_command", new() { ["document"] = Id(editedWorld), ["revision"] = editedWorld.Revision, ["node"] = world, ["command"] = "WorldSetFogColor", ["arguments"] = new[] { "0.5", "0.25", "0.125" } }))["document"]!);
             Assert.Contains("NewWorld %worldName%\r\nWorldSetFogColor 0.5 0.25 0.125\r\n", Text(workspace.Read("gamegen/m1.gs")));
             // The next change of the same setting edits that instruction in place.
-            int worldAfter = fogged.PreviewDocument.Scene!.Nodes.First(n => n.Name == "world").Index;
+            int worldAfter = fogged.Document.Scene!.Nodes.First(n => n.Name == "world").Index;
             editedWorld = Document((await Job("source_world_command", new() { ["document"] = Id(fogged), ["revision"] = fogged.Revision, ["node"] = worldAfter, ["command"] = "WorldSetFogColor", ["arguments"] = new[] { "1.0", "0.25", "0.125" } }))["document"]!);
             Assert.Contains("WorldSetFogColor 1.0 0.25 0.125\r\n", Text(workspace.Read("gamegen/m1.gs")));
             Assert.DoesNotContain("0.5 0.25 0.125", Text(workspace.Read("gamegen/m1.gs")));
             // Copy the ground beside itself, move the copy under the original, then delete it: each edits the database's glTF.
             await Preview();
-            int groundNow = editedWorld.PreviewDocument.Scene!.Nodes.First(n => n.Name == "ground").Index;
+            int groundNow = editedWorld.Document.Scene!.Nodes.First(n => n.Name == "ground").Index;
             var copied = await Job("source_world_object_edit", new() { ["document"] = Id(editedWorld), ["revision"] = editedWorld.Revision, ["node"] = groundNow, ["action"] = "duplicate", ["name"] = "ground_copy", ["position"] = new Dictionary<string, object?> { ["x"] = 10, ["y"] = 0, ["z"] = 40 } });
             int copyNode = copied["copy"]!.GetValue<int>();
             var withCopy = Document(copied["document"]!);
             Assert.Equal(2, JsonNode.Parse(workspace.Read("data/m1/models/m1.gltf")!)!["nodes"]!.AsArray().Count);
             await Preview();
-            int groundThen = withCopy.PreviewDocument.Scene!.Nodes.First(n => n.Name == "ground").Index;
+            int groundThen = withCopy.Document.Scene!.Nodes.First(n => n.Name == "ground").Index;
             var reparented = Document((await Job("source_world_object_edit", new() { ["document"] = Id(withCopy), ["revision"] = withCopy.Revision, ["node"] = copyNode, ["action"] = "parent", ["parent"] = groundThen }))["document"]!);
             Assert.Equal("ground", (await Call("source_world_object", new() { ["document"] = Id(reparented), ["node"] = copyNode }))["object"]!["parent"]!.GetValue<string>());
             editedWorld = Document((await Job("source_world_object_edit", new() { ["document"] = Id(reparented), ["revision"] = reparented.Revision, ["node"] = copyNode, ["action"] = "delete" }))["document"]!);
@@ -532,7 +532,7 @@ internal static class SourceEditingMcpChecks
             var retainedTurretDocument = second;
             var turretViewport = (zStudio.Rendering.SceneViewport)main.SceneHost.Content!;
             var reachableTurretNodes = zStudio.Core.SceneBuilder.Assemble(turretViewport.Mission!.Scene).VisibleNodes;
-            int turretNode = second.PreviewDocument.Scene!.Nodes.Single(n => n.Class == "object3d" && n.Name == "tur_101"
+            int turretNode = second.Document.Scene!.Nodes.Single(n => n.Class == "object3d" && n.Name == "tur_101"
                 && reachableTurretNodes.Contains(n.Index) && second.SourceBuild!.Provenance.ContainsKey(n.Index)).Index;
             await Call("scene_properties", new() { ["preview"] = PreviewId(), ["node"] = turretNode, ["open"] = true });
             var turretCard = (SceneInspectionCard)turretViewport.InspectionContent!;
@@ -673,7 +673,7 @@ internal static class SourceEditingMcpChecks
             // refused, and Undo restores the file.
             var m2Nodes = System.Text.Json.Nodes.JsonNode.Parse(workspace.Read("data/m2/models/m2.gltf")!)!["nodes"]!.AsArray();
             int turretGroup = m2Nodes.Select((n, i) => (Name: n!["name"]?.GetValue<string>(), i)).Single(n => n.Name == "turret_group").i;
-            var compiledNames = second.PreviewDocument.Scene!.Nodes.Select(n => n.Name).ToArray();
+            var compiledNames = second.Document.Scene!.Nodes.Select(n => n.Name).ToArray();
             Dictionary<string, object?> RenameGroup(string name) => new() { ["document"] = Id(second), ["revision"] = second.Revision, ["action"] = "rename",
                 ["sourceFile"] = "data/m2/models/m2.gltf", ["gltfNode"] = turretGroup, ["name"] = name };
             var taken = await Job("source_world_object_edit", RenameGroup("tur_101"), "failed");
@@ -686,7 +686,7 @@ internal static class SourceEditingMcpChecks
             second = Document((await Job("source_world_object_edit", RenameGroup("gTurrets")))["document"]!);
             Assert.True((await Call("scene_tree", new() { ["document"] = Id(second), ["search"] = "gTurrets" }))["matches"]!["items"]!.AsArray().Single()!["item"]!["IsExpanded"]!.GetValue<bool>());
             Assert.Equal("gTurrets", System.Text.Json.Nodes.JsonNode.Parse(workspace.Read("data/m2/models/m2.gltf")!)!["nodes"]![turretGroup]!["name"]!.GetValue<string>());
-            Assert.Equal(compiledNames.Select(n => n == "turret_group" ? "gTurrets" : n), second.PreviewDocument.Scene!.Nodes.Select(n => n.Name));
+            Assert.Equal(compiledNames.Select(n => n == "turret_group" ? "gTurrets" : n), second.Document.Scene!.Nodes.Select(n => n.Name));
             second = Document(await Call("undo_redo", new() { ["document"] = Id(second), ["revision"] = second.Revision, ["action"] = "undo" }));
             Assert.False(workspace.IsDirty);
 
@@ -741,7 +741,7 @@ internal static class SourceEditingMcpChecks
                 }
                 Assert.DoesNotContain(zStudio.Core.SceneBuilder.Assemble(turretViewport.Mission!.Scene).Placements, p => p.Name == "wreck");
             }
-            int ground2 = second.PreviewDocument.Scene!.Nodes.First(n => n.Name == "ground").Index;
+            int ground2 = second.Document.Scene!.Nodes.First(n => n.Name == "ground").Index;
             var edited2 = Document((await Job("source_world_object_edit", new() { ["document"] = Id(second), ["revision"] = second.Revision, ["node"] = ground2, ["position"] = new Dictionary<string, object?> { ["x"] = 5, ["y"] = 0, ["z"] = 5 } }))["document"]!);
             Assert.Equal(["data/m2/models/m2.gltf"], workspace.DirtyFiles);
             long priorUndoRevision = edited2.Revision;

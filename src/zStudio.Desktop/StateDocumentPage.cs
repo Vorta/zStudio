@@ -28,7 +28,7 @@ internal static class StateDocumentPage
     internal static long MaximumRowBytes(DocumentModel document)
     {
         // All remaining fields are fixed names, enums, numbers, booleans and count-only content state.
-        long bytes = 2048 + Text(document.Path) + Text(document.LastSavedCopy) + Text(document.SelectedAsset?.Record.Id.File)
+        long bytes = 2048 + Text(document.Path) + Text(document.SelectedAsset?.Record.Id.File)
             + Text(document.Document.Probe.Description);
         if (document.SourceWorld is not { } world) return bytes;
         bytes += 4096 + Text(world.Mission) + Text(world.Root) + Text(world.ScriptPath) + Text(world.DefinitionsPath);

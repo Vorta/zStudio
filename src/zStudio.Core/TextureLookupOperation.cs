@@ -11,7 +11,6 @@ public sealed class TextureLookupOperation
     private readonly AssetResolver resolver;
     private readonly string context;
     private readonly string? preferred;
-    private readonly long revision;
     private readonly SemaphoreSlim gate = new(1, 1);
     private readonly Dictionary<string, PackIndex> indexes = new(StringComparer.OrdinalIgnoreCase);
     private string[]? packs;
@@ -24,7 +23,7 @@ public sealed class TextureLookupOperation
     {
         if (maximumWork < 0 || maximumColdReadBytes < 0) throw new ArgumentOutOfRangeException(nameof(maximumWork));
         this.resolver = resolver; this.context = context; this.preferred = preferred;
-        revision = resolver.SnapshotRevision; work = maximumWork;
+        work = maximumWork;
         reads = new(maximumDiscoveryBytes, maximumColdReadBytes);
     }
     private void Spend(long units, CancellationToken token)
@@ -37,7 +36,6 @@ public sealed class TextureLookupOperation
     private void CheckRevision()
     {
         reads.Check();
-        if (revision != resolver.SnapshotRevision) throw new InvalidDataException("Texture sources changed during lookup; reload the preview or retry the export.");
     }
     public async Task<ResolvedTexture?> ResolveAsync(string name, CancellationToken token = default)
     {
@@ -80,7 +78,7 @@ public sealed class TextureLookupOperation
                     }
                     index = new(document.Stamp, names); indexes.Add(path, index);
                 }
-                else if (!resolver.HasTextureLookupStamp(path, index.Stamp))
+                else if (!AssetResolver.HasTextureLookupStamp(path, index.Stamp))
                     throw new InvalidDataException("A texture pack changed during lookup; reload the preview or retry the export.");
                 CheckRevision();
                 if (!index.Names.TryGetValue(key, out var found)) continue;

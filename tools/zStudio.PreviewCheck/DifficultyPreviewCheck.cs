@@ -53,7 +53,6 @@ internal static class DifficultyPreviewCheck
                 Require(SameView(pose, editor.Viewport.CaptureView()), "Difficulty reframed camera");
                 Require(lod.SelectedIndex == originalLod && height.Text == "100" && ((Slider)editor.FindName("SeekSlider")).Maximum == 200, "Difficulty reset preview controls");
                 Require(ReferenceEquals(selectedEvent, ((TreeView)editor.FindName("ProgramTree")).SelectedItem), "Difficulty reset event selection");
-                Require(!document.AnimationEdits!.IsDirty, "Difficulty created an authored edit");
                 follow.IsChecked = true; await editor.SeekAsync(3); await Task.Delay(80, timeout.Token); CheckFollow();
                 picker.SelectedItem = MissionDifficulty.Hard; await Ready(); CheckFollow();
                 Require(AivCount(editor.Viewport) == 87, "Hard layout did not add its actors");

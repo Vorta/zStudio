@@ -46,7 +46,7 @@ public partial class AnimationEditor
         foreach (var trace in frame.Trace)
         {
             if (trace.Occurrence <= latest) continue;
-            var entry = edits.Package.Entries.ElementAtOrDefault(trace.Entry);
+            var entry = package.Entries.ElementAtOrDefault(trace.Entry);
             string sequence = entry?.AllSequences.FirstOrDefault(s => s.Id == trace.Sequence)?.Name ?? trace.Sequence.ToString();
             logRows.Add(new(trace.Occurrence,trace.Start,trace.Instance,trace.Entry,trace.Sequence,trace.Event,sequence,trace.Name,trace.Status));
         }

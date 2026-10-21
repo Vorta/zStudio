@@ -20,7 +20,6 @@ public partial class MainWindow
     private void ConfigureSourceMapPresentation(SceneViewport viewport, DocumentModel doc, MissionSceneContext? mission,
         IReadOnlyDictionary<string, bool>? requested = null)
     {
-        viewport.AllowLockedInspection = doc.SourceWorld != null;
         viewport.SelectionOwner = null; viewport.NodeVisibility = null;
         sourceMapPartSnapshots.Remove(viewport);
         if (doc.SourceWorld is not { } session || mission == null) return;

@@ -46,7 +46,7 @@ public partial class MainWindow
             List<object> colors = [];
             if (t.PaletteOffset >= 0)
             {
-                var bytes = d.PreviewDocument.Slice(t.PaletteOffset, t.PaletteLength).Span;
+                var bytes = d.Document.Slice(t.PaletteOffset, t.PaletteLength).Span;
                 for (int i = 0; i < bytes.Length / 2; i++)
                 {
                     ushort value = System.Buffers.Binary.BinaryPrimitives.ReadUInt16LittleEndian(bytes[(i * 2)..]);
@@ -163,7 +163,7 @@ public partial class MainWindow
             if (changes.ContainsKey("highlight") && sourceChromeActive && doc.SourceWorld != null && Text(changes, "highlight") is "zones" or "polygonZones" && sceneTree?.Sections?.Zones.Any(z => z.Used) != true)
                 throw new StudioCommandException("unsupported", "This map has no zones to colour yet.");
             // MW3 previews select an authored mission; the shared RECOIL difficulty preference does not apply.
-            if (changes.ContainsKey("difficulty") && (doc.PreviewDocument.Game == GameVariant.MechWarrior3 || scene?.Mission is { } shown && (!shown.Layout.DifficultyApplies || shown.Layout.MissionArchive != null)))
+            if (changes.ContainsKey("difficulty") && (doc.Document.Game == GameVariant.MechWarrior3 || scene?.Mission is { } shown && (!shown.Layout.DifficultyApplies || shown.Layout.MissionArchive != null)))
                 throw new StudioCommandException("unsupported", "MechWarrior 3 previews use missions instead of difficulty.");
             // Schema validation covers types/enums. Validate current-view constraints
             // for the entire batch before any control, preference or renderer changes.
@@ -268,7 +268,7 @@ public partial class MainWindow
         {
             var editor = TargetAnimation(a); RequireNoDrafts(shownDocument);
             Guid sequence=GuidArg(a,"sequence"), ev=GuidArg(a,"event");
-            var entry=shownDocument!.AnimationEdits!.Package.Entries[editor.EntryIndex];
+            var entry=shownDocument!.Document.Animations!.Entries[editor.EntryIndex];
             if (sequence != Guid.Empty && !entry.AllSequences.Any(s => s.Id==sequence && (ev==Guid.Empty || s.Events.Any(e=>e.Id==ev))) || sequence==Guid.Empty && ev!=Guid.Empty)
                 throw new StudioCommandException("stale_record","Authored sequence/event is unavailable.");
             editor.SelectSource(sequence,ev); return Result(editor.PropertySelection);

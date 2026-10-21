@@ -71,60 +71,6 @@ public sealed class MotionClip
         var a = Parts[part].Frames[index]; var b = Parts[part].Frames[index + 1];
         return new(Vector3.Lerp(a.Translation, b.Translation, blend), Quaternion.Slerp(Quaternion.Normalize(a.Rotation), Quaternion.Normalize(b.Rotation), blend));
     }
-    public MotionClip Edit(string action, int part = -1, int frame = -1, MotionFrame? value = null, float? loopTime = null)
-    {
-        if (loopTime is float t && (!float.IsFinite(t) || t <= 0)) throw new InvalidDataException("Loop time must be finite and positive.");
-        if (action == "timing") return new() { Header = Header, LoopTime = loopTime ?? throw new InvalidDataException("Specify loop time."), FrameCount = FrameCount, Parts = Parts };
-        if (frame < 0 || frame >= FrameCount || action == "set" && (part < 0 || part >= Parts.Count)) throw new InvalidDataException("Missing motion part or frame.");
-        if (action == "delete" && FrameCount == 1) throw new InvalidDataException("A motion clip needs at least one frame.");
-        if (action == "insert" && FrameCount >= 100_000) throw new InvalidDataException("A motion clip cannot exceed 100000 frames.");
-        if (action is not ("set" or "insert" or "delete")) throw new InvalidDataException("Unknown motion edit action.");
-        var replacement = value.GetValueOrDefault();
-        if (action == "set" && (value == null || !float.IsFinite(replacement.Translation.LengthSquared()) || !float.IsFinite(replacement.Rotation.LengthSquared()) || replacement.Rotation.LengthSquared() < 1e-12f))
-            throw new InvalidDataException("Specify a finite translation and a nonzero finite quaternion.");
-        var tracks = Parts.Select((p, index) =>
-        {
-            if (action == "set" && index != part) return p;
-            var samples = p.Frames.ToList();
-            if (action == "set") samples[frame] = replacement;
-            if (action == "insert") samples.Insert(frame + 1, samples[frame]);
-            if (action == "delete") samples.RemoveAt(frame);
-            // The final sample is authored separately; structural edits shift it
-            // with the track without implicitly replacing it with frame zero.
-            return p with { Frames = samples.ToArray() };
-        }).ToArray();
-        return new() { Header = Header, LoopTime = LoopTime, FrameCount = FrameCount + (action == "insert" ? 1 : action == "delete" ? -1 : 0), Parts = tracks };
-    }
-    public byte[] Write(CancellationToken token = default)
-    {
-        if (Header.Length != 24 || !float.IsFinite(LoopTime) || LoopTime <= 0 || FrameCount is < 1 or > 100_000 || Parts.Count is < 1 or > 4096)
-            throw new InvalidDataException("Invalid motion header or track counts.");
-        long size = 24 + Parts.Sum(p => (long)p.NameBytes.Length + 4 + (FrameCount + 1L) * 28);
-        FormatRegistry.ValidateDocumentSize(size);
-        using MemoryStream stream = new(); using BinaryWriter w = new(stream);
-        byte[] header = Header.ToArray(); BinaryPrimitives.WriteSingleLittleEndian(header.AsSpan(4), LoopTime);
-        BinaryPrimitives.WriteInt32LittleEndian(header.AsSpan(8), FrameCount); BinaryPrimitives.WriteInt32LittleEndian(header.AsSpan(12), Parts.Count);
-        w.Write(header);
-        foreach (var part in Parts)
-        {
-            token.ThrowIfCancellationRequested();
-            if (part.Frames.Count != FrameCount + 1) throw new InvalidDataException("Motion track length mismatch.");
-            w.Write(part.NameBytes.Span); w.Write(part.Flags);
-            for (int i = 0; i < part.Frames.Count; i++)
-            {
-                if ((i & 4095) == 0) token.ThrowIfCancellationRequested(); var f = part.Frames[i];
-                if (!float.IsFinite(f.Translation.LengthSquared()) || !float.IsFinite(f.Rotation.LengthSquared()) || f.Rotation.LengthSquared() < 1e-12f)
-                    throw new InvalidDataException("Motion tracks must contain finite translations and nonzero finite quaternions.");
-                w.Write(f.Translation.X); w.Write(f.Translation.Y); w.Write(f.Translation.Z);
-            }
-            for (int i = 0; i < part.Frames.Count; i++)
-            {
-                if ((i & 4095) == 0) token.ThrowIfCancellationRequested(); var f = part.Frames[i];
-                w.Write(f.Rotation.W); w.Write(f.Rotation.X); w.Write(f.Rotation.Y); w.Write(f.Rotation.Z);
-            }
-        }
-        return stream.ToArray();
-    }
     public JsonObject ToJson(bool bounded = true, CancellationToken token = default) =>
         ToJson(bounded ? Math.Min(MaximumPreviewParts, Parts.Count) : Parts.Count, bounded, token);
 

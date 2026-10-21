@@ -50,7 +50,6 @@ public partial class MainWindow
             if (scene!.IsPickupDragging || scene.IsFlyActive) throw new StudioCommandException("busy", "Finish the pickup drag or exit Fly before changing AI inspection.");
             if (action == "clear") { scene.SelectAiNode(null); return Result(new { selectedNode = scene.SelectedAiNode }); }
             var target = graph.Find(id) ?? throw new StudioCommandException("stale_record", "AI node unavailable.");
-            if (action == "select" && !scene.InspectionSelectionEnabled) throw new StudioCommandException("locked", "Unlock editing before selecting an AI marker.");
             if (action == "select" && !scene.SelectAiNode(id)) throw new StudioCommandException("not_ready", "Enable AI nodes and choose All networks or this node's network before selecting it.");
             if (action == "properties")
             {

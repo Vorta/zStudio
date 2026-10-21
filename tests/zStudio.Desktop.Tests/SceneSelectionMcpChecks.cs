@@ -142,19 +142,18 @@ internal static class SceneSelectionMcpChecks
             typeof(SceneViewport).GetMethod("RegisterInspectionMesh", flags)!.Invoke(viewport, [mesh, 0, null, -1, -1]);
             Assert.True(viewport.SelectInspectionNode(1)); Assert.NotNull(viewport.SelectedInspection);
             // Source-map ownership changes selection, never the physical surface.
-            // Locked source inspection remains available but cannot start a transform.
+            // A read-only world's selection remains available but cannot start a transform.
             viewport.SelectionOwner = n => n is 1 or 2 ? -10 : n;
-            viewport.AllowLockedInspection = true;
-            viewport.SetEditingLocked(true);
+            viewport.SetPlacementEditing(false);
             Assert.True(viewport.SelectInspectionNode(-10));
             Assert.Equal(1, viewport.SelectedInspection!.Node);
             Assert.Equal(-10, viewport.SelectedInspection.SelectionNode);
             Assert.Equal(-10, viewport.FramingSelection);
             Assert.Throws<InvalidOperationException>(() => viewport.PreviewTransformDraft(new("fixture", 0, "fixture", 0),
                 new(Vector3.Zero, Vector3.Zero), PlacementRotationKind.None, "move", true));
-            viewport.SetEditingLocked(true); Assert.NotNull(viewport.SelectedInspection);
-            viewport.SelectionOwner = null; viewport.AllowLockedInspection = false;
-            viewport.SetEditingLocked(false);
+            Assert.NotNull(viewport.SelectedInspection);
+            viewport.SelectionOwner = null;
+            viewport.SetPlacementEditing(true);
             Assert.False((await Call("select", 3)).IsError == true);
             Assert.Null(viewport.SelectedInspection);
             Assert.Equal(3, viewport.FramingSelection);

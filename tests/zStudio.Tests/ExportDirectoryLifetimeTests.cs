@@ -1,6 +1,7 @@
 using System.Text.Json.Nodes;
 using zStudio.Core;
 using zStudio.Core.Export;
+using zStudio.Core.Formats;
 using Xunit;
 
 namespace zStudio.Tests;
@@ -44,6 +45,21 @@ public sealed class ExportDirectoryLifetimeTests
         finally { Directory.Delete(root, true); }
     }
 
+    [Theory]
+    [InlineData("source")]
+    [InlineData("zbd_1999")]
+    public async Task ModelBundleAndStandardExportsRejectProtectedDestinations(string folder)
+    {
+        string root = Path.Combine(Path.GetTempPath(), "zstudio-export-guard-" + Guid.NewGuid().ToString("N"));
+        string source = Path.Combine(root, "source"), destination = Path.Combine(root, folder, "nested", "export");
+        using AssetResolver resolver = new(source);
+        var token = TestContext.Current.CancellationToken;
+        var document = FormatRegistry.Default.OpenBytes(Path.Combine(source, "gamez.zbd"), ModelFixture.GameZ(), token: token);
+        var exporter = new ExportService(resolver);
+        await Assert.ThrowsAsync<IOException>(() => exporter.ExportModelBundleAsync(document, 0, destination, token: token));
+        await Assert.ThrowsAsync<IOException>(() => exporter.ExportAsync(document, document.Assets, destination, false, token: token));
+        Assert.False(Directory.Exists(root));
+    }
     private sealed class OnReport(Action<ExportProgress> action) : IProgress<ExportProgress>
     {
         public void Report(ExportProgress value) => action(value);

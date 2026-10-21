@@ -131,36 +131,8 @@ public partial class MainWindow
     {
         public void Dispose() => release();
     }
-    internal Func<AnimationPackage, string, string, string, CancellationToken, Task> WriteAnimationArchiveAsync { get; set; } = AnimationWriter.SaveAsAsync;
     internal Func<AssetResolver, IAssetExporter> CreateAssetExporter { get; set; } = static resolver => new ExportService(resolver);
     internal Func<string, CancellationToken, Task<AssetDocument>> ReadValidationSourceAsync { get; set; } = static (path, token) => FormatRegistry.Default.OpenAsync(path, token);
-    internal async Task SaveAnimationToPathAsync(DocumentModel doc, string destination, CancellationToken token = default)
-    {
-        using var save = BeginDocumentSave();
-        var edits = doc.AnimationEdits ?? throw new InvalidOperationException("Not an editable animation pack.");
-        if (shownDocument == doc) animation?.Pause();
-        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(token, doc.Lifetime.Token);
-        await WriteAnimationArchiveAsync(edits.Package, destination, doc.Path, ViewModel.Resolver?.Root ?? Path.GetDirectoryName(doc.Path)!, cancellation.Token);
-        doc.LastSavedCopy = destination; edits.MarkSaved(); ViewModel.Status = "Saved and verified " + destination + " · preview keeps the original mission context";
-    }
-    private async Task<PickupPlacementSaveResult> SavePickupDestinationsAsync(DocumentModel doc, IReadOnlyDictionary<string, string>? destinations, bool backup, CancellationToken token = default)
-    {
-        using var save = BeginDocumentSave();
-        var edits = doc.PickupEdits ?? throw new InvalidOperationException("No editable pickup placements loaded.");
-        // Claim only archives this save writes; unedited readers may belong to other documents.
-        var written = edits.ArchivePaths.Where(p => edits.IsArchiveDirty(p) || destinations?.Keys.Any(d => Path.GetFullPath(d).Equals(Path.GetFullPath(p), StringComparison.OrdinalIgnoreCase)) == true).ToArray();
-        doc.ClaimResourcePaths(written.Concat(written.Select(edits.TargetPath)).Concat(destinations?.Values ?? []));
-        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(token, doc.Lifetime.Token);
-        var result = await edits.SaveAsync(destinations, backup, cancellation.Token);
-        if (result.SavedPaths.Count > 0)
-        {
-            if (ViewModel.Resolver is { } resolver) await resolver.InvalidateAsync(result.SavedPaths, doc.Lifetime.Token);
-            foreach (var open in ViewModel.Documents) open.InvalidateMissionContext();
-            ViewModel.CheckExternalChanges(); ViewModel.Status = $"Saved and verified {result.SavedPaths.Count} files";
-        }
-        foreach (string error in result.Errors) ViewModel.AddProblem(error, file: doc.Path);
-        PickupEditsChanged(); return result;
-    }
     private async Task<ExportResult> ExportAssetsAsync(DocumentModel doc, AssetRecord[] assets, string destination, bool json, string? pack, int lod, CancellationToken token)
     {
         if (operation != null) throw new StudioCommandException("busy", "An export or validation is already running.");
@@ -175,7 +147,7 @@ public partial class MainWindow
                     ViewModel.Status = $"Exporting {p.Completed}/{p.Total}: {p.Name}";
             });
             var exporter = CreateAssetExporter(resolver);
-            var snapshot = doc.PreviewDocument;
+            var snapshot = doc.Document;
             var exportAssets = assets.Select(a => snapshot.Assets.Single(s => s.Id.Kind == a.Kind && s.Index == a.Index)).ToArray();
             var result = await Task.Run(() => exporter.ExportAsync(snapshot, exportAssets, destination, json, pack, lod, progress, cancellation.Token), cancellation.Token);
             cancellation.Token.ThrowIfCancellationRequested();

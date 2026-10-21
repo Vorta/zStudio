@@ -126,8 +126,10 @@ internal static class ResponsiveNavigatorChecks
             var package = new AnimationPackage { Prefix = new byte[72], Tail = [] };
             package.Entries.Add(new(new byte[308],0,0));
             var documentScene = new GameScene(); documentScene.Nodes.Add(new(0,"root","world",null,[],[],new(),new()));
-            using var propertiesDoc = new DocumentModel(new AssetDocument(Path.Combine(root,"properties.zbd"),new(0,DateTime.MinValue),
-                new(FormatFamily.Animation,28,Recognition.Supported,"fixture"),ReadOnlyMemory<byte>.Empty) { Animations = package, Scene = documentScene });
+            var propertiesSource = new AssetDocument(Path.Combine(root,"properties.zbd"),new(0,DateTime.MinValue),
+                new(FormatFamily.Animation,28,Recognition.Supported,"fixture"),ReadOnlyMemory<byte>.Empty) { Animations = package, Scene = documentScene };
+            propertiesSource.Add(AssetKind.Animation,0,"animation",0,0);
+            using var propertiesDoc = new DocumentModel(propertiesSource);
             main.ViewModel.Documents.Add(propertiesDoc);
             main.ViewModel.SelectedDocument = propertiesDoc; await Idle();
             await Changes(new() { ["navigatorTab"] = 3 });
@@ -138,16 +140,13 @@ internal static class ResponsiveNavigatorChecks
             await Resize(1600,"split"); Assert.Equal(3,tabs.SelectedIndex);
             main.ViewModel.SelectedDocument = opened; await Idle();
             Assert.Equal(1,tabs.SelectedIndex); Assert.Equal(0,main.ViewModel.Settings.GetWorkspace().BrowserTab);
-            main.OpenAnimationProperties(propertiesDoc,0,Guid.Empty,Guid.Empty);
-            var form = main.OpenPropertiesWindow!.AnimationFields!;
-            var input = Descendants(form).OfType<TextBox>().Single(t => AutomationProperties.GetName(t) == "Reset delay (s)");
-            input.Text = "-";
+            await main.OpenAssetPropertiesAsync(propertiesDoc,propertiesDoc.Assets[0].Record,deadline.Token);
+            var properties = main.OpenPropertiesWindow!;
             foreach (string theme in new[] { "Light","Dark","System" })
             {
                 await Changes(new() { ["theme"] = theme });
                 await Resize(1080,"tabbed"); await Resize(1600,"split");
-                Assert.Equal("-",input.Text); Assert.True(form.HasPendingDrafts);
-                Assert.Same(form,main.OpenPropertiesWindow.AnimationFields);
+                Assert.Same(properties,main.OpenPropertiesWindow); Assert.Same(propertiesDoc,properties.Document);
                 Assert.Same(opened,main.ViewModel.SelectedDocument);
                 Assert.Same(tree,main.FindName("FileTree")); Assert.Same(selection,tree.SelectedItem);
             }
@@ -155,8 +154,8 @@ internal static class ResponsiveNavigatorChecks
             Assert.Equal(0,main.ViewModel.Settings.GetWorkspace().BrowserTab);
             Assert.Equal(240,main.ViewModel.Settings.GetWorkspace().FilesWidth);
             Assert.Equal(294,main.ViewModel.Settings.GetWorkspace().NavigatorWidth);
-            Assert.True(form.HasPendingDrafts); input.Text = "0";
-            main.OpenPropertiesWindow.CloseResolved();
+            Assert.Same(properties,main.OpenPropertiesWindow);
+            properties.CloseResolved();
             main.ViewModel.CloseResolved(propertiesDoc);
             await main.ViewModel.CloseAsync(opened); await Idle();
             Assert.Equal(0,main.ViewModel.Settings.GetWorkspace().BrowserTab);

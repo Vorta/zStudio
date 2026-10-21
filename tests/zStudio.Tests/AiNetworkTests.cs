@@ -81,7 +81,7 @@ public sealed class AiNetworkTests
     private static ZrdNode Node(int a = -1, int b = -1, int c = -1) => A(I(12), A(F("1.25"), F("-2"), F("3")), A(I(a), I(b), I(c)));
     private static AiNetwork Decode(ZrdNode root) => MissionAiNetworks.Decode("network", "archive.zbd", 3, "net_01.zrd", root, TestContext.Current.CancellationToken);
     private static AssetDocument Archive(params ZrdNode[] roots) => FormatRegistry.Default.OpenBytes("ai-test.zbd",
-        ResourceEditingTests.Archive(roots.Select(root => ("net_01.zrd", ZrdWriter.Write(root, TestContext.Current.CancellationToken))).ToArray()), token: TestContext.Current.CancellationToken);
+        ResourceReaderTests.Archive(roots.Select(root => ("net_01.zrd", ZrdWriter.Write(root, TestContext.Current.CancellationToken))).ToArray()), token: TestContext.Current.CancellationToken);
     private static AiNetworkSnapshot Read(AssetDocument doc) => MissionAiNetworks.Read(doc.Assets.Select(a => (doc, a)), TestContext.Current.CancellationToken);
     [Fact]
     public void CachedSnapshotsLiveOnlyAsLongAsTheirSourceArchive()
@@ -106,7 +106,7 @@ public sealed class AiNetworkTests
     public void SnapshotDiagnosticsShareOneBudgetAcrossNetworkMembers()
     {
         // Identically named members are valid; each undecodable one reports a diagnostic, but the snapshot keeps one budget.
-        var doc = FormatRegistry.Default.OpenBytes("ai-test.zbd", ResourceEditingTests.Archive(Enumerable.Range(0, 1_000).Select(_ => ("net_01.zrd", new byte[] { 9, 9, 9, 9 })).ToArray()), token: TestContext.Current.CancellationToken);
+        var doc = FormatRegistry.Default.OpenBytes("ai-test.zbd", ResourceReaderTests.Archive(Enumerable.Range(0, 1_000).Select(_ => ("net_01.zrd", new byte[] { 9, 9, 9, 9 })).ToArray()), token: TestContext.Current.CancellationToken);
         var graph = Read(doc); var notes = graph.Diagnostics.ToArray();
         Assert.Equal(1_000, graph.Networks.Count);
         Assert.Equal(PreviewNotes.MaximumItems + 1, notes.Length); Assert.Equal(744, graph.OmittedDiagnostics);
@@ -200,23 +200,6 @@ public sealed class AiNetworkTests
         Assert.Equal(longText.Length, info["characters"]!.GetValue<int>()); Assert.True(info["truncated"]!.GetValue<bool>());
         Assert.True(info["value"]!.GetValue<string>().Length < 4200);
     }
-    [Fact]
-    public async Task StrategyEditsAndUndoPublishNewSnapshotsWithoutTouchingSources()
-    {
-        var doc = Archive(A(S("attack_strategy"), A(S("Head-on")), S("node_00"), Node()));
-        byte[] original = doc.Bytes.ToArray(); var before = Read(doc); var edits = new ResourceEditSession(doc);
-        var member = edits.Current.Members[0]; var node = edits.Tree(member, TestContext.Current.CancellationToken).Children[1].Children[0];
-        edits.Accept(await edits.PrepareZrdAsync(member.Id, node.Id, "set", value: "\"circle\"", token: TestContext.Current.CancellationToken));
-        using AssetResolver resolver = new(Path.GetTempPath()); Guid owner = Guid.NewGuid();
-        async Task<AiNetworkSnapshot> Current()
-        { resolver.SetWorkspaceSnapshots(owner, [edits.Current.Document]); return Read(await resolver.OpenCachedAsync(doc.Path, TestContext.Current.CancellationToken)); }
-        var changed = await Current();
-        Assert.NotEqual(before.Id, changed.Id); Assert.Equal(AiAttackStrategyKind.CIR, changed.Networks[0].AttackStrategy.Kind);
-        Assert.Equal(before.Networks[0].Nodes[0].Id, changed.Networks[0].Nodes[0].Id);
-        edits.UndoRedo(false); Assert.Equal(before.Id, (await Current()).Id);
-        edits.UndoRedo(true); Assert.Equal(changed.Id, (await Current()).Id);
-        Assert.Equal(original, doc.Bytes.ToArray());
-    }
 
     [Fact]
     public void DirectedSlotsRetainOrderAndAllNegativeSentinelsWithoutInventingReverseEdges()
@@ -280,21 +263,6 @@ public sealed class AiNetworkTests
         Assert.NotEqual(first.Id, changed.Id);
         using var canceled = new CancellationTokenSource(); canceled.Cancel();
         Assert.Throws<OperationCanceledException>(() => MissionAiNetworks.Read(doc.Assets.Select(a => (doc, a)), canceled.Token));
-    }
-    [Fact]
-    public async Task PublishedUnsavedResourcesAndUndoDriveTheSameGraphReader()
-    {
-        var doc = Archive(A(S("node_00"), Node())); var before = Read(doc); var edits = new ResourceEditSession(doc);
-        var member = edits.Current.Members[0]; var root = edits.Tree(member, TestContext.Current.CancellationToken);
-        var x = root.Children[1].Children[1].Children[0];
-        edits.Accept(await edits.PrepareZrdAsync(member.Id, x.Id, "set", value: "88", token: TestContext.Current.CancellationToken));
-        using AssetResolver resolver = new(Path.GetTempPath()); Guid owner = Guid.NewGuid();
-        resolver.SetWorkspaceSnapshots(owner, [edits.Current.Document]);
-        var current = Read(await resolver.OpenCachedAsync(doc.Path, TestContext.Current.CancellationToken));
-        Assert.Equal(88, current.Networks[0].Nodes[0].Position.X); Assert.NotEqual(before.Id, current.Id);
-        edits.UndoRedo(false); resolver.SetWorkspaceSnapshots(owner, [edits.Current.Document]);
-        Assert.Equal(before.Id, Read(await resolver.OpenCachedAsync(doc.Path, TestContext.Current.CancellationToken)).Id);
-        Assert.Equal(1.25f, Read(doc).Networks[0].Nodes[0].Position.X);
     }
     [Fact]
     public void UnsupportedAndMalformedMembersAreVisibleAsDiagnosticsAlongsideValidNetworks()

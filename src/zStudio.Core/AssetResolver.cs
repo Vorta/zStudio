@@ -14,7 +14,6 @@ public sealed class AssetResolver : IDisposable
         if (maximumCachedBytes < 0 || maximumCachedBytes > MaximumCachedBytes) throw new ArgumentOutOfRangeException(nameof(maximumCachedBytes));
         Root = Path.GetFullPath(root); this.maximumCachedBytes = maximumCachedBytes;
     }
-    public ResourceEditOwnership EditOwnership { get; } = new();
     public string Root { get; }
     private readonly Dictionary<string, string> missions = new(StringComparer.OrdinalIgnoreCase);
     public string? SelectedMission(string worldPath) { lock (missions) return missions.GetValueOrDefault(Path.GetDirectoryName(Path.GetFullPath(worldPath))!); }
@@ -35,30 +34,6 @@ public sealed class AssetResolver : IDisposable
     private readonly SemaphoreSlim gate = new(1, 1);
     private readonly Dictionary<string, (AssetDocument Document, long Used)> cache = new(StringComparer.OrdinalIgnoreCase);
     private long clock;
-    private readonly object snapshotGate = new();
-    private readonly Dictionary<Guid, AssetDocument[]> workspaceSnapshots = [];
-    public long SnapshotRevision { get; private set; }
-    public event Action? WorkspaceSnapshotsChanged;
-    public bool IsWorkspaceSnapshot(AssetDocument document)
-    { lock (snapshotGate) return publishedSnapshots.TryGetValue(document.Path, out var published) && ReferenceEquals(published, document); }
-    public AssetDocument? WorkspaceSnapshot(string path, Guid excludingOwner)
-    { lock (snapshotGate) return workspaceSnapshots.Where(p => p.Key != excludingOwner).SelectMany(p => p.Value).SingleOrDefault(d => d.Path.Equals(path, StringComparison.OrdinalIgnoreCase)); }
-    private IReadOnlyDictionary<string, AssetDocument> publishedSnapshots = new Dictionary<string, AssetDocument>(StringComparer.OrdinalIgnoreCase);
-    public void SetWorkspaceSnapshots(Guid owner, IEnumerable<AssetDocument> documents)
-    {
-        lock (snapshotGate)
-        {
-            var values = documents.ToArray();
-            // Closing a document that published nothing changes no source; it must not expire other previews.
-            if (values.Length == 0 && !workspaceSnapshots.ContainsKey(owner)) return;
-            // Build the complete replacement before changing either published state or ownership history.
-            var next = workspaceSnapshots.Where(p => p.Key != owner).SelectMany(p => p.Value).Concat(values)
-                .ToDictionary(d => d.Path, StringComparer.OrdinalIgnoreCase);
-            if (values.Length == 0) workspaceSnapshots.Remove(owner); else workspaceSnapshots[owner] = values;
-            publishedSnapshots = next; SnapshotRevision++;
-        }
-        WorkspaceSnapshotsChanged?.Invoke();
-    }
     public IEnumerable<string> ResourceDirectories(string context) => ResourceDirectories(context, new CompiledInventory());
     internal IEnumerable<string> ResourceDirectories(string context, CompiledInventory inventory)
     {
@@ -102,7 +77,6 @@ public sealed class AssetResolver : IDisposable
     {
         if (maximumBytes < 0 || maximumBytes > FormatRegistry.MaximumDocumentBytes) throw new ArgumentOutOfRangeException(nameof(maximumBytes));
         token.ThrowIfCancellationRequested();
-        lock (snapshotGate) if (publishedSnapshots.TryGetValue(path, out var snapshot)) return Admitted(snapshot);
         await gate.WaitAsync(token).ConfigureAwait(false);
         try
         {
@@ -127,7 +101,7 @@ public sealed class AssetResolver : IDisposable
         finally { gate.Release(); }
         AssetDocument Admitted(AssetDocument document)
         {
-            if (document.Bytes.Length > maximumBytes) throw new InvalidDataException("The texture pack exceeds the remaining edit buffer budget.");
+            if (document.Bytes.Length > maximumBytes) throw new InvalidDataException($"{JsonData.ShownText(path)} exceeds {maximumBytes:N0} bytes (remaining read allowance).");
             budget?.Document(path, document.Bytes.Length);
             return document;
         }
@@ -135,11 +109,7 @@ public sealed class AssetResolver : IDisposable
     public TextureLookupOperation BeginTextureLookup(string context, string? preferredPack = null) => new(this, context, preferredPack);
     public Task<ResolvedTexture?> ResolveTextureAsync(string context, string name, string? preferredPack, CancellationToken token)
         => BeginTextureLookup(context, preferredPack).ResolveAsync(name, token);
-    internal bool HasTextureLookupStamp(string path, FileStamp stamp)
-    {
-        lock (snapshotGate) if (publishedSnapshots.TryGetValue(path, out var snapshot)) return snapshot.Stamp == stamp;
-        return FileStamp.Read(path) == stamp;
-    }
+    internal static bool HasTextureLookupStamp(string path, FileStamp stamp) => FileStamp.Read(path) == stamp;
     public async Task InvalidateAsync(IEnumerable<string> paths, CancellationToken token = default)
     {
         await gate.WaitAsync(token).ConfigureAwait(false);

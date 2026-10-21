@@ -12,86 +12,8 @@ public sealed class MissionIdentityProjectionTests
     private static CancellationToken Token => TestContext.Current.CancellationToken;
 
     // Essential batch contract: one history operation, atomic rejection and only coordinate bytes changed.
-    [Fact]
-    public void AiPathBatchTransformsPreserveIdentitiesAndUseOneAtomicUndo()
-    {
-        var (archive, edits, snapshot) = Coordinates(3);
-        var selected = edits.OtherCoordinates.Take(2).ToDictionary(c => c.Source, c => c.OriginalPosition);
-        var sources = selected.Keys.ToArray();
-        Assert.Equal(new Vector3(1.5f, 2, 3), AiPathTransforms.Center(selected));
-        var rotated = AiPathTransforms.Rotate(selected, 2, 90);
-        Assert.Equal(new Vector3(1.5f, 1.5f, 3), rotated[sources[0]]);
-        Assert.Equal(new Vector3(1.5f, 2.5f, 3), rotated[sources[1]]);
-        var scaled = AiPathTransforms.Scale(rotated, new(1, 2, 1));
-        var result = AiPathTransforms.Translate(scaled, new(10, 0, -1));
-        Assert.Equal(new Vector3(11.5f, 1, 2), result[sources[0]]);
-        Assert.Equal(new Vector3(11.5f, 3, 2), result[sources[1]]);
-        // World Y rotation changes X/Z, while the centre and unselected node stay put.
-        Assert.Equal(new Vector3(1.5f, 2, 3.5f), AiPathTransforms.Rotate(selected, 1, 90)[sources[0]]);
-        Assert.Equal(new Vector3(1.5f, 2, 2.5f), AiPathTransforms.Rotate(rotated, 0, 90)[sources[0]]);
-        // Locked axes and neutral gestures retain float bits, even across differently sized coordinates.
-        var uneven = selected.ToDictionary(); uneven[sources[0]] = new(0.00001f, 2, 3); uneven[sources[1]] = new(100_000, 2, 3);
-        Assert.Equal(uneven[sources[0]], AiPathTransforms.Rotate(uneven, 1, 360)[sources[0]]);
-        Assert.Equal(uneven[sources[0]].X, AiPathTransforms.Rotate(uneven, 0, 90)[sources[0]].X);
-        Assert.Equal(uneven[sources[0]].X, AiPathTransforms.Scale(uneven, new(1, 2, 1))[sources[0]].X);
-        int claims = 0, accepted = 0, changed = 0;
-        edits.BeforeEdit += paths => { Assert.Single(paths); claims++; };
-        edits.EditAccepted += () => accepted++;
-        edits.Changed += () => changed++;
-        var invalid = result.ToDictionary(); invalid[sources[1]] = new(float.NaN, 0, 0);
-        Assert.Throws<InvalidDataException>(() => edits.MoveAiNodesTo(invalid));
-        invalid = result.ToDictionary(); invalid.Add(sources[0] with { RecordIndex = int.MaxValue }, Vector3.Zero);
-        Assert.Throws<InvalidDataException>(() => edits.MoveAiNodesTo(invalid));
-        Assert.Equal((0, 0, 0), (claims, accepted, changed));
-        Assert.False(edits.CanUndo); Assert.Empty(edits.EditedArchivePaths);
-        Assert.Same(snapshot, edits.ApplyAiPositions(snapshot));
-        var preview = edits.PreviewAiPositions(result);
-        var draft = edits.ApplyAiPositions(snapshot, preview);
-        Assert.Equal(snapshot.Id, draft.Id); Assert.False(edits.IsDirty);
-        Assert.True(edits.MoveAiNodesTo(result));
-        Assert.Equal((1, 1, 1), (claims, accepted, changed));
-        var working = Assert.Single(edits.WorkingArchives(Token));
-        var reread = MissionAiNetworks.Read([(working, Assert.Single(working.Assets))], Token);
-        var beforeNodes = snapshot.Networks[0].Nodes; var afterNodes = reread.Networks[0].Nodes;
-        Assert.Equal(beforeNodes.Select(n => n.Id), afterNodes.Select(n => n.Id));
-        Assert.Equal(beforeNodes.Select(n => n.RawValue), afterNodes.Select(n => n.RawValue));
-        for (int i = 0; i < beforeNodes.Count; i++) Assert.Equal(beforeNodes[i].Links, afterNodes[i].Links);
-        Assert.Equal(beforeNodes[2].Position, afterNodes[2].Position);
-        var allowed = edits.ScalarWrites(preview).SelectMany(w => Enumerable.Range(w.Offset, 8)).ToHashSet();
-        byte[] original = archive.Bytes.ToArray(), encoded = edits.EncodeArchive(archive.Path);
-        Assert.All(Enumerable.Range(0, original.Length).Where(i => original[i] != encoded[i]), i => Assert.Contains(i, allowed));
-        Assert.False(edits.MoveAiNodesTo(result)); Assert.Equal((1, 1, 1), (claims, accepted, changed));
-        edits.Undo(); Assert.False(edits.CanUndo); Assert.Same(snapshot, edits.ApplyAiPositions(snapshot));
-        Assert.Equal(original, edits.EncodeArchive(archive.Path));
-        edits.Redo(); Assert.Equal(encoded, edits.EncodeArchive(archive.Path));
-        Assert.Equal(original, archive.Bytes.ToArray());
-    }
 
-    [Fact]
-    public void ActualAiEditRefreshPreservesAcceptedAndDraftSnapshotSemantics()
-    {
-        var (archive, edits, snapshot) = Coordinates(3);
-        byte[] before = archive.Bytes.ToArray();
-        Assert.Same(snapshot, edits.ApplyAiPositions(snapshot));
-        var source = edits.OtherCoordinates.OrderBy(c => c.Source.RecordIndex).First().Source;
-        Assert.All(edits.OtherCoordinates, record =>
-        { Assert.Same(source.ArchivePath, record.Source.ArchivePath); Assert.Same(source.ResourceName, record.Source.ResourceName); });
-        Assert.True(edits.MoveTo(source, new(10, 20, 30)));
-        var accepted = edits.ApplyAiPositions(snapshot);
-        Assert.Equal(new Vector3(10, 20, 30), accepted.Networks[0].Nodes[0].Position);
-        Assert.Equal(ExpectedId(snapshot.Id, accepted), accepted.Id);
-        Assert.NotEqual(snapshot.Id, accepted.Id);
-        Assert.Equal(snapshot.Networks[0].Nodes[1], accepted.Networks[0].Nodes[1]);
-        var pending = edits.PreviewTransform(source, new(new(40, 50, 60), Vector3.Zero));
-        var draft = edits.ApplyAiPositions(accepted, pending); // Same accepted-then-draft sequence as the renderer.
-        Assert.Equal(accepted.Id, draft.Id); Assert.Equal(new Vector3(40, 50, 60), draft.Networks[0].Nodes[0].Position);
-        Assert.Equal(new Vector3(10, 20, 30), edits.Position(source));
-        edits.Undo(); Assert.Same(snapshot, edits.ApplyAiPositions(snapshot));
-        edits.Redo(); Assert.Equal(accepted.Id, edits.ApplyAiPositions(snapshot).Id);
-        Assert.Equal(before, archive.Bytes.ToArray());
-    }
-
-    [Fact]
+[Fact]
     public void CustomPreviewComparerKeepsItsPublicLookupSemantics()
     {
         var (_, edits, snapshot) = Coordinates(1);
@@ -152,9 +74,10 @@ public sealed class MissionIdentityProjectionTests
         var empty = snapshot.Networks[0] with { Archive = "\0", Member = "unused", Nodes = [] };
         var onlyEmpty = snapshot with { Networks = [empty] };
         Assert.Same(onlyEmpty, edits.ApplyAiPositions(onlyEmpty));
-        var source = Assert.Single(edits.OtherCoordinates).Source; Assert.True(edits.MoveTo(source, new(4, 5, 6)));
+        var source = Assert.Single(edits.OtherCoordinates).Source;
+        var preview = edits.PreviewAiPositions(new Dictionary<MissionPickupSource, Vector3>(edits.SourceComparer) { [source] = new(4, 5, 6) });
         var combined = snapshot with { Networks = [empty, snapshot.Networks[0]] };
-        var updated = edits.ApplyAiPositions(combined);
+        var updated = edits.ApplyAiPositions(combined, preview);
         Assert.Empty(updated.Networks[0].Nodes); Assert.Equal(new Vector3(4, 5, 6), updated.Networks[1].Nodes[0].Position);
     }
 
@@ -186,7 +109,7 @@ public sealed class MissionIdentityProjectionTests
     {
         var root = A(Enumerable.Range(0, count).SelectMany(i => new[] { S($"node_{i:D2}"), A(I(12), A(F(i + 1), F(2), F(3)), A(I(-1), I(-1), I(-1))) }).ToArray());
         var archive = FormatRegistry.Default.OpenBytes(Path.GetFullPath("identity-network.zbd"),
-            ResourceEditingTests.Archive(("net_01.zrd", ZrdWriter.Write(root, Token))), token: Token);
+            ResourceReaderTests.Archive(("net_01.zrd", ZrdWriter.Write(root, Token))), token: Token);
         var resource = Assert.Single(archive.Assets);
         var edits = PickupPlacementEditSession.Create([], token: Token); edits.AddCoordinates([(archive, resource)], Token);
         var snapshot = MissionAiNetworks.Read([(archive, resource)], Token);

@@ -184,7 +184,7 @@ public sealed class GameZBoundsTests
     /// and, when <paramref name="lightVertices"/> is nonnegative, one point light with that many complete vertices.
     /// A nonnegative <paramref name="cycleIndices"/> adds one cycling material with that many complete texture indices.
     /// The first model may also have <paramref name="vertices"/> complete vertices and <paramref name="polygonCorners"/> vertex indices per polygon.</summary>
-    private static byte[] World(int version, int models, int polygons, int lightVertices = -1, int cycleIndices = -1, int vertices = 0, int polygonCorners = 0)
+    internal static byte[] World(int version, int models, int polygons, int lightVertices = -1, int cycleIndices = -1, int vertices = 0, int polygonCorners = 0)
     {
         var layout = GameZLayouts.For((uint)version); int header = layout.ModelSize, polygonSize = layout.PolygonSize, shift = version == 27 ? 4 : 0;
         const int materials = 36; int modelTable = materials + 16 + (cycleIndices < 0 ? 0 : 44 + 28 + cycleIndices * 4);

@@ -19,7 +19,6 @@ public partial class MainWindow
         // A source project's workspace lives while any of its worlds is open; its last close decides its edits.
         ViewModel.Documents.CollectionChanged += (_, e) =>
         {
-            foreach (var added in e.NewItems?.OfType<DocumentModel>() ?? []) added.BeforeResourceEdit = RefuseResourceEditOfWorkspaceFile;
             if (e.Action is not System.Collections.Specialized.NotifyCollectionChangedAction.Add) ReleaseUnusedSourceWorkspace();
             // An approval waits for a release deferred by a rebuild or an opening; the release clears it.
             if (!ViewModel.Documents.Any(d => d.SourceWorld != null) && sourceWorkspace == null) discardApprovedWorkspace = null;
@@ -90,20 +89,18 @@ public partial class MainWindow
         WelcomeHelp.Visibility = WelcomeHelp.Text.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
         WelcomeHelp.Margin = new(0, ViewModel.HasRoot ? 24 : 8, 0, 0);
         AnimationMenu.IsEnabled = animation != null;
-        foreach (var column in AssetGrid.Columns.Skip(1)) column.Visibility = doc?.AnimationEdits != null ? Visibility.Visible : Visibility.Collapsed;
-        foreach (var item in AnimationMenu.Items.OfType<MenuItem>()) if (item.Tag is string command) item.IsEnabled = animation?.CanRunCommand(command) == true;
+        foreach (var column in AssetGrid.Columns.Skip(1)) column.Visibility = doc?.Document.Animations != null ? Visibility.Visible : Visibility.Collapsed;
         // A rebuilding source world accepts no other edit or save until the rebuilt world is shown.
         bool rebuilding = doc?.SourceWorld is { } rebuildingWorld && (rebuildingWorld.IsRebuilding || sourceWorkspaceBusy || rebuildingWorld.Workspace.IsSaving || scene?.IsZonePainting == true || zoneTool.Applying);
-        DocumentSave.IsEnabled = !rebuilding && (doc?.SourceWorld != null || doc?.AnimationEdits != null || doc?.PickupEdits != null || doc?.ModelEdits != null || doc?.ResourceEdits != null || doc?.ContentEdits != null);
-        DocumentSave.ToolTip = doc?.SourceWorld is { } sourceWorld ? SourceSaveTip(sourceWorld.Workspace) : doc?.AnimationEdits != null ? doc.PickupEdits?.IsDirty == true ? "Save an animation copy and modified mission coordinates (Ctrl+S)" : "Save the animation pack to a new file (Ctrl+S)" : doc?.ModelEdits?.IsDirty == true ? "Save model and texture changes (Ctrl+S)" : doc?.PickupEdits != null ? "Save pickup placements to the owning archive (Ctrl+S)" : "Save (Ctrl+S)";
-        DocumentUndo.IsEnabled = !rebuilding && (doc?.SourceWorld?.Workspace.CanUndo == true || doc?.AnimationEdits?.CanUndo == true || doc?.CanUndoScene == true || doc?.ResourceEdits?.CanUndo == true || doc?.ContentEdits?.CanUndo == true);
-        DocumentRedo.IsEnabled = !rebuilding && (doc?.SourceWorld?.Workspace.CanRedo == true || doc?.AnimationEdits?.CanRedo == true || doc?.CanRedoScene == true || doc?.ResourceEdits?.CanRedo == true || doc?.ContentEdits?.CanRedo == true);
-        SaveMenu.IsEnabled = SaveAsMenu.IsEnabled = DocumentSave.IsEnabled;
-        // A source world saves to its project's sources; there is no other destination.
-        if (doc?.SourceWorld != null) SaveAsMenu.IsEnabled = false;
+        // Only a source world saves, undoes and redoes; compiled documents are read only.
+        DocumentSave.IsEnabled = !rebuilding && doc?.SourceWorld != null;
+        DocumentSave.ToolTip = doc?.SourceWorld is { } sourceWorld ? SourceSaveTip(sourceWorld.Workspace) : "Save (Ctrl+S)";
+        DocumentUndo.IsEnabled = !rebuilding && doc?.SourceWorld?.Workspace.CanUndo == true;
+        DocumentRedo.IsEnabled = !rebuilding && doc?.SourceWorld?.Workspace.CanRedo == true;
+        SaveMenu.IsEnabled = DocumentSave.IsEnabled;
         UndoMenu.IsEnabled = DocumentUndo.IsEnabled; RedoMenu.IsEnabled = DocumentRedo.IsEnabled;
-        DocumentUndo.ToolTip = (doc?.SourceWorld?.Workspace.UndoLabel ?? doc?.AnimationEdits?.UndoDescription) is string undo ? "Undo: " + undo + " (Ctrl+Z)" : "Undo (Ctrl+Z)";
-        DocumentRedo.ToolTip = (doc?.SourceWorld?.Workspace.RedoLabel ?? doc?.AnimationEdits?.RedoDescription) is string redo ? "Redo: " + redo + " (Ctrl+Y)" : "Redo (Ctrl+Y)";
+        DocumentUndo.ToolTip = doc?.SourceWorld?.Workspace.UndoLabel is string undo ? "Undo: " + undo + " (Ctrl+Z)" : "Undo (Ctrl+Z)";
+        DocumentRedo.ToolTip = doc?.SourceWorld?.Workspace.RedoLabel is string redo ? "Redo: " + redo + " (Ctrl+Y)" : "Redo (Ctrl+Y)";
     }
     /// <summary>What Save writes in a source project: every changed source file, not only this world's.</summary>
     private static string SourceSaveTip(zStudio.Core.Sources.SourceWorkspace workspace)
@@ -117,23 +114,11 @@ public partial class MainWindow
         if (commandDocument == document) return;
         if (commandDocument is { } previous)
         {
-            if (previous.AnimationEdits is { } edits) edits.Changed -= UpdateDocumentCommands;
-            previous.PickupEditsChanged -= UpdateDocumentCommands;
-            previous.ModelEditsChanged -= UpdateDocumentCommands;
-            previous.ResourceEditsChanged -= UpdateDocumentCommands;
-            previous.ContentEditsChanged -= UpdateDocumentCommands;
-            previous.ContentEditsChanged -= ContentWorkspaceChanged;
             previous.SourceWorldChanged -= UpdateDocumentCommands;
         }
         commandDocument = document;
         if (document != null)
         {
-            if (document.AnimationEdits is { } edits) edits.Changed += UpdateDocumentCommands;
-            document.PickupEditsChanged += UpdateDocumentCommands;
-            document.ModelEditsChanged += UpdateDocumentCommands;
-            document.ResourceEditsChanged += UpdateDocumentCommands;
-            document.ContentEditsChanged += UpdateDocumentCommands;
-            document.ContentEditsChanged += ContentWorkspaceChanged;
             document.SourceWorldChanged += UpdateDocumentCommands;
         }
     }
@@ -143,16 +128,12 @@ public partial class MainWindow
         editor.SceneHierarchyChanged += RefreshSceneTree;
         int preferredTool = Layout.ToolTab, preferredInspector = Layout.InspectorTab; detachingWorkspace = true;
         ProgramHost.Content = editor.ProgramView;
-        editor.PropertiesRequested += async (sequence, ev) => { var document = shownDocument; if (document != null && await ResolvePropertiesDraftsAsync() && !document.IsDisposed) OpenAnimationProperties(document, editor.EntryIndex, sequence, ev); };
-        var ownerDocument = shownDocument!;
-        editor.ResolvePropertyDrafts = () => ResolvePropertiesDrafts(ownerDocument);
         ReferencesHost.Content = editor.ReferencesView; PreviewSetupHost.Content = editor.PreviewSetupView;
         DispatchHost.Content = editor.DispatchView; EventLogHost.Content = editor.EventLogView;
         RuntimeHost.Content = editor.RuntimeView; ProblemsHost.Content = editor.ProblemsView;
         editor.SetOperationDiagnostics(ViewModel.Problems);
         editor.SourceSelectionChanged += UpdateDocumentCommands;
         editor.SetupRequested += () => { Layout.InspectorVisible = true; inspectorTemporary = true; InspectorTabs.SelectedItem = PreviewSetupTab; ArrangeWorkspace(); };
-        editor.CommandsChanged += UpdateDocumentCommands;
         editor.FileProblemSelected += async problem => await NavigateProblemAsync(problem);
         editor.SourceNavigationRequested += (entry,sequence,ev) => NavigateAnimationSource(entry,sequence,ev);
         ReferencesTab.IsEnabled = PreviewSetupTab.IsEnabled = ProgramTab.IsEnabled = true;
@@ -311,10 +292,6 @@ public partial class MainWindow
     private void AnimationStopClick(object sender, RoutedEventArgs e) => animation?.Stop();
     private void AnimationPreviousClick(object sender, RoutedEventArgs e) => animation?.Step(-1);
     private void AnimationNextClick(object sender, RoutedEventArgs e) => animation?.Step(1);
-    private void AnimationAddEventClick(object sender, RoutedEventArgs e) => animation?.ChooseEvent();
-    private void AnimationAddSequenceClick(object sender, RoutedEventArgs e) => animation?.AddSequence();
-    private void AnimationDuplicateClick(object sender, RoutedEventArgs e) => animation?.DuplicateRecord();
-    private void AnimationDeleteClick(object sender, RoutedEventArgs e) => animation?.DeleteRecord();
     private void PreviewSetupClick(object sender, RoutedEventArgs e) { if (animation != null) { Layout.InspectorVisible = true; inspectorTemporary = true; InspectorTabs.SelectedItem = PreviewSetupTab; ArrangeWorkspace(); } }
     private async void FileProblemDoubleClick(object sender, MouseButtonEventArgs e)
     {

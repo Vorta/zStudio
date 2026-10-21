@@ -71,30 +71,6 @@ internal static class WorldHighlightCheck
                     buttons[0].IsChecked = true;
                     Require(preview.CaptureView() == isolated, "Highlight changed isolation camera");
                     preview.Isolate(null); preview.RestoreView(pose);
-                    // Pinned popup drafts survive GUI appearance changes; MCP retains its draft guard.
-                    if (preview.Mission!.Actors.FirstOrDefault(a => a.Pickup != null) is { } pickup)
-                    {
-                        var state = (await main.Commands.ExecuteAsync("zstudio_state", new())).Data;
-                        string id = state["preview"]!.GetValue<string>();
-                        await main.Commands.ExecuteAsync("zstudio_scene_selection", new() { ["preview"] = id, ["action"] = "select", ["node"] = pickup.Root });
-                        ((ToggleButton)main.FindName("EditingUnlocked")).IsChecked = true;
-                        main.OpenCurrentProperties();
-                        await System.Windows.Threading.Dispatcher.Yield(System.Windows.Threading.DispatcherPriority.ApplicationIdle);
-                        var popup = main.OpenPropertiesWindow!; var fields = popup.PickupFields!;
-                        var input = VisualChildren(fields).OfType<ValueTextBox>().First(); string original = input.Text;
-                        input.Text = "-"; buttons[0].IsChecked = true;
-                        Require(input.Text == "-" && fields.HasPendingDrafts && ReferenceEquals(popup.PickupFields, fields) && doc.Revision == 0, "Highlight retargeted/committed Properties draft");
-                        var operation = (await main.Commands.ExecuteAsync("zstudio_scene_options", new() { ["preview"] = id, ["changes"] = new JsonObject { ["highlight"] = "clipTo" } })).Data;
-                        string operationId = operation["id"]!.GetValue<string>();
-                        while (operation["State"]!.GetValue<string>() is "queued" or "running")
-                        {
-                            await Task.Delay(10, deadline.Token);
-                            operation = (await main.Commands.ExecuteAsync("zstudio_operation", new() { ["id"] = operationId })).Data;
-                        }
-                        Require(operation["State"]!.GetValue<string>() == "failed" && operation["result"]!["code"]!.GetValue<string>() == "pending_drafts", "MCP highlight bypassed Properties draft guard");
-                        input.Text = original; popup.Close();
-                        ((ToggleButton)main.FindName("EditingUnlocked")).IsChecked = false;
-                    }
                     // Native overflow and theme retain the selected mode.
                     main.Width = 740;
                     var toolbar = (ToolBar)main.FindName("SceneToolbar");

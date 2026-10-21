@@ -15,7 +15,7 @@ public sealed class MissionCoordinateGrowthTests
     private static ZrdNode I(int value) => ZrdNode.Create(ZrdKind.Int) with { Bits = unchecked((uint)value) };
     private static ZrdNode Actor(float x = 1, params ZrdNode[] extra) => A([I(0), A(F(x), F(2), F(3)), F(90), ..extra]);
     private static AssetDocument Archive(string name, ZrdNode root) => FormatRegistry.Default.OpenBytes(Path.GetFullPath("coordinates.zbd"),
-        ResourceEditingTests.Archive((name, ZrdWriter.Write(root, TestContext.Current.CancellationToken))), token: TestContext.Current.CancellationToken);
+        ResourceReaderTests.Archive((name, ZrdWriter.Write(root, TestContext.Current.CancellationToken))), token: TestContext.Current.CancellationToken);
 
     [Fact]
     public void CoordinateIndexReusesTheTypedTreeWithoutExpandingInactivePayload()
@@ -27,7 +27,6 @@ public sealed class MissionCoordinateGrowthTests
         long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
         Assert.True(allocated < archive.Bytes.Length + 1_000_000, $"Index allocated {allocated:N0} bytes for {archive.Bytes.Length:N0} source bytes.");
         Assert.Equal(new Vector3(1, 2, 3), Assert.Single(edits.OtherCoordinates).OriginalPosition);
-        Assert.Equal(archive.Bytes.ToArray(), edits.EncodeArchive(archive.Path));
     }
 
     [Fact]
@@ -38,7 +37,6 @@ public sealed class MissionCoordinateGrowthTests
         edits.AddCoordinates([(archive, archive.Assets[0])], TestContext.Current.CancellationToken, mw3: true);
         Assert.Empty(edits.OtherCoordinates); Assert.Equal(257, edits.Diagnostics.Count);
         Assert.Contains("744", edits.Diagnostics[^1]); Assert.Contains("omitted", edits.Diagnostics[^1]);
-        Assert.False(edits.IsDirty); Assert.False(edits.CanUndo);
     }
 
     [Fact]
@@ -72,13 +70,8 @@ public sealed class MissionCoordinateGrowthTests
         archive.Add(AssetKind.Raw, 1, "opaque", offset, length);
         var edits = PickupPlacementEditSession.Create([], token: TestContext.Current.CancellationToken);
         edits.AddCoordinates([(archive, member)], TestContext.Current.CancellationToken, mw3: true);
-        if (rejected)
-        {
-            Assert.Empty(edits.OtherCoordinates); Assert.Contains("non-overlapping", Assert.Single(edits.Diagnostics));
-            Assert.Empty(edits.ArchivePaths);
-        }
+        if (rejected) { Assert.Empty(edits.OtherCoordinates); Assert.Contains("non-overlapping", Assert.Single(edits.Diagnostics)); }
         else Assert.Single(edits.OtherCoordinates);
-        Assert.False(edits.IsDirty); Assert.False(edits.CanUndo);
     }
 
     [Fact]
@@ -118,26 +111,11 @@ public sealed class MissionCoordinateGrowthTests
         Assert.True(allocated < 4096, $"Allocated {allocated:N0} bytes to inspect an ignored string.");
     }
 
-    [Theory]
-    [InlineData(0, float.MaxValue)][InlineData(1, -float.MaxValue)][InlineData(2, 2e12f)]
-    public void MissionActorEditsRejectUnsupportedPositionsBeforeHistoryOrPublication(int axis, float value)
-    {
-        var archive = Archive("aiv.zrd", A(S("actor_01"), Actor())); var edits = PickupPlacementEditSession.Create([], token: TestContext.Current.CancellationToken);
-        edits.AddCoordinates([(archive, archive.Assets[0])], TestContext.Current.CancellationToken, mw3: true);
-        var record = Assert.Single(edits.OtherCoordinates); var original = edits.Transform(record.Source);
-        Vector3 invalid = original.Position; invalid[axis] = value;
-        Assert.Throws<InvalidDataException>(() => edits.PreviewTransform(record.Source, original with { Position = invalid }));
-        Assert.Throws<InvalidDataException>(() => edits.MoveTo(record.Source, invalid));
-        Assert.Equal(original, edits.Transform(record.Source)); Assert.False(edits.CanUndo); Assert.False(edits.IsDirty);
-        Assert.True(edits.MoveTo(record.Source, new(4, 5, 6))); edits.Undo();
-        Assert.Equal(archive.Bytes.ToArray(), edits.EncodeArchive(archive.Path));
-    }
-
-    [Fact]
+[Fact]
     public void ValveSourceAttachmentIndexesArchiveAndMemberInsteadOfRescanningNetworks()
     {
         byte[] root = ZrdWriter.Write(A(S("version"), A(I(106))), TestContext.Current.CancellationToken);
-        var archive = FormatRegistry.Default.OpenBytes("valve-index.zbd", ResourceEditingTests.Archive(Enumerable.Range(0, 600).Select(_ => ("net_01.zrd", root)).ToArray()), token: TestContext.Current.CancellationToken);
+        var archive = FormatRegistry.Default.OpenBytes("valve-index.zbd", ResourceReaderTests.Archive(Enumerable.Range(0, 600).Select(_ => ("net_01.zrd", root)).ToArray()), token: TestContext.Current.CancellationToken);
         var networks = archive.Assets.Select(a => MissionAiNetworks.Decode("net" + a.Index, archive.Path.ToUpperInvariant(), a.Index, a.Name, (ZrdNode)a.Content!, TestContext.Current.CancellationToken)).ToArray();
         var counted = new CountedNetworks(networks);
         var result = MissionAiValves.Attach(new("graph", counted), [archive], TestContext.Current.CancellationToken);

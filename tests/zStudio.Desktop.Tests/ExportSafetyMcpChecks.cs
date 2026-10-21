@@ -179,30 +179,15 @@ internal static class ExportSafetyMcpChecks
     private static async Task RelativePathChecks(MainWindow main, Func<string, Dictionary<string, object?>, string, Task<JsonNode>> job, CancellationToken token)
     {
         using var fixture = new SourceFixture();
-        // A texture pack beside the corpus's archives, for texture_import.
-        byte[] rgba = new byte[16 * 16 * 4]; Array.Fill(rgba, (byte)200);
-        var pack = TexturePackBuilder.Build([new("rock", "rock", new DecodedImage(16, 16, rgba))], TexturePackVariant.FromFileName("rtexture4.zbd")!, token);
-        await File.WriteAllBytesAsync(Path.Combine(fixture.Corpus, "m1", "rtexture4.zbd"), pack.Bytes, token);
         await job("open_root", new() { ["path"] = fixture.Corpus }, "completed");
         await Refused("open_document", new() { ["path"] = "m1/zrdr.zbd" });
         string archivePath = Path.Combine(fixture.Corpus, "m1", "zrdr.zbd");
         var archive = Document(await job("open_document", new() { ["path"] = archivePath }, "completed"));
-        var asset = archive.PreviewDocument.Assets[0];
-        await Refused("save_document", new() { ["document"] = Id(archive), ["revision"] = archive.Revision, ["destination"] = "copy.zbd" });
-        await Refused("save_document", new() { ["document"] = Id(archive), ["revision"] = archive.Revision, ["destinations"] = new Dictionary<string, object?> { [archivePath] = "copy.zbd" } });
-        await Refused("save_document", new() { ["document"] = Id(archive), ["revision"] = archive.Revision, ["modelDirectory"] = "models" });
+        var asset = archive.Document.Assets[0];
         await Refused("export", new() { ["document"] = Id(archive), ["destination"] = "exported" });
         await Refused("model_bundle_export", new() { ["document"] = Id(archive), ["kind"] = asset.Kind.ToString(), ["index"] = asset.Index, ["destination"] = "bundle" });
-        await Refused("model_replace", new() { ["document"] = Id(archive), ["revision"] = archive.Revision, ["manifest"] = "manifest.json" });
-        await Refused("mech_model_replace", new() { ["document"] = Id(archive), ["revision"] = archive.Revision, ["member"] = Guid.NewGuid().ToString(), ["localModel"] = 0, ["material"] = 0, ["path"] = "model.obj" });
-        await Refused("archive_edit", new() { ["document"] = Id(archive), ["revision"] = archive.Revision, ["action"] = "add", ["name"] = "extra.zrd", ["path"] = "extra.zrd" });
-        var textures = Document(await job("open_document", new() { ["path"] = Path.Combine(fixture.Corpus, "m1", "rtexture4.zbd") }, "completed"));
-        await Refused("texture_import", new() { ["document"] = Id(textures), ["revision"] = textures.Revision, ["path"] = "rock.png", ["index"] = 0 });
-        await Refused("texture_import", new() { ["document"] = Id(textures), ["revision"] = textures.Revision, ["path"] = Path.Combine(fixture.Root, "rock.png"), ["index"] = 0,
-            ["targets"] = new[] { new Dictionary<string, object?> { ["path"] = "m1/rtexture4.zbd", ["index"] = 0 } } });
-        // Nothing was edited or written beside zStudio.
-        Assert.False(archive.IsDirty); Assert.False(textures.IsDirty);
-        foreach (string name in new[] { "copy.zbd", "models", "exported", "bundle" })
+        // Nothing was written beside zStudio.
+        foreach (string name in new[] { "exported", "bundle" })
             Assert.False(Path.Exists(Path.Combine(AppContext.BaseDirectory, name)) || Path.Exists(Path.Combine(Environment.CurrentDirectory, name)), name);
         foreach (var doc in main.ViewModel.Documents.ToArray()) main.ViewModel.CloseResolved(doc);
 
@@ -340,7 +325,7 @@ internal static class ExportSafetyMcpChecks
         Assert.True(m1.IsDisposed); Assert.DoesNotContain(main.ViewModel.Problems, p => Changed(p, "m2"));
         m1 = Document((await job("source_world_open", new() { ["mission"] = "m1" }, "completed"))["document"]!);
         // Another edit remains local; changing maps cannot silently carry it into a different document.
-        int ground = m1.PreviewDocument.Scene!.Nodes.First(n => n.Name == "ground" && m1.SourceBuild!.Provenance.ContainsKey(n.Index)).Index;
+        int ground = m1.Document.Scene!.Nodes.First(n => n.Name == "ground" && m1.SourceBuild!.Provenance.ContainsKey(n.Index)).Index;
         m1 = Document((await job("source_world_object_edit", new() { ["document"] = Id(m1), ["revision"] = m1.Revision, ["node"] = ground, ["position"] = new Dictionary<string, object?> { ["x"] = 5, ["y"] = 0, ["z"] = -5 } }, "completed"))["document"]!);
         Assert.Equal("unsaved_changes", (await job("source_world_open", new() { ["mission"] = "m2" }, "failed"))["code"]!.GetValue<string>());
         Assert.Same(m1, Assert.Single(main.ViewModel.Documents));
@@ -350,7 +335,7 @@ internal static class ExportSafetyMcpChecks
 
         async Task<DocumentModel> Duplicate(DocumentModel doc, string source, string name)
         {
-            int crate = doc.PreviewDocument.Scene!.Nodes.First(n => n.Name == source && doc.SourceBuild!.Provenance.ContainsKey(n.Index)).Index;
+            int crate = doc.Document.Scene!.Nodes.First(n => n.Name == source && doc.SourceBuild!.Provenance.ContainsKey(n.Index)).Index;
             return Document((await job("source_world_object_edit", new() { ["document"] = Id(doc), ["revision"] = doc.Revision, ["node"] = crate, ["action"] = "duplicate", ["name"] = name }, "completed"))["document"]!);
         }
         bool Changed(StudioProblem p, string mission) => p.File == Path.Combine(fixture.Project, "gamegen", mission + ".gs")

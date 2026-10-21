@@ -127,130 +127,6 @@ public sealed class Mw3MissionIsolationTests
     }
 
     [Fact]
-    public async Task CoordinateEditsPublishAndCheckOnlyTheArchivesTheyEdited()
-    {
-        using var fixture = new Mw3MissionFixture("actor_01");
-        string second = Path.Combine(fixture.Folder, "readerm2.zbd"); File.WriteAllBytes(second, fixture.ReaderBytes);
-        var edits = await PickupPlacementEditSession.LoadAsync(fixture.World.Path, fixture.Resolver, Token);
-        var first = Record(edits, fixture.ReaderPath);
-        Assert.True(edits.MoveTo(first.Source, new(1, 2, 3)));
-        Assert.Equal(fixture.ReaderPath, Assert.Single(edits.WorkingArchives(Token)).Path, ignoreCase: true);
-        // An unrelated reader saved elsewhere is not an external change to these edits.
-        File.WriteAllBytes(second, Rewritten(fixture.ReaderBytes, heading: 45));
-        Assert.False(edits.HasExternalChanges()); Assert.False(edits.HasSourceChanges());
-        Assert.True(edits.HasStaleBaselines(_ => null));
-    }
-
-    [Fact]
-    public async Task CoordinateAndResourceDocumentsEditDifferentReadersInEitherOrder()
-    {
-        using var fixture = new Mw3MissionFixture("actor_01");
-        string second = Path.Combine(fixture.Folder, "readerm2.zbd"); File.WriteAllBytes(second, fixture.ReaderBytes);
-        var resolver = fixture.Resolver; ResourceEditOwnership ownership = new(); Guid worldOwner = Guid.NewGuid(), readerOwner = Guid.NewGuid();
-
-        // The reader document edits and publishes readerm2 before the map loads its coordinates.
-        var readerDoc = await FormatRegistry.Default.OpenAsync(second, Token); var reader = new ResourceEditSession(readerDoc);
-        reader.BeforeEdit += () => ownership.Acquire(readerOwner, "reader", [second, reader.TargetPath]);
-        reader.Changed += () => resolver.SetWorkspaceSnapshots(readerOwner, [reader.Current.Document]);
-        await SetHeading(reader, 30);
-
-        var edits = await PickupPlacementEditSession.LoadAsync(fixture.World.Path, resolver, Token);
-        Wire(edits, resolver, ownership, worldOwner);
-        Assert.Equal(30, Record(edits, second).Rotation.Y);
-        var first = Record(edits, fixture.ReaderPath);
-        Assert.True(edits.MoveTo(first.Source, new(1, 2, 3)));
-        Assert.Equal(new[] { fixture.ReaderPath }, edits.EditedArchivePaths, StringComparer.OrdinalIgnoreCase);
-
-        // Same-archive edits from two documents remain rejected without partial history.
-        var owned = Record(edits, second).Source;
-        Assert.Throws<InvalidOperationException>(() => edits.MoveTo(owned, new(9, 9, 9)));
-        Assert.False(edits.IsArchiveEdited(second)); Assert.True(edits.CanUndo); edits.Undo(); edits.Redo();
-
-        // The reader saves; its published copy continues to be the served baseline.
-        await reader.SaveAsync(token: Token); byte[] readerSaved = File.ReadAllBytes(second);
-        Assert.False(edits.HasExternalChanges()); Assert.False(edits.HasStaleBaselines(Published(resolver, worldOwner)));
-        await SetHeading(reader, 60); await reader.SaveAsync(token: Token); readerSaved = File.ReadAllBytes(second);
-        Assert.True(edits.HasStaleBaselines(Published(resolver, worldOwner)));
-        Assert.Throws<InvalidOperationException>(() => edits.MoveTo(owned, new(8, 8, 8))); // Stale and owned elsewhere.
-        edits.RebaseUntouched(await PickupPlacementEditSession.LoadAsync(fixture.World.Path, resolver, Token));
-        Assert.False(edits.HasStaleBaselines(Published(resolver, worldOwner)));
-        Assert.Equal(60, Record(edits, second).Rotation.Y);
-        Assert.Equal(new Vector3(1, 2, 3), edits.Position(first.Source)); Assert.True(edits.CanUndo);
-
-        // The map saves only its own reader; the other document's saved bytes stay intact.
-        Assert.True(edits.MoveTo(first.Source, new(4, 5, 6)));
-        var result = await edits.SaveAsync(token: Token);
-        Assert.Empty(result.Errors); Assert.Equal(fixture.ReaderPath, Assert.Single(result.SavedPaths), ignoreCase: true);
-        Assert.Equal(readerSaved, File.ReadAllBytes(second));
-        AssertOnlyPositionChanged(fixture.ReaderBytes, File.ReadAllBytes(fixture.ReaderPath), new(4, 5, 6));
-
-        // After the reader closes, the map may edit it from the saved file, not the retired copy.
-        resolver.SetWorkspaceSnapshots(readerOwner, []); ownership.Release(readerOwner);
-        Assert.True(edits.HasStaleBaselines(Published(resolver, worldOwner)));
-        edits.RebaseUntouched(await PickupPlacementEditSession.LoadAsync(fixture.World.Path, resolver, Token));
-        Assert.True(edits.MoveTo(owned, new(7, 7, 7)));
-        Assert.Empty((await edits.SaveAsync(token: Token)).Errors);
-        AssertOnlyPositionChanged(readerSaved, File.ReadAllBytes(second), new(7, 7, 7));
-        edits.Undo(); edits.Undo(); Assert.True(edits.IsDirty); // History spans both saves.
-    }
-
-    [Fact]
-    public async Task ResourceDocumentMayEditAnotherReaderAfterCoordinateEdits()
-    {
-        using var fixture = new Mw3MissionFixture("actor_01");
-        string second = Path.Combine(fixture.Folder, "readerm2.zbd"); File.WriteAllBytes(second, fixture.ReaderBytes);
-        var resolver = fixture.Resolver; ResourceEditOwnership ownership = new(); Guid worldOwner = Guid.NewGuid(), readerOwner = Guid.NewGuid();
-        var edits = await PickupPlacementEditSession.LoadAsync(fixture.World.Path, resolver, Token);
-        Wire(edits, resolver, ownership, worldOwner);
-        Assert.True(edits.MoveTo(Record(edits, fixture.ReaderPath).Source, new(1, 2, 3)));
-        foreach (var (path, owner) in new[] { (second, readerOwner), (fixture.ReaderPath, Guid.NewGuid()) })
-        {
-            var doc = await FormatRegistry.Default.OpenAsync(path, Token); var resources = new ResourceEditSession(doc);
-            resources.BeforeEdit += () => ownership.Acquire(owner, "reader", [path, resources.TargetPath]);
-            resources.Changed += () => resolver.SetWorkspaceSnapshots(owner, [resources.Current.Document]);
-            if (path == second) { await SetHeading(resources, 15); await resources.SaveAsync(token: Token); }
-            else await Assert.ThrowsAsync<InvalidOperationException>(() => SetHeading(resources, 15)); // The map owns readerm1.
-        }
-        Assert.Equal(fixture.ReaderPath, Assert.Single(edits.WorkingArchives(Token)).Path, ignoreCase: true);
-        Assert.False(edits.HasExternalChanges());
-        Assert.Empty((await edits.SaveAsync(token: Token)).Errors);
-        AssertOnlyPositionChanged(fixture.ReaderBytes, File.ReadAllBytes(fixture.ReaderPath), new(1, 2, 3));
-    }
-
-    private static Func<string, AssetDocument?> Published(AssetResolver resolver, Guid owner) => path => resolver.WorkspaceSnapshot(path, owner);
-    // Mirrors DocumentModel: claim changed archives only, after checking their served baseline.
-    private static void Wire(PickupPlacementEditSession edits, AssetResolver resolver, ResourceEditOwnership ownership, Guid owner)
-    {
-        edits.BeforeEdit += archives =>
-        {
-            if (edits.HasStaleBaselines(Published(resolver, owner), archives)) throw new InvalidOperationException("Refresh the map before editing this archive.");
-            ownership.Acquire(owner, "map", archives.Concat(archives.Select(edits.TargetPath)));
-        };
-        edits.Changed += () => resolver.SetWorkspaceSnapshots(owner, edits.WorkingArchives(Token));
-    }
-    private static MissionCoordinateRecord Record(PickupPlacementEditSession edits, string archive) =>
-        edits.OtherCoordinates.Single(c => c.Source.ArchivePath.Equals(Path.GetFullPath(archive), StringComparison.OrdinalIgnoreCase));
-    private static async Task SetHeading(ResourceEditSession resources, float heading)
-    {
-        var member = resources.Current.Members[0]; var node = resources.Tree(member, Token).Children[1].Children[2];
-        resources.Accept(await resources.PrepareZrdAsync(member.Id, node.Id, "set", value: heading.ToString("R", System.Globalization.CultureInfo.InvariantCulture), token: Token));
-    }
-    private static void AssertOnlyPositionChanged(byte[] before, byte[] after, Vector3 expected)
-    {
-        Assert.Equal(before.Length, after.Length);
-        var tree = ZrdDecoder.Read(Member(after, 0), Token);
-        var position = tree.Children[1].Children[1].Children.Select(n => BitConverter.UInt32BitsToSingle(n.Bits)).ToArray();
-        Assert.Equal(new[] { expected.X, expected.Y, expected.Z }, position);
-        int changed = Enumerable.Range(0, before.Length).Count(i => before[i] != after[i]);
-        Assert.InRange(changed, 1, 3 * 8); // Only the three typed position scalars.
-    }
-    private static byte[] Rewritten(byte[] reader, float heading)
-    {
-        var tree = ZrdDecoder.Read(Member(reader, 0), Token); var rows = tree.Children.ToArray(); var data = rows[1].Children.ToArray();
-        data[2] = data[2] with { Bits = BitConverter.SingleToUInt32Bits(heading) }; rows[1] = rows[1] with { Children = data };
-        return Archive(("aiv.zrd", ZrdWriter.Write(tree with { Children = rows })));
-    }
-    [Fact]
     public async Task RememberedMissionThatCannotBeReadKeepsItsSelectionForLaterRecovery()
     {
         using var fixture = new Mw3MissionFixture("actor_01");
@@ -293,7 +169,7 @@ public sealed class Mw3MissionIsolationTests
     public async Task ExactAnimationMissionRequestsNeverLoadAFallbackReader()
     {
         using var fixture = new Mw3MissionFixture("actor_01");
-        fixture.Resolver.SetWorkspaceSnapshots(Guid.NewGuid(), [fixture.World]);
+        File.WriteAllBytes(fixture.World.Path, GameZBoundsTests.World(27, 1, 0)); // The context opens the world from disk.
         byte[] prefix = new byte[80]; BinaryPrimitives.WriteUInt32LittleEndian(prefix, 0x08170616); BinaryPrimitives.WriteInt32LittleEndian(prefix.AsSpan(4), 39);
         var package = new zStudio.Core.Animation.AnimationPackage { Prefix = prefix, Tail = [] };
         string animation = Path.Combine(fixture.Folder, "anim.zbd"), vanished = Path.Combine(fixture.Folder, "readerm2.zbd");
@@ -325,7 +201,7 @@ public sealed class Mw3MissionIsolationTests
         try
         {
             string library = Path.Combine(root, "mechlib.zbd"), locked = Path.Combine(root, "other.zbd");
-            File.WriteAllBytes(library, Mw3ReplacementConventionTests.MechLibrary(true)); File.WriteAllBytes(locked, Archive(("fx.zrd", Zrd())));
+            File.WriteAllBytes(library, MechLibrary()); File.WriteAllBytes(locked, Archive(("fx.zrd", Zrd())));
             using AssetResolver resolver = new(root); List<string> skipped = [];
             using (new FileStream(locked, FileMode.Open, FileAccess.ReadWrite, FileShare.Read))
             {
@@ -354,6 +230,37 @@ public sealed class Mw3MissionIsolationTests
             }
         }
         finally { Directory.Delete(root, true); }
+    }
+    /// <summary>Version-27 mech library archive: version, format, one textured material and one single-node member with one polygon.</summary>
+    private static byte[] MechLibrary()
+    {
+        using MemoryStream s = new(); using BinaryWriter w = new(s); List<(string Name, long Offset, long Length)> members = [];
+        void Member(string name, Action write) { long start = s.Position; write(); members.Add((name, start, s.Position - start)); }
+        Member("version", () => w.Write(27)); Member("format", () => w.Write(1));
+        Member("materials", () =>
+        {
+            w.Write(1); byte[] m = new byte[40]; m[0] = 255; m[1] = 0x11; BinaryPrimitives.WriteInt32LittleEndian(m.AsSpan(16), 0x0BADF00D); w.Write(m);
+            w.Write(4); w.Write("mtex"u8);
+        });
+        Member("mech_test.flt", () =>
+        {
+            byte[] node = new byte[208]; Encoding.ASCII.GetBytes("root").CopyTo(node, 0);
+            BinaryPrimitives.WriteInt32LittleEndian(node.AsSpan(36), 0x300); BinaryPrimitives.WriteInt32LittleEndian(node.AsSpan(52), 5); BinaryPrimitives.WriteInt32LittleEndian(node.AsSpan(60), 0x4000);
+            for (int box = 116; box <= 140; box += 24) for (int k = 0; k < 6; k++) BinaryPrimitives.WriteSingleLittleEndian(node.AsSpan(box + k * 4), k < 3 ? -3 : 3);
+            w.Write(node); byte[] object3d = new byte[144]; BinaryPrimitives.WriteInt32LittleEndian(object3d, 8); w.Write(object3d);
+            byte[] header = new byte[92]; BinaryPrimitives.WriteInt32LittleEndian(header.AsSpan(16), 1); BinaryPrimitives.WriteInt32LittleEndian(header.AsSpan(20), 3);
+            BinaryPrimitives.WriteInt32LittleEndian(header.AsSpan(52), 123); BinaryPrimitives.WriteSingleLittleEndian(header.AsSpan(84), 2); w.Write(header);
+            foreach (var v in ModelFixture.Positions) { w.Write(v.X); w.Write(v.Y); w.Write(v.Z); }
+            w.Write(3); w.Write(4u); w.Write(111); w.Write(0); w.Write(222); w.Write(0); w.Write(0x1234ABCDu); w.Write(0); w.Write(0xFFFF0201u);
+            w.Write(0); w.Write(1); w.Write(2); foreach (var uv in ModelFixture.Uvs) { w.Write(uv.X); w.Write(uv.Y); }
+        });
+        foreach (var (name, offset, length) in members)
+        {
+            byte[] record = new byte[148]; BinaryPrimitives.WriteUInt32LittleEndian(record, (uint)offset); BinaryPrimitives.WriteUInt32LittleEndian(record.AsSpan(4), (uint)length);
+            Encoding.Latin1.GetBytes(name).CopyTo(record, 8); w.Write(record);
+        }
+        w.Write(1); w.Write(members.Count);
+        return s.ToArray();
     }
     private static byte[] Zrd() => ZrdWriter.Write(ZrdNode.Create(ZrdKind.Array) with { Children = [ZrdNode.Create(ZrdKind.Int) with { Bits = 1 }] });
     private static byte[] Member(byte[] archive, int index)

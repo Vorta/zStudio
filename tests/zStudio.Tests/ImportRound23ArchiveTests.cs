@@ -26,10 +26,9 @@ public sealed class ImportRound23ArchiveTests
         Assert.DoesNotContain(document.Diagnostics, d => d.Severity == "Error");
         foreach (var asset in document.Assets)
             Assert.Equal(bytes.AsSpan((int)asset.Offset, (int)asset.Length).ToArray(), document.Slice(asset.Offset, asset.Length).ToArray());
-        ResourceEditSession edits = new(document);
-        foreach (var member in edits.Current.Members.Where(m => m.TypedDecodeLimited))
-            Assert.Contains("budget", Assert.Throws<InvalidDataException>(() => edits.Tree(member, Token)).Message);
-        Assert.Equal(bytes, ArchiveWriter.Write(document, edits.Current.Members, Token));
+        ResourceMembers members = new(document, Token);
+        foreach (var member in members.Members.Where(m => m.TypedDecodeLimited))
+            Assert.Contains("budget", Assert.Throws<InvalidDataException>(() => members.Tree(member, Token)).Message);
     }
 
     [Fact]
@@ -79,32 +78,7 @@ public sealed class ImportRound23ArchiveTests
         finally { Directory.Delete(root, true); }
     }
 
-    [Fact]
-    public async Task ReplacementCanRestoreTypedAccessWithoutRetainingTheOldLimitFlag()
-    {
-        string root = Path.Combine(Path.GetTempPath(), "zstudio-archive-replace-r23-" + Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(root);
-        try
-        {
-            var document = Document(Overlapping(2, 1024), Path.Combine(root, "archive.zbd"));
-            new ArchiveReader(3000).Read(document, Token);
-            ResourceEditSession edits = new(document);
-            var limited = edits.Current.Members.Last(m => m.TypedDecodeLimited);
-            string input = Path.Combine(root, "replacement.zrd");
-            byte[] replacement = new byte[8]; BinaryPrimitives.WriteInt32LittleEndian(replacement, 1); BinaryPrimitives.WriteInt32LittleEndian(replacement.AsSpan(4), 123);
-            await File.WriteAllBytesAsync(input, replacement, Token);
-            edits.Accept(await edits.PrepareArchiveAsync("replace", limited.Id, path: input, token: Token));
-            var member = edits.Member(limited.Id);
-            Assert.False(member.TypedDecodeLimited);
-            Assert.Equal(123u, edits.Tree(member, Token).Bits);
-            edits.UndoRedo(false);
-            Assert.True(edits.Member(limited.Id).TypedDecodeLimited);
-            Assert.Throws<InvalidDataException>(() => edits.Tree(edits.Member(limited.Id), Token));
-        }
-        finally { Directory.Delete(root, true); }
-    }
-
-    [Fact]
+[Fact]
     public void LargeStringResourcesRemainTypedWhenTheirDecodedShapeFits()
     {
         const int characters = 1024 * 1024;
@@ -117,7 +91,7 @@ public sealed class ImportRound23ArchiveTests
             BinaryPrimitives.WriteInt32LittleEndian(resource.AsSpan(offset + 4), characters);
             resource.AsSpan(offset + 8, characters).Fill((byte)'x');
         }
-        var document = FormatRegistry.Default.OpenBytes("names.zbd", ResourceEditingTests.Archive(("names.zrd", resource)), token: Token);
+        var document = FormatRegistry.Default.OpenBytes("names.zbd", ResourceReaderTests.Archive(("names.zrd", resource)), token: Token);
         var tree = Assert.IsType<ZrdNode>(Assert.Single(document.Assets).Content);
         Assert.Equal(2, tree.Children.Count);
         Assert.All(tree.Children, child => Assert.Equal(characters, child.Text.Length));
@@ -130,7 +104,7 @@ public sealed class ImportRound23ArchiveTests
         byte[] malformed = new byte[256], scalar = new byte[8];
         BinaryPrimitives.WriteInt32LittleEndian(malformed, 3); BinaryPrimitives.WriteInt32LittleEndian(malformed.AsSpan(4), 240);
         BinaryPrimitives.WriteInt32LittleEndian(scalar, 1);
-        var document = Document(ResourceEditingTests.Archive(("trailing.bin", malformed), ("scalar.zrd", scalar)));
+        var document = Document(ResourceReaderTests.Archive(("trailing.bin", malformed), ("scalar.zrd", scalar)));
         new ArchiveReader(700).Read(document, Token);
         Assert.All(document.Assets, a => Assert.Equal(AssetKind.Raw, a.Kind));
         Assert.True(document.Assets[1].Metadata["typed_decode_limited"]!.GetValue<bool>());

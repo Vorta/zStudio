@@ -583,7 +583,7 @@ public partial class MainWindow
         if (shownDocument == current && scene != null && HasPublishedStaticScene)
             try { view = scene.CaptureView(); } catch (InvalidOperationException) { }
         IReadOnlyList<string> kept = [.. notes ?? []];
-        var replacement = new DocumentModel(built.World, session, built.Build, built.Revision) { EditingLocked = current.EditingLocked, SourceEditNotes = kept };
+        var replacement = new DocumentModel(built.World, session, built.Build, built.Revision) { SourceEditNotes = kept };
         sourceWorldModels.Add(replacement, built.Model);
         // A world that was stale when the project was saved takes the first build that reads only saved sources as its baseline.
         if (session.LookupBaselinePending && ReadsOnlySaved(session, built.Build)) session.SetLookupBaseline(built.Build, ((SourceSceneSnapshot)built.World).World);
@@ -985,7 +985,7 @@ public partial class MainWindow
                 && r.Source.AssetIndex == source.AssetIndex && r.Source.ResourceName == source.ResourceName && r.Source.RecordIndex == source.RecordIndex).Take(2).ToArray();
             if (matches is not [var record] || record.Type != type) return;
             var following = GetPropertiesWindow();
-            PresentProperties(following, following.SetPickup(next, record.Source, record.Type, original, SourcePickupMove(next)));
+            PresentProperties(following, following.SetPickup(next, record.Source, record.Type, original, SourcePickupMove(next)!));
         }
         // The edit already applied; a superseded/failed Properties read must not report that edit as rejected.
         catch (Exception ex) when (ex is OperationCanceledException or IOException or UnauthorizedAccessException or InvalidDataException or StudioCommandException)
@@ -1160,7 +1160,7 @@ public partial class MainWindow
         if (session.Owner != doc || !ViewModel.Documents.Contains(doc) || session.Workspace.Revision != revision)
             throw new StudioCommandException("context_changed", "The source world changed during model discovery; reopen Add model for its current revision.");
         RequireSourceWorldIdle(session);
-        HashSet<string> names = new(doc.PreviewDocument.Scene?.Nodes.Select(n => n.Name) ?? [], StringComparer.Ordinal);
+        HashSet<string> names = new(doc.Document.Scene?.Nodes.Select(n => n.Name) ?? [], StringComparer.Ordinal);
         Vector3 position = Vector3.Zero;
         if (shownDocument == doc && scene != null && HasPublishedStaticScene)
             try { var pivot = scene.CaptureView().OrbitPivot; if (pivot is { } p) position = new((float)p.X, (float)p.Y, (float)p.Z); } catch (InvalidOperationException) { }
@@ -1279,7 +1279,7 @@ public partial class MainWindow
                     catch (Exception ex) when (ex is InvalidDataException or IOException or UnauthorizedAccessException) { throw new StudioCommandException("invalid_argument", ex.Message); }
                     if (files.Count > SourceWorlds.MaximumDefinitionChoices) throw new StudioCommandException("invalid_argument", $"{files.Count:N0} definition files name {model.Name}; choose up to {SourceWorlds.MaximumDefinitionChoices} with definitionFiles (page or filter zstudio_source_world_definitions to find them).");
                 }
-                bool duplicate = d.PreviewDocument.Scene?.Nodes.Any(n => n.Name == model.Name) == true;
+                bool duplicate = d.Document.Scene?.Nodes.Any(n => n.Name == model.Name) == true;
                 // Admission and editing retain complete identities; only the completion preview is shortened.
                 // Bound it before accepting the edit, including paths discovered when the argument is omitted.
                 var shownFiles = FileResultPreview.Paths(files, files.Count);

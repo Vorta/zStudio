@@ -39,7 +39,6 @@ internal static class AiNetworkCheck
                 var host = (ContentControl)main.FindName("SceneHost"); var scene = (SceneViewport)host.Content;
                 Require(scene.AiNetworks.Networks.Count == 91 && scene.AiNetworks.Networks.Sum(n => n.Nodes.Count) == 592, "m1 AI counts");
                 main.Width = 1250; main.Height = 850;
-                ((ToggleButton)main.FindName("EditingUnlocked")).IsChecked = true;
                 ((ToggleButton)main.FindName("AiEnabled")).IsChecked = true;
                 var choice = (ComboBox)main.FindName("AiNetworkCombo"); choice.SelectedIndex = 1;
                 var network = scene.AiNetworks.Networks.Single(n => n.Id == scene.AiNetworkFilter); var node = network.Nodes[0];
@@ -140,7 +139,7 @@ internal static class AiNetworkCheck
             foreach (var wall in walls) wall.IsTransparent = false;
             scene.SetAiOptions(false, false, null); await Task.Delay(100);
             Require(original.SequenceEqual(Pixels(Presented(view))), "Disabling AI did not restore the scene");
-            scene.SetEditingLocked(false);
+            scene.SetPlacementEditing(true);
             (string Label, AiAttackStrategy Strategy, string Hex)[] strategyCases =
             [
                 ("head", AiAttackStrategy.Stored("Head-on"), "#FFA640"), ("circle", AiAttackStrategy.Stored("cIrClE"), "#33D9FF"),

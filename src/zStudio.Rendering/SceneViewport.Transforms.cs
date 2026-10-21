@@ -17,8 +17,7 @@ public sealed partial class SceneViewport
     private IReadOnlyDictionary<MissionPickupSource, PlacementTransform>? transformOverrides;
     private readonly Dictionary<int, Matrix4x4> placementDeltas = [];
     private bool transformValid;
-    public bool InspectionSelectionEnabled => AllowLockedInspection || !worldInspection || !editingLocked;
-    private bool PlacementEditingEnabled => !worldInspection || !editingLocked;
+    private bool PlacementEditingEnabled => !worldInspection || placementEditing;
     public string TransformMode { get; private set; } = "move";
     public bool HasTransformDraft => transformSource != null || objectDraftNode != null;
     public bool TransformHandlesVisible => !PresentationUiHidden && pickupManipulator?.Visibility == Visibility.Visible;
@@ -55,7 +54,7 @@ public sealed partial class SceneViewport
         if (mode is not ("move" or "rotate") || mode == "rotate" && rotation == PlacementRotationKind.None)
             throw new ArgumentException("Unsupported transform mode.");
         if (HasParachutePreview || IsParachutePointerMoving) throw new InvalidOperationException("Finish drop-window editing first.");
-        if (!PlacementEditingEnabled) throw new InvalidOperationException("Unlock editing first.");
+        if (!PlacementEditingEnabled) throw new InvalidOperationException("This world is read only: edit its source project instead.");
         var pending = valid ? placementEdits?.PreviewTransform(source, value) : transformOverrides;
         bool changedMode = TransformMode != mode || transformRotation != rotation;
         transformSource = source; transformTarget = SelectedInspection?.Target;
@@ -76,7 +75,7 @@ public sealed partial class SceneViewport
     {
         if (mode is not ("move" or "rotate")) throw new ArgumentException("Unsupported transform mode.");
         if (HasParachutePreview || IsParachutePointerMoving) throw new InvalidOperationException("Finish drop-window editing first.");
-        if (!PlacementEditingEnabled) throw new InvalidOperationException("Editing is locked.");
+        if (!PlacementEditingEnabled) throw new InvalidOperationException("This world is read only: edit its source project instead.");
         var data = Mission?.Scene ?? PreviewScene;
         if (data == null || node < 0 || node >= data.Nodes.Count) return false;
         HashSet<int> chain = [];

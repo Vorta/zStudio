@@ -234,7 +234,7 @@
   },
   {
     "Name": "zstudio_assets",
-    "Description": "List current edited assets by current kind/index. Resource member/script UUIDs remain stable through reordering. Offset/Length describe the edited snapshot; sourceOffset/sourceLength identify original bytes, or are null for newly added records.",
+    "Description": "List a document\u0027s assets by kind/index. Resource member and script UUIDs stay stable while the document is open; Offset/Length locate each record\u0027s bytes.",
     "Mutates": false,
     "Parameters": [
       {
@@ -310,7 +310,7 @@
   },
   {
     "Name": "zstudio_inspect_asset",
-    "Description": "Read original asset metadata/content and a separately frozen edited snapshot at one revision. ZRD/script inspection bounds nodes, instructions and strings. Model/world/sound lists preview 32 records; nested metadata has node/depth/text budgets with properties_truncated. Motion metadata previews up to 32 parts with 128-character names within a shared 4,096-part allowance per archive; motion_records pages all tracks. Animation inspection previews 4 records per reference table, 4 puffers and 16 sequence summaries; sequence Properties previews 8 events, event/tail raw previews use 256 bytes, and keyframe streams are omitted. Totals/truncation flags disclose omissions; animation_records/references/property_fields inspect individual records. JSON export retains complete data. Closed or changed documents reject stale results.",
+    "Description": "Read an asset\u0027s metadata/content at one revision. ZRD/script inspection bounds nodes, instructions and strings. Model/world/sound lists preview 32 records; nested metadata has node/depth/text budgets with properties_truncated. Motion metadata previews up to 32 parts with 128-character names within a shared 4,096-part allowance per archive; motion_records pages all tracks. Animation inspection previews 4 records per reference table, 4 puffers and 16 sequence summaries; sequence summaries preview 8 events, event/tail raw previews use 256 bytes, and keyframe streams are omitted. Totals/truncation flags disclose omissions; animation_records/references inspect individual records. JSON export retains complete data. Closed or changed documents reject stale results.",
     "Mutates": false,
     "Parameters": [
       {
@@ -411,7 +411,7 @@
   },
   {
     "Name": "zstudio_reload_document",
-    "Description": "Stage and reparse a clean document before replacing it, using the current model/resource Save As destination. An already-open destination, failure or pre-publication cancellation retains the document and preview. Dirty documents must first be saved or explicitly closed. A source world instead evaluates the project\u0027s current sources and pending edits directly in memory, without creating archives. External changes to any dirty workspace source cause a conflict, including scripts, models, resources and animation definitions (.zad). Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Description": "Stage and reparse a document before replacing it; failure or pre-publication cancellation retains the document and preview. A source world instead evaluates the project\u0027s current sources and pending edits directly in memory, without creating archives. External changes to any dirty workspace source cause a conflict, including scripts, models, resources and animation definitions (.zad). Returns an operation ID; use zstudio_operation to await/read the result.",
     "Mutates": true,
     "Parameters": [
       {
@@ -436,7 +436,7 @@
   },
   {
     "Name": "zstudio_undo_redo",
-    "Description": "Undo or redo one accepted edit in the specified document.",
+    "Description": "Undo or redo one accepted edit of a source map\u0027s project. Compiled documents are read only.",
     "Mutates": true,
     "Parameters": [
       {
@@ -472,7 +472,7 @@
   },
   {
     "Name": "zstudio_save_document",
-    "Description": "Verified save: source worlds save every accepted project change to its owning glTF, script, ZRD or animation-definition source, creating no archives; animations require a NEW destination outside the source root; pickup/AI/tank coordinates save owning archives or explicit new destinations; model edits save all texture variants before GameZ; ZAR/ZRD, script and texture saves verify and atomically replace each working destination or create new Save As files. Batch results preview at most 64 saved/remaining paths and 32 errors, each at most 512 characters, with SavedPathCount/SavedPathsTruncated, RemainingPathCount/RemainingPathsTruncated and ErrorCount/ErrorsTruncated. Source saves return written with writtenCount/writtenTruncated under the same path bound. All files are still saved; truncated previews are not full path identities. Global state.contentEdits reports fileCount with empty files/filesTruncated; per-document command results preview affected paths and targets. Partial content/coordinate Save As retains every requested destination; ordinary Save retries unpublished copies without overwriting existing files. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Description": "Verified save of a source map\u0027s project: every accepted change goes to its owning glTF, script, ZRD or animation-definition source; no archives are created. Results preview at most 64 written paths, each at most 512 characters, with writtenCount/writtenTruncated; all files are still saved. Compiled documents are read only. Returns an operation ID; use zstudio_operation to await/read the result.",
     "Mutates": true,
     "Parameters": [
       {
@@ -492,46 +492,6 @@
         "Properties": null,
         "Minimum": 0,
         "Maximum": 9223372036854775807
-      },
-      {
-        "Name": "destination",
-        "Type": "string",
-        "Description": "Full path of a new single-file Save As (animation, ZAR/ZRD, script or texture pack). Omit to save working files.",
-        "Required": false,
-        "Choices": null,
-        "Properties": null
-      },
-      {
-        "Name": "modelDirectory",
-        "Type": "string",
-        "Description": "Full path of the model Save As directory; all GameZ/texture destinations must be new. Omit for verified save to the working files.",
-        "Required": false,
-        "Choices": null,
-        "Properties": null
-      },
-      {
-        "Name": "destinations",
-        "Type": "object",
-        "Description": "Mission coordinate or texture batch source path to new Save As path map; cover every affected file.",
-        "Required": false,
-        "Choices": null,
-        "Properties": null,
-        "AdditionalProperties": {
-          "Name": "",
-          "Type": "string",
-          "Description": "New Save As full path for this source archive.",
-          "Required": false,
-          "Choices": null,
-          "Properties": null
-        }
-      },
-      {
-        "Name": "backup",
-        "Type": "boolean",
-        "Description": "Mission coordinate backup preference; defaults to app setting.",
-        "Required": false,
-        "Choices": null,
-        "Properties": null
       }
     ]
   },
@@ -1888,14 +1848,6 @@
             "Properties": null
           },
           {
-            "Name": "backupOnSave",
-            "Type": "boolean",
-            "Description": "backupOnSave",
-            "Required": false,
-            "Choices": null,
-            "Properties": null
-          },
-          {
             "Name": "theme",
             "Type": "string",
             "Description": "Theme.",
@@ -2018,7 +1970,7 @@
   },
   {
     "Name": "zstudio_properties_open",
-    "Description": "Open the reusable Properties window for an explicit edited asset or animation sequence/event; current pending drafts must be resolved first. Model records remain pinned by identity through replacement and undo/redo. Concurrent edits reject stale loads.",
+    "Description": "Open the reusable Properties window (read only) for an explicit asset; current pending drafts must be resolved first. Concurrent changes reject stale loads.",
     "Mutates": true,
     "Parameters": [
       {
@@ -2046,22 +1998,6 @@
         "Properties": null,
         "Minimum": -2147483648,
         "Maximum": 2147483647
-      },
-      {
-        "Name": "sequence",
-        "Type": "string",
-        "Description": "Animation sequence GUID.",
-        "Required": false,
-        "Choices": null,
-        "Properties": null
-      },
-      {
-        "Name": "event",
-        "Type": "string",
-        "Description": "Animation event GUID.",
-        "Required": false,
-        "Choices": null,
-        "Properties": null
       }
     ]
   },
@@ -2079,7 +2015,7 @@
   },
   {
     "Name": "zstudio_scene_properties",
-    "Description": "Inspect a scene object, focus its source-world object panel, or open the shared Properties window in other viewers, including editable mission pickups. Source-map parts resolve to their complete selection owner; synthetic reference groups return Index=null and a signed selectionOwner with read-only properties. Physical mesh/polygon inspection remains available through inspection commands. Metadata is bounded to 512 JSON nodes/8192 text characters with inspection_truncated. MW3 actor labels use 128-character prefixes; source data and JSON exports remain intact.",
+    "Description": "Inspect a scene object, focus its source-world object panel, or open the shared Properties window in other viewers (a source map\u0027s pickups are editable there). Source-map parts resolve to their complete selection owner; synthetic reference groups return Index=null and a signed selectionOwner with read-only properties. Physical mesh/polygon inspection remains available through inspection commands. Metadata is bounded to 512 JSON nodes/8192 text characters with inspection_truncated. MW3 actor labels use 128-character prefixes; source data and JSON exports remain intact.",
     "Mutates": true,
     "Parameters": [
       {
@@ -2434,7 +2370,7 @@
   },
   {
     "Name": "zstudio_parachute",
-    "Description": "Inspect and relocate complete existing VTOL drop windows in a Whole world. Show analyzes the first discovered flight; unavailable flights retain the candidate list, entry and analysisRefusal without a partial path. Analyze selects an exact entry. Conditional release markers come from a frozen bounded runtime, never landing predictions. Select/begin/set/confirm/cancel share the GUI draft and one undo step. Set a local start time or exact path segment plus fraction to disambiguate crossings. Compiled edits belong to the returned animation owner; source edits use token-preserving project history and in-memory scene evaluation. Source Apply creates no archives and Save writes the owning animation definitions. Undo/redo/save explicitly target that owner. save requires a NEW destination for compiled animations; source saves retain their project destination. Samples/releases support offset/limit pagination without query; preview_state.parachute reports bounded state. No physical input is captured. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Description": "Inspect and relocate complete existing VTOL drop windows in a Whole world. Show analyzes the first discovered flight; unavailable flights retain the candidate list, entry and analysisRefusal without a partial path. Analyze selects an exact entry. Conditional release markers come from a frozen bounded runtime, never landing predictions. A source map\u0027s windows can be moved: select/begin/set/confirm/cancel share the GUI draft and one undo step, set takes a local start time or an exact path segment plus fraction to disambiguate crossings, and the edit uses token-preserving project history and in-memory scene evaluation (Apply creates no archives; Save writes the owning animation definitions; undo/redo/save target the project). A compiled world is read only (show, analyze, select, samples and releases). Samples/releases support offset/limit pagination without query; preview_state.parachute reports bounded state. No physical input is captured. Returns an operation ID; use zstudio_operation to await/read the result.",
     "Mutates": true,
     "Parameters": [
       {
@@ -2494,15 +2430,6 @@
         "Properties": null
       },
       {
-        "Name": "ownerRevision",
-        "Type": "integer",
-        "Description": "Current animation owner revision for compiled begin/set/confirm/undo/redo/save.",
-        "Required": false,
-        "Choices": null,
-        "Properties": null,
-        "Minimum": 0
-      },
-      {
         "Name": "entry",
         "Type": "integer",
         "Description": "Exact discovered flight entry index for analyze.",
@@ -2559,14 +2486,6 @@
         "NumberMaximum": 1
       },
       {
-        "Name": "destination",
-        "Type": "string",
-        "Description": "New animation Save As file outside the source root, only for compiled save.",
-        "Required": false,
-        "Choices": null,
-        "Properties": null
-      },
-      {
         "Name": "offset",
         "Type": "integer",
         "Description": "Zero-based result offset.",
@@ -2590,7 +2509,7 @@
   },
   {
     "Name": "zstudio_ai_valves",
-    "Description": "Page authored MW3 valve records or exact-name references from an edited resource. Includes repeated triggers, compound definitions and node/edge/objective uses; no runtime state is inferred. Query filters record names or valve references before paging. Parameters and reference previews are bounded; zrd_nodes/export retains complete data. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Description": "Page authored MW3 valve records or exact-name references of a resource. Includes repeated triggers, compound definitions and node/edge/objective uses; no runtime state is inferred. Query filters record names or valve references before paging. Parameters and reference previews are bounded; zrd_nodes/export retains complete data. Returns an operation ID; use zstudio_operation to await/read the result.",
     "Mutates": true,
     "Parameters": [
       {
@@ -2612,12 +2531,11 @@
       {
         "Name": "section",
         "Type": "string",
-        "Description": "Records, references or eligible network binding targets.",
+        "Description": "Records or references.",
         "Required": false,
         "Choices": [
           "records",
-          "references",
-          "targets"
+          "references"
         ],
         "Properties": null
       },
@@ -2652,105 +2570,8 @@
     ]
   },
   {
-    "Name": "zstudio_ai_valve_edit",
-    "Description": "Edit one authored valve occurrence through shared resource history. set uses a scalar operand UUID and invariant typed text. add_record creates a complete action/compound block in valves.zrd; add_binding uses the owning network row\u0027s value-node UUID. Record/item moves use final zero-based pair/item positions. No implicit rename propagation or cascade deletion. Unknown fields are preserved. Returns an operation ID; use zstudio_operation to await/read the result.",
-    "Mutates": true,
-    "Parameters": [
-      {
-        "Name": "document",
-        "Type": "string",
-        "Description": "Document lifetime ID from zstudio_state.",
-        "Required": true,
-        "Choices": null,
-        "Properties": null
-      },
-      {
-        "Name": "revision",
-        "Type": "integer",
-        "Description": "Expected current document revision. Read before editing.",
-        "Required": true,
-        "Choices": null,
-        "Properties": null,
-        "Minimum": 0,
-        "Maximum": 9223372036854775807
-      },
-      {
-        "Name": "member",
-        "Type": "string",
-        "Description": "Stable member UUID from archive_members or assets.",
-        "Required": true,
-        "Choices": null,
-        "Properties": null
-      },
-      {
-        "Name": "action",
-        "Type": "string",
-        "Description": "Semantic operation.",
-        "Required": true,
-        "Choices": [
-          "set",
-          "add_record",
-          "add_binding",
-          "delete",
-          "duplicate",
-          "move",
-          "add_action",
-          "add_term",
-          "delete_item",
-          "duplicate_item",
-          "move_item",
-          "add_option",
-          "remove_option"
-        ],
-        "Properties": null
-      },
-      {
-        "Name": "record",
-        "Type": "string",
-        "Description": "Valve occurrence UUID except for add_record/add_binding.",
-        "Required": false,
-        "Choices": null,
-        "Properties": null
-      },
-      {
-        "Name": "operand",
-        "Type": "string",
-        "Description": "Scalar, action-name, union-term or target row UUID.",
-        "Required": false,
-        "Choices": null,
-        "Properties": null
-      },
-      {
-        "Name": "value",
-        "Type": "string",
-        "Description": "Typed set value; unquoted new valve/term name.",
-        "Required": false,
-        "Choices": null,
-        "Properties": null
-      },
-      {
-        "Name": "kind",
-        "Type": "string",
-        "Description": "Action, compound or binding kind from authored valve vocabulary.",
-        "Required": false,
-        "Choices": null,
-        "Properties": null
-      },
-      {
-        "Name": "index",
-        "Type": "integer",
-        "Description": "Final item or pair index for move.",
-        "Required": false,
-        "Choices": null,
-        "Properties": null,
-        "Minimum": 0,
-        "Maximum": 2147483647
-      }
-    ]
-  },
-  {
     "Name": "zstudio_ai_valve_selection",
-    "Description": "Discover mission valve resources or open one in pinned Properties without changing the Whole world preview. Uses the current AI snapshot and source member index, never names as identity. Optional record selects a discovered source occurrence. Source edits require the returned owning document\u0027s revision and stable member identity. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Description": "Discover mission valve resources, page their records or references, and highlight or frame valve associations in the Whole world preview. Uses the current AI snapshot and source member index, never names as identity. Returns an operation ID; use zstudio_operation to await/read the result.",
     "Mutates": true,
     "Parameters": [
       {
@@ -2778,7 +2599,6 @@
           "sources",
           "records",
           "references",
-          "properties",
           "overlay",
           "highlight",
           "frame",
@@ -2803,14 +2623,6 @@
         "Properties": null,
         "Minimum": -2147483648,
         "Maximum": 2147483647
-      },
-      {
-        "Name": "record",
-        "Type": "string",
-        "Description": "Optional source record UUID.",
-        "Required": false,
-        "Choices": null,
-        "Properties": null
       },
       {
         "Name": "name",
@@ -3347,7 +3159,7 @@
   },
   {
     "Name": "zstudio_animation_records",
-    "Description": "List authored sequence identities; supply sequence to page its events with edited scalar fields and a 256-byte raw preview (raw_hex_truncated). Keyframe streams are omitted (keyframes_omitted); use property_fields with segment or JSON export. Event queries match these bounded displayed fields before pagination. Cleanup is listed separately from runtime sequences.",
+    "Description": "List authored sequence identities; supply sequence to page its events with decoded scalar fields and a 256-byte raw preview (raw_hex_truncated). Keyframe streams are omitted (keyframes_omitted); use JSON export for them. Event queries match these bounded displayed fields before pagination. Cleanup is listed separately from runtime sequences.",
     "Mutates": false,
     "Parameters": [
       {
@@ -3408,7 +3220,7 @@
   },
   {
     "Name": "zstudio_references",
-    "Description": "List authored reference table slots, including raw bytes and reserved/unverified status.",
+    "Description": "List authored reference table slots, including raw bytes and whether a slot is reserved or unverified.",
     "Mutates": false,
     "Parameters": [
       {
@@ -3487,354 +3299,8 @@
     ]
   },
   {
-    "Name": "zstudio_property_fields",
-    "Description": "Read the same fields, choices, validation hints and actions as animation Properties, without opening or retargeting its window. IDs apply to this target/segment/revision.",
-    "Mutates": false,
-    "Parameters": [
-      {
-        "Name": "document",
-        "Type": "string",
-        "Description": "Document lifetime ID from zstudio_state.",
-        "Required": true,
-        "Choices": null,
-        "Properties": null
-      },
-      {
-        "Name": "entry",
-        "Type": "integer",
-        "Description": "Animation entry index.",
-        "Required": true,
-        "Choices": null,
-        "Properties": null,
-        "Minimum": -2147483648,
-        "Maximum": 2147483647
-      },
-      {
-        "Name": "sequence",
-        "Type": "string",
-        "Description": "Sequence GUID; omit for entry properties.",
-        "Required": false,
-        "Choices": null,
-        "Properties": null
-      },
-      {
-        "Name": "event",
-        "Type": "string",
-        "Description": "Event GUID; omit for sequence properties.",
-        "Required": false,
-        "Choices": null,
-        "Properties": null
-      },
-      {
-        "Name": "segment",
-        "Type": "integer",
-        "Description": "Keyframe segment index; default 0.",
-        "Required": false,
-        "Choices": null,
-        "Properties": null,
-        "Minimum": -2147483648,
-        "Maximum": 2147483647
-      }
-    ]
-  },
-  {
-    "Name": "zstudio_property_edit",
-    "Description": "Edit one Properties field using its current field ID and invariant editor text. Components use the delimiter shown in the current value. One undoable edit.",
-    "Mutates": true,
-    "Parameters": [
-      {
-        "Name": "document",
-        "Type": "string",
-        "Description": "Document lifetime ID from zstudio_state.",
-        "Required": true,
-        "Choices": null,
-        "Properties": null
-      },
-      {
-        "Name": "entry",
-        "Type": "integer",
-        "Description": "Animation entry index.",
-        "Required": true,
-        "Choices": null,
-        "Properties": null,
-        "Minimum": -2147483648,
-        "Maximum": 2147483647
-      },
-      {
-        "Name": "sequence",
-        "Type": "string",
-        "Description": "Sequence GUID; omit for entry properties.",
-        "Required": false,
-        "Choices": null,
-        "Properties": null
-      },
-      {
-        "Name": "event",
-        "Type": "string",
-        "Description": "Event GUID; omit for sequence properties.",
-        "Required": false,
-        "Choices": null,
-        "Properties": null
-      },
-      {
-        "Name": "segment",
-        "Type": "integer",
-        "Description": "Keyframe segment index; default 0.",
-        "Required": false,
-        "Choices": null,
-        "Properties": null,
-        "Minimum": -2147483648,
-        "Maximum": 2147483647
-      },
-      {
-        "Name": "revision",
-        "Type": "integer",
-        "Description": "Expected current document revision. Read before editing.",
-        "Required": true,
-        "Choices": null,
-        "Properties": null,
-        "Minimum": 0,
-        "Maximum": 9223372036854775807
-      },
-      {
-        "Name": "field",
-        "Type": "string",
-        "Description": "Field ID from property_fields.",
-        "Required": true,
-        "Choices": null,
-        "Properties": null
-      },
-      {
-        "Name": "value",
-        "Type": "string",
-        "Description": "New editor value.",
-        "Required": true,
-        "Choices": null,
-        "Properties": null
-      }
-    ]
-  },
-  {
-    "Name": "zstudio_property_action",
-    "Description": "Run a currently available Properties action, including add/copy/delete/reorder keyframe segments.",
-    "Mutates": true,
-    "Parameters": [
-      {
-        "Name": "document",
-        "Type": "string",
-        "Description": "Document lifetime ID from zstudio_state.",
-        "Required": true,
-        "Choices": null,
-        "Properties": null
-      },
-      {
-        "Name": "entry",
-        "Type": "integer",
-        "Description": "Animation entry index.",
-        "Required": true,
-        "Choices": null,
-        "Properties": null,
-        "Minimum": -2147483648,
-        "Maximum": 2147483647
-      },
-      {
-        "Name": "sequence",
-        "Type": "string",
-        "Description": "Sequence GUID; omit for entry properties.",
-        "Required": false,
-        "Choices": null,
-        "Properties": null
-      },
-      {
-        "Name": "event",
-        "Type": "string",
-        "Description": "Event GUID; omit for sequence properties.",
-        "Required": false,
-        "Choices": null,
-        "Properties": null
-      },
-      {
-        "Name": "segment",
-        "Type": "integer",
-        "Description": "Keyframe segment index; default 0.",
-        "Required": false,
-        "Choices": null,
-        "Properties": null,
-        "Minimum": -2147483648,
-        "Maximum": 2147483647
-      },
-      {
-        "Name": "revision",
-        "Type": "integer",
-        "Description": "Expected current document revision. Read before editing.",
-        "Required": true,
-        "Choices": null,
-        "Properties": null,
-        "Minimum": 0,
-        "Maximum": 9223372036854775807
-      },
-      {
-        "Name": "action",
-        "Type": "string",
-        "Description": "Action ID from property_fields.",
-        "Required": true,
-        "Choices": null,
-        "Properties": null
-      }
-    ]
-  },
-  {
-    "Name": "zstudio_animation_structure",
-    "Description": "Add, duplicate, delete or reorder authored sequences/events. Cleanup is not an extra runtime sequence.",
-    "Mutates": true,
-    "Parameters": [
-      {
-        "Name": "document",
-        "Type": "string",
-        "Description": "Document lifetime ID from zstudio_state.",
-        "Required": true,
-        "Choices": null,
-        "Properties": null
-      },
-      {
-        "Name": "entry",
-        "Type": "integer",
-        "Description": "Animation entry index.",
-        "Required": true,
-        "Choices": null,
-        "Properties": null,
-        "Minimum": -2147483648,
-        "Maximum": 2147483647
-      },
-      {
-        "Name": "sequence",
-        "Type": "string",
-        "Description": "Sequence GUID; omit for entry properties.",
-        "Required": false,
-        "Choices": null,
-        "Properties": null
-      },
-      {
-        "Name": "event",
-        "Type": "string",
-        "Description": "Event GUID; omit for sequence properties.",
-        "Required": false,
-        "Choices": null,
-        "Properties": null
-      },
-      {
-        "Name": "segment",
-        "Type": "integer",
-        "Description": "Keyframe segment index; default 0.",
-        "Required": false,
-        "Choices": null,
-        "Properties": null,
-        "Minimum": -2147483648,
-        "Maximum": 2147483647
-      },
-      {
-        "Name": "revision",
-        "Type": "integer",
-        "Description": "Expected current document revision. Read before editing.",
-        "Required": true,
-        "Choices": null,
-        "Properties": null,
-        "Minimum": 0,
-        "Maximum": 9223372036854775807
-      },
-      {
-        "Name": "action",
-        "Type": "string",
-        "Description": "Structural operation.",
-        "Required": true,
-        "Choices": [
-          "add_sequence",
-          "add_event",
-          "duplicate",
-          "delete",
-          "up",
-          "down"
-        ],
-        "Properties": null
-      },
-      {
-        "Name": "eventType",
-        "Type": "integer",
-        "Description": "Catalog event type for add_event.",
-        "Required": false,
-        "Choices": null,
-        "Properties": null,
-        "Minimum": -2147483648,
-        "Maximum": 2147483647
-      }
-    ]
-  },
-  {
-    "Name": "zstudio_reference_edit",
-    "Description": "Retarget a verified stored reference name, preserving table indices. Reserved/unverified slots remain read-only.",
-    "Mutates": true,
-    "Parameters": [
-      {
-        "Name": "document",
-        "Type": "string",
-        "Description": "Document lifetime ID from zstudio_state.",
-        "Required": true,
-        "Choices": null,
-        "Properties": null
-      },
-      {
-        "Name": "revision",
-        "Type": "integer",
-        "Description": "Expected current document revision. Read before editing.",
-        "Required": true,
-        "Choices": null,
-        "Properties": null,
-        "Minimum": 0,
-        "Maximum": 9223372036854775807
-      },
-      {
-        "Name": "entry",
-        "Type": "integer",
-        "Description": "Entry index.",
-        "Required": true,
-        "Choices": null,
-        "Properties": null,
-        "Minimum": -2147483648,
-        "Maximum": 2147483647
-      },
-      {
-        "Name": "table",
-        "Type": "integer",
-        "Description": "Reference table index, 1\u20135.",
-        "Required": true,
-        "Choices": null,
-        "Properties": null,
-        "Minimum": -2147483648,
-        "Maximum": 2147483647
-      },
-      {
-        "Name": "index",
-        "Type": "integer",
-        "Description": "Nonreserved reference index.",
-        "Required": true,
-        "Choices": null,
-        "Properties": null,
-        "Minimum": -2147483648,
-        "Maximum": 2147483647
-      },
-      {
-        "Name": "name",
-        "Type": "string",
-        "Description": "New Latin-1 name.",
-        "Required": true,
-        "Choices": null,
-        "Properties": null
-      }
-    ]
-  },
-  {
     "Name": "zstudio_pickups",
-    "Description": "Load/list all authored mission pickup placements and owning archive identities, including difficulty counterparts. Full identities are retained; long or escaped paths shorten pages, so follow nextOffset. Combined query text is bounded before copying; omit query and page if that allowance is exceeded. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Description": "Load/list all authored mission pickup placements and owning resource identities, including difficulty counterparts. Full identities are retained; long or escaped paths shorten pages, so follow nextOffset. Combined query text is bounded before copying; omit query and page if that allowance is exceeded. Returns an operation ID; use zstudio_operation to await/read the result.",
     "Mutates": true,
     "Parameters": [
       {
@@ -3876,41 +3342,8 @@
     ]
   },
   {
-    "Name": "zstudio_scene_lock",
-    "Description": "Gate compiled Whole world object cards, selection bounds and transform editing (source worlds have no lock and refuse this as unsupported). Locking closes the card; unlock alone does not select an object. Source/tree inspection and hover remain available. EditingLocked reports the shared lock; new documents start locked, and a 1998 demo world (GameZ version 13) stays locked (unlocking it is refused as read_only). Pending drafts require explicit resolution.",
-    "Mutates": true,
-    "Parameters": [
-      {
-        "Name": "document",
-        "Type": "string",
-        "Description": "Document lifetime ID from zstudio_state.",
-        "Required": true,
-        "Choices": null,
-        "Properties": null
-      },
-      {
-        "Name": "revision",
-        "Type": "integer",
-        "Description": "Expected current document revision. Read before editing.",
-        "Required": true,
-        "Choices": null,
-        "Properties": null,
-        "Minimum": 0,
-        "Maximum": 9223372036854775807
-      },
-      {
-        "Name": "locked",
-        "Type": "boolean",
-        "Description": "Whether Whole world cards and placement edits are locked; inverse of Unlock editing.",
-        "Required": true,
-        "Choices": null,
-        "Properties": null
-      }
-    ]
-  },
-  {
     "Name": "zstudio_pickup_move",
-    "Description": "Move a pickup to exact coordinates as one undoable operation, including unambiguous difficulty counterparts. Requires unlocked placements. In a source world the move accepts changed coordinate tokens of the resource sources (data/mN/zrdr/puppies*.zrd) in memory and updates the scene. The result is the accepted document/revision. Save writes the sources; no archives are created.",
+    "Description": "Move a source map\u0027s pickup to exact coordinates as one undoable operation, including unambiguous difficulty counterparts. The move accepts changed coordinate tokens of the resource sources (data/mN/zrdr/puppies*.zrd) in memory, stored with one decimal, and updates the scene. The result is the accepted document/revision. Save writes the sources; no archives are created. Compiled worlds are read only.",
     "Mutates": true,
     "Parameters": [
       {
@@ -4129,41 +3562,8 @@
     ]
   },
   {
-    "Name": "zstudio_model_replace",
-    "Description": "Validate an explicit version-1 OBJ/PNG replacement manifest, then accept the entire batch as one document undo step. Model indices and source SHA-256 must match. Shared file ownership is acquired before acceptance; conflicting writers leave the document unchanged. Saves use save_document. texturePacks previews at most 64 paths of 512 characters, with texturePackCount/texturePacksTruncated; all prepared packs remain part of the edit and save. Returns an operation ID; use zstudio_operation to await/read the result.",
-    "Mutates": true,
-    "Parameters": [
-      {
-        "Name": "document",
-        "Type": "string",
-        "Description": "Document lifetime ID from zstudio_state.",
-        "Required": true,
-        "Choices": null,
-        "Properties": null
-      },
-      {
-        "Name": "revision",
-        "Type": "integer",
-        "Description": "Expected current document revision. Read before editing.",
-        "Required": true,
-        "Choices": null,
-        "Properties": null,
-        "Minimum": 0,
-        "Maximum": 9223372036854775807
-      },
-      {
-        "Name": "manifest",
-        "Type": "string",
-        "Description": "Absolute replacement manifest JSON path.",
-        "Required": true,
-        "Choices": null,
-        "Properties": null
-      }
-    ]
-  },
-  {
     "Name": "zstudio_archive_members",
-    "Description": "List edited resource members in stored order with stable identities and original source indices. Duplicate names are allowed. Standalone ZRD has one member.",
+    "Description": "List the members of a compiled archive or ZRD in stored order with stable identities and source indices. Duplicate names are allowed. Standalone ZRD has one member.",
     "Mutates": false,
     "Parameters": [
       {
@@ -4205,81 +3605,6 @@
     ]
   },
   {
-    "Name": "zstudio_archive_edit",
-    "Description": "Add, replace, rename, duplicate, delete or reorder a ZAR member as one undoable edit. add_zrd creates an empty array. Names use Latin-1 and are not identities. Move position is the final zero-based index. The active preview follows the selected member UUID; deleting or changing its content kind clears or retargets the viewer, including Undo/Redo. Returns an operation ID; use zstudio_operation to await/read the result.",
-    "Mutates": true,
-    "Parameters": [
-      {
-        "Name": "document",
-        "Type": "string",
-        "Description": "Document lifetime ID from zstudio_state.",
-        "Required": true,
-        "Choices": null,
-        "Properties": null
-      },
-      {
-        "Name": "revision",
-        "Type": "integer",
-        "Description": "Expected current document revision. Read before editing.",
-        "Required": true,
-        "Choices": null,
-        "Properties": null,
-        "Minimum": 0,
-        "Maximum": 9223372036854775807
-      },
-      {
-        "Name": "action",
-        "Type": "string",
-        "Description": "Member operation.",
-        "Required": true,
-        "Choices": [
-          "add",
-          "add_zrd",
-          "replace",
-          "rename",
-          "duplicate",
-          "delete",
-          "move"
-        ],
-        "Properties": null
-      },
-      {
-        "Name": "member",
-        "Type": "string",
-        "Description": "Required member UUID except for add/add_zrd.",
-        "Required": false,
-        "Choices": null,
-        "Properties": null
-      },
-      {
-        "Name": "name",
-        "Type": "string",
-        "Description": "Required for add/add_zrd/rename/duplicate; 1\u201363 Latin-1 characters.",
-        "Required": false,
-        "Choices": null,
-        "Properties": null
-      },
-      {
-        "Name": "path",
-        "Type": "string",
-        "Description": "Full path of the input file for add/replace.",
-        "Required": false,
-        "Choices": null,
-        "Properties": null
-      },
-      {
-        "Name": "position",
-        "Type": "integer",
-        "Description": "Final index for move.",
-        "Required": false,
-        "Choices": null,
-        "Properties": null,
-        "Minimum": 0,
-        "Maximum": 2147483647
-      }
-    ]
-  },
-  {
     "Name": "zstudio_resource_select",
     "Description": "Select a member and optional ZRD node by stable UUID in the visible Data tree. Properties retains its pinned target. Returns an operation ID; use zstudio_operation to await/read the result.",
     "Mutates": true,
@@ -4312,7 +3637,7 @@
   },
   {
     "Name": "zstudio_zrd_nodes",
-    "Description": "Read an edited typed ZRD root, or page the immediate children of a node. Values use invariant editor text; strings are JSON-quoted, floats include raw bits. Formatting is bounded to a 4096-character prefix with valueTruncated; truncated text may be incomplete JSON. Node IDs survive edits and undo. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Description": "Read a typed ZRD root, or page the immediate children of a node. Values use invariant text; strings are JSON-quoted, floats include raw bits. Formatting is bounded to a 4096-character prefix with valueTruncated; truncated text may be incomplete JSON. Node IDs stay stable while the document is open. Returns an operation ID; use zstudio_operation to await/read the result.",
     "Mutates": true,
     "Parameters": [
       {
@@ -4363,199 +3688,6 @@
         "Name": "query",
         "Type": "string",
         "Description": "Case-insensitive name/path or displayed-text filter, applied before pagination.",
-        "Required": false,
-        "Choices": null,
-        "Properties": null
-      }
-    ]
-  },
-  {
-    "Name": "zstudio_zrd_edit",
-    "Description": "Edit typed ZRD values or structure as one undoable operation. add inserts in the selected array. move uses parent UUID and final position after removal. Root deletion/duplication and cycles are rejected. Changing type replaces the old value/children. Returns an operation ID; use zstudio_operation to await/read the result.",
-    "Mutates": true,
-    "Parameters": [
-      {
-        "Name": "document",
-        "Type": "string",
-        "Description": "Document lifetime ID from zstudio_state.",
-        "Required": true,
-        "Choices": null,
-        "Properties": null
-      },
-      {
-        "Name": "revision",
-        "Type": "integer",
-        "Description": "Expected current document revision. Read before editing.",
-        "Required": true,
-        "Choices": null,
-        "Properties": null,
-        "Minimum": 0,
-        "Maximum": 9223372036854775807
-      },
-      {
-        "Name": "member",
-        "Type": "string",
-        "Description": "Stable member UUID from archive_members or assets.",
-        "Required": true,
-        "Choices": null,
-        "Properties": null
-      },
-      {
-        "Name": "node",
-        "Type": "string",
-        "Description": "Stable ZRD node UUID from zrd_nodes.",
-        "Required": true,
-        "Choices": null,
-        "Properties": null
-      },
-      {
-        "Name": "action",
-        "Type": "string",
-        "Description": "Node operation.",
-        "Required": true,
-        "Choices": [
-          "set",
-          "type",
-          "add",
-          "duplicate",
-          "delete",
-          "move"
-        ],
-        "Properties": null
-      },
-      {
-        "Name": "kind",
-        "Type": "string",
-        "Description": "Type for add/type; default String.",
-        "Required": false,
-        "Choices": [
-          "Int",
-          "Float",
-          "String",
-          "Array"
-        ],
-        "Properties": null
-      },
-      {
-        "Name": "value",
-        "Type": "string",
-        "Description": "Invariant int/float, explicit 0xXXXXXXXX float bits, or JSON-quoted Latin-1 string.",
-        "Required": false,
-        "Choices": null,
-        "Properties": null
-      },
-      {
-        "Name": "parent",
-        "Type": "string",
-        "Description": "Destination array UUID for move.",
-        "Required": false,
-        "Choices": null,
-        "Properties": null
-      },
-      {
-        "Name": "position",
-        "Type": "integer",
-        "Description": "Final child index; add defaults to append.",
-        "Required": false,
-        "Choices": null,
-        "Properties": null,
-        "Minimum": 0,
-        "Maximum": 2147483647
-      }
-    ]
-  },
-  {
-    "Name": "zstudio_resource_properties",
-    "Description": "Read generated resource Properties fields, open the pinned Properties window, or edit one current field. Node omitted targets the member. Values exceeding 16384 displayed characters use a read-only prefix; zrd_edit can replace the complete value and export retains full data. Editing requires revision and rejects pending drafts. Returns an operation ID; use zstudio_operation to await/read the result.",
-    "Mutates": true,
-    "Parameters": [
-      {
-        "Name": "document",
-        "Type": "string",
-        "Description": "Document lifetime ID from zstudio_state.",
-        "Required": true,
-        "Choices": null,
-        "Properties": null
-      },
-      {
-        "Name": "member",
-        "Type": "string",
-        "Description": "Stable member UUID from archive_members or assets.",
-        "Required": true,
-        "Choices": null,
-        "Properties": null
-      },
-      {
-        "Name": "node",
-        "Type": "string",
-        "Description": "Optional ZRD node UUID.",
-        "Required": false,
-        "Choices": null,
-        "Properties": null
-      },
-      {
-        "Name": "action",
-        "Type": "string",
-        "Description": "Properties operation.",
-        "Required": true,
-        "Choices": [
-          "fields",
-          "open",
-          "edit",
-          "invoke"
-        ],
-        "Properties": null
-      },
-      {
-        "Name": "revision",
-        "Type": "integer",
-        "Description": "Required current revision for edit/invoke.",
-        "Required": false,
-        "Choices": null,
-        "Properties": null,
-        "Minimum": 0,
-        "Maximum": 9223372036854775807
-      },
-      {
-        "Name": "field",
-        "Type": "string",
-        "Description": "Current field ID for edit or action ID for invoke.",
-        "Required": false,
-        "Choices": null,
-        "Properties": null
-      },
-      {
-        "Name": "value",
-        "Type": "string",
-        "Description": "Invariant field editor text for edit.",
-        "Required": false,
-        "Choices": null,
-        "Properties": null
-      },
-      {
-        "Name": "part",
-        "Type": "integer",
-        "Description": "Motion part index; default 0.",
-        "Required": false,
-        "Choices": null,
-        "Properties": null,
-        "Minimum": -2147483648,
-        "Maximum": 2147483647
-      },
-      {
-        "Name": "frame",
-        "Type": "integer",
-        "Description": "Motion frame index; default 0.",
-        "Required": false,
-        "Choices": null,
-        "Properties": null,
-        "Minimum": -2147483648,
-        "Maximum": 2147483647
-      },
-      {
-        "Name": "valves",
-        "Type": "boolean",
-        "Description": "Use the semantic MW3 valve editor; node identifies an optional valve occurrence.",
         "Required": false,
         "Choices": null,
         "Properties": null
@@ -4620,116 +3752,6 @@
         "Required": false,
         "Choices": null,
         "Properties": null
-      }
-    ]
-  },
-  {
-    "Name": "zstudio_motion_edit",
-    "Description": "Edit authored motion timing or a frame, or insert/delete a frame across all parts. The separate closing sample is preserved exactly, including edits to frame zero and structural changes. One shared archive undo transaction. Refreshes the active sampler while retaining camera/playback. Does not save; use the existing verified document save operation. Returns an operation ID; use zstudio_operation to await/read the result.",
-    "Mutates": true,
-    "Parameters": [
-      {
-        "Name": "document",
-        "Type": "string",
-        "Description": "Document lifetime ID from zstudio_state.",
-        "Required": true,
-        "Choices": null,
-        "Properties": null
-      },
-      {
-        "Name": "revision",
-        "Type": "integer",
-        "Description": "Expected current document revision. Read before editing.",
-        "Required": true,
-        "Choices": null,
-        "Properties": null,
-        "Minimum": 0,
-        "Maximum": 9223372036854775807
-      },
-      {
-        "Name": "member",
-        "Type": "string",
-        "Description": "Stable member UUID from archive_members or assets.",
-        "Required": true,
-        "Choices": null,
-        "Properties": null
-      },
-      {
-        "Name": "action",
-        "Type": "string",
-        "Description": "Edit operation.",
-        "Required": true,
-        "Choices": [
-          "timing",
-          "set",
-          "insert",
-          "delete"
-        ],
-        "Properties": null
-      },
-      {
-        "Name": "part",
-        "Type": "integer",
-        "Description": "Part index required for set.",
-        "Required": false,
-        "Choices": null,
-        "Properties": null,
-        "Minimum": -2147483648,
-        "Maximum": 2147483647
-      },
-      {
-        "Name": "frame",
-        "Type": "integer",
-        "Description": "Frame index required for set/insert/delete; insert occurs after it.",
-        "Required": false,
-        "Choices": null,
-        "Properties": null,
-        "Minimum": -2147483648,
-        "Maximum": 2147483647
-      },
-      {
-        "Name": "loopSeconds",
-        "Type": "number",
-        "Description": "Positive finite loop duration for timing.",
-        "Required": false,
-        "Choices": null,
-        "Properties": null
-      },
-      {
-        "Name": "translation",
-        "Type": "array",
-        "Description": "XYZ for set.",
-        "Required": false,
-        "Choices": null,
-        "Properties": null,
-        "Items": {
-          "Name": "component",
-          "Type": "number",
-          "Description": "Finite component.",
-          "Required": false,
-          "Choices": null,
-          "Properties": null
-        },
-        "MinItems": 3,
-        "MaxItems": 3
-      },
-      {
-        "Name": "quaternionWxyz",
-        "Type": "array",
-        "Description": "Nonzero finite WXYZ quaternion for set.",
-        "Required": false,
-        "Choices": null,
-        "Properties": null,
-        "Items": {
-          "Name": "component",
-          "Type": "number",
-          "Description": "Finite component.",
-          "Required": false,
-          "Choices": null,
-          "Properties": null
-        },
-        "MinItems": 4,
-        "MaxItems": 4
       }
     ]
   },
@@ -4946,210 +3968,8 @@
     ]
   },
   {
-    "Name": "zstudio_mech_model_replace",
-    "Description": "Replace one member-local mech mesh from a triangulated local-coordinate OBJ with UVs/normals and optional RGB vertex colors. Explicit shared material index; textures use texture_import. One archive undo step, with hierarchy and unrelated members preserved. Refreshes active and dependent previews, retaining the camera. Save through save_document. Returns an operation ID; use zstudio_operation to await/read the result.",
-    "Mutates": true,
-    "Parameters": [
-      {
-        "Name": "document",
-        "Type": "string",
-        "Description": "Document lifetime ID from zstudio_state.",
-        "Required": true,
-        "Choices": null,
-        "Properties": null
-      },
-      {
-        "Name": "revision",
-        "Type": "integer",
-        "Description": "Expected current document revision. Read before editing.",
-        "Required": true,
-        "Choices": null,
-        "Properties": null,
-        "Minimum": 0,
-        "Maximum": 9223372036854775807
-      },
-      {
-        "Name": "member",
-        "Type": "string",
-        "Description": "Stable member UUID from archive_members or assets.",
-        "Required": true,
-        "Choices": null,
-        "Properties": null
-      },
-      {
-        "Name": "localModel",
-        "Type": "integer",
-        "Description": "Local model index from mech_models.",
-        "Required": true,
-        "Choices": null,
-        "Properties": null,
-        "Minimum": -2147483648,
-        "Maximum": 2147483647
-      },
-      {
-        "Name": "material",
-        "Type": "integer",
-        "Description": "Shared material index from mech_models materials.",
-        "Required": true,
-        "Choices": null,
-        "Properties": null,
-        "Minimum": -2147483648,
-        "Maximum": 2147483647
-      },
-      {
-        "Name": "path",
-        "Type": "string",
-        "Description": "Full path of the OBJ file.",
-        "Required": true,
-        "Choices": null,
-        "Properties": null
-      }
-    ]
-  },
-  {
-    "Name": "zstudio_texture_targets",
-    "Description": "Discover sibling texture packs with matching names. Current Save As aliases are excluded because their source records already belong to this batch. Default replacement is this pack only. Duplicate matches require explicit record indices. Names are not identities. Returns an operation ID; use zstudio_operation to await/read the result.",
-    "Mutates": true,
-    "Parameters": [
-      {
-        "Name": "document",
-        "Type": "string",
-        "Description": "Document lifetime ID from zstudio_state.",
-        "Required": true,
-        "Choices": null,
-        "Properties": null
-      },
-      {
-        "Name": "index",
-        "Type": "integer",
-        "Description": "Selected texture record index.",
-        "Required": true,
-        "Choices": null,
-        "Properties": null,
-        "Minimum": 0,
-        "Maximum": 4095
-      },
-      {
-        "Name": "offset",
-        "Type": "integer",
-        "Description": "Zero-based result offset.",
-        "Required": false,
-        "Choices": null,
-        "Properties": null,
-        "Minimum": -2147483648,
-        "Maximum": 2147483647
-      },
-      {
-        "Name": "limit",
-        "Type": "integer",
-        "Description": "Page size, 1\u2013200; default 100.",
-        "Required": false,
-        "Choices": null,
-        "Properties": null,
-        "Minimum": -2147483648,
-        "Maximum": 2147483647
-      },
-      {
-        "Name": "query",
-        "Type": "string",
-        "Description": "Case-insensitive name/path or displayed-text filter, applied before pagination.",
-        "Required": false,
-        "Choices": null,
-        "Properties": null
-      }
-    ]
-  },
-  {
-    "Name": "zstudio_texture_import",
-    "Description": "Replace a texture from RGB/RGBA PNG (16 MiB; up to 4096\u00D74096), or add a named texture when index is omitted. Replacement dimensions must match the selected record. Explicit sibling targets retain their dimensions, using premultiplied-alpha resampling and private palettes for indexed records. One undo step owns the complete batch. Results preview at most 64 files with fileCount/filesTruncated; Path/destination keep 512 characters with PathTruncated/destinationTruncated. Each file includes at most 4 diagnostics of 256 characters with diagnosticCount/diagnosticsTruncated and MessageTruncated. All affected files remain owned and saved. Returns an operation ID; use zstudio_operation to await/read the result.",
-    "Mutates": true,
-    "Parameters": [
-      {
-        "Name": "document",
-        "Type": "string",
-        "Description": "Document lifetime ID from zstudio_state.",
-        "Required": true,
-        "Choices": null,
-        "Properties": null
-      },
-      {
-        "Name": "revision",
-        "Type": "integer",
-        "Description": "Expected current document revision. Read before editing.",
-        "Required": true,
-        "Choices": null,
-        "Properties": null,
-        "Minimum": 0,
-        "Maximum": 9223372036854775807
-      },
-      {
-        "Name": "path",
-        "Type": "string",
-        "Description": "Full path of the PNG input.",
-        "Required": true,
-        "Choices": null,
-        "Properties": null
-      },
-      {
-        "Name": "index",
-        "Type": "integer",
-        "Description": "Texture to replace; omit to add.",
-        "Required": false,
-        "Choices": null,
-        "Properties": null,
-        "Minimum": 0,
-        "Maximum": 4095
-      },
-      {
-        "Name": "name",
-        "Type": "string",
-        "Description": "New texture name, required when adding.",
-        "Required": false,
-        "Choices": null,
-        "Properties": null
-      },
-      {
-        "Name": "targets",
-        "Type": "array",
-        "Description": "Optional explicit replacement targets, including the selected record; one per sibling pack, maximum 64.",
-        "Required": false,
-        "Choices": null,
-        "Properties": null,
-        "Items": {
-          "Name": "",
-          "Type": "object",
-          "Description": "Target identity.",
-          "Required": false,
-          "Choices": null,
-          "Properties": [
-            {
-              "Name": "path",
-              "Type": "string",
-              "Description": "Full texture pack path, as texture_targets returns it.",
-              "Required": true,
-              "Choices": null,
-              "Properties": null
-            },
-            {
-              "Name": "index",
-              "Type": "integer",
-              "Description": "Record index.",
-              "Required": true,
-              "Choices": null,
-              "Properties": null,
-              "Minimum": 0,
-              "Maximum": 4095
-            }
-          ]
-        },
-        "MinItems": 1,
-        "MaxItems": 64
-      }
-    ]
-  },
-  {
     "Name": "zstudio_script_records",
-    "Description": "Page scripts in stored order, or instructions of one script. UUIDs survive edits and undo. Token previews are capped at 64 characters and 16 tokens; source offsets refer to original bytes.",
+    "Description": "Page scripts in stored order, or instructions of one script. UUIDs stay stable while the document is open. Token previews are capped at 64 characters and 16 tokens; source offsets refer to the file\u0027s bytes.",
     "Mutates": false,
     "Parameters": [
       {
@@ -5199,165 +4019,6 @@
     ]
   },
   {
-    "Name": "zstudio_script_entry_edit",
-    "Description": "Add, duplicate, rename, delete, reorder or set the stored timestamp of a script. Unknown commands and unrelated bytes are preserved. No scripts execute and names/references are not rewritten. New timestamps default to zero. Returns an operation ID; use zstudio_operation to await/read the result.",
-    "Mutates": true,
-    "Parameters": [
-      {
-        "Name": "document",
-        "Type": "string",
-        "Description": "Document lifetime ID from zstudio_state.",
-        "Required": true,
-        "Choices": null,
-        "Properties": null
-      },
-      {
-        "Name": "revision",
-        "Type": "integer",
-        "Description": "Expected current document revision. Read before editing.",
-        "Required": true,
-        "Choices": null,
-        "Properties": null,
-        "Minimum": 0,
-        "Maximum": 9223372036854775807
-      },
-      {
-        "Name": "action",
-        "Type": "string",
-        "Description": "Entry action.",
-        "Required": true,
-        "Choices": [
-          "add",
-          "duplicate",
-          "rename",
-          "delete",
-          "move",
-          "timestamp"
-        ],
-        "Properties": null
-      },
-      {
-        "Name": "script",
-        "Type": "string",
-        "Description": "Required script UUID except add.",
-        "Required": false,
-        "Choices": null,
-        "Properties": null
-      },
-      {
-        "Name": "name",
-        "Type": "string",
-        "Description": "Name for add/duplicate/rename; 1\u2013119 Latin-1 characters.",
-        "Required": false,
-        "Choices": null,
-        "Properties": null
-      },
-      {
-        "Name": "position",
-        "Type": "integer",
-        "Description": "Final index for move.",
-        "Required": false,
-        "Choices": null,
-        "Properties": null,
-        "Minimum": 0,
-        "Maximum": 2147483647
-      },
-      {
-        "Name": "fileTime",
-        "Type": "integer",
-        "Description": "Raw stored timestamp.",
-        "Required": false,
-        "Choices": null,
-        "Properties": null,
-        "Minimum": 0,
-        "Maximum": 4294967295
-      }
-    ]
-  },
-  {
-    "Name": "zstudio_script_instruction_edit",
-    "Description": "Add, replace tokens, duplicate, delete or reorder an instruction. Tokens contain command followed by ordered arguments: 1\u201316 Latin-1 strings, no NUL, each at most 16384 characters. Move position is the final index; add defaults to append. Returns an operation ID; use zstudio_operation to await/read the result.",
-    "Mutates": true,
-    "Parameters": [
-      {
-        "Name": "document",
-        "Type": "string",
-        "Description": "Document lifetime ID from zstudio_state.",
-        "Required": true,
-        "Choices": null,
-        "Properties": null
-      },
-      {
-        "Name": "revision",
-        "Type": "integer",
-        "Description": "Expected current document revision. Read before editing.",
-        "Required": true,
-        "Choices": null,
-        "Properties": null,
-        "Minimum": 0,
-        "Maximum": 9223372036854775807
-      },
-      {
-        "Name": "script",
-        "Type": "string",
-        "Description": "Stable script UUID from script_records.",
-        "Required": true,
-        "Choices": null,
-        "Properties": null
-      },
-      {
-        "Name": "instruction",
-        "Type": "string",
-        "Description": "Required instruction UUID except add.",
-        "Required": false,
-        "Choices": null,
-        "Properties": null
-      },
-      {
-        "Name": "action",
-        "Type": "string",
-        "Description": "Instruction action.",
-        "Required": true,
-        "Choices": [
-          "add",
-          "set",
-          "duplicate",
-          "delete",
-          "move"
-        ],
-        "Properties": null
-      },
-      {
-        "Name": "tokens",
-        "Type": "array",
-        "Description": "Complete command and arguments for add/set.",
-        "Required": false,
-        "Choices": null,
-        "Properties": null,
-        "Items": {
-          "Name": "",
-          "Type": "string",
-          "Description": "Literal token.",
-          "Required": false,
-          "Choices": null,
-          "Properties": null
-        },
-        "MinItems": 1,
-        "MaxItems": 16
-      },
-      {
-        "Name": "position",
-        "Type": "integer",
-        "Description": "Insertion/final index.",
-        "Required": false,
-        "Choices": null,
-        "Properties": null,
-        "Minimum": 0,
-        "Maximum": 2147483647
-      }
-    ]
-  },
-  {
     "Name": "zstudio_script_select",
     "Description": "Select a script and optional instruction in the visible workspace, retaining the pinned Properties target. Returns an operation ID; use zstudio_operation to await/read the result.",
     "Mutates": true,
@@ -5382,84 +4043,6 @@
         "Name": "instruction",
         "Type": "string",
         "Description": "Optional instruction UUID.",
-        "Required": false,
-        "Choices": null,
-        "Properties": null
-      }
-    ]
-  },
-  {
-    "Name": "zstudio_script_properties",
-    "Description": "Read generated fields/actions, open pinned script/instruction Properties, edit a field, or invoke an argument action. Field tokens are JSON-quoted. Mutations require revision and no pending drafts. Returns an operation ID; use zstudio_operation to await/read the result.",
-    "Mutates": true,
-    "Parameters": [
-      {
-        "Name": "document",
-        "Type": "string",
-        "Description": "Document lifetime ID from zstudio_state.",
-        "Required": true,
-        "Choices": null,
-        "Properties": null
-      },
-      {
-        "Name": "script",
-        "Type": "string",
-        "Description": "Stable script UUID from script_records.",
-        "Required": true,
-        "Choices": null,
-        "Properties": null
-      },
-      {
-        "Name": "instruction",
-        "Type": "string",
-        "Description": "Optional instruction UUID.",
-        "Required": false,
-        "Choices": null,
-        "Properties": null
-      },
-      {
-        "Name": "action",
-        "Type": "string",
-        "Description": "Properties action.",
-        "Required": true,
-        "Choices": [
-          "fields",
-          "open",
-          "edit",
-          "invoke"
-        ],
-        "Properties": null
-      },
-      {
-        "Name": "revision",
-        "Type": "integer",
-        "Description": "Required revision for edit/invoke.",
-        "Required": false,
-        "Choices": null,
-        "Properties": null,
-        "Minimum": 0,
-        "Maximum": 9223372036854775807
-      },
-      {
-        "Name": "field",
-        "Type": "string",
-        "Description": "Field ID for edit.",
-        "Required": false,
-        "Choices": null,
-        "Properties": null
-      },
-      {
-        "Name": "value",
-        "Type": "string",
-        "Description": "Editor text.",
-        "Required": false,
-        "Choices": null,
-        "Properties": null
-      },
-      {
-        "Name": "propertyAction",
-        "Type": "string",
-        "Description": "Generated action ID for invoke.",
         "Required": false,
         "Choices": null,
         "Properties": null

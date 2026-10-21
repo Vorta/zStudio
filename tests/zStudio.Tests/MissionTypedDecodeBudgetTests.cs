@@ -20,7 +20,7 @@ public sealed class MissionTypedDecodeBudgetTests
     };
     private static AssetDocument Open(string member, byte[] payload, long budget)
     {
-        byte[] bytes = ResourceEditingTests.Archive((member, payload));
+        byte[] bytes = ResourceReaderTests.Archive((member, payload));
         AssetDocument document = new(Path.Combine(Path.GetTempPath(), "typed-budget-reader.zbd"), new(bytes.Length, DateTime.MinValue),
             new(FormatFamily.Archive, 1, Recognition.Supported, "fixture"), bytes);
         new ArchiveReader(budget).Read(document, Token);
@@ -60,10 +60,8 @@ public sealed class MissionTypedDecodeBudgetTests
         var result = Consume(member, limited);
         Assert.Equal(0, result.Records);
         Assert.Contains(result.Notes, n => n.Contains("shared typed-decoding budget", StringComparison.Ordinal));
-        // Refusal concerns automatic decoding: exact member data and archive publication remain available.
+        // Refusal concerns automatic decoding: the exact member data remains available.
         Assert.Equal(payload, limited.Slice(asset.Offset, asset.Length).ToArray());
-        ResourceEditSession edits = new(limited);
-        Assert.Equal(limited.Bytes.ToArray(), ArchiveWriter.Write(limited, edits.Current.Members, Token));
     }
 
     [Theory]

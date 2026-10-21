@@ -8,14 +8,13 @@ using zStudio.Core;
 
 namespace zStudio.Desktop;
 
-/// <summary>Coordinates are bound to a placement source, never the viewport's current selection.</summary>
+/// <summary>A source map's pickup position, bound to its placement source (never the viewport's current selection) and edited through the sources.</summary>
 public sealed class PickupPropertiesEditor : FieldEditor, IDisposable
 {
     private readonly DocumentModel document;
     private readonly MissionPickupSource source;
     private readonly JsonObject original;
     private readonly string label;
-    private bool? locked;
     private string shownPosition = "";
     private readonly ReadOnlyPropertySheet details = new();
     public event Action? Changed;
@@ -32,25 +31,24 @@ public sealed class PickupPropertiesEditor : FieldEditor, IDisposable
                 json["preview_world_position"] = JsonData.Vector(edits.Position(source));
                 json["source_archive"] = source.ArchivePath;
                 json["resource"] = source.ResourceName; json["placement_record"] = source.RecordIndex;
-                json["save_destination"] = edits.TargetPath(source.ArchivePath);
                 json["edit_scope"] = edits.Scope(source).Description;
             }
             return json;
         }
     }
-    /// <summary>For a source world: moves a placement through its sources (the edit rebuilds the world).</summary>
-    private readonly Func<MissionPickupSource, Vector3, Task>? sourceMove;
-    public PickupPropertiesEditor(DocumentModel document, MissionPickupSource source, string label, JsonObject metadata, Func<MissionPickupSource, Vector3, Task>? sourceMove = null)
+    /// <summary>Moves a placement through its sources (the edit rebuilds the world).</summary>
+    private readonly Func<MissionPickupSource, Vector3, Task> sourceMove;
+    public PickupPropertiesEditor(DocumentModel document, MissionPickupSource source, string label, JsonObject metadata, Func<MissionPickupSource, Vector3, Task> sourceMove)
     {
         this.document = document; this.source = source; this.label = label; this.sourceMove = sourceMove;
         original = JsonData.PreviewObject(metadata);
-        document.PickupEditsChanged += RefreshProperties; document.PropertyChanged += DocumentChanged;
+        document.PropertyChanged += DocumentChanged;
         RefreshProperties();
     }
     private void DocumentChanged(object? sender, PropertyChangedEventArgs e)
-    { if (e.PropertyName is nameof(DocumentModel.EditingLocked) or nameof(DocumentModel.PickupEdits)) RefreshProperties(); }
-    // Reads and commits use the document's current session, never one captured when the form was built: a clean session
-    // is replaced when other documents publish changes, and a replaced one is no longer shown, undone or saved.
+    { if (e.PropertyName is nameof(DocumentModel.PickupEdits)) RefreshProperties(); }
+    // Reads and commits use the document's current session, never one captured when the form was built: a rebuilt world
+    // has another one.
     private PickupPlacementEditSession Session() => document.PickupEdits is { } edits && edits.Find(source) != null ? edits
         : throw new InvalidOperationException("This map's placements are reloading or no longer hold this placement. Show the map again, then retry.");
     private const string Gone = "This map's placements no longer hold this record: another change moved, renamed or removed it in its archive. Select the placement again in Whole world.";
@@ -61,9 +59,9 @@ public sealed class PickupPropertiesEditor : FieldEditor, IDisposable
         if (document.PickupEdits is not { } edits) return;
         var record = edits.Find(source);
         // Unfinished input stays visible (its commit is refused) until it is resolved.
-        if (record == null ? !shownGone && !HasPendingDrafts : shownGone || locked != document.EditingLocked)
+        if (record == null ? !shownGone && !HasPendingDrafts : shownGone || Content == null)
         {
-            shownGone = record == null; locked = shownGone ? null : document.EditingLocked; draftInputs.Clear(); ClearAutomationFields("properties"); valueRefresh.Clear();
+            shownGone = record == null; draftInputs.Clear(); ClearAutomationFields("properties"); valueRefresh.Clear();
             if (details.Parent is Panel previous) previous.Children.Remove(details);
             DockPanel panel = new(); Content = panel;
             StackPanel form = new() { Margin = new(12) }; DockPanel.SetDock(form, Dock.Top); panel.Children.Add(form);
@@ -76,7 +74,7 @@ public sealed class PickupPropertiesEditor : FieldEditor, IDisposable
                 return;
             }
             Label(form, record.Type + " · placement #" + source.RecordIndex, true);
-            Label(form, locked == true ? "Enable Unlock editing in Whole world to edit this placement." : "Position in game units · Enter to apply · Escape to restore");
+            Label(form, "Position in game units · Enter to apply · Escape to restore");
             string Read()
             {
                 if (document.PickupEdits is { } current && current.Find(source) != null)
@@ -85,17 +83,14 @@ public sealed class PickupPropertiesEditor : FieldEditor, IDisposable
             }
             Vector3 Parse(string text)
             {
-                if (document.EditingLocked) throw new InvalidOperationException("This document's coordinate editing is locked.");
                 string[] parts = text.Split([',', ' ', '\t'], StringSplitOptions.RemoveEmptyEntries);
                 if (parts.Length != 3) throw new FormatException("Enter finite X, Y and Z coordinates.");
                 float[] values = parts.Select(v => float.Parse(v, CultureInfo.InvariantCulture)).ToArray();
                 if (values.Any(v => !float.IsFinite(v))) throw new FormatException("Coordinates must be finite numbers.");
                 return new(values[0], values[1], values[2]);
             }
-            if (sourceMove is { } move)
-                Input(form, "Position", Read(), _ => throw new InvalidOperationException("Use the asynchronous edit."), locked == true, getter: Read, components: ["X", "Y", "Z"],
-                    asyncCommit: async text => { var position = Parse(text); if (position != Session().Position(source)) await move(source, position); });
-            else Input(form, "Position", Read(), text => Session().MoveTo(source, Parse(text)), locked == true, getter: Read, components: ["X", "Y", "Z"]);
+            Input(form, "Position", Read(), _ => throw new InvalidOperationException("Use the asynchronous edit."), false, getter: Read, components: ["X", "Y", "Z"],
+                asyncCommit: async text => { var position = Parse(text); if (position != Session().Position(source)) await sourceMove(source, position); });
             panel.Children.Add(details);
         }
         else foreach (var refresh in valueRefresh.ToArray()) refresh();
@@ -104,7 +99,7 @@ public sealed class PickupPropertiesEditor : FieldEditor, IDisposable
     public void Dispose()
     {
         if (disposed) return; disposed = true;
-        document.PickupEditsChanged -= RefreshProperties; document.PropertyChanged -= DocumentChanged;
+        document.PropertyChanged -= DocumentChanged;
         Content = null; draftInputs.Clear(); GC.SuppressFinalize(this);
     }
 }

@@ -91,7 +91,6 @@ public sealed class MissionSessionIdentityTests
             ("aiv.zrd", A(S("tank_01"), Actor(9))), ("net_01.zrd", A(S("node_00"), Ai(7))));
         var edits = PickupPlacementEditSession.Create([new(MissionDifficulty.Medium, doc, doc.Assets[0])], token: Token);
         edits.AddCoordinates(doc.Assets.Skip(1).Select(a => (doc, a)), Token, mw3: true);
-        string archive = Assert.Single(edits.ArchivePaths);
         var sources = edits.Records.Select(r => r.Source).Concat(edits.OtherCoordinates.Select(r => r.Source)).Select(Copy).ToArray();
         List<MissionActor> actors = [];
         foreach (var record in edits.Records)
@@ -102,11 +101,10 @@ public sealed class MissionSessionIdentityTests
         Read(); long resolved = edits.IdentityPrefixResolutions;
         for (int pass = 0; pass < 8; pass++) Read();
         Assert.Equal(resolved, edits.IdentityPrefixResolutions);
-        Assert.Equal(4, edits.Records.Count); Assert.Equal(doc.Bytes.ToArray(), edits.EncodeArchive(archive));
+        Assert.Equal(4, edits.Records.Count);
         void Read()
         {
-            Assert.False(edits.IsDirty); Assert.False(edits.IsArchiveDirty(archive));
-            Assert.Equal(4, edits.PreviewPositions(mission).Count); Assert.Single(edits.TankPreviewPositions(mission));
+            Assert.Equal(4, sources.Count(s => edits.MatchIn(s, mission) != null));
             foreach (var source in sources)
             {
                 Assert.True(edits.Find(source) != null || edits.Coordinate(source) != null);
@@ -134,11 +132,9 @@ public sealed class MissionSessionIdentityTests
         Assert.Equal(new[] { 0, 2 }, five.Sources.Select(s => s.AssetIndex));
         Assert.Single(edits.Scope(rows[3].Source).Sources); Assert.Single(edits.Scope(rows[4].Source).Sources);
         Assert.Contains("Easy", five.Description); Assert.Contains("ambiguous", five.Description);
-        Assert.True(edits.MoveTo(Copy(rows[0].Source), new(10, 20, 30)));
-        foreach (var source in zero.Sources) Assert.Equal(new Vector3(10, 20, 30), edits.Position(source));
+        var moved = edits.PreviewTransform(Copy(rows[0].Source), new(new(10, 20, 30), rows[0].Rotation));
+        foreach (var source in zero.Sources) Assert.Equal(new Vector3(10, 20, 30), moved[source].Position);
         Assert.Same(zero, edits.Scope(rows[0].Source)); Assert.Equal(rows.Count, edits.ScopeIndexRows);
-        edits.Undo(); Assert.False(edits.IsDirty); edits.Redo(); Assert.True(edits.IsDirty);
-        Assert.Equal(rows.Count, edits.ScopeIndexRows);
     }
 
     [Fact]
@@ -174,27 +170,10 @@ public sealed class MissionSessionIdentityTests
         Assert.Equal(new[] { rows[0].Source, rows[1].Source }, edits.Scope(rows[1].Source).Sources);
     }
 
-    [Fact]
-    public void RebaseAdoptsFreshKeysAndScopesButKeepsTouchedHistory()
-    {
-        var first = Archive("first.zbd", ("puppies.zrd", Pickups(1)));
-        var second = Archive("second.zbd", ("puppies.zrd", Pickups(2)));
-        var edits = PickupPlacementEditSession.Create([new(MissionDifficulty.Medium, first, first.Assets[0]), new(MissionDifficulty.Easy, second, second.Assets[0])], token: Token);
-        var touched = edits.Records[0].Source; var oldUntouched = Copy(edits.Records[1].Source);
-        _ = edits.Scope(oldUntouched); edits.MoveTo(touched, new(9, 8, 7));
-        var changed = Archive("second.zbd", ("puppies.zrd", Pickups(3, 4)));
-        var fresh = PickupPlacementEditSession.Create([new(MissionDifficulty.Easy, changed, changed.Assets[0])], token: Token);
-        edits.RebaseUntouched(fresh);
-        Assert.Equal(3, edits.Records.Count); Assert.Equal(new Vector3(3, 2, 3), edits.Position(oldUntouched));
-        Assert.Single(edits.Scope(oldUntouched).Sources); Assert.Equal(new Vector3(9, 8, 7), edits.Position(Copy(touched)));
-        edits.Undo(); Assert.Equal(new Vector3(1, 2, 3), edits.Position(touched)); Assert.False(edits.IsDirty);
-        edits.Redo(); Assert.Equal(new Vector3(9, 8, 7), edits.Position(touched)); Assert.True(edits.IsDirty);
-    }
-
-    private static MissionPickupSource Copy(MissionPickupSource source) => source with
+private static MissionPickupSource Copy(MissionPickupSource source) => source with
     { ArchivePath = new(source.ArchivePath.ToCharArray()), ResourceName = new(source.ResourceName.ToCharArray()) };
     private static AssetDocument Archive(string path, params (string Name, ZrdNode Root)[] entries) =>
-        FormatRegistry.Default.OpenBytes(Path.GetFullPath(path), ResourceEditingTests.Archive(entries.Select(e => (e.Name, ZrdWriter.Write(e.Root, Token))).ToArray()), token: Token);
+        FormatRegistry.Default.OpenBytes(Path.GetFullPath(path), ResourceReaderTests.Archive(entries.Select(e => (e.Name, ZrdWriter.Write(e.Root, Token))).ToArray()), token: Token);
     private static ZrdNode Pickups(params float[] xs) => A(A(xs.Select(x => A(S("NANITE"), I(1), A(F(x), F(2), F(3)), A(F(0), F(0), F(0)), F(0))).ToArray()));
     private static ZrdNode Actor(float x) => A(I(0), A(F(x), F(2), F(3)), F(0));
     private static ZrdNode Ai(float x) => A(I(12), A(F(x), F(2), F(3)), A(I(-1), I(-1), I(-1)));
@@ -206,28 +185,4 @@ public sealed class MissionSessionIdentityTests
 
 public sealed partial class AnimationTests
 {
-    [Fact]
-    public async Task SessionIdentityIndexesKeepVerifiedSaveBaselineAndUndoSemantics()
-    {
-        await WithMissionArchiveAsync(new() { ["puppies.zrd"] = Zrd(PickupList(PickupRow())) }, async (world, resolver) =>
-        {
-            var token = TestContext.Current.CancellationToken;
-            var edits = await PickupPlacementEditSession.LoadAsync(world.Path, resolver, token);
-            var row = Assert.Single(edits.Records); string archive = Assert.Single(edits.ArchivePaths);
-            var external = row.Source with { ArchivePath = new(row.Source.ArchivePath.ToCharArray()), ResourceName = new(row.Source.ResourceName.ToCharArray()) };
-            var scope = edits.Scope(external); var before = edits.EncodeArchive(archive);
-            int accepted = 0; edits.EditAccepted += () => accepted++;
-            var target = row.OriginalPosition + new Vector3(9, 8, 7);
-            var draft = edits.PreviewTransform(external, new(target, row.Rotation));
-            Assert.Same(edits.SourceComparer, Assert.IsType<Dictionary<MissionPickupSource, PlacementTransform>>(draft).Comparer);
-            Assert.False(edits.IsDirty); Assert.False(edits.CanUndo);
-            Assert.True(edits.MoveTo(external, target)); Assert.Equal(1, accepted);
-            var expected = edits.EncodeArchive(archive);
-            Assert.Empty((await edits.SaveAsync(token: token)).Errors); Assert.False(edits.IsDirty);
-            Assert.Equal(expected, await File.ReadAllBytesAsync(archive, token)); Assert.Same(scope, edits.Scope(external));
-            edits.Undo(); Assert.True(edits.IsDirty); Assert.Equal(before, edits.EncodeArchive(archive));
-            edits.Redo(); Assert.False(edits.IsDirty); Assert.Equal(target, edits.Position(external));
-            Assert.Equal(1, accepted);
-        });
-    }
 }

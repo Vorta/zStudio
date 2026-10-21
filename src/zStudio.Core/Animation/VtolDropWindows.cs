@@ -156,15 +156,6 @@ public static class VtolDropWindows
             throw new InvalidDataException("The drop-window timing changed during editing.");
     }
 
-    public static void Apply(AnimationEditSession session, VtolDropMovePlan plan, CancellationToken token = default)
-    {
-        ValidatePlan(session.Package, plan, token);
-        RequireVerifiedMove(plan);
-        token.ThrowIfCancellationRequested();
-        session.Apply(plan.Window.EntryIndex, "Move parachute drop window", entry =>
-            entry.Sequences.Single(s => s.Id == plan.Window.SequenceId).Events.Single(e => e.Id == plan.Window.CallEventId).Threshold = plan.NewStart);
-    }
-
     public static VtolDropSnapshot PreviewMove(AnimationPreviewContext frozenContext, VtolDropSnapshot original,
         VtolDropMovePlan plan, CancellationToken token = default)
     {

@@ -52,7 +52,7 @@ public sealed class WorkspaceStateTests
             var settings = JsonSerializer.Deserialize<StudioSettings>($$"""{"Workspace":{{workspace}},"Theme":"Dark","LastRoot":"fixture","CreateBackupOnSave":true}""")!;
             var defaults = settings.GetWorkspace();
             Assert.Equal(4, defaults.Version); Assert.Equal(352, defaults.InspectorWidth);
-            Assert.Equal("Dark", settings.Theme); Assert.Equal("fixture", settings.LastRoot); Assert.True(settings.CreateBackupOnSave);
+            Assert.Equal("Dark", settings.Theme); Assert.Equal("fixture", settings.LastRoot);
             Assert.False(settings.McpEnabled);
         }
         var current = new StudioSettings(); var layout = current.GetWorkspace();

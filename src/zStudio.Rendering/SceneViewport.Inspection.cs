@@ -45,7 +45,6 @@ public sealed partial class SceneViewport
     public Func<int, int>? SelectionOwner { get; set; }
     /// <summary>Immutable source-editor presentation overrides. Null uses initialized mission visibility.</summary>
     public Func<int, bool?>? NodeVisibility { get; set; }
-    public bool AllowLockedInspection { get; set; }
     public IReadOnlySet<int> VisibleSceneNodes { get; private set; } = new HashSet<int>();
     public int SelectionNode(int node) => node < 0 ? node : SelectionOwner?.Invoke(node) ?? node;
     private UIElement? inspectionContent;
@@ -146,7 +145,7 @@ public sealed partial class SceneViewport
     public bool SelectInspection(string? target, bool guard = true)
     {
         var next = target == null ? null : InspectTarget(target);
-        if (target != null && (!InspectionSelectionEnabled || next == null) || IsFlyActive || IsPickupDragging || guard && CanChangeInspection?.Invoke() == false) return false;
+        if (target != null && next == null || IsFlyActive || IsPickupDragging || guard && CanChangeInspection?.Invoke() == false) return false;
         SelectedInspection = next;
         if (next == null) { SelectAiNode(null); SelectPickup(null, false, true); FramingSelection = null; InspectionSelectionCleared?.Invoke(); }
         else if (next.AiNode is { } ai) SelectAiNode(ai);
@@ -168,7 +167,6 @@ public sealed partial class SceneViewport
     private bool HandleInspectionClick(Point point, MouseButtonEventArgs e)
     {
         if (e.ChangedButton != MouseButton.Left || IsFlyActive || IsPickupDragging) return false;
-        if (!InspectionSelectionEnabled) return true;
         // Consume the scene click even when a draft vetoes selection, before Helix's callbacks.
         var hit = ProbeInspection(point);
         if (hit == null) return false;
