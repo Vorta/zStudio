@@ -37,7 +37,7 @@ Open a mission's `gamez.zbd` and choose **Whole world**. The view shows the sing
 Open a mission's `anim.zbd` and select an animation in Assets. Its world, textures, effects and sounds resolve automatically; **Scene → Choose GameZ…** picks another world, **Scene → Bind root…** another root node when a name matches several.
 
 - **Toolbar**: **LOD**, difficulty, **Frame**, **Face orientation** (front faces blue, back faces red), then **Map**, **Grid**, **Height** (−999 to 999, raising or lowering the animation; the grid stays at Y = 0), **Ground collision** (a flat plane at Y = 0), **Horizon**, **Effects** and **Follow camera**.
-- **Transport**: **Space** (with Assets or the preview focused) plays and pauses; **Play/Pause**, **Stop**, **Previous frame** and **Next frame** sit beside the seek bar, which counts 60 Hz frames. Below it: **Preview phase** (**Runtime**, or **Reset / stop** for the cleanup sequence), **Range…** (the preview range), speed, **Replay preview**, mute and volume.
+- **Transport**: **Space** (with Assets or the preview focused) plays and pauses; **Play/Pause**, **Stop**, **Previous frame** and **Next frame** sit beside the seek bar, which counts 60 Hz frames. Below it: speed, **Replay preview**, mute, volume, **Preview phase** (**Runtime**, or **Reset / stop** for the cleanup sequence) and **Range…** (the preview range).
 - **Sequences** lists the entry, its Cleanup sequence, the runtime sequences and their events with their stored operands. The timing under an event is a start threshold, not a duration; **Dispatch** and **Event log** show when events actually ran.
 - **Settings** shows the binding and mission, and sets the seed, forced conditions, activation points and **Range in seconds** (**Auto** restores the calculated range, labelled **Looping**, **Open-ended** or **Partial** when there is no fixed end).
 - **References** lists the stored reference tables.
@@ -52,5 +52,5 @@ Select records in Assets and choose **Export selected…** (textures as PNG with
 
 ## Other versions and games
 
-- **July and August 1998 demos** (version-13 worlds): their worlds and animations preview like the retail ones; Initialize refuses them. The September 1998 demo can be reconstructed as a source project.
+- **July and August 1998 demos** (version-13 worlds): their worlds preview like the retail ones, and the August demo's animations too (the July demo's animation programs, versions 26 and 27, are not read).
 - **MechWarrior 3**: its base-game worlds, animations, motion clips and model library can be inspected and previewed. A mission picker replaces the difficulty picker. MCP: `zstudio_missions`, `zstudio_motion_records`, `zstudio_motion_preview`, `zstudio_mech_models`, `zstudio_ai_valves`, `zstudio_ai_valve_selection`. Further MechWarrior 3 support is deferred.

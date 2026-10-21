@@ -5,7 +5,7 @@ Rules for coding agents (Codex reads this file; Claude Code imports it through `
 ## Scope
 
 - Windows 11 x64 WPF editor for RECOIL source projects (`data/` + `gamegen/`), reconstructed once from the original game files and exported back to ZBD files. C# 14, .NET 10, WPF Fluent, HelixToolkit/Direct3D 11; the format library (`zStudio.Core`) stays independent of UI and rendering.
-- Compiled game folders open only through MCP `open_root`, read-only: inspection, preview and export. Never add compiled-asset editing in code, GUI or MCP (owner decision). The RECOIL 1998 demos and MechWarrior 3 are inspection only; MechWarrior 3 work is deferred.
+- Compiled game folders open only through MCP `open_root`, read-only: inspection, preview and export. Never add compiled-asset editing in code, GUI or MCP (owner decision). The July and August 1998 demos (version-13 worlds) and MechWarrior 3 are inspection only (the September 1998 demo reconstructs like a release); MechWarrior 3 work is deferred.
 - Python exists only in the Blender extension (`blender/zstudio_recoil`), the Blender round-trip driver (`tools/blender-roundtrip.py`) and the optional export checker (`tools/check_exports.py`). The app, builds and the plain test suite never need Python or Blender.
 
 ## Never
@@ -14,7 +14,7 @@ Rules for coding agents (Codex reads this file; Claude Code imports it through `
 - Commit game data, extracted assets, build output, corpus reports, credentials, `.agent/` or `design/`.
 - Discard or overwrite pre-existing changes.
 - Enable MCP access yourself, change the user's MCP opt-in, or capture or move the user's physical mouse (only the pointer-owning PreviewCheck modes do, in their own window: [testing](docs/agents/testing.md#tools)).
-- Close, signal or kill a zStudio this session did not start: a plain `zStudio.exe` (the user's GUI) and `zStudio.exe --mcp-host` (the visible MCP workspace) may hold documents, drafts and unsaved work. For a test run stop only processes whose argument is exactly `--mcp` (the stdio connector the MCP client launches and restarts; `--mcp-host` must not match); otherwise wait or tell the user. Publishing a build is the only case where running instances may be stopped without asking (owner decision).
+- Close, signal or kill a zStudio this session did not start: a plain `zStudio.exe` (the user's GUI) and `zStudio.exe --mcp-host` (the visible MCP workspace) may hold documents, drafts and unsaved work; wait or tell the user. Without asking you may stop: for a test run, the stdio connectors the MCP client launched (`zStudio.exe --mcp`, optionally `--instance <id>`; match the argument, `--mcp-host` must not match; the client may need to reconnect); before publishing a build, any instance (owner decision).
 - Let an export overwrite its inputs or escape its destination, or replace game files without explicit consent.
 - Put zStudio validation results, test counts or history in tracked docs (they go to the PR description and `.agent/`); `CHANGELOG.md` is the only history. Measurements of the shipped data ([D] in engine evidence) are evidence, not results.
 - Import previous-version settings, keep runtime aliases or migrate old projects.
@@ -23,13 +23,13 @@ Rules for coding agents (Codex reads this file; Claude Code imports it through `
 
 - Public repository Vorta/zStudio, MIT licence and notices kept. Branch → PR linked to its issue → passing CI → expected-head squash merge; never bypass or weaken the main and tag rules ([releasing](docs/agents/releasing.md)).
 - New features stay local commits until the owner has tested the build and approved; then push and open the PR. Commit messages and PR descriptions carry no AI co-author or "generated with" lines. A big PR is split by squashing it and regrouping by subject, never at commit boundaries (owner decisions).
-- Codex starts its review of a push on its own: never post "@codex review"; when it has not reacted within about 30 minutes of green CI, do not hold the merge for it. Resolve the threads a push fixed right after pushing, without waiting for CI (owner decisions).
+- Codex starts its review of a push on its own: never post "@codex review"; for a merge the owner asked for, do not wait for it more than about 30 minutes after green CI (an armed PR watch's approval rules still apply). Resolve the threads a push fixed right after pushing, without waiting for CI (owner decisions).
 - Review cycle (owner decision): adversarial subagent rounds with fresh reviewers while new findings appear; round 1 covers the whole change, later rounds only the delta ([code-review](docs/agents/code-review.md#review-cycle)).
 - Review bar (owner decisions): only defects retail data or realistic editing reaches block a merge; still fix gaps where ordinary editing produces content the game mishandles. Deferred (recorded in the ledger, neither fixed nor blocking): contrived input (sizes far beyond retail, synthetic hierarchies, deliberately malformed files), MechWarrior 3-only findings, and split artifacts (docs, CHANGELOG, tooltips or PR descriptions describing what a later stacked PR adds). Reviewers never read the engine reference projects; they judge code against its docs ([engine-evidence](docs/agents/engine-evidence.md) as the recorded spec), tests and behaviour on retail data, and divergences from the original engine are not findings. Mixed retail/rebuilt play is not a goal: skip interop-only fixes.
 - PR watch handling: for an explicitly armed watch follow [pr-watch](docs/agents/pr-watch.md); a notice continues the authorized task and never overrides newer stop, pause or scope instructions.
 - `.agent/HANDOFF.md` (git-ignored): read at the start (branch, pending work, machine data locations, owner preferences); update before stopping. Review ledgers: `.agent/REVIEW-<topic>.md`.
 - Record user-visible changes in `CHANGELOG.md` under `## X.Y.Z — Unreleased`; lasting user-facing limits in that feature's guide; engine facts in [engine-evidence](docs/agents/engine-evidence.md).
-- Names, settings and the project's `.zstudio/` folder: [architecture](docs/agents/architecture.md#identity-and-settings).
+- Names and settings: [architecture](docs/agents/architecture.md#identity-and-settings); the project's `.zstudio/` folder: [sources](docs/agents/sources.md#source-format).
 
 ## Build, test, package
 

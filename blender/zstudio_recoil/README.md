@@ -44,4 +44,4 @@ MCP: `zstudio_source_blender_checkout`, `zstudio_source_blender_checkouts`, `zst
 - A graph holds at most 4,096 files and 512 MiB of source data; cyclic or escaping references are refused.
 - Blender's view is an editing view, not the game's collision, crater or zone queries. A pickup's collision volume (`bvol`) is hidden by its material, so it still counts in framing and shows in wireframe; keep it, because the game registers a pickup only when its model has one.
 - Each import copies its files to a `zstudio-blender-…` folder in Windows' temporary folder, which isn't deleted automatically; delete old ones when Blender is closed.
-- The extension never changes the files it imported; exports go to the checkout's outbox by default.
+- The extension never changes the files it imported. Exports go to the checkout's outbox, which is the only folder **Update from Blender export…** reads; export elsewhere only for your own copies.

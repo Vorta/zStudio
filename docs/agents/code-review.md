@@ -1,6 +1,6 @@
 # Code review
 
-Procedure for a requested code review or review-fix cycle. Round 1 looks for consequential failures across the whole change, later rounds in each delta; it does not guarantee that none remain. Green tests and a corpus run are evidence only for the cases they exercise.
+Procedure for a requested code review or review-fix cycle ([review cycle](#review-cycle) sets each round's scope). The procedure finds consequential failures; it does not guarantee that none remain. Green tests and a corpus run are evidence only for the cases they exercise.
 
 ## Review cycle
 

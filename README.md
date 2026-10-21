@@ -43,8 +43,8 @@ Enable **Tools → MCP integration…**, copy the configuration it shows into yo
 
 | Game | Support |
 | --- | --- |
-| **RECOIL** (1998 and 1999 releases) | Source projects: reconstruct, edit, export |
-| RECOIL July and August 1998 demos | Read-only inspection through MCP ([Compiled files](docs/compiled-files.md)); the September 1998 demo reconstructs like a release |
+| **RECOIL** (1998 and 1999 releases, September 1998 demo) | Source projects: reconstruct, edit, export |
+| RECOIL July and August 1998 demos | Read-only inspection through MCP ([Compiled files](docs/compiled-files.md)) |
 | MechWarrior 3 | Read-only inspection through MCP ([Compiled files](docs/compiled-files.md)) |
 
 Game files are not included; use your own copy of the game.

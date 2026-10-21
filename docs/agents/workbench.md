@@ -31,7 +31,7 @@ Rules for the WPF workbench. User-facing descriptions: [map editor](../map-edito
 
 ## Properties window
 
-- One reusable, owned, modeless window for every viewer, opened through a row context menu or Alt+Enter (in a source map Alt+Enter focuses the docked card for a selected object, zone, network or definition, and opens this window for a selected pickup, AI node or AI path). Closed at startup; size and position saved; closes when its document is disposed; the window X closes it. Never a docked pane and never takes workspace space; no bottom button row.
+- One reusable, owned, modeless window for every viewer, opened through a row context menu or Alt+Enter (in a source map Alt+Enter focuses the docked card for a selected object, zone, network or definition, and opens this window for a selected pickup, AI node or AI path, read-only for an AIV vehicle, and for the archive when nothing is selected). Closed at startup; size and position saved; closes when its document is disposed; the window X closes it. Never a docked pane and never takes workspace space; no bottom button row.
 - Its document and record identity stay pinned across selection and preview replacement; ordinary selection never retargets it. Never bind editable fields to the active row; never keep a hidden renderer alive for it.
 - Fields are editable for source documents (source objects, source pickups); compiled assets show a read-only view.
 - Its commands target its owning document; native text undo stays. Icon-only Undo/Redo at the top right of the breadcrumb row; trimmed single-line heading with a full-context tooltip; document-scoped Ctrl+S.

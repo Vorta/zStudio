@@ -935,6 +935,8 @@ public partial class MainWindow
         var restore = committingCard?.CapturePlacementDraftRestore();
         try
         {
+            // A move below the stored precision (see PlacementPrecision) changes nothing: the world is not evaluated again.
+            if (doc.PickupEdits is { } edits && edits.PreviewTransform(source, transform).All(p => p.Value == edits.Transform(p.Key))) return doc;
             return await PrepareSourceWorldEditAsync(doc, "Moving placement", (workspace, ct) =>
             {
                 var plan = PlanSourcePlacement(doc, workspace, source, transform, ct);
