@@ -147,7 +147,7 @@ public partial class MainWindow
         if (selectedNode is int node && properties != null)
         {
             string name = (motion?.Viewport.PreviewScene ?? scene?.PreviewScene ?? doc.Document.Scene)?.Nodes.ElementAtOrDefault(node)?.Name ?? "Scene object";
-            // A source world's own objects edit their sources; placed copies and mission actors (vehicles, animation-placed objects) open read-only here.
+            // A source world's own objects edit their sources; placed copies and mission actors open here: a pickup in its editable placement form, vehicles and animation-placed objects read-only.
             if (doc.SourceWorld != null && scene?.PickupAt(node) == null && SourceObjectNode(node) is int sourceNode && doc.SourceBuild?.Provenance.ContainsKey(sourceNode) == true
                 && scene?.Mission?.ActorAt(SourceSelectionOwner(doc, sourceNode)) == null)
             {
@@ -185,16 +185,6 @@ public partial class MainWindow
         if (!item.Owner.IsPreview && doc.Document.Assets.FirstOrDefault(a => a.Kind == AssetKind.Node && a.Index == node.Index) is { } asset)
             return await OpenAssetPropertiesAsync(doc, asset, token, automation);
         ++propertyRequest;
-        if (doc.SourceWorld != null && scene?.Mission?.ActorAt(node.Index) is { } actor)
-        {
-            var actorWindow = GetPropertiesWindow();
-            bool shown = actor.Pickup is { } pickup && doc.PickupEdits?.Find(pickup.Source) != null
-                ? actorWindow.SetPickup(doc, pickup.Source, item.DisplayName, SceneTreeProperties(item), SourcePickupMove(doc)!)
-                : actorWindow.SetReadOnly(doc, item.DisplayName, SceneTreeProperties(item));
-            PresentProperties(actorWindow, shown); return shown ? actorWindow : null;
-        }
-        if (doc.SourceWorld != null && doc.SourceBuild?.Provenance.ContainsKey(node.Index) == true)
-            return await ShowSourceObjectPropertiesAsync(doc, node.Index, token) ? propertiesWindow : null;
         var window = GetPropertiesWindow(); bool opened = window.SetReadOnly(doc, $"{node.Name} · node #{node.Index}", SceneTreeProperties(item));
         PresentProperties(window, opened); return opened ? window : null;
     }
