@@ -1,172 +1,63 @@
 # zStudio
 
-**Advanced viewer and editor for Zipper Interactive's ZBD files.**
+**Map editor and source-project tools for Zipper Interactive's RECOIL.**
 
 ![zStudio screenshot](docs/images/zstudio-whole-world.png)
 
-zStudio is a native Windows desktop application built with C# 14, .NET 10, WPF Fluent and Direct3D 11. Reconstruct an editable source project from the retail game files, edit its maps in zStudio or in Blender through the bundled RECOIL extension, and export them back to game files. Compiled game folders open only through MCP, where assets can still be inspected, previewed and exported; direct editing of compiled archives, typed data, texture packs, scripts, models and animation programs is being retired and is reachable only in such MCP-opened roots. Download **[zStudio v0.9.4](https://github.com/Vorta/zStudio/releases/tag/v0.9.4)** for Windows x64.
+zStudio is a Windows desktop application. It unpacks RECOIL's retail game files once into an editable source project (the developers' original `data\` and `gamegen\` tree: text resources, glTF models, PNG textures, WAV sounds and build scripts), lets you edit the maps in zStudio or in Blender, and exports new game files from the sources. AI agents can work in the same workspace through local MCP.
 
-[Download releases](https://github.com/Vorta/zStudio/releases) · [Report a bug or request a feature](https://github.com/Vorta/zStudio/issues/new/choose) · [Contribute](CONTRIBUTING.md) · [Changelog](CHANGELOG.md)
+Download **[zStudio v0.9.4](https://github.com/Vorta/zStudio/releases/tag/v0.9.4)** for Windows x64.
 
-Texture PNG import and the prepared-script instruction editor are described in the [texture and script editing guide](docs/texture-script-editing.md). Both share undo, verified save and MCP support.
+[Releases](https://github.com/Vorta/zStudio/releases) · [Report a bug or request a feature](https://github.com/Vorta/zStudio/issues/new/choose) · [Contribute](CONTRIBUTING.md) · [Changelog](CHANGELOG.md)
 
-[3D inspection cards](docs/scene-inspection.md) show pointed surface coordinates, node identities and animation instances. In a source map the docked card edits the selected object; in a compiled Whole world (opened through MCP) its XYZ fields move pickups, AI navigation nodes and supported AIV tanks, with shared undo and verified archive saves.
+## Quick start
 
-**Document scene** shows the active preview's parent-child hierarchy, including mission placements, shared references and disconnected nodes. Viewport selections reveal their node in the tree. Animation playback keeps the bound scene hierarchy stable while cards identify individual runtime copies.
+1. Download `zStudio-<version>-win-x64.zip` from [Releases](https://github.com/Vorta/zStudio/releases), extract it and run **zStudio.exe**. Keep the **dependencies** folder beside it. It needs Windows 11 x64 and a Direct3D 11 graphics device; .NET is included.
+2. On the welcome screen, under **Work with source project**, choose **Initialize**, enter your retail RECOIL folder and an empty project folder, and choose **Initialize and open**.
+3. Pick a map. Select objects in the view or the World outliner and edit them in the Properties pane; **Apply** accepts an edit, **Undo**/**Redo** take it back.
+4. **Save** writes the changed source files.
+5. **Export → Export all ZBD files…** builds new game files into a folder outside the project (or into your game folder, confirming each file it replaces).
 
-## Compatible games
+## Documentation
 
-| Game | Status |
+| Guide | Covers |
 | --- | --- |
-| **Recoil** | Supported for the format versions tested in the 1998 and 1999 datasets. The worlds of the July and August 1998 demos (GameZ version 13) open read-only. See the capabilities and limits below. |
-| **MechWarrior 3 base game** | This source tree supports version-27 worlds, mission/AI placement, mech assemblies, version-4 motion clips and version-39 animations. See [workflows and limits](docs/mechwarrior3.md); original-game acceptance of edited files has not been established. |
-| Other Zipper Interactive titles | Planned; compatibility has not yet been established. |
+| [Source projects](docs/source-project.md) | initialize and open a project, its layout, saving, check and export, build profiles, texture dithering, editing source files by hand |
+| [Map editor](docs/map-editor.md) | the map workspace: objects, pickups, AI vehicles and networks, VTOL drop windows, zones, terrain, overlays |
+| [3D navigation](docs/3d-navigation.md) | mouse and keyboard, fly camera, views, Hide UI and fullscreen |
+| [Blender extension](blender/zstudio_recoil/README.md) | editing a project's models in Blender |
+| [MCP](docs/mcp.md) | connecting an AI agent |
+| [Compiled files](docs/compiled-files.md) | inspecting and exporting compiled game folders through MCP |
 
-Game files are supplied by the user and are not included. Recognizing an archive does not imply that every editing operation is supported or that edited files have been verified in the original game.
+## Blender
 
-For MechWarrior 3, open the game's `zbd` folder. Whole world has an authored mission picker; the model library supports component export and replacement, and motion members have assembly playback and frame editing. These features share the visible GUI workspace, undo, verified saves and MCP tools. See the [MechWarrior 3 guide](docs/mechwarrior3.md) for the supported editing paths and preview approximations.
+The portable folder includes the **zStudio RECOIL** extension for Blender 5.2 LTS. **Tools → Edit in Blender…** checks out a model with every file it references; **Tools → Update from Blender export…** applies the Blender export as one undoable edit. See the [extension guide](blender/zstudio_recoil/README.md).
 
-The version-28 animation editor supports event and sequence editing, deterministic playback and seeking, preloaded audio, undo/redo and verified Save As. Its preview includes mission starting layouts, authored camera following, texture cycles, transparency, LOD selection and an adjustable-height ground grid for falling debris. The [pickup placement editor](docs/pickup-editor.md) adds selection, axis dragging, exact coordinates and verified archive saving in Whole world. The [model replacement workflow](docs/model-replacement.md) exports components for Blender and imports replacement meshes and textures into supported GameZ v15 files. The [resource editors](docs/resource-editing.md) edit ZAR members and standalone or embedded typed ZRD trees with shared undo/redo and verified saves. Other formats provide browsing, inspection, previews and standard exports. See [the animation editor guide](docs/animation-editor.md) for controls and preview limitations.
+## AI agents (MCP)
 
-The welcome screen's **Work with source project** initializes a source project from the retail files or opens one (also **File → Open workspace…**, Ctrl+O, which accepts only a source project and says what is wrong with any other folder). Editing compiled ZBD files directly is being retired. For Recoil, initializing rebuilds the original `data\` and `gamegen\` source tree from the shipped files, once: resources as text `.zrd` in their recorded folders, animation definitions as `.zad` with their `.zan` keyframe scripts, mission worlds as glTF models, textures and interface images as PNG, the build scripts recovered from `interp.zbd`, and the best-quality WAV of each sound. Only the original files can be unpacked. With the project open, **Export all ZBD files…** or **Export ZBD file** builds game files from the sources, converting sounds to each bank's declared format. Exported files work in the game but are not byte-identical to the shipped ones. See [source projects](docs/source-project.md).
+Enable **Tools → MCP integration…**, copy the configuration it shows into your agent, and the agent connects through `zStudio.exe --mcp`. Access is off until you enable it, works only for your Windows account on this computer, and the agent uses the visible workspace with the same undo, drafts and save checks as you. See [MCP](docs/mcp.md).
 
-Source glTF stores readable node attributes in `extras.recoil`: Boolean flags appear only when true, and `declient` appears only as `"canModify"` or `"clipTo"`. Zones and independent altitude gates remain in the linked model hierarchy. Earlier source formats require fresh extraction from the original ZBD files. See the [source format and flag rules](docs/source-project.md#worlds-and-models).
+## Compatibility
 
-## Run
-
-Download the latest published `zStudio-<version>-win-x64.zip` from [GitHub Releases](https://github.com/Vorta/zStudio/releases), extract it, and run **zStudio.exe**. Keep the adjacent **dependencies** folder with it. Releases include a SHA-256 checksum. The self-contained Windows 11 x64 build does not require Python, Visual Studio, or a separate .NET installation. A Direct3D 11-capable graphics device is needed for 3D previews.
-
-```text
-zStudio.exe
-dependencies/
-```
-
-The dependencies folder contains the application libraries, bundled .NET runtime, documentation, and license notices. The executable and app window use the supplied Studio icon.
-
-zStudio v0.5.0 includes **local MCP access for AI agents**. Enable **Tools → MCP integration…**, copy the displayed configuration into your agent, and connect through `zStudio.exe --mcp`. Connecting and discovering tools stays in the background; the first workspace request opens or attaches to zStudio. Agents share the visible workspace and can browse, inspect, preview, edit, undo, export and save through the same protections as the GUI. See [MCP setup and tool guide](docs/mcp.md).
-
-Opening a folder of compiled game files (the folder containing `image.zbd` and the mission directories, such as `zbd_1999`) is left to MCP's `open_root` while compiled editing is retired. The GUI opens only source projects: **File → Open workspace…**, **File → Recent folders**, a folder dropped on the window and a folder given on the command line refuse any other folder, and dropped or command-line files are refused. In a compiled root opened that way, Files, Assets and Search browse its files: double-click a file in Files to open it and switch to Assets; open files are marked in Files and have a close button. Filter assets on the left, or use the Search tab across the root. Folder scanning includes unknown files, which can be inspected as raw bytes.
-
-## Configure MCP for Codex
-
-MCP requires **zStudio v0.5.0 or later** and Codex running locally on Windows under the same Windows account as zStudio. Keep `zStudio.exe` and its `dependencies` folder together at a stable installation path.
-
-1. Launch zStudio once, open **Tools → MCP integration…**, and check **Enable local MCP access**. Access is off by default. You can then close zStudio; the preference is retained.
-2. Open your Codex user configuration, normally `%USERPROFILE%\.codex\config.toml` (for example, `C:\Users\YourName\.codex\config.toml`). If you use a custom `CODEX_HOME`, use its `config.toml` instead. Add the block below, replacing the executable path with your installation path. Update an existing `mcp_servers.zstudio` section rather than adding a duplicate.
-
-   ```toml
-   [mcp_servers.zstudio]
-   command = 'D:\Tools\zStudio\zStudio.exe'
-   args = ["--mcp"]
-   enabled = true
-   startup_timeout_sec = 60
-   tool_timeout_sec = 120
-   ```
-
-   Single quotes in the TOML path preserve Windows backslashes. The **Copy configuration** button in zStudio provides generic MCP JSON; use the TOML form above for Codex's `config.toml`.
-
-3. Restart Codex to load the configuration. If the Codex CLI is installed, run `codex mcp get zstudio` to check the executable path and arguments. This confirms configuration; the first workspace request below checks the actual connection.
-4. Ask Codex: **“Use zStudio MCP to show the current workspace state.”** zStudio should open on this first workspace request, or attach to the already running instance of the configured installation. Then try: **“Open my ZBD root at D:\Games\Recoil\zbd, open m1/gamez.zbd in Whole world, and inspect its pickups without changing anything.”** Replace the root with your game-data folder.
-
-As an alternative to adding the configuration block manually, register the server from PowerShell with the Codex CLI:
-
-```powershell
-codex mcp add zstudio -- 'D:\Tools\zStudio\zStudio.exe' --mcp
-codex mcp get zstudio
-```
-
-You can then add the optional timeout values from the TOML example. Codex's supported configuration and CLI commands are documented in the [official MCP guide](https://developers.openai.com/codex/mcp).
-
-Starting Codex and discovering tools leaves the zStudio window closed. Only a workspace request launches it. Agents work in the visible GUI, sharing document selections, edits, undo history and saves. Camera commands move the viewport without taking over your physical mouse. Closing Codex leaves zStudio open.
-
-If a workspace call reports `access_disabled`, enable access in **Tools → MCP integration…** yourself. If you move or update the portable installation, check the configured executable path and restart the Codex connection. After **Disconnect clients**, restart the connection as well. If several instances of that installation are open, close the extra instances or use `args = ["--mcp", "--instance", "INSTANCE_ID"]` with the desired ID from the integration window; that ID is valid only for that running instance. To revoke access, uncheck **Enable local MCP access** in zStudio. See the [full MCP guide](docs/mcp.md) for tool coverage, drafts, save protections and connection details.
-
-## Available tools
-
-The compiled-file tools below apply to game folders opened through MCP `open_root`; the GUI works on source projects.
-
-| Content | Browse, inspect and edit | Export and save |
-| --- | --- | --- |
-| Texture packs | PNG replacement/addition, explicit sibling variants, batch undo, thumbnails, zoom/pan, channels and palettes | PNG with alpha, JSON; verified Save and Save As |
-| Sound archives | Member list, PCM waveform, play/pause/stop, seeking, cue points | Original WAV/member bytes, JSON |
-| ZAR archives | Import, replace, rename, duplicate, delete and reorder members; create ZRD resources | Edited member bytes and JSON; verified Save and Save As |
-| ZRD data | Edit typed nested trees, scalar values, raw float bits and ordered array structure | Edited bytes and JSON; verified Save and Save As, including the owning archive |
-| Prepared scripts | Edit ordered entries, instructions, arguments and timestamps with pinned Properties and undo | Text and JSON; verified Save and Save As |
-| Animation/effects | Edit events, sequences, references and keyframes; scrub motion/effects/audio previews in isolation or mission context | Verified new ZBD with Save As; edited JSON |
-| GameZ | Individual models, assembled static worlds, scene tree, materials, texture references and node properties, including the 1998 demos' version-13 worlds (read-only); replace supported v15/v27 models and textures | OBJ/MTL/PNG component bundles, JSON; verified model/texture Save and Save As |
-| MW3 mech libraries | Member-scoped hierarchy and mesh inspection, textured previews and explicit local-mesh replacement | OBJ/MTL/PNG component bundles; shared archive undo and verified Save As |
-| MW3 motion clips | Assembly binding, playback/seek, loop duration and translation/quaternion frame edits | Original/edited member bytes and JSON; shared archive undo and verified Save As |
-| Mission pickups | Select pickups in Whole world, show bounds, after Unlock editing type coordinates or show Move/Rotate handles, Apply, undo/redo; matching difficulties move and turn together | Save positions and rotations to their owning ZBD archive; Save As; optional backups (an MCP-set preference) |
-| World comparison | Tools → Compare worlds…: two GameZ worlds (such as shipped and rebuilt) merged by parent-child structure, changed/missing/extra nodes, differing fields and name lookups that resolve elsewhere | — |
-| AI nodes and AIV tanks | Inspect source identities and placements in 3D cards; edit XYZ (and a tank's Y heading) with explicit confirmation and undo; uniquely matched tank difficulties move together | Position/heading patches to owning archives; verified Save and Save As |
-
-In a compiled root, the workspace uses resizable navigation, preview and tool panes, with Properties in a separate window (a source map uses the [source map editor](docs/scene-inspection.md#source-map-editor) instead). The Navigator tabs are Files, Assets, Search and Document scene. On wide windows, Files automatically becomes its own resizable column to the left of the remaining tabs, leaving at least 600 DIP for the central preview and room for the animation Inspector. At smaller widths it returns to the first tab. Both column widths, tree state and the active section are retained. Assets appears only while a file is open; Document scene appears only when the active file contains a scene hierarchy. Files marks open documents with a blue dot and bold filename, underlines the active document, adds an asterisk for unsaved changes, and provides a close button on each open file row. Double-click a file or press Enter to open it and switch to Assets; use Search for root-wide asset searches. Related references navigate to matching assets. Files changed externally get a reload banner. Settings retain theme, pane widths, window size, and recent roots.
-
-Textures open at 1:1 (100%) with the scroll position reset. At 1:1, each texture pixel occupies one physical screen pixel, regardless of Windows display scaling. Texture controls: wheel to zoom, left- or middle-button drag to pan, Fit and 1:1, RGBA/RGB/individual channels. Drag the texture or the surrounding preview background when the image extends beyond the viewport; scrollbars remain available.
-
-3D textures display their original colors without added scene lighting. Middle-button drag orbits around the surface under the initial press, Shift + middle-button drag pans, and Ctrl + middle-button drag or the wheel zooms toward the pointer at a speed based on the pointed surface; orthographic views scale about the pointer. Zoom refreshes this speed as you move, retains it over empty space and continues past the old target. Ctrl + Shift + middle-button drag dollies. Shift/Ctrl can be pressed or released during the drag in either order. Numpad views, perspective/orthographic switching and framing shortcuts are available, with menu equivalents in a source map's **Perspective** chip. See [3D navigation](docs/3d-navigation.md) for the complete controls. Select a node in the view or Scene tree to inspect or isolate it. Wireframe, textures, bounds, fly mode, LOD choices, and texture variants are available. **LOD 0 · Highest detail** is the default. Higher numbers select lower-detail distance bands separately for each object; objects with fewer variants keep their last available level. A model belonging to an LOD group previews that group's selected variant. The animation toolbar has the same picker, also applied to its optional mission level. The camera-following horizon is optional in the preview; OBJ world exports include it.
-
-Whole world also offers [surface highlights](docs/world-highlights.md), six icon buttons after Bounds (in a source map, the command bar's **Overlay** group) that tint matching surfaces 50%: **Non-default soils** (yellow), **CanModify** (green), **ClipTo** (red), **Object zones** and **Polygon zones** (one color per zone) and **Landmarks** (magenta). CanModify and ClipTo can be combined; the others are exclusive modes. Clicking a checked button turns it off. Tints preserve textures and transparency and do not change source data.
-
-Whole world also provides [AI network visualization](docs/ai-networks.md): node markers, directed connections, filtering by source network, through-geometry or depth-tested drawing, and pinned read-only Properties. Enable **AI nodes** in the toolbar or its overflow menu. This displays authored paths without simulating AI behavior.
-
-Click **Fly camera** in a model or **Whole world** preview to capture the mouse and keyboard for freecam navigation. The cursor is hidden while flying; the highlighted button and viewer overlay show that freecam is active, together with the current speed.
-
-| Freecam control | Action |
+| Game | Support |
 | --- | --- |
-| **W / S** | Move forward/backward along the viewing direction, including its vertical angle. |
-| **A / D** | Strafe left/right horizontally. |
-| **Space / C** | Move up/down along the world's vertical axis. |
-| **Move the mouse** | Look around without holding a mouse button. |
-| **Mouse wheel** | Increase/decrease movement speed; scrolling alone does not move the camera. |
-| **Escape** | Exit freecam and restore ordinary controls at the current camera position and direction. |
+| **RECOIL** (1998 and 1999 releases) | Source projects: reconstruct, edit, export |
+| RECOIL July and August 1998 demos | Read-only inspection through MCP ([Compiled files](docs/compiled-files.md)) |
+| MechWarrior 3 | Read-only inspection through MCP ([Compiled files](docs/compiled-files.md)) |
 
-Movement starts and stops with the keys, keeps the same speed near and far from surfaces, and does not accelerate diagonally. Speed is retained when leaving and re-entering freecam until the loaded preview changes. Switching away from the application, losing capture, replacing or hiding the preview, or closing the window also releases input. The camera can pass through geometry. Freecam applies to model and Whole world previews; animation previews use the shared Blender-style controls described above.
+Game files are not included; use your own copy of the game.
 
-3D cameras stay upright relative to world +Y, with free horizontal rotation and vertical tilt limited to ±89°. Named top/bottom views are exactly axis-aligned; free orbit safely leaves those fixed poses. Orbit preserves its target and Fly preserves its position when rotating. View-cube transitions, inertia and authored-camera previews also stay upright; saved animation camera data is unchanged. This does not add terrain collision or lock the camera's height. Depth clipping follows the geometry in view, independently of the small navigation clearance, so entering a map's bounds does not destroy depth precision or prevent close inspection.
+## Limits
 
-The animation preview toolbar starts with **LOD**, difficulty and the **Frame** icon, followed by icon toggles for Map, Grid, Ground collision, Horizon, Effects and Follow camera. Enabled options use an accent-filled background; tooltips explain each icon and its current state. **Height** sits next to Grid and accepts −999 through 999 game units, including fractions. Positive values raise the animation and negative values lower it. Valid values apply as you type, preserving the playhead and prior playback state while recalculating contact and duration. Unfinished or invalid text keeps the last valid height; an intentional field boundary, Enter or Escape restores its display. Height is preview-only. Grid and collision are independently enabled by default: hiding the grid leaves collision active. The plane stays at preview-world Y=0, equivalent to authored Y=−Height. This is a preview plane, not mission-terrain or camera collision. Grid, Height and collision stay together in toolbar overflow.
+- Exported files work in the game but are not byte-identical to the shipped ones ([differences](docs/source-project.md#differences-from-the-shipped-files)). Not every kind of edit has been tested in the game.
+- Some edits are available only through MCP, such as adding a model to a world or moving an object to another parent.
+- Previews show each mission's starting scene; they don't simulate gameplay.
+- The portable build is unsigned.
 
-Animation controls: select an asset and press **Space** to play/pause. Play/pause, stop and frame-step icons sit beside the seek bar, with a current/total frame readout. Finite preview duration is calculated automatically; looping and open-ended programs use a labeled, adjustable preview range. Speed, Replay preview, Mute and volume sit below the transport. **Settings** contains mission/root information, seed, conditions, activation points, preview range and support. Scene selection and root binding are in the toolbar’s **Scene** menu; presentation and audio controls are not duplicated in Settings. Right-click an event and choose **Properties…** to edit its typed fields in a separate window; add, duplicate, delete and reorder events or sequences. Runtime and reset/stop phases preview separately. Audio starts unmuted at 50% volume. **Ctrl+S** saves a new animation pack; **Ctrl+Z / Ctrl+Y** undo/redo edits. See [the animation editor guide and engine evidence](docs/animation-editor.md).
+## Contributing
 
-Shortcuts: **Ctrl+O** opens a workspace (a source project), **Ctrl+W** closes the active file, and **F5** reloads. **Escape** first exits active freecam or cancels an active pickup drag. Otherwise, **Escape** cancels an active export or validation. Indexing runs to completion unless the root changes or the application closes. The **Export** menu builds game files from the project's sources: every output is built, re-parsed and staged first, and nothing is written if any fails. Existing game files in the destination are replaced only after you confirm them. An export canceled before it writes leaves the destination as it was; one canceled while replacing files finishes or restores them.
-
-The Windows 11 Fluent workspace places **Files / Assets / Search / Document scene** on the left, the preview and persistent transport in the center, and **Sequences / Settings / References** on the right for animations. **Properties** opens in one reusable, resizable window through an item’s context menu or **Alt+Enter**. It stays on the explicitly opened item while you browse, including other open files. Its title identifies the owning file and record. Sequences opens by default when entering the animation viewer; switching animations retains the selected right-hand tab. Right-click an entry, sequence or event in Sequences and choose Properties to inspect its stored fields without changing tabs. Properties is also available for assets, scene objects and selected Whole world pickups. Undo/Redo icons share the Properties breadcrumb row at the top right; there is no bottom button row. Accepted edits update the owning document and its undo history; closing the window keeps them, and saving writes them to disk. Ctrl+S in Properties saves its pinned document. Selecting Cleanup does not change the preview phase. Numeric/vector/keyframe inputs keep unfinished drafts, show validation inline and support Escape to restore the stored value. The current file name and Undo, Redo and Save icons form a centered group in the title bar; in a source map the title shows the map's name (with an **Edited** pill while there are unsaved changes) and **Save**, **Undo** and **Redo** live in its command bar. Save as remains in File, the ZBD exports and Check source project are in the **Export** menu, and Validate remains in Tools. Use **File → Open workspace…** or **Ctrl+O** to open another source project.
-
-The resizable bottom tools are **Dispatch**, **Event log**, **Problems**, **Runtime**, **Related** and **Bytes**. Dispatch is the observed timeline; Event log retains distinct dispatch occurrences and exposes its history limit. Problems separates file/operation, preview, resource and support diagnostics. Runtime shows current sequence states and preview context. Related contains name-based matches. Bytes identifies the selected original source record and its offset, distinct from edited Properties and live simulation data.
-
-Outside source projects, **View → Workspace preset** offers Inspect, Edit, Debug or Focus preview; controls are always compact. Pane splitters, Inspector groups and selected tabs are remembered. Narrow windows temporarily collapse panes; status-bar buttons reopen them. **View → Reset layout** (also hidden in source projects) restores pane and tab defaults: Files, Sequences and Dispatch for animations, or Files and Related for other viewers. The single title/menu row has full-height minimize, maximize/restore and close controls, with Windows system commands, caption dragging, resizing and the maximize/Snap hit region retained.
-
-**Tools → Validate source file on disk** checks the source file on disk, not pending edits, and adds findings to Problems. Opening another root clears file/operation diagnostics. See [the animation editor guide](docs/animation-editor.md) for detailed controls and preview limitations.
-
-## Build and verify
-
-Open `zStudio.slnx` in Visual Studio 2026 with the .NET desktop workload, and select `zStudio.Desktop` as the startup project. SDK and package versions are pinned.
-
-```powershell
-dotnet build zStudio.slnx -c Release
-dotnet test --solution zStudio.slnx -c Release
-./tools/publish.ps1
-```
-
-The solution separates binary readers/exporters (`zStudio.Core`), Direct3D preview (`zStudio.Rendering`), WPF/audio (`zStudio.Desktop`), tests, and verification runners. Project folders, assemblies and namespaces use `zStudio.*`. Settings and logs live in `%LOCALAPPDATA%/zStudio`; previous-version settings are not imported. Normal builds and unit tests require no game files or Python. Optional corpus and GPU/audio checks use your own game data. See [architecture and format evidence](docs/architecture.md), [verification commands](docs/testing.md), and [current status](docs/status.md).
-
-## Current limits
-
-In a source map, objects are edited from the [selected-object card](docs/scene-inspection.md#source-world-object-editing) (position, rotation, scale, name, model, flags and zone, plus Copy and Delete); adding a model to a world is available only through MCP for now. The compiled editors (version-28 animation entries with Save As to a new file, Whole world [pickup](docs/pickup-editor.md), AIV vehicle and AI-node placements, texture PNG import and prepared-script instructions) work only in roots opened through MCP `open_root`. General vehicle/turret behavior, directly authored GameZ pickup placements, AI link editing and creation of whole animation entries remain outside the supported editing tools; texture and script editing execute no game behavior. Animation preview approximates physics, beams, lighting, fog, camera parameters, screen effects and audio; game callbacks are trace-only. LOD selection is manual; camera-distance fades are not simulated. Edited files have not yet been tested in the original game. Missing textures are reported; unresolved animation texture cards stay hidden. Six 1999 missions reference some textures absent from their own packs.
-
-Unknown versions remain available for raw inspection. The snapshot reader limits individual files to 512 MiB, directories/tables (archive members, texture and script records, GameZ textures/materials/models/nodes/world partition cells) to 65,536 entries, GameZ polygon/light records including point-light vertices, material-cycle texture indices and node index references to 262,144 each per file, model vertices/normals/morphs to 1,048,576 and polygon corner elements to 4,194,304 per file, and decoded MW3 motion samples to 2,097,152 per archive; larger values open for raw inspection with a diagnostic instead of being materialized. JSON exports are intended for inspection and external tools; they are not the Python CLI repack schema. The portable build is unsigned and has not yet been checked on an independent clean Windows machine.
-
-## Contributing and future development
-
-Bug reports, feature requests and pull requests are welcome. Use the [issue forms](https://github.com/Vorta/zStudio/issues/new/choose), and read [CONTRIBUTING.md](CONTRIBUTING.md) before proposing code changes. Include the game/data version, zStudio version and asset record identity in reports. Please do not upload game archives or extracted game assets.
-
-Future work includes additional Zipper Interactive games and broader content editing. A compatibility request should identify the game and format evidence; support remains unconfirmed until tested. [Release and maintenance instructions](docs/releasing.md) describe versioning, CI and repository protections.
-
-The former Python unpacker/repacker is archived separately from this desktop repository. An optional Python utility remains for independent export checks; it is not needed to build or run zStudio.
+Bug reports, feature requests and pull requests are welcome. Use the [issue forms](https://github.com/Vorta/zStudio/issues/new/choose) and read [CONTRIBUTING.md](CONTRIBUTING.md). Include the game version and zStudio version in reports, and don't upload game files or extracted game assets.
 
 ## License
 
-zStudio is licensed under the [MIT License](LICENSE), copyright © 2026 Vorta. Game content retains its original ownership. This project is independent of Zipper Interactive and is not an official game tool.
-
-Game data is not included in releases. Dependency notices are in [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
+zStudio is licensed under the [MIT License](LICENSE), copyright © 2026 Vorta. Game content retains its original ownership. zStudio is independent of Zipper Interactive and is not an official game tool. Dependency notices are in [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
