@@ -212,7 +212,7 @@ internal static class GuiReviewCapture
                     for (int x = -36; x <= 36 && !selected; x += 2)
                     {
                         var p = point + new System.Windows.Vector(x, y);
-                        var hit = scene.HitTestScene(p).FirstOrDefault();
+                        var hit = scene.HitTestScene(p).FirstOrDefault(h => h.Mesh is { IsDepthClipEnabled: true });
                         if (hit?.Mesh is not { IsLine: false } || Vector3.Distance(hit.Point, actor.Pickup!.Position) > 3) continue;
                         scene.HandleScenePointerDown(p, new MouseButtonEventArgs(Mouse.PrimaryDevice, Environment.TickCount, MouseButton.Left));
                         selected = scene.SelectedPickupRoot == actor.Root;

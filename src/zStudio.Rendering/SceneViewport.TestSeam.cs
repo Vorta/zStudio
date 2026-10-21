@@ -216,7 +216,7 @@ public sealed partial class SceneViewport
     internal int RenderedTriangleCount => EnumerateRenderMeshes().Where(m => m.Role != RenderMeshRole.Overlay && m.Visible)
         .Sum(m => m.Indices.Count / 3 * (m.Instances?.Count ?? 1));
 
-    /// <summary>Ray hits against the rendered scene with the current camera's render context, nearest first.</summary>
+    /// <summary>Ray hits against every hit-testable node of the rendered scene (horizon backdrop and overlays included), nearest first.</summary>
     internal IReadOnlyList<RenderHit> HitTestScene(Point3D origin, Vector3D direction)
     {
         if (viewport.RenderContext is not { } context || direction.LengthSquared <= 0) return [];
@@ -229,7 +229,7 @@ public sealed partial class SceneViewport
             .Select(h => new RenderHit(h.ModelHit is GeometryModel3D node ? Handle(node) : null, h.PointHit, h.NormalAtHit, h.Distance, h.Tag as int?)).ToArray();
     }
 
-    /// <summary>Hits under a render-surface point (DIPs), along the current camera's ray.</summary>
+    /// <summary>Hits under a render-surface point (DIPs) along the current camera's ray from the eye, not from the near plane.</summary>
     internal IReadOnlyList<RenderHit> HitTestScene(Point point) => TryCameraRay(point, out var origin, out var direction, true) ? HitTestScene(origin, direction) : [];
 
     private RenderMeshHandle Handle(GeometryModel3D node) => new(node, node is MeshGeometryModel3D mesh && meshes.Contains(mesh) ? RenderMeshRole.Scene

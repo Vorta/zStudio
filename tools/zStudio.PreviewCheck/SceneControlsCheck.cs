@@ -59,7 +59,9 @@ internal static class SceneControlsCheck
                 for (int y = 3; y <= 7 && !found; y++)
                     for (int x = 3; x <= 7 && !found; x++)
                     {
-                        if (scene.HitTestScene(new Point(viewport.ActualWidth * x / 10, viewport.ActualHeight * y / 10)).FirstOrDefault() is { } hit) { surface = hit.Point; found = true; }
+                        // The map surface navigation itself uses (never the horizon backdrop).
+                        if (scene.TryNavigationSurface(new Point(viewport.ActualWidth * x / 10, viewport.ActualHeight * y / 10), out var hit))
+                        { surface = new((float)hit.X, (float)hit.Y, (float)hit.Z); found = true; }
                     }
                 if (!found) throw new InvalidOperationException("Could not find a map surface for navigation checks.");
                 double height = Math.Max(1, camera.LookDirection.Length * 0.01);
