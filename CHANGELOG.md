@@ -4,6 +4,9 @@ Version numbers follow `MAJOR.MINOR.PATCH`; the 0.x series is under active devel
 
 ## 0.9.5 — Unreleased
 
+- Edited positions of AI network nodes, AIV vehicles and pickups, and AIV headings, are saved with one decimal, as the shipped files write them (pickup rotations, in radians, with four); drags snap to that precision, so the view shows what is saved. Values an edit does not change keep their text.
+- Reconstruction keeps a texture's authored shape: the copy chosen is the shape the pack with the most room holds, then the largest copy of it. Before, 42 strips of the 1999 release (such as `sonic06`, 128 × 16) became the stretched squares of the smaller packs (64 × 64). Reconstruct affected projects to get the strips back.
+
 ## 0.9.4 — 2026-10-21
 
 - Source maps can create pickups through Tools → Add pickup… or the Pickups section's context menu. Choose a catalog type, position, rotation, amount, respawn delay and one or all difficulties. The shared source workspace verifies that the template can spawn, supports undo/redo and saves the owning resource files without creating archives.

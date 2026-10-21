@@ -212,6 +212,8 @@ public sealed partial class SceneViewport
             ObjectDraftDragged?.Invoke(drag);
             return;
         }
+        // A placement drag snaps to the precision an edit stores, so the card and preview show what is saved.
+        if (transformSource is { } source && placementEdits != null) value = placementEdits.Stored(source, value);
         transformDraft = value; TransformDraftChanged?.Invoke(value);
         PickupMovePreviewed?.Invoke(value.Position);
     }

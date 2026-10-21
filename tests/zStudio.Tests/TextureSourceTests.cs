@@ -12,6 +12,16 @@ public sealed class TextureSourceTests
 {
     private static CancellationToken Token => TestContext.Current.CancellationToken;
 
+    [Fact]
+    public void ReconstructionKeepsTheShapeOfThePackWithTheMostRoom()
+    {
+        (long, int) texture4 = (4L << 20, 1), rtexture2 = (2L << 20, 0), rtexture4 = (4L << 20, 0);
+        // 1999 sonic06: the 128 x 16 strip, not rtexture2's 64 x 64 square that only stretches it (twice its texels).
+        Assert.Equal(1, SourceExtractor.BestTextureVariant([(64, 64, rtexture2, false), (128, 16, texture4, true)]));
+        // m5 swall3: equal areas; the wider shape of the packs with more room, then direct colour within that shape.
+        Assert.Equal(2, SourceExtractor.BestTextureVariant([(128, 128, rtexture2, false), (256, 64, texture4, true), (256, 64, rtexture4, false)]));
+    }
+
     private static DecodedImage Image(int width, int height, Func<int, int, (byte R, byte G, byte B, byte A)> pixel)
     {
         byte[] rgba = new byte[width * height * 4];

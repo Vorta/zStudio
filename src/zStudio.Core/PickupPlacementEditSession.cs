@@ -221,6 +221,21 @@ public sealed partial class PickupPlacementEditSession
     public PickupPlacementScope Scope(MissionPickupSource source)
         => IndexedScope(source);
     public bool MoveTo(MissionPickupSource source, Vector3 position) => TransformTo(source, Transform(source) with { Position = position });
+    /// <summary>
+    /// <paramref name="value"/> as an edit of <paramref name="source"/> stores it (<see cref="PlacementPrecision"/>): changed
+    /// positions and AIV headings at one decimal, changed pickup rotations at four; unchanged components as they are.
+    /// </summary>
+    public PlacementTransform Stored(MissionPickupSource source, PlacementTransform value)
+    {
+        var current = Transform(source);
+        var rotation = RotationKind(source) switch
+        {
+            PlacementRotationKind.EulerRadians => PlacementPrecision.Changed(value.Rotation, current.Rotation, PlacementPrecision.RadianDecimals),
+            PlacementRotationKind.HeadingDegrees => PlacementPrecision.Changed(value.Rotation, current.Rotation, PlacementPrecision.HeadingDecimals),
+            _ => value.Rotation
+        };
+        return new(PlacementPrecision.Position(value.Position, current.Position), rotation);
+    }
     public bool TransformTo(MissionPickupSource source, PlacementTransform transform)
     {
         if (ReadOnlyReason is { } reason) throw new InvalidOperationException(reason);
@@ -239,7 +254,9 @@ public sealed partial class PickupPlacementEditSession
     /// <summary>Validate and derive linked transforms without accepting an edit or changing history.</summary>
     public IReadOnlyDictionary<MissionPickupSource, PlacementTransform> PreviewTransform(MissionPickupSource source, PlacementTransform transform)
     {
-        var position = transform.Position; RequireFinite(position); RequireFinite(transform.Rotation);
+        RequireFinite(transform.Position); RequireFinite(transform.Rotation);
+        transform = Stored(source, transform);
+        var position = transform.Position;
         var kind = RotationKind(source);
         if (kind == PlacementRotationKind.None && transform.Rotation != rotations[source] ||
             kind == PlacementRotationKind.HeadingDegrees && (transform.Rotation.X != 0 || transform.Rotation.Z != 0))
@@ -255,7 +272,7 @@ public sealed partial class PickupPlacementEditSession
         // A counterpart where the source is takes the requested values exactly: arithmetic on the delta would round them
         // apart, and the records would no longer match as counterparts.
         var after = Scope(source).Sources.ToDictionary(s => s, s => sourceComparer.Equals(s, source) || positions[s] == positions[source] && rotations[s] == rotations[source] ? transform
-            : new PlacementTransform(positions[s] + delta, rotations[s] + rotationDelta), sourceComparer);
+            : Stored(s, new PlacementTransform(positions[s] + delta, rotations[s] + rotationDelta)), sourceComparer);
         foreach (var value in after.Values) { RequireFinite(value.Position); RequireFinite(value.Rotation); }
         return after;
     }

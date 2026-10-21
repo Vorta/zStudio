@@ -276,18 +276,18 @@ internal static class SceneInspectionMcpChecks
             }
             Assert.Equal(copy["text"]!.GetValue<string>(), (await Card("copy", new() { ["field"] = "Authored placement XYZ" }))["text"]!.GetValue<string>());
             await Edit("apply", new() { ["token"] = token }, "invalid_argument"); Assert.False(doc.IsDirty);
-            var valid = await Edit("set", new() { ["token"] = token, ["position"] = new JsonArray("5.125", "6", "7") });
+            var valid = await Edit("set", new() { ["token"] = token, ["position"] = new JsonArray("5.1", "6", "7") });
             token = valid["draft"]!["token"]!.GetValue<string>();
             Assert.False(doc.IsDirty); Assert.Equal(new Vector3(1, 2, 3), edits.Position(edits.OtherCoordinates[0].Source));
-            Assert.Equal(new Vector3(5.125f, 6, 7), viewport.AiNetworks.Networks[0].Nodes[0].Position);
+            Assert.Equal(new Vector3(5.1f, 6, 7), viewport.AiNetworks.Networks[0].Nodes[0].Position);
             Assert.Equal(graph.Id, viewport.AiNetworks.Id); // Drafts do not expire source identities.
             await Edit("apply", new() { ["token"] = token });
             Assert.All(inlinePosition.Inputs, input => Assert.False(input.IsReadOnly)); // Still editable: the draft ended, the placement did not lock.
-            Assert.Equal(new[] { "5.125", "6", "7" }, inlinePosition.Inputs.Select(input => input.Text).ToArray());
+            Assert.Equal(new[] { "5.1", "6", "7" }, inlinePosition.Inputs.Select(input => input.Text).ToArray());
             Assert.Null(Get("inspectionDraft")); // Finished drafts must not retain a replaced viewport.
-            Assert.True(doc.IsDirty); Assert.Equal(new Vector3(5.125f, 6, 7), edits.Position(edits.OtherCoordinates[0].Source));
+            Assert.True(doc.IsDirty); Assert.Equal(new Vector3(5.1f, 6, 7), edits.Position(edits.OtherCoordinates[0].Source));
             Assert.Equal(original, File.ReadAllBytes(archivePath));
-            Assert.Equal(new Vector3(5.125f, 6, 7), viewport.AiNetworks.Networks[0].Nodes[0].Position);
+            Assert.Equal(new Vector3(5.1f, 6, 7), viewport.AiNetworks.Networks[0].Nodes[0].Position);
             await Lock(true); Assert.False(unlock.IsChecked);
             await Edit("begin", error: "locked");
             await Call("scene_inspect", new() { ["preview"] = preview, ["target"] = target }, "stale_record");
@@ -336,7 +336,7 @@ internal static class SceneInspectionMcpChecks
             token = rotated["draft"]!["token"]!.GetValue<string>();
             Assert.True(viewport.TransformHandlesVisible); Assert.Equal("rotate", viewport.TransformMode);
             Assert.False(doc.IsDirty); Assert.Equal(record.OriginalPosition, edits.Position(record.Source));
-            var pending = inspectionCard.DraftTransform();
+            var pending = edits.Stored(record.Source, inspectionCard.DraftTransform()); // The preview shows the stored (rounded) values.
             var expectedDelta = pending.DeltaFrom(new(record.OriginalPosition, record.Rotation), PlacementRotationKind.EulerRadians);
             Assert.Equal(instances.Select(p => p.Transform * expectedDelta), mesh.Instances);
             AssertSelectionBox(ownerTransform * expectedDelta, new(-2, 0, 0), new(9, 3, 0));

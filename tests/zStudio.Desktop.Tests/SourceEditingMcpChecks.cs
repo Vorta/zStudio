@@ -63,7 +63,7 @@ internal static class SourceEditingMcpChecks
             DateTime resourceStamp = File.GetLastWriteTimeUtc(resourcePath);
             var placementSource = doc.PickupEdits!.Records.First(r => r.Type == "HEMORTAR_AMMO" && r.Source.ResourceName == "PUPPIES.ZRD").Source;
             var planner = typeof(MainWindow).GetMethod("PlanSourcePlacement", BindingFlags.Static | BindingFlags.NonPublic)!;
-            var placement = new zStudio.Core.PlacementTransform(new(20.25f, 8, -5), System.Numerics.Vector3.Zero);
+            var placement = new zStudio.Core.PlacementTransform(new(20.3f, 8, -5), System.Numerics.Vector3.Zero);
             long beforeRevision = doc.SourceWorld!.Workspace.Revision;
             try
             {
@@ -238,22 +238,22 @@ internal static class SourceEditingMcpChecks
             pickups = await Job("pickups", new() { ["document"] = Id(doc) });
             ammo = pickups["items"]!.AsArray().First(p => p!["Type"]!.GetValue<string>() == "HEMORTAR_AMMO" && p["source"]!["ResourceName"]!.GetValue<string>() == "PUPPIES.ZRD")!;
 
-            var moved = Document(await Call("pickup_move", new() { ["document"] = Id(doc), ["revision"] = doc.Revision, ["source"] = ammo["source"]!.DeepClone(), ["x"] = 20.25, ["y"] = 8, ["z"] = -5 }));
+            var moved = Document(await Call("pickup_move", new() { ["document"] = Id(doc), ["revision"] = doc.Revision, ["source"] = ammo["source"]!.DeepClone(), ["x"] = 20.3, ["y"] = 8, ["z"] = -5 }));
             Assert.Same(doc, moved); Assert.False(doc.IsDisposed); Assert.False(moved.EditingLocked);
             var workspace = moved.SourceWorld!.Workspace;
             Assert.Equal(["data/m1/zrdr/puppies.zrd", "data/m1/zrdr/puppies_easy.zrd"], workspace.DirtyFiles);
-            Assert.Equal(Default.Replace("( 12 8 -5 )", "( 20.25 8 -5 )"), Text(workspace.Read("data/m1/zrdr/puppies.zrd")));
-            Assert.Equal(Easy.Replace("( 12 8 -5 )", "( 20.25 8 -5 )"), Text(workspace.Read("data/m1/zrdr/puppies_easy.zrd")));
+            Assert.Equal(Default.Replace("( 12 8 -5 )", "( 20.3 8 -5 )"), Text(workspace.Read("data/m1/zrdr/puppies.zrd")));
+            Assert.Equal(Easy.Replace("( 12 8 -5 )", "( 20.3 8 -5 )"), Text(workspace.Read("data/m1/zrdr/puppies_easy.zrd")));
             Assert.StartsWith("# pickups", await File.ReadAllTextAsync(fixture.Path("data/m1/zrdr/puppies.zrd"), token));
             // The pending change is visible as a line diff of the working source against the disk.
             var changes = await Call("source_changes", new() { ["file"] = "data/m1/zrdr/puppies.zrd" });
             Assert.Equal(2, changes["workspace"]!["dirtyFileCount"]!.GetValue<int>());
             var lines = changes["diff"]!["Lines"]!.AsArray().Select(l => l!["Kind"]!.GetValue<string>() + l["Text"]!.GetValue<string>()).ToArray();
             Assert.Contains("-  ( HEMORTAR_AMMO 1 ( 12 8 -5 ) ( 0.0 0.0 0.0 ) 12.5 )   # hand-written", lines);
-            Assert.Contains("+  ( HEMORTAR_AMMO 1 ( 20.25 8 -5 ) ( 0.0 0.0 0.0 ) 12.5 )   # hand-written", lines);
+            Assert.Contains("+  ( HEMORTAR_AMMO 1 ( 20.3 8 -5 ) ( 0.0 0.0 0.0 ) 12.5 )   # hand-written", lines);
             // The evaluated sources hold the new position for both difficulties.
             var after = await Job("pickups", new() { ["document"] = Id(moved) });
-            Assert.All(after["items"]!.AsArray().Where(p => p!["Type"]!.GetValue<string>() == "HEMORTAR_AMMO"), p => Assert.Equal(20.25f, p!["OriginalPosition"]!["X"]!.GetValue<float>()));
+            Assert.All(after["items"]!.AsArray().Where(p => p!["Type"]!.GetValue<string>() == "HEMORTAR_AMMO"), p => Assert.Equal(20.3f, p!["OriginalPosition"]!["X"]!.GetValue<float>()));
 
             // Properties commits a typed position through the same source edit: its own committing draft does not block it.
             // (The fixture has no pickup models, so the pickup is opened in Properties as the scene's card opens it.)
@@ -295,7 +295,7 @@ internal static class SourceEditingMcpChecks
             await ((Task)typeof(MainWindow).GetField("sourceWorldWork", hidden)!.GetValue(main)!).WaitAsync(token);
             moved = main.ViewModel.Documents.Single(d => d.SourceWorld != null);
             main.ViewModel.SelectedDocument = moved; await Preview();
-            Assert.Equal(Default.Replace("( 12 8 -5 )", "( 20.25 8 -5 )"), Text(workspace.Read("data/m1/zrdr/puppies.zrd")));
+            Assert.Equal(Default.Replace("( 12 8 -5 )", "( 20.3 8 -5 )"), Text(workspace.Read("data/m1/zrdr/puppies.zrd")));
             string restoredArchive = Path.Combine(moved.SourceBuild!.Root, Path.GetRelativePath(typed.SourceBuild!.Root, pinned["source_archive"]!.GetValue<string>()));
             var undoneSource = moved.PickupEdits!.Records.Single(r => r.Source.ArchivePath.Equals(restoredArchive, StringComparison.OrdinalIgnoreCase)
                 && r.Source.ResourceName == ammoSource.ResourceName && r.Source.AssetIndex == ammoSource.AssetIndex && r.Source.RecordIndex == ammoSource.RecordIndex).Source;
@@ -429,7 +429,7 @@ internal static class SourceEditingMcpChecks
             var written = saved["written"]!.AsArray().Select(w => w!.GetValue<string>()).ToArray();
             Assert.Equal(["data/m1/models/m1.gltf", "data/m1/zrdr/puppies.zrd", "data/m1/zrdr/puppies_easy.zrd", "gamegen/m1.gs"], written.Order(StringComparer.Ordinal));
             Assert.False(editedWorld.IsDirty);
-            Assert.Equal(Default.Replace("( 12 8 -5 )", "( 20.25 8 -5 )"), await File.ReadAllTextAsync(fixture.Path("data/m1/zrdr/puppies.zrd"), Encoding.Latin1, token));
+            Assert.Equal(Default.Replace("( 12 8 -5 )", "( 20.3 8 -5 )"), await File.ReadAllTextAsync(fixture.Path("data/m1/zrdr/puppies.zrd"), Encoding.Latin1, token));
             Assert.Empty(new SourcePublisher(fixture.Project).FindInterrupted(token));
             // No save was interrupted; resolving an unknown one is refused.
             Assert.Equal(0, (await Call("source_recovery", new()))["saveCount"]!.GetValue<int>());
@@ -515,7 +515,7 @@ internal static class SourceEditingMcpChecks
                 var retainedDraft = System.Text.Json.JsonSerializer.SerializeToNode(tankCard.DescribeDraft())!;
                 Assert.Equal(tankDraftPosition, retainedDraft["position"]!.AsArray().Select(v => v!.GetValue<string>()).ToArray());
                 Assert.Equal(tankHistory, workspace.History); Assert.False(workspace.IsDirty);
-                Assert.DoesNotContain("1000.25", Text(workspace.Read("data/m2/zrdr/aiv.zrd")));
+                Assert.DoesNotContain("1000.3", Text(workspace.Read("data/m2/zrdr/aiv.zrd")));
             }
             finally { main.PreparingSourceWorldModel = prepareTankModel; }
             var tankMoved = Document((await Call("scene_card", new() { ["preview"] = tankPreview, ["action"] = "apply", ["document"] = Id(second),
@@ -523,8 +523,8 @@ internal static class SourceEditingMcpChecks
             Assert.Same(second, tankMoved); Assert.Same(tankViewport, main.SceneHost.Content);
             Assert.Equal(tankTarget, tankViewport.SelectedInspection?.Target);
             Assert.Equal(tankKey, second.PickupEdits!.SourcePresentationKey(Assert.Single(second.PickupEdits.OtherCoordinates, row => row.Kind == "tank").Source));
-            Assert.Contains("1000.25", Text(workspace.Read("data/m2/zrdr/aiv.zrd")));
-            Assert.DoesNotContain("1000.25", File.ReadAllText(fixture.Path("data/m2/zrdr/aiv.zrd")));
+            Assert.Contains("( 1000.3 20.0 30.0 )", Text(workspace.Read("data/m2/zrdr/aiv.zrd"))); // Stored with one decimal.
+            Assert.DoesNotContain("1000.3", File.ReadAllText(fixture.Path("data/m2/zrdr/aiv.zrd")));
             second = Document(await Call("undo_redo", new() { ["document"] = Id(second), ["revision"] = second.Revision, ["action"] = "undo" }));
             Assert.False(workspace.IsDirty); Assert.Empty(Directory.EnumerateFiles(fixture.Project, "*.zbd", SearchOption.AllDirectories));
             // A real referenced turret under nested authored groups follows the object card path, including

@@ -63,22 +63,23 @@ public sealed class SourcePlacementTests
         Assert.Equal(2, scope.Sources.Count);
         Assert.Contains("Easy", scope.Description); Assert.Contains("Hard", scope.Description);
 
-        var after = session.PreviewTransform(ammo, session.Transform(ammo) with { Position = new(20.25f, 8, -5) });
+        // A drag's arbitrary float is stored with the shipped files' one decimal.
+        var after = session.PreviewTransform(ammo, session.Transform(ammo) with { Position = new(20.2671f, 8, -5) });
         var writes = session.ScalarWrites(after);
         // Only X differs from the stored values, once per linked record.
-        Assert.Equal(2, writes.Count); Assert.All(writes, w => Assert.Equal(20.25f, w.Value));
+        Assert.Equal(2, writes.Count); Assert.All(writes, w => Assert.Equal(20.3f, w.Value));
         var changes = session.SourceChanges(after, workspace, Token);
         Assert.Equal(["data/m1/zrdr/puppies.zrd", "data/m1/zrdr/puppies_easy.zrd"], changes.Select(c => c.Relative).Order(StringComparer.Ordinal));
         // Each file differs from its source only where the edited token was: comments, spacing and other values stay.
         string defaultAfter = Encoding.Latin1.GetString(changes.Single(c => c.Relative.EndsWith("puppies.zrd")).Content);
         string easyAfter = Encoding.Latin1.GetString(changes.Single(c => c.Relative.EndsWith("puppies_easy.zrd")).Content);
-        Assert.Equal(Default.Replace("( 12 8 -5 )", "( 20.25 8 -5 )"), defaultAfter);
-        Assert.Equal(Easy.Replace("( 12 8 -5 )", "( 20.25 8 -5 )"), easyAfter);
+        Assert.Equal(Default.Replace("( 12 8 -5 )", "( 20.3 8 -5 )"), defaultAfter);
+        Assert.Equal(Easy.Replace("( 12 8 -5 )", "( 20.3 8 -5 )"), easyAfter);
 
         // Accepted workspace source evaluation holds the moved placement in both lists.
         workspace.Apply("Move HEMORTAR_AMMO", changes.Select(c => (c.Relative, (byte[]?)c.Content)), Token);
         var (_, _, rebuilt) = await BuildAsync(fixture, workspace);
-        Assert.All(rebuilt.Records.Where(r => r.Type == "HEMORTAR_AMMO"), r => Assert.Equal(new Vector3(20.25f, 8, -5), r.OriginalPosition));
+        Assert.All(rebuilt.Records.Where(r => r.Type == "HEMORTAR_AMMO"), r => Assert.Equal(new Vector3(20.3f, 8, -5), r.OriginalPosition));
         Assert.Equal(new Vector3(100, 0, -100), rebuilt.Records.First(r => r.Type == "NANITE").OriginalPosition);
         // Undo restores the exact source bytes.
         workspace.Undo();
@@ -93,10 +94,10 @@ public sealed class SourcePlacementTests
         fixture.Write("data/m1/zrdr/puppies.zrd", Default); fixture.Write("data/m1/zrdr/puppies_easy.zrd", Easy);
         var (workspace, _, session) = await BuildAsync(fixture);
         var nanite = session.Records.Single(r => r.Type == "NANITE" && r.Source.ResourceName == "PUPPIES.ZRD").Source;
+        // Radians keep four decimals.
         var after = session.PreviewTransform(nanite, new(new(100, 0, -100), new(0, 3.1415927f, 0)));
-        var writes = session.ScalarWrites(after);
         var changes = session.SourceChanges(after, workspace, Token);
-        Assert.Equal(Default.Replace("( 0.0 1.5707964 0.0 )", "( 0.0 3.1415927 0.0 )"), Encoding.Latin1.GetString(changes.Single(c => c.Relative.EndsWith("puppies.zrd")).Content));
+        Assert.Equal(Default.Replace("( 0.0 1.5707964 0.0 )", "( 0.0 3.1416 0.0 )"), Encoding.Latin1.GetString(changes.Single(c => c.Relative.EndsWith("puppies.zrd")).Content));
     }
 
     [Fact]
@@ -126,6 +127,21 @@ public sealed class SourcePlacementTests
         Assert.True(pending.ResourceInputsChanged(workspace, Token));
         using var canceled = new CancellationTokenSource(); canceled.Cancel();
         Assert.Throws<OperationCanceledException>(() => pending.ResourceInputsChanged(workspace, canceled.Token));
+    }
+
+    [Fact]
+    public async Task AiNodeMovesAreStoredWithOneDecimal()
+    {
+        using SourceWorldFixture fixture = new();
+        const string relative = "data/m1/zrdr/net_01.zrd";
+        const string text = "( version ( 105 )\n node_00 ( 12 ( 1.0 -920.9 3.0 ) ( 1 -1 -7 ) )\n node_01 ( 23 ( 3.0 18.25 3.0 ) ( 0 -1 -1 ) ) )";
+        fixture.Write(relative, text);
+        var (workspace, _, session) = await BuildAsync(fixture);
+        var first = session.OtherCoordinates.Single(c => c.OriginalPosition.Y < -900);
+        // A numeric move of -920.9 by +880.9 writes -40.0; a change below the stored precision (X) writes nothing.
+        var after = session.PreviewAiPositions(AiPathTransforms.Translate(new Dictionary<MissionPickupSource, Vector3> { [first.Source] = first.OriginalPosition }, new(0.03f, 880.9f, 0)));
+        var change = Assert.Single(session.SourceChanges(after, workspace, Token));
+        Assert.Equal(text.Replace("( 1.0 -920.9 3.0 )", "( 1.0 -40.0 3.0 )"), Encoding.Latin1.GetString(change.Content));
     }
 
     [Fact]

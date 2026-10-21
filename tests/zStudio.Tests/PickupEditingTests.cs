@@ -68,7 +68,7 @@ public sealed partial class AnimationTests
             var selected = edits.Records.Single(r => r.Type == "NANITE" && r.Difficulties.Contains(MissionDifficulty.Medium));
             var scope = edits.Scope(selected.Source); Assert.Equal(3, scope.Sources.Count);
             Assert.False(edits.MoveTo(selected.Source, selected.OriginalPosition)); Assert.False(edits.CanUndo);
-            var position = selected.OriginalPosition + new Vector3(2.25f, -7, 15);
+            var position = selected.OriginalPosition + new Vector3(2.5f, -7, 15);
             Assert.True(edits.MoveTo(selected.Source, position)); Assert.True(edits.IsDirty);
             foreach (var source in scope.Sources) Assert.Equal(position, edits.Position(source));
             foreach (var other in edits.Records.Where(r => r.Type != "NANITE")) Assert.Equal(other.OriginalPosition, edits.Position(other.Source));
@@ -90,7 +90,7 @@ public sealed partial class AnimationTests
             edits.Undo(); Assert.False(edits.IsDirty); Assert.False(edits.CanUndo); Assert.Equal(original, edits.EncodeArchive(path));
             edits.Redo(); Assert.True(edits.IsDirty); Assert.Equal(encoded, edits.EncodeArchive(path));
             // Values float arithmetic on a delta would round apart stay identical, so the records remain counterparts.
-            Vector3 inexact = new(0.1f, 1234.567f, -0.3f);
+            Vector3 inexact = new(0.1f, 1234.6f, -0.3f);
             edits.MoveTo(selected.Source, inexact);
             foreach (var source in scope.Sources) Assert.Equal(inexact, edits.Position(source));
             Assert.Equal(3, edits.Scope(selected.Source).Sources.Count);

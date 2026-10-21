@@ -143,8 +143,9 @@ public partial class MainWindow
                 "rotate" => AiPathTransforms.Rotate(draft.Before, draft.Axis == "x" ? 0 : draft.Axis == "z" ? 2 : 1, values[0]),
                 _ => AiPathTransforms.Scale(draft.Before, vector)
             };
-            draft.Document.PickupEdits!.PreviewAiPositions(draft.After);
-            draft.Viewport.SetAiPathPreview(draft.Sources.ToDictionary(p => p.Key, p => draft.After[p.Value]));
+            // The preview shows the positions as they are stored (one decimal), as Apply writes them.
+            var stored = draft.Document.PickupEdits!.PreviewAiPositions(draft.After);
+            draft.Viewport.SetAiPathPreview(draft.Sources.ToDictionary(p => p.Key, p => stored[p.Value].Position));
             draft.Error = null;
         }
         catch (Exception ex) when (ex is ArgumentException or InvalidDataException or InvalidOperationException)
