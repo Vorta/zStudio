@@ -307,7 +307,7 @@ public static partial class MissionSceneLoader
                     var pose = Matrix4x4.CreateRotationY(yaw) * Matrix4x4.CreateTranslation(position);
                     ValidatePose(pose); // Refuse before a clone enters the live index or an existing root changes.
                     // CreateFromNamesAtPose (0x421ab0) looks both names up among all live nodes, the most recently created first
-                    // (FindByTypeAndName, docs/engine-evidence.md), and uses what it finds as the vehicle whatever its class.
+                    // (FindByTypeAndName, docs/agents/engine-evidence.md#aivzrd), and uses what it finds as the vehicle whatever its class.
                     int root = placement.Live(name); bool copied = false;
                     if (root < 0)
                     {

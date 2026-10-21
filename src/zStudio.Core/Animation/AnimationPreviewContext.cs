@@ -14,7 +14,7 @@ public sealed record AnimationSound(string Name, string FileName, bool Loop, Rea
     public double Duration { get; } = WaveDecoder.Read(Bytes).Duration;
 }
 
-/// <summary>How an instance's node names were looked up (docs/engine-evidence.md#name-lookups-and-node-slot-order).</summary>
+/// <summary>How an instance's node names were looked up (docs/agents/engine-evidence.md#name-lookups-and-node-slot-order).</summary>
 public enum AnimationBinding
 {
     /// <summary>LoadZbd's binding at the root the game loads: the attach node inside the root, else the world's highest slot.</summary>

@@ -4,7 +4,7 @@ using Xunit;
 
 namespace zStudio.Tests;
 
-/// <summary>How the shipped worlds meet the engine's zone probes (see docs/world-editor-plan.md, "Zone probes").</summary>
+/// <summary>How the shipped worlds meet the engine's zone probes (see docs/agents/engine-evidence.md#zone-probes).</summary>
 public sealed class ZoneProbeCorpusTests
 {
     private static CancellationToken Token => TestContext.Current.CancellationToken;

@@ -73,7 +73,7 @@ public static partial class SourceBuilder
         private IEnumerable<string> Sources(string mission, CancellationToken token)
         {
             // The game reads the effects.zrd of the first mounted archive that holds one (zRdrOpenFile, retail 0x48D1C0), and
-            // the common zrdr.zbd stays ahead of the mission's (docs/engine-evidence.md, Resource archives): a mission's own
+            // the common zrdr.zbd stays ahead of the mission's (docs/agents/engine-evidence.md#resource-archives): a mission's own
             // effects.zrd counts only when no common resource folder has one. Several in one archive's folders cannot all be
             // members (that archive's build refuses them); all of them count here.
             var common = Inventory("data/common", token);

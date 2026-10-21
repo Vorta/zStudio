@@ -47,7 +47,7 @@ public static partial class WorldGltf
     /// Refuses a file whose copies of a shared node (<c>extras.recoil.instance</c>) differ in anything import reads: name,
     /// engine values, zone, transform, mesh or children, compared copy against first copy below the copies themselves.
     /// Import reads the first copy in the file and ignores the others, so an edit made to one copy only would be lost, or
-    /// would move every placement (world-editor-plan: copies that disagree are rejected). A zone that comes from whatever
+    /// would move every placement (docs/agents/sources.md#shared-nodes: copies that disagree are rejected). A zone that comes from whatever
     /// loads the file is unknown here and agrees with any; a shared node inside a copy is compared with its own copies.
     /// </summary>
     public static void CheckInstances(GltfDocument doc, string path)

@@ -113,7 +113,7 @@ public static partial class SourceBuilder
         var common = ResourceInputs(root, null, added, token, inventory);
         if (common.Count > 0) AddPlan(new("zrdr.zbd", "archive", common));
         // The game opens a resource from the first mounted archive that holds its name, and zrdr.zbd stays ahead of the
-        // mission's (docs/engine-evidence.md, Resource archives): a mission resource named like a common one is never read.
+        // mission's (docs/agents/engine-evidence.md#resource-archives): a mission resource named like a common one is never read.
         Dictionary<string, string>? commonNames = null;
         IReadOnlyList<string> Shadowed(string mission, IReadOnlyList<string> resources)
         {
@@ -280,7 +280,7 @@ public static partial class SourceBuilder
         /// 0x41FE90) and keeps at the camera (Player::UpdateThirdPersonCamera, 0x405650), with the nodes the cameras hold as
         /// their horizons (CameraSetHorizon, CameraSetHorizonXZ): the textures of every model at or below them, and the frames
         /// of texture cycles shown in place of one. Both shipped releases keep exactly these direct, besides choices no
-        /// source records (docs/engine-evidence.md, Textures and the rendering target).
+        /// source records (docs/agents/engine-evidence.md#textures-and-the-rendering-target).
         /// </summary>
         internal HashSet<string> DirectTextures(string mission, CancellationToken token)
         {

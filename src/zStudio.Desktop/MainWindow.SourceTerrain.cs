@@ -10,7 +10,7 @@ using zStudio.Rendering;
 namespace zStudio.Desktop;
 
 /// <summary>
-/// Terrain in source worlds: recipes (see docs/source-project.md, Terrain) are edited through the project's workspace and
+/// Terrain in source worlds: recipes (see docs/agents/sources.md#terrain) are edited through the project's workspace and
 /// the world rebuilds with the new pieces. Properties of a terrain piece shows its recipe; the viewport brush paints the
 /// selected region; MCP has the same edits as semantic commands (a stroke is a path and radius, never synthesized input).
 /// </summary>

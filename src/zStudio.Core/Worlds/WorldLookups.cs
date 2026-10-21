@@ -7,7 +7,7 @@ using zStudio.Core.Sources;
 namespace zStudio.Core.Worlds;
 
 /// <summary>
-/// The engine's lookups by name (docs/engine-evidence.md#name-lookups-and-node-slot-order). Every live node of every class
+/// The engine's lookups by name (docs/agents/engine-evidence.md#name-lookups-and-node-slot-order). Every live node of every class
 /// is in one list (bucket 6), the most recently created first, and a world file's nodes join it in slot order, so a lookup
 /// finds the highest slot of a name first (<c>FindByTypeAndName</c> 0x44ecf0).
 /// </summary>

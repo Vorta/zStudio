@@ -228,7 +228,7 @@ public sealed class SourceProjectCorpusTests
     /// <summary>
     /// The names a mission's texture-effect scripts (FindNode) and animation roots look up whose node in the rebuilt world
     /// is not the shipped node's counterpart. Roots: consecutive entries with one name take the following same-named
-    /// nodes, else the highest slot (docs/engine-evidence.md).
+    /// nodes, else the highest slot (docs/agents/engine-evidence.md#name-lookups-and-node-slot-order).
     /// </summary>
     /// <summary>Models used by other nodes (by slot) in one world than in the other, and a different number of models.</summary>
     private static IEnumerable<string> ModelDifferences(GameZWorld shipped, GameZWorld built)

@@ -12,7 +12,7 @@ namespace zStudio.Core.Sources;
 /// Reconstructs model sources from shipped worlds: each mission database (<c>data/mN/models/mN.gltf</c>), each file the
 /// build scripts loaded, and each OpenFlight external reference (a node named <c>*.flt</c>) as its own file that the
 /// referencing node names in <c>extras.recoil.ref</c>. Files go where the original tree had them as far as the scripts
-/// show (docs/recoil-original-worktree.md): a file whose script chose its folder (<c>SetModelDirectory</c>) goes there,
+/// show (docs/agents/recoil-original-worktree.md#models): a file whose script chose its folder (<c>SetModelDirectory</c>) goes there,
 /// a file that a script several missions run loads identically (the pickups) goes to <c>data/common/models</c>, and a
 /// file a mission's own scripts load to that mission's <c>models</c> folder, a copy per mission. A vehicle that several
 /// missions' vehicle scripts load identically from their own folders is one file in <c>data/common/models</c> instead

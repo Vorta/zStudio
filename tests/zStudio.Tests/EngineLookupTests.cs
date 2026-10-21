@@ -11,7 +11,7 @@ namespace zStudio.Tests;
 
 /// <summary>
 /// Lookups by name as ResolveNodeByName, LoadZbd, RebindEntryToNode, CreateFromNamesAtPose and the script interpreter
-/// make them (docs/engine-evidence.md#name-lookups-and-node-slot-order).
+/// make them (docs/agents/engine-evidence.md#name-lookups-and-node-slot-order).
 /// </summary>
 public sealed class EngineLookupTests
 {

@@ -164,7 +164,7 @@ internal sealed partial class SourceObjectCardEditor : FieldEditor
             string.Join(", ", new[] { value.X, value.Y, value.Z }.Select(v => v.ToString("R", CultureInfo.InvariantCulture))), true, hint, ["X", "Y", "Z"]);
     }
     /// <summary>
-    /// What the altitude zone check does (engine evidence in the world editor plan, "Zone gate and filters"): only the
+    /// What the altitude zone check does (docs/agents/engine-evidence.md#zone-gate-and-filters): only the
     /// altitude probes test it; drawing, collision and the other queries test the zone either way.
     /// </summary>
     private const string AltitudeZoneCheckHelp = "Vehicles and the game camera find this object's ground height only while their current zones allow its zone. Off, it is ground in every zone, even where it is not drawn. Drawing and collision follow the zone either way.";

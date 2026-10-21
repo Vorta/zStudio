@@ -5,7 +5,7 @@ namespace zStudio.Core.Sources;
 
 /// <summary>
 /// Edits the header of an AI network's source (<c>data/mN/zrdr/aipath/net_NN.zrd</c>): its name, type, attack strategy and
-/// the radii, dwells and flags the game reads (see docs/engine-evidence.md). Only the edited values change: a stored value's
+/// the radii, dwells and flags the game reads (see docs/agents/engine-evidence.md#net_nnzrd). Only the edited values change: a stored value's
 /// token is replaced in place, and a missing key is written before the first node, keeping the file's comments and layout.
 /// The network's ID is its file's number, which vehicles name, so the file itself is never renamed here.
 /// </summary>
