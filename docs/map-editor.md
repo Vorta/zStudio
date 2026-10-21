@@ -102,8 +102,8 @@ The **Zones** section lists the zones the map uses, each with its colour, label 
 The **Edit zones** toggle in the Zones group (or **Tools → Paint polygon zones** / **Erase polygon zones**, **P** and **E**) starts the polygon zone tool:
 - Drag over the map to paint the chosen zone on every polygon you cross, or erase it; each stroke is one undo step.
 - **Ctrl** inverts the mode for a stroke, **Shift**+click picks a zone from the polygon under the pointer, **[** and **]** step through the map's zones, **Escape** drops a stroke, then leaves the tool.
-- Paint adds the zone after a polygon's others (a polygon keeps at most three); painting Any replaces them, and a numbered zone replaces Any. Erasing the last zone leaves none, which differs from Any.
-- Only the map's own models (`data\mN\models`) take zones; shared models, vehicles, units and pickups don't. A placement takes its own zones.
+- Paint adds the zone after a polygon's others (a polygon keeps at most three); painting Any replaces them, and a numbered zone replaces Any, as in the shipped maps, where a polygon that lists Any lists nothing else. Erasing the last zone leaves none, which differs from Any.
+- Only the map's own models (`data\mN\models`) take zones; shared models, vehicles, units and pickups don't. A placement takes its own zones; when they come to differ from the other placements of the same model, the build gives that placement a model of its own and the world is rebuilt in full.
 - A stroke covers at most 4,096 polygons on 1,024 placements.
 
 MCP: `zstudio_source_zones`, `zstudio_source_polygon_zones`, `zstudio_source_zone_tool`, `zstudio_source_zone_label`.
@@ -154,6 +154,7 @@ An addition is refused when a folder the mission searches first holds another fi
 ## Limits
 
 - AI links, new groups and Add model can't be edited in the GUI; positions that startup animations set can't be moved.
+- Deleting or copying an object an animation names, or changing the model of an object whose parts a bound animation names, isn't refused: the rebuild and the export report it in Problems.
 - The view is the mission's starting scene, without simulating gameplay; not every kind of change has been tested in the game.
 - The AI overlay draws at most 16,384 nodes and 32,768 links.
 - Terrain recipes have no tilted region planes for walls and no texture page cutting.

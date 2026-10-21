@@ -42,5 +42,6 @@ MCP: `zstudio_source_blender_checkout`, `zstudio_source_blender_checkouts`, `zst
 - Blender 5.2.x, `.gltf` files with external PNG textures, and the zStudio source format's rules for materials, names, transforms and model sizes. Give new surfaces a material with Metallic set to zero.
 - Missing images show as magenta checkers and never become source textures; replace one with an actual image to export it.
 - A graph holds at most 4,096 files and 512 MiB of source data; cyclic or escaping references are refused.
-- Blender's view is an editing view, not the game's collision, crater or zone queries. A pickup's collision volume (`bvol`) is invisible but still counts in framing.
+- Blender's view is an editing view, not the game's collision, crater or zone queries. A pickup's collision volume (`bvol`) is hidden by its material, so it still counts in framing and shows in wireframe.
+- Import sessions stay in the temporary folder.
 - Nothing writes the protected retail folders or the imported originals.
