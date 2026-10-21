@@ -29,7 +29,7 @@ internal sealed class PreparedSound
         if (source.WaveFormat.Channels != 2) throw new InvalidDataException("Only mono and stereo preview sounds are supported.");
         // A fixed output request can demand a huge input workspace at an extreme downsampling ratio.
         // Keep ordinary reads unchanged, and shrink high-rate reads towards 4,096 input frames.
-        // NAudio 3.1's output-driven WDL resampler asks for floor(rate/48000 * frames) + 4 input
+        // NAudio's output-driven WDL resampler (3.1 and 3.3) asks for floor(rate/48000 * frames) + 4 input
         // frames: at most 44,743 for a positive Int32 rate. Its EOF padding, simultaneous old/new
         // resize arrays and mono/64-bit PCM conversion buffers together stay below 4 MiB.
         int readSamples = 2 * (int)Math.Clamp(4096L * SampleRate / source.WaveFormat.SampleRate, 1, 4096);
