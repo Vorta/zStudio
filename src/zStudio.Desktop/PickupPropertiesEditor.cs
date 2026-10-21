@@ -14,7 +14,6 @@ public sealed class PickupPropertiesEditor : FieldEditor, IDisposable
     private readonly DocumentModel document;
     private readonly MissionPickupSource source;
     private readonly JsonObject original;
-    private readonly string label;
     private string shownPosition = "";
     private readonly ReadOnlyPropertySheet details = new();
     public event Action? Changed;
@@ -38,9 +37,9 @@ public sealed class PickupPropertiesEditor : FieldEditor, IDisposable
     }
     /// <summary>Moves a placement through its sources (the edit rebuilds the world).</summary>
     private readonly Func<MissionPickupSource, Vector3, Task> sourceMove;
-    public PickupPropertiesEditor(DocumentModel document, MissionPickupSource source, string label, JsonObject metadata, Func<MissionPickupSource, Vector3, Task> sourceMove)
+    public PickupPropertiesEditor(DocumentModel document, MissionPickupSource source, JsonObject metadata, Func<MissionPickupSource, Vector3, Task> sourceMove)
     {
-        this.document = document; this.source = source; this.label = label; this.sourceMove = sourceMove;
+        this.document = document; this.source = source; this.sourceMove = sourceMove;
         original = JsonData.PreviewObject(metadata);
         document.PropertyChanged += DocumentChanged;
         RefreshProperties();

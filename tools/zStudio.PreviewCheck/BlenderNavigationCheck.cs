@@ -48,7 +48,7 @@ internal static class BlenderNavigationCheck
                 await Preview(); var scene = (SceneViewport)((ContentControl)main.FindName("SceneHost")).Content;
                 await CheckViews(scene, "world");
                 var pickup = scene.Mission!.Actors.First(a => a.Pickup != null);
-                scene.SelectFramingNode(pickup.Root); scene.SelectPickup(pickup.Root, true, false);
+                scene.SelectFramingNode(pickup.Root); scene.SelectPickup(pickup.Root);
                 var child = scene.Mission.Scene.Nodes.First(n => scene.PickupAt(n.Index)?.Root == pickup.Root && scene.SelectInspectionNode(n.Index));
                 // The compiled world is read only; show the handles a source map's draft shows.
                 scene.SetPlacementEditing(true);

@@ -23,7 +23,6 @@ public sealed class PropertiesWindow : Window
     private readonly Button redo = HistoryButton("Redo", "\uE7A6", "Ctrl+Y");
     private readonly TextBlock notice = new() { TextWrapping = TextWrapping.Wrap, Margin = new(12, 0, 12, 8), Opacity = .7 };
     private JsonObject? snapshot;
-    private AssetId? readOnlyAsset;
     private string label = "";
     private bool closingResolved, resolvingClose, hasBeenShown;
     public DocumentModel? Document { get; private set; }
@@ -99,8 +98,7 @@ public sealed class PropertiesWindow : Window
     }
     internal bool SetAsset(DocumentModel document, AssetRecord asset, JsonObject json)
     {
-        if (!SetReadOnly(document, $"{asset.Name} · {asset.Kind} #{asset.Index}", json)) return false;
-        readOnlyAsset = asset.Id; return true;
+        return SetReadOnly(document, $"{asset.Name} · {asset.Kind} #{asset.Index}", json);
     }
     internal void MarkAiSnapshotStale()
     {
@@ -114,7 +112,7 @@ public sealed class PropertiesWindow : Window
     public bool SetPickup(DocumentModel document, MissionPickupSource source, string title, JsonObject json, Func<MissionPickupSource, System.Numerics.Vector3, Task> sourceMove)
     {
         if (!BeginTarget(document)) return false;
-        label = title; PickupFields = new(document, source, title, json, sourceMove);
+        label = title; PickupFields = new(document, source, json, sourceMove);
         PickupFields.Changed += Refresh; body.Content = PickupFields; Refresh(); return true;
     }
     internal bool SetSourceObject(DocumentModel document, SourcePropertiesEditor fields)
@@ -137,7 +135,7 @@ public sealed class PropertiesWindow : Window
             doc.Disposing -= DocumentDisposing; doc.PropertyChanged -= DocumentChanged;
         }
         PickupFields?.Dispose(); SourceFields?.Dispose(); SourceFields = null;
-        PickupFields = null; Document = null; snapshot = null; body.Content = null; readOnlyAsset = null;
+        PickupFields = null; Document = null; snapshot = null; body.Content = null;
     }
     private void DocumentDisposing() => CloseResolved();
     private void DocumentChanged(object? sender, PropertyChangedEventArgs e) => Refresh();

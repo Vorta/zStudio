@@ -159,7 +159,7 @@ public sealed partial class SceneViewport
         else if (element is GroupElement3D group)
             foreach (var child in group.Children) foreach (var nested in ManipulatorMeshes(child)) yield return nested;
     }
-    public void SelectPickup(int? root, bool editable, bool locked)
+    public void SelectPickup(int? root)
     {
         if (root != selectedPickup) CancelPickupDrag();
         selectedPickup = root is int r && pickupActors.ContainsKey(r) ? r : null;

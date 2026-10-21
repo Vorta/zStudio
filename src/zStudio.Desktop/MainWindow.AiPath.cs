@@ -234,9 +234,8 @@ public partial class MainWindow
     }
     private async void AiPathActionClick(object sender, RoutedEventArgs e) => await ReportUi(async () =>
     {
-        string action = (sender as FrameworkElement)?.Tag as string ?? "edit";
-        if (action == "edit") { if (scene?.AiPathEditingNetwork != null) { if (!ResolveAiPathDraft()) return; scene.SetAiPathEditing(null); } else EnterAiPath(); }
-        else if (action == "confirm") await ApplyAiPathAsync(CancellationToken.None);
+        string action = (sender as FrameworkElement)?.Tag as string ?? "";
+        if (action == "confirm") await ApplyAiPathAsync(CancellationToken.None);
         else if (action == "cancel") CancelAiPathDraft();
         else if (action == "properties") await OpenAiPathPropertiesAsync();
         else BeginAiPathTransform(action);

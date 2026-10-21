@@ -150,16 +150,6 @@ public partial class MainWindow
         throw new StudioCommandException("context_changed", "The source world's prepared object model is unavailable. Reopen the world.");
     }
 
-    /// <summary>A resource editor may not change a project file the source workspace holds unsaved edits of; the edits would conflict on save.</summary>
-    private void RefuseResourceEditOfWorkspaceFile(DocumentModel doc)
-    {
-        if (sourceWorkspace is not { } workspace) return;
-        string full = Path.GetFullPath(doc.Path), prefix = Path.EndsInDirectorySeparator(workspace.Root) ? workspace.Root : workspace.Root + Path.DirectorySeparatorChar;
-        if (!full.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) return;
-        string relative = SourceProject.Relative(workspace.Root, full);
-        if (workspace.IsFileDirty(relative))
-            throw new InvalidOperationException($"The source project holds unsaved edits of {relative}; save or undo them before editing the file here.");
-    }
     /// <summary>The world-file node a shown scene node is, or null for a runtime copy (a placed vehicle or pickup instance).</summary>
     private int? SourceObjectNode(int node)
     {

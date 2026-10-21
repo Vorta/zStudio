@@ -121,12 +121,6 @@ public sealed partial class DocumentModel : ObservableObject, IDisposable
     internal Dictionary<AssetId,Dictionary<string,bool>> DataTreeExpansion { get; } = [];
     /// <summary>Only a source world has unsaved changes: its edits are its project's, persisted only by Save. Compiled documents are read only.</summary>
     public bool IsDirty => SourceWorld?.Workspace.IsDirty == true;
-    /// <summary>Forgets compiled placements read for an earlier preview, so the next read loads them again.</summary>
-    public void InvalidatePickupEdits()
-    {
-        if (SourceWorld != null) return;
-        PickupEdits = null; pickupLoading = null; PickupDiagnosticsReported = false;
-    }
     public async Task<PickupPlacementEditSession> GetPickupEditsAsync(AssetResolver resolver, CancellationToken token)
     {
         token.ThrowIfCancellationRequested();

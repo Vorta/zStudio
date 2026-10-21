@@ -9,7 +9,6 @@ namespace zStudio.Tests;
 public sealed partial class AnimationTests
 {
     private static JsonNode CoordinateInt(int value) => new JsonObject { ["type"] = "int", ["value"] = value };
-    private static JsonNode AiCoordinateNode(float x = 1) => Arr(CoordinateInt(12), Arr(Num(x), Num(2), Num(3)), Arr(CoordinateInt(-7), CoordinateInt(0), CoordinateInt(-1)));
 
     [Fact]
     public async Task TankSelectionFollowsOnlyUniqueCoordinateCounterpartsAcrossDifficulty()

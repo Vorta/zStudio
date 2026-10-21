@@ -9,8 +9,8 @@ namespace zStudio.Desktop;
 
 public partial class MainWindow
 {
-    private void UndoAnimationClick(object sender, RoutedEventArgs e) { scene?.CancelPickupDrag(); if (ViewModel.SelectedDocument is { } doc) UndoDocument(doc, false); }
-    private void RedoAnimationClick(object sender, RoutedEventArgs e) { scene?.CancelPickupDrag(); if (ViewModel.SelectedDocument is { } doc) UndoDocument(doc, true); }
+    private void UndoDocumentClick(object sender, RoutedEventArgs e) { scene?.CancelPickupDrag(); if (ViewModel.SelectedDocument is { } doc) UndoDocument(doc, false); }
+    private void RedoDocumentClick(object sender, RoutedEventArgs e) { scene?.CancelPickupDrag(); if (ViewModel.SelectedDocument is { } doc) UndoDocument(doc, true); }
     /// <summary>
     /// Close decisions run one at a time (a decision can wait for a rebuild, and its prompt pumps messages): a later one
     /// waits its turn, so prompts never stack, and a document an earlier decision closed needs no decision.

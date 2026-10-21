@@ -129,7 +129,7 @@ public sealed partial class SceneViewport
         SelectedParachuteWindow = id;
         if (id != null)
         {
-            SelectedInspection = null; SelectAiNode(null); SelectPickup(null, false, true); FramingSelection = null;
+            SelectedInspection = null; SelectAiNode(null); SelectPickup(null); FramingSelection = null;
             RefreshPickupSelection(); InspectionChanged?.Invoke();
         }
         parachuteMarkerPose = null; UpdateParachuteMarkers(); ParachuteWindowSelected?.Invoke(id); return true;

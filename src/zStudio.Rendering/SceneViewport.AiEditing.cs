@@ -52,7 +52,7 @@ public sealed partial class SceneViewport
         {
             aiPathSelection.UnionWith(selection);
             aiPathNetworkNodes.UnionWith(AiNetworks.Networks.Single(n => n.Id == networkId).Nodes.Select(n => n.Id));
-            SelectedInspection = null; SelectedAiNode = null; SelectPickup(null, false, true);
+            SelectedInspection = null; SelectedAiNode = null; SelectPickup(null);
             FramingSelection = null; RefreshPickupSelection(); InspectionChanged?.Invoke();
         }
         aiMarkerPose = null; UpdateAiMarkers(); RefreshAiSelection();

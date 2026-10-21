@@ -82,7 +82,7 @@ public sealed partial class SceneViewport
         if (id != null) SelectedInspection = InspectAi(id);
         else if (SelectedInspection?.AiNode != null) SelectedInspection = null;
         InspectionChanged?.Invoke();
-        if (id != null) { FramingSelection = null; SelectPickup(null, false, true); }
+        if (id != null) { FramingSelection = null; SelectPickup(null); }
         RefreshPickupSelection(); RefreshAiSelection(); AiNodeSelected?.Invoke(id); return true;
     }
     private IEnumerable<AiNetwork> VisibleAiNetworks => AiVisible ? AiNetworks.Networks.Where(n => (AiNetworkFilter == null || n.Id == AiNetworkFilter) && !aiHiddenNetworks.Contains(n.Id)) : [];

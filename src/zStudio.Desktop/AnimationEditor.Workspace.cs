@@ -16,7 +16,6 @@ public partial class AnimationEditor
     public FrameworkElement EventLogView => LogPage;
     public FrameworkElement RuntimeView => RuntimePage;
     public FrameworkElement ProblemsView => ProblemPage;
-    public long SelectedSourceOffset => Event?.SourceOffset ?? Sequence?.SourceOffset ?? Entry.SourceOffset;
     public (Guid Sequence, Guid Event) PropertySelection => (selectedSequence, selectedEvent);
     public event Action? SourceSelectionChanged;
     internal event Action? SceneHierarchyChanged;

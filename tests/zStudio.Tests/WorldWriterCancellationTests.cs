@@ -1,5 +1,3 @@
-using System.Security.Cryptography;
-using System.Text;
 using zStudio.Core;
 using zStudio.Core.Formats;
 using zStudio.Core.Worlds;
@@ -7,12 +5,11 @@ using Xunit;
 
 namespace zStudio.Tests;
 
-public sealed class ResourceSessionPreparationTests
+public sealed class WorldWriterCancellationTests
 {
     private static CancellationToken Token => TestContext.Current.CancellationToken;
-    private const string Text = "# untouched comment\r\n( VALUE ( 7 ) OTHER ( 9 ) )\r\n";
 
-[Fact]
+    [Fact]
     public void CancellableSlotProjectionPreservesFreedSlotAndNodeIdentities()
     {
         GameZWorld world = new();

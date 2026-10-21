@@ -46,7 +46,7 @@ internal static class ExportSafetyMcpChecks
                 Assert.Equal("{}", File.ReadAllText(legacy.Path("data/m1/meta/zones.json")));
                 Assert.False(Directory.Exists(Path.Combine(legacy.Project, ".zstudio")));
             }
-            await RelativePathChecks(main, Job, token);
+            await RelativePathChecks(main, Job);
             await SourceResourceOperationChecks.Run(main, Job, token);
             await ExportChoiceContextChecks(main, token);
             await TextureFailureAndMissingInputChecks(main, Job, token);
@@ -176,7 +176,7 @@ internal static class ExportSafetyMcpChecks
     }
 
     /// <summary>File and folder arguments resolve against nothing but themselves: a relative one is refused before anything is read or written.</summary>
-    private static async Task RelativePathChecks(MainWindow main, Func<string, Dictionary<string, object?>, string, Task<JsonNode>> job, CancellationToken token)
+    private static async Task RelativePathChecks(MainWindow main, Func<string, Dictionary<string, object?>, string, Task<JsonNode>> job)
     {
         using var fixture = new SourceFixture();
         await job("open_root", new() { ["path"] = fixture.Corpus }, "completed");

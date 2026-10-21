@@ -116,13 +116,6 @@ public sealed class MissionIdentityProjectionTests
         Assert.Equal(count, edits.OtherCoordinates.Count); Assert.Equal(count, Assert.Single(snapshot.Networks).Nodes.Count);
         return (archive, edits, snapshot);
     }
-    private static string ExpectedId(string original, AiNetworkSnapshot snapshot)
-    {
-        using MemoryStream bytes = new(); bytes.Write(Encoding.UTF8.GetBytes(original));
-        using (BinaryWriter writer = new(bytes, Encoding.UTF8, leaveOpen: true))
-            foreach (var node in snapshot.Networks.SelectMany(n => n.Nodes)) { writer.Write(node.Position.X); writer.Write(node.Position.Y); writer.Write(node.Position.Z); }
-        return Convert.ToHexString(SHA256.HashData(bytes.ToArray()));
-    }
     private sealed class CaseInsensitiveSources : IEqualityComparer<MissionPickupSource>
     {
         public bool Equals(MissionPickupSource? x, MissionPickupSource? y) => x?.AssetIndex == y?.AssetIndex && x?.RecordIndex == y?.RecordIndex &&

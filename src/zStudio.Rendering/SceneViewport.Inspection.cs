@@ -147,7 +147,7 @@ public sealed partial class SceneViewport
         var next = target == null ? null : InspectTarget(target);
         if (target != null && next == null || IsFlyActive || IsPickupDragging || guard && CanChangeInspection?.Invoke() == false) return false;
         SelectedInspection = next;
-        if (next == null) { SelectAiNode(null); SelectPickup(null, false, true); FramingSelection = null; InspectionSelectionCleared?.Invoke(); }
+        if (next == null) { SelectAiNode(null); SelectPickup(null); FramingSelection = null; InspectionSelectionCleared?.Invoke(); }
         else if (next.AiNode is { } ai) SelectAiNode(ai);
         else if (next is { Node: >= 0 } node) { SelectFramingNode(PickupAt(node.SelectionNode)?.Root ?? node.SelectionNode); NodeSelected?.Invoke(node.SelectionNode); }
         RefreshPickupSelection(); InspectionChanged?.Invoke(); return true;

@@ -736,7 +736,7 @@ public partial class MainWindow : Window
         RevealSceneNode(index);
         var actor = scene?.PickupAt(index);
         if (actor != null) index = actor.Root;
-        scene?.SelectPickup(actor?.Root, actor?.Pickup is { } pickup && pickupDocument?.PickupEdits?.Find(pickup.Source) != null, pickupDocument?.SourceWorld == null);
+        scene?.SelectPickup(actor?.Root);
         selectedNode = index; scene?.SelectFramingNode(index); var properties = JsonData.PreviewObject(data.Nodes[index].Metadata);
         if (scene?.Mission is { } mission)
         {
@@ -882,7 +882,7 @@ public partial class MainWindow : Window
             if (!e.IsRepeat) { if (motion != null) motion.TogglePlayback(); else if (animation != null) animation.TogglePlayback(); else pendingAnimationPlay = !pendingAnimationPlay; }
             return;
         }
-        bool ctrl = KeyboardModifiers(); if (ctrl && e.Key == Key.O) OpenWorkspaceClick(this, e); else if (ctrl && e.Key == Key.S) SaveCurrentClick(this, e); else if (ctrl && e.Key == Key.Z && e.OriginalSource is not TextBoxBase) UndoAnimationClick(this, e); else if (ctrl && e.Key == Key.Y && e.OriginalSource is not TextBoxBase) RedoAnimationClick(this, e); else if (ctrl && e.Key == Key.W) CloseCurrentClick(this, e); else if (e.Key == Key.F5) ReloadClick(this, e); else if (e.Key == Key.Escape && OperationRunning && !zoneTool.Applying) CancelRunningOperation(); else return; e.Handled = true;
+        bool ctrl = KeyboardModifiers(); if (ctrl && e.Key == Key.O) OpenWorkspaceClick(this, e); else if (ctrl && e.Key == Key.S) SaveCurrentClick(this, e); else if (ctrl && e.Key == Key.Z && e.OriginalSource is not TextBoxBase) UndoDocumentClick(this, e); else if (ctrl && e.Key == Key.Y && e.OriginalSource is not TextBoxBase) RedoDocumentClick(this, e); else if (ctrl && e.Key == Key.W) CloseCurrentClick(this, e); else if (e.Key == Key.F5) ReloadClick(this, e); else if (e.Key == Key.Escape && OperationRunning && !zoneTool.Applying) CancelRunningOperation(); else return; e.Handled = true;
     }
     private bool AnimationSpaceTarget(DependencyObject? source)
     {
