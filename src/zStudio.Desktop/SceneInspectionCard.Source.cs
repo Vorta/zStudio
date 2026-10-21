@@ -310,10 +310,14 @@ internal sealed partial class SceneInspectionCard
         catch (OperationCanceledException) { }
         catch (Exception ex) when (ex is StudioCommandException or InvalidOperationException or System.IO.InvalidDataException) { ShowSourceError(ex.Message); }
     }
-    /// <summary>Gives the keyboard to the card: a source object's first field, or a placement's first editable coordinate.</summary>
+    /// <summary>
+    /// Gives the keyboard to the card: a placement's first editable coordinate when its section is open, otherwise the card's
+    /// (or a source object's editor's) first control.
+    /// </summary>
     internal void FocusObject()
     {
         if (ObjectEditor != null) { ObjectEditor.MoveFocus(new(System.Windows.Input.FocusNavigationDirection.First)); return; }
         if (values.TryGetValue(AuthoredPlacement, out var field) && field.Inputs.FirstOrDefault(i => i.IsEnabled && !i.IsReadOnly && i.IsVisible) is { } input) input.Focus();
+        else MoveFocus(new(System.Windows.Input.FocusNavigationDirection.First));
     }
 }
