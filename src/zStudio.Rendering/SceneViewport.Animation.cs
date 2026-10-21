@@ -295,12 +295,7 @@ public sealed partial class SceneViewport
         {
             RegisterInspectionMesh(mesh, part.MaterialIndex, pose.Id, pose.SourceNode, pose.Model);
             inspectionPolygons[mesh] = part.VertexPolygons;
-            // The horizon is backdrop: clicking the sky selects nothing.
-            int source = pose.SourceNode; if (!horizon) mesh.MouseDown3D += (_, e) =>
-            {
-                if (!IsPickupDragging && e is MouseDown3DEventArgs { OriginalInputEventArgs: System.Windows.Input.MouseButtonEventArgs { ChangedButton: System.Windows.Input.MouseButton.Left } })
-                { SelectFramingNode(source); NodeSelected?.Invoke(source); }
-            };
+            // Clicks select through HandleScenePointerDown's inspection probe, which skips the horizon.
             animationGroup!.Children.Add(mesh);
             return new(mesh, material, part);
         }

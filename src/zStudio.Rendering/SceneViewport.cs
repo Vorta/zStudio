@@ -322,16 +322,8 @@ public sealed partial class SceneViewport : UserControl, IDisposable
                         RenderOrder = group.Horizon ? 0 : 1,
                         IsDepthClipEnabled = !group.Horizon,
                     };
-                    // The horizon is backdrop, as for the hover probe: clicking the sky selects nothing.
-                    if (!group.Horizon) mesh.MouseDown3D += (_, e) =>
-                    {
-                        if (!IsFlyActive && !IsPickupDragging && e is MouseDown3DEventArgs { OriginalInputEventArgs: MouseButtonEventArgs { ChangedButton: MouseButton.Left } } args && args.HitTestResult is { } hit && visiblePlacements.TryGetValue(mesh, out var found))
-                        {
-                            int at = hit.Tag is int instance ? instance : 0;
-                            if (at >= 0 && at < found.Length && found[at].NodeIndex >= 0)
-                            { int selected = SelectionNode(found[at].NodeIndex); SelectFramingNode(PickupAt(selected)?.Root ?? selected); NodeSelected?.Invoke(selected); }
-                        }
-                    };
+                    // Clicks select through HandleScenePointerDown's inspection probe only, which
+                    // excludes the horizon backdrop: clicking the sky selects nothing.
                     meshes.Add(mesh); placements[mesh] = visiblePlacements[mesh] = batch;
                     if (!group.Horizon) RegisterPolygonSource(geometry, part, scene.Models, group.Model);
                     RegisterInspectionMesh(mesh, part.MaterialIndex);
