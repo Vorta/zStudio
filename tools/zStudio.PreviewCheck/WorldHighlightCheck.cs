@@ -10,9 +10,6 @@ using System.Windows.Controls.Primitives;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Media.Media3D;
-using HelixToolkit;
-using HelixToolkit.SharpDX;
-using HelixToolkit.Wpf.SharpDX;
 using zStudio.Core;
 using zStudio.Core.Animation;
 using zStudio.Desktop;
@@ -50,18 +47,18 @@ internal static class WorldHighlightCheck
                     var preview = (SceneViewport)host.Content;
                     preview.RestoreView(SceneViewport.UprightPose(preview.CaptureView()));
                     var pose = preview.CaptureView(); var data = preview.PreviewScene;
-                    var meshIds = Meshes((Viewport3DX)preview.RenderSurface).ToArray();
+                    var meshIds = Meshes(preview).ToArray();
                     var buttons = new[] { "HighlightSoils", "HighlightCanModify", "HighlightClipTo" }.Select(n => (ToggleButton)main.FindName(n)).ToArray();
                     var group = (FrameworkElement)main.FindName("WorldHighlights");
                     // Shown on the toolbar or, when it is narrow, in its native overflow.
                     Require(group.Visibility == Visibility.Visible && (group.IsVisible || ToolBar.GetIsOverflowItem(group)), $"Whole world highlight controls missing in {mission}");
                     for (int i = 0; i < buttons.Length; i++)
                     {
-                        await PresentedAfter((Viewport3DX)preview.RenderSurface, () => buttons[i].IsChecked = true);
+                        await PresentedAfter(preview, () => buttons[i].IsChecked = true);
                         Require(buttons.Count(b => b.IsChecked == true) == (i == 2 ? 2 : 1), "Soils must be exclusive; crater highlights must combine");
                         Require(preview.CaptureView() == pose && ReferenceEquals(host.Content, preview) && ReferenceEquals(data, preview.PreviewScene), "Highlight replaced scene/camera");
-                        Require(meshIds.SequenceEqual(Meshes((Viewport3DX)preview.RenderSurface)), "Highlight rebuilt geometry");
-                        Save(Presented((Viewport3DX)preview.RenderSurface), Path.Combine(output, mission + "-" + preview.HighlightMode + ".png"));
+                        Require(meshIds.SequenceEqual(Meshes(preview)), "Highlight rebuilt geometry");
+                        Save(preview.CapturePresentedFrame(), Path.Combine(output, mission + "-" + preview.HighlightMode + ".png"));
                         Console.WriteLine($"PASS: {mission} {preview.HighlightMode}, retained geometry/camera and combined GUI state");
                     }
                     Save(StudioCapture.Window(main), Path.Combine(output, mission + "-controls.png"));
@@ -144,15 +141,15 @@ internal static class WorldHighlightCheck
             var asset = doc.Add(AssetKind.World, 0, "Whole world", 0, 0);
             string before = Snapshot(scene);
             await preview.ShowAsync(doc, asset, resolver, null, 0, default, mission: MissionSceneLoader.Build(doc, null, null, null, null));
-            var viewport = (Viewport3DX)preview.RenderSurface; viewport.ShowCoordinateSystem = viewport.ShowViewCube = viewport.IsInertiaEnabled = false;
-            await PresentedAfter(viewport, () => preview.RestoreView(new(new(0,0,12), new(0,0,-12), new(0,1,0), 50)));
-            var meshes = Meshes(viewport).ToArray(); var materials = meshes.Select(m => m.Material).ToArray(); var pose = preview.CaptureView();
-            byte[] normal = Pixels(Presented(viewport));
+            preview.SetNavigationAids(false, false); preview.InertiaEnabled = false;
+            await PresentedAfter(preview, () => preview.RestoreView(new(new(0,0,12), new(0,0,-12), new(0,1,0), 50)));
+            var meshes = Meshes(preview).ToArray(); var materials = meshes.Select(m => m.MaterialIdentity).ToArray(); var pose = preview.CaptureView();
+            byte[] normal = Pixels(preview.CapturePresentedFrame());
             foreach (var mode in new[] { WorldHighlightMode.NonDefaultSoils, WorldHighlightMode.CanModify, WorldHighlightMode.ClipTo, WorldHighlightMode.CanModifyAndClipTo })
             {
-                await PresentedAfter(viewport, () => preview.SetWorldHighlightMode(mode));
-                Require(meshes.Any(m => m.Material is HelixToolkit.Wpf.SharpDX.DiffuseMaterial material && PreviewMaterials.OverlayColor(material).Alpha == .5f), "Highlight did not reach normal material shader state");
-                var image = Presented(viewport); Save(image, Path.Combine(output, "fixture-" + mode + ".png"));
+                await PresentedAfter(preview, () => preview.SetWorldHighlightMode(mode));
+                Require(meshes.Any(m => m.OverlayColor.W == .5f), "Highlight did not reach normal material shader state");
+                var image = preview.CapturePresentedFrame(); Save(image, Path.Combine(output, "fixture-" + mode + ".png"));
                 int[] rgb = mode == WorldHighlightMode.NonDefaultSoils ? [255,255,0] : mode == WorldHighlightMode.CanModify ? [0,255,0] : [255,0,0];
                 for (int node = 0; node < 4; node++) for (int part = 0; part < 2; part++)
                 {
@@ -160,32 +157,29 @@ internal static class WorldHighlightCheck
                     int[] baseRgb = part == 0 ? [128,255,64] : [0,0,255];
                     int[] tint = mode == WorldHighlightMode.CanModifyAndClipTo && (node & 2) == 0 ? [0,255,0] : rgb;
                     int[] expected = matches ? Mix(baseRgb, tint) : baseRgb;
-                    CheckPixel(image, viewport, new(-3 + node * 2 + (part == 0 ? -.5 : .5), 1.3, 0), expected);
+                    CheckPixel(image, preview, new(-3 + node * 2 + (part == 0 ? -.5 : .5), 1.3, 0), expected);
                 }
-                CheckPixel(image, viewport, new(-1.3,-1.5,0), [0,0,255]);
-                CheckPixel(image, viewport, new(0,-1.5,0), Mix(Mix([128,0,255], rgb), [0,0,255]));
-                CheckPixel(image, viewport, new(1.3,-1.5,0), Mix([0,255,0], rgb));
-                CheckPixel(image, viewport, new(3,-1.5,0), Mix(Mix([255,255,255], rgb), [0,0,255]));
-                await PresentedAfter(viewport, () => { preview.SetTextured(false); preview.SetWorldHighlightMode(WorldHighlightMode.None); });
-                var untextured = Presented(viewport);
-                await PresentedAfter(viewport, () => preview.SetWorldHighlightMode(mode));
+                CheckPixel(image, preview, new(-1.3,-1.5,0), [0,0,255]);
+                CheckPixel(image, preview, new(0,-1.5,0), Mix(Mix([128,0,255], rgb), [0,0,255]));
+                CheckPixel(image, preview, new(1.3,-1.5,0), Mix([0,255,0], rgb));
+                CheckPixel(image, preview, new(3,-1.5,0), Mix(Mix([255,255,255], rgb), [0,0,255]));
+                await PresentedAfter(preview, () => { preview.SetTextured(false); preview.SetWorldHighlightMode(WorldHighlightMode.None); });
+                var untextured = preview.CapturePresentedFrame();
+                await PresentedAfter(preview, () => preview.SetWorldHighlightMode(mode));
                 foreach (double x in new[] { -1.3, 1.3 })
-                    CheckPixel(Presented(viewport), viewport, new(x,-1.5,0), Mix(ReadPixel(untextured, viewport, new(x,-1.5,0)), rgb));
-                await PresentedAfter(viewport, () =>
+                    CheckPixel(preview.CapturePresentedFrame(), preview, new(x,-1.5,0), Mix(ReadPixel(untextured, preview, new(x,-1.5,0)), rgb));
+                await PresentedAfter(preview, () =>
                 {
                     preview.SetTextured(true);
-                    preview.SetWireframe(true); Require(preview.PolygonOutlineCount > 0 && meshes.All(m => m.FillMode == SharpDX.Direct3D11.FillMode.Solid), "Wireframe lost highlighted meshes"); preview.SetWireframe(false);
+                    preview.SetWireframe(true); Require(preview.PolygonOutlineCount > 0 && meshes.All(m => m.SolidFill), "Wireframe lost highlighted meshes"); preview.SetWireframe(false);
                 });
-                var ray = new HelixToolkit.Maths.Ray(new(0,0,12), Vector3.Normalize(new(-3.5f,1.3f,-12)));
-                var hitContext = new HitTestContext(viewport.RenderContext, ray, Vector2.Zero);
-                List<HelixToolkit.SharpDX.HitTestResult> hits = [];
-                foreach (var mesh in meshes) mesh.SceneNode.HitTest(hitContext, ref hits);
-                Require(hits.Any(h => Vector3.Distance(h.PointHit, new(-3.5f,1.3f,0)) < .001f), "Highlight lost instance ray picking");
-                Require(meshes.SequenceEqual(Meshes(viewport)) && preview.CaptureView() == pose, "Highlight changed geometry or camera");
+                var hits = preview.HitTestScene(new Point3D(0,0,12), new Vector3D(-3.5,1.3,-12)).Where(h => h.Mesh is { } hit && meshes.Contains(hit));
+                Require(hits.Any(h => Vector3.Distance(h.Point, new(-3.5f,1.3f,0)) < .001f), "Highlight lost instance ray picking");
+                Require(meshes.SequenceEqual(Meshes(preview)) && preview.CaptureView() == pose, "Highlight changed geometry or camera");
             }
-            await PresentedAfter(viewport, () => preview.SetWorldHighlightMode(WorldHighlightMode.None));
-            Require(materials.SequenceEqual(meshes.Select(m => m.Material)), "Normal material identities were not restored");
-            Require(normal.SequenceEqual(Pixels(Presented(viewport))), "Normal pixels were not restored");
+            await PresentedAfter(preview, () => preview.SetWorldHighlightMode(WorldHighlightMode.None));
+            Require(materials.SequenceEqual(meshes.Select(m => m.MaterialIdentity)), "Normal material identities were not restored");
+            Require(normal.SequenceEqual(Pixels(preview.CapturePresentedFrame())), "Normal pixels were not restored");
             // The same normal appearance and transparency must feed winding overlays
             // in static and animated paths, including vertex tint times a real texture.
             foreach (bool animated in new[] { false, true })
@@ -199,16 +193,16 @@ internal static class WorldHighlightCheck
                     preview.RestoreView(pose);
                 }
                 else preview.SetWorldHighlightMode(WorldHighlightMode.ClipTo);
-                await PresentedAfter(viewport, () => preview.SetFaceOrientation(true));
-                var oriented = Presented(viewport);
-                CheckPixel(oriented, viewport, new(-3.5,1.3,0), Mix([128,255,64], [0,0,255]));
-                CheckPixel(oriented, viewport, new(-1.3,-1.5,0), [0,0,255]); // Texture alpha-zero hole.
-                CheckPixel(oriented, viewport, new(0,-1.5,0), Mix(Mix([128,0,255], [0,0,255]), [0,0,255]));
-                CheckPixel(oriented, viewport, new(1.3,-1.5,0), Mix([0,255,0], [0,0,255]));
-                CheckPixel(oriented, viewport, new(3,-1.5,0), Mix(Mix([255,255,255], [0,0,255]), [0,0,255]));
-                await PresentedAfter(viewport, () => preview.SetFaceOrientation(false));
-                if (!animated) CheckPixel(Presented(viewport), viewport, new(1.3,-1.5,0), Mix([0,255,0], [255,0,0]));
-                else CheckPixel(Presented(viewport), viewport, new(1.3,-1.5,0), [0,255,0]);
+                await PresentedAfter(preview, () => preview.SetFaceOrientation(true));
+                var oriented = preview.CapturePresentedFrame();
+                CheckPixel(oriented, preview, new(-3.5,1.3,0), Mix([128,255,64], [0,0,255]));
+                CheckPixel(oriented, preview, new(-1.3,-1.5,0), [0,0,255]); // Texture alpha-zero hole.
+                CheckPixel(oriented, preview, new(0,-1.5,0), Mix(Mix([128,0,255], [0,0,255]), [0,0,255]));
+                CheckPixel(oriented, preview, new(1.3,-1.5,0), Mix([0,255,0], [0,0,255]));
+                CheckPixel(oriented, preview, new(3,-1.5,0), Mix(Mix([255,255,255], [0,0,255]), [0,0,255]));
+                await PresentedAfter(preview, () => preview.SetFaceOrientation(false));
+                if (!animated) CheckPixel(preview.CapturePresentedFrame(), preview, new(1.3,-1.5,0), Mix([0,255,0], [255,0,0]));
+                else CheckPixel(preview.CapturePresentedFrame(), preview, new(1.3,-1.5,0), [0,255,0]);
             }
             Require(before == Snapshot(scene), "Highlight mutated source metadata");
             Console.WriteLine("PASS: GPU fixture half-tint RGB, combined per-instance flags, soil, two texture colors, vertex tint, original alpha/cutouts, normal pixel restoration and static/animated face overlays.");
@@ -229,41 +223,24 @@ internal static class WorldHighlightCheck
             foreach (var nested in VisualChildren(child)) yield return nested;
         }
     }
-    private static IEnumerable<MeshGeometryModel3D> Meshes(Viewport3DX viewport) => viewport.Items.OfType<MeshGeometryModel3D>().Concat(viewport.Items.OfType<SortingGroupModel3D>().SelectMany(g => g.Children.OfType<MeshGeometryModel3D>()));
-    private static async Task PresentedAfter(Viewport3DX viewport, Action change)
+    // The scene's own surfaces: static batches and animation meshes, not overlays.
+    private static IEnumerable<SceneViewport.RenderMeshHandle> Meshes(SceneViewport preview) => preview.EnumerateRenderMeshes().Where(m => m.Role != SceneViewport.RenderMeshRole.Overlay);
+    private static async Task PresentedAfter(SceneViewport preview, Action change)
     {
-        var host = viewport.RenderHost!;
-        var frame = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        void Rendered(object? sender, EventArgs e) => frame.TrySetResult();
-        host.Rendered += Rendered;
-        try
-        {
-            change();
-            try { await frame.Task.WaitAsync(TimeSpan.FromSeconds(10)); }
-            catch (TimeoutException)
-            {
-                throw new InvalidDataException($"No presented frame after appearance change: IsRendering={host.IsRendering}, IsBusy={host.IsBusy}, Visible={viewport.IsVisible}, Loaded={viewport.IsLoaded}, WindowActive={Window.GetWindow(viewport)?.IsActive}.");
-            }
-        }
-        finally { host.Rendered -= Rendered; }
-    }
-    private static BitmapSource Presented(Viewport3DX viewport)
-    {
-        using MemoryStream stream = new();
-        HelixToolkit.SharpDX.Utilities.ScreenCapture.SaveWICTextureToBitmapStream(viewport.RenderHost!.EffectsManager!, viewport.RenderHost.RenderBuffer!.BackBuffer!.Resource as SharpDX.Direct3D11.Texture2D, stream);
-        stream.Position = 0; return BitmapFrame.Create(stream, BitmapCreateOptions.None, BitmapCacheOption.OnLoad);
+        try { await preview.WaitForPresentedFrameAsync(change); }
+        catch (TimeoutException error) { throw new InvalidDataException("Appearance change: " + error.Message); }
     }
     private static byte[] Pixels(BitmapSource image) { var converted = new FormatConvertedBitmap(image,PixelFormats.Bgra32,null,0); byte[] bytes = new byte[converted.PixelWidth * converted.PixelHeight * 4]; converted.CopyPixels(bytes,converted.PixelWidth*4,0); return bytes; }
     private static int[] Mix(int[] a, int[] b) => Enumerable.Range(0,3).Select(i => (a[i] + b[i]) / 2).ToArray();
-    private static int[] ReadPixel(BitmapSource image, Viewport3DX viewport, Point3D world)
+    private static int[] ReadPixel(BitmapSource image, SceneViewport preview, Point3D world)
     {
-        var p = viewport.Project(world); int x = (int)(p.X * image.PixelWidth / viewport.ActualWidth), y = (int)(p.Y * image.PixelHeight / viewport.ActualHeight);
+        var p = preview.ProjectToView(world); var surface = preview.RenderSurface; int x = (int)(p.X * image.PixelWidth / surface.ActualWidth), y = (int)(p.Y * image.PixelHeight / surface.ActualHeight);
         var converted = new FormatConvertedBitmap(image,PixelFormats.Bgra32,null,0); byte[] pixel = new byte[4]; converted.CopyPixels(new Int32Rect(x,y,1,1),pixel,4,0);
         return [pixel[2], pixel[1], pixel[0]];
     }
-    private static void CheckPixel(BitmapSource image, Viewport3DX viewport, Point3D world, int[] rgb)
+    private static void CheckPixel(BitmapSource image, SceneViewport preview, Point3D world, int[] rgb)
     {
-        var p = viewport.Project(world); int x = (int)(p.X * image.PixelWidth / viewport.ActualWidth), y = (int)(p.Y * image.PixelHeight / viewport.ActualHeight);
+        var p = preview.ProjectToView(world); var surface = preview.RenderSurface; int x = (int)(p.X * image.PixelWidth / surface.ActualWidth), y = (int)(p.Y * image.PixelHeight / surface.ActualHeight);
         var converted = new FormatConvertedBitmap(image,PixelFormats.Bgra32,null,0); byte[] pixel = new byte[4]; converted.CopyPixels(new Int32Rect(x,y,1,1),pixel,4,0);
         Require(Enumerable.Range(0,3).All(i => Math.Abs(pixel[2-i]-rgb[i]) <= 4), $"At {world}: expected RGB {string.Join(',',rgb)}, got {pixel[2]},{pixel[1]},{pixel[0]}");
     }

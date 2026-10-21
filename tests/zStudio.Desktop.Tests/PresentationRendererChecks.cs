@@ -4,7 +4,6 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media.Media3D;
-using HelixToolkit.Wpf.SharpDX;
 using zStudio.Core;
 using zStudio.Rendering;
 using Xunit;
@@ -20,7 +19,6 @@ internal static class PresentationRendererChecks
     internal static void Run()
     {
         using var scene = new SceneViewport();
-        var surface = (Viewport3DX)scene.RenderSurface;
         Layout(900, 600);
         scene.RestoreView(new(new(0, 0, 100), new(0, 0, -100), new(0, 1, 0), 60));
         var pose = scene.CaptureView();
@@ -98,11 +96,11 @@ internal static class PresentationRendererChecks
 
         Guid window = Guid.NewGuid();
         scene.SetParachuteOverlay([new(0, Vector3.Zero), new(1, new(-20, 0, 0)), new(10, new(20, 0, 0))], [new(window, 5, [])]);
-        var flightLine = Get<LineGeometryModel3D>("parachuteLine").Geometry!;
+        var flightLine = scene.ParachuteLine!;
         Assert.Equal(new[] { 1, 2 }, flightLine.Indices);
-        Assert.Equal(Vector3.Zero, flightLine.Positions![0]); // Retain sample identity; omit only its rendered edge.
+        Assert.Equal(Vector3.Zero, flightLine.Positions[0]); // Retain sample identity; omit only its rendered edge.
         scene.SetParachuteOverlay([new(0, new(-20, 0, 0)), new(10, new(20, 0, 0))], [new(window, 5, [])]);
-        Assert.Empty(Get<LineGeometryModel3D>("parachuteLine").Geometry!.Indices!);
+        Assert.Empty(scene.ParachuteLine!.Indices);
         // A read-only world inspects objects, but drop-window selection enters an edit-only interaction.
         // Exercise the real pointer dispatch over the visible marker without native input or mouse capture.
         scene.SetPlacementEditing(false);
@@ -125,15 +123,13 @@ internal static class PresentationRendererChecks
         scene.SetParachuteOverlay([], []);
 
         // The real translation handler's post-layout path retains the existing draft and original Escape rollback.
-        using var arrow = new MeshGeometryModel3D { Transform = new MatrixTransform3D(Matrix3D.Identity) };
-        Set("activePickupHandle", new HelixToolkit.SharpDX.HitTestResult { ModelHit = arrow, PointHit = Vector3.Zero });
+        scene.BeginFixtureHandleGesture(Matrix4x4.Identity, Vector3.Zero);
         var original = new PlacementTransform(Vector3.Zero, Vector3.Zero);
         var draft = original with { Position = new(7, 0, 0) };
         Set("transformDragStart", original); Set("transformDraft", draft);
         typeof(SceneViewport).GetProperty(nameof(SceneViewport.IsPickupDragging))!.SetValue(scene, true);
         List<PlacementTransform> transforms = [];
         scene.TransformDraftChanged += transforms.Add;
-        var handles = new GroupModel3D(); Set("pickupTarget", handles);
         try
         {
             Layout(1100, 760);
@@ -142,13 +138,12 @@ internal static class PresentationRendererChecks
             scene.HandlePickupPointerMove(new(650, 380)); Assert.Empty(transforms);
             scene.HandlePickupPointerMove(new(650, 380)); Assert.Equal(draft, transforms[^1]);
             scene.HandlePickupPointerMove(new(660, 380)); Assert.True(transforms[^1].Position.X > draft.Position.X);
-            Assert.Equal(transforms[^1].Position.X, handles.Transform.Value.OffsetX, 4); // The handles follow during the drag, not on release.
+            Assert.Equal(transforms[^1].Position.X, scene.TransformHandleTargetTransform!.Value.M41, 4); // The handles follow during the drag, not on release.
             Assert.Equal(0, transforms[^1].Position.Y); Assert.Equal(0, transforms[^1].Position.Z);
             Assert.True(scene.CancelPickupDrag()); Assert.Equal(original, transforms[^1]);
         }
         finally { typeof(SceneViewport).GetProperty(nameof(SceneViewport.IsPickupDragging))!.SetValue(scene, false); }
 
-        T Get<T>(string name) => (T)typeof(SceneViewport).GetField(name, Private)!.GetValue(scene)!;
         void Set(string name, object value) => typeof(SceneViewport).GetField(name, Private)!.SetValue(scene, value);
         object? Call(string name, params object[] values) => typeof(SceneViewport).GetMethod(name, Private)!.Invoke(scene, values);
         void Layout(double width, double height) { scene.Measure(new(width, height)); scene.Arrange(new(0, 0, width, height)); scene.UpdateLayout(); }
@@ -156,9 +151,8 @@ internal static class PresentationRendererChecks
 
     internal static void CheckSurfaceStrokes(SceneViewport scene)
     {
-        var surface = (Viewport3DX)scene.RenderSurface;
         // Interior points of the existing ModelFixture triangle, tested against the actual rendered surface.
-        Point first = surface.Project(new Point3D(0, .4, .02)), next = surface.Project(new Point3D(0, 1.4, .07));
+        Point first = scene.ProjectToView(new Point3D(0, .4, .02)), next = scene.ProjectToView(new Point3D(0, 1.4, .07));
         Assert.True(scene.TryNavigationSurface(first, out var firstHit));
         Assert.True(scene.TryNavigationSurface(next, out _));
         var zoneHit = Assert.IsType<SceneInspection>(scene.ProbeInspection(next));

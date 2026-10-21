@@ -1,4 +1,3 @@
-using HelixToolkit.SharpDX;
 using zStudio.Rendering;
 using Xunit;
 
@@ -12,14 +11,13 @@ public sealed class PreviewRecoveryTests
     public void InterfaceRecoveryRefusesNestedOperationsBeforeDisposingAndAllowsLaterRetry(bool dispose)
     {
         // No window, D3DImage or hardware surface: one small software device.
-        using var owned = new PreviewEffectsManager(new() { EnableSoftwareRendering = true });
-        IEffectsManager manager = owned;
+        using var manager = new PreviewRecoveryHarness();
         manager.DisposeAllResources();
         int notifications = 0;
         EventHandler<EventArgs> callback = (_, _) =>
         {
             notifications++;
-            var device = owned.Device;
+            var device = manager.Device;
             Assert.NotNull(device);
             try
             {
@@ -27,30 +25,30 @@ public sealed class PreviewRecoveryTests
             }
             finally
             {
-                Assert.Same(device, owned.Device);
-                Assert.False(device.IsDisposed); // Nested disposal must refuse before touching it.
+                Assert.Same(device, manager.Device);
+                Assert.False(manager.DeviceDisposed); // Nested disposal must refuse before touching it.
             }
         };
-        owned.Reinitialized += callback;
+        manager.Reinitialized += callback;
         try
         {
             var error = Assert.Throws<InvalidOperationException>(manager.Reinitialize);
             Assert.Contains("retry the preview", error.Message, StringComparison.Ordinal);
             Assert.Equal(1, notifications);
         }
-        finally { owned.Reinitialized -= callback; }
+        finally { manager.Reinitialized -= callback; }
 
         // An unrelated callback exception must also release the recovery guard.
         var unrelated = new InvalidOperationException("controlled device observer failure");
         EventHandler<EventArgs> failing = (_, _) => throw unrelated;
         manager.DisposeAllResources();
-        owned.Reinitialized += failing;
+        manager.Reinitialized += failing;
         try { Assert.Same(unrelated, Assert.Throws<InvalidOperationException>(manager.Reinitialize)); }
-        finally { owned.Reinitialized -= failing; }
+        finally { manager.Reinitialized -= failing; }
         manager.DisposeAllResources();
         manager.Reinitialize();
-        Assert.NotNull(owned.Device);
-        Assert.False(owned.Device.IsDisposed);
+        Assert.NotNull(manager.Device);
+        Assert.False(manager.DeviceDisposed);
     }
 
     [Fact]

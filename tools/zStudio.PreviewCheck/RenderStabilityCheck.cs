@@ -4,12 +4,9 @@ using System.Windows;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Media.Media3D;
-using HelixToolkit.SharpDX;
-using HelixToolkit.Wpf.SharpDX;
 using zStudio.Core;
 using zStudio.Core.Animation;
 using zStudio.Rendering;
-using HCamera = HelixToolkit.Wpf.SharpDX.PerspectiveCamera;
 
 internal static class RenderStabilityCheck
 {
@@ -46,24 +43,24 @@ internal static class RenderStabilityCheck
                         await preview.ShowAsync(context.World, new() { Id = new("fixture", AssetKind.Node, 0), Name = "world", Content = scene.Nodes[0] }, resolver, null, 0, default);
                     }
                     else await preview.ShowAnimationAsync(context, frame, resolver, false, default);
-                    var viewport = (Viewport3DX)preview.RenderSurface; viewport.ShowCoordinateSystem = viewport.ShowViewCube = false;
-                    var camera = (HCamera)viewport.Camera!;
+                    preview.SetNavigationAids(false, false);
+                    var camera = preview.DebugCamera;
                     camera.Position = new(2041, 32, 1893); camera.LookDirection = new(0, 0, -200); camera.UpDirection = new(0, 1, 0);
                     await Task.Delay(300);
-                    AssertRed(Capture(viewport), $"inside world, instanced {instanced}, front first {frontFirst}, near {camera.NearPlaneDistance:G6}");
+                    AssertRed(preview.CapturePresentedFrame(), $"inside world, instanced {instanced}, front first {frontFirst}, near {camera.NearPlaneDistance:G6}");
                     // Use native inertia; read the last presented frame after it stops.
-                    viewport.AddZoomForce(-.12);
-                    await Task.Delay(100); AssertRed(Capture(viewport), "moving");
-                    await Task.Delay(2400); var idle = Capture(viewport); AssertRed(idle, "idle 2 s");
-                    await Task.Delay(8000); var later = Capture(viewport); AssertRed(later, "idle 10 s");
+                    preview.QueueNativeNavigation(zoom: -.12);
+                    await Task.Delay(100); AssertRed(preview.CapturePresentedFrame(), "moving");
+                    await Task.Delay(2400); var idle = preview.CapturePresentedFrame(); AssertRed(idle, "idle 2 s");
+                    await Task.Delay(8000); var later = preview.CapturePresentedFrame(); AssertRed(later, "idle 10 s");
                     Require(Pixels(idle).SequenceEqual(Pixels(later)), "Displayed frame changed while idle.");
-                    double width = viewport.RenderHost!.ActualWidth, height = viewport.RenderHost.ActualHeight;
+                    var size = preview.PresentedPixelSize;
                     var position = camera.Position;
                     for (int i = 0; i < 8; i++) { var export = preview.RenderImage(320, 240); Require(export.PixelWidth == 320 && export.PixelHeight == 240, "Wrong export size"); }
-                    Require(viewport.RenderHost.ActualWidth == width && viewport.RenderHost.ActualHeight == height && camera.Position == position, "Capturing resized the live viewport or moved its camera.");
+                    Require(preview.PresentedPixelSize == size && camera.Position == position, "Capturing resized the live viewport or moved its camera.");
                 }
                 Console.WriteLine("PASS: inside-world opaque depth, animated/instanced, both draw orders, inertia, 2/10-second idle and repeated DPI captures.");
-                var view = (Viewport3DX)preview.RenderSurface; var cam = (HCamera)view.Camera!;
+                var cam = preview.DebugCamera;
                 foreach (bool fly in new[] { false, true })
                 {
                     preview.SetFly(fly); cam.Position = new(4, 5, 6); cam.LookDirection = new(0, 0, -10);
@@ -76,12 +73,12 @@ internal static class RenderStabilityCheck
                     }
                     cam.UpDirection = new(0, -1, 0); await Task.Delay(100); Require(cam.UpDirection.Y > 0, "External camera roll was not removed.");
                     var stopped = preview.CaptureView();
-                    view.AddRotateForce(0, 1000); await Task.Delay(1800); Require(cam.UpDirection.Y > 0, "Native rotation inertia inverted the camera.");
+                    preview.QueueNativeNavigation(rotateY: 1000); await Task.Delay(1800); Require(cam.UpDirection.Y > 0, "Native rotation inertia inverted the camera.");
                     if (fly) Require(preview.CaptureView() == stopped, "Native rotation changed captured freecam.");
                 }
                 Console.WriteLine("PASS: upright Orbit/Fly, large drags, pole limits, no roll, fixed orbit target/Fly position and native rotation inertia.");
                 preview.SetFly(false);
-                view.ChangeDirection(new(0, -10, 0), new(0, 0, -1), 300);
+                preview.AnimateNativeDirection(new(0, -10, 0), new(0, 0, -1), 300);
                 await Task.Delay(600); Require(cam.UpDirection.Y > 0 && Math.Abs(cam.LookDirection.Y / cam.LookDirection.Length) <= Math.Sin(89 * Math.PI / 180) + 1e-12, "Top view animation crossed the pitch limit.");
                 var animation = await resolver.OpenCachedAsync(Path.Combine(resolver.Root, "m1", "anim.zbd"), default);
                 context = await AnimationPreviewContext.LoadAsync(animation.Animations!, animation.Path, resolver);
@@ -108,14 +105,14 @@ internal static class RenderStabilityCheck
                 async Task CheckReal(string label, bool world)
                 {
                     if (world) { cam.Position = new(2065, 72, 1702); cam.LookDirection = new(-24, -40, -9); cam.UpDirection = new(0, 1, 0); }
-                    await Task.Delay(400); view.AddZoomForce(-.12);
-                    await Task.Delay(100); Save(Capture(view), Path.Combine(output, label + "-moving.png"));
-                    await Task.Delay(2400); var idle = Capture(view); var position = cam.Position;
-                    var identities = Meshes(view.Items).ToArray();
+                    await Task.Delay(400); preview.QueueNativeNavigation(zoom: -.12);
+                    await Task.Delay(100); Save(preview.CapturePresentedFrame(), Path.Combine(output, label + "-moving.png"));
+                    await Task.Delay(2400); var idle = preview.CapturePresentedFrame(); var position = cam.Position;
+                    var identities = preview.EnumerateRenderMeshes().ToArray();
                     Save(idle, Path.Combine(output, label + "-idle2.png"));
-                    await Task.Delay(8000); var later = Capture(view); Save(later, Path.Combine(output, label + "-idle10.png"));
+                    await Task.Delay(8000); var later = preview.CapturePresentedFrame(); Save(later, Path.Combine(output, label + "-idle10.png"));
                     Require(Pixels(idle).SequenceEqual(Pixels(later)) && cam.Position == position, label + " changed while idle.");
-                    Require(identities.SequenceEqual(Meshes(view.Items)), label + " replaced mesh identities while idle.");
+                    Require(identities.SequenceEqual(preview.EnumerateRenderMeshes()), label + " replaced mesh identities while idle.");
                     Console.WriteLine($"PASS {label}: stable displayed buffers at 2/10 seconds; near={cam.NearPlaneDistance:G6}, far={cam.FarPlaneDistance:G6}, animated meshes={preview.AnimationMeshCount}");
                 }
             }
@@ -125,14 +122,6 @@ internal static class RenderStabilityCheck
         app.Run(); return exit;
     }
     private static GameModel Plane(int material) => new(material, [new(-40, -40, 0), new(40, -40, 0), new(40, 40, 0), new(-40, 40, 0)], [], [], [new(material, 0, [0, 1, 2, 3], [], [], [])], []);
-    // Read the displayed buffer. RenderBitmap would force another frame and hide an idle-frame defect.
-    internal static BitmapSource Capture(Viewport3DX viewport)
-    {
-        using var stream = new MemoryStream();
-        HelixToolkit.SharpDX.Utilities.ScreenCapture.SaveWICTextureToBitmapStream(viewport.RenderHost!.EffectsManager!, viewport.RenderHost.RenderBuffer!.BackBuffer!.Resource as SharpDX.Direct3D11.Texture2D, stream);
-        stream.Position = 0;
-        var image = new BitmapImage(); image.BeginInit(); image.StreamSource = stream; image.CacheOption = BitmapCacheOption.OnLoad; image.EndInit(); image.Freeze(); return image;
-    }
     private static void AssertRed(BitmapSource image, string label)
     {
         var bitmap = new FormatConvertedBitmap(image, PixelFormats.Bgra32, null, 0); byte[] pixel = new byte[4];
@@ -144,6 +133,4 @@ internal static class RenderStabilityCheck
     { var bitmap = new FormatConvertedBitmap(image, PixelFormats.Bgra32, null, 0); byte[] data = new byte[bitmap.PixelWidth * bitmap.PixelHeight * 4]; bitmap.CopyPixels(data, bitmap.PixelWidth * 4, 0); return data; }
     private static void Require(bool condition, string message) { if (!condition) throw new InvalidDataException(message); }
     private static void Save(BitmapSource image, string path) { PngBitmapEncoder encoder = new(); encoder.Frames.Add(BitmapFrame.Create(image)); using var stream = File.Create(path); encoder.Save(stream); }
-    private static IEnumerable<MeshGeometryModel3D> Meshes(IEnumerable<Element3D> elements)
-    { foreach (var e in elements) { if (e is MeshGeometryModel3D m) yield return m; else if (e is GroupModel3D g) foreach (var child in Meshes(g.Children)) yield return child; } }
 }

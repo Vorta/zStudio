@@ -145,11 +145,11 @@ internal static class MissionSelectionChecks
         try
         {
             Assert.False((bool)typeof(MainWindow).GetProperty("HasPublishedStaticScene", flags)!.GetValue(main)!);
-            Exception? firstSharpDxFailure = null, nativeFailure = null;
+            Exception? firstInteropFailure = null, nativeFailure = null;
             void CaptureNativeFailure(object? sender, System.Runtime.ExceptionServices.FirstChanceExceptionEventArgs args)
             {
-                if (args.Exception is SharpDX.SharpDXException)
-                    Interlocked.CompareExchange(ref firstSharpDxFailure, args.Exception, null);
+                if (SceneViewport.IsGraphicsInteropException(args.Exception))
+                    Interlocked.CompareExchange(ref firstInteropFailure, args.Exception, null);
                 if (args.Exception.HResult == unchecked((int)0x8007000E))
                     Interlocked.CompareExchange(ref nativeFailure, args.Exception, null);
             }
@@ -174,7 +174,7 @@ internal static class MissionSelectionChecks
                     $"scene present: {failedScene != null}; displayed reader: {Clip(failedScene?.Mission?.Layout.MissionArchive)}; " +
                     $"published: {typeof(MainWindow).GetProperty("HasPublishedStaticScene", flags)!.GetValue(main)}; " +
                     $"request canceled: {token.IsCancellationRequested}\n" +
-                    $"First SharpDX exception: {Volatile.Read(ref firstSharpDxFailure)?.ToString() ?? "<not observed>"}\n" +
+                    $"First graphics interop exception: {Volatile.Read(ref firstInteropFailure)?.ToString() ?? "<not observed>"}\n" +
                     $"First 0x8007000E exception: {Volatile.Read(ref nativeFailure)?.ToString() ?? "<not observed>"}", ex);
             }
             finally { AppDomain.CurrentDomain.FirstChanceException -= CaptureNativeFailure; }

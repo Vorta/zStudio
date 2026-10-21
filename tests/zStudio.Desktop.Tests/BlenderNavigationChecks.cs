@@ -7,8 +7,6 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media.Media3D;
-using HelixToolkit;
-using HelixToolkit.Wpf.SharpDX;
 using ModelContextProtocol.Client;
 using ModelContextProtocol.Protocol;
 using zStudio.Core;
@@ -17,8 +15,6 @@ using zStudio.Desktop;
 using zStudio.Mcp;
 using zStudio.Rendering;
 using Xunit;
-using MeshGeometry3D = HelixToolkit.SharpDX.MeshGeometry3D;
-using ProjectionCamera = HelixToolkit.Wpf.SharpDX.ProjectionCamera;
 
 namespace zStudio.Desktop.Tests;
 
@@ -28,10 +24,9 @@ internal static class BlenderNavigationChecks
     internal static async Task Run()
     {
         using var scene = new SceneViewport();
-        var surface = (Viewport3DX)scene.RenderSurface;
+        var surface = scene.RenderSurface;
         scene.Measure(new(900, 600)); scene.Arrange(new(0, 0, 900, 600));
-        Assert.False(surface.UseDefaultGestures);
-        Assert.Empty(surface.InputBindings);
+        Assert.False(scene.UsesBuiltInGestures);
         var initial = new SceneViewport.ViewPose(new(0, 0, 10), new(0, 0, -10), new(0, 1, 0), 60);
         scene.RestoreView(initial);
         var target = initial.Position + initial.LookDirection;
@@ -98,7 +93,6 @@ internal static class BlenderNavigationChecks
     }
     private static void CheckPointerAnchoring(SceneViewport scene, SceneViewport.ViewPose initial)
     {
-        var surface = (Viewport3DX)scene.RenderSurface;
         var point = new Point3D(2, 1, 0);
         foreach (string projection in new[] { "perspective", "orthographic" })
         {
@@ -140,8 +134,8 @@ internal static class BlenderNavigationChecks
             var pose = SceneViewport.UprightPose(initial with { Position = new(5305, 2879, 7446), LookDirection = look * length,
                 Projection = projection, OrthographicWidth = projection == "orthographic" ? 20 : null });
             scene.RestoreView(pose);
-            var camera = (ProjectionCamera)surface.Camera!;
-            foreach (var matrix in new[] { camera.CreateViewMatrix(), ((ProjectionCamera)camera.Clone()).CreateViewMatrix() })
+            var camera = scene.DebugCamera;
+            foreach (var matrix in new[] { camera.CreateViewMatrix(), camera.CreateClonedViewMatrix() })
                 Assert.True(Vector3.Distance(new(-matrix.M13, -matrix.M23, -matrix.M33), new((float)look.X, (float)look.Y, (float)look.Z)) < 1e-6,
                     "Rendered view direction lost precision with a short look vector at a map-scale position");
         }
@@ -149,7 +143,7 @@ internal static class BlenderNavigationChecks
 
         Point Project(Point3D p)
         {
-            var camera = (ProjectionCamera)surface.Camera!;
+            var camera = scene.DebugCamera;
             var matrix = camera.CreateViewMatrix() * camera.CreateProjectionMatrix(1.5);
             var clip = Vector4.Transform(new Vector4((float)p.X, (float)p.Y, (float)p.Z, 1), matrix);
             return new((clip.X / clip.W + 1) * 450, (1 - clip.Y / clip.W) * 300);
@@ -158,7 +152,7 @@ internal static class BlenderNavigationChecks
     private static void CheckLiveModifiers(SceneViewport scene, SceneViewport.ViewPose initial)
     {
         Point start = new(300, 200), finish = new(330, 220);
-        var surface = (Viewport3DX)scene.RenderSurface;
+        var surface = scene.RenderSurface;
         foreach (var (key, modifiers) in new[] { (Key.LeftShift, ModifierKeys.Shift), (Key.RightShift, ModifierKeys.Shift),
             (Key.LeftCtrl, ModifierKeys.Control), (Key.RightCtrl, ModifierKeys.Control),
             (Key.LeftShift, ModifierKeys.Control | ModifierKeys.Shift), (Key.RightCtrl, ModifierKeys.Control | ModifierKeys.Shift) })
@@ -221,7 +215,7 @@ internal static class BlenderNavigationChecks
     }
     private static void CheckContinuousZoomAndPivot(SceneViewport scene, SceneViewport.ViewPose initial)
     {
-        var surface = (Viewport3DX)scene.RenderSurface;
+        var surface = scene.RenderSurface;
         scene.RestoreView(initial); scene.ZoomBy(100); var batch = scene.CaptureView();
         Assert.True(batch.Position.Z < 0, "Zoom must travel past the original target");
         Assert.Equal(.01, batch.LookDirection.Length, 10);
@@ -302,13 +296,13 @@ internal static class BlenderNavigationChecks
     {
         using var scene = new SceneViewport();
         scene.Measure(new(900, 600)); scene.Arrange(new(0, 0, 900, 600));
-        InstallGeometry(scene);
+        var mesh = InstallGeometry(scene);
         var data = scene.PreviewScene!;
         data.Nodes[0] = data.Nodes[0] with { Name = "horizon", Class = "object3d",
             Data = new() { ["transform"] = new JsonArray(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0) } };
         Assert.Single(MissionSceneContext.FindHorizons(data));
         typeof(SceneViewport).GetMethod("ConfigureHorizon", Fields)!.Invoke(scene, [data]);
-        var mesh = ((List<MeshGeometryModel3D>)typeof(SceneViewport).GetField("meshes", Fields)!.GetValue(scene)!).Single();
+        Assert.Single(scene.StaticBatches);
         var prepare = typeof(SceneViewport).GetMethod("PrepareCameraFrame", Fields)!;
         foreach (string projection in new[] { "perspective", "orthographic" })
         foreach (var gesture in new[] { SceneViewport.NavigationGesture.Pan, SceneViewport.NavigationGesture.Zoom, SceneViewport.NavigationGesture.Dolly })
@@ -344,29 +338,26 @@ internal static class BlenderNavigationChecks
             Assert.True(MainWindow.CameraInputIsNative(control));
         Assert.False(MainWindow.CameraInputIsNative(new Grid()));
     }
-    private static void InstallGeometry(SceneViewport scene)
+    private static SceneViewport.RenderMeshHandle InstallGeometry(SceneViewport scene)
     {
         var data = new GameScene();
         data.Nodes.Add(new(0, "parent", "Object3D", null, [], [1], new(), new()));
         data.Nodes.Add(new(1, "child", "Object3D", 0, [0], [], new(), new()));
         data.Nodes.Add(new(2, "other", "Object3D", 0, [], [], new(), new()));
         typeof(SceneViewport).GetProperty(nameof(SceneViewport.PreviewScene))!.SetValue(scene, data);
-        var geometry = new MeshGeometry3D { Positions = new Vector3Collection([new(-1, -1, 0), new(1, -1, 0), new(0, 1, 0)]), Indices = new IntCollection([0, 1, 2]) };
-        var mesh = new MeshGeometryModel3D { Geometry = geometry, Instances = [Matrix4x4.CreateTranslation(10, 0, 0), Matrix4x4.CreateTranslation(100, 0, 0)] };
-        ((List<MeshGeometryModel3D>)typeof(SceneViewport).GetField("meshes", Fields)!.GetValue(scene)!).Add(mesh);
-        ((Dictionary<MeshGeometry3D, (Vector3 Min, Vector3 Max)>)typeof(SceneViewport).GetField("staticMeshBounds", Fields)!.GetValue(scene)!).Add(geometry, (new(-1, -1, 0), new(1, 1, 0)));
-        ScenePlacement[] placements = [new(1, 0, "child", mesh.Instances[0]), new(2, 0, "other", mesh.Instances[1])];
-        foreach (string field in new[] { "placements", "visiblePlacements" })
-            ((Dictionary<MeshGeometryModel3D, ScenePlacement[]>)typeof(SceneViewport).GetField(field, Fields)!.GetValue(scene)!).Add(mesh, placements);
-        var surface = typeof(SceneViewport).GetMethod("IsOrbitSurface", Fields)!;
-        bool Eligible(MeshGeometryModel3D candidate, int instance) => (bool)surface.Invoke(scene, [candidate, instance])!;
-        Assert.True(Eligible(mesh, 0)); Assert.True(Eligible(mesh, 1)); Assert.False(Eligible(mesh, 2));
-        using var helper = new MeshGeometryModel3D { Geometry = geometry }; Assert.False(Eligible(helper, 0));
-        mesh.IsDepthClipEnabled = false; Assert.False(Eligible(mesh, 0)); mesh.IsDepthClipEnabled = true;
-        mesh.Visibility = Visibility.Collapsed; Assert.False(Eligible(mesh, 0)); mesh.Visibility = Visibility.Visible;
-        mesh.IsRendering = false; Assert.False(Eligible(mesh, 0)); mesh.IsRendering = true;
-        mesh.IsHitTestVisible = false; Assert.False(Eligible(mesh, 0)); mesh.IsHitTestVisible = true;
-        mesh.IsTransparent = true; Assert.True(Eligible(mesh, 0)); mesh.IsTransparent = false;
+        Vector3[] triangle = [new(-1, -1, 0), new(1, -1, 0), new(0, 1, 0)];
+        Matrix4x4[] instances = [Matrix4x4.CreateTranslation(10, 0, 0), Matrix4x4.CreateTranslation(100, 0, 0)];
+        ScenePlacement[] placements = [new(1, 0, "child", instances[0]), new(2, 0, "other", instances[1])];
+        var mesh = scene.AddFixtureMesh(new(triangle, [0, 1, 2]) { Instances = instances, Placements = placements, Rendered = false });
+        Assert.True(scene.OrbitSurfaceEligible(mesh, 0)); Assert.True(scene.OrbitSurfaceEligible(mesh, 1)); Assert.False(scene.OrbitSurfaceEligible(mesh, 2));
+        var helper = scene.AddFixtureMesh(new(triangle, [0, 1, 2]) { Rendered = false }); Assert.False(scene.OrbitSurfaceEligible(helper, 0));
+        scene.RemoveFixtureMesh(helper);
+        mesh.IsDepthClipEnabled = false; Assert.False(scene.OrbitSurfaceEligible(mesh, 0)); mesh.IsDepthClipEnabled = true;
+        mesh.Visible = false; Assert.False(scene.OrbitSurfaceEligible(mesh, 0)); mesh.Visible = true;
+        mesh.IsRendering = false; Assert.False(scene.OrbitSurfaceEligible(mesh, 0)); mesh.IsRendering = true;
+        mesh.IsHitTestVisible = false; Assert.False(scene.OrbitSurfaceEligible(mesh, 0)); mesh.IsHitTestVisible = true;
+        mesh.IsTransparent = true; Assert.True(scene.OrbitSurfaceEligible(mesh, 0)); mesh.IsTransparent = false;
+        return mesh;
     }
     private static async Task CheckProtocol(SceneViewport scene, SceneViewport.ViewPose initial)
     {

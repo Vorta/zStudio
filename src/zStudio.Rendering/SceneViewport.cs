@@ -410,11 +410,11 @@ public sealed partial class SceneViewport : UserControl, IDisposable
             Aspect, minimumClipDistance, (camera as OrthographicCamera)?.Width);
         foreach (var mesh in DepthMeshes(viewport.Items))
         {
-            if (mesh.Geometry is not MeshGeometry3D geometry) continue;
+            if (mesh.Geometry is not MeshGeometry3D { Positions: { } positions, Indices: { } indices }) continue;
             var world = mesh.Transform?.Value ?? Matrix3D.Identity;
             if (mesh.Instances is { Count: > 0 } instances)
-                foreach (var instance in instances) { var transform = ToWpf(instance); transform.Append(world); range.Include(geometry, transform); }
-            else range.Include(geometry, world);
+                foreach (var instance in instances) { var transform = ToWpf(instance); transform.Append(world); range.Include(positions, indices, transform); }
+            else range.Include(positions, indices, world);
         }
         double closest = range.Near, farthest = range.Far;
         // Empty views still need a valid projection while navigating back to geometry.
@@ -572,6 +572,7 @@ public sealed partial class SceneViewport : UserControl, IDisposable
         sceneAlphaGroup = null;
         sceneMin = new(float.PositiveInfinity); sceneMax = new(float.NegativeInfinity);
         viewport.Items.Clear(); foreach (var mesh in meshes) mesh.Dispose(); foreach (var box in bounds) box.Dispose(); bounds.Clear(); meshes.Clear(); placements.Clear(); visiblePlacements.Clear(); staticMeshBounds.Clear(); textureMaps.Clear();
+        DisposeFixtures();
         staticRenderUnits = 0;
         staticGeometry?.Dispose(); staticGeometry = null;
         previewTextures?.Dispose(); previewTextures = null;

@@ -2,7 +2,6 @@ using System.IO;
 using System.Numerics;
 using System.Windows;
 using System.Windows.Threading;
-using HelixToolkit.Wpf.SharpDX;
 using zStudio.Core;
 using zStudio.Core.Formats;
 using zStudio.Rendering;
@@ -30,7 +29,6 @@ internal static class ViewportSizeCheck
                 scene.Nodes.Add(new(0, "fixture", "object3d", 0, [], [], new() { ["flags"] = 4 }, []));
                 var document = new AssetDocument("fixture", new(0, DateTime.MinValue), new(FormatFamily.GameZ, 15, Recognition.Supported, ""), ReadOnlyMemory<byte>.Empty) { Scene = scene };
                 await preview.ShowAsync(document, new() { Id = new("fixture", AssetKind.Model, 0), Name = "fixture", Content = model }, resolver, null, 0, default);
-                var viewport = (Viewport3DX)preview.RenderSurface;
                 await Check("initial load");
                 var camera = preview.CaptureView();
                 window.Width = 760; window.Height = 820; window.UpdateLayout(); await Check("portrait resize");
@@ -43,12 +41,12 @@ internal static class ViewportSizeCheck
                     await Task.Delay(180);
                     // Inspect the presented GPU surface directly; never force
                     // rendering, capture scaling, or resizing to hide a stale size.
-                    var surface = (SharpDX.Direct3D11.Texture2D)viewport.RenderHost!.RenderBuffer!.BackBuffer!.Resource!;
-                    int width = (int)((int)viewport.ActualWidth * viewport.RenderHost!.DpiScale);
-                    int height = (int)((int)viewport.ActualHeight * viewport.RenderHost.DpiScale);
-                    if (Math.Abs(surface.Description.Width - width) > 1 || Math.Abs(surface.Description.Height - height) > 1)
-                        throw new InvalidDataException($"{label}: buffer {surface.Description.Width} × {surface.Description.Height}, expected {width} × {height}.");
-                    Console.WriteLine($"{label}: {surface.Description.Width} × {surface.Description.Height} presented pixels at DPI scale {viewport.RenderHost.DpiScale}.");
+                    var surface = preview.PresentedPixelSize; double scale = preview.RenderDpiScale;
+                    int width = (int)((int)preview.RenderSurface.ActualWidth * scale);
+                    int height = (int)((int)preview.RenderSurface.ActualHeight * scale);
+                    if (Math.Abs(surface.Width - width) > 1 || Math.Abs(surface.Height - height) > 1)
+                        throw new InvalidDataException($"{label}: buffer {surface.Width} × {surface.Height}, expected {width} × {height}.");
+                    Console.WriteLine($"{label}: {surface.Width} × {surface.Height} presented pixels at DPI scale {scale}.");
                 }
             }
             catch (Exception ex) { result = 1; Console.Error.WriteLine(ex); }

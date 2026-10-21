@@ -3,13 +3,10 @@ using System.Numerics;
 using System.Reflection;
 using System.Text;
 using System.Windows;
-using HelixToolkit.SharpDX;
-using HelixToolkit.Wpf.SharpDX;
 using zStudio.Core;
 using zStudio.Core.Animation;
 using zStudio.Rendering;
 using Xunit;
-using DiffuseMaterial = HelixToolkit.Wpf.SharpDX.DiffuseMaterial;
 
 namespace zStudio.Desktop.Tests;
 
@@ -49,15 +46,15 @@ internal static class AnimationTextureQueueChecks
             Assert.Equal(96, framingCorners); // Eight prepared corners x twelve visible part instances.
             Assert.True(preview.TryFrame("selected", 2));
             Assert.Equal(24, framingCorners);
-            var boxes = Field<Dictionary<LineGeometryModel3D, ScenePlacement[]>>("boundsPlacements");
-            Assert.Equal([1, 2, 3, 4], boxes.Values.SelectMany(p => p).Select(p => p.NodeIndex).Order().ToArray());
+            var boxes = preview.BoundsBoxes;
+            Assert.Equal([1, 2, 3, 4], boxes.SelectMany(b => b.Placements).Select(p => p.NodeIndex).Order().ToArray());
             Assert.Equal(4, boxes.Count);
-            Assert.All(boxes.Keys, box =>
+            Assert.All(boxes, b =>
             {
-                var geometry = Assert.IsType<LineGeometry3D>(box.Geometry);
-                Assert.NotNull(geometry.Positions);
-                Assert.Equal(Vector3.Zero, geometry.Positions[0]);
-                Assert.Equal(new Vector3(1, 1, 0), geometry.Positions[6]);
+                Assert.True(b.Box.IsLine);
+                Assert.NotNull(b.Box.GeometryIdentity);
+                Assert.Equal(Vector3.Zero, b.Box.Positions[0]);
+                Assert.Equal(new Vector3(1, 1, 0), b.Box.Positions[6]);
             });
             // Isolate leaves the camera; an explicit Frame all then measures only the isolated geometry.
             preview.Isolate(2); preview.FrameAll();
@@ -122,18 +119,18 @@ internal static class AnimationTextureQueueChecks
             Assert.Equal(1, preview.AnimationMeshCount);
             preview.UpdateAnimationFrame(opened);
             Assert.Equal(2, preview.AnimationMeshCount);
-            var polygonMaps = Field<Dictionary<MeshGeometryModel3D, int[]>>("inspectionPolygons");
-            var expanded = polygonMaps.Single(p => p.Value.Length == 6);
-            Assert.Equal([0, 0, 0, 1, 1, 1], expanded.Value);
-            var expandedGeometry = Assert.IsType<HelixToolkit.SharpDX.MeshGeometry3D>(expanded.Key.Geometry);
-            Assert.NotNull(expandedGeometry.Colors);
-            Assert.Equal(6, expandedGeometry.Colors.Count);
-            Assert.Equal(1f, expandedGeometry.Colors[0].Red); Assert.Equal(1f, expandedGeometry.Colors[3].Blue);
-            Assert.Equal(128f / 255, expandedGeometry.Colors[0].Alpha);
-            Assert.Contains(polygonMaps, p => p.Value.SequenceEqual([2, 2, 2]));
+            var polygonMaps = preview.InspectionPolygonMaps;
+            var expanded = polygonMaps.Single(p => p.Polygons.Length == 6);
+            Assert.Equal([0, 0, 0, 1, 1, 1], expanded.Polygons);
+            var expandedColors = expanded.Mesh.Colors;
+            Assert.NotNull(expandedColors);
+            Assert.Equal(6, expandedColors.Count);
+            Assert.Equal(1f, expandedColors[0].X); Assert.Equal(1f, expandedColors[3].Z);
+            Assert.Equal(128f / 255, expandedColors[0].W);
+            Assert.Contains(polygonMaps, p => p.Polygons.SequenceEqual([2, 2, 2]));
             preview.UpdateAnimationFrame(closed);
-            Assert.Equal(1, preview.AnimationMeshCount); Assert.Equal([1, 1, 1], Assert.Single(polygonMaps).Value);
-            preview.UpdateAnimationFrame(closed with { Nodes = [] }); Assert.Empty(polygonMaps);
+            Assert.Equal(1, preview.AnimationMeshCount); Assert.Equal([1, 1, 1], Assert.Single(preview.InspectionPolygonMaps).Polygons);
+            preview.UpdateAnimationFrame(closed with { Nodes = [] }); Assert.Empty(preview.InspectionPolygonMaps);
             preview.UpdateAnimationFrame(opened); Assert.Equal(2, preview.AnimationMeshCount);
             preview.Clear(); Assert.Equal(0, preview.RetainedGeometryBytes);
 
@@ -232,13 +229,12 @@ internal static class AnimationTextureQueueChecks
             var references = Field<System.Collections.IDictionary>("animationTextureReferences");
             Assert.Equal(loads.Count, references.Count);
 
-            var surface = (Viewport3DX)preview.RenderSurface;
-            var meshes = surface.Items.OfType<SortingGroupModel3D>().Single().Children.OfType<MeshGeometryModel3D>().ToArray();
+            var meshes = AnimationMeshes();
             Assert.Equal(2, meshes.Length);
-            Assert.Equal(accepted ? Visibility.Visible : Visibility.Collapsed, meshes[0].Visibility);
-            Assert.Equal(Visibility.Visible, meshes[1].Visibility);
-            Assert.NotNull(((DiffuseMaterial)meshes[1].Material!).DiffuseMap);
-            if (accepted) Assert.NotNull(((DiffuseMaterial)meshes[0].Material!).DiffuseMap);
+            Assert.Equal(accepted, meshes[0].Visible);
+            Assert.True(meshes[1].Visible);
+            Assert.True(meshes[1].HasDiffuseMap);
+            if (accepted) Assert.True(meshes[0].HasDiffuseMap);
             var limits = notices.Where(n => n.Contains("allowance", StringComparison.Ordinal) || n.Contains("request limit", StringComparison.Ordinal)).ToArray();
             if (accepted && rejectedName == null) Assert.Empty(limits); else Assert.Single(limits);
 
@@ -252,14 +248,14 @@ internal static class AnimationTextureQueueChecks
                 }
                 Assert.Equal(2, loads.Count); Assert.Equal(10, references.Count);
                 Assert.Equal(11, Field<long>("animationTextureNameUnits"));
-                Assert.Equal(Visibility.Visible, meshes[0].Visibility);
+                Assert.True(meshes[0].Visible);
                 var stable = frame with { Nodes = [frame.Nodes[0] with { Texture = new string(firstName.AsSpan()) }, frame.Nodes[1]] };
                 preview.UpdateAnimationFrame(stable);
                 long lookup = Field<long>("animationTextureLookupUnits"), visits = Field<long>("animationTextureCycleMemberVisits");
                 for (int i = 0; i < 256; i++) preview.UpdateAnimationFrame(stable);
                 Assert.Equal(lookup, Field<long>("animationTextureLookupUnits"));
                 Assert.Equal(visits, Field<long>("animationTextureCycleMemberVisits"));
-                Assert.Equal(Visibility.Visible, meshes[0].Visibility);
+                Assert.True(meshes[0].Visible);
             }
             long cycleVisits = Field<long>("animationTextureCycleMemberVisits"), lookupUnits = Field<long>("animationTextureLookupUnits");
             for (int i = 0; i < 128; i++) preview.UpdateAnimationFrame(frame);
@@ -268,20 +264,20 @@ internal static class AnimationTextureQueueChecks
             if (firstName == "sample")
             {
                 // Repeated spawned lifetimes must not retain expired meshes through picking metadata.
-                var polygons = Field<System.Collections.IDictionary>("inspectionPolygons");
                 for (int i = 1; i <= 3; i++)
                 {
                     preview.UpdateAnimationFrame(frame with { Nodes = [frame.Nodes[0] with { Id = (long)i << 32 }, frame.Nodes[1]] });
-                    var live = surface.Items.OfType<SortingGroupModel3D>().Single().Children.OfType<MeshGeometryModel3D>().ToArray();
-                    Assert.Equal(2, live.Length); Assert.Equal(live.Length, polygons.Count);
-                    Assert.All(live, mesh => Assert.True(polygons.Contains(mesh)));
+                    var live = AnimationMeshes();
+                    Assert.Equal(2, live.Length); Assert.Equal(live.Length, preview.InspectionPolygonMaps.Count);
+                    Assert.All(live, mesh => Assert.NotNull(preview.InspectionPolygons(mesh)));
                 }
                 preview.UpdateAnimationFrame(frame with { Nodes = [] });
-                Assert.Equal(0, preview.AnimationMeshCount); Assert.Empty(polygons);
+                Assert.Equal(0, preview.AnimationMeshCount); Assert.Empty(preview.InspectionPolygonMaps);
             }
             preview.Clear(); Assert.Empty(references);
             Assert.Equal(0, Field<long>("animationTextureNameUnits")); Assert.Equal(0, Field<long>("animationTextureLookupUnits"));
             T Field<T>(string name) => (T)typeof(SceneViewport).GetField(name, BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(preview)!;
+            SceneViewport.RenderMeshHandle[] AnimationMeshes() => [.. preview.EnumerateRenderMeshes().Where(m => m.Role == SceneViewport.RenderMeshRole.Animation)];
         }
         finally { Directory.Delete(root, true); }
     }

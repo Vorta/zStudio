@@ -9,8 +9,6 @@ using System.Windows.Media.Imaging;
 using System.Windows.Media;
 using System.Windows.Media.Media3D;
 using System.Windows.Threading;
-using HelixToolkit.SharpDX;
-using HelixToolkit.Wpf.SharpDX;
 using zStudio.Core;
 using zStudio.Desktop;
 using zStudio.Rendering;
@@ -202,23 +200,21 @@ internal static class GuiReviewCapture
                 ((TabControl)window.FindName("ToolTabs")).SelectedIndex = 4;
                 var actor = scene.Mission!.Actors.Single(a => a.Pickup?.Source.RecordIndex == 49);
                 Console.WriteLine("Nanite matched save scope: " + string.Join("; ",world.PickupEdits!.Scope(actor.Pickup!.Source).Sources.Select(s => $"{Path.GetFileName(s.ArchivePath)}/{s.ResourceName} asset#{s.AssetIndex} record#{s.RecordIndex}")));
-                var viewport = (Viewport3DX)scene.RenderSurface;
-                var camera = (HelixToolkit.Wpf.SharpDX.PerspectiveCamera)viewport.Camera!;
+                var camera = scene.DebugCamera;
                 var vertices = SceneBuilder.Assemble(scene.Mission.Scene).Placements.Where(p => scene.PickupAt(p.NodeIndex)?.Root == actor.Root)
                     .SelectMany(p => scene.Mission.Scene.Models[p.ModelIndex].Vertices.Select(v => Vector3.Transform(v, p.Transform))).ToArray();
                 var center = (vertices.Aggregate(Vector3.Min) + vertices.Aggregate(Vector3.Max)) * .5f;
                 camera.Position = new(center.X + 4, center.Y + 3, center.Z + 5); camera.LookDirection = new(-4, -3, -5); camera.UpDirection = new(0, 1, 0);
                 await Task.Delay(500, timeout.Token);
-                var point = viewport.Project(new Point3D(center.X, center.Y, center.Z));
+                var point = scene.ProjectToView(new Point3D(center.X, center.Y, center.Z));
                 bool selected = false;
                 for (int y = -36; y <= 36 && !selected; y += 2)
                     for (int x = -36; x <= 36 && !selected; x += 2)
                     {
                         var p = point + new System.Windows.Vector(x, y);
-                        var hit = viewport.FindHits(p).OrderBy(h => h.Distance).FirstOrDefault();
-                        if (hit?.ModelHit is not MeshGeometryModel3D || Vector3.Distance(new(hit.PointHit.X, hit.PointHit.Y, hit.PointHit.Z), actor.Pickup!.Position) > 3) continue;
-                        var args = new MouseButtonEventArgs(Mouse.PrimaryDevice, Environment.TickCount, MouseButton.Left);
-                        if (!scene.HandlePickupPointerDown(p, args)) typeof(Viewport3DX).GetMethod("MouseDownHitTest", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.Invoke(viewport, [p, args]);
+                        var hit = scene.HitTestScene(p).FirstOrDefault();
+                        if (hit?.Mesh is not { IsLine: false } || Vector3.Distance(hit.Point, actor.Pickup!.Position) > 3) continue;
+                        scene.HandleScenePointerDown(p, new MouseButtonEventArgs(Mouse.PrimaryDevice, Environment.TickCount, MouseButton.Left));
                         selected = scene.SelectedPickupRoot == actor.Root;
                     }
                 Require(selected, "Could not select Nanite for review");

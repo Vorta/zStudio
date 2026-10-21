@@ -7,16 +7,9 @@ using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Media.Media3D;
 using System.Windows.Threading;
-using HelixToolkit;
-using HelixToolkit.Maths;
-using HelixToolkit.SharpDX;
-using HelixToolkit.Wpf.SharpDX;
 using zStudio.Core;
 using zStudio.Desktop;
 using zStudio.Rendering;
-using HCamera = HelixToolkit.Wpf.SharpDX.PerspectiveCamera;
-using DiffuseMaterial = HelixToolkit.Wpf.SharpDX.DiffuseMaterial;
-using MeshGeometry3D = HelixToolkit.SharpDX.MeshGeometry3D;
 
 internal static class SceneControlsCheck
 {
@@ -42,29 +35,32 @@ internal static class SceneControlsCheck
                     await Task.Delay(50, timeout.Token);
                 }
                 var scene = (SceneViewport)((ContentControl)window.FindName("SceneHost")).Content;
-                var viewport = (Viewport3DX)scene.RenderSurface;
-                var camera = viewport.Camera as HCamera ?? throw new InvalidOperationException("No perspective camera attached.");
+                var viewport = scene.RenderSurface;
+                var camera = scene.DebugCamera;
+                if (camera.IsOrthographic) throw new InvalidOperationException("No perspective camera attached.");
                 Point3D sceneCenter = camera.Position + camera.LookDirection;
-                viewport.IsInertiaEnabled = false;
-                if (viewport.UseDefaultGestures || viewport.InputBindings.Count != 0
+                scene.InertiaEnabled = false;
+                if (scene.UsesBuiltInGestures
                     || SceneViewport.Gesture(MouseButton.Middle, ModifierKeys.None) != SceneViewport.NavigationGesture.Orbit
                     || SceneViewport.Gesture(MouseButton.Middle, ModifierKeys.Shift) != SceneViewport.NavigationGesture.Pan
                     || SceneViewport.Gesture(MouseButton.Middle, ModifierKeys.Control) != SceneViewport.NavigationGesture.Zoom
                     || SceneViewport.Gesture(MouseButton.Middle, ModifierKeys.Control | ModifierKeys.Shift) != SceneViewport.NavigationGesture.Dolly)
                     throw new InvalidOperationException("Pan/rotate gesture mapping is incorrect.");
 
-                var textured = viewport.Items.OfType<MeshGeometryModel3D>().Select(m => m.Material).OfType<DiffuseMaterial>().Distinct().Where(m => m.DiffuseMap != null).ToArray();
-                if (textured.Length == 0 || textured.Any(m => !m.EnableUnLit)) throw new InvalidOperationException("Textured materials are not using original-color rendering.");
+                var textured = scene.EnumerateRenderMeshes().Where(m => m.Role == SceneViewport.RenderMeshRole.Scene && !m.IsTransparent && m.HasDiffuseMap).ToArray();
+                if (textured.Length == 0 || textured.Any(m => !m.MaterialUnlit)) throw new InvalidOperationException("Textured materials are not using original-color rendering.");
                 scene.SetTextured(false);
-                if (textured.Any(m => m.DiffuseMap != null || m.EnableUnLit)) throw new InvalidOperationException("Untextured inspection mode failed.");
+                if (textured.Any(m => m.HasDiffuseMap || m.MaterialUnlit)) throw new InvalidOperationException("Untextured inspection mode failed.");
                 scene.SetTextured(true);
-                if (textured.Any(m => m.DiffuseMap == null || !m.EnableUnLit)) throw new InvalidOperationException("Texture restoration failed.");
+                if (textured.Any(m => !m.HasDiffuseMap || !m.MaterialUnlit)) throw new InvalidOperationException("Texture restoration failed.");
 
                 Vector3 surface = default;
                 bool found = false;
                 for (int y = 3; y <= 7 && !found; y++)
                     for (int x = 3; x <= 7 && !found; x++)
-                        found = viewport.FindNearest(new Vector2((float)viewport.ActualWidth * x / 10, (float)viewport.ActualHeight * y / 10), out surface, out _, out _);
+                    {
+                        if (scene.HitTestScene(new Point(viewport.ActualWidth * x / 10, viewport.ActualHeight * y / 10)).FirstOrDefault() is { } hit) { surface = hit.Point; found = true; }
+                    }
                 if (!found) throw new InvalidOperationException("Could not find a map surface for navigation checks.");
                 double height = Math.Max(1, camera.LookDirection.Length * 0.01);
                 Point center = new(viewport.ActualWidth / 2, viewport.ActualHeight / 2);
@@ -91,25 +87,16 @@ internal static class SceneControlsCheck
                 if (camera.Position == beforePan || camera.LookDirection != beforeDirection) throw new InvalidOperationException("Pan did not translate the camera without rotating.");
 
                 // Render a constant-color patch through a real scene material and verify its pixel values.
-                var material = (DiffuseMaterial)textured[0].Clone();
-                material.DiffuseMap = new TextureModel(new byte[] { 40, 80, 120, 255 }, SharpDX.DXGI.Format.R8G8B8A8_UNorm, 1, 1);
-                viewport.Items.Clear();
-                using MeshGeometryModel3D patch = new()
+                scene.ClearRenderItems();
+                var patch = scene.AddFixtureMesh(new([new(-1, -1, 0), new(1, -1, 0), new(1, 1, 0), new(-1, 1, 0)], [0, 1, 2, 0, 2, 3])
                 {
-                    Geometry = new MeshGeometry3D
-                    {
-                        Positions = new Vector3Collection([new(-1, -1, 0), new(1, -1, 0), new(1, 1, 0), new(-1, 1, 0)]),
-                        Normals = new Vector3Collection([Vector3.UnitZ, Vector3.UnitZ, Vector3.UnitZ, Vector3.UnitZ]),
-                        TextureCoordinates = new Vector2Collection([new(0, 0), new(1, 0), new(1, 1), new(0, 1)]),
-                        Indices = new IntCollection([0, 1, 2, 0, 2, 3])
-                    },
-                    Material = material,
-                    Instances = new[] { Matrix4x4.CreateTranslation((float)sceneCenter.X, (float)sceneCenter.Y, (float)sceneCenter.Z) },
-                    CullMode = SharpDX.Direct3D11.CullMode.None
-                };
-                viewport.Items.Add(patch);
+                    Normals = [Vector3.UnitZ, Vector3.UnitZ, Vector3.UnitZ, Vector3.UnitZ],
+                    TextureCoordinates = [new(0, 0), new(1, 0), new(1, 1), new(0, 1)],
+                    MaterialFrom = textured[0], Texture = ([40, 80, 120, 255], 1, 1),
+                    Instances = [Matrix4x4.CreateTranslation((float)sceneCenter.X, (float)sceneCenter.Y, (float)sceneCenter.Z)]
+                });
                 camera.Position = sceneCenter + new Vector3D(0, 0, 4); camera.LookDirection = new(0, 0, -4); camera.UpDirection = new(0, 1, 0);
-                viewport.ShowCoordinateSystem = viewport.ShowViewCube = false;
+                scene.SetNavigationAids(false, false);
                 await Task.Delay(150, timeout.Token);
                 var rendered = scene.RenderImage(128, 128);
                 var pixels = new FormatConvertedBitmap(rendered, PixelFormats.Bgra32, null, 0);
@@ -119,7 +106,7 @@ internal static class SceneControlsCheck
                     throw new InvalidOperationException($"Original RGB (40,80,120) rendered as ({pixel[2]},{pixel[1]},{pixel[0]}).");
                 Save(rendered, Path.Combine(Path.GetTempPath(), "zbd-scene-color-check.png"));
                 Console.WriteLine($"PASS: RGB (40,80,120) renders as ({pixel[2]},{pixel[1]},{pixel[0]}); texture toggle, centered close zoom, screen pan, and Blender middle/Shift-middle/Ctrl-middle/Ctrl-Shift-middle gestures. Captured freecam is checked separately.");
-                viewport.Items.Remove(patch);
+                scene.RemoveFixtureMesh(patch);
             }
             catch (Exception ex) { Console.Error.WriteLine(ex); exit = 1; }
             finally { window.Close(); app.Shutdown(exit); }

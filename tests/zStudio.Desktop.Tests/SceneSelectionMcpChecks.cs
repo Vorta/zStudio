@@ -4,7 +4,6 @@ using System.Numerics;
 using System.Reflection;
 using System.Text.Json.Nodes;
 using System.Windows;
-using HelixToolkit.Wpf.SharpDX;
 using ModelContextProtocol.Client;
 using ModelContextProtocol.Protocol;
 using zStudio.Core;
@@ -83,11 +82,8 @@ internal static class SceneSelectionMcpChecks
             roots.Add(0, 0); roots.Add(1, 0); roots.Add(2, 0);
             var actors = (Dictionary<int, MissionActor>)typeof(SceneViewport).GetField("pickupActors", flags)!.GetValue(viewport)!;
             actors.Add(0, new(0, 0, "fixture pickup", "fixture"));
-            var mesh = new MeshGeometryModel3D();
-            ((List<MeshGeometryModel3D>)typeof(SceneViewport).GetField("meshes", flags)!.GetValue(viewport)!).Add(mesh);
             ScenePlacement[] placements = [new(1, 0, "first", Matrix4x4.Identity), new(2, 1, "second", Matrix4x4.Identity)];
-            ((Dictionary<MeshGeometryModel3D, ScenePlacement[]>)typeof(SceneViewport).GetField("placements", flags)!.GetValue(viewport)!).Add(mesh, placements);
-            ((Dictionary<MeshGeometryModel3D, ScenePlacement[]>)typeof(SceneViewport).GetField("visiblePlacements", flags)!.GetValue(viewport)!).Add(mesh, placements);
+            var mesh = viewport.AddFixtureMesh(new([], []) { Placements = placements, Rendered = false });
             var isolated = await Call("isolate", 1);
             Assert.False(isolated.IsError == true);
             Assert.Contains("original", isolated.Content.OfType<TextContentBlock>().Single().Text);
@@ -139,7 +135,7 @@ internal static class SceneSelectionMcpChecks
             // Flat MCP selection must not leave a different rendered node's card
             // selected when the requested source has no visible mesh.
             data.Nodes.Add(new(3, "unrendered source", "object3d", null, [], [], new(), new()));
-            typeof(SceneViewport).GetMethod("RegisterInspectionMesh", flags)!.Invoke(viewport, [mesh, 0, null, -1, -1]);
+            viewport.RegisterFixtureInspection(mesh, 0);
             Assert.True(viewport.SelectInspectionNode(1)); Assert.NotNull(viewport.SelectedInspection);
             // Source-map ownership changes selection, never the physical surface.
             // A read-only world's selection remains available but cannot start a transform.

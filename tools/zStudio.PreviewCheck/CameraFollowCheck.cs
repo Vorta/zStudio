@@ -2,10 +2,8 @@ using System.IO;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media.Imaging;
-using HelixToolkit.Wpf.SharpDX;
 using zStudio.Core.Animation;
 using zStudio.Desktop;
-using HCamera = HelixToolkit.Wpf.SharpDX.PerspectiveCamera;
 
 internal static class CameraFollowCheck
 {
@@ -32,7 +30,7 @@ internal static class CameraFollowCheck
                 }
                 ((CheckBox)editor.FindName("Mute")).IsChecked = true;
                 var follow = (System.Windows.Controls.Primitives.ToggleButton)editor.FindName("FollowCamera");
-                var camera = (HCamera)((Viewport3DX)editor.Viewport.RenderSurface).Camera!;
+                var camera = editor.Viewport.DebugCamera;
                 await editor.SeekAsync(.1);
                 follow.IsChecked = true; await Task.Delay(150);
                 CheckPose(editor.CurrentFrame!.Camera!);

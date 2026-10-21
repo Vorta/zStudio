@@ -4,7 +4,6 @@ using System.IO.Pipes;
 using System.Reflection;
 using System.Text.Json.Nodes;
 using System.Windows.Media.Media3D;
-using HelixToolkit.Wpf.SharpDX;
 using ModelContextProtocol.Client;
 using ModelContextProtocol.Protocol;
 using zStudio.Automation;
@@ -42,7 +41,6 @@ internal static class SourceZoneMcpChecks
             // The upper face overlaps flat_a in XZ: a pick must not select the hidden lower face.
             const BindingFlags fields = BindingFlags.Instance | BindingFlags.NonPublic;
             var view = (SceneViewport)typeof(MainWindow).GetField("scene", fields)!.GetValue(main)!;
-            var viewport = (Viewport3DX)view.RenderSurface;
             int upper = doc.SourceBuild.Provenance.Single(p => p.Value.ModelNodeName == "flat_over").Key;
             int side = doc.SourceBuild.Provenance.Single(p => p.Value.ModelNodeName == "flat_b").Key;
             view.RestoreView(new(new(220, 100, 321), new(0, -90, -1), new(0, 1, 0), 60));
@@ -51,7 +49,7 @@ internal static class SourceZoneMcpChecks
             {
                 await Task.Delay(25, token);
                 if (!view.IsOrbitPickingReady) continue;
-                hit = view.ProbeInspection(viewport.Project(new Point3D(220, 10, 320)));
+                hit = view.ProbeInspection(view.ProjectToView(new Point3D(220, 10, 320)));
                 if (hit?.Node == upper && hit.Polygon == 0) break;
             }
             Assert.NotNull(hit); Assert.Equal(upper, hit.Node); Assert.Equal(0, hit.Polygon);
@@ -76,7 +74,7 @@ internal static class SourceZoneMcpChecks
             // What the tool cannot paint lets the pointer through to the polygon behind it.
             var realBrush = view.ZoneBrush!;
             view.SetZoneBrush(new PolygonZoneBrush { Reach = n => n == upper ? PolygonZoneReach.PassThrough : realBrush.Reach(n), SourcePolygons = realBrush.SourcePolygons, Site = realBrush.Site, SiteNodes = realBrush.SiteNodes });
-            object?[] probe = [viewport.Project(new Point3D(220, 10, 320)), false, null];
+            object?[] probe = [view.ProjectToView(new Point3D(220, 10, 320)), false, null];
             var behind = (ZonePaintHover?)typeof(SceneViewport).GetMethod("ProbeZone", fields)!.Invoke(view, probe);
             Assert.NotNull(behind); Assert.Equal(node, behind.Node); Assert.Equal(new byte[] { 3 }, behind.Zones); Assert.Equal(PolygonZoneOutcome.Changed, behind.Outcome);
             view.SetZoneBrush(realBrush);

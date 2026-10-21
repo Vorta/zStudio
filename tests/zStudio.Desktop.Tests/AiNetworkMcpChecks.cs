@@ -128,9 +128,8 @@ internal static class AiNetworkMcpChecks
             Assert.Equal(100_000, limited["link_count"]!.GetValue<int>()); Assert.True(limited["links_truncated"]!.GetValue<bool>()); Assert.Equal(32, limited["links"]!.AsArray().Count);
             Assert.True(nodes.ToJsonString().Length < 10_000);
             viewport.SetAiOptions(true, true, null);
-            var geometry = (System.Collections.IDictionary)typeof(SceneViewport).GetField("aiLinks", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(viewport)!;
-            var linksMesh = Assert.Single(geometry.Keys.Cast<HelixToolkit.Wpf.SharpDX.MeshGeometryModel3D>());
-            Assert.Equal(32 * 9, linksMesh.Geometry!.Positions!.Count);
+            var linksMesh = Assert.Single(viewport.AiLinkMeshes);
+            Assert.Equal(32 * 9, linksMesh.Positions.Count);
             Assert.True((await State())["ai"]!["linksTruncated"]!.GetValue<bool>());
             // A valid large network: only the overlay budget is drawn, and only drawn markers are pickable.
             var chain = Enumerable.Range(0, 20_000).Select(i => new AiNode("chain-" + i, i, 12, new(i, 0, 0), i,

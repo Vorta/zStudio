@@ -9,7 +9,6 @@ using System.Windows.Controls.Primitives;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Media.Media3D;
-using HelixToolkit.Wpf.SharpDX;
 using zStudio.Core;
 using zStudio.Core.Formats;
 using zStudio.Desktop;
@@ -43,7 +42,7 @@ internal static class AiNetworkCheck
                 var choice = (ComboBox)main.FindName("AiNetworkCombo"); choice.SelectedIndex = 1;
                 var network = scene.AiNetworks.Networks.Single(n => n.Id == scene.AiNetworkFilter); var node = network.Nodes[0];
                 Require(scene.SelectAiNode(node.Id) && scene.TryFrame("selected"), "AI selection/frame");
-                await Task.Delay(300); Save(Presented((Viewport3DX)scene.RenderSurface), Path.Combine(output, "m1-network.png"));
+                await Task.Delay(300); Save(scene.CapturePresentedFrame(), Path.Combine(output, "m1-network.png"));
                 // Strategy is an ordinary read-only detail in the scrollable card.
                 var strategyField = Descendants((SceneInspectionCard)scene.InspectionContent!).OfType<TextBox>()
                     .Single(t => System.Windows.Automation.AutomationProperties.GetName(t) == "Attack strategy");
@@ -110,35 +109,35 @@ internal static class AiNetworkCheck
             var doc = new AssetDocument(Path.Combine(output, "gamez.zbd"), new(0, DateTime.MinValue), new(FormatFamily.GameZ,15,Recognition.Supported,"fixture"), ReadOnlyMemory<byte>.Empty) { Scene = data };
             var asset = doc.Add(AssetKind.World, 0, "Whole world", 0, 0);
             await scene.ShowAsync(doc, asset, resolver, null, 0, default, mission: MissionSceneLoader.Build(doc, null, null, null, null));
-            var view = (Viewport3DX)scene.RenderSurface; view.ShowCoordinateSystem = view.ShowViewCube = view.IsInertiaEnabled = false;
+            scene.SetNavigationAids(false, false); scene.InertiaEnabled = false;
             scene.RestoreView(new(new(0, 0, 20), new(0, 0, -20), new(0, 1, 0), 50));
             AiNode a = new("a", 0, 12, new(-6, 0, -2), 0, [new(0, 1, "b", null)]);
             AiNode b = new("b", 1, 12, new(6, 0, -2), 0, [new(0, 0, "a", null)]);
             scene.SetAiNetworks(new("fixture", [new("network", "fixture.zbd", 0, "net_01.zrd", "fixture", "standard", 10, [a,b], [])]));
-            await Task.Delay(250); var camera = (HelixToolkit.Wpf.SharpDX.ProjectionCamera)view.Camera!; var clip = (camera.NearPlaneDistance, camera.FarPlaneDistance); var pose = scene.CaptureView();
-            byte[] original = Pixels(Presented(view));
+            await Task.Delay(250); var camera = scene.DebugCamera; var clip = (camera.NearPlaneDistance, camera.FarPlaneDistance); var pose = scene.CaptureView();
+            byte[] original = Pixels(scene.CapturePresentedFrame());
             Require(scene.PreviewDiagnostics.All(d => !d.Message.Contains("transform", StringComparison.OrdinalIgnoreCase)), "Invalid occlusion fixture transform");
             Require(original.Count(b => b == 255) > original.Length / 5, "Occlusion fixture wall is missing");
             scene.SetAiOptions(true, true, null); await Task.Delay(250);
-            var xray = Presented(view); Save(xray, Path.Combine(output, "fixture-through.png"));
+            var xray = scene.CapturePresentedFrame(); Save(xray, Path.Combine(output, "fixture-through.png"));
             Require(!original.SequenceEqual(Pixels(xray)), "Through-geometry mode did not draw");
-            var point = view.Project(new Point3D(-6, 0, -2));
+            var point = scene.ProjectToView(new Point3D(-6, 0, -2));
             Require(scene.PickAiNode(point) == "a", "Through-geometry picking failed");
             Require(clip == (camera.NearPlaneDistance, camera.FarPlaneDistance) && scene.CaptureView() == pose, "Overlay altered camera/depth bounds");
-            byte[] idle = Pixels(xray); await Task.Delay(250); Require(idle.SequenceEqual(Pixels(Presented(view))), "AI overlay is not stable at idle");
+            byte[] idle = Pixels(xray); await Task.Delay(250); Require(idle.SequenceEqual(Pixels(scene.CapturePresentedFrame())), "AI overlay is not stable at idle");
             scene.SetAiOptions(true, false, null); await Task.Delay(250);
-            Save(Presented(view), Path.Combine(output, "fixture-occluded.png"));
-            Require(original.SequenceEqual(Pixels(Presented(view))), "Depth-tested nodes/links showed through wall");
+            Save(scene.CapturePresentedFrame(), Path.Combine(output, "fixture-occluded.png"));
+            Require(original.SequenceEqual(Pixels(scene.CapturePresentedFrame())), "Depth-tested nodes/links showed through wall");
             Require(scene.PickAiNode(point) == null, "Occluded marker remained selectable");
             // Transparent meshes do not write depth in the application. Picking
             // must agree with the visible marker behind those surfaces.
-            var walls = view.Items.OfType<MeshGeometryModel3D>().ToArray(); Require(walls.Length == 2, "Fixture wall batches");
+            var walls = scene.EnumerateRenderMeshes().Where(m => m.Role == SceneViewport.RenderMeshRole.Scene).ToArray(); Require(walls.Length == 2, "Fixture wall batches");
             foreach (var wall in walls) wall.IsTransparent = true;
             await Task.Delay(200);
-            Require(!original.SequenceEqual(Pixels(Presented(view))) && scene.PickAiNode(point) == "a", "Transparent surfaces incorrectly block AI picking");
+            Require(!original.SequenceEqual(Pixels(scene.CapturePresentedFrame())) && scene.PickAiNode(point) == "a", "Transparent surfaces incorrectly block AI picking");
             foreach (var wall in walls) wall.IsTransparent = false;
             scene.SetAiOptions(false, false, null); await Task.Delay(100);
-            Require(original.SequenceEqual(Pixels(Presented(view))), "Disabling AI did not restore the scene");
+            Require(original.SequenceEqual(Pixels(scene.CapturePresentedFrame())), "Disabling AI did not restore the scene");
             scene.SetPlacementEditing(true);
             (string Label, AiAttackStrategy Strategy, string Hex)[] strategyCases =
             [
@@ -158,18 +157,18 @@ internal static class AiNetworkCheck
                     // Transparent fixture walls allow both depth modes to expose the same markers.
                     foreach (var wall in walls) wall.IsTransparent = true;
                     scene.SetAiOptions(true, through, null); await Task.Delay(120);
-                    var rendered = Presented(view);
-                    Require(HasColor(rendered, view, point, hex), "Wrong marker color: " + text);
-                    Require(HasColor(rendered, view, view.Project(new Point3D(0, 0, -2)), hex), "Wrong arrow/connection color: " + text);
-                    Require(HasColor(rendered, view, view.Project(new Point3D(-6, 5, -2)), hex), "Same strategy differs between networks: " + text);
+                    var rendered = scene.CapturePresentedFrame();
+                    Require(HasColor(rendered, scene, point, hex), "Wrong marker color: " + text);
+                    Require(HasColor(rendered, scene, scene.ProjectToView(new Point3D(0, 0, -2)), hex), "Wrong arrow/connection color: " + text);
+                    Require(HasColor(rendered, scene, scene.ProjectToView(new Point3D(-6, 5, -2)), hex), "Same strategy differs between networks: " + text);
                     scene.SetAiOptions(true, through, "network"); await Task.Delay(100);
-                    Require(HasColor(Presented(view), view, point, hex), "Filtering changed strategy color: " + text);
+                    Require(HasColor(scene.CapturePresentedFrame(), scene, point, hex), "Filtering changed strategy color: " + text);
                 }
                 Require(scene.SelectAiNode("a"), "Strategy marker selection failed"); await Task.Delay(100);
-                Require(HasColor(Presented(view), view, point, "#FFFFFF"), "Selected marker lost white highlight");
+                Require(HasColor(scene.CapturePresentedFrame(), scene, point, "#FFFFFF"), "Selected marker lost white highlight");
                 Require(scene.SelectAiNode(null), "Strategy marker clearing failed"); await Task.Delay(100);
-                Require(HasColor(Presented(view), view, point, hex), "Clearing selection did not restore strategy color: " + text);
-                Save(Presented(view), Path.Combine(output, "strategy-" + text + ".png"));
+                Require(HasColor(scene.CapturePresentedFrame(), scene, point, hex), "Clearing selection did not restore strategy color: " + text);
+                Save(scene.CapturePresentedFrame(), Path.Combine(output, "strategy-" + text + ".png"));
             }
             // Actual presented pixels: valve cages and assignments must remain separate
             // from strategy-colored base nodes, and an unmatched filter removes them.
@@ -185,24 +184,24 @@ internal static class AiNetworkCheck
                 S("node_02"), A([A(I(0), I(1)), ..Enumerable.Range(0, 1100).SelectMany(n => new[] { S("valve_assign"), A(S(n == 1099 ? "start" : "edge" + n), I(1)) })])));
             scene.SetAiNetworks(new("valve-fixture", [valveGraph]));
             scene.SetAiOptions(true, true, null); scene.SetValveOptions(false); await Task.Delay(150);
-            var valveBase = Pixels(Presented(view));
+            var valveBase = Pixels(scene.CapturePresentedFrame());
             scene.SetValveOptions(true); await Task.Delay(150);
-            var valves = Presented(view);
+            var valves = scene.CapturePresentedFrame();
             Require(!valveBase.SequenceEqual(Pixels(valves)), "Valve overlay did not render");
-            Require(HasColor(valves, view, point, "#FF6666"), "Valve cage replaced attack strategy color");
-            Require(HasColor(valves, view, view.Project(new Point3D(-1.5, 0, -2)), "#F2F2F2"), "Valve assignment dash missing");
+            Require(HasColor(valves, scene, point, "#FF6666"), "Valve cage replaced attack strategy color");
+            Require(HasColor(valves, scene, scene.ProjectToView(new Point3D(-1.5, 0, -2)), "#F2F2F2"), "Valve assignment dash missing");
             byte[] valveIdle = Pixels(valves); await Task.Delay(150);
-            Require(valveIdle.SequenceEqual(Pixels(Presented(view))), "Valve overlay changed at idle");
+            Require(valveIdle.SequenceEqual(Pixels(scene.CapturePresentedFrame())), "Valve overlay changed at idle");
             Save(valves, Path.Combine(output, "fixture-valves.png"));
             scene.SetValveOptions(true, "absent"); await Task.Delay(150);
-            Require(valveBase.SequenceEqual(Pixels(Presented(view))), "Valve name filter left unrelated overlays");
+            Require(valveBase.SequenceEqual(Pixels(scene.CapturePresentedFrame())), "Valve name filter left unrelated overlays");
             scene.SetValveOptions(true, "start"); await Task.Delay(150);
-            Require(HasColor(Presented(view), view, view.Project(new Point3D(-1.5, 0, -2)), "#FFCC33"), "Valve highlight dash missing");
+            Require(HasColor(scene.CapturePresentedFrame(), scene, scene.ProjectToView(new Point3D(-1.5, 0, -2)), "#FFCC33"), "Valve highlight dash missing");
             Require(scene.CaptureView() == pose && clip == (camera.NearPlaneDistance, camera.FarPlaneDistance), "Valve overlays altered camera/depth bounds");
             foreach (string name in new[] { "node19", "term39" })
             {
                 scene.SetValveOptions(true, name); await Task.Delay(150);
-                Require(!valveBase.SequenceEqual(Pixels(Presented(view))), "Late valve condition was not rendered: " + name);
+                Require(!valveBase.SequenceEqual(Pixels(scene.CapturePresentedFrame())), "Late valve condition was not rendered: " + name);
             }
             Require(scene.CaptureView() == pose, "Late valve filtering moved the camera");
             foreach (string name in new[] { "node19", "term39", "start" })
@@ -222,17 +221,12 @@ internal static class AiNetworkCheck
             foreach (var descendant in Descendants(child)) yield return descendant;
         }
     }
-    private static BitmapSource Presented(Viewport3DX viewport)
-    {
-        using MemoryStream stream = new();
-        HelixToolkit.SharpDX.Utilities.ScreenCapture.SaveWICTextureToBitmapStream(viewport.RenderHost!.EffectsManager!, viewport.RenderHost.RenderBuffer!.BackBuffer!.Resource as SharpDX.Direct3D11.Texture2D, stream);
-        stream.Position = 0; return BitmapFrame.Create(stream, BitmapCreateOptions.None, BitmapCacheOption.OnLoad);
-    }
     private static byte[] Pixels(BitmapSource image) { var converted = new FormatConvertedBitmap(image, PixelFormats.Bgra32, null, 0); byte[] bytes = new byte[converted.PixelWidth * converted.PixelHeight * 4]; converted.CopyPixels(bytes, converted.PixelWidth * 4, 0); return bytes; }
-    private static bool HasColor(BitmapSource image, Viewport3DX viewport, Point point, string hex)
+    private static bool HasColor(BitmapSource image, SceneViewport scene, Point point, string hex)
     {
         byte[] pixels = Pixels(image); uint rgb = Convert.ToUInt32(hex[1..], 16);
-        int x = (int)Math.Round(point.X * image.PixelWidth / viewport.ActualWidth), y = (int)Math.Round(point.Y * image.PixelHeight / viewport.ActualHeight);
+        var surface = scene.RenderSurface;
+        int x = (int)Math.Round(point.X * image.PixelWidth / surface.ActualWidth), y = (int)Math.Round(point.Y * image.PixelHeight / surface.ActualHeight);
         for (int py = Math.Max(0, y - 5); py <= Math.Min(image.PixelHeight - 1, y + 5); py++)
         for (int px = Math.Max(0, x - 5); px <= Math.Min(image.PixelWidth - 1, x + 5); px++)
         {

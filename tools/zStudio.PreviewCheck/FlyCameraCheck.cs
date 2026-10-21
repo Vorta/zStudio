@@ -10,11 +10,9 @@ using System.Windows.Media;
 using System.Windows.Media.Media3D;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
-using HelixToolkit.Wpf.SharpDX;
 using zStudio.Core;
 using zStudio.Desktop;
 using zStudio.Rendering;
-using HCamera = HelixToolkit.Wpf.SharpDX.PerspectiveCamera;
 
 internal static class FlyCameraCheck
 {
@@ -40,15 +38,14 @@ internal static class FlyCameraCheck
                 var document = await window.ViewModel.OpenFileAsync(path) ?? throw new InvalidDataException("Missing map");
                 await Ready();
                 scene = (SceneViewport)((ContentControl)window.FindName("SceneHost")).Content;
-                var viewport = (Viewport3DX)scene.RenderSurface;
-                var camera = (HCamera)viewport.Camera!;
+                var camera = scene.DebugCamera;
                 var fly = (ToggleButton)window.FindName("FlyEnabled");
                 var toolbar = (ToolBar)window.FindName("SceneToolbar");
                 var session = (FlyCameraSession)typeof(MainWindow).GetField("flyCamera", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(window)!;
                 window.Activate(); await Delay(80);
                 var pose = scene.CaptureView();
                 // Entry must discard queued native forces and preserve the exact position/direction.
-                viewport.AddPanForce(12, 8); viewport.AddZoomForce(.5);
+                scene.QueueNativeNavigation(panX: 12, panY: 8, zoom: .5);
                 // Isolate inertia from live physical pointer movement during capture.
                 scene.SetFly(true);
                 await Delay(80);
@@ -115,7 +112,7 @@ internal static class FlyCameraCheck
                 GetClipCursor(out var released); Require(released.Right - released.Left > clipped.Right - clipped.Left, "Escape retained cursor confinement");
                 Require(scene.FlySpeed == Math.Min(100000, initialSpeed * 1.25), "Exit lost selected speed");
                 var exitPose = scene.CaptureView(); await Delay(150); Require(scene.CaptureView() == exitPose, "Exit restored old camera inertia");
-                Require(viewport.IsPanEnabled && viewport.IsZoomEnabled && viewport.IsRotationEnabled, "Orbit controls were not restored");
+                Require(scene.OrbitControlsEnabled, "Orbit controls were not restored");
 
                 await Enter(); KeyInput(Key.W, true);
                 var other = new Window { Owner = window, Width = 200, Height = 100, Content = new TextBox(), Title = "Freecam focus regression" };

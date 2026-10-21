@@ -6,15 +6,9 @@ using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Media.Media3D;
 using System.Windows.Threading;
-using HelixToolkit;
-using HelixToolkit.Maths;
-using HelixToolkit.Wpf.SharpDX;
 using zStudio.Core;
 using zStudio.Desktop;
 using zStudio.Rendering;
-using HCamera = HelixToolkit.Wpf.SharpDX.PerspectiveCamera;
-using DiffuseMaterial = HelixToolkit.Wpf.SharpDX.DiffuseMaterial;
-using MeshGeometry3D = HelixToolkit.SharpDX.MeshGeometry3D;
 
 internal static class SceneDepthCheck
 {
@@ -40,9 +34,9 @@ internal static class SceneDepthCheck
                     await Task.Delay(50, timeout.Token);
                 }
                 var scene = (SceneViewport)((ContentControl)window.FindName("SceneHost")).Content;
-                var viewport = (Viewport3DX)scene.RenderSurface;
-                var camera = viewport.Camera as HCamera ?? throw new InvalidOperationException("No perspective camera.");
-                viewport.IsInertiaEnabled = false;
+                var camera = scene.DebugCamera;
+                if (camera.IsOrthographic) throw new InvalidOperationException("No perspective camera.");
+                scene.InertiaEnabled = false;
                 Point3D center = camera.Position + camera.LookDirection;
                 Vector3D framedDirection = camera.LookDirection;
                 double framedDistance = framedDirection.Length;
@@ -53,16 +47,16 @@ internal static class SceneDepthCheck
                     camera.Position = center - framedDirection * factor;
                     camera.LookDirection = framedDirection * factor;
                     await Task.Delay(100, timeout.Token);
-                    Save(viewport.RenderBitmap() ?? throw new InvalidOperationException("No rendered frame."), Path.Combine(output, $"world-{factor}x.png"));
+                    Save(scene.RenderCurrentFrame(), Path.Combine(output, $"world-{factor}x.png"));
                 }
 
                 // Two almost adjacent, opaque instanced surfaces at map scale.
                 // The red front surface must win regardless of draw order or camera distance.
                 float size = (float)(framedDistance * 0.12), gap = (float)(framedDistance * 0.00001);
-                using var front = Surface(0, new Color4(1, 0, 0, 1));
-                using var back = Surface(-gap, new Color4(0, 1, 0, 1));
-                viewport.Items.Clear();
-                viewport.ShowCoordinateSystem = viewport.ShowViewCube = false;
+                var front = Surface(0, new Vector4(1, 0, 0, 1));
+                var back = Surface(-gap, new Vector4(0, 1, 0, 1));
+                scene.ClearRenderItems();
+                scene.SetNavigationAids(false, false);
                 foreach (int factor in new[] { 1, 2, 4, 8 })
                 {
                     double distance = framedDistance * factor;
@@ -70,11 +64,12 @@ internal static class SceneDepthCheck
                     camera.LookDirection = new(0, 0, -distance); camera.UpDirection = new(0, 1, 0);
                     foreach (bool frontFirst in new[] { true, false })
                     {
-                        viewport.Items.Clear();
-                        viewport.Items.Add(frontFirst ? front : back);
-                        viewport.Items.Add(frontFirst ? back : front);
+                        scene.ClearRenderItems();
+                        var first = scene.AddFixtureMesh(frontFirst ? front : back);
+                        var second = scene.AddFixtureMesh(frontFirst ? back : front);
                         await Task.Delay(100, timeout.Token);
-                        var rendered = viewport.RenderBitmap() ?? throw new InvalidOperationException("No rendered frame.");
+                        var rendered = scene.RenderCurrentFrame();
+                        scene.RemoveFixtureMesh(first); scene.RemoveFixtureMesh(second);
                         Save(rendered, Path.Combine(output, $"overlap-{factor}x-{(frontFirst ? "front-first" : "back-first")}.png"));
                         var bitmap = new FormatConvertedBitmap(rendered, PixelFormats.Bgra32, null, 0);
                         byte[] pixel = new byte[4];
@@ -84,21 +79,15 @@ internal static class SceneDepthCheck
                             throw new InvalidOperationException("A rear surface is showing through the opaque front surface.");
                     }
                 }
-                viewport.Items.Clear();
+                scene.ClearRenderItems();
                 Console.WriteLine("PASS: opaque depth occlusion at 1x/2x/4x/8x overview distance in both draw orders.");
 
-                MeshGeometryModel3D Surface(float z, Color4 color) => new()
+                SceneViewport.FixtureMesh Surface(float z, Vector4 color) => new([new(-size, -size, z), new(size, -size, z), new(size, size, z), new(-size, size, z)], [0, 1, 2, 0, 2, 3])
                 {
-                    Geometry = new MeshGeometry3D
-                    {
-                        Positions = new Vector3Collection([new(-size, -size, z), new(size, -size, z), new(size, size, z), new(-size, size, z)]),
-                        Normals = new Vector3Collection([Vector3.UnitZ, Vector3.UnitZ, Vector3.UnitZ, Vector3.UnitZ]),
-                        TextureCoordinates = new Vector2Collection([new(0, 0), new(1, 0), new(1, 1), new(0, 1)]),
-                        Indices = new IntCollection([0, 1, 2, 0, 2, 3])
-                    },
-                    Instances = new[] { Matrix4x4.CreateTranslation((float)center.X, (float)center.Y, (float)center.Z) },
-                    Material = new DiffuseMaterial { DiffuseColor = color, EnableUnLit = true },
-                    CullMode = SharpDX.Direct3D11.CullMode.None
+                    Normals = [Vector3.UnitZ, Vector3.UnitZ, Vector3.UnitZ, Vector3.UnitZ],
+                    TextureCoordinates = [new(0, 0), new(1, 0), new(1, 1), new(0, 1)],
+                    Instances = [Matrix4x4.CreateTranslation((float)center.X, (float)center.Y, (float)center.Z)],
+                    Color = color, Unlit = true
                 };
             }
             catch (Exception ex) { Console.Error.WriteLine(ex); exit = 1; }
