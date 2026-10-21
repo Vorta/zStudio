@@ -137,7 +137,7 @@ public static class AnimationScript
         List<AnimationKeyframe> frames = [];
         float step = FrameStep(frameRate);
         // A channel without a rate moves until the next key that lists it. Between segments the engine holds a channel
-        // the next segment does not key (engine-evidence.md, "Between segments"), so every key in between carries the
+        // the next segment does not key (docs/agents/engine-evidence.md#between-segments), so every key in between carries the
         // channel on, at the same rate from the value it has reached at that key's time.
         Glide moving = Glide.None, turning = Glide.None, growing = Glide.None;
         for (int i = 0; i + 1 < keys.Count; i++)

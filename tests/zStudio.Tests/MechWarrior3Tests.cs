@@ -19,8 +19,8 @@ public sealed class MechWarrior3Tests
         System.Buffers.Binary.BinaryPrimitives.WriteInt32LittleEndian(nameBytes, 4096); System.Text.Encoding.Latin1.GetBytes(name).CopyTo(nameBytes, 4);
         var part = seed.Parts[0] with { Name = name, NameBytes = nameBytes };
         var clip = new MotionClip { Header = seed.Header, LoopTime = seed.LoopTime, FrameCount = seed.FrameCount, Parts = Enumerable.Repeat(part, 4096).ToArray() };
-        byte[] source = clip.Write(token);
-        var doc = FormatRegistry.Default.OpenBytes("motion.zbd", ResourceEditingTests.Archive(("large_motion", source)), token: token);
+        byte[] source = Write(clip);
+        var doc = FormatRegistry.Default.OpenBytes("motion.zbd", ResourceReaderTests.Archive(("large_motion", source)), token: token);
         var asset = Assert.Single(doc.Assets); Assert.IsType<MotionClip>(asset.Content);
         var metadata = asset.Metadata["motion"]!;
         Assert.InRange(metadata["parts"]!.AsArray().Count, 1, 32); Assert.Equal(4096, metadata["part_count"]!.GetValue<int>());
@@ -30,7 +30,6 @@ public sealed class MechWarrior3Tests
         Assert.True(ExportService.AssetJson(doc, asset, token, boundedZrd: true).ToJsonString().Length < 20_000);
         var complete = ExportService.AssetJson(doc, asset, token)["properties"]!["motion"]!;
         Assert.Equal(4096, complete["parts"]!.AsArray().Count); Assert.Equal(name, complete["parts"]![4095]!["name"]!.GetValue<string>());
-        Assert.Equal(source, ((MotionClip)asset.Content!).Write(token));
     }
     [Fact]
     public void DuplicateMotionTracksLeaveTheAmbiguousNodeAtItsStoredPose()
@@ -57,7 +56,7 @@ public sealed class MechWarrior3Tests
             ZrdNode Array(params ZrdNode[] children) => ZrdNode.Create(ZrdKind.Array) with { Children = children };
             ZrdNode Name() => ZrdNode.Create(ZrdKind.String) with { Text = "actor_01" };
             ZrdNode Placement(float x) => Array(ZrdNode.Create(ZrdKind.Int), Array(Scalar(x), Scalar(2), Scalar(3)), Scalar(0));
-            byte[] source = ResourceEditingTests.Archive(("aiv.zrd", ZrdWriter.Write(Array(Name(), Placement(10), Name(), Placement(20)), token)));
+            byte[] source = ResourceReaderTests.Archive(("aiv.zrd", ZrdWriter.Write(Array(Name(), Placement(10), Name(), Placement(20)), token)));
             string reader = Path.Combine(folder, "readerm1.zbd"); await File.WriteAllBytesAsync(reader, source, token);
             GameScene scene = new(); scene.Models.Add(new(0, [], [], [], [], []));
             scene.Nodes.Add(new(0, "world", "world", null, [], [1], [], []));
@@ -75,9 +74,10 @@ public sealed class MechWarrior3Tests
             Assert.All(mission.Actors, a => Assert.Equal(a.PlacementPosition, SceneBuilder.LocalTransform(mission.Scene.Nodes[a.Root]).Translation));
             Assert.Equal(new[] { 10f, 20f }, SceneBuilder.Assemble(mission.Scene, token: token).Placements.Select(p => p.Transform.M41));
             var edits = await PickupPlacementEditSession.LoadAsync(world.Path, resolver, token);
-            var first = mission.Actors[0]; Assert.True(edits.MoveTo(first.CoordinateSource!, new(30, 2, 3)));
-            var positions = edits.TankPreviewPositions(mission);
-            Assert.Equal(new Vector3(30, 2, 3), positions[first.Root]); Assert.Equal(new Vector3(20, 2, 3), positions[mission.Actors[1].Root]);
+            var first = mission.Actors[0].CoordinateSource!;
+            var moved = edits.PreviewTransform(first, new(new(30, 2, 3), edits.Rotation(first)));
+            Assert.Equal(new Vector3(30, 2, 3), Assert.Single(moved).Value.Position);
+            Assert.Equal(new Vector3(20, 2, 3), edits.Position(mission.Actors[1].CoordinateSource!));
             // A refresh with unchanged inputs (now naming the adopted reader) reuses the layout; a rebuilt one maps every actor.
             Assert.Same(mission, await MissionSceneLoader.LoadAsync(world, resolver, token: token));
             MissionSceneLoader.Invalidate(world);
@@ -88,96 +88,6 @@ public sealed class MechWarrior3Tests
             Assert.Equal(source, await File.ReadAllBytesAsync(reader, token));
         }
         finally { Directory.Delete(folder, true); }
-    }
-    [Fact]
-    public void Version39WaterAndLavaReferencesProtectSequenceIdentity()
-    {
-        byte[] prefix = new byte[80]; System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(prefix, 0x08170616); System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(prefix.AsSpan(4), 39);
-        var package = new AnimationPackage { Prefix = prefix, Tail = [] }; var entry = new AnimationEntry(new byte[316], 0, 80); package.Entries.Add(entry);
-        var sequence = new AnimationSequence(new byte[64]); sequence.Name = "impact"; entry.Sequences.Add(sequence);
-        var ev = AnimationCatalog.Create(10, 39); ev.SetText(248, "impact"); ev.SetShort(280, 0); ev.SetText(288, "impact"); ev.SetShort(320, 0); entry.Primary.Events.Add(ev);
-        var edits = new AnimationEditSession(package);
-        Assert.Throws<InvalidDataException>(() => edits.DeleteSequence(0, sequence.Id));
-        edits.RenameSequence(0, sequence.Id, "renamed"); ev = package.Entries[0].Primary.Events[0];
-        Assert.Equal("renamed", ev.Text(248)); Assert.Equal("renamed", ev.Text(288)); Assert.Equal(-1, ev.I16(280)); Assert.Equal(-1, ev.I16(320));
-        edits.Undo(); Assert.Equal("impact", package.Entries[0].Primary.Events[0].Text(248));
-        var bytes = AnimationWriter.Write(package, TestContext.Current.CancellationToken);
-        Assert.Equal(bytes, AnimationWriter.Write(AnimationPackage.Read(bytes, TestContext.Current.CancellationToken), TestContext.Current.CancellationToken));
-    }
-    [Fact]
-    public async Task OptionalVersion27ModelReplacementPreservesOtherRecords()
-    {
-        string? root = Environment.GetEnvironmentVariable("ZSTUDIO_MW3_CORPUS"); if (root == null) return;
-        var token = TestContext.Current.CancellationToken;
-        var world = await FormatRegistry.Default.OpenAsync(Path.Combine(root, "c1", "gamez.zbd"), token);
-        var model = world.Scene!.Models.First(m => m.Morphs.Length == 0 && m.Metadata.Int("light_count") == 0 && m.Vertices.Length >= 3 && world.Scene.Nodes.Any(n => n.ModelIndex == m.Index));
-        var mesh = new ImportedMesh(model.Vertices.Take(3).ToArray(), [Vector3.UnitY, Vector3.UnitY, Vector3.UnitY], [Vector2.Zero, Vector2.UnitX, Vector2.UnitY], [0,1,2]);
-        string output = Path.Combine(Path.GetTempPath(), "zstudio-mw3-model-save-" + Guid.NewGuid().ToString("N"));
-        try
-        {
-            using AssetResolver resolver = new(root);
-            var edits = new ModelEditSession(world);
-            var batch = new ModelImportBatch(Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(world.Bytes.Span)),
-                "mw3_edit_test", new(8, 8, Enumerable.Repeat((byte)255, 8 * 8 * 4).ToArray()), new Dictionary<int, ImportedMesh> { [model.Index] = mesh });
-            var prepared = await edits.PrepareAsync(batch, resolver, token);
-            var changed = prepared.World;
-            Assert.DoesNotContain(changed.Diagnostics, d => d.Severity == "Error"); Assert.Equal(mesh.Positions, changed.Scene!.Models[model.Index].Vertices);
-            Assert.Equal(world.Scene.Textures.Count + 1, changed.Scene.Textures.Count); Assert.Equal("mw3_edit_test", changed.Scene.Textures[^1].Text("name"));
-            foreach (var original in world.Assets.Where(a => a.Kind is AssetKind.Model or AssetKind.TextureReference && !(a.Kind == AssetKind.Model && a.Index == model.Index)))
-            {
-                var copy = changed.Assets.Single(a => a.Kind == original.Kind && a.Index == original.Index);
-                Assert.Equal(world.Slice(original.Offset, original.Length).ToArray(), changed.Slice(copy.Offset, copy.Length).ToArray());
-            }
-            edits.Accept(prepared);
-            var saved = await edits.SaveAsync(output, token);
-            Assert.Empty(saved.Errors); Assert.Equal(prepared.Textures.Count + 1, saved.SavedPaths.Count); Assert.False(edits.IsDirty);
-        }
-        finally { if (Directory.Exists(output)) Directory.Delete(output, true); }
-    }
-    [Fact]
-    public void MotionRoundTripEditingAndLoopSamplingRetainClosingSample()
-    {
-        byte[] bytes = MotionBytes(); var clip = MotionClip.Read(bytes, TestContext.Current.CancellationToken);
-        Assert.Equal(bytes, clip.Write(TestContext.Current.CancellationToken));
-        Assert.Equal(new Vector3(1, 0, 0), clip.Sample(0, .5).Translation);
-        Assert.Equal(clip.Sample(0, .25), clip.Sample(0, 2.25));
-        var edited = clip.Edit("set", 0, 0, new(new(4, 5, 6), Quaternion.Identity));
-        Assert.Equal(clip.Parts[0].Frames[^1], edited.Parts[0].Frames[^1]);
-        Assert.Equal(Vector3.Zero, clip.Parts[0].Frames[0].Translation);
-        Assert.Equal(edited.Write(TestContext.Current.CancellationToken), MotionClip.Read(edited.Write(TestContext.Current.CancellationToken), TestContext.Current.CancellationToken).Write(TestContext.Current.CancellationToken));
-        var inserted = clip.Edit("insert", frame: 0); Assert.Equal(3, inserted.FrameCount);
-        Assert.Equal(bytes, inserted.Edit("delete", frame: 1).Write(TestContext.Current.CancellationToken));
-        Assert.Throws<InvalidDataException>(() => clip.Edit("timing", loopTime: float.NaN));
-        Assert.Throws<InvalidDataException>(() => clip.Edit("set", 0, 0, new(Vector3.Zero, default)));
-        Assert.Throws<InvalidDataException>(() => MotionClip.Read(bytes.AsMemory(0, bytes.Length - 1), TestContext.Current.CancellationToken));
-        byte[] enormous = bytes.ToArray(); System.Buffers.Binary.BinaryPrimitives.WriteInt32LittleEndian(enormous.AsSpan(8), int.MaxValue);
-        Assert.Throws<InvalidDataException>(() => MotionClip.Read(enormous, TestContext.Current.CancellationToken));
-    }
-    [Theory]
-    [InlineData("set", 0)]
-    [InlineData("set", 1)]
-    [InlineData("insert", 0)]
-    [InlineData("insert", 1)]
-    [InlineData("delete", 0)]
-    [InlineData("delete", 1)]
-    public void MotionEditsPreserveDistinctClosingSamplesOnEveryTrack(string action, int frame)
-    {
-        var token = TestContext.Current.CancellationToken; var seed = MotionClip.Read(MotionBytes(), token);
-        var first = seed.Parts[0] with { Frames = [.. seed.Parts[0].Frames.Take(2), new(new(7, 8, -0f), new(.25f, .5f, .75f, 2))] };
-        var second = first with { Frames = [first.Frames[0], first.Frames[1], new(new(-7, -8, -9), new(1, 2, 3, 4))] };
-        var clip = new MotionClip { Header = seed.Header, LoopTime = seed.LoopTime, FrameCount = seed.FrameCount, Parts = [first, second] };
-        byte[] original = clip.Write(token);
-        var edited = clip.Edit(action, 0, frame, new(new(4, 5, 6), Quaternion.Identity));
-        var readback = MotionClip.Read(edited.Write(token), token);
-        for (int p = 0; p < 2; p++)
-        {
-            Assert.Equal(Bits(clip.Parts[p].Frames[^1]), Bits(readback.Parts[p].Frames[^1]));
-            Assert.Equal(edited.FrameCount + 1, readback.Parts[p].Frames.Count);
-        }
-        if (action == "set") Assert.Equal(clip.Parts[1].Frames, readback.Parts[1].Frames);
-        if (action == "insert") Assert.Equal(original, edited.Edit("delete", frame: frame + 1).Write(token));
-        Assert.Equal(original, clip.Write(token));
-        static int[] Bits(MotionFrame f) => new[] { f.Translation.X, f.Translation.Y, f.Translation.Z, f.Rotation.W, f.Rotation.X, f.Rotation.Y, f.Rotation.Z }.Select(BitConverter.SingleToInt32Bits).ToArray();
     }
     [Fact]
     public void WorldVersionsHaveDistinctProbesAndTriangleStripsHaveAlternatingWinding()
@@ -241,76 +151,7 @@ public sealed class MechWarrior3Tests
         recoil.SetInt(16, -1); Assert.Equal(2, recoil.Keyframes(token).Count); // RECOIL's field is reserved, not a count.
     }
     [Fact]
-    public async Task MotionEditsUseMemberIdentityAndVerifiedArchiveHistory()
-    {
-        var token = TestContext.Current.CancellationToken;
-        string folder = Path.Combine(Path.GetTempPath(), "zstudio-motion-history-" + Guid.NewGuid().ToString("N")); Directory.CreateDirectory(folder);
-        try
-        {
-            string path = Path.Combine(folder, "motion.zbd"), copy = Path.Combine(folder, "copy.zbd");
-            byte[] clip = MotionBytes(); using MemoryStream stream = new(); using BinaryWriter writer = new(stream);
-            writer.Write(clip); writer.Write(clip);
-            for (int i = 0; i < 2; i++) { byte[] record = new byte[148]; System.Buffers.Binary.BinaryPrimitives.WriteInt32LittleEndian(record, i * clip.Length); System.Buffers.Binary.BinaryPrimitives.WriteInt32LittleEndian(record.AsSpan(4), clip.Length); "same"u8.CopyTo(record.AsSpan(8)); writer.Write(record); }
-            writer.Write(1); writer.Write(2); byte[] source = stream.ToArray(); await File.WriteAllBytesAsync(path, source, token);
-            var edits = new ResourceEditSession(await FormatRegistry.Default.OpenAsync(path, token)); var member = edits.Current.Members[1].Id;
-            var prepared = await edits.PrepareMotionAsync(member, "set", 0, 1, new(new(3, 4, 5), Quaternion.Identity), token: token); edits.Accept(prepared);
-            Assert.Equal(clip, edits.Current.Members[0].Data.ToArray()); Assert.True(edits.IsDirty);
-            Assert.Equal(new Vector3(3, 4, 5), MotionClip.Read(edits.Member(member).Data, token).Parts[0].Frames[1].Translation);
-            Assert.Throws<InvalidOperationException>(() => edits.Accept(prepared));
-            edits.UndoRedo(false); Assert.False(edits.IsDirty); Assert.Equal(source, edits.Current.Document.Bytes.ToArray());
-            edits.UndoRedo(true); await edits.SaveAsync(copy, token); Assert.False(edits.IsDirty);
-            Assert.Equal(source, await File.ReadAllBytesAsync(path, token));
-            var saved = await FormatRegistry.Default.OpenAsync(copy, token); Assert.Equal(edits.Current.Document.Bytes.ToArray(), saved.Bytes.ToArray());
-            edits.Accept(await edits.PrepareMotionAsync(member, "insert", frame: 0, token: token)); Assert.Equal(3, MotionClip.Read(edits.Member(member).Data, token).FrameCount);
-            edits.UndoRedo(false); Assert.False(edits.IsDirty);
-        }
-        finally { Directory.Delete(folder, true); }
-    }
-    [Fact]
-    public async Task OptionalMissionIsolationMechEditingAndMotionHierarchy()
-    {
-        string? root = Environment.GetEnvironmentVariable("ZSTUDIO_MW3_CORPUS"); if (root == null) return;
-        var token = TestContext.Current.CancellationToken; using AssetResolver resolver = new(root);
-        var world = await resolver.OpenCachedAsync(Path.Combine(root, "c1", "gamez.zbd"), token);
-        byte[] original = world.Bytes.ToArray(); var choices = await MissionSceneLoader.Mw3MissionsAsync(world.Path, resolver, token); Assert.True(choices.Count > 1);
-        resolver.SelectMission(world.Path, choices[0].Archive); var first = await MissionSceneLoader.LoadAsync(world, resolver, token: token);
-        Assert.NotEmpty(first.Actors); Assert.All(first.Actors, a => Assert.Equal(Path.GetFullPath(choices[0].Archive).ToUpperInvariant(), a.CoordinateSource!.ArchivePath));
-        Assert.All(first.AiNetworks.Networks, n => Assert.Equal(choices[0].Archive, n.Archive));
-        Assert.NotEmpty(first.AiNetworks.Networks.SelectMany(n => n.Constraints));
-        var edits = await PickupPlacementEditSession.LoadAsync(world.Path, resolver, token);
-        var actor = first.Actors.First(a => a.CoordinateSource != null); var source = actor.CoordinateSource!;
-        Assert.True(edits.MoveTo(source, actor.PlacementPosition!.Value + Vector3.UnitX)); Assert.Single(edits.Scope(source).Sources);
-        resolver.SelectMission(world.Path, choices[1].Archive); var second = await MissionSceneLoader.LoadAsync(world, resolver, token: token);
-        Assert.All(second.AiNetworks.Networks, n => Assert.Equal(choices[1].Archive, n.Archive));
-        Assert.DoesNotContain(second.Actors, a => a.CoordinateSource == source); Assert.True(edits.IsDirty); Assert.Equal(-1, second.RemapNodeFrom(first, actor.Root));
-        resolver.SelectMission(world.Path, choices[0].Archive); var again = await MissionSceneLoader.LoadAsync(world, resolver, token: token);
-        Assert.True(again.RemapNodeFrom(first, actor.Root) >= 0); Assert.Equal(original, world.Bytes.ToArray());
-        string working = Path.Combine(Path.GetTempPath(), "zstudio-mw3-coordinates-" + Guid.NewGuid().ToString("N")); Directory.CreateDirectory(working);
-        try
-        {
-            byte[] sourceReader = await File.ReadAllBytesAsync(choices[0].Archive, token), expected = edits.EncodeArchive(choices[0].Archive);
-            string copy = Path.Combine(working, "reader-copy.zbd");
-            var saved = await edits.SaveAsync(new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase) { [choices[0].Archive] = copy }, token: token);
-            Assert.Empty(saved.Errors); Assert.False(edits.IsDirty); Assert.Equal(expected, await File.ReadAllBytesAsync(copy, token));
-            Assert.Equal(sourceReader, await File.ReadAllBytesAsync(choices[0].Archive, token));
-            Assert.DoesNotContain((await FormatRegistry.Default.OpenAsync(copy, token)).Diagnostics, d => d.Severity == "Error");
-            edits.Undo(); Assert.Equal(sourceReader, edits.EncodeArchive(choices[0].Archive));
-        }
-        finally { Directory.Delete(working, true); }
-        var library = await MotionLibrary.LoadAsync(Path.Combine(root, "motion.zbd"), resolver, token);
-        var motions = await resolver.OpenCachedAsync(Path.Combine(root, "motion.zbd"), token); var motionAsset = motions.Assets.First(a => a.Content is MotionClip);
-        int memberIndex = MotionLibrary.SuggestedMember(motionAsset.Name, library)!.Value; var assembly = (MechAssembly)library.Assets[memberIndex].Content!;
-        var preview = new MotionPreview((MotionClip)motionAsset.Content!, library, assembly);
-        Assert.NotEmpty(preview.At(.2, token: token).Nodes); Assert.Equal(preview.At(.2, token: token).Nodes, preview.At(.2, token: token).Nodes);
-        var model = library.Scene!.Models[assembly.FirstModel]; var center = (model.Vertices.Aggregate(Vector3.Min) + model.Vertices.Aggregate(Vector3.Max)) / 2;
-        var mesh = new ImportedMesh([center, center + new Vector3(.001f, 0, 0), center + new Vector3(0, .001f, 0)], [Vector3.UnitZ, Vector3.UnitZ, Vector3.UnitZ], [Vector2.Zero, Vector2.UnitX, Vector2.UnitY], [0, 1, 2]) { Colors = [Vector3.UnitX, Vector3.UnitY, Vector3.UnitZ] };
-        var resources = new ResourceEditSession(library); var member = resources.Current.Members[memberIndex].Id;
-        resources.Accept(await resources.PrepareMechModelAsync(member, 0, mesh, model.Polygons[0].MaterialIndex, token));
-        var changed = resources.Current.Document.Scene!.Models[assembly.FirstModel]; Assert.Equal(mesh.Positions, changed.Vertices); Assert.Equal(mesh.Colors.Select(c => c * 255), changed.Polygons[0].Colors);
-        resources.UndoRedo(false); Assert.Equal(library.Bytes.ToArray(), resources.Current.Document.Bytes.ToArray());
-    }
-    [Fact]
-    public async Task OptionalBaseGameCorpusParsesAndAnimationsAndMotionsRoundTrip()
+    public async Task OptionalBaseGameCorpusParsesAndAnimationsRoundTrip()
     {
         string? root = Environment.GetEnvironmentVariable("ZSTUDIO_MW3_CORPUS"); if (root == null) return;
         var token = TestContext.Current.CancellationToken; int worlds = 0, animations = 0, motions = 0, assemblies = 0, invalidTransforms = 0;
@@ -350,11 +191,26 @@ public sealed class MechWarrior3Tests
             }
             foreach (var asset in doc.Assets)
             {
-                if (asset.Content is MotionClip clip) { motions++; Assert.Equal(doc.Slice(asset.Offset, asset.Length).ToArray(), clip.Write(token)); }
+                if (asset.Content is MotionClip) motions++;
                 if (asset.Content is MechAssembly assembly) { assemblies++; Assert.NotEmpty(SceneBuilder.ForAsset(doc.Scene!, asset, token: token).Placements); }
             }
         }
         Assert.Equal(6, worlds); Assert.Equal(6, animations); Assert.Equal(258, motions); Assert.Equal(57, assemblies); Assert.Equal(456, invalidTransforms);
+    }
+    /// <summary>The bytes of <paramref name="clip"/> as a motion member stores them.</summary>
+    private static byte[] Write(MotionClip clip)
+    {
+        using MemoryStream s = new(); using BinaryWriter w = new(s);
+        byte[] header = clip.Header.ToArray(); System.Buffers.Binary.BinaryPrimitives.WriteSingleLittleEndian(header.AsSpan(4), clip.LoopTime);
+        System.Buffers.Binary.BinaryPrimitives.WriteInt32LittleEndian(header.AsSpan(8), clip.FrameCount); System.Buffers.Binary.BinaryPrimitives.WriteInt32LittleEndian(header.AsSpan(12), clip.Parts.Count);
+        w.Write(header);
+        foreach (var part in clip.Parts)
+        {
+            w.Write(part.NameBytes.Span); w.Write(part.Flags);
+            foreach (var f in part.Frames) { w.Write(f.Translation.X); w.Write(f.Translation.Y); w.Write(f.Translation.Z); }
+            foreach (var f in part.Frames) { w.Write(f.Rotation.W); w.Write(f.Rotation.X); w.Write(f.Rotation.Y); w.Write(f.Rotation.Z); }
+        }
+        return s.ToArray();
     }
     internal static byte[] MotionBytes()
     {

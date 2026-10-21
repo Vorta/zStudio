@@ -7,14 +7,6 @@ namespace zStudio.Desktop.Tests;
 
 public sealed class DifficultySettingsTests
 {
-    [Fact]
-    public void PickupBackupsAreOptInAndThePreferenceRoundTrips()
-    {
-        var settings = JsonSerializer.Deserialize<StudioSettings>("{}")!;
-        Assert.False(settings.CreateBackupOnSave);
-        settings.CreateBackupOnSave = true;
-        Assert.True(JsonSerializer.Deserialize<StudioSettings>(JsonSerializer.Serialize(settings))!.CreateBackupOnSave);
-    }
     [Theory]
     [InlineData("{}", MissionDifficulty.Medium)]
     [InlineData("{\"Difficulty\":99}", MissionDifficulty.Medium)]

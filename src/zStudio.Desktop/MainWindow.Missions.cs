@@ -14,10 +14,10 @@ public partial class MainWindow
     private string? PendingExactMission(string worldPath) => exactMissionRequest is { } pending && pending.World.Equals(worldPath, StringComparison.OrdinalIgnoreCase) ? pending.Archive : null;
     private string? ExactMissionFor(string worldPath, string? archive) => exactMissionRequest is { } pending && archive != null &&
         pending.World.Equals(worldPath, StringComparison.OrdinalIgnoreCase) && pending.Archive.Equals(archive, StringComparison.OrdinalIgnoreCase) ? archive : null;
-    private string? MissionWorldPath => animation?.Mw3WorldPath ?? (shownAsset?.Kind == AssetKind.World && shownDocument?.PreviewDocument.Game == GameVariant.MechWarrior3 ? shownDocument.Path : null);
+    private string? MissionWorldPath => animation?.Mw3WorldPath ?? (shownAsset?.Kind == AssetKind.World && shownDocument?.Document.Game == GameVariant.MechWarrior3 ? shownDocument.Path : null);
     private async Task PopulateWorldMissionsAsync(DocumentModel doc, CancellationToken token)
     {
-        if (doc.PreviewDocument.Game != GameVariant.MechWarrior3 || ViewModel.Resolver == null) return;
+        if (doc.Document.Game != GameVariant.MechWarrior3 || ViewModel.Resolver == null) return;
         var catalog = await MissionSceneLoader.Mw3MissionCatalogAsync(doc.Path, ViewModel.Resolver, token);
         token.ThrowIfCancellationRequested(); bool wasUpdating = updating; updating = true;
         try
@@ -127,7 +127,7 @@ public partial class MainWindow
     }
     private void RegisterMissionCommands(StudioCommands registry)
     {
-        RegisterJob(registry, "missions", "List the current MW3 map's authored mission readers, or select one for the visible world/animation. Selection waits for the displayed preview, retains archive edit history, playhead and camera, and rejects superseded requests with context_changed. Shared resources remain available; other mission readers do not contribute actors or AI networks.",
+        RegisterJob(registry, "missions", "List the current MW3 map's authored mission readers, or select one for the visible world/animation. Selection waits for the displayed preview, retains the playhead and camera, and rejects superseded requests with context_changed. Shared resources remain available; other mission readers do not contribute actors or AI networks.",
             [PreviewParameter, P("archive", "string", "Optional full reader path returned by this tool. Omit to list."), .. PageParameters], false, async (a, token) =>
         {
             RequirePreview(a); string path = MissionWorldPath ?? throw new StudioCommandException("unsupported", "Select a MechWarrior 3 world or animation.");

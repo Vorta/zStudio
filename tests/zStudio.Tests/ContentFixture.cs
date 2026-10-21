@@ -20,7 +20,7 @@ internal static class ContentFixture
     internal static byte[] DamagedScripts(int index, string damage)
     {
         var package = FormatRegistry.Default.OpenBytes("interp.zbd", Scripts()).Scripts!;
-        var entries = Enumerable.Range(0, 3).Select(i => package.Entries[0].Duplicate($"script-{i}.zrd")).ToArray();
+        var entries = Enumerable.Range(0, 3).Select(i => package.Entries[0] with { Id = Guid.NewGuid(), SourceIndex = null, Name = $"script-{i}.zrd", Instructions = package.Entries[0].Instructions.Select(n => n with { Id = Guid.NewGuid(), SourceOffset = null }).ToArray() }).ToArray();
         byte[] bytes = PreparedScriptWriter.Write(package with { Entries = entries });
         int directoryOffset = 12 + index * 128 + 124;
         int offset = (int)BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(directoryOffset));

@@ -55,7 +55,7 @@ internal static class SourceRound30PlanningChecks
             await ((Task)typeof(MainWindow).GetField("previewWork", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(main)!).WaitAsync(token);
             var workspace = doc.SourceWorld!.Workspace;
             long revision = workspace.Revision, contentRevision = workspace.ContentRevision, documentRevision = doc.Revision;
-            var history = workspace.History.ToArray(); var preview = doc.PreviewDocument;
+            var history = workspace.History.ToArray(); var preview = doc.Document;
 
             if (macroTerrain)
             {
@@ -127,7 +127,7 @@ internal static class SourceRound30PlanningChecks
                 Assert.Equal(documentRevision, doc.Revision); Assert.Equal(history, workspace.History);
                 Assert.False(workspace.CanUndo); Assert.False(workspace.CanRedo); Assert.False(workspace.IsDirty);
                 Assert.Empty(workspace.Overlay()); Assert.Same(doc, main.ViewModel.SelectedDocument);
-                Assert.Same(preview, doc.PreviewDocument); Assert.False(doc.IsDisposed);
+                Assert.Same(preview, doc.Document); Assert.False(doc.IsDisposed);
                 Assert.False(main.OperationRunning);
                 foreach (var (path, bytes) in original) if (path != (locked == null ? null : fixture.Path(locked))) Assert.Equal(bytes, File.ReadAllBytes(path));
             }

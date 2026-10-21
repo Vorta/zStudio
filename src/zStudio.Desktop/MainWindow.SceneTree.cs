@@ -27,7 +27,7 @@ public partial class MainWindow
         if (changingSceneTree) return;
         var doc = ViewModel.SelectedDocument;
         var viewport = doc == shownDocument ? TreeViewport : null;
-        var data = viewport?.PreviewScene ?? doc?.PreviewDocument.Scene;
+        var data = viewport?.PreviewScene ?? doc?.Document.Scene;
         bool active = data != null && viewport?.PreviewScene == data;
         if (doc?.IsDisposed == true) { doc = null; data = null; }
         // A source map shows only its projected World tree: while a rebuild replaces the view (or its projection is prepared),

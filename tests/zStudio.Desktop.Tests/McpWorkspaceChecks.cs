@@ -40,7 +40,7 @@ internal static class McpWorkspaceChecks
             await pipe.ConnectAsync(5000);
             await using var client = await McpClient.CreateAsync(new StreamClientTransport(pipe,pipe));
             var tools = await client.ListToolsAsync(); Assert.True(tools.Count>25);
-            Assert.Contains(tools,t=>t.Name=="zstudio_property_edit");
+            Assert.Contains(tools,t=>t.Name=="zstudio_save_document");
             foreach(var tool in tools) Assert.Equal("object",tool.ProtocolTool.InputSchema.GetProperty("type").GetString());
             var imageResult = await client.CallToolAsync("zstudio_test_image");
             Assert.False(imageResult.IsError == true);
@@ -103,7 +103,7 @@ internal static class McpWorkspaceChecks
                 var largeDoc = new DocumentModel(largeSource); main.ViewModel.Documents.Add(largeDoc);
                 try
                 {
-                    string sequenceId = largeDoc.AnimationEdits!.Package.Entries[0].Primary.Id.ToString();
+                    string sequenceId = largeDoc.Document.Animations!.Entries[0].Primary.Id.ToString();
                     foreach (string query in new[] { "", "Unknown event", "absent" })
                     {
                         var page = await Call("animation_records", new() { ["document"] = largeDoc.SessionId.ToString(), ["entry"] = 0, ["sequence"] = sequenceId, ["limit"] = 200, ["query"] = query });
@@ -117,69 +117,15 @@ internal static class McpWorkspaceChecks
                     }
                     var inspection = await Call("inspect_asset", new() { ["document"] = largeDoc.SessionId.ToString(), ["kind"] = "Animation", ["index"] = 0 });
                     Assert.True(inspection.ToJsonString().Length < 65536);
-                    using var properties = new AnimationPropertiesEditor(largeDoc, 0, Guid.Parse(sequenceId), Guid.Empty);
-                    Assert.True(properties.Json["events_truncated"]!.GetValue<bool>());
-                    Assert.True(properties.Json.ToJsonString().Length < 32768);
                     Assert.Equal(0, largeDoc.Revision);
                 }
                 finally { main.ViewModel.CloseResolved(largeDoc); }
             }
-            await Call("animation_structure", new() { ["document"] = doc.SessionId.ToString(), ["revision"] = doc.Revision, ["entry"] = 0, ["sequence"] = Guid.NewGuid().ToString(), ["action"] = "duplicate" }, "stale_record");
-            Assert.Equal(0, doc.Revision);
             main.ViewModel.AddProblem("MCP search fixture", file: "fixture.zbd");
             filtered = await Call("problems", new() { ["query"] = "SEARCH FIXTURE" });
             Assert.Equal(1, filtered["total"]!.GetValue<int>());
             filtered = await Call("problems", new() { ["query"] = "missing-problem" });
             Assert.Equal(0, filtered["total"]!.GetValue<int>());
-            var fields=await Call("property_fields",new() { ["document"]=doc.SessionId.ToString(),["entry"]=0 });
-            string field=fields["fields"]!["fields"]!.AsArray().Single(x=>x!["Label"]!.GetValue<string>()=="Reset delay (s)")!["Id"]!.GetValue<string>();
-            await Call("property_edit",new() { ["document"]=doc.SessionId.ToString(),["revision"]=doc.Revision,["entry"]=0,["field"]=field,["value"]="2.5" });
-            Assert.Equal(2.5f,doc.AnimationEdits!.Package.Entries[0].F32(164)); Assert.True(doc.IsDirty);
-            await Call("property_edit",new() { ["document"]=doc.SessionId.ToString(),["revision"]=0,["entry"]=0,["field"]=field,["value"]="3" },"revision_conflict");
-            await Call("undo_redo",new() { ["document"]=doc.SessionId.ToString(),["revision"]=doc.Revision,["action"]="undo" });
-            Assert.Equal(0,doc.AnimationEdits.Package.Entries[0].F32(164));
-            main.OpenAnimationProperties(doc,0,Guid.Empty,Guid.Empty);
-            var form=main.OpenPropertiesWindow!.AnimationFields!;
-            var input=Descendants(form).OfType<TextBox>().Single(t=>AutomationProperties.GetName(t)=="Reset delay (s)"); input.Text="-";
-            await Call("property_edit",new() { ["document"]=doc.SessionId.ToString(),["revision"]=doc.Revision,["entry"]=0,["field"]=field,["value"]="3" },"pending_drafts");
-            Assert.Equal("-",input.Text);
-            var drafts=await Call("drafts",new() { ["target"]="properties" }); string token=drafts["drafts"]!["token"]!.GetValue<string>();
-            await Call("resolve_drafts",new() { ["document"]=doc.SessionId.ToString(),["target"]="properties",["token"]=token,["action"]="apply" },"invalid_draft");
-            Assert.True(form.HasPendingDrafts);
-            await Call("resolve_drafts",new() { ["document"]=doc.SessionId.ToString(),["target"]="properties",["token"]=token,["action"]="discard" }); Assert.False(form.HasPendingDrafts);
-            await Call("animation_structure",new() { ["document"]=doc.SessionId.ToString(),["revision"]=doc.Revision,["entry"]=0,["sequence"]=sequence.Id.ToString(),["action"]="add_event",["eventType"]=12 });
-            Assert.Equal(2,doc.AnimationEdits.Package.Entries[0].Sequences[0].Events.Count);
-            var keyframe = doc.AnimationEdits.Package.Entries[0].Sequences[0].Events[1];
-            var keyFields = await Call("property_fields",new() { ["document"]=doc.SessionId.ToString(),["entry"]=0,["sequence"]=sequence.Id.ToString(),["event"]=keyframe.Id.ToString() });
-            string addSegment = keyFields["fields"]!["actions"]!.AsArray().Single(x=>x!["Label"]!.GetValue<string>()=="+ segment")!["Id"]!.GetValue<string>();
-            int originalSegments=keyframe.Keyframes().Count;
-            await Call("property_action",new() { ["document"]=doc.SessionId.ToString(),["revision"]=doc.Revision,["entry"]=0,["sequence"]=sequence.Id.ToString(),["event"]=keyframe.Id.ToString(),["action"]=addSegment });
-            Assert.Equal(originalSegments+1,doc.AnimationEdits.Package.Entries[0].Sequences[0].Events[1].Keyframes().Count);
-            // A truncated payload leaves scheduling and catalog fields available
-            // in the GUI. MCP must preserve the same partial inspection/edit path.
-            var mw3Malformed = AnimationCatalog.Create(12, 39); mw3Malformed.SetInt(16, 0);
-            foreach (var malformed in new[] { new AnimationEvent(keyframe.Bytes[..33]), mw3Malformed })
-            {
-                byte[] malformedPayload = malformed.Bytes[32..];
-                doc.AnimationEdits.Apply(0, "Malformed fixture", e => e.Sequences[0].Events.Add(malformed));
-                var malformedTarget = new JsonObject { ["document"] = doc.SessionId.ToString(), ["entry"] = 0, ["sequence"] = sequence.Id.ToString(), ["event"] = malformed.Id.ToString() };
-                var malformedFields = await Call("property_fields", malformedTarget);
-                var diagnostic = malformedFields["fields"]!["fields"]!.AsArray().Single(f => f!["Label"]!.GetValue<string>() == "Keyframe diagnostic")!;
-                Assert.True(diagnostic["readOnly"]!.GetValue<bool>());
-                Assert.Contains("read-only", diagnostic["value"]!.GetValue<string>());
-                Assert.Empty(malformedFields["fields"]!["actions"]!.AsArray());
-                string thresholdField = malformedFields["fields"]!["fields"]!.AsArray().Single(f => f!["Label"]!.GetValue<string>() == "Threshold (s)")!["Id"]!.GetValue<string>();
-                var badSegment = (JsonObject)malformedTarget.DeepClone(); badSegment["segment"] = 1;
-                await Call("property_fields", badSegment, "invalid_argument");
-                var editMalformed = (JsonObject)malformedTarget.DeepClone();
-                editMalformed["revision"] = doc.Revision; editMalformed["field"] = thresholdField; editMalformed["value"] = "1.25";
-                await Call("property_edit", editMalformed);
-                var changedMalformed = doc.AnimationEdits.Package.Entries[0].Sequences[0].Events.Last();
-                Assert.Equal(1.25f, changedMalformed.Threshold);
-                Assert.Equal(malformedPayload, changedMalformed.Bytes[32..]);
-                Assert.Equal(malformed.I32(16), changedMalformed.I32(16));
-            }
-            await Call("close_document",new() { ["document"]=doc.SessionId.ToString(),["revision"]=doc.Revision },"unsaved_changes");
             await Call("source_bytes",new() { ["document"]=doc.SessionId.ToString(),["offset"]=0,["length"]=4097 },"invalid_argument");
             await Call("state",new() { ["unexpected"]=true },"invalid_argument");
             await Call("close_document",new() { ["document"]=doc.SessionId.ToString(),["revision"]=doc.Revision,["discard"]=true });
@@ -291,7 +237,7 @@ internal static class McpWorkspaceChecks
                 return json;
             }
         }
-        finally { main.OpenPropertiesWindow?.CloseResolved(); doc.AnimationEdits?.MarkSaved(); main.Close(); }
+        finally { main.OpenPropertiesWindow?.CloseResolved(); main.Close(); }
     }
     private static void CheckNativeCorners(Window window)
     {

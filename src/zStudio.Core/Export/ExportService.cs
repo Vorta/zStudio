@@ -256,7 +256,7 @@ public sealed partial class ExportService(AssetResolver resolver) : IAssetExport
     {
         destination = Path.GetFullPath(destination);
         string captured = directories.CapturedPath(destination);
-        if (IsWithin(directories.CapturedPath(resolver.Root), captured) || PickupPlacementEditSession.IsProtectedPath(captured))
+        if (IsWithin(directories.CapturedPath(resolver.Root), captured) || ProtectedPaths.IsProtected(captured))
             throw new IOException("Choose an export folder outside the opened source tree and protected datasets.");
         // Inspect ancestors above the selected folder too: a junction there can
         // otherwise redirect an apparently external export into the source tree.
@@ -282,7 +282,7 @@ public sealed partial class ExportService(AssetResolver resolver) : IAssetExport
     private static async Task WriteAtomicAsync(string root, string relative, ReadOnlyMemory<byte> bytes, CancellationToken token, DirectoryLease directories)
     {
         string path = DestinationPath(root, relative);
-        if (PickupPlacementEditSession.IsProtectedPath(directories.CapturedPath(path))) throw new IOException("Export outside protected reference datasets.");
+        if (ProtectedPaths.IsProtected(directories.CapturedPath(path))) throw new IOException("Export outside protected reference datasets.");
         directories.Parent(path, create: true);
         if (directories.Exists(path)) throw new IOException($"Export already exists: {relative}");
         string temporary = path + "." + Guid.NewGuid().ToString("N") + ".tmp";

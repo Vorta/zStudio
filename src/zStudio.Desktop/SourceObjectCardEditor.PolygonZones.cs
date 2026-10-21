@@ -11,7 +11,7 @@ using zStudio.Core;
 namespace zStudio.Desktop;
 
 /// <summary>
-/// The Zone section's read-only polygon zones (design/zone-section-ui.md): under a divider and its own sub-header, one row
+/// The Zone section's read-only polygon zones: under a divider and its own sub-header, one row
 /// per zone set of the object's polygons (its own and those below it), each a swatch in the overlay's colours, the zones'
 /// name, their labels and the polygon count. Text blocks only: nothing in it takes input; right-click copies it.
 /// </summary>

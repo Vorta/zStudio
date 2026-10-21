@@ -25,7 +25,7 @@ internal static class AnimationMcpCancellationChecks
         var source = new AssetDocument("fixture", new(0, DateTime.MinValue), new(FormatFamily.Animation, 28, Recognition.Supported, "fixture"), ReadOnlyMemory<byte>.Empty) { Animations = package };
         using var doc = new DocumentModel(source);
         var world = new AssetDocument("world", new(0, DateTime.MinValue), new(FormatFamily.GameZ, 15, Recognition.Supported, "fixture"), ReadOnlyMemory<byte>.Empty) { Scene = new() };
-        var context = new AnimationPreviewContext { Package = doc.AnimationEdits!.Package, World = world };
+        var context = new AnimationPreviewContext { Package = doc.Document.Animations!, World = world };
         using var wav = new MemoryStream();
         using (var writer = new BinaryWriter(wav, System.Text.Encoding.ASCII, leaveOpen: true))
         {
@@ -227,7 +227,7 @@ internal static class AnimationMcpCancellationChecks
                     [i <= depth ? i - 1 : depth], children, new() { ["flags"] = 4 }, new() { ["flags"] = 8 }));
             }
             var world = new AssetDocument("world", new(0, DateTime.MinValue), new(FormatFamily.GameZ, 15, Recognition.Supported, "fixture"), ReadOnlyMemory<byte>.Empty) { Scene = scene };
-            return new() { Package = document.AnimationEdits!.Package, World = world };
+            return new() { Package = document.Document.Animations!, World = world };
         }
     }
 
@@ -244,7 +244,7 @@ internal static class AnimationMcpCancellationChecks
         scene.Models.Add(new(0, [System.Numerics.Vector3.Zero, System.Numerics.Vector3.UnitX, System.Numerics.Vector3.UnitY], [], [], [new(0, 3, [0, 1, 2], [], [], [])], []));
         scene.Nodes.Add(new(0, "root", "object3d", 0, [], [], new() { ["flags"] = 4 }, new() { ["flags"] = 8 }));
         var world = new AssetDocument("world", new(0, DateTime.MinValue), new(FormatFamily.GameZ, 27, Recognition.Supported, "fixture"), ReadOnlyMemory<byte>.Empty) { Scene = scene };
-        var context = new AnimationPreviewContext { Package = document.AnimationEdits!.Package, World = world };
+        var context = new AnimationPreviewContext { Package = document.Document.Animations!, World = world };
         var audio = new AnimationAudio(() => new SilentOutput());
         using var resolver = new AssetResolver(Path.GetTempPath());
         using var editor = new AnimationEditor(document, 0, resolver, token, null, audio);

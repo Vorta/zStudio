@@ -38,33 +38,6 @@ internal static class ComponentFieldChecks
         Assert.True(ordinaryPaste.CommandCancelled);
         Assert.Equal(["4", "5", "6"], boxes.Select(b => b.Text));
         Assert.True(editor.CommitNow()); Assert.Equal(new Vector3(4, 5, 6), record.Vector(0));
-        CheckQuaternionAutomation(huge);
-    }
-
-    private static void CheckQuaternionAutomation(string huge)
-    {
-        var package = new AnimationPackage { Prefix = new byte[72], Tail = [] };
-        System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(package.Prefix.AsSpan(4), 28);
-        var entry = new AnimationEntry(new byte[308], 0, 0);
-        var sequence = new AnimationSequence(new byte[64]);
-        var frame = AnimationKeyframe.Create(2); frame.End = 1; frame.SetFloat(frame.ChannelOffset(1), 1);
-        var ev = AnimationCatalog.Create(12).WithKeyframes([frame]);
-        sequence.Events.Add(ev); entry.Sequences.Add(sequence); package.Entries.Add(entry);
-        var source = new AssetDocument("numeric-properties.zbd", new(0, DateTime.MinValue), new(FormatFamily.Animation, 28, Recognition.Supported, "Fixture"), ReadOnlyMemory<byte>.Empty) { Animations = package };
-        using var document = new DocumentModel(source);
-        using var editor = new AnimationPropertiesEditor(document, 0, sequence.Id, ev.Id);
-        var fields = JsonSerializer.SerializeToNode(editor.DescribeAutomationFields())!["fields"]!.AsArray();
-        string id = fields.Single(f => f!["Label"]!.GetValue<string>() == "Rotation base W, X, Y, Z")!["Id"]!.GetValue<string>();
-        byte[] original = document.AnimationEdits!.Package.Entries[0].Sequences[0].Events[0].Bytes.ToArray();
-        Assert.Throws<InvalidDataException>(() => editor.WriteAutomationField(id, huge));
-        Assert.Throws<InvalidDataException>(() => editor.WriteAutomationField(id, "1, 2, 3, NaN"));
-        Assert.False(document.IsDirty);
-        Assert.Equal(original, document.AnimationEdits.Package.Entries[0].Sequences[0].Events[0].Bytes);
-        editor.WriteAutomationField(id, "2, 0, 0, 0");
-        Assert.True(document.IsDirty);
-        var changed = Assert.Single(document.AnimationEdits.Package.Entries[0].Sequences[0].Events[0].Keyframes());
-        Assert.Equal(2f, changed.F32(changed.ChannelOffset(1)));
-        document.AnimationEdits.Undo(); Assert.False(document.IsDirty);
     }
 
     private sealed class Editor : FieldEditor

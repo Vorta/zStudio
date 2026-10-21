@@ -325,7 +325,7 @@ public sealed partial class SceneViewport : UserControl, IDisposable
                     // The horizon is backdrop, as for the hover probe: clicking the sky selects nothing.
                     if (!group.Horizon) mesh.MouseDown3D += (_, e) =>
                     {
-                        if (InspectionSelectionEnabled && !IsFlyActive && !IsPickupDragging && e is MouseDown3DEventArgs { OriginalInputEventArgs: MouseButtonEventArgs { ChangedButton: MouseButton.Left } } args && args.HitTestResult is { } hit && visiblePlacements.TryGetValue(mesh, out var found))
+                        if (!IsFlyActive && !IsPickupDragging && e is MouseDown3DEventArgs { OriginalInputEventArgs: MouseButtonEventArgs { ChangedButton: MouseButton.Left } } args && args.HitTestResult is { } hit && visiblePlacements.TryGetValue(mesh, out var found))
                         {
                             int at = hit.Tag is int instance ? instance : 0;
                             if (at >= 0 && at < found.Length && found[at].NodeIndex >= 0)

@@ -30,8 +30,6 @@ public sealed partial class SceneViewport
     public event Action? AiPathTransformConfirmRequested;
     public event Action? AiPathTransformCancelRequested;
 
-    public void FocusAiPathViewport() => viewport.Focus();
-
     public void SetAiPathEditing(string? networkId, IEnumerable<string>? selectedIds = null)
     {
         if (networkId == null && AiPathEditingNetwork == null) return;
@@ -52,7 +50,7 @@ public sealed partial class SceneViewport
         {
             aiPathSelection.UnionWith(selection);
             aiPathNetworkNodes.UnionWith(AiNetworks.Networks.Single(n => n.Id == networkId).Nodes.Select(n => n.Id));
-            SelectedInspection = null; SelectedAiNode = null; SelectPickup(null, false, true);
+            SelectedInspection = null; SelectedAiNode = null; SelectPickup(null);
             FramingSelection = null; RefreshPickupSelection(); InspectionChanged?.Invoke();
         }
         aiMarkerPose = null; UpdateAiMarkers(); RefreshAiSelection();
@@ -61,7 +59,7 @@ public sealed partial class SceneViewport
 
     private void RequireAiPathInteraction()
     {
-        if (!PlacementEditingEnabled) throw new InvalidOperationException("Unlock editing first.");
+        if (!PlacementEditingEnabled) throw new InvalidOperationException("This world is read only: edit its source project instead.");
         if (IsFlyActive || IsPickupDragging || HasTransformDraft || TerrainBrushActive || ZonePaintActive || HasParachutePreview || IsParachutePointerMoving)
             throw new InvalidOperationException("Finish the active navigation or editing operation before editing an AI path.");
     }

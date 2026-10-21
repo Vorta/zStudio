@@ -37,7 +37,7 @@ public sealed class AnimationWorldDiscoveryTests
     {
         using var fixture = new Fixture(animationVersion, worldVersion, otherVersion);
         var context = await AnimationPreviewContext.LoadAsync(fixture.Package, fixture.AnimationPath, fixture.Resolver, token: TestContext.Current.CancellationToken);
-        Assert.Same(fixture.MatchingWorld, context.World);
+        Assert.Equal(fixture.MatchingWorld.Path, context.World.Path);
         Assert.Equal((uint)animationVersion, context.Package.Version);
     }
 
@@ -50,7 +50,7 @@ public sealed class AnimationWorldDiscoveryTests
         using var fixture = new Fixture(animationVersion, worldVersion, otherVersion);
         var token = TestContext.Current.CancellationToken;
         var context = await AnimationPreviewContext.LoadAsync(fixture.Package, fixture.AnimationPath, fixture.Resolver, fixture.MatchingWorld.Path, token);
-        Assert.Same(fixture.MatchingWorld, context.World);
+        Assert.Equal(fixture.MatchingWorld.Path, context.World.Path);
         var incompatible = await Assert.ThrowsAsync<InvalidDataException>(() => AnimationPreviewContext.LoadAsync(fixture.Package, fixture.AnimationPath, fixture.Resolver, fixture.OtherWorld.Path, token));
         Assert.Contains("different games", incompatible.Message);
         File.Delete(fixture.MatchingWorld.Path);
@@ -61,7 +61,6 @@ public sealed class AnimationWorldDiscoveryTests
     private sealed class Fixture : IDisposable
     {
         private readonly string directory = Path.Combine(Path.GetTempPath(), "zstudio-world-discovery-" + Guid.NewGuid().ToString("N"));
-        private readonly Guid snapshotOwner = Guid.NewGuid();
         public AssetResolver Resolver { get; }
         public AnimationPackage Package { get; }
         public AssetDocument MatchingWorld { get; }
@@ -78,7 +77,6 @@ public sealed class AnimationWorldDiscoveryTests
             OtherWorld = World(paths[0], otherVersion);
             MatchingWorld = World(paths[1], worldVersion);
             Resolver = new(directory);
-            Resolver.SetWorkspaceSnapshots(snapshotOwner, [OtherWorld, MatchingWorld]);
             byte[] prefix = new byte[animationVersion == 39 ? 80 : 72];
             BinaryPrimitives.WriteUInt32LittleEndian(prefix, 0x08170616);
             BinaryPrimitives.WriteInt32LittleEndian(prefix.AsSpan(4), animationVersion);
@@ -87,11 +85,9 @@ public sealed class AnimationWorldDiscoveryTests
 
         private static AssetDocument World(string path, int version)
         {
-            byte[] bytes = new byte[36];
-            BinaryPrimitives.WriteUInt32LittleEndian(bytes, 0x02971222);
-            BinaryPrimitives.WriteInt32LittleEndian(bytes.AsSpan(4), version);
+            byte[] bytes = version switch { 15 => ModelFixture.GameZ(), 13 => DemoWorldFixture.FromVersion15(ModelFixture.GameZ()), _ => GameZBoundsTests.World(version, 1, 0) };
             File.WriteAllBytes(path, bytes);
-            return new(path, FileStamp.Read(path), FormatRegistry.Probe(path), bytes) { Scene = new() };
+            return FormatRegistry.Default.OpenBytes(path, bytes);
         }
 
         public void Dispose() { Resolver.Dispose(); Directory.Delete(directory, true); }

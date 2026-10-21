@@ -150,16 +150,6 @@ public partial class MainWindow
         throw new StudioCommandException("context_changed", "The source world's prepared object model is unavailable. Reopen the world.");
     }
 
-    /// <summary>A resource editor may not change a project file the source workspace holds unsaved edits of; the edits would conflict on save.</summary>
-    private void RefuseResourceEditOfWorkspaceFile(DocumentModel doc)
-    {
-        if (sourceWorkspace is not { } workspace) return;
-        string full = Path.GetFullPath(doc.Path), prefix = Path.EndsInDirectorySeparator(workspace.Root) ? workspace.Root : workspace.Root + Path.DirectorySeparatorChar;
-        if (!full.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) return;
-        string relative = SourceProject.Relative(workspace.Root, full);
-        if (workspace.IsFileDirty(relative))
-            throw new InvalidOperationException($"The source project holds unsaved edits of {relative}; save or undo them before editing the file here.");
-    }
     /// <summary>The world-file node a shown scene node is, or null for a runtime copy (a placed vehicle or pickup instance).</summary>
     private int? SourceObjectNode(int node)
     {
@@ -229,8 +219,6 @@ public partial class MainWindow
         var provenance = SourceWorldProvenance(doc);
         return new(workspace, session.Mission, model.World, SourceObjectEdits.ObjectOf(built, provenance), provenance, build.Executions) { Write = build.WriteInstruction };
     }
-    /// <summary>A node of the shown world by name (see <see cref="SourceWorldNodeNamedNear"/>).</summary>
-    private WorldNode SourceWorldNodeNamed(DocumentModel doc, string name) => SourceWorldNodeNamedNear(doc, name, null);
     /// <summary>
     /// A node of the shown world by name, refused when no node or several nodes have it, unless they are the copies of one
     /// node of a part of the mission database: an edit of the part's file is the same through any of them. Of those, the one

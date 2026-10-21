@@ -16,7 +16,7 @@ public sealed class McpLazyConnectorTests
         int connections = 0;
         await WithConnector(_ => { connections++; throw new Exception("Must not connect"); }, () => false, async client =>
         {
-            Assert.Equal(119, (await client.ListToolsAsync()).Count);
+            Assert.Equal(101, (await client.ListToolsAsync()).Count);
             Assert.Equal(2, (await client.ListResourcesAsync()).Count);
             Assert.False((await client.CallToolAsync("zstudio_capabilities")).IsError);
             Assert.Single((await client.ReadResourceAsync("zstudio://capabilities")).Contents);
@@ -46,25 +46,6 @@ public sealed class McpLazyConnectorTests
                 Assert.True(result.IsError); Assert.Equal("invalid_argument", result.StructuredContent!.Value.GetProperty("code").GetString());
             }
             Assert.Equal(0, connections);
-        });
-    }
-    [Fact]
-    public async Task InvalidTextureTargetsAndScriptTokensNeverLaunchWorkspace()
-    {
-        int connections = 0;
-        await WithConnector(_ => { connections++; throw new Exception("Must not connect"); }, () => true, async client =>
-        {
-            foreach (string targets in new[] { "[]", "[{}]", "[null]", "[{\"path\":\"a\",\"index\":-1}]", "[{\"path\":\"a\",\"index\":4096}]" })
-            {
-                var result = await client.CallToolAsync("zstudio_texture_import", new Dictionary<string,object?> { ["document"]=Guid.NewGuid().ToString(),["revision"]=0,["path"]="unused.png",["index"]=0,["targets"]=JsonNode.Parse(targets) });
-                Assert.True(result.IsError); Assert.Equal("invalid_argument",result.StructuredContent!.Value.GetProperty("code").GetString());
-            }
-            foreach (var tokens in new object?[][] { [], ["command",null], ["command",1], Enumerable.Repeat<object?>("x",17).ToArray() })
-            {
-                var result = await client.CallToolAsync("zstudio_script_instruction_edit", new Dictionary<string,object?> { ["document"]=Guid.NewGuid().ToString(),["revision"]=0,["script"]=Guid.NewGuid().ToString(),["action"]="add",["tokens"]=tokens });
-                Assert.True(result.IsError); Assert.Equal("invalid_argument",result.StructuredContent!.Value.GetProperty("code").GetString());
-            }
-            Assert.Equal(0,connections);
         });
     }
 
@@ -157,16 +138,6 @@ public sealed class McpLazyConnectorTests
                 {
                     ["document"] = Guid.NewGuid().ToString(), ["revision"] = 0, ["source"] = source,
                     ["x"] = 0, ["y"] = 0, ["z"] = 0
-                });
-                Assert.True(result.IsError);
-                Assert.Equal("invalid_argument", result.StructuredContent!.Value.GetProperty("code").GetString());
-            }
-            foreach (JsonNode? value in new JsonNode?[] { null, JsonValue.Create(1), JsonValue.Create(false), new JsonObject(), new JsonArray() })
-            {
-                var result = await client.CallToolAsync("zstudio_save_document", new Dictionary<string, object?>
-                {
-                    ["document"] = Guid.NewGuid().ToString(), ["revision"] = 0,
-                    ["destinations"] = new JsonObject { ["source.zbd"] = value }
                 });
                 Assert.True(result.IsError);
                 Assert.Equal("invalid_argument", result.StructuredContent!.Value.GetProperty("code").GetString());

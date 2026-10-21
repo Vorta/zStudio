@@ -19,7 +19,6 @@ public sealed partial class PickupPlacementEditSession
 
     public void AddCoordinates(IEnumerable<(AssetDocument Archive, AssetRecord Asset)> resources, CancellationToken token = default, bool mw3 = false, IReadOnlySet<string>? presentResources = null)
     {
-        if (CanUndo || CanRedo || IsDirty) throw new InvalidOperationException("Coordinate sources must be loaded before editing.");
         // Cancellation can leave successfully admitted earlier rows; invalidate before the first mutation.
         InvalidateMembership();
         var inputs = resources.Where(r => IsCoordinateResource(r.Asset.Name)).ToArray();
@@ -70,8 +69,8 @@ public sealed partial class PickupPlacementEditSession
                         sourceComparer.Register(source);
                         // The common coordinate store uses the existing archive-key identity.
                         entries.Add(source, entry);
-                        positions.Add(source, position); savedPositions.Add(source, position); otherCoordinates.Add(source, record);
-                        rotations.Add(source, rotation); savedRotations.Add(source, rotation);
+                        positions.Add(source, position); otherCoordinates.Add(source, record);
+                        rotations.Add(source, rotation);
                     }
                     catch (Exception ex) when (ex is InvalidDataException or FormatException or OverflowException)
                     { diagnostics.Add($"{asset.Name} record {i / 2}: {ex.Message}"); }
@@ -93,13 +92,6 @@ public sealed partial class PickupPlacementEditSession
             var matches = templates[record.Template].Take(2).ToArray();
             otherCoordinates[key] = record with { TemplateSourceNode = matches.Length == 1 ? matches[0].Index : null };
         }
-    }
-
-    public IEnumerable<AssetDocument> WorkingArchives(CancellationToken token = default)
-    {
-        // Publish only owned archives; unedited readers remain served by their own documents or files.
-        foreach (var (path, archive) in archives.Where(a => touched.Contains(a.Key)).ToArray())
-            yield return FormatRegistry.Default.OpenBytes(archive.Original.Path, EncodeArchive(path), archive.Original.Stamp, token);
     }
 
     public AiNetworkSnapshot ApplyAiPositions(AiNetworkSnapshot snapshot, IReadOnlyDictionary<MissionPickupSource, PlacementTransform>? preview = null)
@@ -140,9 +132,4 @@ public sealed partial class PickupPlacementEditSession
             foreach (float value in new[] { node.Position.X, node.Position.Y, node.Position.Z }) hash.AppendData(BitConverter.GetBytes(value));
         return snapshot with { Id = Convert.ToHexString(hash.GetHashAndReset()), Networks = networks };
     }
-
-    public IReadOnlyDictionary<int, Vector3> TankPreviewPositions(MissionSceneContext mission) => mission.Actors
-        .GroupBy(a => a.Root).Where(g => g.Count() == 1).Select(g => g.Single())
-        .Where(a => a.CoordinateSource != null && positions.ContainsKey(a.CoordinateSource))
-        .ToDictionary(a => a.Root, a => positions[a.CoordinateSource!]);
 }

@@ -91,7 +91,7 @@ internal sealed partial class SceneInspectionCard
         sourceRows.Visibility = ObjectEditor == null ? Visibility.Collapsed : Visibility.Visible;
         copyObject.Visibility = deleteObject.Visibility = objectBinding?.State.Class is "Object3D" or "Lod" ? Visibility.Visible : Visibility.Collapsed;
         if (ObjectEditor == null) { detailsSection.Visibility = Visibility.Visible; return false; }
-        detailsSection.Visibility = Visibility.Collapsed; valves.Visibility = Visibility.Collapsed;
+        detailsSection.Visibility = Visibility.Collapsed;
         if (ObjectEditor.TransformSection is { } transformSection) PlaceModes(transformSection);
         ObjectEditor.IsEnabled = !objectBinding!.Document.SourceWorld!.IsRebuilding && !ObjectApplying;
         copyObject.IsEnabled = deleteObject.IsEnabled = ObjectEditor.IsEnabled;
@@ -310,5 +310,14 @@ internal sealed partial class SceneInspectionCard
         catch (OperationCanceledException) { }
         catch (Exception ex) when (ex is StudioCommandException or InvalidOperationException or System.IO.InvalidDataException) { ShowSourceError(ex.Message); }
     }
-    internal void FocusObject() { ObjectEditor?.MoveFocus(new(System.Windows.Input.FocusNavigationDirection.First)); }
+    /// <summary>
+    /// Gives the keyboard to the card: a source object's editor's first control, or a placement's first editable coordinate
+    /// while it is shown. Otherwise the keyboard stays where it is (the docked card's panel is not under this element, so
+    /// moving focus from here would reach the view's chips).
+    /// </summary>
+    internal void FocusObject()
+    {
+        if (ObjectEditor != null) { ObjectEditor.MoveFocus(new(System.Windows.Input.FocusNavigationDirection.First)); return; }
+        if (values.TryGetValue(AuthoredPlacement, out var field) && field.Inputs.FirstOrDefault(i => i.IsEnabled && !i.IsReadOnly && i.IsVisible) is { } input) input.Focus();
+    }
 }

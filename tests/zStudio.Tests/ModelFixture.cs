@@ -1,13 +1,13 @@
 using System.Buffers.Binary;
 using System.Numerics;
-using zStudio.Core.Export;
 
 namespace zStudio.Tests;
 
 internal static class ModelFixture
 {
-    internal static ImportedMesh Mesh => new([new(-.3f,0,0),new(.3f,0,0),new(0,2,.1f)], [Vector3.UnitZ,Vector3.UnitZ,Vector3.UnitZ], [new(0,1),new(1,1),new(.5f,0)], [0,1,2]);
-    /// <summary>Slot 0 is the one active material; each import takes the next free slot.</summary>
+    internal static readonly Vector3[] Positions = [new(-.3f,0,0),new(.3f,0,0),new(0,2,.1f)];
+    internal static readonly Vector2[] Uvs = [new(0,1),new(1,1),new(.5f,0)];
+    /// <summary>Slot 0 is the one active material; the other slots are free.</summary>
     internal static byte[] GameZ(int materialSlots = 4)
     {
         const int materials = 36;
@@ -23,10 +23,9 @@ internal static class ModelFixture
         {
             int h = models + 12 + i * 88, d = data + i * 100;
             I(h,1); I(h + 4,3); I(h + 8,1); I(h + 12,1); I(h + 16,3); I(h + 48,123); I(h + 64,456); F(h + 80,2); I(h + 84,d);
-            var m = Mesh;
-            for (int v = 0; v < 3; v++) { F(d + v * 12,m.Positions[v].X); F(d + v * 12 + 4,m.Positions[v].Y); F(d + v * 12 + 8,m.Positions[v].Z); }
+            for (int v = 0; v < 3; v++) { F(d + v * 12,Positions[v].X); F(d + v * 12 + 4,Positions[v].Y); F(d + v * 12 + 8,Positions[v].Z); }
             I(d + 36,3); I(d + 44,111); I(d + 52,222); I(d + 56,0);
-            for (int v = 0; v < 3; v++) { I(d + 64 + v * 4,v); F(d + 76 + v * 8,m.Uvs[v].X); F(d + 80 + v * 8,m.Uvs[v].Y); }
+            for (int v = 0; v < 3; v++) { I(d + 64 + v * 4,v); F(d + 76 + v * 8,Uvs[v].X); F(d + 80 + v * 8,Uvs[v].Y); }
             h = nodes + i * 196; System.Text.Encoding.ASCII.GetBytes(i == 0 ? "root" : "child").CopyTo(b,h);
             I(h + 52,5); I(h + 60,i); I(h + 84,i); I(h + 92,1-i);
             // Retail node flags: 0x100 cached, 0x200 model and 0x400 child bounds valid.

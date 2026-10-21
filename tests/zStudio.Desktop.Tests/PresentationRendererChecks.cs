@@ -103,16 +103,14 @@ internal static class PresentationRendererChecks
         Assert.Equal(Vector3.Zero, flightLine.Positions![0]); // Retain sample identity; omit only its rendered edge.
         scene.SetParachuteOverlay([new(0, new(-20, 0, 0)), new(10, new(20, 0, 0))], [new(window, 5, [])]);
         Assert.Empty(Get<LineGeometryModel3D>("parachuteLine").Geometry!.Indices!);
-        // Source maps permit locked object inspection, but drop-window selection enters an edit-only interaction.
+        // A read-only world inspects objects, but drop-window selection enters an edit-only interaction.
         // Exercise the real pointer dispatch over the visible marker without native input or mouse capture.
-        scene.AllowLockedInspection = true;
-        scene.SetEditingLocked(true);
-        Assert.True(scene.InspectionSelectionEnabled);
+        scene.SetPlacementEditing(false);
         Assert.True(scene.HandleScenePointerDown(new(600, 400), new(Mouse.PrimaryDevice, 0, MouseButton.Left)));
         Assert.Null(scene.SelectedParachuteWindow);
         Assert.False(scene.IsParachutePointerMoving);
         Assert.False(scene.HasParachutePreview);
-        scene.SetEditingLocked(false);
+        scene.SetPlacementEditing(true);
         Assert.True(scene.HandleScenePointerDown(new(600, 400), new(Mouse.PrimaryDevice, 0, MouseButton.Left)));
         Assert.Equal(window, scene.SelectedParachuteWindow);
         scene.SetParachutePointerMove(true);

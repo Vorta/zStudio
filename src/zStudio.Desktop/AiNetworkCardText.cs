@@ -3,7 +3,7 @@ using zStudio.Core;
 namespace zStudio.Desktop;
 
 /// <summary>
-/// What the AI network card says about each header field: what it does in play (docs/engine-evidence.md, net_NN.zrd),
+/// What the AI network card says about each header field: what it does in play (docs/agents/engine-evidence.md#net_nnzrd),
 /// following the type and attack strategy chosen in the draft, and the game's value when it is not stored. The card and its
 /// MCP draft report show the same lines.
 /// </summary>

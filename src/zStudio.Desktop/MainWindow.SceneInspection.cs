@@ -18,7 +18,6 @@ public partial class MainWindow
     private void AttachInspection(SceneViewport viewport)
     {
         var card = new SceneInspectionCard(viewport, item => DescribeInspection(viewport, item), BeginInspectionEdit, ApplyInspectionEdit);
-        card.ValvesRequested += async id => await ResourceUiAsync(() => OpenNodeValvesAsync(id));
         card.SetPanelHeight(Layout.InspectionPanelHeight);
         card.PanelHeightChanged += height => Layout.InspectionPanelHeight = height;
         card.DraftClosed += () => { if (ReferenceEquals(inspectionDraft, card)) inspectionDraft = null; };
@@ -197,22 +196,23 @@ public partial class MainWindow
             else
             {
                 info["Source archive"] = Short(source!.ArchivePath); info["Source resource"] = source.ResourceName + $" · member #{source.AssetIndex} · record #{source.RecordIndex}";
-                info["Save archive"] = Short(edits.TargetPath(source.ArchivePath));
             }
             info["Edit scope"] = edits.Scope(source).Description;
             var rotation = edits.Rotation(source);
             if (edits.RotationKind(source) == PlacementRotationKind.EulerRadians)
             {
                 info["Rotation radians"] = JsonData.Vector(rotation);
-                info[SceneInspectionCard.AuthoredRotation] = new JsonObject { ["x"] = rotation.X * (180 / Math.PI), ["y"] = rotation.Y * (180 / Math.PI), ["z"] = rotation.Z * (180 / Math.PI) };
+                // Degrees to two decimals, as the card's fields show them (radians are stored with four, about 0.006°).
+                info[SceneInspectionCard.AuthoredRotation] = new JsonObject { ["x"] = Math.Round(rotation.X * (180 / Math.PI), 2), ["y"] = Math.Round(rotation.Y * (180 / Math.PI), 2), ["z"] = Math.Round(rotation.Z * (180 / Math.PI), 2) };
             }
             if (edits.Coordinate(source) is { Kind: "tank" } tank) { info["Template"] = tank.Template; info[SceneInspectionCard.AuthoredHeading] = rotation.Y; }
         }
         if (known && edits!.Coordinate(source!) is { Kind: "tank" } vehicle && (!vehicle.MissionSpecific && (vehicle.TemplateSourceNode == null || vehicle.Difficulties.Count == 0))) known = false;
-        bool locked = known && shownDocument!.EditingLocked;
-        info["Editable"] = known && !locked;
+        // A compiled world is read only: its placements are inspected, never moved.
+        bool readOnly = shownDocument?.SourceWorld == null;
+        info["Editable"] = known && !readOnly;
         info["Rotation axes"] = known ? edits!.RotationKind(source!) switch { PlacementRotationKind.EulerRadians => "XYZ", PlacementRotationKind.HeadingDegrees => "Y", _ => "None" } : "None";
-        info["Editing"] = edits?.ReadOnlyReason is { } readOnly ? readOnly : locked ? "Unlock editing to select and edit objects" : known ? "Edit position and supported rotation; confirm together as one undo step" : "Read-only inspection";
+        info["Editing"] = readOnly ? "Read only: edit the source project instead" : known ? "Edit position and supported rotation; confirm together as one undo step" : "Read-only inspection";
         if (!known && shownDocument is { SourceWorld: not null } sourceDoc && SourceSelection(sourceDoc, data) is { } editSelection)
             info["Editing"] = editSelection.Boundaries.GetValueOrDefault(item.SelectionNode)?.ReadOnlyReason
                 ?? "Edit this object in the selected-object panel.";
@@ -311,7 +311,7 @@ public partial class MainWindow
     {
         // A draft started now would count as unfinished input when the rebuild finishes, taking its edit back.
         if (shownDocument?.SourceWorld != null && sourceWorkspaceBusy) throw new StudioCommandException("busy", "The world is rebuilding after an edit; edit placements when it is shown.");
-        if (scene != null && shownDocument?.EditingLocked == true) throw new StudioCommandException("locked", "Unlock editing first.");
+        if (scene != null && shownDocument is { SourceWorld: null }) throw new StudioCommandException("read_only", "This world is read only: edit its source project instead.");
         if (card != CurrentInspectionCard || scene == null || shownDocument is not { IsDisposed: false } doc || card.Selection is not { } selection)
             throw new StudioCommandException("not_ready", "Select a mission placement first.");
         if (!ResolvePropertiesDrafts(doc)) return;
@@ -322,8 +322,6 @@ public partial class MainWindow
             throw new StudioCommandException("read_only", "This node has no verified editable placement.");
         if (edits.Coordinate(source) is { Kind: "tank" } vehicle && (!vehicle.MissionSpecific && (vehicle.TemplateSourceNode == null || vehicle.Difficulties.Count == 0)))
             throw new StudioCommandException("read_only", "The tank template is missing or ambiguous.");
-        if (doc.EditingLocked) throw new StudioCommandException("locked", "Unlock editing first.");
-        if (edits.HasExternalChanges()) throw new StudioCommandException("external_change", "An owning archive changed. Reload or preserve your existing edits with Save As.");
         inspectionDraft = card; card.StartDraft(doc, source, edits.Position(source));
     }
     private Task? ApplyInspectionEdit(SceneInspectionCard card)
@@ -342,23 +340,15 @@ public partial class MainWindow
         if (!card.HasDraft || doc == null || doc.IsDisposed || doc != shownDocument || card != CurrentInspectionCard || card.Selection?.Target != card.DraftTarget)
             throw new StudioCommandException("stale_record", "The draft's document or selected instance is no longer available.");
         if (doc.Revision != card.DraftRevision) throw new StudioCommandException("revision_conflict", "The document changed. Discard this draft and start again.");
-        // Edit mode without a change: Apply only leaves it.
+        // Edit mode without a change: Apply only leaves it; a placement draft that stores nothing ends the same way.
         if (card.ObjectEditing && !card.HasObjectDraft) { card.CancelDraft(); return null; }
+        if (!card.HasObjectDraft && card.DraftSource != null && !card.HasChanges) { card.CancelDraft(); return null; }
         if (card.HasObjectDraft) return ApplySourceObjectCardAsync(card, token, sharedZones);
-        // Another document's edit may have dropped the clean session until the map shows its reloaded placements.
-        var edits = doc.PickupEdits ?? throw new StudioCommandException("not_ready", "The map's placements are reloading. Apply again when the map is shown.");
-        if (doc.EditingLocked) throw new StudioCommandException("locked", "Coordinate editing is locked.");
-        if (edits.HasExternalChanges()) throw new StudioCommandException("external_change", "An owning archive changed outside zStudio.");
-        if (doc.SourceWorld != null)
-        {
-            if (doc.SourceWorld.IsRebuilding || sourceWorkspaceBusy) throw new StudioCommandException("busy", "The world is rebuilding after another edit; apply when it is shown.");
-            var source = card.DraftSource!; var transform = card.DraftTransform();
-            // Keep this exact draft until worker preparation and its source/ownership checks succeed.
-            return MoveSourcePlacementAsync(doc, source, transform, token, card);
-        }
-        edits.TransformTo(card.DraftSource!, card.DraftTransform());
-        card.CancelDraft(); UpdateDocumentCommands();
-        return null;
+        _ = doc.PickupEdits ?? throw new StudioCommandException("not_ready", "The map's placements are reloading. Apply again when the map is shown.");
+        if (doc.SourceWorld == null) throw new StudioCommandException("read_only", "This world is read only: edit its source project instead.");
+        if (doc.SourceWorld.IsRebuilding || sourceWorkspaceBusy) throw new StudioCommandException("busy", "The world is rebuilding after another edit; apply when it is shown.");
+        // Keep this exact draft until worker preparation and its source/ownership checks succeed.
+        return MoveSourcePlacementAsync(doc, card.DraftSource!, card.DraftTransform(), token, card);
     }
 
     private void RegisterInspectionCommands(StudioCommands commands)
@@ -384,7 +374,7 @@ public partial class MainWindow
                 panel = (viewport.InspectionContent as SceneInspectionCard)?.DescribePanel(),
                 recentSelections = sourceChromeActive && recentDocument == shownDocument ? recentSelections.Select(s => new { name = s.Name, parent = s.Parent, category = s.Category, node = RecentRow(s)?.Index }).ToArray() : null });
         });
-        Register(commands, "scene_card", "Expand/clear selected-object details below the permanent top-right hover readout, copy fields, or begin/set/apply/cancel the shared draft. Source objects expose local transform, name, model, flags and command fields in this panel, editable at once: the first change opens the draft (begin only checks an edit could start); set takes fields and/or transformMode (move/rotate handles, move arrows along the object's own axes, or none), Apply accepts one atomic source transaction and cancel is the footer's Revert. Placements start their draft with begin, a GUI field change or showing handles. Source worlds have no editing lock; compiled Whole world selection and all viewport manipulation require unlocked editing. Move and supported Rotate toggles in the transform header show or hide their handles; unsupported Rotate stays hidden; Apply and Revert (footer) are enabled only once a draft changes something; transforms preview until apply creates one undo step. Edit actions require document/revision; set/apply/cancel require the current draft token. Copy optionally writes the clipboard.", true,
+        Register(commands, "scene_card", "Expand/clear selected-object details below the permanent top-right hover readout, copy fields, or begin/set/apply/cancel the shared draft. Source objects expose local transform, name, model, flags and command fields in this panel, editable at once: the first change opens the draft (begin only checks an edit could start); set takes fields and/or transformMode (move/rotate handles, move arrows along the object's own axes, or none), Apply accepts one atomic source transaction and cancel is the footer's Revert. Placements start their draft with begin, a GUI field change or showing handles. Placement values are stored as the shipped files write them: positions and AIV headings with one decimal, pickup rotations in radians with four; a change below that precision changes nothing (apply then ends the draft without an edit and returns no document). Compiled worlds are read only: their cards show values, and begin/apply are refused. Move and supported Rotate toggles in the transform header show or hide their handles; unsupported Rotate stays hidden; Apply and Revert (footer) are enabled only once a draft changes something; transforms preview until apply creates one undo step. Edit actions require document/revision; set/apply/cancel require the current draft token. Copy optionally writes the clipboard.", true,
             [PreviewParameter, P("action", "string", "Card action.", true, "select", "clear", "copy", "begin", "set", "apply", "cancel"),
                 P("target", "string", "Opaque inspection target for select."), P("node", "integer", "Alternative scene node for selection."),
                 P("runtime", "string", "Optional runtime instance ID with node."), P("field", "string", "Copy field label; omitted copies all details."), P("clipboard", "boolean", "Write copy text to clipboard; default false."),
@@ -400,7 +390,6 @@ public partial class MainWindow
             if (action is "select" or "clear")
             {
                 if (viewport.IsFlyActive || viewport.IsPickupDragging) throw new StudioCommandException("busy", "Finish the transform drag or exit Fly before changing selection.");
-                if (action == "select" && !viewport.InspectionSelectionEnabled) throw new StudioCommandException("locked", "Unlock editing before opening a Whole world object card.");
                 if (action == "select" && (a["target"] != null && a["node"] != null || a["runtime"] != null && (a["node"] == null || a["target"] != null)))
                     throw new StudioCommandException("invalid_argument", "Select by target, or by node with an optional runtime instance.");
                 RequireNoSelectionDrafts(); bool selected;

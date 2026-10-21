@@ -29,9 +29,8 @@ public sealed record ZrdNode(Guid Id, ZrdKind Kind, uint Bits, string Text, IRea
         return (value.Length > maximumCharacters ? value[..maximumCharacters] : value, truncated);
     }
     public ZrdNode? Find(Guid id) => Id == id ? this : Children.Select(c => c.Find(id)).FirstOrDefault(n => n != null);
-    public ZrdNode Duplicate() => this with { Id = Guid.NewGuid(), SourceOffset = -1, Children = Children.Select(c => c.Duplicate()).ToArray() };
     public static ZrdNode Create(ZrdKind kind, string value = "") => Set(new(Guid.NewGuid(), kind, 0, "", []), kind, value);
-    public static ZrdNode Set(ZrdNode node, ZrdKind kind, string value)
+    private static ZrdNode Set(ZrdNode node, ZrdKind kind, string value)
     {
         if (!Enum.IsDefined(kind)) throw new InvalidDataException("Unknown ZRD type.");
         uint bits = 0; string text = "";

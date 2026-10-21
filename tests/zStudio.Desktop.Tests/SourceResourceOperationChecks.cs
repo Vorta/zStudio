@@ -36,29 +36,22 @@ internal static class SourceResourceOperationChecks
                     .GetMethod("ValidateDocumentSourceAsync", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(main, [doc, token])!;
                 Assert.Empty(await guiValidation);
 
-                var member = Assert.Single(doc.ResourceEdits!.Current.Members);
-                var value = doc.ResourceEdits.Tree(member, token).Children[1].Children[0];
-                await job("zrd_edit", new()
-                {
-                    ["document"] = doc.SessionId.ToString(), ["revision"] = doc.Revision, ["action"] = "set",
-                    ["member"] = member.Id.ToString(), ["node"] = value.Id.ToString(), ["value"] = "2",
-                }, "completed");
                 var exported = await job("export", new() { ["document"] = doc.SessionId.ToString(), ["destination"] = destination }, "completed");
                 Assert.Equal(1, exported["Completed"]!.GetValue<int>());
                 Assert.Empty(exported["Errors"]!.AsArray());
                 string raw = Path.Combine(exported["Directory"]!.GetValue<string>(), "Zrd", "00000_" + file);
-                Assert.Equal(doc.PreviewDocument.Bytes.ToArray(), await File.ReadAllBytesAsync(raw, token));
+                Assert.Equal(doc.Document.Bytes.ToArray(), await File.ReadAllBytesAsync(raw, token));
                 var companion = JsonNode.Parse(await File.ReadAllBytesAsync(raw + ".json", token))!;
-                Assert.Equal(2, companion["children"]![1]!["children"]![0]!["value"]!.GetValue<int>());
+                Assert.Equal(1, companion["children"]![1]!["children"]![0]!["value"]!.GetValue<int>());
 
-                // The GUI's export helper remaps the owning document's edited snapshot just as the MCP command does.
+                // The GUI's export helper exports the same document as the MCP command does.
                 var guiExport = (Task<ExportResult>)typeof(MainWindow).GetMethod("ExportAssetsAsync", BindingFlags.Instance | BindingFlags.NonPublic)!
-                    .Invoke(main, [doc, doc.PreviewDocument.Assets.ToArray(), destination, true, null, 0, token])!;
+                    .Invoke(main, [doc, doc.Document.Assets.ToArray(), destination, true, null, 0, token])!;
                 var jsonExport = await guiExport;
                 Assert.Equal(1, jsonExport.Completed); Assert.Empty(jsonExport.Errors);
                 string jsonFile = Path.Combine(jsonExport.Directory, "Zrd", "00000_" + file + ".json");
-                Assert.Equal(2, JsonNode.Parse(await File.ReadAllBytesAsync(jsonFile, token))!["tree"]!["children"]![1]!["children"]![0]!["value"]!.GetValue<int>());
-                // Validation deliberately reads disk, while export uses accepted edits; neither writes the original.
+                Assert.Equal(1, JsonNode.Parse(await File.ReadAllBytesAsync(jsonFile, token))!["tree"]!["children"]![1]!["children"]![0]!["value"]!.GetValue<int>());
+                // Neither validation nor export writes the original.
                 Assert.Empty(Assert.IsType<JsonArray>((await job("validate", arguments, "completed"))["items"]));
                 var original = await FormatRegistry.Default.OpenAsync(path, token);
                 Assert.Equal(1u, ZrdDecoder.ReadAsset(original, Assert.Single(original.Assets), token).Children[1].Children[0].Bits);

@@ -76,49 +76,29 @@ public sealed class TextureLookupOperationTests
     }
 
     [Fact]
-    public async Task ChangedPacksAndWorkspaceSnapshotsRefuseStaleIndexes()
+    public async Task ChangedPacksRefuseStaleIndexes()
     {
         using Fixture f = new(); string path = f.Pack("texture1", "foo", "bar");
         using AssetResolver resolver = new(f.Root);
         var old = resolver.BeginTextureLookup(f.Context); Assert.Null(await old.ResolveAsync("missing", Token));
         File.SetLastWriteTimeUtc(path, File.GetLastWriteTimeUtc(path).AddSeconds(2));
         await Assert.ThrowsAsync<InvalidDataException>(() => old.ResolveAsync("foo", Token));
-        var current = resolver.BeginTextureLookup(f.Context); Assert.NotNull(await current.ResolveAsync("foo", Token));
-        var snapshot = FormatRegistry.Default.OpenBytes(path, File.ReadAllBytes(path), token: Token);
-        snapshot.Assets[0].Name = "draft"; resolver.SetWorkspaceSnapshots(Guid.NewGuid(), [snapshot]);
-        await Assert.ThrowsAsync<InvalidDataException>(() => current.ResolveAsync("foo", Token));
-        Assert.Equal("draft", (await resolver.BeginTextureLookup(f.Context).ResolveAsync("draft", Token))!.Asset.Name);
+        Assert.NotNull(await resolver.BeginTextureLookup(f.Context).ResolveAsync("foo", Token));
     }
 
     [Fact]
-    public async Task DiscoveryAdmitsBorrowedAndWarmBytesAndCacheEvictsByBytes()
+    public async Task CacheEvictsByBytesAndDiscoveryIsBounded()
     {
-        // Must-have: target discovery precedes replacement in GUI/MCP, so it must not open
-        // unbounded sibling buffers even when the selected pack and snapshots are externally owned.
         using Fixture f = new();
         string first = f.Pack("texture1", "foo", "bar"), second = f.Pack("texture2", "foo", "bar");
-        byte[] bytes = File.ReadAllBytes(first); long size = bytes.Length;
+        long size = new FileInfo(first).Length;
         using AssetResolver resolver = new(f.Root, maximumCachedBytes: size);
         var original = await resolver.OpenCachedAsync(first, Token);
         await resolver.OpenCachedAsync(second, Token);
         Assert.NotSame(original, await resolver.OpenCachedAsync(first, Token));
-        var warm = await resolver.OpenCachedAsync(second, Token);
-        TextureEditSession edits = new(original);
-        await Assert.ThrowsAsync<InvalidDataException>(() => edits.DiscoverTargetsAsync(0, resolver, 2 * size - 1, TextureLookupOperation.MaximumWork, Token));
-        Assert.Same(warm, await resolver.OpenCachedAsync(second, Token));
-        Assert.Equal(2, (await edits.DiscoverTargetsAsync(0, resolver, 2 * size, TextureLookupOperation.MaximumWork, Token)).Count);
-        await Assert.ThrowsAsync<InvalidDataException>(() => edits.DiscoverTargetsAsync(0, resolver, 2 * size, 1, Token));
-
-        // The disk header is tiny; admission must use the authoritative workspace snapshot's bytes.
-        string third = f.Empty("texture3");
-        var snapshot = FormatRegistry.Default.OpenBytes(third, bytes, token: Token);
-        resolver.SetWorkspaceSnapshots(Guid.NewGuid(), [snapshot]);
-        await Assert.ThrowsAsync<InvalidDataException>(() => edits.DiscoverTargetsAsync(0, resolver, 3 * size - 1, TextureLookupOperation.MaximumWork, Token));
-        Assert.Equal(3, (await edits.DiscoverTargetsAsync(0, resolver, 3 * size, TextureLookupOperation.MaximumWork, Token)).Count);
         var denied = new TextureLookupOperation(resolver, f.Context, null, maximumColdReadBytes: 0, maximumDiscoveryBytes: size - 1);
         await Assert.ThrowsAsync<InvalidDataException>(() => denied.ResolveAsync("foo", Token));
         await Assert.ThrowsAsync<InvalidDataException>(() => denied.ResolveAsync("foo", Token));
-        Assert.Same(snapshot, (await resolver.BeginTextureLookup(f.Context).ResolveAsync("foo", Token))!.Document);
     }
 
     [Fact]

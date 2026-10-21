@@ -17,8 +17,7 @@ public sealed partial class SceneViewport
     private IReadOnlyDictionary<MissionPickupSource, PlacementTransform>? transformOverrides;
     private readonly Dictionary<int, Matrix4x4> placementDeltas = [];
     private bool transformValid;
-    public bool InspectionSelectionEnabled => AllowLockedInspection || !worldInspection || !editingLocked;
-    private bool PlacementEditingEnabled => !worldInspection || !editingLocked;
+    private bool PlacementEditingEnabled => !worldInspection || placementEditing;
     public string TransformMode { get; private set; } = "move";
     public bool HasTransformDraft => transformSource != null || objectDraftNode != null;
     public bool TransformHandlesVisible => !PresentationUiHidden && pickupManipulator?.Visibility == Visibility.Visible;
@@ -47,7 +46,7 @@ public sealed partial class SceneViewport
     private System.Numerics.Quaternion objectHandleOrientation = System.Numerics.Quaternion.Identity;
     // A source object's draft: the node, its parent's world matrix, its draft local transform and the instance preview showing it.
     private int? objectDraftNode;
-    private Matrix4x4 objectDraftParent = Matrix4x4.Identity, objectDraftLocal;
+    private Matrix4x4 objectDraftParent = Matrix4x4.Identity;
     private long objectDraftPreview;
 
     public void PreviewTransformDraft(MissionPickupSource source, PlacementTransform value, PlacementRotationKind rotation, string mode, bool valid)
@@ -55,7 +54,7 @@ public sealed partial class SceneViewport
         if (mode is not ("move" or "rotate") || mode == "rotate" && rotation == PlacementRotationKind.None)
             throw new ArgumentException("Unsupported transform mode.");
         if (HasParachutePreview || IsParachutePointerMoving) throw new InvalidOperationException("Finish drop-window editing first.");
-        if (!PlacementEditingEnabled) throw new InvalidOperationException("Unlock editing first.");
+        if (!PlacementEditingEnabled) throw new InvalidOperationException("This world is read only: edit its source project instead.");
         var pending = valid ? placementEdits?.PreviewTransform(source, value) : transformOverrides;
         bool changedMode = TransformMode != mode || transformRotation != rotation;
         transformSource = source; transformTarget = SelectedInspection?.Target;
@@ -76,7 +75,7 @@ public sealed partial class SceneViewport
     {
         if (mode is not ("move" or "rotate")) throw new ArgumentException("Unsupported transform mode.");
         if (HasParachutePreview || IsParachutePointerMoving) throw new InvalidOperationException("Finish drop-window editing first.");
-        if (!PlacementEditingEnabled) throw new InvalidOperationException("Editing is locked.");
+        if (!PlacementEditingEnabled) throw new InvalidOperationException("This world is read only: edit its source project instead.");
         var data = Mission?.Scene ?? PreviewScene;
         if (data == null || node < 0 || node >= data.Nodes.Count) return false;
         HashSet<int> chain = [];
@@ -91,7 +90,7 @@ public sealed partial class SceneViewport
         transformTarget = SelectedInspection?.Target; transformRotation = PlacementRotationKind.EulerRadians; TransformMode = mode;
         if (valid && IsFinite(local))
         {
-            objectDraftLocal = local; transformValid = true;
+            transformValid = true;
             transformDraft = new((local * parentWorld).Translation, Vector3.Zero);
             // The move arrows follow the object's world orientation (without its scale).
             var orientation = Matrix4x4.Decompose(local * parentWorld, out _, out var turned, out _) && float.IsFinite(turned.X + turned.Y + turned.Z + turned.W) ? System.Numerics.Quaternion.Normalize(turned) : System.Numerics.Quaternion.Identity;
@@ -212,6 +211,8 @@ public sealed partial class SceneViewport
             ObjectDraftDragged?.Invoke(drag);
             return;
         }
+        // A placement drag snaps to the precision an edit stores, so the card and preview show what is saved.
+        if (transformSource is { } source && placementEdits != null) value = placementEdits.Stored(source, value);
         transformDraft = value; TransformDraftChanged?.Invoke(value);
         PickupMovePreviewed?.Invoke(value.Position);
     }

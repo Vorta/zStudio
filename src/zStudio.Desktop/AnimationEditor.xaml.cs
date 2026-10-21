@@ -22,7 +22,7 @@ public partial class AnimationEditor : FieldEditor, IDisposable
     private readonly DocumentModel document;
     private readonly int entryIndex;
     private readonly AssetResolver resolver;
-    private readonly AnimationEditSession edits;
+    private readonly AnimationPackage package;
     private readonly MainViewModel? preferences;
     private MissionDifficulty SelectedDifficulty => Difficulty.SelectedItem is MissionDifficulty value ? value : MissionDifficulty.Medium;
     private readonly CancellationTokenSource lifetime;
@@ -63,8 +63,7 @@ public partial class AnimationEditor : FieldEditor, IDisposable
     public AnimationDuration? Duration => duration;
     public event Action<JsonObject, byte[]>? InspectionChanged;
     public event Action<string>? StatusChanged;
-    public event Func<Task>? SaveRequested;
-    private AnimationEntry Entry => edits.Package.Entries[entryIndex];
+    private AnimationEntry Entry => package.Entries[entryIndex];
     private AnimationSequence? Sequence => Entry.AllSequences.FirstOrDefault(s => s.Id == selectedSequence);
     private AnimationEvent? Event => Sequence?.Events.FirstOrDefault(e => e.Id == selectedEvent);
 
@@ -74,7 +73,7 @@ public partial class AnimationEditor : FieldEditor, IDisposable
     {
         this.audio = audio;
         this.preferences = preferences;
-        this.document = document; this.entryIndex = entryIndex; this.resolver = resolver; edits = document.AnimationEdits!;
+        this.document = document; this.entryIndex = entryIndex; this.resolver = resolver; package = document.Document.Animations!;
         lifetime = CancellationTokenSource.CreateLinkedTokenSource(token, document.Lifetime.Token);
         InitializeComponent(); ViewportHost.Content = viewport; InitializeWorkspaceViews();
         Difficulty.ItemsSource = MainViewModel.DifficultyChoices; Difficulty.SelectedItem = preferences?.Difficulty ?? MissionDifficulty.Medium;
@@ -90,7 +89,7 @@ public partial class AnimationEditor : FieldEditor, IDisposable
         };
         viewport.NodeSelected += index => Note($"Scene node #{index}: {context?.Scene.Nodes[index].Name}");
         Timeline.SeekRequested += time => { if (ResolvePendingDrafts()) _ = SeekAsync(time); };
-        timer.Tick += Tick; edits.Changed += EditsChanged;
+        timer.Tick += Tick;
         Seed.KeyDown += (_, e) => { if (e.Key == Key.Enter) { SeedChanged(Seed, e); e.Handled = true; } };
         EndTime.KeyDown += (_, e) => { if (e.Key == Key.Enter) { RangeChanged(EndTime, e); e.Handled = true; } };
         Seed.TextChanged += (_, _) => { if (!changing) ++settingsInputRevision; };
@@ -395,13 +394,7 @@ public partial class AnimationEditor : FieldEditor, IDisposable
     }
     private void RefreshLists()
     {
-        RefreshProgram(); RefreshProperties(); CommandsChanged?.Invoke();
-    }
-    private void EditsChanged()
-    {
-        if (disposed) return;
-        double time = frame?.Time ?? 0; contextDirty = true; resetSimulation = true; audioDirty = true; ++audioRevision;
-        RefreshLists(); _ = SeekAsync(time);
+        RefreshProgram(); RefreshProperties();
     }
     internal async Task RefreshModelContextAsync(bool resourceChanges = false)
     {
@@ -411,35 +404,6 @@ public partial class AnimationEditor : FieldEditor, IDisposable
         contextDirty = true; resetSimulation = true;
         await SeekAsync(frame?.Time ?? 0, preservePlayhead: true);
     }
-    private void TryEdit(Action action)
-    {
-        if (!committingDraft && (!ResolvePendingDrafts() || ResolvePropertyDrafts?.Invoke() == false)) return;
-        try { SetPlaying(false); action(); }
-        catch (Exception ex) when (ex is InvalidDataException or FormatException or OverflowException or ArgumentException or InvalidOperationException)
-        {
-            if (committingDraft) throw;
-            RecordPreviewError(ex.Message); MessageBox.Show(Window.GetWindow(this), ex.Message, "Animation edit", MessageBoxButton.OK, MessageBoxImage.Information);
-        }
-    }
-    private int SelectedEventIndex => Sequence?.Events.FindIndex(e => e.Id == selectedEvent) ?? -1;
-    private void InsertEvent(AnimationEventSpec spec)
-    {
-        if (Sequence == null || !ResolvePendingDrafts()) return;
-        TryEdit(() => { var id = edits.InsertEvent(entryIndex, selectedSequence, spec.Type, selectedEvent); SelectSource(selectedSequence, id); });
-    }
-    private void CopyEventClick(object sender, RoutedEventArgs e) { if (Event == null) return; TryEdit(() => { var id = edits.ChangeEventStructure(entryIndex, selectedSequence, selectedEvent, "duplicate"); SelectSource(selectedSequence, id); }); }
-    private void DeleteEventClick(object sender, RoutedEventArgs e) { if (Event != null) TryEdit(() => edits.ChangeEventStructure(entryIndex, selectedSequence, selectedEvent, "delete")); }
-    private void MoveEvent(int direction) { int at = SelectedEventIndex, to = at + direction; if (Sequence == null || at < 0 || to < 0 || to >= Sequence.Events.Count) return; TryEdit(() => edits.ChangeEventStructure(entryIndex, selectedSequence, selectedEvent, direction < 0 ? "up" : "down")); }
-    private void MoveEventUpClick(object sender, RoutedEventArgs e) => MoveEvent(-1);
-    private void MoveEventDownClick(object sender, RoutedEventArgs e) => MoveEvent(1);
-    private void AddSequenceClick(object sender, RoutedEventArgs e) => TryEdit(() => edits.AddSequence(entryIndex));
-    private void CopySequenceClick(object sender, RoutedEventArgs e) { if (Sequence != null) TryEdit(() => edits.AddSequence(entryIndex, selectedSequence)); }
-    private void DeleteSequenceClick(object sender, RoutedEventArgs e) { if (Sequence != null) TryEdit(() => edits.DeleteSequence(entryIndex, selectedSequence)); }
-    public void Undo() => TryEdit(edits.Undo);
-    public void Redo() => TryEdit(edits.Redo);
-    private void UndoClick(object sender, RoutedEventArgs e) => Undo();
-    private void RedoClick(object sender, RoutedEventArgs e) => Redo();
-    private async void SaveClick(object sender, RoutedEventArgs e) { SetPlaying(false); if (SaveRequested != null) await SaveRequested(); }
     public void TogglePlayback()
     {
         if (disposed || !ResolvePendingDrafts()) return;
@@ -682,8 +646,6 @@ public partial class AnimationEditor : FieldEditor, IDisposable
     public void Pause() { levelResume = false; pendingPlay = false; SetPlaying(false); }
     public void Dispose()
     {
-        if (disposed) return; if (operationDiagnostics != null) operationDiagnostics.CollectionChanged -= OperationDiagnosticsChanged; disposed = true; ready = false; pendingPlay = false; SetPlaying(false); lifetime.Cancel(); initializing?.Cancel(); initializing?.Dispose(); seeking?.Cancel(); seeking?.Dispose(); edits.Changed -= EditsChanged; if (preferences != null) preferences.PropertyChanged -= PreferencesChanged; audio.Dispose(); viewport.Dispose(); lifetime.Dispose(); GC.SuppressFinalize(this);
+        if (disposed) return; if (operationDiagnostics != null) operationDiagnostics.CollectionChanged -= OperationDiagnosticsChanged; disposed = true; ready = false; pendingPlay = false; SetPlaying(false); lifetime.Cancel(); initializing?.Cancel(); initializing?.Dispose(); seeking?.Cancel(); seeking?.Dispose(); if (preferences != null) preferences.PropertyChanged -= PreferencesChanged; audio.Dispose(); viewport.Dispose(); lifetime.Dispose(); GC.SuppressFinalize(this);
     }
-    private sealed record SequenceChoice(Guid Id, string Label);
-    private sealed record EventChoice(Guid Id, int Index, string Name, string Mode, string Threshold);
 }

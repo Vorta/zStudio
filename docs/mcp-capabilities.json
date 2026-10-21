@@ -2,7 +2,7 @@
   "schema": 1,
   "inspectionPaging": "pickups and scene_nodes reserve escaped row size before projection and may shorten pages; nextOffset continues complete identities. A row that cannot fit returns too_large. Pickup queries have a cumulative 32 MiB copy allowance; omit query and page if exceeded. preview_state accepts offset (default 0) and limit (1..200, default 100) for texturePacks only, with texturePackCount, texturePackOffset and texturePackNextOffset; complete Name/Path choices remain shared with the GUI and scene_options.",
   "discovery": "Document source-workspace summaries retain counts and undo/redo status without duplicating dirty-file/history arrays across open missions; source_changes returns those shared bounded details. dirtyFilesTruncated/historyTruncated disclose omitted rows. Initialize, tools/list, resources/list and capabilities inspection are windowless. The first valid workspace request attaches or launches the opted-in GUI. Embedded command metadata is generated from the live registry and parity-tested. Camera position/look arrays have exactly three numeric elements; rotate/zoom screenPoint has exactly two viewport DIP coordinates; export array items require kind/index identities. Terrain path coordinates are numeric [x,z] pairs within ±1,000,000; polygons require an outer ring and optional same-shaped hole rings, each with 3–200,000 points. Recursive item validation rejects invalid_argument before handlers or workspace connection. Pickup source identities have four required typed fields; destination maps have string values; integers advertise handler-compatible bounds.",
-  "inspection": "Folder indexing retains at most 250,000 asset rows and 8,388,608 name characters. open_root, search and related expose indexComplete and indexNotice; totals describe indexed matches. The GUI discloses incomplete indexing and Files/direct opening remain available. Related asset lookup uses one bounded index scan, preserves case-insensitive filename-stem/reference-order matching, and reports truncated when indexing is incomplete or reference, index or result limits are reached; the GUI Related tab shows the same limitation. World comparison retains primary-root names and material texture directory-occurrence identities. Source builds retain XZ horizon bindings and report unsupported camera mutations. Automatic texture planning rereads current PNG headers. World comparison uses node counterparts for area, camera, light and sound references, preserving area multiplicity; duplicate-name reference details include slots. Import refuses unrepresentable engine names and malformed engine metadata/material vectors; reconstruction rejects differing duplicate scripts and bounds image-resource strings before normalization. Source checks and exports refuse known animation engine-load failures independently of warning caps; damage-mask textures use the final WriteTextureSetMap argument and remain unpaletted in software packs. Every glTF buffer requires a positive declared byteLength. Source-world stale checks are dependency-scoped; shared validation rejects malformed collections and extension declarations, ordinary empty meshes, non-affine transforms and nonpositive source partitions, using the current node-level representation for point-only models. World comparison includes texture-directory counts, states and variant links on the world row; reconstruction hashes every input with a 4 GiB aggregate limit; glTF version and 16-bit material values are checked. Source workspace and prepared reads verify content digests despite unchanged stamps. Terrain conversion uses bounded projected triangles and wildcard work, with positive overlaps kept separate; animation wildcard expansion shares a name index and aggregate matching budget. Deep sound declarations retain their format ceilings. Terrain region area/squareUnits is null with areaUnavailable when the bounded clipping calculation cannot finish; metadata and coordinate truncation remain available. List queries filter case-insensitively before pagination and retain record identities. Preview state describes the active viewer; unavailable 3D options are null. Invalid workspace tab requests leave presentation preferences unchanged. Missing structural edit targets return stale_record. Preview capture requires the preview lifetime UUID and returns preview/asset identity; window captures are independent. 3D capture preserves aspect ratio. Explicit camera poses are clamped upright before subsequent movement. Isolation/Show all reject animation previews, matching GUI availability; static pickup isolation uses the complete pickup root. Scene selection and camera mutations preserve active GUI pickup drags by returning busy. Accepted application closing cancels retained preview/editor lifetimes before draining MCP; canceled closing preserves them, and MCP-only disable still permits recovery. Concurrent teardown is shared and cannot reopen access during shutdown. MCP shutdown cancels pending jobs and audio retries without owning retained preview lifetimes; canceled animation level refreshes release their loading overlay. Static LOD/horizon/texture-pack and Whole world difficulty refreshes retain the published scene and options until successful replacement; cancellation restores the saved difficulty. Canceled asset/document loading retries the still-current GUI selection outside the operation scope; navigation/disposal/shutdown suppress obsolete recovery. Superseded MCP scene refreshes report context_changed; failed preparation reports preview_unavailable, with no unpublished preview result. Properties opening verifies publication/identity, links request cancellation, and rechecks pending drafts after decoding. Decoder traversal observes cancellation. Inspection freezes one edited revision and links request/document cancellation, preserving separate original data; disposed or revised results are rejected. Reload stages parsing and guards drafts/revisions/navigation before atomic document replacement, retaining the old document/preview on staging failure. Root/file navigation guards asynchronous publication, including newer pending file loads. GUI browsing keeps pinned Properties drafts. Saves/modal dialogs exclude MCP mutations; read-only state remains available. Approved preview setting drafts apply as one frozen batch and preserve newer input. Late pickup sessions and export/validation reports cannot publish after document closure. Animation binds and late renderer refreshes recover only for originating MCP cancellation; same-editor GUI seek supersession reports context_changed. LOD waits cancel before mutation; pending picker choices cannot leak into another seek. Initial binding and Map/Horizon refreshes reconcile the latest presentation choices and retain playback or explicit Pause. Static refresh ownership survives reentrant status callbacks. Deferred window close preserves new edits/drafts/drag without prompting. Animation v28/v39 open and inspection bound references (4 per table), puffers (4), sequence summaries (16), sequence event previews (8), and raw event/tail bytes (256); counts/truncation flags disclose omissions. Passive JSON omits keyframe streams; property_fields selects individual segments. Animation event numeric fields and numeric compound callbacks share a 4096-character pre-parse input bound across GUI and property_edit; all vector/quaternion components validate before mutation, while complete invalid GUI drafts and nonnumeric text identities remain intact. animation_records pages bounded event fields; explicit JSON exports remain complete. Model geometry/world lists/sound cues are capped at 32 with counts/truncation; nested metadata uses 512 JSON nodes/8192 text characters (1024 per string, depth 12). Nested polygon/node/material rows and scene lists use 64 nodes/1024 characters per metadata row, including both source/edited snapshots; scene properties/selection and GUI inspection use the larger budget with inspection_truncated. Superseded mission selections return context_changed; retrying an in-flight choice awaits presentation before persisting settings. Malformed keyframe payloads, including version-39 stored-count mismatches, retain scheduling fields and a read-only diagnostic at segment 0. Segment access/actions and preview transforms reject the invalid stream while preserving source bytes. Source projects (roots with data and gamegen folders) open to the map picker, with source_world_list discovery and one map at a time; direct file opening is refused; source_status pages buildable game files with 16 inputs previewed each, and source_export reports built/failed outputs with at most 256 rows, 4 warnings of 128 characters each and 256-character errors (with truncation flags). Source worlds (source_world_open) evaluate GameGen, glTF references, source textures, ZRD resources and animation definitions directly in memory. No preview cache or ZBD archives are created on open, Apply, history or Save. Document path is the mission entry script. sourceWorld reports evaluating, sourceRevision, evaluation diagnostics (64 strings of 512 characters with diagnosticCount/diagnosticsTruncated), workspace revision/history counts, editNotes (16) and lookupChangeCount. Apply validates and accepts source changes in memory; ordinary transforms retain document/viewport resources and structural changes may replace presentation. Commands return the accepted document/revision. Undo/redo is project-wide. save_document atomically writes every dirty owning source through the recoverable project journal; external changes reject publication. Only source_export creates game archives, after pending edits are saved or discarded. Failed or pre-acceptance canceled evaluation leaves the prior scene and history intact; late cancellation cannot retract an accepted edit. Other mutations return busy during evaluation or GUI save. validate evaluates on-disk project sources without accepting pending edits; standard asset export uses the accepted scene's frozen PNG textures. Placement edits change only coordinate tokens of the text resources; object edits change the glTF node or the script instruction that set the value (refused when it ran more than once or uses a macro; a value a script another mission also runs set is set again before this mission's world is written). Copy, delete and re-parent apply to the whole object (a loaded model's root): database glTF nodes are copied, removed or moved in the file; script objects are loaded again before the world is written, commented out, or attached anew. Edits planned from a world whose build inputs changed in the workspace since are refused (stale_document) until it is reloaded. source_changes diffs a working file against the disk off the UI thread (1000 edit lines among at most 200,000 compared lines, up to 2000 shown rows). Escaped diff presentation is charged before decoding rows, at most 1 MiB after reserving workspace details within a 2 MiB service-data allowance. Truncated reports omitted rows; ChangedLines remains the full count or -1 if comparison is bounded. TextTruncated reports line text shortened to 400 characters plus an ellipsis; diff.File and internal source identities remain complete. A concurrent edit, undo, save or project replacement returns context_changed instead of mixing diff content and workspace revisions. Terrain recipes (source_terrain, source_terrain_edit, source_terrain_create, source_terrain_convert) compile to pieces when the mission database is imported: pieces are build outputs, so object edits of them are refused and their recipe is edited instead (recipe edits read the current recipe, so they are not refused in worlds built before another edit). Source-project Blender checkout and update use the bundled RECOIL extension, complete source graphs, stable provenance and one shared undoable transaction. source_blender_extension supplies installation information. Completed exports are hash-verified and placement profiles in other owners remapped before acceptance. Explicit source/texture conflict consent cannot override invalid metadata. Only current version-two graph checkouts are listed; explicitly requested unsupported checkouts require a fresh checkout. Reconstructed source models use physical original-file identities and relative glTF references, with node and polygon attributes embedded in glTF; legacy meta/zones.json projects require fresh reconstruction from original ZBD files, without migration. A placed addition must be the node its AddChild attaches (build_failed otherwise). Changing maps requires saving or explicitly discarding unsaved edits; cancel retains the map. Stale detection compares the build's inputs and the workspace's later changes off the UI thread.",
+  "inspection": "Folder indexing retains at most 250,000 asset rows and 8,388,608 name characters. open_root, search and related expose indexComplete and indexNotice; totals describe indexed matches. The GUI discloses incomplete indexing and Files/direct opening remain available. Related asset lookup uses one bounded index scan, preserves case-insensitive filename-stem/reference-order matching, and reports truncated when indexing is incomplete or reference, index or result limits are reached; the GUI Related tab shows the same limitation. World comparison retains primary-root names and material texture directory-occurrence identities. Source builds retain XZ horizon bindings and report unsupported camera mutations. Automatic texture planning rereads current PNG headers. World comparison uses node counterparts for area, camera, light and sound references, preserving area multiplicity; duplicate-name reference details include slots. Import refuses unrepresentable engine names and malformed engine metadata/material vectors; reconstruction rejects differing duplicate scripts and bounds image-resource strings before normalization. Source checks and exports refuse known animation engine-load failures independently of warning caps; damage-mask textures use the final WriteTextureSetMap argument and remain unpaletted in software packs. Every glTF buffer requires a positive declared byteLength. Source-world stale checks are dependency-scoped; shared validation rejects malformed collections and extension declarations, ordinary empty meshes, non-affine transforms and nonpositive source partitions, using the current node-level representation for point-only models. World comparison includes texture-directory counts, states and variant links on the world row; reconstruction hashes every input with a 4 GiB aggregate limit; glTF version and 16-bit material values are checked. Source workspace and prepared reads verify content digests despite unchanged stamps. Terrain conversion uses bounded projected triangles and wildcard work, with positive overlaps kept separate; animation wildcard expansion shares a name index and aggregate matching budget. Deep sound declarations retain their format ceilings. Terrain region area/squareUnits is null with areaUnavailable when the bounded clipping calculation cannot finish; metadata and coordinate truncation remain available. List queries filter case-insensitively before pagination and retain record identities. Preview state describes the active viewer; unavailable 3D options are null. Invalid workspace tab requests leave presentation preferences unchanged. Missing structural edit targets return stale_record. Preview capture requires the preview lifetime UUID and returns preview/asset identity; window captures are independent. 3D capture preserves aspect ratio. Explicit camera poses are clamped upright before subsequent movement. Isolation/Show all reject animation previews, matching GUI availability; static pickup isolation uses the complete pickup root. Scene selection and camera mutations preserve active GUI pickup drags by returning busy. Accepted application closing cancels retained preview/editor lifetimes before draining MCP; canceled closing preserves them, and MCP-only disable still permits recovery. Concurrent teardown is shared and cannot reopen access during shutdown. MCP shutdown cancels pending jobs and audio retries without owning retained preview lifetimes; canceled animation level refreshes release their loading overlay. Static LOD/horizon/texture-pack and Whole world difficulty refreshes retain the published scene and options until successful replacement; cancellation restores the saved difficulty. Canceled asset/document loading retries the still-current GUI selection outside the operation scope; navigation/disposal/shutdown suppress obsolete recovery. Superseded MCP scene refreshes report context_changed; failed preparation reports preview_unavailable, with no unpublished preview result. Properties opening verifies publication/identity, links request cancellation, and rechecks pending drafts after decoding. Decoder traversal observes cancellation. Inspection freezes one document revision and links request/document cancellation; disposed or revised results are rejected. Reload stages parsing and guards drafts/revisions/navigation before atomic document replacement, retaining the old document/preview on staging failure. Root/file navigation guards asynchronous publication, including newer pending file loads. GUI browsing keeps pinned Properties drafts. Saves/modal dialogs exclude MCP mutations; read-only state remains available. Approved preview setting drafts apply as one frozen batch and preserve newer input. Late pickup sessions and export/validation reports cannot publish after document closure. Animation binds and late renderer refreshes recover only for originating MCP cancellation; same-editor GUI seek supersession reports context_changed. LOD waits cancel before mutation; pending picker choices cannot leak into another seek. Initial binding and Map/Horizon refreshes reconcile the latest presentation choices and retain playback or explicit Pause. Static refresh ownership survives reentrant status callbacks. Deferred window close preserves new edits/drafts/drag without prompting. Animation v28/v39 open and inspection bound references (4 per table), puffers (4), sequence summaries (16), sequence event previews (8), and raw event/tail bytes (256); counts/truncation flags disclose omissions. Passive JSON omits keyframe streams. Numeric fields and numeric compound callbacks share a 4096-character pre-parse input bound; all vector/quaternion components validate before mutation, while complete invalid GUI drafts remain intact. animation_records pages bounded event fields; explicit JSON exports remain complete. Model geometry/world lists/sound cues are capped at 32 with counts/truncation; nested metadata uses 512 JSON nodes/8192 text characters (1024 per string, depth 12). Nested polygon/node/material rows and scene lists use 64 nodes/1024 characters per metadata row; scene properties/selection and GUI inspection use the larger budget with inspection_truncated. Superseded mission selections return context_changed; retrying an in-flight choice awaits presentation before persisting settings. Malformed keyframe payloads, including version-39 stored-count mismatches, retain scheduling fields and a read-only diagnostic at segment 0. Segment access/actions and preview transforms reject the invalid stream while preserving source bytes. Source projects (roots with data and gamegen folders) open to the map picker, with source_world_list discovery and one map at a time; direct file opening is refused; source_status pages buildable game files with 16 inputs previewed each, and source_export reports built/failed outputs with at most 256 rows, 4 warnings of 128 characters each and 256-character errors (with truncation flags). Source worlds (source_world_open) evaluate GameGen, glTF references, source textures, ZRD resources and animation definitions directly in memory. No preview cache or ZBD archives are created on open, Apply, history or Save. Document path is the mission entry script. sourceWorld reports evaluating, sourceRevision, evaluation diagnostics (64 strings of 512 characters with diagnosticCount/diagnosticsTruncated), workspace revision/history counts, editNotes (16) and lookupChangeCount. Apply validates and accepts source changes in memory; ordinary transforms retain document/viewport resources and structural changes may replace presentation. Commands return the accepted document/revision. Undo/redo is project-wide. save_document atomically writes every dirty owning source through the recoverable project journal; external changes reject publication. Only source_export creates game archives, after pending edits are saved or discarded. Failed or pre-acceptance canceled evaluation leaves the prior scene and history intact; late cancellation cannot retract an accepted edit. Other mutations return busy during evaluation or GUI save. validate evaluates on-disk project sources without accepting pending edits; standard asset export uses the accepted scene's frozen PNG textures. Placement edits change only coordinate tokens of the text resources; object edits change the glTF node or the script instruction that set the value (refused when it ran more than once or uses a macro; a value a script another mission also runs set is set again before this mission's world is written). Copy, delete and re-parent apply to the whole object (a loaded model's root): database glTF nodes are copied, removed or moved in the file; script objects are loaded again before the world is written, commented out, or attached anew. Edits planned from a world whose build inputs changed in the workspace since are refused (stale_document) until it is reloaded. source_changes diffs a working file against the disk off the UI thread (1000 edit lines among at most 200,000 compared lines, up to 2000 shown rows). Escaped diff presentation is charged before decoding rows, at most 1 MiB after reserving workspace details within a 2 MiB service-data allowance. Truncated reports omitted rows; ChangedLines remains the full count or -1 if comparison is bounded. TextTruncated reports line text shortened to 400 characters plus an ellipsis; diff.File and internal source identities remain complete. A concurrent edit, undo, save or project replacement returns context_changed instead of mixing diff content and workspace revisions. Terrain recipes (source_terrain, source_terrain_edit, source_terrain_create, source_terrain_convert) compile to pieces when the mission database is imported: pieces are build outputs, so object edits of them are refused and their recipe is edited instead (recipe edits read the current recipe, so they are not refused in worlds built before another edit). Source-project Blender checkout and update use the bundled RECOIL extension, complete source graphs, stable provenance and one shared undoable transaction. source_blender_extension supplies installation information. Completed exports are hash-verified and placement profiles in other owners remapped before acceptance. Explicit source/texture conflict consent cannot override invalid metadata. Only current version-two graph checkouts are listed; explicitly requested unsupported checkouts require a fresh checkout. Reconstructed source models use physical original-file identities and relative glTF references, with node and polygon attributes embedded in glTF; legacy meta/zones.json projects require fresh reconstruction from original ZBD files, without migration. A placed addition must be the node its AddChild attaches (build_failed otherwise). Changing maps requires saving or explicitly discarding unsaved edits; cancel retains the map. Stale detection compares the build's inputs and the workspace's later changes off the UI thread.",
   "fileOperationResults": "Save and model-replacement path previews are bounded before retained result serialization: 64 entries, 512 characters each, with total counts and truncation flags; save errors show 32 entries of 512 characters. Source written and model texturePacks lists disclose counts/omissions. Global state pages complete document identities with offset/limit (maximum64), total/nextOffset and a 1 MiB escaped metadata allowance before row construction; status text is a512-character preview with statusTruncated. Global state content summaries return counts and empty file arrays with truncation disclosed; per-command content and texture-import file rows share the path bounds. Texture diagnostics show four messages of 256 characters with counts/truncation. Full internal identities and all selected saves are preserved.",
   "interactions": [
     {
@@ -39,42 +39,18 @@
       "gui": "MainWindow.Resources:ArchiveMembers",
       "tools": [
         "zstudio_archive_members",
-        "zstudio_archive_edit",
         "zstudio_resource_select",
         "zstudio_export"
       ],
-      "note": "Dynamic Assets context menus share the resource session. Member UUIDs survive rename, reorder and undo; imported known payloads are validated off-thread. The active preview follows the current selection even when Assets is hidden: deletion or content-kind replacement clears/retargets the viewer, and Undo/Redo restores the selected content. Motion rename/reorder retains transport and camera by UUID, never name or old index. Aliased payload ranges share immutable decoding but retain independent member edits. Malformed embedded ZRD remains raw with a warning and supports member repair. Raw export uses the edited snapshot."
+      "note": "Archive members list in Assets with stable member UUIDs; the active preview follows the selected member even when Assets is hidden. Aliased payload ranges share immutable decoding. Malformed embedded ZRD remains raw with a warning. Compiled archives are read only: their source project is edited instead."
     },
     {
       "gui": "MainWindow.Resources:ZrdNodes",
       "tools": [
         "zstudio_zrd_nodes",
-        "zstudio_zrd_edit",
         "zstudio_resource_select"
       ],
-      "note": "Typed Data tree and dynamic context menus use ordered node UUIDs. Standalone ZRD requires complete bounded decoding before edit/save controls are enabled. Complete structural decoding retains ZRD editing after member rename/save/reopen, without relying on extensions. Add/type/duplicate/delete/move use shared validation and one undo step; type replaces existing children even when choosing Array again, while set accepts scalars. Selection keeps Properties pinned. GUI labels and zrd_nodes bound string prefixes before JSON escaping; MCP marks valueTruncated at 4096 characters. Paging retains only the returned page; ZRD filtering runs off-thread with cancellation/revision checks."
-    },
-    {
-      "gui": "ResourcePropertiesEditor:Fields",
-      "tools": [
-        "zstudio_resource_properties",
-        "zstudio_properties_state",
-        "zstudio_drafts",
-        "zstudio_resolve_drafts",
-        "zstudio_undo_redo",
-        "zstudio_save_document"
-      ],
-      "note": "Generated member/node fields share asynchronous validation, retained invalid drafts, document revision checks, undo and verified saves. Values over 16384 displayed characters expose a read-only prefix, never an editable truncated draft. ZRD JSON inspection bounds tree/string expansion and marks truncation; full exports remain available. Retarget and close resolve drafts. Save As requires a new destination and retargets later saves and reload; an already-open destination blocks reload."
-    },
-    {
-      "gui": "MainWindow.Content:Textures",
-      "tools": [
-        "zstudio_texture_targets",
-        "zstudio_texture_import",
-        "zstudio_undo_redo",
-        "zstudio_save_document"
-      ],
-      "note": "Assets context menus share PNG import, explicit sibling targets, record-index disambiguation, one batch undo, ownership, mirrored open views and verified per-file save results. Current Save As aliases are excluded from variant discovery and explicit imports. Partial Save As retains all requested destinations, keeps unpublished copies dirty and retries them as new files without falling back to source paths. This pack is the default; variant dimensions and storage class are retained."
+      "note": "The typed Data tree uses ordered node UUIDs; standalone ZRD requires complete bounded decoding before its tree is shown. Selection keeps Properties pinned. GUI labels and zrd_nodes bound string prefixes before JSON escaping; MCP marks valueTruncated at 4096 characters. Paging retains only the returned page; ZRD filtering runs off-thread with cancellation/revision checks. Compiled resources are read only."
     },
     {
       "gui": "MainWindow.Content:Scripts",
@@ -85,24 +61,9 @@
         "zstudio_export",
         "zstudio_problems",
         "zstudio_script_records",
-        "zstudio_script_entry_edit",
-        "zstudio_script_instruction_edit",
-        "zstudio_script_select",
-        "zstudio_script_properties"
+        "zstudio_script_select"
       ],
-      "note": "Dynamic script menus and virtualized instruction rows share stable script/instruction identities, structural actions and explicit pinned Properties targeting. Read-only reconstructed Text and original Bytes remain separate. Malformed records retain scoped errors and leave valid scripts inspectable/exportable at their authored indices, while the whole pack stays ineligible for editing/saving. Selection never executes commands or retargets Properties."
-    },
-    {
-      "gui": "ScriptPropertiesEditor:Fields",
-      "tools": [
-        "zstudio_script_properties",
-        "zstudio_properties_state",
-        "zstudio_drafts",
-        "zstudio_resolve_drafts",
-        "zstudio_undo_redo",
-        "zstudio_save_document"
-      ],
-      "note": "Generated timestamp/name/token fields and asynchronous argument actions use shared draft validation, revisions, stable identities and undo. Literal Latin-1 tokens use JSON quotes. Oversized values are read-only prefixes; complete instruction replacement remains available. Save As retargets later saves and reload."
+      "note": "Virtualized instruction rows share stable script/instruction identities. Read-only reconstructed Text and original Bytes remain separate. Malformed records retain scoped errors and leave valid scripts inspectable/exportable at their authored indices. Selection never executes commands or retargets Properties. Compiled scripts are read only."
     },
     {
       "gui": "SceneViewport.Ai:HandleAiPointerDown",
@@ -112,7 +73,7 @@
         "zstudio_ai_selection",
         "zstudio_camera"
       ],
-      "note": "AI marker picking and its dynamic Properties context action share snapshot identities with AI discovery and selection. Nodes/arrows use a fixed attack-strategy palette shared with the compiled toolbar's AI nodes tooltip; the selected marker is white. Network/node/selection/Properties results expose attack_strategy value/status/key/characters/truncated/color, with missing strategies red (#FF6666) and empty/unknown/invalid strategies gray (#A0A0A0). Malformed or duplicate strategy fields retain valid graph geometry and produce diagnostics. Marker selection requires unlocked editing in a compiled Whole world (source maps have no lock); locked selection is rejected before retaining a hidden marker/card. Explicit read-only Properties remains available while locked. Hover/selection labels derive from the same node data. Malformed node value types are diagnosed individually while valid neighbors remain visible; malformed duplicate indices remain ambiguous. MW3 constraint queries search bounded network member/name and kind prefixes plus edge/attribute/endpoint labels before pagination, retaining source identities and matching totals. KindCharacters/KindTruncated and ParametersTruncated disclose bounded result previews (kind 256 characters; parameters 64 nodes, depth 8, 2048 text characters, 512 per string). Node/network queries cap authored name/type prefixes before filtering and skip search formatting for empty queries. MW3 links share a 32-slot preview across overlay, cards, Properties and MCP with full counts/truncation; source ZRD paging/export retains all slots. Network diagnostics preview 8 messages at 128 characters, with totals/truncation. Structured strategy values cap 1024 characters. Frame selected uses camera; normal scene framing excludes the overlay."
+      "note": "AI marker picking and its dynamic Properties context action share snapshot identities with AI discovery and selection. Nodes/arrows use a fixed attack-strategy palette shared with the compiled toolbar's AI nodes tooltip; the selected marker is white. Network/node/selection/Properties results expose attack_strategy value/status/key/characters/truncated/color, with missing strategies red (#FF6666) and empty/unknown/invalid strategies gray (#A0A0A0). Malformed or duplicate strategy fields retain valid graph geometry and produce diagnostics. A compiled Whole world is read only: its markers select and inspect, never move. Hover/selection labels derive from the same node data. Malformed node value types are diagnosed individually while valid neighbors remain visible; malformed duplicate indices remain ambiguous. MW3 constraint queries search bounded network member/name and kind prefixes plus edge/attribute/endpoint labels before pagination, retaining source identities and matching totals. KindCharacters/KindTruncated and ParametersTruncated disclose bounded result previews (kind 256 characters; parameters 64 nodes, depth 8, 2048 text characters, 512 per string). Node/network queries cap authored name/type prefixes before filtering and skip search formatting for empty queries. MW3 links share a 32-slot preview across overlay, cards, Properties and MCP with full counts/truncation; source ZRD paging/export retains all slots. Network diagnostics preview 8 messages at 128 characters, with totals/truncation. Structured strategy values cap 1024 characters. Frame selected uses camera; normal scene framing excludes the overlay."
     },
     {
       "gui": "SceneViewport.Inspection:Pointer",
@@ -138,12 +99,11 @@
         "zstudio_resolve_drafts",
         "zstudio_undo_redo",
         "zstudio_save_document",
-        "zstudio_ai_valve_selection",
         "zstudio_scene_selection",
         "zstudio_workspace_view",
         "zstudio_camera"
       ],
-      "note": "Compiled Whole world cards, selection bounds and viewport manipulation require unlocked editing; source maps have no lock. Tree inspection and hover remain available while locked. Header Isolate and Close and footer Revert/Apply share scene_card revisions, draft lifetimes, archive ownership, history and verified saves. AuthoredPosition, AuthoredRotation and AuthoredHeading bindings enable persistent fields in place. Editable placement fields take input at once (a change starts the draft); Move/Rotate toggles in the Details header show or hide world-axis handles (showing them starts a draft; transformMode move/rotate/none), sharing the draft with scene_card set position/rotationDegrees/headingDegrees. Revert and Apply are enabled only once the draft changes something. Pickups support XYZ radians displayed as degrees; vehicles support native Y heading degrees; Rotate stays hidden for placements without authored rotation. Drags preview until Apply (or Enter in a placement field) creates one combined undo step; Revert (or Escape in a field) discards the draft; Escape during a drag restores that gesture only. Invalid inputs retain the last valid preview and hide handles. Per-field copy (and scene_card copy without a field, MCP only) returns accepted values with labels. World-origin readouts, animation poses and ambiguous actor ownership remain read-only. Header spacing, scrolling and gutter do not change camera or document state. Short viewports automatically place the navigation cube beside the panel, restoring its normal corner when space permits or details close; axis commands remain shared and no physical input is captured. Source-world object fields are editable at once; the Transform header's toggles show Move arrows along the object's own axes or Rotate rings about world X, Y and Z, writing the local Position/Rotation fields (scene_card set fields/transformMode, none hides them); Apply accepts one source transaction and Revert restores the accepted values. Isolate (scene_selection isolate/show_all) shows only the selected object in model and Whole world previews, and again everything when pressed while isolated. In a source map the card is always docked as the Properties pane, without Isolate (the World tree's eyes isolate), and, with nothing selected, Recently selected (scene_inspect recentSelections, then scene_tree select); its footer has icon buttons with immediate tooltips: Copy… and Delete (source_world_object_edit) left of Revert and Apply (scene_card cancel/apply)."
+      "note": "Compiled Whole world cards and selection bounds are read only: they inspect and never edit (scene_card begin refuses them as read_only). Header Isolate and Close and footer Revert/Apply share scene_card revisions, draft lifetimes, history and verified saves. AuthoredPosition, AuthoredRotation and AuthoredHeading bindings enable persistent fields in place. Editable placement fields take input at once (a change starts the draft); Move/Rotate toggles in the Details header show or hide world-axis handles (showing them starts a draft; transformMode move/rotate/none), sharing the draft with scene_card set position/rotationDegrees/headingDegrees. Revert and Apply are enabled only once the draft changes something. Pickups support XYZ radians displayed as degrees; vehicles support native Y heading degrees; Rotate stays hidden for placements without authored rotation. Drags preview until Apply (or Enter in a placement field) creates one combined undo step; Revert (or Escape in a field) discards the draft; Escape during a drag restores that gesture only. Invalid inputs retain the last valid preview and hide handles. Per-field copy (and scene_card copy without a field, MCP only) returns accepted values with labels. World-origin readouts, animation poses and ambiguous actor ownership remain read-only. Header spacing, scrolling and gutter do not change camera or document state. Short viewports automatically place the navigation cube beside the panel, restoring its normal corner when space permits or details close; axis commands remain shared and no physical input is captured. Source-world object fields are editable at once; the Transform header's toggles show Move arrows along the object's own axes or Rotate rings about world X, Y and Z, writing the local Position/Rotation fields (scene_card set fields/transformMode, none hides them); Apply accepts one source transaction and Revert restores the accepted values. Isolate (scene_selection isolate/show_all) shows only the selected object in model and Whole world previews, and again everything when pressed while isolated. In a source map the card is always docked as the Properties pane, without Isolate (the World tree's eyes isolate), and, with nothing selected, Recently selected (scene_inspect recentSelections, then scene_tree select); its footer has icon buttons with immediate tooltips: Copy… and Delete (source_world_object_edit) left of Revert and Apply (scene_card cancel/apply)."
     },
     {
       "gui": "DocumentSceneTree:Hierarchy",
@@ -163,36 +123,6 @@
         "zstudio_capture"
       ],
       "note": "Dynamic assembly and LOD pickers, transport, seeker and frame button share the motion sampler and visible viewport. Binding indexes member-scoped ordinal node names once off the UI thread, with cancellation throughout indexing and track binding; superseded results cannot publish. Selection retains the UUID from its exact decoded geometry snapshot, including retained edit history when a load is overtaken by an edit, and duplicated/imported members without SourceIndex. Rename/reorder/model replacement/history retain that identity; canceled selection preserves it and deletion clears it. Overlapping assembly loads retain pre-load playback intent, while explicit Play/Pause during loading takes precedence, including cancellation recovery. State exposes actual playing, loading and playbackRequested. Motion diagnostic previews cap 32 messages at 512 characters with diagnosticCount/diagnosticsTruncated; GUI support text discloses shortened output. Assembly previews cap 32 rows with assemblyCount/assembliesTruncated; motion_preview action assemblies pages all bindings with name filtering. No physical mouse capture."
-    },
-    {
-      "gui": "ResourcePropertiesEditor:MotionFields",
-      "tools": [
-        "zstudio_motion_records",
-        "zstudio_motion_edit",
-        "zstudio_resource_properties"
-      ],
-      "note": "Generated timing/part/frame/translation/quaternion fields and insert/delete actions share archive identities, draft guards and undo. All tracks change together on insertion/deletion, retaining each separately authored closing sample exactly; frame-zero edits never overwrite it. Accepted edits and Undo/Redo refresh the active sampler while retaining camera and playback; failed edits do not pause playback. Motion inspection metadata previews up to 32 parts and 128 characters per name within a shared 4,096-part allowance per archive, with counts/truncation even for empty later previews; motion_records pages 512-character track-name previews with nameCharacters/nameTruncated and full-name query matching; explicit exports retain all parts and complete names. Aliased motion members share a decoded payload without sharing record identities."
-    },
-    {
-      "gui": "MainWindow.MechModels:ReplaceMechModelDialogAsync",
-      "tools": [
-        "zstudio_mech_models",
-        "zstudio_mech_model_replace",
-        "zstudio_texture_import"
-      ],
-      "note": "Explicit member-local mesh and shared material picker plus OBJ selection use the same resource transaction as MCP. Accepted mesh edits and Undo/Redo rebuild the active mech preview and dependent viewers while retaining the camera. Texture replacement uses the existing texture editor. mech_models caps nested node/material previews at 32 with totals/truncation; section nodes/materials plus localModel pages full lists with pre-pagination filtering."
-    },
-    {
-      "gui": "ResourcePropertiesEditor:ValveFields",
-      "tools": [
-        "zstudio_resource_properties",
-        "zstudio_ai_valves",
-        "zstudio_ai_valve_edit",
-        "zstudio_ai_valve_selection",
-        "zstudio_zrd_nodes",
-        "zstudio_zrd_edit"
-      ],
-      "note": "Generated typed fields/actions and paged records, operands, bindings, ordered actions/terms and exact-name references share resource history, draft guards and verified saves. Record queries compare complete names and numeric references without concatenating source strings; bounded names disclose nameCharacters. Record UUIDs distinguish repeated names. Generic ZRD editing retains access to unknown fields."
     },
     {
       "gui": "SceneViewport:Valves",
@@ -256,7 +186,7 @@
         "zstudio_source_terrain",
         "zstudio_source_terrain_edit"
       ],
-      "note": "Properties of a terrain piece edits its recipe: recipe and surface defaults (attribute inputs; empty removes an override), regions in order (select, move up/down, delete, add, rename, surfaces, attributes, cover whole surfaces), the brush (radius, paint or erase in viewport) and Paint polygon / Erase polygon: typed plan-view corners (x z pairs separated by commas, a semicolon starting each hole, at most 65,536 characters) that map to source_terrain_edit paint with polygons (mode paint or erase), read by the same recipe shape parser with its ring and coordinate refusals; the round brush cannot draw such exact edges, and a larger shape is painted in parts, painting being a union. Properties shows 32 regions per page with native Previous/Next actions. MCP uses source_terrain pagination for the same ordered regions; property_action serves animation properties. source_terrain pages recipe lists and region lists with offset/nextOffset (at most 64 rows), retaining exact paths and names. Each edit is source_terrain_edit with the same recipe, region and attribute patch; the brush selection itself is presentation state."
+      "note": "Properties of a terrain piece edits its recipe: recipe and surface defaults (attribute inputs; empty removes an override), regions in order (select, move up/down, delete, add, rename, surfaces, attributes, cover whole surfaces), the brush (radius, paint or erase in viewport) and Paint polygon / Erase polygon: typed plan-view corners (x z pairs separated by commas, a semicolon starting each hole, at most 65,536 characters) that map to source_terrain_edit paint with polygons (mode paint or erase), read by the same recipe shape parser with its ring and coordinate refusals; the round brush cannot draw such exact edges, and a larger shape is painted in parts, painting being a union. Properties shows 32 regions per page with native Previous/Next actions. MCP uses source_terrain pagination for the same ordered regions. source_terrain pages recipe lists and region lists with offset/nextOffset (at most 64 rows), retaining exact paths and names. Each edit is source_terrain_edit with the same recipe, region and attribute patch; the brush selection itself is presentation state."
     },
     {
       "gui": "SceneViewport.TerrainBrush:Strokes",
@@ -353,7 +283,7 @@
       "tools": [
         "zstudio_ai_path"
       ],
-      "note": "In compiled worlds Tab enters/exits one-network Edit mode (source worlds ignore Tab; ai_path enters Edit mode there); G/R/S start move/rotate/scale drafts, X/Y/Z constrain world axes, Enter confirms one undo step, Escape cancels the gesture/draft. Native text/control shortcuts remain native."
+      "note": "In a source map's AI path Edit mode (ai_path enter), G/R/S start move/rotate/scale drafts, X/Y/Z constrain world axes, Enter confirms one undo step, Escape cancels the gesture/draft. Compiled worlds are read only. Native text/control shortcuts remain native."
     },
     {
       "gui": "SceneViewport.AiEditing:HandleAiPathDown",
@@ -401,13 +331,6 @@
       "note": "View Fullscreen and View Hide UI are independent transient presentation flags. They preserve the retained preview, camera, playback, layout preferences and drafts; enabling requires a 3D preview and disabling remains available. Hide UI hides chrome, panes, the Properties window and editor guides, makes clicks inert and leaves the polygon zone tool."
     },
     {
-      "gui": "AnimationEditor.xaml:AddSequenceClick",
-      "tools": [
-        "zstudio_animation_structure"
-      ],
-      "note": "Use the semantic tool with explicit identities and arguments."
-    },
-    {
       "gui": "AnimationEditor.xaml:AudioChanged",
       "tools": [
         "zstudio_animation_options"
@@ -425,13 +348,6 @@
       "gui": "AnimationEditor.xaml:BindClick",
       "tools": [
         "zstudio_animation_options"
-      ],
-      "note": "Use the semantic tool with explicit identities and arguments."
-    },
-    {
-      "gui": "AnimationEditor.xaml:ChooseEventClick",
-      "tools": [
-        "zstudio_animation_structure"
       ],
       "note": "Use the semantic tool with explicit identities and arguments."
     },
@@ -457,23 +373,9 @@
       "note": "Return structured data directly; no clipboard side effect is needed."
     },
     {
-      "gui": "AnimationEditor.xaml:DeleteRecordClick",
-      "tools": [
-        "zstudio_animation_structure"
-      ],
-      "note": "Use the semantic tool with explicit identities and arguments."
-    },
-    {
       "gui": "AnimationEditor.xaml:DifficultyChanged",
       "tools": [
         "zstudio_animation_options"
-      ],
-      "note": "Use the semantic tool with explicit identities and arguments."
-    },
-    {
-      "gui": "AnimationEditor.xaml:DuplicateRecordClick",
-      "tools": [
-        "zstudio_animation_structure"
       ],
       "note": "Use the semantic tool with explicit identities and arguments."
     },
@@ -562,20 +464,6 @@
       "note": "Use the semantic tool with explicit identities and arguments."
     },
     {
-      "gui": "AnimationEditor.xaml:MoveRecordDownClick",
-      "tools": [
-        "zstudio_animation_structure"
-      ],
-      "note": "Use the semantic tool with explicit identities and arguments."
-    },
-    {
-      "gui": "AnimationEditor.xaml:MoveRecordUpClick",
-      "tools": [
-        "zstudio_animation_structure"
-      ],
-      "note": "Use the semantic tool with explicit identities and arguments."
-    },
-    {
       "gui": "AnimationEditor.xaml:NextFrameClick",
       "tools": [
         "zstudio_animation_transport"
@@ -635,13 +523,6 @@
       "gui": "AnimationEditor.xaml:ProgramSelected",
       "tools": [
         "zstudio_animation_select"
-      ],
-      "note": "Use the semantic tool with explicit identities and arguments."
-    },
-    {
-      "gui": "AnimationEditor.xaml:PropertiesClick",
-      "tools": [
-        "zstudio_properties_open"
       ],
       "note": "Use the semantic tool with explicit identities and arguments."
     },
@@ -709,34 +590,6 @@
       "note": "Use the semantic tool with explicit identities and arguments."
     },
     {
-      "gui": "MainWindow.xaml:AnimationAddEventClick",
-      "tools": [
-        "zstudio_animation_structure"
-      ],
-      "note": "Use the semantic tool with explicit identities and arguments."
-    },
-    {
-      "gui": "MainWindow.xaml:AnimationAddSequenceClick",
-      "tools": [
-        "zstudio_animation_structure"
-      ],
-      "note": "Use the semantic tool with explicit identities and arguments."
-    },
-    {
-      "gui": "MainWindow.xaml:AnimationDeleteClick",
-      "tools": [
-        "zstudio_animation_structure"
-      ],
-      "note": "Use the semantic tool with explicit identities and arguments."
-    },
-    {
-      "gui": "MainWindow.xaml:AnimationDuplicateClick",
-      "tools": [
-        "zstudio_animation_structure"
-      ],
-      "note": "Use the semantic tool with explicit identities and arguments."
-    },
-    {
       "gui": "MainWindow.xaml:AnimationNextClick",
       "tools": [
         "zstudio_animation_transport"
@@ -767,8 +620,7 @@
     {
       "gui": "MainWindow.xaml:AssetPropertiesClick",
       "tools": [
-        "zstudio_properties_open",
-        "zstudio_resource_properties"
+        "zstudio_properties_open"
       ],
       "note": "Use the semantic tool with explicit identities and arguments."
     },
@@ -780,7 +632,7 @@
         "zstudio_inspect_asset",
         "zstudio_source_bytes"
       ],
-      "note": "Model rows expose accepted AssetRecords and appended material/texture references while retaining kind/index identity through undo/redo. Asset offsets describe edited ranges; nullable sourceOffset/sourceLength and GUI Bytes retain original source ranges. New records have no original bytes. Model replacement snapshots are restricted to GameZ and texture packs before acceptance/history; mission coordinates publish separate ZAR archives. Mixed model/placement edits share chronological undo and publish all snapshots without bypassing duplicate-owner protection."
+      "note": "Asset rows expose the document's AssetRecords with stable kind/index identity; source_bytes and GUI Bytes show their original source ranges."
     },
     {
       "gui": "MainWindow.xaml:AudioSeekChanged",
@@ -988,14 +840,7 @@
       "tools": [
         "zstudio_texture_palette"
       ],
-      "note": "GUI and MCP inspect the same current edited or mirrored texture snapshot, including moved private palettes, added records, undo/redo and Save As aliases."
-    },
-    {
-      "gui": "MainWindow.xaml:EditingUnlockedChanged",
-      "tools": [
-        "zstudio_scene_lock"
-      ],
-      "note": "Unlock editing gates all Whole world object cards, selection bounds and pickup/AI-node/AIV-tank transforms. Unlocking alone selects nothing. Locking closes selection after draft resolution; GUI Cancel preserves drafts and the unlocked state. Source/tree inspection, read-only point queries and hover remain available while locked. scene_lock and document-state EditingLocked share the GUI lock; MCP lock transitions require resolved drafts. Compiled Whole worlds only: source worlds have no lock or Unlock editing button, and scene_lock refuses them as unsupported."
+      "note": "GUI and MCP inspect the same texture pack, including its private palettes."
     },
     {
       "gui": "MainWindow.xaml:PlayAudioClick",
@@ -1026,7 +871,7 @@
       "note": "Use the semantic tool with explicit identities and arguments."
     },
     {
-      "gui": "MainWindow.xaml:RedoAnimationClick",
+      "gui": "MainWindow.xaml:RedoDocumentClick",
       "tools": [
         "zstudio_undo_redo"
       ],
@@ -1050,13 +895,6 @@
       "gui": "MainWindow.xaml:ResetLayoutClick",
       "tools": [
         "zstudio_workspace_view"
-      ],
-      "note": "Use the semantic tool with explicit identities and arguments."
-    },
-    {
-      "gui": "MainWindow.xaml:SaveCurrentAsClick",
-      "tools": [
-        "zstudio_save_document"
       ],
       "note": "Use the semantic tool with explicit identities and arguments."
     },
@@ -1155,7 +993,7 @@
       "note": "Use the semantic tool with explicit identities and arguments."
     },
     {
-      "gui": "MainWindow.xaml:UndoAnimationClick",
+      "gui": "MainWindow.xaml:UndoDocumentClick",
       "tools": [
         "zstudio_undo_redo"
       ],
@@ -1210,13 +1048,6 @@
         "zstudio_missions"
       ],
       "note": "Selects an authored MW3 mission while retaining animation playhead, custom range, camera and playback intent."
-    },
-    {
-      "gui": "MainWindow.xaml:AiValvesClick",
-      "tools": [
-        "zstudio_ai_valve_selection"
-      ],
-      "note": "Opens an authored MW3 valve resource in the reusable pinned Properties window, retaining the Whole world preview and resolving pending drafts."
     },
     {
       "gui": "MainWindow.xaml:AiValveOverlayChanged",
@@ -1357,7 +1188,7 @@
       "tools": [
         "zstudio_ai_path"
       ],
-      "note": "Edit mode, transform begin/confirm/cancel and pinned Properties use the same ai_path operations and draft/identity guards. Compiled worlds only for now: source worlds hide Edit path and ignore Tab; ai_path remains available."
+      "note": "Edit-mode transform begin/confirm/cancel and pinned Properties use the same ai_path operations and draft/identity guards. Compiled worlds are read only; in a source map ai_path enters Edit mode."
     },
     {
       "gui": "MainWindow.xaml:AiPathInputChanged",
@@ -1371,21 +1202,21 @@
       "tools": [
         "zstudio_parachute"
       ],
-      "note": "Shared Parachute flight/window selection, numeric or pointer draft, explicit confirm/cancel and actual animation-owner history/save. Compiled saves create a verified new copy; source saves retain project ownership. A selected unavailable flight exposes analysisRefusal while other candidates remain selectable. Samples/releases use offset/limit without query."
+      "note": "Shared Parachute flight/window selection, numeric or pointer draft, explicit confirm/cancel and project history/save. A compiled world's flights are shown and analyzed read only: its windows are neither selected nor moved. A selected unavailable flight exposes analysisRefusal while other candidates remain selectable. Samples/releases use offset/limit without query."
     },
     {
       "gui": "MainWindow.xaml:ParachuteSelectionChanged",
       "tools": [
         "zstudio_parachute"
       ],
-      "note": "Shared Parachute flight/window selection, numeric or pointer draft, explicit confirm/cancel and actual animation-owner history/save. Compiled saves create a verified new copy; source saves retain project ownership."
+      "note": "Shared Parachute flight/window selection, numeric or pointer draft, explicit confirm/cancel and project history/save. A compiled world's flights are shown and analyzed read only: its windows are neither selected nor moved."
     },
     {
       "gui": "MainWindow.xaml:ParachuteInputChanged",
       "tools": [
         "zstudio_parachute"
       ],
-      "note": "Shared Parachute flight/window selection, numeric or pointer draft, explicit confirm/cancel and actual animation-owner history/save. Compiled saves create a verified new copy; source saves retain project ownership."
+      "note": "Shared Parachute flight/window selection, numeric or pointer draft, explicit confirm/cancel and project history/save. A compiled world's flights are shown and analyzed read only: its windows are neither selected nor moved."
     },
     {
       "gui": "MainWindow.xaml:SourceMapsClick",

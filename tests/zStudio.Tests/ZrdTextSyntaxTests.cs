@@ -659,7 +659,7 @@ public sealed class ZrdTextSyntaxTests
                 dropsComments = true;
                 return Change(root, node.Id, n => n.Kind == ZrdKind.Array ? RandomScalar(random) with { Id = n.Id } : n with { Kind = ZrdKind.Array, Bits = 0, Text = "", Children = [.. Enumerable.Range(0, random.Next(0, 3)).Select(_ => RandomNode(random, 3))] });
             default:
-                return Change(root, parent.Id, p => p with { Children = [.. p.Children.Take(index + 1), node.Duplicate(), .. p.Children.Skip(index + 1)] });
+                return Change(root, parent.Id, p => p with { Children = [.. p.Children.Take(index + 1), Copy(node), .. p.Children.Skip(index + 1)] });
         }
     }
 
@@ -669,4 +669,6 @@ public sealed class ZrdTextSyntaxTests
         do node = RandomNode(random, 4); while (node.Kind == ZrdKind.Array);
         return node;
     }
+
+    private static ZrdNode Copy(ZrdNode node) => node with { Id = Guid.NewGuid(), SourceOffset = -1, Children = node.Children.Select(Copy).ToArray() };
 }

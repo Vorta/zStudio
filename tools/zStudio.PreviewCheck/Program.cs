@@ -52,13 +52,11 @@ internal static class Program
         if (args.Length == 2 && args[0] == "--gui-review") return GuiReviewCapture.Run(args[1]);
         if (args.Length == 2 && args[0] == "--scene-tree") return GuiReviewCapture.Run(args[1], sceneTreeOnly: true);
         if (args.Length == 2 && args[0] == "--workspace-performance") return WorkspacePerformanceCheck.Run(args[1]);
-        if (args.Length == 2 && args[0] is "--pickup-editor" or "--pickup-pointer") return PickupEditorCheck.Run(args[1], args[0] == "--pickup-pointer");
         if (args.Length == 2 && args[0] == "--placements") return MissionPlacementPreviewCheck.Run(args[1]);
         if (args.Length == 2 && args[0] == "--difficulty") return DifficultyPreviewCheck.Run(args[1]);
         if (args.Length == 2 && args[0] == "--ground") return GroundPreviewCheck.Run(args[1]);
         if (args.Length == 2 && args[0] == "--camera-follow") return CameraFollowCheck.Run(args[1]);
         if (args.Length == 2 && args[0] == "--toolbars") return AnimationLayoutCheck.Run(args[1],toolbarOnly:true);
-        if (args.Length == 2 && args[0] == "--properties") return AnimationLayoutCheck.Run(args[1],propertiesOnly:true);
         if (args.Length == 2 && args[0] == "--animation-layout") return AnimationLayoutCheck.Run(args[1]);
         if (args.Length == 2 && args[0] == "--animation-tree") return AnimationLayoutCheck.Run(args[1],treeOnly:true);
         if (args.Length == 2 && args[0] == "--render-stability") return RenderStabilityCheck.Run(args[1]);

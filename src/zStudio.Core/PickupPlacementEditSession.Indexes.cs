@@ -8,7 +8,6 @@ public sealed partial class PickupPlacementEditSession
     private readonly object indexGate = new();
     /// <summary>Exact full source identity, sharing this session's bounded-lifetime prefix memoization.</summary>
     public IEqualityComparer<MissionPickupSource> SourceComparer => sourceComparer;
-    private Dictionary<ArchiveState, List<Entry>>? archiveEntries;
     private IReadOnlyList<PickupPlacementRecord>? pickupRecords;
     private Dictionary<MissionPickupSource, PickupPlacementScope>? scopes;
     internal long ScopeIndexRows { get; private set; }
@@ -17,37 +16,14 @@ public sealed partial class PickupPlacementEditSession
     public PickupPlacementEditSession()
     {
         entries = new(sourceComparer); otherCoordinates = new(sourceComparer);
-        positions = new(sourceComparer); savedPositions = new(sourceComparer);
-        rotations = new(sourceComparer); savedRotations = new(sourceComparer);
+        positions = new(sourceComparer); rotations = new(sourceComparer);
     }
     private void InvalidateMembership()
-    { lock (indexGate) { archiveEntries = null; pickupRecords = null; scopes = null; } }
+    { lock (indexGate) { pickupRecords = null; scopes = null; } }
     private void InvalidateScopes() { lock (indexGate) scopes = null; }
     private IReadOnlyList<PickupPlacementRecord> IndexedRecords()
     {
         lock (indexGate) return pickupRecords ??= Array.AsReadOnly(entries.Values.Where(e => !otherCoordinates.ContainsKey(e.Record.Source)).Select(e => e.Record).ToArray());
-    }
-
-    private IEnumerable<Entry> EntriesForArchive(string path, bool exact = false)
-    {
-        lock (indexGate)
-        {
-            if (archiveEntries == null)
-            {
-                Dictionary<ArchiveState, List<Entry>> built = [];
-                Dictionary<string, ArchiveState> resolved = new(ReferenceEqualityComparer.Instance);
-                foreach (var entry in entries.Values)
-                {
-                    string prefix = entry.Record.Source.ArchivePath;
-                    if (!resolved.TryGetValue(prefix, out var archive)) resolved.Add(prefix, archive = archives[prefix]);
-                    if (!built.TryGetValue(archive, out var rows)) built.Add(archive, rows = []);
-                    rows.Add(entry);
-                }
-                archiveEntries = built;
-            }
-            if (!archiveEntries.TryGetValue(archives[path], out var found)) return [];
-            return exact ? found.Where(e => sourceComparer.SameArchive(e.Record.Source.ArchivePath, path)) : found;
-        }
     }
 
     private PickupPlacementScope IndexedScope(MissionPickupSource source)

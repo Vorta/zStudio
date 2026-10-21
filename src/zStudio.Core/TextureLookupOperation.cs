@@ -11,7 +11,6 @@ public sealed class TextureLookupOperation
     private readonly AssetResolver resolver;
     private readonly string context;
     private readonly string? preferred;
-    private readonly long revision;
     private readonly SemaphoreSlim gate = new(1, 1);
     private readonly Dictionary<string, PackIndex> indexes = new(StringComparer.OrdinalIgnoreCase);
     private string[]? packs;
@@ -24,7 +23,7 @@ public sealed class TextureLookupOperation
     {
         if (maximumWork < 0 || maximumColdReadBytes < 0) throw new ArgumentOutOfRangeException(nameof(maximumWork));
         this.resolver = resolver; this.context = context; this.preferred = preferred;
-        revision = resolver.SnapshotRevision; work = maximumWork;
+        work = maximumWork;
         reads = new(maximumDiscoveryBytes, maximumColdReadBytes);
     }
     private void Spend(long units, CancellationToken token)
@@ -34,17 +33,12 @@ public sealed class TextureLookupOperation
         { work = -1; throw new InvalidDataException("Texture lookup exceeds its discovery/index work allowance; use fewer textures or packs."); }
         work -= units;
     }
-    private void CheckRevision()
-    {
-        reads.Check();
-        if (revision != resolver.SnapshotRevision) throw new InvalidDataException("Texture sources changed during lookup; reload the preview or retry the export.");
-    }
     public async Task<ResolvedTexture?> ResolveAsync(string name, CancellationToken token = default)
     {
         await gate.WaitAsync(token).ConfigureAwait(false);
         try
         {
-            CheckRevision(); Spend(name.Length + 1L, token);
+            reads.Check(); Spend(name.Length + 1L, token);
             if (packs == null)
             {
                 var inventory = new CompiledInventory(token);
@@ -61,12 +55,12 @@ public sealed class TextureLookupOperation
             string key = Path.GetFileNameWithoutExtension(name);
             foreach (string path in packs)
             {
-                Spend(key.Length + path.Length + 1L, token); CheckRevision();
+                Spend(key.Length + path.Length + 1L, token); reads.Check();
                 AssetDocument? document = null;
                 if (!indexes.TryGetValue(path, out var index))
                 {
                     document = await resolver.OpenCachedAsync(path, FormatRegistry.MaximumDocumentBytes, token, reads).ConfigureAwait(false);
-                    CheckRevision();
+                    reads.Check();
                     Dictionary<string, Match> names = new(StringComparer.OrdinalIgnoreCase);
                     for (int ordinal = 0; ordinal < document.Assets.Count; ordinal++)
                     {
@@ -80,16 +74,16 @@ public sealed class TextureLookupOperation
                     }
                     index = new(document.Stamp, names); indexes.Add(path, index);
                 }
-                else if (!resolver.HasTextureLookupStamp(path, index.Stamp))
+                else if (!AssetResolver.HasTextureLookupStamp(path, index.Stamp))
                     throw new InvalidDataException("A texture pack changed during lookup; reload the preview or retry the export.");
-                CheckRevision();
+                reads.Check();
                 if (!index.Names.TryGetValue(key, out var found)) continue;
                 document ??= await resolver.OpenCachedAsync(path, FormatRegistry.MaximumDocumentBytes, token, reads).ConfigureAwait(false);
-                CheckRevision();
+                reads.Check();
                 if (document.Stamp != index.Stamp) throw new InvalidDataException("A texture pack changed during lookup; retry the operation.");
                 return new(document, document.Assets[found.Ordinal], found.Ambiguous);
             }
-            CheckRevision(); return null;
+            reads.Check(); return null;
         }
         finally { gate.Release(); }
     }

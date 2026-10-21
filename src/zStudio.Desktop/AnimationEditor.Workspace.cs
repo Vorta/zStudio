@@ -16,31 +16,12 @@ public partial class AnimationEditor
     public FrameworkElement EventLogView => LogPage;
     public FrameworkElement RuntimeView => RuntimePage;
     public FrameworkElement ProblemsView => ProblemPage;
-    public long SelectedSourceOffset => Event?.SourceOffset ?? Sequence?.SourceOffset ?? Entry.SourceOffset;
-    public event Action<Guid, Guid>? PropertiesRequested;
-    public Func<bool>? ResolvePropertyDrafts { get; set; }
     public (Guid Sequence, Guid Event) PropertySelection => (selectedSequence, selectedEvent);
-    private ProgramItem? propertyContextTarget;
-    private bool pointerContext;
-    private void PropertiesClick(object sender, RoutedEventArgs e)
-    { if (propertyContextTarget is { } target) PropertiesRequested?.Invoke(target.Sequence, target.Event); }
     public event Action? SourceSelectionChanged;
-    public event Action? CommandsChanged;
     internal event Action? SceneHierarchyChanged;
     private GameScene? publishedHierarchy;
     public event Action? SetupRequested;
     public event Action<int,Guid,Guid>? SourceNavigationRequested;
-    internal bool CanRunCommand(string command) => !disposed && command switch
-    {
-        "add-event" => Sequence?.IsEditable == true,
-        "add-sequence" => Entry.Sequences.Count < 255 && Entry.AllSequences.All(s => s.IsEditable),
-        "duplicate" => Event != null ? Sequence?.IsEditable == true : Sequence != null && Entry.AllSequences.All(s => s.IsEditable),
-        "delete" => Event != null ? Sequence?.IsEditable == true : Sequence != null && Sequence != Entry.Primary && Entry.AllSequences.All(s => s.IsEditable),
-        "up" => Event != null ? SelectedEventIndex > 0 && Sequence!.IsEditable : Entry.Sequences.FindIndex(s => s.Id == selectedSequence) > 0,
-        "down" => Event != null ? SelectedEventIndex + 1 < Sequence!.Events.Count && Sequence.IsEditable : Entry.Sequences.FindIndex(s => s.Id == selectedSequence) is >= 0 and int index && index + 1 < Entry.Sequences.Count,
-        "copy-event" => Event != null,
-        _ => true
-    };
     private readonly ContentControl referencesPage = new();
     private readonly ObservableCollection<ProgramItem> program = [];
     private readonly List<(Expander Group,bool Default)> setupGroups = [];
@@ -49,22 +30,7 @@ public partial class AnimationEditor
         // Each page has exactly one host. Tab/preset changes do not own preview lifetimes.
         DetachedPages.Children.Clear(); EditorRoot.Children.Remove(DetachedPages);
         ProgramTree.ItemsSource = program;
-        ProgramTree.PreviewMouseRightButtonDown += (_, e) =>
-        {
-            propertyContextTarget = PropertyContext.FindAncestor<TreeViewItem>(e.OriginalSource as DependencyObject)?.DataContext as ProgramItem;
-            pointerContext = true; e.Handled = true;
-            if (propertyContextTarget is { } item) SelectSource(item.Sequence, item.Event);
-        };
         ProgramTree.ItemTemplate = (HierarchicalDataTemplate)Resources[new DataTemplateKey(typeof(ProgramItem))];
-        ProgramTree.ContextMenu.Opened += (_,_) =>
-        {
-            if (!pointerContext) propertyContextTarget = ProgramTree.SelectedItem as ProgramItem;
-            pointerContext = false;
-            foreach (var item in ProgramTree.ContextMenu.Items.OfType<MenuItem>())
-                item.IsEnabled = item.Tag is string command
-                    ? propertyContextTarget is { } target && target.Sequence == selectedSequence && target.Event == selectedEvent && CanRunCommand(command)
-                    : propertyContextTarget != null;
-        };
         foreach (var group in ((StackPanel)SetupPage.Content).Children.OfType<Expander>())
         {
             string key = "setup/" + group.Header; setupGroups.Add((group,group.IsExpanded));
@@ -112,7 +78,6 @@ public partial class AnimationEditor
             if (selectedSequence != Guid.Empty && Sequence == null) { selectedSequence = selectedEvent = Guid.Empty;  }
             if (selectedEvent != Guid.Empty && Event == null) { selectedEvent = Guid.Empty;  }
             SyncProgramSelection();
-            AddEventButton.IsEnabled = CanRunCommand("add-event"); AddSequenceButton.IsEnabled = CanRunCommand("add-sequence");
         }
         finally { changing = false; }
     }
@@ -137,7 +102,6 @@ public partial class AnimationEditor
         if (program.Count > 0) { program[0].IsExpanded = true; foreach (var parent in program[0].Children.Where(p => p.Sequence == sequence)) parent.IsExpanded = true; }
         changing = true; SyncProgramSelection(); changing = false;
         RefreshProperties(); SourceSelectionChanged?.Invoke();
-        AddEventButton.IsEnabled = CanRunCommand("add-event"); AddSequenceButton.IsEnabled = CanRunCommand("add-sequence");
         // Only explicit authored selection scrolls Program; playback cursors never do.
         Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Loaded, () =>
         {
@@ -155,45 +119,8 @@ public partial class AnimationEditor
     private void SetupClick(object sender, RoutedEventArgs e) => SetupRequested?.Invoke();
     public void Stop() { if (ResolvePendingDrafts()) { pendingPlay = false; _ = SeekAsync(0); } }
     public void Step(int direction) { if (ResolvePendingDrafts()) _ = SeekAsync(Math.Max(0, (frame?.Time ?? 0) + direction * AnimationPlayer.StepSeconds)); }
-    public void AddSequence() => AddSequenceClick(this, new());
-    public void DuplicateRecord() { if (Event != null) CopyEventClick(this, new()); else if (Sequence != null) CopySequenceClick(this, new()); }
-    public void DeleteRecord() { if (Event != null) DeleteEventClick(this, new()); else if (Sequence != null) DeleteSequenceClick(this, new()); }
-    private void DuplicateRecordClick(object sender, RoutedEventArgs e) => DuplicateRecord();
-    private void DeleteRecordClick(object sender, RoutedEventArgs e) => DeleteRecord();
-    private void MoveRecordUpClick(object sender, RoutedEventArgs e) => MoveRecord(-1);
-    private void MoveRecordDownClick(object sender, RoutedEventArgs e) => MoveRecord(1);
-    private void MoveRecord(int direction) { if (Event != null) MoveEvent(direction); else if (Sequence != null) TryEdit(() => edits.MoveSequence(entryIndex, selectedSequence, direction)); }
-    public void CopySelectedEvent()
-    {
-        if (!ResolvePendingDrafts()) return;
-        if (Event is { } ev) Clipboard.SetText(ev.ToJson().ToJsonString(JsonData.Options));
-        else Note("Select an event in Sequences to copy its JSON.");
-    }
-    private void ChooseEventClick(object sender, RoutedEventArgs e) => ChooseEvent();
-    public void ChooseEvent()
-    {
-        if (!ResolvePendingDrafts()) return;
-        if (Sequence == null) { Note("Select a sequence or event in Sequences to choose the insertion destination."); return; }
-        if (!Sequence.IsEditable) { Note("This sequence has an unsupported tail and cannot accept new events."); return; }
-        Guid destination = selectedSequence;
-        StackPanel header = new() { Margin = new(8) };
-        header.Children.Add(new TextBlock { Text = $"{Sequence.Name}: {(Event == null ? "append to sequence" : "insert after " + Event.Name)}", TextWrapping = TextWrapping.Wrap });
-        TextBox query = new() { Margin = new(0,8,0,4), ToolTip = "Search event names, IDs and categories" }; header.Children.Add(query);
-        ComboBox category = new() { ItemsSource = new[] { "All" }.Concat(AnimationCatalog.ForVersion(Entry.Version).Select(e => AnimationFieldPresentation.Category(e.Type)).Distinct()), SelectedIndex = 0 }; header.Children.Add(category);
-        ListBox list = new() { Margin = new(8), DisplayMemberPath = nameof(EventPickerItem.Label) };
-        void Filter() => list.ItemsSource = AnimationCatalog.ForVersion(Entry.Version).Where(e => (category.SelectedIndex == 0 || AnimationFieldPresentation.Category(e.Type) == category.SelectedItem?.ToString()) && (e.Name + $" 0x{e.Type:X2} " + AnimationFieldPresentation.Category(e.Type)).Contains(query.Text, StringComparison.OrdinalIgnoreCase)).Select(e => new EventPickerItem(e, $"{e.Name} · 0x{e.Type:X2} · {AnimationFieldPresentation.Category(e.Type)}")).ToArray();
-        query.TextChanged += (_, _) => Filter(); category.SelectionChanged += (_, _) => Filter(); Filter();
-        Button add = new() { Content = "Insert event", Margin = new(8), IsDefault = true, IsEnabled = false };
-        list.SelectionChanged += (_, _) => add.IsEnabled = list.SelectedItem != null;
-        DockPanel panel = new(); DockPanel.SetDock(header, Dock.Top); DockPanel.SetDock(add, Dock.Bottom); panel.Children.Add(header); panel.Children.Add(add); panel.Children.Add(list);
-        Window dialog = new() { Owner = Window.GetWindow(this), Title = "Add event", Width = 610, Height = 540, Content = panel, WindowStartupLocation = WindowStartupLocation.CenterOwner };
-        add.Click += (_, _) => dialog.DialogResult = true;
-        if (dialog.ShowDialog() == true && !disposed && destination == selectedSequence && list.SelectedItem is EventPickerItem picked) InsertEvent(picked.Spec);
-    }
-    private sealed record EventPickerItem(AnimationEventSpec Spec, string Label);
     internal (ReadOnlyMemory<byte> Bytes,long Offset,long Length,string Scope) SourceByteSelection()
     {
-        // Asset content retains the original records; edit sessions replace entry snapshots.
         var original = document.Document.Assets.FirstOrDefault(a => a.Kind == AssetKind.Animation && a.Index == entryIndex)?.Content as AnimationEntry;
         var sequence = original?.AllSequences.FirstOrDefault(s => s.Id == selectedSequence);
         var ev = sequence?.Events.FirstOrDefault(e => e.Id == selectedEvent);
@@ -201,12 +128,12 @@ public partial class AnimationEditor
         long length = selectedEvent != Guid.Empty ? ev?.Bytes.Length ?? 0 : selectedSequence != Guid.Empty ? sequence == null ? 0 : 64L + sequence.I32(60) : original?.SourceLength ?? 0;
         string owner = $"Entry #{entryIndex} · {Entry.Name}";
         if (Sequence != null) owner += $" / Sequence {Sequence.Name}";
-        if (Event != null) owner += $" / Event #{SelectedEventIndex} · {Event.Name}";
+        if (Event != null) owner += $" / Event #{Sequence!.Events.FindIndex(e => e.Id == selectedEvent)} · {Event.Name}";
         if (selectedSequence != Guid.Empty) owner += $"\nSequence ID: {selectedSequence}";
         if (selectedEvent != Guid.Empty) owner += $"\nEvent ID: {selectedEvent}";
         if (offset >= 0 && length >= 0 && offset <= document.Document.Bytes.Length && length <= document.Document.Bytes.Length - offset)
-            return (document.Document.Bytes.Slice((int)offset,(int)Math.Min(length,4096)),offset,length,"Original source bytes · " + owner + "\nPending edits are shown in Properties, not in this source-byte view.");
-        return (ReadOnlyMemory<byte>.Empty,-1,0,"New record · " + owner + "\nThis record has no original source range; its current fields are shown in Properties.");
+            return (document.Document.Bytes.Slice((int)offset,(int)Math.Min(length,4096)),offset,length,"Original source bytes · " + owner);
+        return (ReadOnlyMemory<byte>.Empty,-1,0,"No source range · " + owner);
     }
     private bool inspectorReplacement;
     internal bool PresentationUiHidden { get; private set; }

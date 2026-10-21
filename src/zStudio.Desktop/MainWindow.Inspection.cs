@@ -11,22 +11,12 @@ public partial class MainWindow
     {
         using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(token, doc.Lifetime.Token);
         long revision = doc.Revision;
-        // Freeze the bounded view on the owning dispatcher; copying complete payloads
-        // just to inspect a summary would reintroduce size-dependent allocations.
-        JsonNode? edited = asset.Kind == AssetKind.Animation ? doc.AnimationEdits?.Package.Entries[asset.Index].ToPreviewJson(cancellation.Token) : null;
-        var modelSnapshot = doc.ContentEdits != null ? doc.PreviewDocument : doc.ResourceEdits?.Current.Document ?? doc.ModelEdits?.Current.World;
         try
         {
             var original = doc.OriginalAsset(asset);
             var source = original == null ? null : await LoadAssetPropertiesAsync(doc.Document, original, cancellation.Token);
             ValidateContext();
-            if (modelSnapshot != null)
-            {
-                var editedAsset = modelSnapshot.Assets.SingleOrDefault(a => a.Kind == asset.Kind && a.Index == asset.Index);
-                if (editedAsset != null) edited = await LoadAssetPropertiesAsync(modelSnapshot, editedAsset, cancellation.Token);
-            }
-            ValidateContext();
-            return Result(new JsonObject { ["document"] = doc.SessionId.ToString(), ["Revision"] = revision, ["source"] = source, ["edited"] = edited });
+            return Result(new JsonObject { ["document"] = doc.SessionId.ToString(), ["Revision"] = revision, ["source"] = source });
         }
         catch (OperationCanceledException) when (!token.IsCancellationRequested && doc.IsDisposed)
         {

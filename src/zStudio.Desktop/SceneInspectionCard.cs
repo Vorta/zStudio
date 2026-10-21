@@ -45,8 +45,6 @@ internal sealed partial class SceneInspectionCard : Grid
     internal Func<bool>? IsIsolated { get; set; }
     /// <summary>Shows only the selected object, or everything again when something is isolated.</summary>
     internal Action<SceneInspectionCard>? ToggleIsolation { get; set; }
-    private readonly Button valves;
-    internal event Action<string>? ValvesRequested;
     private JsonObject details = [];
     private Guid draftId;
     private long placementDraftLifetime;
@@ -61,7 +59,13 @@ internal sealed partial class SceneInspectionCard : Grid
     private readonly TextBlock footerStatus = new() { FontSize = 12, VerticalAlignment = VerticalAlignment.Center };
     private readonly System.Windows.Shapes.Ellipse footerDot = new() { Width = 6, Height = 6, Margin = new(0, 0, 8, 0), VerticalAlignment = VerticalAlignment.Center };
     /// <summary>Whether the draft changes anything: Apply and Revert act only then.</summary>
-    internal bool HasChanges => ObjectEditor != null ? HasObjectDraft : DraftSource != null && (!Coordinates.Select(c => c.Text).SequenceEqual(initialCoordinates) || !Angles.Select(c => c.Text).SequenceEqual(initialAngles));
+    internal bool HasChanges => ObjectEditor != null ? HasObjectDraft : DraftSource != null && (!Coordinates.Select(c => c.Text).SequenceEqual(initialCoordinates) || !Angles.Select(c => c.Text).SequenceEqual(initialAngles)) && StoresChange();
+    /// <summary>Whether the draft would store anything: a change below the stored precision (see PlacementPrecision) is none.</summary>
+    private bool StoresChange()
+    {
+        try { return DraftDocument?.PickupEdits is not { } edits || edits.Stored(DraftSource!, DraftTransform()) != originalTransform; }
+        catch (Exception ex) when (ex is StudioCommandException or InvalidOperationException or System.IO.InvalidDataException or KeyNotFoundException) { return true; }
+    }
     private string[] initialCoordinates = [];
     private bool refreshingRows;
     internal event Action? DraftClosed;
@@ -160,11 +164,8 @@ internal sealed partial class SceneInspectionCard : Grid
         footer.Child = foot; footer.Margin = new(-12, 4, -6, -10);
         footer.SetResourceReference(Border.BorderBrushProperty, "CardStrokeColorDefaultBrush");
         SetRow(footer, 2); layout.Children.Add(footer);
-        valves = new Button { Visibility = Visibility.Collapsed, Content = "Valve Properties…", HorizontalAlignment = HorizontalAlignment.Left, Margin = new(0, 4, 0, 4) };
-        System.Windows.Automation.AutomationProperties.SetName(valves, "Open selected node valves");
-        valves.Click += (_, _) => { if (Selection?.AiNode is { } id && ResolvePending()) ValvesRequested?.Invoke(id); };
         modesFrame.Child = modes; detailsSection.Trailing = modesFrame; detailsSection.Body.Children.Add(rows); detailsSection.Body.Margin = new(10, 0, 10, 8);
-        StackPanel body = new(); body.Children.Add(scope); body.Children.Add(error); body.Children.Add(valves); body.Children.Add(terrainEdit); body.Children.Add(sourceRows); body.Children.Add(detailsSection);
+        StackPanel body = new(); body.Children.Add(scope); body.Children.Add(error); body.Children.Add(terrainEdit); body.Children.Add(sourceRows); body.Children.Add(detailsSection);
         emptyView = new ScrollViewer { Content = emptyBody, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled, Margin = new(0, 6, 0, 0), Visibility = Visibility.Collapsed };
         SetRow(emptyView, 1); layout.Children.Add(emptyView);
         terrainEdit.Click += (_, _) => { if (ResolvePending()) EditTerrain?.Invoke(); };
@@ -331,7 +332,8 @@ internal sealed partial class SceneInspectionCard : Grid
     private Task? applying;
     private void Apply()
     {
-        if (!HasChanges) return;
+        // A placement draft that would store nothing (a change below the stored precision) ends, as Revert would.
+        if (!HasChanges) { if (DraftSource != null && ObjectEditor == null) CancelDraft(); return; }
         if (apply(this) is { IsCompleted: false } running) applying = running;
     }
     internal string Copy(string? field, bool clipboard)
@@ -395,7 +397,6 @@ internal sealed partial class SceneInspectionCard : Grid
         isolate.ToolTip = HasDraft ? "Apply or discard the edit first" : isolate.IsChecked == true ? "Show all objects" : "Isolate: show only this object";
         details = describe(selected);
         if (RefreshSource()) return;
-        valves.Visibility = details.ContainsKey("AI valves") ? Visibility.Visible : Visibility.Collapsed;
         var pickup = PickupNameOf?.Invoke(selected);
         heading.Text = pickup?.Name ?? Display(details["Selected object"] ?? details["Node"]); heading.ToolTip = heading.Text; selectionName.Text = heading.Text;
         subtitle.Text = pickup?.Subtitle ?? Kind(selected); subtitle.ToolTip = pickup?.ToolTip ?? subtitle.Text;

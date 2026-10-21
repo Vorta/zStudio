@@ -10,7 +10,7 @@ namespace zStudio.Tests;
 public sealed class VtolDropWindowsTests
 {
     [Fact]
-    public void WholeWindowMoveUsesExactModelLessRootAndOneVerifiedUndo()
+    public void WholeWindowMovePlansUseTheExactModelLessRoot()
     {
         var token = TestContext.Current.CancellationToken;
         var package = VtolDropFixture.Compile(VtolDropFixture.Files(), token).Package;
@@ -33,15 +33,6 @@ public sealed class VtolDropWindowsTests
         Assert.Equal(2, preview.Windows[0].Start);
         Assert.Equal(snapshot.Windows[0].Duration, preview.Windows[0].Duration);
         Assert.Equal(original, AnimationWriter.Write(package, token));
-        var session = new AnimationEditSession(package);
-        VtolDropWindows.Apply(session, plan, token);
-        Assert.True(session.CanUndo);
-        var changed = AnimationWriter.Write(package, token);
-        long threshold = package.Entries[1].Sequences[1].Events[1].SourceOffset + 8;
-        for (int i = 0; i < original.Length; i++) if (i < threshold || i >= threshold + 4) Assert.Equal(original[i], changed[i]);
-        session.Undo(); Assert.Equal(original, AnimationWriter.Write(package, token)); Assert.False(session.CanUndo);
-        session.Redo(); Assert.Equal(changed, AnimationWriter.Write(package, token));
-        Assert.Throws<InvalidDataException>(() => VtolDropWindows.Apply(session, plan, token));
 
         // The curve revisits the same origin. Segment identity selects its later phase rather than the nearest XYZ.
         var late = VtolDropWindows.PlanMove(snapshot, snapshot.Windows[1].Id, 360, 0);
@@ -49,7 +40,7 @@ public sealed class VtolDropWindowsTests
         using CancellationTokenSource canceled = new(); canceled.Cancel();
         Assert.Throws<OperationCanceledException>(() => VtolDropWindows.Analyze(context, candidate, canceled.Token));
 
-        // Retail m8 has an already-due call behind a relative stop. Keep it inspectable, allow no-op, and
+        // Retail m8 has an already-due call behind a relative stop. Keep it inspectable, plan a no-op, and
         // refuse independently moving the predecessor whose stop determines the neighbor's dispatch.
         var overlapFiles = VtolDropFixture.Files();
         overlapFiles.Content[VtolDropFixture.Root] = System.Text.Encoding.Latin1.GetBytes(VtolDropFixture.Definitions()
@@ -59,9 +50,7 @@ public sealed class VtolDropWindowsTests
         var overlap = VtolDropWindows.Analyze(Context(overlapPackage), overlapCandidate, token);
         Assert.NotNull(overlap.Windows[0].MoveRefusal);
         Assert.True(overlap.Windows[1].EffectiveStart > overlap.Windows[1].Start);
-        var noop = VtolDropWindows.PlanMove(overlap, overlap.Windows[0].Id, overlap.Windows[0].Start);
-        var overlapSession = new AnimationEditSession(overlapPackage); VtolDropWindows.Apply(overlapSession, noop, token);
-        Assert.False(overlapSession.CanUndo);
+        VtolDropWindows.PlanMove(overlap, overlap.Windows[0].Id, overlap.Windows[0].Start);
         Assert.Throws<InvalidDataException>(() => VtolDropWindows.PlanMove(overlap, overlap.Windows[0].Id, .5f));
     }
 

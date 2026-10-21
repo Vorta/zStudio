@@ -24,12 +24,15 @@ public sealed class Mw3MissionSceneTests
     public async Task ExtremeFinitePositionsDoNotPoisonFramingOrTheNextPlacement(float position)
     {
         using var fixture = new Mw3MissionFixture("actor_01", "actor_02"); var token = TestContext.Current.CancellationToken;
+        // The first actor's X as an author could store it.
         var archive = await FormatRegistry.Default.OpenAsync(fixture.ReaderPath, token);
         var root = (zStudio.Core.Formats.ZrdNode)archive.Assets[0].Content!;
-        var edits = new ResourceEditSession(archive); var member = edits.Current.Members[0];
-        var node = edits.Tree(member, token).Children[1].Children[1].Children[0];
-        edits.Accept(await edits.PrepareZrdAsync(member.Id, node.Id, "set", value: position.ToString("R", System.Globalization.CultureInfo.InvariantCulture), token: token));
-        await edits.SaveAsync(token: token); byte[] authored = File.ReadAllBytes(fixture.ReaderPath);
+        var rows = root.Children.ToArray(); var data = rows[1].Children.ToArray(); var xyz = data[1].Children.ToArray();
+        xyz[0] = xyz[0] with { Bits = BitConverter.SingleToUInt32Bits(position) };
+        data[1] = data[1] with { Children = xyz }; rows[1] = rows[1] with { Children = data };
+        byte[] member = zStudio.Core.Formats.ZrdWriter.Write(root with { Children = rows }, token);
+        byte[] authored = ResourceReaderTests.Archive([.. archive.Assets.Select((a, i) => (a.Name, i == 0 ? member : archive.Slice(a.Offset, a.Length).ToArray()))]);
+        File.WriteAllBytes(fixture.ReaderPath, authored);
         var mission = await MissionSceneLoader.LoadAsync(fixture.World, fixture.Resolver, token: token);
         Assert.Equal("actor_02", Assert.Single(mission.Actors).Name);
         Assert.Contains(mission.Diagnostics, n => n.Contains("±1e12"));

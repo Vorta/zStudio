@@ -67,7 +67,7 @@ public partial class MainWindow
         {
             token.ThrowIfCancellationRequested();
             // The mission is captured with the other options; a concurrent selection cannot change it mid-load.
-            var mission = asset.Kind == AssetKind.World ? await MissionSceneLoader.LoadAsync(doc.PreviewDocument, resolver, token: token, difficulty: requested.Difficulty,
+            var mission = asset.Kind == AssetKind.World ? await MissionSceneLoader.LoadAsync(doc.Document, resolver, token: token, difficulty: requested.Difficulty,
                 mission: requested.Mission, exactMission: ExactMissionFor(doc.Path, requested.Mission) != null) : null;
             if (mission != null) await doc.GetPickupEditsAsync(resolver, token);
             token.ThrowIfCancellationRequested();
@@ -76,7 +76,7 @@ public partial class MainWindow
             replacement = new SceneViewport();
             if (mission != null) await PrepareSourceMapSelectionAsync(doc, mission.Scene, mission, token);
             ConfigureSourceMapPresentation(replacement, doc, mission, partOverrides);
-            await replacement.ShowAsync(doc.PreviewDocument, asset, resolver, requested.Pack?.Path, requested.Lod, token, requested.Horizon, mission);
+            await replacement.ShowAsync(doc.Document, asset, resolver, requested.Pack?.Path, requested.Lod, token, requested.Horizon, mission);
             token.ThrowIfCancellationRequested();
             if (!OwnsRequest()) return null;
             await RefreshAssetInspectionAsync(doc, asset, token);

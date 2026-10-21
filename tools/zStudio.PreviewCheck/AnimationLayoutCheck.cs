@@ -16,7 +16,7 @@ using zStudio.Desktop;
 
 internal static class AnimationLayoutCheck
 {
-    public static int Run(string root, bool treeOnly = false, bool propertiesOnly = false, bool toolbarOnly = false)
+    public static int Run(string root, bool treeOnly = false, bool toolbarOnly = false)
     {
         string output = Path.Combine(Path.GetTempPath(), "zstudio-fluent-" + DateTime.Now.ToString("yyyyMMdd-HHmmss")); Directory.CreateDirectory(output);
         string settings = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "zStudio", "settings.json");
@@ -74,7 +74,7 @@ internal static class AnimationLayoutCheck
                 tools.SelectedIndex = 3; await Dispatcher.Yield(DispatcherPriority.ApplicationIdle);
                 Require(((DataGrid)editor.FindName("RuntimeSequences")).Items.Cast<AnimationSequenceStatus>().SequenceEqual(pausedFrame!.Sequences.Where(s => s.Instance == 1)), "Opening Runtime while paused did not display the current root sequences");
                 Require(ReferenceEquals(pausedFrame,editor.CurrentFrame), "Opening Runtime advanced the paused player"); tools.SelectedIndex = 0;
-                var entry = document.AnimationEdits!.Package.Entries[asset.Index];
+                var entry = document.Document.Animations!.Entries[asset.Index];
 
                 var sequence = entry.Sequences.First(s => s.Events.Any(e => e.Type == 10)); var ev = sequence.Events.First(e => e.Type == 10);
                 inspector.SelectedItem = window.FindName("ProgramTab");
@@ -83,59 +83,6 @@ internal static class AnimationLayoutCheck
                 Require(!Descendants((FrameworkElement)window.FindName("NavigatorHost")).Contains(editor.ProgramView),"Program still consumes Navigator space");
                 Descendants(tree).OfType<TreeViewItem>().First(t => t.DataContext is ProgramItem p && p.Event == ev.Id).IsSelected = true;
                 await Dispatcher.Yield(DispatcherPriority.ApplicationIdle);
-                window.OpenAnimationProperties(document, asset.Index, sequence.Id, ev.Id);
-                var popup = window.OpenPropertiesWindow!; popup.Width = 440; popup.Left = -11000;
-                var propertyEditor = popup.AnimationFields!;
-                Require(inspector.SelectedIndex == 0 && popup.IsVisible,"Opening Properties changed the right tab or failed to show the window");
-                if (propertiesOnly)
-                {
-                    popup.Width = 640; popup.Height = 720;
-                    editor.SelectSource(Guid.Empty); window.UpdateLayout();
-                    var targetRow = Descendants(tree).OfType<TreeViewItem>().First(t => t.DataContext is ProgramItem p && p.Event == ev.Id);
-                    targetRow.RaiseEvent(new MouseButtonEventArgs(Mouse.PrimaryDevice, Environment.TickCount, MouseButton.Right) { RoutedEvent = Mouse.PreviewMouseDownEvent });
-                    tree.ContextMenu.PlacementTarget = tree; tree.ContextMenu.IsOpen = true;
-                    await Dispatcher.Yield(DispatcherPriority.ApplicationIdle);
-                    tree.ContextMenu.Items.OfType<MenuItem>().Single(m => Equals(m.Header, "Properties…")).RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
-                    tree.ContextMenu.IsOpen = false;
-                    Require(popup.AnimationFields!.Json.ToJsonString() == ev.ToJson().ToJsonString(), "Right-click Properties targeted the previously selected record");
-                    await Capture("context-procedural");
-                    var pickupAsset = document.Assets.First(a => a.Name == "pu000");
-                    var pickupEntry = document.AnimationEdits!.Package.Entries[pickupAsset.Index];
-                    var pickupSequence = pickupEntry.Sequences.First(s => s.Name == "pickup");
-                    var pickupMotion = pickupSequence.Events.First(e => e.Type == 10);
-                    byte[] pickupBefore = pickupMotion.Bytes.ToArray();
-                    window.OpenAnimationProperties(document, pickupAsset.Index, pickupSequence.Id, pickupMotion.Id);
-                    await Dispatcher.Yield(DispatcherPriority.ApplicationIdle);
-                    var velocityZ = Descendants(popup.AnimationFields!).OfType<TextBox>().Single(t => AutomationProperties.GetName(t) == "Initial velocity Z");
-                    Require(velocityZ.Text == "0.0000003874302", "Pickup velocity Z did not use precise plain decimal notation: " + velocityZ.Text);
-                    Require(!popup.AnimationFields!.HasPendingDrafts && !document.IsDirty && pickupBefore.SequenceEqual(pickupMotion.Bytes), "Opening decimal properties altered the record or created a draft");
-                    await Capture("pickup-decimal-properties");
-                    Require(sourceHash.SequenceEqual(SHA256.HashData(File.ReadAllBytes(document.Path))), "Decimal property display changed the source archive");
-                    Console.WriteLine("PASS: pu000 / pickup / Procedural motion velocity Z displays 0.0000003874302; no pending draft, dirty document or changed source bytes.");
-                    var pinned = popup.AnimationFields;
-                    editor.SelectSource(entry.Primary.Id);
-                    Require(ReferenceEquals(pinned, popup.AnimationFields), "Ordinary selection retargeted Properties");
-                    var textures = await window.ViewModel.OpenFileAsync(Path.Combine(Path.GetFullPath(root), "image.zbd")) ?? throw new InvalidDataException("No textures");
-                    var assetRowsGrid = (DataGrid)window.FindName("AssetGrid");
-                    ((TabControl)window.FindName("NavigationTabs")).SelectedItem = window.FindName("AssetsTab");
-                    var other = textures.Assets.First(a => a != textures.SelectedAsset);
-                    assetRowsGrid.ScrollIntoView(other); await Dispatcher.Yield(DispatcherPriority.ApplicationIdle); window.UpdateLayout();
-                    Require(ReferenceEquals(pinned, popup.AnimationFields) && popup.Document == document, "Switching files changed pinned animation properties");
-                    var selected = assetRowsGrid.SelectedItems.Cast<object>().ToArray();
-                    var row = (DataGridRow)assetRowsGrid.ItemContainerGenerator.ContainerFromItem(other);
-                    row.RaiseEvent(new MouseButtonEventArgs(Mouse.PrimaryDevice, Environment.TickCount, MouseButton.Right) { RoutedEvent = Mouse.PreviewMouseDownEvent });
-                    assetRowsGrid.ContextMenu.PlacementTarget = assetRowsGrid; assetRowsGrid.ContextMenu.IsOpen = true;
-                    await Dispatcher.Yield(DispatcherPriority.ApplicationIdle);
-                    ((MenuItem)window.FindName("AssetPropertiesMenu")).RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent)); assetRowsGrid.ContextMenu.IsOpen = false;
-                    while (popup.Document != textures) await Task.Delay(30, timeout.Token);
-                    Require(popup.Title.Contains("#" + other.Index) && selected.SequenceEqual(assetRowsGrid.SelectedItems.Cast<object>()), "Asset context Properties changed the export set or targeted the selected row");
-                    await Capture("context-texture");
-                    Require(((FrameworkElement)window.FindName("InspectorHost")).Visibility == Visibility.Collapsed,"Texture viewer kept an empty right pane");
-                    await window.ViewModel.CloseAsync(textures);
-                    Require(window.OpenPropertiesWindow == null,"Closing the inspected document left a stale window");
-                    Console.WriteLine("PASS: unselected animation and asset context rows open their exact Properties; export selection retained; pinned target survives source/file switches; static right pane reclaimed; document close disposes the popup.");
-                    Console.WriteLine("Screenshots: " + output); return;
-                }
                 var bytesBefore = editor.SourceByteSelection();
                 Require(bytesBefore.Offset == ev.SourceOffset && bytesBefore.Bytes.Span.SequenceEqual(document.Document.Bytes.Span.Slice((int)ev.SourceOffset,ev.Bytes.Length)),"Bytes did not select original event range");
                 var frame = editor.CurrentFrame; var view = editor.Viewport.CaptureView();
@@ -143,23 +90,6 @@ internal static class AnimationLayoutCheck
                 editor.SelectSource(sequence.Id,ev.Id);
                 Require(ReferenceEquals(frame,editor.CurrentFrame), "Source selection restarted preview");
                 window.UpdateLayout();
-                var texts = Descendants(propertyEditor).OfType<TextBox>().Where(t => !t.IsReadOnly).ToArray();
-
-                var threshold = texts.First(t => AutomationProperties.GetName(t) == "Threshold (s)");
-                string originalThreshold = threshold.Text; threshold.Text = "not a number";
-                threshold.RaiseEvent(new KeyEventArgs(Keyboard.PrimaryDevice,PresentationSource.FromVisual(window),Environment.TickCount,Key.Enter) { RoutedEvent = Keyboard.PreviewKeyDownEvent });
-                Require(propertyEditor.HasPendingDrafts && !document.IsDirty, "Invalid draft mutated the record or disappeared");
-                bool resolvedDraft = false;
-                var draftDialogTimer = new DispatcherTimer(DispatcherPriority.Normal) { Interval = TimeSpan.FromMilliseconds(20) };
-                draftDialogTimer.Tick += (_,_) =>
-                {
-                    var dialog = app.Windows.Cast<Window>().FirstOrDefault(w => w.Title == "Resolve property input");
-                    if (dialog == null) return;
-                    ((StackPanel)dialog.Content).Children.OfType<WrapPanel>().Single().Children.OfType<Button>().Single(b => Equals(b.Content,"Keep editing")).RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
-                    resolvedDraft = true; draftDialogTimer.Stop();
-                };
-                draftDialogTimer.Start(); try { window.OpenAnimationProperties(document, asset.Index, entry.Primary.Id, Guid.Empty); } finally { draftDialogTimer.Stop(); }
-                Require(resolvedDraft && editor.SelectedSourceOffset == ev.SourceOffset && threshold.Text == "not a number","Invalid draft navigation lost source or draft");
                 var navigation = (TabControl)window.FindName("NavigationTabs");
                 navigation.SelectedIndex = 2; inspector.SelectedIndex = 2; tools.SelectedIndex = 5;
                 var resetViewMenu = ((Menu)window.FindName("AppMenu")).Items.OfType<MenuItem>().Single(m => Equals(m.Header, "_View"));
@@ -172,35 +102,11 @@ internal static class AnimationLayoutCheck
                 var restoredTabs = StudioSettings.Load().GetWorkspace();
                 Require(restoredTabs.BrowserTab == 0 && restoredTabs.InspectorTab == 0 && restoredTabs.ToolTab == 0, "Reset tabs were not persisted");
                 Require(ReferenceEquals(frame,editor.CurrentFrame) && Equals(view,editor.Viewport.CaptureView()), "Reset layout changed player or camera");
-                Require(propertyEditor.HasPendingDrafts && threshold.Text == "not a number","Reset layout lost the draft");
                 var layout = window.ViewModel.Settings.GetWorkspace();
                 layout.InspectorVisible = false; window.Width = 1599; await Task.Delay(80,timeout.Token);
                 layout.InspectorVisible = true; window.Width = 1600; await Task.Delay(80,timeout.Token);
-                Require(threshold.Text == "not a number" && propertyEditor.HasPendingDrafts, "Hiding right Properties lost draft");
-                popup.Height = 600; popup.Width = 450; popup.UpdateLayout();
-                Require(propertyEditor.HasPendingDrafts && threshold.Text == "not a number","Resizing Properties lost the draft");
-                threshold.RaiseEvent(new KeyEventArgs(Keyboard.PrimaryDevice,PresentationSource.FromVisual(window),Environment.TickCount,Key.Escape) { RoutedEvent = Keyboard.PreviewKeyDownEvent });
-                Require(threshold.Text == originalThreshold && !propertyEditor.HasPendingDrafts,"Escape failed to discard only draft");
-                var x = Descendants(propertyEditor).OfType<TextBox>().First(t => AutomationProperties.GetName(t) == "Initial velocity X");
-                string before = x.Text; x.Text = "123.25";
-                x.RaiseEvent(new KeyEventArgs(Keyboard.PrimaryDevice,PresentationSource.FromVisual(window),Environment.TickCount,Key.Enter) { RoutedEvent = Keyboard.PreviewKeyDownEvent });
-                await Task.Delay(100,timeout.Token);
-                Require(document.IsDirty && entry != document.AnimationEdits.Package.Entries[asset.Index], "Compound edit did not use snapshot session");
-                Require(Descendants(propertyEditor).Contains(x), "Ordinary edit rebuilt the form");
-                Require(editor.SourceByteSelection().Bytes.Span.SequenceEqual(bytesBefore.Bytes.Span),"Editing changed original-source byte view");
-                document.AnimationEdits.Undo(); await Task.Delay(120,timeout.Token);
-                Require(!document.IsDirty && x.Text == before, "Undo failed to refresh stable form");
                 await Capture("procedural-motion");
                 inspector.SelectedItem = window.FindName("ReferencesTab"); window.UpdateLayout();
-                var referenceList = Descendants(editor.ReferencesView).OfType<ListBox>().Single(); referenceList.SelectedIndex = 1;
-                await Dispatcher.Yield(DispatcherPriority.ApplicationIdle);
-                var referenceName = Descendants(editor.ReferencesView).OfType<TextBox>().First(t => !t.IsReadOnly);
-                string originalReference = referenceName.Text; referenceName.Text = "workspace_test";
-                referenceName.RaiseEvent(new KeyEventArgs(Keyboard.PrimaryDevice,PresentationSource.FromVisual(window),Environment.TickCount,Key.Enter) { RoutedEvent = Keyboard.PreviewKeyDownEvent });
-                await Task.Delay(100,timeout.Token);
-                Require(document.AnimationEdits.Package.Entries[asset.Index].References[1][1].Text(0,32) == "workspace_test","Reference did not retarget its existing slot");
-                document.AnimationEdits.Undo(); await Task.Delay(100,timeout.Token);
-                Require(referenceName.Text == originalReference && !document.IsDirty,"Reference Undo left stale text or dirty bytes");
                 inspector.SelectedIndex = 0;
                 CheckChrome(window);
                 window.WindowState = WindowState.Maximized; await Task.Delay(120,timeout.Token);
@@ -258,7 +164,7 @@ internal static class AnimationLayoutCheck
                 var assets = (DataGrid)window.FindName("AssetGrid");
                 var space = new KeyEventArgs(Keyboard.PrimaryDevice,PresentationSource.FromVisual(window),Environment.TickCount,Key.Space) { RoutedEvent = Keyboard.PreviewKeyDownEvent }; assets.RaiseEvent(space);
                 for (int attempt = 0; space.Handled && !editor.IsPlaying && attempt < 100; attempt++) await Task.Delay(20,timeout.Token);
-                Require(space.Handled && editor.IsPlaying,$"Space from Assets failed: handled={space.Handled}, loading={((Border)editor.FindName("LoadingPanel")).Visibility}, enabled={((Button)editor.FindName("PlayButton")).IsEnabled}, pendingDrafts={propertyEditor.HasPendingDrafts}, modifiers={Keyboard.Modifiers}"); editor.Pause();
+                Require(space.Handled && editor.IsPlaying,$"Space from Assets failed: handled={space.Handled}, loading={((Border)editor.FindName("LoadingPanel")).Visibility}, enabled={((Button)editor.FindName("PlayButton")).IsEnabled}, modifiers={Keyboard.Modifiers}"); editor.Pause();
                 foreach (string name in new[] { "Seed","PreviewHeight","Condition","ShowHorizon","SeekSlider" })
                 {
                     var native = new KeyEventArgs(Keyboard.PrimaryDevice,PresentationSource.FromVisual(window),Environment.TickCount,Key.Space) { RoutedEvent = Keyboard.PreviewKeyDownEvent };
@@ -270,35 +176,11 @@ internal static class AnimationLayoutCheck
                     layout.Preset = preset; window.Width -= 1; window.UpdateLayout(); window.Width += 1; await Task.Delay(80,timeout.Token);
                     Require(ReferenceEquals(preserved,editor.CurrentFrame) && Equals(camera,editor.Viewport.CaptureView()),"Preset reset player or camera");
                 }
-                // Resize the actual quaternion form with an incomplete draft. The existing
-                // controls must reflow, preserving precision/caret and one logical undo.
-                var keyEntry = document.AnimationEdits.Package.Entries.First(e => e.Sequences.Any(s => s.Events.Any(v => v.Type == 12)));
-                asset = document.Assets.First(a => a.Index == keyEntry.Index); document.SelectedAsset = asset; editor = await Ready(asset.Index);
-                var keySequence = keyEntry.Sequences.First(s => s.Events.Any(v => v.Type == 12)); var keyEvent = keySequence.Events.First(v => v.Type == 12);
-                editor.SelectSource(keySequence.Id,keyEvent.Id);
-                window.OpenAnimationProperties(document, asset.Index, keySequence.Id, keyEvent.Id); propertyEditor = popup.AnimationFields!;
-                popup.Width = 440; popup.UpdateLayout(); await Dispatcher.Yield(DispatcherPriority.ApplicationIdle);
-                var quaternion = Descendants(propertyEditor).OfType<TextBox>().Where(t => AutomationProperties.GetName(t).StartsWith("Rotation base W, X, Y, Z ",StringComparison.Ordinal)).ToArray();
-                Require(quaternion.Length == 4,"Quaternion components missing");
-                byte[] keyBytes = keyEvent.Bytes.ToArray(); string originalW = quaternion[0].Text;
-                var qGrid = (Grid)((FrameworkElement)quaternion[0].Parent).Parent;
-                Require(qGrid.ColumnDefinitions.Count == 2,"Normal-width quaternion is not readable in two columns");
-                quaternion[0].Text = "-"; quaternion[0].CaretIndex = 1;
-                popup.Width = 760; window.Width = 1599; await Task.Delay(80,timeout.Token); window.Width = 1600; await Task.Delay(80,timeout.Token);
-                Require(qGrid.ColumnDefinitions.Count == 4 && quaternion[0].Text == "-" && quaternion[0].CaretIndex == 1 && propertyEditor.HasPendingDrafts && !document.IsDirty,"Widening quaternion form lost draft, caret or atomic state");
-                popup.Width = 440; window.Width = 1599; await Task.Delay(80,timeout.Token); window.Width = 1600; await Task.Delay(80,timeout.Token);
-                Require(qGrid.ColumnDefinitions.Count == 2 && Descendants(propertyEditor).Contains(quaternion[0]),"Quaternion resize replaced input controls");
-                SendTestKey(quaternion[0],System.Windows.Input.Key.Escape); Require(quaternion[0].Text == originalW && !propertyEditor.HasPendingDrafts,"Quaternion Escape did not restore original precision");
-                quaternion[0].Text = "-1.2345678E-02"; quaternion[1].Text = "2.3456789E-03"; SendTestKey(quaternion[0],System.Windows.Input.Key.Enter); await Stable(editor);
-                Require(document.IsDirty,"Quaternion atomic edit did not commit");
-                document.AnimationEdits.Undo(); await Stable(editor);
-                Require(!document.IsDirty && document.AnimationEdits.Package.Entries[keyEntry.Index].Sequences.First(s => s.Id == keySequence.Id).Events.First(v => v.Id == keyEvent.Id).Bytes.SequenceEqual(keyBytes),"One Undo did not restore the entire quaternion and exact source record");
-                Console.WriteLine("PASS: WXYZ 2x2/4-column reflow retains incomplete draft/caret/controls; signed exponential values commit atomically and one Undo restores exact bytes.");
                 asset = document.Assets.First(a => a.Name == "destroy_vtol1"); document.SelectedAsset = asset; editor = await Ready(asset.Index);
                 ((CheckBox)editor.FindName("Mute")).IsChecked = true;
                 inspector.SelectedItem = window.FindName("ProgramTab"); tools.SelectedIndex = 0;
                 tree = (TreeView)editor.FindName("ProgramTree");
-                var authored = document.AnimationEdits.Package.Entries[asset.Index];
+                var authored = document.Document.Animations!.Entries[asset.Index];
                 var rootItem = (ProgramItem)tree.Items[0];
                 foreach (var s in rootItem.Children) s.IsExpanded = true;
                 var rows = rootItem.Children.SelectMany(s => s.Children).ToArray();
@@ -327,16 +209,15 @@ internal static class AnimationLayoutCheck
                         asset = document.Assets.First(a => a.Name == animationName); document.SelectedAsset = asset; editor = await Ready(asset.Index);
                         ((CheckBox)editor.FindName("Mute")).IsChecked = true;
                         Require(inspector.SelectedItem == tab,$"Switching to {animationName} left {tab.Header}");
-                        var selectedEntry = document.AnimationEdits.Package.Entries[asset.Index];
+                        var selectedEntry = document.Document.Animations!.Entries[asset.Index];
                         var selectedSequence = selectedEntry.Sequences.First(s => s.Events.Count > 0); var selectedEvent = selectedSequence.Events[0];
                         editor.SelectSource(selectedSequence.Id,selectedEvent.Id);
-                        Require(inspector.SelectedItem == tab && popup.AnimationFields == propertyEditor && popup.IsVisible && editor.SourceByteSelection().Offset == selectedEvent.SourceOffset,"Source selection switched the right tab or left stale Properties");
+                        Require(inspector.SelectedItem == tab && editor.SourceByteSelection().Offset == selectedEvent.SourceOffset,"Source selection switched the right tab");
                     }
                 }
-                inspector.SelectedItem = window.FindName("ProgramTab"); await Capture("sequences-and-floating-properties");
-                Console.WriteLine("PASS: Sequences default; all three right tabs survive animation changes and source selection; floating Properties retains its explicitly opened record.");
-                void SendTestKey(UIElement control,Key key) => control.RaiseEvent(new KeyEventArgs(Keyboard.PrimaryDevice,PresentationSource.FromVisual(window),Environment.TickCount,key) { RoutedEvent = Keyboard.PreviewKeyDownEvent });
-                layout.NavigatorWidth = 310; layout.InspectorWidth = 380; layout.ToolsHeight = 200; window.ViewModel.Settings.Save();
+                inspector.SelectedItem = window.FindName("ProgramTab"); await Capture("sequences");
+                Console.WriteLine("PASS: Sequences default; all three right tabs survive animation changes and source selection.");
+                                layout.NavigatorWidth = 310; layout.InspectorWidth = 380; layout.ToolsHeight = 200; window.ViewModel.Settings.Save();
                 var restored = StudioSettings.Load().GetWorkspace(); Require(restored.NavigatorWidth == 310 && restored.InspectorWidth == 380 && restored.ToolsHeight == 200,"Layout preferences did not persist");
                 Require(sourceHash.SequenceEqual(SHA256.HashData(File.ReadAllBytes(document.Path))),"Source data changed");
                 Console.WriteLine("PASS: Fluent workbench hierarchy, contextual selection, cleanup isolation, invalid draft/escape/hide, compound edit and stable form undo, structured tools, light/dark/narrow layouts, four grid/collision states, Height template, Space, presets, persistence and untouched source.");
@@ -374,7 +255,7 @@ internal static class AnimationLayoutCheck
                 }
             }
             catch (Exception ex) { Console.Error.WriteLine(ex); exit = 1; }
-            finally { foreach (var doc in window.ViewModel.Documents) doc.AnimationEdits?.MarkSaved(); window.Close(); app.Shutdown(exit); }
+            finally { window.Close(); app.Shutdown(exit); }
         };
         try { app.Run(); } finally { if (original != null) File.WriteAllBytes(settings,original); else if (File.Exists(settings)) File.Delete(settings); }
         return exit;

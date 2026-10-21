@@ -387,7 +387,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
             RequireCurrentNavigation(generation); ValidateNavigationPublication?.Invoke(false); beforePublish?.Invoke(); RequireCurrentNavigation(generation);
             existing = Documents.FirstOrDefault(d => d.Path.Equals(path, StringComparison.OrdinalIgnoreCase));
             if (existing != null) { if (activate) SelectedDocument = existing; return existing; }
-            DocumentModel model = new(prepared); model.AttachResolver(Resolver); Documents.Add(model); if (activate) SelectedDocument = model;
+            DocumentModel model = new(prepared); Documents.Add(model); if (activate) SelectedDocument = model;
             foreach (var diagnostic in doc.Diagnostics) AddProblem(diagnostic.Message, diagnostic.Severity, path, diagnostic.AssetIndex, diagnostic.Offset);
             if (reportStatus) Status = model.Description; return model;
         }
@@ -437,7 +437,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         {
             // While a save replaces the project's files they differ from what the workspace last read; the save's end is the next state.
             if (doc.SourceWorld != null) { if (!doc.SourceWorld.Workspace.IsSaving && !doc.SourceWorld.IsRebuilding) pending.Add(CheckSourceWorldAsync(doc)); continue; }
-            try { doc.IsStale = (doc.ContentEdits is { } content ? content.HasExternalChanges() : doc.ResourceEdits is { } resources ? FileStamp.Read(resources.TargetPath) != resources.TargetStamp : doc.ModelEdits?.HasExternalChanges() ?? FileStamp.Read(doc.Path) != doc.Document.Stamp) || doc.PickupEdits?.HasExternalChanges() == true; }
+            try { doc.IsStale = FileStamp.Read(doc.Path) != doc.Document.Stamp; }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException) { doc.IsStale = true; }
         }
         return Task.WhenAll(pending);
@@ -466,7 +466,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     /// <summary>Publishes a document built elsewhere (a source world), as opening a file would.</summary>
     internal void AddDocument(DocumentModel model, bool activate)
     {
-        model.AttachResolver(Resolver); Documents.Add(model); if (activate) SelectedDocument = model;
+        Documents.Add(model); if (activate) SelectedDocument = model;
         Status = model.Description;
     }
     /// <summary>Replaces <paramref name="original"/> in place with a rebuilt document; the original is disposed.</summary>
@@ -476,7 +476,6 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         if (index < 0) throw new StudioCommandException("context_changed", "The document was closed.");
         AdvanceNavigation();
         replacement.Query = original.Query; replacement.KindFilter = original.KindFilter;
-        replacement.AttachResolver(Resolver);
         var asset = original.SelectedAsset?.Record;
         replacement.SelectedAsset = asset == null ? null : replacement.Assets.FirstOrDefault(a => a.Record.Kind == asset.Kind && a.Record.Index == asset.Index) ?? replacement.Assets.FirstOrDefault(a => a.Record.Kind == asset.Kind);
         bool selected = SelectedDocument == original;

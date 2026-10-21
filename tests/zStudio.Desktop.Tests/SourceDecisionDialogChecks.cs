@@ -48,7 +48,7 @@ internal static class SourceDecisionDialogChecks
             foreach (var available in new[] { new Size(1280, 720), new Size(1920, 1080), new Size(320, 360) })
             {
                 string? chosen = null;
-                var unsaved = owner.CreateUnsavedDialog(document, true, "Save", value => chosen = value, available);
+                var unsaved = owner.CreateUnsavedDialog(document, value => chosen = value, available);
                 await Check(unsaved, available, () =>
                 {
                     var expander = Descendants(unsaved).OfType<Expander>().Single(); expander.IsExpanded = true; expander.UpdateLayout();
@@ -87,7 +87,7 @@ internal static class SourceDecisionDialogChecks
             workspace.Undo();
             workspace.Apply("Short source edit", [("data/note.zrd", new byte[] { (byte)'(', (byte)')' })], token);
             string? shortChoice = null;
-            var shortUnsaved = owner.CreateUnsavedDialog(document, true, "Save", choice => shortChoice = choice, new(1280, 720));
+            var shortUnsaved = owner.CreateUnsavedDialog(document, choice => shortChoice = choice, new(1280, 720));
             await Check(shortUnsaved, new(1280, 720));
             Assert.False(Assert.Single(((Grid)shortUnsaved.Content).Children.OfType<ScrollViewer>()).ScrollableHeight > 0);
             ButtonOf(shortUnsaved, "Cancel").RaiseEvent(new RoutedEventArgs(Button.ClickEvent)); Assert.Equal("Cancel", shortChoice); Assert.True(workspace.IsDirty);

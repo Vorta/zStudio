@@ -35,7 +35,7 @@ public sealed class SourcePickupTests
             if (expected == 1)
             {
                 var pickup = snapshot.MissionScene(layout, token).Actors.Single(a => a.Pickup?.LogicalName == "PUP_AMPHIB").Pickup!;
-                Assert.Equal(1, pickup.AuthoredAmount); Assert.Equal(MathF.PI / 2, pickup.Rotation.Y);
+                Assert.Equal(1, pickup.AuthoredAmount); Assert.Equal(1.5708f, pickup.Rotation.Y); // 90 degrees, stored with four decimals
             }
         }
         Assert.Single(workspace.History);

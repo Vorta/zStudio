@@ -1,16 +1,16 @@
 # Contributing to zStudio
 
-Bug reports, feature requests and pull requests are welcome. Use the issue forms to report bugs, propose features or request support for another game.
+Bug reports, feature requests and pull requests are welcome.
 
 ## Reports and proposals
 
-Use the [issue forms](https://github.com/Vorta/zStudio/issues/new/choose). For bugs, include the zStudio version from Help > About, Windows version, game/data version, archive path, asset name **and record index**, reproduction steps, and expected/actual behavior. Include relevant Diagnostics or animation Status/Event trace text, removing personal information. Do not attach game archives, extracted assets or decompilation databases. Synthetic reproductions and descriptions of format structure are preferred.
+Use the [issue forms](https://github.com/Vorta/zStudio/issues/new/choose). For a bug include the zStudio version from Help → About, the Windows version, the game and data version, the project-relative file path, the object or record name **and index**, steps to reproduce, and expected and actual behaviour. Add relevant Diagnostics, Problems or Event log text with personal information removed. Never attach game archives, extracted assets or decompilation databases; synthetic reproductions and descriptions of format structure are preferred.
 
-For a feature or another game's compatibility, explain the intended workflow and available evidence. Discuss substantial format or architecture changes in an issue before implementation. Current compatibility is Recoil; other Zipper Interactive titles are planned, not presumed compatible.
+For a feature or another game's compatibility, describe the intended workflow and the available evidence. Discuss substantial format or architecture changes in an issue first. zStudio supports RECOIL; other Zipper Interactive titles are not presumed compatible.
 
 ## Build and test
 
-Use Windows 11 x64 and the .NET SDK specified in `global.json`. Visual Studio 2026 with the .NET desktop workload is optional.
+Use Windows 11 x64 and the .NET SDK pinned in `global.json` (Visual Studio 2026 with the .NET desktop workload is optional).
 
 ```powershell
 dotnet restore zStudio.slnx --locked-mode
@@ -18,20 +18,23 @@ dotnet build zStudio.slnx -c Release --no-restore
 dotnet test --solution zStudio.slnx -c Release --no-build
 ```
 
-These checks use synthetic fixtures and require no game data, Python, Binary Ninja or external reconstruction project. Optional corpus, graphics and audio checks are described in [docs/testing.md](docs/testing.md); run UI checks sequentially and keep their outputs outside the source tree. Mark checks you cannot run honestly in your PR.
+These use synthetic fixtures and need no game data, Python, Blender or external reconstruction project. Corpus, graphics, audio and Blender checks are in [docs/agents/testing.md](https://github.com/Vorta/zStudio/blob/main/docs/agents/testing.md); run UI checks one at a time and keep their outputs outside the source tree. After changing MCP commands regenerate the discovery catalog and rebuild:
 
-## Code and pull requests
+```powershell
+dotnet run --project tools/zStudio.PreviewCheck -c Release --no-build -- --mcp-catalog src/zStudio.Mcp/CommandCatalog.json
+```
 
-1. Fork the repository when public, or use a feature branch if you have access. Start from current `main`.
-2. Keep the change focused and follow `.editorconfig` and [AGENTS.md](AGENTS.md) (Claude Code reads the same file through `CLAUDE.md`). Use C# 14, nullable types, bounded little-endian reads and actionable diagnostics. Keep format models independent of UI/rendering.
-3. Preserve source bytes, unknown fields, record identities and order. Do not infer identity from names. Add meaningful regression/malformed-input tests for behavior changes. Successful parsing alone does not establish game compatibility.
-4. Run the relevant checks, document visible behavior and limitations, and update the Unreleased section of the changelog.
-5. Open a PR describing the concrete problem, resulting behavior, related issue and verification. Maintainer review and successful CI precede a squash merge. Resolve review conversations and update the branch when `main` changes.
+## Pull requests
 
-Never commit game data, build output, credentials, local settings, corpus reports or external reconstruction/decompilation sources. Keep dependency lockfiles in sync with intentional package changes. The optional Python export checker must stay independent of the archived CLI.
+1. Fork the repository (or use a branch if you have access), starting from current `main`.
+2. Keep the change focused and follow `.editorconfig` and [AGENTS.md](https://github.com/Vorta/zStudio/blob/main/AGENTS.md): C# 14, nullable types, bounded little-endian reads, actionable diagnostics, format models independent of UI and rendering.
+3. Preserve source bytes, unknown fields, record identities and order; never infer identity from names. Add only must-have tests ([test policy](https://github.com/Vorta/zStudio/blob/main/docs/agents/testing.md#minimal-must-have-tests)). A successful parse does not establish game compatibility.
+4. Every user-facing feature also works over MCP through the shared command and editing services, with the same validation, identities, undo and save protections. Update the typed tool schemas, [the capability inventory](https://github.com/Vorta/zStudio/blob/main/docs/mcp-capabilities.json), [the MCP guide](docs/mcp.md) and a protocol check that exercises the new path. CI checks XAML action handlers against the inventory; reviews also cover bound and dynamically created controls. MCP returns explicit draft and conflict errors instead of opening a dialog or discarding input.
+5. Document visible behaviour and limits in the relevant guide and add an entry under the Unreleased section of `CHANGELOG.md`.
+6. Open a PR describing the problem, the resulting behaviour, the related issue and how you verified it. Maintainer review and passing CI precede a squash merge; resolve review conversations and update the branch when `main` changes.
 
-Every new user-facing feature must also work over MCP. Use shared command/editing services and the same validation, identities, undo and save protections as the GUI. Update typed tool schemas, [the capability inventory](docs/mcp-capabilities.json), [MCP documentation](docs/mcp.md), and protocol tests. CI checks XAML action-handler coverage against the independent inventory; review must additionally cover bound and dynamically constructed controls. A label in the inventory alone is not evidence of working parity. Property fields/actions created through FieldEditor are exposed automatically. MCP must return explicit draft/conflict errors rather than opening a modal dialog or discarding input.
+Never commit game data, build output, credentials, local settings, corpus reports or external reconstruction/decompilation sources. Keep lock files in sync with intentional package changes.
 
-Treat contributors respectfully, discuss the work rather than the person, and avoid harassment or disclosure of private information. Vorta maintains the repository and may moderate discussions to keep them constructive.
+Treat contributors respectfully, discuss the work rather than the person, and keep private information private. Vorta maintains the repository and may moderate discussions.
 
-Contributions are provided under the project's existing [MIT license](LICENSE). Include attribution and compatible notices for third-party code. See [SECURITY.md](SECURITY.md) for vulnerability reports and [docs/releasing.md](docs/releasing.md) for release procedures.
+Contributions are made under the project's [MIT license](LICENSE); include attribution and compatible notices for third-party code. Vulnerabilities: [SECURITY.md](SECURITY.md). Releases: [docs/agents/releasing.md](https://github.com/Vorta/zStudio/blob/main/docs/agents/releasing.md).

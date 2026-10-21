@@ -23,25 +23,18 @@ public sealed class PropertiesWindow : Window
     private readonly Button redo = HistoryButton("Redo", "\uE7A6", "Ctrl+Y");
     private readonly TextBlock notice = new() { TextWrapping = TextWrapping.Wrap, Margin = new(12, 0, 12, 8), Opacity = .7 };
     private JsonObject? snapshot;
-    private AssetId? readOnlyAsset;
-    private long assetRefreshGeneration;
-    internal Task AssetRefreshWork { get; private set; } = Task.CompletedTask;
     private string label = "";
     private bool closingResolved, resolvingClose, hasBeenShown;
     public DocumentModel? Document { get; private set; }
-    public AnimationPropertiesEditor? AnimationFields { get; private set; }
     public PickupPropertiesEditor? PickupFields { get; private set; }
-    public ResourcePropertiesEditor? ResourceFields { get; private set; }
-    public ScriptPropertiesEditor? ScriptFields { get; private set; }
     internal SourcePropertiesEditor? SourceFields { get; private set; }
     public bool HasPendingDrafts => Editors.Any(e => e.HasPendingDrafts);
     /// <summary>Pending input other than drafts being committed (an edit a draft's commit runs may proceed).</summary>
     public bool HasUncommittedDrafts => Editors.Any(e => e.HasUncommittedDrafts);
-    private IEnumerable<FieldEditor> Editors => new FieldEditor?[] { AnimationFields, PickupFields, ResourceFields, ScriptFields, SourceFields }.OfType<FieldEditor>();
-    public Func<DocumentModel, bool, Task<bool>>? SaveRequested { get; set; }
+    private IEnumerable<FieldEditor> Editors => new FieldEditor?[] { PickupFields, SourceFields }.OfType<FieldEditor>();
+    public Func<DocumentModel, Task<bool>>? SaveRequested { get; set; }
     public Action<DocumentModel, bool>? UndoRequested { get; set; }
-    public Action<DocumentModel>? Editing { get; set; }
-    public JsonObject? CurrentJson => ScriptFields?.Json ?? ResourceFields?.Json ?? AnimationFields?.Json ?? PickupFields?.Json ?? SourceFields?.Json ?? snapshot;
+    public JsonObject? CurrentJson => PickupFields?.Json ?? SourceFields?.Json ?? snapshot;
 
     public PropertiesWindow(Window owner, MainViewModel preferences)
     {
@@ -96,14 +89,6 @@ public sealed class PropertiesWindow : Window
         FontSize = 13;
         Resources["WorkspaceControlPadding"] = new Thickness(8, 4, 8, 4);
     }
-    public bool SetAnimation(DocumentModel document, int entry, Guid sequence, Guid ev)
-    {
-        if (!BeginTarget(document)) return false;
-        AnimationFields = new(document, entry, sequence, ev, preferences);
-        AnimationFields.Changed += Refresh;
-        AnimationFields.Editing += () => Editing?.Invoke(document);
-        body.Content = AnimationFields; Refresh(); return true;
-    }
     public bool SetReadOnly(DocumentModel document, string title, JsonObject json)
     {
         if (!BeginTarget(document)) return false;
@@ -112,8 +97,7 @@ public sealed class PropertiesWindow : Window
     }
     internal bool SetAsset(DocumentModel document, AssetRecord asset, JsonObject json)
     {
-        if (!SetReadOnly(document, $"{asset.Name} · {asset.Kind} #{asset.Index}", json)) return false;
-        readOnlyAsset = asset.Id; return true;
+        return SetReadOnly(document, $"{asset.Name} · {asset.Kind} #{asset.Index}", json);
     }
     internal void MarkAiSnapshotStale()
     {
@@ -123,27 +107,11 @@ public sealed class PropertiesWindow : Window
         if (body.Content is ReadOnlyPropertySheet sheet) sheet.Show(snapshot, false);
         Refresh();
     }
-    private void ModelAssetsChanged() => AssetRefreshWork = RefreshAssetAsync();
-    private async Task RefreshAssetAsync()
-    {
-        if (Document is not { } doc || readOnlyAsset is not { } id) return;
-        long generation = ++assetRefreshGeneration, revision = doc.Revision;
-        var token = doc.Lifetime.Token;
-        var current = doc.PreviewDocument;
-        var asset = current.Assets.SingleOrDefault(a => a.Id == id);
-        try
-        {
-            var json = asset == null ? new JsonObject { ["unavailable"] = "This record is absent from the current edit. Redo can restore it.", ["kind"] = id.Kind.ToString(), ["index"] = id.Index }
-                : await Task.Run(() => ExportService.AssetJson(current, asset, token, boundedZrd: true), token);
-            if (generation != assetRefreshGeneration || Document != doc || doc.IsDisposed || doc.Revision != revision || readOnlyAsset != id) return;
-            snapshot = json; ReadOnlyPropertySheet sheet = new(); sheet.Show(json, false); body.Content = sheet; Refresh();
-        }
-        catch (OperationCanceledException) when (doc.IsDisposed) { }
-    }
-    public bool SetPickup(DocumentModel document, MissionPickupSource source, string title, JsonObject json, Func<MissionPickupSource, System.Numerics.Vector3, Task>? sourceMove = null)
+    /// <summary>A source map's pickup, whose position edits its sources (<paramref name="sourceMove"/>).</summary>
+    public bool SetPickup(DocumentModel document, MissionPickupSource source, string title, JsonObject json, Func<MissionPickupSource, System.Numerics.Vector3, Task> sourceMove)
     {
         if (!BeginTarget(document)) return false;
-        label = title; PickupFields = new(document, source, title, json, sourceMove);
+        label = title; PickupFields = new(document, source, json, sourceMove);
         PickupFields.Changed += Refresh; body.Content = PickupFields; Refresh(); return true;
     }
     internal bool SetSourceObject(DocumentModel document, SourcePropertiesEditor fields)
@@ -151,26 +119,12 @@ public sealed class PropertiesWindow : Window
         if (!BeginTarget(document)) { fields.Dispose(); return false; }
         label = fields.Title; SourceFields = fields; fields.Changed += Refresh; body.Content = fields; Refresh(); return true;
     }
-    public bool SetResource(DocumentModel document, ResourcePropertiesEditor fields)
-    {
-        if (!BeginTarget(document)) return false;
-        ResourceFields = fields; fields.Changed += Refresh; body.Content = fields; Refresh(); return true;
-    }
-    public bool SetScript(DocumentModel document, ScriptPropertiesEditor fields)
-    {
-        if (!BeginTarget(document)) return false;
-        ScriptFields = fields; fields.Changed += Refresh; body.Content = fields; Refresh(); return true;
-    }
     private bool BeginTarget(DocumentModel document)
     {
         if (!ResolvePendingDrafts() || document.IsDisposed) return false;
         Detach(); Document = document;
         Retargeted?.Invoke();
         document.Disposing += DocumentDisposing; document.PropertyChanged += DocumentChanged;
-        if (document.AnimationEdits is { } edits) edits.Changed += Refresh;
-        document.PickupEditsChanged += Refresh;
-        document.ModelEditsChanged += ModelAssetsChanged;
-        document.ContentEditsChanged += ModelAssetsChanged;
         return true;
     }
     private void Detach()
@@ -178,17 +132,13 @@ public sealed class PropertiesWindow : Window
         if (Document is { } doc)
         {
             doc.Disposing -= DocumentDisposing; doc.PropertyChanged -= DocumentChanged;
-            if (doc.AnimationEdits is { } edits) edits.Changed -= Refresh;
-            doc.PickupEditsChanged -= Refresh;
-            doc.ModelEditsChanged -= ModelAssetsChanged;
-            doc.ContentEditsChanged -= ModelAssetsChanged;
         }
-        AnimationFields?.Dispose(); PickupFields?.Dispose(); ResourceFields?.Dispose(); ScriptFields?.Dispose(); SourceFields?.Dispose(); ScriptFields = null; SourceFields = null;
-        AnimationFields = null; PickupFields = null; ResourceFields = null; Document = null; snapshot = null; body.Content = null; readOnlyAsset = null; ++assetRefreshGeneration;
+        PickupFields?.Dispose(); SourceFields?.Dispose(); SourceFields = null;
+        PickupFields = null; Document = null; snapshot = null; body.Content = null;
     }
     private void DocumentDisposing() => CloseResolved();
     private void DocumentChanged(object? sender, PropertyChangedEventArgs e) => Refresh();
-    public bool ResolvePendingDrafts() => AnimationFields?.ResolvePendingDrafts() != false && PickupFields?.ResolvePendingDrafts() != false && ResourceFields?.ResolvePendingDrafts() != false && ScriptFields?.ResolvePendingDrafts() != false && SourceFields?.ResolvePendingDrafts() != false;
+    public bool ResolvePendingDrafts() => PickupFields?.ResolvePendingDrafts() != false && SourceFields?.ResolvePendingDrafts() != false;
     public async Task<bool> ResolvePendingDraftsAsync()
     {
         // Each editor commits its drafts (awaiting asynchronous ones, such as a source world's pickup position) or asks.
@@ -200,32 +150,30 @@ public sealed class PropertiesWindow : Window
     {
         if (Document is not { } doc) return;
         string path = preferences.RootPath.Length > 0 ? Path.GetRelativePath(preferences.RootPath, doc.Path) : doc.Path;
-        string target = ScriptFields?.TargetLabel ?? ResourceFields?.TargetLabel ?? AnimationFields?.TargetLabel ?? label;
+        string target = label;
         Title = "Properties — " + Path.GetFileName(doc.Path) + " — " + target;
         heading.Text = path + " → " + target;
         heading.ToolTip = doc.Path + " → " + target;
         notice.Text = doc.IsStale ? "The source file changed on disk. These properties belong to the open document; reload to read the changed source."
-            : doc.AnimationEdits != null || PickupFields != null || ResourceFields != null || ScriptFields != null ? "Edits update this document; Ctrl+S saves it to disk." : "Stored properties of the explicitly opened item.";
-        undo.IsEnabled = doc.SourceWorld is { } undoWorld ? undoWorld.Workspace.CanUndo
-            : doc.AnimationEdits?.CanUndo == true || doc.CanUndoScene || doc.ResourceEdits?.CanUndo == true || doc.ContentEdits?.CanUndo == true;
-        redo.IsEnabled = doc.SourceWorld is { } redoWorld ? redoWorld.Workspace.CanRedo
-            : doc.AnimationEdits?.CanRedo == true || doc.CanRedoScene || doc.ResourceEdits?.CanRedo == true || doc.ContentEdits?.CanRedo == true;
-        undo.Visibility = redo.Visibility = doc.SourceWorld != null || doc.AnimationEdits != null || doc.PickupEdits != null || doc.ModelEdits != null || doc.ResourceEdits != null || doc.ContentEdits != null ? Visibility.Visible : Visibility.Collapsed;
+            : doc.SourceWorld != null && body.Content is not ReadOnlyPropertySheet ? "Edits update the source project; Ctrl+S saves it to disk." : "Stored properties of the explicitly opened item (read only).";
+        undo.IsEnabled = doc.SourceWorld?.Workspace.CanUndo == true;
+        redo.IsEnabled = doc.SourceWorld?.Workspace.CanRedo == true;
+        undo.Visibility = redo.Visibility = doc.SourceWorld != null ? Visibility.Visible : Visibility.Collapsed;
     }
     private async void RunUndo(bool isRedo)
     { if (Document is { } doc && await ResolvePendingDraftsAsync()) UndoRequested?.Invoke(doc, isRedo); }
-    private async Task SaveAsync(bool saveAs)
+    private async Task SaveAsync()
     {
         if (Document is not { } doc || !await ResolvePendingDraftsAsync() || SaveRequested == null) return;
         IsEnabled = false;
-        try { await SaveRequested(doc, saveAs); }
+        try { await SaveRequested(doc); }
         finally { IsEnabled = true; Refresh(); }
     }
     private async void OnKey(object sender, KeyEventArgs e)
     {
         if (Owner is MainWindow main && main.PresentationKey(e)) return;
         bool ctrl = (Keyboard.Modifiers & ModifierKeys.Control) != 0;
-        if (ctrl && e.Key == Key.S) { e.Handled = true; await SaveAsync((Keyboard.Modifiers & ModifierKeys.Shift) != 0); }
+        if (ctrl && e.Key == Key.S) { e.Handled = true; await SaveAsync(); }
         else if (ctrl && e.Key is Key.Z or Key.Y && e.OriginalSource is not TextBoxBase)
         { e.Handled = true; RunUndo(e.Key == Key.Y); }
         // Escape belongs to field drafts, not to window dismissal.

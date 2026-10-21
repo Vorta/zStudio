@@ -17,38 +17,6 @@ public sealed record FileStamp(long Length, DateTime LastWriteUtc)
     public static FileStamp Read(string path) { FileInfo f = new(path); return new(f.Length, f.LastWriteTimeUtc); }
     /// <summary>A stamp no file has: a file another program changed before its stamp could be taken reads as changed.</summary>
     public static readonly FileStamp Unverified = new(-1, DateTime.MinValue);
-    /// <summary>
-    /// The stamp of a file just saved with <paramref name="bytes"/>, taken while it still holds exactly them (read back
-    /// between two stamps); <see cref="Unverified"/> when another program changed or removed it meanwhile. The read shares
-    /// the file with the seal that may still hold it (<see cref="SealedFile"/>), which lets no other program write it.
-    /// </summary>
-    public static FileStamp ReadHolding(string path, ReadOnlySpan<byte> bytes) => ReadHolding(path, bytes, null);
-    internal static FileStamp ReadHolding(string path, ReadOnlySpan<byte> bytes, DirectoryLease? directories)
-    {
-        try
-        {
-            using DirectoryLease? own = directories == null ? new() : null;
-            using FileStream stream = (directories ?? own!).OpenFile(path, FileMode.Open, FileAccess.Read,
-                FileShare.ReadWrite | FileShare.Delete, 65536, FileOptions.SequentialScan);
-            FileStamp stamp = new(stream.Length, File.GetLastWriteTimeUtc(stream.SafeFileHandle));
-            if (stamp.Length != bytes.Length) return Unverified;
-            byte[] buffer = System.Buffers.ArrayPool<byte>.Shared.Rent(65536);
-            try
-            {
-                int offset = 0;
-                while (offset < bytes.Length)
-                {
-                    int read = stream.Read(buffer, 0, Math.Min(65536, bytes.Length - offset));
-                    if (read == 0 || !buffer.AsSpan(0, read).SequenceEqual(bytes.Slice(offset, read))) return Unverified;
-                    offset += read;
-                }
-                return stream.Length == stamp.Length && File.GetLastWriteTimeUtc(stream.SafeFileHandle) == stamp.LastWriteUtc
-                    ? stamp : Unverified;
-            }
-            finally { System.Buffers.ArrayPool<byte>.Shared.Return(buffer); }
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return Unverified; }
-    }
 }
 
 public sealed class AssetRecord

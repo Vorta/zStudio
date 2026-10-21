@@ -45,7 +45,6 @@ public partial class MainWindow
                     case "navigatorTab": SelectNavigatorSection(value!.GetValue<int>()); break;
                     case "inspectorTab": SetTab(InspectorTabs,value!.GetValue<int>()); break;
                     case "toolsTab": SetTab(ToolTabs,value!.GetValue<int>()); break;
-                    case "backupOnSave": ViewModel.Settings.CreateBackupOnSave=value!.GetValue<bool>(); break;
                     default: throw new StudioCommandException("unknown_option",key);
                 }
             }
@@ -56,7 +55,7 @@ public partial class MainWindow
                     CurrentInspectionCard?.SetPanelHeight(Layout.InspectionPanelHeight);
                 ArrangeWorkspace(); SaveWorkspacePreferences(); ViewModel.Settings.Save();
             }
-            return Result(new { theme=ViewModel.Settings.Theme,layout=Layout,navigatorMode=NavigatorMode,sourceMap=ViewModel.IsSourceProject ? new { outliner=sourceOutlinerVisible, outlinerWidth=sourceOutlinerWidth, properties=sourcePropertiesVisible, propertiesWidth=sourcePropertiesWidth, diagnostics=SourceToolsVisible, diagnosticsHeight=sourceToolsHeight ?? Layout.ToolsHeight } : null,ViewModel.Settings.CreateBackupOnSave });
+            return Result(new { theme=ViewModel.Settings.Theme,layout=Layout,navigatorMode=NavigatorMode,sourceMap=ViewModel.IsSourceProject ? new { outliner=sourceOutlinerVisible, outlinerWidth=sourceOutlinerWidth, properties=sourcePropertiesVisible, propertiesWidth=sourcePropertiesWidth, diagnostics=SourceToolsVisible, diagnosticsHeight=sourceToolsHeight ?? Layout.ToolsHeight } : null });
         });
         Register(r,"window","Read or change zStudio window state; close requires clean documents and resolved drafts.",true,
             [P("action","string","Window action.",true,"read","activate","minimize","maximize","restore","close")],a=>
@@ -74,21 +73,12 @@ public partial class MainWindow
             }
             return Result(new { state=WindowState.ToString(),Width,Height,closing=action=="close" });
         });
-        Register(r,"properties_open","Open the reusable Properties window for an explicit edited asset or animation sequence/event; current pending drafts must be resolved first. Model records remain pinned by identity through replacement and undo/redo. Concurrent edits reject stale loads.",true,
-            [..AssetParameters,P("sequence","string","Animation sequence GUID."),P("event","string","Animation event GUID.")],async (a,token)=>
+        Register(r,"properties_open","Open the reusable Properties window (read only) for an explicit asset; current pending drafts must be resolved first. Concurrent changes reject stale loads.",true,
+            [..AssetParameters],async (a,token)=>
         {
             RequireNoPropertiesDrafts("Resolve Properties drafts before retargeting.");
             var doc=TargetDocument(a); var asset=TargetAsset(doc,a);
-            PropertiesWindow? opened;
-            if(asset.Kind==Core.AssetKind.Animation)
-            {
-                Guid sequence = GuidArg(a,"sequence"), ev = GuidArg(a,"event");
-                var entry = doc.AnimationEdits?.Package.Entries.ElementAtOrDefault(asset.Index) ?? throw new StudioCommandException("unsupported", "Animation properties are unavailable.");
-                if (sequence == Guid.Empty && ev != Guid.Empty || sequence != Guid.Empty && !entry.AllSequences.Any(s => s.Id == sequence && (ev == Guid.Empty || s.Events.Any(e => e.Id == ev))))
-                    throw new StudioCommandException("stale_record", "Animation sequence/event is unavailable.");
-                opened = OpenAnimationProperties(doc,asset.Index,sequence,ev);
-            }
-            else opened = await OpenAssetPropertiesAsync(doc,asset,token,automation: true);
+            var opened = await OpenAssetPropertiesAsync(doc,asset,token,automation: true);
             token.ThrowIfCancellationRequested();
             if (opened == null || propertiesWindow != opened || opened.Document != doc || !IsPropertiesPresented(opened))
                 throw new StudioCommandException("context_changed", "The requested Properties target was not published.");
@@ -101,9 +91,9 @@ public partial class MainWindow
             if(propertiesWindow != null) throw new StudioCommandException("pending_drafts","Properties stayed open: resolve its drafts first.");
             return Result(new { closed=true });
         });
-        Register(r,"properties_state","Read the pinned Properties window identity, content and current editable fields.",false,[],_ =>
-            Result(new { open=propertiesWindow != null, document=propertiesWindow?.Document?.SessionId, content=propertiesWindow?.CurrentJson, fields=((FieldEditor?)propertiesWindow?.ScriptFields ?? (FieldEditor?)propertiesWindow?.AnimationFields ?? (FieldEditor?)propertiesWindow?.PickupFields ?? (FieldEditor?)propertiesWindow?.ResourceFields ?? propertiesWindow?.SourceFields)?.DescribeAutomationFields() }));
-        Register(r,"scene_properties","Inspect a scene object, focus its source-world object panel, or open the shared Properties window in other viewers, including editable mission pickups. Source-map parts resolve to their complete selection owner; synthetic reference groups return Index=null and a signed selectionOwner with read-only properties. Physical mesh/polygon inspection remains available through inspection commands. Metadata is bounded to 512 JSON nodes/8192 text characters with inspection_truncated. MW3 actor labels use 128-character prefixes; source data and JSON exports remain intact.",true,
+        Register(r,"properties_state","Read the pinned Properties window identity, content and fields (editable only for a source map's objects and pickups; read only otherwise).",false,[],_ =>
+            Result(new { open=propertiesWindow != null, document=propertiesWindow?.Document?.SessionId, content=propertiesWindow?.CurrentJson, fields=((FieldEditor?)propertiesWindow?.PickupFields ?? propertiesWindow?.SourceFields)?.DescribeAutomationFields() }));
+        Register(r,"scene_properties","Inspect a scene object, focus its source-world object panel, or open the shared Properties window in other viewers (a source map's pickups are editable there). Source-map parts resolve to their complete selection owner; synthetic reference groups return Index=null and a signed selectionOwner with read-only properties. Physical mesh/polygon inspection remains available through inspection commands. Metadata is bounded to 512 JSON nodes/8192 text characters with inspection_truncated. MW3 actor labels use 128-character prefixes; source data and JSON exports remain intact.",true,
             [PreviewParameter,P("node","integer","Scene node index or signed selectionOwner from scene_tree in this preview.",true),P("open","boolean","Focus the source-object panel, or open Properties for other viewers.")],async (a, token)=>
         {
             var viewport=TargetViewport(a); int node=Int(a,"node"); var data=viewport.PreviewScene;
@@ -138,8 +128,8 @@ public partial class MainWindow
                 if(shownDocument is { SourceWorld: not null } sourceDoc && viewport.PickupAt(node) == null && SourceObjectNode(node) is int sourceNode && sourceDoc.SourceBuild?.Provenance.ContainsKey(sourceNode) == true)
                 { if (!await ShowSourceObjectPropertiesAsync(sourceDoc, sourceNode, token)) throw new StudioCommandException("context_changed", "Properties was superseded while loading."); return Result(new { data.Nodes[node].Index, data.Nodes[node].Name, Metadata = Core.JsonData.PreviewObject(data.Nodes[node].Metadata), source = DescribeSourceObject(sourceDoc, sourceNode).Json() }); }
                 var w=GetPropertiesWindow(); var actor=viewport.PickupAt(node);
-                bool opened=actor?.Pickup is { } pickup && shownDocument!.PickupEdits?.Find(pickup.Source) != null
-                    ? w.SetPickup(shownDocument!,pickup.Source,data.Nodes[node].Name,data.Nodes[node].Metadata,SourcePickupMove(shownDocument!))
+                bool opened=shownDocument!.SourceWorld != null && actor?.Pickup is { } pickup && shownDocument.PickupEdits?.Find(pickup.Source) != null
+                    ? w.SetPickup(shownDocument,pickup.Source,data.Nodes[node].Name,data.Nodes[node].Metadata,SourcePickupMove(shownDocument)!)
                     : w.SetReadOnly(shownDocument!,data.Nodes[node].Name,Core.JsonData.PreviewObject(data.Nodes[node].Metadata));
                 PresentProperties(w,opened);
             }

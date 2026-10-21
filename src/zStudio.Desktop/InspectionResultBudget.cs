@@ -13,8 +13,8 @@ internal static class InspectionResultBudget
     internal static long Actor(MissionActor? actor) => actor == null ? 4 :
         1024 + Text(actor.Name) + Text(actor.PlacementSource) + Source(actor.CoordinateSource)
         + (actor.Pickup is { } pickup ? 512 + Text(pickup.LogicalName) + Source(pickup.Source) : 4);
-    internal static long Pickup(PickupPlacementRecord record, string target, string scope) =>
-        1024 + Source(record.Source) + Text(record.Type) + Text(target) + Text(scope);
+    internal static long Pickup(PickupPlacementRecord record, string scope) =>
+        1024 + Source(record.Source) + Text(record.Type) + Text(scope);
     // PreviewObject uses at most64 nodes and1024 total text characters. Include keys, truncation markers and scalars.
     internal static long SceneNode(string name, string kind, MissionActor? actor) =>
         16_384 + Text(name) + Text(kind) + Actor(actor);
@@ -50,14 +50,14 @@ internal static class InspectionResultBudget
     internal sealed class Search(long maximum = 32L * 1024 * 1024)
     {
         private long remaining = maximum;
-        internal bool Pickup(PickupPlacementRecord record, string target, string query)
+        internal bool Pickup(PickupPlacementRecord record, string query)
         {
-            long characters = (long)record.Type.Length + record.Source.ResourceName.Length + target.Length + 2;
+            long characters = (long)record.Type.Length + record.Source.ResourceName.Length + record.Source.ArchivePath.Length + 2;
             long cost = 64 + 2 * characters;
             if (cost > remaining)
                 throw new StudioCommandException("too_large", "The combined pickup search text exceeds its inspection budget; omit query and follow the result pages.");
             remaining -= cost;
-            return string.Concat(record.Type, " ", record.Source.ResourceName, " ", target).Contains(query, StringComparison.OrdinalIgnoreCase);
+            return string.Concat(record.Type, " ", record.Source.ResourceName, " ", record.Source.ArchivePath).Contains(query, StringComparison.OrdinalIgnoreCase);
         }
     }
 }

@@ -345,7 +345,7 @@ public sealed partial class SourcePublisher
             string relative = Canonical(directories, write.Relative, listings, budget);
             if (!seen.Add(relative)) throw new ArgumentException($"{JsonData.ShownText(write.Relative, 256)} is listed more than once in the save.", nameof(writes));
             string path = SourceProject.Resolve(root, relative);
-            if (PickupPlacementEditSession.IsProtectedPath(path)) throw new IOException($"{JsonData.ShownText(write.Relative, 256)} is inside the protected zbd_1998/zbd_1999 folders; nothing was saved.");
+            if (ProtectedPaths.IsProtected(path)) throw new IOException($"{JsonData.ShownText(write.Relative, 256)} is inside the protected zbd_1998/zbd_1999 folders; nothing was saved.");
             SourceProject.RejectNestedLinks(root, relative);
             Target target = new(i, write.Relative, relative, path, JournalDigest.Of(write.Expected), JournalDigest.Of(write.Content), write.Content);
             (Same(write.Expected, write.Content) ? checks : changes).Add(target);
@@ -451,7 +451,7 @@ public sealed partial class SourcePublisher
         SourceProject.RejectLinkedProject(root);
         SourceProject.RejectNestedLinks(root, RecoveryFolder); SourceProject.RejectNestedLinks(root, StagingFolder);
         string folder = SourceProject.Resolve(root, RecoveryFolder);
-        if (PickupPlacementEditSession.IsProtectedPath(folder) || PickupPlacementEditSession.IsProtectedPath(directories.CapturedPath(folder)))
+        if (ProtectedPaths.IsProtected(folder) || ProtectedPaths.IsProtected(directories.CapturedPath(folder)))
             throw new IOException("Source projects inside the protected zbd_1998/zbd_1999 folders cannot be saved.");
        directories.Hold(folder, create: true);
         SourceProjectSettings.HideFolderOf(folder);

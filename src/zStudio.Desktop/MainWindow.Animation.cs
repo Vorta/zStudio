@@ -1,35 +1,13 @@
-using System.IO;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
-using Microsoft.Win32;
-using zStudio.Core.Animation;
 
 namespace zStudio.Desktop;
 
 public partial class MainWindow
 {
-    internal Func<SaveFileDialog, bool?>? ShowingAnimationSaveDialog { get; set; }
-    private async void SaveAnimationClick(object sender, RoutedEventArgs e) { if (ViewModel.SelectedDocument is { } doc) await SaveAnimationAsync(doc); }
-    private void UndoAnimationClick(object sender, RoutedEventArgs e) { scene?.CancelPickupDrag(); if (ViewModel.SelectedDocument is { } doc) UndoDocument(doc, false); }
-    private void RedoAnimationClick(object sender, RoutedEventArgs e) { scene?.CancelPickupDrag(); if (ViewModel.SelectedDocument is { } doc) UndoDocument(doc, true); }
-    private async Task<bool> SaveAnimationAsync(DocumentModel doc)
-    {
-        if (doc.AnimationEdits is not { } edits) { ViewModel.Status = "Saving is available for animation packs and editable mission pickups."; return false; }
-        if (!ResolvePropertiesDrafts(doc) || shownDocument == doc && animation?.ResolvePendingDrafts() == false) return false;
-        System.Windows.Input.Keyboard.ClearFocus(); if (shownDocument == doc) animation?.Pause();
-        SaveFileDialog dialog = new() { Title = "Save a new animation pack outside the source dataset", Filter = "Animation pack|*.zbd", DefaultExt = ".zbd", AddExtension = true, FileName = "anim-edited.zbd", OverwritePrompt = false,
-            InitialDirectory = doc.LastSavedCopy == null ? Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments) : Path.GetDirectoryName(doc.LastSavedCopy)! };
-        if ((ShowingAnimationSaveDialog?.Invoke(dialog) ?? dialog.ShowDialog(this)) != true) return false;
-        IsEnabled = false; if (propertiesWindow != null) propertiesWindow.IsEnabled = false;
-        try
-        {
-            await SaveAnimationToPathAsync(doc, dialog.FileName);
-            return true;
-        }
-        catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException) { Report(ex); MessageBox.Show(this, ex.Message, "Animation Save As", MessageBoxButton.OK, MessageBoxImage.Information); return false; }
-        finally { IsEnabled = true; if (propertiesWindow != null) propertiesWindow.IsEnabled = true; }
-    }
+    private void UndoDocumentClick(object sender, RoutedEventArgs e) { scene?.CancelPickupDrag(); if (ViewModel.SelectedDocument is { } doc) UndoDocument(doc, false); }
+    private void RedoDocumentClick(object sender, RoutedEventArgs e) { scene?.CancelPickupDrag(); if (ViewModel.SelectedDocument is { } doc) UndoDocument(doc, true); }
     /// <summary>
     /// Close decisions run one at a time (a decision can wait for a rebuild, and its prompt pumps messages): a later one
     /// waits its turn, so prompts never stack, and a document an earlier decision closed needs no decision.
@@ -74,12 +52,12 @@ public partial class MainWindow
                 if ((closingAllDocuments || ViewModel.ClosingAllDocuments) && discardApprovedWorkspace is { } approved && approved.Workspace == world.Workspace && approved.Revision == world.Workspace.Revision)
                     return ApproveClose(document, document.Revision);
             }
-            bool pickup = document.SourceWorld != null || document.ContentEdits != null || document.PickupEdits?.IsDirty == true || document.ResourceEdits != null || document.ModelEdits?.IsDirty == true; string saveLabel = pickup ? "Save" : "Save As…";
+            const string saveLabel = "Save";
             animation?.Pause(); string choice = "Cancel";
             // The answer covers the state the question shows. Its message loop still runs work started before it (an MCP job
             // whose planning ran while it opened), so a change accepted while it waits is asked about, not saved or dropped unseen.
             long shown = document.Revision; var project = document.SourceWorld?.Workspace; long shownProject = project?.Revision ?? 0;
-            Window dialog = CreateUnsavedDialog(document, pickup, saveLabel, selected => choice = selected);
+            Window dialog = CreateUnsavedDialog(document, selected => choice = selected);
             dialog.ShowDialog();
             if (choice != "Discard" && choice != saveLabel) return false;
             var live = LiveDocument(document);
@@ -107,12 +85,13 @@ public partial class MainWindow
     }
     private static bool ApproveClose(DocumentModel document, long revision) { document.ApprovedCloseRevision = revision; return true; }
 
-    internal Window CreateUnsavedDialog(DocumentModel document, bool pickup, string saveLabel, Action<string> selected, Size? available = null)
+    /// <summary>Asks about a source project's unsaved edits (only source worlds have any).</summary>
+    internal Window CreateUnsavedDialog(DocumentModel document, Action<string> selected, Size? available = null)
     {
         StackPanel panel = new();
         panel.Children.Add(new TextBlock { Text = $"Save changes to {document.Title.TrimEnd(' ', '*')}?", FontSize = 17, FontWeight = FontWeights.SemiBold, TextWrapping = TextWrapping.Wrap });
         string detail = document.SourceWorld is { } project ? $"Save writes every changed file of the source project ({project.Workspace.DirtyFiles.Count}): {string.Join(", ", project.Workspace.DirtyFiles.Take(6).Select(path => Bounded(path, 256)))}{(project.Workspace.DirtyFiles.Count > 6 ? ", …" : "")}. Discard drops the project's unsaved edits."
-            : pickup ? "Save verifies changes before updating working files. Protected reference datasets require saving a copy elsewhere." : "Save As writes a new animation pack and preserves the original source.";
+            : "";
         panel.Children.Add(new TextBlock { Text = detail, Margin = new(0,12,0,20), TextWrapping = TextWrapping.Wrap });
         if (document.SourceWorld is { } source)
         {
@@ -125,9 +104,9 @@ public partial class MainWindow
         Window dialog = new() { Owner = this, Title = "Unsaved changes", ResizeMode = ResizeMode.NoResize, WindowStartupLocation = WindowStartupLocation.CenterOwner,
             ShowInTaskbar = false, Content = DialogLayout.WithActions(panel, buttons, 20) };
         DialogLayout.Constrain(dialog, new(470, 440), available);
-        foreach (string label in new[] { saveLabel, "Discard", "Cancel" })
+        foreach (string label in new[] { "Save", "Discard", "Cancel" })
         {
-            Button button = new() { Content = label, MinWidth = 95, Margin = new(4), Padding = new(10,7,10,7), IsCancel = label == "Cancel", IsDefault = label == saveLabel };
+            Button button = new() { Content = label, MinWidth = 95, Margin = new(4), Padding = new(10,7,10,7), IsCancel = label == "Cancel", IsDefault = label == "Save" };
             button.Click += (_, _) => { selected(label); dialog.Close(); }; buttons.Children.Add(button);
         }
         return dialog;

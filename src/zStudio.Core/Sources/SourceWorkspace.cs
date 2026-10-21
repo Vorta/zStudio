@@ -290,7 +290,7 @@ public sealed class SourceWorkspace
         SourceProject.CheckSavablePath(Root, relative);
         string path = SourceProject.Resolve(Root, relative);
         SourceProject.CheckSavableTarget(Root, relative);
-        if (PickupPlacementEditSession.IsProtectedPath(path)) throw new InvalidDataException($"{relative} is inside the protected zbd_1998/zbd_1999 folders.");
+        if (ProtectedPaths.IsProtected(path)) throw new InvalidDataException($"{relative} is inside the protected zbd_1998/zbd_1999 folders.");
     }
 
     /// <summary>

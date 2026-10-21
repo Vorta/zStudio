@@ -259,8 +259,8 @@ internal static class SourceTakeBackMcpChecks
             string Snapshot() => string.Join("\n", [workspace.UndoCount.ToString(), workspace.UndoLabel ?? "-", workspace.RedoLabel ?? "-",
                 .. workspace.History.Select(t => t.Label), .. workspace.DirtyFiles, Encoding.UTF8.GetString(workspace.Read("data/m1/models/m1.gltf")!),
                 .. main.ViewModel.Problems.Select(p => $"{p.Severity} {p.File}: {p.Message}")]);
-            int[] Grounds(DocumentModel d) => [.. d.PreviewDocument.Scene!.Nodes.Where(n => n.Name == "ground" && d.SourceBuild!.Provenance.ContainsKey(n.Index)).Select(n => n.Index)];
-            static int Node(DocumentModel d, string name) => d.PreviewDocument.Scene!.Nodes.First(n => n.Name == name && d.SourceBuild!.Provenance.ContainsKey(n.Index)).Index;
+            int[] Grounds(DocumentModel d) => [.. d.Document.Scene!.Nodes.Where(n => n.Name == "ground" && d.SourceBuild!.Provenance.ContainsKey(n.Index)).Select(n => n.Index)];
+            static int Node(DocumentModel d, string name) => d.Document.Scene!.Nodes.First(n => n.Name == name && d.SourceBuild!.Provenance.ContainsKey(n.Index)).Index;
             async Task Preview()
             {
                 var work = (Task)typeof(MainWindow).GetField("previewWork", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(main)!;

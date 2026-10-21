@@ -107,14 +107,14 @@ public static partial class MissionSceneLoader
         return new(selected, files, unavailable, catalog.Diagnostics, unreadable) { Complete = catalog.Unreadable.Count == 0 };
     }
     /// <summary>
-    /// A private load. Its key holds every input of the build (world identity, requested reader, published snapshots and the
+    /// A private load. Its key holds every input of the build (world identity, requested reader and the
     /// stamp of each map and shared archive), so an unchanged request reuses the published context before reading anything.
     /// </summary>
     private static async Task<MissionSceneContext> LoadMw3CachedAsync(AssetDocument world, AssetResolver resolver, string? requested, bool exact, CancellationToken token)
     {
         token.ThrowIfCancellationRequested();
         CompiledInventory inventory = new(token);
-        string inputs = resolver.SnapshotRevision + "|" + inventory.Fingerprint(ResourceFiles(world.Path, resolver, token, inventory));
+        string inputs = inventory.Fingerprint(ResourceFiles(world.Path, resolver, token, inventory));
         string Key(string? reader) => "mw3|" + reader?.ToUpperInvariant() + "|" + inputs;
         var cache = Cache.GetOrCreateValue(world);
         // An exact request may reuse only a context that loaded that reader; a fallback must still fail as before.

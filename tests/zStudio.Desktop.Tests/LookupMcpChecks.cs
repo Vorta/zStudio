@@ -46,12 +46,12 @@ internal static class LookupMcpChecks
             // Copying the crate copies its lid, newer than the others: FindNode lid finds the copy's, and Problems says so.
             var opened = (await Job("source_world_open", new() { ["mission"] = "m1" }))["document"]!;
             var doc = Document(opened);
-            int crate = doc.PreviewDocument.Scene!.Nodes.First(n => n.Name == "crate" && doc.SourceBuild!.Provenance.ContainsKey(n.Index)).Index;
+            int crate = doc.Document.Scene!.Nodes.First(n => n.Name == "crate" && doc.SourceBuild!.Provenance.ContainsKey(n.Index)).Index;
             Assert.DoesNotContain(main.ViewModel.Problems, Changed);
             // Placed beside the crate, as the card's Copy does: X moves by the crate's width, Y and Z stay.
-            var before = zStudio.Core.SceneBuilder.LocalTransform(doc.PreviewDocument.Scene!.Nodes[crate]).Translation;
+            var before = zStudio.Core.SceneBuilder.LocalTransform(doc.Document.Scene!.Nodes[crate]).Translation;
             var copied = Document((await Job("source_world_object_edit", new() { ["document"] = Id(doc), ["revision"] = doc.Revision, ["node"] = crate, ["action"] = "duplicate", ["name"] = "crate2", ["beside"] = true }))["document"]!);
-            var beside = zStudio.Core.SceneBuilder.LocalTransform(copied.PreviewDocument.Scene!.Nodes.First(n => n.Name == "crate2" && copied.SourceBuild!.Provenance.ContainsKey(n.Index))).Translation;
+            var beside = zStudio.Core.SceneBuilder.LocalTransform(copied.Document.Scene!.Nodes.First(n => n.Name == "crate2" && copied.SourceBuild!.Provenance.ContainsKey(n.Index))).Translation;
             Assert.True(beside.X > before.X); Assert.Equal((before.Y, before.Z), (beside.Y, beside.Z));
             var warning = Assert.Single(main.ViewModel.Problems, Changed);
             Assert.Equal("Warning", warning.Severity);
@@ -63,14 +63,14 @@ internal static class LookupMcpChecks
             Assert.DoesNotContain(main.ViewModel.Problems, Changed);
             // Properties takes an unambiguous parent by name, while a name nothing has is refused.
             var shown = main.ViewModel.Documents.Single(d => d.SourceWorld != null);
-            var named = typeof(MainWindow).GetMethod("SourceWorldNodeNamed", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!;
-            Assert.Equal("crate", ((zStudio.Core.Worlds.WorldNode)named.Invoke(main, [shown, "crate"])!).Name);
-            Assert.IsType<zStudio.Automation.StudioCommandException>(Assert.Throws<System.Reflection.TargetInvocationException>(() => named.Invoke(main, [shown, "nothing"])).InnerException);
+            var named = typeof(MainWindow).GetMethod("SourceWorldNodeNamedNear", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!;
+            Assert.Equal("crate", ((zStudio.Core.Worlds.WorldNode)named.Invoke(main, [shown, "crate", null])!).Name);
+            Assert.IsType<zStudio.Automation.StudioCommandException>(Assert.Throws<System.Reflection.TargetInvocationException>(() => named.Invoke(main, [shown, "nothing", null])).InnerException);
             // The crate's lids and its copy's are different nodes of one name: the Parent field lists each with its scene node
             // number and takes "#index" (or "name #index"), the index source_world_object_edit's parent takes.
             var parentOf = typeof(MainWindow).GetMethod("SourceParentNode", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!;
-            int[] lids = [.. shown.PreviewDocument.Scene!.Nodes.Where(n => n.Name == "lid" && shown.SourceBuild!.Provenance.ContainsKey(n.Index)).Select(n => n.Index)];
-            int moved = shown.PreviewDocument.Scene!.Nodes.First(n => n.Name == "crate2" && shown.SourceBuild!.Provenance.ContainsKey(n.Index)).Index;
+            int[] lids = [.. shown.Document.Scene!.Nodes.Where(n => n.Name == "lid" && shown.SourceBuild!.Provenance.ContainsKey(n.Index)).Select(n => n.Index)];
+            int moved = shown.Document.Scene!.Nodes.First(n => n.Name == "crate2" && shown.SourceBuild!.Provenance.ContainsKey(n.Index)).Index;
             Assert.True(lids.Length > 2);
             var several = Assert.IsType<zStudio.Automation.StudioCommandException>(Assert.Throws<System.Reflection.TargetInvocationException>(() => parentOf.Invoke(main, [shown, "lid", moved])).InnerException);
             Assert.All(lids, l => Assert.Contains($"#{l} under ", several.Message, StringComparison.Ordinal));

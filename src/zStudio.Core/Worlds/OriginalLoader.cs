@@ -5,7 +5,7 @@ namespace zStudio.Core.Worlds;
 /// <summary>
 /// The order in which RECOIL's build tool created and freed nodes when it loaded a model file (<c>LoadGameGen</c>). The
 /// tool is lost; the order is what the shipped worlds' node slots show, given the engine's node table (one free list,
-/// last freed first; see <see cref="WorldAssembler"/>) and docs/engine-evidence.md:
+/// last freed first; see <see cref="WorldAssembler"/>) and docs/agents/engine-evidence.md#build-tool-loader:
 /// <list type="number">
 /// <item>Each file the load's records reference is loaded once into a cache, in the order of the first reference to
 /// it: the referenced file loaded as a load of its own (its own caches, a root, its records), kept until the end.</item>

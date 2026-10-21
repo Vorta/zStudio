@@ -64,12 +64,12 @@ public static class SourcePickupEdits
             var root = resource.Root ?? throw new InvalidDataException($"{resource.Path} is not a valid pickup resource.");
             if (root.Children is not [{ Kind: ZrdKind.Array } list])
                 throw new InvalidDataException($"{resource.Path} must contain one ordered pickup list.");
-            var rotation = addition.RotationDegrees * (MathF.PI / 180);
+            var rotation = StoredRadians(addition.RotationDegrees);
             ZrdNode record = ZrdNode.Create(ZrdKind.Array) with
             {
                 Children = [new(Guid.NewGuid(), ZrdKind.String, 0, type.Name, []),
                     new(Guid.NewGuid(), ZrdKind.Int, checked((uint)(addition.Amount ?? type.DefaultAmount)), "", []),
-                    Vector(addition.Position), Vector(rotation), SourceResourceEdits.Float(addition.RespawnDelay)]
+                    Vector(PlacementPrecision.Position(addition.Position)), Vector(rotation), SourceResourceEdits.Float(addition.RespawnDelay)]
             };
             var edited = root with { Children = [list with { Children = [.. list.Children, record] }] };
             byte[] content;
@@ -130,7 +130,7 @@ public static class SourcePickupEdits
             foreach (var item in group)
                 if (!mission.Actors.Any(a => a.Pickup is { } p && p.Source.RecordIndex == item.RecordIndex &&
                     string.Equals(Path.GetFullPath(p.Source.ArchivePath), Path.GetFullPath(Path.Combine(snapshot.Root, item.File)), StringComparison.OrdinalIgnoreCase) &&
-                    p.LogicalName == addition.Type && p.Position == addition.Position))
+                    p.LogicalName == addition.Type && p.Position == PlacementPrecision.Position(addition.Position)))
                     throw new InvalidDataException(Cause(mission, item) is { } cause ? $"The {group.Key} pickup cannot be placed: {cause}"
                         : $"The {group.Key} pickup cannot be placed. Check its template and copyable bvol collision child.");
         }
@@ -147,6 +147,13 @@ public static class SourcePickupEdits
 
     private static bool Finite(Vector3 v) => float.IsFinite(v.X) && float.IsFinite(v.Y) && float.IsFinite(v.Z) &&
         Math.Abs(v.X) <= SourceWorlds.MaximumCoordinate && Math.Abs(v.Y) <= SourceWorlds.MaximumCoordinate && Math.Abs(v.Z) <= SourceWorlds.MaximumCoordinate;
+    /// <summary>A new pickup's rotation as stored: radians at <see cref="PlacementPrecision.RadianDecimals"/> decimals.</summary>
+    private static Vector3 StoredRadians(Vector3 degrees)
+    {
+        var radians = degrees * (MathF.PI / 180);
+        return new(PlacementPrecision.Round(radians.X, PlacementPrecision.RadianDecimals), PlacementPrecision.Round(radians.Y, PlacementPrecision.RadianDecimals),
+            PlacementPrecision.Round(radians.Z, PlacementPrecision.RadianDecimals));
+    }
     private static ZrdNode Vector(Vector3 v) => ZrdNode.Create(ZrdKind.Array) with
     { Children = [SourceResourceEdits.Float(v.X), SourceResourceEdits.Float(v.Y), SourceResourceEdits.Float(v.Z)] };
 }

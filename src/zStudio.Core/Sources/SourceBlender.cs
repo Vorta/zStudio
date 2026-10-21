@@ -77,7 +77,7 @@ public static partial class SourceBlender
         public void Root(string path)
         {
             path = Path.GetFullPath(path);
-            if (PickupPlacementEditSession.IsProtectedPath(directories.CapturedPath(path)))
+            if (ProtectedPaths.IsProtected(directories.CapturedPath(path)))
                 throw new InvalidDataException("Blender checkouts cannot be written inside the protected zbd_1998/zbd_1999 folders.");
             directories.Parent(path, create: true);
             // A colliding folder belongs to somebody else; neither write into it nor clean it up.

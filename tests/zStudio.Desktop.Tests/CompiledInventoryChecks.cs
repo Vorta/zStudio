@@ -85,9 +85,7 @@ internal static class CompiledInventoryChecks
         MainWindow window = new();
         try
         {
-            var empty = FormatRegistry.Default.OpenBytes(file, File.ReadAllBytes(file), token: token);
-            var members = new[] { "first.bin", "second.bin" }.Select(name => new ResourceMember(Guid.NewGuid(), null, name, new byte[] { 1 }, new byte[148])).ToArray();
-            File.WriteAllBytes(file, ArchiveWriter.Write(empty, members, token));
+            File.WriteAllBytes(file, MotionFixture.Archive(("first.bin", [1]), ("second.bin", [1])));
             string laterFile = Path.Combine(root, "zlast.zbd"); File.WriteAllBytes(laterFile, File.ReadAllBytes(file));
             // Aggregate index admission preserves the file tree/direct opening and tells both GUI and commands
             // that an absent match is not a complete-root answer. Narrow limits exercise production admission.

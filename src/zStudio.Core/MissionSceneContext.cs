@@ -163,9 +163,9 @@ public static partial class MissionSceneLoader
         string directory = Path.GetDirectoryName(world.Path)!;
         CompiledInventory inventory = new(token);
         var files = ResourceFiles(world.Path, resolver, token, inventory);
-        string key = difficulty + "|" + resolver.SnapshotRevision + "|" + inventory.Fingerprint(files) + (package == null ? "" : Convert.ToHexString(SHA256.HashData(AnimationWriter.Write(package, token))));
+        string key = difficulty + "|" + inventory.Fingerprint(files) + (package == null ? "" : Convert.ToHexString(SHA256.HashData(AnimationWriter.Write(package, token))));
         var cache = Cache.GetOrCreateValue(world);
-        // The key holds every input of the build (world identity, published snapshots, each file's stamp, difficulty
+        // The key holds every input of the build (world identity, each file's stamp, difficulty
         // and animations): a private load's context was admitted with exactly these, so reuse it before any read or walk.
         if (!shared && cache.TryGetValue(key, out var reused)) return reused.Context;
         if (!shared) resourcesBudget.Retain(world, token);
@@ -307,7 +307,7 @@ public static partial class MissionSceneLoader
                     var pose = Matrix4x4.CreateRotationY(yaw) * Matrix4x4.CreateTranslation(position);
                     ValidatePose(pose); // Refuse before a clone enters the live index or an existing root changes.
                     // CreateFromNamesAtPose (0x421ab0) looks both names up among all live nodes, the most recently created first
-                    // (FindByTypeAndName, docs/engine-evidence.md), and uses what it finds as the vehicle whatever its class.
+                    // (FindByTypeAndName, docs/agents/engine-evidence.md#aivzrd), and uses what it finds as the vehicle whatever its class.
                     int root = placement.Live(name); bool copied = false;
                     if (root < 0)
                     {

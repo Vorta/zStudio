@@ -51,8 +51,7 @@ public partial class AnimationEditor
     {
         string[] names = ["Tracked nodes","Scene nodes","Lights","Sound nodes","Samples","Effect templates","Activation conditions","Child slots"];
         DockPanel page = new() { Margin = new(8) }; StackPanel header = new(); DockPanel.SetDock(header,Dock.Top); page.Children.Add(header);
-        Label(header,"Stored references",true); Label(header,"Stable table indices. Reserved index 0 and unverified tables are read-only.");
-        Label(header,"Changing a verified name retargets every event in this entry that uses that table slot. Indices and ordering stay unchanged.");
+        Label(header,"Stored references",true); Label(header,"Stable table indices; reserved index 0 and unverified tables are marked.");
         ComboBox category = new() { ItemsSource = names.Select((n,i) => $"{n} ({Entry.References[i].Count})").ToArray(),SelectedIndex = 1,Margin = new(0,0,0,6) }; header.Children.Add(category);
         Grid body = new(); body.RowDefinitions.Add(new()); body.RowDefinitions.Add(new() { Height = GridLength.Auto }); page.Children.Add(body);
         ListBox list = new() { DisplayMemberPath = nameof(ChoiceValue.Label) }; body.Children.Add(list);
@@ -72,7 +71,7 @@ public partial class AnimationEditor
             if (index >= Entry.References[t].Count) return;
             inputScope = "references";
             string Read() => Entry.References[t][index].Text(0,Math.Min(32,Entry.References[t][index].Bytes.Length));
-            Input(edit,$"[{index}] name",Read(),text => TryEdit(() => edits.RetargetReference(entryIndex,t,index,text)),t is 0 or 6 or 7 || index == 0,getter:Read);
+            Input(edit,$"[{index}] name",Read(),_ => { },true,getter:Read);
             inputScope = "properties";
         };
         category.SelectionChanged += (_,_) => { if (category.SelectedIndex == table) return; if (!ResolvePendingDrafts()) { category.SelectedIndex = table; return; } table = category.SelectedIndex; LoadTable(); };

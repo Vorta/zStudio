@@ -23,7 +23,7 @@ internal static class AssetInspectionMcpChecks
         try
         {
             await CheckPickupPublicationAsync(deadline.Token);
-            foreach (string scenario in new[] { "revision", "closed", "removed", "canceled", "success" })
+            foreach (string scenario in new[] { "closed", "removed", "canceled", "success" })
             {
                 var doc = NewDocument(); main.ViewModel.Documents.Add(doc);
                 var target = Target(doc);
@@ -39,7 +39,6 @@ internal static class AssetInspectionMcpChecks
                 using var request = CancellationTokenSource.CreateLinkedTokenSource(deadline.Token);
                 var inspecting = main.Commands.ExecuteAsync("zstudio_inspect_asset", target, request.Token);
                 await started.Task.WaitAsync(deadline.Token);
-                if (scenario == "revision") doc.AnimationEdits!.Apply(0, "Concurrent edit", e => e.SetFloat(164, 5));
                 if (scenario == "closed") main.ViewModel.CloseResolved(doc);
                 if (scenario == "removed") main.ViewModel.Documents.Remove(doc);
                 if (scenario == "canceled") request.Cancel();
@@ -50,27 +49,15 @@ internal static class AssetInspectionMcpChecks
                     Assert.Equal(doc.SessionId.ToString(), result.Data["document"]!.GetValue<string>());
                     Assert.Equal(doc.Revision, result.Data["Revision"]!.GetValue<long>());
                     Assert.Equal(Convert.ToHexStringLower(doc.Document.Animations!.Entries[0].Bytes), result.Data["source"]!["properties"]!["header_hex"]!.GetValue<string>());
-                    Assert.Equal(Convert.ToHexStringLower(doc.AnimationEdits!.Package.Entries[0].Bytes), result.Data["edited"]!["header_hex"]!.GetValue<string>());
-                    Assert.NotEqual(result.Data["source"]!["properties"]!["header_hex"]!.GetValue<string>(), result.Data["edited"]!["header_hex"]!.GetValue<string>());
-                    string sourceHex = result.Data["source"]!["properties"]!["header_hex"]!.GetValue<string>();
-                    main.LoadAssetPropertiesAsync = originalLoader;
-                    doc.AnimationEdits.Undo();
-                    var undone = await main.Commands.ExecuteAsync("zstudio_inspect_asset", target, deadline.Token);
-                    Assert.Equal(sourceHex, undone.Data["source"]!["properties"]!["header_hex"]!.GetValue<string>());
-                    Assert.Equal(sourceHex, undone.Data["edited"]!["header_hex"]!.GetValue<string>());
-                    doc.AnimationEdits.Redo();
-                    var redone = await main.Commands.ExecuteAsync("zstudio_inspect_asset", target, deadline.Token);
-                    Assert.Equal(sourceHex, redone.Data["source"]!["properties"]!["header_hex"]!.GetValue<string>());
-                    Assert.Equal(result.Data["edited"]!["header_hex"]!.GetValue<string>(), redone.Data["edited"]!["header_hex"]!.GetValue<string>());
+                    Assert.Null(result.Data["edited"]);
                 }
                 else if (scenario == "canceled") await Assert.ThrowsAnyAsync<OperationCanceledException>(() => inspecting);
                 else
                 {
                     var error = await Assert.ThrowsAsync<StudioCommandException>(() => inspecting);
-                    Assert.Equal(scenario == "revision" ? "revision_conflict" : "stale_document", error.Code);
+                    Assert.Equal("stale_document", error.Code);
                 }
                 if (scenario is "closed" or "canceled") Assert.True(observedToken.IsCancellationRequested);
-                doc.AnimationEdits!.MarkSaved();
                 main.ViewModel.Documents.Remove(doc); doc.Dispose();
             }
 
@@ -98,13 +85,9 @@ internal static class AssetInspectionMcpChecks
             main.LoadAssetPropertiesAsync = originalLoader;
             var recovered = await main.Commands.ExecuteAsync("zstudio_inspect_asset", Target(live), deadline.Token);
             Assert.Equal(live.Revision, recovered.Data["Revision"]!.GetValue<long>());
-            live.AnimationEdits!.MarkSaved(); main.ViewModel.CloseResolved(live);
+            main.ViewModel.CloseResolved(live);
         }
-        finally
-        {
-            foreach (var doc in main.ViewModel.Documents) doc.AnimationEdits?.MarkSaved();
-            main.Close();
-        }
+        finally { main.Close(); }
     }
 
     private static JsonObject Target(DocumentModel doc) => new() { ["document"] = doc.SessionId.ToString(), ["kind"] = "Animation", ["index"] = 0 };
@@ -140,9 +123,6 @@ internal static class AssetInspectionMcpChecks
         var source = new AssetDocument(Path.Combine(Path.GetTempPath(), "inspection-mcp.zbd"), new(0, DateTime.MinValue),
             new(FormatFamily.Animation, 28, Recognition.Supported, "fixture"), ReadOnlyMemory<byte>.Empty) { Animations = package };
         source.Add(AssetKind.Animation, 0, "animation", 0, 0);
-        var doc = new DocumentModel(source);
-        doc.AnimationEdits!.Apply(0, "Edited fixture", e => e.SetFloat(164, 2));
-        doc.AnimationEdits.MarkSaved();
-        return doc;
+        return new DocumentModel(source);
     }
 }

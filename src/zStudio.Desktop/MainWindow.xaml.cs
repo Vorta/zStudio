@@ -85,7 +85,6 @@ public partial class MainWindow : Window
         var s = ViewModel.Settings;
         RestoreWindowSize(new(SystemParameters.VirtualScreenWidth, SystemParameters.VirtualScreenHeight));
         InitializeWorkspace();
-        InitializeResourceMenus();
         InitializeContentEditors();
         InitializeSourceEditor();
         ApplyTheme(s.Theme); UpdateRecent(); ready = true;
@@ -371,15 +370,12 @@ public partial class MainWindow : Window
     {
         if (shutdownToken.IsCancellationRequested) return;
         if (!ResolveInspectionDrafts() || animation?.ResolvePendingDrafts() == false) { doc.SelectedAsset = doc.Assets.FirstOrDefault(a => a.Record.Id == shownAsset?.Id); return; }
-        asset = asset == null ? null : doc.PreviewDocument.Assets.SingleOrDefault(a => a.Id == asset.Id);
+        asset = asset == null ? null : doc.Document.Assets.SingleOrDefault(a => a.Id == asset.Id);
         bool differentAsset = shownAsset?.Id != asset?.Id;
-        shownResourceMember = asset != null && doc.ResourceEdits is { } shownEdits && asset.Index < shownEdits.Current.Members.Count ? shownEdits.Current.Members[asset.Index].Id : null;
         SourceMapsButton.Visibility = doc.SourceWorld != null ? Visibility.Visible : Visibility.Collapsed;
         PreviewTitle.Text = asset?.Name ?? Path.GetFileName(doc.Path); PreviewSubtitle.Text = SourceWorldFile(doc) is { } worldFile ? Path.GetFileName(worldFile) : asset == null ? doc.Description : $"{asset.Kind} #{asset.Index} · {asset.Length:N0} bytes · source 0x{asset.Offset:X}";
         ViewModel.Status = asset == null ? doc.Description : $"{asset.Kind} #{asset.Index}: {asset.Name} · {Path.GetFileName(doc.Path)}";
-        // A motion's member UUID survives rename/reorder; its asset index does not.
-        // Conversely, deleting a member can put another clip at the same asset ID.
-        if (asset?.Kind == AssetKind.Motion && shownDocument == doc && motion != null && doc.ResourceEdits?.Current.Members[asset.Index].Id == motion.MemberId)
+        if (asset?.Kind == AssetKind.Motion && shownDocument == doc && motion != null && doc.ResourceMembers?.Members[asset.Index].Id == motion.MemberId)
         { shownAsset = asset; await motion.RefreshClipAsync(); await RefreshAssetInspectionAsync(doc, asset, preview.Token); return; }
         if (!differentAsset && asset != null && shownDocument == doc && HasPublishedStaticScene && ViewModel.Resolver != null)
         { shownAsset = asset; await RefreshStaticSceneAsync(doc, asset); return; }
@@ -406,7 +402,7 @@ public partial class MainWindow : Window
         EmptyPreview.Text = "Loading preview…"; PreviewInfo.Text = ""; properties = null;
         try
         {
-            var snapshot = doc.PreviewDocument;
+            var snapshot = doc.Document;
             await RefreshAssetInspectionAsync(doc, asset, token);
             var bytes = asset == null ? snapshot.Bytes : snapshot.Slice(asset.Offset, asset.Length);
             if (asset?.Kind == AssetKind.Texture)
@@ -430,8 +426,8 @@ public partial class MainWindow : Window
             else if (asset != null && (asset.Kind is AssetKind.Model or AssetKind.World || asset.Content is GameNode { Class: "object3d" or "lod" }) && doc.Document.Scene != null && ViewModel.Resolver != null)
             {
                 int selectedLod = differentAsset ? 0 : Math.Max(0, LodCombo.SelectedIndex);
-                int? root = SceneLods.PreviewRoot(doc.PreviewDocument.Scene!, asset);
-                int count = new SceneLods(doc.PreviewDocument.Scene!).Count(asset.Kind == AssetKind.World ? null : root is int r ? [r] : []);
+                int? root = SceneLods.PreviewRoot(doc.Document.Scene!, asset);
+                int count = new SceneLods(doc.Document.Scene!).Count(asset.Kind == AssetKind.World ? null : root is int r ? [r] : []);
                 updating = true; LodCombo.ItemsSource = SceneLods.Choices(count); LodCombo.SelectedIndex = Math.Min(selectedLod, count - 1); LodCombo.IsEnabled = count > 1; updating = false;
                 SceneToolbar.Visibility = SceneHost.Visibility = Visibility.Visible;
                 WorldHighlights.Visibility = asset.Kind == AssetKind.World ? Visibility.Visible : Visibility.Collapsed;
@@ -446,12 +442,12 @@ public partial class MainWindow : Window
                 }
                 if (asset.Kind == AssetKind.World) await PopulateWorldMissionsAsync(doc, token);
                 string? exactMission = ExactMissionFor(doc.Path, ViewModel.Resolver.SelectedMission(doc.Path));
-                var mission = asset.Kind == AssetKind.World ? await MissionSceneLoader.LoadAsync(doc.PreviewDocument, ViewModel.Resolver, token: token, difficulty: ViewModel.Difficulty, mission: exactMission, exactMission: exactMission != null) : null;
+                var mission = asset.Kind == AssetKind.World ? await MissionSceneLoader.LoadAsync(doc.Document, ViewModel.Resolver, token: token, difficulty: ViewModel.Difficulty, mission: exactMission, exactMission: exactMission != null) : null;
                 // A source world's placement edits are carried back to its sources (see MoveSourcePlacementAsync).
                 if (mission != null) { await doc.GetPickupEditsAsync(ViewModel.Resolver, token); await PopulateWorldMissionsAsync(doc, token); }
                 if (mission != null) await PrepareSourceMapSelectionAsync(doc, mission.Scene, mission, token);
                 ConfigureSourceMapPresentation(scene, doc, mission);
-                await scene.ShowAsync(doc.PreviewDocument, asset, ViewModel.Resolver, PreferredPack, LodCombo.SelectedIndex, token, BackdropEnabled.IsChecked == true, mission); token.ThrowIfCancellationRequested(); ApplySceneOptions(); RefreshZoneToolScene();
+                await scene.ShowAsync(doc.Document, asset, ViewModel.Resolver, PreferredPack, LodCombo.SelectedIndex, token, BackdropEnabled.IsChecked == true, mission); token.ThrowIfCancellationRequested(); ApplySceneOptions(); RefreshZoneToolScene();
                 PublishSourceMapParts(scene, doc);
                 CompleteSceneHandoff();
                 // A rebuilt source world keeps the camera of the build it replaced.
@@ -477,10 +473,9 @@ public partial class MainWindow : Window
                 if (mission != null) WorldDifficulty.ToolTip = mission.Layout.Description;
                 if (mission != null && mission.Layout.DifficultyApplies && mission.Layout.MissionArchive == null && mission.Layout.Difficulty != ViewModel.Difficulty) await RefreshWorldDifficultyAsync();
             }
-            else if (asset?.Kind == AssetKind.Motion && doc.ResourceEdits != null && ViewModel.Resolver != null)
+            else if (asset?.Kind == AssetKind.Motion && doc.ResourceMembers != null && ViewModel.Resolver != null)
             {
-                var editor = new MotionEditor(doc, doc.ResourceEdits.Current.Members[asset.Index].Id, ViewModel.Resolver, previewLifetime,
-                    library => ViewModel.Documents.Select(d => d.ResourceEdits is { } e && e.SnapshotFor(library) is { } s ? (e, s) : ((ResourceEditSession, ResourceSnapshot)?)null).SingleOrDefault(p => p != null)); motion = editor;
+                var editor = new MotionEditor(doc, doc.ResourceMembers.Members[asset.Index].Id, ViewModel.Resolver, previewLifetime); motion = editor;
                 editor.SceneChanged += () => { AttachInspection(editor.Viewport); editor.Viewport.NodeSelected -= InspectNode; editor.Viewport.NodeSelected += InspectNode; RefreshSceneTree(); };
                 editor.StatusChanged += text => { if (!previewLifetime.IsCancellationRequested) ViewModel.Status = text; };
                 // Hide UI applies before the editor shows its first frame.
@@ -488,13 +483,12 @@ public partial class MainWindow : Window
                 AnimationHost.Content = editor; AnimationHost.Visibility = Visibility.Visible;
                 await editor.InitializeAsync(token);
             }
-            else if (asset?.Kind == AssetKind.Animation && doc.AnimationEdits != null && ViewModel.Resolver != null)
+            else if (asset?.Kind == AssetKind.Animation && doc.Document.Animations != null && ViewModel.Resolver != null)
             {
                 var editor = new AnimationEditor(doc, asset.Index, ViewModel.Resolver, previewLifetime, ViewModel); animation = editor; editor.MissionRequested = path => SelectMissionAsync(path, false, CancellationToken.None); editor.ExactMission = PendingExactMission;
                 if (pendingAnimationPlay) { pendingAnimationPlay = false; editor.TogglePlayback(); }
                 editor.StatusChanged += text => { if (!previewLifetime.IsCancellationRequested) ViewModel.Status = text; };
                 editor.InspectionChanged += (json, data) => { if (previewLifetime.IsCancellationRequested) return; properties = json; var source = editor.SourceByteSelection(); RawText.Text = source.Scope + "\n\n" + (source.Offset >= 0 ? Hex(source.Bytes.Span,source.Offset) : "") + (source.Length > 4096 ? "\n… first 4,096 source bytes shown." : ""); };
-                editor.SaveRequested += async () => { await SaveAnimationAsync(doc); };
                 ApplyRetainedPresentation();
                 AnimationHost.Content = editor; AttachAnimationWorkspace(editor);
                 AnimationHost.Visibility = Visibility.Visible;
@@ -504,7 +498,7 @@ public partial class MainWindow : Window
             {
                 StructuredPanel.Visibility = Visibility.Visible;
                 if (asset?.Content is AnimationEntry entry) { EventsTab.Visibility = Visibility.Visible; EventsTab.Header = entry.AllSequences.Sum(s => (long)s.Events.Count) > 200 ? "Events (first 200)" : "Events"; EventGrid.ItemsSource = EventRows(entry); StructuredPanel.SelectedIndex = 2; }
-                else if (doc.ScriptEdits != null && asset?.Content is ScriptContent) StructuredPanel.SelectedItem = scriptTab;
+                else if (doc.Document.Scripts != null && asset?.Content is ScriptContent) StructuredPanel.SelectedItem = scriptTab;
                 else StructuredPanel.SelectedIndex = asset?.Content is ScriptContent ? 1 : 0;
             }
             token.ThrowIfCancellationRequested(); EmptyPreview.Visibility = Visibility.Collapsed;
@@ -542,10 +536,10 @@ public partial class MainWindow : Window
     }
     private async Task RefreshAssetInspectionAsync(DocumentModel doc, AssetRecord? asset, CancellationToken token)
     {
-        long revision = doc.Revision; var snapshot = doc.PreviewDocument;
+        long revision = doc.Revision; var snapshot = doc.Document;
         var json = asset == null ? (JsonObject)snapshot.Metadata.DeepClone() : await LoadAssetPropertiesAsync(snapshot, asset, token);
-        var root = asset?.Kind == AssetKind.Zrd && doc.ResourceEdits is { } resources
-            ? await ResourceTreeAsync(doc, resources.Current.Members[asset.Index].Id, token) : null;
+        var root = asset?.Kind == AssetKind.Zrd && doc.ResourceMembers is { } resources
+            ? await ResourceTreeAsync(doc, resources.Members[asset.Index].Id, token) : null;
         token.ThrowIfCancellationRequested();
         if (doc.IsDisposed || doc.Revision != revision || shownDocument != doc || shownAsset?.Id != asset?.Id)
             throw new OperationCanceledException("Asset inspection was superseded.");
@@ -561,8 +555,8 @@ public partial class MainWindow : Window
         RefreshScriptGrid(doc, asset);
         var original = asset == null ? null : doc.OriginalAsset(asset);
         var sourceBytes = asset == null ? doc.Document.Bytes : original == null ? ReadOnlyMemory<byte>.Empty : doc.Document.Slice(original.Offset, original.Length);
-        RawText.Text = original == null && asset != null ? "New record: no original source bytes." : Hex(sourceBytes.Span[..Math.Min(sourceBytes.Length, 4096)], original?.Offset ?? 0) + (sourceBytes.Length > 4096 ? "\n… first 4,096 original source bytes shown." : "");
-        PreviewSubtitle.Text = SourceWorldFile(doc) is { } worldFile ? Path.GetFileName(worldFile) : asset == null ? doc.Description : $"{asset.Kind} #{asset.Index} · {asset.Length:N0} edited bytes" + (original == null ? " · new record" : $" · source 0x{original.Offset:X}");
+        RawText.Text = Hex(sourceBytes.Span[..Math.Min(sourceBytes.Length, 4096)], original?.Offset ?? 0) + (sourceBytes.Length > 4096 ? "\n… first 4,096 source bytes shown." : "");
+        PreviewSubtitle.Text = SourceWorldFile(doc) is { } worldFile ? Path.GetFileName(worldFile) : asset == null ? doc.Description : $"{asset.Kind} #{asset.Index} · {asset.Length:N0} bytes" + (original == null ? "" : $" · source 0x{original.Offset:X}");
         var related = asset == null ? null : FindRelated(asset, doc);
         RelatedList.ItemsSource = related?.Items;
         RelatedLimit.Visibility = related?.Truncated == true ? Visibility.Visible : Visibility.Collapsed;
@@ -581,7 +575,7 @@ public partial class MainWindow : Window
                 yield return ""; // Empty instructions still consume the passive inspection work budget.
                 foreach (string argument in instruction) yield return argument;
             }
-            if (asset.Content is GameModel model && doc.PreviewDocument.Scene is { } sceneData)
+            if (asset.Content is GameModel model && doc.Document.Scene is { } sceneData)
                 foreach (var polygon in model.Polygons)
                 {
                     int mat = polygon.MaterialIndex;
@@ -615,7 +609,7 @@ public partial class MainWindow : Window
     private async void AssetLoadingRow(object sender, DataGridRowEventArgs e)
     {
         if (e.Row.Item is not AssetItem { Record.Kind: AssetKind.Texture } item || item.ThumbnailRequested || ViewModel.SelectedDocument is not { } doc || !doc.Assets.Contains(item)) return;
-        item.ThumbnailRequested = true; var token = doc.Lifetime.Token; var thumbnailSnapshot = doc.PreviewDocument; var thumbnailRecord = item.Record; long thumbnailRevision = doc.Revision;
+        item.ThumbnailRequested = true; var token = doc.Lifetime.Token; var thumbnailSnapshot = doc.Document; var thumbnailRecord = item.Record; long thumbnailRevision = doc.Revision;
         try
         {
             await thumbnailGate.WaitAsync(token);
@@ -707,7 +701,7 @@ public partial class MainWindow : Window
     {
         if (ViewModel.SelectedDocument is not { } doc || shownAsset?.Content is not TextureInfo t) return;
         StackPanel content = new() { Margin = new(18) }; content.Children.Add(new TextBlock { Text = $"{t.Width} × {t.Height} · flags 0x{t.Flags:X2}\n{t.PaletteCount} palette entries · page {t.PalettePage}\n" + shownAsset.Metadata.ToJsonString(JsonData.Options), TextWrapping = TextWrapping.Wrap });
-        if (t.PaletteOffset >= 0) { WrapPanel colors = new(); var bytes = doc.PreviewDocument.Bytes.Span.Slice(t.PaletteOffset, t.PaletteLength); for (int i = 0; i < bytes.Length / 2; i++) { ushort value = System.Buffers.Binary.BinaryPrimitives.ReadUInt16LittleEndian(bytes[(i * 2)..]); byte r = (byte)(value >> 11), g = (byte)((value >> 5) & 63), b = (byte)(value & 31); colors.Children.Add(new Border { Width = 24, Height = 24, Background = new SolidColorBrush(Color.FromRgb((byte)((r << 3) | (r >> 2)), (byte)((g << 2) | (g >> 4)), (byte)((b << 3) | (b >> 2)))), ToolTip = $"Index {i} · RGB565 0x{value:X4}" }); } content.Children.Add(colors); }
+        if (t.PaletteOffset >= 0) { WrapPanel colors = new(); var bytes = doc.Document.Bytes.Span.Slice(t.PaletteOffset, t.PaletteLength); for (int i = 0; i < bytes.Length / 2; i++) { ushort value = System.Buffers.Binary.BinaryPrimitives.ReadUInt16LittleEndian(bytes[(i * 2)..]); byte r = (byte)(value >> 11), g = (byte)((value >> 5) & 63), b = (byte)(value & 31); colors.Children.Add(new Border { Width = 24, Height = 24, Background = new SolidColorBrush(Color.FromRgb((byte)((r << 3) | (r >> 2)), (byte)((g << 2) | (g >> 4)), (byte)((b << 3) | (b >> 2)))), ToolTip = $"Index {i} · RGB565 0x{value:X4}" }); } content.Children.Add(colors); }
         new Window { Owner = this, Title = "Texture palette and header", Width = 480, Height = 650, Content = new ScrollViewer { Content = content }, WindowStartupLocation = WindowStartupLocation.CenterOwner }.Show();
     }
     private string? PreferredPack => (TexturePackCombo.SelectedItem as PackChoice)?.Path;
@@ -742,7 +736,7 @@ public partial class MainWindow : Window
         RevealSceneNode(index);
         var actor = scene?.PickupAt(index);
         if (actor != null) index = actor.Root;
-        scene?.SelectPickup(actor?.Root, actor?.Pickup is { } pickup && pickupDocument?.PickupEdits?.Find(pickup.Source) != null, pickupDocument?.EditingLocked ?? true);
+        scene?.SelectPickup(actor?.Root);
         selectedNode = index; scene?.SelectFramingNode(index); var properties = JsonData.PreviewObject(data.Nodes[index].Metadata);
         if (scene?.Mission is { } mission)
         {
@@ -782,7 +776,7 @@ public partial class MainWindow : Window
     {
         if (ViewModel.SelectedDocument is not { } doc || ViewModel.Resolver is not { } resolver) return;
         if (operation != null) { ViewModel.Status = "Wait for the current operation or cancel it first"; return; }
-        AssetRecord[] assets = all ? doc.PreviewDocument.Assets.ToArray() : AssetGrid.SelectedItems.Cast<AssetItem>().Select(a => a.Record).ToArray();
+        AssetRecord[] assets = all ? doc.Document.Assets.ToArray() : AssetGrid.SelectedItems.Cast<AssetItem>().Select(a => a.Record).ToArray();
         if (assets.Length == 0) { ViewModel.Status = "Select an asset to export"; return; }
         OpenFolderDialog dialog = new() { Title = "Choose an export destination outside the source folder" }; if (dialog.ShowDialog(this) != true) return;
         var result = await ExportAssetsAsync(doc, assets, dialog.FolderName, json, PreferredPack, Math.Max(0,LodCombo.SelectedIndex), CancellationToken.None);
@@ -858,7 +852,6 @@ public partial class MainWindow : Window
         finally { detachingWorkspace = false; }
         SaveWorkspacePreferences();
     }
-    private void CopyPropertiesClick(object sender, RoutedEventArgs e) { if (animation?.ResolvePendingDrafts() == false) return; if (properties != null) Clipboard.SetText(properties.ToJsonString(JsonData.Options)); }
     private void HelpClick(object sender, RoutedEventArgs e) => MessageBox.Show(this, "Workspace: Initialize unpacks the retail ZBD files once into a source project (a folder with data and gamegen); File > Open workspace (Ctrl+O) opens one. Choose a map to edit it; the back arrow returns to the maps. Ctrl+Z/Ctrl+Y undo and redo, Ctrl+S saves the project's changed files, Ctrl+W closes the map. Export builds game files from the sources into a folder outside the project.\n\nView: middle drag orbits; Shift+middle drag pans; Ctrl+middle drag or the wheel zooms toward the pointer (orthographic views scale about it); Ctrl+Shift+middle drag dollies. Numpad 1/3/7 selects front/right/top (Ctrl for the opposite views), Numpad 5 toggles perspective/orthographic, Home frames everything and Numpad decimal frames the selection; the Perspective chip offers the same. F10 hides or shows the UI (the view alone, for footage; clicks then select nothing) and F11 toggles fullscreen. Flycam: WASD moves along the view, Space/C moves up/down, the mouse looks around and the wheel changes speed; Escape returns to normal controls.\n\nObjects: click one in the view or the World tree to select it; its Properties pane edits it. Move and Rotate show handles; Apply accepts the changes as one undo step, Revert discards them. Escape or a click on empty space clears the selection. Copy… asks for the copy's name and places it beside the original (in place when it shows nothing with a width).\n\nPolygon zones: the Zones group's Edit zones tool (P paints, E erases) adds a zone to, or removes it from, every polygon you drag over in the map's own models; Ctrl inverts it for a stroke, Shift+click picks a polygon's zone, [ and ] step through the map's zones, and Escape leaves the tool.\n\nWorld tree: Zones, AI Networks and Animations (definitions) list the map's zones, AI networks and animation definitions; selecting one opens its card in the Properties pane (a zone's label and a network's settings are edited there). Zones and AI networks are shown one by one with their eyes (all start hidden); the eyes on the Zones, AI Networks, AI Vehicles and Pickups rows show or hide everything below them. Middle-clicking a world object's eye shows only it. Up/Down move through the rows (a row that can be selected becomes the selection), Left/Right reach a row's buttons, Space or Enter opens or closes a row or presses the button.", "Controls and formats");
     private void AboutClick(object sender, RoutedEventArgs e)
     {
@@ -881,14 +874,14 @@ public partial class MainWindow : Window
         { e.Handled = true; sectionCard?.FocusFirst(); return; }
         if (e.Key == Key.Escape && (scene?.CancelPickupDrag() == true || scene?.CancelTerrainStroke() == true)) { e.Handled = true; return; }
         if (e.Key == Key.Space && System.Windows.Input.Keyboard.Modifiers == ModifierKeys.None &&
-            (shownAsset?.Kind == AssetKind.Animation && ViewModel.SelectedDocument?.AnimationEdits != null || motion != null) &&
+            (shownAsset?.Kind == AssetKind.Animation && ViewModel.SelectedDocument?.Document.Animations != null || motion != null) &&
             AnimationSpaceTarget(e.OriginalSource as DependencyObject))
         {
             e.Handled = true;
             if (!e.IsRepeat) { if (motion != null) motion.TogglePlayback(); else if (animation != null) animation.TogglePlayback(); else pendingAnimationPlay = !pendingAnimationPlay; }
             return;
         }
-        bool ctrl = KeyboardModifiers(); if (ctrl && e.Key == Key.O) OpenWorkspaceClick(this, e); else if (ctrl && e.Key == Key.S) { if ((System.Windows.Input.Keyboard.Modifiers & ModifierKeys.Shift) != 0) SaveCurrentAsClick(this, e); else SaveCurrentClick(this, e); } else if (ctrl && e.Key == Key.Z && e.OriginalSource is not TextBoxBase) UndoAnimationClick(this, e); else if (ctrl && e.Key == Key.Y && e.OriginalSource is not TextBoxBase) RedoAnimationClick(this, e); else if (ctrl && e.Key == Key.W) CloseCurrentClick(this, e); else if (e.Key == Key.F5) ReloadClick(this, e); else if (e.Key == Key.Escape && OperationRunning && !zoneTool.Applying) CancelRunningOperation(); else return; e.Handled = true;
+        bool ctrl = KeyboardModifiers(); if (ctrl && e.Key == Key.O) OpenWorkspaceClick(this, e); else if (ctrl && e.Key == Key.S) SaveCurrentClick(this, e); else if (ctrl && e.Key == Key.Z && e.OriginalSource is not TextBoxBase) UndoDocumentClick(this, e); else if (ctrl && e.Key == Key.Y && e.OriginalSource is not TextBoxBase) RedoDocumentClick(this, e); else if (ctrl && e.Key == Key.W) CloseCurrentClick(this, e); else if (e.Key == Key.F5) ReloadClick(this, e); else if (e.Key == Key.Escape && OperationRunning && !zoneTool.Applying) CancelRunningOperation(); else return; e.Handled = true;
     }
     private bool AnimationSpaceTarget(DependencyObject? source)
     {
@@ -926,7 +919,7 @@ public partial class MainWindow : Window
             e.Cancel = true; resolvingClose = true;
             try
             {
-                // Discard (and a canceled Save As) can finish synchronously. Leave the
+                // Discard can finish synchronously. Leave the
                 // original WPF Closing event before showing prompts or calling Close again.
                 await Dispatcher.Yield(DispatcherPriority.Normal);
                 if (animation?.ResolvePendingDrafts() == false || !await ResolvePropertiesDraftsAsync() || !await ResolveInspectionDraftsAsync()) return;

@@ -170,14 +170,14 @@ public sealed class AnimationEffectCycleBudgetTests
             byte[] bytes = GameZWriter.Write(world, Token);
             string worldPath = Path.Combine(directory, "gamez.zbd"); File.WriteAllBytes(worldPath, bytes);
             byte[] aliases = ZrdWriter.Write(ZrdText.Parse("( ( alias missing.wav ) ( alias one.wav LOOPED ) )", Token), Token);
-            byte[] resource = ResourceEditingTests.Archive(("effects.zrd", ZrdWriter.Write(ZrdText.Parse(
+            byte[] resource = ResourceReaderTests.Archive(("effects.zrd", ZrdWriter.Write(ZrdText.Parse(
                 "( ( fxroot NAME ( first ) MAPS ( first ) ) ( fxroot NAME ( last ) MAPS ( last0 last1 ) SPEED ( 2 ) LOOPING ( ON ) ) )", Token), Token)),
                 ("net_01.zrd", ZrdWriter.Write(ZrdText.Parse("( )", Token), Token)), ("sounds.zrd", aliases), ("sounds.zrd", aliases));
             // Two directory members reference the exact same sound-definition payload.
             int table = resource.Length - 8 - 4 * 148;
             resource.AsSpan(table + 2 * 148, 8).CopyTo(resource.AsSpan(table + 3 * 148, 8));
             string resourcePath = Path.Combine(directory, "resources.zbd"); File.WriteAllBytes(resourcePath, resource);
-            byte[] sounds = ResourceEditingTests.Archive(("one.wav", SourceFixture.Tone(new(8000, 8, 1), 2, null)));
+            byte[] sounds = ResourceReaderTests.Archive(("one.wav", SourceFixture.Tone(new(8000, 8, 1), 2, null)));
             string soundPath = Path.Combine(directory, "sounds.zbd"); File.WriteAllBytes(soundPath, sounds);
             var scriptPackage = FormatRegistry.Default.OpenBytes("scripts.zbd", ContentFixture.Scripts(), token: Token).Scripts!;
             var scriptEntry = scriptPackage.Entries[0] with { Name = "unused.gw", Instructions =
@@ -198,10 +198,9 @@ public sealed class AnimationEffectCycleBudgetTests
             Assert.Equal(2, context.Sounds.Count); // Raw filename plus the first alias whose WAV actually exists.
             Assert.Equal("net_01.zrd", Assert.Single(context.Mission!.AiNetworks.Networks).Member);
             // The same raw archives feed mission and audio phases. Exact admission succeeds without
-            // counting/reopening them twice; neither warm snapshots nor a cached mission bypass refusal.
+            // counting/reopening them twice; a cached mission does not bypass refusal.
             var published = new[] { worldPath, resourcePath, soundPath, scriptPath }.Select(path =>
                 FormatRegistry.Default.OpenBytes(path, File.ReadAllBytes(path), token: Token)).ToArray();
-            resolver.SetWorkspaceSnapshots(Guid.NewGuid(), published);
             var rawRefusal = new PreviewResourceBudget(bytes.Length + resource.Length + sounds.Length - 1);
             await Assert.ThrowsAsync<InvalidDataException>(() => AnimationPreviewContext.LoadWithResourcesAsync(package,
                 Path.Combine(directory, "anim.zbd"), resolver, rawRefusal, worldPath, Token));
@@ -243,11 +242,10 @@ public sealed class AnimationEffectCycleBudgetTests
             foreach (string name in new[] { "aiv", "vehicle", "startanims", "ai" })
             {
                 string path = Path.Combine(directory, name + ".zbd");
-                byte[] content = ResourceEditingTests.Archive((name + ".zrd", ignored));
+                byte[] content = ResourceReaderTests.Archive((name + ".zrd", ignored));
                 File.WriteAllBytes(path, content);
                 selected.Add(FormatRegistry.Default.OpenBytes(path, content, token: Token));
             }
-            resolver.SetWorkspaceSnapshots(Guid.NewGuid(), selected);
             var projectionRefusal = new PreviewResourceBudget(maximumDecodedBytes: 512 * 1024);
             foreach (var document in published.Concat(selected)) projectionRefusal.Retain(document, Token);
             var selectedWorld = published.Single(d => d.Path == worldPath);

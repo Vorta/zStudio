@@ -53,7 +53,7 @@ internal static class ParachuteMcpChecks
             Assert.Equal(Guid.Parse(state["windows"]![0]!["id"]!.GetValue<string>()), state["selected"]!.GetValue<Guid>());
             Assert.StartsWith("VTOL drop windows ready:", main.ViewModel.Status);
             var windowsPicker = (ComboBox)main.FindName("ParachuteWindows");
-            Assert.True(windowsPicker.IsEnabled); Assert.False(world.EditingLocked);
+            Assert.True(windowsPicker.IsEnabled);
             windowsPicker.SelectedIndex = 0;
             Assert.Equal((await State())!["selected"]!.GetValue<Guid>(), Viewport().SelectedParachuteWindow);
             Assert.True(((FrameworkElement)main.FindName("ParachuteMoveButtons")).IsEnabled);
@@ -273,128 +273,13 @@ internal static class ParachuteMcpChecks
             var owner = main.ViewModel.Documents.Single(d => Id(d) == state["owner"]!.GetValue<string>());
             Assert.NotSame(world, owner); Assert.Same(world, main.ViewModel.SelectedDocument);
             Assert.EndsWith("anim.zbd", owner.Path, StringComparison.OrdinalIgnoreCase);
-            byte[] original = File.ReadAllBytes(owner.Path);
-            long revision = owner.Revision;
-            // Inspecting sibling coordinates is permitted on an animation owner; explicit animation controls must
-            // still use AnimationEdits rather than dispatching through its now-present coordinate session.
-            await Job("pickups", new() { ["document"] = Id(owner) });
-            Assert.NotEmpty(owner.PickupEdits!.Records);
-            await Unlock();
-            await SelectFirstWindow();
-
-            var staleOwner = await Arguments("begin"); staleOwner["ownerRevision"] = owner.Revision + 1;
-            Assert.Equal("revision_conflict", (await Job("parachute", staleOwner, "failed"))["code"]!.GetValue<string>());
-            state = (await PathAction("begin"))["parachute"]!;
-            draft = state["draft"]!["token"]!.GetValue<string>();
-            Assert.Equal("pending_drafts", Assert.Throws<StudioCommandException>(() => main.ViewModel.ValidateNavigationPublication!(false)).Code);
-            // A clean owner's unfinished transform participates in both normal close and delayed automation close.
-            var closeAutomation = (AsyncLocal<bool>)typeof(MainWindow).GetField("automationRequest", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(main)!;
-            bool oldAutomation = closeAutomation.Value; closeAutomation.Value = true;
-            try
-            {
-                main.Close(); Assert.True(main.IsLoaded);
-                await Until(() => !(bool)typeof(MainWindow).GetField("resolvingClose", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(main)!);
-                Assert.NotNull((await State())!["draft"]);
-                typeof(MainWindow).GetField("automationCloseRequested", BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(main, true);
-                main.Close(); Assert.True(main.IsLoaded); Assert.NotNull((await State())!["draft"]);
-            }
-            finally { closeAutomation.Value = oldAutomation; }
-            Assert.Equal("pending_drafts", (await Job("parachute", await Arguments("hide"), "failed"))["code"]!.GetValue<string>());
-            // GUI cancellation is the same draft, with no preliminary discard dialog or accepted edit.
-            Click("cancel");
-            Assert.Null((await State())!["draft"]); Assert.Equal(revision, owner.Revision);
-
-            state = (await PathAction("begin"))["parachute"]!;
-            draft = state["draft"]!["token"]!.GetValue<string>();
-            var stale = await Arguments("set", new() { ["token"] = "expired", ["start"] = 2 });
-            Assert.Equal("stale_draft", (await Job("parachute", stale, "failed"))["code"]!.GetValue<string>());
-            // Real TextChanged + routed Confirm protect GUI/protocol parity, not only the underlying command.
-            ((TextBox)main.FindName("ParachuteStart")).Text = "2";
-            await Until(() => ((Button)main.FindName("ParachuteConfirm")).IsEnabled);
-            Click("confirm");
-            await Until(() => owner.Revision == revision + 1);
-            await UntilAsync(async () => (await State())?["ownerRevision"]?.GetValue<long>() == owner.Revision);
-            Assert.False(world.IsDirty); Assert.True(owner.IsDirty); Assert.Same(world, main.ViewModel.SelectedDocument);
-            Assert.Equal(2, FirstWindow(owner).Start);
-            Assert.Equal(original, File.ReadAllBytes(owner.Path));
-            await SupersedeRefresh("undo"); Assert.Equal(1, FirstWindow(owner).Start); Assert.False(owner.IsDirty);
-            state = (await PathAction("begin"))["parachute"]!;
-            draft = state["draft"]!["token"]!.GetValue<string>();
-            await PathAction("set", new() { ["token"] = draft, ["start"] = 2 });
-            await SupersedeRefresh("confirm", new() { ["token"] = draft }); Assert.Equal(2, FirstWindow(owner).Start);
-            await PathAction("undo"); Assert.Equal(1, FirstWindow(owner).Start);
-            await PathAction("redo"); Assert.Equal(2, FirstWindow(owner).Start);
-            await Call("undo_redo", new() { ["document"] = Id(owner), ["revision"] = owner.Revision, ["action"] = "undo" });
-            Assert.Equal(1, FirstWindow(owner).Start);
-            await Call("undo_redo", new() { ["document"] = Id(owner), ["revision"] = owner.Revision, ["action"] = "redo" });
-            Assert.Equal(2, FirstWindow(owner).Start);
-            await PathAction("show");
-            await SupersedeRefresh("show");
-            await SupersedeRefresh("analyze");
-            // The ordinary Files close path must reach animation Save As even after pickup inspection.
-            // Canceling that destination picker keeps the accepted animation edit and document alive.
-            int animationSavePrompts = 0;
-            main.ShowingAnimationSaveDialog = _ => { animationSavePrompts++; return false; };
-            try { await CloseOwnerWithSave(); }
-            finally { main.ShowingAnimationSaveDialog = null; }
-            Assert.Equal(1, animationSavePrompts);
-            Assert.False(owner.IsDisposed); Assert.True(owner.AnimationEdits!.IsDirty);
-            Assert.Null(owner.ApprovedCloseRevision); Assert.Equal(original, File.ReadAllBytes(owner.Path));
-            string saved = Path.Combine(fixture.Root, "animation-copy.zbd");
-            await PathAction("save", new() { ["destination"] = saved });
-            var reopened = await FormatRegistry.Default.OpenAsync(saved, token);
-            Assert.Equal(2, Assert.Single(VtolDropWindows.Discover(reopened.Animations!, token).Candidates).Windows[0].Start);
-            Assert.Equal(original, File.ReadAllBytes(owner.Path)); Assert.False(owner.IsDirty);
-
-            await PathAction("show");
-            await SelectFirstWindow();
-            state = (await PathAction("begin"))["parachute"]!;
-            var oldArguments = await Arguments("confirm", new() { ["token"] = state["draft"]!["token"]!.GetValue<string>() });
-            // An independent accepted owner edit expires the overlay and draft instead of retaining a stale write plan.
-            owner.AnimationEdits!.Apply(1, "Change owner", e => e.SetFloat(164, e.F32(164) + 1));
-            Assert.False((await State())!["visible"]!.GetValue<bool>());
-            Assert.Equal("not_ready", (await Job("parachute", oldArguments, "failed"))["code"]!.GetValue<string>());
-
-            // A document can hold accepted animation and coordinate edits together. Save-and-close
-            // must persist both, rather than approving disposal after only one session was saved.
-            await Job("pickups", new() { ["document"] = Id(owner) });
-            await Call("scene_lock", new() { ["document"] = Id(owner), ["revision"] = owner.Revision, ["locked"] = false });
-            var placement = owner.PickupEdits!.Records[0];
-            var position = owner.PickupEdits.Position(placement.Source);
-            var coordinateSource = new Dictionary<string, object?> { ["ArchivePath"] = placement.Source.ArchivePath, ["AssetIndex"] = placement.Source.AssetIndex,
-                ["ResourceName"] = placement.Source.ResourceName, ["RecordIndex"] = placement.Source.RecordIndex };
-            await Call("pickup_move", new() { ["document"] = Id(owner), ["revision"] = owner.Revision, ["source"] = coordinateSource,
-                ["x"] = position.X + 7, ["y"] = position.Y, ["z"] = position.Z });
-            Assert.True(owner.AnimationEdits.IsDirty); Assert.True(owner.PickupEdits.IsDirty);
-            string mixedCopy = Path.Combine(fixture.Root, "mixed-animation-copy.zbd");
-            await Job("save_document", new() { ["document"] = Id(owner), ["revision"] = owner.Revision, ["destination"] = mixedCopy });
-            Assert.False(owner.IsDirty); Assert.True(File.Exists(mixedCopy));
-            // Repeat through the normal GUI close decision, which must save both sessions too.
-            owner.AnimationEdits.Apply(1, "Change owner before close", e => e.SetFloat(164, e.F32(164) + 1));
-            await Call("pickup_move", new() { ["document"] = Id(owner), ["revision"] = owner.Revision, ["source"] = coordinateSource,
-                ["x"] = position.X + 8, ["y"] = position.Y, ["z"] = position.Z });
-            string closedCopy = Path.Combine(fixture.Root, "closed-animation-copy.zbd");
-            byte[] expectedAnimation = AnimationWriter.Write(owner.AnimationEdits.Package);
-            var savedCoordinates = owner.PickupEdits;
-            // Animation is the owner's primary history; coordinate steps remain reachable after
-            // that requested direction is exhausted, for both undo and redo.
-            while (owner.AnimationEdits.CanUndo)
-                await Call("undo_redo", new() { ["document"] = Id(owner), ["revision"] = owner.Revision, ["action"] = "undo" });
-            Assert.Equal(position.X + 8, savedCoordinates.Position(placement.Source).X);
-            await Call("undo_redo", new() { ["document"] = Id(owner), ["revision"] = owner.Revision, ["action"] = "undo" });
-            Assert.Equal(position.X + 7, savedCoordinates.Position(placement.Source).X);
-            while (owner.AnimationEdits.CanRedo)
-                await Call("undo_redo", new() { ["document"] = Id(owner), ["revision"] = owner.Revision, ["action"] = "redo" });
-            await Call("undo_redo", new() { ["document"] = Id(owner), ["revision"] = owner.Revision, ["action"] = "redo" });
-            Assert.Equal(position.X + 8, savedCoordinates.Position(placement.Source).X);
-            Assert.Equal(expectedAnimation, AnimationWriter.Write(owner.AnimationEdits.Package));
-            main.ShowingAnimationSaveDialog = dialog => { dialog.FileName = closedCopy; return true; };
-            try { await CloseOwnerWithSave(); }
-            finally { main.ShowingAnimationSaveDialog = null; }
-            Assert.True(owner.IsDisposed); Assert.False(savedCoordinates.IsDirty);
-            Assert.Equal(expectedAnimation, File.ReadAllBytes(closedCopy));
-            var reopenedCoordinates = await PickupPlacementEditSession.LoadAsync(world.Path, main.ViewModel.Resolver!, token);
-            Assert.Equal(position.X + 8, reopenedCoordinates.Position(placement.Source).X);
+            // A compiled world's drop windows are shown and analyzed, never selected or moved.
+            Assert.Null(state["selected"]);
+            string compiledWindow = state["windows"]![0]!["id"]!.GetValue<string>();
+            Assert.Equal("read_only", (await Job("parachute", await Arguments("select", new() { ["window"] = compiledWindow }), "failed"))["code"]!.GetValue<string>());
+            Assert.Equal("read_only", (await Job("parachute", await Arguments("begin"), "failed"))["code"]!.GetValue<string>());
+            Assert.False(((ComboBox)main.FindName("ParachuteWindows")).IsEnabled);
+            Assert.False(owner.IsDirty); Assert.False(world.IsDirty);
 
             // An ordinary source timing edit can make one discovered flight unavailable without
             // invalidating a healthy sibling. The picker must remain available, with no partial path.
@@ -430,72 +315,6 @@ internal static class ParachuteMcpChecks
             await PathAction("hide");
             Assert.Equal("VTOL drop windows hidden.", main.ViewModel.Status);
 
-            async Task CloseOwnerWithSave()
-            {
-                Exception? dialogFailure = null;
-                var timer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(10) };
-                timer.Tick += (_, _) =>
-                {
-                    var dialog = main.OwnedWindows.Cast<Window>().SingleOrDefault(w => w.Title == "Unsaved changes");
-                    if (dialog == null) return;
-                    try
-                    {
-                        token.ThrowIfCancellationRequested();
-                        var buttons = ((Grid)dialog.Content).Children.OfType<WrapPanel>().Single();
-                        buttons.Children.OfType<Button>().Single(b => b.Content as string is "Save" or "Save As…")
-                            .RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
-                    }
-                    catch (Exception ex) { dialogFailure = ex; dialog.Close(); }
-                };
-                timer.Start();
-                try { await main.ViewModel.CloseAsync(owner); if (dialogFailure != null) throw dialogFailure; }
-                finally { timer.Stop(); }
-            }
-
-            async Task SupersedeRefresh(string action, Dictionary<string, object?>? extra = null)
-            {
-                TaskCompletionSource refreshing = new(TaskCreationOptions.RunContinuationsAsynchronously);
-                using var releaseRefresh = new SemaphoreSlim(0);
-                // Hold the old worker even after supersession, so its canceled continuation runs only
-                // after the real GUI has published a newer session and begun its independent draft.
-                main.ParachuteAnalysisPreparing = _ => { refreshing.TrySetResult(); Assert.True(releaseRefresh.Wait(TimeSpan.FromSeconds(20))); };
-                // The accepted mutations use the real protocol job. Ordinary GUI analysis uses its
-                // existing ReportUi boundary so a stale cancellation cannot overwrite newer status.
-                Task accepted;
-                if (action is "show" or "analyze")
-                {
-                    int entry = (await State())!["entry"]!.GetValue<int>();
-                    Func<Task> work = () => (Task)typeof(MainWindow).GetMethod(action == "show" ? "ShowParachutesAsync" : "AnalyzeParachuteAsync", BindingFlags.Instance | BindingFlags.NonPublic)!
-                        .Invoke(main, action == "show" ? [CancellationToken.None, null, null] : [entry, CancellationToken.None])!;
-                    accepted = (Task)typeof(MainWindow).GetMethod("ReportUi", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(main, [work])!;
-                }
-                else accepted = PathAction(action, extra);
-                try
-                {
-                    var first = await Task.WhenAny(refreshing.Task, accepted).WaitAsync(token);
-                    if (first == accepted) { await accepted; Assert.Fail("The operation did not reach its analysis worker."); }
-                    main.ParachuteAnalysisPreparing = null;
-                    // Analyze retains its old panel until replacement; hide it before the GUI Show.
-                    if (action == "analyze") typeof(MainWindow).GetMethod("CloseParachutes", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(main, []);
-                    var show = (Button)main.FindName("ParachuteButton");
-                    Assert.True(show.IsEnabled); show.RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent, show));
-                    await UntilAsync(async () => (await State())?["visible"]?.GetValue<bool>() == true);
-                    Click("numeric");
-                    var newer = (await State())!;
-                    string snapshot = newer["snapshot"]!.GetValue<string>(), newerToken = newer["draft"]!["token"]!.GetValue<string>();
-                    string input = newer["draft"]!["input"]!.GetValue<string>();
-                    main.ViewModel.Status = "Newer Parachute draft retained";
-                    releaseRefresh.Release(); await accepted;
-                    var retained = (await State())!;
-                    Assert.True(retained["visible"]!.GetValue<bool>());
-                    Assert.Equal(snapshot, retained["snapshot"]!.GetValue<string>());
-                    Assert.Equal(newerToken, retained["draft"]!["token"]!.GetValue<string>());
-                    Assert.Equal(input, retained["draft"]!["input"]!.GetValue<string>());
-                    Assert.Equal("Newer Parachute draft retained", main.ViewModel.Status);
-                    Click("cancel");
-                }
-                finally { releaseRefresh.Release(); main.ParachuteAnalysisPreparing = null; }
-            }
             bool Confirming() => (bool)typeof(MainWindow).GetField("acceptingParachute", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(main)!;
             async Task GuiConfirmFinished()
             {
@@ -529,9 +348,7 @@ internal static class ParachuteMcpChecks
                 }
                 finally { release.Release(); main.SourceEditPreparing = null; }
             }
-            async Task Unlock() => await Call("scene_lock", new() { ["document"] = Id(world), ["revision"] = world.Revision, ["locked"] = false });
             zStudio.Rendering.SceneViewport Viewport() => (zStudio.Rendering.SceneViewport)((ContentControl)main.FindName("SceneHost")).Content;
-            async Task SelectFirstWindow() => await PathAction("select", new() { ["window"] = (await State())!["windows"]![0]!["id"]!.GetValue<string>() });
             async Task<JsonNode?> State()
             {
                 var current = await Call("state", new());
@@ -542,11 +359,7 @@ internal static class ParachuteMcpChecks
                 var current = await Call("state", new());
                 var args = extra ?? new(); args["action"] = action; args["preview"] = current["preview"]!.GetValue<string>();
                 args["document"] = Id(world); args["revision"] = world.Revision;
-                if (action != "show")
-                {
-                    var shown = (await State())!; args["snapshot"] = shown["snapshot"]!.GetValue<string>();
-                    args["ownerRevision"] = shown["ownerRevision"]!.GetValue<long>();
-                }
+                if (action != "show") args["snapshot"] = (await State())!["snapshot"]!.GetValue<string>();
                 return args;
             }
             async Task<JsonNode> PathAction(string action, Dictionary<string, object?>? extra = null) => await Job("parachute", await Arguments(action, extra));
@@ -587,7 +400,6 @@ internal static class ParachuteMcpChecks
         }
     }
     private static string Id(DocumentModel document) => document.SessionId.ToString();
-    private static VtolDropWindow FirstWindow(DocumentModel owner) => Assert.Single(VtolDropWindows.Discover(owner.AnimationEdits!.Package).Candidates).Windows[0];
     private static IEnumerable<DependencyObject> Descendants(DependencyObject root)
     {
         for (int i = 0; i < System.Windows.Media.VisualTreeHelper.GetChildrenCount(root); i++)

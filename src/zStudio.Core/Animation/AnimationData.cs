@@ -59,15 +59,6 @@ public sealed class AnimationEvent(byte[] bytes, long sourceOffset = -1) : Anima
     private AnimationKeyframe[]? playbackKeyframes;
     private long playbackVersion = -1;
     private long keyframeVersion = -1;
-    /// <summary>Count only already retained caches, including stale caches, without preparing a stream or frames.</summary>
-    internal void RetainedCaches(RetainedDocumentBudget budget, CancellationToken token)
-    {
-        keyframeStream?.Retained(budget, token);
-        if (keyframeError != null) budget.Text(keyframeError, token);
-        if (playbackKeyframes != null && budget.Object(playbackKeyframes, 32L + 8L * playbackKeyframes.Length, token))
-            foreach (var frame in playbackKeyframes)
-                if (budget.Object(frame, 128, token)) budget.Bytes(frame.Bytes, token);
-    }
     public Guid Id { get; init; } = Guid.NewGuid();
     public long SourceOffset { get; } = sourceOffset;
     public uint Version { get; init; } = 28;
@@ -83,8 +74,6 @@ public sealed class AnimationEvent(byte[] bytes, long sourceOffset = -1) : Anima
         if (keyframeVersion == MutationVersion) { clone.keyframeStream = keyframeStream?.ForSnapshot(clone.Bytes); clone.keyframeError = keyframeError; clone.keyframeVersion = 0; }
         return clone;
     }
-    public AnimationEvent Duplicate() => Duplicate(default);
-    public AnimationEvent Duplicate(CancellationToken token) => new(SnapshotBytes(Bytes, token)) { Version = Version };
     public IReadOnlyList<AnimationKeyframe> Keyframes(CancellationToken token = default)
     {
         token.ThrowIfCancellationRequested();
@@ -232,11 +221,11 @@ public sealed class AnimationSequence(byte[] header, long offset = -1) : Animati
     public List<AnimationEvent> Events { get; } = [];
     public byte[] OpaqueTail { get; internal set; } = [];
     public bool IsEditable => OpaqueTail.Length == 0;
-    public AnimationSequence Clone(bool newIdentity = false) => Clone(newIdentity, default);
-    public AnimationSequence Clone(bool newIdentity, CancellationToken token)
+    public AnimationSequence Clone() => Clone(default);
+    public AnimationSequence Clone(CancellationToken token)
     {
-        var copy = new AnimationSequence(SnapshotBytes(Bytes, token), SourceOffset) { Id = newIdentity ? Guid.NewGuid() : Id, OpaqueTail = SnapshotBytes(OpaqueTail, token) };
-        foreach (var ev in Events) copy.Events.Add(newIdentity ? ev.Duplicate(token) : ev.Clone(token));
+        var copy = new AnimationSequence(SnapshotBytes(Bytes, token), SourceOffset) { Id = Id, OpaqueTail = SnapshotBytes(OpaqueTail, token) };
+        foreach (var ev in Events) copy.Events.Add(ev.Clone(token));
         token.ThrowIfCancellationRequested();
         return copy;
     }
@@ -263,11 +252,11 @@ public sealed class AnimationEntry(byte[] header, int index, long offset) : Anim
     public AnimationEntry Clone() => Clone(default);
     public AnimationEntry Clone(CancellationToken token)
     {
-        var copy = new AnimationEntry(SnapshotBytes(Bytes, token), Index, SourceOffset) { Primary = Primary.Clone(false, token), SourceLength = SourceLength, OriginalPrimaryHeader = SnapshotBytes(OriginalPrimaryHeader, token) };
+        var copy = new AnimationEntry(SnapshotBytes(Bytes, token), Index, SourceOffset) { Primary = Primary.Clone(token), SourceLength = SourceLength, OriginalPrimaryHeader = SnapshotBytes(OriginalPrimaryHeader, token) };
         for (int i = 0; i < 8; i++)
             foreach (var record in References[i]) copy.References[i].Add(new(SnapshotBytes(record.Bytes, token)));
         foreach (var r in Puffers) copy.Puffers.Add(new(SnapshotBytes(r.Bytes, token)));
-        foreach (var sequence in Sequences) copy.Sequences.Add(sequence.Clone(false, token));
+        foreach (var sequence in Sequences) copy.Sequences.Add(sequence.Clone(token));
         token.ThrowIfCancellationRequested();
         return copy;
     }

@@ -59,7 +59,7 @@ public static class TerrainCompiler
     /// <summary>
     /// Vertices and normals per crater-capable piece (CanModify, not ClipTo): each crater rebuilds a touched piece with up to
     /// 26 more vertices, and past the 922nd the engine drops that polygon and every later one, so 16 craters (a cell's
-    /// limit) must fit (engine-evidence, "Craters and quicksand").
+    /// limit) must fit (docs/agents/engine-evidence.md#craters-and-quicksand).
     /// </summary>
     public const int CraterVertexBudget = 450;
     /// <summary>Corners per polygon of a crater-capable piece: a crater inside one polygon is cut on a 32-entry edge stack.</summary>
@@ -102,7 +102,7 @@ public static class TerrainCompiler
             HashSet<int> on = compiler.RegionSurfaces(region, surfaceIndices, surfaces.Count);
             compiler.ApplyRegion(region, on);
         }
-        // Every polygon is drawn on its own, so frame time follows their number (engine-evidence, "Frame time"); detailed
+        // Every polygon is drawn on its own, so frame time follows their number (docs/agents/engine-evidence.md#frame-time); detailed
         // painting can multiply a terrain's. The world still loads, so this is reported rather than refused.
         if (compiler.Count - unpainted > PaintedPolygonNotice)
             warnings.Add($"Its painted regions cut its surfaces' {unpainted:N0} polygons into {compiler.Count:N0}. Every shipped world holds under {PaintedPolygonNotice:N0} polygons in all, and the engine draws each polygon on its own, so frame rate falls as they grow; paint fewer, larger strokes, or erase detail that is not needed.");

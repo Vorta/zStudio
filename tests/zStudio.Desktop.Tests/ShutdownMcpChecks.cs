@@ -20,7 +20,7 @@ namespace zStudio.Desktop.Tests;
 
 internal static class ShutdownMcpChecks
 {
-    internal static async Task Run(Application app)
+    internal static async Task Run()
     {
         foreach (bool cancelClose in new[] { false, true })
         {
@@ -61,15 +61,15 @@ internal static class ShutdownMcpChecks
             };
             var host = new LocalMcpHost(main.Commands, "test");
             typeof(MainWindow).GetField("mcpHost", flags)!.SetValue(main, host);
+            DocumentModel? dirty = null;
             var timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(10) };
             TaskCompletionSource closeCanceled = new(TaskCreationOptions.RunContinuationsAsynchronously);
             timer.Tick += (_, _) =>
             {
-                var dialog = app.Windows.Cast<Window>().FirstOrDefault(w => w.Owner == main && w.Title == "Unsaved changes");
+                var dialog = Application.Current.Windows.Cast<Window>().FirstOrDefault(w => w.Owner == main && w.Title == "Unsaved changes");
                 if (dialog == null) return;
                 var buttons = ((Grid)dialog.Content).Children.OfType<WrapPanel>().Single();
-                buttons.Children.OfType<Button>().Single(b => Equals(b.Content, "Cancel"))
-                    .RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                buttons.Children.OfType<Button>().Single(b => Equals(b.Content, "Cancel")).RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
                 closeCanceled.TrySetResult(); timer.Stop();
             };
             try
@@ -85,7 +85,8 @@ internal static class ShutdownMcpChecks
                 var previewLifetime = ((CancellationTokenSource)typeof(MainWindow).GetField("preview", flags)!.GetValue(main)!).Token;
                 if (cancelClose)
                 {
-                    doc.AnimationEdits!.Apply(0, "Unsaved fixture", e => e.SetFloat(164, 1));
+                    // A dirty source world asks first; Cancel keeps the window, the preview and the running load.
+                    dirty = WindowClosingTests.DirtyDocument(0); main.ViewModel.Documents.Add(dirty);
                     timer.Start(); main.Close();
                     await closeCanceled.Task.WaitAsync(deadline.Token);
                     await Dispatcher.Yield(DispatcherPriority.ApplicationIdle);
@@ -104,7 +105,7 @@ internal static class ShutdownMcpChecks
                     Assert.Equal(Visibility.Collapsed, ((TextBlock)main.FindName("EmptyPreview")).Visibility);
                     var state = await main.Commands.ExecuteAsync("zstudio_operation", new JsonObject { ["id"] = operationId }, deadline.Token);
                     Assert.Equal("canceled", state.Data["State"]!.GetValue<string>());
-                    doc.AnimationEdits.MarkSaved(); main.Close();
+                    dirty.SourceWorld!.Workspace.Undo(); main.Close();
                     await closed.Task.WaitAsync(deadline.Token);
                 }
                 else
@@ -121,8 +122,8 @@ internal static class ShutdownMcpChecks
             finally
             {
                 timer.Stop(); releaseRecovery.TrySetResult();
+                if (dirty?.SourceWorld?.Workspace is { IsDirty: true } workspace) workspace.Undo();
                 main.LoadAssetPropertiesAsync = loader;
-                if (!doc.IsDisposed) doc.AnimationEdits!.MarkSaved();
                 if (!closed.Task.IsCompleted)
                 {
                     await main.StopMcpAsync().WaitAsync(TimeSpan.FromSeconds(5));
@@ -145,7 +146,7 @@ internal static class ShutdownMcpChecks
             new(FormatFamily.Animation, 28, Recognition.Supported, "fixture"), ReadOnlyMemory<byte>.Empty) { Animations = package });
         main.ViewModel.Documents.Add(doc);
         using var resolver = new AssetResolver(Path.GetTempPath());
-        var context = new AnimationPreviewContext { Package = doc.AnimationEdits!.Package,
+        var context = new AnimationPreviewContext { Package = doc.Document.Animations!,
             World = new AssetDocument("world", new(0, DateTime.MinValue), new(FormatFamily.GameZ, 15, Recognition.Supported, "fixture"), ReadOnlyMemory<byte>.Empty) { Scene = new() } };
         var previewToken = ((CancellationTokenSource)typeof(MainWindow).GetField("preview", flags)!.GetValue(main)!).Token;
         using var audio = new AnimationAudio(() => new SilentOutput());

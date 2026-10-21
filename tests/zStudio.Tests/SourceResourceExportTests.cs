@@ -49,13 +49,10 @@ public sealed class SourceResourceExportTests
     }
 
     [Theory]
-    [InlineData(".zrd", true, false)]
-    [InlineData(".zad", true, false)]
-    [InlineData(".zrd", true, true)]
-    [InlineData(".zad", true, true)]
-    [InlineData(".zrd", false, false)]
-    [InlineData(".zrd", false, true)]
-    public async Task NormalAndJsonExportsUseTheCurrentResourceRepresentation(string extension, bool text, bool edited)
+    [InlineData(".zrd", true)]
+    [InlineData(".zad", true)]
+    [InlineData(".zrd", false)]
+    public async Task NormalAndJsonExportsUseTheCurrentResourceRepresentation(string extension, bool text)
     {
         using Fixture fixture = new();
         byte[] original = text ? "VALUE ( 1 )\n"u8.ToArray() : ZrdWriter.Write(ZrdText.Parse("VALUE ( 1 )", Token), Token);
@@ -63,18 +60,10 @@ public sealed class SourceResourceExportTests
         await File.WriteAllBytesAsync(path, original, Token);
         var document = await FormatRegistry.Default.OpenAsync(path, Token);
         Assert.Empty(document.Diagnostics);
-        if (edited)
-        {
-            var session = new ResourceEditSession(document);
-            var member = Assert.Single(session.Current.Members);
-            var value = session.Tree(member, Token).Children[1].Children[0];
-            session.Accept(await session.PrepareZrdAsync(member.Id, value.Id, "set", ZrdKind.Int, "2", token: Token));
-            document = session.Current.Document;
-        }
         Assert.Equal(text ? "zrd-text" : null, document.SourceSyntax);
         var asset = Assert.Single(document.Assets);
         var expected = ZrdDecoder.ReadAsset(document, asset, Token).ToJson(Token);
-        Assert.Equal(edited ? 2L : 1L, expected["children"]![1]!["children"]![0]!["value"]!.GetValue<long>());
+        Assert.Equal(1L, expected["children"]![1]!["children"]![0]!["value"]!.GetValue<long>());
         // The recorded syntax also selects the shared parser when the optional retained tree is unavailable.
         asset.Content = null;
         Assert.True(JsonNode.DeepEquals(expected, ZrdDecoder.ReadAsset(document, asset, Token).ToJson(Token)));

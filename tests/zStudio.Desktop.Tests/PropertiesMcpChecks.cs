@@ -32,15 +32,9 @@ internal static class PropertiesMcpChecks
         Task<StudioResult> Open(CancellationToken token) => main.Commands.ExecuteAsync("zstudio_properties_open", Target(), token);
         try
         {
-            main.OpenAnimationProperties(doc, 0, Guid.Empty, Guid.Empty);
-            foreach (string key in new[] { "sequence", "event" })
-            {
-                var invalid = Target(); invalid["kind"] = "Animation"; invalid[key] = Guid.NewGuid().ToString();
-                Assert.Equal("stale_record", (await Assert.ThrowsAsync<StudioCommandException>(() =>
-                    main.Commands.ExecuteAsync("zstudio_properties_open", invalid, deadline.Token))).Code);
-                Assert.NotNull(main.OpenPropertiesWindow!.AnimationFields);
-            }
-            foreach (string scenario in new[] { "superseded", "canceled", "draft", "decode_error", "success" })
+            main.LoadAssetPropertiesAsync = (_, _, _) => Task.FromResult(new JsonObject { ["fixture"] = "initial" });
+            await main.OpenAssetPropertiesAsync(doc, source.Assets[1], deadline.Token);
+            foreach (string scenario in new[] { "superseded", "canceled", "decode_error", "success" })
             {
                 TaskCompletionSource started = new(TaskCreationOptions.RunContinuationsAsynchronously);
                 TaskCompletionSource<JsonObject> decoded = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -48,15 +42,15 @@ internal static class PropertiesMcpChecks
                 using var request = CancellationTokenSource.CreateLinkedTokenSource(deadline.Token);
                 var opening = Open(request.Token); await started.Task.WaitAsync(deadline.Token);
                 var previous = main.OpenPropertiesWindow!.CurrentJson!.ToJsonString();
-                TextBox? draft = null;
-                if (scenario == "superseded") main.OpenAnimationProperties(doc, 0, Guid.Empty, Guid.Empty);
-                if (scenario == "canceled") request.Cancel();
-                if (scenario == "draft")
+                if (scenario == "superseded")
                 {
-                    main.OpenPropertiesWindow!.UpdateLayout();
-                    draft = Descendants(main.OpenPropertiesWindow!.AnimationFields!).OfType<TextBox>().Single(t => AutomationProperties.GetName(t) == "Reset delay (s)");
-                    draft.Text = "-";
+                    // A newer GUI request for another asset supersedes the pending one.
+                    var pending = main.LoadAssetPropertiesAsync;
+                    main.LoadAssetPropertiesAsync = (_, _, _) => Task.FromResult(new JsonObject { ["fixture"] = "newer" });
+                    await main.OpenAssetPropertiesAsync(doc, source.Assets[1], deadline.Token);
+                    main.LoadAssetPropertiesAsync = pending; previous = main.OpenPropertiesWindow!.CurrentJson!.ToJsonString();
                 }
+                if (scenario == "canceled") request.Cancel();
                 if (scenario == "decode_error") decoded.SetException(new InvalidDataException("fixture decode error"));
                 else decoded.TrySetResult(new() { ["fixture"] = "raw properties" });
                 if (scenario == "success")
@@ -69,29 +63,11 @@ internal static class PropertiesMcpChecks
                 {
                     if (scenario == "canceled") await Assert.ThrowsAnyAsync<OperationCanceledException>(() => opening);
                     else if (scenario == "decode_error") Assert.Equal("fixture decode error", (await Assert.ThrowsAsync<InvalidDataException>(() => opening)).Message);
-                    else Assert.Equal(scenario == "draft" ? "pending_drafts" : "context_changed", (await Assert.ThrowsAsync<StudioCommandException>(() => opening)).Code);
+                    else Assert.Equal("context_changed", (await Assert.ThrowsAsync<StudioCommandException>(() => opening)).Code);
                     Assert.Equal(previous, main.OpenPropertiesWindow!.CurrentJson!.ToJsonString());
                 }
-                if (draft != null) { Assert.Equal("-", draft.Text); draft.Text = "0"; }
             }
 
-            // Work authored after the deferred MCP close request must be retained
-            // without opening the GUI's save/discard confirmation dialog.
-            await main.Commands.ExecuteAsync("zstudio_window", new() { ["action"] = "close" }, deadline.Token);
-            doc.AnimationEdits!.Apply(0, "Edit during close", e => e.SetInt(164, 1));
-            // The deferred close runs once its response is sent: wait for its refusal rather than a fixed time.
-            for (int attempt = 0; attempt < 100 && !main.ViewModel.Status.StartsWith("Close canceled:", StringComparison.Ordinal); attempt++) await Task.Delay(50, deadline.Token);
-            Assert.True(main.IsVisible); Assert.StartsWith("Close canceled:", main.ViewModel.Status);
-            doc.AnimationEdits.Undo();
-            main.OpenAnimationProperties(doc, 0, Guid.Empty, Guid.Empty); main.OpenPropertiesWindow!.UpdateLayout();
-            main.ViewModel.Status = "";
-            await main.Commands.ExecuteAsync("zstudio_window", new() { ["action"] = "close" }, deadline.Token);
-            var closingDraft = Descendants(main.OpenPropertiesWindow.AnimationFields!).OfType<TextBox>().Single(t => AutomationProperties.GetName(t) == "Reset delay (s)");
-            closingDraft.Text = "-";
-            for (int attempt = 0; attempt < 100 && !main.ViewModel.Status.StartsWith("Close canceled:", StringComparison.Ordinal); attempt++) await Task.Delay(50, deadline.Token);
-            Assert.StartsWith("Close canceled:", main.ViewModel.Status);
-            Assert.True(main.IsVisible); Assert.Equal("-", closingDraft.Text); Assert.True(main.OpenPropertiesWindow.HasPendingDrafts);
-            closingDraft.Text = "0";
             main.LoadAssetPropertiesAsync = (_, _, _) => Task.FromResult(new JsonObject { ["fixture"] = "raw properties" });
             await main.OpenAssetPropertiesAsync(doc, source.Assets.First(), deadline.Token);
 

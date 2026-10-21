@@ -57,7 +57,7 @@ internal static class SourceObjectPlanMcpChecks
 
             // Only objects have flags to edit, as Properties shows them (not the world, which a script made); a node of a glTF
             // file carries every flag.
-            int world = doc.PreviewDocument.Scene!.Nodes.First(n => n.Name == "world" && doc.SourceBuild!.Provenance.ContainsKey(n.Index)).Index;
+            int world = doc.Document.Scene!.Nodes.First(n => n.Name == "world" && doc.SourceBuild!.Provenance.ContainsKey(n.Index)).Index;
             static IEnumerable<string> Bits(JsonNode state) => state["editableFlags"]!.AsArray().Select(f => f!["bit"]!.GetValue<string>());
             // A meshless World has the same card route and its clean token cannot edit a different selection.
             string priorToken = Card().DraftToken; string priorTarget = Card().Selection!.Target;
@@ -151,7 +151,7 @@ internal static class SourceObjectPlanMcpChecks
                     foreach (var item in Descendants(child)) yield return item;
                 }
             }
-            List<int> Nodes(DocumentModel d, string name) => [.. d.PreviewDocument.Scene!.Nodes.Where(n => n.Name == name && d.SourceBuild!.Provenance.ContainsKey(n.Index)).Select(n => n.Index)];
+            List<int> Nodes(DocumentModel d, string name) => [.. d.Document.Scene!.Nodes.Where(n => n.Name == name && d.SourceBuild!.Provenance.ContainsKey(n.Index)).Select(n => n.Index)];
             DocumentModel Document(JsonNode state) => main.ViewModel.Documents.Single(d => d.SessionId.ToString() == state["id"]!.GetValue<string>());
             static string Id(DocumentModel d) => d.SessionId.ToString();
             async Task<JsonNode> Call(string name, Dictionary<string, object?> arguments, bool error = false)

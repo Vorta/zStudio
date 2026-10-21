@@ -36,9 +36,8 @@ public sealed partial class SceneViewport
     public bool AiVisible { get; private set; }
     public bool AiThroughGeometry { get; private set; } = true;
     public string? AiNetworkFilter { get; private set; }
-    private HashSet<string> aiHiddenNetworks = new(StringComparer.Ordinal);
     /// <summary>Networks the overlay leaves out (the World tree's network eyes): their markers, links, hover and picking.</summary>
-    public IReadOnlySet<string> AiHiddenNetworks => aiHiddenNetworks;
+    private HashSet<string> aiHiddenNetworks = new(StringComparer.Ordinal);
     /// <summary>The network a selection emphasises (the others are drawn faint), or null.</summary>
     public string? AiEmphasizedNetwork { get; private set; }
     public string? SelectedAiNode { get; private set; }
@@ -75,14 +74,14 @@ public sealed partial class SceneViewport
     }
     public bool SelectAiNode(string? id)
     {
-        if (id != null && (!InspectionSelectionEnabled || IsPickupDragging || IsFlyActive || AiPathEditingNetwork != null)) return false;
+        if (id != null && (IsPickupDragging || IsFlyActive || AiPathEditingNetwork != null)) return false;
         if (id != null && (!AiVisible || AiNetworks.Find(id) is not { } found || AiNetworkFilter != null && found.Network.Id != AiNetworkFilter || aiHiddenNetworks.Contains(found.Network.Id))) return false;
         if (id != null && CanChangeInspection?.Invoke() == false) return false;
         SelectedAiNode = id;
         if (id != null) SelectedInspection = InspectAi(id);
         else if (SelectedInspection?.AiNode != null) SelectedInspection = null;
         InspectionChanged?.Invoke();
-        if (id != null) { FramingSelection = null; SelectPickup(null, false, true); }
+        if (id != null) { FramingSelection = null; SelectPickup(null); }
         RefreshPickupSelection(); RefreshAiSelection(); AiNodeSelected?.Invoke(id); return true;
     }
     private IEnumerable<AiNetwork> VisibleAiNetworks => AiVisible ? AiNetworks.Networks.Where(n => (AiNetworkFilter == null || n.Id == AiNetworkFilter) && !aiHiddenNetworks.Contains(n.Id)) : [];
@@ -231,7 +230,7 @@ public sealed partial class SceneViewport
             else
             {
                 var selected = SelectedAiNode == null ? null : AiNetworks.Find(SelectedAiNode);
-                aiSelectionMarker.Visibility = !InspectionSelectionEnabled || selected == null ? Visibility.Collapsed : Visibility.Visible;
+                aiSelectionMarker.Visibility = selected == null ? Visibility.Collapsed : Visibility.Visible;
                 if (selected is { } target) aiSelectionMarker.Instances = [Matrix4x4.CreateScale(AiScale(target.Node.Position, 5.5)) * Matrix4x4.CreateTranslation(target.Node.Position)];
             }
         }

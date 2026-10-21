@@ -197,7 +197,7 @@ internal static class SourceProjectMcpChecks
             var relativeExport = await Job("source_export", new() { ["destination"] = "game" }, "failed");
             Assert.Contains("full path", relativeExport["message"]!.GetValue<string>());
 
-            // Standalone source-file editing remains available from the compiled/plain explorer, not the map workspace.
+            // A loose source file opens only for inspection from a plain folder, not inside the map workspace.
             string source = Path.Combine(fixture.Project, "data", "m1", "zrdr", "ai.zrd");
             Assert.Equal("source_map_required", (await Job("open_document", new() { ["path"] = source }, "failed"))["code"]!.GetValue<string>());
             await Job("open_root", new() { ["path"] = fixture.Root });
@@ -206,13 +206,8 @@ internal static class SourceProjectMcpChecks
             Assert.Equal("zrd-text", doc.Document.SourceSyntax);
             var members = await Call("archive_members", new() { ["document"] = doc.SessionId.ToString() });
             Guid member = Guid.Parse(members["members"]!["items"]![0]!["member"]!.GetValue<string>());
-            var gravity = doc.ResourceEdits!.Tree(doc.ResourceEdits.Member(member), token).Children[1].Children[0];
-            await Job("zrd_edit", new() { ["document"] = doc.SessionId.ToString(), ["revision"] = doc.Revision, ["action"] = "set", ["member"] = member.ToString(), ["node"] = gravity.Id.ToString(), ["value"] = "-1.5" });
-            var unsaved = await Job("open_root", new() { ["path"] = fixture.Project, ["project"] = true }, "failed");
-            Assert.Equal("unsaved_changes", unsaved["code"]!.GetValue<string>());
-            Assert.Same(doc, main.ViewModel.SelectedDocument);
-            await Job("save_document", new() { ["document"] = doc.SessionId.ToString(), ["revision"] = doc.Revision });
-            Assert.Contains("GRAVITY ( -1.5 )", await File.ReadAllTextAsync(source, token));
+            Assert.Equal(doc.ResourceMembers!.Members[0].Id, member);
+            Assert.False(doc.IsDirty);
             await Job("open_root", new() { ["path"] = fixture.Project, ["project"] = true });
             await Job("source_profile", new() { ["profile"] = "original" });
 
@@ -225,7 +220,7 @@ internal static class SourceProjectMcpChecks
             Assert.Equal([Path.Combine(exported, "m1", "zrdr.zbd")], Directory.GetFiles(exported, "*", SearchOption.AllDirectories));
             var archive = FormatRegistry.Default.OpenBytes("zrdr.zbd", await File.ReadAllBytesAsync(Path.Combine(exported, "m1", "zrdr.zbd"), token), token: token);
             var ai = archive.Assets.Single(a => a.Name == "ai.zrd");
-            Assert.Equal(-1.5f, BitConverter.UInt32BitsToSingle(ZrdDecoder.Read(archive.Slice(ai.Offset, ai.Length), token).Children[1].Children[0].Bits));
+            Assert.Equal(-9.8f, BitConverter.UInt32BitsToSingle(ZrdDecoder.Read(archive.Slice(ai.Offset, ai.Length), token).Children[1].Children[0].Bits));
             // Existing game files are replaced only on request; unknown outputs are refused.
             var exists = await Job("source_export", new() { ["destination"] = exported, ["outputs"] = new[] { "m1/zrdr.zbd" } }, "failed");
             Assert.Equal("io_failed", exists["code"]!.GetValue<string>());

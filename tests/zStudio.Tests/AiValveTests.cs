@@ -56,13 +56,6 @@ public sealed class AiValveTests
                     kinds.Add(record.Kind); _ = MissionAiValves.Describe(record, token);
                     if (record.Kind == "definition" && !record.Name.StartsWith(':')) Assert.Null(MissionAiValves.Problem(record, token));
                 }
-                if (records.FirstOrDefault() is { } first)
-                {
-                    var duplicated = Edit(asset.Name, tree, new("duplicate", first.Id));
-                    var inserted = Records(asset.Name, duplicated).Skip(1).First();
-                    Assert.NotEqual(first.Id, inserted.Id);
-                    Assert.Equal(Write(tree), Write(Edit(asset.Name, duplicated, new("delete", inserted.Id))));
-                }
             }
         }
         Assert.Equal(1510, definitions); Assert.True(networks > 100);
@@ -77,33 +70,6 @@ public sealed class AiValveTests
         var root = A(S(name), A(S("sound"), A(S("sample"), I(1))));
         var record = Assert.Single(Records("valves.zrd", root));
         Assert.Null(MissionAiValves.Problem(record, TestContext.Current.CancellationToken));
-        Assert.Throws<InvalidDataException>(() => Edit("valves.zrd", root, new("add_term", record.Id)));
-        var edited = Edit("valves.zrd", root, new("add_action", record.Id, Kind: "destroy"));
-        Assert.Equal(4, Assert.Single(Records("valves.zrd", edited)).Value.Children.Count);
-    }
-    [Fact]
-    public void EmptyActionBlockCanBeRepopulatedAfterDeletingItsLastAction()
-    {
-        var root = A(S("go"), A(S("sound"), A(S("sample"), I(1))));
-        var record = Assert.Single(Records("valves.zrd", root));
-        var empty = Edit("valves.zrd", root, new("delete_item", record.Id, record.Value.Children[0].Id));
-        var restored = Edit("valves.zrd", empty, new("add_action", record.Id, Kind: "destroy"));
-        Assert.Equal("destroy", Assert.Single(Records("valves.zrd", restored)).Value.Children[0].Text);
-    }
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public void MalformedCompoundListCannotAcceptInvisibleTermEdits(bool union)
-    {
-        var root = union ? A(S("version"), A(I(106)), S("node_00"), A(I(1), A(F(), F(), F()), A(), S("valveunion"), S("not an array")))
-            : A(S("go"), A(S("all_zero"), S("namelist"), S("not an array")));
-        string member = union ? "net_01.zrd" : "valves.zrd";
-        var records = Records(member, root).ToArray(); byte[] before = Write(root);
-        // A node row whose attribute value is not an array is not a node, so its list is not a record at all.
-        Guid id = union ? root.Children[3].Children[3].Id : Assert.Single(records).Id;
-        if (union) Assert.Empty(records);
-        Assert.Throws<InvalidDataException>(() => Edit(member, root, new("add_term", id, Value: "new")));
-        Assert.Equal(before, Write(root));
     }
     [Fact]
     public void ObjectiveValveNamesAndDescriptionTextAreNotOperations()
@@ -114,9 +80,6 @@ public sealed class AiValveTests
         var records = Records("objectives.zrd", root).ToArray();
         var record = Assert.Single(records); Assert.Equal(actionName.Id, record.Id);
         Assert.Equal("set_valve", Assert.Single(MissionAiValves.References(record, TestContext.Current.CancellationToken)).Name);
-        var removed = Edit("objectives.zrd", root, new("delete", record.Id));
-        Assert.Empty(Records("objectives.zrd", removed));
-        Assert.Equal(Write(A(root.Children[0], A(root.Children[1].Children.Take(2).ToArray()))), Write(removed));
     }
     [Fact]
     public void MalformedDuplicateConstraintsCannotCreateFalseValveAssociations()
@@ -131,10 +94,9 @@ public sealed class AiValveTests
         Assert.All(graph.Nodes, n => Assert.Empty(MissionAiValves.ForNode(graph, n)));
         var invalid = root with { Children = [..root.Children, S("version"), A(I(105))] };
         Assert.Empty(Records("net_01.zrd", invalid));
-        Assert.Throws<InvalidDataException>(() => Edit("net_01.zrd", invalid, new("add_binding", Operand: root.Children[3].Id)));
     }
     [Fact]
-    public void MalformedNodeAttributePairsAreNeitherNodesNorBindingTargets()
+    public void MalformedNodeAttributePairsAreNotNodes()
     {
         // Valid position and links, but a non-string attribute key or a dangling field.
         var root = A(S("version"), A(I(106)), S("node_00"), A(I(1), A(F(), F(), F()), A(), S("valve"), A(I(1), S("go"))),
@@ -143,12 +105,7 @@ public sealed class AiValveTests
         var graph = Decode("net", "", 0, "net_01.zrd", root);
         Assert.Equal(0, Assert.Single(graph.Nodes).Index);
         Assert.Equal(2, graph.Diagnostics.Count(d => d.Message.Contains("attribute pairs", StringComparison.Ordinal)));
-        var target = Assert.Single(MissionAiValves.Targets(root, TestContext.Current.CancellationToken)); Assert.Equal(root.Children[3].Id, target.Id);
         Assert.Single(Records("net_01.zrd", root));
-        byte[] original = Write(root);
-        foreach (int field in new[] { 5, 7 })
-            Assert.Throws<InvalidDataException>(() => Edit("net_01.zrd", root, new("add_binding", Operand: root.Children[field].Id)));
-        Assert.Equal(original, Write(root));
     }
     [Fact]
     public void RecordSearchMatchesReferencedValveNames()
@@ -160,28 +117,6 @@ public sealed class AiValveTests
         Assert.Equal(records[1], Assert.Single(records, r => MissionAiValves.MatchesSearch(r, "bridge")));
         var objective = Assert.Single(Records("objectives.zrd", A(S("objective"), A(S("set_valve"), A(S("alarm"), I(1))))));
         Assert.True(MissionAiValves.MatchesSearch(objective, "alarm")); Assert.False(MissionAiValves.MatchesSearch(objective, "absent"));
-    }
-    [Fact]
-    public void MoveOverflowAndInvalidScalarEditsLeaveTheSourceUnchanged()
-    {
-        var root = A(S("go"), A(S("delayupdate"), MissionAiValves.Parameters("delayupdate"))); var original = Write(root);
-        var record = Assert.Single(Records("valves.zrd", root));
-        Assert.Throws<InvalidDataException>(() => Edit("valves.zrd", root, new("move", record.Id, Index: int.MaxValue)));
-        Assert.Throws<InvalidDataException>(() => Edit("valves.zrd", root, new("set", record.Id, record.Value.Children[1].Children[1].Id)));
-        Assert.Equal(original, Write(root));
-    }
-    [Theory]
-    [InlineData("valve")]
-    [InlineData("valveunion")]
-    [InlineData("valve_assign")]
-    [InlineData("set_valve")]
-    public void NewDefinitionsRejectBindingKindsWithoutChangingTheSource(string kind)
-    {
-        var root = A(S("go"), A(S("sound"), A(S("sample"), I(1))));
-        var original = Write(root);
-        Assert.Throws<InvalidDataException>(() => Edit("valves.zrd", root, new("add_record", Value: "new", Kind: kind)));
-        Assert.Equal(original, Write(root));
-        Assert.Equal(2, Records("valves.zrd", Edit("valves.zrd", root, new("add_record", Value: "new", Kind: "sound"))).Count());
     }
     [Fact]
     public async Task SemanticValvePropertiesRequireAuthoredValveStructureNotOnlyTheSharedName()
@@ -210,7 +145,6 @@ public sealed class AiValveTests
     private static IEnumerable<AiValveReference> References(AiValveRecord record) => MissionAiValves.References(record, TestContext.Current.CancellationToken);
     private static byte[] Write(ZrdNode root) => ZrdWriter.Write(root, TestContext.Current.CancellationToken);
     private static AiNetwork Decode(string id, string path, int member, string name, ZrdNode root) => MissionAiNetworks.Decode(id, path, member, name, root, TestContext.Current.CancellationToken);
-    private static ZrdNode Edit(string name, ZrdNode root, AiValveEdit edit) => MissionAiValves.Edit(name, root, edit, TestContext.Current.CancellationToken);
     private static ZrdNode S(string text) => ZrdNode.Create(ZrdKind.String, JsonSerializer.Serialize(text));
     private static ZrdNode I(int n) => ZrdNode.Create(ZrdKind.Int, n.ToString(System.Globalization.CultureInfo.InvariantCulture));
     private static ZrdNode F() => ZrdNode.Create(ZrdKind.Float, "0");
@@ -242,31 +176,6 @@ public sealed class AiValveTests
         var recoil = root with { Children = [S("version"), A(I(105)), ..root.Children.Skip(2)] };
         Assert.Empty(Decode("net", "test", 0, "net_01.zrd", recoil).Nodes);
         Assert.Empty(Records("net_01.zrd", recoil));
-    }
-    [Fact]
-    public async Task SemanticActionsAreAtomicAndPreserveUnrelatedMembersAndHistoryIdentities()
-    {
-        var root = A(S("go"), A(S("sound"), A(S("sample"), I(1))));
-        var doc = FormatRegistry.Default.OpenBytes("valves-test.zbd", ResourceEditingTests.Archive(("valves.zrd", Write(root)), ("untouched", new byte[] { 3, 5, 7 })), token: TestContext.Current.CancellationToken);
-        var original = doc.Bytes.ToArray(); var edits = new ResourceEditSession(doc); var member = edits.Current.Members[0];
-        var record = Assert.Single(Records(member.Name, edits.Tree(member, TestContext.Current.CancellationToken)));
-        edits.Accept(await edits.PrepareValveAsync(member.Id, new("add_action", record.Id, Kind: "delayupdate"), TestContext.Current.CancellationToken));
-        var added = Assert.Single(Records(member.Name, edits.Tree(edits.Member(member.Id), TestContext.Current.CancellationToken)));
-        Assert.Equal(record.Id, added.Id); Assert.Equal(4, added.Value.Children.Count);
-        Assert.Equal(new byte[] { 3, 5, 7 }, edits.Current.Members[1].Data.ToArray());
-        edits.UndoRedo(false); Assert.Equal(original, edits.Current.Document.Bytes.ToArray());
-        edits.UndoRedo(true); Assert.Equal(4, Assert.Single(Records(member.Name, edits.Tree(edits.Member(member.Id), TestContext.Current.CancellationToken))).Value.Children.Count);
-        Assert.Equal(original, doc.Bytes.ToArray());
-        await Assert.ThrowsAsync<InvalidDataException>(() => edits.PrepareValveAsync(member.Id, new("delete", Guid.NewGuid()), TestContext.Current.CancellationToken));
-    }
-    [Fact]
-    public void UnionTermsAndActionsSupportOrderedEditsWithoutChangingOtherOperands()
-    {
-        var root = A(S("go"), A(S("all_zero"), S("namelist"), A(S("a"), S("b"))));
-        var record = Assert.Single(Records("valves.zrd", root));
-        var reordered = Edit("valves.zrd", root, new("move_item", record.Id, record.Value.Children[2].Children[0].Id, Index: 1));
-        Assert.Equal(new[] { "go", "b", "a" }, References(Assert.Single(Records("valves.zrd", reordered))).Select(r => r.Name));
-        Assert.Equal(new[] { "go", "a", "b" }, References(record).Select(r => r.Name));
     }
     [Fact]
     public void ConstraintAccumulationAndParameterExpansionAreBoundedBeforePublication()

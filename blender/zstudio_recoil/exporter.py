@@ -224,7 +224,7 @@ class RECOIL_OT_export(bpy.types.Operator):
                         geometry_changed |= api().mesh_signature(obj.data) != api().state(obj.data).get("zs_signature", "") or bool(obj.modifiers)
                         geometry_changed |= any(s.link == "OBJECT" or (s.material and api().material_signature(s.material, signatures) != api().state(s.material).get("zs_signature", "")) for s in obj.material_slots)
                         if obj.modifiers and obj.data.shape_keys:
-                            raise ValueError("Apply modifiers explicitly before exporting a mesh with shape keys")
+                            raise ValueError("Blender cannot apply modifiers to a mesh with shape keys: remove its modifiers or its shape keys before exporting")
                 for original, copied in copies.items():
                     if original.parent and original.parent not in copies:
                         raise ValueError("An object is parented outside its physical source file")

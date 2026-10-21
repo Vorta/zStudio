@@ -10,21 +10,6 @@ namespace zStudio.Tests;
 public sealed partial class AnimationTests
 {
     [Fact]
-    public void CleanupDuplicationDoesNotTreatInvalidCachesAsSelfReferences()
-    {
-        var package = Fixture(); var entry = package.Entries[0]; entry.Primary.Name = "cleanup";
-        var external = AnimationCatalog.Create(22); external.SetText(12, "motion"); external.SetInt(44, -1);
-        var self = AnimationCatalog.Create(23); self.SetText(12, "cleanup"); self.SetInt(44, -1);
-        entry.Primary.Events.AddRange([external, self]); var original = Pack(package);
-        var session = new AnimationEditSession(package); session.AddSequence(0, entry.Primary.Id);
-        var copy = package.Entries[0].Sequences[^1];
-        Assert.Equal("motion", copy.Events[0].Text(12)); Assert.Equal(-1, copy.Events[0].I32(44));
-        Assert.Equal(copy.Name, copy.Events[1].Text(12));
-        Assert.Equal("motion", Parse(Pack(package)).Entries[0].Sequences[^1].Events[0].Text(12));
-        session.Undo(); Assert.Equal(original, Pack(package));
-        session.Redo(); Assert.Equal("motion", package.Entries[0].Sequences[^1].Events[0].Text(12));
-    }
-    [Fact]
     public void WriterPreservesOpaqueBytesAndDuplicatedPrimaryUntilEdited()
     {
         var package = Fixture(); package.Entries[0].Bytes[210] = 0xCC;
@@ -36,52 +21,13 @@ public sealed partial class AnimationTests
         var changed = Pack(copy); Assert.Equal((byte)'c', changed[package.Prefix.Length + 196]);
     }
     [Fact]
-    public void EditingUndoRedoAndSequenceReferencesSurviveSaving()
-    {
-        var package = Fixture(); var entry = package.Entries[0]; var sequence = entry.Sequences[0];
-        var release = AnimationCatalog.Create(22); release.SetText(12, sequence.Name); release.SetInt(44, 0); entry.Primary.Events.Add(release);
-        AnimationEditSession session = new(package); session.RenameSequence(0, sequence.Id, "renamed");
-        Assert.True(session.IsDirty); Assert.Equal("renamed", package.Entries[0].Primary.Events[0].Text(12));
-        session.Undo(); Assert.False(session.IsDirty); Assert.Equal("motion", package.Entries[0].Sequences[0].Name);
-        session.Redo(); session.MarkSaved(); Assert.False(session.IsDirty);
-        Assert.Equal("renamed", Parse(Pack(package)).Entries[0].Sequences[0].Name);
-        Assert.Throws<InvalidDataException>(() => session.DeleteSequence(0, sequence.Id));
-
-        // A scalar edit must not retain an unlimited number of copies of an untouched opaque event.
-        var opaquePackage = Fixture();
-        var opaque = new AnimationEvent(new byte[16 * 1024]); opaque.Bytes[0] = 255; opaque.Bytes[^1] = 0xA7;
-        opaquePackage.Entries[0].Sequences[0].Events.Add(opaque);
-        opaquePackage = Parse(Pack(opaquePackage));
-        byte[] preserved = (byte[])opaquePackage.Entries[0].Sequences[0].Events[0].Bytes.Clone();
-        AnimationEditSession bounded = new(opaquePackage, 256 * 1024, 1024 * 1024);
-        for (int i = 0; i < 24; i++) bounded.Apply(0, "Reset delay", e => e.SetFloat(164, i));
-        var accepted = opaquePackage.Entries[0];
-        Assert.Throws<InvalidDataException>(() => bounded.Apply(0, "Invalid compound edit", e =>
-        { e.SetFloat(164, 100); throw new InvalidDataException("Invalid second field."); }));
-        Assert.Same(accepted, opaquePackage.Entries[0]);
-        bounded.Undo(); Assert.Equal(22, opaquePackage.Entries[0].F32(164));
-        var prior = opaquePackage.Entries[0]; string? redo = bounded.RedoDescription;
-        Assert.Throws<InvalidDataException>(() => bounded.Apply(0, "Oversized replacement", e =>
-            e.Sequences[0].Events.Add(new AnimationEvent(new byte[256 * 1024]))));
-        Assert.Same(prior, opaquePackage.Entries[0]); Assert.Equal(redo, bounded.RedoDescription);
-        bounded.Redo(); Assert.Same(accepted, opaquePackage.Entries[0]);
-        bounded.Apply(0, "Retry", e => e.SetFloat(164, 24));
-        Assert.Equal(preserved, Parse(Pack(opaquePackage)).Entries[0].Sequences[0].Events[0].Bytes);
-        int undoCount = 0; while (bounded.CanUndo) { bounded.Undo(); undoCount++; }
-        Assert.InRange(undoCount, 1, 23);
-        AnimationEditSession noScratch = new(opaquePackage, 256 * 1024, 1);
-        bool invoked = false;
-        Assert.Throws<InvalidDataException>(() => noScratch.Apply(0, "Refused before clone", _ => invoked = true));
-        Assert.False(invoked); Assert.False(noScratch.CanUndo);
-    }
-    [Fact]
-    public void MalformedEventPayloadIsPreservedAndNotEditable()
+    public void MalformedEventPayloadIsPreserved()
     {
         var package = Fixture(); var sequence = package.Entries[0].Sequences[0]; sequence.Events.Add(AnimationCatalog.Create(6));
         byte[] bytes = Pack(package); int header = package.Prefix.Length + 308 + 80 + 64;
         BinaryPrimitives.WriteInt32LittleEndian(bytes.AsSpan(header + 64 + 4), int.MaxValue);
         var parsed = Parse(bytes); Assert.False(parsed.Entries[0].Sequences[0].IsEditable); Assert.NotEmpty(parsed.Diagnostics);
-        Assert.Equal(bytes, Pack(parsed)); Assert.Throws<InvalidDataException>(() => AnimationEditSession.EnsureEditable(parsed.Entries[0].Sequences[0]));
+        Assert.Equal(bytes, Pack(parsed));
     }
     [Fact]
     public void RelativeDelayWaitsAfterPreviousTimedEventAndSeekIsDeterministic()
@@ -180,35 +126,6 @@ public sealed partial class AnimationTests
         var package = Fixture(); var ev = AnimationCatalog.Create(6); ev.Bytes[0] = 255; package.Entries[0].Sequences[0].Events.Add(ev);
         var frame = new AnimationPlayer(Context(package), 0).EvaluateForTest(.1); Assert.Contains(frame.Diagnostics, s => s.Contains("unverified")); Assert.Equal("Unavailable", frame.Sequences[0].State);
     }
-    [Fact]
-    public async Task SaveAsRejectsSourcesAndRoundTripsOutsideDataset()
-    {
-        string temporary = Path.Combine(Path.GetTempPath(), "recoil-animation-test-" + Guid.NewGuid().ToString("N")); Directory.CreateDirectory(temporary);
-        try
-        {
-            string root = Path.Combine(temporary, "source"), path = Path.Combine(temporary, "edited.zbd"); Directory.CreateDirectory(root);
-            string source = Path.Combine(root, "anim.zbd"); byte[] bytes = Pack(Fixture()); await File.WriteAllBytesAsync(source, bytes, TestContext.Current.CancellationToken);
-            await Assert.ThrowsAsync<IOException>(() => AnimationWriter.SaveAsAsync(Fixture(), source, source, root, TestContext.Current.CancellationToken));
-            await AnimationWriter.SaveAsAsync(Fixture(), path, source, root, 256 * 1024, TestContext.Current.CancellationToken); Assert.Equal(bytes, await File.ReadAllBytesAsync(path, TestContext.Current.CancellationToken));
-            // A tiny edited entry can retain a much larger, valid unknown package tail. Save must
-            // admit the whole write/read/write overlap before creating a destination or changing undo.
-            byte[] original = [.. bytes, .. new byte[64 * 1024]]; original[^1] = 0xA7;
-            await File.WriteAllBytesAsync(source, original, TestContext.Current.CancellationToken);
-            var package = Parse(original); AnimationEditSession session = new(package);
-            session.Apply(0, "Reset delay", e => e.SetFloat(164, 3));
-            var accepted = package.Entries[0]; string? undo = session.UndoDescription;
-            string boundedPath = Path.Combine(temporary, "new-folder", "edited.zbd");
-            await Assert.ThrowsAsync<InvalidDataException>(() => AnimationWriter.SaveAsAsync(package, boundedPath, source, root,
-                256 * 1024, TestContext.Current.CancellationToken));
-            Assert.False(Directory.Exists(Path.GetDirectoryName(boundedPath))); Assert.Same(accepted, package.Entries[0]);
-            Assert.True(session.IsDirty); Assert.Equal(undo, session.UndoDescription);
-            session.Undo(); Assert.Equal(original, Pack(package)); session.Redo();
-            await AnimationWriter.SaveAsAsync(package, boundedPath, source, root, TestContext.Current.CancellationToken);
-            Assert.Equal(Pack(package), await File.ReadAllBytesAsync(boundedPath, TestContext.Current.CancellationToken));
-            Assert.Equal(original, await File.ReadAllBytesAsync(source, TestContext.Current.CancellationToken));
-        }
-        finally { Directory.Delete(temporary, true); }
-    }
     private static byte[] Pack(AnimationPackage package) => AnimationWriter.Write(package, TestContext.Current.CancellationToken);
     [Fact]
     public void OpacityRequiresOverrideFlagAndInheritsFromParent()
@@ -221,16 +138,6 @@ public sealed partial class AnimationTests
         Assert.Equal(.35f, new AnimationPlayer(context,0).EvaluateForTest(.1).Nodes[0].Opacity);
         opacity.SetShort(12,0);
         Assert.Equal(1, new AnimationPlayer(context,0).EvaluateForTest(.1).Nodes[0].Opacity);
-    }
-    [Fact]
-    public void ProceduralCollisionSequenceReferenceSurvivesStructuralEdits()
-    {
-        var package = Fixture(); var entry = package.Entries[0]; var other = new AnimationSequence(new byte[64]) { Name = "collision" }; entry.Sequences.Add(other);
-        var motion = AnimationCatalog.Create(10); motion.SetInt(12,0x800); motion.SetText(208,"collision"); motion.SetShort(240,1); entry.Sequences[0].Events.Add(motion);
-        var edits = new AnimationEditSession(package); edits.MoveSequence(0,other.Id,-1);
-        var updated = edits.Package.Entries[0].Sequences[1].Events[0]; Assert.Equal(-1,updated.I16(240)); Assert.Equal("collision",updated.Text(208));
-        edits.RenameSequence(0,other.Id,"landed"); Assert.Equal("landed",edits.Package.Entries[0].Sequences[1].Events[0].Text(208));
-        Assert.Throws<InvalidDataException>(() => edits.DeleteSequence(0,other.Id));
     }
     [Fact]
     public void NullPositionBasisDoesNotAddTheBoundRootTwice()

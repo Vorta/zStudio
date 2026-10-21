@@ -20,7 +20,6 @@ public partial class MainWindow
     private void ConfigureSourceMapPresentation(SceneViewport viewport, DocumentModel doc, MissionSceneContext? mission,
         IReadOnlyDictionary<string, bool>? requested = null)
     {
-        viewport.AllowLockedInspection = doc.SourceWorld != null;
         viewport.SelectionOwner = null; viewport.NodeVisibility = null;
         sourceMapPartSnapshots.Remove(viewport);
         if (doc.SourceWorld is not { } session || mission == null) return;
@@ -40,11 +39,6 @@ public partial class MainWindow
     {
         if (doc.SourceWorld is { } session && sourceMapPartSnapshots.TryGetValue(viewport, out var snapshot))
             sourceMapPartStates.GetOrCreateValue(session).Overrides = snapshot.Overrides;
-    }
-
-    private void ClearSourceMapParts(DocumentModel doc)
-    {
-        if (doc.SourceWorld is { } session) sourceMapPartStates.Remove(session);
     }
 
     private IReadOnlyList<SourceMapPartRow> DescribeSourceMapParts(int owner)

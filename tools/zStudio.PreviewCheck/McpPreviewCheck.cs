@@ -154,13 +154,9 @@ internal static class McpPreviewCheck
                 if (Math.Abs(imageAspect / viewportAspect - 1) > .02) throw new InvalidDataException("MCP capture distorted the viewport aspect ratio.");
                 var records = await Call("assets", new { document = animation, query = "vtol_destruction1" });
                 int entry = records["items"]![0]!["Index"]!.GetValue<int>();
-                var fields = await Call("property_fields", new { document = animation, entry });
-                string field = fields["fields"]!["fields"]!.AsArray().Single(f => f!["Label"]!.GetValue<string>() == "Reset delay (s)")!["Id"]!.GetValue<string>();
-                await Call("property_edit", new { document = animation, revision = fields["Revision"]!.GetValue<long>(), entry, field, value = "2.5" });
-                fields = await Call("property_fields", new { document = animation, entry });
-                await Call("save_document", new { document = animation, revision = fields["Revision"]!.GetValue<long>(), destination = Path.Combine(output, "edited-anim.zbd") });
+                await Call("inspect_asset", new { document = animation, kind = "Animation", index = entry });
                 if (!animHash.SequenceEqual(SHA256.HashData(File.ReadAllBytes(animPath)))) throw new InvalidDataException("Animation source changed.");
-                Console.WriteLine("MCP animation seek, render, property edit and verified Save As passed.");
+                Console.WriteLine("MCP animation seek, render and inspection passed.");
                 var textureFile = window.ViewModel.Files.First(f => f.RelativePath.EndsWith("image.zbd", StringComparison.OrdinalIgnoreCase));
                 var (texture, texturePreview) = await Select(textureFile.Path, "Texture", "");
                 await Call("texture_view", new { preview = texturePreview, zoom = 1, channel = 2, x = 0, y = 0 });
@@ -361,18 +357,10 @@ internal static class McpPreviewCheck
                 var worldCapture = await Call("capture", new { target = "preview", preview = worldPreview, width = 800, height = 600 });
                 if (worldCapture["preview"]!.GetValue<string>() != worldPreview || worldCapture["asset"]!["Kind"]!.GetValue<string>() != "World") throw new InvalidDataException("Capture identity differs from the selected preview.");
                 var placements = await Call("pickups", new { document = world });
-                var pickup = placements["items"]![0]!;
-                var state2 = await Call("state", new { });
-                long revision = state2["documents"]!.AsArray().Single(d => d!["id"]!.GetValue<string>() == world)!["Revision"]!.GetValue<long>();
-                await Call("scene_lock", new { document = world, revision, locked = false });
-                var position = pickup["position"]!;
-                await Call("pickup_move", new { document = world, revision, source = pickup["source"]!.DeepClone(), x = position["X"]!.GetValue<double>() + 1, y = position["Y"]!.GetValue<double>(), z = position["Z"]!.GetValue<double>() });
-                state2 = await Call("state", new { });
-                revision = state2["documents"]!.AsArray().Single(d => d!["id"]!.GetValue<string>() == world)!["Revision"]!.GetValue<long>();
-                await Call("undo_redo", new { document = world, revision, action = "undo" });
+                if (placements["items"]!.AsArray().Count == 0) throw new InvalidDataException("The world lists no pickups.");
                 await Call("validate", new { document = world });
                 await Call("capture", new { target = "window" });
-                Console.WriteLine("MCP Whole world, camera, pickup editing/undo and validation passed.");
+                Console.WriteLine("MCP Whole world, camera, read-only pickups and validation passed.");
                 File.WriteAllText(Path.Combine(output, "result.json"), (await Call("state", new { })).ToJsonString());
                 Console.WriteLine("PASS " + output);
             }

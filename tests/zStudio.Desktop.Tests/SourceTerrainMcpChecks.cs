@@ -164,7 +164,7 @@ internal static class SourceTerrainMcpChecks
 
             // Properties of a piece edits its recipe; the brush erases part of the road with a viewport stroke.
             await Preview();
-            int piece = doc.PreviewDocument.Scene!.Nodes.First(n => n.Name.StartsWith("hills_land_", StringComparison.Ordinal)).Index;
+            int piece = doc.Document.Scene!.Nodes.First(n => n.Name.StartsWith("hills_land_", StringComparison.Ordinal)).Index;
             Assert.Equal(piece, (int)typeof(MainWindow).GetMethod("SourceSelectionOwner", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(main, [doc, piece])!);
             string preview = ((Guid)typeof(MainWindow).GetField("previewId", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(main)!).ToString();
             main.TerrainRecipeReader = (w, path, t) =>
@@ -252,7 +252,7 @@ internal static class SourceTerrainMcpChecks
             await Preview();
             doc = Document(await Call("undo_redo", new() { ["document"] = Id(doc), ["revision"] = doc.Revision, ["action"] = "undo" }));
             await Preview();
-            piece = doc.PreviewDocument.Scene!.Nodes.First(n => n.Name.StartsWith("hills_land_", StringComparison.Ordinal)).Index;
+            piece = doc.Document.Scene!.Nodes.First(n => n.Name.StartsWith("hills_land_", StringComparison.Ordinal)).Index;
             preview = ((Guid)typeof(MainWindow).GetField("previewId", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(main)!).ToString();
             await Call("scene_properties", new() { ["preview"] = preview, ["node"] = piece, ["open"] = true });
             var fields = Assert.IsType<TerrainPropertiesEditor>(main.OpenPropertiesWindow!.SourceFields);
@@ -304,7 +304,7 @@ internal static class SourceTerrainMcpChecks
             // but never consume that preview's input or accept its coordinates as a terrain stroke.
             var worldAsset = doc.SelectedAsset!.Record;
             var modelAsset = doc.Assets.First(a => a.Record.Kind == zStudio.Core.AssetKind.Model &&
-                !doc.SourceBuild!.Provenance.Any(p => p.Value.Terrain != null && doc.PreviewDocument.Scene!.Nodes[p.Key].ModelIndex == a.Index));
+                !doc.SourceBuild!.Provenance.Any(p => p.Value.Terrain != null && doc.Document.Scene!.Nodes[p.Key].ModelIndex == a.Index));
             var heldStroke = typeof(SceneViewport).GetField("brushStroke", BindingFlags.Instance | BindingFlags.NonPublic)!;
             heldStroke.SetValue(view, new List<Vector3> { new(250, 0, 250) });
             var selectedBrush = (TerrainBrushState)brush.GetValue(main)!;
@@ -323,7 +323,7 @@ internal static class SourceTerrainMcpChecks
             Assert.Equal(beforeWrongView, workspace.ContentRevision);
             Assert.False(doc.IsDisposed);
             // Compiler-generated terrain keeps world coordinates in both its node and raw model preview.
-            int terrainModel = doc.PreviewDocument.Scene!.Nodes[piece].ModelIndex!.Value;
+            int terrainModel = doc.Document.Scene!.Nodes[piece].ModelIndex!.Value;
             await Job("select_asset", new() { ["document"] = Id(doc), ["kind"] = "Model", ["index"] = terrainModel });
             Assert.True(view.TerrainBrushActive);
             var terrainAsset = doc.Assets.Single(a => a.Record.Content is zStudio.Core.GameNode n && n.Index == piece);

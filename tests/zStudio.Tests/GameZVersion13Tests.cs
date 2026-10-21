@@ -118,13 +118,9 @@ public sealed class GameZVersion13Tests
     }
 
     [Fact]
-    public void DemoWorldsStayReadOnlyAndMalformedOnesAreRefused()
+    public void MalformedDemoWorldsAreRefused()
     {
         byte[] v13 = DemoWorldFixture.FromVersion15(GameZWriter.Write(SampleWorld(), Token));
-        var doc = FormatRegistry.Default.OpenBytes("gamez.zbd", v13, token: Token);
-        ImportedMesh triangle = new([new(0, 0, 0), new(1, 0, 0), new(0, 1, 0)], [Vector3.UnitZ, Vector3.UnitZ, Vector3.UnitZ], [new(0, 0), new(1, 0), new(0, 1)], [0, 1, 2]);
-        var refused = Assert.Throws<InvalidDataException>(() => ModelReplacementWriter.Replace(doc, new Dictionary<int, ImportedMesh> { [0] = triangle }, "rock", Token));
-        Assert.Contains("v15 or v27", refused.Message);
 
         // Cut inside the node records: the reader reports it and the world reader refuses the file.
         int nodeTable = BinaryPrimitives.ReadInt32LittleEndian(v13.AsSpan(32));
