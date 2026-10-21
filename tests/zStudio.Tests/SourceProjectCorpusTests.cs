@@ -77,6 +77,20 @@ public sealed class SourceProjectCorpusTests
             Assert.True(File.Exists(Path.Combine(project, "data", "common", "models", "ntank.gltf")));
             Assert.False(File.Exists(Path.Combine(project, "data", "m1", "models", "bft", "ntank.gltf")));
             Assert.True(File.Exists(Path.Combine(project, "data", "m1", "models", "bft", "bft_m1.gltf")));
+            // Explicit source layout for the m6 designator and m4 train assembly, in both retail releases.
+            foreach (var (mission, model, destination) in new[]
+            {
+                (6, "lasdesig", "data/common/models"), (4, "train", "data/m4/models"),
+                (4, "rcar1", "data/m4/models"), (4, "trnsplsh", "data/m4/models"), (4, "tturret", "data/m4/models"),
+            })
+            {
+                if (!Directory.Exists(Path.Combine(corpus, $"m{mission}"))) continue;
+                foreach (string extension in new[] { "gltf", "bin" })
+                {
+                    Assert.True(File.Exists(Path.Combine(project, destination, $"{model}.{extension}")));
+                    Assert.False(File.Exists(Path.Combine(project, $"data/m{mission}/models/bft/{model}.{extension}")));
+                }
+            }
             Assert.NotEmpty(Directory.GetFiles(Path.Combine(project, "data", "common", "effects", "models"), "*.gltf"));
             Assert.NotEmpty(Directory.GetFiles(Path.Combine(project, "data", "common", "effects", "textures"), "*.png"));
             Assert.False(Directory.Exists(Path.Combine(project, "data", "effects")));
@@ -110,6 +124,7 @@ public sealed class SourceProjectCorpusTests
                 var built = zStudio.Core.Animation.AnimationPackage.Read(File.ReadAllBytes(Path.Combine(exported, Path.GetRelativePath(corpus, animations))), Token);
                 Assert.Equal(shipped.Entries.Select(e => e.Name), built.Entries.Select(e => e.Name));
                 Assert.All(Enumerable.Range(1, shipped.Entries.Count - 1), i => Assert.Null(zStudio.Core.Animation.AnimationComparer.Difference(shipped.Entries[i], built.Entries[i], Token)));
+                AnimationPrerequisiteChecks.Verify(Path.GetFileName(Path.GetDirectoryName(animations))!, built);
             }
             // Worlds rebuilt by their scripts have the shipped nodes, placements, flags, cells, models and textures; only the
             // grouping of coplanar triangles into polygons may differ, which draws the same surfaces.

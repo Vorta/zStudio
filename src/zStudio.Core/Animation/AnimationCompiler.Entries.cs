@@ -142,10 +142,12 @@ public sealed partial class AnimationCompiler
         private void Prerequisites(AnimationItem key)
         {
             // Records: whether the entry is one of several options, the kind (1 an animation name, 3 a node on a path,
-            // 2 the node that ends it) and the name; a node's name starts four bytes in, as the loader reads it.
+            // 2 the node that ends it) and the name. Mode 2 stores the expected active bit at +8, followed by
+            // the node name at +12; mode 1 uses +8 for its animation name and mode 3 only traverses the path.
             void Add(int mode, string target, bool option)
             {
                 byte[] record = new byte[48]; BinaryPrimitives.WriteInt32LittleEndian(record, option ? 1 : 0); record[4] = (byte)mode;
+                if (mode == 2) BinaryPrimitives.WriteInt32LittleEndian(record.AsSpan(8), 1); // OBJECT_ACTIVE_LIST
                 if (mode == 1) Text(record, 8, target, 32, "prerequisite"); else Text(record, 12, target, 28, "prerequisite");
                 Append(6, record);
             }

@@ -19,6 +19,7 @@ public partial class MainWindow
     [
         .. new[] { "textures", "faceOrientation", "wireframe", "bounds", "horizon" }.Select(n => P(n,"boolean",n)),
         P("aiNodes", "boolean", "Whole world: show authored AI nodes and directed links."),
+        P("pickupsByType", "boolean", "Source maps: Group by type, a row per catalog type inside the Pickups section's Weapons, Ammo and Other (for the session; off at first)."),
         P("aiThroughGeometry", "boolean", "Whole world: show AI through scene geometry; false enables depth occlusion."),
         P("aiNetwork", "string", "Whole world: all, or an AI network ID. A specific ID requires aiSnapshot."),
         P("aiSnapshot", "string", "Expected AI graph snapshot from preview_state.ai; required with a specific aiNetwork ID."),

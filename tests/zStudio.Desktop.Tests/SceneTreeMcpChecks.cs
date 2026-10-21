@@ -106,15 +106,36 @@ internal static class SceneTreeMcpChecks
                 [1] = new() { ModelFile = "data/m1/models/region.gltf", ModelNode = 0, ReferencedBy = reference },
                 [2] = new() { ModelFile = "data/m1/models/region.gltf", ModelNode = 1, ReferencedBy = reference },
             }, deadline.Token);
-            var projection = new SourceMapSelection(data, null, ownership, i => new("node:" + i, i, null), deadline.Token);
+            var associations = new MissionSceneContext(data, [0, 1, 2], [], [], [], MissionLayoutSelection.For(MissionDifficulty.Medium), 3)
+            {
+                AnimationUses = new Dictionary<int, MissionAnimationUses>
+                {
+                    [0] = new([new(1, "indirect", "indirect", "Turret destruction, ai.zrd default")], false, false),
+                    [1] = new(Enumerable.Range(1, 8).Select(i => new MissionAnimationUse(i, "indirect" + i, "indirect", "Assigned by resource")).ToArray(), false, false),
+                    [2] = new([new(9, "direct", "initialRoot", "Initial animation root")], true, false)
+                }
+            };
+            var projection = new SourceMapSelection(data, associations, ownership, i => new("node:" + i, i, null), deadline.Token);
             viewport.SelectionOwner = projection.Owner;
-            Set("sceneTree", new SceneTreeModel(data, "fixture", true, new(), projection: projection));
+            var associationTree = new SceneTreeModel(data, "fixture", true, new(), projection: projection);
+            Set("sceneTree", associationTree);
+            Assert.Equal("#FF89B5BC", associationTree.Roots[0].AnimationBrush.ToString());
+            Assert.Equal("#FF6FC8D6", associationTree.Roots[0].Children[0].AnimationBrush.ToString());
+            Assert.Contains("Receives animation indirectly", associationTree.Roots[0].AnimationsToolTip);
+            Assert.Contains("Initial animation root", associationTree.Roots[0].Children[0].AnimationsToolTip);
             read = await Call(new()); context = read["context"]!.GetValue<string>();
             root = read["children"]!["items"]![0]!["row"]!.GetValue<string>();
             children = await Call(Args("read", root));
             var sourceGroup = Assert.Single(children["children"]!["items"]!.AsArray())!;
             Assert.Null(sourceGroup["node"]); Assert.True(sourceGroup["selectionOwner"]!.GetValue<int>() < -1);
             Assert.Equal("reference", sourceGroup["nodeType"]!.GetValue<string>());
+            Assert.True(sourceGroup["animationHasInitialRoot"]!.GetValue<bool>());
+            Assert.True(sourceGroup["animationHasIndirect"]!.GetValue<bool>());
+            Assert.True(sourceGroup["animationUsesTruncated"]!.GetValue<bool>());
+            Assert.Equal(8, sourceGroup["animationUses"]!.AsArray().Count);
+            Assert.Equal("indirect", sourceGroup["animationUses"]![0]!["origin"]!.GetValue<string>());
+            var searched = await Call(new() { ["search"] = "region" });
+            Assert.True(JsonNode.DeepEquals(sourceGroup["animationUses"], searched["matches"]!["items"]![0]!["item"]!["animationUses"]));
             string groupRow = sourceGroup["row"]!.GetValue<string>();
             await Call(Args("select", groupRow));
             Assert.Equal(sourceGroup["selectionOwner"]!.GetValue<int>(), viewport.FramingSelection);

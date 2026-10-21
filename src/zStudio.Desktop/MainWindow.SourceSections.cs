@@ -35,6 +35,8 @@ public partial class MainWindow : ISourceSectionState
     private string? sectionStateMap;
     private SourceSectionCard? sectionCard;
     private bool applyingSectionPresentation, sectionPresentationAgain;
+    /// <summary>Group by type: the Pickups section lists a row per catalog type inside Weapons, Ammo and Other (for the session).</summary>
+    private bool pickupsByType;
 
     // ---------------------------------------------------------------- what the rows show
 
@@ -47,7 +49,7 @@ public partial class MainWindow : ISourceSectionState
     bool ISourceSectionState.AnyNetworkShown => shownNetworks.Count > 0;
     bool ISourceSectionState.NetworkShown(string network) => shownNetworks.Contains(network);
     bool ISourceSectionState.MasterShown(string section) => MasterShown(section);
-    private bool MasterShown(string section) => masterShown.TryGetValue(section, out bool shown) ? shown : InitialMasters.GetValueOrDefault(section);
+    private bool MasterShown(string section) => masterShown.TryGetValue(section, out bool shown) ? shown : InitialMasters.TryGetValue(section, out bool initial) ? initial : section.StartsWith("puppies:", StringComparison.Ordinal);
 
     private SceneTreeItem? SectionSelection => sceneTree?.Selected is { IsSectionItem: true } row ? row : null;
 
@@ -166,7 +168,16 @@ public partial class MainWindow : ISourceSectionState
         }
         Reconcile("aiNetworks", (scene?.AiNetworks.Networks ?? []).Select(n => shownNetworks.Contains(n.Id)));
         foreach (var pass in sceneTree is { Projection: not null } tree ? tree.Roots.Where(r => r.Pass is { Kind: "aiv" or "puppies" }) : [])
-            Reconcile(pass.Pass!.Kind, pass.Children.Where(c => c.CanHide && c.Index is int).Select(c => !c.IsHidden));
+        {
+            Reconcile(pass.Pass!.Kind, Shown(pass));
+            // Pickups' Weapons, Ammo and Other rows, and their type rows, follow their own pickups.
+            foreach (var group in pass.Children.Where(c => c.MasterKey != null))
+            {
+                Reconcile(group.MasterKey!, Shown(group));
+                foreach (var type in group.Children.Where(c => c.MasterKey != null)) Reconcile(type.MasterKey!, Shown(type));
+            }
+        }
+        static IEnumerable<bool> Shown(SceneTreeItem row) => SceneTreeModel.PassLeaves(row).Where(c => c.CanHide && c.Index is int).Select(c => !c.IsHidden);
         void Reconcile(string section, IEnumerable<bool> shown)
         {
             bool any = false, all = true, none = true;
@@ -250,12 +261,13 @@ public partial class MainWindow : ISourceSectionState
             case "aiNetworks":
                 if (!ShowAllNetworks(!(hide ?? MasterShown("aiNetworks")))) return;
                 break;
-            case "aiv" or "puppies":
+            // The AI Vehicles and Pickups rows, and Pickups' group and type rows.
+            case { } pass when pass is "aiv" or "puppies" || pass.StartsWith("puppies:", StringComparison.Ordinal):
             {
                 if (scene == null) throw new StudioCommandException("not_ready", "Show the map first.");
                 if (scene.IsPickupDragging || scene.IsFlyActive) throw new StudioCommandException("busy", "Finish the transform drag or exit Fly first.");
                 bool hideAll = hide ?? MasterShown(row.MasterKey);
-                foreach (var child in row.Children)
+                foreach (var child in SceneTreeModel.PassLeaves(row))
                 {
                     if (!child.CanHide || child.Index is not int index) continue;
                     if (hideAll) hiddenRows[index] = HiddenNodesFor(sceneTree, index); else hiddenRows.Remove(index);
@@ -313,6 +325,62 @@ public partial class MainWindow : ISourceSectionState
         if (HasAiPathDraft) throw new StudioCommandException("pending_drafts", "Confirm or cancel the AI path transform before hiding AI networks.");
         return !overlayEnds || ResolveInspectionDrafts();
     }
+    /// <summary>
+    /// Group by type (the Pickups row's toggle and context menu, MCP scene_options pickupsByType): the tree is built again with
+    /// or without type rows. A pickup keeps its row identity, so its selection, eye and open state stay.
+    /// </summary>
+    internal void SetPickupsByType(bool on, bool focusPickups = false, (bool Had, SceneTreeItem? Row)? menuFocus = null)
+    {
+        if (pickupsByType == on) return;
+        RequirePickupsTreeReady();
+        var (hadFocus, focusedRow) = menuFocus ?? (DocumentSceneTree.IsKeyboardFocusWithin, FocusedSceneRow());
+        // The Pickups row, or a group or type row (its group once the types go), that had the keyboard keeps it.
+        string? focusedGroup = focusedRow?.Section switch { PickupGroupEntry g => g.Group, PickupTypeEntry t => t.Group, _ => null };
+        focusPickups |= focusedRow?.Pass?.Kind == "puppies";
+        pickupsByType = on;
+        int? selected = sceneTree is { Projection: not null, Selected: { Placement: not null, Index: int node } } ? node : null;
+        RefreshSceneTree();
+        if (selected is int pickup && sceneTree is { } tree)
+        {
+            // The selected pickup's new type row opens, unless its group was closed.
+            changingSceneTree = true;
+            try { if (tree.Reveal(pickup, expand: false) is { Parent: { Section: PickupTypeEntry } type } && type.Parent is { IsExpanded: true }) type.IsExpanded = true; }
+            finally { changingSceneTree = false; }
+            ScheduleSceneTreeReveal();
+        }
+        RefreshRowEyes();
+        // The rebuilt tree replaced the focused row or toggle: the keyboard returns to the Pickups row or group that had it, else
+        // to the selected row when it is shown (as after a rebuild), otherwise to the Pickups row.
+        if (hadFocus && sceneTree is { } built) Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Loaded, () =>
+        {
+            if (sceneTree != built) return;
+            var pickups = built.Roots.FirstOrDefault(r => r.Pass?.Kind == "puppies");
+            var target = focusedGroup != null ? pickups?.Children.FirstOrDefault(c => c.Section is PickupGroupEntry g && g.Group == focusedGroup)
+                : !focusPickups && built.Selected is { } row && Ancestors(row).All(a => a.IsExpanded) ? row : null;
+            if (((target != null ? RealizeRow(target) : null) ?? (pickups != null ? RealizeRow(pickups) : null)) is { } container) FocusRow(container);
+        });
+        static IEnumerable<SceneTreeItem> Ancestors(SceneTreeItem row) { for (var at = row.Parent; at != null; at = at.Parent) yield return at; }
+    }
+    private SceneTreeItem? FocusedSceneRow() => DocumentSceneTree.IsKeyboardFocusWithin
+        ? PropertyContext.FindAncestor<System.Windows.Controls.TreeViewItem>(System.Windows.Input.Keyboard.FocusedElement as DependencyObject)?.DataContext as SceneTreeItem : null;
+    /// <summary>Group by type waits while an edit is evaluated and while a rebuild replaces the map (its open rows and hidden
+    /// pickups are then remembered by tree path).</summary>
+    private void RequirePickupsTreeReady()
+    {
+        if (shownDocument?.SourceWorld is { IsRebuilding: true } || sourceWorkspaceBusy || !DocumentSceneTree.IsEnabled || pendingTreeLayout != null || pendingHidden != null)
+            throw new StudioCommandException("busy", "The World tree is waiting for the rebuilt map; change Group by type when it is shown.");
+    }
+    private void OutlinerGroupByTypeClick(object sender, RoutedEventArgs e)
+    {
+        e.Handled = true;
+        try { SetPickupsByType(!pickupsByType, focusPickups: (sender as UIElement)?.IsKeyboardFocused == true); }
+        catch (StudioCommandException ex) { Report(ex); }
+    }
+    private void SceneGroupByTypeClick(object sender, RoutedEventArgs e)
+    {
+        try { SetPickupsByType(!pickupsByType, menuFocus: sceneMenuFocus); }
+        catch (StudioCommandException ex) { Report(ex); }
+    }
     /// <summary>The Zones header's Objects | Polygons switch: the overlay kind the shown zones are coloured by.</summary>
     internal void ChooseZoneOverlay(bool polygons)
     {
@@ -328,14 +396,14 @@ public partial class MainWindow : ISourceSectionState
         try { ChooseZoneOverlay((sender as FrameworkElement)?.Name == "ZoneKindPolygons"); }
         catch (StudioCommandException ex) { Report(ex); }
     }
-    /// <summary>A click on a section, scope or file row opens or closes it; those rows are never the selection.</summary>
+    /// <summary>A click on a section, scope, file or Pickups group or type row opens or closes it; those rows are never the selection.</summary>
     private void OutlinerRowMouseDown(object sender, MouseButtonEventArgs e)
     {
         // A press on a row's button (a disabled one does not take it) is not a click on the row; a double-click toggles once.
         for (var at = e.OriginalSource as DependencyObject; at != null && at != sender; at = at is System.Windows.Media.Visual ? System.Windows.Media.VisualTreeHelper.GetParent(at) : LogicalTreeHelper.GetParent(at))
             if (at is System.Windows.Controls.Primitives.ButtonBase) { e.Handled = true; return; }
         if (e.ClickCount > 1 && (sender as FrameworkElement)?.DataContext is SceneTreeItem { IsSourceMap: true, Selectable: false }) { e.Handled = true; return; }
-        if ((sender as FrameworkElement)?.DataContext is not SceneTreeItem { Section: SectionHeader or DefinitionScopeEntry or DefinitionFileEntry } row && (sender as FrameworkElement)?.DataContext is not SceneTreeItem { Pass: not null }) return;
+        if ((sender as FrameworkElement)?.DataContext is not SceneTreeItem { Section: SectionHeader or DefinitionScopeEntry or DefinitionFileEntry or PickupGroupEntry or PickupTypeEntry } row && (sender as FrameworkElement)?.DataContext is not SceneTreeItem { Pass: not null }) return;
         var item = (SceneTreeItem)((FrameworkElement)sender).DataContext;
         if (item.ChildCount == 0) return;
         e.Handled = true;
@@ -561,6 +629,9 @@ public partial class MainWindow : ISourceSectionState
             rootNodes = sceneTree?.Sections?.DefinitionRoots.GetValueOrDefault(definition.Definition.Index)?.Take(64).ToArray() },
         MissingFileEntry missing => new { definitionFile = missing.Listing.File, missing = true, listedBy = missing.Listing.ListedBy },
         NoteEntry note => new { note = note.Text },
+        PickupGroupEntry group => new { kind = "pickupGroup", group = group.Group, count = group.Entries.Count, shown = group.Entries.Count(e => e.Row != null) },
+        PickupTypeEntry type => new { kind = "pickupType", group = type.Group, pickupType = type.Type, shortName = row.Pickup?.ShortName, name = row.Pickup?.ManualName,
+            count = type.Entries.Count, shown = type.Entries.Count(e => e.Row != null) },
         _ => null,
     };
     /// <summary>
@@ -572,7 +643,7 @@ public partial class MainWindow : ISourceSectionState
         zones = new { overlay = ZoneOverlayOn, kind = (ZoneOverlayOn ? worldHighlightMode : zoneOverlayKind) == WorldHighlightMode.PolygonZones ? "polygons" : "objects", paused = ZoneToolEngaged,
             shown = shownZones.Order().Select(z => (int)z).ToArray(), master = MasterShown("zones"), emphasis = (int?)viewport.ZoneSelection },
         networks = new { shown = shownNetworks.Order(StringComparer.Ordinal).Take(256).ToArray(), shownCount = shownNetworks.Count, master = MasterShown("aiNetworks"), emphasis = viewport.AiEmphasizedNetwork },
-        passes = new { aiv = MasterShown("aiv"), puppies = MasterShown("puppies") },
+        passes = new { aiv = MasterShown("aiv"), puppies = MasterShown("puppies"), pickupsByType },
         outlines = new { roots = viewport.OutlinedNodes.Count, boxes = viewport.OutlinedBoxes },
         selection = SectionSelection is { } row ? new { row = row.Id, kind = row.Category, key = row.Section!.Key } : null,
     };

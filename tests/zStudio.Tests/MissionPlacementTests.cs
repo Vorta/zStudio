@@ -13,6 +13,11 @@ public sealed partial class AnimationTests
     {
         var context = TurretFixture(); string[] before = NodeState(context.Scene); byte[] animation = Pack(context.Package);
         context.Mission = BuildTurrets(context);
+        Assert.True(context.Mission.AnimationUses[2].HasInitialRoot);
+        Assert.False(context.Mission.AnimationUses[7].HasInitialRoot);
+        Assert.Contains(context.Mission.AnimationUses[7].Uses, u => u.Name == "destroy" && u.Origin == "indirect" && u.Reason.Contains("default"));
+        Assert.False(context.Mission.AnimationUses.ContainsKey(12));
+        Assert.False(context.Mission.AnimationUses.ContainsKey(17));
         foreach (int root in new[] { 2, 7 })
         {
             Assert.True(Active(context.Scene, root + 1)); Assert.False(Active(context.Scene, root + 2));
@@ -41,6 +46,8 @@ public sealed partial class AnimationTests
         var mission = BuildTurrets(context, explicitName);
         Assert.Equal(first, SceneBuilder.LocalTransform(mission.Scene.Nodes[2]).M41);
         Assert.Equal(second, SceneBuilder.LocalTransform(mission.Scene.Nodes[7]).M41);
+        Assert.Contains(mission.AnimationUses[2].Uses, u => u.Origin == "indirect" && u.Name == (explicitName == "override" ? "override" : "tur_01"));
+        Assert.Contains(mission.AnimationUses[7].Uses, u => u.Origin == "indirect" && u.Name == (explicitName == "override" ? "override" : "destroy"));
         static void AddPosition(AnimationEntry entry, int x)
         { var ev = AnimationCatalog.Create(7); ev.SetShort(28, -100); ev.SetVector(16, new(x, 0, 0)); entry.Primary.Events.Add(ev); }
     }

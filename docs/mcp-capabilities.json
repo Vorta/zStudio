@@ -152,7 +152,7 @@
         "zstudio_scene_properties",
         "zstudio_properties_open"
       ],
-      "note": "Lazy hierarchy rows, bound expansion/selection and viewport reveal share context-scoped occurrence identities, source provenance and pending-draft guards. Source rows expose sourceFile/gltfNode/sourceOccurrence and optional compiledNode. Authored groups removed by compilation remain read-only sourceGroup rows with null node and selectionOwner; whole-reference owners retain framing; their editor-only Parts are MCP-only (source_map_parts). Preview hierarchy is stable during animation; stored nodes are the fallback. Motion previews scope tree/enumeration/selection/Properties/node framing to the selected assembly and retain original library indices. Expand/collapse/reveal only change presentation. MW3 mission labels use 128-character prefixes with actor NameCharacters/NameTruncated and node metadata name_characters/name_truncated, also available in scene_nodes, scene_properties and pinned Properties. Cards disclose shortened labels; original AIV names and instance identities remain intact. In a source map the World tree adds section rows (scene_tree sectionRow): Zones, AI Networks and Animations (definitions) list the map's zones, AI networks and .zad definitions; zones and networks are shown one by one with their eyes (all hidden at first), the Zones, AI Networks, AI Vehicles and Pickups rows' master eyes show or hide everything below them, and selecting one opens its card in the docked Properties pane (zone label: source_zone_label; network header: source_ai_network; definitions are read-only and outline what they bind). preview_state sections reports the eyes, emphasis, outlines and selection; drafts/resolve_drafts target section covers the card's pending input. Keyboard: Up/Down, Home/End and Page Up/Down move through every shown row (a selectable row becomes the selection; section, folder, file, pass and note rows only take focus), Left/Right reach the row's buttons, Space or Enter opens or closes a row with children or presses the focused button, Escape returns from a button to its row."
+      "note": "A source map's Pickups section always holds Weapons, Ammo and Other (scene_tree category pickupGroup, sectionRow group/count/shown; hide/show/frame, never select), with a row per catalog type inside each under Group by type (scene_options pickupsByType; category pickupType). Pickup rows read as the manual-based short name and a per-type number (Label ERFPG #1); a weapon pickup shows the weapon's render, ammo, health and technology their HUD icons. scene_tree exposes pickupType, pickupKind, pickupGroup, pickupNumber, pickupShortName, pickupName (manual name), instanceName (null on other-difficulty rows) and pickupTemplate from the same catalog classification, and null for non-pickup rows; search matches every word in names, kinds and catalog/game names. Lazy hierarchy rows, bound expansion/selection and viewport reveal share context-scoped occurrence identities, source provenance and pending-draft guards. Source rows expose sourceFile/gltfNode/sourceOccurrence and optional compiledNode. Authored groups removed by compilation remain read-only sourceGroup rows with null node and selectionOwner; whole-reference owners retain framing; their editor-only Parts are MCP-only (source_map_parts). Preview hierarchy is stable during animation; stored nodes are the fallback. Motion previews scope tree/enumeration/selection/Properties/node framing to the selected assembly and retain original library indices. Expand/collapse/reveal only change presentation. MW3 mission labels use 128-character prefixes with actor NameCharacters/NameTruncated and node metadata name_characters/name_truncated, also available in scene_nodes, scene_properties and pinned Properties. Cards disclose shortened labels; original AIV names and instance identities remain intact. In a source map the World tree adds section rows (scene_tree sectionRow): Zones, AI Networks and Animations (definitions) list the map's zones, AI networks and .zad definitions; zones and networks are shown one by one with their eyes (all hidden at first), the Zones, AI Networks, AI Vehicles and Pickups rows' master eyes show or hide everything below them, and selecting one opens its card in the docked Properties pane (zone label: source_zone_label; network header: source_ai_network; definitions are read-only and outline what they bind). preview_state sections reports the eyes, emphasis, outlines and selection; drafts/resolve_drafts target section covers the card's pending input. Keyboard: Up/Down, Home/End and Page Up/Down move through every shown row (a selectable row becomes the selection; section, folder, file, pass and note rows only take focus), Left/Right reach the row's buttons, Space or Enter opens or closes a row with children or presses the focused button, Escape returns from a button to its row."
     },
     {
       "gui": "MotionEditor:Controls",
@@ -305,6 +305,11 @@
       "note": "The Add model dialog (Tools > Add model to world, shown unavailable for now) lists project models (source_world_models) with a filter (a virtualized list of at most 2000 matches, with a note when the filter matches more), suggests the model's name as node name, offers unplaced or placed (position and heading, defaulting to the orbit pivot), and filters/pages all other missions' definition files for the name (source_world_definitions: query, offset, limit 1–64, nextOffset, filtered total and unfiltered fileCount). Full paths remain usable; large rows shorten MCP pages before projection. Model listing observes workspace cancellation and refuses a project replacement with context_changed. The GUI retains checked files across pages, selecting at most 64. Lists up to 64 start checked; larger lists start unchecked (source_world_add_model refuses to add such a list whole); Add maps to source_world_add_model with complete checked paths from any pages, including long project paths. Completion definitionFiles previews keep at most 64 paths of 512 characters with definitionFileCount and definitionFilesTruncated; discovery and editing retain full identities."
     },
     {
+      "gui": "SourcePickupDialog:Controls",
+      "tools": ["zstudio_source_pickup_add"],
+      "note": "Tools and the Pickups section context menu open the same dialog. Catalog type, explicit position, Euler degrees, amount, respawn and difficulty use the shared source append transaction; template spawning is verified before acceptance. Pending drafts and stale revisions refuse creation."
+    },
+    {
       "gui": "BlenderUpdateDialog:Controls",
       "tools": [
         "zstudio_source_blender_checkouts",
@@ -326,7 +331,7 @@
         "zstudio_source_reconstruct",
         "zstudio_operation"
       ],
-      "note": "The Initialize source project dialog's retail ZBD folder and source project folder (typed or browsed) are source_reconstruct's source and destination; Initialize and open (enabled once both are given) runs it with open true, showing its progress and refusals in the dialog, and Cancel or closing the dialog cancels the running operation (zstudio_operation cancel), which removes what it wrote; a Cancel that comes once the project is written leaves it unopened in its folder, as a cancel before source_reconstruct has made it the workspace root does (a later cancel changes nothing: a source project is not indexed, so the operation completes with the project open and indexComplete true); a refusal, including a folder it could not remove, stays shown in the dialog."
+      "note": "GUI Initialize and source_reconstruct share reconstruction placement: m6 lasdesig goes to data/common/models; m4 train, rcar1, trnsplsh and their referenced tturret go to data/m4/models when provenance and safe lookup agree. Existing projects are not migrated. The Initialize source project dialog's retail ZBD folder and source project folder (typed or browsed) are source_reconstruct's source and destination; Initialize and open (enabled once both are given) runs it with open true, showing its progress and refusals in the dialog, and Cancel or closing the dialog cancels the running operation (zstudio_operation cancel), which removes what it wrote; a Cancel that comes once the project is written leaves it unopened in its folder, as a cancel before source_reconstruct has made it the workspace root does (a later cancel changes nothing: a source project is not indexed, so the operation completes with the project open and indexComplete true); a refusal, including a folder it could not remove, stays shown in the dialog."
     },
     {
       "gui": "WorldCompareWindow:Controls",
@@ -1257,6 +1262,11 @@
       "note": "Omit destination to build every output in memory and report failures and warnings without writing. Recognized but unimplemented world mutations report warnings in both this result and GUI Problems. Shared planning caps aggregate output inputs at 1,000,000 and pending/disk inventories at 50,000 files; imports refuse ambiguous glTF scene selection and malformed active world references."
     },
     {
+      "gui": "MainWindow.xaml:AddSourcePickupClick",
+      "tools": ["zstudio_source_pickup_add"],
+      "note": "Add one source pickup through the shared prepared transaction, with explicit placement and difficulty. All deduplicates fallback resources; exclusive changes materialize variants to preserve other layouts. Undo and Save use the source workspace; once saved, an addition that created a variant file cannot be undone (undo never deletes a saved file)."
+    },
+    {
       "gui": "MainWindow.xaml:AddSourceModelClick",
       "tools": [
         "zstudio_source_world_add_model"
@@ -1432,7 +1442,7 @@
         "zstudio_scene_tree",
         "zstudio_camera"
       ],
-      "note": "A row's Frame selection is scene_tree select on that row, then camera frame target selected."
+      "note": "A row's Frame selection is scene_tree select on that row, then camera frame target selected. On the Pickups section's Weapons, Ammo and Other rows and their type rows (never selected) it is scene_tree action frame on that row."
     },
     {
       "gui": "MainWindow.xaml:OutlinerEyeClick",
@@ -1440,7 +1450,7 @@
         "zstudio_scene_tree",
         "zstudio_scene_selection"
       ],
-      "note": "A row's eye is scene_tree hide/show (view only, no source edit). Zones and AI networks are shown one by one and start hidden: a zone's eye shows or hides its colour and a network's its nodes and links (any shown zone turns the zone overlay on, any shown network the AI overlay). The Zones, AI Networks, AI Vehicles and Pickups rows' master eye (scene_tree hide/show on that row; rows report master) hides or shows everything below them; it changes when pressed, or when everything below comes to be shown (or hidden) one by one. preview_state sections reports them. scene_selection show_all shows every hidden object (units and pickups too), not zones or networks."
+      "note": "A row's eye is scene_tree hide/show (view only, no source edit). Zones and AI networks are shown one by one and start hidden: a zone's eye shows or hides its colour and a network's its nodes and links (any shown zone turns the zone overlay on, any shown network the AI overlay). The Zones, AI Networks, AI Vehicles and Pickups rows' master eye, and those of the Pickups section's Weapons, Ammo and Other rows and their type rows (scene_tree hide/show on that row; rows report master), hides or shows everything below them; it changes when pressed, or when everything below comes to be shown (or hidden) one by one. preview_state sections reports the section and pass masters; group and type rows report theirs as master on their scene_tree rows. scene_selection show_all shows every hidden object (units and pickups too), not zones or networks."
     },
     {
       "gui": "MainWindow.xaml:OutlinerEyeMiddleClick",
@@ -1458,11 +1468,26 @@
       "note": "The Zones header's Objects | Polygons switch is scene_options changes.highlight zones or polygonZones: the kind of colour the shown zones take. It is disabled while no zone shows and paused while Edit zones is on (busy)."
     },
     {
+      "gui": "MainWindow.xaml:OutlinerGroupByTypeClick",
+      "tools": [
+        "zstudio_scene_options"
+      ],
+      "note": "The Pickups row's Group by type toggle is scene_options changes.pickupsByType (preview_state sections.passes.pickupsByType): inside Weapons, Ammo and Other a row per catalog type (scene_tree category pickupType). For the session; off at first."
+    },
+    {
+      "gui": "MainWindow.xaml:SceneGroupByTypeClick",
+      "tools": [
+        "zstudio_scene_options"
+      ],
+      "note": "The Pickups row's context menu item Group by type is the same scene_options changes.pickupsByType as the row's toggle."
+    },
+    {
       "gui": "MainWindow.xaml:OpenWorkspaceClick",
       "tools": [
         "zstudio_open_root"
       ],
       "note": "File > Open workspace… (Ctrl+O): open_root with project true, which refuses a folder that is not a source project (not_project, naming the missing data or gamegen folder), one that is or lies below a link, or one in an earlier source format."
     }
-  ]
+  ],
+  "animationAssociationResults": "scene_tree animations includes initial-root and statically known indirect recipients. animationUses contains up to eight entryIndex/name/origin/reason records; origin is initialRoot or indirect. animationUsesTruncated discloses omissions. animationHasInitialRoot and animationHasIndirect retain both origin summaries when details are capped. GUI tree/search uses #6FC8D6 for any initial root, #89B5BC for indirect-only recipients; same glyph and opacity. Read-only position references and unknown impact targets are excluded."
 }

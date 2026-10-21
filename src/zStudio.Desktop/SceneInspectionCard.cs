@@ -81,6 +81,10 @@ internal sealed partial class SceneInspectionCard : Grid
     internal Border PanelRoot => panel;
     /// <summary>The outliner type of a selection (world, group, geometry, object or node), for its icon.</summary>
     internal Func<SceneInspection, string>? CategoryOf { get; set; }
+    /// <summary>A source map pickup's name for the heading, its subtitle (kind and game name) with tooltip, and the status bar's label; null otherwise.</summary>
+    internal Func<SceneInspection, PickupNaming?>? PickupNameOf { get; set; }
+    internal sealed record PickupNaming(string Name, string Subtitle, string ToolTip, string Label);
+    private string? pickupLabel;
     /// <summary>The recently selected objects the empty pane offers, newest first, and how to select one again.</summary>
     internal Func<IReadOnlyList<RecentSelection>>? RecentSelections { get; set; }
     internal Action<RecentSelection>? PickRecent { get; set; }
@@ -353,7 +357,7 @@ internal sealed partial class SceneInspectionCard : Grid
     /// <summary>After every refresh: the selection's label may have changed.</summary>
     internal event Action? Refreshed;
     /// <summary>The selection as the status bar names it: "name · node #N", or null without one.</summary>
-    internal string? SelectionLabel => Selection is not { } selected ? null
+    internal string? SelectionLabel => Selection is not { } selected ? null : pickupLabel != null ? pickupLabel
         : ObjectEditor is { } editor ? $"{editor.State.Name} · node #{editor.State.Node}" : heading.Text.Length > 0 ? heading.Text + (selected.SelectionNode >= 0 ? $" · node #{selected.SelectionNode}" : "") : null;
     internal void Refresh() { RefreshCore(); Refreshed?.Invoke(); }
     private void RefreshCore()
@@ -370,6 +374,7 @@ internal sealed partial class SceneInspectionCard : Grid
         close.ToolTip = Docked ? "Clear selection (Esc)" : "Close node card";
         System.Windows.Automation.AutomationProperties.SetName(close, Docked ? "Clear selection" : "Close node card");
         RefreshChips(selected);
+        pickupLabel = null;
         if (selected == null)
         {
             if (!HasDraft) { EndObjectHandles(); ObjectEditor = null; objectBinding = null; sourceRows.Children.Clear(); sourceRows.Visibility = Visibility.Collapsed; }
@@ -391,8 +396,10 @@ internal sealed partial class SceneInspectionCard : Grid
         details = describe(selected);
         if (RefreshSource()) return;
         valves.Visibility = details.ContainsKey("AI valves") ? Visibility.Visible : Visibility.Collapsed;
-        heading.Text = Display(details["Selected object"] ?? details["Node"]); heading.ToolTip = heading.Text; selectionName.Text = heading.Text;
-        subtitle.Text = Kind(selected); subtitle.ToolTip = subtitle.Text;
+        var pickup = PickupNameOf?.Invoke(selected);
+        heading.Text = pickup?.Name ?? Display(details["Selected object"] ?? details["Node"]); heading.ToolTip = heading.Text; selectionName.Text = heading.Text;
+        subtitle.Text = pickup?.Subtitle ?? Kind(selected); subtitle.ToolTip = pickup?.ToolTip ?? subtitle.Text;
+        pickupLabel = pickup?.Label;
         detailsSection.Visibility = Visibility.Visible; PlaceModes(detailsSection);
         scope.Text = details["Edit scope"] is { } affected ? Display(affected) : "";
         scope.Visibility = scope.Text.Length == 0 ? Visibility.Collapsed : Visibility.Visible;

@@ -255,8 +255,11 @@ public partial class MainWindow
         else if (doc.ScriptEdits != null && asset.ResourceId is Guid script) await ResourceUiAsync(async () => { await OpenScriptPropertiesAsync(doc, script, null); });
         else await OpenAssetPropertiesAsync(doc, asset.Record);
     }
+    /// <summary>Whether, and on which row, the World tree had the keyboard when its context menu was opened (Group by type gives it back).</summary>
+    private (bool Had, SceneTreeItem? Row) sceneMenuFocus;
     private void SceneContextTarget(object sender, MouseButtonEventArgs e)
     {
+        sceneMenuFocus = (DocumentSceneTree.IsKeyboardFocusWithin, FocusedSceneRow());
         contextScene = PropertyContext.FindAncestor<TreeViewItem>(e.OriginalSource as DependencyObject)?.DataContext as SceneTreeItem;
         sceneContextDocument = ViewModel.SelectedDocument; scenePointerContext = true; e.Handled = true;
     }
@@ -264,14 +267,21 @@ public partial class MainWindow
     {
         if (!scenePointerContext) { contextScene = DocumentSceneTree.SelectedItem as SceneTreeItem; sceneContextDocument = ViewModel.SelectedDocument; }
         scenePointerContext = false;
+        bool addPickup = sceneContextDocument is { SourceWorld: not null } && sceneContextDocument == shownDocument &&
+            contextScene?.Owner == sceneTree && contextScene?.Pass?.Kind == "puppies";
+        SceneAddPickupMenu.Visibility = addPickup ? Visibility.Visible : Visibility.Collapsed;
+        SceneAddPickupMenu.IsEnabled = addPickup && sceneContextDocument!.SourceWorld is { IsRebuilding: false } && !sourceWorkspaceBusy;
+        SceneGroupByTypeMenu.Visibility = addPickup && contextScene!.HasGroupByType ? Visibility.Visible : Visibility.Collapsed;
+        SceneGroupByTypeMenu.IsChecked = pickupsByType;
+        SceneGroupByTypeMenu.IsEnabled = SceneAddPickupMenu.IsEnabled;
         if (sceneContextDocument?.SourceWorld != null)
         {
-            // Source worlds offer only Rename, for the source-only rows whose names the build removes.
+            // Source rows offer Rename, and the Pickups pass offers creation.
             ScenePropertiesMenu.Visibility = Visibility.Collapsed;
             bool rename = contextScene?.Authored is { } authored && CanRenameRemoved(sceneContextDocument, authored) && contextScene.Owner == sceneTree && sceneContextDocument == shownDocument;
             SceneRenameMenu.Visibility = rename ? Visibility.Visible : Visibility.Collapsed;
             SceneRenameMenu.IsEnabled = rename && sceneContextDocument.SourceWorld is { IsRebuilding: false } && !sourceWorkspaceBusy;
-            if (!rename && sender is ContextMenu menu) menu.IsOpen = false;
+            if (!rename && !addPickup && sender is ContextMenu menu) menu.IsOpen = false;
             e.Handled = true; return;
         }
         SceneRenameMenu.Visibility = Visibility.Collapsed;

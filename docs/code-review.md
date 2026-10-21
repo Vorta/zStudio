@@ -45,7 +45,7 @@ When a finding concerns a test, first decide whether that test is must-have and 
 4. Recheck each fix, then perform a separate challenge pass over the full coverage inventory. Start from invariants and adversarial inputs rather than from the patch's explanation. Ask where the same assumption survives elsewhere, what happens before the guard, and what happens when two individually valid features interact.
 5. A newly found issue starts another fixing cycle. Any production change invalidates the prior clean conclusion for its dependencies and requires a final challenge pass after that change. Do not stop because a fixed number of rounds elapsed or because a large existing test suite is green.
 
-This procedure does not itself authorize spawning agents, contacting reviewers, enabling MCP access or modifying game sources. Follow the session's existing permissions and collaboration instructions. A separate challenge pass can be performed by the same agent; do not claim independent review when none occurred.
+A requested review cycle uses adversarial subagent reviewers (AGENTS.md): fix their findings, then review again with fresh reviewers, as long as new findings come up; a later round reviews what changed since the previous one rather than areas that already passed. Otherwise this procedure does not itself authorize contacting reviewers, enabling MCP access or modifying game sources. Follow the session's existing permissions and collaboration instructions. Do not claim independent review when none occurred.
 
 ## Evidence and completion gate
 

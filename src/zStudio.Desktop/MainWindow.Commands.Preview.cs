@@ -130,7 +130,7 @@ public partial class MainWindow
             }
             return Result(new { visible = "all" });
         });
-        RegisterJob(r, "scene_options", "Set static model/world options: lod(integer), difficulty(Easy/Medium/Hard; RECOIL only, MW3 uses missions), textures/wireframe/faceOrientation/bounds/horizon(boolean), texturePack(path or empty for automatic), highlight(none/nonDefaultSoils/canModify/clipTo/canModifyAndClipTo/zones/polygonZones/landmarks), aiNodes/aiThroughGeometry(boolean), aiNetwork(all or ID with aiSnapshot). Highlights and AI are Whole world only. In a source map zones and AI networks are shown one by one (scene_tree show/hide): highlight zones or polygonZones chooses the kind of zone colour (every zone shows when none did), another highlight hides every zone; aiNodes shows or hides every network; aiNetwork filters and aiThroughGeometry false are refused (networks are always drawn through geometry, at half strength where it hides them).", [PreviewParameter,SceneChanges], false, async (a, token) =>
+        RegisterJob(r, "scene_options", "Set static model/world options: lod(integer), difficulty(Easy/Medium/Hard; RECOIL only, MW3 uses missions), textures/wireframe/faceOrientation/bounds/horizon(boolean), texturePack(path or empty for automatic), highlight(none/nonDefaultSoils/canModify/clipTo/canModifyAndClipTo/zones/polygonZones/landmarks), aiNodes/aiThroughGeometry(boolean), aiNetwork(all or ID with aiSnapshot), pickupsByType(boolean; source maps: Group by type in the Pickups section, for the session). Highlights and AI are Whole world only. In a source map zones and AI networks are shown one by one (scene_tree show/hide): highlight zones or polygonZones chooses the kind of zone colour (every zone shows when none did), another highlight hides every zone; aiNodes shows or hides every network; aiNetwork filters and aiThroughGeometry false are refused (networks are always drawn through geometry, at half strength where it hides them).", [PreviewParameter,SceneChanges], false, async (a, token) =>
         {
             RequirePreview(a); RequireNoDrafts(shownDocument); if (animation != null || motion != null) throw new StudioCommandException("unsupported","Use animation_options or motion_preview.");
             TargetViewport(a);
@@ -174,6 +174,9 @@ public partial class MainWindow
             if (changes.ContainsKey("texturePack"))
                 requestedPack = TexturePackCombo.Items.Cast<PackChoice>().FirstOrDefault(p => (p.Path ?? "").Equals(Text(changes, "texturePack"), StringComparison.OrdinalIgnoreCase))
                     ?? throw new StudioCommandException("invalid_argument", "Choose an available texture variant.");
+            if (changes.ContainsKey("pickupsByType") && (!sourceChromeActive || doc.SourceWorld == null))
+                throw new StudioCommandException("unsupported", "Group by type applies to a source map's Pickups section.");
+            if (changes.ContainsKey("pickupsByType") && Flag(changes, "pickupsByType") != pickupsByType) RequirePickupsTreeReady();
             long highlightGeneration = worldHighlightGeneration;
             // As in the GUI, whose overlay buttons are disabled while the polygon zone tool is engaged.
             if (ZoneToolEngaged && (changes.ContainsKey("highlight") || changes.ContainsKey("faceOrientation")))
@@ -192,6 +195,7 @@ public partial class MainWindow
                     case "textures": TexturesEnabled.IsChecked = value!.GetValue<bool>(); ApplySceneOptions(); break;
                     case "wireframe": Wireframe.IsChecked = value!.GetValue<bool>(); ApplySceneOptions(); break;
                     case "bounds": BoundsEnabled.IsChecked = value!.GetValue<bool>(); ApplySceneOptions(); break;
+                    case "pickupsByType": SetPickupsByType(value!.GetValue<bool>()); break;
                     case "difficulty":
                         if (!Enum.TryParse<MissionDifficulty>(value!.GetValue<string>(),out var difficulty) || !Enum.IsDefined(difficulty)) throw new StudioCommandException("invalid_argument","Use Easy, Medium or Hard.");
                         bool changedDifficulty = ViewModel.Difficulty != difficulty;

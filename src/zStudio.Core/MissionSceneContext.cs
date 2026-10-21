@@ -24,13 +24,10 @@ public sealed partial class MissionSceneContext
     public IReadOnlyList<MissionActor> Actors { get; }
     public IReadOnlyList<HorizonBinding> Horizons { get; }
     public IReadOnlySet<int> DormantRoots { get; }
-    /// <summary>
-    /// The mission's animations by the node each binds to by name (at most eight names per node, then "…"):
-    /// the objects the animations act on, for presentation. Empty without animation definitions.
-    /// </summary>
-    public IReadOnlyDictionary<int, IReadOnlyList<string>> AnimationRoots { get; init; } = new Dictionary<int, IReadOnlyList<string>>();
     /// <summary>The node each compiled animation entry binds to (by its index in the package), as far as the binding allowance reached.</summary>
     public IReadOnlyDictionary<int, int> AnimationEntryRoots { get; init; } = new Dictionary<int, int>();
+    /// <summary>Initial roots and statically resolved indirect recipients, bounded independently per node.</summary>
+    public IReadOnlyDictionary<int, MissionAnimationUses> AnimationUses { get; init; } = new Dictionary<int, MissionAnimationUses>();
     public IReadOnlyList<string> Diagnostics { get; }
     public MissionLayoutSelection Layout { get; }
     public AiNetworkSnapshot AiNetworks { get; internal set; } = AiNetworkSnapshot.Empty;
@@ -191,7 +188,7 @@ public static partial class MissionSceneLoader
                     if (asset.Content is ZrdNode tree) resourcesBudget.Interpret(tree, token);
                     aiResources.Add((archive, asset));
                 }
-                foreach (var asset in archive.Assets.Where(a => a.Name.ToLowerInvariant() is "aiv.zrd" or "aiv_easy.zrd" or "aiv_hard.zrd" or "vehicle.zrd" or "vehicle_easy.zrd" or "vehicle_hard.zrd" or "startanims.zrd" or "ai.zrd" or "puppies.zrd" or "puppies_easy.zrd" or "puppies_hard.zrd"))
+                foreach (var asset in archive.Assets.Where(a => a.Name.ToLowerInvariant() is "aiv.zrd" or "aiv_easy.zrd" or "aiv_hard.zrd" or "vehicle.zrd" or "vehicle_easy.zrd" or "vehicle_hard.zrd" or "startanims.zrd" or "ai.zrd" or "puppies.zrd" or "puppies_easy.zrd" or "puppies_hard.zrd" or "weapons.zrd"))
                 {
                     resources.TryAdd(asset.Name, (archive, asset));
                 }
@@ -210,12 +207,20 @@ public static partial class MissionSceneLoader
         {
             var context = Build(world, package, Decode(aivName), Decode(vehicleName), Decode("startanims.zrd"), diagnostics, token, selection,
                 Decode("ai.zrd"), Decode(pickupName), pickupSource,
-                resources.TryGetValue(aivName, out var aivResource) ? new(aivResource.Archive.Path, aivResource.Asset.Index, aivResource.Asset.Name) : null);
+                resources.TryGetValue(aivName, out var aivResource) ? new(aivResource.Archive.Path, aivResource.Asset.Index, aivResource.Asset.Name) : null, Weapons());
             context.AiNetworks = MissionAiNetworks.Read(aiResources, token);
             return context;
         }, token).ConfigureAwait(false);
         token.ThrowIfCancellationRequested();
         Publish(cache, key, new(result)); return result;
+
+        // Weapon flyouts only describe animation associations: an unreadable weapons.zrd omits them, never the mission.
+        JsonNode? Weapons()
+        {
+            try { return Decode("weapons.zrd"); }
+            catch (InvalidDataException ex) when (!resourcesBudget.Exhausted)
+            { diagnostics.Add($"Animation associations: weapon flyouts are unavailable: {ex.Message}"); return null; }
+        }
 
         string Select(string name, string fallback)
         {
@@ -246,13 +251,13 @@ public static partial class MissionSceneLoader
     }
 
     public static MissionSceneContext Build(ISceneDocument world, AnimationPackage? package, JsonNode? aiv, JsonNode? vehicles, JsonNode? starts, IEnumerable<string>? initialDiagnostics = null, CancellationToken token = default, MissionLayoutSelection? selection = null,
-        JsonNode? ai = null, JsonNode? pickups = null, MissionResourceSource? pickupSource = null, MissionResourceSource? aivSource = null)
-        => BuildWithBudget(world, new MissionPlacementBudget(token), package, aiv, vehicles, starts, initialDiagnostics, token, selection, ai, pickups, pickupSource, aivSource);
+        JsonNode? ai = null, JsonNode? pickups = null, MissionResourceSource? pickupSource = null, MissionResourceSource? aivSource = null, JsonNode? weapons = null)
+        => BuildWithBudget(world, new MissionPlacementBudget(token), package, aiv, vehicles, starts, initialDiagnostics, token, selection, ai, pickups, pickupSource, aivSource, weapons: weapons);
 
     internal static MissionSceneContext BuildWithBudget(ISceneDocument world, MissionPlacementBudget budget, AnimationPackage? package, JsonNode? aiv, JsonNode? vehicles, JsonNode? starts,
         IEnumerable<string>? initialDiagnostics = null, CancellationToken token = default, MissionLayoutSelection? selection = null,
         JsonNode? ai = null, JsonNode? pickups = null, MissionResourceSource? pickupSource = null, MissionResourceSource? aivSource = null,
-        long? maximumBindingWork = null)
+        long? maximumBindingWork = null, JsonNode? weapons = null)
     {
         selection ??= MissionLayoutSelection.For(MissionDifficulty.Medium);
         token.ThrowIfCancellationRequested();
@@ -276,7 +281,9 @@ public static partial class MissionSceneLoader
         string[] startup = context == null ? [] : Startup(starts, budget); HashSet<(int Entry, int Root)> running = [];
         Vector3? player = context == null ? null : PlayerStart(aiv, vehicleNames, budget);
         if (context != null) Initialize(true);
-        try { InitializeTurrets(scene, context, ai, notes, positioned, token, bindings); }
+        List<AnimationUseSeed> animationSeeds = [];
+        try { InitializeTurrets(scene, context, ai, notes, positioned, token, bindings, (root, entry, reason) =>
+        { bindings!.Reserve(128); animationSeeds.Add(new(root, entry, reason)); }); }
         catch (InvalidDataException ex) { notes.Add($"Mission turrets: ai.zrd initialization is incomplete: {ex.Message}"); }
         int worldRoot = scene.Nodes.FirstOrDefault(n => n.Class == "world")?.Index ?? -1;
         MissionPlacementState placement = new(scene, original.Nodes.Count, worldRoot, budget); placement.Initialize();
@@ -378,7 +385,6 @@ public static partial class MissionSceneLoader
             budget.Take(scene.Nodes[root].Parents.Length);
             if (scene.Nodes[root].Parents.Contains(worldRoot)) { placement.Actor(root); actors.Add(new(root, sources[root], scene.Nodes[root].Name, "Animation initialization")); }
         }
-        Dictionary<int, IReadOnlyList<string>> animationRoots = [];
         Dictionary<int, int> entryRoots = [];
         if (context != null)
             foreach (var entry in package!.Entries)
@@ -393,16 +399,14 @@ public static partial class MissionSceneLoader
                     int root = bindings.Root(entry);
                     if (root < 0 || root >= scene.Nodes.Count) continue;
                     entryRoots[entry.Index] = root;
-                    if (!animationRoots.TryGetValue(root, out var names)) animationRoots[root] = names = new List<string>();
-                    var list = (List<string>)names;
-                    if (list.Count < 8) { budget.Name(entry.Name); list.Add(entry.Name); }
-                    else if (list.Count == 8) list.Add("…"); // More than eight: the list says so.
                 }
                 catch (InvalidDataException) when (!budget.Exhausted) { if (bindings.Exhausted) break; }
                 catch (IOException) when (bindings.Exhausted) { break; }
             }
+        var animationUses = context == null ? new Dictionary<int, MissionAnimationUses>() :
+            CollectAnimationUses(context, original, bindings!, entryRoots, animationSeeds, actors, vehicles, weapons, selection, notes, token);
         return new(scene, sources, actors, dormant, notes, selection, original.Nodes.Count, token)
-        { InitializationTransforms = context?.InitializationTransforms ?? new(), AnimationRoots = animationRoots, AnimationEntryRoots = entryRoots };
+        { InitializationTransforms = context?.InitializationTransforms ?? new(), AnimationEntryRoots = entryRoots, AnimationUses = animationUses };
 
         MissionPickupSource? CoordinateSource(int recordIndex)
         {

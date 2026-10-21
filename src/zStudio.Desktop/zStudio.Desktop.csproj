@@ -12,6 +12,7 @@
   </PropertyGroup>
   <ItemGroup>
     <Resource Include="Assets/studio.ico" />
+    <Resource Include="Assets/Pickups/**/*.png" />
     <ProjectReference Include="../zStudio.Mcp/zStudio.Mcp.csproj" />
     <ProjectReference Include="../zStudio.Core/zStudio.Core.csproj" />
     <ProjectReference Include="../zStudio.Rendering/zStudio.Rendering.csproj" />

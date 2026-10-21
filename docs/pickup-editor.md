@@ -1,5 +1,9 @@
 # Pickup placement editor
 
+In a source map, **Tools → Add pickup…** and the **Pickups** section's context menu create a pickup from the engine's 40-type catalog. Enter an explicit XYZ position, Euler XYZ rotation in degrees, amount and respawn delay, then choose **All**, **Easy**, **Medium** or **Hard**. Amount defaults to the catalog value; zero uses the game default. Rotation and respawn default to zero. Coordinates are authored as entered, without terrain snapping.
+
+The map must already load the selected type's template with a copyable `bvol` collision child. Creation evaluates actual placement before accepting one undoable source transaction. Existing records, comments and numeric values are retained. **All** writes each effective resource once; an exclusive difficulty edit creates missing variants when necessary to keep other layouts unchanged, including when Easy or Hard falls back to Medium's default list. Save writes the owning sources; only explicit game export creates archives. Once saved, an addition that created a variant file can no longer be undone, since undoing it would delete a saved file, which the source workspace never does. MCP: `zstudio_source_pickup_add`.
+
 Editing compiled ZBD assets is being retired in favour of [source projects](source-project.md). A compiled root opens only through MCP `open_root` (the GUI opens only source projects); the workflow below applies there. In a source map, pickups are edited from the selected-object card, without a lock (see [Placements](source-project.md#placements)).
 
 Open a mission's `gamez.zbd`, then **Whole world**. The **Unlock editing** toggle starts unchecked for each newly opened map; turn it on, then click the visible pickup to select it and show its bounds. Hover and tree inspection still work while editing is locked. This lock also governs AI-node and supported AIV tank coordinates.

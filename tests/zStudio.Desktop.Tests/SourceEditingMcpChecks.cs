@@ -27,6 +27,7 @@ internal static class SourceEditingMcpChecks
     {
         using var fixture = new SourceWorldFixture();
         fixture.WriteReferencedTurretDatabase();
+        fixture.WritePickupTemplate();
         fixture.Write("data/m1/zrdr/puppies.zrd", Default); fixture.Write("data/m1/zrdr/puppies_easy.zrd", Easy);
         const string aiSource = "node_00 ( 12 ( 1.0 2.0 3.0 ) ( -7 -1 0 ) )\nnode_01 ( 23 ( 5.0 2.0 7.0 ) ( 0 -1 -1 ) )\n";
         fixture.Write("data/m1/zrdr/net_01.zrd", aiSource);
@@ -751,6 +752,119 @@ internal static class SourceEditingMcpChecks
             var reloaded = Document(await Job("reload_document", new() { ["document"] = Id(undone2), ["revision"] = undone2.Revision }));
             await Call("close_document", new() { ["document"] = Id(reloaded), ["revision"] = reloaded.Revision });
             Assert.Empty(main.ViewModel.Documents);
+
+            // Creation uses the actual prepared source workspace, including clone validation and verified saves.
+            main.SourceEditPreparing = null; main.SourceEditEvaluation = null;
+            var pickupMap = Document((await Job("source_world_open", new() { ["mission"] = "m1" }))["document"]!);
+            await Preview();
+            Dictionary<string, object?> Addition(string type) => new()
+            {
+                ["document"] = Id(pickupMap), ["revision"] = pickupMap.Revision, ["type"] = type, ["difficulty"] = "All",
+                ["position"] = new Dictionary<string, object?> { ["x"] = 31.0, ["y"] = 2.0, ["z"] = 21.0 }
+            };
+            long unchanged = pickupMap.SourceWorld!.Workspace.ContentRevision;
+            await Job("source_pickup_add", Addition("PUP_HOVER"), "failed"); // no template: nothing accepted
+            Assert.Equal(unchanged, pickupMap.SourceWorld.Workspace.ContentRevision);
+            Assert.False(pickupMap.IsDirty);
+            long oldRevision = pickupMap.Revision;
+            string oldId = Id(pickupMap);
+            var created = await Job("source_pickup_add", Addition("PUP_AMPHIB"));
+            pickupMap = Document(created["document"]!); await Preview();
+            Assert.Equal(3, created["added"]!.AsArray().Count); // Hard shares the default source.
+            var createdPickups = await Job("pickups", new() { ["document"] = Id(pickupMap) });
+            Assert.Equal(2, createdPickups["items"]!.AsArray().Count(p => p!["Type"]!.GetValue<string>() == "PUP_AMPHIB"));
+            var staleAddition = Addition("PUP_AMPHIB"); staleAddition["document"] = oldId; staleAddition["revision"] = oldRevision;
+            await Job("source_pickup_add", staleAddition, "failed");
+            pickupMap = Document(await Call("undo_redo", new() { ["document"] = Id(pickupMap), ["revision"] = pickupMap.Revision, ["action"] = "undo" }));
+            Assert.False(pickupMap.IsDirty);
+            pickupMap = Document(await Call("undo_redo", new() { ["document"] = Id(pickupMap), ["revision"] = pickupMap.Revision, ["action"] = "redo" }));
+            await Job("save_document", new() { ["document"] = Id(pickupMap), ["revision"] = pickupMap.Revision });
+            Assert.Contains("PUP_AMPHIB", File.ReadAllText(fixture.Path("data/m1/zrdr/puppies.zrd")));
+            Assert.Contains("PUP_AMPHIB", File.ReadAllText(fixture.Path("data/m1/zrdr/puppies_easy.zrd")));
+            Assert.False(File.Exists(fixture.Path("data/m1/zrdr/puppies_hard.zrd")));
+
+            await Call("close_document", new() { ["document"] = Id(pickupMap), ["revision"] = pickupMap.Revision });
+
+            // Pickups' groups, names and pictures use placement identity, including rows absent from the shown difficulty.
+            fixture.Write("gamegen/m1.gs", File.ReadAllText(fixture.Path("gamegen/m1.gs")).Replace("GameZWriteZBDFile",
+                "LoadGameGen chip.gltf pu000\r\nLoadGameGen chip.gltf pu017\r\nLoadGameGen chip.gltf pu034\r\nGameZWriteZBDFile", StringComparison.Ordinal));
+            const string iconRows = "( ERFPG_AMMO 1 ( 10 0 10 ) ( 0 0 0 ) 0 ) ( NANITE 50 ( 20 0 10 ) ( 0 0 0 ) 0 ) ( PUP_AMPHIB 1 ( 30 0 10 ) ( 0 0 0 ) 0 )";
+            fixture.Write("data/m1/zrdr/puppies.zrd", "( " + iconRows + " )");
+            fixture.Write("data/m1/zrdr/puppies_easy.zrd", "( " + iconRows + " ( ERFPG_WEAPON 1 ( 40 0 10 ) ( 0 0 0 ) 0 ) )");
+            await main.ViewModel.OpenRootAsync(fixture.Project, token);
+            pickupMap = Document((await Job("source_world_open", new() { ["mission"] = "m1" }))["document"]!);
+            await Preview();
+            var iconTree = await Call("scene_tree", new() { ["document"] = Id(pickupMap) });
+            await Job("scene_options", new() { ["preview"] = iconTree["preview"]!.GetValue<string>(),
+                ["changes"] = new Dictionary<string, object?> { ["difficulty"] = "Medium" } });
+            await Preview();
+            iconTree = await Call("scene_tree", new() { ["document"] = Id(pickupMap) });
+            var pickupSection = iconTree["children"]!["items"]!.AsArray().Single(r => r!["pass"]?.GetValue<string>() == "puppies")!;
+            Assert.Null(pickupSection["pickupType"]); Assert.Null(pickupSection["pickupKind"]);
+            string iconContext = iconTree["context"]!.GetValue<string>();
+            async Task<JsonArray> Rows(JsonNode row) => (await Call("scene_tree", new() { ["document"] = Id(pickupMap), ["context"] = iconContext,
+                ["row"] = row["row"]!.GetValue<string>() }))["children"]!["items"]!.AsArray();
+            // Pickups always hold Weapons, Ammo and Other; the weapon placed only on Easy dims its group.
+            var groups = await Rows(pickupSection);
+            Assert.Equal(new[] { "weapons", "ammo", "other" }, groups.Select(g => g!["sectionRow"]!["group"]!.GetValue<string>()));
+            Assert.Equal(new[] { 1, 1, 2 }, groups.Select(g => g!["sectionRow"]!["count"]!.GetValue<int>()));
+            Assert.Equal(new[] { 0, 1, 2 }, groups.Select(g => g!["sectionRow"]!["shown"]!.GetValue<int>()));
+            Assert.All(groups, g => Assert.Equal("pickupGroup", g!["category"]!.GetValue<string>()));
+            Assert.Null(groups[0]!["master"]); Assert.True(groups[1]!["master"]!.GetValue<bool>());
+            await Call("scene_tree", new() { ["document"] = Id(pickupMap), ["context"] = iconContext, ["preview"] = iconTree["preview"]!.GetValue<string>(), ["action"] = "select", ["row"] = groups[1]!["row"]!.GetValue<string>() }, error: true);
+            var iconTreeModel = (SceneTreeModel)typeof(MainWindow).GetField("sceneTree", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(main)!;
+            var guiRows = SceneTreeModel.PassLeaves(iconTreeModel.Roots.Single(r => r.Pass?.Kind == "puppies")).ToArray();
+            Assert.Equal(4, guiRows.Length);
+            foreach (var (type, kind, group, name) in new[] { ("ERFPG_AMMO", "ammo", 1, "ERFPG #1"), ("ERFPG_WEAPON", "weapon", 0, "ERFPG #1"),
+                ("NANITE", "health", 2, "Nanite #1"), ("PUP_AMPHIB", "technology", 2, "Amphib Tech #1") })
+            {
+                var pickupRowJson = (await Rows(groups[group]!)).Single(r => r!["pickupType"]?.GetValue<string>() == type)!;
+                var gui = guiRows.Single(r => r.PickupType == type);
+                Assert.Equal(kind, pickupRowJson["pickupKind"]!.GetValue<string>()); Assert.Equal(kind, gui.PickupKind);
+                Assert.Equal(name, pickupRowJson["Label"]!.GetValue<string>()); Assert.Equal(name, gui.PickupName); Assert.Equal(1, pickupRowJson["pickupNumber"]!.GetValue<int>());
+                Assert.Equal(groups[group]!["sectionRow"]!["group"]!.GetValue<string>(), pickupRowJson["pickupGroup"]!.GetValue<string>());
+                Assert.True(gui.HasPickupIcon); Assert.NotNull(gui.PickupImage);
+                Assert.Equal(type == "ERFPG_WEAPON" ? ["Easy"] : new[] { "Easy", "Medium", "Hard" },
+                    pickupRowJson["difficulties"]!.AsArray().Select(d => d!.GetValue<string>()));
+                Assert.Equal(type == "ERFPG_WEAPON" ? "E" : "All", gui.Meta);
+                Assert.Equal(type == "ERFPG_WEAPON", gui.IsOtherDifficulty);
+                Assert.Equal(type == "ERFPG_WEAPON", pickupRowJson["instanceName"] == null);
+                if (gui.IsOtherDifficulty) { Assert.True(pickupRowJson["otherDifficulty"]!.GetValue<bool>()); Assert.Null(pickupRowJson["node"]); }
+            }
+            // Search matches every word, including the kind and the manual's name, with the group in the path.
+            var searched = (await Call("scene_tree", new() { ["document"] = Id(pickupMap), ["search"] = "ammo pulse" }))["matches"]!["items"]!.AsArray();
+            Assert.Equal("ERFPG_AMMO", Assert.Single(searched.ToArray())!["item"]!["pickupType"]!.GetValue<string>());
+            Assert.Equal("Pickups › Ammo", searched[0]!["path"]!.GetValue<string>());
+            // A group's eye hides and shows its pickups; frame frames them without selecting; a group with nothing shown refuses.
+            string treePreview = iconTree["preview"]!.GetValue<string>(), ammoRow = groups[1]!["row"]!.GetValue<string>();
+            Dictionary<string, object?> GroupAction(string action, string row) => new() { ["document"] = Id(pickupMap), ["context"] = iconContext, ["preview"] = treePreview, ["action"] = action, ["row"] = row };
+            Assert.False((await Call("scene_tree", GroupAction("hide", ammoRow)))["row"]!["master"]!.GetValue<bool>());
+            Assert.True(guiRows.Single(r => r.PickupType == "ERFPG_AMMO").IsHidden);
+            await Call("scene_tree", GroupAction("show", ammoRow));
+            Assert.False(guiRows.Single(r => r.PickupType == "ERFPG_AMMO").IsHidden);
+            await Call("scene_tree", GroupAction("frame", ammoRow));
+            await Call("scene_tree", GroupAction("frame", groups[0]!["row"]!.GetValue<string>()), error: true);
+            // Group by type adds a row per catalog type inside each group; a pickup keeps its identity.
+            await Job("scene_options", new() { ["preview"] = treePreview, ["changes"] = new Dictionary<string, object?> { ["pickupsByType"] = true } });
+            try
+            {
+                var byType = await Call("scene_tree", new() { ["document"] = Id(pickupMap) });
+                string typedContext = byType["context"]!.GetValue<string>();
+                var typedGroups = (await Call("scene_tree", new() { ["document"] = Id(pickupMap), ["context"] = typedContext,
+                    ["row"] = byType["children"]!["items"]!.AsArray().Single(r => r!["pass"]?.GetValue<string>() == "puppies")!["row"]!.GetValue<string>() }))["children"]!["items"]!.AsArray();
+                var otherTypes = (await Call("scene_tree", new() { ["document"] = Id(pickupMap), ["context"] = typedContext, ["row"] = typedGroups[2]!["row"]!.GetValue<string>() }))["children"]!["items"]!.AsArray();
+                Assert.Equal(new[] { "NANITE", "PUP_AMPHIB" }, otherTypes.Select(t => t!["sectionRow"]!["pickupType"]!.GetValue<string>()));
+                Assert.All(otherTypes, t => { Assert.Equal("pickupType", t!["category"]!.GetValue<string>()); Assert.Null(t["pickupType"]); });
+            }
+            finally { await Job("scene_options", new() { ["preview"] = treePreview, ["changes"] = new Dictionary<string, object?> { ["pickupsByType"] = false } }); }
+            foreach (var type in zStudio.Core.MissionPickupType.Catalog)
+            {
+                var art = Assert.IsType<PickupPresentation>(PickupPresentation.For(type.Name));
+                Assert.True(art.Image.IsFrozen); // Every catalog picture resolves from an embedded resource.
+            }
+            Assert.Null(PickupPresentation.For("unknown"));
+            Assert.False(pickupMap.IsDirty);
+            await Call("close_document", new() { ["document"] = Id(pickupMap), ["revision"] = pickupMap.Revision });
 
             async Task Preview()
             {

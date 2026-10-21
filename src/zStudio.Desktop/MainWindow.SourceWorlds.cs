@@ -708,7 +708,7 @@ public partial class MainWindow
             : $"{action} was not applied: {failure.Message}");
     /// <summary>Read and evaluate an isolated worker workspace; publish one checked transaction on the dispatcher.</summary>
     private async Task<DocumentModel> PrepareSourceWorldEditAsync(DocumentModel doc, string action, Func<SourceWorkspace, CancellationToken, SourceTransaction?> prepare,
-        CancellationToken token, IReadOnlyList<SourceModelAddition>? additions = null, bool fromBuild = true, Func<ScriptLineChanges?>? verifyTargets = null, IReadOnlyList<string>? notes = null, SceneInspectionCard? committingCard = null, AiPathDraft? committingAiPath = null, ParachuteDraft? committingParachute = null, Action<CancellationToken>? preparationStarted = null, bool? historyRedo = null, bool requireAnimations = false, bool zoneEdit = false, bool committingSection = false)
+        CancellationToken token, IReadOnlyList<SourceModelAddition>? additions = null, bool fromBuild = true, Func<ScriptLineChanges?>? verifyTargets = null, IReadOnlyList<string>? notes = null, SceneInspectionCard? committingCard = null, AiPathDraft? committingAiPath = null, ParachuteDraft? committingParachute = null, Action<CancellationToken>? preparationStarted = null, bool? historyRedo = null, bool requireAnimations = false, bool zoneEdit = false, bool committingSection = false, Action<SourceSceneSnapshot, CancellationToken>? verifyPrepared = null)
     {
         var session = SourceWorldOf(doc);
         if (doc.IsDisposed || session.Owner != doc) throw new StudioCommandException("stale_document", "The world was rebuilt or closed.");
@@ -801,6 +801,7 @@ public partial class MainWindow
                         if (resource.Root == null && (previousSource.Resources.TryGetValue(name, out var previousResource) && previousResource.Root != null || changedFiles.Contains(resource.Path)))
                             throw new StudioCommandException("build_failed", $"The edit would make source resource {Bounded(resource.Path, 256)} unavailable.");
                 }
+                verifyPrepared?.Invoke(evaluated, cancellation.Token);
                 SourceBuildStep?.Invoke(new(1, 1, "Built"));
                 CheckSourceEvaluation(prepared.Workspace, evaluated.BuildState, cancellation.Token);
                 if (verifyTargets?.Invoke() is { } targetLines && doc.SourceBuild is { } prior
@@ -1204,6 +1205,7 @@ public partial class MainWindow
 
     private void RegisterSourceWorldCommands(StudioCommands r)
     {
+        RegisterSourcePickupCommands(r);
         Register(r, "source_world_list", "List source-project map folders with matching gamegen entry scripts, in numeric order. Broken or missing map assets do not hide a map; opening reports its evaluation problems.", false, [.. PageParameters], async (a, token) =>
         {
             string root = SourceProjectRoot ?? throw new StudioCommandException("no_project", "Open a source project first.");

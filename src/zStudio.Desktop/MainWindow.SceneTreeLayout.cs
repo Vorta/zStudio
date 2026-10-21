@@ -10,7 +10,7 @@ namespace zStudio.Desktop;
 /// </summary>
 public partial class MainWindow
 {
-    private sealed record TreeLayout(string Path, HashSet<string> Expanded, HashSet<string> Prefixes, string? Anchor, string? Section);
+    private sealed record TreeLayout(string Path, HashSet<string> Expanded, HashSet<string> Prefixes, string? Anchor, string? Section, HashSet<string> Collapsed);
     private TreeLayout? pendingTreeLayout;
     /// <summary>The row to scroll back to after the next rebuild (the renamed group), as a layout path.</summary>
     private string? pendingTreeAnchor;
@@ -18,13 +18,15 @@ public partial class MainWindow
     private static string LayoutKey(SceneTreeItem row) =>
         row.Pass != null ? row.Kind :
         row.Authored is { } authored ? "a:" + authored.File.ToUpperInvariant() + ":" + authored.SourceNode.ToString(CultureInfo.InvariantCulture) :
-        row.Kind == "unlinked" ? "unlinked" : "n:" + row.NodeType + ":" + row.DisplayName;
+        row.Kind == "unlinked" ? "unlinked" : "n:" + row.NodeType + ":" + StableName(row);
+    /// <summary>A row's name for layout paths: a pickup by the game's name (its number can shift when another is added).</summary>
+    private static string StableName(SceneTreeItem row) => row.PickupName != null ? row.Placement!.Name : row.DisplayName;
     /// <summary>
     /// A hidden row's key: an authored row by its file and name (a delete renumbers the file's nodes, so an index could name
     /// another object); the occurrence among equally named siblings tells copies apart. A renamed object shows again.
     /// </summary>
     private static string HiddenKey(SceneTreeItem row) =>
-        row.Authored is { } authored ? "a:" + authored.File.ToUpperInvariant() + ":" + row.DisplayName : LayoutKey(row);
+        row.Authored is { } authored ? "a:" + authored.File.ToUpperInvariant() + ":" + StableName(row) : LayoutKey(row);
     /// <summary>The row's layout path: each level's key with its occurrence among siblings that share it.</summary>
     private static string LayoutPath(SceneTreeItem row, Dictionary<SceneTreeItem, string>? paths = null) => RowPath(row, LayoutKey, paths ?? []);
     private static string HiddenPath(SceneTreeItem row, Dictionary<SceneTreeItem, string> paths) => RowPath(row, HiddenKey, paths);
@@ -47,17 +49,19 @@ public partial class MainWindow
     {
         string? anchor = pendingTreeAnchor; pendingTreeAnchor = null;
         if (shownDocument?.SourceWorld == null || sceneTreeDocument != shownDocument || sceneTree is not { Projection: not null, IsPreview: true } tree) return;
-        HashSet<string> expanded = [], prefixes = [];
+        HashSet<string> expanded = [], prefixes = [], collapsed = [];
         Dictionary<SceneTreeItem, string> paths = [];
         foreach (var row in tree.CreatedRows)
         {
-            if (!row.IsExpanded || expanded.Count >= 10_000) continue;
+            // Rows start closed, except Pickups' Weapons, Ammo and Other: those are remembered closed instead.
+            bool closedGroup = row.IsPickupGroup && !row.IsExpanded;
+            if (!row.IsExpanded && !closedGroup || expanded.Count + collapsed.Count >= 10_000) continue;
             string path = LayoutPath(row, paths);
-            expanded.Add(path);
+            (closedGroup ? collapsed : expanded).Add(path);
             for (int slash = path.IndexOf('/'); slash > 0; slash = path.IndexOf('/', slash + 1)) prefixes.Add(path[..slash]);
         }
         // A selected zone, network or definition is found again by its key (an object selection follows the view's).
-        pendingTreeLayout = new(shownDocument.Path, expanded, prefixes, anchor, tree.Selected is { IsSectionItem: true } section ? section.Section!.Key : null);
+        pendingTreeLayout = new(shownDocument.Path, expanded, prefixes, anchor, tree.Selected is { IsSectionItem: true } section ? section.Section!.Key : null, collapsed);
     }
 
     /// <summary>Opens again, in the rebuilt map's tree, the rows that were open; what no longer exists stays closed.</summary>
@@ -87,6 +91,7 @@ public partial class MainWindow
                 if (current.Path == layout.Anchor) anchor = current.Row;
                 bool open = layout.Expanded.Contains(current.Path);
                 if (open) current.Row.IsExpanded = true;
+                else if (layout.Collapsed.Contains(current.Path)) current.Row.IsExpanded = false;
                 // Rows inside a closed one can still have been open: their children are created only when needed.
                 if (open || layout.Prefixes.Contains(current.Path) || layout.Anchor?.StartsWith(current.Path + "/", StringComparison.Ordinal) == true)
                     Level(current.Row.Children, current.Path);

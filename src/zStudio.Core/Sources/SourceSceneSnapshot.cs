@@ -67,7 +67,7 @@ public sealed class SourceSceneSnapshot : AssetDocument
         JsonNode? Decode(string name) => Resources.TryGetValue(name, out var resource) ? resource.Root?.ToJson(token) : null;
         MissionResourceSource? Source(string name) => Resources.TryGetValue(name, out var resource) ? new(System.IO.Path.Combine(Root, resource.Path), 0, name) : null;
         var scene = MissionSceneLoader.Build(this, Animations, Decode(aiv), Decode(vehicles), Decode("startanims.zrd"), notes, token,
-            new(difficulty, aiv, vehicles, pickups), Decode("ai.zrd"), Decode(pickups), Source(pickups), Source(aiv));
+            new(difficulty, aiv, vehicles, pickups), Decode("ai.zrd"), Decode(pickups), Source(pickups), Source(aiv), Decode("weapons.zrd"));
         List<AiNetwork> networks = []; int retainedNotes = 0; long omittedNotes = 0;
         foreach (var (name, resource) in Resources)
         {
