@@ -109,6 +109,8 @@ internal static class SourceEditingMcpChecks
             await Call("scene_card", new() { ["preview"] = cardPreview, ["action"] = "select", ["target"] = target });
             await Call("scene_card", new() { ["preview"] = cardPreview, ["action"] = "begin", ["document"] = Id(doc), ["revision"] = doc.Revision });
             var card = (SceneInspectionCard)scene.InspectionContent!;
+            // A draft that stores nothing ends at Apply without evaluating the world: give it a change first.
+            card.SetDraft(card.DraftToken, ["9", "9", "9"], null, null, null);
             TaskCompletionSource preparing = new(TaskCreationOptions.RunContinuationsAsynchronously);
             using (var proceed = new SemaphoreSlim(0))
             {
