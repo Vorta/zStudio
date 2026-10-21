@@ -31,7 +31,10 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'Publish failed.' }
     Copy-Item -LiteralPath README.md, LICENSE, THIRD-PARTY-NOTICES.md, CHANGELOG.md, CONTRIBUTING.md, SECURITY.md -Destination $dependencies
     Copy-Item -LiteralPath licenses -Destination $dependencies -Recurse
-    Copy-Item -LiteralPath docs -Destination $dependencies -Recurse
+    # User guides ship; agent guidance (docs/agents) and the MCP parity inventory stay in the repository.
+    $docs = New-Item -ItemType Directory -Path (Join-Path $dependencies 'docs') -Force
+    Get-ChildItem -LiteralPath docs -Force | Where-Object { $_.Name -notin @('agents', 'mcp-capabilities.json') } |
+        Copy-Item -Destination $docs.FullName -Recurse
     & (Join-Path $PSScriptRoot 'package-blender.ps1') -Destination (Join-Path $dependencies 'blender')
     $topLevel = @(Get-ChildItem -LiteralPath $stage)
     if ($topLevel.Count -ne 2 -or -not (Test-Path -LiteralPath (Join-Path $stage 'zStudio.exe'))) {

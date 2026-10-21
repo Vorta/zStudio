@@ -29,9 +29,9 @@ body:
   - type: input
     id: asset
     attributes:
-      label: Archive and asset identity
-      description: Relative archive path, asset name and record index; names alone may be ambiguous.
-      placeholder: m1/anim.zbd, animation name, record index
+      label: File and object identity
+      description: Project-relative file path (or archive path for compiled files), object or record name and index; names alone may be ambiguous.
+      placeholder: data/m1/zrdr/puppies.zrd, NANITE, record 12
   - type: textarea
     id: steps
     attributes:
