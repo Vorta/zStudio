@@ -2,6 +2,8 @@
 
 Version numbers follow `MAJOR.MINOR.PATCH`; the 0.x series is under active development. Release tags and downloadable archives use the same version.
 
+## 0.9.5 — Unreleased
+
 ## 0.9.4 — 2026-10-21
 
 - Source maps can create pickups through Tools → Add pickup… or the Pickups section's context menu. Choose a catalog type, position, rotation, amount, respawn delay and one or all difficulties. The shared source workspace verifies that the template can spawn, supports undo/redo and saves the owning resource files without creating archives.
