@@ -111,7 +111,7 @@ public partial class MainWindow
                 if (!saveAs && !edits.IsArchiveDirty(source)) continue;
                 string target = edits.TargetPath(source);
                 bool protectedTarget;
-                try { protectedTarget = PickupPlacementEditSession.IsProtectedPath(target); }
+                try { protectedTarget = ProtectedPaths.IsProtected(target); }
                 // Save As can recover edits even if the original drive is no longer available.
                 // Use Documents as its starting folder; the chosen destination is verified on save.
                 catch (IOException) when (saveAs) { protectedTarget = true; }

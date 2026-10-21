@@ -89,7 +89,7 @@ public partial class MainWindow
         try
         {
             var edits = ResourceSession(doc); string? destination = null;
-            if (saveAs || PickupPlacementEditSession.IsProtectedPath(edits.TargetPath))
+            if (saveAs || ProtectedPaths.IsProtected(edits.TargetPath))
             {
                 SaveFileDialog dialog = new() { Title = "Save resource as a new file", FileName = Path.GetFileName(edits.TargetPath), Filter = edits.IsArchive ? "ZAR archive|*.zbd" : "ZRD resource|*.zrd", OverwritePrompt = false };
                 if (dialog.ShowDialog(this) != true) return false; destination = dialog.FileName;

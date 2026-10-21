@@ -49,7 +49,7 @@ public sealed class PickupPlacementPanel : UserControl
         source = record.Source; position = value; title.Text = record.Type + " · placement #" + record.Source.RecordIndex;
         identity.Text = "World node: " + worldNode + "\nResource: " + record.Source.ResourceName + " · record #" + record.Source.RecordIndex + "\n" + scope.Description;
         string destination;
-        try { destination = PickupPlacementEditSession.IsProtectedPath(target) ? "Output: not chosen. Save As is required outside the reference dataset." : "Save output: " + target; }
+        try { destination = ProtectedPaths.IsProtected(target) ? "Output: not chosen. Save As is required outside the reference dataset." : "Save output: " + target; }
         catch (System.IO.IOException) { destination = "Output: location unavailable. Choose a new destination with Save As."; }
         detail.Text = "Source archive: " + record.Source.ArchivePath + "\n" + destination
             + $"\n{scope.Sources.Count} unambiguously matched placement record(s) move together; shared resources can serve multiple difficulties."

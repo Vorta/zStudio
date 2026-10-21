@@ -74,7 +74,7 @@ public partial class MainWindow
         try
         {
             var edits = doc.ContentEdits!; var documents = edits.Documents.ToArray(); Dictionary<string, string>? targets = null;
-            if (saveAs || documents.Any(d => PickupPlacementEditSession.IsProtectedPath(edits.TargetPath(d.Path))))
+            if (saveAs || documents.Any(d => ProtectedPaths.IsProtected(edits.TargetPath(d.Path))))
             {
                 targets = new(StringComparer.OrdinalIgnoreCase);
                 if (documents.Length == 1)

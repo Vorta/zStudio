@@ -172,7 +172,7 @@ internal static class VerifiedDocumentSave
 {
     internal static void ValidateDestination(string path)
     {
-        if (PickupPlacementEditSession.IsProtectedPath(path)) throw new IOException("Save outside protected reference datasets.");
+        if (ProtectedPaths.IsProtected(path)) throw new IOException("Save outside protected reference datasets.");
         if (Directory.Exists(path)) throw new IOException("The save destination is a directory. Choose a new file path.");
         if (File.Exists(path) && File.GetAttributes(path).HasFlag(FileAttributes.ReparsePoint)) throw new IOException("Cannot save through a file link.");
         for (var d = new DirectoryInfo(Path.GetDirectoryName(path)!); d != null; d = d.Parent)

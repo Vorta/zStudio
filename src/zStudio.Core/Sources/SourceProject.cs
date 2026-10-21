@@ -297,7 +297,7 @@ public static partial class SourceProject
     public static void ValidateSeparate(string destination, string input, string role)
     {
         string d = System.IO.Path.TrimEndingDirectorySeparator(System.IO.Path.GetFullPath(destination)), i = System.IO.Path.TrimEndingDirectorySeparator(System.IO.Path.GetFullPath(input));
-        if (PickupPlacementEditSession.IsProtectedPath(d)) throw new InvalidDataException($"The {role} cannot be inside the protected zbd_1998/zbd_1999 folders.");
+        if (ProtectedPaths.IsProtected(d)) throw new InvalidDataException($"The {role} cannot be inside the protected zbd_1998/zbd_1999 folders.");
         if (Overlap(d, i) || OperatingSystem.IsWindows() && Overlap(Resolved(d), Resolved(i)))
             throw new InvalidDataException($"The {role} must be separate from {input}.");
         static bool Overlap(string a, string b) => Within(a, b) || Within(b, a);

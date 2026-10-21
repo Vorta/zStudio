@@ -18,16 +18,6 @@ public sealed partial class PickupPlacementEditSession
         else staged.MoveTo(destination);
     };
 
-    /// <summary>Checks both the supplied and resolved destination. Throws if its location cannot be verified.</summary>
-    public static bool IsProtectedPath(string path)
-    {
-        string fullPath = Path.GetFullPath(path);
-        return HasProtectedComponent(fullPath) ||
-            (OperatingSystem.IsWindows() && HasProtectedComponent(WindowsSavePath.ResolveExistingParent(fullPath)));
-    }
-    private static bool HasProtectedComponent(string path) => path.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
-        .Any(p => p.Equals("zbd_1998", StringComparison.OrdinalIgnoreCase) || p.Equals("zbd_1999", StringComparison.OrdinalIgnoreCase));
-
     /// <summary>Stage and verify every output first. Report each atomic replacement independently.</summary>
     public async Task<PickupPlacementSaveResult> SaveAsync(IReadOnlyDictionary<string, string>? destinations = null, bool createBackup = false, CancellationToken token = default)
     {
@@ -139,7 +129,7 @@ public sealed partial class PickupPlacementEditSession
     private static bool EqualBytes(byte[] a, byte[] b) => a.Length == b.Length && CryptographicOperations.FixedTimeEquals(SHA256.HashData(a), SHA256.HashData(b));
     private static void ValidateDestination(string path)
     {
-        if (IsProtectedPath(path)) throw new IOException("Save pickup edits outside the protected zbd_1998 and zbd_1999 reference datasets.");
+        if (ProtectedPaths.IsProtected(path)) throw new IOException("Save pickup edits outside the protected zbd_1998 and zbd_1999 reference datasets.");
         if (!Path.GetExtension(path).Equals(".zbd", StringComparison.OrdinalIgnoreCase)) throw new IOException("Pickup archives must use the .zbd extension.");
         if (File.Exists(path) && File.GetAttributes(path).HasFlag(FileAttributes.ReparsePoint)) throw new IOException("Saving through file links is not supported.");
         for (var directory = new DirectoryInfo(Path.GetDirectoryName(path)!); directory != null; directory = directory.Parent)

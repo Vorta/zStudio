@@ -25,7 +25,7 @@ public sealed partial class AnimationTests
             using var alias = WindowsTestPathAlias.Create(protectedDirectory, shortName: false);
             Assert.DoesNotContain(dataset, alias.Path, StringComparison.OrdinalIgnoreCase);
             string source = Path.Combine(alias.Path, "m1", "resources.zbd");
-            Assert.True(PickupPlacementEditSession.IsProtectedPath(source));
+            Assert.True(ProtectedPaths.IsProtected(source));
             var archive = await FormatRegistry.Default.OpenAsync(source, TestContext.Current.CancellationToken);
             source = archive.Path;
             var edits = PickupPlacementEditSession.Create([new(MissionDifficulty.Medium, archive, archive.Assets[0])]);
@@ -37,7 +37,7 @@ public sealed partial class AnimationTests
             foreach (string relative in new[] { "copy.zbd", Path.Combine("new", "nested", "copy.zbd") })
             {
                 string destination = Path.Combine(alias.Path, relative);
-                Assert.True(PickupPlacementEditSession.IsProtectedPath(destination));
+                Assert.True(ProtectedPaths.IsProtected(destination));
                 failure = await Assert.ThrowsAsync<IOException>(() => edits.SaveAsync(new Dictionary<string, string> { [source] = destination }, token: TestContext.Current.CancellationToken));
                 Assert.Contains("protected", failure.Message);
             }
@@ -65,7 +65,7 @@ public sealed partial class AnimationTests
             string fixture = Path.GetDirectoryName(world.Path)!;
             using var alias = WindowsTestPathAlias.Create(fixture, shortName);
             string source = Path.Combine(alias.Path, "resources.zbd");
-            Assert.False(PickupPlacementEditSession.IsProtectedPath(source));
+            Assert.False(ProtectedPaths.IsProtected(source));
             var archive = await FormatRegistry.Default.OpenAsync(source, TestContext.Current.CancellationToken);
             source = archive.Path;
             var edits = PickupPlacementEditSession.Create([new(MissionDifficulty.Medium, archive, archive.Assets[0])]);
@@ -94,8 +94,8 @@ public sealed partial class AnimationTests
             Assert.True(protectedDirectory.Length > 512);
             using var protectedAlias = WindowsTestPathAlias.Create(protectedDirectory, shortName: false);
             using var workingAlias = WindowsTestPathAlias.Create(workingDirectory, shortName: false);
-            Assert.True(PickupPlacementEditSession.IsProtectedPath(Path.Combine(protectedAlias.Path, "new", "copy.zbd")));
-            Assert.False(PickupPlacementEditSession.IsProtectedPath(Path.Combine(workingAlias.Path, "new", "copy.zbd")));
+            Assert.True(ProtectedPaths.IsProtected(Path.Combine(protectedAlias.Path, "new", "copy.zbd")));
+            Assert.False(ProtectedPaths.IsProtected(Path.Combine(workingAlias.Path, "new", "copy.zbd")));
             return Task.CompletedTask;
         });
     }
@@ -117,7 +117,7 @@ public sealed partial class AnimationTests
                 destination = Path.Combine(alias.Path, "new", "copy.zbd");
             }
             string source = Assert.Single(edits.ArchivePaths);
-            Assert.Contains("Cannot verify the save destination", Assert.Throws<IOException>(() => PickupPlacementEditSession.IsProtectedPath(destination)).Message);
+            Assert.Contains("Cannot verify the save destination", Assert.Throws<IOException>(() => ProtectedPaths.IsProtected(destination)).Message);
             edits.MoveTo(Assert.Single(edits.Records).Source, new(44, 55, 66));
             await Assert.ThrowsAsync<IOException>(() => edits.SaveAsync(token: TestContext.Current.CancellationToken));
             var failure = await Assert.ThrowsAsync<IOException>(() => edits.SaveAsync(new Dictionary<string, string> { [source] = destination }, token: TestContext.Current.CancellationToken));

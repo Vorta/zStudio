@@ -438,7 +438,7 @@ public sealed class ModelEditSession
     }
     private static void ValidateDestination(string path)
     {
-        if (PickupPlacementEditSession.IsProtectedPath(path)) throw new IOException("Save model edits outside zbd_1998 and zbd_1999.");
+        if (ProtectedPaths.IsProtected(path)) throw new IOException("Save model edits outside zbd_1998 and zbd_1999.");
         if (File.Exists(path) && File.GetAttributes(path).HasFlag(FileAttributes.ReparsePoint)) throw new IOException("Cannot save through a file link.");
         for (var d = new DirectoryInfo(Path.GetDirectoryName(path)!); d != null; d = d.Parent)
             if (d.Exists && d.Attributes.HasFlag(FileAttributes.ReparsePoint)) throw new IOException("Cannot save through directory links.");

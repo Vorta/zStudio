@@ -53,7 +53,7 @@ public static class AnimationWriter
     {
         EditRetentionBudget.Limit(maximumConstructionBytes, EditRetentionBudget.MaximumConstructionBytes);
         path = Path.GetFullPath(path); source = Path.GetFullPath(source); protectedRoot = Path.GetFullPath(protectedRoot);
-        if (path.Equals(source, StringComparison.OrdinalIgnoreCase) || IsInside(path, protectedRoot) || PickupPlacementEditSession.IsProtectedPath(path) ||
+        if (path.Equals(source, StringComparison.OrdinalIgnoreCase) || IsInside(path, protectedRoot) || ProtectedPaths.IsProtected(path) ||
             OperatingSystem.IsWindows() && IsInside(WindowsSavePath.ResolveExistingParent(path),
                 Path.GetDirectoryName(WindowsSavePath.ResolveExistingParent(Path.Combine(protectedRoot, ".zstudio-root-probe")))!))
             throw new IOException("Save the edited animation to a new file outside the source dataset.");
@@ -63,7 +63,7 @@ public static class AnimationWriter
         using DirectoryLease directories = new();
         string captured = directories.CapturedPath(path);
         string capturedRoot = Path.GetDirectoryName(directories.CapturedPath(Path.Combine(protectedRoot, ".zstudio-root-probe")))!;
-        if (IsInside(captured, capturedRoot) || PickupPlacementEditSession.IsProtectedPath(captured))
+        if (IsInside(captured, capturedRoot) || ProtectedPaths.IsProtected(captured))
             throw new IOException("Save the edited animation to a new file outside the source dataset.");
         // Admit the complete save, not only the edited entry. The first output remains alive beside
         // the fresh reader graph while the second writer verifies it. No destination is created on refusal.

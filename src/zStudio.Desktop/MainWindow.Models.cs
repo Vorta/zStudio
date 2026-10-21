@@ -104,7 +104,7 @@ public partial class MainWindow
         try
         {
             string? directory = null;
-            if (saveAs || PickupPlacementEditSession.IsProtectedPath(doc.ModelEdits!.TargetPath(doc.Path)))
+            if (saveAs || ProtectedPaths.IsProtected(doc.ModelEdits!.TargetPath(doc.Path)))
             {
                 OpenFolderDialog dialog = new() { Title = "Save model and texture copies to a new mission folder" }; if (dialog.ShowDialog(this) != true) return false;
                 directory = dialog.FolderName;
