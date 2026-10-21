@@ -555,8 +555,8 @@ public partial class MainWindow : Window
         RefreshScriptGrid(doc, asset);
         var original = asset == null ? null : doc.OriginalAsset(asset);
         var sourceBytes = asset == null ? doc.Document.Bytes : original == null ? ReadOnlyMemory<byte>.Empty : doc.Document.Slice(original.Offset, original.Length);
-        RawText.Text = original == null && asset != null ? "New record: no original source bytes." : Hex(sourceBytes.Span[..Math.Min(sourceBytes.Length, 4096)], original?.Offset ?? 0) + (sourceBytes.Length > 4096 ? "\n… first 4,096 original source bytes shown." : "");
-        PreviewSubtitle.Text = SourceWorldFile(doc) is { } worldFile ? Path.GetFileName(worldFile) : asset == null ? doc.Description : $"{asset.Kind} #{asset.Index} · {asset.Length:N0} edited bytes" + (original == null ? " · new record" : $" · source 0x{original.Offset:X}");
+        RawText.Text = Hex(sourceBytes.Span[..Math.Min(sourceBytes.Length, 4096)], original?.Offset ?? 0) + (sourceBytes.Length > 4096 ? "\n… first 4,096 source bytes shown." : "");
+        PreviewSubtitle.Text = SourceWorldFile(doc) is { } worldFile ? Path.GetFileName(worldFile) : asset == null ? doc.Description : $"{asset.Kind} #{asset.Index} · {asset.Length:N0} bytes" + (original == null ? "" : $" · source 0x{original.Offset:X}");
         var related = asset == null ? null : FindRelated(asset, doc);
         RelatedList.ItemsSource = related?.Items;
         RelatedLimit.Visibility = related?.Truncated == true ? Visibility.Visible : Visibility.Collapsed;

@@ -13,7 +13,41 @@ public sealed class MissionIdentityProjectionTests
 
     // Essential batch contract: one history operation, atomic rejection and only coordinate bytes changed.
 
-[Fact]
+    // Essential batch contract: transforms keep identities and exact bits on locked axes; invalid input is refused atomically.
+    [Fact]
+    public void AiPathBatchTransformsKeepLockedAxesAndRefuseInvalidPositions()
+    {
+        var (_, edits, snapshot) = Coordinates(3);
+        var selected = edits.OtherCoordinates.Take(2).ToDictionary(c => c.Source, c => c.OriginalPosition);
+        var sources = selected.Keys.ToArray();
+        Assert.Equal(new Vector3(1.5f, 2, 3), AiPathTransforms.Center(selected));
+        var rotated = AiPathTransforms.Rotate(selected, 2, 90);
+        Assert.Equal(new Vector3(1.5f, 1.5f, 3), rotated[sources[0]]);
+        Assert.Equal(new Vector3(1.5f, 2.5f, 3), rotated[sources[1]]);
+        var scaled = AiPathTransforms.Scale(rotated, new(1, 2, 1));
+        var result = AiPathTransforms.Translate(scaled, new(10, 0, -1));
+        Assert.Equal(new Vector3(11.5f, 1, 2), result[sources[0]]);
+        Assert.Equal(new Vector3(11.5f, 3, 2), result[sources[1]]);
+        // World Y rotation changes X/Z, while the centre and unselected node stay put.
+        Assert.Equal(new Vector3(1.5f, 2, 3.5f), AiPathTransforms.Rotate(selected, 1, 90)[sources[0]]);
+        Assert.Equal(new Vector3(1.5f, 2, 2.5f), AiPathTransforms.Rotate(rotated, 0, 90)[sources[0]]);
+        // Locked axes and neutral gestures retain float bits, even across differently sized coordinates: the stored
+        // precision then leaves those tokens untouched.
+        var uneven = selected.ToDictionary(); uneven[sources[0]] = new(0.00001f, 2, 3); uneven[sources[1]] = new(100_000, 2, 3);
+        Assert.Equal(uneven[sources[0]], AiPathTransforms.Rotate(uneven, 1, 360)[sources[0]]);
+        Assert.Equal(uneven[sources[0]].X, AiPathTransforms.Rotate(uneven, 0, 90)[sources[0]].X);
+        Assert.Equal(uneven[sources[0]].X, AiPathTransforms.Scale(uneven, new(1, 2, 1))[sources[0]].X);
+        var invalid = result.ToDictionary(); invalid[sources[1]] = new(float.NaN, 0, 0);
+        Assert.Throws<InvalidDataException>(() => edits.PreviewAiPositions(invalid));
+        invalid = result.ToDictionary(); invalid.Add(sources[0] with { RecordIndex = int.MaxValue }, Vector3.Zero);
+        Assert.Throws<InvalidDataException>(() => edits.PreviewAiPositions(invalid));
+        // A preview overlays the snapshot under its identity; nothing was accepted.
+        var draft = edits.ApplyAiPositions(snapshot, edits.PreviewAiPositions(result));
+        Assert.Equal(snapshot.Id, draft.Id);
+        Assert.Same(snapshot, edits.ApplyAiPositions(snapshot));
+    }
+
+    [Fact]
     public void CustomPreviewComparerKeepsItsPublicLookupSemantics()
     {
         var (_, edits, snapshot) = Coordinates(1);

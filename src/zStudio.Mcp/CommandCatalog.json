@@ -1,7 +1,7 @@
 [
   {
     "Name": "zstudio_state",
-    "Description": "Read the visible workspace and page document identities/revisions, preserving complete paths. Offset defaults to 0; limit defaults to 64, maximum 64. Documents have a 1 MiB pre-projection metadata allowance, so a page may be shorter; follow nextOffset, with total and offset. A single unsupported oversized row returns too_large. Status is a 512-character preview with statusTruncated. Source document workspace summaries contain counts and undo/redo state; read source_changes for the shared dirty-file and history details. Global state contentEdits summaries return fileCount with empty files and filesTruncated; per-document command results preview at most 64 file paths/targets of 512 characters, with per-row PathTruncated/destinationTruncated.",
+    "Description": "Read the visible workspace and page document identities/revisions, preserving complete paths. Offset defaults to 0; limit defaults to 64, maximum 64. Documents have a 1 MiB pre-projection metadata allowance, so a page may be shorter; follow nextOffset, with total and offset. A single unsupported oversized row returns too_large. Status is a 512-character preview with statusTruncated. Source document workspace summaries contain counts and undo/redo state; read source_changes for the shared dirty-file and history details. Command results preview at most 64 file paths of 512 characters, with Truncated flags for longer lists or paths.",
     "Mutates": false,
     "Parameters": [
       {
@@ -667,7 +667,7 @@
   },
   {
     "Name": "zstudio_texture_palette",
-    "Description": "Read the current edited or mirrored texture header and paged RGB565 palette entries, matching the GUI palette inspector.",
+    "Description": "Read the current texture header and paged RGB565 palette entries, matching the GUI palette inspector.",
     "Mutates": false,
     "Parameters": [
       {
@@ -2009,7 +2009,7 @@
   },
   {
     "Name": "zstudio_properties_state",
-    "Description": "Read the pinned Properties window identity, content and current editable fields.",
+    "Description": "Read the pinned Properties window identity, content and fields (editable only for a source map\u0027s objects and pickups; read only otherwise).",
     "Mutates": false,
     "Parameters": []
   },
@@ -2161,7 +2161,7 @@
   },
   {
     "Name": "zstudio_ai_selection",
-    "Description": "Select/clear an AI marker or open its pinned read-only Properties. Selection requires unlocked Whole world editing, enabled visualization and a matching filter. Read-only Properties remains available while locked. Frame a selected marker with camera action=frame,target=selected.",
+    "Description": "Select/clear an AI marker or open its pinned read-only Properties. Selection requires enabled visualization and a matching filter; compiled worlds select read only. Frame a selected marker with camera action=frame,target=selected.",
     "Mutates": true,
     "Parameters": [
       {
@@ -2204,7 +2204,7 @@
   },
   {
     "Name": "zstudio_ai_path",
-    "Description": "Edit nodes in one authored AI path. Enter/exit Edit mode; replace/add/toggle a bounded selection or box-select visible nodes; begin a move/rotate/scale draft, set numeric input, then confirm one undo step or cancel. World XYZ constraints and selection-centre pivot match the GUI. Links and other fields are preserved. Source-world confirmation updates source tokens in memory, evaluates the scene and returns the accepted document/revision, exiting Edit mode. Save writes the owning ZRD sources; no archives are created. Selection and draft state are in preview_state.ai.path. Properties pins common values (mixed where different), without following later selection. No physical input is captured. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Description": "Edit nodes in one authored AI path. Enter/exit Edit mode; replace/add/toggle a bounded selection or box-select visible nodes; begin a move/rotate/scale draft, set numeric input, then confirm one undo step or cancel. World XYZ constraints and selection-centre pivot match the GUI. Links and other fields are preserved; changed coordinates are stored with one decimal, and a move below that precision changes nothing. Source-world confirmation updates source tokens in memory, evaluates the scene and returns the accepted document/revision, exiting Edit mode. Save writes the owning ZRD sources; no archives are created. Selection and draft state are in preview_state.ai.path. Properties pins common values (mixed where different), without following later selection. No physical input is captured. Returns an operation ID; use zstudio_operation to await/read the result.",
     "Mutates": true,
     "Parameters": [
       {
@@ -2370,7 +2370,7 @@
   },
   {
     "Name": "zstudio_parachute",
-    "Description": "Inspect and relocate complete existing VTOL drop windows in a Whole world. Show analyzes the first discovered flight; unavailable flights retain the candidate list, entry and analysisRefusal without a partial path. Analyze selects an exact entry. Conditional release markers come from a frozen bounded runtime, never landing predictions. A source map\u0027s windows can be moved: select/begin/set/confirm/cancel share the GUI draft and one undo step, set takes a local start time or an exact path segment plus fraction to disambiguate crossings, and the edit uses token-preserving project history and in-memory scene evaluation (Apply creates no archives; Save writes the owning animation definitions; undo/redo/save target the project). A compiled world is read only (show, analyze, select, samples and releases). Samples/releases support offset/limit pagination without query; preview_state.parachute reports bounded state. No physical input is captured. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Description": "Inspect and relocate complete existing VTOL drop windows in a Whole world. Show analyzes the first discovered flight; unavailable flights retain the candidate list, entry and analysisRefusal without a partial path. Analyze selects an exact entry. Conditional release markers come from a frozen bounded runtime, never landing predictions. A source map\u0027s windows can be moved: select/begin/set/confirm/cancel share the GUI draft and one undo step, set takes a local start time or an exact path segment plus fraction to disambiguate crossings, and the edit uses token-preserving project history and in-memory scene evaluation (Apply creates no archives; Save writes the owning animation definitions; undo/redo/save target the project). A compiled world is read only: show, analyze, samples and releases work, its windows cannot be selected or moved. Samples/releases support offset/limit pagination without query; preview_state.parachute reports bounded state. No physical input is captured. Returns an operation ID; use zstudio_operation to await/read the result.",
     "Mutates": true,
     "Parameters": [
       {
@@ -2714,7 +2714,7 @@
   },
   {
     "Name": "zstudio_scene_card",
-    "Description": "Expand/clear selected-object details below the permanent top-right hover readout, copy fields, or begin/set/apply/cancel the shared draft. Source objects expose local transform, name, model, flags and command fields in this panel, editable at once: the first change opens the draft (begin only checks an edit could start); set takes fields and/or transformMode (move/rotate handles, move arrows along the object\u0027s own axes, or none), Apply accepts one atomic source transaction and cancel is the footer\u0027s Revert. Placements start their draft with begin, a GUI field change or showing handles. Source worlds have no editing lock; compiled Whole world selection and all viewport manipulation require unlocked editing. Move and supported Rotate toggles in the transform header show or hide their handles; unsupported Rotate stays hidden; Apply and Revert (footer) are enabled only once a draft changes something; transforms preview until apply creates one undo step. Edit actions require document/revision; set/apply/cancel require the current draft token. Copy optionally writes the clipboard.",
+    "Description": "Expand/clear selected-object details below the permanent top-right hover readout, copy fields, or begin/set/apply/cancel the shared draft. Source objects expose local transform, name, model, flags and command fields in this panel, editable at once: the first change opens the draft (begin only checks an edit could start); set takes fields and/or transformMode (move/rotate handles, move arrows along the object\u0027s own axes, or none), Apply accepts one atomic source transaction and cancel is the footer\u0027s Revert. Placements start their draft with begin, a GUI field change or showing handles. Placement values are stored as the shipped files write them: positions and AIV headings with one decimal, pickup rotations in radians with four; a change below that precision changes nothing. Compiled worlds are read only: their cards show values, and begin/apply are refused. Move and supported Rotate toggles in the transform header show or hide their handles; unsupported Rotate stays hidden; Apply and Revert (footer) are enabled only once a draft changes something; transforms preview until apply creates one undo step. Edit actions require document/revision; set/apply/cancel require the current draft token. Copy optionally writes the clipboard.",
     "Mutates": true,
     "Parameters": [
       {
@@ -3343,7 +3343,7 @@
   },
   {
     "Name": "zstudio_pickup_move",
-    "Description": "Move a source map\u0027s pickup to exact coordinates as one undoable operation, including unambiguous difficulty counterparts. The move accepts changed coordinate tokens of the resource sources (data/mN/zrdr/puppies*.zrd) in memory, stored with one decimal, and updates the scene. The result is the accepted document/revision. Save writes the sources; no archives are created. Compiled worlds are read only.",
+    "Description": "Move a source map\u0027s pickup to exact coordinates as one undoable operation, including unambiguous difficulty counterparts. The move accepts changed coordinate tokens of the resource sources (data/mN/zrdr/puppies*.zrd) in memory, stored with one decimal (rotations in radians with four; unchanged values keep their text), and updates the scene. The result is the accepted document/revision. Save writes the sources; no archives are created. Compiled worlds are read only.",
     "Mutates": true,
     "Parameters": [
       {
@@ -3845,7 +3845,7 @@
   },
   {
     "Name": "zstudio_missions",
-    "Description": "List the current MW3 map\u0027s authored mission readers, or select one for the visible world/animation. Selection waits for the displayed preview, retains archive edit history, playhead and camera, and rejects superseded requests with context_changed. Shared resources remain available; other mission readers do not contribute actors or AI networks. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Description": "List the current MW3 map\u0027s authored mission readers, or select one for the visible world/animation. Selection waits for the displayed preview, retains the playhead and camera, and rejects superseded requests with context_changed. Shared resources remain available; other mission readers do not contribute actors or AI networks. Returns an operation ID; use zstudio_operation to await/read the result.",
     "Mutates": true,
     "Parameters": [
       {
@@ -4208,7 +4208,7 @@
   },
   {
     "Name": "zstudio_source_pickup_add",
-    "Description": "Add one pickup to a source map as an undoable transaction. All appends once to each effective difficulty resource; a single difficulty materializes missing variants as needed to leave other layouts unchanged. Existing records and text are preserved. The template must actually spawn with a copyable bvol. Position is explicit; no automatic terrain snapping. Save writes owning sources. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Description": "Add one pickup to a source map as an undoable transaction. All appends once to each effective difficulty resource; a single difficulty materializes missing variants as needed to leave other layouts unchanged. Existing records and text are preserved. The template must actually spawn with a copyable bvol. Position is explicit (stored with one decimal, rotation in radians with four); no automatic terrain snapping. Save writes owning sources. Returns an operation ID; use zstudio_operation to await/read the result.",
     "Mutates": true,
     "Parameters": [
       {

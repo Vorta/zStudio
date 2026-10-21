@@ -21,7 +21,7 @@ public partial class MainWindow
     };
     private void RegisterParachuteCommands(StudioCommands registry)
     {
-        RegisterJob(registry, "parachute", "Inspect and relocate complete existing VTOL drop windows in a Whole world. Show analyzes the first discovered flight; unavailable flights retain the candidate list, entry and analysisRefusal without a partial path. Analyze selects an exact entry. Conditional release markers come from a frozen bounded runtime, never landing predictions. A source map's windows can be moved: select/begin/set/confirm/cancel share the GUI draft and one undo step, set takes a local start time or an exact path segment plus fraction to disambiguate crossings, and the edit uses token-preserving project history and in-memory scene evaluation (Apply creates no archives; Save writes the owning animation definitions; undo/redo/save target the project). A compiled world is read only (show, analyze, select, samples and releases). Samples/releases support offset/limit pagination without query; preview_state.parachute reports bounded state. No physical input is captured.",
+        RegisterJob(registry, "parachute", "Inspect and relocate complete existing VTOL drop windows in a Whole world. Show analyzes the first discovered flight; unavailable flights retain the candidate list, entry and analysisRefusal without a partial path. Analyze selects an exact entry. Conditional release markers come from a frozen bounded runtime, never landing predictions. A source map's windows can be moved: select/begin/set/confirm/cancel share the GUI draft and one undo step, set takes a local start time or an exact path segment plus fraction to disambiguate crossings, and the edit uses token-preserving project history and in-memory scene evaluation (Apply creates no archives; Save writes the owning animation definitions; undo/redo/save target the project). A compiled world is read only: show, analyze, samples and releases work, its windows cannot be selected or moved. Samples/releases support offset/limit pagination without query; preview_state.parachute reports bounded state. No physical input is captured.",
             [PreviewParameter, DocumentParameter, RevisionParameter,
                 P("action", "string", "Operation.", true, "show", "hide", "analyze", "select", "begin", "set", "confirm", "cancel", "undo", "redo", "save", "samples", "releases"),
                 P("snapshot", "string", "Current Parachute snapshot, required except show."),
@@ -63,7 +63,7 @@ public partial class MainWindow
             else if (action is "undo" or "redo") await ParachuteHistoryAsync(action == "redo", token);
             else if (action == "save")
             {
-                changed = RequireParachutes(Text(a, "snapshot"), edit: true).World;
+                changed = ParachuteSaveWorld(Text(a, "snapshot"));
                 await SaveSourceWorldAsync(state.World, token); CommitRunningJob();
             }
             else

@@ -40,7 +40,7 @@ internal static class ComponentFieldChecks
         Assert.True(editor.CommitNow()); Assert.Equal(new Vector3(4, 5, 6), record.Vector(0));
     }
 
-private sealed class Editor : FieldEditor
+    private sealed class Editor : FieldEditor
     {
         internal StackPanel Panel { get; } = new();
         internal Editor(string value, Action<string> write)

@@ -41,7 +41,7 @@ public partial class MainWindow
             sourceMapPartStates.GetOrCreateValue(session).Overrides = snapshot.Overrides;
     }
 
-private IReadOnlyList<SourceMapPartRow> DescribeSourceMapParts(int owner)
+    private IReadOnlyList<SourceMapPartRow> DescribeSourceMapParts(int owner)
     {
         if (scene == null || shownDocument?.SourceWorld == null || !sourceMapPartSnapshots.TryGetValue(scene, out var snapshot) ||
             !snapshot.Selection.IsBoundary(owner) || !snapshot.Selection.MemberSlots.TryGetValue(owner, out var members)) return [];

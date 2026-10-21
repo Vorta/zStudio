@@ -40,7 +40,6 @@ public partial class MainWindow
         {
             SaveRequested = SaveCurrentAsync,
             UndoRequested = UndoDocument,
-            Editing = doc => { if (doc == shownDocument) animation?.Pause(); },
         };
         window.Closed += (_, _) => { if (presentationProperties == window) presentationProperties = null; if (propertiesWindow == window) { propertiesWindow = null; ++propertyRequest; } };
         window.Retargeted += UpdateSourceInputBlock;

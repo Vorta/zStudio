@@ -91,7 +91,7 @@ public partial class MainWindow
             if(propertiesWindow != null) throw new StudioCommandException("pending_drafts","Properties stayed open: resolve its drafts first.");
             return Result(new { closed=true });
         });
-        Register(r,"properties_state","Read the pinned Properties window identity, content and current editable fields.",false,[],_ =>
+        Register(r,"properties_state","Read the pinned Properties window identity, content and fields (editable only for a source map's objects and pickups; read only otherwise).",false,[],_ =>
             Result(new { open=propertiesWindow != null, document=propertiesWindow?.Document?.SessionId, content=propertiesWindow?.CurrentJson, fields=((FieldEditor?)propertiesWindow?.PickupFields ?? propertiesWindow?.SourceFields)?.DescribeAutomationFields() }));
         Register(r,"scene_properties","Inspect a scene object, focus its source-world object panel, or open the shared Properties window in other viewers (a source map's pickups are editable there). Source-map parts resolve to their complete selection owner; synthetic reference groups return Index=null and a signed selectionOwner with read-only properties. Physical mesh/polygon inspection remains available through inspection commands. Metadata is bounded to 512 JSON nodes/8192 text characters with inspection_truncated. MW3 actor labels use 128-character prefixes; source data and JSON exports remain intact.",true,
             [PreviewParameter,P("node","integer","Scene node index or signed selectionOwner from scene_tree in this preview.",true),P("open","boolean","Focus the source-object panel, or open Properties for other viewers.")],async (a, token)=>

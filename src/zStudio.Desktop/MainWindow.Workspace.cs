@@ -81,6 +81,8 @@ public partial class MainWindow
         NavigatorPaneButton.IsEnabled = !ViewModel.IsSourceProject && ViewModel.HasRoot;
         ToolsPaneButton.IsEnabled = hasDocument || ViewModel.Problems.Count > 0;
         DocumentCommands.Visibility = hasDocument ? Visibility.Visible : Visibility.Collapsed;
+        // Compiled documents are read only: the title row shows their name without Undo, Redo and Save.
+        DocumentUndo.Visibility = DocumentRedo.Visibility = DocumentSave.Visibility = doc?.SourceWorld != null ? Visibility.Visible : Visibility.Collapsed;
         CloseDocumentMenu.IsEnabled = ValidateMenu.IsEnabled = ReloadMenu.IsEnabled = hasDocument;
         WelcomeTitle.Text = ViewModel.HasRoot ? "Choose a file to inspect" : "Explore Recoil’s assets";
         WelcomeDescription.Text = ViewModel.HasRoot ? "Open a ZBD file from Files, or search for an asset across this folder." : "Textures, worlds, models, audio, scripts, and animation sequences — together in one workspace.";
@@ -89,7 +91,7 @@ public partial class MainWindow
         WelcomeHelp.Visibility = WelcomeHelp.Text.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
         WelcomeHelp.Margin = new(0, ViewModel.HasRoot ? 24 : 8, 0, 0);
         AnimationMenu.IsEnabled = animation != null;
-        foreach (var column in AssetGrid.Columns.Skip(1)) column.Visibility = doc?.Document.Animations != null ? Visibility.Visible : Visibility.Collapsed;
+        foreach (var column in AssetGrid.Columns.Skip(1)) column.Visibility = doc is { SourceWorld: null, Document.Animations: not null } ? Visibility.Visible : Visibility.Collapsed;
         // A rebuilding source world accepts no other edit or save until the rebuilt world is shown.
         bool rebuilding = doc?.SourceWorld is { } rebuildingWorld && (rebuildingWorld.IsRebuilding || sourceWorkspaceBusy || rebuildingWorld.Workspace.IsSaving || scene?.IsZonePainting == true || zoneTool.Applying);
         // Only a source world saves, undoes and redoes; compiled documents are read only.

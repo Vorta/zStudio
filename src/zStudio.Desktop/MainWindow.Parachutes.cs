@@ -97,6 +97,12 @@ public partial class MainWindow
         if (state.World.Revision == state.WorldRevision && (state.Owner?.Revision ?? state.World.Revision) == state.OwnerRevision) return;
         CloseParachutes(); ViewModel.Status = "The Parachute owner changed. Open Parachute again to analyze its current animation.";
     }
+    /// <summary>The route editor's world for Save: a source world, saved as the project is (save_document), whatever gesture runs.</summary>
+    private DocumentModel ParachuteSaveWorld(string? snapshot = null)
+    {
+        var world = RequireParachutes(snapshot).World;
+        return world.SourceWorld != null ? world : throw new StudioCommandException("read_only", "This world is read only: edit its source project instead.");
+    }
     private ParachuteSession RequireParachutes(string? snapshot = null, bool edit = false)
     {
         var state = parachutes ?? throw new StudioCommandException("not_ready", "Open Parachute in a Whole world first.");
@@ -261,7 +267,11 @@ public partial class MainWindow
         var state = RequireParachutes(); RequireNoDrafts();
         if (state.World.SourceWorld == null) throw new StudioCommandException("read_only", "This world is read only: edit its source project instead.");
         if (state.Analysis?.Windows.Any(w => w.Id == id) != true) throw new StudioCommandException("stale_record", "Choose a current drop window.");
-        state.Selected = id; state.Viewport.SelectParachuteWindow(id); UpdateParachutePanel();
+        bool accepted;
+        try { accepted = state.Viewport.SelectParachuteWindow(id); }
+        catch (InvalidOperationException ex) { throw new StudioCommandException("busy", ex.Message); }
+        if (!accepted) throw new StudioCommandException("busy", "Finish the current selection operation first.");
+        state.Selected = id; UpdateParachutePanel();
     }
     private void BeginParachute(bool pointer = false)
     {
@@ -421,7 +431,7 @@ public partial class MainWindow
         else if (action == "confirm") await ConfirmParachuteFromGuiAsync();
         else if (action == "cancel") CancelParachuteDraft();
         else if (action is "undo" or "redo") await ParachuteHistoryAsync(action == "redo", CancellationToken.None);
-        else if (action == "save") await SaveSourceWorldDocumentAsync(RequireParachutes(edit: true).World);
+        else if (action == "save") await SaveSourceWorldDocumentAsync(ParachuteSaveWorld());
     });
     private async void ParachuteSelectionChanged(object sender, SelectionChangedEventArgs e)
     {

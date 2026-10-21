@@ -163,8 +163,7 @@ public static class VtolDropWindows
         if (plan.NewStart == plan.Window.Start) return original;
         CheckPackage(frozenContext.Package, token);
         var copy = frozenContext.Snapshot(); token.ThrowIfCancellationRequested();
-        // Snapshot owns every cloned entry. This disposable simulation needs no document undo session,
-        // whose compiled-edit comparison would otherwise serialize the before/after entry records.
+        // Snapshot owns every cloned entry: the disposable simulation changes only its copy.
         copy.Package.Entries[plan.Window.EntryIndex].Sequences.Single(s => s.Id == plan.Window.SequenceId)
             .Events.Single(e => e.Id == plan.Window.CallEventId).Threshold = plan.NewStart;
         var candidate = Discover(copy.Package, token).Candidates.SingleOrDefault(c => c.EntryIndex == original.Candidate.EntryIndex && c.ScheduleSequenceId == original.Candidate.ScheduleSequenceId)

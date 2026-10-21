@@ -7,14 +7,9 @@ namespace zStudio.Core.Formats;
 public sealed record ScriptInstruction(Guid Id, IReadOnlyList<string> Tokens, ReadOnlyMemory<byte> Raw, long? SourceOffset)
 {
     public ReadOnlyMemory<byte> Padding { get; init; }
-    public ScriptInstruction Duplicate() => this with { Id = Guid.NewGuid(), SourceOffset = null };
 }
 public sealed record PreparedScriptEntry(Guid Id, int? SourceIndex, string Name, uint FileTime,
-    ReadOnlyMemory<byte> DirectoryRecord, IReadOnlyList<ScriptInstruction> Instructions, ReadOnlyMemory<byte> FollowingBytes)
-{
-    public PreparedScriptEntry Duplicate(string name) => this with { Id = Guid.NewGuid(), SourceIndex = null, Name = name,
-        Instructions = Instructions.Select(i => i.Duplicate()).ToArray() };
-}
+    ReadOnlyMemory<byte> DirectoryRecord, IReadOnlyList<ScriptInstruction> Instructions, ReadOnlyMemory<byte> FollowingBytes);
 public sealed record PreparedScriptPackage(ReadOnlyMemory<byte> Header, ReadOnlyMemory<byte> PrefixGap,
     IReadOnlyList<PreparedScriptEntry> Entries, ReadOnlyMemory<byte> Tail);
 

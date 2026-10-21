@@ -14,22 +14,28 @@ Open work for the world editor. Every item ships with GUI/MCP parity, protocol a
 | --- | --- | --- |
 | Complete terrain behaviour | Caves, stacked surfaces, underwater layers, multi-zone transitions, CanModify and ClipTo, quicksand, crater reload; tilted region planes for walls; zone probe validation; texture page cutting for large painted textures | M1, then the M5/M6 underwater and zone cases, pass source editing, Blender update, export and in-game tests, one change at a time |
 | Vehicle upgrades and actors | Upgrade vehicle (below), role-safe splitting, LODs, textures, cosmetic animations; cross-mission actor import; mission export | An upgraded tank passes two-copy, death, respawn and save/reload tests with its listed gameplay changes checked; the M2 tank works in M1 |
-| Mission logic | Source-backed animation editing (`.zad`, `.zan`, `anim.zad`; a wildcard edit affects every expansion, isolating one is an explicit refactor), triggers, prerequisites, destruction, objectives, starts, cameras, audio cues; Blender action conversion | One encounter with an upgraded enemy, an animated or destructible object, an objective and an exit works in the game |
+| Mission logic | Source-backed animation editing (`.zad`, `.zan`, `anim.zad`; a wildcard edit affects every expansion, isolating one is an explicit refactor), triggers, prerequisites, destruction, objectives, starts, cameras, audio cues; Blender action conversion (requirements: [engine evidence](engine-evidence.md#animation-runtime), Blender action import); resource validation classes (fatal, silently ignored, behaviour-changing; [resource schemas](engine-evidence.md#resource-schemas)) | One encounter with an upgraded enemy, an animated or destructible object, an objective and an exit works in the game |
 | Integrated rebuild | An existing mission rebuilt from unsplit terrain with gameplay edits on the measured modern profile | The full capability matrix passes; only then new maps |
 | Scale | Incremental builds, multiplayer workflows, new mission slots only with evidence | Incremental and clean builds agree; budgets survive repeated runtime activity; multiplayer checked with several clients |
 
 ## Where edits still need to land
 
+Implemented edits are in [sources](sources.md#edit-semantics).
+
 | Edit | Source |
 | --- | --- |
-| An object created or changed by a script | The responsible instruction, once its exact execution occurrence is established; new objects are readable blocks in the mission's scripts, updated in place by repeated edits, inserted relative to the executed write point with traced search-path changes |
-| Lights, fog, cameras | Their effective script commands; animated changes in animation definitions |
+| Animated light, fog and camera changes | Their animation definitions |
 | Texture cycles | The responsible `tex_fx*.gw` or effect definition |
-| Soils and polygon attributes | The material or primitive; a shared material offers an explicit fork |
+| Soils and other material or polygon attributes (polygon zones are implemented) | The material or primitive; a shared material offers an explicit fork |
+
+## Open gaps
+
+- AI path Edit mode on source maps is reachable only through MCP (`zstudio_ai_path` `enter`); the GUI panel and G/R/S keys work only after that. Add a GUI entry, then the absolute-coordinate operation for a multi-node selection (one undo step, one evaluation).
+- Runtime capacity validation (requirement): check the three free chains, report load-time demand per pool as an error and the play reserve against headroom as a warning, the texture directory against 4,096, and light/sound/animate/sequence/switch nodes inside vehicle and pickup templates ([runtime capacity](engine-evidence.md#runtime-capacity)).
 
 ## Upgrade vehicle
 
-- Keeps the vehicle's key, data records, placements, movement type and part hierarchy; replaces the visual content. Starts from the `ltank` structure: `healthy` → `turret` (game-driven yaw) → `gun` (game-driven pitch) → `fpnt_c`/`fpnt_l`/`fpnt_r`; `l4` (LOD 0–256: chassis, `ltracks`, `rtracks`, shadow); `l5` (LOD 256–1024: `chassis_1`); `target`; `support00`–`support03`; `collide00`–`collide11`.
+- Keeps the vehicle's key, data records, placements, movement type and part hierarchy; replaces the visual content. Authoring requirements: [vehicles](engine-evidence.md#vehicles). Starts from the `ltank` structure: `healthy` → `turret` (game-driven yaw) → `gun` (game-driven pitch) → `fpnt_c`/`fpnt_l`/`fpnt_r`; `l4` (LOD 0–256: chassis, `ltracks`, `rtracks`, shadow); `l5` (LOD 256–1024: `chassis_1`); `target`; `support00`–`support03`; `collide00`–`collide11`.
 - The checkout holds the whole hierarchy, helpers, LODs, texture-cycle bindings, behaviour dependencies and every mission load including aliases (`ltank_2`). Role names and helper numbering stay. Collision/support points, fire points, aim target and track UV scale may be fitted to the new mesh (suggested, then reviewed); every gameplay-affecting change is listed for testing.
 - Splitting: cosmetic rigid geometry under a kept pivot → child meshes; a role whose model the game reads directly keeps one compliant model; `ltracks`/`rtracks` one model each within limits (the game scrolls them); morph parts keep both shapes in correspondence; helpers never split.
 - One functional skeleton with visual LOD bands; the original model becomes the far band. Full-quality PNG sources packed per profile, keeping cycle frames, skins and damage masks; shared materials flagged.

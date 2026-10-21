@@ -51,8 +51,7 @@ public partial class AnimationEditor
     {
         string[] names = ["Tracked nodes","Scene nodes","Lights","Sound nodes","Samples","Effect templates","Activation conditions","Child slots"];
         DockPanel page = new() { Margin = new(8) }; StackPanel header = new(); DockPanel.SetDock(header,Dock.Top); page.Children.Add(header);
-        Label(header,"Stored references",true); Label(header,"Stable table indices. Reserved index 0 and unverified tables are read-only.");
-        Label(header,"Changing a verified name retargets every event in this entry that uses that table slot. Indices and ordering stay unchanged.");
+        Label(header,"Stored references",true); Label(header,"Stable table indices; reserved index 0 and unverified tables are marked.");
         ComboBox category = new() { ItemsSource = names.Select((n,i) => $"{n} ({Entry.References[i].Count})").ToArray(),SelectedIndex = 1,Margin = new(0,0,0,6) }; header.Children.Add(category);
         Grid body = new(); body.RowDefinitions.Add(new()); body.RowDefinitions.Add(new() { Height = GridLength.Auto }); page.Children.Add(body);
         ListBox list = new() { DisplayMemberPath = nameof(ChoiceValue.Label) }; body.Children.Add(list);

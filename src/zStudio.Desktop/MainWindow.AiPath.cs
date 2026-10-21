@@ -159,6 +159,14 @@ public partial class MainWindow
         token.ThrowIfCancellationRequested();
         if (draft.Document.SourceWorld != null)
         {
+            // A move below the stored precision (one decimal) changes nothing: end the draft without evaluating the world.
+            var stored = draft.Document.PickupEdits!.PreviewAiPositions(draft.After);
+            if (stored.All(p => p.Value.Position == draft.Before[p.Key]))
+            {
+                CancelAiPathDraft(); UpdateAiPathPanel();
+                ViewModel.Status = "Nothing to apply: the nodes keep their stored positions (one decimal).";
+                return draft.Document;
+            }
             try
             {
                 var next = await PrepareSourceWorldEditAsync(draft.Document, "Transforming AI path nodes", (workspace, ct) =>

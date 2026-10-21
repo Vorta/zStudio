@@ -9,6 +9,34 @@ namespace zStudio.Tests;
 public sealed partial class AnimationTests
 {
     private static JsonNode CoordinateInt(int value) => new JsonObject { ["type"] = "int", ["value"] = value };
+    private static JsonNode AiCoordinateNode(float x = 1) => Arr(CoordinateInt(12), Arr(Num(x), Num(2), Num(3)), Arr(CoordinateInt(-7), CoordinateInt(0), CoordinateInt(-1)));
+
+    [Fact]
+    public async Task PlacementsRefuseUnsupportedRotationAxesAndStoreHeadingsWithOneDecimal()
+    {
+        await WithMissionArchiveAsync(new()
+        {
+            ["vehicle.zrd"] = Zrd(Arr(Str("animated"), Arr())),
+            ["aiv.zrd"] = Zrd(Arr(Str("animated_01"), Spawn(1, 2, 3, 45))),
+            ["aiv_hard.zrd"] = Zrd(Arr(Str("animated_02"), Spawn(1, 2, 3, 45))),
+            ["net_01.zrd"] = Zrd(Arr(Str("node_00"), AiCoordinateNode()))
+        }, async (world, resolver) =>
+        {
+            var token = TestContext.Current.CancellationToken;
+            var edits = await PickupPlacementEditSession.LoadAsync(world.Path, resolver, token); edits.BindCoordinateTemplates(world.Scene!);
+            var tank = edits.OtherCoordinates.Single(r => r.Kind == "tank" && r.Difficulties.Contains(MissionDifficulty.Medium));
+            var ai = edits.OtherCoordinates.Single(r => r.Kind == "ai");
+            var before = edits.Transform(tank.Source);
+            Assert.Equal(PlacementRotationKind.HeadingDegrees, edits.RotationKind(tank.Source));
+            Assert.Equal(PlacementRotationKind.None, edits.RotationKind(ai.Source));
+            Assert.Throws<InvalidDataException>(() => edits.PreviewTransform(ai.Source, edits.Transform(ai.Source) with { Rotation = Vector3.UnitY }));
+            Assert.Throws<InvalidDataException>(() => edits.PreviewTransform(tank.Source, before with { Rotation = Vector3.UnitX }));
+            Assert.Throws<InvalidDataException>(() => edits.PreviewTransform(tank.Source, before with { Rotation = new(0, float.NaN, 0) }));
+            // A heading is stored in degrees with one decimal, and every counterpart takes it.
+            var after = edits.PreviewTransform(tank.Source, before with { Position = new(9.04f, 8, 7), Rotation = new(0, 132.54f, 0) });
+            Assert.All(edits.Scope(tank.Source).Sources, s => Assert.Equal(new PlacementTransform(new(9, 8, 7), new(0, 132.5f, 0)), after[s]));
+        });
+    }
 
     [Fact]
     public async Task TankSelectionFollowsOnlyUniqueCoordinateCounterpartsAcrossDifficulty()
@@ -41,7 +69,7 @@ public sealed partial class AnimationTests
         });
     }
 
-[Fact]
+    [Fact]
     public async Task DuplicateTankRecordsRemainInspectable()
     {
         await WithMissionArchiveAsync(new()

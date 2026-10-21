@@ -4,7 +4,7 @@ Open a [source project](source-project.md), then a map. You edit the map's sourc
 
 ## Open a map
 
-Choose a map in the map picker. The view shows the mission's starting scene at the chosen **Difficulty** (Easy, Medium or Hard): the units and pickups that difficulty places and the poses its startup animations set. The back arrow left of **Whole world** returns to the picker, asking to save or discard unsaved changes.
+The map picker lists the single-player maps (m1–m6) and the multiplayer maps; one map is open at a time. A map whose model or script is broken still has its button; opening it reports the problem. The view shows the mission's starting scene at the chosen **Difficulty** (Easy, Medium or Hard): the units and pickups that difficulty places and the poses its startup animations set. The back arrow left of **Whole world**, or **File → Close file** (**Ctrl+W**), returns to the picker, asking to save or discard unsaved changes.
 
 MCP: `zstudio_source_world_list`, `zstudio_source_world_open`.
 
@@ -12,11 +12,11 @@ MCP: `zstudio_source_world_list`, `zstudio_source_world_open`.
 
 - **Title:** the map's name, with an **Edited** pill while the project has unsaved changes.
 - **Command bar:** the scope (back arrow, **Whole world** and the world's source model file, such as `m1.gltf`); **Save**, **Undo**, **Redo**; **LOD** (LOD 0 is each object's highest detail) and **Difficulty**; then **Camera** (Frame all, Flycam), **Display** (Wireframe, Textures, Bounds, Horizon), **Overlay** (Non-default soils, CanModify, ClipTo, Landmarks, Face orientation), **Show** (VTOL route) and **Zones** (Edit zones).
-- **World outliner** (left), the view (middle) and the **Properties** pane (right). Drag the gaps between them to resize.
+- **World tree** (left), the view (middle) and the **Properties** pane (right). Drag the gaps between them to resize.
 - **Over the view:** the **Perspective** chip (projection, named views, framing), the navigation cube, the selected object with its handles, and the surface under the pointer with its X/Y/Z.
 - **Status bar:** the selection, the mission start and difficulty, instance and mesh batch counts, **Preview notices**, and toggles for the **World tree**, **Properties** and **Diagnostics** panes. Diagnostics lists the map's file and preview problems.
 
-### World outliner
+### World tree
 
 Rows come in a fixed order: **World** (the authored glTF hierarchy, including groups the build removes), **Zones**, **AI Vehicles**, **AI Networks**, **Pickups**, **Animations (keyframed)** (objects the startup animations place) and **Animations (definitions)** (the `.zad` files the mission lists). Icons show each node's type; the info button beside **Show all** opens a legend.
 - Objects show their zone on the right (`Zone: 12`, `Zone: Any`).
@@ -31,7 +31,7 @@ MCP: `zstudio_scene_tree`, `zstudio_scene_selection`.
 
 ## Select and inspect
 
-Click an object in the view or the outliner. The Properties pane shows its card: its icon, name and type (with its source file in the tooltip), and collapsible sections. Clicking a mesh inside a turret or vehicle selects the whole object; the clicked polygon is under **Surface**. Clear the selection with **Escape**, **Clear selection** or a click on empty space. With nothing selected, the pane shows **Recently selected** and a summary of the world. **Alt+Enter** focuses the card.
+Click an object in the view or the World tree. The Properties pane shows its card: its icon, name and type (with its source file in the tooltip), and collapsible sections. Clicking a mesh inside a turret or vehicle selects the whole object; the clicked polygon is under **Surface**. Clear the selection with **Escape**, **Clear selection** or a click on empty space. With nothing selected, the pane shows **Recently selected** and a summary of the world. **Alt+Enter** focuses the card.
 
 MCP: `zstudio_scene_inspect`, `zstudio_scene_card` (`select`, `clear`, `copy`).
 
@@ -83,7 +83,7 @@ The **AI Networks** section lists the mission's networks (`net_01`…) with thei
 
 Select a network to emphasise it and open its card. The card edits the network header with the names of the developers' own Net Edit dialog: **Net Name**, **Net Type**, **Attack Strategy**, **Pursuit Radius Min** and **Max**, **Activation Radius**, **Attack Radius**, **Return Radius**, **Attack Dwell**, **Post Attack Dwell** and **Buddies Attack**; under **No effect in play**, **Buddies Activate**, **Path Width** and **Hide Time 1** and **2**, which the game never uses. The line under each field says what it does in play. **Apply** changes only those values in `data\mN\zrdr\aipath\net_NN.zrd`.
 
-Move a node by selecting it in the view. To move, rotate or scale several nodes at once, use MCP Edit mode (`zstudio_ai_path`): click, Shift-click or drag a rectangle to select nodes, then **G**, **R** or **S** with the pointer (**X**, **Y**, **Z** constrain to an axis), or type values; Enter confirms one undo step, Escape cancels.
+Move one node by selecting it and dragging its handles or editing its card. Moving, rotating or scaling several nodes at once uses AI path Edit mode, which only MCP turns on (`zstudio_ai_path`); then click, Shift-click or drag a rectangle to select nodes and press **G**, **R** or **S** with the pointer (**X**, **Y**, **Z** constrain to an axis), or type values; **Enter** confirms one undo step, **Escape** cancels.
 
 MCP: `zstudio_source_ai_network`, `zstudio_ai_networks`, `zstudio_ai_nodes`, `zstudio_ai_selection`, `zstudio_ai_path`.
 
@@ -112,9 +112,10 @@ MCP: `zstudio_source_zones`, `zstudio_source_polygon_zones`, `zstudio_source_zon
 
 Terrain is authored as whole surfaces in glTF plus a recipe beside them (`name.terrain.json`) that holds the gameplay attributes painted on them; the build cuts the surfaces into the pieces the engine needs.
 - **Tools → Create terrain…** takes a glTF file of its own and the meshes in it that are terrain, writes the recipe and adds a terrain marker to the mission database.
-- Select a terrain piece to open its recipe in Properties: defaults, regions (painted areas, in the order they apply) and the brush: **Paint in viewport** or **Erase in viewport**, then drag over the terrain, or **Paint polygon** / **Erase polygon** with typed corners for exact edges. Each stroke is one undo step.
+- Select a terrain piece and choose **Edit terrain…** on its card: the recipe opens in the Properties window, with its defaults, regions (painted areas, in the order they apply) and the brush: **Paint in viewport** or **Erase in viewport**, then drag over the terrain, or **Paint polygon** / **Erase polygon** with typed corners for exact edges. Each stroke is one undo step.
 - Attributes: zones, node zone, altitude gate, collision, standable, craters (allowed, blocked or ignored), soil (default, water, seafloor, quicksand, lava, fire), priority and flags.
-- **Tools → Convert to editable terrain…** turns a shipped map's terrain pieces into surfaces and recipes. It lists what it keeps as objects (landmarks, transformed or named pieces, parts) before changing anything, and compares the ground heights before and after.
+- Stacked sheets, such as a cave floor under its ceiling, must be separate surfaces: the engine's ground probe takes the first polygon of a node.
+- **Tools → Convert to editable terrain…** turns a shipped map's terrain pieces into surfaces and recipes. It lists what it keeps as objects (landmarks, transformed or named pieces, parts) before changing anything, and compares the ground heights before and after. The original piece layout and names are lost; **Undo** takes the conversion back.
 
 MCP: `zstudio_source_terrain`, `zstudio_source_terrain_create`, `zstudio_source_terrain_edit`, `zstudio_source_terrain_convert`.
 
@@ -149,7 +150,7 @@ An addition is refused when a folder the mission searches first holds another fi
 
 ## Undo and save
 
-**Undo**, **Redo** and **Save** in the command bar (**Ctrl+Z**, **Ctrl+Y**, **Ctrl+S**) apply to the whole project: an edit can change several files, and missions can share a file. Simple moves update the view in place; larger edits rebuild the world (a card over the view shows **Rebuilding the world…**), keeping the camera and open outliner rows. When a file changes outside zStudio, the map asks to reload before further edits. See [Save and recover](source-project.md#save-and-recover).
+**Undo**, **Redo** and **Save** in the command bar (**Ctrl+Z**, **Ctrl+Y**, **Ctrl+S**) apply to the whole project ([Save and recover](source-project.md#save-and-recover)). Simple moves update the view in place; larger edits rebuild the world (a card over the view shows **Rebuilding the world…**), keeping the camera and open World tree rows. When a file changes outside zStudio, the map asks to reload before further edits. **Tools → Validate source file on disk** evaluates the map from the saved files, without your unsaved edits.
 
 ## Limits
 

@@ -1,25 +1,25 @@
 # Code review
 
-Procedure for a requested code review or review-fix cycle. It finds consequential failures across the whole change, including code written in earlier rounds; it does not guarantee that none remain. Green tests and a corpus run are evidence only for the cases they exercise.
+Procedure for a requested code review or review-fix cycle. It finds consequential failures across the change, including code written in earlier rounds; it does not guarantee that none remain. Green tests and a corpus run are evidence only for the cases they exercise.
 
 ## Review cycle
 
-- A requested review cycle uses adversarial subagent reviewers: fix their findings, then review again with fresh reviewers, as long as new findings come up (owner decision). A later round reviews what changed since the previous round, not areas that already passed.
-- Split a large change into reviewer groups by subsystem; give each reviewer the scope, the invariants to attack and the evidence rules below; reviewers are read-only.
-- Reviewers judge zStudio's behaviour on retail data and realistic editing; they do not read the engine reconstruction/decompilation projects or Binary Ninja databases.
-- This procedure itself never authorizes contacting outside reviewers, enabling MCP access or modifying game sources. Never claim independent review when none happened.
+- Adversarial subagent reviewers, read-only; fix their findings; review again with fresh reviewers while new findings come up (owner decision).
+- **Round 1** covers the full inventory ([scope](#scope)), split into reviewer groups by subsystem; give each reviewer the scope, the invariants to attack and the evidence rules below.
+- **Later rounds**, and their challenge pass, cover only what changed since the previous round plus the code it directly interacts with; areas that passed are not reviewed again (owner decision).
+- What blocks a merge, what is deferred and what reviewers do not read: [AGENTS.md](../../AGENTS.md#workflow). This procedure never authorizes contacting outside reviewers, enabling MCP access or modifying game sources; never claim independent review when none happened.
 
 ## Scope
 
 1. Read the PR's inline threads, review summaries and relevant comments; record unresolved findings, including ones fixed locally but not pushed. Check the branch, working tree and PR base/head; preserve other people's changes.
 2. Build the changed-file inventory from the actual base/head merge base plus staged, unstaged and new files. Never substitute `HEAD~1`, the latest fix or the files reviewers named. Refresh it when fixes change the scope.
 3. Group changed behaviour by subsystem and format version. Read every changed production file in context and trace its callers, consumers and shared services, changed or not, including generated discovery, bindings, dynamic controls and renderer interactions.
-4. Keep a ledger in `.agent/REVIEW-<topic>.md` (template below): per group the invariant, attempted counterexample, inspected path, evidence and remaining uncertainty. An unreviewed group stays unreviewed; never turn missing evidence into a pass or an unexplained "not applicable".
-5. When later reviews find new P1/P2 issues, record why the earlier pass missed each and reopen that risk category across the whole change, including analogous code in other format families.
+4. Keep a ledger in `.agent/REVIEW-<topic>.md` ([template](#ledger-template)): per group the invariant, attempted counterexample, inspected path, evidence and remaining uncertainty. An unreviewed group stays unreviewed; never turn missing evidence into a pass or an unexplained "not applicable".
+5. When a later round finds a new P1/P2, record why the earlier pass missed it and check the same failure class in the paths the fix touches and their siblings (analogous code in other format families included).
 
 ## Required risk passes
 
-Apply every relevant row; mark one not applicable only with a concrete reason. Severity: data loss, source corruption and blocked ordinary workflows are P1 candidates; incorrect supported behaviour, false identity resolution and failures on valid input are P2 candidates; block merges only on defects retail data or realistic editing can reach (owner decision). Record the trigger and the severity rationale.
+Apply every relevant row; mark one not applicable only with a concrete reason. Severity: data loss, source corruption and blocked ordinary workflows are P1 candidates; incorrect supported behaviour, false identity resolution and failures on valid input are P2 candidates. Record the trigger and the severity rationale.
 
 | Risk | Trace | Counterexamples and evidence |
 | --- | --- | --- |
@@ -38,19 +38,18 @@ Searches locate risks; an empty search result is not evidence. Follow the values
 ## Fix, challenge, repeat
 
 1. Per finding record trigger, expected invariant, observed behaviour, consequence and severity. A review comment is a hypothesis: verify it against the implementation and dependency semantics.
-2. Reproduce before changing production code when practical, otherwise record the concrete failing path. Keep a regression test only when it is must-have ([testing](testing.md#minimal-must-have-tests)), with independent expected behaviour. A finding about a test: remove the test unless it is must-have; track any production defect it exposed separately.
+2. Reproduce before changing production code when practical, otherwise record the concrete failing path. Regression tests follow [testing](testing.md#minimal-must-have-tests), including what to do with a defective test.
 3. Fix through the shared parser, editing, preview and export services; check sibling versions, commands, GUI consumers and related failure modes; update typed contracts, discovery and MCP docs when behaviour changes.
-4. Recheck each fix, then run a separate challenge pass over the whole inventory starting from invariants and adversarial inputs, not the patch's explanation: where else does the assumption survive, what happens before the guard, what happens when two valid features interact.
-5. A new finding starts another cycle; any production change invalidates the clean conclusion for its dependencies. Never stop because a number of rounds elapsed or a large suite is green.
+4. Recheck each fix, then run a challenge pass over the round's scope starting from invariants and adversarial inputs, not the patch's explanation: where else does the assumption survive, what happens before the guard, what happens when two valid features interact.
+5. A new finding starts another round; never stop because a number of rounds elapsed or a large suite is green.
 
 ## Completion gate
 
 - Use evidence suited to the failure: allocation measurements for growth (not returned length), mixed record kinds with duplicates in one fixture for classification, controlled interleavings for races, source and unrelated-byte comparison plus reopen for persistence.
-- Before calling a cycle complete: every behaviour group reviewed with its risk passes and evidence, limitations stated; every concrete P1/P2 fixed and verified or explicitly open with cause and impact ("outside the latest comment" and "tests pass" are not dismissals); the final challenge pass ran after the last production fix and found nothing actionable; relevant build, tests, corpus, GUI/MCP and package checks passed on the delivered code, recorded with command, dataset, result and revision; MCP inventory, schema and catalog parity current; the portable folder and ZIP republished after application changes.
+- Before calling a cycle complete: round 1 reviewed every behaviour group with its risk passes and evidence, limitations stated; every concrete P1/P2 fixed and verified or explicitly open with cause and impact ("outside the latest comment" and "tests pass" are not dismissals); the last round's challenge pass ran after the last production fix and found nothing actionable; relevant build, tests, corpus, GUI/MCP and package checks passed on the delivered code, recorded in the ledger with command, dataset, result and revision; MCP inventory, schema and catalog parity current; the portable folder and ZIP republished after application changes.
 - An open P1/P2 or a material coverage gap makes the gate incomplete; report it rather than calling the cycle clean.
-- A review-before-push request means finishing this local gate before the next push; then check remote CI, re-read review threads and resolve only findings whose fixes were delivered. Passing CI is still required before merge.
+- A review-before-push request means finishing this local gate before the next push. After the push resolve the threads whose fixes it delivered, then check CI; passing CI is still required before merge. With an armed watch, re-arm as [pr-watch](pr-watch.md#on-a-notice) says.
 - Documentation-only work gets document, link and diff validation; it is not a code-fix cycle.
-- With an armed [PR watch](pr-watch.md), acknowledge the reviewed snapshot and re-arm against the verified remote head right after the validated fix push, before waiting for CI.
 - Report precisely: "No further actionable P1/P2 found in [scope] at [revision], with [limitations]." An incomplete scope is reported as incomplete.
 
 ## Ledger template
@@ -67,9 +66,9 @@ Open external findings:
 | Finding / severity | Trigger and impact | Root cause / sibling paths | Regression or disconfirming evidence | State |
 | --- | --- | --- | --- | --- |
 
-Rounds and final challenge pass:
+Rounds (scope of each) and final challenge pass:
 Checks (command, dataset, revision, result):
-Remaining limitations / unresolved findings:
+Remaining limitations / unresolved or deferred findings:
 Local gate: complete or incomplete, with reason:
 Push / CI / delivered artifact:
 ```

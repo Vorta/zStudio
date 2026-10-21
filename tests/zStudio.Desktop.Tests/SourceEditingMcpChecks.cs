@@ -305,6 +305,21 @@ internal static class SourceEditingMcpChecks
             typeof(MainWindow).GetMethod("PresentProperties", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(main, [window, true]);
             var redoButton = (System.Windows.Controls.Button)typeof(PropertiesWindow).GetField("redo", hidden)!.GetValue(window)!;
             Assert.Equal(System.Windows.Visibility.Visible, redoButton.Visibility); Assert.True(redoButton.IsEnabled);
+            // A typed, uncommitted position is a Properties draft: the window keeps it (retargeting is refused) until it is
+            // resolved. MCP drafts/resolve_drafts see the same draft, refuse applying invalid text and discard it; then the
+            // window retargets.
+            await main.Dispatcher.InvokeAsync(() => window.UpdateLayout(), System.Windows.Threading.DispatcherPriority.Loaded);
+            var draftFields = window.PickupFields!;
+            var draftX = Descendants(draftFields).OfType<System.Windows.Controls.TextBox>().Single(t => System.Windows.Automation.AutomationProperties.GetName(t) == "Position X");
+            draftX.Text = "not a number";
+            Assert.True(draftFields.HasPendingDrafts);
+            Assert.False(window.SetPickup(moved, undoneSource, "HEMORTAR_AMMO", new JsonObject(), sourceMove!));
+            Assert.Same(draftFields, window.PickupFields); Assert.Equal("not a number", draftX.Text);
+            string draftToken = (await Call("drafts", new() { ["target"] = "properties" }))["drafts"]!["token"]!.GetValue<string>();
+            Assert.Contains("invalid_draft", (await Call("resolve_drafts", new() { ["document"] = Id(moved), ["target"] = "properties", ["token"] = draftToken, ["action"] = "apply" }, error: true)).GetValue<string>());
+            await Call("resolve_drafts", new() { ["document"] = Id(moved), ["target"] = "properties", ["token"] = draftToken, ["action"] = "discard" });
+            Assert.False(draftFields.HasPendingDrafts);
+            Assert.True(window.SetPickup(moved, undoneSource, "HEMORTAR_AMMO", new JsonObject(), sourceMove!));
             // A Discard approval left from a close that did not happen (the world is still open) is forgotten when the next
             // close decision starts, so it never skips that decision's prompt.
             var approval = typeof(MainWindow).GetField("discardApprovedWorkspace", hidden)!;

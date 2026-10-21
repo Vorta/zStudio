@@ -34,7 +34,6 @@ public sealed class PropertiesWindow : Window
     private IEnumerable<FieldEditor> Editors => new FieldEditor?[] { PickupFields, SourceFields }.OfType<FieldEditor>();
     public Func<DocumentModel, Task<bool>>? SaveRequested { get; set; }
     public Action<DocumentModel, bool>? UndoRequested { get; set; }
-    public Action<DocumentModel>? Editing { get; set; }
     public JsonObject? CurrentJson => PickupFields?.Json ?? SourceFields?.Json ?? snapshot;
 
     public PropertiesWindow(Window owner, MainViewModel preferences)
@@ -156,7 +155,7 @@ public sealed class PropertiesWindow : Window
         heading.Text = path + " → " + target;
         heading.ToolTip = doc.Path + " → " + target;
         notice.Text = doc.IsStale ? "The source file changed on disk. These properties belong to the open document; reload to read the changed source."
-            : doc.SourceWorld != null ? "Edits update the source project; Ctrl+S saves it to disk." : "Stored properties of the explicitly opened item (read only).";
+            : doc.SourceWorld != null && body.Content is not ReadOnlyPropertySheet ? "Edits update the source project; Ctrl+S saves it to disk." : "Stored properties of the explicitly opened item (read only).";
         undo.IsEnabled = doc.SourceWorld?.Workspace.CanUndo == true;
         redo.IsEnabled = doc.SourceWorld?.Workspace.CanRedo == true;
         undo.Visibility = redo.Visibility = doc.SourceWorld != null ? Visibility.Visible : Visibility.Collapsed;

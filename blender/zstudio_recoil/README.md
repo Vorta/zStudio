@@ -24,12 +24,12 @@ In zStudio, open the project's map and choose **Tools → Edit in Blender…** t
 Export refuses edits it can't map back to the sources, and says what to undo:
 - removing, duplicating, moving or retargeting a reference's display helper (the `↳` child of a holder that has its own mesh);
 - objects copied from another RECOIL import, or faces joined (**Ctrl+J**) or Boolean-merged from another RECOIL mesh;
-- modifiers that remove face identities or mix incompatible zone assignments (apply them first);
+- modifiers that remove face identities or mix incompatible zone assignments (apply them first), and modifiers on a mesh with shape keys (other modifiers export as their result);
 - geometry or hierarchy changes inside a zone workspace.
 
 ## Export and update zStudio
 
-1. Choose **File → Export → RECOIL glTF graph** (or **Export RECOIL glTF** in the sidebar); a checkout exports into its own outbox. Each export is a complete new generation of the linked files with a receipt.
+1. Choose **File → Export → RECOIL glTF graph** (or **Export RECOIL glTF** in the sidebar); a checkout exports into its own outbox. Each export is a complete new generation of the linked files with a receipt. Hidden objects export too. Blender's file browser hides the project's `.zstudio` folder, so paste a path into it rather than browsing there.
 2. In zStudio, with a map of the project open, choose **Tools → Update from Blender export…**. The whole graph is validated and applied as one undoable edit; placement zones elsewhere in the project follow it. Source edits made in zStudio since the checkout, and shared texture changes, need your confirmation.
 3. **Save** in zStudio writes the source files; only a project export builds game files.
 
@@ -42,6 +42,6 @@ MCP: `zstudio_source_blender_checkout`, `zstudio_source_blender_checkouts`, `zst
 - Blender 5.2.x, `.gltf` files with external PNG textures, and the zStudio source format's rules for materials, names, transforms and model sizes. Give new surfaces a material with Metallic set to zero.
 - Missing images show as magenta checkers and never become source textures; replace one with an actual image to export it.
 - A graph holds at most 4,096 files and 512 MiB of source data; cyclic or escaping references are refused.
-- Blender's view is an editing view, not the game's collision, crater or zone queries. A pickup's collision volume (`bvol`) is hidden by its material, so it still counts in framing and shows in wireframe.
-- Import sessions stay in the temporary folder.
-- Nothing writes the protected retail folders or the imported originals.
+- Blender's view is an editing view, not the game's collision, crater or zone queries. A pickup's collision volume (`bvol`) is hidden by its material, so it still counts in framing and shows in wireframe; keep it, because the game registers a pickup only when its model has one.
+- Each import copies its files to a `zstudio-blender-…` folder in Windows' temporary folder, which isn't deleted automatically; delete old ones when Blender is closed.
+- The extension never changes the files it imported; exports go to the checkout's outbox.

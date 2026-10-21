@@ -219,7 +219,7 @@ public sealed class AssetJsonCancellationTests
         Assert.Equal(3, entry.References[1][0].Bytes[0]);
         using var cancellation = new CancellationTokenSource(); cancellation.Cancel();
         Assert.Throws<OperationCanceledException>(() => entry.Clone(cancellation.Token));
-        Assert.Throws<OperationCanceledException>(() => sequence.Clone(false, cancellation.Token));
+        Assert.Throws<OperationCanceledException>(() => sequence.Clone(cancellation.Token));
         Assert.Throws<OperationCanceledException>(() => sequence.Events[0].Clone(cancellation.Token));
     }
 

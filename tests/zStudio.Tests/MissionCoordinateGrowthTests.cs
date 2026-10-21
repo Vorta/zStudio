@@ -111,7 +111,7 @@ public sealed class MissionCoordinateGrowthTests
         Assert.True(allocated < 4096, $"Allocated {allocated:N0} bytes to inspect an ignored string.");
     }
 
-[Fact]
+    [Fact]
     public void ValveSourceAttachmentIndexesArchiveAndMemberInsteadOfRescanningNetworks()
     {
         byte[] root = ZrdWriter.Write(A(S("version"), A(I(106))), TestContext.Current.CancellationToken);

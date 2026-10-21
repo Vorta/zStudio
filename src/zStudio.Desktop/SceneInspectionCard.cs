@@ -59,7 +59,13 @@ internal sealed partial class SceneInspectionCard : Grid
     private readonly TextBlock footerStatus = new() { FontSize = 12, VerticalAlignment = VerticalAlignment.Center };
     private readonly System.Windows.Shapes.Ellipse footerDot = new() { Width = 6, Height = 6, Margin = new(0, 0, 8, 0), VerticalAlignment = VerticalAlignment.Center };
     /// <summary>Whether the draft changes anything: Apply and Revert act only then.</summary>
-    internal bool HasChanges => ObjectEditor != null ? HasObjectDraft : DraftSource != null && (!Coordinates.Select(c => c.Text).SequenceEqual(initialCoordinates) || !Angles.Select(c => c.Text).SequenceEqual(initialAngles));
+    internal bool HasChanges => ObjectEditor != null ? HasObjectDraft : DraftSource != null && (!Coordinates.Select(c => c.Text).SequenceEqual(initialCoordinates) || !Angles.Select(c => c.Text).SequenceEqual(initialAngles)) && StoresChange();
+    /// <summary>Whether the draft would store anything: a change below the stored precision (see PlacementPrecision) is none.</summary>
+    private bool StoresChange()
+    {
+        try { return DraftDocument?.PickupEdits is not { } edits || edits.Stored(DraftSource!, DraftTransform()) != originalTransform; }
+        catch (Exception ex) when (ex is StudioCommandException or InvalidOperationException or System.IO.InvalidDataException or KeyNotFoundException) { return true; }
+    }
     private string[] initialCoordinates = [];
     private bool refreshingRows;
     internal event Action? DraftClosed;

@@ -13,10 +13,12 @@ Download **[zStudio v0.9.4](https://github.com/Vorta/zStudio/releases/tag/v0.9.4
 ## Quick start
 
 1. Download `zStudio-<version>-win-x64.zip` from [Releases](https://github.com/Vorta/zStudio/releases), extract it and run **zStudio.exe**. Keep the **dependencies** folder beside it. It needs Windows 11 x64 and a Direct3D 11 graphics device; .NET is included.
-2. On the welcome screen, under **Work with source project**, choose **Initialize**, enter your retail RECOIL folder and an empty project folder, and choose **Initialize and open**.
-3. Pick a map. Select objects in the view or the World outliner and edit them in the Properties pane; **Apply** accepts an edit, **Undo**/**Redo** take it back.
+2. On the welcome screen, under **Work with source project**, choose **Initialize**, enter the game's zbd folder (the one holding `image.zbd` and the mission folders `m1`, `m2`, …) and an empty project folder, and choose **Initialize and open**.
+3. Pick a map. Select objects in the view or the World tree and edit them in the Properties pane; **Apply** accepts an edit, **Undo**/**Redo** take it back.
 4. **Save** writes the changed source files.
-5. **Export → Export all ZBD files…** builds new game files into a folder outside the project (or into your game folder, confirming each file it replaces).
+5. **Export → Export all ZBD files…** builds new game files into a folder outside the project, such as the zbd folder of a copy of the game; it lists the files it would replace and asks once.
+
+**Keep an untouched copy of the original game files.** Reconstruction needs the original ZBD files, and an export into the game's zbd folder replaces them for good. Export into a copy of the game, or back up its zbd folder first.
 
 ## Documentation
 

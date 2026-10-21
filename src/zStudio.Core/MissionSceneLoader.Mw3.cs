@@ -107,7 +107,7 @@ public static partial class MissionSceneLoader
         return new(selected, files, unavailable, catalog.Diagnostics, unreadable) { Complete = catalog.Unreadable.Count == 0 };
     }
     /// <summary>
-    /// A private load. Its key holds every input of the build (world identity, requested reader, published snapshots and the
+    /// A private load. Its key holds every input of the build (world identity, requested reader and the
     /// stamp of each map and shared archive), so an unchanged request reuses the published context before reading anything.
     /// </summary>
     private static async Task<MissionSceneContext> LoadMw3CachedAsync(AssetDocument world, AssetResolver resolver, string? requested, bool exact, CancellationToken token)

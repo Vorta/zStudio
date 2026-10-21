@@ -2,7 +2,7 @@
 
 The source tree the developers built the shipped ZBD files from, as far as the shipped files show it. Source projects follow this layout with glTF/PNG in place of OpenFlight `.flt`/TIFF `.tif` and `.zad` animation definitions in place of their `.zrd` (see [sources](sources.md#reconstruction)); this page keeps the original file types. The backbone is `interp.zbd`: 122 prepared gamegen scripts (same names in 1998 and 1999) whose commands name every folder and many files. The 1999 release is described; 1998 ships the same scripts and data for m1–m6.
 
-### Evidence
+## Evidence
 
 | Mark | Meaning |
 | --- | --- |
@@ -15,7 +15,7 @@ The source tree the developers built the shipped ZBD files from, as far as the s
 | **sounds.zrd** | `SOUND_PATH` gives the sound folder. |
 | **image order** | `image.zbd` records are sorted by source path; runs give its folders, resources name some (`IMAGE_PATH`). |
 
-### The tree
+## The tree
 
 ```
 <gamegen work folder>\            scripts run from here; ..\data is beside it
@@ -56,7 +56,7 @@ The source tree the developers built the shipped ZBD files from, as far as the s
 
 m7–m13 are multiplayer (vehicles from `common\multi_bft`); their `models\bft` and `textures\bft` are searched but empty.
 
-### How the scripts run
+## How the scripts run
 
 The build runs `mN.gs`; the game, loading a mission, runs `support\initmN.gw` then `mN_zbd.gs`. `m1.gs` order (indentation = `source` nesting; `*` after the world is written): `commonm1.gw` → `common.gw`; `loadm1.gw` → `world.gw`, `displaym1.gw`, `weapons.gw`, `bft1.gw`, `vehicles.gw`, `mission1.gw`, `pickup.gw`; `tex_fxm1.gw` * → `tex_fx.gw` *.
 
@@ -93,22 +93,9 @@ The build runs `mN.gs`; the game, loading a mission, runs `support\initmN.gw` th
 
 ## How the shipped files were built
 
-The 1999 file dates survived with a constant 9-hour shift: each of the 14 `zrdr.zbd` files is dated 9 hours (±2 s) before the last member packed inside it, and shifted dates fall seconds after times recorded inside other files (`anim.zbd` stamps, script times). Times are UTC after that shift, 1998 unless noted.
+**Source and archive mode.** The retail executable keeps the developers' switch. With archives on (retail default; its menu item is always removed), a level load runs `mN_zbd.gs`, reading `gamez.zbd`, and mounts `zbd\mN\zrdr.zbd`. With archives off it ran `mN.gs`, building the world from scripts and models and writing `gamez.zbd`, with resources from the `..\data\...\zrdr` folders; the same load then reached the animations (the loader still rejects an `anim.zbd` whose stamped sources changed and is still passed `anim.zrd`, the remains of a path that compiled `anim.zbd` there). Packing `zrdr.zbd` and the sound banks was a separate step.
 
-**Source and archive mode.** The retail executable keeps the developers' switch. With archives on (retail default; its menu item is always removed), a level load runs `mN_zbd.gs`, reading `gamez.zbd`, and mounts `zbd\mN\zrdr.zbd`. With archives off it ran `mN.gs`, building the world from scripts and models and writing `gamez.zbd`, with resources from the `..\data\...\zrdr` folders; the same load then reached the animations (the loader still rejects an `anim.zbd` whose stamped sources changed and is still passed `anim.zrd`, the remains of a path that compiled `anim.zbd` there). Each `anim.zbd` was written 16–30 s after its `gamez.zbd`. Packing `zrdr.zbd` and the sound banks was a separate step.
-
-| When | What | Shipped files it left |
-| --- | --- | --- |
-| 3 Sep 21:18–21:51 | texture packs, in mission order | packs of m2, m3, m5, m8, m9, m12, m13 (others rebuilt one by one, 10 Sep – 18 Nov) |
-| 31 Oct 20:58 | last script change: the newest of the 122 scripts is `bft2.gw` | — |
-| 10 Nov 23:36–23:43 | every mission loaded in source mode, in order (each `mNvtols.zrd` of m2–m5 rewritten seconds apart first) | worlds and animations of m3, m4, m8, m9, m11, m12 |
-| 10 Nov 23:46:58–23:48:46 | resource archives packed, 1–13 s each | archives of m1–m5, m7, m8, m10–m13 |
-| 12 Nov | m6 archive (17:34); sound banks (17:56, 17:59, 18:02); m2 loaded (21:08) | those files |
-| 13 Nov – 11 Dec | single missions loaded again: m6 (13 Nov), m1 (16 Nov, 34 s after `semideath.zrd` was saved), m7 (30 Nov), m5 and m10 (4 Dec), m13 (11 Dec) | those worlds and animations; `interp.zbd` (4 s before m13's world) |
-| 4 Dec, 9 Dec | m9 archive and the common archive, packed in `E:\RecoilFull` (others in `D:\battlesportdev`) | those archives |
-| 7 Jan 1999 | `image.zbd` | — |
-
-The release mixes runs: reloading a mission rewrote its world and animations, not its archive. No script a shipped world ran is newer than the world. Five archived definitions are older than the versions their animations were compiled from (packing dates alone do not show it: the 1999 common archive, repacked 9 Dec, keeps the `gen_vtol` text shipped 31 Oct, before the compiled-from version's 4 Nov date):
+The release mixes runs: reloading a mission rewrote its world and animations, not its archive; no script a shipped world ran is newer than the world. The 1999 file dates (a constant 9-hour shift, checked against the times recorded inside the files) show five archived definitions older than the versions their animations were compiled from:
 
 | Definition | Archived text packed | `anim.zbd` compiled from a version saved | What the newer version changed |
 | --- | --- | --- | --- |
@@ -120,7 +107,7 @@ The release mixes runs: reloading a mission rewrote its world and animations, no
 
 The game never reads these definitions; reconstruction rebuilds them from the compiled entries ([sources](sources.md#reconstruction)).
 
-**What the packer took:** every `.zrd` under the `zrdr` folders and nothing else: all 371 definition files the animation compilers read are in their archives, none of the 77 keyframe scripts is, and unused files were packed too (`location.zrd` in every mission, `aiv_easy.zrd`/`aiv_hard.zrd`, `cockpit.zrd`, `fonts.zrd`, `rcochet1.zrd`, definitions no `anim.zrd` lists). Of 997 members, 403 (1.9 of 3.3 MB) are never requested by the game.
+**What the packer took:** every `.zrd` under the `zrdr` folders and nothing else: all 371 definition files the animation compilers read are in their archives, none of the 77 keyframe scripts is, and unused files were packed too (the never-requested files in [resource archives](engine-evidence.md#resource-archives), definitions no `anim.zrd` lists).
 
 **A cut feature:** `m5\zrdr\subhut\sbbelt.zrd` defines the sub hut's conveyor belt (`sub_convey_belt`, `stop_the_belt`); m5's `anim.zrd` does not list it and no world has its objects, but the compiled `sbelev.zrd` still calls `stop_the_belt`; the game finds nothing and carries on.
 

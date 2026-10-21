@@ -127,7 +127,7 @@ public partial class MainWindow
     }
     private void RegisterMissionCommands(StudioCommands registry)
     {
-        RegisterJob(registry, "missions", "List the current MW3 map's authored mission readers, or select one for the visible world/animation. Selection waits for the displayed preview, retains archive edit history, playhead and camera, and rejects superseded requests with context_changed. Shared resources remain available; other mission readers do not contribute actors or AI networks.",
+        RegisterJob(registry, "missions", "List the current MW3 map's authored mission readers, or select one for the visible world/animation. Selection waits for the displayed preview, retains the playhead and camera, and rejects superseded requests with context_changed. Shared resources remain available; other mission readers do not contribute actors or AI networks.",
             [PreviewParameter, P("archive", "string", "Optional full reader path returned by this tool. Omit to list."), .. PageParameters], false, async (a, token) =>
         {
             RequirePreview(a); string path = MissionWorldPath ?? throw new StudioCommandException("unsupported", "Select a MechWarrior 3 world or animation.");

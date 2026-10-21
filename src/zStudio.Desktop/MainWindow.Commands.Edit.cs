@@ -9,8 +9,10 @@ namespace zStudio.Desktop;
 public partial class MainWindow
 {
     private static Guid GuidArg(JsonObject a, string name) => a[name] == null ? Guid.Empty : Guid.TryParse(Text(a, name), out var id) ? id : throw new StudioCommandException("invalid_argument", "Invalid GUID: " + name);
+    /// <summary>An entry of a compiled animation pack; a source map's animations are its definitions, inspected through the scene.</summary>
     private static AnimationEntry TargetEntry(DocumentModel doc, JsonObject a)
-        => doc.Document.Animations?.Entries.ElementAtOrDefault(Int(a, "entry", -1)) ?? throw new StudioCommandException("unsupported", "No animation entry at that index.");
+        => (doc.SourceWorld == null ? doc.Document.Animations?.Entries.ElementAtOrDefault(Int(a, "entry", -1)) : null)
+            ?? throw new StudioCommandException("unsupported", "No compiled animation entry at that index.");
     private void RegisterEditCommands(StudioCommands r)
     {
         Register(r, "animation_records", "List authored sequence identities; supply sequence to page its events with decoded scalar fields and a 256-byte raw preview (raw_hex_truncated). Keyframe streams are omitted (keyframes_omitted); use JSON export for them. Event queries match these bounded displayed fields before pagination. Cleanup is listed separately from runtime sequences.", false, [DocumentParameter, P("entry", "integer", "Entry index.", true), P("sequence", "string", "Optional sequence UUID for event details."), .. PageParameters], a =>
@@ -53,7 +55,7 @@ public partial class MainWindow
                 matches: (p, query) => search.Pickup(p, query),
                 maximumRowBytes: p => InspectionResultBudget.Pickup(p, edits.Scope(p.Source).Description));
         });
-        Register(r, "pickup_move", "Move a source map's pickup to exact coordinates as one undoable operation, including unambiguous difficulty counterparts. The move accepts changed coordinate tokens of the resource sources (data/mN/zrdr/puppies*.zrd) in memory, stored with one decimal, and updates the scene. The result is the accepted document/revision. Save writes the sources; no archives are created. Compiled worlds are read only.", true,
+        Register(r, "pickup_move", "Move a source map's pickup to exact coordinates as one undoable operation, including unambiguous difficulty counterparts. The move accepts changed coordinate tokens of the resource sources (data/mN/zrdr/puppies*.zrd) in memory, stored with one decimal (rotations in radians with four; unchanged values keep their text), and updates the scene. The result is the accepted document/revision. Save writes the sources; no archives are created. Compiled worlds are read only.", true,
             [DocumentParameter, RevisionParameter, new("source", "object", "Exact source identity returned by pickups; field names are case-sensitive.", true, Properties:
                 [P("ArchivePath", "string", "Owning archive path returned by pickups.", true),
                  new("AssetIndex", "integer", "Resource asset index returned by pickups.", true, Minimum: 0, Maximum: int.MaxValue),

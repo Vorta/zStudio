@@ -2,23 +2,23 @@
 
 RECOIL's shipped ZBD files are build outputs: the developers built them with a gamegen tool from a source tree (`data\` beside a folder of `.gs`/`.gw` scripts). zStudio reconstructs that source tree from the shipped files once, lets you edit the sources, and builds every game file from them again: resource archives, scripts, sounds, interface images, texture packs, worlds and animations. The sources are what you edit; game files change only when you export them. Exported files work in the game; they are not byte-identical to the shipped ones.
 
-Maps are edited in the [map editor](map-editor.md). Compiled game folders open only through MCP, read-only ([Compiled files](compiled-files.md)).
+Maps are edited in the [map editor](map-editor.md); [compiled files](compiled-files.md) covers inspecting game files.
 
 ## Initialize a project
 
 1. On the welcome screen, under **Work with source project**, choose **Initialize**.
-2. Enter the retail ZBD folder (the folder that holds `image.zbd` and the mission folders `m1`, `m2`, …) and a new or empty project folder, or use **Browse…**.
+2. Enter the game's zbd folder (the one holding `image.zbd` and the mission folders `m1`, `m2`, …) and a new or empty project folder, or use **Browse…**.
 3. Choose **Initialize and open**. The dialog shows progress and, if a folder is refused, the reason. **Cancel** stops the reconstruction and removes what it wrote; once the project is written, it leaves the project unopened.
 
-Initialize accepts only the original files of the RECOIL 1998 and 1999 releases: their resource archives carry the animation definitions every `anim.zbd` was compiled from. Any other folder, including a zStudio export, is refused with "zStudio can unpack only the original ZBD files." MechWarrior 3 folders and the 1998 demos are refused too. Only the files in the chosen folder and its mission folders are read. The project folder must be outside the game folder, must not overlap it and must not be or lie below a link. Don't change the game files while it runs. A canceled or failed reconstruction removes what it wrote, so the folder can be used again.
+Initialize accepts only the original files of the RECOIL 1998 and 1999 releases: their resource archives carry the animation definitions every `anim.zbd` was compiled from. Any other folder, including a zStudio export, is refused with "zStudio can unpack only the original ZBD files." MechWarrior 3 folders and the July and August 1998 demos are refused too. **Keep an untouched copy of the original files**: an export into the game's zbd folder replaces them, and a folder it replaced can't be reconstructed again. Only the files in the chosen folder and its mission folders are read. The project folder must be outside the game folder, must not overlap it and must not be or lie below a link. Don't change the game files while it runs. A canceled or failed reconstruction removes what it wrote, so the folder can be used again.
 
 MCP: `zstudio_source_reconstruct`.
 
 ## Open a project
 
-Choose **Open** under **Work with source project**, or **File → Open workspace…** (**Ctrl+O**), **File → Recent folders**, or drop the project folder on the window. A source project is a folder with both `data` and `gamegen`; any other folder is refused with what is wrong with it (no `data` or `gamegen`, a link, or a project in an unsupported source format, which you reconstruct again from the original files).
+Choose **Open** under **Work with source project**, or **File → Open workspace…** (**Ctrl+O**), **File → Recent folders**, or drop the project folder on the window. A source project is a folder with both `data` and `gamegen`; any other folder is refused with what is wrong with it.
 
-The map picker lists the single-player maps (m1–m6) and the multiplayer maps. One map is open at a time; the back arrow left of **Whole world** returns to the picker and asks to save or discard unsaved changes. A map whose model or script is broken still has its button; opening it reports the problem.
+Opening a project shows the map picker ([Open a map](map-editor.md#open-a-map)).
 
 MCP: `zstudio_open_root` with `project`, `zstudio_source_world_list`, `zstudio_source_world_open`.
 
@@ -75,10 +75,10 @@ MCP: `zstudio_save_document`, `zstudio_undo_redo`, `zstudio_source_changes`, `zs
 
 The **Export** menu builds game files from the project's files on disk, so save or discard unsaved changes first.
 - **Check source project** builds everything in memory and reports failures and warnings without writing.
-- **Export all ZBD files…** builds every game file into a folder outside the project.
+- **Export all ZBD files…** builds every game file into a folder outside the project: an empty folder, or the zbd folder of a copy of the game.
 - **Export ZBD file** builds one game file you choose.
 
-A progress window shows the file being built; **Cancel** or **Escape** stops it. Every output is built, read back and staged first; if any fails, nothing is written. When the destination already has some of the files, zStudio names them and replaces only those you confirm; other files in the destination stay, so a game installation can be the destination. An export canceled while it replaces files finishes or restores them.
+A progress window shows the file being built; **Cancel** or **Escape** stops it. Every output is built, read back and staged first; if any fails, nothing is written. When the destination already holds some of the game files, one confirmation lists them: **Yes** replaces them, **No** cancels the export. Other files in the destination stay. A texture pack there that the export doesn't build (such as an `rtexture8.zbd` the profile leaves out) stays too, and the game may load it instead; the export warns about it. An export canceled while it replaces files finishes or restores them. Replaced original files are gone for good, so export into a copy of the game, or keep a copy of its zbd folder.
 
 Check and export also list in Problems each node the game finds by name as a mission loads (animation roots, texture-effect `FindNode`), with the node it finds. Where several nodes share a name the game takes the one made last; an export that changes which node a lookup finds warns about it.
 
@@ -115,7 +115,7 @@ MCP: `zstudio_source_export` (without `destination` it checks; `outputs` selects
 - `"file": "rtexture*.zbd"` is the automatic pack; its `budgetMiB` (1–1024, default 256) is the largest it makes.
 - `maximumDimension` is a power of two from 8 to 4096, at most 1024 for software packs.
 - `missions` limits a pack to some missions.
-- Every profile needs an `rtexture` pack for every mission. A file that breaks a rule is shown with its reason in the menu and fails only exports that use it.
+- Every profile needs an `rtexture` pack for every mission. A file that breaks a rule is shown with its reason in the menu and fails only exports that use it; a file that isn't valid JSON, or that may be the default (two defaults, or a broken one marked `"default": true`), stops every export and check until you fix it. The message names the file.
 
 MCP: `zstudio_source_profile`; `zstudio_source_export` with `profile` overrides it for one export.
 
@@ -135,15 +135,16 @@ MCP: `zstudio_source_dithering`.
 
 ## Keep sources away from the game
 
-Don't put a project inside a game folder: loose `support\*.gw`/`*.gs` files override `interp.zbd`, and loose `*_easy`/`*_hard` resources change which difficulty files the game uses. Export into the game folder (or a separate folder) instead.
+Don't put a project inside a game folder: loose `support\*.gw`/`*.gs` files override `interp.zbd`, and loose `*_easy`/`*_hard` resources change which difficulty files the game uses. Export into the zbd folder of a copy of the game, or a separate folder, instead.
 
 ## Edit source files by hand
 
 Edit sources in zStudio or Blender where you can; other editors work too.
-- **Resources (`.zrd`) and animation definitions (`.zad`)** are text. A file lists the children of its root array. `( … )` is an array, and a key and its values go on one line: `GRAVITY ( -9.8 )`. Integers are decimal (`42`); floats always have a decimal point or exponent (`2.0`, `1E-45`), because the game tells them apart; `f32:7FC00001` writes raw float bits. Strings are bare when they start with a letter or `_` and hold only letters, digits, `_`, `.` and `-`, otherwise quoted with `\"`, `\\` and `\xNN` escapes. `#` starts a comment.
+- **Resources (`.zrd`) and animation definitions (`.zad`)** are text. A file lists the children of its root array. `( … )` is an array, and a key and its values go on one line: `GRAVITY ( -9.8 )`. Integers are decimal (`42`); floats always have a decimal point or exponent (`2.0`, `1E-45`), because the game tells them apart; `f32:7FC00001` writes raw float bits. Strings are bare when they start with a letter or `_` and hold only letters, digits, `_`, `.` and `-`, otherwise quoted with `\"`, `\\` and `\xNN` escapes. `#` starts a comment. Two sources with the same file name in one archive are refused; a mission `.zrd` named like a common one is never read by the game (the build warns).
 - **Keyframe scripts (`.zan`)** use the Softimage "SI Animation Script" format the originals were written in: frame blocks with each object's `Scaling`, `Rotation` (radians) and `Translation`. Keyframes no SI script reproduces exactly are written in zStudio's keyframe format, a track per object: `OBJECT name`, then `FRAME n` lines with `POSITION`, `ROTATION` (quaternion W X Y Z), `SCALE` and optional rates `VELOCITY`, `SPIN`, `GROWTH`. Both compile.
 - **Scripts (`.gs`, `.gw`)** use the game's tokenizer: `#` ends a line; tokens are separated by commas, spaces or tabs; write an empty token with commas (`a,,b`).
-- **Sounds** can be any 8- or 16-bit PCM WAV; **textures** any PNG.
+- **Sounds** can be any 8- or 16-bit PCM WAV. `sounds.zrd` declares each bank's format as a ceiling: a lower rate, sample size or channel count of the source is kept. A WAV it doesn't declare goes into every bank unchanged (the build warns).
+- **Textures** can be any PNG.
 - **Models** are glTF 2.0 with external PNG textures. Engine attributes (flags, zones, references) live in `extras.recoil`; change them in zStudio or with the [Blender extension](../blender/zstudio_recoil/README.md), which keeps the linked model graph that ordinary glTF import/export loses. A model must:
   - hold at most 921 vertices (corners within 0.001 units merge); split larger meshes;
   - use triangles, strips or fans, with external PNG base-colour textures (no embedded images, normal, occlusion, emissive or metallic/roughness maps; metallic 0, roughness 1);
@@ -162,7 +163,7 @@ MCP: `zstudio_world_compare`, `zstudio_world_compare_tree`.
 
 Exports match the shipped files in meaning: every resource, script token, sound, world node, placement, model, texture and animation entry. They differ where the shipped files carry what the game doesn't read:
 - Name fields carry other leftover bytes after the name.
-- Software packs keep a texture in direct colour by rule (damage masks and the horizon's textures), not by the developers' hand choices: the player vehicle's `tanktop` and `tankback` and, in 1999 m10 and m11, `arcgun01`, `beamred`, `beamyelo` and `erfpgscl` are paletted, while m2's `sky2lite`, 1999 m11's `m11sky` and m13's `skym6` are direct.
+- Software packs (`texture*`) keep textures in direct colour by rule (damage masks and the horizon's textures), so a few textures the developers chose by hand differ between paletted and direct colour.
 - `m9\gamez.zbd` names a texture (`surf00`) that no pack holds; the game shows its default texture, in the export too.
 - Five 1999 animation definitions (one of 1998) are older than the ones the shipped animations were compiled from. Reconstruction rebuilds them from `anim.zbd` and notes what the newer version changes, so the project reproduces the animations the game shipped.
-- Reconstruction rebuilds each texture from its best copy: the largest copy in the shape the pack with the most room keeps (the 1999 strips such as `sonic06`, 128 × 16, stay strips).
+- Reconstruction rebuilds each texture from its best copy: the shape the pack with the most room keeps, in direct colour where a copy of that shape has it (the 1999 strips such as `sonic06`, 128 × 16, stay strips).

@@ -6,10 +6,10 @@ Build and test commands are in [AGENTS.md](../../AGENTS.md#build-test-package). 
 
 - Rendered Desktop and live-preview checks need an interactive Windows desktop session with working Direct3D 9Ex/D3DImage interop; a disconnected session returns `D3DERR_NOTAVAILABLE`. Restore the session; never turn that failure into a skipped or passing preview assertion.
 - Window-size fixtures fit the current monitor work area while still checking exact saved and restored sizes.
-- Run UI checks serially, with the owner's zStudio closed, and restore the user's settings afterward. Never move or capture the physical mouse except in the explicitly pointer-owning modes below, which restore cursor, foreground window and settings.
-- CI runs test modules one at a time (`--max-parallel-test-modules 1`) so Core allocation checks do not compete with the Desktop dispatcher; the Desktop chain keeps its six-minute hang guard and reports its active phase.
-- The Desktop suite is one xUnit test (`WindowClosingTests.DiscardAndCancelUseTheRealWindowCloseLifecycle`) that runs every `*Checks.Run()` on a real WPF STA dispatcher; a removed check also needs its call line removed.
-- Put transient reports and game-derived exports in the OS temporary folder; `artifacts/` holds only the current portable folder and ZIP.
+- Run UI checks serially on a private desktop with no zStudio running, and restore the user's settings afterward. Stop only `zStudio --mcp` instances the MCP connector started; a zStudio the user started is never closed (it may hold unsaved work): wait or ask. The machine's private-desktop runner is noted in `.agent/HANDOFF.md`. Never move or capture the physical mouse except in the pointer-owning modes below, which restore cursor, foreground window and settings.
+- CI and the Release workflow run test modules one at a time (`--max-parallel-test-modules 1`) so Core allocation checks do not compete with the Desktop dispatcher; the Desktop chain keeps its six-minute hang guard and reports its active phase.
+- Desktop tests are ordinary xUnit tests plus the `*Checks.Run()` chain that `WindowClosingTests.DiscardAndCancelUseTheRealWindowCloseLifecycle` runs on one real WPF STA dispatcher; a removed check also needs its call line removed there.
+- Transient reports and game-derived exports go to the OS temporary folder ([local artifacts](releasing.md#local-artifacts)).
 
 ## Minimal must-have tests
 
@@ -34,7 +34,7 @@ Tests that need data return early unless their variable is set, so the plain sui
 | `ZSTUDIO_BLENDER_SOURCE` | any value | `tools/blender-roundtrip.py` loads the extension from `blender/` instead of the packaged ZIP |
 | `ZSTUDIO_INSPECTION_CAPTURE` | an output folder | screenshots from the Desktop inspection checks |
 
-Full local gate (CI downloads Blender 5.2.2 x64 with a pinned SHA-256 for the optional Blender step):
+Full local gate (CI downloads the Blender version pinned with its SHA-256 in `.github/workflows/ci.yml` for the optional Blender step):
 
 ```powershell
 $env:ZSTUDIO_CORPUS = 'D:\...\zbd_1999'; $env:ZSTUDIO_MW3_CORPUS = 'D:\...\MechWarrior 3\zbd'
@@ -46,7 +46,7 @@ dotnet test --project tests/zStudio.Tests -c Release --no-build --filter "FullyQ
 
 ## Tools
 
-`dotnet run --project <tool> -c Release -- <mode> <dataset-root>`. Each mode owns its test window, verifies unchanged source hashes, writes outputs under `%TEMP%`, restores settings and never captures the physical mouse unless stated.
+`dotnet run --project <tool> -c Release -- <mode> <dataset-root>` unless a row shows other arguments; `--face-orientation` and `--inspection-fixture` take none (a root after them runs the default mode instead). Each mode owns its test window, verifies unchanged source hashes, writes to its `<out>` folder or `%TEMP%`, restores settings and never captures the physical mouse unless stated.
 
 | Tool / mode | Checks |
 | --- | --- |
@@ -56,7 +56,7 @@ dotnet test --project tests/zStudio.Tests -c Release --no-build --filter "FullyQ
 | `PreviewCheck <out> <roots…>` | application startup, indexing, all world previews, representative texture/audio/script/animation/ZRD layouts; `--overview <out>` summarizes |
 | `PreviewCheck --mcp <root>` | its own visible workspace over real MCP: previews, unfinished height drafts, texture capture/export, audio, world camera |
 | `PreviewCheck --mcp-stdio <exe> [root]` | packaged connector: windowless handshake and discovery, one GUI for concurrent first use, reconnect, simultaneous clients, shutdown; with a root, the real workspace across all five families. Requires access the user already enabled; refuses an already registered instance |
-| `PreviewCheck --mcp-catalog <path>` | regenerates the embedded discovery catalog |
+| `PreviewCheck --mcp-catalog <path>` | regenerates the embedded discovery catalog ([AGENTS.md](../../AGENTS.md#build-test-package)) |
 | `--blender-navigation`, `--scene-controls`, `--scene-depth`, `--render-stability`, `--viewport-size`, `--face-orientation`, `--inspection-fixture` | navigation gestures and both projections, framing, depth precision, presented-buffer idle stability, ±89° pitch, view cube |
 | `--freecam` | Fly capture, cursor clipping, injected movement, release paths; briefly owns foreground input in its window |
 | `--world-highlights`, `--ai-networks`, `--placements`, `--difficulty`, `--mission`, `--lod`, `--alpha` | Whole world overlays, AI networks, starting layouts, difficulty refreshes, LOD bands, alpha passes |
@@ -74,7 +74,7 @@ python -m venv $env:TEMP\check-venv
 
 ## In-game acceptance
 
-- Run on a disposable game installation (for example `D:\RecoilTest`), exporting only into it, through the normal runtime scripts (`mN_zbd.gs`), never the build script that writes `gamez.zbd`. Preview, parsing and reconstruction fixed points are separate acceptance labels from passing in the game. Tools: Process Monitor, VMMap, `typeperf`, PresentMon, optionally the dgVoodoo debug build with DebugView.
+- Run on a disposable game installation (for example `D:\RecoilTest`), exporting only into it, through the normal runtime scripts (`mN_zbd.gs`), never the build script that writes `gamez.zbd`. Label evidence as synthetic, packaged or original-game; preview, parsing and reconstruction fixed points are separate acceptance labels from passing in the game. Tools: Process Monitor, VMMap, `typeperf`, PresentMon, optionally the dgVoodoo debug build with DebugView.
 - T1 pack choice: dgVoodoo VRAM 8, 16, 64, 256, 1024 MB, 2 and 4 GB; Process Monitor shows the first `rtexture<N>` probed and the one opened. Pass: N follows VRAM; no setting ends on `texturemax` or `texture.zbd`.
 - T2 maximum texture size: labelled grids 512² to 4096², plus 1024×128 and 1024×64, at the M1 start with a profile of `maximumDimension` 4096 and no budget. Pass per size: the grid renders; 1024×64 shows the default texture.
 - T3 memory tiers: packs of upscaled textures at 32–512 MiB selected through VRAM; log virtual bytes (`typeperf`) and the largest free block (VMMap) over load, play, three restarts, save, load and a mission change. Pass: peak ≤ 1.5 GiB, largest free block ≥ 256 MiB, restarts within 32 MiB, no default textures.

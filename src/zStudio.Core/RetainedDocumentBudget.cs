@@ -5,23 +5,15 @@ using System.Text.Json.Nodes;
 
 namespace zStudio.Core;
 
-/// <summary>Explicit retained format families shared by preview loading and compiled edit history.</summary>
+/// <summary>Explicit retained format families of preview loading.</summary>
 internal sealed class RetainedDocumentBudget(long maximumBytes)
 {
     private readonly HashSet<object> decoded = new(ReferenceEqualityComparer.Instance);
-    private readonly List<object> admitted = [];
     private readonly long capacity = maximumBytes;
     private long remaining = maximumBytes;
     internal long UsedBytes => capacity - remaining;
     internal bool Exhausted => remaining < 0;
-    internal (long Remaining, int Count) Checkpoint() => (remaining, admitted.Count);
-    internal void Restore((long Remaining, int Count) checkpoint)
-    {
-        for (int i = admitted.Count - 1; i >= checkpoint.Count; i--) decoded.Remove(admitted[i]);
-        admitted.RemoveRange(checkpoint.Count, admitted.Count - checkpoint.Count);
-        remaining = checkpoint.Remaining;
-    }
-    private void Remember(object value) { decoded.Add(value); admitted.Add(value); }
+    private void Remember(object value) => decoded.Add(value);
     internal void Reserve(long bytes, CancellationToken token)
     {
         Check(token);
@@ -114,30 +106,6 @@ internal sealed class RetainedDocumentBudget(long maximumBytes)
                         if (First(instruction, 128L + 8L * instruction.Tokens.Count, token))
                             foreach (string text in instruction.Tokens) Text(text, token);
                 }
-    }
-    /// <summary>Animation editor ownership: opaque payloads are bytes, not hypothetical decoded keyframes.</summary>
-    internal void AnimationEntry(Animation.AnimationEntry entry, CancellationToken token)
-    {
-        if (!First(entry, 256L + 16L * (entry.Sequences.Count + entry.Puffers.Count + entry.References.Length), token)) return;
-        Bytes(entry.Bytes, token); Bytes(entry.OriginalPrimaryHeader, token);
-        foreach (var lane in entry.References)
-        {
-            if (!First(lane, 32L + 16L * lane.Count, token)) continue;
-            foreach (var record in lane) Record(record);
-        }
-        foreach (var record in entry.Puffers) Record(record);
-        Sequence(entry.Primary);
-        foreach (var sequence in entry.Sequences) Sequence(sequence);
-
-        void Record(Animation.AnimationRecord record)
-        { if (First(record, 128, token)) Bytes(record.Bytes, token); }
-        void Sequence(Animation.AnimationSequence sequence)
-        {
-            if (!First(sequence, 192L + 16L * sequence.Events.Count, token)) return;
-            Bytes(sequence.Bytes, token); Bytes(sequence.OpaqueTail, token);
-            foreach (var ev in sequence.Events)
-                if (First(ev, 192, token)) { Bytes(ev.Bytes, token); ev.RetainedCaches(this, token); }
-        }
     }
     internal bool Object(object value, long bytes, CancellationToken token) => First(value, bytes, token);
     private bool First(object value, long bytes, CancellationToken token)

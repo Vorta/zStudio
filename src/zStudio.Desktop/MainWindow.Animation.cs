@@ -1,9 +1,6 @@
-using System.IO;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
-using Microsoft.Win32;
-using zStudio.Core.Animation;
 
 namespace zStudio.Desktop;
 

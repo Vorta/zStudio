@@ -124,8 +124,13 @@ internal sealed partial class SceneInspectionCard
         { viewport.PreviewTransformDraft(DraftSource!, lastValidTransform, rotationKind, transformMode, false); }
         RefreshModeControls();
     }
-    private static string AngleText(float value, PlacementRotationKind kind) =>
-        (kind == PlacementRotationKind.EulerRadians ? value * (180 / Math.PI) : value).ToString("R", CultureInfo.InvariantCulture);
+    /// <summary>
+    /// An angle as the card shows it: an AIV heading as its stored degrees; a pickup's radians (stored with four decimals,
+    /// about 0.006°) as degrees to two decimals, so 90° shows as 90 rather than its rounded radians' 90.00021.
+    /// </summary>
+    private static string AngleText(float value, PlacementRotationKind kind) => kind == PlacementRotationKind.EulerRadians
+        ? Math.Round(value * (180 / Math.PI), 2).ToString("R", CultureInfo.InvariantCulture)
+        : value.ToString("R", CultureInfo.InvariantCulture);
 
     private void ReceiveTransformDrag(PlacementTransform value)
     {

@@ -59,6 +59,7 @@ Arguments are validated against their schemas before anything runs; a malformed 
 
 - **Transactions.** An edit is prepared and evaluated in memory before it is accepted, as one undo step. A change that cannot be evaluated answers `build_failed`; a file changed by another program answers `external_change`. Neither changes anything. Each edit returns the document to use next.
 - **Drafts.** Unfinished GUI input (a Properties field, a scene card, a zone or AI network card) blocks writes with `pending_drafts`. Read it with `zstudio_drafts` and apply or discard it with `zstudio_resolve_drafts`; nothing is committed or discarded implicitly.
+- **Placement precision.** Positions of pickups, AIV vehicles and AI network nodes, and AIV headings, are stored with one decimal; pickup rotations in radians with four. Only changed values are rewritten; a change below that precision changes nothing.
 - **Busy.** While the map is being evaluated, saved, or a GUI dialog waits for the user, mutations answer `busy`; reads and `zstudio_operation` keep working.
 - **Undo and save.** `zstudio_undo_redo` steps through the project's shared history. `zstudio_save_document` writes every changed source file as one recoverable publication, after checking for external changes. `zstudio_source_changes` lists unsaved files, the history and a line diff. `zstudio_close_document` needs `discard: true` to drop unsaved edits.
 - **Recovery.** An interrupted save is listed in `zstudio_problems` when the project opens; decide it with `zstudio_source_recovery` and `zstudio_source_recovery_resolve` (roll back, complete or abandon). MCP shows no dialogs.
@@ -106,7 +107,7 @@ Move an object in a map and check that the project still builds:
 2. `zstudio_source_world_list`, then `zstudio_source_world_open` with `mission: "m1"`; poll it and keep the returned document UUID and revision.
 3. `zstudio_scene_tree` with the document and a `search`, to find the object's row and `node`.
 4. `zstudio_source_world_object` with the node, to read its transform and where it comes from.
-5. `zstudio_source_world_object_edit` with `document`, `revision`, `node`, `action: "move"` and `position`; poll it and keep the new revision.
+5. `zstudio_source_world_object_edit` with `document`, `revision`, `node`, `action: "transform"` and `position`; poll it and keep the new revision.
 6. `zstudio_source_changes` to review, `zstudio_save_document` to save.
 7. `zstudio_source_export` without `destination` to check the build, then with a destination folder to write game files.
 
@@ -118,7 +119,7 @@ All tools are named `zstudio_*`. "MCP only" marks tools without a GUI path. The 
 | --- | --- | --- |
 | Workspace | `state`, `capabilities`, `window`, `workspace_view`, `presentation`, `open_root`, `files`, `search`, `open_document`, `close_document`, `reload_document`, `assets`, `asset_filter`, `select_asset`, `related`, `problems`, `operation` | Window, **File** and **View** menus, Navigator |
 | Source project | `source_reconstruct`, `source_status`, `source_profile`, `source_dithering`, `source_export`, `source_changes`, `source_bytes`, `source_recovery`, `source_recovery_resolve`, `validate` | Welcome screen **Initialize**, **Export** menu, **Tools → Validate source file on disk** |
-| Maps | `source_world_list`, `source_world_open`, `scene_tree`, `scene_inspect`, `scene_card`, `scene_properties`, `scene_nodes`, `scene_selection`, `scene_options` | Map picker, World outliner, Properties pane, command bar |
+| Maps | `source_world_list`, `source_world_open`, `scene_tree`, `scene_inspect`, `scene_card`, `scene_properties`, `scene_nodes`, `scene_selection`, `scene_options` | Map picker, World tree, Properties pane, command bar |
 | Objects | `source_world_object`, `source_world_object_edit`, `source_world_command`, `source_world_models`, `source_world_definitions` | Properties pane (reparenting with `parent` is MCP only) |
 | Adding models | `source_world_add_model`, `source_map_parts`, `source_map_parts_visibility` | MCP only |
 | Pickups and units | `pickups`, `pickup_move`, `source_pickup_add` | **Tools → Add pickup…**, scene card |

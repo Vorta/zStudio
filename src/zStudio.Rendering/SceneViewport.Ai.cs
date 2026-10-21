@@ -36,8 +36,8 @@ public sealed partial class SceneViewport
     public bool AiVisible { get; private set; }
     public bool AiThroughGeometry { get; private set; } = true;
     public string? AiNetworkFilter { get; private set; }
-    private HashSet<string> aiHiddenNetworks = new(StringComparer.Ordinal);
     /// <summary>Networks the overlay leaves out (the World tree's network eyes): their markers, links, hover and picking.</summary>
+    private HashSet<string> aiHiddenNetworks = new(StringComparer.Ordinal);
     /// <summary>The network a selection emphasises (the others are drawn faint), or null.</summary>
     public string? AiEmphasizedNetwork { get; private set; }
     public string? SelectedAiNode { get; private set; }

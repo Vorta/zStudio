@@ -13,6 +13,13 @@ $extensionRelative = "dependencies/blender/zstudio_recoil-$ExpectedVersion.zip"
 foreach ($required in @('dependencies/zStudio.Desktop.dll', 'dependencies/zStudio.Desktop.runtimeconfig.json', 'dependencies/hostfxr.dll', 'dependencies/README.md', 'dependencies/LICENSE', 'dependencies/THIRD-PARTY-NOTICES.md', $extensionRelative)) {
     if (-not (Test-Path -LiteralPath (Join-Path $root $required) -PathType Leaf)) { throw "Missing portable file: $required" }
 }
+$repository = Split-Path -Parent $PSScriptRoot
+$guides = @('dependencies/CHANGELOG.md', 'dependencies/CONTRIBUTING.md', 'dependencies/SECURITY.md', 'dependencies/blender/zstudio_recoil/README.md')
+$guides += @(Get-ChildItem -LiteralPath (Join-Path $repository 'docs') -File -Filter '*.md') + @(Get-ChildItem -LiteralPath (Join-Path $repository 'docs/images') -File) |
+    ForEach-Object { 'dependencies/' + [IO.Path]::GetRelativePath($repository, $_.FullName).Replace('\', '/') }
+foreach ($guide in $guides) {
+    if (-not (Test-Path -LiteralPath (Join-Path $root $guide) -PathType Leaf)) { throw "Missing user guide: $guide" }
+}
 foreach ($excluded in @('dependencies/docs/agents', 'dependencies/docs/mcp-capabilities.json')) {
     if (Test-Path -LiteralPath (Join-Path $root $excluded)) { throw "Agent-only documentation is packaged: $excluded" }
 }

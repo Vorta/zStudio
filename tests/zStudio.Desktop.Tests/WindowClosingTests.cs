@@ -224,7 +224,8 @@ public sealed class WindowClosingTests
     private static readonly List<zStudio.Tests.SourceWorldFixture> fixtures = [];
 
     /// <summary>A source world of its own project with an unsaved edit: each one asks about its changes when it closes.</summary>
-    private static DocumentModel DirtyDocument(int index)
+    /// <summary>A source world document whose project has one unsaved edit (Undo on its workspace makes it clean).</summary>
+    internal static DocumentModel DirtyDocument(int index)
     {
         zStudio.Tests.SourceWorldFixture fixture = new(); fixtures.Add(fixture);
         SourceWorkspace workspace = new(fixture.Project);

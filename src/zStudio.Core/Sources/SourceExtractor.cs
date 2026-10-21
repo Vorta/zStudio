@@ -150,10 +150,9 @@ public static class SourceExtractor
         return (FormatRegistry.Probe(prefix, trailer, file.Length, Path.GetExtension(file.Path)), digest);
     }
 
-    /// <summary>A game file as the folder was listed: its size and modification time, which it must still have when it is read.</summary>
     /// <summary>
-    /// The copy of a texture that becomes its source: the shape kept by the pack with the most room (see
-    /// <c>PackRoom</c>), then the largest copy of that shape, then direct colour over a palette. A pack short of
+    /// The copy of a texture that becomes its source: the shape (width × height) kept by the pack with the most room (see
+    /// <c>PackRoom</c>); between shapes whose best packs have equal room, the larger; then direct colour over a palette. A pack short of
     /// room stores a texture resampled to another shape: of the same area (m5 swall3: 128 × 128 in rtexture2 and
     /// texture2, 256 × 64 in rtexture4, texture4 and texture6) or, for the 1999 strips (8:1, heldoor6 16:1), a square
     /// whose side is half the strip's long side and so has twice its texels (sonic06: 128 × 16 in texture4, texture6 and
@@ -165,6 +164,7 @@ public static class SourceExtractor
         return Enumerable.Range(0, copies.Count).OrderByDescending(i => shapeRoom[(copies[i].Width, copies[i].Height)])
             .ThenByDescending(i => (long)copies[i].Width * copies[i].Height).ThenBy(i => copies[i].Paletted ? 1 : 0).First();
     }
+    /// <summary>A game file as the folder was listed: its size and modification time, which it must still have when it is read.</summary>
     internal sealed record Input(string Path, string Relative, long Length, DateTime Modified);
 
     /// <summary>

@@ -7,8 +7,7 @@ namespace zStudio.Tests;
 
 public sealed partial class AnimationTests
 {
-
-[Theory]
+    [Theory]
     [InlineData(0, 0, 0)]
     [InlineData(1.5707963f, .3f, -.4f)]
     [InlineData(-1.5707963f, -.8f, .7f)]

@@ -19,6 +19,8 @@ public partial class MainWindow
         scriptGrid.Columns.Add(new DataGridTextColumn { Header = "Arguments", Binding = new Binding("Arguments"), Width = new DataGridLength(1, DataGridLengthUnitType.Star) });
         VirtualizingPanel.SetVirtualizationMode(scriptGrid, VirtualizationMode.Recycling);
         scriptTab.Content = scriptGrid; StructuredPanel.Items.Add(scriptTab);
+        // The Data tree keeps the node the user chose across refreshes.
+        CentralTree.SelectedItemChanged += (_, e) => selectedResourceNode = (e.NewValue as ResourceTreeItem)?.Node.Id;
     }
     private void RefreshScriptGrid(DocumentModel doc, AssetRecord? asset)
     {

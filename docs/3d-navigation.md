@@ -45,7 +45,6 @@ Axis views (**Numpad 1**, **3**, **7** and their opposites) switch to orthograph
 
 Manual navigation leaves animation Follow camera at the shown pose; **Numpad 0** or the Follow camera button returns to the authored camera.
 
-**Face orientation** tints front faces blue and back faces red, from the polygons' winding.
 
 ## Hide UI and fullscreen
 

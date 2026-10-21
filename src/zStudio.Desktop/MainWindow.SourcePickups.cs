@@ -49,7 +49,7 @@ public partial class MainWindow
     private void RegisterSourcePickupCommands(StudioCommands commands)
     {
         RegisterJob(commands, "source_pickup_add",
-            "Add one pickup to a source map as an undoable transaction. All appends once to each effective difficulty resource; a single difficulty materializes missing variants as needed to leave other layouts unchanged. Existing records and text are preserved. The template must actually spawn with a copyable bvol. Position is explicit; no automatic terrain snapping. Save writes owning sources.",
+            "Add one pickup to a source map as an undoable transaction. All appends once to each effective difficulty resource; a single difficulty materializes missing variants as needed to leave other layouts unchanged. Existing records and text are preserved. The template must actually spawn with a copyable bvol. Position is explicit (stored with one decimal, rotation in radians with four); no automatic terrain snapping. Save writes owning sources.",
             [DocumentParameter, RevisionParameter,
                 P("type", "string", "Pickup catalog type.", true, [.. MissionPickupType.Catalog.Select(t => t.Name)]),
                 new("position", "object", "Authored world position.", true, Properties:

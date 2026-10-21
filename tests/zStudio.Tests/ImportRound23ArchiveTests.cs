@@ -78,7 +78,7 @@ public sealed class ImportRound23ArchiveTests
         finally { Directory.Delete(root, true); }
     }
 
-[Fact]
+    [Fact]
     public void LargeStringResourcesRemainTypedWhenTheirDecodedShapeFits()
     {
         const int characters = 1024 * 1024;

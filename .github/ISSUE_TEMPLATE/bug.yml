@@ -48,4 +48,4 @@ body:
     id: diagnostics
     attributes:
       label: Relevant diagnostics and additional context
-      description: Diagnostics or animation Status/Event trace text, synthetic reproduction, and whether previous versions behaved differently.
+      description: Diagnostics, Problems or Event log text, synthetic reproduction, and whether previous versions behaved differently.

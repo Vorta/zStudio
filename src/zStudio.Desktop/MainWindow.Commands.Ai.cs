@@ -43,7 +43,7 @@ public partial class MainWindow
                 search: p => $"{ShortAiText(p.Network.Member)} {ShortAiText(p.Network.Name)} node_{p.Node.Index:00}", project: p => DescribeAiNode(graph, p.Network, p.Node),
                 maximumRowBytes: p => InspectionResultBudget.AiNode(graph.Id, p.Network, p.Node));
         });
-        Register(registry, "ai_selection", "Select/clear an AI marker or open its pinned read-only Properties. Selection requires unlocked Whole world editing, enabled visualization and a matching filter. Read-only Properties remains available while locked. Frame a selected marker with camera action=frame,target=selected.", true,
+        Register(registry, "ai_selection", "Select/clear an AI marker or open its pinned read-only Properties. Selection requires enabled visualization and a matching filter; compiled worlds select read only. Frame a selected marker with camera action=frame,target=selected.", true,
             [PreviewParameter, AiSnapshotParameter, P("action", "string", "Selection action.", true, "select", "clear", "properties"), P("node", "string", "Snapshot-scoped node ID; required except for clear.")], async (args, token) =>
         {
             RequireNoDrafts(); var graph = TargetAiGraph(args); string action = Text(args, "action"), id = Text(args, "node");

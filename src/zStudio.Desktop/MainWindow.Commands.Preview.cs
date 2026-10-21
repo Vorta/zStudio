@@ -39,7 +39,7 @@ public partial class MainWindow
     }
     private void RegisterPreviewCommands(StudioCommands r)
     {
-        Register(r, "texture_palette", "Read the current edited or mirrored texture header and paged RGB565 palette entries, matching the GUI palette inspector.", false, [.. AssetParameters, .. PageParameters], a =>
+        Register(r, "texture_palette", "Read the current texture header and paged RGB565 palette entries, matching the GUI palette inspector.", false, [.. AssetParameters, .. PageParameters], a =>
         {
             var d = TargetDocument(a); var asset = TargetAsset(d, a);
             if (asset.Content is not TextureInfo t) throw new StudioCommandException("unsupported", "Choose a texture.");

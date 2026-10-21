@@ -45,7 +45,7 @@ jobs:
       - name: Build Release
         run: dotnet build zStudio.slnx -c Release --no-restore
       - name: Test without game assets
-        run: dotnet test --solution zStudio.slnx -c Release --no-build
+        run: dotnet test --solution zStudio.slnx -c Release --no-build --max-parallel-test-modules 1
       - name: Publish and verify portable archive
         run: ./tools/publish.ps1
       - name: Prepare checksum and release notes

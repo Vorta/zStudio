@@ -315,7 +315,7 @@ internal static class ParachuteMcpChecks
             await PathAction("hide");
             Assert.Equal("VTOL drop windows hidden.", main.ViewModel.Status);
 
-bool Confirming() => (bool)typeof(MainWindow).GetField("acceptingParachute", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(main)!;
+            bool Confirming() => (bool)typeof(MainWindow).GetField("acceptingParachute", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(main)!;
             async Task GuiConfirmFinished()
             {
                 await Until(() => !Confirming());
