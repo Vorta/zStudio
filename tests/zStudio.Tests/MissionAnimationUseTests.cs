@@ -27,7 +27,7 @@ public sealed partial class AnimationTests
         var state = NodeState(context.Scene); var bytes = Pack(context.Package);
         var mission = MissionSceneLoader.Build(context.World, context.Package, null, null, null, token: TestContext.Current.CancellationToken);
         Assert.Contains(mission.AnimationUses[7].Uses, u => u.Name == "child" && u.Origin == "indirect");
-        Assert.Contains(mission.AnimationUses[17].Uses, u => u.Name == "child" && u.Reason.Contains("outside root"));
+        Assert.Contains(mission.AnimationUses[17].Uses, u => u.Name == "child" && u.Reason.Contains("outside its bound root"));
         Assert.False(mission.AnimationUses.ContainsKey(12));
         Assert.Equal(bytes, Pack(context.Package)); Assert.Equal(state, NodeState(context.Scene));
         Assert.DoesNotContain(mission.Diagnostics, d => d.Contains("discovery is incomplete"));

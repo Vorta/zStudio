@@ -86,7 +86,7 @@ public partial class MainWindow
         if (scene?.InspectionContent is SceneInspectionCard card)
         {
             card.IsSourceWorld = shownDocument?.SourceWorld != null;
-            if (!sourceChromeActive) { card.WorldRebuilding = null; card.CategoryOf = null; card.ZoneLabel = null; card.RecentSelections = null; card.PickRecent = null; card.WorldSummary = null; }
+            if (!sourceChromeActive) { card.WorldRebuilding = null; card.CategoryOf = null; card.PickupNameOf = null; card.ZoneLabel = null; card.RecentSelections = null; card.PickRecent = null; card.WorldSummary = null; }
         }
         RefreshSourceChrome();
     }
@@ -319,6 +319,7 @@ public partial class MainWindow
         {
             card.WorldRebuilding = () => rebuildEvaluating;
             card.CategoryOf = SelectionCategory;
+            card.PickupNameOf = PickupNaming;
             card.ZoneLabel = zone => shownDocument?.SourceWorld is { IsDisposed: false } world ? ZoneLabels(world).GetValueOrDefault(zone) : null;
             card.RecentSelections = () => recentDocument == shownDocument ? recentSelections : [];
             card.PickRecent = PickRecentSelection;
@@ -343,6 +344,16 @@ public partial class MainWindow
         dockedCard = null;
     }
 
+    /// <summary>A selected pickup as the World tree names it: "ERFPG #1", "Weapon pickup · pu01700", "ERFPG #1 · weapon pickup".</summary>
+    private SceneInspectionCard.PickupNaming? PickupNaming(SceneInspection selected)
+    {
+        if (!sourceChromeActive || sceneTree?.Projection == null || selected.SelectionNode < 0) return null;
+        var row = sceneTree.Selected is { Index: int index } current && index == selected.SelectionNode ? current : sceneTree.Reveal(selected.SelectionNode, expand: false);
+        if (row?.PickupName is not { } name || row.Pickup is not { } pickup) return null;
+        string game = row.Placement!.Name;
+        return new(name, $"{char.ToUpperInvariant(pickup.Kind[0])}{pickup.Kind[1..]} pickup · {game}",
+            $"{pickup.ManualName} · {pickup.Type} (catalog {pickup.Index}) · game name {game} (template {pickup.TemplateName})", $"{name} · {pickup.Kind} pickup");
+    }
     /// <summary>The outliner type of a selection: from its tree row when the tree shows it, otherwise from its node.</summary>
     private string SelectionCategory(SceneInspection selected)
     {
@@ -364,7 +375,11 @@ public partial class MainWindow
         if (recentDocument != sceneTreeDocument) { recentSelections.Clear(); recentDocument = sceneTreeDocument; }
         string[] path = row.Owner.State.SelectionPath.ToArray();
         recentSelections.RemoveAll(r => r.Path.SequenceEqual(path));
-        recentSelections.Insert(0, new(row.DisplayName, row.Parent?.DisplayName ?? "", row.Category, path));
+        string parent = row.Parent?.PickupEntries != null ? string.Join(" › ", Ancestors(row).Reverse()) : row.Parent?.DisplayName ?? "";
+        recentSelections.Insert(0, new(row.DisplayName, parent, row.Category, path));
+        // A pickup is found under Pickups › Weapons (› its type).
+        static IEnumerable<string> Ancestors(SceneTreeItem row)
+        { for (var at = row.Parent; at != null; at = at.Parent) yield return at.Pass?.Label ?? at.DisplayName; }
         if (recentSelections.Count > 4) recentSelections.RemoveRange(4, recentSelections.Count - 4);
     }
     /// <summary>A recent selection's row, found again by its path of tree identities (never by name), or null.</summary>
@@ -373,7 +388,7 @@ public partial class MainWindow
         IReadOnlyList<SceneTreeItem>? level = sceneTree?.Roots; SceneTreeItem? row = null;
         foreach (string key in entry.Path)
         {
-            row = level?.FirstOrDefault(r => r.StateKey == key);
+            row = level == null ? null : SceneTreeModel.FindRow(level, key);
             if (row == null) return null;
             level = row.Children;
         }
@@ -489,10 +504,11 @@ public partial class MainWindow
         if (outlinerSearchDelay.Tag == null) { outlinerSearchDelay.Tag = true; outlinerSearchDelay.Tick += (_, _) => { outlinerSearchDelay.Stop(); if (sourceChromeActive) RefreshOutlinerFilter(); }; }
         outlinerSearchDelay.Start();
     }
-    /// <summary>The rows matching a search (case-insensitive name) and type filter, in tree order, with their parent paths.</summary>
+    /// <summary>The rows matching a search (every word, case-insensitive) and type filter, in tree order, with their parent paths.</summary>
     internal IReadOnlyList<(SceneTreeItem Row, string Path)> OutlinerMatches(SceneTreeModel model, string query, IReadOnlySet<string> types, int limit, out bool truncated)
     {
         List<(SceneTreeItem, string)> hits = []; truncated = false;
+        string[] words = SceneTreeItem.SearchWords(query);
         Stack<(SceneTreeItem Row, string Path)> pending = new(model.Roots.Reverse().Select(r => (r, "")));
         int visited = 0;
         while (pending.TryPop(out var current))
@@ -500,7 +516,7 @@ public partial class MainWindow
             // Bound the walk itself, not only the result, for a very large world.
             if (++visited > 200_000) { truncated = true; break; }
             var row = current.Row;
-            if (row.Category != "world" && types.Contains(row.Category) && (query.Length == 0 || row.SearchText.Contains(query, StringComparison.OrdinalIgnoreCase)))
+            if (row.Category != "world" && types.Contains(row.Category) && row.Matches(words))
             {
                 if (hits.Count == limit) { truncated = true; break; }
                 hits.Add((row, current.Path));
@@ -562,6 +578,8 @@ public partial class MainWindow
         if ((sender as FrameworkElement)?.Tag is not SceneTreeItem { CanFrame: true } row) return;
         try
         {
+            // A Pickups group or type row is never the selection: it frames its pickups on the shown difficulty.
+            if (row.PickupEntries != null) { if (!TryFrameSection(row)) ViewModel.Status = "Nothing shown to frame."; return; }
             if (sceneTree?.Selected != row)
             {
                 if (!ResolveSelectionDrafts(sceneTreeDocument) || animation?.ResolvePendingDrafts() == false) return;
@@ -572,7 +590,7 @@ public partial class MainWindow
         }
         catch (StudioCommandException ex) { Report(ex); }
     }
-    /// <summary>Frames a network (all of its nodes) or what a definition binds to; false when nothing shown is there.</summary>
+    /// <summary>Frames a network (all of its nodes), what a definition binds to or a Pickups group's or type's pickups; false when nothing shown is there.</summary>
     internal bool TryFrameSection(SceneTreeItem row)
     {
         if (scene is not { } viewport) return false;
@@ -580,6 +598,7 @@ public partial class MainWindow
         {
             NetworkEntry network => viewport.TryFrameAiNetwork(network.Network.Id),
             DefinitionEntry definition => sceneTree?.Sections?.DefinitionRoots.GetValueOrDefault(definition.Definition.Index) is { } roots && viewport.TryFrameNodes(roots.Take(4096).ToArray()),
+            PickupGroupEntry or PickupTypeEntry => row.PickupEntries!.Select(e => e.Row).OfType<int>().Take(4096).ToArray() is { Length: > 0 } pickups && viewport.TryFrameNodes(pickups),
             _ => false,
         };
     }

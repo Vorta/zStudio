@@ -30,7 +30,11 @@ public static class AnimationComparer
                 token.ThrowIfCancellationRequested();
                 var ra = a.References[t][r]; var rb = b.References[t][r];
                 if (NameSizes[t] > 0 && ra.Text(0, NameSizes[t]) != rb.Text(0, NameSizes[t])) return $"T{t}[{r}].name {ra.Text(0, NameSizes[t])}|{rb.Text(0, NameSizes[t])}";
-                if (t == 6 && (ra.Bytes[4] == 1 ? ra.Text(8, 32) != rb.Text(8, 32) : ra.Text(12, 28) != rb.Text(12, 28))) return $"T6[{r}].target {ra.Text(12, 28)}|{rb.Text(12, 28)}";
+                if (t == 6)
+                {
+                    var (at, size) = ra.Bytes[4] == 1 ? (8, 32) : (12, 28);
+                    if (ra.Text(at, size) != rb.Text(at, size)) return $"T6[{r}].target {ra.Text(at, size)}|{rb.Text(at, size)}";
+                }
                 if (t == 7 && ra.Text(32, 32) != rb.Text(32, 32)) return $"T7[{r}].local {ra.Text(32, 32)}|{rb.Text(32, 32)}";
                 var ranges = TableRanges[t];
                 for (int k = 0; k < ranges.Length; k += 2)

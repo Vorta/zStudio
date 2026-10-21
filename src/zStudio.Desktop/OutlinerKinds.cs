@@ -21,12 +21,14 @@ internal static class OutlinerKinds
     internal static string SectionIcon(SectionEntry section) => section switch
     {
         SectionHeader { Section: "zones" } => "Zones", SectionHeader { Section: "aiNetworks" } => "AiNodes", SectionHeader => "Definition",
-        DefinitionScopeEntry => "Folder", DefinitionFileEntry or MissingFileEntry => "DefinitionFile", DefinitionEntry => "Definition", _ => "",
+        DefinitionScopeEntry or PickupGroupEntry => "Folder", DefinitionFileEntry or MissingFileEntry => "DefinitionFile", DefinitionEntry => "Definition", _ => "",
     };
     internal static Brush SectionBrush(SectionEntry section) => section switch
     {
         SectionHeader { Section: "zones" } => ZonesBrush, SectionHeader { Section: "aiNetworks" } => VehicleBrush,
         SectionHeader or DefinitionEntry => AnimationBrush,
+        // Pickups' groups only sort: a tertiary folder, not the gold of world groups.
+        PickupGroupEntry => Application.Current?.TryFindResource("TextFillColorTertiaryBrush") as Brush ?? Brushes.Gray,
         _ => Application.Current?.TryFindResource("TextFillColorSecondaryBrush") as Brush ?? Brushes.Gray,
     };
     /// <summary>An attack strategy in words.</summary>

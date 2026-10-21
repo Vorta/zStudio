@@ -90,3 +90,7 @@ internal sealed record DefinitionEntry(SourceAnimationDefinition Definition, Sou
 internal sealed record MissingFileEntry(SourceAnimationListing Listing) : SectionEntry($"missing:{Listing.Index}:{Listing.File}");
 /// <summary>A tertiary line in an empty section saying why it is empty.</summary>
 internal sealed record NoteEntry(string Text) : SectionEntry("note");
+/// <summary>Weapons, Ammo or Other (health and technology) under Pickups: always there, holding its pickups in list order.</summary>
+internal sealed record PickupGroupEntry(string Group, IReadOnlyList<SourceMapPassEntry> Entries) : SectionEntry("pickups:" + Group);
+/// <summary>With Group by type: one catalog type's pickups inside their group (a type never mixes kinds).</summary>
+internal sealed record PickupTypeEntry(string Group, string Type, IReadOnlyList<SourceMapPassEntry> Entries) : SectionEntry("pickups:" + Group + ":" + Type);

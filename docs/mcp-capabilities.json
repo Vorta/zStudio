@@ -152,7 +152,7 @@
         "zstudio_scene_properties",
         "zstudio_properties_open"
       ],
-      "note": "Individual source-map pickup rows use embedded type artwork and A (ammo) or W (weapon) beside their difficulty labels; health and technology have no letter. scene_tree exposes pickupType and pickupKind from the same catalog classification, including other-difficulty entries, and null for non-pickup rows. Lazy hierarchy rows, bound expansion/selection and viewport reveal share context-scoped occurrence identities, source provenance and pending-draft guards. Source rows expose sourceFile/gltfNode/sourceOccurrence and optional compiledNode. Authored groups removed by compilation remain read-only sourceGroup rows with null node and selectionOwner; whole-reference owners retain framing; their editor-only Parts are MCP-only (source_map_parts). Preview hierarchy is stable during animation; stored nodes are the fallback. Motion previews scope tree/enumeration/selection/Properties/node framing to the selected assembly and retain original library indices. Expand/collapse/reveal only change presentation. MW3 mission labels use 128-character prefixes with actor NameCharacters/NameTruncated and node metadata name_characters/name_truncated, also available in scene_nodes, scene_properties and pinned Properties. Cards disclose shortened labels; original AIV names and instance identities remain intact. In a source map the World tree adds section rows (scene_tree sectionRow): Zones, AI Networks and Animations (definitions) list the map's zones, AI networks and .zad definitions; zones and networks are shown one by one with their eyes (all hidden at first), the Zones, AI Networks, AI Vehicles and Pickups rows' master eyes show or hide everything below them, and selecting one opens its card in the docked Properties pane (zone label: source_zone_label; network header: source_ai_network; definitions are read-only and outline what they bind). preview_state sections reports the eyes, emphasis, outlines and selection; drafts/resolve_drafts target section covers the card's pending input. Keyboard: Up/Down, Home/End and Page Up/Down move through every shown row (a selectable row becomes the selection; section, folder, file, pass and note rows only take focus), Left/Right reach the row's buttons, Space or Enter opens or closes a row with children or presses the focused button, Escape returns from a button to its row."
+      "note": "A source map's Pickups section always holds Weapons, Ammo and Other (scene_tree category pickupGroup, sectionRow group/count/shown; hide/show/frame, never select), with a row per catalog type inside each under Group by type (scene_options pickupsByType; category pickupType). Pickup rows read as the manual-based short name and a per-type number (Label ERFPG #1); a weapon pickup shows the weapon's render, ammo, health and technology their HUD icons. scene_tree exposes pickupType, pickupKind, pickupGroup, pickupNumber, pickupShortName, pickupName (manual name), instanceName (null on other-difficulty rows) and pickupTemplate from the same catalog classification, and null for non-pickup rows; search matches every word in names, kinds and catalog/game names. Lazy hierarchy rows, bound expansion/selection and viewport reveal share context-scoped occurrence identities, source provenance and pending-draft guards. Source rows expose sourceFile/gltfNode/sourceOccurrence and optional compiledNode. Authored groups removed by compilation remain read-only sourceGroup rows with null node and selectionOwner; whole-reference owners retain framing; their editor-only Parts are MCP-only (source_map_parts). Preview hierarchy is stable during animation; stored nodes are the fallback. Motion previews scope tree/enumeration/selection/Properties/node framing to the selected assembly and retain original library indices. Expand/collapse/reveal only change presentation. MW3 mission labels use 128-character prefixes with actor NameCharacters/NameTruncated and node metadata name_characters/name_truncated, also available in scene_nodes, scene_properties and pinned Properties. Cards disclose shortened labels; original AIV names and instance identities remain intact. In a source map the World tree adds section rows (scene_tree sectionRow): Zones, AI Networks and Animations (definitions) list the map's zones, AI networks and .zad definitions; zones and networks are shown one by one with their eyes (all hidden at first), the Zones, AI Networks, AI Vehicles and Pickups rows' master eyes show or hide everything below them, and selecting one opens its card in the docked Properties pane (zone label: source_zone_label; network header: source_ai_network; definitions are read-only and outline what they bind). preview_state sections reports the eyes, emphasis, outlines and selection; drafts/resolve_drafts target section covers the card's pending input. Keyboard: Up/Down, Home/End and Page Up/Down move through every shown row (a selectable row becomes the selection; section, folder, file, pass and note rows only take focus), Left/Right reach the row's buttons, Space or Enter opens or closes a row with children or presses the focused button, Escape returns from a button to its row."
     },
     {
       "gui": "MotionEditor:Controls",
@@ -1264,7 +1264,7 @@
     {
       "gui": "MainWindow.xaml:AddSourcePickupClick",
       "tools": ["zstudio_source_pickup_add"],
-      "note": "Add one source pickup through the shared prepared transaction, with explicit placement and difficulty. All deduplicates fallback resources; exclusive changes materialize variants to preserve other layouts. Undo and Save use the source workspace."
+      "note": "Add one source pickup through the shared prepared transaction, with explicit placement and difficulty. All deduplicates fallback resources; exclusive changes materialize variants to preserve other layouts. Undo and Save use the source workspace; once saved, an addition that created a variant file cannot be undone (undo never deletes a saved file)."
     },
     {
       "gui": "MainWindow.xaml:AddSourceModelClick",
@@ -1442,7 +1442,7 @@
         "zstudio_scene_tree",
         "zstudio_camera"
       ],
-      "note": "A row's Frame selection is scene_tree select on that row, then camera frame target selected."
+      "note": "A row's Frame selection is scene_tree select on that row, then camera frame target selected. On the Pickups section's Weapons, Ammo and Other rows and their type rows (never selected) it is scene_tree action frame on that row."
     },
     {
       "gui": "MainWindow.xaml:OutlinerEyeClick",
@@ -1450,7 +1450,7 @@
         "zstudio_scene_tree",
         "zstudio_scene_selection"
       ],
-      "note": "A row's eye is scene_tree hide/show (view only, no source edit). Zones and AI networks are shown one by one and start hidden: a zone's eye shows or hides its colour and a network's its nodes and links (any shown zone turns the zone overlay on, any shown network the AI overlay). The Zones, AI Networks, AI Vehicles and Pickups rows' master eye (scene_tree hide/show on that row; rows report master) hides or shows everything below them; it changes when pressed, or when everything below comes to be shown (or hidden) one by one. preview_state sections reports them. scene_selection show_all shows every hidden object (units and pickups too), not zones or networks."
+      "note": "A row's eye is scene_tree hide/show (view only, no source edit). Zones and AI networks are shown one by one and start hidden: a zone's eye shows or hides its colour and a network's its nodes and links (any shown zone turns the zone overlay on, any shown network the AI overlay). The Zones, AI Networks, AI Vehicles and Pickups rows' master eye, and those of the Pickups section's Weapons, Ammo and Other rows and their type rows (scene_tree hide/show on that row; rows report master), hides or shows everything below them; it changes when pressed, or when everything below comes to be shown (or hidden) one by one. preview_state sections reports the section and pass masters; group and type rows report theirs as master on their scene_tree rows. scene_selection show_all shows every hidden object (units and pickups too), not zones or networks."
     },
     {
       "gui": "MainWindow.xaml:OutlinerEyeMiddleClick",
@@ -1466,6 +1466,20 @@
         "zstudio_scene_options"
       ],
       "note": "The Zones header's Objects | Polygons switch is scene_options changes.highlight zones or polygonZones: the kind of colour the shown zones take. It is disabled while no zone shows and paused while Edit zones is on (busy)."
+    },
+    {
+      "gui": "MainWindow.xaml:OutlinerGroupByTypeClick",
+      "tools": [
+        "zstudio_scene_options"
+      ],
+      "note": "The Pickups row's Group by type toggle is scene_options changes.pickupsByType (preview_state sections.passes.pickupsByType): inside Weapons, Ammo and Other a row per catalog type (scene_tree category pickupType). For the session; off at first."
+    },
+    {
+      "gui": "MainWindow.xaml:SceneGroupByTypeClick",
+      "tools": [
+        "zstudio_scene_options"
+      ],
+      "note": "The Pickups row's context menu item Group by type is the same scene_options changes.pickupsByType as the row's toggle."
     },
     {
       "gui": "MainWindow.xaml:OpenWorkspaceClick",

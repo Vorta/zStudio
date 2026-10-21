@@ -21,28 +21,52 @@ public static partial class MissionSceneLoader
         HashSet<(int Entry, int Root, AnimationBinding Binding)> scheduled = [];
         Dictionary<int, HashSet<int>> subtrees = [];
         Dictionary<string, int>? loadedNames = null;
+        HashSet<string> reported = new(StringComparer.Ordinal);
         BoundedDiagnostics notes = new(diagnostics);
+        // Initial roots are the binding phase's own results; they never depend on the allowance left after it.
+        foreach (var entry in context.Package.Entries)
+            if (initialRoots.TryGetValue(entry.Index, out int root)) Record(entry, root, "initialRoot", "Initial animation root");
         try
         {
             foreach (var entry in context.Package.Entries)
             {
                 work.Reserve(1);
-                if (initialRoots.TryGetValue(entry.Index, out int root))
-                    Add(entry, root, "initialRoot", "Initial animation root", context.Binding(entry, root, work));
+                if (initialRoots.TryGetValue(entry.Index, out int root)) Schedule(entry, root, context.Binding(entry, root, work));
             }
             foreach (var seed in seeds) Add(seed.Entry, seed.Root, "indirect", seed.Reason, AnimationBinding.Rebound);
-            var vehicleDefinitions = Fields(vehicles);
+            // An irregular vehicle, weapon or entry omits only its own associations, never the rest of discovery.
+            Dictionary<string, JsonNode?> vehicleDefinitions = [];
+            Guarded(() => layout.VehicleResource, () => vehicleDefinitions = Fields(vehicles));
             foreach (var actor in actors)
             {
                 work.Reserve(64L + 8L * actor.Name.Length);
+                Guarded(() => $"{layout.VehicleResource} '{JsonData.ShownText(VehicleTemplateName(actor.Name), 64)}'", () => Actor(actor));
+            }
+            List<(string Name, JsonNode? Definition)> ballistics = [];
+            Guarded(() => "weapons.zrd", () =>
+            {
+                foreach (var (category, group) in Fields(weapons))
+                    if (category == "BALLISTICS")
+                        foreach (var (name, definition) in Fields(group)) { work.Reserve(16); ballistics.Add((name, definition)); }
+            });
+            foreach (var (name, definition) in ballistics)
+                Guarded(() => $"weapons.zrd '{JsonData.ShownText(name, 64)}'", () => Weapon(definition));
+            while (pending.TryDequeue(out var item))
+            {
+                work.Reserve(1);
+                Guarded(() => $"#{item.Entry.Index} ({JsonData.ShownText(item.Entry.Name, 64)})", () => Recipients(item.Entry, item.Root, item.Binding));
+            }
+
+            void Actor(MissionActor actor)
+            {
                 if (actor.Pickup is { } pickup)
                 {
                     Named($"pu{pickup.TypeIndex:000}", actor.Root, "Pickup collection");
-                    continue;
+                    return;
                 }
-                if (actor.PlacementSource == "Animation initialization") continue;
+                if (actor.PlacementSource == "Animation initialization") return;
                 string template = VehicleTemplateName(actor.Name);
-                if (!vehicleDefinitions.TryGetValue(template, out var definition)) continue;
+                if (!vehicleDefinitions.TryGetValue(template, out var definition)) return;
                 var fields = Fields(definition);
                 var common = Fields(fields.GetValueOrDefault("common_mode"));
                 Named(FirstString(common.GetValueOrDefault("start_anims")), actor.Root, $"Vehicle startup, {layout.VehicleResource}", required: true);
@@ -73,47 +97,46 @@ public static partial class MissionSceneLoader
             }
             // MODEL_ANIMATION binds the flyout's model copy. ANIMATION and ANIMATION_ATTACHED use a null
             // bound node and only position references. Describe the concrete model template, never the shooter.
-            foreach (var (category, group) in Fields(weapons))
-                foreach (var (_, definition) in category == "BALLISTICS" ? Fields(group) : [])
-                {
-                    var fields = Fields(definition);
-                    var flyout = Fields(fields.GetValueOrDefault("FLYOUT"));
-                    if (flyout.ContainsKey("EFFECT")) continue; // Retail EFFECT takes precedence over MODEL, even if empty.
-                    string name = FirstString(flyout.GetValueOrDefault("MODEL_ANIMATION"));
-                    string model = FirstString(flyout.GetValueOrDefault("MODEL"));
-                    if (name.Length == 0 || model.Length == 0) continue;
-                    // Weapons are loaded before AIV/pickup instances. Later copies or no-copy renames cannot
-                    // steal this lookup. Like effect-template preparation, index the frozen original world.
-                    if (loadedNames == null)
-                    {
-                        loadedNames = new(StringComparer.Ordinal);
-                        foreach (var node in loadedScene.Nodes)
-                        {
-                            work.Reserve(64L + node.Name.Length);
-                            if (node.Class != "none") loadedNames[node.Name] = node.Index;
-                        }
-                    }
-                    work.Reserve(1L + model.Length);
-                    if (loadedNames.TryGetValue(model, out int modelRoot)) Named(name, modelRoot, "Weapon flyout model template, weapons.zrd", required: true);
-                    else notes.Add($"Animation associations: weapon model '{JsonData.ShownText(model, 64)}' is unavailable.");
-                }
-            while (pending.TryDequeue(out var item))
+            void Weapon(JsonNode? definition)
             {
-                work.Reserve(1);
-                var (entry, root, binding) = item;
+                var fields = Fields(definition);
+                var flyout = Fields(fields.GetValueOrDefault("FLYOUT"));
+                if (flyout.ContainsKey("EFFECT")) return; // Retail EFFECT takes precedence over MODEL, even if empty.
+                string name = FirstString(flyout.GetValueOrDefault("MODEL_ANIMATION"));
+                string model = FirstString(flyout.GetValueOrDefault("MODEL"));
+                if (name.Length == 0 || model.Length == 0) return;
+                // Weapons are loaded before AIV/pickup instances. Later copies or no-copy renames cannot
+                // steal this lookup. Like effect-template preparation, index the frozen original world.
+                if (loadedNames == null)
+                {
+                    Dictionary<string, int> names = new(StringComparer.Ordinal);
+                    foreach (var node in loadedScene.Nodes)
+                    {
+                        work.Reserve(64L + node.Name.Length);
+                        if (node.Class != "none") names[node.Name] = node.Index;
+                    }
+                    loadedNames = names;
+                }
+                work.Reserve(1L + model.Length);
+                if (loadedNames.TryGetValue(model, out int modelRoot)) Named(name, modelRoot, "Weapon flyout model template, weapons.zrd", required: true);
+                else notes.Add($"Animation associations: weapon model '{JsonData.ShownText(model, 64)}' is unavailable.");
+            }
+            void Recipients(AnimationEntry entry, int root, AnimationBinding binding)
+            {
                 if (!subtrees.TryGetValue(root, out var descendants))
                 {
                     var nodes = work.Descendants(root, context.Scene.Nodes.Count);
                     work.Reserve(32L * nodes.Count);
                     subtrees[root] = descendants = nodes.ToHashSet();
                 }
+                // The reasons leave out the root: one write reached from many roots is one association, not many.
                 if ((entry.U32(148) & 0x40) != 0)
                     foreach (var tracked in entry.References[0])
                     {
                         work.Reserve(1);
                         int target = context.ResolveTrackedNode(entry, tracked.Text(0, 36), root, binding, work);
                         if (target >= 0 && !descendants.Contains(target))
-                            Add(entry, target, "indirect", $"Animation cleanup outside root #{root}", null);
+                            Add(entry, target, "indirect", "Animation cleanup outside its bound root", null);
                     }
                 foreach (var ev in entry.AllSequences.SelectMany(s => s.Events))
                 {
@@ -129,7 +152,7 @@ public static partial class MissionSceneLoader
                     };
                     int target = Resolve(reference);
                     if (target >= 0 && !descendants.Contains(target))
-                        Add(entry, target, "indirect", $"Animation target outside root #{root}", null);
+                        Add(entry, target, "indirect", "Animation target outside its bound root", null);
                     if (ev.Type is not (19 or 24)) continue;
                     var child = work.EntryLookup().ResolveChild(ev, token);
                     if (child == null) { notes.Add($"Animation associations: unresolved child of #{entry.Index} ({entry.Name})."); continue; }
@@ -144,10 +167,20 @@ public static partial class MissionSceneLoader
         }
         catch (InvalidDataException ex)
         { notes.Add($"Animation association discovery is incomplete: {ex.Message}"); }
-        catch (IOException ex) when (work.Exhausted)
-        { notes.Add($"Animation association discovery is incomplete: {ex.Message}"); }
+        catch (IOException) when (work.Exhausted)
+        { notes.Add($"Animation association discovery is incomplete: it reached the scene's binding allowance, so some indirect associations are not shown."); }
         return new System.Collections.ObjectModel.ReadOnlyDictionary<int, MissionAnimationUses>(result);
 
+        // The label is made only on failure, and each is reported once (a definition many actors share fails for each).
+        void Guarded(Func<string> what, Action discover)
+        {
+            try { discover(); }
+            catch (InvalidDataException ex) when (!work.Exhausted)
+            {
+                string label = what();
+                if (reported.Add(label)) notes.Add($"Animation association discovery is incomplete for {label}: {ex.Message}");
+            }
+        }
         AnimationEntry? Entry(string name)
         {
             work.Reserve(1L + name.Length);
@@ -163,11 +196,20 @@ public static partial class MissionSceneLoader
         void Add(AnimationEntry entry, int root, string origin, string reason, AnimationBinding? binding)
         {
             work.Reserve(256);
-            if (root < 0 || root >= context.Scene.Nodes.Count || entry.Index == 0 || entry.Name.Length == 0) return;
+            if (Record(entry, root, origin, reason) && binding is { } kind) Schedule(entry, root, kind);
+        }
+        bool Record(AnimationEntry entry, int root, string origin, string reason)
+        {
+            if (root < 0 || root >= context.Scene.Nodes.Count || entry.Index == 0 || entry.Name.Length == 0) return false;
             var use = new MissionAnimationUse(entry.Index, entry.Name, origin, reason);
             var addition = new MissionAnimationUses([use], origin == "initialRoot", false, origin == "indirect");
             result[root] = result.GetValueOrDefault(root, MissionAnimationUses.Empty).Merge(addition);
-            if (binding is { } kind && scheduled.Add((entry.Index, root, kind))) pending.Enqueue((entry, root, kind));
+            return true;
+        }
+        void Schedule(AnimationEntry entry, int root, AnimationBinding binding)
+        {
+            if (root >= 0 && root < context.Scene.Nodes.Count && entry.Index != 0 && entry.Name.Length != 0 && scheduled.Add((entry.Index, root, binding)))
+                pending.Enqueue((entry, root, binding));
         }
         Dictionary<string, JsonNode?> Fields(JsonNode? node)
         {

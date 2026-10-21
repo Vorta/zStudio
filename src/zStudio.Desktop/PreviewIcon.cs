@@ -51,6 +51,8 @@ public sealed class PreviewIcon : FrameworkElement
         ["Search"] = "M2.5,7 A4.5,4.5 0 1 0 11.5,7 A4.5,4.5 0 1 0 2.5,7 M10.5,10.5 L14,14",
         ["World"] = "M1.5,13 L6,6 9,10.2 11,7.5 14.5,13 Z M10.2,4 A1.3,1.3 0 1 0 12.8,4 A1.3,1.3 0 1 0 10.2,4",
         ["Folder"] = "M2.5,3.5 H6 L7.5,5 H13.5 A1,1 0 0 1 14.5,6 V12.5 A1,1 0 0 1 13.5,13.5 H2.5 A1,1 0 0 1 1.5,12.5 V4.5 A1,1 0 0 1 2.5,3.5 Z",
+        // Pickups' Group by type: rows indented under rows.
+        ["GroupByType"] = "M2,3.5 H8.5 M4.5,6.5 H14 M2,9.5 H8.5 M4.5,12.5 H14",
         ["Geometry"] = "M8,2 L14,13 H2 Z M5,7.5 H11 M5,7.5 L8,13 11,7.5",
         ["Node"] = "M8,2 L14,8 8,14 2,8 Z",
         // The later passes: AI vehicles (a tank), pickups (a power-up) and map animations (a film strip).

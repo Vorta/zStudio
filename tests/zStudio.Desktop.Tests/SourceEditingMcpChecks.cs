@@ -785,7 +785,7 @@ internal static class SourceEditingMcpChecks
 
             await Call("close_document", new() { ["document"] = Id(pickupMap), ["revision"] = pickupMap.Revision });
 
-            // Type artwork and role badges use placement identity, including rows absent from the shown difficulty.
+            // Pickups' groups, names and pictures use placement identity, including rows absent from the shown difficulty.
             fixture.Write("gamegen/m1.gs", File.ReadAllText(fixture.Path("gamegen/m1.gs")).Replace("GameZWriteZBDFile",
                 "LoadGameGen chip.gltf pu000\r\nLoadGameGen chip.gltf pu017\r\nLoadGameGen chip.gltf pu034\r\nGameZWriteZBDFile", StringComparison.Ordinal));
             const string iconRows = "( ERFPG_AMMO 1 ( 10 0 10 ) ( 0 0 0 ) 0 ) ( NANITE 50 ( 20 0 10 ) ( 0 0 0 ) 0 ) ( PUP_AMPHIB 1 ( 30 0 10 ) ( 0 0 0 ) 0 )";
@@ -801,30 +801,66 @@ internal static class SourceEditingMcpChecks
             iconTree = await Call("scene_tree", new() { ["document"] = Id(pickupMap) });
             var pickupSection = iconTree["children"]!["items"]!.AsArray().Single(r => r!["pass"]?.GetValue<string>() == "puppies")!;
             Assert.Null(pickupSection["pickupType"]); Assert.Null(pickupSection["pickupKind"]);
-            var iconRowsJson = (await Call("scene_tree", new() { ["document"] = Id(pickupMap), ["context"] = iconTree["context"]!.GetValue<string>(),
-                ["row"] = pickupSection["row"]!.GetValue<string>() }))["children"]!["items"]!.AsArray();
+            string iconContext = iconTree["context"]!.GetValue<string>();
+            async Task<JsonArray> Rows(JsonNode row) => (await Call("scene_tree", new() { ["document"] = Id(pickupMap), ["context"] = iconContext,
+                ["row"] = row["row"]!.GetValue<string>() }))["children"]!["items"]!.AsArray();
+            // Pickups always hold Weapons, Ammo and Other; the weapon placed only on Easy dims its group.
+            var groups = await Rows(pickupSection);
+            Assert.Equal(new[] { "weapons", "ammo", "other" }, groups.Select(g => g!["sectionRow"]!["group"]!.GetValue<string>()));
+            Assert.Equal(new[] { 1, 1, 2 }, groups.Select(g => g!["sectionRow"]!["count"]!.GetValue<int>()));
+            Assert.Equal(new[] { 0, 1, 2 }, groups.Select(g => g!["sectionRow"]!["shown"]!.GetValue<int>()));
+            Assert.All(groups, g => Assert.Equal("pickupGroup", g!["category"]!.GetValue<string>()));
+            Assert.Null(groups[0]!["master"]); Assert.True(groups[1]!["master"]!.GetValue<bool>());
+            await Call("scene_tree", new() { ["document"] = Id(pickupMap), ["context"] = iconContext, ["preview"] = iconTree["preview"]!.GetValue<string>(), ["action"] = "select", ["row"] = groups[1]!["row"]!.GetValue<string>() }, error: true);
             var iconTreeModel = (SceneTreeModel)typeof(MainWindow).GetField("sceneTree", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(main)!;
-            var guiRows = iconTreeModel.Roots.Single(r => r.Pass?.Kind == "puppies").Children;
-            Assert.Equal(4, iconRowsJson.Count);
-            foreach (var (type, kind, badge) in new[] { ("ERFPG_AMMO", "ammo", "A"), ("ERFPG_WEAPON", "weapon", "W"),
-                ("NANITE", "health", ""), ("PUP_AMPHIB", "technology", "") })
+            var guiRows = SceneTreeModel.PassLeaves(iconTreeModel.Roots.Single(r => r.Pass?.Kind == "puppies")).ToArray();
+            Assert.Equal(4, guiRows.Length);
+            foreach (var (type, kind, group, name) in new[] { ("ERFPG_AMMO", "ammo", 1, "ERFPG #1"), ("ERFPG_WEAPON", "weapon", 0, "ERFPG #1"),
+                ("NANITE", "health", 2, "Nanite #1"), ("PUP_AMPHIB", "technology", 2, "Amphib Tech #1") })
             {
-                var pickupRowJson = iconRowsJson.Single(r => r!["pickupType"]?.GetValue<string>() == type)!;
+                var pickupRowJson = (await Rows(groups[group]!)).Single(r => r!["pickupType"]?.GetValue<string>() == type)!;
                 var gui = guiRows.Single(r => r.PickupType == type);
                 Assert.Equal(kind, pickupRowJson["pickupKind"]!.GetValue<string>()); Assert.Equal(kind, gui.PickupKind);
-                Assert.Equal(badge, gui.PickupBadge); Assert.Equal(badge.Length > 0, gui.HasPickupBadge);
+                Assert.Equal(name, pickupRowJson["Label"]!.GetValue<string>()); Assert.Equal(name, gui.PickupName); Assert.Equal(1, pickupRowJson["pickupNumber"]!.GetValue<int>());
+                Assert.Equal(groups[group]!["sectionRow"]!["group"]!.GetValue<string>(), pickupRowJson["pickupGroup"]!.GetValue<string>());
                 Assert.True(gui.HasPickupIcon); Assert.NotNull(gui.PickupImage);
                 Assert.Equal(type == "ERFPG_WEAPON" ? ["Easy"] : new[] { "Easy", "Medium", "Hard" },
                     pickupRowJson["difficulties"]!.AsArray().Select(d => d!.GetValue<string>()));
+                Assert.Equal(type == "ERFPG_WEAPON" ? "E" : "All", gui.Meta);
                 Assert.Equal(type == "ERFPG_WEAPON", gui.IsOtherDifficulty);
+                Assert.Equal(type == "ERFPG_WEAPON", pickupRowJson["instanceName"] == null);
                 if (gui.IsOtherDifficulty) { Assert.True(pickupRowJson["otherDifficulty"]!.GetValue<bool>()); Assert.Null(pickupRowJson["node"]); }
             }
-            Assert.Equal("ic_rfpg2.png", PickupPresentation.For("ERFPG_AMMO")!.IconFile);
-            Assert.Same(PickupPresentation.For("ERFPG_AMMO")!.Image, PickupPresentation.For("ERFPG_WEAPON")!.Image);
+            // Search matches every word, including the kind and the manual's name, with the group in the path.
+            var searched = (await Call("scene_tree", new() { ["document"] = Id(pickupMap), ["search"] = "ammo pulse" }))["matches"]!["items"]!.AsArray();
+            Assert.Equal("ERFPG_AMMO", Assert.Single(searched.ToArray())!["item"]!["pickupType"]!.GetValue<string>());
+            Assert.Equal("Pickups › Ammo", searched[0]!["path"]!.GetValue<string>());
+            // A group's eye hides and shows its pickups; frame frames them without selecting; a group with nothing shown refuses.
+            string treePreview = iconTree["preview"]!.GetValue<string>(), ammoRow = groups[1]!["row"]!.GetValue<string>();
+            Dictionary<string, object?> GroupAction(string action, string row) => new() { ["document"] = Id(pickupMap), ["context"] = iconContext, ["preview"] = treePreview, ["action"] = action, ["row"] = row };
+            Assert.False((await Call("scene_tree", GroupAction("hide", ammoRow)))["row"]!["master"]!.GetValue<bool>());
+            Assert.True(guiRows.Single(r => r.PickupType == "ERFPG_AMMO").IsHidden);
+            await Call("scene_tree", GroupAction("show", ammoRow));
+            Assert.False(guiRows.Single(r => r.PickupType == "ERFPG_AMMO").IsHidden);
+            await Call("scene_tree", GroupAction("frame", ammoRow));
+            await Call("scene_tree", GroupAction("frame", groups[0]!["row"]!.GetValue<string>()), error: true);
+            // Group by type adds a row per catalog type inside each group; a pickup keeps its identity.
+            await Job("scene_options", new() { ["preview"] = treePreview, ["changes"] = new Dictionary<string, object?> { ["pickupsByType"] = true } });
+            try
+            {
+                var byType = await Call("scene_tree", new() { ["document"] = Id(pickupMap) });
+                string typedContext = byType["context"]!.GetValue<string>();
+                var typedGroups = (await Call("scene_tree", new() { ["document"] = Id(pickupMap), ["context"] = typedContext,
+                    ["row"] = byType["children"]!["items"]!.AsArray().Single(r => r!["pass"]?.GetValue<string>() == "puppies")!["row"]!.GetValue<string>() }))["children"]!["items"]!.AsArray();
+                var otherTypes = (await Call("scene_tree", new() { ["document"] = Id(pickupMap), ["context"] = typedContext, ["row"] = typedGroups[2]!["row"]!.GetValue<string>() }))["children"]!["items"]!.AsArray();
+                Assert.Equal(new[] { "NANITE", "PUP_AMPHIB" }, otherTypes.Select(t => t!["sectionRow"]!["pickupType"]!.GetValue<string>()));
+                Assert.All(otherTypes, t => { Assert.Equal("pickupType", t!["category"]!.GetValue<string>()); Assert.Null(t["pickupType"]); });
+            }
+            finally { await Job("scene_options", new() { ["preview"] = treePreview, ["changes"] = new Dictionary<string, object?> { ["pickupsByType"] = false } }); }
             foreach (var type in zStudio.Core.MissionPickupType.Catalog)
             {
                 var art = Assert.IsType<PickupPresentation>(PickupPresentation.For(type.Name));
-                Assert.True(art.Image.IsFrozen); // Every catalog icon resolves from an embedded resource.
+                Assert.True(art.Image.IsFrozen); // Every catalog picture resolves from an embedded resource.
             }
             Assert.Null(PickupPresentation.For("unknown"));
             Assert.False(pickupMap.IsDirty);

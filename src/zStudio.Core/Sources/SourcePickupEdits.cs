@@ -18,11 +18,14 @@ public static class SourcePickupEdits
         if (addition.Difficulty is not ("All" or "Easy" or "Medium" or "Hard"))
             throw new InvalidDataException("Choose All, Easy, Medium or Hard.");
         if (!Finite(addition.Position) || !Finite(addition.RotationDegrees))
-            throw new InvalidDataException($"Pickup position and rotation must be finite numbers within ±{SourceWorlds.MaximumCoordinate}.");
-        if (addition.Amount is < 0 || !float.IsFinite(addition.RespawnDelay) || addition.RespawnDelay < 0 || addition.RespawnDelay > SourceWorlds.MaximumCoordinate)
-            throw new InvalidDataException("Amount and respawn delay must be zero or greater.");
+            throw new InvalidDataException($"Pickup position and rotation must be finite numbers within ±{Bound}.");
+        if (addition.Amount is < 0)
+            throw new InvalidDataException("Amount must be zero or greater.");
+        if (!float.IsFinite(addition.RespawnDelay) || addition.RespawnDelay < 0 || addition.RespawnDelay > SourceWorlds.MaximumCoordinate)
+            throw new InvalidDataException($"Respawn delay must be a finite number from 0 to {Bound}.");
         return type;
     }
+    private static readonly string Bound = SourceWorlds.MaximumCoordinate.ToString("N0", System.Globalization.CultureInfo.InvariantCulture);
 
     public static IReadOnlyList<SourceAddedPickup> Add(SourceWorkspace workspace, SourceSceneSnapshot snapshot,
         SourcePickupAddition addition, CancellationToken token = default)
@@ -128,7 +131,17 @@ public static class SourcePickupEdits
                 if (!mission.Actors.Any(a => a.Pickup is { } p && p.Source.RecordIndex == item.RecordIndex &&
                     string.Equals(Path.GetFullPath(p.Source.ArchivePath), Path.GetFullPath(Path.Combine(snapshot.Root, item.File)), StringComparison.OrdinalIgnoreCase) &&
                     p.LogicalName == addition.Type && p.Position == addition.Position))
-                    throw new InvalidDataException($"The {group.Key} pickup cannot be placed. Check its template and copyable bvol collision child.");
+                    throw new InvalidDataException(Cause(mission, item) is { } cause ? $"The {group.Key} pickup cannot be placed: {cause}"
+                        : $"The {group.Key} pickup cannot be placed. Check its template and copyable bvol collision child.");
+        }
+
+        // The placement's own note names the template or bvol problem, when the bounded notes kept it.
+        static string? Cause(MissionSceneContext mission, SourceAddedPickup item)
+        {
+            string prefix = $"Mission pickup {Path.GetFileName(item.File)} #{item.RecordIndex} in ";
+            string? note = mission.Diagnostics.FirstOrDefault(d => d.StartsWith(prefix, StringComparison.OrdinalIgnoreCase));
+            int colon = note?.IndexOf(": ", prefix.Length, StringComparison.Ordinal) ?? -1;
+            return colon < 0 ? null : note![(colon + 2)..];
         }
     }
 
