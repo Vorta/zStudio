@@ -31,7 +31,7 @@ MCP: `zstudio_scene_tree`, `zstudio_scene_selection`.
 
 ## Select and inspect
 
-Click an object in the view or the World tree. The Properties pane shows its card: its icon, name and type (with its source file in the tooltip), and collapsible sections. Clicking a mesh inside a turret or vehicle selects the whole object; the clicked polygon is under **Surface**. Clear the selection with **Escape**, **Clear selection** or a click on empty space. With nothing selected, the pane shows **Recently selected** and a summary of the world. **Alt+Enter** focuses the card.
+Click an object in the view or the World tree. The Properties pane shows its card: its icon, name and type (with its source file in the tooltip), and collapsible sections. Clicking a mesh inside a turret or vehicle selects the whole object; the clicked polygon is under **Surface**. Clear the selection with **Escape**, **Clear selection** or a click on empty space. With nothing selected, the pane shows **Recently selected** and a summary of the world. **Alt+Enter** focuses the card (a pickup, AI node or vehicle selected in the view opens the Properties window instead).
 
 MCP: `zstudio_scene_inspect`, `zstudio_scene_card` (`select`, `clear`, `copy`).
 
