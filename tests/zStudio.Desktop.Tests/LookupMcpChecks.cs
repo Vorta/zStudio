@@ -63,9 +63,9 @@ internal static class LookupMcpChecks
             Assert.DoesNotContain(main.ViewModel.Problems, Changed);
             // Properties takes an unambiguous parent by name, while a name nothing has is refused.
             var shown = main.ViewModel.Documents.Single(d => d.SourceWorld != null);
-            var named = typeof(MainWindow).GetMethod("SourceWorldNodeNamed", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!;
-            Assert.Equal("crate", ((zStudio.Core.Worlds.WorldNode)named.Invoke(main, [shown, "crate"])!).Name);
-            Assert.IsType<zStudio.Automation.StudioCommandException>(Assert.Throws<System.Reflection.TargetInvocationException>(() => named.Invoke(main, [shown, "nothing"])).InnerException);
+            var named = typeof(MainWindow).GetMethod("SourceWorldNodeNamedNear", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!;
+            Assert.Equal("crate", ((zStudio.Core.Worlds.WorldNode)named.Invoke(main, [shown, "crate", null])!).Name);
+            Assert.IsType<zStudio.Automation.StudioCommandException>(Assert.Throws<System.Reflection.TargetInvocationException>(() => named.Invoke(main, [shown, "nothing", null])).InnerException);
             // The crate's lids and its copy's are different nodes of one name: the Parent field lists each with its scene node
             // number and takes "#index" (or "name #index"), the index source_world_object_edit's parent takes.
             var parentOf = typeof(MainWindow).GetMethod("SourceParentNode", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!;

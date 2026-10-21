@@ -90,7 +90,7 @@ internal static class SourceSaveMcpChecks
             var undone = Document(await Call("undo_redo", new() { ["document"] = Id(added), ["revision"] = added.Revision, ["action"] = "undo" }));
             Assert.True(undone.IsDirty);
             onUiThread = null;
-            var gui = SourceTask<bool>("SaveCurrentAsync", undone, false);
+            var gui = SourceTask<bool>("SaveCurrentAsync", undone);
             await entered.WaitAsync(token);
             Assert.False(onUiThread); Assert.False(main.IsEnabled);
             Assert.False(((UIElement)main.FindName("DocumentSave")).IsEnabled); Assert.False(((UIElement)main.FindName("DocumentUndo")).IsEnabled);

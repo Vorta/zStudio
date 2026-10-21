@@ -128,7 +128,7 @@ internal static class ResponsiveNavigatorChecks
             var documentScene = new GameScene(); documentScene.Nodes.Add(new(0,"root","world",null,[],[],new(),new()));
             var propertiesSource = new AssetDocument(Path.Combine(root,"properties.zbd"),new(0,DateTime.MinValue),
                 new(FormatFamily.Animation,28,Recognition.Supported,"fixture"),ReadOnlyMemory<byte>.Empty) { Animations = package, Scene = documentScene };
-            propertiesSource.Add(AssetKind.Animation,0,"animation",0,0);
+            propertiesSource.Add(AssetKind.Raw,0,"raw",0,0); // A raw row keeps the right pane hidden.
             using var propertiesDoc = new DocumentModel(propertiesSource);
             main.ViewModel.Documents.Add(propertiesDoc);
             main.ViewModel.SelectedDocument = propertiesDoc; await Idle();
