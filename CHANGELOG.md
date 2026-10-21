@@ -2,6 +2,8 @@
 
 Version numbers follow `MAJOR.MINOR.PATCH`; the 0.x series is under active development. Release tags and downloadable archives use the same version.
 
+## 0.9.6 — Unreleased
+
 ## 0.9.5 — 2026-10-21
 
 - **Editing of compiled ZBD files is removed.** zStudio edits the source project it reconstructs; compiled game folders still open through MCP `open_root` for read-only inspection, preview and export. Gone: ZAR member and ZRD editing, texture pack and script editing, model and MechWarrior 3 mech model replacement, MechWarrior 3 motion and AI valve editing, animation editing and its Save As, Whole world placement editing of compiled maps (Unlock editing, archive saves and backups) and editing loose text `.zrd` files outside a source project. Compiled assets show their stored data read-only in Properties; compiled maps keep read-only selection, cards and VTOL drop-window analysis. **File → Save As…** is removed; Undo, Redo and Save act on source maps only, in the map's command bar; compiled documents no longer show them in the title bar.
