@@ -48,6 +48,7 @@ public sealed partial class AnimationTests
             Assert.Equal(complete.Scene.Nodes[i].Metadata.UInt("flags"), incremental.Scene.Nodes[i].Metadata.UInt("flags"));
         }
         Assert.Same(initial.Scene.Nodes[2], incremental.Scene.Nodes[2]);
+        Assert.Same(initial.AnimationUses, incremental.AnimationUses);
         Assert.Equal(Vector3.Zero, SceneBuilder.LocalTransform(initial.Scene.Nodes[0]).Translation);
         Assert.Equal(Vector3.Zero, SceneBuilder.LocalTransform(source.Scene.Nodes[0]).Translation);
         // Even an initialization write equal to the old source is authoritative and must not be overwritten.

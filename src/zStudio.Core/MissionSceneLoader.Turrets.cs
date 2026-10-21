@@ -8,7 +8,8 @@ public static partial class MissionSceneLoader
     // Retail turret.cpp 0x437AC0 / 0x4367A0 calls 0x45D6B0 with the actual
     // turret root. That callback runs cleanup, not the destruction sequence.
     internal static void InitializeTurrets(GameScene scene, AnimationPreviewContext? context, JsonNode? ai,
-        List<string> diagnostics, HashSet<int> positioned, CancellationToken token, AnimationBindingOperation? bindings = null)
+        List<string> diagnostics, HashSet<int> positioned, CancellationToken token, AnimationBindingOperation? bindings = null,
+        Action<int, AnimationEntry, string>? animationUse = null)
     {
         BoundedDiagnostics notes = new(diagnostics);
         if (ai == null) { notes.Add($"Mission turrets: ai.zrd is unavailable; turret initialization could not be recovered."); return; }
@@ -29,6 +30,7 @@ public static partial class MissionSceneLoader
             return work.EntryLookup().Find(name, token);
         }
         var defaultEntry = Entry(defaultName);
+        var napalmEntry = Entry("napalm_vehicle");
         foreach (var (pattern, definition) in Records(turrets))
         {
             work.Reserve(1L + pattern.Length);
@@ -53,6 +55,10 @@ public static partial class MissionSceneLoader
             var fields = Fields(definition);
             string explicitName = FirstString(fields.FirstOrDefault(p => p.Name == "DESTROY_ANIM").Value);
             var explicitEntry = Entry(explicitName);
+            string fireName = FirstString(fields.FirstOrDefault(p => p.Name == "FIRE_ANIM").Value);
+            var fireEntry = Entry(fireName);
+            if (fireName.Length > 0 && fireEntry == null)
+                notes.Add($"Mission turret animation associations: FIRE_ANIM '{JsonData.ShownText(fireName, 64)}' is unavailable.");
             if (explicitName.Length > 0 && explicitEntry == null)
                 notes.Add($"Mission turrets: ai.zrd '{pattern}' animation '{explicitName}' is unavailable; using the named/default reset when available.");
             string effect = FirstString(fields.FirstOrDefault(p => p.Name == "EFFECT").Value);
@@ -68,9 +74,14 @@ public static partial class MissionSceneLoader
                     int node = work.First(turret.Index, helper, scene.Nodes.Count);
                     if (node >= 0) scene.Nodes[node].Metadata["flags"] = scene.Nodes[node].Metadata.UInt("flags") & ~4u;
                 }
-                var reset = explicitEntry ?? Entry(turret.Name) ?? defaultEntry;
+                var namedEntry = explicitEntry == null ? Entry(turret.Name) : null;
+                var reset = explicitEntry ?? namedEntry ?? defaultEntry;
+                if (fireEntry != null) animationUse?.Invoke(turret.Index, fireEntry, "Turret firing, ai.zrd FIRE_ANIM");
+                if (napalmEntry != null) animationUse?.Invoke(turret.Index, napalmEntry, "Turret burning destruction");
                 if (reset == null)
                 { notes.Add($"Mission turrets: ai.zrd '{pattern}', node #{turret.Index} '{turret.Name}' has no resolved reset animation; stored state retained."); continue; }
+                animationUse?.Invoke(turret.Index, reset, explicitEntry != null ? "Turret destruction, ai.zrd override" :
+                    namedEntry != null ? "Turret destruction, object-name animation" : "Turret destruction, ai.zrd default");
                 try
                 {
                     List<string> resetDiagnostics = [];

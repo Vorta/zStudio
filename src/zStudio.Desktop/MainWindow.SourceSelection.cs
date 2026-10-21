@@ -30,8 +30,9 @@ internal sealed class SourceMapSelection
     private readonly Dictionary<int, SourceMapPass> passOf = [];
     /// <summary>The pass whose top-level row this is, or null for the world's rows.</summary>
     internal SourceMapPass? PassOf(int row) => passOf.GetValueOrDefault(row);
-    /// <summary>The mission animations bound to each object (the game binds them by name), at most eight per object.</summary>
+    /// <summary>Resolved initial and indirect associations projected to each authored object, at most eight names.</summary>
     internal IReadOnlyDictionary<int, IReadOnlyList<string>> Animations { get; }
+    internal IReadOnlyDictionary<int, MissionAnimationUses> AnimationUses { get; }
     private readonly IReadOnlyList<int>? sourceNodes;
     /// <summary>A template copy the mission makes at run time, which has no source node of its own (a defensive rule for copies outside the aiv and puppies passes).</summary>
     internal bool IsRuntimeCopy(int node) => node >= 0 && sourceNodes != null && node < sourceNodes.Count && sourceNodes[node] != node;
@@ -217,17 +218,17 @@ internal sealed class SourceMapSelection
         foreach (var pass in passes) foreach (int row in pass.Roots) { passOf[row] = pass; passRows.Add(row); }
         foreach (int parent in children.Keys.ToArray())
             if (children[parent].Any(e => passRows.Contains(e.Node))) children[parent] = children[parent].Where(e => !passRows.Contains(e.Node)).ToArray();
-        // An object's rows merge the animations of every node it owns (eight names, then "…").
-        Dictionary<int, List<string>> animations = [];
-        foreach (var (root, names) in mission?.AnimationRoots ?? new Dictionary<int, IReadOnlyList<string>>())
+        // Merge by authored occurrence ownership, never by object name. Retain origin before capping details.
+        Dictionary<int, MissionAnimationUses> animationUses = [];
+        foreach (var (root, uses) in mission?.AnimationUses ?? new Dictionary<int, MissionAnimationUses>())
         {
             if (root < 0 || root >= scene.Nodes.Count) continue;
-            if (!animations.TryGetValue(Owner(root), out var merged)) animations[Owner(root)] = merged = [];
-            foreach (string name in names)
-                if (merged.Count < 8 && name != "…" && !merged.Contains(name)) merged.Add(name);
-                else if (merged.Count == 8 && (name == "…" || !merged.Contains(name))) { merged.Add("…"); break; }
+            token.ThrowIfCancellationRequested();
+            int owner = Owner(root);
+            animationUses[owner] = animationUses.GetValueOrDefault(owner, MissionAnimationUses.Empty).Merge(uses);
         }
-        Animations = animations.ToDictionary(p => p.Key, p => (IReadOnlyList<string>)p.Value);
+        AnimationUses = animationUses;
+        Animations = animationUses.ToDictionary(p => p.Key, p => p.Value.Names);
         parentCounts = [];
         foreach (var edges in children.Values)
             foreach (var edge in edges) parentCounts[edge.Node] = parentCounts.GetValueOrDefault(edge.Node) + 1;

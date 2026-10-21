@@ -189,6 +189,7 @@ public sealed class SceneTreeItem : INotifyPropertyChanged
     internal SourceMapPass? Pass => Kind.StartsWith("pass:", StringComparison.Ordinal) ? Owner.Projection?.Passes.FirstOrDefault(p => "pass:" + p.Kind == Kind) : null;
     /// <summary>The mission animations bound to this object.</summary>
     public IReadOnlyList<string>? Animations => Index is int i ? Owner.Projection?.Animations.GetValueOrDefault(i) : null;
+    public MissionAnimationUses? AnimationUses => Index is int i ? Owner.Projection?.AnimationUses.GetValueOrDefault(i) : null;
     public SourceSelectionNode? Authored => Index is int i ? Owner.Projection?.AuthoredNodes.GetValueOrDefault(i) : null;
     public bool Synthetic => SourceGroup || Index is int i && Owner.Projection?.Boundaries.GetValueOrDefault(i)?.Synthetic == true;
     public bool Selectable => Problem == null && (Section is ZoneEntry or NetworkEntry or DefinitionEntry || Section == null && (Node != null || Synthetic));
@@ -234,11 +235,20 @@ public sealed class SceneTreeItem : INotifyPropertyChanged
     public string OutlinerLabel => Section != null ? SectionLabel : Pass is { } pass ? pass.Label : Kind == "unlinked" ? "Unlinked nodes" : Problem != null && !IsOtherDifficulty ? Label : Short(DisplayName, 180);
     /// <summary>A section of the World tree (a later pass, the world, or Zones, AI Networks, Animations (definitions)): set in SemiBold, with its count.</summary>
     public bool IsSectionHeader => Pass != null || Section is SectionHeader || Owner.Projection != null && Parent == null && Category == "world";
-    /// <summary>Whether a mission animation binds to this object (an icon beside its name).</summary>
+    /// <summary>Whether this object is an initial root or known indirect recipient.</summary>
     public bool IsAnimated => Animations != null;
+    public System.Windows.Media.Brush AnimationBrush => AnimationUses?.HasInitialRoot == true ? InitialAnimationBrush : IndirectAnimationBrush;
+    public static readonly System.Windows.Media.Brush InitialAnimationBrush = AnimationColor(0x6F, 0xC8, 0xD6);
+    // Half the original HSL saturation, with identical hue, lightness and alpha.
+    public static readonly System.Windows.Media.Brush IndirectAnimationBrush = AnimationColor(0x89, 0xB5, 0xBC);
+    private static System.Windows.Media.Brush AnimationColor(byte r, byte g, byte b)
+    { var brush = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(r, g, b)); brush.Freeze(); return brush; }
     /// <summary>The aiv or puppies pass this row lies in (units and pickups the mission places after the world is loaded), or null.</summary>
     private readonly string? addedPass;
-    public string? AnimationsToolTip => Animations is { } animations ? "Bound to mission animations: " + string.Join(", ", animations.Select(a => Short(a, 64))) : null;
+    public string? AnimationsToolTip => AnimationUses is { } uses
+        ? (uses.HasInitialRoot ? "Initial animation root" + (uses.HasIndirect ? "; also receives animations indirectly" : "") : "Receives animation indirectly") + "\n" +
+          string.Join("\n", uses.Uses.Select(a => $"{Short(a.Name, 64)} — {a.Reason}")) + (uses.Truncated ? "\n…" : "")
+        : null;
     /// <summary>
     /// The text at the row's right: the zone of an object or piece of geometry in the world ("Zone: 12"), or the difficulties
     /// placing an aiv or puppies unit or pickup ("E/M/H"). The units and pickups the mission places after the world is loaded

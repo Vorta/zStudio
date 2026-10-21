@@ -36,6 +36,10 @@ public static class AnimationComparer
                 for (int k = 0; k < ranges.Length; k += 2)
                     for (int o = ranges[k]; o < ranges[k + 1]; o++)
                         if (ra.Bytes[o] != rb.Bytes[o]) return $"T{t}[{r}]@{o} {Hex(ra.Bytes, o)}|{Hex(rb.Bytes, o)}";
+                // Mode 2's expected active bit is authored data, not a pointer or unused name prefix.
+                // Modes 1/3 use this area for an animation name / unused traversal operand respectively.
+                if (t == 6 && ra.Bytes[4] == 2 && ra.I32(8) != rb.I32(8))
+                    return $"T6[{r}].expected state {ra.I32(8)}|{rb.I32(8)}";
             }
         }
         var sa = a.AllSequences.ToList(); var sb = b.AllSequences.ToList();

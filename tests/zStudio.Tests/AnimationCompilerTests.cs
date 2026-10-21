@@ -12,6 +12,35 @@ public sealed class AnimationCompilerTests
 {
     private static CancellationToken Token => TestContext.Current.CancellationToken;
 
+    [Theory]
+    [InlineData("REQUIRED", 0, 0)]
+    [InlineData("OPTIONS", 1, 1)]
+    [InlineData("OPTIONS", 2, 1)]
+    public void ObjectPrerequisitesRequireActiveNodesWithoutOverwritingOtherRecordKinds(string group, int minimum, int option)
+    {
+        string source = "ANIMATION_DEFINITIONS ( ANIMATION_LIST ( ANIMATION_DEFINITION ( NAME ( gate ) " +
+            $"ACTIVATION_PREREQUISITE ( {group} ( MINIMUM_TO_SATISFY ( {minimum} ) " +
+            "ANIMATION_LIST ( previous_animation ) OBJECT_ACTIVE_LIST ( ( single ) ( parent middle leaf ) ) ) ) ) ) )";
+        var files = new MemoryFiles(new() { ["data/m1/zrdr/anim.zad"] = Encoding.ASCII.GetBytes(source) });
+        var result = AnimationCompiler.Compile(files, "data/m1/zrdr/anim.zad", ["gate", "single", "parent", "middle", "leaf"], Token);
+        var entry = AnimationPackage.Read(result.Bytes, Token).Entries.Single(e => e.Name == "gate");
+        var records = entry.References[6];
+        Assert.Equal(minimum, entry.Bytes[268]);
+        Assert.Equal(new byte[] { 1, 2, 3, 3, 2 }, records.Select(r => r.Bytes[4]));
+        Assert.All(records, r => Assert.Equal(option, r.I32(0)));
+        Assert.Equal("previous_animation", records[0].Text(8, 32));
+        Assert.Equal(["single", "parent", "middle", "leaf"], records.Skip(1).Select(r => r.Text(12, 28)));
+        Assert.All(records.Where(r => r.Bytes[4] == 2), r => Assert.Equal(1, r.I32(8)));
+        Assert.All(records.Where(r => r.Bytes[4] == 3), r => Assert.Equal(0, r.I32(8)));
+
+        var changed = entry.Clone(Token);
+        changed.References[6][1].SetInt(8, 0);
+        Assert.Contains("expected state", Assert.IsType<string>(AnimationComparer.Difference(entry, changed, Token)));
+        changed.References[6][1].SetInt(8, 1);
+        changed.References[6][2].SetInt(8, 123); // Mode 3's unused operand is not an active-state condition.
+        Assert.Null(AnimationComparer.Difference(entry, changed, Token));
+    }
+
     [Fact]
     public void CompilationBoundsAggregateNonmatchingWildcardWork()
     {

@@ -124,6 +124,7 @@ public sealed class SourceProjectCorpusTests
                 var built = zStudio.Core.Animation.AnimationPackage.Read(File.ReadAllBytes(Path.Combine(exported, Path.GetRelativePath(corpus, animations))), Token);
                 Assert.Equal(shipped.Entries.Select(e => e.Name), built.Entries.Select(e => e.Name));
                 Assert.All(Enumerable.Range(1, shipped.Entries.Count - 1), i => Assert.Null(zStudio.Core.Animation.AnimationComparer.Difference(shipped.Entries[i], built.Entries[i], Token)));
+                AnimationPrerequisiteChecks.Verify(Path.GetFileName(Path.GetDirectoryName(animations))!, built);
             }
             // Worlds rebuilt by their scripts have the shipped nodes, placements, flags, cells, models and textures; only the
             // grouping of coplanar triangles into polygons may differ, which draws the same surfaces.

@@ -1474,5 +1474,6 @@
       ],
       "note": "File > Open workspace… (Ctrl+O): open_root with project true, which refuses a folder that is not a source project (not_project, naming the missing data or gamegen folder), one that is or lies below a link, or one in an earlier source format."
     }
-  ]
+  ],
+  "animationAssociationResults": "scene_tree animations includes initial-root and statically known indirect recipients. animationUses contains up to eight entryIndex/name/origin/reason records; origin is initialRoot or indirect. animationUsesTruncated discloses omissions. animationHasInitialRoot and animationHasIndirect retain both origin summaries when details are capped. GUI tree/search uses #6FC8D6 for any initial root, #89B5BC for indirect-only recipients; same glyph and opacity. Read-only position references and unknown impact targets are excluded."
 }
