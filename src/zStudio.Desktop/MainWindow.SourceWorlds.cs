@@ -936,7 +936,8 @@ public partial class MainWindow
         try
         {
             // A move below the stored precision (see PlacementPrecision) changes nothing: the world is not evaluated again.
-            if (doc.PickupEdits is { } edits && edits.PreviewTransform(source, transform).All(p => p.Value == edits.Transform(p.Key))) return doc;
+            try { if (doc.PickupEdits is { } edits && edits.PreviewTransform(source, transform).All(p => p.Value == edits.Transform(p.Key))) return doc; }
+            catch (InvalidDataException ex) { throw new StudioCommandException("invalid_argument", ex.Message); }
             return await PrepareSourceWorldEditAsync(doc, "Moving placement", (workspace, ct) =>
             {
                 var plan = PlanSourcePlacement(doc, workspace, source, transform, ct);

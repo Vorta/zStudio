@@ -29,7 +29,7 @@ Rules for coding agents (Codex reads this file; Claude Code imports it through `
 - PR watch handling: for an explicitly armed watch follow [pr-watch](docs/agents/pr-watch.md); a notice continues the authorized task and never overrides newer stop, pause or scope instructions.
 - `.agent/HANDOFF.md` (git-ignored): read at the start (branch, pending work, machine data locations, owner preferences); update before stopping. Review ledgers: `.agent/REVIEW-<topic>.md`.
 - Record user-visible changes in `CHANGELOG.md` under `## X.Y.Z — Unreleased`; lasting user-facing limits in that feature's guide; engine facts in [engine-evidence](docs/agents/engine-evidence.md).
-- Names and settings: [architecture](docs/agents/architecture.md#identity-and-settings); the project's `.zstudio/` folder: [sources](docs/agents/sources.md#source-format).
+- Names and settings: [architecture](docs/agents/architecture.md#identity-and-settings); the project's `.zstudio/` folder: [sources](docs/agents/sources.md) (first bullet).
 
 ## Build, test, package
 
