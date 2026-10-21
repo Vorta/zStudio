@@ -4,7 +4,7 @@ using System.Windows.Controls;
 using System.Windows.Media;
 using System.Windows.Threading;
 using zStudio.Core;
-using zStudio.Core.Animation;
+using zStudio.Core.Sources;
 using zStudio.Desktop;
 using Xunit;
 
@@ -127,10 +127,11 @@ public sealed class WindowClosingTests
                     foreach (Window window in app.Windows.Cast<Window>().ToArray())
                     {
                         if (window is MainWindow main)
-                            foreach (var doc in main.ViewModel.Documents) doc.AnimationEdits?.MarkSaved();
+                            foreach (var doc in main.ViewModel.Documents) if (doc.SourceWorld?.Workspace is { IsDirty: true } workspace) workspace.Discard();
                         window.Close();
                     }
                     app.Shutdown();
+                    foreach (var fixture in fixtures) fixture.Dispose();
                 }
 
                 async Task Check(string[] answers, int documentCount, bool closes, bool repeatClose = false)
@@ -229,15 +230,16 @@ public sealed class WindowClosingTests
         { throw new TimeoutException($"Desktop workspace checks timed out during {Volatile.Read(ref phase)}.", ex); }
     }
 
+    private static readonly List<zStudio.Tests.SourceWorldFixture> fixtures = [];
+
+    /// <summary>A source world of its own project with an unsaved edit: each one asks about its changes when it closes.</summary>
     private static DocumentModel DirtyDocument(int index)
     {
-        var package = new AnimationPackage { Prefix = new byte[72], Tail = [] };
-        var entry = new AnimationEntry(new byte[308], 0, 0);
-        package.Entries.Add(entry);
-        var document = new DocumentModel(new AssetDocument(Path.Combine(Path.GetTempPath(), $"close-fixture-{index}.zbd"),
-            new(0, DateTime.MinValue), new(FormatFamily.Animation, 28, Recognition.Supported, "Close fixture"), ReadOnlyMemory<byte>.Empty)
-        { Animations = package });
-        document.AnimationEdits!.Apply(0, "Change reset delay", e => e.SetFloat(164, 1));
+        zStudio.Tests.SourceWorldFixture fixture = new(); fixtures.Add(fixture);
+        SourceWorkspace workspace = new(fixture.Project);
+        workspace.Apply("Change the world script", [("gamegen/m1.gs", System.Text.Encoding.Latin1.GetBytes(File.ReadAllText(fixture.Path("gamegen/m1.gs")) + "# edited\r\n"))]);
+        var document = new DocumentModel(new AssetDocument(fixture.Path("gamegen/m1.gs"), new(0, DateTime.MinValue),
+            new(FormatFamily.Unknown, null, Recognition.Supported, "Close fixture"), ReadOnlyMemory<byte>.Empty), new SourceWorldSession(workspace, "m1"), null);
         Assert.True(document.IsDirty);
         return document;
     }
