@@ -1,73 +1,56 @@
 # 3D navigation
 
-**F11** toggles fullscreen on the current monitor, and **F10** independently hides the UI so the 3D view fills the window; they are also View → Fullscreen and View → Hide UI and work in every 3D preview. Together they give the view alone on the whole screen, for footage. Both retain the current camera, playback, selection and pending edits; toggling them during Fly does not start a new Fly session. Escape keeps its existing Fly and gesture cancellation behavior.
+Every 3D view (maps, models and animation previews) uses the same Blender-style controls. The game uses +Y up and −Z forward.
 
-Hide UI hides the menus and title row, a source map's command bar, World tree, Properties pane and status bar, the Diagnostics pane, banners and chips (including Flycam's), an open Properties window, transport controls, the rebuild notice and the editor guides: grid, axes, view cube, bounds, selection box, handles, outlines, AI nodes and VTOL routes. Display choices such as wireframe, textures, the horizon and the Overlay highlights stay as chosen, and the view loses its rounded corners. While the UI is hidden, clicks select and edit nothing and the pointer draws no hover outlines; middle-button navigation, the wheel, numpad views and Fly work as usual. Hiding the UI leaves the polygon zone tool and turns the terrain brush off (it is refused while a stroke is held; released zone strokes still apply), and neither can be turned on until the UI shows again. Keyboard focus in a control that hides moves to the view. Pane sizes and other layout preferences are not changed. F10 shows everything again as it was, and leaving 3D content shows it automatically. Fullscreen remains after leaving 3D content until F11 turns it off; exiting it restores the previous window placement. Neither mode is remembered at startup. MCP uses the same `zstudio_presentation` state and controls.
-
-If the viewport layout changes during a terrain or zone paint stroke, that stroke keeps only the points or faces already painted. Release to finish it, or press Escape to cancel, then start a new stroke in the new layout.
-
-The **Face orientation** toolbar toggle in model, Whole world and animation previews shows front-facing polygons in blue and back-facing polygons in red. It uses triangle winding, including mirrored transforms, rather than stored vertex normals. The mode applies a 50% blue or red tint over the normal appearance, preserving textures, vertex/material colors and transparency. It temporarily takes precedence over world surface highlights; turning it off restores the chosen highlight. Wireframe polygon outlines stay visible over it. It does not edit the mesh, change playback or move the camera. Grid and editing guides remain independent.
-
-Models, Whole world and animation previews share Blender-style navigation. Smooth camera inertia remains enabled. Perspective zoom moves along the ray from the camera through the pointer without rotating the view, with speed determined by the visible scene surface under the pointer. Point at distant geometry to travel faster or nearby geometry for close inspection. Empty space retains the last surface-based speed; framing or an explicit camera pose supplies the initial speed before a surface is sampled. Zoom can continue past the old view target, and a tiny pan or orbit does not reset its speed. Orthographic zoom changes the view width and shifts the camera so the pointed location stays at the same screen position, including in Front/Top/Side views.
-
-Wheel and Ctrl + middle drag refresh the surface distance at the current pointer position. Numpad zoom uses the pointer when it is inside the viewport, otherwise the view center. Zoom inertia keeps the final input's camera-relative ray through presentation layout changes and updates the surface distance as the camera moves. Geometry beside or behind the camera does not control speed unless it lies under that ray.
-
-Press the middle button over a visible object to orbit around the surface beneath the pointer. Picking does not move or recenter the camera: an off-center point stays at the same screen position as you orbit. The point remains fixed in world space through the drag and its inertia, even if the object animates. Picking is deferred until orbit movement actually begins. A press over empty space keeps the existing pivot. Hidden objects, the horizon, grid, bounds, AI overlays and editing handles do not supply orbit points. Picking uses scene triangles, including transparent materials, without per-texel alpha testing.
-
-Hold the middle button and press or release Shift/Ctrl to switch among orbit, pan, zoom and dolly without starting a new drag. Either input order and either left/right modifier key works. Each transition resets movement sampling and inertia; only movement in the final mode can continue after release. Returning to orbit picks once at the start of that orbit segment. Unsupported modifier combinations suspend movement until released. Captured zoom drags beyond the viewport use its nearest edge.
-
-Pan and dolly translate the pivot along with the camera. Framing, explicit camera positioning and named views establish a view-center pivot. Perspective zoom retains the pivot while approaching its view target; further forward travel advances it with the view target. Picking a new orbit point does not reset the zoom-speed reference. Snapshots preserve both the pivot and the last zoom reference through preview refreshes.
+## Mouse and keyboard
 
 | Input | Action |
-|---|---|
-| Middle-button drag | Pick the surface under the initial press, then orbit around it |
-| Shift + middle-button drag | Pan in the screen plane |
-| Ctrl + middle-button drag | Zoom; down zooms in, up zooms out |
-| Wheel / Numpad + or − | Zoom in/out |
-| Ctrl + Shift + middle-button drag | Dolly the camera and its target forward/backward |
-| Numpad 1 / 3 / 7 | Front / right / top |
-| Ctrl + Numpad 1 / 3 / 7 | Back / left / bottom |
-| Numpad 2 / 4 / 6 / 8 | Orbit down / left / right / up in 15° steps |
-| Ctrl + Numpad 2 / 4 / 6 / 8 | Pan down / left / right / up |
-| Numpad 9 | Opposite view |
-| Numpad 5 | Toggle perspective/orthographic |
-| Home | Frame all visible scene geometry |
-| Numpad . | Frame the selected scene node, or the active asset without a node selection |
-| Numpad 0 | Toggle animation Follow camera |
+| --- | --- |
+| Middle-button drag | Orbit around the surface under the pointer |
+| **Shift** + middle-button drag | Pan |
+| **Ctrl** + middle-button drag | Zoom (down zooms in) |
+| Wheel / **Numpad +** or **−** | Zoom toward the pointer |
+| **Ctrl** + **Shift** + middle-button drag | Dolly the camera and its target |
+| **Numpad 1** / **3** / **7** | Front / right / top view |
+| **Ctrl** + **Numpad 1** / **3** / **7** | Back / left / bottom view |
+| **Numpad 2** / **4** / **6** / **8** | Orbit down / left / right / up in 15° steps |
+| **Ctrl** + **Numpad 2** / **4** / **6** / **8** | Pan |
+| **Numpad 9** | Opposite view |
+| **Numpad 5** | Switch perspective / orthographic |
+| **Home** | Frame everything visible |
+| **Numpad .** | Frame the selection |
+| **Numpad 0** | Switch animation Follow camera |
+| Left click | Select |
 
-Use Num Lock for numeric-keypad shortcuts. The top-row digits keep their normal behavior. Shortcuts apply with the 3D surface focused or hovered, except when a text field, menu, timeline or another native input control owns the key. Animation Space transport retains its existing behavior. In a source map, named views, projection choices and framing are also available in the view's **Perspective** chip.
+Zooming moves toward the pointer at a speed set by the surface under it: point at distant geometry to travel fast, at nearby geometry to inspect closely. You can press or release **Shift** and **Ctrl** during a middle-button drag to switch between orbit, pan, zoom and dolly. Use Num Lock for the numeric keypad; the shortcuts work while the view is focused or under the pointer, except when a text field or menu has the key.
 
-Axis shortcuts enter orthographic projection, which has no perspective foreshortening. Orbiting out of an axis view returns to perspective automatically. Choosing orthographic explicitly with Numpad 5 (or, in a source map, the **Perspective** chip) keeps that projection while orbiting. Switching projections preserves the orbit target and apparent scale at that target.
+## Fly camera
 
-The game uses +Y up and −Z forward. Front looks from −Z, right from +X, and top from +Y. The view cube uses these same directions. Top and bottom are exactly aligned; free orbit, Fly and authored camera previews retain the upright ±89° pitch limit. Panning and zooming retain an exact axis view.
+Choose **Flycam** (in a map's Camera group; **Fly camera** in a compiled model or Whole world preview) to capture the mouse and keyboard for free flight. Animation previews have no fly camera. A banner shows the speed and **Exit**.
 
-Framing uses currently visible transformed geometry, excluding the horizon, grid and editing handles. Selected nodes include their visible descendants; pickups frame their complete placed instance. Animation source nodes frame their visible runtime instances without changing sequence/event selection or time. The animation toolbar's Frame button frames the active animation; Home includes the visible mission when Map is enabled. Framing preserves orientation and projection. An unavailable selection leaves the camera in place and reports a status message.
+| Input | Action |
+| --- | --- |
+| **W** / **S** | Forward / backward along the view |
+| **A** / **D** | Strafe left / right |
+| **Space** / **C** | Up / down |
+| Move the mouse | Look around |
+| Wheel | Change speed |
+| **Escape** | Return to normal controls |
 
-Manual navigation leaves animation Follow camera immediately, starting from the displayed pose. Numpad 0 and the Follow camera button share the same state; reenabling follow applies the authored camera immediately when available. Navigation never edits serialized camera records or pauses playback.
+The camera passes through geometry and keeps its speed near and far from surfaces. Switching to another application or replacing the view also ends flight.
 
-Left-click selects scene geometry and retains pickup-axis editing. Middle-button gestures do not select nodes or move pickups. Right-drag camera bindings are removed. Camera gestures are blocked during pickup drags. Ordinary camera drag state is released on capture/focus loss, deactivation, preview replacement and shutdown.
+## Views
 
-Fly remains an explicitly activated mode for models and Whole world. Entering it switches to perspective at the current pose, with the existing WASD, Space/C, mouse-look, wheel-speed and Escape controls. Texture navigation is separate. AI paths support [multi-node Edit mode and G/R/S transforms](ai-networks.md#edit-a-whole-path); exit that mode before Fly. Camera roll, local-view mode and region zoom are not implemented.
+Axis views (**Numpad 1**, **3**, **7** and their opposites) switch to orthographic projection; orbiting out of one returns to perspective. Orthographic chosen with **Numpad 5** stays while you orbit. Cameras stay upright: tilt stops at ±89°, and only the top and bottom views look straight down or up. Framing uses the visible geometry and keeps the view's direction and projection; a pickup or vehicle frames as its whole placement. In a map the **Perspective** chip offers the projections, named views and framing.
 
-## MCP equivalents
+Manual navigation leaves animation Follow camera at the shown pose; **Numpad 0** or the Follow camera button returns to the authored camera.
 
-`zstudio_camera` uses the current preview UUID and the same camera operations as the GUI. Existing `read`, `set`, `move`, `rotate` and `frame` actions remain available. The default frame target is `asset` for compatibility; `target=all` matches Home, while `target=selected` uses the shared selection or an explicit `node` index. Hidden/unavailable geometry returns `not_ready` without moving the camera.
+**Face orientation** tints front faces blue and back faces red, from the polygons' winding.
 
-Additional actions:
+## Hide UI and fullscreen
 
-- `pan`: `horizontal` and `vertical` screen deltas in DIP.
-- `rotate`: `horizontal` and `vertical` deltas, with optional `screenPoint: [x, y]` in viewport DIP to pick an orbit surface once before rotating. Omit it to keep the current pivot. Empty-space picks keep the pivot; coordinates outside the viewport are rejected. The preview must be rendered before picking.
-- `zoom`: signed wheel-equivalent `steps`, positive to move forward, with optional `screenPoint: [x, y]` viewport DIP coordinates for perspective direction and surface-based speed, or orthographic anchoring. Omit it to query the viewport center. Perspective movement follows the pointer ray; orthographic scaling keeps the pointed location fixed on screen. Empty space retains the last speed. Explicit coordinates require a rendered preview and must be inside the viewport; MCP never reads the physical mouse.
-- `dolly`: signed `distance` in game units, positive forward.
-- `view`: `front`, `back`, `left`, `right`, `top`, `bottom`, or `opposite`.
-- `projection`: `perspective` or `orthographic`, with optional positive orthographic `width` in game units.
+**F10** (**View → Hide UI**) hides everything but the 3D view: menus, panes, status bar, banners, the Properties window and editor guides such as the grid, axes, bounds, handles, AI nodes and VTOL routes. Display choices such as wireframe, textures and overlays stay. While the UI is hidden, clicks select and edit nothing, but navigation and Flycam work. **F10** again shows everything as it was; leaving the 3D view does too.
 
-`set` also accepts projection and orthographic width. Readback includes Position, LookDirection, UpDirection, FieldOfView, Projection, OrthographicWidth, AxisView, AutoPerspective, OrbitPivot, NavigationReferenceDistance and FramingSelection. FieldOfView retains the perspective camera setting while orthographic is active. `preview_state` includes the expanded camera state and `framingSelection`. Animation camera following uses the existing `animation_options.changes.followCamera`.
+**F11** (**View → Fullscreen**) fills the monitor. Together, F10 and F11 give the view alone on the whole screen, for footage. Neither is remembered at startup, and neither changes the camera, playback, selection or pending edits.
 
-NavigationReferenceDistance is the most recently sampled camera-to-surface distance, or the initial framing/pose distance until a hit is available. Perspective travel is `0.12 * max(reference distance, 0.01) * steps` game units. Inputs larger than one wheel step refresh the query between substeps of at most one step. This speed is independent of the orbit target and near/far clipping. Reversing zoom moves backward using the same pointed-surface rule. The 0.01-unit minimum reference allows crossing a surface instead of approaching it indefinitely.
-
-Invalid arguments are rejected before changing navigation/follow state. Camera mutations return `busy` during pickup drags; reads remain available. MCP uses semantic operations and never captures physical input. Discovery remains windowless.
-
-The compiled Whole world's **Parachute** button, or **VTOL route** in a source map's Show group, opens the [VTOL drop-window editor](parachute-editor.md). It follows ordered flight phases at path crossings; camera mutations pause during its pointer move, with a numeric start-time alternative.
-
-Selection bounds use one enclosing box aligned with the selected object's effective transform, including its visible parts and current placement draft. Hidden parts and inactive LODs do not enlarge the box. Synthetic groups without a surviving owner use an unambiguous common ancestor frame when available; otherwise a world-aligned box remains the safe fallback.
+MCP: `zstudio_camera` (orbit, pan, zoom, dolly, views, projection, framing), `zstudio_presentation` (Hide UI, fullscreen).

@@ -13,6 +13,9 @@ $extensionRelative = "dependencies/blender/zstudio_recoil-$ExpectedVersion.zip"
 foreach ($required in @('dependencies/zStudio.Desktop.dll', 'dependencies/zStudio.Desktop.runtimeconfig.json', 'dependencies/hostfxr.dll', 'dependencies/README.md', 'dependencies/LICENSE', 'dependencies/THIRD-PARTY-NOTICES.md', $extensionRelative)) {
     if (-not (Test-Path -LiteralPath (Join-Path $root $required) -PathType Leaf)) { throw "Missing portable file: $required" }
 }
+foreach ($excluded in @('dependencies/docs/agents', 'dependencies/docs/mcp-capabilities.json')) {
+    if (Test-Path -LiteralPath (Join-Path $root $excluded)) { throw "Agent-only documentation is packaged: $excluded" }
+}
 $expectedFileVersion = ($ExpectedVersion -split '-', 2)[0] + '.0'
 foreach ($binary in @('zStudio.exe', 'dependencies/zStudio.Desktop.dll')) {
     $version = (Get-Item -LiteralPath (Join-Path $root $binary)).VersionInfo

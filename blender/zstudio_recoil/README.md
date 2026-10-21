@@ -1,49 +1,47 @@
 # zStudio RECOIL for Blender
 
-This extension imports and exports zStudio source-format-4 glTF graphs in **Blender 5.2 LTS on Windows x64**. It uses Blender's bundled glTF importer/exporter and the installed zStudio format library through a windowless helper. No zStudio window, MCP permission or network connection is needed.
+This extension imports and exports zStudio source glTF graphs in **Blender 5.2 LTS on Windows x64**. It uses Blender's glTF importer and exporter and the zStudio format library through a windowless helper; it needs no zStudio window, MCP access or network connection.
 
 ## Install
 
-1. In Blender, open **Edit → Preferences → Get Extensions** and choose **Install from Disk** from the upper-right menu.
-2. Select `dependencies/blender/zstudio_recoil-0.9.5.zip` from the portable zStudio folder and enable it.
-3. In **Preferences → Add-ons**, find **zStudio RECOIL**, expand its entry, and set **zStudio executable** to that portable folder's `zStudio.exe`.
+1. In Blender, open **Edit → Preferences → Get Extensions** and choose **Install from Disk** in the upper-right menu.
+2. Select `dependencies/blender/zstudio_recoil-<version>.zip` from your portable zStudio folder (the version is zStudio's) and enable it.
+3. In **Preferences → Add-ons**, expand **zStudio RECOIL** and set **zStudio executable** to that folder's `zStudio.exe`.
 
-The helper is chosen in your preferences. Imported files cannot choose an executable. The extension and zStudio share version **0.9.5**; update them together. Keep the portable folder's `dependencies` alongside `zStudio.exe`.
+The extension and zStudio share one version; update them together and keep `dependencies` beside `zStudio.exe`.
 
 ## Import and edit
 
-Use **File → Import → RECOIL glTF**. Select a source project's master map or a model, or the input file of a zStudio checkout. Each imported graph gets its own Blender scene; switch between imports with Blender's scene selector. Each physical glTF has one shared collection. Reference holders retain their own transforms, flags and zone assignment; collection instances display the referenced file. Reference spellings such as `part.gltf` and `./part.gltf` stay distinct in the exported graph.
+In zStudio, open the project's map and choose **Tools → Edit in Blender…** to check out a source model or master map with every file it references. In Blender, choose **File → Import → RECOIL glTF** and select the checkout's input file. Each import gets its own Blender scene; each physical glTF file is one shared collection, and reference holders display the file they reference through collection instances.
 
-Select an object and open **Object Properties → RECOIL** to edit its engine name, seven Boolean node flags, optional Can Modify / Clip To crater mode, and zone (**Inherit**, **Any**, or an ID from 0 to 254). Hover over each field for a description of its role in the game. Zone ID 0 is an ordinary explicit zone; **Inherit** takes the parent zone. Omitted Boolean flags mean false. Unset crater mode writes no `declient` property. The unresolved node bits are not exposed.
+- **Object Properties → RECOIL** (also in the **RECOIL** sidebar) edits an object's engine name, its node flags, its crater mode (Can Modify or Clip To) and its zone (**Inherit**, **Any**, or 0–254). Hover over a field for its role in the game. **File Load Root** in the sidebar edits the file's root attributes.
+- **Edit Shared Model** on a reference holder edits the referenced file's collection: changes there affect every reference to that file. Add new objects there. Choose **Return to World** when done. Move reference holders, not the collection instances, to place copies.
+- **Edit Placement Zones** opens a zone workspace for that one occurrence of a referenced file: node zones, altitude gates and face zones there affect only that placement. **Accept Placement Zones** keeps them, **Cancel Placement Zones** discards them. Finish every zone workspace before exporting.
+- In Mesh Edit Mode, **Assign Polygon Zones** sets an ordered list of up to three zone IDs (or `any`; empty clears) on the selected faces, and **Select Faces by Zones** selects faces with a given list. Objects sharing a mesh share its face zones; make the mesh single-user in **Edit Shared Model** to give them their own.
+- **Mesh Properties**, **Material Properties** and **Object Appearance** show their stored flag words as checkboxes and the other engine values as JSON.
+- To make a textured material untextured, disconnect its image and remove `texture` from **Material Properties → Other values**.
 
-The **RECOIL** sidebar shows the same editing values alongside the import, export and reference-workspace actions. **File Load Root** in that sidebar edits the file's root attributes. Source identities, original names, metadata and workspace bookkeeping are saved internally and hidden from ordinary Custom Properties. Use the RECOIL fields and advanced dialogs to edit engine properties; your own Custom Properties remain available. Import the glTF again to create a scene for this extension; scenes without the required internal state cannot be exported.
-
-Select a reference holder and choose **Edit Shared Model** to edit its source collection. Geometry and source properties there affect every reference to that file. Ordinary child collections may organize that file; viewport hiding and selection locks do not remove objects from export. Keep physical collection instance offsets at zero and move reference holders to place instances. Use **Return to World** when finished. New objects belong in that source collection. Physical source filenames and existing reference links are retained; the extension does not invent a separate glTF for every mesh.
-
-Keep reference instancing enabled and its collection target intact. A holder that also has its own mesh uses an `↳` child to display the referenced file: move the holder, and leave that child parented to it with identity transforms. Export refuses removed, duplicated, moved or retargeted reference helpers. Undo those helper edits or reimport to restore the reference display.
-
-Imported objects and resources belong to their original graph. Export refuses copies from a separate RECOIL import, even when both graphs use the same filenames. Undo the cross-graph copy and create the replacement within the intended graph. Duplicating objects or making meshes single-user within that graph remains supported. Export also refuses faces joined (Ctrl+J) from another RECOIL mesh, or brought in by a Boolean modifier whose operand is one, since their polygon identities belong to that mesh; undo the join or delete those faces (for a Boolean, apply it first).
-
-**Edit Placement Zones** opens a separate zone workspace. Node zones, altitude gates and face zones there affect only that reference occurrence, including nested occurrences. A face split later in Blender takes the placement zones of the nearest face it was split from that has an assignment. **Accept Placement Zones** keeps these assignments; **Cancel Placement Zones** discards that workspace's draft. Geometry and hierarchy changes are refused in a zone workspace: use shared-model editing for those. Nested placement edits remain inside the outer draft: accepting a nested workspace keeps its changes in that draft, and canceling the outer workspace discards them. Finish or cancel every open zone workspace before exporting.
-
-Objects using the same mesh inside that physical file also share its face assignments. To give them independent faces, first make the mesh single-user in **Edit Shared Model**, then edit the placement zones.
-
-In Mesh Edit Mode select faces, then choose **Assign Polygon Zones**. Enter an ordered comma-separated list of up to three zone IDs, with `any` allowed; an empty list clears explicit face zones. **Select Faces by Zones** selects faces with that exact assignment. The face attributes survive ordinary Blender geometry editing. Unapplied modifiers export as their evaluated result, with face zones following the faces they produce (apply them first on a mesh with shape keys). If a modifier removes the face identities or mixes incompatible identities or assignments, export refuses instead of guessing which placement zones should follow them.
-
-**Mesh Properties**, **Material Properties** and **Object Appearance** expose their separate stored flag words as checkboxes, with the remaining values as JSON. These are advanced engine attributes, not additional node flags. Object transform bookkeeping is represented by Blender's transforms and is excluded from appearance flags. Source validation runs before an export is offered to zStudio. Blender's viewport is an editing view, not a simulation of the game's collision, crater or altitude queries.
-
-To make an imported textured material untextured, disconnect its image and remove `texture` from **Material Properties → Other values**. Export refuses a removed image while a recorded engine texture name remains, including missing-image checkers. Materials originally authored with only a named runtime texture retain that behavior.
+Export refuses edits it can't map back to the sources, and says what to undo:
+- removing, duplicating, moving or retargeting a reference's display helper (the `↳` child of a holder that has its own mesh);
+- objects copied from another RECOIL import, or faces joined (**Ctrl+J**) or Boolean-merged from another RECOIL mesh;
+- modifiers that remove face identities or mix incompatible zone assignments (apply them first);
+- geometry or hierarchy changes inside a zone workspace.
 
 ## Export and update zStudio
 
-Use **File → Export → RECOIL glTF graph** or **Export RECOIL glTF** in the sidebar. Choose a folder outside the imported sources; a checkout defaults to its outbox. A successful export creates a new generation containing all linked glTFs, buffers and textures, with a completion receipt. Source properties and zones remain embedded in glTF. The receipt and provenance are temporary workflow data, not authoritative project metadata.
+1. Choose **File → Export → RECOIL glTF graph** (or **Export RECOIL glTF** in the sidebar); a checkout exports into its own outbox. Each export is a complete new generation of the linked files with a receipt.
+2. In zStudio, with a map of the project open, choose **Tools → Update from Blender export…**. The whole graph is validated and applied as one undoable edit; placement zones elsewhere in the project follow it. Source edits made in zStudio since the checkout, and shared texture changes, need your confirmation.
+3. **Save** in zStudio writes the source files; only a project export builds game files.
 
-For a zStudio project, use **Tools → Edit in Blender…** to choose a source file and create a checkout first. After exporting from Blender, open its map from the project's map picker, then choose **Tools → Update from Blender export…**. The whole graph is validated and accepted as one undoable source edit. Existing placement assignments in other source files are remapped through the edit. Conflicting source changes and shared texture replacements require an explicit decision. An export is a Blender undo step: after undoing past an export whose update zStudio applied, redo it (Ctrl+Shift+Z) or undo that update in zStudio before exporting again (otherwise create a fresh checkout), or an update that would remap placement assignments is refused. Save in zStudio to publish source changes; only a project export writes compiled game files.
+An export is a Blender undo step. After undoing past an export that zStudio applied, redo it (**Ctrl+Shift+Z**) or undo that update in zStudio before exporting again, or start a fresh checkout. Use the RECOIL commands for this workflow: ordinary Blender glTF exports lack the provenance an update needs. Saving the `.blend` keeps the imported baseline and images.
 
-Use the RECOIL import/export commands for this workflow. Ordinary Blender glTF exports lack the graph provenance needed for safe updates. Old flattened checkouts must be replaced by a new checkout.
-
-Saving a `.blend` retains the exact imported baseline, reference collection identities, editing properties and packed images. Reopening can restore its temporary baseline cache. Export still validates all current geometry and metadata. Polygon boundaries are retained when they represent the exported surface; faces with differing placement zones, normals, UVs or non-affine shape-key deformation remain separate when merging them would change that surface.
+MCP: `zstudio_source_blender_checkout`, `zstudio_source_blender_checkouts`, `zstudio_source_blender_update`, `zstudio_source_blender_extension`.
 
 ## Limits
 
-The initial compatibility range is Blender 5.2.x, with glTF `.gltf` files and external PNG textures. Normal zStudio source-format restrictions apply, including supported material channels, engine names, transforms and model sizes. Assign new surfaces a material with Metallic set to zero. Missing source images (including names supplied by runtime texture cycles) appear as magenta checkers; unchanged checkers are editor placeholders and never become source textures. Replacing a checker with an actual image exports that authored image normally. A graph is bounded to 4,096 files and 512 MiB of source bytes. Cyclic or escaping references are refused. No operation writes the protected retail corpora or the original imported files.
+- Blender 5.2.x, `.gltf` files with external PNG textures, and the zStudio source format's rules for materials, names, transforms and model sizes. Give new surfaces a material with Metallic set to zero.
+- Missing images show as magenta checkers and never become source textures; replace one with an actual image to export it.
+- A graph holds at most 4,096 files and 512 MiB of source data; cyclic or escaping references are refused.
+- Blender's view is an editing view, not the game's collision, crater or zone queries. A pickup's collision volume (`bvol`) is hidden by its material, so it still counts in framing and shows in wireframe.
+- Import sessions stay in the temporary folder.
+- Nothing writes the protected retail folders or the imported originals.
