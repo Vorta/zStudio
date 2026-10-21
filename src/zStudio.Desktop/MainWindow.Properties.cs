@@ -147,7 +147,7 @@ public partial class MainWindow
         if (selectedNode is int node && properties != null)
         {
             string name = (motion?.Viewport.PreviewScene ?? scene?.PreviewScene ?? doc.Document.Scene)?.Nodes.ElementAtOrDefault(node)?.Name ?? "Scene object";
-            // A source world's own objects (not placed copies or mission actors, which the card shows read-only) edit their sources.
+            // A source world's own objects edit their sources; placed copies and mission actors (vehicles, animation-placed objects) open read-only here.
             if (doc.SourceWorld != null && scene?.PickupAt(node) == null && SourceObjectNode(node) is int sourceNode && doc.SourceBuild?.Provenance.ContainsKey(sourceNode) == true
                 && scene?.Mission?.ActorAt(SourceSelectionOwner(doc, sourceNode)) == null)
             {
