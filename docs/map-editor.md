@@ -83,7 +83,7 @@ The **AI Networks** section lists the mission's networks (`net_01`…) with thei
 
 Select a network to emphasise it and open its card. The card edits the network header with the names of the developers' own Net Edit dialog: **Net Name**, **Net Type**, **Attack Strategy**, **Pursuit Radius Min** and **Max**, **Activation Radius**, **Attack Radius**, **Return Radius**, **Attack Dwell**, **Post Attack Dwell** and **Buddies Attack**; under **No effect in play**, **Buddies Activate**, **Path Width** and **Hide Time 1** and **2**, which the game never uses. The line under each field says what it does in play. **Apply** changes only those values in `data\mN\zrdr\aipath\net_NN.zrd`.
 
-Move one node by selecting it and dragging its handles or editing its card. Moving, rotating or scaling several nodes at once uses AI path Edit mode, which only MCP turns on (`zstudio_ai_path`); then click, Shift-click or drag a rectangle to select nodes and press **G**, **R** or **S** with the pointer (**X**, **Y**, **Z** constrain to an axis), or type values; **Enter** confirms one undo step, **Escape** cancels.
+Moving, rotating or scaling several nodes at once uses AI path Edit mode, which only MCP turns on (`zstudio_ai_path`); then click, Shift-click or drag a rectangle to select nodes and press **G**, **R** or **S** with the pointer (**X**, **Y**, **Z** constrain to an axis), or type values; **Enter** confirms one undo step, **Escape** cancels.
 
 MCP: `zstudio_source_ai_network`, `zstudio_ai_networks`, `zstudio_ai_nodes`, `zstudio_ai_selection`, `zstudio_ai_path`.
 

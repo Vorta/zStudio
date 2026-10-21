@@ -21,7 +21,7 @@ Rules for model, Whole world, mission and animation previews. Engine facts and a
 
 ## Turrets
 
-- Turrets initialize from `ai.zrd` for each matching scene instance, with its pattern and destruction-animation rules ([`ai.zrd`](engine-evidence.md#aizrd)); an absent animation name never resolves the reserved empty entry.
+- Turrets initialize from `ai.zrd` for each matching scene instance, with its pattern and destruction-animation rules ([`ai.zrd`](engine-evidence.md#aizrd)).
 - Apply the selected primary cleanup to the actual instance, with reset components scoped to that turret; keep destroyed geometry for later animation playback. Hide initialization-only fire-point and effect helpers without deleting source records.
 
 ## Pickups
@@ -59,7 +59,7 @@ Rules for model, Whole world, mission and animation previews. Engine facts and a
 - Projection changes keep the target plane's apparent scale. Clipping uses perspective side planes or parallel orthographic planes; picking, framing, billboards, horizon and constant-pixel pickup handles support both. Frame uses visible transformed geometry with stable source-node/descendant selection, excluding horizon, grid and handles.
 - Fly: [workbench](workbench.md#fly-camera); its motion integrates before camera finalization. Terrain collision is not simulated for any camera.
 - Axis views enter orthographic and return to perspective on orbit; an explicitly chosen orthographic projection persists. Camera snapshots keep projection, width and axis state through refreshes. Manual navigation exits Follow camera without changing playback or serialized data.
-- Camera animation channels ([cameras](engine-evidence.md#animation-runtime)): SetTarget (+0x14) is translation and SetPosition (+0x20) is Euler rotation in transform mode; the eye comes from the world matrix and the forward direction from its negative Z basis. Never treat Euler angles as eye coordinates or translation as a look-at target. Stored and event horizontal FOV is radians, converted to degrees at the preview-frame boundary. Camera keyframes keep parent transforms and deterministic seeking. Follow camera toggles apply immediately while paused.
+- Camera animation channels follow the engine's camera semantics ([cameras](engine-evidence.md#animation-runtime)): never treat Euler angles as eye coordinates or translation as a look-at target; the radian horizontal FOV converts to degrees at the preview-frame boundary. Camera keyframes keep parent transforms and deterministic seeking. Follow camera toggles apply immediately while paused.
 - Idle regression captures read the presented back buffer without forcing a render or resize.
 
 ## Ground grid, collision and height

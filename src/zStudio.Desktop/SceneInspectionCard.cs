@@ -332,7 +332,8 @@ internal sealed partial class SceneInspectionCard : Grid
     private Task? applying;
     private void Apply()
     {
-        if (!HasChanges) return;
+        // A placement draft that would store nothing (a change below the stored precision) ends, as Revert would.
+        if (!HasChanges) { if (DraftSource != null && ObjectEditor == null) CancelDraft(); return; }
         if (apply(this) is { IsCompleted: false } running) applying = running;
     }
     internal string Copy(string? field, bool clipboard)

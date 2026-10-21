@@ -55,7 +55,7 @@ public partial class MainWindow
                 matches: (p, query) => search.Pickup(p, query),
                 maximumRowBytes: p => InspectionResultBudget.Pickup(p, edits.Scope(p.Source).Description));
         });
-        Register(r, "pickup_move", "Move a source map's pickup to exact coordinates as one undoable operation, including unambiguous difficulty counterparts. The move accepts changed coordinate tokens of the resource sources (data/mN/zrdr/puppies*.zrd) in memory, stored with one decimal (rotations in radians with four; unchanged values keep their text), and updates the scene. The result is the accepted document/revision. Save writes the sources; no archives are created. Compiled worlds are read only.", true,
+        Register(r, "pickup_move", "Move a source map's pickup to exact coordinates as one undoable operation, including unambiguous difficulty counterparts. The move accepts changed coordinate tokens of the resource sources (data/mN/zrdr/puppies*.zrd) in memory, stored with one decimal (unchanged values keep their text), and updates the scene. The result is the accepted document/revision. Save writes the sources; no archives are created. Compiled worlds are read only.", true,
             [DocumentParameter, RevisionParameter, new("source", "object", "Exact source identity returned by pickups; field names are case-sensitive.", true, Properties:
                 [P("ArchivePath", "string", "Owning archive path returned by pickups.", true),
                  new("AssetIndex", "integer", "Resource asset index returned by pickups.", true, Minimum: 0, Maximum: int.MaxValue),

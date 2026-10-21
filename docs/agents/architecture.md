@@ -79,4 +79,4 @@
 
 - Solution `zStudio.slnx`; projects, assemblies, namespaces, embedded resources and friend assemblies use `zStudio.*`.
 - `%LOCALAPPDATA%/zStudio` holds settings (`StudioSettings`), the error log and local MCP registrations. No settings import from other versions, no runtime aliases. A fresh profile keeps MCP disabled. Settings load with default `System.Text.Json` options, so unknown keys are ignored and dropped on the next save.
-- A project's only zStudio data is its hidden `.zstudio/` folder: `settings.json` (`SourceProjectSettings`: last view, mission difficulty, texture dithering), recovery journals, save staging, Blender checkouts. Builds never read it.
+- A project's only zStudio data is its hidden `.zstudio/` folder ([sources](sources.md); settings: `SourceProjectSettings`).

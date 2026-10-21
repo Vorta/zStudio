@@ -11,8 +11,6 @@ public sealed class MissionIdentityProjectionTests
 {
     private static CancellationToken Token => TestContext.Current.CancellationToken;
 
-    // Essential batch contract: one history operation, atomic rejection and only coordinate bytes changed.
-
     // Essential batch contract: transforms keep identities and exact bits on locked axes; invalid input is refused atomically.
     [Fact]
     public void AiPathBatchTransformsKeepLockedAxesAndRefuseInvalidPositions()

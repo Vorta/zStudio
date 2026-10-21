@@ -10,7 +10,7 @@ In the opened folder, **Files** lists every file, including unknown ones (shown 
 
 ## Workspace
 
-- **Properties** (a record's context menu **Properties…**, or **Alt+Enter**) opens one reusable window showing the record's stored data, read-only. Sequence, event and node detail is in the viewers' trees and in MCP (`zstudio_animation_records`, `zstudio_zrd_nodes`). It stays on its record while you browse; close it with its X. MCP: `zstudio_properties_open`, `zstudio_properties_state`.
+- **Properties** (a record's context menu **Properties…**, or **Alt+Enter**) opens one reusable window showing the record's stored data, read-only. It stays on its record while you browse; close it with its X. Sequence, event and node detail is in the viewers' trees and in MCP (`zstudio_animation_records`, `zstudio_zrd_nodes`). MCP: `zstudio_properties_open`, `zstudio_properties_state`.
 - The bottom tools hold **Dispatch**, **Event log**, **Problems**, **Runtime**, **Related** and **Bytes** (the selected record's original bytes, at most 4,096). Problems keeps each issue's severity and source.
 - **View → Workspace preset** offers Inspect, Edit, Debug and Focus preview layouts; **View → Reset layout** restores the default. Pane sizes and tabs are remembered.
 - A file changed on disk shows a reload banner; **Tools → Reload current file** (**F5**) reads it again.
@@ -36,8 +36,8 @@ Open a mission's `gamez.zbd` and choose **Whole world**. The view shows the sing
 
 Open a mission's `anim.zbd` and select an animation in Assets. Its world, textures, effects and sounds resolve automatically; **Scene → Choose GameZ…** picks another world, **Scene → Bind root…** another root node when a name matches several.
 
-- **Toolbar**: **LOD**, difficulty, **Frame**, then **Map**, **Grid**, **Height** (−999 to 999, raising or lowering the animation; the grid stays at Y = 0), **Ground collision** (a flat plane at Y = 0), **Horizon**, **Effects**, **Face orientation** (front faces blue, back faces red) and **Follow camera**; **Preview phase** chooses **Runtime** or **Reset / stop** (the cleanup sequence), and **Range…** sets the preview range.
-- **Transport**: **Space** (with Assets or the preview focused) plays and pauses; **Play/Pause**, **Stop**, **Previous frame** and **Next frame** sit beside the seek bar, which counts 60 Hz frames. Speed, **Replay preview**, Mute and volume are below it.
+- **Toolbar**: **LOD**, difficulty, **Frame**, **Face orientation** (front faces blue, back faces red), then **Map**, **Grid**, **Height** (−999 to 999, raising or lowering the animation; the grid stays at Y = 0), **Ground collision** (a flat plane at Y = 0), **Horizon**, **Effects** and **Follow camera**.
+- **Transport**: **Space** (with Assets or the preview focused) plays and pauses; **Play/Pause**, **Stop**, **Previous frame** and **Next frame** sit beside the seek bar, which counts 60 Hz frames. Below it: **Preview phase** (**Runtime**, or **Reset / stop** for the cleanup sequence), **Range…** (the preview range), speed, **Replay preview**, mute and volume.
 - **Sequences** lists the entry, its Cleanup sequence, the runtime sequences and their events with their stored operands. The timing under an event is a start threshold, not a duration; **Dispatch** and **Event log** show when events actually ran.
 - **Settings** shows the binding and mission, and sets the seed, forced conditions, activation points and **Range in seconds** (**Auto** restores the calculated range, labelled **Looping**, **Open-ended** or **Partial** when there is no fixed end).
 - **References** lists the stored reference tables.
@@ -52,5 +52,5 @@ Select records in Assets and choose **Export selected…** (textures as PNG with
 
 ## Other versions and games
 
-- **July and August 1998 demos**: their worlds and animations preview like the retail ones.
+- **July and August 1998 demos** (version-13 worlds): their worlds and animations preview like the retail ones; Initialize refuses them. The September 1998 demo can be reconstructed as a source project.
 - **MechWarrior 3**: its base-game worlds, animations, motion clips and model library can be inspected and previewed. A mission picker replaces the difficulty picker. MCP: `zstudio_missions`, `zstudio_motion_records`, `zstudio_motion_preview`, `zstudio_mech_models`, `zstudio_ai_valves`, `zstudio_ai_valve_selection`. Further MechWarrior 3 support is deferred.

@@ -9,7 +9,7 @@
 
 ## Cutting a release
 
-1. Merge open Dependabot PRs first, then merge `main` into the release branch and revalidate it ([AGENTS.md](../../AGENTS.md#build-test-package)).
+1. Dependabot PRs first ([AGENTS.md](../../AGENTS.md#build-test-package)); then merge `main` into the release branch and revalidate it.
 2. Set the same `MAJOR.MINOR.PATCH` (or an explicit prerelease suffix) in `Directory.Build.props` and `blender/zstudio_recoil/blender_manifest.toml` (the guides name the extension `zstudio_recoil-<version>.zip` generically). Turn `## X.Y.Z — Unreleased` in `CHANGELOG.md` into `## X.Y.Z — YYYY-MM-DD` (the release workflow extracts that section as the notes). Update the README download link, the only other place a version is pinned.
 3. Run the Release build and tests and the relevant corpus/UI checks ([testing](testing.md)). CI also publishes and verifies a portable package on a clean runner without game assets; original-game compatibility needs separate validation.
 4. Merge the reviewed version change to `main` after CI passes (expected-head squash merge). Then tag current `main`:
@@ -27,7 +27,7 @@
 
 ## Portable package
 
-- `./tools/publish.ps1` creates `artifacts/zStudio-win-x64/` and `artifacts/zStudio-<version>-win-x64.zip` and runs `tools/verify-package.ps1`: the root layout, required files and user guides, the absence of `docs/agents/` and `docs/mcp-capabilities.json`, file versions, the relative apphost binding, the Blender extension's version and file hashes against its sources, and SHA-256 parity of every ZIP entry.
+- `./tools/publish.ps1` creates `artifacts/zStudio-win-x64/` and `artifacts/zStudio-<version>-win-x64.zip` and runs `tools/verify-package.ps1`: the root layout, required files and user guides, the absence of `docs/agents/`, `docs/mcp-capabilities.json` and of `.zbd`, `.zrd`, `.bndb`, `.pfx`, `.p12` or `.key` files, file versions, the relative apphost binding, the Blender extension's version and file hashes against its sources, and SHA-256 parity of every ZIP entry.
 - The ZIP root holds exactly `zStudio.exe` and `dependencies/`: managed and native runtime, `LICENSE`, `THIRD-PARTY-NOTICES.md` and `licenses/`, `README.md`, `CHANGELOG.md`, `CONTRIBUTING.md`, `SECURITY.md`, the user guides (`docs/` without `docs/agents/` and `docs/mcp-capabilities.json`) and the Blender extension ZIP plus its guide under `dependencies/blender/`. Self-contained and unsigned.
 - `zStudio.exe` is the SDK apphost bound to `dependencies/zStudio.Desktop.dll` by relative path; no wrapper process and no custom assembly resolver. The icon is the checked-in `src/zStudio.Desktop/Assets/studio.ico` (the owner's artwork).
 - Publishing stages a fresh build below `artifacts/`, moves the previous output aside, swaps in the new one and deletes the old folder and older ZIPs; a custom `-Output` must also be below `artifacts/`.
@@ -36,7 +36,7 @@
 ## Local artifacts
 
 - Keep `artifacts/zStudio-win-x64` and its ZIP the latest validated local build. Launch it for the user and for all live GUI/MCP work, including unreleased features; never point the user at `src/**/bin`.
-- Republish after application changes before handing off or using the changed application; stop running zStudio instances first, without asking (owner decision; it applies to publishing only).
+- Republish after application changes before handing off or using the changed application; stop running zStudio instances first ([AGENTS.md](../../AGENTS.md#never): publishing needs no asking).
 - Keep no superseded portable folders or ZIPs (in `artifacts`, `.agent` or temporary folders). Reports and checksum sidecars go to the OS temporary folder. A local package refresh is not a release and changes no version.
 
 ## Maintenance checks

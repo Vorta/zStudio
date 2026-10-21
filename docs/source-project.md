@@ -7,10 +7,10 @@ Maps are edited in the [map editor](map-editor.md); [compiled files](compiled-fi
 ## Initialize a project
 
 1. On the welcome screen, under **Work with source project**, choose **Initialize**.
-2. Enter the game's zbd folder (the one holding `image.zbd` and the mission folders `m1`, `m2`, …) and a new or empty project folder, or use **Browse…**.
-3. Choose **Initialize and open**. The dialog shows progress and, if a folder is refused, the reason. **Cancel** stops the reconstruction and removes what it wrote; once the project is written, it leaves the project unopened.
+2. Enter the game's zbd folder (the one holding `image.zbd` and the mission folders `m1`, `m2`, …) as the **Retail ZBD folder** and a new or empty project folder, or use **Browse…**.
+3. Choose **Initialize and open**. The dialog shows progress and, if a folder is refused, the reason. **Cancel** stops the reconstruction; once the project is written, it leaves the project unopened.
 
-Initialize accepts only the original files of the RECOIL 1998 and 1999 releases: their resource archives carry the animation definitions every `anim.zbd` was compiled from. Any other folder, including a zStudio export, is refused with "zStudio can unpack only the original ZBD files." MechWarrior 3 folders and the July and August 1998 demos are refused too. **Keep an untouched copy of the original files**: an export into the game's zbd folder replaces them, and a folder it replaced can't be reconstructed again. Only the files in the chosen folder and its mission folders are read. The project folder must be outside the game folder, must not overlap it and must not be or lie below a link. Don't change the game files while it runs. A canceled or failed reconstruction removes what it wrote, so the folder can be used again.
+Initialize accepts original RECOIL game files whose resource archives carry the animation definitions every `anim.zbd` was compiled from: the 1998 and 1999 releases and the September 1998 demo. Any other folder, including a zStudio export, is refused with "zStudio can unpack only the original ZBD files." MechWarrior 3 folders and the July and August 1998 demos are refused too. **Keep an untouched copy of the original files**: a folder an export replaced can't be reconstructed again. Only the files in the chosen folder and its mission folders are read. The project folder must be outside the game folder, must not overlap it and must not be or lie below a link. Don't change the game files while it runs. A canceled or failed reconstruction removes what it wrote, so the folder can be used again.
 
 MCP: `zstudio_source_reconstruct`.
 
@@ -78,7 +78,7 @@ The **Export** menu builds game files from the project's files on disk, so save 
 - **Export all ZBD files…** builds every game file into a folder outside the project: an empty folder, or the zbd folder of a copy of the game.
 - **Export ZBD file** builds one game file you choose.
 
-A progress window shows the file being built; **Cancel** or **Escape** stops it. Every output is built, read back and staged first; if any fails, nothing is written. When the destination already holds some of the game files, one confirmation lists them: **Yes** replaces them, **No** cancels the export. Other files in the destination stay. A texture pack there that the export doesn't build (such as an `rtexture8.zbd` the profile leaves out) stays too, and the game may load it instead; the export warns about it. An export canceled while it replaces files finishes or restores them. Replaced original files are gone for good, so export into a copy of the game, or keep a copy of its zbd folder.
+A progress window shows the file being built; **Cancel** or **Escape** stops it. Every output is built, read back and staged first; if any fails, nothing is written. When the destination already holds some of the game files, one confirmation lists them: **Yes** replaces them, **No** cancels the export. Other files in the destination stay. A texture pack there that the export doesn't build (such as an `rtexture8.zbd` the profile leaves out) stays too, and the game may load it instead; the export warns about it. An export canceled while it replaces files finishes or restores them. Replaced original files are gone for good.
 
 Check and export also list in Problems each node the game finds by name as a mission loads (animation roots, texture-effect `FindNode`), with the node it finds. Where several nodes share a name the game takes the one made last; an export that changes which node a lookup finds warns about it.
 
@@ -115,7 +115,7 @@ MCP: `zstudio_source_export` (without `destination` it checks; `outputs` selects
 - `"file": "rtexture*.zbd"` is the automatic pack; its `budgetMiB` (1–1024, default 256) is the largest it makes.
 - `maximumDimension` is a power of two from 8 to 4096, at most 1024 for software packs.
 - `missions` limits a pack to some missions.
-- Every profile needs an `rtexture` pack for every mission. A file that breaks a rule is shown with its reason in the menu and fails only exports that use it; a file that isn't valid JSON, or that may be the default (two defaults, or a broken one marked `"default": true`), stops every export and check until you fix it. The message names the file.
+- Every profile needs an `rtexture` pack for every mission. A file that breaks a rule is shown with its reason in the menu and fails the exports that use it; a file that isn't valid JSON, or a broken or second default, can stop every export and check until you fix it. The message names the file.
 
 MCP: `zstudio_source_profile`; `zstudio_source_export` with `profile` overrides it for one export.
 
@@ -135,7 +135,7 @@ MCP: `zstudio_source_dithering`.
 
 ## Keep sources away from the game
 
-Don't put a project inside a game folder: loose `support\*.gw`/`*.gs` files override `interp.zbd`, and loose `*_easy`/`*_hard` resources change which difficulty files the game uses. Export into the zbd folder of a copy of the game, or a separate folder, instead.
+Don't put a project inside a game folder: loose `support\*.gw`/`*.gs` files override `interp.zbd`, and loose `*_easy`/`*_hard` resources change which difficulty files the game uses. Export into a copy of the game, or a separate folder, instead.
 
 ## Edit source files by hand
 

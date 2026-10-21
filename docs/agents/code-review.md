@@ -1,6 +1,6 @@
 # Code review
 
-Procedure for a requested code review or review-fix cycle. It finds consequential failures across the change, including code written in earlier rounds; it does not guarantee that none remain. Green tests and a corpus run are evidence only for the cases they exercise.
+Procedure for a requested code review or review-fix cycle. Round 1 looks for consequential failures across the whole change, later rounds in each delta; it does not guarantee that none remain. Green tests and a corpus run are evidence only for the cases they exercise.
 
 ## Review cycle
 
@@ -12,7 +12,7 @@ Procedure for a requested code review or review-fix cycle. It finds consequentia
 ## Scope
 
 1. Read the PR's inline threads, review summaries and relevant comments; record unresolved findings, including ones fixed locally but not pushed. Check the branch, working tree and PR base/head; preserve other people's changes.
-2. Build the changed-file inventory from the actual base/head merge base plus staged, unstaged and new files. Never substitute `HEAD~1`, the latest fix or the files reviewers named. Refresh it when fixes change the scope.
+2. Inventory. Round 1: the changed files from the actual base/head merge base plus staged, unstaged and new files; never substitute `HEAD~1`, the latest fix or only the files reviewers named. A later round: the diff from the revision the previous round reviewed to the current tree, plus the code it directly interacts with. Refresh the inventory when fixes change the scope.
 3. Group changed behaviour by subsystem and format version. Read every changed production file in context and trace its callers, consumers and shared services, changed or not, including generated discovery, bindings, dynamic controls and renderer interactions.
 4. Keep a ledger in `.agent/REVIEW-<topic>.md` ([template](#ledger-template)): per group the invariant, attempted counterexample, inspected path, evidence and remaining uncertainty. An unreviewed group stays unreviewed; never turn missing evidence into a pass or an unexplained "not applicable".
 5. When a later round finds a new P1/P2, record why the earlier pass missed it and check the same failure class in the paths the fix touches and their siblings (analogous code in other format families included).
@@ -47,8 +47,8 @@ Searches locate risks; an empty search result is not evidence. Follow the values
 
 - Use evidence suited to the failure: allocation measurements for growth (not returned length), mixed record kinds with duplicates in one fixture for classification, controlled interleavings for races, source and unrelated-byte comparison plus reopen for persistence.
 - Before calling a cycle complete: round 1 reviewed every behaviour group with its risk passes and evidence, limitations stated; every concrete P1/P2 fixed and verified or explicitly open with cause and impact ("outside the latest comment" and "tests pass" are not dismissals); the last round's challenge pass ran after the last production fix and found nothing actionable; relevant build, tests, corpus, GUI/MCP and package checks passed on the delivered code, recorded in the ledger with command, dataset, result and revision; MCP inventory, schema and catalog parity current; the portable folder and ZIP republished after application changes.
-- An open P1/P2 or a material coverage gap makes the gate incomplete; report it rather than calling the cycle clean.
-- A review-before-push request means finishing this local gate before the next push. After the push resolve the threads whose fixes it delivered, then check CI; passing CI is still required before merge. With an armed watch, re-arm as [pr-watch](pr-watch.md#on-a-notice) says.
+- An open P1/P2 or a material coverage gap makes the gate incomplete; report it rather than calling the cycle clean. Findings deferred under the [review bar](../../AGENTS.md#workflow) do not block; list them in the ledger and the report.
+- A review-before-push request means finishing this local gate before the next push; after it, resolve fixed threads ([AGENTS.md](../../AGENTS.md#workflow)) and, with an armed watch, re-arm ([pr-watch](pr-watch.md#on-a-notice)). Passing CI is still required before merge.
 - Documentation-only work gets document, link and diff validation; it is not a code-fix cycle.
 - Report precisely: "No further actionable P1/P2 found in [scope] at [revision], with [limitations]." An incomplete scope is reported as incomplete.
 

@@ -14,7 +14,7 @@ Labels: **[B]** byte-matched in the reconstruction; **[BN]** confirmed in the ex
   - A missing folder is not listed and is tested again when named again. Another spelling (case, separators) is a new entry at the head; Windows finds the folder under any spelling.
   - zStudio: builds list a folder only when the project has it (on disk or holding a pending file) and its text is new, and search each folder once from its first place. Traces outside a build (reconstruction, checkouts, object edits) take every named folder as present, which finds the same files.
 - **No type checks.** Gameplay loaders read the raw value union and never call checked accessors: an integer where a float belongs reads as a denormal (`10` → about 1.4e−45), a float where an integer belongs as a huge integer (`8.0` → 1090519040); a missing item or wrong shape dereferences garbage. zStudio treats each as an error.
-- **Loose files.** Scripts not in `interp.zbd` are read loose from the game folder (`RunScriptFile` 0x4c1500 [B]); a loose `support\*.gw`/`*.gs` newer than its `interp.zbd` entry overrides it (loose-file timestamp precedence 0x4C5740). Loose `vehicle_*`/`puppies_*` files change difficulty selection; `aiv.zrd` is fixed ([Resource archives](#resource-archives)).
+- **Loose files.** Scripts not in `interp.zbd` are read loose from the game folder (`RunScriptFile` 0x4c1500 [B]); a loose `support\*.gw`/`*.gs` newer than its `interp.zbd` entry overrides it (loose-file timestamp precedence 0x4C5740 [U]). Loose difficulty variants: [Resource archives](#resource-archives).
 
 ## Node attributes and flags
 

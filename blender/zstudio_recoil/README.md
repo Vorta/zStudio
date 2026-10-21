@@ -12,7 +12,7 @@ The extension and zStudio share one version; update them together and keep `depe
 
 ## Import and edit
 
-In zStudio, open the project's map and choose **Tools → Edit in Blender…** to check out a source model or master map with every file it references. In Blender, choose **File → Import → RECOIL glTF** and select the checkout's input file. Each import gets its own Blender scene; each physical glTF file is one shared collection, and reference holders display the file they reference through collection instances.
+In zStudio, open the project's map and choose **Tools → Edit in Blender…** to check out a source model or master map with every file it references. In Blender, choose **File → Import → RECOIL glTF** and select the checkout's input file: Blender's file browser hides the project's `.zstudio` folder, so paste the path zStudio shows. Each import gets its own Blender scene; each physical glTF file is one shared collection, and reference holders display the file they reference through collection instances.
 
 - **Object Properties → RECOIL** (also in the **RECOIL** sidebar) edits an object's engine name, its node flags, its crater mode (Can Modify or Clip To) and its zone (**Inherit**, **Any**, or 0–254). Hover over a field for its role in the game. **File Load Root** in the sidebar edits the file's root attributes.
 - **Edit Shared Model** on a reference holder edits the referenced file's collection: changes there affect every reference to that file. Add new objects there. Choose **Return to World** when done. Move reference holders, not the collection instances, to place copies.
@@ -24,12 +24,12 @@ In zStudio, open the project's map and choose **Tools → Edit in Blender…** t
 Export refuses edits it can't map back to the sources, and says what to undo:
 - removing, duplicating, moving or retargeting a reference's display helper (the `↳` child of a holder that has its own mesh);
 - objects copied from another RECOIL import, or faces joined (**Ctrl+J**) or Boolean-merged from another RECOIL mesh;
-- modifiers that remove face identities or mix incompatible zone assignments (apply them first), and modifiers on a mesh with shape keys (other modifiers export as their result);
+- modifiers that remove face identities or mix incompatible zone assignments (apply them first), and modifiers on a mesh with shape keys (remove the modifiers or the shape keys; other modifiers export as their result);
 - geometry or hierarchy changes inside a zone workspace.
 
 ## Export and update zStudio
 
-1. Choose **File → Export → RECOIL glTF graph** (or **Export RECOIL glTF** in the sidebar); a checkout exports into its own outbox. Each export is a complete new generation of the linked files with a receipt. Hidden objects export too. Blender's file browser hides the project's `.zstudio` folder, so paste a path into it rather than browsing there.
+1. Choose **File → Export → RECOIL glTF graph** (or **Export RECOIL glTF** in the sidebar); a checkout exports into its own outbox. Each export is a complete new generation of the linked files with a receipt. Hidden objects export too.
 2. In zStudio, with a map of the project open, choose **Tools → Update from Blender export…**. The whole graph is validated and applied as one undoable edit; placement zones elsewhere in the project follow it. Source edits made in zStudio since the checkout, and shared texture changes, need your confirmation.
 3. **Save** in zStudio writes the source files; only a project export builds game files.
 
@@ -44,4 +44,4 @@ MCP: `zstudio_source_blender_checkout`, `zstudio_source_blender_checkouts`, `zst
 - A graph holds at most 4,096 files and 512 MiB of source data; cyclic or escaping references are refused.
 - Blender's view is an editing view, not the game's collision, crater or zone queries. A pickup's collision volume (`bvol`) is hidden by its material, so it still counts in framing and shows in wireframe; keep it, because the game registers a pickup only when its model has one.
 - Each import copies its files to a `zstudio-blender-…` folder in Windows' temporary folder, which isn't deleted automatically; delete old ones when Blender is closed.
-- The extension never changes the files it imported; exports go to the checkout's outbox.
+- The extension never changes the files it imported; exports go to the checkout's outbox by default.

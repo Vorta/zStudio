@@ -2204,7 +2204,7 @@
   },
   {
     "Name": "zstudio_ai_path",
-    "Description": "Edit nodes in one authored AI path. Enter/exit Edit mode; replace/add/toggle a bounded selection or box-select visible nodes; begin a move/rotate/scale draft, set numeric input, then confirm one undo step or cancel. World XYZ constraints and selection-centre pivot match the GUI. Links and other fields are preserved; changed coordinates are stored with one decimal, and a move below that precision changes nothing. Source-world confirmation updates source tokens in memory, evaluates the scene and returns the accepted document/revision, exiting Edit mode. Save writes the owning ZRD sources; no archives are created. Selection and draft state are in preview_state.ai.path. Properties pins common values (mixed where different), without following later selection. No physical input is captured. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Description": "Edit nodes in one authored AI path. Enter/exit Edit mode; replace/add/toggle a bounded selection or box-select visible nodes; begin a move/rotate/scale draft, set numeric input, then confirm one undo step or cancel. World XYZ constraints and selection-centre pivot match the GUI. Links and other fields are preserved; changed coordinates are stored with one decimal; a confirmation below that precision changes nothing and keeps Edit mode. Source-world confirmation updates source tokens in memory, evaluates the scene and returns the accepted document/revision, exiting Edit mode. Save writes the owning ZRD sources; no archives are created. Selection and draft state are in preview_state.ai.path. Properties pins common values (mixed where different), without following later selection. No physical input is captured. Returns an operation ID; use zstudio_operation to await/read the result.",
     "Mutates": true,
     "Parameters": [
       {
@@ -3343,7 +3343,7 @@
   },
   {
     "Name": "zstudio_pickup_move",
-    "Description": "Move a source map\u0027s pickup to exact coordinates as one undoable operation, including unambiguous difficulty counterparts. The move accepts changed coordinate tokens of the resource sources (data/mN/zrdr/puppies*.zrd) in memory, stored with one decimal (rotations in radians with four; unchanged values keep their text), and updates the scene. The result is the accepted document/revision. Save writes the sources; no archives are created. Compiled worlds are read only.",
+    "Description": "Move a source map\u0027s pickup to exact coordinates as one undoable operation, including unambiguous difficulty counterparts. The move accepts changed coordinate tokens of the resource sources (data/mN/zrdr/puppies*.zrd) in memory, stored with one decimal (unchanged values keep their text), and updates the scene. The result is the accepted document/revision. Save writes the sources; no archives are created. Compiled worlds are read only.",
     "Mutates": true,
     "Parameters": [
       {

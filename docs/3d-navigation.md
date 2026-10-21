@@ -45,7 +45,6 @@ Axis views (**Numpad 1**, **3**, **7** and their opposites) switch to orthograph
 
 Manual navigation leaves animation Follow camera at the shown pose; **Numpad 0** or the Follow camera button returns to the authored camera.
 
-
 ## Hide UI and fullscreen
 
 **F10** (**View → Hide UI**) hides everything but the 3D view: menus, panes, status bar, banners, the Properties window and editor guides such as the grid, axes, bounds, handles, AI nodes and VTOL routes. Display choices such as wireframe, textures and overlays stay. While the UI is hidden, clicks select and edit nothing, but navigation and Flycam work. **F10** again shows everything as it was; leaving the 3D view does too.

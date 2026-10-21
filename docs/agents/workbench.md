@@ -12,7 +12,7 @@ Rules for the WPF workbench. User-facing descriptions: [map editor](../map-edito
 ## Workbench layout
 
 - Fluent workbench, always compact; no density setting (owner decision).
-- Compiled explorer (MCP-opened compiled roots; in a source project the Navigator and Inspector are disabled, Reset layout is hidden and the [source map editor](#source-map-editor) applies): one Navigator (Files, Assets, Search, Document scene), the central preview with persistent transport, one Inspector (animation tabs), bottom tools (Dispatch, Event log, Problems, Runtime, Related, Bytes), and a separate [Properties window](#properties-window).
+- Compiled explorer (MCP-opened compiled roots; in a source project the Navigator and Inspector are collapsed, Reset layout is hidden and the [source map editor](#source-map-editor) applies): one Navigator (Files, Assets, Search, Document scene), the central preview with persistent transport, one Inspector (animation tabs), bottom tools (Dispatch, Event log, Problems, Runtime, Related, Bytes), and a separate [Properties window](#properties-window).
 - Keep both side panes visible when the viewport has room. Hide the whole right pane for non-animation viewers.
 - Preferred pane dimensions, groups and tabs persist; automatic narrow collapse never overwrites them. Settings keys for a docked Properties pane height or a Program pane height are ignored.
 - Resizing, fullscreen and theme changes never replace or dispose the editor or commit drafts.
@@ -31,7 +31,7 @@ Rules for the WPF workbench. User-facing descriptions: [map editor](../map-edito
 
 ## Properties window
 
-- One reusable, owned, modeless window for every viewer, opened through a row context menu or Alt+Enter (in a source map Alt+Enter focuses the docked card instead: the selected object's, or the selected zone, network or definition card). Closed at startup; size and position saved; closes when its document is disposed; the window X closes it. Never a docked pane and never takes workspace space; no bottom button row.
+- One reusable, owned, modeless window for every viewer, opened through a row context menu or Alt+Enter (in a source map Alt+Enter focuses the docked card for a selected object, zone, network or definition, and opens this window for a selected pickup, AI node or AI path). Closed at startup; size and position saved; closes when its document is disposed; the window X closes it. Never a docked pane and never takes workspace space; no bottom button row.
 - Its document and record identity stay pinned across selection and preview replacement; ordinary selection never retargets it. Never bind editable fields to the active row; never keep a hidden renderer alive for it.
 - Fields are editable for source documents (source objects, source pickups); compiled assets show a read-only view.
 - Its commands target its owning document; native text undo stays. Icon-only Undo/Redo at the top right of the breadcrumb row; trimmed single-line heading with a full-context tooltip; document-scoped Ctrl+S.

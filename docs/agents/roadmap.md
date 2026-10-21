@@ -31,7 +31,7 @@ Implemented edits are in [sources](sources.md#edit-semantics).
 ## Open gaps
 
 - AI path Edit mode on source maps is reachable only through MCP (`zstudio_ai_path` `enter`); the GUI panel and G/R/S keys work only after that. Add a GUI entry, then the absolute-coordinate operation for a multi-node selection (one undo step, one evaluation).
-- Runtime capacity validation (requirement): check the three free chains, report load-time demand per pool as an error and the play reserve against headroom as a warning, the texture directory against 4,096, and light/sound/animate/sequence/switch nodes inside vehicle and pickup templates ([runtime capacity](engine-evidence.md#runtime-capacity)).
+- Runtime capacity validation (requirement): check the three free chains, report load-time demand per pool as an error and the play reserve against headroom as a warning, textures appended at run time against the 4,096-entry texture directory (the stored directory is already capped), and light/sound/animate/sequence/switch nodes inside vehicle and pickup templates ([runtime capacity](engine-evidence.md#runtime-capacity)).
 
 ## Upgrade vehicle
 
@@ -48,7 +48,7 @@ Implemented edits are in [sources](sources.md#edit-semantics).
 | Workflow | Scope |
 | --- | --- |
 | Buildings, doors, bridges, destructibles | Blender hierarchy → static, moving and destruction roles → collision and zones → activation, health and cleanup definitions → placement → destruction and reload test |
-| AI paths and encounters | Typed networks, connected nodes, compatible actors, activation and pursuit, traversability tests; absolute coordinates for a multi-node selection |
+| AI paths and encounters | Typed networks, connected nodes, compatible actors, activation and pursuit, traversability tests |
 | Mission logic and objectives | Starts, prerequisites, triggers, objectives, failure and completion, exit, save state; reference-safe rename and delete |
 | Water, seafloor, special soils | Layers, zone transitions, soils, movement modes, underwater effects and camera |
 | Effects and attachment points | Geometry and sprites → cycles → effect definition → animation calls → lifetime and budget |

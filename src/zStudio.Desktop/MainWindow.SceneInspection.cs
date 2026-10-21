@@ -202,7 +202,8 @@ public partial class MainWindow
             if (edits.RotationKind(source) == PlacementRotationKind.EulerRadians)
             {
                 info["Rotation radians"] = JsonData.Vector(rotation);
-                info[SceneInspectionCard.AuthoredRotation] = new JsonObject { ["x"] = rotation.X * (180 / Math.PI), ["y"] = rotation.Y * (180 / Math.PI), ["z"] = rotation.Z * (180 / Math.PI) };
+                // Degrees to two decimals, as the card's fields show them (radians are stored with four, about 0.006°).
+                info[SceneInspectionCard.AuthoredRotation] = new JsonObject { ["x"] = Math.Round(rotation.X * (180 / Math.PI), 2), ["y"] = Math.Round(rotation.Y * (180 / Math.PI), 2), ["z"] = Math.Round(rotation.Z * (180 / Math.PI), 2) };
             }
             if (edits.Coordinate(source) is { Kind: "tank" } tank) { info["Template"] = tank.Template; info[SceneInspectionCard.AuthoredHeading] = rotation.Y; }
         }
@@ -339,8 +340,9 @@ public partial class MainWindow
         if (!card.HasDraft || doc == null || doc.IsDisposed || doc != shownDocument || card != CurrentInspectionCard || card.Selection?.Target != card.DraftTarget)
             throw new StudioCommandException("stale_record", "The draft's document or selected instance is no longer available.");
         if (doc.Revision != card.DraftRevision) throw new StudioCommandException("revision_conflict", "The document changed. Discard this draft and start again.");
-        // Edit mode without a change: Apply only leaves it.
+        // Edit mode without a change: Apply only leaves it; a placement draft that stores nothing ends the same way.
         if (card.ObjectEditing && !card.HasObjectDraft) { card.CancelDraft(); return null; }
+        if (!card.HasObjectDraft && card.DraftSource != null && !card.HasChanges) { card.CancelDraft(); return null; }
         if (card.HasObjectDraft) return ApplySourceObjectCardAsync(card, token, sharedZones);
         _ = doc.PickupEdits ?? throw new StudioCommandException("not_ready", "The map's placements are reloading. Apply again when the map is shown.");
         if (doc.SourceWorld == null) throw new StudioCommandException("read_only", "This world is read only: edit its source project instead.");
