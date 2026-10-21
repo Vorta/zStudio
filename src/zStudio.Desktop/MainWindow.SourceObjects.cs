@@ -219,8 +219,6 @@ public partial class MainWindow
         var provenance = SourceWorldProvenance(doc);
         return new(workspace, session.Mission, model.World, SourceObjectEdits.ObjectOf(built, provenance), provenance, build.Executions) { Write = build.WriteInstruction };
     }
-    /// <summary>A node of the shown world by name (see <see cref="SourceWorldNodeNamedNear"/>).</summary>
-    private WorldNode SourceWorldNodeNamed(DocumentModel doc, string name) => SourceWorldNodeNamedNear(doc, name, null);
     /// <summary>
     /// A node of the shown world by name, refused when no node or several nodes have it, unless they are the copies of one
     /// node of a part of the mission database: an edit of the part's file is the same through any of them. Of those, the one

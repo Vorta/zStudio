@@ -648,6 +648,4 @@ public partial class AnimationEditor : FieldEditor, IDisposable
     {
         if (disposed) return; if (operationDiagnostics != null) operationDiagnostics.CollectionChanged -= OperationDiagnosticsChanged; disposed = true; ready = false; pendingPlay = false; SetPlaying(false); lifetime.Cancel(); initializing?.Cancel(); initializing?.Dispose(); seeking?.Cancel(); seeking?.Dispose(); if (preferences != null) preferences.PropertyChanged -= PreferencesChanged; audio.Dispose(); viewport.Dispose(); lifetime.Dispose(); GC.SuppressFinalize(this);
     }
-    private sealed record SequenceChoice(Guid Id, string Label);
-    private sealed record EventChoice(Guid Id, int Index, string Name, string Mode, string Threshold);
 }

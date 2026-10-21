@@ -107,8 +107,6 @@ public sealed class AssetResolver : IDisposable
         }
     }
     public TextureLookupOperation BeginTextureLookup(string context, string? preferredPack = null) => new(this, context, preferredPack);
-    public Task<ResolvedTexture?> ResolveTextureAsync(string context, string name, string? preferredPack, CancellationToken token)
-        => BeginTextureLookup(context, preferredPack).ResolveAsync(name, token);
     internal static bool HasTextureLookupStamp(string path, FileStamp stamp) => FileStamp.Read(path) == stamp;
     public async Task InvalidateAsync(IEnumerable<string> paths, CancellationToken token = default)
     {

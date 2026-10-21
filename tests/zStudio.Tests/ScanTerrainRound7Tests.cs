@@ -253,7 +253,6 @@ public sealed class ScanTerrainRound7Tests
         for (int i = 0; i < count; i++) doc.Roots.Add(new GltfNode { Name = "copy", Mesh = mesh(i), Extras = new JsonObject { [WorldGltf.Key] = values(i) } });
         return doc;
     }
-    private static JsonArray Zeros(int count) => new(Enumerable.Repeat(0, count).Select(z => (JsonNode?)z).ToArray());
     /// <summary>A mesh of <paramref name="parts"/> morphing triangles, its values noting <paramref name="note"/>.</summary>
     private static GltfMesh Mesh(int parts, int note = 0)
     {

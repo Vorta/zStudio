@@ -278,7 +278,6 @@ public sealed partial class InspectorNode : ObservableObject
         Value = value switch { JsonObject o when o.ContainsKey("text") => o.Text(), JsonObject o when o["type"]?.ToString() is "array" or "string" or "int" or "float" && o.ContainsKey("offset") => $"{o["type"]} · {o["offset"]}" + (o.ContainsKey("value") ? " · " + o["value"] : ""), JsonObject o => $"{{{o.Count} field{(o.Count == 1 ? "" : "s")}}}", JsonArray a => $"[{a.Count} item{(a.Count == 1 ? "" : "s")}]", null => "null", _ => value.ToString() };
         if (Value.Length > 240) Value = Value[..240] + "…";
     }
-    public string FullText => node?.ToJsonString(JsonData.Options) ?? "null";
 }
 public sealed record SearchHit(string File, AssetKind Kind, int Index, string Name)
 {

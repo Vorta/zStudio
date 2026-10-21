@@ -341,10 +341,6 @@ public partial class MainWindow
     }
     private SourceMapSelection? SourceSelection(DocumentModel? doc, GameScene? data)
         => doc != null && data != null && sourceSelections.TryGetValue(doc, out var cache) && cache.TryGetValue(data, out var found) ? found : null;
-    private IReadOnlyDictionary<int, int> SourceSelectionOwners(DocumentModel doc, GameScene data, MissionSceneContext? mission)
-        => SourceSelection(doc, data)?.Owners ?? throw new StudioCommandException("not_ready", "The source map's selection projection is not prepared.");
-    private IReadOnlyDictionary<int, string> SourceSelectionPartIdentities(DocumentModel doc, GameScene data, MissionSceneContext? mission)
-        => SourceSelection(doc, data)?.PartIdentities ?? throw new StudioCommandException("not_ready", "The source map's part identities are not prepared.");
     private int SourceSelectionOwner(DocumentModel doc, int node)
     {
         if (doc.SourceWorld == null) return node;

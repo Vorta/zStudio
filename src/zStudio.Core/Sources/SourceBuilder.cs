@@ -1297,8 +1297,6 @@ public static partial class SourceBuilder
         var assembled = snapshot.World(plan.Path.Split('/')[0], token);
         return new(GameZWriter.Write(assembled.World, token), assembled.World.Nodes.Count, assembled.Warnings);
     }
-    /// <summary>Damage-mark masks (support\weapons.gw WriteTextureSetMap), which must stay unpaletted.</summary>
-    private static readonly HashSet<string> DamageMasks = new(["pock1", "pock2", "pock3"], StringComparer.OrdinalIgnoreCase);
 
     /// <summary>A texture is named by its file name without the extension, as the engine looks textures up by name.</summary>
     internal static string TextureName(string input)

@@ -9,7 +9,6 @@ namespace zStudio.Tests;
 public sealed class ImportRound23JsonOutputTests
 {
     private static CancellationToken Token => TestContext.Current.CancellationToken;
-    private const string Model = "data/common/models/model.gltf";
     private static byte[] NestedMetadata(int values) => Encoding.UTF8.GetBytes(
         "{\"asset\":{\"version\":\"2.0\"},\"nodes\":[{\"name\":\"object\"}],\"ignored\":"
         + new string('[', 55) + string.Join(',', Enumerable.Repeat("0", values)) + new string(']', 55) + "}");

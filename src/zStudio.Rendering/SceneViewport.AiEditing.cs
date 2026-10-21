@@ -30,8 +30,6 @@ public sealed partial class SceneViewport
     public event Action? AiPathTransformConfirmRequested;
     public event Action? AiPathTransformCancelRequested;
 
-    public void FocusAiPathViewport() => viewport.Focus();
-
     public void SetAiPathEditing(string? networkId, IEnumerable<string>? selectedIds = null)
     {
         if (networkId == null && AiPathEditingNetwork == null) return;

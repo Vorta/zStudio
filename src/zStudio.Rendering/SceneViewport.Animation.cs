@@ -38,7 +38,7 @@ public sealed partial class SceneViewport
     private readonly Dictionary<int, (string? Name, AnimationTextureSlot? Slot)> animationBaseTextures = [];
     private long animationTextureNameUnits;
     private long animationTextureLookupUnits;
-    private long animationTextureCycleMembers, animationTextureCycleMemberVisits;
+    private long animationTextureCycleMembers;
     internal long MaximumAnimationTextureCycleMembers { get; set; } = 1_000_000;
     private bool animationTextureLimitReported;
     private int animationTextureNotices;
@@ -459,7 +459,7 @@ public sealed partial class SceneViewport
         prepared = new(ReferenceEqualityComparer.Instance);
         for (int i = 0; i < names.Count; i++)
         {
-            animationToken.ThrowIfCancellationRequested(); animationTextureCycleMemberVisits++;
+            animationToken.ThrowIfCancellationRequested();
             string name = names[i];
             if (!prepared.ContainsKey(name)) prepared.Add(name, QueueAnimationTexture(name));
         }
@@ -542,7 +542,7 @@ public sealed partial class SceneViewport
         animationMeshReservation?.Dispose(); animationMeshReservation = null;
         animationTextureModels.Clear(); animationTextureReferences.Clear(); animationTextureCycles.Clear(); animationTextureNameUnits = 0; animationTextureLookupUnits = 0;
         animationBaseTextures.Clear();
-        animationTextureCycleMembers = animationTextureCycleMemberVisits = 0; animationTextureLimitReported = false; animationTextureNotices = 0;
+        animationTextureCycleMembers = 0; animationTextureLimitReported = false; animationTextureNotices = 0;
         AnimationLightingWork = AnimationLightVisits = 0;
     }
     private sealed class AnimationTextureSlot

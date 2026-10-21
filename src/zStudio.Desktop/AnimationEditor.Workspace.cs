@@ -119,12 +119,6 @@ public partial class AnimationEditor
     private void SetupClick(object sender, RoutedEventArgs e) => SetupRequested?.Invoke();
     public void Stop() { if (ResolvePendingDrafts()) { pendingPlay = false; _ = SeekAsync(0); } }
     public void Step(int direction) { if (ResolvePendingDrafts()) _ = SeekAsync(Math.Max(0, (frame?.Time ?? 0) + direction * AnimationPlayer.StepSeconds)); }
-    public void CopySelectedEvent()
-    {
-        if (!ResolvePendingDrafts()) return;
-        if (Event is { } ev) Clipboard.SetText(ev.ToJson().ToJsonString(JsonData.Options));
-        else Note("Select an event in Sequences to copy its JSON.");
-    }
     internal (ReadOnlyMemory<byte> Bytes,long Offset,long Length,string Scope) SourceByteSelection()
     {
         var original = document.Document.Assets.FirstOrDefault(a => a.Kind == AssetKind.Animation && a.Index == entryIndex)?.Content as AnimationEntry;

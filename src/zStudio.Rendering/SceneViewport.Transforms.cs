@@ -46,7 +46,7 @@ public sealed partial class SceneViewport
     private System.Numerics.Quaternion objectHandleOrientation = System.Numerics.Quaternion.Identity;
     // A source object's draft: the node, its parent's world matrix, its draft local transform and the instance preview showing it.
     private int? objectDraftNode;
-    private Matrix4x4 objectDraftParent = Matrix4x4.Identity, objectDraftLocal;
+    private Matrix4x4 objectDraftParent = Matrix4x4.Identity;
     private long objectDraftPreview;
 
     public void PreviewTransformDraft(MissionPickupSource source, PlacementTransform value, PlacementRotationKind rotation, string mode, bool valid)
@@ -90,7 +90,7 @@ public sealed partial class SceneViewport
         transformTarget = SelectedInspection?.Target; transformRotation = PlacementRotationKind.EulerRadians; TransformMode = mode;
         if (valid && IsFinite(local))
         {
-            objectDraftLocal = local; transformValid = true;
+            transformValid = true;
             transformDraft = new((local * parentWorld).Translation, Vector3.Zero);
             // The move arrows follow the object's world orientation (without its scale).
             var orientation = Matrix4x4.Decompose(local * parentWorld, out _, out var turned, out _) && float.IsFinite(turned.X + turned.Y + turned.Z + turned.W) ? System.Numerics.Quaternion.Normalize(turned) : System.Numerics.Quaternion.Identity;

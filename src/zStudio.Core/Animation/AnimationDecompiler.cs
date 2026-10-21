@@ -31,7 +31,6 @@ public static class AnimationDecompiler
 
     private sealed class Builder(AnimationEntry entry, Func<AnimationEvent, (string File, float Rate)> script, AnimationDefinitionBudget budget)
     {
-        private readonly List<ZrdNode> items = [];
 
         public ZrdNode Definition()
         {

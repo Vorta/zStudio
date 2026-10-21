@@ -177,12 +177,6 @@ public sealed partial class SceneViewport
         RefreshPickupSelection(); RefreshAiSelection();
         ++inspectionSerial; InspectionChanged?.Invoke(); viewport.InvalidateRender();
     }
-    public void SetPickupPositions(IReadOnlyDictionary<int, Vector3> positions)
-    {
-        foreach (var (root, position) in positions)
-            if (pickupActors.ContainsKey(root) && Finite(position)) pickupPositions[root] = position;
-        UpdatePickupInstances(); RefreshPickupSelection();
-    }
     public Vector3 PickupPosition(int root) => pickupPositions[root];
     private void UpdatePickupInstances()
     {
