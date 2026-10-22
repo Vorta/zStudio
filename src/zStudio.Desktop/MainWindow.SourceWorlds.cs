@@ -162,6 +162,8 @@ public partial class MainWindow
         // An older request must not clear a newer request's loading screen.
         object opening = new();
         sourceMapOpening = ViewModel.IsSourceProject && ViewModel.SelectedDocument == null ? opening : null;
+        // A failure an earlier opening left without entering its map is stale: this opening's load reports its own.
+        if (sourceMapOpening != null) pendingPreviewFailure = null;
         UpdateSourceMapPresentation(); ArrangeWorkspace();
         try { return await OpenSourceWorldCoreAsync(mission, token, automation); }
         finally
