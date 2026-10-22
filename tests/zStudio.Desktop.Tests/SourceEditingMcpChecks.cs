@@ -498,16 +498,18 @@ internal static class SourceEditingMcpChecks
             await Call("scene_tree", new() { ["document"] = Id(second), ["context"] = treeContext, ["preview"] = found["preview"]!.GetValue<string>(), ["action"] = "show", ["row"] = tankListed["row"]!.GetValue<string>() });
             Assert.Empty(tankViewport.HiddenNodes); Assert.True(await AivMaster());
             Assert.Equal(tankActor.Root, tankViewport.SelectedInspection?.SelectionNode);
-            // Another object's isolation hides it too: moving the isolation onto it (scene_selection isolate) selects it in the view.
+            // Another object's isolation hides it too: ending it (scene_tree isolate on the isolated row, a middle-click on its eye) selects it in the view.
             string isolationPreview = found["preview"]!.GetValue<string>();
-            int isolatedObject = (await TreeNodes(rootRows.First(r => r!["pass"] == null)!)).First(n => n >= 0 && n != tankActor.Root);
+            var isolatedRow = (await Call("scene_tree", new() { ["document"] = Id(second), ["context"] = treeContext, ["row"] = rootRows.First(r => r!["pass"] == null)!["row"]!.GetValue<string>(), ["limit"] = 200 }))
+                ["children"]!["items"]!.AsArray().First(r => r!["node"] is { } n && n.GetValue<int>() >= 0 && r["category"]?.GetValue<string>() is "object" or "geometry")!;
             await Call("scene_card", new() { ["preview"] = isolationPreview, ["action"] = "clear" });
-            await Call("scene_selection", new() { ["preview"] = isolationPreview, ["action"] = "isolate", ["node"] = isolatedObject });
+            await Call("scene_tree", new() { ["document"] = Id(second), ["context"] = treeContext, ["preview"] = isolationPreview, ["action"] = "isolate", ["row"] = isolatedRow["row"]!.GetValue<string>() });
             await Call("scene_tree", new() { ["document"] = Id(second), ["context"] = treeContext, ["preview"] = isolationPreview, ["action"] = "select", ["row"] = tankListed["row"]!.GetValue<string>() });
             Assert.Null(tankViewport.SelectedInspection);
-            await Call("scene_selection", new() { ["preview"] = isolationPreview, ["action"] = "isolate", ["node"] = tankActor.Root });
+            await Call("scene_tree", new() { ["document"] = Id(second), ["context"] = treeContext, ["preview"] = isolationPreview, ["action"] = "isolate", ["row"] = isolatedRow["row"]!.GetValue<string>() });
             Assert.Equal(tankActor.Root, tankViewport.SelectedInspection?.SelectionNode);
-            await Call("scene_selection", new() { ["preview"] = isolationPreview, ["action"] = "show_all" });
+            // Units are never isolated, by node either (the World tree has no isolation for them).
+            Assert.Contains("unsupported", (await Call("scene_selection", new() { ["preview"] = isolationPreview, ["action"] = "isolate", ["node"] = tankActor.Root }, error: true)).GetValue<string>());
             string tankTarget = tankViewport.SelectedInspection!.Target;
             // Clicking the pass row (no object of its own) keeps the selected unit. A refused click restores the previous row only
             // after WPF has moved focus: restoring inside that change made the two rows trade focus until the stack overflowed.
