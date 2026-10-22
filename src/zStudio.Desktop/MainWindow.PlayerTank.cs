@@ -44,6 +44,11 @@ public partial class MainWindow
         ?? System.IO.Path.GetFileName(System.IO.Path.GetDirectoryName(shownDocument?.Path ?? "")) ?? "";
     /// <summary>The choice the radios show: a posing one, else the map's, else the mission's start.</summary>
     private PlayerTankState ChosenTank(MissionPlayerTank tank) => posingTank ?? shownDocument?.SourceWorld?.PlayerTank ?? tank.Defaults;
+    /// <summary>What the map keeps as its choice for a drawn tank: null at the mission's start, so a changed start is never kept as a choice.</summary>
+    private static PlayerTankState? KeptChoice(MissionPlayerTank tank) => tank.Shown == tank.Defaults ? null : tank.Shown;
+    /// <summary>Why the map's player tank could not be prepared, as the card, the empty pane and MCP refusals say it; null when it was.</summary>
+    private static string? PlayerTankFailureText(MissionSceneContext mission) => mission.PlayerTankFailure is { } failure
+        ? $"The player tank ({JsonData.ShownText(mission.LocalPlayer?.Name ?? "", 64)}) can't be prepared: {failure}" : null;
 
     /// <summary>
     /// A published scene's tank: the map's choice becomes what the view draws (Tracked after a failed or withdrawn type, the
@@ -53,8 +58,8 @@ public partial class MainWindow
     {
         if (doc.SourceWorld is { } session && mission?.PlayerTank is { } tank)
         {
-            session.PlayerTank = tank.Shown;
-            if (publishedStaticOptions != null && ReferenceEquals(doc, shownDocument)) publishedStaticOptions = publishedStaticOptions with { Tank = tank.Shown };
+            session.PlayerTank = KeptChoice(tank);
+            if (publishedStaticOptions != null && ReferenceEquals(doc, shownDocument)) publishedStaticOptions = publishedStaticOptions with { Tank = session.PlayerTank };
             playerTankFailure = tank.Failure == null ? null
                 : $"Couldn't show {PlayerTankPresentation.Label(tank.Requested.Type)}: {tank.Failure} (see Diagnostics). The view shows {PlayerTankPresentation.Label(tank.Shown.Type)}.";
             playerTankSubstitution = tank.SecondarySubstituted
@@ -105,8 +110,7 @@ public partial class MainWindow
     {
         if (!sourceChromeActive || shownDocument?.SourceWorld == null || shownAsset?.Kind != AssetKind.World || scene?.Mission is not { } mission) return null;
         if (mission.PlayerTank is not { } tank)
-            return new("", null, mission.PlayerTankFailure is { } failure ? $"The player tank can't be shown as chosen: {failure}"
-                : $"No vehicle spawns on {mission.Layout.Difficulty}, so this map has no player tank there.");
+            return new("", null, PlayerTankFailureText(mission) ?? $"No vehicle spawns on {mission.Layout.Difficulty}, so this map has no player tank there.");
         return new(tank.Actor.Name, PlayerTankPresentation.Summary(ChosenTank(tank)), null);
     }
     /// <summary>Selects the player tank as its World tree row does, which opens its card.</summary>
@@ -139,8 +143,7 @@ public partial class MainWindow
         if (!sourceChromeActive || shownDocument?.SourceWorld is not { } session || shownAsset is not { Kind: AssetKind.World } asset || scene?.Mission is not { } mission)
             throw new StudioCommandException("unsupported", "The player tank's type and weapons are a source map preview.");
         if (mission.PlayerTank is not { } tank)
-            throw new StudioCommandException("unsupported", mission.PlayerTankFailure is { } failure ? $"The player tank of {session.Mission} can't be prepared: {failure}"
-                : $"{session.Mission} has no player tank on {mission.Layout.Difficulty}.");
+            throw new StudioCommandException("unsupported", PlayerTankFailureText(mission) ?? $"{session.Mission} has no player tank on {mission.Layout.Difficulty}.");
         if (PlayerTankRebuilding)
             throw new StudioCommandException("busy", "The source scene is being evaluated; change the player tank when it is ready.");
         if (!next.IsValid) throw new StudioCommandException("invalid_argument", "Use a known type, a primary weapon (RFPG, ERFPG) and a secondary weapon.");
@@ -204,7 +207,7 @@ public partial class MainWindow
             }
             posingTank = null;
             // A rebuild that did not publish leaves the map's choice at what the view shows.
-            if (doc.SourceWorld is { } session && ReferenceEquals(doc, shownDocument) && ShownPlayerTank is { } tank && staticRefresh == null) session.PlayerTank = tank.Shown;
+            if (doc.SourceWorld is { } session && ReferenceEquals(doc, shownDocument) && ShownPlayerTank is { } tank && staticRefresh == null) session.PlayerTank = KeptChoice(tank);
             RestorePlayerTankRadios();
         }
     }
@@ -214,7 +217,7 @@ public partial class MainWindow
     {
         if (ShownWorldMission is not { } mission) return null;
         if (mission.PlayerTank is not { } tank)
-            return mission.PlayerTankFailure is { } failure ? new { adjustable = false, failure } : null;
+            return PlayerTankFailureText(mission) is { } failure ? new { adjustable = false, vehicle = mission.LocalPlayer?.Name, failure } : null;
         bool adjustable = PlayerTankAdjustable;
         var state = adjustable ? ChosenTank(tank) : tank.Shown;
         string missionName = ShownMissionName;

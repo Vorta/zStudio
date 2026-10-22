@@ -78,8 +78,11 @@ internal sealed class PlayerTankPanel : StackPanel
             // A narrow header keeps its title: the weapons' summary (the radios show them) gives way.
             if (narrow != wasNarrow && view is { } shown) Summary(weaponsSection, weaponsSpinner, shown.PosingWeapons, narrow ? "" : PlayerTankPresentation.WeaponsSummary(shown.State));
         };
+        // A ring turns only while it shows on a loaded panel: selecting another object while posing stops it.
+        Unloaded += (_, _) => StopSpinners();
         Loaded += (_, _) =>
         {
+            Spin(typeSpinner, view?.PosingType == true); Spin(weaponsSpinner, view?.PosingWeapons == true);
             if (!restoreFocus) return;
             restoreFocus = false;
             Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Input, () => { if (lastFocused is { IsVisible: true, IsEnabled: true } radio) radio.Focus(); });
@@ -89,7 +92,14 @@ internal sealed class PlayerTankPanel : StackPanel
     /// <summary>Before a card hosts the panel: whether its radios had the keyboard, to give it back once hosted again.</summary>
     internal void PrepareMove() { if (IsKeyboardFocusWithin) restoreFocus = true; }
     /// <summary>The next <see cref="Show"/> draws again even with the same inputs (the radios return to them after a refused click).</summary>
-    internal void Invalidate() => view = null;
+    internal void Invalidate() { view = null; StopSpinners(); }
+    private void StopSpinners() { Spin(typeSpinner, false); Spin(weaponsSpinner, false); }
+    private static void Spin(FrameworkElement spinner, bool on)
+    {
+        var turn = (RotateTransform)spinner.RenderTransform;
+        if (!on) turn.BeginAnimation(RotateTransform.AngleProperty, null);
+        else if (!turn.HasAnimatedProperties) turn.BeginAnimation(RotateTransform.AngleProperty, new DoubleAnimation(0, 360, TimeSpan.FromSeconds(1)) { RepeatBehavior = RepeatBehavior.Forever });
+    }
     /// <summary>The docked Properties pane's width, or null outside it.</summary>
     private double? PaneWidth()
     {
@@ -153,13 +163,10 @@ internal sealed class PlayerTankPanel : StackPanel
         if (shared.Count > 0) readModel.Inlines.Add(new Run(", shared with " + (shared.Count == 1 ? shared[0] : string.Join(", ", shared.Take(shared.Count - 1)) + " and " + shared[^1])));
     }
 
-    private static void Summary(CardSection section, FrameworkElement spinner, bool posing, string text)
+    private void Summary(CardSection section, FrameworkElement spinner, bool posing, string text)
     {
         section.Summary = posing ? "Posing…" : text;
-        var turn = (RotateTransform)spinner.RenderTransform;
-        bool showing = spinner.Parent != null;
-        if (posing && !showing) turn.BeginAnimation(RotateTransform.AngleProperty, new DoubleAnimation(0, 360, TimeSpan.FromSeconds(1)) { RepeatBehavior = RepeatBehavior.Forever });
-        else if (!posing && showing) turn.BeginAnimation(RotateTransform.AngleProperty, null);
+        Spin(spinner, posing && IsLoaded);
         section.SummaryLead = posing ? spinner : null;
     }
     private static FrameworkElement Spinner()

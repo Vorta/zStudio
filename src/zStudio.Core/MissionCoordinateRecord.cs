@@ -85,8 +85,8 @@ public sealed partial class PickupPlacementEditSession
     /// <summary>
     /// Binds each tank record to the world node the game places for it (<c>CreateFromNamesAtPose</c> 0x421ab0 looks the record's
     /// own name up first, else copies the template its name derives; docs/agents/engine-evidence.md, aiv.zrd): a world node
-    /// of the record's own name is placed itself and is its own template identity (bft2–6 and bftmulti load the player tank
-    /// as bft_00); otherwise the one template of the derived name. Either must be unique in the world, or the record is read only.
+    /// of the record's own name is placed itself and is its own template identity (each bftN.gw and bftmulti.gw loads the player tank
+    /// as bft_00; bft1.gw's second load, bft, is a copy no retail record uses); otherwise the one template of the derived name. Either must be unique in the world, or the record is read only.
     /// </summary>
     public void BindCoordinateTemplates(GameScene scene)
     {

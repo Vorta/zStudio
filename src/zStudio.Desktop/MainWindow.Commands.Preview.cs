@@ -87,8 +87,8 @@ public partial class MainWindow
         Register(r, "scene_nodes", "List active assembled scene nodes by index (motion previews include only the selected assembly), including instance metadata (64 JSON nodes/1024 text characters per row, inspection_truncated when shortened). Full actor/source identities are retained; long or escaped text shortens pages, so follow nextOffset. MW3 actor labels/query matching use 128-character prefixes; actor NameCharacters/NameTruncated disclose shortening. Full authored data remains available through JSON export.", false, [PreviewParameter, .. PageParameters], a =>
         {
             var viewport = TargetViewport(a); return Page(viewport.InspectableNodes.Where(n => n.Name.Contains(Text(a,"query"),StringComparison.OrdinalIgnoreCase)), a,
-                project: n => new { n.Index,n.Name,n.Class, Metadata = JsonData.PreviewObject(n.Metadata, 64, 1024), actor = viewport.ActorAt(n.Index) },
-                maximumRowBytes: n => InspectionResultBudget.SceneNode(n.Name, n.Class, viewport.ActorAt(n.Index)));
+                project: n => new { n.Index,n.Name,n.Class, Metadata = JsonData.PreviewObject(n.Metadata, 64, 1024), actor = viewport.Mission?.InspectedActorAt(n.Index) },
+                maximumRowBytes: n => InspectionResultBudget.SceneNode(n.Name, n.Class, viewport.Mission?.InspectedActorAt(n.Index)));
         });
         Register(r, "scene_selection", "Select/inspect a scene node with bounded metadata and inspection_truncated. Isolate includes its descendants; isolate and show_all are available only in static model/Whole world previews, matching the GUI. show_all also shows what scene_tree hide hid.", true, [PreviewParameter, P("action","string","Selection operation; isolate/show_all require a static model or Whole world preview.",true,"select","isolate","show_all"), P("node","integer","Node index.")], a =>
         {

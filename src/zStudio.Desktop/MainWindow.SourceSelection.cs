@@ -29,6 +29,9 @@ internal sealed record SourceMapPassEntry(int? Row, string Key, string Name, IRe
 /// <summary>Immutable editor projection. Negative row IDs denote source-only groups, never scene slots.</summary>
 internal sealed class SourceMapSelection
 {
+    internal const string HiddenAtStart = "Hidden at the mission's start (a startup animation shows it later), so its placement can't be edited.";
+    internal const string MissingTankTemplate = "The tank template is missing or ambiguous, so its placement can't be edited.";
+    internal const string HiddenInTree = "Show it in the World tree to edit its placement.";
     /// <summary>The later passes, in the order the mission adds them; a source map always has all three (an empty one says so in the tree).</summary>
     internal IReadOnlyList<SourceMapPass> Passes { get; }
     /// <summary>The difficulty the view shows (the aiv and puppies trees list the others' entries dimmed), or null.</summary>
@@ -90,22 +93,19 @@ internal sealed class SourceMapSelection
         Dictionary<int, List<int>> members = [];
         Dictionary<int, int> sourceRows = [];
         Dictionary<MissionActor, string> unretainedActors = new(ReferenceEqualityComparer.Instance);
-        // Records that place one node themselves (retail m2 Easy lists bft_00 twice): the first of them owns the node and
-        // everything below it, read only, since an edit could not tell which record to change.
-        Dictionary<int, (MissionActor First, int Count)> repeated = (mission?.Actors ?? []).GroupBy(a => a.Root).Where(g => g.Count() > 1)
-            .ToDictionary(g => g.Key, g => (g.First(), g.Count()));
         for (int node = 0; node < scene.Nodes.Count; node++)
         {
             token.ThrowIfCancellationRequested();
             int sourceNode = mission != null && node < mission.SourceNodes.Count ? mission.SourceNodes[node] : node;
             var actor = actors?.At(node);
-            string? sharedReason = null;
-            // Ambiguous actors must never fall through to a shared template's source edit path.
+            bool repeatedRoot = false;
+            // Ambiguous actors must never fall through to a shared template's source edit path. Records that place one node
+            // themselves (retail m2 Easy lists bft_00 twice): the first of them owns the node and everything below it, read
+            // only, since an edit could not tell which record to change.
             if (actors?.IsAmbiguous(node) == true)
             {
-                var (first, count) = RepeatedPlacement(node) ?? throw new InvalidDataException("Several mission placements share a node; source-map selection is ambiguous.");
-                actor = first;
-                sharedReason = $"{count} records of the shown difficulty place this object, so editing its placement is unavailable.";
+                actor = mission!.RepeatedPlacementAt(scene, node) ?? throw new InvalidDataException("Several mission placements share a node; source-map selection is ambiguous.");
+                repeatedRoot = true;
             }
             int owner = actor?.Root ?? source.Owners.GetValueOrDefault(sourceNode, node);
             owners[node] = owner;
@@ -124,8 +124,7 @@ internal sealed class SourceMapSelection
                 retainPart &= stableActor != null;
                 if (stableActor == null && !unretainedActors.ContainsKey(actor)) unretainedActors[actor] = "unretained:" + Guid.NewGuid().ToString("N");
                 string actorKey = stableActor ?? unretainedActors[actor];
-                boundaries[owner] = new(owner, actorKey, actor.Name, actor.PlacementSource, false, sharedReason
-                    ?? (actor.Pickup == null && actor.CoordinateSource == null ? "This object's placement is controlled by startup animation. Editing that placement is unavailable." : null));
+                boundaries[owner] = new(owner, actorKey, actor.Name, actor.PlacementSource, false, PlacementReadOnlyReason(actor, repeatedRoot));
                 identities[owner] = actorKey;
                 physical = actorKey + ":" + physical;
             }
@@ -140,14 +139,16 @@ internal sealed class SourceMapSelection
         foreach (var (key, nodes) in partUses)
             if (nodes.Count == 1) parts[nodes[0]] = key;
 
-        // The repeated placement a node belongs to: its own or its nearest ancestor's (first parents, bounded), or null.
-        (MissionActor First, int Count)? RepeatedPlacement(int node)
+        // Why a placed object's placement can't be edited (the card, scene_tree readOnlyReason, scene_card begin), or null.
+        string? PlacementReadOnlyReason(MissionActor actor, bool repeatedRoot)
         {
-            for (int depth = 0; depth <= SceneHierarchy.MaximumDepth && node >= 0 && node < scene.Nodes.Count; depth++)
-            {
-                if (repeated.TryGetValue(node, out var found)) return found;
-                node = scene.Nodes[node].Parents.FirstOrDefault(-1);
-            }
+            if (repeatedRoot)
+                return $"{mission!.Actors.Count(a => a.Root == actor.Root)} records of the shown difficulty place this object, so editing its placement is unavailable.";
+            if (actor.Pickup == null && actor.CoordinateSource == null) return "This object's placement is controlled by startup animation. Editing that placement is unavailable.";
+            if (actor.Root >= 0 && actor.Root < scene.Nodes.Count && (scene.Nodes[actor.Root].Metadata.UInt("flags") & 4) == 0)
+                return HiddenAtStart;
+            if (actor.CoordinateSource is { } record && placements?.Coordinate(record) is { Kind: "tank", MissionSpecific: false } vehicle && (vehicle.TemplateSourceNode == null || vehicle.Difficulties.Count == 0))
+                return MissingTankTemplate;
             return null;
         }
         Owners = owners; Boundaries = boundaries; Identities = identities; PartIdentities = parts;
@@ -298,6 +299,12 @@ internal sealed class SourceMapSelection
                     MissionPickupType.Catalog.FirstOrDefault(t => t.Name == r.Type)?.TemplateName ?? r.Type, $"{r.Type} pickup · {Position(r.OriginalPosition)}", true, r.Type, r.OriginalPosition))
                 : placements.OtherCoordinates.Where(c => c.Kind == "tank").Select(c => new PassRecord(c.Source, c.Difficulties, c.Name,
                     $"{c.Template} · {Position(c.OriginalPosition)} · heading {c.Rotation.Y.ToString("0.#", System.Globalization.CultureInfo.InvariantCulture)}°", c.TemplateSourceNode != null));
+            // A resource that lists one placement more than once (retail m2 aiv_easy.zrd: bft_00 twice) says so on each entry:
+            // the rows are one object, not several.
+            records = records.ToList();
+            var listings = records.GroupBy(r => (r.Source.ResourceName, r.Name, r.Detail)).Where(g => g.Count() > 1).ToDictionary(g => g.Key, g => g.Count());
+            records = records.Select(r => listings.TryGetValue((r.Source.ResourceName, r.Name, r.Detail), out int listed)
+                ? r with { Detail = r.Detail + $" · listed {(listed == 2 ? "twice" : listed.ToString(System.Globalization.CultureInfo.InvariantCulture) + " times")} in {r.Source.ResourceName.ToLowerInvariant()}" } : r).ToList();
             foreach (var record in records)
             {
                 token.ThrowIfCancellationRequested();

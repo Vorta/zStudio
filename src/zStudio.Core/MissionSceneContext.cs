@@ -33,12 +33,32 @@ public sealed partial class MissionSceneContext
     public AiNetworkSnapshot AiNetworks { get; internal set; } = AiNetworkSnapshot.Empty;
     /// <summary>The local player's tank and how the preview draws it (docs/agents/preview.md); null without a spawned vehicle.</summary>
     public MissionPlayerTank? PlayerTank { get; init; }
-    /// <summary>Why a spawned player tank could not be prepared (<see cref="PlayerTank"/> is then null).</summary>
+    /// <summary>The local player's vehicle: the first AIV actor that spawns, or null.</summary>
+    public MissionActor? LocalPlayer { get; init; }
+    /// <summary>Why the local player's tank could not be prepared (<see cref="PlayerTank"/> is then null).</summary>
     public string? PlayerTankFailure { get; init; }
     private readonly int originalNodeCount;
     private readonly MissionActorIndex actorIndex;
+    /// <summary>Roots that several actors place (retail m2 Easy lists bft_00 twice), each with the first of them.</summary>
+    private readonly Dictionary<int, MissionActor> repeatedRoots;
     /// <summary>The unique authored actor occurrence owning this node, or null for absent/ambiguous ownership.</summary>
     public MissionActor? ActorAt(int node) => actorIndex.At(node);
+    /// <summary>
+    /// The actor an inspection shows for a node: <see cref="ActorAt"/>, else, for a node at or below a root that several
+    /// records place, the first of them. Never an edit identity: such a placement is read only.
+    /// </summary>
+    public MissionActor? InspectedActorAt(int node) => ActorAt(node) ?? (actorIndex.IsAmbiguous(node) ? RepeatedPlacementAt(Scene, node) : null);
+    /// <summary>For a node of <paramref name="scene"/> at or below a root several records place, the first of them (nearest such ancestor by first parents); otherwise null.</summary>
+    public MissionActor? RepeatedPlacementAt(GameScene scene, int node)
+    {
+        if (repeatedRoots.Count == 0) return null;
+        for (int depth = 0; depth <= 1024 && node >= 0 && node < scene.Nodes.Count; depth++)
+        {
+            if (repeatedRoots.TryGetValue(node, out var first)) return first;
+            node = scene.Nodes[node].Parents.FirstOrDefault(-1);
+        }
+        return null;
+    }
 
     /// <summary>Prepare ownership for the actual preview topology, reusing this baseline's index only for its own scene.</summary>
     public MissionActorIndex PrepareActorIndex(GameScene scene, CancellationToken token = default)
@@ -52,6 +72,7 @@ public sealed partial class MissionSceneContext
         Layout = layout; this.originalNodeCount = originalNodeCount;
         Scene = scene; SourceNodes = sources.AsReadOnly(); Actors = actors.AsReadOnly(); DormantRoots = dormant;
         actorIndex = MissionActorIndex.Build(scene, Actors, token);
+        repeatedRoots = Actors.GroupBy(a => a.Root).Where(g => g.Count() > 1).ToDictionary(g => g.Key, g => g.First());
         Diagnostics = diagnostics.Distinct(StringComparer.Ordinal).ToArray(); Horizons = FindHorizons(scene);
     }
     /// <summary>Match an instance and its source node; never carry clone indices between layouts.</summary>
@@ -359,8 +380,8 @@ public static partial class MissionSceneLoader
             }
             catch (InvalidDataException ex) when (!budget.Exhausted)
             {
-                tankFailure = $"{JsonData.ShownText(localPlayer.Name, 64)} could not be prepared: {ex.Message}";
-                notes.Add($"Player tank: {tankFailure}");
+                tankFailure = ex.Message;
+                notes.Add($"Player tank: {ex.Message}");
             }
         HashSet<int> dormant = [];
         if (context != null)
@@ -430,7 +451,7 @@ public static partial class MissionSceneLoader
         var animationUses = context == null ? new Dictionary<int, MissionAnimationUses>() :
             CollectAnimationUses(context, original, bindings!, entryRoots, animationSeeds, actors, vehicles, weapons, selection, notes, token);
         return new(scene, sources, actors, dormant, notes, selection, original.Nodes.Count, token)
-        { InitializationTransforms = dependencies, AnimationEntryRoots = entryRoots, AnimationUses = animationUses, PlayerTank = tank, PlayerTankFailure = tankFailure };
+        { InitializationTransforms = dependencies, AnimationEntryRoots = entryRoots, AnimationUses = animationUses, LocalPlayer = localPlayer, PlayerTank = tank, PlayerTankFailure = tankFailure };
 
         MissionPickupSource? CoordinateSource(int recordIndex)
         {
