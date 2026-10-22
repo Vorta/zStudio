@@ -320,6 +320,30 @@
         "zstudio_source_world_open"
       ],
       "note": "The centered source-project picker lists data/mN folders with matching gamegen/mN.gs scripts in numeric order. A button opens that map through the guarded shared source-world service. New is disabled. Source projects do not expose Files/Assets/Search or direct file opening."
+    },
+    {
+      "gui": "PlayerTankPanel:Radios",
+      "tools": [
+        "zstudio_scene_options",
+        "zstudio_preview_state",
+        "zstudio_scene_tree"
+      ],
+      "note": "The player tank card's Master type, Primary and Secondary radios (created in code) are scene_options changes.bftType (tracked, amphibious, hover, sub), bftPrimary and bftSecondary, applied together and published like difficulty: a preview choice for the open map, never saved, no draft or undo. Disabled radios are refusals with the same reasons (a type without transitions, a beam or fire weapon in sub, a rebuilding world: busy). preview_state.bft reports the choice, what the view draws (shown, gun), each type's availability and reason, the secondaries, posing, rebuilding, failure, substitution and the card's note; scene_tree marks the tank's row playerTank."
+    },
+    {
+      "gui": "SceneInspectionCard:PlayerTankRow",
+      "tools": [
+        "zstudio_scene_tree",
+        "zstudio_preview_state"
+      ],
+      "note": "With nothing selected, the docked Properties pane's Player tank row (created in code) shows preview_state.bft's choice and selects the tank: scene_tree select on the row marked playerTank. A difficulty without a spawned vehicle shows why (preview_state.bft is null)."
+    },
+    {
+      "gui": "MainWindow.SourceEditor:StatusPlayerTank",
+      "tools": [
+        "zstudio_preview_state"
+      ],
+      "note": "The source map status bar's player tank item, shown while preview_state.bft's choice differs from its defaults."
     }
   ],
   "handlers": [

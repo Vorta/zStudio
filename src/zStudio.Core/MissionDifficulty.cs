@@ -10,6 +10,8 @@ public sealed record MissionLayoutSelection(MissionDifficulty Difficulty, string
     public string? UnavailableMission { get; init; }
     /// <summary>False for MechWarrior 3, whose authored missions do not use RECOIL's difficulty resource variants.</summary>
     public bool DifficultyApplies { get; init; } = true;
+    /// <summary>How the preview draws the local player's tank: part of the context's identity and, when not the default, its description.</summary>
+    public PlayerTankState PlayerTank { get; init; } = PlayerTankState.Default;
     public static MissionLayoutSelection For(MissionDifficulty difficulty) => difficulty switch
     {
         MissionDifficulty.Easy => new(difficulty, "aiv_easy.zrd", "vehicle_easy.zrd", "puppies_easy.zrd"),
@@ -19,5 +21,6 @@ public sealed record MissionLayoutSelection(MissionDifficulty Difficulty, string
     };
     public string Label => MissionArchive != null ? $"Authored mission · {Path.GetFileNameWithoutExtension(MissionArchive)}" : DifficultyApplies ? $"Mission start · {Difficulty}" : "Stored world layout";
     public string Description => MissionArchive != null ? $"{Label} · {MissionArchive} · gameplay activation is not simulated" :
-        DifficultyApplies ? $"{Label} · {AivResource} · {VehicleResource} · {PickupResource} (all authored pickups)" : $"{Label} · no MechWarrior 3 mission reader · gameplay activation is not simulated";
+        DifficultyApplies ? $"{Label} · {AivResource} · {VehicleResource} · {PickupResource} (all authored pickups)" + (PlayerTank.IsDefault ? "" : $" · player tank {PlayerTank.Type} · {PlayerTank.Primary} · {PlayerTank.Secondary} (preview)")
+        : $"{Label} · no MechWarrior 3 mission reader · gameplay activation is not simulated";
 }

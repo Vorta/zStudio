@@ -443,7 +443,8 @@ public partial class MainWindow : Window
                 }
                 if (asset.Kind == AssetKind.World) await PopulateWorldMissionsAsync(doc, token);
                 string? exactMission = ExactMissionFor(doc.Path, ViewModel.Resolver.SelectedMission(doc.Path));
-                var mission = asset.Kind == AssetKind.World ? await MissionSceneLoader.LoadAsync(doc.Document, ViewModel.Resolver, token: token, difficulty: ViewModel.Difficulty, mission: exactMission, exactMission: exactMission != null) : null;
+                var mission = asset.Kind == AssetKind.World ? await MissionSceneLoader.LoadAsync(doc.Document, ViewModel.Resolver, token: token, difficulty: ViewModel.Difficulty, mission: exactMission, exactMission: exactMission != null,
+                    playerTank: doc.SourceWorld?.PlayerTank) : null;
                 // A source world's placement edits are carried back to its sources (see MoveSourcePlacementAsync).
                 if (mission != null) { await doc.GetPickupEditsAsync(ViewModel.Resolver, token); await PopulateWorldMissionsAsync(doc, token); }
                 if (mission != null) await PrepareSourceMapSelectionAsync(doc, mission.Scene, mission, token);
@@ -454,7 +455,9 @@ public partial class MainWindow : Window
                 // A rebuilt source world keeps the camera of the build it replaced.
                 if (pendingSourceView is { } rebuilt && rebuilt.Document == doc) { pendingSourceView = null; scene.RestoreView(rebuilt.View); }
                 var shownOptions = ReadStaticSceneOptions();
-                publishedStaticOptions = shownOptions with { Difficulty = mission is { Layout.DifficultyApplies: true } ? mission.Layout.Difficulty : ViewModel.Difficulty, Mission = mission?.Layout.MissionArchive ?? shownOptions.Mission };
+                publishedStaticOptions = shownOptions with { Difficulty = mission is { Layout.DifficultyApplies: true } ? mission.Layout.Difficulty : ViewModel.Difficulty, Mission = mission?.Layout.MissionArchive ?? shownOptions.Mission,
+                    Tank = mission?.PlayerTank?.Requested ?? shownOptions.Tank };
+                AdoptPlayerTank(doc, mission);
                 ApplyTerrainBrush(scene);
                 if (mission != null) ViewModel.AdoptMissionFallback(doc.Path, mission.Layout);
                 if (asset.Kind == AssetKind.World) AttachPickupEditor(doc);

@@ -185,26 +185,93 @@ public sealed partial class AnimationPlayer
     }
 
     private void PublishInitialization(HashSet<int> positioned)
+        => Publish(instances.Where(i => i.Shared || (i.Entry.U32(148) & 0x8000) == 0).SelectMany(i => i.Nodes.Values), positioned);
+
+    /// <summary>
+    /// The player vehicle's mode change as the game plays it on the vehicle's root (<c>ApplyMasterTypeTransition</c> 0x42b520):
+    /// each list's entries start in one frame, entry 0 then entry 1, through <c>ActivateRuntime</c> (0x45d930), which rebinds
+    /// them at the root, refuses an entry whose activation prerequisites fail and first runs a flag-0x20 entry's cleanup
+    /// (<c>StopAndCleanup</c>); they run in 60 Hz ticks of this player's own clock until they finish, then the next list
+    /// starts. Only these instances advance: no mission clock, audio, effect or other actor. The end state (active flags,
+    /// poses and the shape of a part left morphed) is published into the scene only when every list finished.
+    /// </summary>
+    /// <returns>Null when published, otherwise why the change could not be shown.</returns>
+    internal static string? RunVehicleModeChange(AnimationPreviewContext context, IReadOnlyList<IReadOnlyList<AnimationEntry>> lists, int root,
+        HashSet<int> positioned, AnimationBindingOperation operation, CancellationToken token)
     {
-        foreach (var instance in instances.Where(i => i.Shared || (i.Entry.U32(148) & 0x8000) == 0))
-            foreach (var node in instance.Nodes.Values)
+        // Each shipped mode entry ends within half a second and a frame; ten seconds of its own clock bounds a list.
+        const int MaximumTicks = 600;
+        var player = new AnimationPlayer(context, operation) { measuringDuration = true, dispatchBudget = 10000 };
+        foreach (var list in lists)
+        {
+            // The preview evaluates no activation prerequisite; the game would test them before it starts the entry.
+            if (list.FirstOrDefault(e => e.References[6].Count > 0) is { } gated)
+                return $"{gated.Name} has activation prerequisites, which the preview does not evaluate.";
+            foreach (var entry in list.Where(e => (e.U32(148) & 0x20) != 0))
+                if (player.AddInstance(entry, null, root, primary: true, started: true) is not { Shared: true })
+                    return Refused(entry);
+            if (Settle() is { } cleanup) return cleanup;
+            foreach (var entry in list)
+                if (player.AddInstance(entry, null, root, started: true) is not { Shared: true })
+                    return Refused(entry);
+            if (Settle() is { } run) return run;
+        }
+        player.Publish(player.sharedNodes.OrderBy(p => p.Key).Select(p => p.Value), positioned);
+        // A part left shown in a morphed shape (m2's and m3's folded wings): static views draw no morph, so the part draws a
+        // copy of its model at that shape (base vertex plus morph delta times the factor). The model stays shared otherwise.
+        var scene = context.Scene;
+        foreach (var (index, node) in player.sharedNodes.OrderBy(p => p.Key))
+        {
+            if (!node.Active || node.Morph <= 1e-5f || scene.Nodes[index].ModelIndex is not (>= 0 and int model) || model >= scene.Models.Count) continue;
+            var shape = scene.Models[model];
+            if (shape.Morphs.Length != shape.Vertices.Length) continue;
+            operation.Reserve(64L + shape.Vertices.Length);
+            var vertices = new System.Numerics.Vector3[shape.Vertices.Length];
+            for (int i = 0; i < vertices.Length; i++) vertices[i] = shape.Vertices[i] + shape.Morphs[i] * node.Morph;
+            var metadata = (System.Text.Json.Nodes.JsonObject)shape.Metadata.DeepClone();
+            metadata["preview_morph"] = node.Morph;
+            scene.Models.Add(shape with { Index = scene.Models.Count, Vertices = vertices, Morphs = [], Metadata = metadata });
+            scene.Nodes[index] = scene.Nodes[index] with { ModelIndex = scene.Models.Count - 1 };
+        }
+        return null;
+
+        string? Settle()
+        {
+            for (int tick = 0; ; tick++)
             {
-                bindingOperation!.Reserve(64);
-                var source = context.Scene.Nodes[node.Source];
-                if (source.Class is not ("object3d" or "lod")) continue;
-                source.Metadata["flags"] = node.Active ? source.Metadata.UInt("flags") | 4u : source.Metadata.UInt("flags") & ~4u;
-                if (node.Changed && source.Class == "object3d")
-                {
-                    context.InitializationTransforms?.Writes.Add(node.Source);
-                    try { MissionSceneLoader.SetPose(context.Scene, node.Source, node.Local); }
-                    catch (InvalidDataException ex) { AddNote($"{source.Name}: invalid initialization pose was ignored: {ex.Message}"); continue; }
-                }
-                if (source.Class == "object3d")
-                {
-                    source.Data["opacity"] = node.Alpha;
-                    source.Data["flags"] = node.AlphaEnabled ? source.Data.UInt("flags") | 2u : source.Data.UInt("flags") & ~2u;
-                }
-                if (node.PositionWritten) positioned.Add(node.Source);
+                if (player.blockedSequences > 0) return player.lastWarning ?? "An event of the transition is unavailable in the preview.";
+                if (player.instances.All(i => i.Finished) && player.effects.Count == 0) return null;
+                if (tick >= MaximumTicks)
+                    return $"{string.Join(", ", player.instances.Where(i => !i.Finished).Select(i => i.Entry.Name).Distinct())} did not finish within {MaximumTicks / 60} seconds.";
+                try { player.cues.Clear(); player.Tick(token); }
+                catch (Exception ex) when (ex is InvalidDataException or StateLimitException || ex is IOException && operation.Exhausted)
+                { return ex.Message; }
             }
+        }
+        string Refused(AnimationEntry entry) => player.lastWarning is { } warning && warning.Contains(entry.Name, StringComparison.Ordinal)
+            ? warning : $"{entry.Name} could not start on the tank.";
+    }
+
+    private void Publish(IEnumerable<Node> nodes, HashSet<int> positioned)
+    {
+        foreach (var node in nodes)
+        {
+            bindingOperation!.Reserve(64);
+            var source = context.Scene.Nodes[node.Source];
+            if (source.Class is not ("object3d" or "lod")) continue;
+            source.Metadata["flags"] = node.Active ? source.Metadata.UInt("flags") | 4u : source.Metadata.UInt("flags") & ~4u;
+            if (node.Changed && source.Class == "object3d")
+            {
+                context.InitializationTransforms?.Writes.Add(node.Source);
+                try { MissionSceneLoader.SetPose(context.Scene, node.Source, node.Local); }
+                catch (InvalidDataException ex) { AddNote($"{source.Name}: invalid initialization pose was ignored: {ex.Message}"); continue; }
+            }
+            if (source.Class == "object3d")
+            {
+                source.Data["opacity"] = node.Alpha;
+                source.Data["flags"] = node.AlphaEnabled ? source.Data.UInt("flags") | 2u : source.Data.UInt("flags") & ~2u;
+            }
+            if (node.PositionWritten) positioned.Add(node.Source);
+        }
     }
 }

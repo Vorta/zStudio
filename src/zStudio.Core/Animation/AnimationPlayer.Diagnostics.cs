@@ -8,9 +8,12 @@ public sealed partial class AnimationPlayer
     private readonly record struct DiagnosticKey(string Severity, string Category, string Message, AnimationDiagnosticContext Source);
     private Dictionary<DiagnosticKey, AnimationPreviewDiagnostic> previewIssues = [];
     private AnimationDiagnosticContext diagnosticContext = new(-1);
+    /// <summary>The latest warning, which a refused mode change names.</summary>
+    private string? lastWarning;
     private void AddNote(string message, string category = "Preview", string severity = "Warning")
     {
         notes.Add(message); // Preserve the existing text API and duration-analysis contract.
+        if (severity == "Warning") lastWarning = message;
         DiagnosticKey key = new(severity, category, message, diagnosticContext);
         if (previewIssues.Count >= 2000 && !previewIssues.ContainsKey(key))
         {

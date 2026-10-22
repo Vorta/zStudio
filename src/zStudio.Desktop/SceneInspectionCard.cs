@@ -95,6 +95,25 @@ internal sealed partial class SceneInspectionCard : Grid
     /// <summary>The world summary the empty pane shows (label, value).</summary>
     internal Func<IReadOnlyList<(string Label, string Value)>>? WorldSummary { get; set; }
     internal sealed record RecentSelection(string Name, string Parent, string Category, string[] Path);
+    /// <summary>Sections a selection adds after Details (the player tank's Master type and Weapons), or null.</summary>
+    internal Func<SceneInspection, FrameworkElement?>? ExtraSections { get; set; }
+    /// <summary>The empty pane's Player tank row: the tank's name and how the view draws it, or why the map has none; null hides it.</summary>
+    internal Func<PlayerTankRow?>? PlayerTankSummary { get; set; }
+    /// <summary>Selects the player tank (the Player tank row).</summary>
+    internal Action? PickPlayerTank { get; set; }
+    internal sealed record PlayerTankRow(string Name, string? State, string? Absent);
+    private readonly ContentControl extraSections = new() { Focusable = false, IsTabStop = false, Visibility = Visibility.Collapsed };
+    /// <summary>Hosts <paramref name="sections"/> (taking them from another card that hosted them), or nothing.</summary>
+    private void HostExtraSections(FrameworkElement? sections)
+    {
+        if (!ReferenceEquals(extraSections.Content, sections))
+        {
+            if (sections is PlayerTankPanel panel) panel.PrepareMove();
+            if (sections?.Parent is ContentControl previous && !ReferenceEquals(previous, extraSections)) previous.Content = null;
+            extraSections.Content = sections;
+        }
+        extraSections.Visibility = sections == null ? Visibility.Collapsed : Visibility.Visible;
+    }
     /// <summary>Clears the selection (the ✕ and Escape), asking about a pending draft first.</summary>
     internal bool ClearSelection()
     {
@@ -165,7 +184,7 @@ internal sealed partial class SceneInspectionCard : Grid
         footer.SetResourceReference(Border.BorderBrushProperty, "CardStrokeColorDefaultBrush");
         SetRow(footer, 2); layout.Children.Add(footer);
         modesFrame.Child = modes; detailsSection.Trailing = modesFrame; detailsSection.Body.Children.Add(rows); detailsSection.Body.Margin = new(10, 0, 10, 8);
-        StackPanel body = new(); body.Children.Add(scope); body.Children.Add(error); body.Children.Add(terrainEdit); body.Children.Add(sourceRows); body.Children.Add(detailsSection);
+        StackPanel body = new(); body.Children.Add(scope); body.Children.Add(error); body.Children.Add(terrainEdit); body.Children.Add(sourceRows); body.Children.Add(detailsSection); body.Children.Add(extraSections);
         emptyView = new ScrollViewer { Content = emptyBody, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled, Margin = new(0, 6, 0, 0), Visibility = Visibility.Collapsed };
         SetRow(emptyView, 1); layout.Children.Add(emptyView);
         terrainEdit.Click += (_, _) => { if (ResolvePending()) EditTerrain?.Invoke(); };
@@ -379,6 +398,7 @@ internal sealed partial class SceneInspectionCard : Grid
         pickupLabel = null;
         if (selected == null)
         {
+            HostExtraSections(null);
             if (!HasDraft) { EndObjectHandles(); ObjectEditor = null; objectBinding = null; sourceRows.Children.Clear(); sourceRows.Visibility = Visibility.Collapsed; }
             if (empty)
             {
@@ -396,7 +416,8 @@ internal sealed partial class SceneInspectionCard : Grid
         ToolTipService.SetShowOnDisabled(isolate, true);
         isolate.ToolTip = HasDraft ? "Apply or discard the edit first" : isolate.IsChecked == true ? "Show all objects" : "Isolate: show only this object";
         details = describe(selected);
-        if (RefreshSource()) return;
+        if (RefreshSource()) { HostExtraSections(null); return; }
+        HostExtraSections(ExtraSections?.Invoke(selected));
         var pickup = PickupNameOf?.Invoke(selected);
         heading.Text = pickup?.Name ?? Display(details["Selected object"] ?? details["Node"]); heading.ToolTip = heading.Text; selectionName.Text = heading.Text;
         subtitle.Text = pickup?.Subtitle ?? Kind(selected); subtitle.ToolTip = pickup?.ToolTip ?? subtitle.Text;

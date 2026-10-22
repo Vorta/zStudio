@@ -87,7 +87,8 @@ public partial class MainWindow
         if (scene?.InspectionContent is SceneInspectionCard card)
         {
             card.IsSourceWorld = shownDocument?.SourceWorld != null;
-            if (!sourceChromeActive) { card.WorldRebuilding = null; card.CategoryOf = null; card.PickupNameOf = null; card.ZoneLabel = null; card.RecentSelections = null; card.PickRecent = null; card.WorldSummary = null; }
+            if (!sourceChromeActive) { card.WorldRebuilding = null; card.CategoryOf = null; card.PickupNameOf = null; card.ZoneLabel = null; card.RecentSelections = null; card.PickRecent = null; card.WorldSummary = null;
+                card.ExtraSections = null; card.PlayerTankSummary = null; card.PickPlayerTank = null; }
         }
         RefreshSourceChrome();
     }
@@ -267,6 +268,7 @@ public partial class MainWindow
             ZoneEntry zone => section.OutlinerLabel + (zone.Zone.Label is { } label ? " · " + label : ""), _ => section.OutlinerLabel,
         } : card?.SelectionLabel ?? "No selection";
         StatusMission.Text = scene?.Mission?.Layout.Label ?? "";
+        RefreshPlayerTankStatus();
         StatusCounts.Text = scene?.PreviewSummary ?? "";
         StatusNoticeCount.Text = staticPreviewProblems.Count.ToString(CultureInfo.InvariantCulture);
         StatusNotices.Visibility = staticPreviewProblems.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
@@ -325,6 +327,10 @@ public partial class MainWindow
             card.RecentSelections = () => recentDocument == shownDocument ? recentSelections : [];
             card.PickRecent = PickRecentSelection;
             card.WorldSummary = WorldSummary;
+            var viewport = scene!;
+            card.ExtraSections = selected => PlayerTankSections(viewport, selected);
+            card.PlayerTankSummary = PlayerTankRowSummary;
+            card.PickPlayerTank = PickPlayerTank;
         }
         if (dockedCard != null && !ReferenceEquals(dockedCard, card)) UndockCard();
         if (card != null && dockedCard == null)

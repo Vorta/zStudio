@@ -6,7 +6,8 @@ namespace zStudio.Desktop;
 
 public partial class MainWindow
 {
-    private sealed record StaticSceneOptions(int Lod, bool Horizon, PackChoice? Pack, MissionDifficulty Difficulty, string? Mission);
+    /// <param name="Tank">A source map's player tank choice (its session's), which the scene draws.</param>
+    private sealed record StaticSceneOptions(int Lod, bool Horizon, PackChoice? Pack, MissionDifficulty Difficulty, string? Mission, PlayerTankState? Tank = null);
     private bool restoringStaticOptions;
     private StaticSceneOptions? publishedStaticOptions;
     private CancellationTokenSource? staticRefresh;
@@ -14,7 +15,8 @@ public partial class MainWindow
     private long staticRefreshGeneration;
     private bool HasPublishedStaticScene => animation == null && scene?.PreviewScene != null && publishedStaticOptions != null &&
         SceneHost.Visibility == Visibility.Visible && shownAsset != null;
-    private StaticSceneOptions ReadStaticSceneOptions() => new(LodCombo.SelectedIndex, BackdropEnabled.IsChecked == true, TexturePackCombo.SelectedItem as PackChoice, ViewModel.Difficulty, shownDocument == null ? null : ViewModel.Resolver?.SelectedMission(shownDocument.Path));
+    private StaticSceneOptions ReadStaticSceneOptions() => new(LodCombo.SelectedIndex, BackdropEnabled.IsChecked == true, TexturePackCombo.SelectedItem as PackChoice, ViewModel.Difficulty, shownDocument == null ? null : ViewModel.Resolver?.SelectedMission(shownDocument.Path),
+        shownDocument?.SourceWorld?.PlayerTank);
     private void RestoreStaticSceneOptions(StaticSceneOptions options)
     {
         bool wasUpdating = updating; updating = true; restoringStaticOptions = true;
@@ -23,6 +25,8 @@ public partial class MainWindow
             LodCombo.SelectedIndex = options.Lod; BackdropEnabled.IsChecked = options.Horizon; TexturePackCombo.SelectedItem = options.Pack;
             // Only a RECOIL layout restores the shared preference; an MW3 world without readers has no difficulty to restore.
             if (scene?.Mission is { Layout.DifficultyApplies: true } && options.Mission == null) ViewModel.Difficulty = options.Difficulty;
+            // A choice the view did not take returns to the one it shows.
+            if (options.Tank != null && shownDocument?.SourceWorld is { } session && session.PlayerTank != options.Tank) { session.PlayerTank = options.Tank; RefreshPlayerTankViews(); }
             if (options.Mission != null && shownDocument != null)
             {
                 ViewModel.Resolver?.SelectMission(shownDocument.Path, options.Mission);
@@ -68,7 +72,7 @@ public partial class MainWindow
             token.ThrowIfCancellationRequested();
             // The mission is captured with the other options; a concurrent selection cannot change it mid-load.
             var mission = asset.Kind == AssetKind.World ? await MissionSceneLoader.LoadAsync(doc.Document, resolver, token: token, difficulty: requested.Difficulty,
-                mission: requested.Mission, exactMission: ExactMissionFor(doc.Path, requested.Mission) != null) : null;
+                mission: requested.Mission, exactMission: ExactMissionFor(doc.Path, requested.Mission) != null, playerTank: requested.Tank) : null;
             if (mission != null) await doc.GetPickupEditsAsync(resolver, token);
             token.ThrowIfCancellationRequested();
             // Keep all partially built meshes off the displayed viewport. ShowAsync
@@ -138,6 +142,7 @@ public partial class MainWindow
             if (aiSelection != null && previous.AiNetworks.Find(aiSelection) is { } oldAi && scene.AiNetworks.Find(aiSelection) is { } newAi &&
                 oldAi.Node.SourceOffset == newAi.Node.SourceOffset) scene.SelectAiNode(aiSelection);
             publishedStaticOptions = requested with { Mission = mission?.Layout.MissionArchive ?? requested.Mission }; previewId = Guid.NewGuid();
+            AdoptPlayerTank(doc, mission);
             ApplyTerrainBrush(scene);
             if (mission != null) ViewModel.AdoptMissionFallback(doc.Path, mission.Layout);
             PreviewInfo.Text = scene.PreviewSummary; PreviewInfo.ToolTip = scene.PreviewSummary;

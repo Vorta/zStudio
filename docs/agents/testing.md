@@ -89,6 +89,7 @@ python -m venv $env:TEMP\check-venv
 - T14: multiplayer m14 without a patch: copy `zbd\m7` to `zbd\m14`, add `m14_zbd.gs`, `support\initm14.gw`, `commonm14.gw`, `tex_fxm14.gw` and a `dialog.zrd` world entry; host world 8 and join with a second client; every weapon predicted available. T15: an m2 single-player save retargeted to m14 with m2's files copied as m14 loads and round-trips.
 - T16: remove `activate_rad` from one M1 network; its vehicle predicted not to move before being shot. T17: complete M3 objective 5; the objectives panel predicted to read "INACTIVE". T18: delete `READ_SOUND` from M1 objective 3, complete it before objective 2, review; a crash predicted.
 - T19: walk M1 across zone transitions with the camera low and high; drawn geometry follows the camera's zones, not the vehicle's.
+- T20: at the M6 start, cycle the secondaries and change to amphibious, hover and sub; compare the parked tank with the map editor's [player tank](preview.md#player-tank): one primary pair and one secondary on the gun, the turret doors collapsed under a raised weapon, a mine or missile launcher carrying its loaded model (not drawn by the preview), Napalm switched to Freon on entering sub.
 - Vehicle upgrade acceptance: startup; two live copies where one dying leaves the other unaffected; later spawns; movement, reversing and turning; slopes and soils; aiming and firing; LOD changes; death and repeated spawns; save and reload; the player vehicle's mode changes.
 
 ## Flaky tests

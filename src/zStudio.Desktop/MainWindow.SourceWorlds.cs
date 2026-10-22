@@ -323,6 +323,8 @@ public partial class MainWindow
         if (sectionCard != null) sectionCard.IsEnabled = !rebuilding;
         // The card's fields follow too, whoever started the rebuild (an MCP edit, Undo, a Blender update).
         if (shownDocument?.SourceWorld == session && CurrentInspectionCard is { ObjectEditor: not null } card && !card.HasObjectDraft) card.Refresh();
+        // The player tank's radios wait for the rebuilt world.
+        else if (shownDocument?.SourceWorld == session) RefreshPlayerTankViews();
     }
     /// <summary>
     /// Completes when no world of the project rebuilds (after a scene-card edit, undo, stroke, Properties or MCP edit) and no
@@ -509,14 +511,14 @@ public partial class MainWindow
         if (evaluated != null && parachutes == null && current == shownDocument && scene is { PreviewScene: { } previousScene } viewport && HasPublishedStaticScene && shownAsset is { Kind: AssetKind.World } selectedAsset)
         {
             var source = (SourceSceneSnapshot)built.World;
-            var difficulty = ViewModel.Difficulty; int lod = Math.Max(0, LodCombo.SelectedIndex);
+            var difficulty = ViewModel.Difficulty; int lod = Math.Max(0, LodCombo.SelectedIndex); var tank = session.PlayerTank;
             var visibility = viewport.NodeVisibility;
             var previousSelection = SourceSelection(current, previousScene);
             var previousModel = SourceWorldModel(current);
             var prepared = await Task.Run(() =>
             {
                 if (current.Document is not SourceSceneSnapshot previousSource || !SameSourceTextures(previousSource, source)) { SourceTransformRefused?.Invoke("textures"); return null; }
-                var mission = evaluatedMission ?? source.MissionScene(difficulty, token);
+                var mission = evaluatedMission ?? source.MissionScene(difficulty, token, tank);
                 var update = SceneTransformUpdate.Prepare(previousScene, mission.Scene, selectedAsset, lod, token, visibility, SourceTransformRefused);
                 if (update == null) return null;
                 var model = RetainSourceTransformIdentity(previousModel, built.Model, built.Build, token);
@@ -540,6 +542,7 @@ public partial class MainWindow
                 sourceWorldModels.Remove(current); sourceWorldModels.Add(current, built.Model);
                 sourceSelections.GetOrCreateValue(current).Add(prepared.Mission.Scene, prepared.Selection);
                 ConfigureSourceMapPresentation(viewport, current, prepared.Mission);
+                AdoptPlayerTank(current, prepared.Mission);
                 accepted?.Invoke(current);
             }, SourceTransformRefused))
             {

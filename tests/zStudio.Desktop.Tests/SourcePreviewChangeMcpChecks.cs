@@ -17,7 +17,7 @@ namespace zStudio.Desktop.Tests;
 /// <summary>
 /// A source world whose build sees another program change a project file, through the real named-pipe MCP connection: the
 /// world does not open, and an edit whose rebuild sees it is taken back, both with <c>external_change</c>; nothing of the
-/// build is shown or kept.
+/// build is shown or kept. A preview choice changes the view only: the player tank's type and weapons (m3).
 /// </summary>
 internal static class SourcePreviewChangeMcpChecks
 {
@@ -27,6 +27,7 @@ internal static class SourcePreviewChangeMcpChecks
         const string puppies = "( ( NANITE 50 ( 100.0 0.0 -100.0 ) ( 0.0 0.0 0.0 ) 30.0 ) )";
         const string easy = "data/m1/zrdr/puppies_easy.zrd";
         fixture.Write("data/m1/zrdr/puppies.zrd", puppies);
+        fixture.WritePlayerTank();
         using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(90)); var token = deadline.Token;
         var main = new MainWindow { Left = -12000, ShowInTaskbar = false }; main.Show();
         try
@@ -92,6 +93,41 @@ internal static class SourcePreviewChangeMcpChecks
             // The world shown was built from the model before this change, which it now reports.
             Assert.True(doc.SourceInputsChanged());
             Assert.Empty(Directory.EnumerateFiles(fixture.Project, "*.zbd", SearchOption.AllDirectories));
+
+            // The player tank's type and weapons change how the view draws it, never the sources: one primary pair and one
+            // secondary on its gun, the type a transition of the map's data reaches, refusals with the card's reasons.
+            var tankMap = Document((await Job("source_world_open", new() { ["mission"] = "m3" }))["document"]!);
+            await Preview();
+            var tankWorkspace = tankMap.SourceWorld!.Workspace; long tankRevision = tankMap.Revision;
+            string preview = (await Call("scene_tree", new() { ["document"] = Id(tankMap) }))["preview"]!.GetValue<string>();
+            var bft = (await Call("preview_state", new() { ["preview"] = preview }))["bft"]!;
+            Assert.Equal(["tracked", "RFPG", "HEMORTAR"], new[] { "type", "primary", "secondary" }.Select(k => bft[k]!.GetValue<string>()));
+            Assert.Equal(["RFPG_L", "RFPG_R", "HEM"], bft["gun"]!["drawn"]!.AsArray().Select(n => n!.GetValue<string>()));
+            Assert.Equal([true, false, true, false], bft["types"]!.AsArray().Select(t => t!["available"]!.GetValue<bool>()));
+            Assert.Equal("m3's tank has no transition to amphibious (none_to_amphib).", bft["types"]![1]!["reason"]!.GetValue<string>());
+            var tankRow = (await Call("scene_tree", new() { ["document"] = Id(tankMap), ["search"] = "bft_00" }))["matches"]!["items"]!.AsArray()
+                .Single(m => m!["item"]!["playerTank"]?.GetValue<bool>() == true)!["item"]!;
+            Assert.Equal(bft["node"]!.GetValue<int>(), tankRow["node"]!.GetValue<int>());
+            await Job("scene_options", new() { ["preview"] = preview, ["changes"] = new Dictionary<string, object?> { ["bftType"] = "hover", ["bftSecondary"] = "NAPALM" } });
+            preview = (await Call("scene_tree", new() { ["document"] = Id(tankMap) }))["preview"]!.GetValue<string>();
+            bft = (await Call("preview_state", new() { ["preview"] = preview }))["bft"]!;
+            Assert.Equal(["hover", "RFPG", "NAPALM"], new[] { "type", "primary", "secondary" }.Select(k => bft["shown"]![k]!.GetValue<string>()));
+            Assert.Equal(["RFPG_L", "RFPG_R", "NAPALM"], bft["gun"]!["drawn"]!.AsArray().Select(n => n!.GetValue<string>()));
+            var shownTank = ((zStudio.Rendering.SceneViewport)main.SceneHost.Content!).Mission!;
+            bool Active(string name) => (shownTank.Scene.Nodes.Single(n => n.Name == name).Metadata.UInt("flags") & 4) != 0;
+            Assert.True(Active("wings_hover")); Assert.False(Active("tracks")); Assert.False(Active("HEM")); Assert.False(Active("ERFPG_L"));
+            Assert.False(tankWorkspace.IsDirty); Assert.False(tankWorkspace.CanUndo); Assert.Equal(tankRevision, tankMap.Revision);
+            // A type without transitions in this map and a fire weapon in sub are refused; the shown state stays.
+            var refusedType = await Job("scene_options", new() { ["preview"] = preview, ["changes"] = new Dictionary<string, object?> { ["bftType"] = "amphibious" } }, "failed");
+            Assert.Equal("unsupported", refusedType["code"]!.GetValue<string>());
+            Assert.Contains("none_to_amphib", refusedType["message"]!.GetValue<string>());
+            Assert.Equal("hover", (await Call("preview_state", new() { ["preview"] = preview }))["bft"]!["type"]!.GetValue<string>());
+            // Opening the map again starts at the defaults.
+            await Job("source_world_open", new() { ["mission"] = "m1" });
+            tankMap = Document((await Job("source_world_open", new() { ["mission"] = "m3" }))["document"]!);
+            await Preview();
+            preview = (await Call("scene_tree", new() { ["document"] = Id(tankMap) }))["preview"]!.GetValue<string>();
+            Assert.Equal("tracked", (await Call("preview_state", new() { ["preview"] = preview }))["bft"]!["type"]!.GetValue<string>());
 
             async Task Preview()
             {

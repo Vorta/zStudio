@@ -15,9 +15,11 @@ internal sealed class CardSection : Border
 {
     private static readonly Dictionary<string, bool> Expanded = new(StringComparer.Ordinal);
     private readonly ToggleButton header;
-    private readonly TextBlock summary = new() { FontSize = 12, VerticalAlignment = VerticalAlignment.Center, Margin = new(8, 0, 0, 0) };
+    private readonly TextBlock summary = new() { FontSize = 12, VerticalAlignment = VerticalAlignment.Center, Margin = new(8, 0, 0, 0), TextTrimming = TextTrimming.CharacterEllipsis };
     private readonly PreviewIcon chevron = new() { Kind = "Chevron", Width = 12, Height = 12, VerticalAlignment = VerticalAlignment.Center };
     private readonly Border trailing = new() { VerticalAlignment = VerticalAlignment.Center };
+    /// <summary>An element before the summary text, such as a progress ring.</summary>
+    private readonly Border summaryLead = new() { VerticalAlignment = VerticalAlignment.Center, Margin = new(8, 0, 0, 0), Visibility = Visibility.Collapsed };
     internal StackPanel Body { get; } = new() { Margin = new(12, 4, 12, 12) };
     internal string Title { get; }
 
@@ -32,6 +34,7 @@ internal sealed class CardSection : Border
         content.Children.Add(chevron);
         content.Children.Add(new TextBlock { Text = title, FontSize = 14, FontWeight = FontWeights.SemiBold, Margin = new(8, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center });
         DockPanel.SetDock(summary, Dock.Right); content.Children.Insert(0, summary);
+        DockPanel.SetDock(summaryLead, Dock.Right); content.Children.Insert(1, summaryLead);
         header = new() { Content = content, IsChecked = Expanded.GetValueOrDefault(title, expanded) };
         header.SetResourceReference(StyleProperty, "CardSectionHeader");
         AutomationProperties.SetName(header, title);
@@ -55,6 +58,10 @@ internal sealed class CardSection : Border
         summary.ToolTip = toolTip;
         summary.Visibility = Visibility.Visible;
     }
+    /// <summary>An element before the summary text (null for none).</summary>
+    internal UIElement? SummaryLead { set { summaryLead.Child = value; summaryLead.Visibility = value == null ? Visibility.Collapsed : Visibility.Visible; } }
+    /// <summary>The header toggle, which opens and closes the body.</summary>
+    internal ToggleButton Header => header;
     /// <summary>A control at the header's right edge (detached from any earlier parent by the caller).</summary>
     internal UIElement? Trailing { get => trailing.Child; set => trailing.Child = value; }
     private void Apply()
