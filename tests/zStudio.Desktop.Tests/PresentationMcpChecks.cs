@@ -72,7 +72,10 @@ internal static class PresentationMcpChecks
                 main.WindowState = mode; await Idle();
                 var placement = Placement(hwnd);
                 Send(main, Key.F11); await Idle();
-                State(await Present(), true, true);
+                var shown = await Present();
+                // Names why F11 did not take effect when it fails (a refusal lands in the status line).
+                Assert.True(shown["fullscreen"]!.GetValue<bool>(), $"F11 from {mode}: status '{main.ViewModel.Status}', modifiers {Keyboard.Modifiers}, available {shown["available"]}");
+                State(shown, true, true);
                 AssertFullscreen();
                 Assert.False(((Button)main.FindName("CaptionMaximize")).IsEnabled);
                 Assert.Equal("busy", (await Assert.ThrowsAsync<StudioCommandException>(() => Command("window", new() { ["action"] = "maximize" }))).Code);
