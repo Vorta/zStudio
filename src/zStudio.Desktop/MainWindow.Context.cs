@@ -52,19 +52,22 @@ public partial class MainWindow
         PreviewInfo.ToolTip = preview.Mission?.Layout.Description ?? preview.PreviewSummary;
     }
     private StudioProblem? previewFailureProblem;
+    // A failure reported while a map was opening (no Problems pane then), listed when the map is entered if the view still has it.
+    private string? pendingPreviewFailure;
     // A source map hides the footer: there a render failure goes to Problems and opens Diagnostics, as the map's other failures
-    // do (also one that happened while the map was opening: entering the map lists it). The next good frame, another failure or
-    // another preview replaces it; a rebuild's report of the map's problems keeps it.
+    // do. The next good frame, the next failure report (a load reports again when its retry fails) or a new view replaces it;
+    // leaving the map drops it, and a rebuild's report of the map's problems keeps it.
     private void ShowPreviewFailure(string text)
     {
         ClearPreviewFailure();
-        if (!sourceChromeActive) return;
+        if (!sourceChromeActive) { pendingPreviewFailure = text; return; }
         previewFailureProblem = new StudioProblem("Error", "Preview", text, ViewModel.SelectedDocument?.Path);
         ViewModel.Problems.Add(previewFailureProblem);
         SetToolsVisible(true, problems: true);
     }
     private void ClearPreviewFailure()
     {
+        pendingPreviewFailure = null;
         if (previewFailureProblem == null) return;
         ViewModel.Problems.Remove(previewFailureProblem); previewFailureProblem = null;
     }
