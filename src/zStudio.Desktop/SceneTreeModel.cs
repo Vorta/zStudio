@@ -394,7 +394,8 @@ public sealed class SceneTreeItem : INotifyPropertyChanged
             string difficulties = !IsOtherDifficulty ? $"Placed on {Joined(placement.Difficulties)}"
                 : $"Placed on {Joined(placement.Difficulties)}. The view shows {ShownDifficulty}: " + (placement.Difficulties.Count == 1 ? $"choose {placement.Difficulties[0]} to see it." : "choose one of these to see it.");
             return $"{PickupName} · {pickup.Kind} pickup{(IsOtherDifficulty ? " · not on " + ShownDifficulty : "")}\n{pickup.ManualName}\n" +
-                $"{pickup.Type} · {(IsOtherDifficulty ? "template " + pickup.TemplateName : "game name " + Short(placement.Name, 128))}" + (located.Length > 0 ? "\n" + located : "") + "\n" + difficulties;
+                $"{pickup.Type} · {(IsOtherDifficulty ? "template " + pickup.TemplateName : "game name " + Short(placement.Name, 128))}" + (located.Length > 0 ? "\n" + located : "") + "\n" + difficulties
+                + (placement.Listed is { Length: > 0 } listed ? "\n" + char.ToUpperInvariant(listed[0]) + listed[1..] : "");
         }
     }
     private string ToolTipCore => Authored is { } authored ? $"{Short(DisplayName, 2048)} · {(IsEmptyNode ? "empty\n" + OutlinerKinds.EmptyNote : NodeType)}\nSource: {Short(authored.File, 2048)} · glTF node #{authored.SourceNode}\n" +

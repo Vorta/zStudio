@@ -492,9 +492,12 @@ internal static class SourceEditingMcpChecks
             async Task<bool> AivMaster() => (await Call("scene_tree", new() { ["document"] = Id(second) }))["children"]!["items"]!.AsArray().Single(r => r!["pass"]?.GetValue<string>() == "aiv")!["master"]!.GetValue<bool>();
             await Call("scene_tree", new() { ["document"] = Id(second), ["context"] = treeContext, ["preview"] = found["preview"]!.GetValue<string>(), ["action"] = "hide", ["row"] = aivRow["row"]!.GetValue<string>() });
             Assert.Contains(tankActor.Root, tankViewport.HiddenNodes); Assert.False(await AivMaster());
+            // Selected while hidden, the unit is selected in the view once shown, so its placement can be edited (begin below).
+            await Call("scene_tree", new() { ["document"] = Id(second), ["context"] = treeContext, ["preview"] = found["preview"]!.GetValue<string>(), ["action"] = "select", ["row"] = tankListed["row"]!.GetValue<string>() });
+            Assert.Null(tankViewport.SelectedInspection);
             await Call("scene_tree", new() { ["document"] = Id(second), ["context"] = treeContext, ["preview"] = found["preview"]!.GetValue<string>(), ["action"] = "show", ["row"] = tankListed["row"]!.GetValue<string>() });
             Assert.Empty(tankViewport.HiddenNodes); Assert.True(await AivMaster());
-            Assert.True(tankViewport.SelectInspectionNode(tankActor.Root));
+            Assert.Equal(tankActor.Root, tankViewport.SelectedInspection?.SelectionNode);
             string tankTarget = tankViewport.SelectedInspection!.Target;
             // Clicking the pass row (no object of its own) keeps the selected unit. A refused click restores the previous row only
             // after WPF has moved focus: restoring inside that change made the two rows trade focus until the stack overflowed.

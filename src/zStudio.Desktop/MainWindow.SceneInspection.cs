@@ -76,9 +76,21 @@ public partial class MainWindow
         if (selection.Boundaries.GetValueOrDefault(selection.Owner(item.Node))?.ReadOnlyReason is { } reason) return reason;
         if (viewport.Mission?.InspectedActorAt(item.Node) is not { } actor) return null;
         if (animation != null || motion != null || viewport != scene) return "Not editable while an animation preview is open.";
-        if (!item.Active && viewport.PreviewScene is { } data && viewport.HiddenNodes.Count > 0)
+        if (!item.Active && viewport.PreviewScene is { } data)
+        {
+            // Hidden by an eye, or by another object's isolation (which its eye ends).
+            bool isolated = isolatedNode != null, inIsolation = false;
+            int[] members = isolatedNode is int group && group < 0 && sceneTree != null ? HiddenNodesFor(sceneTree, group) : [];
             for (int node = item.Node, depth = 0; depth < 1024 && node >= 0 && node < data.Nodes.Count; depth++, node = data.Nodes[node].Parents.FirstOrDefault(-1))
+            {
                 if (viewport.HiddenNodes.Contains(node) || viewport.HiddenNodes.Contains(selection.Owner(node))) return SourceMapSelection.HiddenInTree;
+                inIsolation |= isolated && (node == isolatedNode || selection.Owner(node) == isolatedNode || members.Contains(node) || members.Contains(selection.Owner(node)));
+            }
+            if (isolated && !inIsolation) return SourceMapSelection.HiddenInTree;
+            // Selected in the tree while hidden and shown since (a draft kept the selection as it was).
+            if (item.Target.StartsWith("source:", StringComparison.Ordinal))
+                return aiPathDraft != null || parachuteDraft != null ? "Confirm or cancel the open AI path or drop-window edit to edit its placement." : "Select it again to edit its placement.";
+        }
         if (!item.Active) return "It isn't shown, so its placement can't be edited.";
         if (shownDocument?.PickupEdits == null) return "Placements are still loading.";
         return $"The placement record of {JsonData.ShownText(actor.Name, 64)} could not be matched, so it can't be edited.";

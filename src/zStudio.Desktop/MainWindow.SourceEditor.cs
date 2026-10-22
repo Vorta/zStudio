@@ -646,7 +646,20 @@ public partial class MainWindow
             if (CurrentInspectionCard?.HasDraft == true) throw new StudioCommandException("pending_drafts", "Apply or discard the edit first.");
             isolatedNode = node;
         }
-        ApplyIsolation(); CurrentInspectionCard?.Refresh(); RefreshRowEyes();
+        ApplyIsolation(); ReselectShownSelection(); CurrentInspectionCard?.Refresh(); RefreshRowEyes();
+    }
+    /// <summary>
+    /// An object selected in the tree while hidden (by its eye or another object's isolation) shows in its card as inactive;
+    /// once shown it is selected in the view again, which makes its placement editable. Only with no draft open anywhere, so
+    /// nothing asks (an AI path or drop-window draft retries this when it ends), and only for the shown map's object.
+    /// </summary>
+    private void ReselectShownSelection()
+    {
+        if (scene is not { } view || shownDocument is not { } doc || CurrentInspectionCard is not { HasDraft: false } card) return;
+        if (HasInspectionDraft || aiPathDraft != null || parachuteDraft != null || HasSectionDraft() || sectionCard?.Applying == true) return;
+        if (card.Selection is not { Active: false } selected || selected.SelectionNode < 0
+            || !selected.Target.StartsWith($"source:{doc.SessionId}:", StringComparison.Ordinal)) return;
+        if (view.SelectInspectionNode(selected.SelectionNode)) card.Refresh();
     }
     /// <summary>
     /// Shows only the isolated object, or everything again: a source group, which owns no node of its own, brings the
@@ -753,11 +766,7 @@ public partial class MainWindow
     private void ApplyHiddenRows()
     {
         scene?.SetHiddenNodes(hiddenRows.Values.SelectMany(n => n));
-        // A unit selected while hidden shows in its card as inactive; once an eye shows it, it is selected in the view again,
-        // which makes its placement editable.
-        if (scene is { } view && CurrentInspectionCard is { HasDraft: false } card && card.Selection is { Active: false } selected
-            && selected.Target.StartsWith("source:", StringComparison.Ordinal) && selected.SelectionNode >= 0 && view.SelectInspectionNode(selected.SelectionNode))
-            card.Refresh();
+        ReselectShownSelection();
         if (sceneTree == null) return;
         HashSet<int> hidden = hiddenRows.Values.SelectMany(n => n).ToHashSet();
         sceneTree.IsHiddenNode = hidden.Contains;

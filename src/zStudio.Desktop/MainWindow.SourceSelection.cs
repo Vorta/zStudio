@@ -24,6 +24,8 @@ internal sealed record SourceMapPassEntry(int? Row, string Key, string Name, IRe
     private static readonly int AllDifficulties = Enum.GetValues<MissionDifficulty>().Length;
     /// <summary>A pickup's number among the section's pickups of its catalog type (1, 2…), in list order over every difficulty; 0 for units.</summary>
     internal int Number { get; init; }
+    /// <summary>How often its resource lists this placement ("listed twice in aiv_easy.zrd") when more than once, else null; <see cref="Detail"/> ends with it.</summary>
+    internal string? Listed { get; init; }
 }
 
 /// <summary>Immutable editor projection. Negative row IDs denote source-only groups, never scene slots.</summary>
@@ -304,7 +306,8 @@ internal sealed class SourceMapSelection
             records = records.ToList();
             var listings = records.GroupBy(r => (r.Source.ResourceName, r.Name, r.Detail)).Where(g => g.Count() > 1).ToDictionary(g => g.Key, g => g.Count());
             records = records.Select(r => listings.TryGetValue((r.Source.ResourceName, r.Name, r.Detail), out int listed)
-                ? r with { Detail = r.Detail + $" · listed {(listed == 2 ? "twice" : listed.ToString(System.Globalization.CultureInfo.InvariantCulture) + " times")} in {r.Source.ResourceName.ToLowerInvariant()}" } : r).ToList();
+                && $"listed {(listed == 2 ? "twice" : listed.ToString(System.Globalization.CultureInfo.InvariantCulture) + " times")} in {r.Source.ResourceName.ToLowerInvariant()}" is var note
+                ? r with { Detail = r.Detail + " · " + note, Listed = note } : r).ToList();
             foreach (var record in records)
             {
                 token.ThrowIfCancellationRequested();
@@ -333,9 +336,9 @@ internal sealed class SourceMapSelection
                 string key = first.Source.ResourceName + ":" + (placements.SourcePresentationKey(first.Source) ?? "#" + first.Source.RecordIndex.ToString(System.Globalization.CultureInfo.InvariantCulture));
                 // A record the shown difficulty places that the view could not show (its notices say why) stays out, as does
                 // one whose template the world lacks: the game skips both.
-                if (group.Row is int row) entries.Add((Placed(row, key, difficulties, first.Detail), order));
+                if (group.Row is int row) entries.Add((Placed(row, key, difficulties, first.Detail) with { Listed = first.Listed }, order));
                 else if (!difficulties.Contains(current) && group.Records.Any(r => r.Placeable))
-                    entries.Add((new(null, key, first.Name, difficulties, first.Detail, first.PickupType, Position: first.Position), order));
+                    entries.Add((new(null, key, first.Name, difficulties, first.Detail, first.PickupType, Position: first.Position) { Listed = first.Listed }, order));
             }
             return entries.OrderBy(e => e.Order).Select(e => e.Entry).ToList();
         }
@@ -343,7 +346,7 @@ internal sealed class SourceMapSelection
     }
 
     private sealed record PassRecord(MissionPickupSource Source, IReadOnlyList<MissionDifficulty> Difficulties, string Name, string Detail, bool Placeable, string? PickupType = null,
-        System.Numerics.Vector3? Position = null);
+        System.Numerics.Vector3? Position = null, string? Listed = null);
     private sealed class PassGroup
     {
         internal List<PassRecord> Records { get; } = [];
