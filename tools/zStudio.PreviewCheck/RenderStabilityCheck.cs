@@ -104,20 +104,30 @@ internal static class RenderStabilityCheck
                 Require((cam.Position - new Point3D(2041, 50, 1693)).Length < 1e-8 && cam.UpDirection.Y > 0, "Authored camera normalization moved its position or inverted its up vector.");
                 await preview.ShowAsync(context.World, context.World.Assets.First(a => a.Kind == AssetKind.World), resolver, null, 0, default, true, context.Mission);
                 await CheckReal("whole-world", true);
-                // Only finished frames reach WPF: with Wireframe a frame takes long enough that WPF, copying the shared surface on
-                // its own device right after a frame was submitted, showed it half drawn (the cleared background where terrain goes).
+                // WPF sees finished frames: it reads the shared surface on the view's Direct3D 9Ex device, unordered with the frame's
+                // Direct3D 11 work, so with Wireframe (long frames) a read right after a frame was submitted showed it half drawn
+                // (the cleared background where terrain goes). Each read must be opaque, free of background and match the
+                // presented frame at this pose (a read of the previous frame at the same pose is the same picture).
                 cam.Position = new(2065, 72, 1702); cam.LookDirection = new(-24, -40, -9); cam.UpDirection = new(0, 1, 0);
                 preview.SetWireframe(true); await Task.Delay(600);
-                Require(BackgroundPixels(preview.CapturePresentedFrame()) == 0, "The wireframe pose does not fill the view with terrain.");
+                var reference = preview.CapturePresentedFrame();
+                Require(BackgroundPixels(reference) == 0, "The wireframe pose does not fill the view with terrain.");
+                double meanSeen = 0, worstSeen = 0;
                 for (int i = 0; i < 12; i++)
                 {
                     var composed = preview.RenderFrameReadAsComposed() ?? throw new InvalidDataException("No frame was rendered for the composed read.");
-                    int missing = BackgroundPixels(composed);
-                    if (missing > 0) { Save(composed, Path.Combine(output, "wireframe-composed-partial.png")); throw new InvalidDataException($"WPF read a frame still being drawn: {missing} background pixels."); }
+                    int missing = BackgroundPixels(composed), clear = TransparentPixels(composed);
+                    var (mean, worst) = BlockDifference(reference, composed);
+                    if (missing > 0 || clear > composed.PixelWidth * composed.PixelHeight / 100 || mean > 8 || worst > 40)
+                    {
+                        Save(composed, Path.Combine(output, "wireframe-composed-read.png"));
+                        throw new InvalidDataException($"WPF read a frame that is not the finished one: {missing} background and {clear} transparent pixels, block difference mean {mean:0.0}, worst {worst:0.0}.");
+                    }
+                    meanSeen = Math.Max(meanSeen, mean); worstSeen = Math.Max(worstSeen, worst);
                     await Task.Delay(30);
                 }
                 preview.SetWireframe(false);
-                Console.WriteLine("PASS whole-world wireframe: 12 frames read as WPF composes them right after drawing, none partly drawn.");
+                Console.WriteLine($"PASS whole-world wireframe: 12 frames read as WPF composes them right after drawing, each the finished frame (block difference to the presented frame: max mean {meanSeen:0.0}, max worst {worstSeen:0.0}).");
                 var model = context.World.Assets.First(a => a.Kind == AssetKind.Model && a.Index == 384);
                 await preview.ShowAsync(context.World, model, resolver, null, 0, default);
                 await CheckReal("sandbags-model", false);
@@ -159,6 +169,33 @@ internal static class RenderStabilityCheck
         var data = Pixels(image); int count = 0;
         for (int i = 0; i < data.Length; i += 4) if (data[i] == 38 && data[i + 1] == 31 && data[i + 2] == 26) count++;
         return count;
+    }
+    private static int TransparentPixels(BitmapSource image)
+    {
+        var data = Pixels(image); int count = 0;
+        for (int i = 3; i < data.Length; i += 4) if (data[i] < 250) count++;
+        return count;
+    }
+    // Mean and worst absolute colour difference of the two images' averages over a 16 × 10 grid (sizes and filtering may differ).
+    private static (double Mean, double Worst) BlockDifference(BitmapSource a, BitmapSource b)
+    {
+        double[] Blocks(BitmapSource image)
+        {
+            var data = Pixels(image); int w = image.PixelWidth, h = image.PixelHeight;
+            var sums = new double[16 * 10 * 3]; var counts = new int[16 * 10];
+            for (int y = 0; y < h; y++)
+                for (int x = 0; x < w; x++)
+                {
+                    int block = y * 10 / h * 16 + x * 16 / w, i = (y * w + x) * 4;
+                    sums[block * 3] += data[i]; sums[block * 3 + 1] += data[i + 1]; sums[block * 3 + 2] += data[i + 2]; counts[block]++;
+                }
+            for (int k = 0; k < sums.Length; k++) sums[k] /= Math.Max(1, counts[k / 3]);
+            return sums;
+        }
+        var first = Blocks(a); var second = Blocks(b);
+        double total = 0, worst = 0;
+        for (int k = 0; k < first.Length; k++) { double d = Math.Abs(first[k] - second[k]); total += d; worst = Math.Max(worst, d); }
+        return (total / first.Length, worst);
     }
     private static void Require(bool condition, string message) { if (!condition) throw new InvalidDataException(message); }
     private static void Save(BitmapSource image, string path) { PngBitmapEncoder encoder = new(); encoder.Frames.Add(BitmapFrame.Create(image)); using var stream = File.Create(path); encoder.Save(stream); }

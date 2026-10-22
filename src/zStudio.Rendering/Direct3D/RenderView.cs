@@ -193,15 +193,20 @@ internal sealed class RenderView : IRayPicker, INodeOwner, IDisposable
     /// <summary>The displayed back buffer, read without rendering, resizing or moving the camera.</summary>
     public BitmapSource CapturePresented() => direct.CapturePresented();
     /// <summary>
-    /// Renders one frame now and at once reads the view the way WPF does, through its own Direct3D 9 device (a software render of
-    /// the element), while this device may still be drawing: checks that only finished frames reach WPF. Null without a frame.
+    /// Renders one frame now and at once reads the view as WPF composes it: a software render of the element, which reads the
+    /// shared surface through the view's Direct3D 9Ex device as WPF's own copy does, while this device may still be drawing.
+    /// Checks that WPF sees a finished frame (the previous one until the copy completes). The element is drawn at the image's
+    /// origin, whatever its offset in its parent; 96 DPI. Null without a frame.
     /// </summary>
     public BitmapSource? RenderAndReadAsComposed()
     {
         if (!direct.RenderFrame(force: true)) return null;
         var element = direct.Element;
-        var bitmap = new RenderTargetBitmap(Math.Max(1, (int)element.ActualWidth), Math.Max(1, (int)element.ActualHeight), 96, 96, PixelFormats.Pbgra32);
-        bitmap.Render(element);
+        double width = Math.Max(1, element.ActualWidth), height = Math.Max(1, element.ActualHeight);
+        var visual = new DrawingVisual();
+        using (var drawing = visual.RenderOpen()) drawing.DrawRectangle(new VisualBrush(element) { Stretch = Stretch.Fill }, null, new Rect(0, 0, width, height));
+        var bitmap = new RenderTargetBitmap((int)Math.Ceiling(width), (int)Math.Ceiling(height), 96, 96, PixelFormats.Pbgra32);
+        bitmap.Render(visual);
         bitmap.Freeze();
         return bitmap;
     }

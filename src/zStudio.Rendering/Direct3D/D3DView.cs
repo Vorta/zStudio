@@ -22,9 +22,11 @@ namespace zStudio.Rendering.Direct3D;
 /// <summary>
 /// The surface behind <see cref="RenderView"/>: a WPF element showing a D3DImage whose back buffer is a Direct3D 11 texture
 /// shared with a Direct3D 9Ex surface. A frame is drawn into a private render target and copied to the shared texture in one
-/// step at its end: WPF copies the shared texture on its own Direct3D 9 device, which the GPU does not order after this
-/// device's work, so drawing into it directly let WPF show frames still being drawn (meshes flashing in and out while the
-/// camera moved, the more so the longer a frame takes, as with Wireframe). Rendering is driven by <see cref="CompositionTarget.Rendering"/> on demand while the
+/// step at its end. WPF reads the shared texture with a StretchRect on this view's Direct3D 9Ex device (it takes the device from
+/// the surface), on its render thread and unordered with this device's Direct3D 11 work, so drawing into the texture directly
+/// let WPF show frames still being drawn (meshes flashing in and out while the camera moved, the more so the longer a frame
+/// takes, as with Wireframe). Now WPF sees a finished frame: the previous one until the copy completes (at worst a rare tear
+/// between two finished frames). Rendering is driven by <see cref="CompositionTarget.Rendering"/> on demand while the
 /// element is visible: a frame renders while one was requested and for six more frames after each request (stale-frame
 /// workaround for the shared surface, and the tail hover refresh relies on). A lost device or front buffer rebuilds everything
 /// (both devices) from retained data; after three recoveries without a frame in between the view fails instead. A real size
@@ -44,7 +46,7 @@ internal sealed class Direct3DView : IDisposable
     private IDirect3DDevice9Ex? device9;
     private IDirect3DTexture9? texture9;
     private IDirect3DSurface9? surface9;
-    // The frame is drawn into renderTarget; backBuffer (shared with the D3DImage) only receives finished frames.
+    // The frame is drawn into renderTarget; backBuffer (shared with the D3DImage) receives it in one copy at its end.
     private ID3D11Texture2D? renderTarget, backBuffer, depthBuffer, staging;
     private ID3D11RenderTargetView? targetView;
     private ID3D11DepthStencilView? depthView;
@@ -163,7 +165,8 @@ internal sealed class Direct3DView : IDisposable
             {
                 EnsureTargets(graphics);
                 Draw(graphics, camera);
-                // Hand the finished frame over in one copy, only while WPF is not reading the shared surface.
+                // Hand the frame over in one copy. The lock waits until WPF's previous read is done; a later read that overlaps the
+                // copy shows the previous finished frame (or, rarely, a tear between two finished frames).
                 bool locked = imageSource != null && surface9 != null && imageSource.IsFrontBufferAvailable;
                 if (locked) imageSource!.Lock();
                 try
