@@ -82,6 +82,8 @@ public partial class MainWindow
         {
             sourceChromeActive = wanted;
             if (wanted) EnterSourceChrome(); else LeaveSourceChrome();
+            // A failure reported while the map was still opening (footer and Problems both out of reach then).
+            if (wanted && scene?.RenderFailure is { } failure) ShowPreviewFailure(failure);
         }
         if (scene?.InspectionContent is SceneInspectionCard card)
         {

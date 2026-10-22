@@ -112,7 +112,7 @@ public sealed partial class SceneViewport
     internal bool HandlePickupPointerMove(Point point)
     {
         if (IsFlyActive) return true;
-        if (IsPickupDragging && activePickupHandle is { } handle)
+        if (IsPickupDragging && activePickupHandle != null)
         {
             // Captured input can arrive outside without MouseLeave. Check after the handle
             // starts; CaptureMouse can synchronously resend an earlier pointer position.

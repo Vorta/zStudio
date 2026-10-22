@@ -466,7 +466,7 @@ public partial class MainWindow
     private void ReportSourceBuild(SourceWorldSession session, SourceSceneState build, IReadOnlyList<SourceLookupChange>? lookupChanges = null)
     {
         string file = SourceWorldProblemFile(session);
-        foreach (var old in ViewModel.Problems.Where(p => p.File == file).ToArray()) ViewModel.Problems.Remove(old);
+        foreach (var old in ViewModel.Problems.Where(p => p.File == file && !IsPreviewProblem(p)).ToArray()) ViewModel.Problems.Remove(old);
         foreach (string warning in SourceWarningMessages(build.Notes, Bounded(session.Label, 64)))
             ViewModel.AddProblem(warning, "Warning", file);
         session.LookupChangeCount = lookupChanges?.Count ?? 0;

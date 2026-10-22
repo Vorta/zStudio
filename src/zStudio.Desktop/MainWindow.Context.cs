@@ -53,7 +53,8 @@ public partial class MainWindow
     }
     private StudioProblem? previewFailureProblem;
     // A source map hides the footer: there a render failure goes to Problems and opens Diagnostics, as the map's other failures
-    // do. The next good frame (or another failure) replaces it.
+    // do (also one that happened while the map was opening: entering the map lists it). The next good frame, another failure or
+    // another preview replaces it; a rebuild's report of the map's problems keeps it.
     private void ShowPreviewFailure(string text)
     {
         ClearPreviewFailure();
@@ -67,14 +68,16 @@ public partial class MainWindow
         if (previewFailureProblem == null) return;
         ViewModel.Problems.Remove(previewFailureProblem); previewFailureProblem = null;
     }
-    // A preview that becomes the current one: the last one's failure goes, a failure of its own load is listed.
+    // A preview that becomes the current one (it has rendered nothing yet): the last one's failure goes.
     private void WatchPreviewFailures(zStudio.Rendering.SceneViewport preview)
     {
         ClearPreviewFailure();
         preview.PreviewFailed += text => { if (ReferenceEquals(preview, scene)) ShowPreviewFailure(text); };
         preview.PreviewRestored += () => { if (ReferenceEquals(preview, scene)) { ClearPreviewFailure(); ShowPreviewFooter(preview); } };
-        if (preview.RenderFailure is { } failure && ReferenceEquals(preview, scene)) ShowPreviewFailure(failure);
     }
+    /// <summary>A problem the preview lists (its notices, a render failure), which a source build's report must not replace.</summary>
+    private bool IsPreviewProblem(StudioProblem problem) =>
+        ReferenceEquals(problem, previewFailureProblem) || staticPreviewProblems.Any(listed => ReferenceEquals(listed, problem));
     private void PreviewNoticesClick(object sender, RoutedEventArgs e)
     {
         SetToolsVisible(true, problems: true);
