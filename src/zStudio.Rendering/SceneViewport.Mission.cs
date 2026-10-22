@@ -1,6 +1,7 @@
 using System.Numerics;
 using System.Windows.Media.Media3D;
 using zStudio.Core;
+using zStudio.Rendering.Direct3D;
 
 namespace zStudio.Rendering;
 
@@ -51,7 +52,7 @@ public sealed partial class SceneViewport
         if (animationFrame != null)
             foreach (var pose in animationFrame.Nodes.Where(p => IsHorizon(p.SourceNode)))
                 if (animatedMeshes.TryGetValue(pose.Id, out var items))
-                    foreach (var item in items) item.Mesh.Transform = new MatrixTransform3D(ToWpf(HorizonTransform(pose.SourceNode, pose.Transform)));
+                    foreach (var item in items) item.Mesh.Transform = HorizonTransform(pose.SourceNode, pose.Transform);
     }
     public static Matrix4x4 WorldTransform(GameScene scene, int index)
     {

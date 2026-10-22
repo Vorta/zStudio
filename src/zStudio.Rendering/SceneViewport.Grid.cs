@@ -1,13 +1,12 @@
 using System.Windows;
 using System.Windows.Media;
-using HelixToolkit.SharpDX;
-using HelixToolkit.Wpf.SharpDX;
+using zStudio.Rendering.Direct3D;
 
 namespace zStudio.Rendering;
 
 public sealed partial class SceneViewport
 {
-    private AxisPlaneGridModel3D? groundGrid;
+    private GroundGridNode? groundGrid;
 
     /// <summary>Animation-only world XZ reference plane. Simulation is owned by Core.</summary>
     public void SetGroundGrid(bool visible)
@@ -17,12 +16,12 @@ public sealed partial class SceneViewport
         {
             groundGrid = new()
             {
-                UpAxis = Axis.Y, Offset = 0, AutoSpacing = true, AutoSpacingRate = 5,
-                GridPattern = GridPattern.Grid, GridSpacing = 1, GridThickness = .025, FadingFactor = .25,
+                Offset = 0, AutoSpacing = true, AutoSpacingRate = 5,
+                GridSpacing = 1, GridThickness = .025, FadingFactor = .25,
                 PlaneColor = Colors.Transparent, GridColor = Color.FromArgb(155, 145, 161, 180),
-                RenderShadowMap = false, IsHitTestVisible = false
+                IsHitTestVisible = false, IsGuide = true
             };
-            PresentationGuide(groundGrid); view.HelixViewport.Items.Add(groundGrid);
+            view.Items.Add(groundGrid);
         }
         if (groundGrid != null) groundGrid.Visibility = visible ? Visibility.Visible : Visibility.Collapsed;
     }

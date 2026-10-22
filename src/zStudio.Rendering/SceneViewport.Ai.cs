@@ -3,25 +3,20 @@ using System.Windows;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Media3D;
-using HelixToolkit;
-using HelixToolkit.Maths;
-using HelixToolkit.SharpDX;
-using HelixToolkit.Wpf.SharpDX;
 using zStudio.Core;
-using MeshGeometry3D = HelixToolkit.SharpDX.MeshGeometry3D;
-using DiffuseMaterial = HelixToolkit.Wpf.SharpDX.DiffuseMaterial;
+using zStudio.Rendering.Direct3D;
 
 namespace zStudio.Rendering;
 
 public sealed partial class SceneViewport
 {
     // Dedicated group: never part of authored meshes, depth bounds, isolation or export.
-    private sealed class AiOverlayGroup : GroupModel3D;
+    private sealed class AiOverlayGroup : GroupNode;
     private AiOverlayGroup? aiOverlay;
-    private readonly List<(MeshGeometryModel3D Mesh, AiNode[] Nodes, double Pixels)> aiMarkers = [];
-    private readonly Dictionary<MeshGeometryModel3D, Func<MeshGeometry3D>> aiLinks = [];
-    private MeshGeometryModel3D? aiSelectionMarker;
-    private readonly List<MeshGeometryModel3D> aiDrawables = [];
+    private readonly List<(MeshNode Mesh, AiNode[] Nodes, double Pixels)> aiMarkers = [];
+    private readonly Dictionary<MeshNode, Func<MeshData>> aiLinks = [];
+    private MeshNode? aiSelectionMarker;
+    private readonly List<MeshNode> aiDrawables = [];
     private string? hoveredAiNode;
     private ViewPose? aiMarkerPose;
     private double aiMarkerWidth, aiMarkerHeight;
@@ -91,7 +86,7 @@ public sealed partial class SceneViewport
         ClearAiDrawables();
         RenderedAiNodes = RenderedAiLinks = 0; AiRenderTruncated = false; aiRendered.Clear();
         if (!AiVisible) { PublishAiLabel(); return; }
-        aiOverlay = new(); PresentationGuide(aiOverlay); view.HelixViewport.Items.Add(aiOverlay);
+        aiOverlay = new() { IsGuide = true }; view.Items.Add(aiOverlay);
         foreach (var network in VisibleAiNetworks)
         {
             var color = AiNetworkColors.Color(network.AttackStrategy);
@@ -116,7 +111,7 @@ public sealed partial class SceneViewport
                 edges.Add((node, end)); RenderedAiLinks++;
             }
             var lines = AiMesh(BuildLinks(), color); aiLinks.Add(lines, BuildLinks);
-            MeshGeometry3D BuildLinks()
+            MeshData BuildLinks()
             {
                 List<Vector3> positions = []; List<int> indices = [];
                 var pose = CaptureView(); Vector3 forward = Vector3.Normalize(new((float)pose.LookDirection.X, (float)pose.LookDirection.Y, (float)pose.LookDirection.Z));
@@ -136,7 +131,7 @@ public sealed partial class SceneViewport
                     }
                     else { Segment(start, end); Arrow(start, end, (end - start).Length() * .18f); }
                 }
-                return new() { Positions = new(positions), Indices = new(indices), Normals = new(positions.Select(_ => Vector3.UnitY)) };
+                return new([.. positions], [.. indices], [.. positions.Select(_ => Vector3.UnitY)]);
                 Vector3 Side(Vector3 direction)
                 {
                     var side = Vector3.Cross(direction, forward);
@@ -165,31 +160,29 @@ public sealed partial class SceneViewport
     /// <summary>How strongly the overlay shows through geometry that hides it.</summary>
     public const float AiBehindGeometry = .5f;
     /// <summary>Each see-through mesh's twin, drawn without depth at <see cref="AiBehindGeometry"/> strength.</summary>
-    private readonly Dictionary<MeshGeometryModel3D, MeshGeometryModel3D> aiBehind = [];
+    private readonly Dictionary<MeshNode, MeshNode> aiBehind = [];
     /// <summary>
     /// An overlay mesh. Seen through geometry, it is drawn at full strength where nothing hides it and, by a depth-free twin,
     /// at half strength where geometry does; <paramref name="twin"/> false draws it through geometry at full strength (the
     /// selection marker). Without see-through, geometry hides it.
     /// </summary>
-    private MeshGeometryModel3D AiMesh(MeshGeometry3D geometry, Color4 color, bool twin = true)
+    private MeshNode AiMesh(MeshData geometry, Color4 color, bool twin = true)
     {
         var mesh = Mesh(color, AiThroughGeometry && !twin);
         if (AiThroughGeometry && twin) aiBehind[mesh] = Mesh(new(color.Red, color.Green, color.Blue, color.Alpha * AiBehindGeometry), true);
         return mesh;
-        MeshGeometryModel3D Mesh(Color4 tint, bool through)
+        MeshNode Mesh(Color4 tint, bool through)
         {
-            var material = PreviewMaterials.Create(through); material.DiffuseColor = tint; material.EnableUnLit = true;
-            var drawn = new MeshGeometryModel3D { Geometry = geometry, Material = material, IsTransparent = true, IsHitTestVisible = false,
-                CullMode = SharpDX.Direct3D11.CullMode.None, RenderOrder = 10, IsDepthClipEnabled = !through };
+            var material = PreviewMaterials.Create(through); material.DiffuseColor = tint; material.Unlit = true;
+            var drawn = new MeshNode { Geometry = geometry, Material = material, IsTransparent = true, IsHitTestVisible = false,
+                CullMode = CullMode.None, RenderOrder = 10, IsDepthClipEnabled = !through };
             aiDrawables.Add(drawn); aiOverlay!.Children.Add(drawn); return drawn;
         }
     }
-    private static MeshGeometry3D AiOctahedron() => new()
-    {
-        Positions = new([Vector3.UnitX, -Vector3.UnitX, Vector3.UnitY, -Vector3.UnitY, Vector3.UnitZ, -Vector3.UnitZ]),
-        Normals = new([Vector3.UnitX, -Vector3.UnitX, Vector3.UnitY, -Vector3.UnitY, Vector3.UnitZ, -Vector3.UnitZ]),
-        Indices = new([0, 2, 4, 4, 2, 1, 1, 2, 5, 5, 2, 0, 0, 4, 3, 4, 1, 3, 1, 5, 3, 5, 0, 3])
-    };
+    private static MeshData AiOctahedron() => new(
+        [Vector3.UnitX, -Vector3.UnitX, Vector3.UnitY, -Vector3.UnitY, Vector3.UnitZ, -Vector3.UnitZ],
+        [0, 2, 4, 4, 2, 1, 1, 2, 5, 5, 2, 0, 0, 4, 3, 4, 1, 3, 1, 5, 3, 5, 0, 3],
+        [Vector3.UnitX, -Vector3.UnitX, Vector3.UnitY, -Vector3.UnitY, Vector3.UnitZ, -Vector3.UnitZ]);
     private float AiScale(Vector3 point, double pixels)
     {
         var pose = CaptureView(); var forward = pose.LookDirection; forward.Normalize();
@@ -275,8 +268,8 @@ public sealed partial class SceneViewport
         if (AiThroughGeometry) return false;
         var pose = CaptureView(); var forward = pose.LookDirection; forward.Normalize();
         // Only eligible click/box candidates pay for a surface ray; distant markers do not.
-        var hit = view.HelixViewport.FindHits(screen)?.FirstOrDefault(h => h.ModelHit is MeshGeometryModel3D mesh && !mesh.IsTransparent && placements.ContainsKey(mesh) && !placements[mesh].Any(p => IsHorizon(p.NodeIndex)));
-        return hit != null && Vector3D.DotProduct(new Point3D(hit.PointHit.X, hit.PointHit.Y, hit.PointHit.Z) - pose.Position, forward) < depth - AiScale(AiPosition(node), 4);
+        var hit = view.FindHits(screen).FirstOrDefault(h => h.Node is MeshNode mesh && !mesh.IsTransparent && placements.ContainsKey(mesh) && !placements[mesh].Any(p => IsHorizon(p.NodeIndex)));
+        return hit != null && Vector3D.DotProduct(new Point3D(hit.Point.X, hit.Point.Y, hit.Point.Z) - pose.Position, forward) < depth - AiScale(AiPosition(node), 4);
     }
     private bool HandleAiPointerDown(Point point, MouseButtonEventArgs e)
     {
@@ -298,7 +291,7 @@ public sealed partial class SceneViewport
     }
     private void ClearAiDrawables()
     {
-        if (aiOverlay != null) { view.HelixViewport.Items.Remove(aiOverlay); aiOverlay.Children.Clear(); aiOverlay.Dispose(); aiOverlay = null; }
+        if (aiOverlay != null) { view.Items.Remove(aiOverlay); aiOverlay.Children.Clear(); aiOverlay.Dispose(); aiOverlay = null; }
         foreach (var mesh in aiDrawables) mesh.Dispose(); aiDrawables.Clear(); aiMarkers.Clear(); aiLinks.Clear(); aiBehind.Clear(); aiSelectionMarker = null; aiMarkerPose = null;
     }
     private void ClearAi()

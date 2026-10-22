@@ -3,6 +3,7 @@ using System.Windows;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Media.Media3D;
+using zStudio.Rendering.Direct3D;
 
 namespace zStudio.Rendering;
 

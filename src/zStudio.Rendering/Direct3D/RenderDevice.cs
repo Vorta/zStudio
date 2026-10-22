@@ -36,6 +36,8 @@ internal sealed class RenderDevice : IDisposable
     public object? DeviceIdentity => effects.Device;
     public bool DeviceDisposed => effects.Device is not { IsDisposed: false };
     public void Dispose() => effects.Dispose();
+    /// <summary>Whether <paramref name="error"/> is the graphics interop's own exception type.</summary>
+    internal static bool IsInteropException(Exception error) => error is SharpDX.SharpDXException;
 
     /// <summary>Bounds Helix's synchronous D3DImage/device recovery callbacks.</summary>
     private sealed class RecoveringEffectsManager : DefaultEffectsManager, IEffectsManager

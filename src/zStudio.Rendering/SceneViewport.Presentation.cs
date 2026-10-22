@@ -2,9 +2,7 @@ using System.Numerics;
 using Vector = System.Windows.Vector;
 using System.Windows;
 using System.Windows.Controls;
-using System.Windows.Data;
 using System.Windows.Media.Media3D;
-using HelixToolkit.Wpf.SharpDX;
 
 namespace zStudio.Rendering;
 
@@ -30,6 +28,8 @@ public sealed partial class SceneViewport
         if (PresentationUiHidden == hidden) return;
         PresentationUiHidden = hidden;
         SetValue(PresentationGuidesVisibleProperty, !hidden);
+        // Guide nodes hide with the chrome; their own Visibility and IsRendering stay as their owners set them.
+        view.GuidesVisible = !hidden;
         view.ShowViewCube = !hidden;
         view.ShowCoordinateSystem = showAxes && !hidden;
         presentationOverlays.Visibility = hidden ? Visibility.Collapsed : Visibility.Visible;
@@ -42,11 +42,6 @@ public sealed partial class SceneViewport
 
     /// <summary>Gives the view keyboard focus (Hide UI moves it here from chrome that hides).</summary>
     public void FocusView() => viewport.Focus();
-
-    // IsRendering is independent of each guide's normal Visibility. Refreshes may change that
-    // preference while hidden, and newly created guides inherit the override before publication.
-    private void PresentationGuide(Element3D guide) => BindingOperations.SetBinding(guide, Element3D.IsRenderingProperty,
-        new Binding(nameof(PresentationGuidesVisible)) { Source = this, Mode = BindingMode.OneWay });
 
     /// <summary>A pointer gesture already under way, which keeps following the pointer when the UI hides.</summary>
     private bool PointerGestureActive => IsPickupDragging || IsAiPathPointerTransform || IsParachutePointerMoving || IsTerrainStroking || IsZonePainting || aiPathBoxStart != null;
@@ -71,7 +66,7 @@ public sealed partial class SceneViewport
 
     private bool RebasePickupPointer(Point point)
     {
-        if (!pickupPresentationRebase || !IsPickupDragging || activePickupHandle?.ModelHit is not MeshGeometryModel3D arrow) return false;
+        if (!pickupPresentationRebase || !IsPickupDragging || activePickupHandle is not { Handle: var arrow }) return false;
         pickupPresentationRebase = false;
         if (TransformMode == "rotate")
         {
@@ -88,7 +83,7 @@ public sealed partial class SceneViewport
             rotationAngle = rotationPresentationAngle = angle;
             return true;
         }
-        var direction = (arrow.Transform?.Value ?? Matrix3D.Identity).Transform(new Vector3D(1, 0, 0));
+        var direction = ToWpf(arrow.Transform ?? System.Numerics.Matrix4x4.Identity).Transform(new Vector3D(1, 0, 0));
         pickupPresentationAxis = Vector3.Normalize(new((float)direction.X, (float)direction.Y, (float)direction.Z));
         var look = CaptureView().LookDirection;
         var forward = Vector3.Normalize(new((float)look.X, (float)look.Y, (float)look.Z));
@@ -117,7 +112,7 @@ public sealed partial class SceneViewport
     {
         if (!PickupPresentationPoint(point, out var hit)) return;
         PublishTransformDrag(transformDraft with { Position = pickupPresentationPosition + pickupPresentationAxis * Vector3.Dot(hit - pickupPresentationHit, pickupPresentationAxis) });
-        // This drag moves the draft itself, not Helix's handle target: the handles follow it now rather than on release.
+        // This drag moves the draft itself, not the gizmo's handle target: the handles follow it now rather than on release.
         if (IsPickupDragging) PlacePickupHandles();
     }
     private float rotationPresentationAngle;

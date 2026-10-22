@@ -69,7 +69,7 @@ internal abstract class Node : IDisposable
     private protected void ReadBackTransform()
     {
         if (settingTransform) return;
-        transform = HelixElement.Transform is { } current && !current.Value.IsIdentity ? ToNumerics(current.Value) : null;
+        transform = HelixElement.Transform is { } current ? ToNumerics(current.Value) : null;
     }
 
     private protected virtual bool Shown => visibility == Visibility.Visible;
@@ -79,6 +79,8 @@ internal abstract class Node : IDisposable
     /// <summary>Guides follow their view's guide state again (attached, or the state changed).</summary>
     internal virtual void RefreshGuides() { if (guide) ApplyRendering(); }
 
+    /// <summary>Makes a transform just set visible to ray picking before the next frame (picking otherwise uses the last frame's).</summary>
+    public void UpdateHitTestTransform() => HelixElement.SceneNode.UpdateAllTransformMatrix();
     public virtual void Dispose() => HelixElement.Dispose();
 
     internal static Matrix3D ToWpf(Matrix4x4 m) => new(m.M11, m.M12, m.M13, m.M14, m.M21, m.M22, m.M23, m.M24, m.M31, m.M32, m.M33, m.M34, m.M41, m.M42, m.M43, m.M44);

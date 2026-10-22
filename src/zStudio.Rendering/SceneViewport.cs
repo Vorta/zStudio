@@ -5,39 +5,33 @@ using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Media3D;
-using HelixToolkit;
-using HelixToolkit.Maths;
-using HelixToolkit.SharpDX;
-using HelixToolkit.Wpf.SharpDX;
 using zStudio.Core;
 using zStudio.Core.Formats;
-using SharpDX.Direct3D11;
-using DiffuseMaterial = HelixToolkit.Wpf.SharpDX.DiffuseMaterial;
+using zStudio.Rendering.Direct3D;
 using Color = System.Windows.Media.Color;
-using MeshGeometry3D = HelixToolkit.SharpDX.MeshGeometry3D;
 
 namespace zStudio.Rendering;
 
-/// <summary>The only application component that exposes Helix/Direct3D types.</summary>
+/// <summary>The 3D preview: the only application component that drives the renderer (zStudio.Rendering.Direct3D).</summary>
 public sealed partial class SceneViewport : UserControl, IDisposable
 {
     private readonly RenderView view;
     // The view's input surface: focus, capture, cursor and pointer positions.
     private readonly FrameworkElement viewport;
-    private readonly List<MeshGeometryModel3D> meshes = [];
-    private readonly PreviewMaterials.OrientationState faceOrientation = new();
+    private readonly List<MeshNode> meshes = [];
+    private readonly FaceOrientation faceOrientation = new();
     private bool wireframe;
     public bool FaceOrientationEnabled => faceOrientation.Enabled;
-    private readonly List<LineGeometryModel3D> bounds = [];
-    private readonly Dictionary<MeshGeometryModel3D, ScenePlacement[]> placements = [];
-    private readonly Dictionary<MeshGeometryModel3D, ScenePlacement[]> visiblePlacements = [];
+    private readonly List<LineNode> bounds = [];
+    private readonly Dictionary<MeshNode, ScenePlacement[]> placements = [];
+    private readonly Dictionary<MeshNode, ScenePlacement[]> visiblePlacements = [];
     // Only immutable static parts enter this cache; animated/morphed geometry owns its bounds separately.
-    private readonly Dictionary<MeshGeometry3D, (Vector3 Min, Vector3 Max)> staticMeshBounds = [];
-    private readonly Dictionary<DiffuseMaterial, TextureModel> textureMaps = [];
+    private readonly Dictionary<MeshData, (Vector3 Min, Vector3 Max)> staticMeshBounds = [];
+    private readonly Dictionary<PreviewMaterial, RenderTexture> textureMaps = [];
     private readonly TextureMemoryBudget textureMemory = new();
     private PreviewTextureCache? previewTextures;
     private RenderDevice? device;
-    private SortingGroupModel3D? sceneAlphaGroup;
+    private SortingGroupNode? sceneAlphaGroup;
     private Vector3 sceneMin = new(float.PositiveInfinity), sceneMax = new(float.NegativeInfinity);
     private double minimumClipDistance = 0.001;
     private bool updatingClipping;
@@ -103,7 +97,7 @@ public sealed partial class SceneViewport : UserControl, IDisposable
         }
         bool colors = model.Polygons.Any(p => p.Colors.Length != 0);
         // A morphed pose retains its current MeshPart (including picking/color
-        // sources) beside the Helix copy, unlike immutable shared base parts.
+        // sources) beside the renderer's copy, unlike immutable shared base parts.
         copyUpperBound = checked(vertices * (colors ? 116L : 68L) + triangles * 28 + model.Polygons.LongLength * 512 + 2048);
         return checked(4 * (vertices * (colors ? 52L : 36L) + triangles * 16 + model.Polygons.LongLength * 256 + 1024) + largest * 128);
     }
@@ -226,7 +220,7 @@ public sealed partial class SceneViewport : UserControl, IDisposable
                 Kind: asset.Kind == AssetKind.World ? WorldSurfaceHighlights.NodeKind(scene, p.NodeIndex) : WorldSurfaceKind.Default,
                 Zone: WorldSurfaceHighlights.NodeZone(scene, p.NodeIndex)))
                 .OrderByDescending(g => g.Key.Horizon).Select(g => new SceneGroup(g.Key.Model, g.Key.Horizon, g.ToArray())).ToArray();
-            // Static batches share one Helix geometry per part, even across transparent
+            // Static batches share one render geometry per part, even across transparent
             // placements. Colors grow from an enumerable; reserve its replacement scratch.
             long copies = geometry.Values.Sum(parts => parts.Sum(GeometryCopyBytes));
             long colorScratch = geometry.Values.SelectMany(parts => parts).Select(p => 32L * p.Colors.LongLength).DefaultIfEmpty().Max();
@@ -255,9 +249,9 @@ public sealed partial class SceneViewport : UserControl, IDisposable
         if (asset.Kind == AssetKind.World) SetAiNetworks(mission?.AiNetworks ?? AiNetworkSnapshot.Empty);
         if (asset.Kind == AssetKind.World) ConfigureHorizon(scene);
         sceneMin = new(float.PositiveInfinity); sceneMax = new(float.NegativeInfinity);
-        Dictionary<(int Material, bool Horizon, bool Colors, WorldSurfaceKind Kind, int Zone), DiffuseMaterial> materials = [];
-        Dictionary<MeshPart, MeshGeometry3D> geometries = [];
-        Dictionary<DecodedImage, TextureModel> textureModels = [];
+        Dictionary<(int Material, bool Horizon, bool Colors, WorldSurfaceKind Kind, int Zone), PreviewMaterial> materials = [];
+        Dictionary<MeshPart, MeshData> geometries = [];
+        Dictionary<DecodedImage, RenderTexture> textureModels = [];
         int created = 0;
         foreach (var group in packet.Groups)
         {
@@ -271,21 +265,21 @@ public sealed partial class SceneViewport : UserControl, IDisposable
                 if (!materials.TryGetValue(materialKey, out var material))
                 {
                     JsonMaterial(scene, part.MaterialIndex, out Color4 color, out int textureIndex);
-                    material = PreviewMaterials.Create(group.Horizon, part.Colors.Length != 0, faceOrientation); material.DiffuseColor = color; material.EnableUnLit = true;
+                    material = PreviewMaterials.Create(group.Horizon, part.Colors.Length != 0, faceOrientation); material.DiffuseColor = color; material.Unlit = true;
                     material.VertexColorBlendingFactor = part.Colors.Length == 0 ? 0 : 1;
                     if (packet.Textures.TryGetValue(textureIndex, out var image))
                     {
                         // Display decoded texture colors without additive preview lighting.
-                        if (!textureModels.TryGetValue(image, out var map)) textureModels[image] = map = new TextureModel(image.Rgba, SharpDX.DXGI.Format.R8G8B8A8_UNorm, image.Width, image.Height);
+                        if (!textureModels.TryGetValue(image, out var map)) textureModels[image] = map = RenderTexture.FromRgba(image.Rgba, image.Width, image.Height);
                         material.DiffuseMap = map;
-                        material.EnableUnLit = true;
-                        textureMaps[material] = material.DiffuseMap;
+                        material.Unlit = true;
+                        textureMaps[material] = map;
                     }
                     materials[materialKey] = material;
                 }
                 if (!geometries.TryGetValue(part, out var geometry))
                 {
-                    geometries[part] = geometry = new() { Positions = new Vector3Collection(part.Positions), Normals = new Vector3Collection(part.Normals), TextureCoordinates = new Vector2Collection(part.TextureCoordinates), Indices = new IntCollection(part.Indices), Colors = VertexColors(part, material.DiffuseColor) };
+                    geometries[part] = geometry = new(part.Positions, part.Indices, part.Normals, part.TextureCoordinates, VertexColors(part, material.DiffuseColor));
                     staticMeshBounds.Add(geometry, packet.PartBounds[part]);
                 }
                 bool transparent = material.DiffuseColor.Alpha < 1 || part.MaterialIndex >= 0 && part.MaterialIndex < scene.Materials.Count && packet.AlphaTextures.Contains(scene.Materials[part.MaterialIndex].Int("texture_index", -1));
@@ -295,13 +289,12 @@ public sealed partial class SceneViewport : UserControl, IDisposable
                 foreach (var batch in batches)
                 {
                     token.ThrowIfCancellationRequested(); if (current != generation) return;
-                    MeshGeometryModel3D mesh = new()
+                    MeshNode mesh = new()
                     {
                         Geometry = geometry,
                         Material = material,
                         Instances = batch.Select(i => i.Transform).ToList(),
                         CullMode = CullMode.None,
-                        IsThrowingShadow = false,
                         IsTransparent = transparent && !group.Horizon,
                         RenderOrder = group.Horizon ? 0 : 1,
                         IsDepthClipEnabled = !group.Horizon,
@@ -318,10 +311,10 @@ public sealed partial class SceneViewport : UserControl, IDisposable
                     }
                     if (mesh.IsTransparent)
                     {
-                        if (sceneAlphaGroup == null) { sceneAlphaGroup = new() { EnableSorting = true, SortTransparentOnly = true, SortingInterval = 0 }; view.HelixViewport.Items.Add(sceneAlphaGroup); }
+                        if (sceneAlphaGroup == null) { sceneAlphaGroup = new() { SortingEnabled = true }; view.Items.Add(sceneAlphaGroup); }
                         sceneAlphaGroup.Children.Add(mesh);
                     }
-                    else view.HelixViewport.Items.Add(mesh);
+                    else view.Items.Add(mesh);
                     // A retained world may render continuously while its replacement
                     // is built. Background-priority continuations can starve behind
                     // that render queue indefinitely; resume in the normal UI queue.
@@ -340,8 +333,8 @@ public sealed partial class SceneViewport : UserControl, IDisposable
             {
                 Vector3[] corners = [new(min.X, min.Y, min.Z), new(max.X, min.Y, min.Z), new(max.X, max.Y, min.Z), new(min.X, max.Y, min.Z), new(min.X, min.Y, max.Z), new(max.X, min.Y, max.Z), new(max.X, max.Y, max.Z), new(min.X, max.Y, max.Z)];
                 foreach (var instance in instances) foreach (var corner in corners) { var world = Vector3.Transform(corner, instance.Transform); sceneMin = Vector3.Min(sceneMin, world); sceneMax = Vector3.Max(sceneMax, world); }
-                LineGeometryModel3D box = new() { Geometry = new LineGeometry3D { Positions = new Vector3Collection(corners), Indices = new IntCollection([0, 1, 1, 2, 2, 3, 3, 0, 4, 5, 5, 6, 6, 7, 7, 4, 0, 4, 1, 5, 2, 6, 3, 7]) }, Color = Colors.Gold, Thickness = 1, Instances = instances.Select(i => i.Transform).ToList(), Visibility = Visibility.Collapsed, IsHitTestVisible = false };
-                PresentationGuide(box); bounds.Add(box); boundsPlacements[box] = instances; view.HelixViewport.Items.Add(box);
+                LineNode box = new() { Geometry = new LineData(corners, [0, 1, 1, 2, 2, 3, 3, 0, 4, 5, 5, 6, 6, 7, 7, 4, 0, 4, 1, 5, 2, 6, 3, 7]), Color = Colors.Gold, Thickness = 1, Instances = instances.Select(i => i.Transform).ToList(), Visibility = Visibility.Collapsed, IsHitTestVisible = false, IsGuide = true };
+                bounds.Add(box); boundsPlacements[box] = instances; view.Items.Add(box);
             }
         }
         token.ThrowIfCancellationRequested(); if (current != generation) return;
@@ -384,11 +377,12 @@ public sealed partial class SceneViewport : UserControl, IDisposable
         minimumClipDistance = Math.Clamp(radius / 1000000, 0.001, 0.05);
         var range = new VisibleDepthRange(camera.Position, direction, camera.UpDirection, CaptureView().FieldOfView,
             Aspect, minimumClipDistance, (camera as OrthographicRenderCamera)?.Width);
-        foreach (var mesh in DepthMeshes(view.HelixViewport.Items))
+        foreach (var mesh in DepthMeshes(view.Items))
         {
-            if (mesh.Geometry is not MeshGeometry3D { Positions: { } positions, Indices: { } indices }) continue;
-            var world = mesh.Transform?.Value ?? Matrix3D.Identity;
-            if (mesh.Instances is { Count: > 0 } instances)
+            if (mesh.Geometry is not { Positions: var positions, Indices: var indices }) continue;
+            var world = ToWpf(mesh.Transform ?? Matrix4x4.Identity);
+            // Null instances draw once; empty instances draw nothing.
+            if (mesh.Instances is { } instances)
                 foreach (var instance in instances) { var transform = ToWpf(instance); transform.Append(world); range.Include(positions, indices, transform); }
             else range.Include(positions, indices, world);
         }
@@ -420,13 +414,13 @@ public sealed partial class SceneViewport : UserControl, IDisposable
         }
         finally { updatingClipping = false; }
     }
-    private static IEnumerable<MeshGeometryModel3D> DepthMeshes(IEnumerable<Element3D> elements)
+    private IEnumerable<MeshNode> DepthMeshes(IEnumerable<Node> nodes)
     {
-        foreach (var element in elements)
+        foreach (var node in nodes)
         {
-            if (element.Visibility != Visibility.Visible || !element.IsRendering || element is TopMostGroup3D or TransformManipulator3D or AiOverlayGroup) continue;
-            if (element is MeshGeometryModel3D mesh && mesh.IsDepthClipEnabled) yield return mesh;
-            else if (element is GroupModel3D group) foreach (var child in DepthMeshes(group.Children)) yield return child;
+            if (node.Visibility != Visibility.Visible || !node.IsRendering || node.IsGuide && !view.GuidesVisible || node is TopMostGroupNode or TransformGizmo or AiOverlayGroup) continue;
+            if (node is MeshNode mesh && mesh.IsDepthClipEnabled) yield return mesh;
+            else if (node is GroupNode group) foreach (var child in DepthMeshes(group.Children)) yield return child;
         }
     }
     /// <summary>Orbit zoom using standard mouse-wheel deltas. Captured Fly uses speed adjustment instead.</summary>
@@ -450,7 +444,7 @@ public sealed partial class SceneViewport : UserControl, IDisposable
         foreach (var (material, texture) in textureMaps)
         {
             material.DiffuseMap = enabled ? texture : null;
-            material.EnableUnLit = enabled;
+            material.Unlit = enabled;
         }
         SyncZoneGhosts();
     }
@@ -524,7 +518,7 @@ public sealed partial class SceneViewport : UserControl, IDisposable
         sceneMin = new(float.PositiveInfinity); sceneMax = new(float.NegativeInfinity);
         foreach (var mesh in meshes.Where(m => m.Visibility == Visibility.Visible && !placements[m].Any(p => IsHorizon(p.NodeIndex))))
         {
-            if (mesh.Geometry is not MeshGeometry3D geometry || !staticMeshBounds.TryGetValue(geometry, out var local) || !float.IsFinite(local.Min.X)) continue;
+            if (mesh.Geometry is not { } geometry || !staticMeshBounds.TryGetValue(geometry, out var local) || !float.IsFinite(local.Min.X)) continue;
             var (min, max) = local;
             foreach (var placement in visiblePlacements[mesh]) for (int corner = 0; corner < 8; corner++) { var p = Vector3.Transform(new((corner & 1) == 0 ? min.X : max.X, (corner & 2) == 0 ? min.Y : max.Y, (corner & 4) == 0 ? min.Z : max.Z), placement.Transform); sceneMin = Vector3.Min(sceneMin, p); sceneMax = Vector3.Max(sceneMax, p); }
         }
@@ -547,7 +541,7 @@ public sealed partial class SceneViewport : UserControl, IDisposable
         objectPreviewMeshes = null; objectPreviewBounds = null; objectPreviewOriginals = null; ObjectTransformPreviewNode = null; objectPreviewToken = 0;
         sceneAlphaGroup = null;
         sceneMin = new(float.PositiveInfinity); sceneMax = new(float.NegativeInfinity);
-        view.HelixViewport.Items.Clear(); foreach (var mesh in meshes) mesh.Dispose(); foreach (var box in bounds) box.Dispose(); bounds.Clear(); meshes.Clear(); placements.Clear(); visiblePlacements.Clear(); staticMeshBounds.Clear(); textureMaps.Clear();
+        view.Items.Clear(); foreach (var mesh in meshes) mesh.Dispose(); foreach (var box in bounds) box.Dispose(); bounds.Clear(); meshes.Clear(); placements.Clear(); visiblePlacements.Clear(); staticMeshBounds.Clear(); textureMaps.Clear();
         DisposeFixtures();
         staticRenderUnits = 0;
         staticGeometry?.Dispose(); staticGeometry = null;
@@ -557,7 +551,7 @@ public sealed partial class SceneViewport : UserControl, IDisposable
     public System.Windows.Media.Imaging.BitmapSource RenderImage(int width, int height, bool preserveAspect = false)
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(width); ArgumentOutOfRangeException.ThrowIfNegativeOrZero(height);
-        // Helix's sized capture restores physical dimensions as logical pixels,
+        // A sized backend capture restored physical dimensions as logical pixels,
         // growing the back buffer on every call at non-100% DPI. Capture the live
         // size, then scale the image without changing the viewport or projection.
         var image = view.RenderBitmap() ?? throw new InvalidOperationException("The graphics device did not produce a frame.");

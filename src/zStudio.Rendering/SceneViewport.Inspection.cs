@@ -3,10 +3,8 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media.Media3D;
-using HelixToolkit;
-using HelixToolkit.SharpDX;
-using HelixToolkit.Wpf.SharpDX;
 using zStudio.Core;
+using zStudio.Rendering.Direct3D;
 
 namespace zStudio.Rendering;
 
@@ -23,8 +21,8 @@ public sealed record SceneInspection(string Target, int Node, int Model, int Mat
 public sealed partial class SceneViewport
 {
     private sealed record InspectionMesh(string Id, int Material, long? Runtime, int Node, int Model);
-    private readonly Dictionary<MeshGeometryModel3D, InspectionMesh> inspectionMeshes = [];
-    private readonly Dictionary<MeshGeometryModel3D, int[]> inspectionPolygons = [];
+    private readonly Dictionary<MeshNode, InspectionMesh> inspectionMeshes = [];
+    private readonly Dictionary<MeshNode, int[]> inspectionPolygons = [];
     private readonly Dictionary<int, Vector3> tankPositions = [];
     private readonly Grid inspectionHost = new();
     private long inspectionSerial;
@@ -77,7 +75,7 @@ public sealed partial class SceneViewport
         }
         return false;
     }
-    private void RegisterInspectionMesh(MeshGeometryModel3D mesh, int material, long? runtime = null, int node = -1, int model = -1)
+    private void RegisterInspectionMesh(MeshNode mesh, int material, long? runtime = null, int node = -1, int model = -1)
         => inspectionMeshes[mesh] = new(Guid.NewGuid().ToString("N"), material, runtime, node, model);
 
     public SceneInspection? ProbeInspection(Point point)
@@ -86,7 +84,7 @@ public sealed partial class SceneViewport
         if (PickAiNode(point) is { } ai)
         {
             var marker = InspectAi(ai);
-            return marker != null && TrySceneSurface(point, out var under) ? marker with { Surface = under!.PointHit, Normal = under.NormalAtHit } : marker;
+            return marker != null && TrySceneSurface(point, out var under) ? marker with { Surface = under!.Point, Normal = under.Normal } : marker;
         }
         return TrySceneSurface(point, out var hit) ? InspectHit(hit!) : null;
     }
@@ -95,31 +93,29 @@ public sealed partial class SceneViewport
         if (!AiVisible || AiNetworks.Find(id) is not { } item || AiNetworkFilter != null && item.Network.Id != AiNetworkFilter) return null;
         return new("ai:" + AiNetworks.Id + ":" + id, -1, -1, -1, null, id, null, null, item.Node.Position, true, null);
     }
-    private SceneInspection? InspectHit(HitTestResult hit)
+    private SceneInspection? InspectHit(RenderHit hit)
     {
-        if (hit.ModelHit is not MeshGeometryModel3D mesh || !inspectionMeshes.TryGetValue(mesh, out var meta)) return null;
-        int instance = hit.Tag is int i ? i : 0;
+        if (hit.Node is not MeshNode mesh || !inspectionMeshes.TryGetValue(mesh, out var meta)) return null;
+        int instance = hit.Tag ?? 0;
         if (meta.Runtime == null && visiblePlacements.TryGetValue(mesh, out var visible) && instance >= 0 && instance < visible.Length)
             instance = Array.IndexOf(placements[mesh], visible[instance]);
         var result = InspectMesh(mesh, meta, instance);
-        // Helix's linear hit tester stores a triangle ordinal in IndiceStartLocation,
-        // while its octree leaves that field unset. Both retain the vertex tuple.
-        // GeometryBuilder duplicates vertices at polygon boundaries, so three agreeing
-        // vertex identities resolve the exact face in constant time on either path.
-        int? polygon = hit.TriangleIndices is { } triangle && inspectionPolygons.TryGetValue(mesh, out var polygons) &&
-            triangle.Item1 >= 0 && triangle.Item1 < polygons.Length && triangle.Item2 >= 0 && triangle.Item2 < polygons.Length &&
-            triangle.Item3 >= 0 && triangle.Item3 < polygons.Length && polygons[triangle.Item1] == polygons[triangle.Item2] &&
-            polygons[triangle.Item1] == polygons[triangle.Item3] ? polygons[triangle.Item1] : null;
-        return result == null ? null : result with { Surface = hit.PointHit, Normal = hit.NormalAtHit, Polygon = polygon };
+        // A hit keeps its triangle's vertex tuple. GeometryBuilder duplicates vertices at polygon
+        // boundaries, so three agreeing vertex identities resolve the exact face in constant time.
+        int? polygon = hit.Triangle is { } triangle && inspectionPolygons.TryGetValue(mesh, out var polygons) &&
+            triangle.A >= 0 && triangle.A < polygons.Length && triangle.B >= 0 && triangle.B < polygons.Length &&
+            triangle.C >= 0 && triangle.C < polygons.Length && polygons[triangle.A] == polygons[triangle.B] &&
+            polygons[triangle.A] == polygons[triangle.C] ? polygons[triangle.A] : null;
+        return result == null ? null : result with { Surface = hit.Point, Normal = hit.Normal, Polygon = polygon };
     }
-    private SceneInspection? InspectMesh(MeshGeometryModel3D mesh, InspectionMesh meta, int instance)
+    private SceneInspection? InspectMesh(MeshNode mesh, InspectionMesh meta, int instance)
     {
         int node = meta.Node, model = meta.Model; Vector3 origin;
         if (meta.Runtime == null)
         {
             if (!placements.TryGetValue(mesh, out var rows) || instance < 0 || instance >= rows.Length) return null;
             node = rows[instance].NodeIndex; model = rows[instance].ModelIndex; origin = rows[instance].Transform.Translation;
-            var transformed = mesh.Transform.Transform(new Point3D(origin.X, origin.Y, origin.Z));
+            var transformed = ToWpf(mesh.Transform ?? Matrix4x4.Identity).Transform(new Point3D(origin.X, origin.Y, origin.Z));
             origin = new((float)transformed.X, (float)transformed.Y, (float)transformed.Z);
         }
         else

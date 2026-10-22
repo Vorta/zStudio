@@ -1,4 +1,4 @@
-using zStudio.Rendering;
+using zStudio.Rendering.Direct3D;
 using Xunit;
 
 namespace zStudio.Desktop.Tests;

@@ -1,9 +1,6 @@
 using System.Windows;
 using System.Windows.Input;
-using HelixToolkit;
-using HelixToolkit.Maths;
-using HelixToolkit.SharpDX;
-using HelixToolkit.Wpf.SharpDX;
+using zStudio.Rendering.Direct3D;
 using Vector3 = System.Numerics.Vector3;
 
 namespace zStudio.Rendering;
@@ -15,7 +12,7 @@ namespace zStudio.Rendering;
 public sealed partial class SceneViewport
 {
     private List<Vector3>? brushStroke;
-    private LineGeometryModel3D? brushTrail;
+    private LineNode? brushTrail;
     private bool terrainBrushActive;
     /// <summary>Whether left-button drags paint instead of selecting. Turning it off drops a stroke in progress.</summary>
     public bool TerrainBrushActive
@@ -101,19 +98,19 @@ public sealed partial class SceneViewport
         // The path drawn a little above the surface, over the scene and without depth writes, never picked.
         List<Vector3> points = [.. stroke.Select(p => p + new Vector3(0, 0.25f, 0))];
         if (points.Count == 1) points.Add(points[0] + new Vector3(0.01f, 0, 0));
-        IntCollection indices = [];
+        List<int> indices = [];
         for (int i = 0; i + 1 < points.Count; i++) { indices.Add(i); indices.Add(i + 1); }
-        var geometry = new LineGeometry3D { Positions = new Vector3Collection(points), Indices = indices };
+        var geometry = new LineData([.. points], [.. indices]);
         if (brushTrail == null)
         {
-            brushTrail = new() { Color = System.Windows.Media.Colors.OrangeRed, Thickness = 3, IsHitTestVisible = false, IsDepthClipEnabled = false, DepthBias = -1000 };
-            PresentationGuide(brushTrail); view.HelixViewport.Items.Add(brushTrail);
+            brushTrail = new() { Color = System.Windows.Media.Colors.OrangeRed, Thickness = 3, IsHitTestVisible = false, IsDepthClipEnabled = false, DepthBias = -1000, IsGuide = true };
+            view.Items.Add(brushTrail);
         }
         brushTrail.Geometry = geometry;
     }
     private void HideTrail()
     {
         if (brushTrail == null) return;
-        view.HelixViewport.Items.Remove(brushTrail); brushTrail = null;
+        view.Items.Remove(brushTrail); brushTrail = null;
     }
 }

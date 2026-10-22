@@ -7,7 +7,7 @@ using SharpDX.DXGI;
 using Buffer = SharpDX.Direct3D11.Buffer;
 using Device = SharpDX.Direct3D11.Device;
 
-namespace zStudio.Rendering;
+namespace zStudio.Rendering.Direct3D;
 
 /// <summary>Runs the production vertex-tint pixel shader on a software device, without a window or hardware GPU (tests only).</summary>
 internal static class ShaderTestBench
@@ -72,7 +72,7 @@ internal static class ShaderTestBench
             Filter = Filter.MinMagMipPoint, AddressU = TextureAddressMode.Clamp, AddressV = TextureAddressMode.Clamp,
             AddressW = TextureAddressMode.Clamp, MaximumLod = float.MaxValue
         });
-        using var raster = new RasterizerState(device, new RasterizerStateDescription { FillMode = FillMode.Solid, CullMode = CullMode.None, IsDepthClipEnabled = true });
+        using var raster = new RasterizerState(device, new RasterizerStateDescription { FillMode = FillMode.Solid, CullMode = SharpDX.Direct3D11.CullMode.None, IsDepthClipEnabled = true });
         context.InputAssembler.PrimitiveTopology = PrimitiveTopology.TriangleList;
         context.VertexShader.Set(vertexShader); context.VertexShader.SetConstantBuffer(1, constants);
         context.PixelShader.Set(pixelShader); context.PixelShader.SetConstantBuffer(1, constants);

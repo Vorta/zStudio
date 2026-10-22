@@ -1,7 +1,6 @@
 using System.Numerics;
 using System.Windows;
 using System.Windows.Media.Media3D;
-using HelixToolkit.Wpf.SharpDX;
 using zStudio.Core;
 
 namespace zStudio.Rendering;

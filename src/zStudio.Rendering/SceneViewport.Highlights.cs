@@ -1,14 +1,12 @@
-using HelixToolkit.Maths;
-using HelixToolkit.Wpf.SharpDX;
 using zStudio.Core;
-using DiffuseMaterial = HelixToolkit.Wpf.SharpDX.DiffuseMaterial;
+using zStudio.Rendering.Direct3D;
 
 namespace zStudio.Rendering;
 
 public sealed partial class SceneViewport
 {
-    private sealed record SurfaceAppearance(DiffuseMaterial Normal, WorldSurfaceKind Kind, int Zone = 0xFF, bool Horizon = false);
-    private readonly Dictionary<MeshGeometryModel3D, SurfaceAppearance> surfaceAppearances = [];
+    private sealed record SurfaceAppearance(PreviewMaterial Normal, WorldSurfaceKind Kind, int Zone = 0xFF, bool Horizon = false);
+    private readonly Dictionary<MeshNode, SurfaceAppearance> surfaceAppearances = [];
     public WorldHighlightMode HighlightMode { get; private set; }
     private HashSet<byte> hiddenZones = [];
     /// <summary>Zone colours the overlays leave out (the World tree's zone eyes): view only, never geometry or picking.</summary>
@@ -67,12 +65,12 @@ public sealed partial class SceneViewport
     }
 
     /// <summary>How the polygon zone pass emphasises: the tool's zone while it is engaged, else a selected zone in the polygon zone overlay.</summary>
-    private void ApplySurfaceZoneEmphasis(DiffuseMaterial material)
+    private void ApplySurfaceZoneEmphasis(PreviewMaterial material)
     {
-        if (zonePaintActive) PreviewMaterials.SetZoneEmphasis(material, PreviewMaterials.ZoneEmphasis.Emphasis, paintZone, ZoneStrong, ZoneWeak);
+        if (zonePaintActive) PreviewMaterials.SetZoneEmphasis(material, ZoneEmphasisMode.Emphasis, paintZone, ZoneStrong, ZoneWeak);
         else if (HighlightMode == WorldHighlightMode.PolygonZones && ZoneSelection is byte zone && !hiddenZones.Contains(zone))
-            PreviewMaterials.SetZoneEmphasis(material, PreviewMaterials.ZoneEmphasis.Emphasis, zone, ZoneStrong, ZoneWeak);
-        else PreviewMaterials.SetZoneEmphasis(material, PreviewMaterials.ZoneEmphasis.None, 0, 0, 0);
+            PreviewMaterials.SetZoneEmphasis(material, ZoneEmphasisMode.Emphasis, zone, ZoneStrong, ZoneWeak);
+        else PreviewMaterials.SetZoneEmphasis(material, ZoneEmphasisMode.None, 0, 0, 0);
     }
 
     private void ClearWorldHighlights()
