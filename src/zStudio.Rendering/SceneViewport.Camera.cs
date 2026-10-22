@@ -77,6 +77,18 @@ public sealed partial class SceneViewport
         {
             if (e.Key is Key.Left or Key.Right or Key.Up or Key.Down or Key.PageUp or Key.PageDown) e.Handled = true;
         }
+        // Nor on the mouse's Back/Forward buttons (the base class restored its own camera history) or on touch, which the base
+        // class turned into camera manipulation; unhandled touch is promoted to the mouse input zStudio handles.
+        protected override void OnMouseDown(MouseButtonEventArgs e)
+        {
+            if (e.ChangedButton is MouseButton.XButton1 or MouseButton.XButton2) { e.Handled = true; return; }
+            base.OnMouseDown(e);
+        }
+        protected override void OnTouchDown(TouchEventArgs e) { }
+        protected override void OnTouchUp(TouchEventArgs e) { }
+        protected override void OnManipulationStarted(ManipulationStartedEventArgs e) { }
+        protected override void OnManipulationDelta(ManipulationDeltaEventArgs e) { }
+        protected override void OnManipulationCompleted(ManipulationCompletedEventArgs e) { }
     }
     private void CameraChanged()
     {

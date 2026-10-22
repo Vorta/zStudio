@@ -308,7 +308,7 @@ internal static class McpPreviewCheck
                         finally { window.ViewModel.PropertyChanged -= changeHighlight; }
                         published = await Call("state", new { });
                         // The toggles combine: CanModify joins the ClipTo the successful batch above left on.
-                        string guiHighlight = ((System.Windows.Controls.Primitives.ToggleButton)window.FindName("HighlightClipTo")).IsChecked == true ? "canModifyAndClipTo" : "canModify";
+                        const string guiHighlight = "canModifyAndClipTo";
                         if (!changedHighlight || !rejectedHighlight || (await Call("preview_state", new { preview = published["preview"]!.GetValue<string>() }))["highlight"]!.GetValue<string>() != guiHighlight)
                             throw new InvalidDataException("Deferred MCP highlight overwrote the newer GUI choice.");
                     }

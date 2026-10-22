@@ -311,8 +311,9 @@ public sealed partial class SceneViewport
         {
             // The card is a sibling of the render surface. Let its native controls
             // process the wheel before any camera motion or inertia is started.
-            if (e.Handled || IsFlyActive || IsAiPathPointerTransform || IsParachutePointerMoving || aiPathBoxStart != null ||
-                InspectionContent is DependencyObject panel && IsInspectionInput(e.OriginalSource as DependencyObject, panel)) return;
+            if (e.Handled || IsFlyActive || InspectionContent is DependencyObject panel && IsInspectionInput(e.OriginalSource as DependencyObject, panel)) return;
+            // An AI path transform, a drop-window move or a box selection holds the camera still: the wheel does nothing then.
+            if (IsAiPathPointerTransform || IsParachutePointerMoving || aiPathBoxStart != null) { e.Handled = true; return; }
             if (!IsPickupDragging) WheelZoom(e.GetPosition(viewport), e.Delta);
             e.Handled = true;
         };

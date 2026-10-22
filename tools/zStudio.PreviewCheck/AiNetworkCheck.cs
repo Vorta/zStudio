@@ -113,19 +113,18 @@ internal static class AiNetworkCheck
             scene.RestoreView(new(new(0, 0, 20), new(0, 0, -20), new(0, 1, 0), 50));
             AiNode a = new("a", 0, 12, new(-6, 0, -2), 0, [new(0, 1, "b", null)]);
             AiNode b = new("b", 1, 12, new(6, 0, -2), 0, [new(0, 0, "a", null)]);
-            scene.SetAiNetworks(new("fixture", [new("network", "fixture.zbd", 0, "net_01.zrd", "fixture", "standard", 10, [a,b], [])]));
-            await Task.Delay(250); var camera = scene.DebugCamera; var clip = (camera.NearPlaneDistance, camera.FarPlaneDistance); var pose = scene.CaptureView();
+            await Settled(scene, () => scene.SetAiNetworks(new("fixture", [new("network", "fixture.zbd", 0, "net_01.zrd", "fixture", "standard", 10, [a,b], [])])));
+            var camera = scene.DebugCamera; var clip = (camera.NearPlaneDistance, camera.FarPlaneDistance); var pose = scene.CaptureView();
             byte[] original = Pixels(scene.CapturePresentedFrame());
             Require(scene.PreviewDiagnostics.All(d => !d.Message.Contains("transform", StringComparison.OrdinalIgnoreCase)), "Invalid occlusion fixture transform");
             Require(original.Count(b => b == 255) > original.Length / 5, "Occlusion fixture wall is missing");
-            scene.SetAiOptions(true, true, null); await Task.Delay(250);
-            var xray = scene.CapturePresentedFrame(); Save(xray, Path.Combine(output, "fixture-through.png"));
+            var xray = await Settled(scene, () => scene.SetAiOptions(true, true, null)); Save(xray, Path.Combine(output, "fixture-through.png"));
             Require(!original.SequenceEqual(Pixels(xray)), "Through-geometry mode did not draw");
             var point = scene.ProjectToView(new Point3D(-6, 0, -2));
             Require(scene.PickAiNode(point) == "a", "Through-geometry picking failed");
             Require(clip == (camera.NearPlaneDistance, camera.FarPlaneDistance) && scene.CaptureView() == pose, "Overlay altered camera/depth bounds");
             byte[] idle = Pixels(xray); await Task.Delay(250); Require(idle.SequenceEqual(Pixels(scene.CapturePresentedFrame())), "AI overlay is not stable at idle");
-            scene.SetAiOptions(true, false, null); await Task.Delay(250);
+            await Settled(scene, () => scene.SetAiOptions(true, false, null));
             Save(scene.CapturePresentedFrame(), Path.Combine(output, "fixture-occluded.png"));
             Require(original.SequenceEqual(Pixels(scene.CapturePresentedFrame())), "Depth-tested nodes/links showed through wall");
             Require(scene.PickAiNode(point) == null, "Occluded marker remained selectable");
@@ -220,6 +219,20 @@ internal static class AiNetworkCheck
             var child = VisualTreeHelper.GetChild(parent, i); yield return child;
             foreach (var descendant in Descendants(child)) yield return descendant;
         }
+    }
+    /// <summary>The presented frame once a change has rendered and two frames 100 ms apart agree (at most about 3 s).</summary>
+    private static async Task<BitmapSource> Settled(SceneViewport scene, Action change)
+    {
+        await scene.WaitForPresentedFrameAsync(change);
+        var frame = scene.CapturePresentedFrame(); byte[] last = Pixels(frame);
+        for (int i = 0; i < 30; i++)
+        {
+            await Task.Delay(100);
+            var next = scene.CapturePresentedFrame(); byte[] pixels = Pixels(next);
+            if (pixels.SequenceEqual(last)) return next;
+            frame = next; last = pixels;
+        }
+        return frame;
     }
     private static byte[] Pixels(BitmapSource image) { var converted = new FormatConvertedBitmap(image, PixelFormats.Bgra32, null, 0); byte[] bytes = new byte[converted.PixelWidth * converted.PixelHeight * 4]; converted.CopyPixels(bytes, converted.PixelWidth * 4, 0); return bytes; }
     private static bool HasColor(BitmapSource image, SceneViewport scene, Point point, string hex)
