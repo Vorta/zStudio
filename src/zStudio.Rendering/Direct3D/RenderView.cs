@@ -38,10 +38,12 @@ internal interface IRayPicker
 /// <summary>
 /// The 3D view: renders <see cref="Items"/> through <see cref="Camera"/> into a WPF-composited surface (<see cref="Element"/>,
 /// the focusable element that takes the view's input, sized in DIPs; its back buffer is floor(width) × <see cref="DpiScale"/>
-/// physical pixels). Rendering is on demand: <see cref="InvalidateRender"/> renders the next few frames, and
-/// <see cref="FrameUpdate"/> runs once per rendered frame, before the camera is read for it.
+/// physical pixels). Rendering is on demand: <see cref="InvalidateRender"/> renders at least the next six frames (hover and
+/// inspection refresh rely on that tail), and <see cref="FrameUpdate"/> runs once per rendered frame, before the camera is read
+/// for it.
 /// <para>
-/// Per frame: opaque meshes and lines in ascending render order (submission order among equals), then the ground grid, then
+/// Per frame: opaque meshes and lines in ascending render order (submission order among equals; the Helix adapter's sort is
+/// unstable beyond 16 nodes), then the ground grid, then
 /// transparent meshes in submission order (sorting groups sort theirs), then top-most groups, the view cube and the axes, each
 /// over a cleared depth buffer. 32-bit float depth, standard Z; no lights, shadows, MSAA or FXAA; background
 /// <see cref="BackgroundColor"/>.
