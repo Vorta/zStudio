@@ -54,13 +54,27 @@ public partial class MainWindow
     private StudioProblem? previewFailureProblem;
     // A failure reported while a map was opening (no Problems pane then), listed when the map is entered if the view still has it.
     private string? pendingPreviewFailure;
+    // Entering or leaving the source map: lists the failure of the opening, or drops the listed one. The change runs after the
+    // current dispatch, because the switch can run inside a Problems change event (CollectionChanged forbids changing it then).
+    private void SourceChromeChangedPreviewFailure(bool entered)
+    {
+        string? pending = entered ? pendingPreviewFailure : null;
+        pendingPreviewFailure = null;
+        Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Normal, () =>
+        {
+            if (sourceChromeActive != entered) return;
+            if (!entered) ClearPreviewFailure();
+            else if (pending != null && previewFailureProblem == null && scene?.RenderFailure == pending) ShowPreviewFailure(pending);
+        });
+    }
     // A source map hides the footer: there a render failure goes to Problems and opens Diagnostics, as the map's other failures
     // do. The next good frame, the next failure report (a load reports again when its retry fails) or a new view replaces it;
     // leaving the map drops it, and a rebuild's report of the map's problems keeps it.
     private void ShowPreviewFailure(string text)
     {
         ClearPreviewFailure();
-        if (!sourceChromeActive) { pendingPreviewFailure = text; return; }
+        // Outside a source map the footer shows it; only a map that is opening lists it once entered.
+        if (!sourceChromeActive) { pendingPreviewFailure = sourceMapOpening != null ? text : null; return; }
         previewFailureProblem = new StudioProblem("Error", "Preview", text, ViewModel.SelectedDocument?.Path);
         ViewModel.Problems.Add(previewFailureProblem);
         SetToolsVisible(true, problems: true);
