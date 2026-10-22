@@ -299,8 +299,8 @@ internal sealed class SourceMapSelection
                     MissionPickupType.Catalog.FirstOrDefault(t => t.Name == r.Type)?.TemplateName ?? r.Type, $"{r.Type} pickup · {Position(r.OriginalPosition)}", true, r.Type, r.OriginalPosition))
                 : placements.OtherCoordinates.Where(c => c.Kind == "tank").Select(c => new PassRecord(c.Source, c.Difficulties, c.Name,
                     $"{c.Template} · {Position(c.OriginalPosition)} · heading {c.Rotation.Y.ToString("0.#", System.Globalization.CultureInfo.InvariantCulture)}°", c.TemplateSourceNode != null));
-            // A resource that lists one placement more than once (retail m2 aiv_easy.zrd: bft_00 twice) says so on each entry:
-            // the rows are one object, not several.
+            // A resource that lists one placement more than once says so on each of its entries: retail m2 aiv_easy.zrd lists
+            // bft_00 twice, which places one unit (two equal pickup records spawn two copies).
             records = records.ToList();
             var listings = records.GroupBy(r => (r.Source.ResourceName, r.Name, r.Detail)).Where(g => g.Count() > 1).ToDictionary(g => g.Key, g => g.Count());
             records = records.Select(r => listings.TryGetValue((r.Source.ResourceName, r.Name, r.Detail), out int listed)
@@ -379,13 +379,14 @@ public partial class MainWindow
     {
         node = SourceSelectionOwner(doc, node);
         var projection = SourceSelection(doc, doc == shownDocument ? scene?.PreviewScene : null);
-        if (projection?.Boundaries.GetValueOrDefault(node)?.ReadOnlyReason is { } reason)
-            throw new StudioCommandException("read_only", reason);
-        if (node < 0) throw new StudioCommandException("read_only", "This reference group has no compiled node. Its parts cannot be edited independently.");
-        if (doc == shownDocument && scene?.Mission?.ActorAt(node) is { } actor)
+        // A placed unit's source refusal names what it is; its boundary's reason is about editing its placement.
+        if (doc == shownDocument && scene?.Mission?.InspectedActorAt(node) is { } actor)
             throw new StudioCommandException("read_only", actor.Pickup != null || actor.CoordinateSource != null
                 ? "This is a resource-placed instance. Edit its mission placement instead of its shared model source."
                 : "This object's placement is controlled by startup animation. Editing that placement is unavailable.");
+        if (projection?.Boundaries.GetValueOrDefault(node)?.ReadOnlyReason is { } reason)
+            throw new StudioCommandException("read_only", reason);
+        if (node < 0) throw new StudioCommandException("read_only", "This reference group has no compiled node. Its parts cannot be edited independently.");
         return node;
     }
 }

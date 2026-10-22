@@ -430,7 +430,7 @@ internal sealed partial class SceneInspectionCard : Grid
             ? ["Network", "Network type", "Authored placement XYZ", "Object world origin XYZ", AttackStrategy, "Status"]
             : details.ContainsKey("Runtime instance")
             ? ["Parent", "Parents", "Runtime instance", "Object world origin XYZ", "Zone", "Compiled source node", "Placed instance", "Template"]
-            : ["Parent", "Parents", "Authored placement XYZ", AuthoredRotation, AuthoredHeading, "Object world origin XYZ", "Zone", "Zone source", "Compiled source node", "Placed instance", "Template"];
+            : ["Parent", "Parents", "Authored placement XYZ", AuthoredRotation, AuthoredHeading, "Object world origin XYZ", "Zone", "Zone source", "Compiled source node", "Placed instance", "Template", "Placement editing"];
         if (IsSourceWorld && ObjectEditor == null)
             foreach (string key in new[] { "Compiled source node", "Surface compiled source node", "Compiled parent", "Compiled parents", "Selection owner", "glTF node index", "Source scene", "Source file", "Scene local XYZ", "Model", "Material", "Object world origin XYZ" }) details.Remove(key);
         var keys = first.Where(details.ContainsKey).Concat(details.Select(p => p.Key).Where(k => !first.Contains(k) &&

@@ -372,7 +372,7 @@ public sealed class SceneTreeItem : INotifyPropertyChanged
             nameof(ZoneKindPolygons), nameof(ZoneKindsEnabled), nameof(ZoneKindsToolTip), nameof(IsPaintZone), nameof(HeaderControlsToolTip), nameof(AccessibleName) }) Changed(name);
     }
     public string ToolTip => (Section != null ? SectionToolTip : Pass is { } pass ? pass.Description + PickupSummary(pass) : PickupName != null ? PickupToolTip
-        : IsOtherDifficulty ? OtherDifficultyToolTip : ToolTipCore) + (Animations is { } animations ? "\nAnimations: " + string.Join(", ", animations.Select(a => Short(a, 64))) : "");
+        : IsOtherDifficulty ? OtherDifficultyToolTip : ToolTipCore + (Placement is { Detail.Length: > 0 } placed ? "\nPlacement: " + placed.Detail : "")) + (Animations is { } animations ? "\nAnimations: " + string.Join(", ", animations.Select(a => Short(a, 64))) : "");
     /// <summary>The Pickups row's summary line: "64 pickups: 8 weapons, 44 ammo, 12 health." (kinds with none left out).</summary>
     private static string PickupSummary(SourceMapPass pass)
     {

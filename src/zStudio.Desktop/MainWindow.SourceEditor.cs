@@ -753,6 +753,11 @@ public partial class MainWindow
     private void ApplyHiddenRows()
     {
         scene?.SetHiddenNodes(hiddenRows.Values.SelectMany(n => n));
+        // A unit selected while hidden shows in its card as inactive; once an eye shows it, it is selected in the view again,
+        // which makes its placement editable.
+        if (scene is { } view && CurrentInspectionCard is { HasDraft: false } card && card.Selection is { Active: false } selected
+            && selected.Target.StartsWith("source:", StringComparison.Ordinal) && selected.SelectionNode >= 0 && view.SelectInspectionNode(selected.SelectionNode))
+            card.Refresh();
         if (sceneTree == null) return;
         HashSet<int> hidden = hiddenRows.Values.SelectMany(n => n).ToHashSet();
         sceneTree.IsHiddenNode = hidden.Contains;

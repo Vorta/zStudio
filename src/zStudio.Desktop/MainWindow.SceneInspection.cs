@@ -68,16 +68,20 @@ public partial class MainWindow
     }
     /// <summary>
     /// Why a source map's placed object can't be edited now: its selection boundary's reason (repeated, hidden at the start,
-    /// missing template, startup animation), else hidden with a World tree eye; null for an object of the map's own sources.
+    /// missing template, startup animation), else a passing cause (an animation preview, hidden with a World tree eye,
+    /// placements loading); null for an object of the map's own sources.
     /// </summary>
-    private static string? PlacementReadOnlyReason(SceneViewport viewport, SceneInspection item, SourceMapSelection selection)
+    private string? PlacementReadOnlyReason(SceneViewport viewport, SceneInspection item, SourceMapSelection selection)
     {
         if (selection.Boundaries.GetValueOrDefault(selection.Owner(item.Node))?.ReadOnlyReason is { } reason) return reason;
         if (viewport.Mission?.InspectedActorAt(item.Node) is not { } actor) return null;
+        if (animation != null || motion != null || viewport != scene) return "Not editable while an animation preview is open.";
         if (!item.Active && viewport.PreviewScene is { } data && viewport.HiddenNodes.Count > 0)
             for (int node = item.Node, depth = 0; depth < 1024 && node >= 0 && node < data.Nodes.Count; depth++, node = data.Nodes[node].Parents.FirstOrDefault(-1))
                 if (viewport.HiddenNodes.Contains(node) || viewport.HiddenNodes.Contains(selection.Owner(node))) return SourceMapSelection.HiddenInTree;
-        return item.Active ? $"The placement record of {JsonData.ShownText(actor.Name, 64)} could not be matched, so it can't be edited." : "It isn't shown, so its placement can't be edited.";
+        if (!item.Active) return "It isn't shown, so its placement can't be edited.";
+        if (shownDocument?.PickupEdits == null) return "Placements are still loading.";
+        return $"The placement record of {JsonData.ShownText(actor.Name, 64)} could not be matched, so it can't be edited.";
     }
     private readonly System.Runtime.CompilerServices.ConditionalWeakTable<GameScene, Dictionary<int, JsonObject>> objectPolygonZones = new();
     private JsonObject DescribeInspection(SceneViewport viewport, SceneInspection item)
@@ -229,7 +233,12 @@ public partial class MainWindow
         info["Rotation axes"] = known ? edits!.RotationKind(source!) switch { PlacementRotationKind.EulerRadians => "XYZ", PlacementRotationKind.HeadingDegrees => "Y", _ => "None" } : "None";
         info["Editing"] = readOnly ? "Read only: edit the source project instead" : known ? "Edit position and supported rotation; confirm together as one undo step" : "Read-only inspection";
         if (!known && shownDocument is { SourceWorld: not null } sourceDoc && SourceSelection(sourceDoc, data) is { } editSelection)
-            info["Editing"] = PlacementReadOnlyReason(viewport, item, editSelection) ?? "Edit this object in the selected-object panel.";
+        {
+            // A placement's reason shows in the card as its Placement editing row (Editing is the footer's tooltip).
+            string? reason = PlacementReadOnlyReason(viewport, item, editSelection);
+            info["Editing"] = reason ?? "Edit this object in the selected-object panel.";
+            if (reason != null) info["Placement editing"] = reason;
+        }
         info["Document revision"] = shownDocument?.Revision;
         return info;
 
