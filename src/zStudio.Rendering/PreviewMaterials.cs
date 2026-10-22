@@ -15,50 +15,6 @@ internal static class PreviewMaterials
     private const string OrientationPass = "ZbdFaceOrientation";
     private const string PolygonZonePass = "ZbdPolygonZones";
     internal sealed class OrientationState { public volatile bool Enabled; }
-    private static readonly Lazy<(byte[] Normal, byte[] Overlay, byte[] Orientation, byte[] PolygonZones)> Shaders = new(() =>
-    {
-        string Read(string name)
-        {
-            using var stream = typeof(PreviewMaterials).Assembly.GetManifestResourceStream("zStudio.Rendering." + name)!;
-            using var reader = new System.IO.StreamReader(stream);
-            return reader.ReadToEnd();
-        }
-        string common = Read("VertexTint.hlsl");
-        byte[] Compile(string source, string entry)
-        {
-            using var shader = SharpDX.D3DCompiler.ShaderBytecode.Compile(source, entry, "ps_5_0", SharpDX.D3DCompiler.ShaderFlags.OptimizationLevel3);
-            return shader.Bytecode.Data;
-        }
-        return (Compile(common, "PSMain"), Compile(common, "PSOverlay"), Compile(common + Read("FaceOrientation.hlsl"), "PSOrientation"), Compile(common, "PSPolygonZones"));
-    });
-    public static DefaultEffectsManager CreateEffects() => PreviewResourceLifetime.Create<DefaultEffectsManager>(
-        static () => new PreviewEffectsManager(), InstallPasses);
-
-    private static void InstallPasses(DefaultEffectsManager manager)
-    {
-        GroundGridShader.Install(manager);
-        foreach (string prefix in new[] { "", TintPass, OverlayPass, OrientationPass, PolygonZonePass })
-        foreach (string suffix in new[] { "", AlphaPass, HorizonPass })
-        {
-            if (prefix.Length == 0 && suffix.Length == 0) continue; // Retain the exact stock normal diffuse pass.
-            var pixel = prefix switch
-            {
-                TintPass => new ShaderDescription("ZbdVertexTintPS", ShaderStage.Pixel, Shaders.Value.Normal),
-                OverlayPass => new ShaderDescription("ZbdOverlayPS", ShaderStage.Pixel, Shaders.Value.Overlay),
-                OrientationPass => new ShaderDescription("ZbdFaceOrientationPS", ShaderStage.Pixel, Shaders.Value.Orientation),
-                PolygonZonePass => new ShaderDescription("ZbdPolygonZonesPS", ShaderStage.Pixel, Shaders.Value.PolygonZones),
-                _ => DefaultPSShaderDescriptions.PSMeshDiffuseMap
-            };
-            manager[DefaultRenderTechniqueNames.Mesh]!.AddPass(new ShaderPassDescription(prefix + suffix)
-            {
-                InputLayoutDescription = new(DefaultVSShaderByteCodes.VSMeshDefault, DefaultInputLayout.VSInput),
-                ShaderList = [DefaultVSShaderDescriptions.VSMeshDefault, pixel],
-                BlendStateDescription = DefaultBlendStateDescriptions.BSAlphaBlend,
-                DepthStencilStateDescription = suffix == HorizonPass ? DefaultDepthStencilDescriptions.DSSNoDepthNoStencil
-                    : suffix == AlphaPass ? DefaultDepthStencilDescriptions.DSSLessNoWrite : DefaultDepthStencilDescriptions.DSSDepthLess
-            });
-        }
-    }
     public static DiffuseMaterial Create(bool horizon = false, bool vertexTint = false, OrientationState? orientation = null) => new(new PreviewMaterialCore(horizon, vertexTint, orientation));
     private static PreviewMaterialCore OverlayMaterial(DiffuseMaterial material) =>
         material.Core as PreviewMaterialCore ?? throw new InvalidOperationException("Diagnostic overlays require a preview material.");

@@ -15,7 +15,7 @@ public sealed partial class SceneViewport
     public bool ShowAxes
     {
         get => showAxes;
-        set { showAxes = value; viewport.ShowCoordinateSystem = value && !PresentationUiHidden; }
+        set { showAxes = value; view.ShowCoordinateSystem = value && !PresentationUiHidden; }
     }
     private readonly Grid presentationOverlays = new();
     private static readonly DependencyProperty PresentationGuidesVisibleProperty = DependencyProperty.Register(
@@ -30,14 +30,14 @@ public sealed partial class SceneViewport
         if (PresentationUiHidden == hidden) return;
         PresentationUiHidden = hidden;
         SetValue(PresentationGuidesVisibleProperty, !hidden);
-        viewport.ShowViewCube = !hidden;
-        viewport.ShowCoordinateSystem = showAxes && !hidden;
+        view.ShowViewCube = !hidden;
+        view.ShowCoordinateSystem = showAxes && !hidden;
         presentationOverlays.Visibility = hidden ? Visibility.Collapsed : Visibility.Visible;
         SetPickupHover(false);
         hoveredAiNode = null; PublishAiLabel(); LeaveZoneHover();
         RebasePresentationPointers();
         ++inspectionSerial;
-        viewport.InvalidateRender();
+        view.InvalidateRender();
     }
 
     /// <summary>Gives the view keyboard focus (Hide UI moves it here from chrome that hides).</summary>

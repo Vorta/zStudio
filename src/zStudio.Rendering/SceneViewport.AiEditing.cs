@@ -105,7 +105,7 @@ public sealed partial class SceneViewport
         }
         aiPathPreview.Clear();
         if (positions != null) foreach (var pair in positions) aiPathPreview.Add(pair.Key, pair.Value);
-        ++inspectionSerial; aiMarkerPose = null; UpdateAiMarkers(); viewport.InvalidateRender();
+        ++inspectionSerial; aiMarkerPose = null; UpdateAiMarkers(); view.InvalidateRender();
     }
 
     private Vector3 AiPosition(AiNode node) => aiPathPreview.GetValueOrDefault(node.Id, node.Position);

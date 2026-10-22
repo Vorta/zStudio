@@ -1,28 +1,4 @@
-using HelixToolkit.SharpDX;
-
 namespace zStudio.Rendering;
-
-/// <summary>Bounds Helix's synchronous D3DImage/device recovery callbacks.</summary>
-internal sealed class PreviewEffectsManager : DefaultEffectsManager, IEffectsManager
-{
-    private int recovering;
-
-    internal PreviewEffectsManager() { }
-    internal PreviewEffectsManager(EffectsManagerConfiguration configuration) : base(configuration) { }
-
-    // Helix calls these through IEffectsManager. Its base methods are nonvirtual.
-    // Guard disposal too: nested recovery disposes resources before reinitializing.
-    void IEffectsManager.DisposeAllResources() => Recover(base.DisposeAllResources);
-    void IEffectsManager.Reinitialize() => Recover(base.Reinitialize);
-
-    private void Recover(Action action)
-    {
-        if (Interlocked.CompareExchange(ref recovering, 1, 0) != 0)
-            throw new InvalidOperationException("3D preview graphics recovery failed repeatedly. Check the active desktop session and graphics device, then retry the preview.");
-        try { action(); }
-        finally { Volatile.Write(ref recovering, 0); }
-    }
-}
 
 /// <summary>Releases partially configured or attached preview resources before an explicit retry.</summary>
 internal static class PreviewResourceLifetime

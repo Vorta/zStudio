@@ -110,19 +110,19 @@ public sealed partial class SceneViewport
     /// <summary>The live projection camera: reads and writes go straight to it, as navigation does.</summary>
     internal sealed class DebugCameraAccess(SceneViewport owner)
     {
-        private ProjectionCamera Camera => owner.viewport.Camera as ProjectionCamera ?? throw new InvalidOperationException("No projection camera.");
+        private RenderCamera Camera => owner.view.Camera ?? throw new InvalidOperationException("No projection camera.");
         public Point3D Position { get => Camera.Position; set => Camera.Position = value; }
         public Vector3D LookDirection { get => Camera.LookDirection; set => Camera.LookDirection = value; }
         public Vector3D UpDirection { get => Camera.UpDirection; set => Camera.UpDirection = value; }
-        public bool IsOrthographic => Camera is OrthographicCamera;
+        public bool IsOrthographic => Camera is OrthographicRenderCamera;
         /// <summary>Vertical field of view in degrees (NaN for an orthographic camera).</summary>
-        public double FieldOfView => Camera is HelixToolkit.Wpf.SharpDX.PerspectiveCamera perspective ? perspective.FieldOfView : double.NaN;
+        public double FieldOfView => Camera is PerspectiveRenderCamera perspective ? perspective.FieldOfView : double.NaN;
         public double NearPlaneDistance { get => Camera.NearPlaneDistance; set => Camera.NearPlaneDistance = value; }
         public double FarPlaneDistance { get => Camera.FarPlaneDistance; set => Camera.FarPlaneDistance = value; }
         /// <summary>The view matrix the renderer uses for this camera.</summary>
         public Matrix4x4 CreateViewMatrix() => Camera.CreateViewMatrix();
         /// <summary>The view matrix of a copy of the camera (the copy must keep the renderer's view construction).</summary>
-        public Matrix4x4 CreateClonedViewMatrix() => ((ProjectionCamera)Camera.Clone()).CreateViewMatrix();
+        public Matrix4x4 CreateClonedViewMatrix() => Camera.Clone().CreateViewMatrix();
         public Matrix4x4 CreateProjectionMatrix(double aspect) => Camera.CreateProjectionMatrix(aspect);
     }
 
@@ -154,49 +154,30 @@ public sealed partial class SceneViewport
     internal DebugCameraAccess DebugCamera => debugCamera ??= new(this);
 
     /// <summary>The displayed back buffer, read without rendering, resizing or moving the camera.</summary>
-    internal BitmapSource CapturePresentedFrame()
-    {
-        var host = viewport.RenderHost;
-        if (host?.EffectsManager is not { } device || host.RenderBuffer?.BackBuffer?.Resource is not SharpDX.Direct3D11.Texture2D buffer)
-            throw new InvalidOperationException("The 3D view has no presented frame.");
-        using var stream = new MemoryStream();
-        if (!HelixToolkit.SharpDX.Utilities.ScreenCapture.SaveWICTextureToBitmapStream(device, buffer, stream))
-            throw new InvalidOperationException("The presented frame could not be read.");
-        stream.Position = 0;
-        var image = new BitmapImage();
-        image.BeginInit(); image.StreamSource = stream; image.CacheOption = BitmapCacheOption.OnLoad; image.EndInit(); image.Freeze();
-        return image;
-    }
+    internal BitmapSource CapturePresentedFrame() => view.CapturePresented();
 
     /// <summary>Applies <paramref name="change"/> and waits until the next frame is presented.</summary>
     internal async Task WaitForPresentedFrameAsync(Action change, TimeSpan? timeout = null)
     {
-        var host = viewport.RenderHost ?? throw new InvalidOperationException("The 3D view has no render host.");
         var frame = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        void Rendered(object? sender, EventArgs e) => frame.TrySetResult();
-        host.Rendered += Rendered;
-        try
+        using var presented = view.ObservePresentedFrames(() => frame.TrySetResult());
+        change();
+        try { await frame.Task.WaitAsync(timeout ?? TimeSpan.FromSeconds(10)); }
+        catch (TimeoutException)
         {
-            change();
-            try { await frame.Task.WaitAsync(timeout ?? TimeSpan.FromSeconds(10)); }
-            catch (TimeoutException)
-            {
-                throw new TimeoutException($"No presented frame after the change: IsRendering={host.IsRendering}, IsBusy={host.IsBusy}, Visible={viewport.IsVisible}, Loaded={viewport.IsLoaded}, WindowActive={Window.GetWindow(viewport)?.IsActive}.");
-            }
+            throw new TimeoutException($"No presented frame after the change: {view.RenderStatus}, Visible={viewport.IsVisible}, Loaded={viewport.IsLoaded}, WindowActive={Window.GetWindow(viewport)?.IsActive}.");
         }
-        finally { host.Rendered -= Rendered; }
     }
 
     /// <summary>The presented back buffer's size in physical pixels (0 × 0 before the first frame).</summary>
-    internal (int Width, int Height) PresentedPixelSize => viewport.RenderHost?.RenderBuffer?.BackBuffer?.Resource is SharpDX.Direct3D11.Texture2D buffer
-        ? (buffer.Description.Width, buffer.Description.Height) : (0, 0);
+    internal (int Width, int Height) PresentedPixelSize => view.PresentedPixelSize;
     /// <summary>Physical pixels per DIP the renderer applies to its back buffer, lines and shader widths.</summary>
-    internal double RenderDpiScale => viewport.RenderHost?.DpiScale ?? 1;
+    internal double RenderDpiScale => view.DpiScale;
     /// <summary>A world point on the render surface, in DIPs.</summary>
-    internal Point ProjectToView(Point3D point) => viewport.Project(point);
-    internal Exception? RenderException => viewport.RenderException;
+    internal Point ProjectToView(Point3D point) => view.Project(point);
+    internal Exception? RenderException => view.RenderException;
     /// <summary>Renders one frame now at the current size (unlike <see cref="CapturePresentedFrame"/>).</summary>
-    internal BitmapSource RenderCurrentFrame() => viewport.RenderBitmap() ?? throw new InvalidOperationException("The graphics device did not produce a frame.");
+    internal BitmapSource RenderCurrentFrame() => view.RenderBitmap() ?? throw new InvalidOperationException("The graphics device did not produce a frame.");
 
     /// <summary>Every mesh node in the rendered scene, in submission order (lines excluded).</summary>
     internal IReadOnlyList<RenderMeshHandle> EnumerateRenderMeshes()
@@ -211,7 +192,7 @@ public sealed partial class SceneViewport
                 else if (element is GroupElement3D group) Walk(group.Children);
             }
         }
-        Walk(viewport.Items);
+        Walk(view.HelixViewport.Items);
         return result;
     }
 
@@ -222,12 +203,12 @@ public sealed partial class SceneViewport
     /// <summary>Ray hits against every hit-testable node of the rendered scene (horizon backdrop and overlays included), nearest first.</summary>
     internal IReadOnlyList<RenderHit> HitTestScene(Point3D origin, Vector3D direction)
     {
-        if (viewport.RenderContext is not { } context || direction.LengthSquared <= 0) return [];
+        if (view.HelixViewport.RenderContext is not { } context || direction.LengthSquared <= 0) return [];
         direction.Normalize();
         var ray = new Ray(new Vector3((float)origin.X, (float)origin.Y, (float)origin.Z), new Vector3((float)direction.X, (float)direction.Y, (float)direction.Z));
         var hitContext = new HitTestContext(context, ray, Vector2.Zero);
         List<HitTestResult> hits = [];
-        foreach (var element in viewport.Items) element.HitTest(hitContext, ref hits);
+        foreach (var element in view.HelixViewport.Items) element.HitTest(hitContext, ref hits);
         return hits.Where(h => h.IsValid).OrderBy(h => h.Distance)
             .Select(h => new RenderHit(h.ModelHit is GeometryModel3D node ? Handle(node) : null, h.PointHit, h.NormalAtHit, h.Distance, h.Tag as int?)).ToArray();
     }
@@ -265,8 +246,8 @@ public sealed partial class SceneViewport
         else fixtureNodes.Add(mesh);
         if (fixture.Rendered)
         {
-            if (viewport.EffectsManager == null) AttachEffects();
-            viewport.Items.Add(mesh);
+            if (view.Device == null) AttachEffects();
+            view.HelixViewport.Items.Add(mesh);
         }
         return new(mesh, fixture.Placements != null ? RenderMeshRole.Scene : RenderMeshRole.Overlay);
     }
@@ -275,7 +256,7 @@ public sealed partial class SceneViewport
     internal void RemoveFixtureMesh(RenderMeshHandle handle)
     {
         var node = BackendNode(handle);
-        viewport.Items.Remove(node);
+        view.HelixViewport.Items.Remove(node);
         if (node is MeshGeometryModel3D mesh)
         {
             meshes.Remove(mesh); placements.Remove(mesh); visiblePlacements.Remove(mesh);
@@ -286,7 +267,7 @@ public sealed partial class SceneViewport
     }
 
     /// <summary>Empties the rendered scene (registrations stay); fixtures added afterwards render alone.</summary>
-    internal void ClearRenderItems() => viewport.Items.Clear();
+    internal void ClearRenderItems() => view.HelixViewport.Items.Clear();
 
     internal void RegisterFixtureInspection(RenderMeshHandle mesh, int material, long? runtime = null, int node = -1, int model = -1)
         => RegisterInspectionMesh((MeshGeometryModel3D)BackendNode(mesh), material, runtime, node, model);
@@ -328,17 +309,17 @@ public sealed partial class SceneViewport
     internal IReadOnlyList<(RenderMeshHandle Mesh, int[] Polygons)> InspectionPolygonMaps => [.. inspectionPolygons.Select(p => (Handle(p.Key), p.Value))];
     internal int[]? InspectionPolygons(RenderMeshHandle mesh) => BackendNode(mesh) is MeshGeometryModel3D node ? inspectionPolygons.GetValueOrDefault(node) : null;
     internal IReadOnlyList<RenderMeshHandle> AiLinkMeshes => [.. aiLinks.Keys.Select(m => new RenderMeshHandle(m, RenderMeshRole.Overlay))];
-    internal IReadOnlyList<GroundGridHandle> GroundGrids => [.. viewport.Items.OfType<AxisPlaneGridModel3D>().Select(g => new GroundGridHandle(g))];
+    internal IReadOnlyList<GroundGridHandle> GroundGrids => [.. view.HelixViewport.Items.OfType<AxisPlaneGridModel3D>().Select(g => new GroundGridHandle(g))];
 
     /// <summary>Shows or hides the view cube and the coordinate axes directly (fixtures keep pixels free of them).</summary>
-    internal void SetNavigationAids(bool viewCube, bool axes) { viewport.ShowViewCube = viewCube; viewport.ShowCoordinateSystem = axes; }
-    internal bool InertiaEnabled { get => viewport.IsInertiaEnabled; set => viewport.IsInertiaEnabled = value; }
+    internal void SetNavigationAids(bool viewCube, bool axes) { view.ShowViewCube = viewCube; view.ShowCoordinateSystem = axes; }
+    internal bool InertiaEnabled { get => navigationInertia; set => navigationInertia = value; }
     /// <summary>Orbit, pan and zoom input are enabled (Fly suspends them).</summary>
-    internal bool OrbitControlsEnabled => viewport.IsPanEnabled && viewport.IsZoomEnabled && viewport.IsRotationEnabled;
+    internal bool OrbitControlsEnabled => panEnabled && zoomEnabled && rotationEnabled;
     /// <summary>Whether the backend's own mouse/keyboard gestures are installed (zStudio owns all navigation input).</summary>
-    internal bool UsesBuiltInGestures => viewport.UseDefaultGestures || viewport.InputBindings.Count != 0;
+    internal bool UsesBuiltInGestures => view.UsesBuiltInGestures;
     /// <summary>Back-to-front sorting of transparent meshes (on by default; fixtures turn it off to force a draw order).</summary>
-    internal void SetTransparentSorting(bool enabled) { foreach (var group in viewport.Items.OfType<SortingGroupModel3D>()) group.EnableSorting = enabled; }
+    internal void SetTransparentSorting(bool enabled) { foreach (var group in view.HelixViewport.Items.OfType<SortingGroupModel3D>()) group.EnableSorting = enabled; }
     /// <summary>The graphics interop's own exception type (first-chance evidence in tests).</summary>
     internal static bool IsGraphicsInteropException(Exception error) => error is SharpDX.SharpDXException;
 
@@ -351,15 +332,13 @@ public sealed partial class SceneViewport
 /// <summary>Device-recovery guard on a software device, as the preview's graphics recovery uses it.</summary>
 internal sealed class PreviewRecoveryHarness : IDisposable
 {
-    private readonly PreviewEffectsManager owned = new(new() { EnableSoftwareRendering = true });
-    // The guard is reached through the interface the backend calls (its base methods are nonvirtual).
-    private IEffectsManager Manager => owned;
-    public void DisposeAllResources() => Manager.DisposeAllResources();
-    public void Reinitialize() => Manager.Reinitialize();
+    private readonly RenderDevice owned = RenderDevice.CreateSoftware();
+    public void DisposeAllResources() => owned.DisposeAllResources();
+    public void Reinitialize() => owned.Reinitialize();
     /// <summary>Raised by the backend after it reinitialized its device resources.</summary>
     public event EventHandler<EventArgs>? Reinitialized { add => owned.Reinitialized += value; remove => owned.Reinitialized -= value; }
     /// <summary>The current device's identity (null without one).</summary>
-    public object? Device => owned.Device;
-    public bool DeviceDisposed => owned.Device is not { IsDisposed: false };
+    public object? Device => owned.DeviceIdentity;
+    public bool DeviceDisposed => owned.DeviceDisposed;
     public void Dispose() => owned.Dispose();
 }

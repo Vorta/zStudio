@@ -78,7 +78,7 @@ public sealed partial class SceneViewport
             if (frozenPath[i].Position != frozenPath[i + 1].Position) moving = i;
             parachuteNextMoving[i] = moving;
         }
-        parachuteOverlay = new(); PresentationGuide(parachuteOverlay); viewport.Items.Add(parachuteOverlay);
+        parachuteOverlay = new(); PresentationGuide(parachuteOverlay); view.HelixViewport.Items.Add(parachuteOverlay);
         parachuteLine = new()
         {
             Geometry = new LineGeometry3D { Positions = new(parachutePath.Select(p => p.Position)),
@@ -92,7 +92,7 @@ public sealed partial class SceneViewport
         parachuteStarts = ParachuteMesh(new(0, .8f, 1, 1));
         parachuteReleases = ParachuteMesh(new(1, .6f, .15f, 1));
         parachuteSelected = ParachuteMesh(new(1, 1, 1, 1));
-        UpdateParachuteMarkers(); viewport.InvalidateRender();
+        UpdateParachuteMarkers(); view.InvalidateRender();
     }
 
     private static void ValidateParachuteWindow(ParachuteWindowOverlay window, double first, double last)
@@ -197,13 +197,13 @@ public sealed partial class SceneViewport
         var selected = windows.FirstOrDefault(w => w.Id == SelectedParachuteWindow);
         parachuteSelected!.Instances = selected == null ? [] : selected.Releases.Select(r => Instance(r.Position, 5))
             .Prepend(Instance(ParachutePosition(selected.Start), 8)).ToArray();
-        viewport.InvalidateRender();
+        view.InvalidateRender();
     }
 
     private bool ProjectParachute(Vector3 position, out Point screen)
     {
         screen = default;
-        if (viewport.Camera is not ProjectionCamera camera || viewport.ActualWidth <= 0 || viewport.ActualHeight <= 0) return false;
+        if (view.Camera is not RenderCamera camera || viewport.ActualWidth <= 0 || viewport.ActualHeight <= 0) return false;
         // Match TryNavigationRay's current-camera projection; the render context may still hold the previous frame.
         var forward = camera.LookDirection; forward.Normalize();
         var right = Vector3D.CrossProduct(forward, camera.UpDirection); right.Normalize();
@@ -211,9 +211,9 @@ public sealed partial class SceneViewport
         var offset = new Point3D(position.X, position.Y, position.Z) - camera.Position;
         double depth = Vector3D.DotProduct(offset, forward);
         // Orthographic overlay geometry remains visible on either side of the eye plane when depth clipping is disabled.
-        if (camera is not OrthographicCamera && depth <= 0) return false;
+        if (camera is not OrthographicRenderCamera && depth <= 0) return false;
         var projection = camera.CreateProjectionMatrix(Aspect);
-        double divisor = camera is OrthographicCamera ? 1 : depth;
+        double divisor = camera is OrthographicRenderCamera ? 1 : depth;
         double x = Vector3D.DotProduct(offset, right) * projection.M11 / divisor;
         double y = Vector3D.DotProduct(offset, up) * projection.M22 / divisor;
         screen = new((x + 1) * viewport.ActualWidth / 2, (1 - y) * viewport.ActualHeight / 2);
@@ -332,7 +332,7 @@ public sealed partial class SceneViewport
         IsParachutePointerMoving = false; parachutePreview = null; parachutePath = []; parachuteWindows = [];
         parachuteNextMoving = []; parachutePreviousMoving = [];
         SelectedParachuteWindow = null; parachuteMarkerPose = null;
-        if (parachuteOverlay != null) { viewport.Items.Remove(parachuteOverlay); parachuteOverlay.Children.Clear(); parachuteOverlay.Dispose(); parachuteOverlay = null; }
+        if (parachuteOverlay != null) { view.HelixViewport.Items.Remove(parachuteOverlay); parachuteOverlay.Children.Clear(); parachuteOverlay.Dispose(); parachuteOverlay = null; }
         parachuteLine?.Dispose(); parachuteStarts?.Dispose(); parachuteReleases?.Dispose(); parachuteSelected?.Dispose();
         parachuteLine = null; parachuteStarts = parachuteReleases = parachuteSelected = null;
         ParachuteWindowSelected?.Invoke(null);

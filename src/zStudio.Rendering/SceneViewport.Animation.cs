@@ -14,7 +14,6 @@ using zStudio.Core.Formats;
 using SharpDX.Direct3D11;
 using DiffuseMaterial = HelixToolkit.Wpf.SharpDX.DiffuseMaterial;
 using MeshGeometry3D = HelixToolkit.SharpDX.MeshGeometry3D;
-using HCamera = HelixToolkit.Wpf.SharpDX.PerspectiveCamera;
 
 namespace zStudio.Rendering;
 
@@ -52,7 +51,6 @@ public sealed partial class SceneViewport
     internal long AnimationLightingWork { get; private set; }
     internal long AnimationLightVisits { get; private set; }
     private SortingGroupModel3D? animationGroup;
-    private OITRenderType previousTransparency;
     public int AnimationMeshCount => animatedMeshes.Values.Sum(m => m.Length);
 
     public async Task ShowAnimationAsync(AnimationPreviewContext context, AnimationFrame frame, AssetResolver resolver, bool includeLevel, CancellationToken token, int lod = 0, bool showHorizon = true, CancellationToken? previewLifetime = null)
@@ -70,11 +68,9 @@ public sealed partial class SceneViewport
             : new PreviewTextureCache(textureMemory, resolver.BeginTextureLookup(context.World.Path), masks: false);
         animationContext = context; animationResolver = resolver; animationToken = token;
         Mission = context.Mission; PreviewScene = context.Scene; InspectionNodes = context.InspectionNodes; InspectionSourcePath = context.World.Path; horizonEnabled = showHorizon; ConfigureHorizon(context.Scene);
-        // Helix 3.1.2's OIT paths drop the unlit DiffuseMaterial effect cards.
-        // Standard alpha blending with a sorted group renders their actual alpha.
-        previousTransparency = viewport.OITRenderMode; viewport.OITRenderMode = OITRenderType.None;
+        // Standard alpha blending with a sorted group renders the effect cards' actual alpha (the view has no order-independent transparency).
         animationGroup = sceneAlphaGroup ?? new() { EnableSorting = true, SortTransparentOnly = true, SortingInterval = 0 };
-        if (sceneAlphaGroup == null) viewport.Items.Add(animationGroup);
+        if (sceneAlphaGroup == null) view.HelixViewport.Items.Add(animationGroup);
         levelMin = sceneMin; levelMax = sceneMax;
         // Spawned effect cards can change on their first visible tick. Prepare the
         // template maps before enabling playback, as with bound material cycles.
@@ -265,14 +261,14 @@ public sealed partial class SceneViewport
         if (followCamera && frame.Camera is { } c)
         {
             ChangeProjection("perspective"); axisView = null; autoPerspective = false;
-            var live = (HCamera)viewport.Camera!;
+            var live = (PerspectiveRenderCamera)view.Camera!;
             authoredCameraPose = true;
             live.Position = new(c.Position.X, c.Position.Y, c.Position.Z);
             var look = c.Target - c.Position; if (look.LengthSquared() > 1e-8f) live.LookDirection = new(look.X, look.Y, look.Z);
             live.FieldOfView = Math.Clamp(c.FieldOfView, 1, 170);
             orbitPivot = null; navigationReferenceDistance = null;
         }
-        if (!preparingCamera) viewport.InvalidateRender();
+        if (!preparingCamera) view.InvalidateRender();
         animationMeshBytes = nextGeometry;
         animationMeshReservation.Resize(checked(nextGeometry + scratch));
         }
@@ -314,10 +310,10 @@ public sealed partial class SceneViewport
     {
         var transform = pose.Transform;
         // The retail facade projection differs; this preview keeps effect cards readable.
-        if ((pose.Texture != null || model.Metadata.Int("model_type") == 1) && viewport.Camera is ProjectionCamera camera && Matrix4x4.Decompose(transform, out var size, out _, out var position))
+        if ((pose.Texture != null || model.Metadata.Int("model_type") == 1) && view.Camera is RenderCamera camera && Matrix4x4.Decompose(transform, out var size, out _, out var position))
         {
             var p = camera.Position; var facing = new Vector3((float)p.X, (float)p.Y, (float)p.Z);
-            if (camera is OrthographicCamera) facing = position - new Vector3((float)camera.LookDirection.X, (float)camera.LookDirection.Y, (float)camera.LookDirection.Z);
+            if (camera is OrthographicRenderCamera) facing = position - new Vector3((float)camera.LookDirection.X, (float)camera.LookDirection.Y, (float)camera.LookDirection.Z);
             if ((model.Metadata.UInt("flags") & 0x10) == 0 && pose.Texture == null) facing.Y = position.Y;
             var up = camera.UpDirection;
             var billboardUp = Math.Abs(Vector3.Dot(Vector3.Normalize(facing - position), Vector3.UnitY)) > .999f
@@ -390,7 +386,7 @@ public sealed partial class SceneViewport
     private Color4 AnimationFogColor(AnimationNodePose pose, Color4 lit, AnimationFrame frame, bool effectLighting)
     {
         Vector3 rgb = new(lit.Red, lit.Green, lit.Blue);
-        if (effectLighting && frame.Fog is { Enabled: true } fog && viewport.Camera is ProjectionCamera camera)
+        if (effectLighting && frame.Fog is { Enabled: true } fog && view.Camera is RenderCamera camera)
         {
             var p = camera.Position;
             float distance = Vector3.Distance(pose.Transform.Translation, new((float)p.X, (float)p.Y, (float)p.Z));
@@ -530,7 +526,7 @@ public sealed partial class SceneViewport
     private void ClearAnimationResources()
     {
         foreach (var items in animatedMeshes.Values) foreach (var item in items) item.Mesh.Dispose();
-        if (animationGroup != null) { animationGroup.Children.Clear(); animationGroup.Dispose(); animationGroup = null; viewport.OITRenderMode = previousTransparency; }
+        if (animationGroup != null) { animationGroup.Children.Clear(); animationGroup.Dispose(); animationGroup = null; }
         animatedMeshes.Clear(); animationGeometry.Clear(); animationTextureSlots.Clear(); replacedNodes.Clear(); animationContext = null; animationResolver = null; animationFrame = null;
         animationGeometryScratch.Clear(); animationGeometryCopies.Clear(); animationPossibleParts.Clear(); animationPoses.Clear(); animationGeometryBytes = animationMeshBytes = 0;
         animationGeometryReservation?.Dispose(); animationGeometryReservation = null;

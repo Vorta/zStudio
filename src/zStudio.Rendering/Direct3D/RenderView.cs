@@ -61,6 +61,7 @@ internal sealed class RenderView : IRayPicker, INodeOwner, IDisposable
         viewport = new FrameViewport(this)
         {
             EnableSwapChainRendering = false,
+            IsInertiaEnabled = true,
             UseDefaultGestures = false,
             ZoomAroundMouseDownPoint = false,
             ZoomExtentsWhenLoaded = false,

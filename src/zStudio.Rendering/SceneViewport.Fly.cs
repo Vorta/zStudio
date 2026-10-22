@@ -1,6 +1,4 @@
 using System.Windows.Media.Media3D;
-using HelixToolkit.SharpDX;
-using HCamera = HelixToolkit.Wpf.SharpDX.PerspectiveCamera;
 
 namespace zStudio.Rendering;
 
@@ -9,7 +7,7 @@ public sealed partial class SceneViewport
     private Vector3D flyMovement;
     private TimeSpan? flyFrameTime;
     private bool flySpeedInitialized;
-    private bool savedFlyInertia, savedFlyMove, savedFlyPan, savedFlyRotate, savedFlyZoom;
+    private bool savedFlyInertia, savedFlyPan, savedFlyRotate, savedFlyZoom;
     public bool IsFlyActive { get; private set; }
     public double FlySpeed { get; private set; } = 100;
     public event Action? FlyStateChanged;
@@ -39,20 +37,18 @@ public sealed partial class SceneViewport
                 FlySpeed = FlyCameraMotion.InitialSpeed((sceneMax - sceneMin).Length());
                 flySpeedInitialized = true;
             }
-            savedFlyInertia = viewport.IsInertiaEnabled; savedFlyMove = viewport.IsMoveEnabled;
-            savedFlyPan = viewport.IsPanEnabled; savedFlyRotate = viewport.IsRotationEnabled; savedFlyZoom = viewport.IsZoomEnabled;
-            viewport.IsInertiaEnabled = viewport.IsMoveEnabled = viewport.IsPanEnabled = viewport.IsRotationEnabled = viewport.IsZoomEnabled = false;
+            savedFlyInertia = navigationInertia; savedFlyPan = panEnabled; savedFlyRotate = rotationEnabled; savedFlyZoom = zoomEnabled;
+            navigationInertia = panEnabled = rotationEnabled = zoomEnabled = false;
         }
         else
         {
-            viewport.IsInertiaEnabled = savedFlyInertia; viewport.IsMoveEnabled = savedFlyMove;
-            viewport.IsPanEnabled = savedFlyPan; viewport.IsRotationEnabled = savedFlyRotate; viewport.IsZoomEnabled = savedFlyZoom;
+            navigationInertia = savedFlyInertia; panEnabled = savedFlyPan; rotationEnabled = savedFlyRotate; zoomEnabled = savedFlyZoom;
             orbitPivot = null; navigationReferenceDistance = null;
         }
         IsFlyActive = enabled;
         if (!enabled) RefreshTerrainBrushCursor();
-        viewport.CameraMode = enabled ? CameraMode.WalkAround : CameraMode.Inspect;
-        cameraPoseDirty = true; viewport.InvalidateRender(); FlyStateChanged?.Invoke();
+        walkAroundCamera = enabled;
+        cameraPoseDirty = true; view.InvalidateRender(); FlyStateChanged?.Invoke();
     }
 
     /// <summary>Signed right/up/forward input; speed is normalized for combined axes.</summary>
@@ -63,14 +59,14 @@ public sealed partial class SceneViewport
         if (flyMovement == next) return;
         // The first held key must not inherit time spent idle.
         if (flyMovement.LengthSquared == 0) flyFrameTime = null;
-        flyMovement = next; viewport.InvalidateRender();
+        flyMovement = next; view.InvalidateRender();
     }
 
     public void LookFlyBy(double horizontal, double vertical)
     {
-        if (!IsFlyActive || viewport.Camera is not HCamera camera) return;
+        if (!IsFlyActive || view.Camera is not PerspectiveRenderCamera camera) return;
         camera.LookDirection = FlyCameraMotion.Look(camera.LookDirection, horizontal, vertical);
-        cameraPoseDirty = true; viewport.InvalidateRender();
+        cameraPoseDirty = true; view.InvalidateRender();
     }
 
     public void AdjustFlySpeed(int wheelDelta)
@@ -81,27 +77,19 @@ public sealed partial class SceneViewport
 
     private void PrepareFlyFrame(TimeSpan timestamp)
     {
-        if (!IsFlyActive || viewport.Camera is not HCamera camera) return;
+        if (!IsFlyActive || view.Camera is not PerspectiveRenderCamera camera) return;
         double seconds = flyFrameTime is { } previous ? (timestamp - previous).TotalSeconds : 0;
         flyFrameTime = timestamp;
         if (flyMovement.LengthSquared == 0) return;
         camera.Position += FlyCameraMotion.Displacement(camera.LookDirection, flyMovement, FlySpeed, seconds);
-        cameraPoseDirty = true; viewport.InvalidateRender();
+        cameraPoseDirty = true; view.InvalidateRender();
     }
 
     private void StopNavigationMotion()
     {
-        // Helix exposes StopSpin but not its full controller. One update with zero
-        // inertia drains pan/zoom/move/rotate forces; restore the exact pose afterward.
+        // Settle anything the renderer's own camera handling still holds, then restore the exact pose.
         var pose = CaptureView();
-        bool inertia = viewport.IsInertiaEnabled, rotation = viewport.IsRotationEnabled;
-        try
-        {
-            viewport.IsInertiaEnabled = false; viewport.IsRotationEnabled = true;
-            viewport.ChangeDirection(pose.LookDirection, pose.UpDirection, 0);
-            ((FrameViewport)viewport).DrainNavigation(previousFrameTime + TimeSpan.FromMilliseconds(1));
-            RestoreView(pose);
-        }
-        finally { viewport.IsInertiaEnabled = inertia; viewport.IsRotationEnabled = rotation; }
+        view.StopNativeCameraMotion(previousFrameTime + TimeSpan.FromMilliseconds(1));
+        RestoreView(pose);
     }
 }

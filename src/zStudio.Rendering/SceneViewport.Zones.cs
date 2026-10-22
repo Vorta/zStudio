@@ -192,10 +192,10 @@ public sealed partial class SceneViewport
     public void ResolveZoneStroke(long id)
     {
         foreach (var key in zonePending.Where(p => p.Value.Stroke == id).Select(p => p.Key).ToArray()) zonePending.Remove(key);
-        zoneOverlayDirty = true; viewport.InvalidateRender();
+        zoneOverlayDirty = true; view.InvalidateRender();
     }
     /// <summary>Outlines the polygons a stroke skipped (until the next stroke or an empty list).</summary>
-    public void ShowZoneSkipped(IReadOnlyList<ZonePaintTarget> targets) { zoneShownSkipped = targets; zoneOverlayDirty = true; viewport.InvalidateRender(); }
+    public void ShowZoneSkipped(IReadOnlyList<ZonePaintTarget> targets) { zoneShownSkipped = targets; zoneOverlayDirty = true; view.InvalidateRender(); }
 
     private void TouchZone(Point point)
     {
@@ -211,7 +211,7 @@ public sealed partial class SceneViewport
         zoneStroke.Add((site, hover.Source), touch);
         if (touch.Outcome == PolygonZoneOutcome.Changed) zoneStrokeChanged++;
         else if (touch.Outcome == PolygonZoneOutcome.Full) zoneStrokeFull++;
-        zoneOverlayDirty = true; viewport.InvalidateRender();
+        zoneOverlayDirty = true; view.InvalidateRender();
         ZoneStrokeProgress?.Invoke(zoneStrokeChanged, zoneStrokeFull, true);
     }
 
@@ -259,7 +259,7 @@ public sealed partial class SceneViewport
         var hover = ProbeZone(point, out bool blocked);
         if (!force && blocked == ZoneHoverBlocked && SameHover(hover, ZoneHover)) return;
         ZoneHover = hover; ZoneHoverBlocked = blocked; zoneOverlayDirty = true;
-        RefreshZoneCursor(); ZoneHoverChanged?.Invoke(); viewport.InvalidateRender();
+        RefreshZoneCursor(); ZoneHoverChanged?.Invoke(); view.InvalidateRender();
     }
 
     private static bool SameHover(ZonePaintHover? a, ZonePaintHover? b) => a == null || b == null ? a == b
@@ -321,7 +321,7 @@ public sealed partial class SceneViewport
                     foreach (int polygon in BuiltPolygons(node, touch.Source))
                         if (positions.Count < 400_000) AddZoneTriangles(model, polygon, transform, color, positions, indices, colors);
         }
-        if (positions.Count == 0) { if (zonePreviewMesh != null) { viewport.Items.Remove(zonePreviewMesh); zonePreviewMesh.Dispose(); zonePreviewMesh = null; } }
+        if (positions.Count == 0) { if (zonePreviewMesh != null) { view.HelixViewport.Items.Remove(zonePreviewMesh); zonePreviewMesh.Dispose(); zonePreviewMesh = null; } }
         else
         {
             if (zonePreviewMesh == null)
@@ -329,7 +329,7 @@ public sealed partial class SceneViewport
                 var material = PreviewMaterials.Create(vertexTint: true); material.EnableUnLit = true; material.VertexColorBlendingFactor = 1;
                 PreviewMaterials.SetPolygonZones(material, true); PreviewMaterials.SetZoneEmphasis(material, PreviewMaterials.ZoneEmphasis.Preview, strong: ZonePreview);
                 zonePreviewMesh = new() { Material = material, CullMode = SharpDX.Direct3D11.CullMode.None, IsTransparent = true, IsHitTestVisible = false, IsThrowingShadow = false, DepthBias = -200 };
-                PresentationGuide(zonePreviewMesh); viewport.Items.Add(zonePreviewMesh);
+                PresentationGuide(zonePreviewMesh); view.HelixViewport.Items.Add(zonePreviewMesh);
             }
             zonePreviewMesh.Geometry = new MeshGeometry3D { Positions = positions, Indices = indices, Colors = colors, Normals = new Vector3Collection(Enumerable.Repeat(Vector3.UnitY, positions.Count)) };
         }
@@ -347,7 +347,7 @@ public sealed partial class SceneViewport
         ShowZoneLines("unchanged", grey, System.Windows.Media.Color.FromArgb(140, 255, 255, 255), 1.5);
         ShowZoneLines("full", yellow, System.Windows.Media.Color.FromRgb(0xFC, 0xE1, 0x00), 2);
         ShowZoneLines("others", dim, System.Windows.Media.Color.FromArgb(170, 255, 255, 255), 1);
-        viewport.InvalidateRender();
+        view.InvalidateRender();
     }
     /// <summary>A zone set as the polygon zone pass reads it; no zones draws the preview's "cleared" fill.</summary>
     private static Color4 ZoneSetColor(IReadOnlyList<byte> zones) => zones.Count == 0 ? new(0, 0, 0, 0)
@@ -374,7 +374,7 @@ public sealed partial class SceneViewport
     }
     private void ShowZoneLines(string name, List<(int Node, int Source, int Model)> polygons, System.Windows.Media.Color color, double thickness)
     {
-        if (zoneLines.Remove(name, out var old)) { viewport.Items.Remove(old); old.Dispose(); }
+        if (zoneLines.Remove(name, out var old)) { view.HelixViewport.Items.Remove(old); old.Dispose(); }
         if (polygons.Count == 0 || PreviewScene is not { } scene) return;
         List<Vector3> points = []; IntCollection indices = [];
         foreach (var (node, source, _) in polygons)
@@ -391,12 +391,12 @@ public sealed partial class SceneViewport
                 }
         if (points.Count == 0) return;
         LineGeometryModel3D line = new() { Geometry = new LineGeometry3D { Positions = new Vector3Collection(points), Indices = indices }, Color = color, Thickness = thickness, IsHitTestVisible = false, DepthBias = -300 };
-        PresentationGuide(line); viewport.Items.Add(line); zoneLines[name] = line;
+        PresentationGuide(line); view.HelixViewport.Items.Add(line); zoneLines[name] = line;
     }
     private void RemoveZoneOverlay()
     {
-        if (zonePreviewMesh != null) { viewport.Items.Remove(zonePreviewMesh); zonePreviewMesh.Dispose(); zonePreviewMesh = null; }
-        foreach (var line in zoneLines.Values) { viewport.Items.Remove(line); line.Dispose(); }
+        if (zonePreviewMesh != null) { view.HelixViewport.Items.Remove(zonePreviewMesh); zonePreviewMesh.Dispose(); zonePreviewMesh = null; }
+        foreach (var line in zoneLines.Values) { view.HelixViewport.Items.Remove(line); line.Dispose(); }
         zoneLines.Clear();
     }
 
@@ -418,7 +418,7 @@ public sealed partial class SceneViewport
             zoneGhosts[mesh] = (material, mesh.IsTransparent);
             mesh.Material = ghost; mesh.IsTransparent = true;
         }
-        viewport.InvalidateRender();
+        view.InvalidateRender();
     }
     private void RestoreZoneGhosts()
     {
@@ -438,7 +438,7 @@ public sealed partial class SceneViewport
             ApplySurfaceZoneEmphasis(surface.Normal);
         }
         SyncZoneGhosts();
-        viewport.InvalidateRender();
+        view.InvalidateRender();
     }
 
     private void ClearZoneToolPresentation()

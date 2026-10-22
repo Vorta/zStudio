@@ -63,7 +63,7 @@ public sealed partial class SceneViewport
     private void ConfigureInspection()
     {
         inspectionHost.Children.Add(viewport); inspectionHost.Children.Add(presentationOverlays); Content = inspectionHost;
-        viewport.MouseMove += (_, e) => { inspectionPointer = e.GetPosition(viewport); viewport.InvalidateRender(); };
+        viewport.MouseMove += (_, e) => { inspectionPointer = e.GetPosition(viewport); view.InvalidateRender(); };
         viewport.MouseLeave += (_, _) => { inspectionPointer = null; HoverInspection = null; InspectionChanged?.Invoke(); };
     }
     private static bool IsInspectionInput(DependencyObject? child, DependencyObject root)
@@ -167,7 +167,7 @@ public sealed partial class SceneViewport
     private bool HandleInspectionClick(Point point, MouseButtonEventArgs e)
     {
         if (e.ChangedButton != MouseButton.Left || IsFlyActive || IsPickupDragging) return false;
-        // Consume the scene click even when a draft vetoes selection, before Helix's callbacks.
+        // Consume the scene click even when a draft vetoes selection, before the view's own pointer handling.
         var hit = ProbeInspection(point);
         if (hit == null) return false;
         viewport.Focus();
@@ -199,9 +199,9 @@ public sealed partial class SceneViewport
     }
     public Point InspectionAnchor(SceneInspection inspection)
     {
-        if (inspection.Origin is not { } p || viewport.Camera is not ProjectionCamera camera ||
+        if (inspection.Origin is not { } p || view.Camera is not RenderCamera camera ||
             Vector3D.DotProduct(new Point3D(p.X, p.Y, p.Z) - camera.Position, camera.LookDirection) <= 0) return new(double.NaN, double.NaN);
-        return viewport.Project(new Point3D(p.X, p.Y, p.Z));
+        return view.Project(new Point3D(p.X, p.Y, p.Z));
     }
     public MissionActor? ActorAt(int node) => Mission?.ActorAt(node);
     public void SetMissionCoordinates(PickupPlacementEditSession edits)

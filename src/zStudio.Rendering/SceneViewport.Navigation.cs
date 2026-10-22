@@ -2,7 +2,6 @@ using System.Diagnostics;
 using System.Windows;
 using System.Windows.Input;
 using System.Windows.Media.Media3D;
-using HelixToolkit.Wpf.SharpDX;
 
 namespace zStudio.Rendering;
 
@@ -53,7 +52,7 @@ public sealed partial class SceneViewport
     public void OrbitStep(double horizontalDegrees, double verticalDegrees)
     {
         StopCameraMotion();
-        double sensitivity = Math.Max(.0001, viewport.RotationSensitivity) * .5;
+        double sensitivity = Math.Max(.0001, RotationSensitivity) * .5;
         RotateBy(horizontalDegrees / sensitivity, verticalDegrees / sensitivity);
     }
 
@@ -109,7 +108,7 @@ public sealed partial class SceneViewport
     }
     public void PanBy(double horizontal, double vertical)
     {
-        if (!BeginManualNavigation() || !viewport.IsPanEnabled || viewport.Camera is not ProjectionCamera camera) return;
+        if (!BeginManualNavigation() || !panEnabled || view.Camera is not RenderCamera camera) return;
         var forward = camera.LookDirection; forward.Normalize();
         var right = Vector3D.CrossProduct(forward, camera.UpDirection); right.Normalize();
         var up = Vector3D.CrossProduct(right, forward);
@@ -122,11 +121,11 @@ public sealed partial class SceneViewport
     /// <summary>Zoom towards the pointer at pointed-surface speed, or scale orthographic views about it.</summary>
     public void ZoomBy(double steps, Point? screenPoint = null)
     {
-        if (!BeginManualNavigation() || !viewport.IsZoomEnabled || viewport.Camera is not ProjectionCamera camera) return;
+        if (!BeginManualNavigation() || !zoomEnabled || view.Camera is not RenderCamera camera) return;
         steps = Math.Clamp(steps, -100, 100);
         if (steps == 0 || !double.IsFinite(steps)) return;
         var projection = camera.CreateProjectionMatrix(Aspect);
-        double rayScale = camera is OrthographicCamera orthographicRay ? orthographicRay.Width : 1;
+        double rayScale = camera is OrthographicRenderCamera orthographicRay ? orthographicRay.Width : 1;
         bool retainRay = applyingZoomInertia && zoomRayCoordinates != null;
         zoomScreenPoint = retainRay && zoomRayCoordinates is { } anchor
             ? new((anchor.X * rayScale * projection.M11 + 1) * viewport.ActualWidth / 2, (1 - anchor.Y * rayScale * projection.M22) * viewport.ActualHeight / 2)
@@ -138,7 +137,7 @@ public sealed partial class SceneViewport
             zoomRayCoordinates = new((2 * zoomScreenPoint.Value.X / viewport.ActualWidth - 1) / projection.M11 / rayScale,
                 (1 - 2 * zoomScreenPoint.Value.Y / viewport.ActualHeight) / projection.M22 / rayScale);
         double factor = Math.Exp(-steps * .12);
-        if (camera is OrthographicCamera orthographic)
+        if (camera is OrthographicRenderCamera orthographic)
         {
             double previousWidth = orthographic.Width;
             double width = Math.Clamp(previousWidth * factor, .001, 1e12);
@@ -175,10 +174,10 @@ public sealed partial class SceneViewport
     /// <summary>Move eye and orbit target together along the view direction, in game units.</summary>
     public void DollyBy(double distance)
     {
-        if (!BeginManualNavigation() || viewport.Camera is not ProjectionCamera camera) return;
+        if (!BeginManualNavigation() || view.Camera is not RenderCamera camera) return;
         var direction = camera.LookDirection; direction.Normalize(); TranslateNavigation(camera, direction * distance);
     }
-    private void TranslateNavigation(ProjectionCamera camera, Vector3D delta)
+    private void TranslateNavigation(RenderCamera camera, Vector3D delta)
     {
         orbitPivot = (orbitPivot ?? camera.Position + camera.LookDirection) + delta;
         camera.Position += delta;
@@ -195,15 +194,15 @@ public sealed partial class SceneViewport
     }
     private void AdvanceNavigationInertia(double seconds)
     {
-        if (rotationPoint != null || !viewport.IsInertiaEnabled || navigationVelocity.LengthSquared <= 1) return;
+        if (rotationPoint != null || !navigationInertia || navigationVelocity.LengthSquared <= 1) return;
         applyingZoomInertia = navigationGesture == NavigationGesture.Zoom;
         try { ApplyNavigationDelta(navigationGesture, navigationVelocity * seconds); }
         finally { applyingZoomInertia = false; }
         // CameraChanged is deliberately suppressed during frame preparation.
         // Refresh camera-dependent horizons/billboards for inertial motion too.
         cameraPoseDirty = true;
-        navigationVelocity *= Math.Pow(Math.Clamp(viewport.CameraInertiaFactor, .01, .99), seconds / .02);
-        viewport.InvalidateRender();
+        navigationVelocity *= Math.Pow(Math.Clamp(CameraInertiaFactor, .01, .99), seconds / .02);
+        view.InvalidateRender();
     }
     internal void BeginNavigationDrag(NavigationGesture gesture, Point position)
     {
@@ -269,10 +268,10 @@ public sealed partial class SceneViewport
     }
     internal void EndNavigationDrag()
     {
-        if (Stopwatch.GetElapsedTime(rotationInputTick).TotalSeconds > .15 || !viewport.IsInertiaEnabled)
+        if (Stopwatch.GetElapsedTime(rotationInputTick).TotalSeconds > .15 || !navigationInertia)
         { rotationVelocity = default; navigationVelocity = default; }
         navigationPresentationRebase = false;
-        rotationPoint = null; pendingOrbitPoint = null; viewport.InvalidateRender();
+        rotationPoint = null; pendingOrbitPoint = null; view.InvalidateRender();
     }
     public void CancelNavigation()
     {
@@ -284,7 +283,7 @@ public sealed partial class SceneViewport
     private void ConfigureNavigation()
     {
         ConfigureNavigationCube();
-        // Parent tunneling precedes Helix's class-level hit testing and view-cube handler.
+        // Parent tunneling precedes the view's own class-level pointer handling.
         PreviewMouseDown += (_, e) =>
         {
             if (e.Handled || IsFlyActive || IsPickupDragging || IsAiPathPointerTransform || IsParachutePointerMoving || aiPathBoxStart != null ||
@@ -328,7 +327,7 @@ public sealed partial class SceneViewport
     {
         StopCameraMotion(); ZoomAt(position, delta);
         navigationGesture = NavigationGesture.Zoom;
-        if (viewport.IsInertiaEnabled) navigationVelocity = new(0, delta / 120.0 * 80);
+        if (navigationInertia) navigationVelocity = new(0, delta / 120.0 * 80);
     }
     private void NavigationModifiersChanged(object sender, KeyEventArgs e)
     {

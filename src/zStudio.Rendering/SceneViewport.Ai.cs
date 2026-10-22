@@ -91,7 +91,7 @@ public sealed partial class SceneViewport
         ClearAiDrawables();
         RenderedAiNodes = RenderedAiLinks = 0; AiRenderTruncated = false; aiRendered.Clear();
         if (!AiVisible) { PublishAiLabel(); return; }
-        aiOverlay = new(); PresentationGuide(aiOverlay); viewport.Items.Add(aiOverlay);
+        aiOverlay = new(); PresentationGuide(aiOverlay); view.HelixViewport.Items.Add(aiOverlay);
         foreach (var network in VisibleAiNetworks)
         {
             var color = AiNetworkColors.Color(network.AttackStrategy);
@@ -160,7 +160,7 @@ public sealed partial class SceneViewport
         }
         BuildValveOverlay();
         aiSelectionMarker = AiMesh(AiOctahedron(), new(1, 1, 1, 1), twin: false);
-        RefreshAiSelection(); UpdateAiMarkers(); viewport.InvalidateRender();
+        RefreshAiSelection(); UpdateAiMarkers(); view.InvalidateRender();
     }
     /// <summary>How strongly the overlay shows through geometry that hides it.</summary>
     public const float AiBehindGeometry = .5f;
@@ -234,7 +234,7 @@ public sealed partial class SceneViewport
                 if (selected is { } target) aiSelectionMarker.Instances = [Matrix4x4.CreateScale(AiScale(target.Node.Position, 5.5)) * Matrix4x4.CreateTranslation(target.Node.Position)];
             }
         }
-        PublishAiLabel(); viewport.InvalidateRender();
+        PublishAiLabel(); view.InvalidateRender();
     }
     private void PublishAiLabel()
     {
@@ -245,7 +245,7 @@ public sealed partial class SceneViewport
     }
     internal string? PickAiNode(Point point)
     {
-        if (PresentationUiHidden || !AiVisible || IsFlyActive || IsPickupDragging || !IsInsidePickupViewport(point) || viewport.RenderContext == null) return null;
+        if (PresentationUiHidden || !AiVisible || IsFlyActive || IsPickupDragging || !IsInsidePickupViewport(point) || !view.IsReady) return null;
         double nearest = 81, chosenDepth = double.PositiveInfinity; string? chosen = null;
         // Only drawn markers are pickable; the complete graph stays selectable through inspection commands.
         foreach (var node in aiRendered)
@@ -261,21 +261,21 @@ public sealed partial class SceneViewport
     private bool TryProjectAiNode(AiNode node, out Point screen, out double depth)
     {
         screen = default; depth = 0;
-        if (!AiVisible || viewport.RenderContext == null) return false;
+        if (!AiVisible || !view.IsReady) return false;
         var position = AiPosition(node); var pose = CaptureView(); var forward = pose.LookDirection; forward.Normalize();
         Point3D point = new(position.X, position.Y, position.Z);
         depth = Vector3D.DotProduct(point - pose.Position, forward);
         if (!double.IsFinite(depth) || depth <= 0) return false;
-        screen = viewport.Project(point);
+        screen = view.Project(point);
         if (!double.IsFinite(screen.X) || !double.IsFinite(screen.Y) || !IsInsidePickupViewport(screen)) return false;
-        return AiThroughGeometry || viewport.Camera is not ProjectionCamera camera || depth >= camera.NearPlaneDistance && depth <= camera.FarPlaneDistance;
+        return AiThroughGeometry || view.Camera is not RenderCamera camera || depth >= camera.NearPlaneDistance && depth <= camera.FarPlaneDistance;
     }
     private bool IsAiNodeOccluded(AiNode node, Point screen, double depth)
     {
         if (AiThroughGeometry) return false;
         var pose = CaptureView(); var forward = pose.LookDirection; forward.Normalize();
         // Only eligible click/box candidates pay for a surface ray; distant markers do not.
-        var hit = viewport.FindHits(screen)?.FirstOrDefault(h => h.ModelHit is MeshGeometryModel3D mesh && !mesh.IsTransparent && placements.ContainsKey(mesh) && !placements[mesh].Any(p => IsHorizon(p.NodeIndex)));
+        var hit = view.HelixViewport.FindHits(screen)?.FirstOrDefault(h => h.ModelHit is MeshGeometryModel3D mesh && !mesh.IsTransparent && placements.ContainsKey(mesh) && !placements[mesh].Any(p => IsHorizon(p.NodeIndex)));
         return hit != null && Vector3D.DotProduct(new Point3D(hit.PointHit.X, hit.PointHit.Y, hit.PointHit.Z) - pose.Position, forward) < depth - AiScale(AiPosition(node), 4);
     }
     private bool HandleAiPointerDown(Point point, MouseButtonEventArgs e)
@@ -298,7 +298,7 @@ public sealed partial class SceneViewport
     }
     private void ClearAiDrawables()
     {
-        if (aiOverlay != null) { viewport.Items.Remove(aiOverlay); aiOverlay.Children.Clear(); aiOverlay.Dispose(); aiOverlay = null; }
+        if (aiOverlay != null) { view.HelixViewport.Items.Remove(aiOverlay); aiOverlay.Children.Clear(); aiOverlay.Dispose(); aiOverlay = null; }
         foreach (var mesh in aiDrawables) mesh.Dispose(); aiDrawables.Clear(); aiMarkers.Clear(); aiLinks.Clear(); aiBehind.Clear(); aiSelectionMarker = null; aiMarkerPose = null;
     }
     private void ClearAi()

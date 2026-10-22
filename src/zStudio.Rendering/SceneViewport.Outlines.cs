@@ -36,7 +36,7 @@ public sealed partial class SceneViewport
         if (OutlinedNodes.Count == 0 || PreviewScene == null)
         {
             if (outlineBoxes != null) outlineBoxes.Visibility = Visibility.Collapsed;
-            viewport.InvalidateRender(); return;
+            view.InvalidateRender(); return;
         }
         // Which root each shown node belongs to, then one pass over the shown meshes.
         Dictionary<int, int> rootOf = [];
@@ -71,22 +71,22 @@ public sealed partial class SceneViewport
                 positions.Add(new((float)(box.X + ((corner & 1) == 0 ? 0 : box.SizeX)), (float)(box.Y + ((corner & 2) == 0 ? 0 : box.SizeY)), (float)(box.Z + ((corner & 4) == 0 ? 0 : box.SizeZ))));
             foreach (int index in (int[])[0, 1, 1, 3, 3, 2, 2, 0, 4, 5, 5, 7, 7, 6, 6, 4, 0, 4, 1, 5, 2, 6, 3, 7]) indices.Add(at + index);
         }
-        if (positions.Count == 0) { if (outlineBoxes != null) outlineBoxes.Visibility = Visibility.Collapsed; viewport.InvalidateRender(); return; }
+        if (positions.Count == 0) { if (outlineBoxes != null) outlineBoxes.Visibility = Visibility.Collapsed; view.InvalidateRender(); return; }
         if (outlineBoxes == null)
         {
-            outlineOverlay = new(); PresentationGuide(outlineOverlay); viewport.Items.Add(outlineOverlay);
+            outlineOverlay = new(); PresentationGuide(outlineOverlay); view.HelixViewport.Items.Add(outlineOverlay);
             outlineBoxes = new() { Color = Colors.Gold, Thickness = 1.5, IsHitTestVisible = false };
             outlineOverlay.Children.Add(outlineBoxes);
         }
         outlineBoxes.Geometry = new LineGeometry3D { Positions = new(positions), Indices = new(indices) };
         outlineBoxes.Visibility = Visibility.Visible;
-        viewport.InvalidateRender();
+        view.InvalidateRender();
     }
 
     private void ClearOutlines()
     {
         OutlinedNodes = []; OutlinedBoxes = 0;
-        if (outlineOverlay != null) { viewport.Items.Remove(outlineOverlay); outlineOverlay.Children.Clear(); outlineOverlay.Dispose(); outlineOverlay = null; }
+        if (outlineOverlay != null) { view.HelixViewport.Items.Remove(outlineOverlay); outlineOverlay.Children.Clear(); outlineOverlay.Dispose(); outlineOverlay = null; }
         outlineBoxes?.Dispose(); outlineBoxes = null;
     }
 }

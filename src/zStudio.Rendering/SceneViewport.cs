@@ -12,7 +12,6 @@ using HelixToolkit.Wpf.SharpDX;
 using zStudio.Core;
 using zStudio.Core.Formats;
 using SharpDX.Direct3D11;
-using HCamera = HelixToolkit.Wpf.SharpDX.PerspectiveCamera;
 using DiffuseMaterial = HelixToolkit.Wpf.SharpDX.DiffuseMaterial;
 using Color = System.Windows.Media.Color;
 using MeshGeometry3D = HelixToolkit.SharpDX.MeshGeometry3D;
@@ -22,7 +21,9 @@ namespace zStudio.Rendering;
 /// <summary>The only application component that exposes Helix/Direct3D types.</summary>
 public sealed partial class SceneViewport : UserControl, IDisposable
 {
-    private readonly Viewport3DX viewport;
+    private readonly RenderView view;
+    // The view's input surface: focus, capture, cursor and pointer positions.
+    private readonly FrameworkElement viewport;
     private readonly List<MeshGeometryModel3D> meshes = [];
     private readonly PreviewMaterials.OrientationState faceOrientation = new();
     private bool wireframe;
@@ -35,7 +36,7 @@ public sealed partial class SceneViewport : UserControl, IDisposable
     private readonly Dictionary<DiffuseMaterial, TextureModel> textureMaps = [];
     private readonly TextureMemoryBudget textureMemory = new();
     private PreviewTextureCache? previewTextures;
-    private DefaultEffectsManager? effects;
+    private RenderDevice? device;
     private SortingGroupModel3D? sceneAlphaGroup;
     private Vector3 sceneMin = new(float.PositiveInfinity), sceneMax = new(float.NegativeInfinity);
     private double minimumClipDistance = 0.001;
@@ -111,47 +112,30 @@ public sealed partial class SceneViewport : UserControl, IDisposable
     private static long GeometryCopyBytes(MeshPart part) => checked(256L + 12L * (part.Positions.LongLength + part.Normals.LongLength)
         + 8L * part.TextureCoordinates.LongLength + 4L * part.Indices.LongLength + 32L * part.Colors.LongLength);
     private bool disposed;
-    private System.Windows.Threading.DispatcherOperation? renderResize;
     public event Action<int>? NodeSelected;
     public event Action<string>? Information;
     public IReadOnlyList<Diagnostic> PreviewDiagnostics { get; private set; } = [];
     public string PreviewSummary { get; private set; } = "";
     public SceneViewport()
     {
-        viewport = new FrameViewport(PrepareCameraFrame, QueueRenderSize)
+        view = new RenderView
         {
-            Camera = new NavigationPerspectiveCamera { Position = new(10, 8, 15), LookDirection = new(-10, -8, -15), UpDirection = new(0, 1, 0), FarPlaneDistance = 100000, NearPlaneDistance = 0.1 },
+            Camera = new PerspectiveRenderCamera { Position = new(10, 8, 15), LookDirection = new(-10, -8, -15), UpDirection = new(0, 1, 0), FarPlaneDistance = 100000, NearPlaneDistance = 0.1 },
             BackgroundColor = Color.FromRgb(26, 31, 38),
-            ShowCoordinateSystem = true,
-            ShowViewCube = true,
-            EnableSwapChainRendering = false,
-            IsInertiaEnabled = true,
-            UseDefaultGestures = false,
-            ZoomAroundMouseDownPoint = false,
-            ZoomExtentsWhenLoaded = false
+            FrameUpdate = PrepareCameraFrame,
         };
-        viewport.OITRenderMode = OITRenderType.None;
-        viewport.EnableRenderOrder = true;
-        viewport.CameraChanged += (_, _) => CameraChanged();
+        viewport = view.Element;
+        view.LayoutChanged += QueueRenderSize;
+        view.CameraChanged += CameraChanged;
         ConfigurePickupInput(); ConfigureNavigation();
-        viewport.RenderExceptionOccurred += (_, e) => { Information?.Invoke("3D preview unavailable: " + e.Exception.Message); e.Handled = true; };
+        view.RenderFailed += error => Information?.Invoke("3D preview unavailable: " + error.Message);
+        view.ResizeFailed += error => Information?.Invoke("3D preview resize unavailable: " + error.Message);
         ConfigureInspection();
     }
     private void QueueRenderSize()
     {
         RebasePresentationPointers();
-        if (disposed || renderResize?.Status == System.Windows.Threading.DispatcherOperationStatus.Pending) return;
-        // Helix defers the D3DImage resize at Background priority. A large scene's
-        // continuous rendering can starve it, stretching the initial tiny buffer
-        // across the viewport. Coalesce layout changes in the normal UI queue.
-        renderResize = Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Normal, () =>
-        {
-            renderResize = null;
-            if (disposed || !viewport.IsLoaded || !viewport.IsVisible || viewport.ActualWidth < 1 || viewport.ActualHeight < 1) return;
-            try { viewport.RenderHost?.Resize((int)viewport.ActualWidth, (int)viewport.ActualHeight); }
-            catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException)
-            { Information?.Invoke("3D preview resize unavailable: " + ex.Message); }
-        });
+        if (!disposed) view.QueueResize();
     }
     public async Task ShowAsync(ISceneDocument doc, AssetRecord asset, AssetResolver resolver, string? pack, int lod, CancellationToken token, bool showBackdrop = false, MissionSceneContext? mission = null)
     {
@@ -334,10 +318,10 @@ public sealed partial class SceneViewport : UserControl, IDisposable
                     }
                     if (mesh.IsTransparent)
                     {
-                        if (sceneAlphaGroup == null) { sceneAlphaGroup = new() { EnableSorting = true, SortTransparentOnly = true, SortingInterval = 0 }; viewport.Items.Add(sceneAlphaGroup); }
+                        if (sceneAlphaGroup == null) { sceneAlphaGroup = new() { EnableSorting = true, SortTransparentOnly = true, SortingInterval = 0 }; view.HelixViewport.Items.Add(sceneAlphaGroup); }
                         sceneAlphaGroup.Children.Add(mesh);
                     }
-                    else viewport.Items.Add(mesh);
+                    else view.HelixViewport.Items.Add(mesh);
                     // A retained world may render continuously while its replacement
                     // is built. Background-priority continuations can starve behind
                     // that render queue indefinitely; resume in the normal UI queue.
@@ -357,7 +341,7 @@ public sealed partial class SceneViewport : UserControl, IDisposable
                 Vector3[] corners = [new(min.X, min.Y, min.Z), new(max.X, min.Y, min.Z), new(max.X, max.Y, min.Z), new(min.X, max.Y, min.Z), new(min.X, min.Y, max.Z), new(max.X, min.Y, max.Z), new(max.X, max.Y, max.Z), new(min.X, max.Y, max.Z)];
                 foreach (var instance in instances) foreach (var corner in corners) { var world = Vector3.Transform(corner, instance.Transform); sceneMin = Vector3.Min(sceneMin, world); sceneMax = Vector3.Max(sceneMax, world); }
                 LineGeometryModel3D box = new() { Geometry = new LineGeometry3D { Positions = new Vector3Collection(corners), Indices = new IntCollection([0, 1, 1, 2, 2, 3, 3, 0, 4, 5, 5, 6, 6, 7, 7, 4, 0, 4, 1, 5, 2, 6, 3, 7]) }, Color = Colors.Gold, Thickness = 1, Instances = instances.Select(i => i.Transform).ToList(), Visibility = Visibility.Collapsed, IsHitTestVisible = false };
-                PresentationGuide(box); bounds.Add(box); boundsPlacements[box] = instances; viewport.Items.Add(box);
+                PresentationGuide(box); bounds.Add(box); boundsPlacements[box] = instances; view.HelixViewport.Items.Add(box);
             }
         }
         token.ThrowIfCancellationRequested(); if (current != generation) return;
@@ -392,15 +376,15 @@ public sealed partial class SceneViewport : UserControl, IDisposable
     }
     private void UpdateClipPlanes()
     {
-        if (updatingClipping || !float.IsFinite(sceneMin.X) || !float.IsFinite(sceneMax.X) || viewport.Camera is not ProjectionCamera camera) return;
+        if (updatingClipping || !float.IsFinite(sceneMin.X) || !float.IsFinite(sceneMax.X) || view.Camera is not RenderCamera camera) return;
         var direction = camera.LookDirection;
         if (direction.LengthSquared <= 0 || !double.IsFinite(direction.LengthSquared)) return;
         direction.Normalize();
         double radius = Math.Max(1, (sceneMax - sceneMin).Length() / 2);
         minimumClipDistance = Math.Clamp(radius / 1000000, 0.001, 0.05);
         var range = new VisibleDepthRange(camera.Position, direction, camera.UpDirection, CaptureView().FieldOfView,
-            Aspect, minimumClipDistance, (camera as OrthographicCamera)?.Width);
-        foreach (var mesh in DepthMeshes(viewport.Items))
+            Aspect, minimumClipDistance, (camera as OrthographicRenderCamera)?.Width);
+        foreach (var mesh in DepthMeshes(view.HelixViewport.Items))
         {
             if (mesh.Geometry is not MeshGeometry3D { Positions: { } positions, Indices: { } indices }) continue;
             var world = mesh.Transform?.Value ?? Matrix3D.Identity;
@@ -459,7 +443,7 @@ public sealed partial class SceneViewport : UserControl, IDisposable
     public void SetFaceOrientation(bool enabled)
     {
         faceOrientation.Enabled = enabled;
-        viewport.InvalidateRender();
+        view.InvalidateRender();
     }
     public void SetTextured(bool enabled)
     {
@@ -533,7 +517,7 @@ public sealed partial class SceneViewport : UserControl, IDisposable
         RefreshBoundsBoxes();
         // The camera stays where it is; Frame all is a separate, explicit command. The horizon follows it again next frame.
         RecalculateSceneBounds(); RefreshPickupSelection(); RefreshZoneVisibility();
-        cameraPoseDirty = true; viewport.InvalidateRender();
+        cameraPoseDirty = true; view.InvalidateRender();
     }
     private void RecalculateSceneBounds()
     {
@@ -563,7 +547,7 @@ public sealed partial class SceneViewport : UserControl, IDisposable
         objectPreviewMeshes = null; objectPreviewBounds = null; objectPreviewOriginals = null; ObjectTransformPreviewNode = null; objectPreviewToken = 0;
         sceneAlphaGroup = null;
         sceneMin = new(float.PositiveInfinity); sceneMax = new(float.NegativeInfinity);
-        viewport.Items.Clear(); foreach (var mesh in meshes) mesh.Dispose(); foreach (var box in bounds) box.Dispose(); bounds.Clear(); meshes.Clear(); placements.Clear(); visiblePlacements.Clear(); staticMeshBounds.Clear(); textureMaps.Clear();
+        view.HelixViewport.Items.Clear(); foreach (var mesh in meshes) mesh.Dispose(); foreach (var box in bounds) box.Dispose(); bounds.Clear(); meshes.Clear(); placements.Clear(); visiblePlacements.Clear(); staticMeshBounds.Clear(); textureMaps.Clear();
         DisposeFixtures();
         staticRenderUnits = 0;
         staticGeometry?.Dispose(); staticGeometry = null;
@@ -576,14 +560,14 @@ public sealed partial class SceneViewport : UserControl, IDisposable
         // Helix's sized capture restores physical dimensions as logical pixels,
         // growing the back buffer on every call at non-100% DPI. Capture the live
         // size, then scale the image without changing the viewport or projection.
-        var image = viewport.RenderBitmap() ?? throw new InvalidOperationException("The graphics device did not produce a frame.");
+        var image = view.RenderBitmap() ?? throw new InvalidOperationException("The graphics device did not produce a frame.");
         double scaleX = (double)width / image.PixelWidth, scaleY = (double)height / image.PixelHeight;
         if (preserveAspect) scaleX = scaleY = Math.Min(scaleX, scaleY);
         var scaled = new System.Windows.Media.Imaging.TransformedBitmap(image, new ScaleTransform(scaleX, scaleY));
         scaled.Freeze(); return scaled;
     }
-    private void AttachEffects() => PreviewResourceLifetime.Attach(ref effects, PreviewMaterials.CreateEffects, manager => viewport.EffectsManager = manager);
-    public void Dispose() { if (disposed) return; disposed = true; renderResize?.Abort(); Clear(); AttachNavigationWindow(null); viewport.Dispose(); effects?.Dispose(); effects = null; GC.SuppressFinalize(this); }
+    private void AttachEffects() => PreviewResourceLifetime.Attach(ref device, RenderDevice.Create, created => view.Device = created);
+    public void Dispose() { if (disposed) return; disposed = true; view.CancelResize(); Clear(); AttachNavigationWindow(null); view.Dispose(); device?.Dispose(); device = null; GC.SuppressFinalize(this); }
     private sealed record SceneGroup(int Model, bool Horizon, ScenePlacement[] Instances);
     private sealed record ScenePacket(SceneView View, Dictionary<int, IReadOnlyList<MeshPart>> Geometry, Dictionary<int, (Vector3 Min, Vector3 Max)> LocalBounds, Dictionary<MeshPart, (Vector3 Min, Vector3 Max)> PartBounds, Dictionary<int, DecodedImage> Textures, HashSet<int> AlphaTextures, List<Diagnostic> Notes, SceneGroup[] Groups, long RenderUnits);
 }

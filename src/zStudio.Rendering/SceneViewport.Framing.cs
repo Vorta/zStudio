@@ -13,7 +13,7 @@ public sealed partial class SceneViewport
     /// <summary>Frames an AI network: all of its nodes (the overlay needs not show it).</summary>
     public bool TryFrameAiNetwork(string network)
     {
-        if (IsPickupDragging || IsFlyActive || IsAiPathPointerTransform || IsParachutePointerMoving || viewport.Camera is not ProjectionCamera) return false;
+        if (IsPickupDragging || IsFlyActive || IsAiPathPointerTransform || IsParachutePointerMoving || view.Camera is not RenderCamera) return false;
         if (AiNetworks.Networks.FirstOrDefault(n => n.Id == network) is not { Nodes.Count: > 0 } found) return false;
         Rect3D bounds = Rect3D.Empty;
         foreach (var item in found.Nodes) bounds.Union(new Rect3D(item.Position.X - 2, item.Position.Y - 2, item.Position.Z - 2, 4, 4, 4));
@@ -28,7 +28,7 @@ public sealed partial class SceneViewport
     private bool TryFrame(string target, int? node, bool manual, IReadOnlyCollection<int>? roots)
     {
         if (target is not ("all" or "asset" or "selected")) throw new ArgumentException("Unknown framing target.", nameof(target));
-        if (IsPickupDragging || IsFlyActive || IsAiPathPointerTransform || IsParachutePointerMoving || viewport.Camera is not ProjectionCamera) return false;
+        if (IsPickupDragging || IsFlyActive || IsAiPathPointerTransform || IsParachutePointerMoving || view.Camera is not RenderCamera) return false;
         long? selectedRuntime = target == "selected" && node == null && FramingSelection == SelectedInspection?.SelectionNode
             ? SelectedInspection?.RuntimeInstance : null;
         if (selectedRuntime != null && InspectTarget(SelectedInspection!.Target)?.Active != true) return false;

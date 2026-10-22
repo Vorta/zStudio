@@ -117,7 +117,7 @@ public sealed partial class SceneViewport
     {
         ++inspectionSerial;
         RecalculateSceneBounds(); RefreshPickupSelection();
-        cameraPoseDirty = true; viewport.InvalidateRender();
+        cameraPoseDirty = true; view.InvalidateRender();
         InspectionChanged?.Invoke();
     }
 

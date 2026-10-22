@@ -51,7 +51,7 @@ public sealed partial class SceneViewport
             }
         }
         ShowPolygonZoneColors(HighlightMode == WorldHighlightMode.PolygonZones || zonePaintActive);
-        viewport.InvalidateRender();
+        view.InvalidateRender();
     }
 
     /// <summary>Outlines every polygon of the static meshes (not their triangles), following each mesh's shown instances.</summary>
@@ -65,9 +65,9 @@ public sealed partial class SceneViewport
             if (edges.Indices == null || edges.Indices.Count == 0) continue;
             // The core sits nearer than its halo, so it wins the depth test whichever is drawn first.
             var halo = Outline(mesh, edges, PolygonEdgeHalo, 2, -100); var core = Outline(mesh, edges, PolygonEdgeCore, 1, -200);
-            viewport.Items.Add(halo); viewport.Items.Add(core); polygonEdges[mesh] = (halo, core);
+            view.HelixViewport.Items.Add(halo); view.HelixViewport.Items.Add(core); polygonEdges[mesh] = (halo, core);
         }
-        viewport.InvalidateRender();
+        view.InvalidateRender();
 
         static LineGeometryModel3D Outline(MeshGeometryModel3D mesh, LineGeometry3D edges, System.Windows.Media.Color color, double thickness, int depthBias)
         {
@@ -82,7 +82,7 @@ public sealed partial class SceneViewport
     private void RemovePolygonEdges()
     {
         foreach (var (halo, core) in polygonEdges.Values)
-            foreach (var line in new[] { halo, core }) { viewport.Items.Remove(line); BindingOperations.ClearAllBindings(line); line.Dispose(); }
+            foreach (var line in new[] { halo, core }) { view.HelixViewport.Items.Remove(line); BindingOperations.ClearAllBindings(line); line.Dispose(); }
         polygonEdges.Clear();
     }
     /// <summary>Each polygon's closed outline; a strip's runs along its even vertices and back along its odd ones.</summary>

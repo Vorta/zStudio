@@ -63,7 +63,7 @@ public sealed partial class SceneViewport
         }
         // The polygon zone tool keeps its zones shown whatever the overlay.
         if (zonePaintActive) ApplyZoneEmphasis();
-        viewport.InvalidateRender();
+        view.InvalidateRender();
     }
 
     /// <summary>How the polygon zone pass emphasises: the tool's zone while it is engaged, else a selected zone in the polygon zone overlay.</summary>

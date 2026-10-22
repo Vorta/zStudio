@@ -23,10 +23,10 @@ public sealed partial class SceneViewport
     private HitTestResult? PickPickupHandle(Point point)
     {
         if (PresentationUiHidden || !CanManipulate ||
-            pickupManipulator?.Visibility != Visibility.Visible || viewport.Camera is not HelixToolkit.Wpf.SharpDX.ProjectionCamera camera ||
+            pickupManipulator?.Visibility != Visibility.Visible || view.Camera is not RenderCamera camera ||
             !IsInsidePickupViewport(point)) return null;
         var origin = transformDraft.Position;
-        var start = viewport.Project(new Point3D(origin.X, origin.Y, origin.Z));
+        var start = view.Project(new Point3D(origin.X, origin.Y, origin.Z));
         double nearest = PickupHandleHitRadius * PickupHandleHitRadius;
         MeshGeometryModel3D? chosen = null;
         Vector3 hitPoint = origin;
@@ -46,7 +46,7 @@ public sealed partial class SceneViewport
                     var a = Ring(i); var b = Ring(i + 1);
                     var pa = new Point3D(a.X, a.Y, a.Z); var pb = new Point3D(b.X, b.Y, b.Z);
                     if (Vector3D.DotProduct(pa - camera.Position, camera.LookDirection) <= 0 || Vector3D.DotProduct(pb - camera.Position, camera.LookDirection) <= 0) continue;
-                    var screenA = viewport.Project(pa); var line = viewport.Project(pb) - screenA;
+                    var screenA = view.Project(pa); var line = view.Project(pb) - screenA;
                     if (!double.IsFinite(line.LengthSquared) || line.LengthSquared < 1e-8) continue;
                     double ringAlong = Math.Clamp(System.Windows.Vector.Multiply(point - screenA, line) / line.LengthSquared, 0, 1);
                     double ringDistance = (point - (screenA + line * ringAlong)).LengthSquared;
@@ -59,7 +59,7 @@ public sealed partial class SceneViewport
             var tip = new Point3D(origin.X, origin.Y, origin.Z) + axis * (pickupManipulator.SizeScale * 1.8);
             // Do not select the mirrored projection of an endpoint behind the camera.
             if (Vector3D.DotProduct(tip - camera.Position, camera.LookDirection) <= 0) continue;
-            var end = viewport.Project(tip); var segment = end - start;
+            var end = view.Project(tip); var segment = end - start;
             if (!double.IsFinite(segment.LengthSquared) || segment.LengthSquared < 1) continue;
             double along = Math.Clamp(System.Windows.Vector.Multiply(point - start, segment) / segment.LengthSquared, 0, 1);
             double distance = (point - (start + segment * along)).LengthSquared;
@@ -76,12 +76,12 @@ public sealed partial class SceneViewport
         SetPickupHover(false);
         if (e.ChangedButton != MouseButton.Left) return false;
         if (PickPickupHandle(point) is not { ModelHit: MeshGeometryModel3D arrow } hit) return false;
-        // A rejected handle click must not fall through to Helix and start a drag.
+        // A rejected handle click must not fall through to the view and start a drag.
         if (CanStartPickupEdit?.Invoke() == false) { if (objectDraftNode != null) ObjectGestureEnded?.Invoke(); return true; }
         PickupInteractionStarting?.Invoke();
         // Use the native axis constraint, but own routing/capture for the whole drag. Do not let
         // scene depth or another triangle choose a different target after this screen-space pick.
-        var down = new MouseDown3DEventArgs(arrow, hit, point, viewport, e);
+        var down = new MouseDown3DEventArgs(arrow, hit, point, view.HelixViewport, e);
         if (TransformMode == "rotate")
         {
             var axis = (arrow.Transform?.Value ?? Matrix3D.Identity).Transform(new Vector3D(1, 0, 0));
@@ -127,7 +127,7 @@ public sealed partial class SceneViewport
             if (RebasePickupPointer(point)) return true;
             if (TransformMode == "rotate") MoveRotationPointer(point);
             else if (pickupPresentationConstraint) MovePresentationPickup(point);
-            else arrow.RaiseEvent(new MouseMove3DEventArgs(arrow, activePickupHandle, point, viewport));
+            else arrow.RaiseEvent(new MouseMove3DEventArgs(arrow, activePickupHandle, point, view.HelixViewport));
             return true;
         }
         SetPickupHover(Mouse.LeftButton == MouseButtonState.Released && Mouse.RightButton == MouseButtonState.Released &&
@@ -141,7 +141,7 @@ public sealed partial class SceneViewport
         if (!IsPickupDragging || e.ChangedButton != MouseButton.Left) return false;
         if (!IsInsidePickupViewport(point)) { CancelPickupDrag(); return true; }
         if (TransformMode == "move" && objectDraftNode == null && activePickupHandle?.ModelHit is MeshGeometryModel3D arrow)
-            arrow.RaiseEvent(new MouseUp3DEventArgs(arrow, activePickupHandle, point, viewport, e));
+            arrow.RaiseEvent(new MouseUp3DEventArgs(arrow, activePickupHandle, point, view.HelixViewport, e));
         activePickupHandle = null; IsPickupDragging = false;
         ResumePickupCamera(); viewport.ReleaseMouseCapture();
         // Completing a gesture updates the card draft only. The document service
