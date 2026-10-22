@@ -283,7 +283,19 @@ internal sealed class MeshNode : GeometryNode
     /// <summary>The facade of a mesh the Helix adapter's gizmo built itself (its handles).</summary>
     internal MeshNode(MeshGeometryModel3D existing) : base(existing) { }
     private MeshGeometryModel3D? Mesh => (MeshGeometryModel3D?)HelixElement;
-    public MeshData? Geometry { get => geometry; set { geometry = value; if (Mesh is { } mesh) mesh.Geometry = value?.HelixGeometry; else Changed(); } }
+    /// <summary>The Direct3D backend releases a replaced geometry's device copy at once (rebuilt geometry such as camera-facing
+    /// links would otherwise hold device memory until collected; another node still drawing it uploads it again).</summary>
+    public MeshData? Geometry
+    {
+        get => geometry;
+        set
+        {
+            var previous = geometry; geometry = value;
+            if (Mesh is { } mesh) { mesh.Geometry = value?.HelixGeometry; return; }
+            if (previous != null && !ReferenceEquals(previous, value)) previous.ReleaseDeviceResources();
+            Changed();
+        }
+    }
     public PreviewMaterial? Material
     {
         get => Mesh is { } mesh ? material ??= mesh.Material is HelixDiffuseMaterial backend ? PreviewMaterial.Wrap(backend) : null : material;
@@ -326,7 +338,17 @@ internal sealed class LineNode : GeometryNode
     private double thickness = 1;
     public LineNode() : base(RenderBackend.UseHelix ? new LineGeometryModel3D() : null) { }
     private LineGeometryModel3D? Line => (LineGeometryModel3D?)HelixElement;
-    public LineData? Geometry { get => geometry; set { geometry = value; if (Line is { } line) line.Geometry = value?.HelixGeometry; else Changed(); } }
+    public LineData? Geometry
+    {
+        get => geometry;
+        set
+        {
+            var previous = geometry; geometry = value;
+            if (Line is { } line) { line.Geometry = value?.HelixGeometry; return; }
+            if (previous != null && !ReferenceEquals(previous, value)) previous.ReleaseDeviceResources();
+            Changed();
+        }
+    }
     public Color Color { get => Line?.Color ?? color; set { color = value; if (Line is { } line) line.Color = value; else Changed(); } }
     public double Thickness { get => Line?.Thickness ?? thickness; set { thickness = value; if (Line is { } line) line.Thickness = value; else Changed(); } }
     public MeshNode? FollowInstancesOf
