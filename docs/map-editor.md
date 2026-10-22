@@ -40,7 +40,7 @@ MCP: `zstudio_scene_inspect`, `zstudio_scene_card` (`select`, `clear`, `copy`).
 The player tank's card (the first vehicle the mission spawns, `bft_00` in the shipped maps) also chooses how the view draws it, marked **Preview**: nothing is saved or undone, and Apply and Revert leave it alone.
 - **Master type:** **Tracked**, **Amphibious**, **Hover** or **Sub**. Each shows the end of the mission's own transition from tracked, with the tank parked (no wake, floating or diving). A type the map's tank has no transition for is disabled (shipped: m1 tracked only; m2 adds amphibious; m3 and m4 hover; m5, m6 and the multiplayer maps sub). The note under the radios also gives the game's single-player rules, which allow amphibious from mission 3, hover from 4 and sub in 6 only.
 - **Weapons:** **Primary** (RFPG or ERFPG) and **Secondary** (the 16 secondary weapons, by weapon slot). The box under them shows the weapon's render, its manual name and the gun model it draws; several weapons share a model (the remote mines the proximity mines', the missiles and nukes one rail). In sub the beam and fire weapons are disabled, and choosing sub with one selected switches to the weapon the game picks.
-- The choice lasts while the map is open (rebuilds, undo, save and difficulty keep it); opening a map starts at Tracked, RFPG and HE Mortar, as a new game does. While it differs from that, the status bar names it, and with nothing selected the pane's **Player tank** row shows it and selects the tank. A mission whose opening drops the tank in (m2, m4, m5) hides it at the start, as the game does.
+- The choice lasts while the map is open (rebuilds, undo, save and difficulty keep it); opening a map starts as a new game of that mission does (Tracked, RFPG and HE Mortar in the shipped maps). While the choice differs from that start, the status bar names it, and with nothing selected the pane's **Player tank** row shows it and selects the tank. A change redraws the view; with a pending edit on the card the map first asks to apply or discard it, and Cancel leaves the tank as it was. A mission whose opening drops the tank in (m2, m4, m5) hides it at the start, as the game does.
 - The keyboard: **Tab** enters each group at its chosen radio; the arrow keys, **Home** and **End** move and choose.
 
 MCP: `zstudio_scene_options` (`bftType`, `bftPrimary`, `bftSecondary`), `zstudio_preview_state` (`bft`).
@@ -164,7 +164,7 @@ An addition is refused when a folder the mission searches first holds another fi
 
 ## Limits
 
-- AI links, new groups and Add model can't be edited in the GUI; positions that startup animations set can't be moved.
+- AI links, new groups and Add model can't be edited in the GUI; positions that startup animations set can't be moved, nor a unit that two records of the shown difficulty place (m2 Easy lists the player tank twice).
 - Deleting or copying an object an animation names, or changing the model of an object whose parts a bound animation names, isn't refused: the rebuild and the export report it in Problems.
 - The view is the mission's starting scene, without simulating gameplay; not every kind of change has been tested in the game.
 - The AI overlay draws at most 16,384 nodes and 32,768 links.

@@ -459,5 +459,7 @@ public partial class MainWindow
         pickupTemplate = row.PickupName != null ? row.Pickup!.TemplateName : null,
         otherDifficulty = row.IsOtherDifficulty ? true : (bool?)null, placement = row.IsOtherDifficulty ? row.Placement!.Detail : null,
         sectionRow = row.Section == null ? null : DescribeSectionRow(row), master = row.HasMasterEye ? MasterShown(row.MasterKey!) : (bool?)null,
-        playerTank = row.Owner == sceneTree && sceneTreeDocument == shownDocument && !row.IsOtherDifficulty && row.Index is int index && ShownPlayerTank?.Actor.Root == index ? true : (bool?)null };
+        // The AI Vehicles row of the spawning actor in a source map (two records can place one root: one row); the node's row elsewhere.
+        playerTank = row.Owner == sceneTree && sceneTreeDocument == shownDocument && ShownPlayerTank?.Actor.Root is int tankRoot
+            && (row.IsSourceMap ? row.Placement is { Row: int placed } && placed == tankRoot : !row.Synthetic && row.Index == tankRoot) ? true : (bool?)null };
 }

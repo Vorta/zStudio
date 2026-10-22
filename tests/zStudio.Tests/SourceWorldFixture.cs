@@ -288,6 +288,8 @@ internal sealed class SourceWorldFixture : IDisposable
         var turret = Node("turret"); turret.Children.Add(Part("doorleft", 1.5f)); turret.Children.Add(Part("doorright", 1.5f)); turret.Children.Add(gun);
         Model("data/m3/models/bft", "bft", "../../textures", body, turret);
         Write("data/m3/zrdr/aiv.zrd", "( bft_00 ( 0 ( 10.0 0.0 -10.0 ) 0.0 ) )");
+        // As retail m2 Easy: the player twice.
+        Write("data/m3/zrdr/aiv_easy.zrd", "( bft_00 ( 0 ( 10.0 0.0 -10.0 ) 0.0 ) bft_00 ( 0 ( 10.0 0.0 -10.0 ) 0.0 ) )");
         Write("data/m3/zrdr/vehicle.zrd", """
             ( bft (
               common_mode ( weapons (

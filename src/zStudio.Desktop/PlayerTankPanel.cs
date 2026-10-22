@@ -28,7 +28,7 @@ internal sealed class PlayerTankPanel : StackPanel
     private readonly TextBlock note = Line(), hiddenNote = Line(), substitution = Line();
     private readonly Grid noteRow, hiddenRow, substitutionRow;
     private readonly TextBlock failure = new() { FontSize = 11.5, TextWrapping = TextWrapping.Wrap, Margin = new(0, 6, 0, 0), Visibility = Visibility.Collapsed };
-    private readonly Border readout = new() { Margin = new(0, 8, 0, 0), Padding = new(10, 8, 10, 8), CornerRadius = new(4), BorderThickness = new(1) };
+    private readonly Border readout = new GroupBorder { Margin = new(0, 8, 0, 0), Padding = new(10, 8, 10, 8), CornerRadius = new(4), BorderThickness = new(1) };
     private readonly Image render = new() { Width = 48, Height = 30, Stretch = Stretch.Uniform, Margin = new(0, 0, 10, 0), VerticalAlignment = VerticalAlignment.Center };
     private readonly TextBlock readName = new() { FontSize = 12.5, TextWrapping = TextWrapping.Wrap };
     private readonly TextBlock readModel = new() { FontSize = 11.5, TextWrapping = TextWrapping.Wrap };
@@ -36,6 +36,8 @@ internal sealed class PlayerTankPanel : StackPanel
     private bool narrow;
     private RadioButton? lastFocused;
     private bool restoreFocus;
+    /// <summary>Each header's progress ring, made once: its animation runs only while the ring shows.</summary>
+    private readonly FrameworkElement typeSpinner = Spinner(), weaponsSpinner = Spinner();
     /// <summary>The user chose a radio: the whole new state.</summary>
     internal event Action<PlayerTankState>? Chosen;
 
@@ -67,13 +69,14 @@ internal sealed class PlayerTankPanel : StackPanel
         AutomationProperties.SetName(readout, "Secondary weapon readout");
         weaponsSection.Body.Children.Add(readout);
         Children.Add(typeSection); Children.Add(weaponsSection);
-        // Below 300 DIP of pane width each grid has one column.
+        // Below 300 DIP of pane width each grid has one column (the docked pane; elsewhere the panel's own width plus the
+        // card's margins, which the pane adds around it).
         SizeChanged += (_, e) =>
         {
-            bool wasNarrow = narrow; narrow = e.NewSize.Width < 280;
+            bool wasNarrow = narrow; narrow = (PaneWidth() ?? e.NewSize.Width + 48) < 300;
             foreach (var grid in new[] { types, primaries, secondaries }) grid.Columns = narrow ? 1 : 2;
             // A narrow header keeps its title: the weapons' summary (the radios show them) gives way.
-            if (narrow != wasNarrow && view is { } shown) Summary(weaponsSection, shown.PosingWeapons, narrow ? "" : PlayerTankPresentation.WeaponsSummary(shown.State));
+            if (narrow != wasNarrow && view is { } shown) Summary(weaponsSection, weaponsSpinner, shown.PosingWeapons, narrow ? "" : PlayerTankPresentation.WeaponsSummary(shown.State));
         };
         Loaded += (_, _) =>
         {
@@ -85,8 +88,15 @@ internal sealed class PlayerTankPanel : StackPanel
 
     /// <summary>Before a card hosts the panel: whether its radios had the keyboard, to give it back once hosted again.</summary>
     internal void PrepareMove() { if (IsKeyboardFocusWithin) restoreFocus = true; }
-    /// <summary>The automation name and checked id of each group, for checks.</summary>
-    internal IReadOnlyList<RadioButton> Radios => [.. types.Items, .. primaries.Items, .. secondaries.Items];
+    /// <summary>The next <see cref="Show"/> draws again even with the same inputs (the radios return to them after a refused click).</summary>
+    internal void Invalidate() => view = null;
+    /// <summary>The docked Properties pane's width, or null outside it.</summary>
+    private double? PaneWidth()
+    {
+        for (DependencyObject? at = this; at != null; at = VisualTreeHelper.GetParent(at))
+            if (at is FrameworkElement { Name: "SourcePropertiesPane" } pane) return pane.ActualWidth;
+        return null;
+    }
 
     private void Choose(PlayerTankState? next) { if (next != null && view != null && next != view.State) Chosen?.Invoke(next); }
 
@@ -108,8 +118,8 @@ internal sealed class PlayerTankPanel : StackPanel
         secondaries.Set(state.Secondary, id => shown.Rebuilding ? (false, PlayerTankPresentation.RebuildingToolTip)
             : sub && !tank.Model(id).AllowedInSub ? (false, PlayerTankPresentation.SubForbidden)
             : (true, PlayerTankPresentation.WeaponToolTip(tank, PlayerTankWeapon.Find(id)!)));
-        Summary(typeSection, shown.PosingType, PlayerTankPresentation.Label(state.Type));
-        Summary(weaponsSection, shown.PosingWeapons, narrow ? "" : PlayerTankPresentation.WeaponsSummary(state));
+        Summary(typeSection, typeSpinner, shown.PosingType, PlayerTankPresentation.Label(state.Type));
+        Summary(weaponsSection, weaponsSpinner, shown.PosingWeapons, narrow ? "" : PlayerTankPresentation.WeaponsSummary(state));
         note.Text = PlayerTankPresentation.Note(shown.Mission, tank);
         hiddenNote.Text = PlayerTankPresentation.HiddenNote;
         hiddenRow.Visibility = tank.HiddenAtStart ? Visibility.Visible : Visibility.Collapsed;
@@ -143,17 +153,19 @@ internal sealed class PlayerTankPanel : StackPanel
         if (shared.Count > 0) readModel.Inlines.Add(new Run(", shared with " + (shared.Count == 1 ? shared[0] : string.Join(", ", shared.Take(shared.Count - 1)) + " and " + shared[^1])));
     }
 
-    private static void Summary(CardSection section, bool posing, string text)
+    private static void Summary(CardSection section, FrameworkElement spinner, bool posing, string text)
     {
         section.Summary = posing ? "Posing…" : text;
-        section.SummaryLead = posing ? Spinner() : null;
+        var turn = (RotateTransform)spinner.RenderTransform;
+        bool showing = spinner.Parent != null;
+        if (posing && !showing) turn.BeginAnimation(RotateTransform.AngleProperty, new DoubleAnimation(0, 360, TimeSpan.FromSeconds(1)) { RepeatBehavior = RepeatBehavior.Forever });
+        else if (!posing && showing) turn.BeginAnimation(RotateTransform.AngleProperty, null);
+        section.SummaryLead = posing ? spinner : null;
     }
     private static FrameworkElement Spinner()
     {
-        System.Windows.Shapes.Ellipse ring = new() { Width = 12, Height = 12, StrokeThickness = 1.5, StrokeDashArray = [5, 3], RenderTransformOrigin = new(.5, .5) };
+        System.Windows.Shapes.Ellipse ring = new() { Width = 12, Height = 12, StrokeThickness = 1.5, StrokeDashArray = [5, 3], RenderTransformOrigin = new(.5, .5), RenderTransform = new RotateTransform() };
         ring.SetResourceReference(System.Windows.Shapes.Shape.StrokeProperty, "AccentFillColorDefaultBrush");
-        RotateTransform turn = new(); ring.RenderTransform = turn;
-        turn.BeginAnimation(RotateTransform.AngleProperty, new DoubleAnimation(0, 360, TimeSpan.FromSeconds(1)) { RepeatBehavior = RepeatBehavior.Forever });
         AutomationProperties.SetName(ring, "Posing");
         return ring;
     }
@@ -161,7 +173,7 @@ internal sealed class PlayerTankPanel : StackPanel
     {
         TextBlock text = new() { Text = "Preview", FontSize = 11, VerticalAlignment = VerticalAlignment.Center };
         text.SetResourceReference(TextBlock.ForegroundProperty, "TextFillColorSecondaryBrush");
-        Border tag = new() { Child = text, Height = 20, Padding = new(8, 0, 8, 0), CornerRadius = new(10), Margin = new(8, 0, 0, 0), ToolTip = PlayerTankPresentation.PreviewToolTip, VerticalAlignment = VerticalAlignment.Center };
+        Border tag = new GroupBorder { Child = text, Height = 20, Padding = new(8, 0, 8, 0), CornerRadius = new(10), Margin = new(8, 0, 0, 0), ToolTip = PlayerTankPresentation.PreviewToolTip, VerticalAlignment = VerticalAlignment.Center };
         tag.SetResourceReference(Border.BackgroundProperty, "ControlFillColorSecondaryBrush");
         ToolTipService.SetInitialShowDelay(tag, 0);
         AutomationProperties.SetName(tag, "Preview only");
@@ -190,15 +202,24 @@ internal sealed class PlayerTankPanel : StackPanel
         return row;
     }
 
+    /// <summary>A named group for UI Automation: panels and borders have no peer of their own, so their names would never be announced.</summary>
+    private sealed class GroupAutomationPeer(FrameworkElement owner) : FrameworkElementAutomationPeer(owner)
+    {
+        protected override AutomationControlType GetAutomationControlTypeCore() => AutomationControlType.Group;
+        protected override string GetClassNameCore() => Owner.GetType().Name;
+        protected override bool IsControlElementCore() => true;
+    }
+    private sealed class GroupBorder : Border { protected override AutomationPeer OnCreateAutomationPeer() => new GroupAutomationPeer(this); }
+
     /// <summary>A radio group laid out in a grid of one or two columns, one tab stop, arrow keys moving and selecting.</summary>
     private sealed class RadioGrid : Grid
     {
+        protected override AutomationPeer OnCreateAutomationPeer() => new GroupAutomationPeer(this);
         private readonly List<RadioButton> radios = [];
         private int columns = 2;
         private bool updating;
         internal event Action<string>? Picked;
         internal event Action<RadioButton>? Focused;
-        internal IReadOnlyList<RadioButton> Items => radios;
         internal RadioGrid(string name, IEnumerable<(string Id, string Label)> items)
         {
             AutomationProperties.SetName(this, name);

@@ -26,7 +26,7 @@ public partial class MainWindow
             // Only a RECOIL layout restores the shared preference; an MW3 world without readers has no difficulty to restore.
             if (scene?.Mission is { Layout.DifficultyApplies: true } && options.Mission == null) ViewModel.Difficulty = options.Difficulty;
             // A choice the view did not take returns to the one it shows.
-            if (options.Tank != null && shownDocument?.SourceWorld is { } session && session.PlayerTank != options.Tank) { session.PlayerTank = options.Tank; RefreshPlayerTankViews(); }
+            if (shownDocument?.SourceWorld is { } session && session.PlayerTank != options.Tank) { session.PlayerTank = options.Tank; RestorePlayerTankRadios(); }
             if (options.Mission != null && shownDocument != null)
             {
                 ViewModel.Resolver?.SelectMission(shownDocument.Path, options.Mission);
@@ -64,6 +64,8 @@ public partial class MainWindow
         using var request = PreviewOperation.Link(preview.Token);
         staticRefresh = request;
         var token = request.Token;
+        // The player tank's radios wait for this refresh unless it draws their choice.
+        RefreshPlayerTankViews();
         SceneViewport? replacement = null;
         bool OwnsRequest() => staticRefresh == request && scene == previous && shownDocument == doc && shownAsset?.Id == asset.Id && !doc.IsDisposed;
         ViewModel.Status = "Updating preview…";
@@ -167,7 +169,7 @@ public partial class MainWindow
         finally
         {
             replacement?.Dispose();
-            if (staticRefresh == request) staticRefresh = null;
+            if (staticRefresh == request) { staticRefresh = null; RefreshPlayerTankViews(); }
         }
         return null;
     }

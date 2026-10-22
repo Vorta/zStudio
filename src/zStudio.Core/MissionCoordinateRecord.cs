@@ -82,6 +82,12 @@ public sealed partial class PickupPlacementEditSession
 
     public MissionCoordinateRecord? Coordinate(MissionPickupSource source) => otherCoordinates.GetValueOrDefault(source);
 
+    /// <summary>
+    /// Binds each tank record to the world node the game places for it (<c>CreateFromNamesAtPose</c> 0x421ab0 looks the record's
+    /// own name up first, else copies the template its name derives; docs/agents/engine-evidence.md, aiv.zrd): a world node
+    /// of the record's own name is placed itself and is its own template identity (bft2–6 and bftmulti load the player tank
+    /// as bft_00); otherwise the one template of the derived name. Either must be unique in the world, or the record is read only.
+    /// </summary>
     public void BindCoordinateTemplates(GameScene scene)
     {
         InvalidateScopes();
@@ -89,7 +95,8 @@ public sealed partial class PickupPlacementEditSession
         foreach (var (key, record) in otherCoordinates.ToArray())
         {
             if (record.Kind != "tank") continue;
-            var matches = templates[record.Template].Take(2).ToArray();
+            var placed = templates[record.Name].Take(2).ToArray();
+            var matches = placed.Length > 0 ? placed : templates[record.Template].Take(2).ToArray();
             otherCoordinates[key] = record with { TemplateSourceNode = matches.Length == 1 ? matches[0].Index : null };
         }
     }

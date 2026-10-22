@@ -183,8 +183,9 @@ internal sealed partial class SceneInspectionCard : Grid
         footer.Child = foot; footer.Margin = new(-12, 4, -6, -10);
         footer.SetResourceReference(Border.BorderBrushProperty, "CardStrokeColorDefaultBrush");
         SetRow(footer, 2); layout.Children.Add(footer);
-        modesFrame.Child = modes; detailsSection.Trailing = modesFrame; detailsSection.Body.Children.Add(rows); detailsSection.Body.Margin = new(10, 0, 10, 8);
-        StackPanel body = new(); body.Children.Add(scope); body.Children.Add(error); body.Children.Add(terrainEdit); body.Children.Add(sourceRows); body.Children.Add(detailsSection); body.Children.Add(extraSections);
+        // The edit scope (which records an edit changes, or why it is read only) belongs to the placement: Details.
+        modesFrame.Child = modes; detailsSection.Trailing = modesFrame; detailsSection.Body.Children.Add(scope); detailsSection.Body.Children.Add(rows); detailsSection.Body.Margin = new(10, 0, 10, 8);
+        StackPanel body = new(); body.Children.Add(error); body.Children.Add(terrainEdit); body.Children.Add(sourceRows); body.Children.Add(detailsSection); body.Children.Add(extraSections);
         emptyView = new ScrollViewer { Content = emptyBody, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled, Margin = new(0, 6, 0, 0), Visibility = Visibility.Collapsed };
         SetRow(emptyView, 1); layout.Children.Add(emptyView);
         terrainEdit.Click += (_, _) => { if (ResolvePending()) EditTerrain?.Invoke(); };

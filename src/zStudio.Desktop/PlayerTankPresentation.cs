@@ -11,7 +11,6 @@ internal static class PlayerTankPresentation
 {
     internal const string PreviewToolTip = "Preview only. This changes how the view draws the player tank. It is not saved, has no undo step, and Apply and Revert leave it alone. In play the game decides the type and weapons.";
     internal const string RebuildingToolTip = "Available when the world has been rebuilt.";
-    internal const string StatusToolTip = "Preview only, not saved. Select the player tank to change it.";
 
     internal static readonly PlayerTankType[] Types = [PlayerTankType.Tracked, PlayerTankType.Amphibious, PlayerTankType.Hover, PlayerTankType.Sub];
     /// <summary>The MCP value of a type.</summary>

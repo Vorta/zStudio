@@ -33,14 +33,13 @@ public sealed record PlayerTankWeapon(int Bank, int Side, string Id)
 }
 
 /// <summary>
-/// How the previews draw the local player's tank: a preview choice, never written to sources or settings. The default is
-/// the game's fresh single-player start (every spawn is tracked; the first and second weapons the mission allows are HE
-/// Mortar and RFPG).
+/// How the previews draw the local player's tank: a preview choice, never written to sources or settings. Without one the
+/// preview draws the game's fresh single-player start (<see cref="MissionPlayerTank.Defaults"/>).
 /// </summary>
 public sealed record PlayerTankState(PlayerTankType Type, string Primary, string Secondary)
 {
+    /// <summary>The shipped fresh start (Tracked, RFPG, HE Mortar): what a tank whose weapon list names no usable weapon falls back to.</summary>
     public static PlayerTankState Default { get; } = new(PlayerTankType.Tracked, "RFPG", "HEMORTAR");
-    public bool IsDefault => Equals(Default);
     /// <summary>Whether the weapons name a primary and a secondary of the catalog.</summary>
     public bool IsValid => PlayerTankWeapon.Find(Primary) is { IsPrimary: true } && PlayerTankWeapon.Find(Secondary) is { IsPrimary: false } && Enum.IsDefined(Type);
 }
@@ -64,6 +63,11 @@ public sealed record PlayerTankWeaponModel(PlayerTankWeapon Weapon, bool Listed,
 /// <param name="Shown">What it draws: Tracked when the requested type is unavailable or failed, and in sub the secondary the game switches to.</param>
 public sealed record MissionPlayerTank(MissionActor Actor, string Template, PlayerTankState Requested, PlayerTankState Shown)
 {
+    /// <summary>
+    /// The game's fresh start of this mission: tracked (the first mode block), the first listed weapon the mission allows as
+    /// secondary and the second as primary (<c>LoadWeaponBanksAndSelectDefaults</c> 0x438ba0); retail: RFPG and HE Mortar.
+    /// </summary>
+    public required PlayerTankState Defaults { get; init; }
     public required IReadOnlyList<PlayerTankTypeChoice> Types { get; init; }
     public required IReadOnlyList<PlayerTankWeaponModel> Weapons { get; init; }
     /// <summary>The gun nodes the preview draws, primary pair first.</summary>

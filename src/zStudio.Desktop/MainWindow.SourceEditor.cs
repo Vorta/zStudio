@@ -382,7 +382,8 @@ public partial class MainWindow
         if (recentDocument != sceneTreeDocument) { recentSelections.Clear(); recentDocument = sceneTreeDocument; }
         string[] path = row.Owner.State.SelectionPath.ToArray();
         recentSelections.RemoveAll(r => r.Path.SequenceEqual(path));
-        string parent = row.Parent?.PickupEntries != null ? string.Join(" › ", Ancestors(row).Reverse()) : row.Parent?.DisplayName ?? "";
+        // A pass row (AI Vehicles) has no node of its own: its label names it.
+        string parent = row.Parent?.PickupEntries != null ? string.Join(" › ", Ancestors(row).Reverse()) : row.Parent?.Pass?.Label ?? row.Parent?.DisplayName ?? "";
         recentSelections.Insert(0, new(row.DisplayName, parent, row.Category, path));
         // A pickup is found under Pickups › Weapons (› its type).
         static IEnumerable<string> Ancestors(SceneTreeItem row)

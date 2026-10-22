@@ -182,7 +182,7 @@ public partial class MainWindow
             PlayerTankState? requestedTank = null;
             if (changes.Any(p => p.Key is "bftType" or "bftPrimary" or "bftSecondary"))
             {
-                var current = posingTank ?? doc.SourceWorld?.PlayerTank ?? PlayerTankState.Default;
+                var current = scene?.Mission?.PlayerTank is { } shownTank ? ChosenTank(shownTank) : PlayerTankState.Default;
                 requestedTank = current with
                 {
                     Type = changes.ContainsKey("bftType") ? PlayerTankPresentation.Parse(Text(changes, "bftType")) ?? throw new StudioCommandException("invalid_argument", "Use tracked, amphibious, hover or sub.") : current.Type,
@@ -214,7 +214,7 @@ public partial class MainWindow
                     case "bftType": case "bftPrimary": case "bftSecondary":
                         if (tankApplied) break;
                         tankApplied = true;
-                        if (requestedTank == (posingTank ?? doc.SourceWorld!.PlayerTank) && posingTank == null) break;
+                        if (posingTank == null && ShownPlayerTank is { } drawn && requestedTank == ChosenTank(drawn)) break;
                         refresh = StartPlayerTankRefresh(doc, asset, requestedTank!); await (previewWork = refresh); break;
                     case "difficulty":
                         if (!Enum.TryParse<MissionDifficulty>(value!.GetValue<string>(),out var difficulty) || !Enum.IsDefined(difficulty)) throw new StudioCommandException("invalid_argument","Use Easy, Medium or Hard.");

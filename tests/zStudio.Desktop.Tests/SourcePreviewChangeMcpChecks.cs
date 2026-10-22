@@ -108,6 +108,9 @@ internal static class SourcePreviewChangeMcpChecks
             var tankRow = (await Call("scene_tree", new() { ["document"] = Id(tankMap), ["search"] = "bft_00" }))["matches"]!["items"]!.AsArray()
                 .Single(m => m!["item"]!["playerTank"]?.GetValue<bool>() == true)!["item"]!;
             Assert.Equal(bft["node"]!.GetValue<int>(), tankRow["node"]!.GetValue<int>());
+            // The world loads the tank as bft_00 itself: its record places that node, which is its own template, so it moves.
+            var tankPlacements = await tankMap.GetPickupEditsAsync(main.ViewModel.Resolver!, token);
+            Assert.NotNull(tankPlacements.OtherCoordinates.Single(c => c.Kind == "tank" && c.Source.ResourceName == "AIV.ZRD").TemplateSourceNode);
             await Job("scene_options", new() { ["preview"] = preview, ["changes"] = new Dictionary<string, object?> { ["bftType"] = "hover", ["bftSecondary"] = "NAPALM" } });
             preview = (await Call("scene_tree", new() { ["document"] = Id(tankMap) }))["preview"]!.GetValue<string>();
             bft = (await Call("preview_state", new() { ["preview"] = preview }))["bft"]!;
@@ -117,7 +120,7 @@ internal static class SourcePreviewChangeMcpChecks
             bool Active(string name) => (shownTank.Scene.Nodes.Single(n => n.Name == name).Metadata.UInt("flags") & 4) != 0;
             Assert.True(Active("wings_hover")); Assert.False(Active("tracks")); Assert.False(Active("HEM")); Assert.False(Active("ERFPG_L"));
             Assert.False(tankWorkspace.IsDirty); Assert.False(tankWorkspace.CanUndo); Assert.Equal(tankRevision, tankMap.Revision);
-            // A type without transitions in this map and a fire weapon in sub are refused; the shown state stays.
+            // A type without transitions in this map is refused with its reason; the shown state stays.
             var refusedType = await Job("scene_options", new() { ["preview"] = preview, ["changes"] = new Dictionary<string, object?> { ["bftType"] = "amphibious" } }, "failed");
             Assert.Equal("unsupported", refusedType["code"]!.GetValue<string>());
             Assert.Contains("none_to_amphib", refusedType["message"]!.GetValue<string>());
@@ -128,6 +131,13 @@ internal static class SourcePreviewChangeMcpChecks
             await Preview();
             preview = (await Call("scene_tree", new() { ["document"] = Id(tankMap) }))["preview"]!.GetValue<string>();
             Assert.Equal("tracked", (await Call("preview_state", new() { ["preview"] = preview }))["bft"]!["type"]!.GetValue<string>());
+            // Easy places the tank twice: the map still shows, with one read-only player tank row.
+            await Job("scene_options", new() { ["preview"] = preview, ["changes"] = new Dictionary<string, object?> { ["difficulty"] = "Easy" } });
+            preview = (await Call("scene_tree", new() { ["document"] = Id(tankMap) }))["preview"]!.GetValue<string>();
+            var twice = (await Call("scene_tree", new() { ["document"] = Id(tankMap), ["search"] = "bft_00" }))["matches"]!["items"]!.AsArray()
+                .Select(m => m!["item"]!).Where(i => i["playerTank"]?.GetValue<bool>() == true).ToArray();
+            Assert.Equal((await Call("preview_state", new() { ["preview"] = preview }))["bft"]!["node"]!.GetValue<int>(), Assert.Single(twice)["node"]!.GetValue<int>());
+            Assert.StartsWith("2 records of the shown difficulty place this object", twice[0]["readOnlyReason"]!.GetValue<string>());
 
             async Task Preview()
             {

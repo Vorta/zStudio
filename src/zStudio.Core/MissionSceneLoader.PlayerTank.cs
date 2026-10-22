@@ -13,14 +13,16 @@ public static partial class MissionSceneLoader
     /// (<c>LoadWeaponBanksAndSelectDefaults</c> 0x438ba0) with the turret doors collapsed (<c>TickAltGunRuntimeState</c>
     /// 0x439ba0). Only flags and poses of the tank's existing nodes change, so identities and indexes stand.
     /// </summary>
-    private static MissionPlayerTank PreparePlayerTank(GameScene scene, MissionActor player, PlayerTankState requested, AnimationPreviewContext? context,
-        AnimationBindingOperation? bindings, JsonNode? vehicles, JsonNode? weapons, MissionLayoutSelection selection, HashSet<int> positioned,
+    /// <param name="requested">The choice to draw; null draws the game's start of the mission (<see cref="MissionPlayerTank.Defaults"/>).</param>
+    /// <param name="mission">The mission number, which the weapons' thresholds compare with; null when the world names none.</param>
+    private static MissionPlayerTank PreparePlayerTank(GameScene scene, MissionActor player, PlayerTankState? requested, AnimationPreviewContext? context,
+        AnimationBindingOperation? bindings, JsonNode? vehicles, JsonNode? weapons, MissionLayoutSelection selection, int? mission, HashSet<int> positioned,
         MissionInitializationTransforms dependencies, List<string> notes, MissionPlacementBudget budget, CancellationToken token)
     {
-        if (!requested.IsValid)
+        if (requested is { IsValid: false })
         {
-            notes.Add("Player tank: the requested type or weapons are unknown; the preview draws the defaults.");
-            requested = PlayerTankState.Default;
+            notes.Add("Player tank: the requested type or weapons are unknown; the preview draws the mission's start.");
+            requested = null;
         }
         int root = player.Root;
         string template = VehicleTemplateName(player.Name);
@@ -63,35 +65,49 @@ public static partial class MissionSceneLoader
         }
         catch (InvalidDataException ex) when (!budget.Exhausted) { notes.Add($"Player tank: weapons.zrd cannot be read: {ex.Message}"); }
 
-        // The weapon list in file order (key, dual mount), as LoadMasterCommonDataFromNode (0x422170) reads it.
-        List<(string Key, bool Dual)> specs = [];
+        // The weapon list in file order (key, mission threshold, dual mount), as LoadMasterCommonDataFromNode (0x422170) reads it.
+        List<(string Key, long Threshold, bool Dual)> specs = [];
         if (common.GetValueOrDefault("weapons")?["children"] is JsonArray list)
             foreach (var item in list)
             {
                 budget.Take();
                 if (item?["children"] is not JsonArray spec || spec.Count == 0 || spec[0].Text("type") != "string") continue;
                 string key = spec[0].Text("value"); budget.Name(key);
-                specs.Add((key, spec.Count > 2 && (JsonData.Integer(spec[2]?["value"]) & 1) != 0));
+                specs.Add((key, spec.Count > 1 ? JsonData.Integer(spec[1]?["value"]) : 0, spec.Count > 2 && (JsonData.Integer(spec[2]?["value"]) & 1) != 0));
             }
         // CacheGunHardpointsAndDetachDisplays (0x4390d0) and the doors (InitStateFromNameAndMasterCommonData 0x420d10) are
         // found with FindSubNodeByName; the weapons under the gun with FindNodeRecursiveByName (docs/agents/engine-evidence.md, vehicles).
         int gun = FindSub(root, "gun"), doorLeft = FindSub(root, "doorleft"), doorRight = FindSub(root, "doorright");
         List<PlayerTankWeaponModel> models = [];
-        Dictionary<PlayerTankWeapon, (string Key, bool Dual)> slots = [];
+        Dictionary<PlayerTankWeapon, (string Key, long Threshold, bool Dual)> slots = [];
         foreach (var spec in specs)
             if (spec.Key.Length > 6 && PlayerTankWeapon.At(spec.Key[4] - '0', spec.Key[6] - '0') is { } slot) slots[slot] = spec;
         foreach (var weapon in PlayerTankWeapon.Catalog)
         {
             if (!slots.TryGetValue(weapon, out var spec))
             {
-                models.Add(new(weapon, false, catalog.GetValueOrDefault(weapon.Key).Model, [], false, Allowed(weapon.Key)));
+                models.Add(new(weapon, false, ModelName(weapon.Key), [], false, Allowed(weapon.Key)));
                 continue;
             }
-            string? model = catalog.TryGetValue(spec.Key, out var entry) ? entry.Model : null;
-            string[] nodes = model == null ? [] : spec.Dual ? [model + "_L", model + "_R"] : [model];
+            string model = ModelName(spec.Key);
+            string[] nodes = spec.Dual ? [model + "_L", model + "_R"] : [model];
             models.Add(new(weapon, true, model, nodes, gun >= 0 && nodes.Length > 0 && nodes.All(n => FindBelow(gun, n) >= 0), Allowed(spec.Key)));
         }
         bool Allowed(string key) => !catalog.TryGetValue(key, out var entry) || !entry.Beam && !entry.CatchesFire;
+        // The gun model: the weapon's NAME, else its key (also for a key weapons.zrd lacks).
+        string ModelName(string key) => catalog.TryGetValue(key, out var entry) ? entry.Model : key;
+
+        // The game's start of the mission (LoadWeaponBanksAndSelectDefaults 0x438ba0): of the listed weapons the mission allows
+        // (CheckMissionWeaponAvailability 0x43ca90: threshold not 0 and at most the mission), the first is the secondary and
+        // the second the primary. A list whose picks are not a secondary and a primary falls back to its first of each.
+        var allowed = specs.Where(s => s.Threshold != 0 && (mission is not int number || s.Threshold <= number))
+            .Select(s => s.Key.Length > 6 ? PlayerTankWeapon.At(s.Key[4] - '0', s.Key[6] - '0') : null).ToArray();
+        string startSecondary = allowed.ElementAtOrDefault(0) is { IsPrimary: false } first ? first.Id
+            : allowed.FirstOrDefault(w => w is { IsPrimary: false })?.Id ?? PlayerTankState.Default.Secondary;
+        string startPrimary = allowed.ElementAtOrDefault(1) is { IsPrimary: true } second ? second.Id
+            : allowed.FirstOrDefault(w => w is { IsPrimary: true })?.Id ?? PlayerTankState.Default.Primary;
+        PlayerTankState defaults = new(PlayerTankType.Tracked, startPrimary, startSecondary);
+        requested ??= defaults;
 
         // Which types the map's data offers: the current (track) block's lists and the entries they start.
         var lookup = context == null ? null : bindings!.EntryLookup();
@@ -113,8 +129,7 @@ public static partial class MissionSceneLoader
         }
         if (type != PlayerTankType.Tracked)
         {
-            try { failure = AnimationPlayer.RunVehicleModeChange(context!, chains[type], root, positioned, bindings!, token); }
-            catch (IOException ex) when (bindings!.Exhausted) { failure = ex.Message; }
+            failure = AnimationPlayer.RunVehicleModeChange(context!, chains[type], root, positioned, token);
             if (failure != null)
             {
                 notes.Add($"Player tank: {type.ToString().ToLowerInvariant()} could not be shown: {failure} The preview shows it tracked.");
@@ -138,11 +153,8 @@ public static partial class MissionSceneLoader
         if (gun >= 0)
         {
             foreach (var spec in specs)
-            {
-                if (!catalog.TryGetValue(spec.Key, out var entry)) continue;
-                foreach (string name in spec.Dual ? [entry.Model + "_L", entry.Model + "_R"] : new[] { entry.Model })
+                foreach (string name in spec.Dual ? [ModelName(spec.Key) + "_L", ModelName(spec.Key) + "_R"] : new[] { ModelName(spec.Key) })
                     if (FindBelow(gun, name) is >= 0 and int node) SetActive(node, false);
-            }
             foreach (var weapon in new[] { primary, secondary })
                 foreach (string name in Model(weapon).Nodes)
                     if (FindBelow(gun, name) is >= 0 and int node) { SetActive(node, true); drawn.Add(name); }
@@ -156,7 +168,7 @@ public static partial class MissionSceneLoader
         }
         return new(player, template, requested, requested with { Type = type, Secondary = secondary.Id })
         {
-            Types = types, Weapons = models, Drawn = drawn, HasGun = gun >= 0, Failure = failure, TypeWithdrawn = withdrawn,
+            Defaults = defaults, Types = types, Weapons = models, Drawn = drawn, HasGun = gun >= 0, Failure = failure, TypeWithdrawn = withdrawn,
             SecondarySubstituted = substituted, HiddenAtStart = (scene.Nodes[root].Metadata.UInt("flags") & 4) == 0,
         };
 
@@ -172,7 +184,7 @@ public static partial class MissionSceneLoader
             {
                 if (!Usable(bank, 0) && !Usable(bank, 1)) continue;
                 var first = PlayerTankWeapon.At(bank, 0)!;
-                bool burning = slots.TryGetValue(first, out var spec) && catalog.TryGetValue(spec.Key, out var entry) && entry.CatchesFire;
+                bool burning = slots.TryGetValue(first, out var spec) && catalog.TryGetValue(spec.Key, out var fire) && fire.CatchesFire;
                 return Model(first).Listed && !burning ? first : current;
             }
             return current;

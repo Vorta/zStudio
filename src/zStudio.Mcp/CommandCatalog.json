@@ -1148,7 +1148,7 @@
           {
             "Name": "bftType",
             "Type": "string",
-            "Description": "Source maps: the player tank\u0027s master type as the view draws it (preview only, for the open map; tracked when a map opens). A type this map\u0027s data has no transition to is refused.",
+            "Description": "Source maps: the player tank\u0027s master type as the view draws it (preview only, for the open map; tracked when a map opens, as the mission starts). A type this map\u0027s data has no transition to is refused.",
             "Required": false,
             "Choices": [
               "tracked",
@@ -1161,7 +1161,7 @@
           {
             "Name": "bftPrimary",
             "Type": "string",
-            "Description": "Source maps: the player tank\u0027s primary weapon (preview only; RFPG when a map opens).",
+            "Description": "Source maps: the player tank\u0027s primary weapon (preview only; when a map opens, the second listed weapon the mission allows, RFPG in the shipped maps).",
             "Required": false,
             "Choices": [
               "RFPG",
@@ -1172,7 +1172,7 @@
           {
             "Name": "bftSecondary",
             "Type": "string",
-            "Description": "Source maps: the player tank\u0027s secondary weapon, by its pickup catalog name without _WEAPON (preview only; HEMORTAR when a map opens). Beam and fire weapons are refused in sub; choosing sub switches away from one as the game does.",
+            "Description": "Source maps: the player tank\u0027s secondary weapon, by its pickup catalog name without _WEAPON (preview only; when a map opens, the first listed weapon the mission allows, HEMORTAR in the shipped maps). Beam and fire weapons are refused in sub; choosing sub switches away from one as the game does.",
             "Required": false,
             "Choices": [
               "HEMORTAR",

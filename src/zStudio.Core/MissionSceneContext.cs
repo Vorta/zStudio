@@ -33,6 +33,8 @@ public sealed partial class MissionSceneContext
     public AiNetworkSnapshot AiNetworks { get; internal set; } = AiNetworkSnapshot.Empty;
     /// <summary>The local player's tank and how the preview draws it (docs/agents/preview.md); null without a spawned vehicle.</summary>
     public MissionPlayerTank? PlayerTank { get; init; }
+    /// <summary>Why a spawned player tank could not be prepared (<see cref="PlayerTank"/> is then null).</summary>
+    public string? PlayerTankFailure { get; init; }
     private readonly int originalNodeCount;
     private readonly MissionActorIndex actorIndex;
     /// <summary>The unique authored actor occurrence owning this node, or null for absent/ambiguous ownership.</summary>
@@ -264,8 +266,6 @@ public static partial class MissionSceneLoader
         long? maximumBindingWork = null, JsonNode? weapons = null, PlayerTankState? playerTank = null)
     {
         selection ??= MissionLayoutSelection.For(MissionDifficulty.Medium);
-        playerTank ??= PlayerTankState.Default;
-        if (!playerTank.IsDefault) selection = selection with { PlayerTank = playerTank };
         token.ThrowIfCancellationRequested();
         var original = world.Scene ?? throw new InvalidDataException("Mission layout requires a GameZ scene.");
         GameScene scene = new(); scene.Models.AddRange(original.Models); scene.Materials.AddRange(original.Materials); scene.Textures.AddRange(original.Textures);
@@ -349,10 +349,19 @@ public static partial class MissionSceneLoader
         placement.PublishChildren();
         if (context != null) Initialize(false);
         // The player's tank as chosen, on the starting scene: only flags and poses change, so the startup indexes stand.
-        MissionPlayerTank? tank = null;
+        MissionPlayerTank? tank = null; string? tankFailure = null;
         if (localPlayer != null)
-            try { tank = PreparePlayerTank(scene, localPlayer, playerTank, context, bindings, vehicles, weapons, selection, positioned, dependencies, notes, budget, token); }
-            catch (InvalidDataException ex) when (!budget.Exhausted) { notes.Add($"Player tank: {ex.Message}"); }
+            try
+            {
+                tank = PreparePlayerTank(scene, localPlayer, playerTank, context, bindings, vehicles, weapons, selection, MissionNumber(world), positioned, dependencies, notes, budget, token);
+                // The labels name what the view draws when it is not the game's start of the mission.
+                if (tank.Shown != tank.Defaults) selection = selection with { PlayerTank = tank.Shown };
+            }
+            catch (InvalidDataException ex) when (!budget.Exhausted)
+            {
+                tankFailure = $"{JsonData.ShownText(localPlayer.Name, 64)} could not be prepared: {ex.Message}";
+                notes.Add($"Player tank: {tankFailure}");
+            }
         HashSet<int> dormant = [];
         if (context != null)
         {
@@ -421,7 +430,7 @@ public static partial class MissionSceneLoader
         var animationUses = context == null ? new Dictionary<int, MissionAnimationUses>() :
             CollectAnimationUses(context, original, bindings!, entryRoots, animationSeeds, actors, vehicles, weapons, selection, notes, token);
         return new(scene, sources, actors, dormant, notes, selection, original.Nodes.Count, token)
-        { InitializationTransforms = dependencies, AnimationEntryRoots = entryRoots, AnimationUses = animationUses, PlayerTank = tank };
+        { InitializationTransforms = dependencies, AnimationEntryRoots = entryRoots, AnimationUses = animationUses, PlayerTank = tank, PlayerTankFailure = tankFailure };
 
         MissionPickupSource? CoordinateSource(int recordIndex)
         {
@@ -525,6 +534,12 @@ public static partial class MissionSceneLoader
             }
             catch { scene.Nodes.RemoveRange(before, scene.Nodes.Count - before); sources.RemoveRange(before, sources.Count - before); throw; }
         }
+    }
+    /// <summary>The mission number a world's folder or source map names (m6 → 6), or null.</summary>
+    private static int? MissionNumber(ISceneDocument world)
+    {
+        string name = world is Sources.SourceSceneSnapshot source ? source.Mission : Path.GetFileName(Path.GetDirectoryName(world.Path) ?? "");
+        return name.Length > 1 && char.ToLowerInvariant(name[0]) == 'm' && int.TryParse(name.AsSpan(1), System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out int number) ? number : null;
     }
     public static string VehicleTemplateName(string name)
     {
