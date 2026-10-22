@@ -71,6 +71,12 @@ public sealed partial class SceneViewport
         protected override void OnRenderSizeChanged(SizeChangedInfo sizeInfo) { base.OnRenderSizeChanged(sizeInfo); resize(); }
         void IViewport3DX.Update(TimeSpan timeStamp) { base.Update(timeStamp); prepare(timeStamp); }
         public void DrainNavigation(TimeSpan timestamp) => base.Update(timestamp);
+        // No built-in keyboard camera control (owner decision 2026-10-22): the base class turned, zoomed and moved the
+        // camera on arrows, Page Up/Down and W/A/S/D/Z/Q. The keys it consumed stay consumed, so focus stays in the view.
+        protected override void OnKeyDown(KeyEventArgs e)
+        {
+            if (e.Key is Key.Left or Key.Right or Key.Up or Key.Down or Key.PageUp or Key.PageDown) e.Handled = true;
+        }
     }
     private void CameraChanged()
     {
