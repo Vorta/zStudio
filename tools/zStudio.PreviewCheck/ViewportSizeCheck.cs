@@ -35,6 +35,21 @@ internal static class ViewportSizeCheck
                 window.Width = 1100; window.Height = 540; window.UpdateLayout(); await Check("wide resize");
                 if (preview.CaptureView() != camera) throw new InvalidDataException("Resizing changed the camera pose.");
                 Console.WriteLine("PASS: native D3D buffer follows initial layout and portrait/wide resizes while Background is starved; camera retained.");
+                // A refreshed preview loads off screen and replaces the shown one; a capture can come before its first layout pass,
+                // its Loaded event and its queued resize. It still renders a frame, at the view's own size.
+                using (var fresh = new SceneViewport())
+                {
+                    await fresh.ShowAsync(document, new() { Id = new("fixture", AssetKind.Model, 0), Name = "fixture", Content = model }, resolver, null, 0, default);
+                    window.Content = fresh;
+                    if (fresh.RenderSurface.IsMeasureValid || fresh.RenderSurface.ActualWidth > 0) throw new InvalidDataException("The replacement view was laid out before the capture; the check proves nothing.");
+                    var image = fresh.RenderImage(320, 240);
+                    var size = fresh.PresentedPixelSize; double scale = fresh.RenderDpiScale;
+                    int width = (int)((int)fresh.RenderSurface.ActualWidth * scale), height = (int)((int)fresh.RenderSurface.ActualHeight * scale);
+                    if (image.PixelWidth != 320 || Math.Abs(size.Width - width) > 1 || Math.Abs(size.Height - height) > 1)
+                        throw new InvalidDataException($"Capture of a just-shown view: image {image.PixelWidth} × {image.PixelHeight}, buffer {size.Width} × {size.Height}, expected {width} × {height}.");
+                    window.Content = preview;
+                }
+                Console.WriteLine("PASS: a capture right after a refreshed view replaces the shown one renders at the view's size.");
 
                 async Task Check(string label)
                 {

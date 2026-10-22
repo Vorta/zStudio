@@ -146,12 +146,21 @@ internal sealed class Direct3DView : IDisposable
         RenderFrame(force: false);
     }
 
+    /// <summary>Why the last forced frame did not render (null after a rendered one), for the capture's error.</summary>
+    public string? Refusal { get; private set; }
+
     /// <summary>Renders a frame when one is due (or <paramref name="force"/>); false when no frame was rendered and presented.</summary>
     public bool RenderFrame(bool force)
     {
         // A hidden view renders only when forced (a capture): the panel holding it may be collapsed while its scene stays live.
-        if (disposed || busy || failed || !force && !Element.IsVisible || owner.Device?.Graphics is not { IsDisposed: false } graphics || owner.Camera is not { } camera
-            || renderWidth <= 10 || renderHeight <= 10 || !frontBufferAvailable || !force && !updateRequested && updateCounter >= MinimumUpdateCount) return false;
+        string? refusal = disposed ? "the view is closed" : busy ? "a frame is already being drawn" : failed ? "rendering failed: " + RenderException?.Message
+            : !force && !Element.IsVisible ? "the view is hidden" : owner.Device?.Graphics is not { IsDisposed: false } ? "no graphics device"
+            : owner.Camera == null ? "no camera" : renderWidth <= 10 || renderHeight <= 10 ? "the view has no size yet"
+            : !frontBufferAvailable ? "the display surface is unavailable (locked or disconnected session)"
+            : !force && !updateRequested && updateCounter >= MinimumUpdateCount ? "no frame is due" : null;
+        if (force) Refusal = refusal;
+        if (refusal != null) return false;
+        var graphics = owner.Device!.Graphics!; var camera = owner.Camera!;
         busy = true;
         bool rendered = false;
         var timestamp = TimeSpan.FromSeconds((double)Stopwatch.GetTimestamp() / Stopwatch.Frequency);
@@ -178,8 +187,8 @@ internal sealed class Direct3DView : IDisposable
                 finally { if (locked) imageSource!.Unlock(); }
                 ready = true; rendered = true; recoveries = 0; RenderException = null;
             }
-            catch (Exception error) when (IsDeviceLost(error, graphics)) { Recover(); }
-            catch (Exception error) when (error is not OutOfMemoryException and not StackOverflowException) { Fail(error); }
+            catch (Exception error) when (IsDeviceLost(error, graphics)) { Recover(); if (force) Refusal = "the graphics device was lost and is being rebuilt"; }
+            catch (Exception error) when (error is not OutOfMemoryException and not StackOverflowException) { Fail(error); if (force) Refusal = "rendering failed: " + error.Message; }
         }
         finally { busy = false; }
         if (rendered) Presented?.Invoke();
@@ -348,12 +357,30 @@ internal sealed class Direct3DView : IDisposable
     /// <summary>The device changed (attached, detached or recovered): targets are rebuilt on the next frame.</summary>
     public void DeviceChanged() { failed = false; ready = false; recoveries = 0; RenderException = null; ReleaseTargets(); CreateTargets(); InvalidateRender(); }
 
-    /// <summary>Renders one frame now and reads it back; null when no frame could be rendered (never an older frame).</summary>
+    /// <summary>
+    /// Renders one frame now and reads it back; null when no frame could be rendered (never an older frame). A view shown since
+    /// its last layout pass is sized from its layout first: a capture can arrive before its first layout, its Loaded event and
+    /// its queued resize (a refreshed preview replacing the shown one).
+    /// </summary>
     public BitmapSource? RenderBitmap()
     {
+        SizeFromLayout();
         InvalidateRender();
         if (!RenderFrame(force: true) || owner.Device?.Graphics is not { IsDisposed: false } graphics || backBuffer == null || targetGeneration != graphics.Generation) return null;
         return Read(graphics);
+    }
+
+    // Applies the element's current layout size (and DPI) at once, as the queued resize will; a collapsed view keeps its size.
+    // A view just placed in a window is connected to it only by the pending layout pass, which runs first.
+    private void SizeFromLayout()
+    {
+        if (disposed) return;
+        if (!Element.IsMeasureValid || !Element.IsArrangeValid) Element.UpdateLayout();
+        if (PresentationSource.FromVisual(Element) == null) return;
+        int width = (int)Element.ActualWidth, height = (int)Element.ActualHeight;
+        if (width < 1 || height < 1) return;
+        UpdateDpi();
+        Resize(width, height);
     }
 
     /// <summary>The displayed back buffer, without rendering, resizing or moving the camera.</summary>

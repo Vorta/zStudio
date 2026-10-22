@@ -166,7 +166,7 @@ public sealed partial class SceneViewport
     internal Point ProjectToView(Point3D point) => view.Project(point);
     internal Exception? RenderException => view.RenderException;
     /// <summary>Renders one frame now at the current size (unlike <see cref="CapturePresentedFrame"/>).</summary>
-    internal BitmapSource RenderCurrentFrame() => view.RenderBitmap() ?? throw new InvalidOperationException("The graphics device did not produce a frame.");
+    internal BitmapSource RenderCurrentFrame() => view.RenderBitmap() ?? throw new InvalidOperationException($"The graphics device did not produce a frame ({view.CaptureRefusal ?? "no frame was read"}).");
 
     /// <summary>Every mesh node in the rendered scene, in submission order (lines excluded).</summary>
     internal IReadOnlyList<RenderMeshHandle> EnumerateRenderMeshes()

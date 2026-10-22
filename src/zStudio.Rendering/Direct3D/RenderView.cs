@@ -190,6 +190,8 @@ internal sealed class RenderView : IRayPicker, INodeOwner, IDisposable
     // Capture.
     /// <summary>Renders one frame now at the current size and returns it (view cube and axes included when shown).</summary>
     public BitmapSource? RenderBitmap() => direct.RenderBitmap();
+    /// <summary>Why the last forced frame (a capture) did not render; null after one that did.</summary>
+    public string? CaptureRefusal => direct.Refusal;
     /// <summary>The displayed back buffer, read without rendering, resizing or moving the camera.</summary>
     public BitmapSource CapturePresented() => direct.CapturePresented();
     /// <summary>

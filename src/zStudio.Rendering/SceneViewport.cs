@@ -586,7 +586,7 @@ public sealed partial class SceneViewport : UserControl, IDisposable
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(width); ArgumentOutOfRangeException.ThrowIfNegativeOrZero(height);
         // Capture at the live size, then scale the image: resizing the back buffer for a capture would change the viewport,
         // the projection and, at non-100% DPI, its own size.
-        var image = view.RenderBitmap() ?? throw new InvalidOperationException("The graphics device did not produce a frame.");
+        var image = view.RenderBitmap() ?? throw new InvalidOperationException($"The graphics device did not produce a frame ({view.CaptureRefusal ?? "no frame was read"}).");
         double scaleX = (double)width / image.PixelWidth, scaleY = (double)height / image.PixelHeight;
         if (preserveAspect) scaleX = scaleY = Math.Min(scaleX, scaleY);
         var scaled = new System.Windows.Media.Imaging.TransformedBitmap(image, new ScaleTransform(scaleX, scaleY));
