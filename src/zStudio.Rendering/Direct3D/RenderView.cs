@@ -22,9 +22,9 @@ internal interface IRayPicker
     /// <summary>
     /// Every hit of the ray from <paramref name="origin"/> (unit <paramref name="direction"/>) on the view's pickable nodes: shown,
     /// rendering and hit-test-visible mesh nodes, transparent ones included (line nodes, grids and the transform gizmo are never
-    /// picked); empty before the first frame. <paramref name="pointer"/> is the screen point the ray came from (DIPs).
+    /// picked); empty before the first frame.
     /// </summary>
-    IReadOnlyList<RenderHit> HitTest(Vector3 origin, Vector3 direction, Point pointer = default);
+    IReadOnlyList<RenderHit> HitTest(Vector3 origin, Vector3 direction);
 }
 
 /// <summary>
@@ -86,7 +86,7 @@ internal sealed class RenderView : IRayPicker, INodeOwner, IDisposable
     }
     /// <summary>Runs on each rendered frame (with the frame's timestamp) before the camera matrices are captured for it.</summary>
     public Action<TimeSpan>? FrameUpdate { get; set; }
-    /// <summary>The surface was loaded, re-templated or resized (synchronously, before the coalesced buffer resize).</summary>
+    /// <summary>The surface was loaded, shown, resized or moved to another DPI (synchronously, before the coalesced buffer resize).</summary>
     public event Action? LayoutChanged;
     internal void RaiseLayoutChanged() => LayoutChanged?.Invoke();
     public event Action<Exception>? RenderFailed;
@@ -135,7 +135,8 @@ internal sealed class RenderView : IRayPicker, INodeOwner, IDisposable
 
     /// <summary>
     /// Resizes the back buffer to the surface at Normal dispatcher priority, coalescing requests; nothing while the surface is
-    /// not loaded or is under 1 × 1 (a hidden view keeps its size and is sized again when shown). Never moves the camera.
+    /// not loaded or is under 1 × 1 (a collapsed view keeps its last size; showing it raises <see cref="LayoutChanged"/>). Never
+    /// moves the camera.
     /// </summary>
     public void QueueResize()
     {
@@ -157,7 +158,7 @@ internal sealed class RenderView : IRayPicker, INodeOwner, IDisposable
     public Point Project(Point3D point) => direct.Project(new((float)point.X, (float)point.Y, (float)point.Z));
     /// <summary>The pointer's ray: from the eye through the point (perspective) or from the view plane (orthographic), current camera.</summary>
     public (Vector3 Origin, Vector3 Direction) UnProject(Point point) => camera == null ? default : RayPicking.EyeRay(camera, point, direct.ProjectionSize);
-    public IReadOnlyList<RenderHit> HitTest(Vector3 origin, Vector3 direction, Point pointer = default) => direct.IsReady ? RayPicking.HitTest(this, origin, direction) : [];
+    public IReadOnlyList<RenderHit> HitTest(Vector3 origin, Vector3 direction) => direct.IsReady ? RayPicking.HitTest(this, origin, direction) : [];
     /// <summary>Hits under a surface point along <see cref="UnProject"/>'s ray, nearest first.</summary>
     public IReadOnlyList<RenderHit> FindHits(Point point)
     {

@@ -38,7 +38,6 @@ public sealed partial class SceneViewport
         }
         public bool IsDepthClipEnabled { get => node.IsDepthClipEnabled; set => node.IsDepthClipEnabled = value; }
         public int RenderOrder => node.RenderOrder;
-        /// <summary>Whether the node fills its triangles (wireframe is drawn as separate outline lines, never as a fill mode).</summary>
         public IReadOnlyList<Matrix4x4>? Instances
         {
             get => node.Instances;

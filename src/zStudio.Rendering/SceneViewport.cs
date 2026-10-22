@@ -115,8 +115,14 @@ public sealed partial class SceneViewport : UserControl, IDisposable
     public event Action<string>? Information;
     /// <summary>A frame rendered again after a reported render or resize failure: the normal status can return.</summary>
     public event Action? PreviewRestored;
-    // The failure last reported: retries on resizes that fail the same way are not reported again until a good frame or a load.
-    private string? reportedRenderFailure;
+    /// <summary>A render or resize failure was reported (with its text, which <see cref="Information"/> also carries).</summary>
+    public event Action<string>? PreviewFailed;
+    /// <summary>The render or resize failure reported since the last good frame; null while the view renders.</summary>
+    public string? RenderFailure { get; private set; }
+    // The failure message last reported: retries that fail the same way (as a render or a resize) are not reported again
+    // until a good frame or a load.
+    private string? reportedFailureMessage;
+    private bool reportNextFailure;
     public IReadOnlyList<Diagnostic> PreviewDiagnostics { get; private set; } = [];
     public string PreviewSummary { get; private set; } = "";
     public SceneViewport()
@@ -131,21 +137,23 @@ public sealed partial class SceneViewport : UserControl, IDisposable
         view.LayoutChanged += QueueRenderSize;
         view.CameraChanged += CameraChanged;
         ConfigurePickupInput(); ConfigureNavigation();
-        view.RenderFailed += error => ReportRenderFailure("3D preview unavailable: " + error.Message);
-        view.ResizeFailed += error => ReportRenderFailure("3D preview resize unavailable: " + error.Message);
+        view.RenderFailed += error => ReportRenderFailure("3D preview unavailable: ", error.Message);
+        view.ResizeFailed += error => ReportRenderFailure("3D preview resize unavailable: ", error.Message);
         view.ObservePresentedFrames(RenderRestored);
         ConfigureInspection();
     }
-    private void ReportRenderFailure(string text)
+    private void ReportRenderFailure(string prefix, string message)
     {
-        if (text == reportedRenderFailure) return;
-        reportedRenderFailure = text;
-        Information?.Invoke(text);
+        if (message == reportedFailureMessage && !reportNextFailure) return;
+        reportNextFailure = false; reportedFailureMessage = message;
+        RenderFailure = prefix + message;
+        Information?.Invoke(RenderFailure);
+        PreviewFailed?.Invoke(RenderFailure);
     }
     private void RenderRestored()
     {
-        if (reportedRenderFailure == null) return;
-        reportedRenderFailure = null;
+        if (RenderFailure == null) return;
+        RenderFailure = null; reportedFailureMessage = null;
         PreviewRestored?.Invoke();
     }
     private void QueueRenderSize()
@@ -576,9 +584,8 @@ public sealed partial class SceneViewport : UserControl, IDisposable
     public System.Windows.Media.Imaging.BitmapSource RenderImage(int width, int height, bool preserveAspect = false)
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(width); ArgumentOutOfRangeException.ThrowIfNegativeOrZero(height);
-        // A sized backend capture restored physical dimensions as logical pixels,
-        // growing the back buffer on every call at non-100% DPI. Capture the live
-        // size, then scale the image without changing the viewport or projection.
+        // Capture at the live size, then scale the image: resizing the back buffer for a capture would change the viewport,
+        // the projection and, at non-100% DPI, its own size.
         var image = view.RenderBitmap() ?? throw new InvalidOperationException("The graphics device did not produce a frame.");
         double scaleX = (double)width / image.PixelWidth, scaleY = (double)height / image.PixelHeight;
         if (preserveAspect) scaleX = scaleY = Math.Min(scaleX, scaleY);
@@ -590,7 +597,7 @@ public sealed partial class SceneViewport : UserControl, IDisposable
     private void AttachEffects()
     {
         PreviewResourceLifetime.Attach(ref device, RenderDevice.Create, created => view.Device = created);
-        reportedRenderFailure = null; view.RetryRendering();
+        reportNextFailure = true; view.RetryRendering();
     }
     public void Dispose() { if (disposed) return; disposed = true; view.CancelResize(); Clear(); AttachNavigationWindow(null); view.Dispose(); device?.Dispose(); device = null; GC.SuppressFinalize(this); }
     private sealed record SceneGroup(int Model, bool Horizon, ScenePlacement[] Instances);

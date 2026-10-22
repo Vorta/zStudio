@@ -108,7 +108,8 @@ internal sealed class TransformGizmo : Node, INodeOwner
         if (PlanePoint(view, pointer, out var point)) { dragHit = point; captured = true; }
         return true;
     }
-    public void MoveTranslation(MeshNode handle, Vector3 hit, Point pointer)
+    /// <summary>Moves the drag to the pointer (DIPs).</summary>
+    public void MoveTranslation(Point pointer)
     {
         if (!captured || View is not { } view || !PlanePoint(view, pointer, out var point)) return;
         var move = point - dragHit; dragHit = point;
@@ -116,7 +117,8 @@ internal sealed class TransformGizmo : Node, INodeOwner
         UpdateControl();
         if (target != null) target.Transform = targetScale * targetRotation * Matrix4x4.CreateTranslation(translationVector);
     }
-    public void EndTranslation(MeshNode handle, Vector3 hit, Point pointer)
+    /// <summary>Ends the drag: the arrow gets its colour back.</summary>
+    public void EndTranslation()
     {
         if (captured && dragged?.Material is { } material) material.DiffuseColor = draggedColor;
         captured = false; dragged = null; axis = -1;

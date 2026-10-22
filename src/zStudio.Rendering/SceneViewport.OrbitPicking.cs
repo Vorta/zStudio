@@ -38,7 +38,7 @@ public sealed partial class SceneViewport
         // Adaptive clipping is finalized on the next frame. Starting at the eye
         // keeps immediate/substep queries independent of the previous near plane.
         var hits = view.HitTest(new Vector3((float)origin.X, (float)origin.Y, (float)origin.Z),
-            new Vector3((float)direction.X, (float)direction.Y, (float)direction.Z), point);
+            new Vector3((float)direction.X, (float)direction.Y, (float)direction.Z));
         foreach (var hit in hits.OrderBy(h => h.Distance))
         {
             if (hit.Node is not MeshNode mesh || !IsOrbitSurface(mesh, hit.Tag)) continue;

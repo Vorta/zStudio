@@ -435,7 +435,7 @@ public partial class MainWindow : Window
                 if (scene == null)
                 {
                     scene = new(); scene.Information += s => { PreviewInfo.Text = s; PreviewInfo.ToolTip = s; }; scene.NodeSelected += InspectNode;
-                    var restored = scene; scene.PreviewRestored += () => { if (ReferenceEquals(restored, scene)) ShowPreviewFooter(restored); }; ConfigureAiScene(scene); ConfigurePickupScene(scene);
+                    WatchPreviewFailures(scene); ConfigureAiScene(scene); ConfigurePickupScene(scene);
                     // During a handoff the retiring scene stays in the host until this one has loaded.
                     if (retiringScene == null) SceneHost.Content = scene;
                     ConfigureFlyScene(scene);

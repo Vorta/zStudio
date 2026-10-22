@@ -43,11 +43,37 @@ public partial class MainWindow
         ShowPreviewFooter(scene);
         RefreshSourceStatus();
     }
-    // The loaded preview's footer (also restored when the view renders again after a render failure).
+    // The loaded preview's footer (also restored when the view renders again after a render failure); a render failure the
+    // view still has stays in view.
     private void ShowPreviewFooter(zStudio.Rendering.SceneViewport preview)
     {
+        if (preview.RenderFailure is { } failure) { PreviewInfo.Text = failure; PreviewInfo.ToolTip = failure; return; }
         PreviewInfo.Text = (preview.Mission is { } mission ? mission.Layout.Label + " · " : "") + preview.PreviewSummary;
         PreviewInfo.ToolTip = preview.Mission?.Layout.Description ?? preview.PreviewSummary;
+    }
+    private StudioProblem? previewFailureProblem;
+    // A source map hides the footer: there a render failure goes to Problems and opens Diagnostics, as the map's other failures
+    // do. The next good frame (or another failure) replaces it.
+    private void ShowPreviewFailure(string text)
+    {
+        ClearPreviewFailure();
+        if (!sourceChromeActive) return;
+        previewFailureProblem = new StudioProblem("Error", "Preview", text, ViewModel.SelectedDocument?.Path);
+        ViewModel.Problems.Add(previewFailureProblem);
+        SetToolsVisible(true, problems: true);
+    }
+    private void ClearPreviewFailure()
+    {
+        if (previewFailureProblem == null) return;
+        ViewModel.Problems.Remove(previewFailureProblem); previewFailureProblem = null;
+    }
+    // A preview that becomes the current one: the last one's failure goes, a failure of its own load is listed.
+    private void WatchPreviewFailures(zStudio.Rendering.SceneViewport preview)
+    {
+        ClearPreviewFailure();
+        preview.PreviewFailed += text => { if (ReferenceEquals(preview, scene)) ShowPreviewFailure(text); };
+        preview.PreviewRestored += () => { if (ReferenceEquals(preview, scene)) { ClearPreviewFailure(); ShowPreviewFooter(preview); } };
+        if (preview.RenderFailure is { } failure && ReferenceEquals(preview, scene)) ShowPreviewFailure(failure);
     }
     private void PreviewNoticesClick(object sender, RoutedEventArgs e)
     {

@@ -126,7 +126,7 @@ public sealed partial class SceneViewport
             if (RebasePickupPointer(point)) return true;
             if (TransformMode == "rotate") MoveRotationPointer(point);
             else if (pickupPresentationConstraint) MovePresentationPickup(point);
-            else pickupManipulator?.MoveTranslation(handle.Handle, handle.Point, point);
+            else pickupManipulator?.MoveTranslation(point);
             return true;
         }
         SetPickupHover(Mouse.LeftButton == MouseButtonState.Released && Mouse.RightButton == MouseButtonState.Released &&
@@ -139,8 +139,7 @@ public sealed partial class SceneViewport
         if (IsFlyActive) return true;
         if (!IsPickupDragging || e.ChangedButton != MouseButton.Left) return false;
         if (!IsInsidePickupViewport(point)) { CancelPickupDrag(); return true; }
-        if (TransformMode == "move" && objectDraftNode == null && activePickupHandle is { } handle)
-            pickupManipulator?.EndTranslation(handle.Handle, handle.Point, point);
+        if (TransformMode == "move" && objectDraftNode == null && activePickupHandle != null) pickupManipulator?.EndTranslation();
         activePickupHandle = null; IsPickupDragging = false;
         ResumePickupCamera(); viewport.ReleaseMouseCapture();
         // Completing a gesture updates the card draft only. The document service
