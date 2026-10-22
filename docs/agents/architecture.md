@@ -78,5 +78,6 @@
 ## Identity and settings
 
 - Solution `zStudio.slnx`; projects, assemblies, namespaces, embedded resources and friend assemblies use `zStudio.*`.
-- `%LOCALAPPDATA%/zStudio` holds settings (`StudioSettings`), the error log and local MCP registrations. No settings import from other versions, no runtime aliases. A fresh profile keeps MCP disabled. Settings load with default `System.Text.Json` options, so unknown keys are ignored and dropped on the next save.
+- `%LOCALAPPDATA%/zStudio` holds settings (`StudioSettings`), the error log and local MCP registrations; `StudioProfile` (zStudio.Application) resolves the folder for every reader and writer. No settings import from other versions, no runtime aliases. A fresh profile keeps MCP disabled. Settings load with default `System.Text.Json` options, so unknown keys are ignored and dropped on the next save.
+- Tests and tools only, not a user feature (the user guides don't mention it): `ZSTUDIO_PROFILE`, an absolute folder read once, replaces the profile for the process and the processes it starts ([testing](testing.md#environment)). On a private profile a connector that has to start the workspace does so through a short-lived `cmd.exe /c start` instead of Explorer, so the workspace inherits the profile and the desktop and still outlives the connector's process tree.
 - A project's only zStudio data is its hidden `.zstudio/` folder ([sources](sources.md); settings: `SourceProjectSettings`).
