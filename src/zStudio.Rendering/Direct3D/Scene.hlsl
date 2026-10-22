@@ -329,7 +329,7 @@ LabelPixel VSLabel(LabelVertex input)
 float4 PSLabel(LabelPixel input) : SV_TARGET
 {
     float4 color = DiffuseMap.Sample(Surface, input.uv) * Diffuse;
-    // Nearly transparent texels write neither colour nor depth: a letter's quad never hides what is behind it.
+    // Texels under 0.1 alpha write neither colour nor depth: they hide nothing behind the quad.
     clip(color.a - 0.1);
     return color;
 }

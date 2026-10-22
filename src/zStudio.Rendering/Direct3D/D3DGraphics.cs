@@ -145,16 +145,18 @@ internal sealed class D3DGraphics : IDisposable
         const DeviceCreationFlags flags = DeviceCreationFlags.BgraSupport;
         ID3D11Device? device = null; ID3D11DeviceContext? context = null;
         SharpGen.Runtime.Result result = default;
-        bool created = false;
-        if (software) created = (result = D3D11.D3D11CreateDevice(IntPtr.Zero, DriverType.Warp, flags, levels, out device, out context)).Success;
+        bool created = false, unsupported = false;
+        // DXGI_ERROR_UNSUPPORTED: the adapter offers none of the requested feature levels.
+        bool Attempt(SharpGen.Runtime.Result attempt) { result = attempt; unsupported |= (uint)attempt.Code == 0x887A0004; return attempt.Success; }
+        if (software) created = Attempt(D3D11.D3D11CreateDevice(IntPtr.Zero, DriverType.Warp, flags, levels, out device, out context));
         else
         {
             using (var adapter = PresentationAdapter())
-                if (adapter != null) created = (result = D3D11.D3D11CreateDevice(adapter, DriverType.Unknown, flags, levels, out device, out context)).Success;
-            if (!created) created = (result = D3D11.D3D11CreateDevice(IntPtr.Zero, DriverType.Hardware, flags, levels, out device, out context)).Success;
+                if (adapter != null) created = Attempt(D3D11.D3D11CreateDevice(adapter, DriverType.Unknown, flags, levels, out device, out context));
+            if (!created) created = Attempt(D3D11.D3D11CreateDevice(IntPtr.Zero, DriverType.Hardware, flags, levels, out device, out context));
         }
-        // DXGI_ERROR_UNSUPPORTED: the adapter offers none of the requested feature levels.
-        if (!created && (uint)result.Code == 0x887A0004)
+        // Either attempt refusing the feature level is the actionable cause, whatever the fallback reported.
+        if (!created && unsupported)
             throw new InvalidOperationException("The 3D preview needs a Direct3D 11 graphics adapter (feature level 11_0); this one does not provide it. Update the graphics driver or use a Direct3D 11 adapter.",
                 new SharpGen.Runtime.SharpGenException(result));
         result.CheckError();

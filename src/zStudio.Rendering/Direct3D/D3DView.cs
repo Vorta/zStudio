@@ -24,9 +24,10 @@ namespace zStudio.Rendering.Direct3D;
 /// shared with a Direct3D 9Ex surface. Rendering is driven by <see cref="CompositionTarget.Rendering"/> on demand while the
 /// element is visible: a frame renders while one was requested and for six more frames after each request (stale-frame
 /// workaround for the shared surface, and the tail hover refresh relies on). A lost device or front buffer rebuilds everything
-/// (both devices) from retained data; after three recoveries without a frame in between the view fails instead. A resize after a
-/// failure (the window resized, the preview reloaded) or a regained front buffer retries with a fresh budget, recreating the
-/// device when the failed recovery left none or a removed one. A forced frame (a capture) renders while the view is hidden too.
+/// (both devices) from retained data; after three recoveries without a frame in between the view fails instead. A real size
+/// change after a failure, a regained front buffer or <see cref="RetryIfFailed"/> (the preview loaded again) retries with a fresh
+/// budget, recreating the device when the failed recovery left none or a removed one. A forced frame (a capture) renders while
+/// the view is hidden too.
 /// </summary>
 internal sealed class Direct3DView : IDisposable
 {
@@ -103,8 +104,18 @@ internal sealed class Direct3DView : IDisposable
             requestedWidth = width; requestedHeight = height;
             renderWidth = Math.Max(2, (float)(width * dpiScale)); renderHeight = Math.Max(2, (float)(height * dpiScale));
             ReleaseTargets();
+            // Only a real size change retries a failed view: layout passes at the same size must not recreate devices.
+            if (failed) Retry();
         }
-        if (failed) Retry();
+        CreateTargets();
+        InvalidateRender();
+    }
+
+    /// <summary>Retries a failed view now (the preview was loaded again): a fresh recovery budget and, when needed, a new device.</summary>
+    public void RetryIfFailed()
+    {
+        if (!failed || disposed) return;
+        Retry();
         CreateTargets();
         InvalidateRender();
     }
@@ -213,11 +224,21 @@ internal sealed class Direct3DView : IDisposable
         });
         depthView = g.Device.CreateDepthStencilView(depthBuffer, new DepthStencilViewDescription(depthBuffer, DepthStencilViewDimension.Texture2D, DxgiFormat.D32_Float_S8X24_UInt));
         targetGeneration = g.Generation;
-        if (shared) AttachSurface();
+        if (shared) AttachSurface(g);
     }
 
-    // The D3DImage shows the shared texture through a Direct3D 9Ex surface opened from its handle.
-    private void AttachSurface()
+    // The D3DImage shows the shared texture through a Direct3D 9Ex surface opened from its handle. A refusal that is not a lost
+    // device is reported as such, with what to check, instead of a bare HRESULT.
+    private void AttachSurface(D3DGraphics g)
+    {
+        try { OpenSharedSurface(); }
+        catch (SharpGenException error) when (!IsDeviceLost(error, g))
+        {
+            throw new InvalidOperationException($"The graphics driver refused the shared Direct3D 9Ex surface that shows the 3D preview (HRESULT 0x{(uint)error.ResultCode.Code:X8}). Update the graphics driver or check the desktop session, then retry the preview.", error);
+        }
+    }
+
+    private void OpenSharedSurface()
     {
         if (backBuffer == null) return;
         if (device9 == null)

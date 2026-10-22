@@ -434,7 +434,8 @@ public partial class MainWindow : Window
                 SceneMenus.Visibility = doc.SourceWorld != null ? Visibility.Collapsed : Visibility.Visible; WorldDifficultyGroup.Visibility = asset.Kind == AssetKind.World && snapshot.Game != GameVariant.MechWarrior3 ? Visibility.Visible : Visibility.Collapsed; WorldMission.Visibility = Visibility.Collapsed;
                 if (scene == null)
                 {
-                    scene = new(); scene.Information += s => { PreviewInfo.Text = s; PreviewInfo.ToolTip = s; }; scene.NodeSelected += InspectNode; ConfigureAiScene(scene); ConfigurePickupScene(scene);
+                    scene = new(); scene.Information += s => { PreviewInfo.Text = s; PreviewInfo.ToolTip = s; }; scene.NodeSelected += InspectNode;
+                    var restored = scene; scene.PreviewRestored += () => { if (ReferenceEquals(restored, scene)) ShowPreviewFooter(restored); }; ConfigureAiScene(scene); ConfigurePickupScene(scene);
                     // During a handoff the retiring scene stays in the host until this one has loaded.
                     if (retiringScene == null) SceneHost.Content = scene;
                     ConfigureFlyScene(scene);

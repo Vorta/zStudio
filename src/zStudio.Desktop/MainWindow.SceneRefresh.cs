@@ -108,6 +108,7 @@ public partial class MainWindow
             scene = replacement; replacement = null;
             PublishSourceMapParts(scene, doc);
             scene.Information += text => { PreviewInfo.Text = text; PreviewInfo.ToolTip = text; };
+            var restored = scene; scene.PreviewRestored += () => { if (ReferenceEquals(restored, scene)) ShowPreviewFooter(restored); };
             scene.NodeSelected += InspectNode;
             ConfigureAiScene(scene);
             ConfigurePickupScene(scene); ConfigureFlyScene(scene);

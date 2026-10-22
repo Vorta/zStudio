@@ -144,6 +144,8 @@ internal sealed class RenderView : IRayPicker, INodeOwner, IDisposable
         }
     }
     private void DeviceReinitialized(object? sender, EventArgs e) => InvalidateRender();
+    /// <summary>Retries a view whose rendering failed (fresh recovery budget, a new device when needed); nothing otherwise.</summary>
+    public void RetryRendering() => direct?.RetryIfFailed();
     /// <summary>Whether the surface has started (picking and projection need it).</summary>
     public bool IsReady => viewport != null ? viewport.RenderContext != null : direct!.IsReady;
     /// <summary>Whether guide nodes (<see cref="Node.IsGuide"/>) are drawn: false for Hide UI.</summary>

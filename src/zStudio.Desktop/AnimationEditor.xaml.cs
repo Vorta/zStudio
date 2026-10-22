@@ -79,6 +79,7 @@ public partial class AnimationEditor : FieldEditor, IDisposable
         Difficulty.ItemsSource = MainViewModel.DifficultyChoices; Difficulty.SelectedItem = preferences?.Difficulty ?? MissionDifficulty.Medium;
         if (preferences != null) preferences.PropertyChanged += PreferencesChanged;
         viewport.Information += Note;
+        viewport.PreviewRestored += () => Note("3D preview restored.");
         viewport.ManualNavigationStarting += () => { if (FollowCamera.IsChecked == true) FollowCamera.IsChecked = false; };
         audio.Diagnostic += message =>
         {

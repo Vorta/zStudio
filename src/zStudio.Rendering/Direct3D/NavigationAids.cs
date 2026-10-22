@@ -120,8 +120,8 @@ internal sealed class NavigationAids
         context.OMSetBlendState(g.AlphaBlend);
     }
 
-    // The axis letters: screen-aligned quads centred on the projected label points, depth tested at those points' depth; the
-    // letters' transparent texels are clipped, so a quad hides nothing beyond its glyph.
+    // The axis letters: screen-aligned quads centred LabelDrop DIPs below the projected label points, depth tested at those
+    // points' depth; texels under 0.1 alpha are clipped, so the rest of a quad hides nothing behind it.
     private void DrawLabels(D3DGraphics g, in FrameConstants frame, float side, double dpiScale)
     {
         var context = g.Context;
