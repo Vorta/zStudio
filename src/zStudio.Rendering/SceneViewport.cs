@@ -98,13 +98,25 @@ public sealed partial class SceneViewport : UserControl, IDisposable
         bool colors = model.Polygons.Any(p => p.Colors.Length != 0);
         // A morphed pose retains its current MeshPart (including picking/color
         // sources) beside the renderer's copy, unlike immutable shared base parts.
-        copyUpperBound = checked(vertices * (colors ? 116L : 68L) + triangles * 28 + model.Polygons.LongLength * 512 + 2048);
+        // MeshPart: 36 bytes per vertex (+16 with colours), 16 per triangle. The Helix adapter copies positions, normals,
+        // texture coordinates and indices and both colour arrays (+32 and +32 per vertex, +12 per triangle); the Direct3D
+        // backend keeps only the tinted colour array (+16 per vertex) and, once picked, its hierarchy (about 20 per triangle).
+        copyUpperBound = RenderBackend.UseHelix
+            ? checked(vertices * (colors ? 116L : 68L) + triangles * 28 + model.Polygons.LongLength * 512 + 2048)
+            : checked(vertices * (colors ? 68L : 36L) + triangles * 16 + MeshBvh.RetainedBytes(triangles) + model.Polygons.LongLength * 512 + 2048);
         return checked(4 * (vertices * (colors ? 52L : 36L) + triangles * 16 + model.Polygons.LongLength * 256 + 1024) + largest * 128);
     }
     private static long GeometryPartBytes(MeshPart part) => checked(256L + 12L * (part.Positions.LongLength + part.Normals.LongLength)
         + 8L * part.TextureCoordinates.LongLength + 4L * (part.Indices.LongLength + part.TrianglePolygons.LongLength + part.VertexPolygons.LongLength) + 16L * part.Colors.LongLength);
-    private static long GeometryCopyBytes(MeshPart part) => checked(256L + 12L * (part.Positions.LongLength + part.Normals.LongLength)
-        + 8L * part.TextureCoordinates.LongLength + 4L * part.Indices.LongLength + 32L * part.Colors.LongLength);
+    // The managed copy a renderer mesh keeps of a part: the Helix adapter copies every array into its own collections (the
+    // tinted colours twice); the Direct3D backend keeps the tinted colour array and, once picked, a hierarchy over the
+    // triangles (device buffers are not managed memory).
+    private static long GeometryCopyBytes(MeshPart part) => RenderBackend.UseHelix
+        ? checked(256L + 12L * (part.Positions.LongLength + part.Normals.LongLength) + 8L * part.TextureCoordinates.LongLength + 4L * part.Indices.LongLength + 32L * part.Colors.LongLength)
+        : checked(256L + 16L * part.Colors.LongLength + MeshBvh.RetainedBytes(part.Indices.LongLength / 3));
+    // A replacement colour stream while the old one is still held: the Helix adapter grows a collection from an enumerable
+    // beside its array; the Direct3D backend only allocates the new tinted array.
+    private static long ColorReplacementBytes(MeshPart part) => (RenderBackend.UseHelix ? 32L : 16L) * part.Colors.LongLength;
     private bool disposed;
     public event Action<int>? NodeSelected;
     public event Action<string>? Information;
@@ -221,9 +233,9 @@ public sealed partial class SceneViewport : UserControl, IDisposable
                 Zone: WorldSurfaceHighlights.NodeZone(scene, p.NodeIndex)))
                 .OrderByDescending(g => g.Key.Horizon).Select(g => new SceneGroup(g.Key.Model, g.Key.Horizon, g.ToArray())).ToArray();
             // Static batches share one render geometry per part, even across transparent
-            // placements. Colors grow from an enumerable; reserve its replacement scratch.
+            // placements. The Helix adapter's colours grow from an enumerable; reserve its replacement scratch.
             long copies = geometry.Values.Sum(parts => parts.Sum(GeometryCopyBytes));
-            long colorScratch = geometry.Values.SelectMany(parts => parts).Select(p => 32L * p.Colors.LongLength).DefaultIfEmpty().Max();
+            long colorScratch = RenderBackend.UseHelix ? geometry.Values.SelectMany(parts => parts).Select(ColorReplacementBytes).DefaultIfEmpty().Max() : 0;
             candidateGeometry.Resize(checked(retainedGeometry + copies + colorScratch + 512L * groups.Length));
             renderUnits = 0;
             foreach (var group in groups)

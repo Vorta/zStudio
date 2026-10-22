@@ -14,5 +14,6 @@
     <EmbeddedResource Include="GroundGrid.hlsl" />
     <EmbeddedResource Include="VertexTint.hlsl" />
     <EmbeddedResource Include="FaceOrientation.hlsl" />
+    <EmbeddedResource Include="Direct3D/Scene.hlsl" />
   </ItemGroup>
 </Project>

@@ -29,8 +29,8 @@ internal interface IRayPicker
 {
     /// <summary>
     /// Every hit of the ray from <paramref name="origin"/> (unit <paramref name="direction"/>) on the view's pickable nodes: shown,
-    /// rendering and hit-test-visible mesh nodes, transparent ones included (line nodes are never picked); empty before the first frame.
-    /// <paramref name="pointer"/> is the screen point the ray came from (DIPs).
+    /// rendering and hit-test-visible mesh nodes, transparent ones included (line nodes, grids and the transform gizmo are never
+    /// picked); empty before the first frame. <paramref name="pointer"/> is the screen point the ray came from (DIPs).
     /// </summary>
     IReadOnlyList<RenderHit> HitTest(Vector3 origin, Vector3 direction, Point pointer = default);
 }
@@ -43,75 +43,128 @@ internal interface IRayPicker
 /// for it.
 /// <para>
 /// Per frame: opaque meshes and lines in ascending render order (submission order among equals; the Helix adapter's sort is
-/// unstable beyond 16 nodes), then the ground grid, then
-/// transparent meshes in submission order (sorting groups sort theirs), then top-most groups, the view cube and the axes, each
-/// over a cleared depth buffer. 32-bit float depth, standard Z; no lights, shadows, MSAA or FXAA; background
-/// <see cref="BackgroundColor"/>.
+/// unstable beyond 16 nodes), then the ground grid, then transparent meshes in submission order (sorting groups sort theirs),
+/// then top-most groups, the view cube and the axes, each over a cleared depth buffer. 32-bit float depth, standard Z; no
+/// lights, shadows, MSAA or FXAA; an 8-bit BGRA back buffer without sRGB conversion; background <see cref="BackgroundColor"/>.
 /// </para>
 /// </summary>
 internal sealed class RenderView : IRayPicker, INodeOwner, IDisposable
 {
-    private readonly FrameViewport viewport;
+    private static readonly List<WeakReference<RenderView>> views = [];
+    private readonly FrameViewport? viewport;
+    private readonly Direct3DView? direct;
     private RenderCamera? camera;
     private RenderDevice? device;
     private RenderTexture? cubeTexture;
-    private bool guidesVisible = true, disposed;
+    private Color background = Colors.Black;
+    private bool guidesVisible = true, disposed, showCube = true, showAxes = true;
+    private double cubeX = .8, cubeY = -.8, cubeSize = 1;
     private DispatcherOperation? resize;
 
     public RenderView()
     {
-        viewport = new FrameViewport(this)
+        if (RenderBackend.UseHelix)
         {
-            EnableSwapChainRendering = false,
-            IsInertiaEnabled = true,
-            UseDefaultGestures = false,
-            ZoomAroundMouseDownPoint = false,
-            ZoomExtentsWhenLoaded = false,
-            // The backend's own camera controller stays idle: zStudio owns all navigation. Its wheel zoom was reachable
-            // only during Fly (unhandled there), when zStudio had turned it off; keep it off.
-            IsZoomEnabled = false,
-            ShowViewCube = true,
-            ShowCoordinateSystem = true,
-        };
-        viewport.OITRenderMode = OITRenderType.None;
-        viewport.EnableRenderOrder = true;
-        viewport.CameraChanged += (_, _) => CameraChanged?.Invoke();
-        viewport.RenderExceptionOccurred += (_, e) => { RenderFailed?.Invoke(e.Exception); e.Handled = true; };
-        Items = new(this, viewport.Items);
+            viewport = new FrameViewport(this)
+            {
+                EnableSwapChainRendering = false,
+                IsInertiaEnabled = true,
+                UseDefaultGestures = false,
+                ZoomAroundMouseDownPoint = false,
+                ZoomExtentsWhenLoaded = false,
+                // The backend's own camera controller stays idle: zStudio owns all navigation. Its wheel zoom was reachable
+                // only during Fly (unhandled there), when zStudio had turned it off; keep it off.
+                IsZoomEnabled = false,
+                ShowViewCube = true,
+                ShowCoordinateSystem = true,
+            };
+            viewport.OITRenderMode = OITRenderType.None;
+            viewport.EnableRenderOrder = true;
+            viewport.CameraChanged += (_, _) => CameraChanged?.Invoke();
+            viewport.RenderExceptionOccurred += (_, e) => { RenderFailed?.Invoke(e.Exception); e.Handled = true; };
+            Items = new(this, viewport.Items);
+        }
+        else
+        {
+            direct = new Direct3DView(this);
+            Items = new(this, null);
+            lock (views) { views.RemoveAll(v => !v.TryGetTarget(out _)); views.Add(new(this)); }
+        }
     }
 
     /// <summary>The focusable WPF element showing the view and taking its input (focus, capture, cursor, pointer positions).</summary>
-    public FrameworkElement Element => viewport;
-    internal Viewport3DX HelixViewport => viewport;
+    public FrameworkElement Element => viewport ?? (FrameworkElement)direct!.Element;
+    internal Viewport3DX? HelixViewport => viewport;
     RenderView? INodeOwner.View => this;
     public NodeCollection Items { get; }
     public RenderCamera? Camera
     {
         get => camera;
-        set { camera = value; viewport.Camera = value?.HelixCamera; }
+        set
+        {
+            if (ReferenceEquals(camera, value)) return;
+            if (camera != null) camera.Changed = null;
+            camera = value;
+            if (viewport != null) { viewport.Camera = value?.HelixCamera; return; }
+            if (value != null) value.Changed = OnCameraChanged;
+            OnCameraChanged();
+        }
     }
+    private void OnCameraChanged() { InvalidateRender(); CameraChanged?.Invoke(); }
     /// <summary>Raised synchronously whenever the camera or one of its properties changes.</summary>
     public event Action? CameraChanged;
-    public Color BackgroundColor { get => viewport.BackgroundColor; set => viewport.BackgroundColor = value; }
+    public Color BackgroundColor
+    {
+        get => viewport?.BackgroundColor ?? background;
+        set { background = value; if (viewport != null) viewport.BackgroundColor = value; else InvalidateRender(); }
+    }
     /// <summary>Runs on each rendered frame (with the frame's timestamp) before the camera matrices are captured for it.</summary>
     public Action<TimeSpan>? FrameUpdate { get; set; }
     /// <summary>The surface was loaded, re-templated or resized (synchronously, before the coalesced buffer resize).</summary>
     public event Action? LayoutChanged;
+    internal void RaiseLayoutChanged() => LayoutChanged?.Invoke();
     public event Action<Exception>? RenderFailed;
+    internal void RaiseRenderFailed(Exception error) => RenderFailed?.Invoke(error);
     public event Action<Exception>? ResizeFailed;
-    public Exception? RenderException => viewport.RenderException;
+    public Exception? RenderException => viewport != null ? viewport.RenderException : direct!.RenderException;
     /// <summary>The graphics device and its shaders; null detaches them.</summary>
-    public RenderDevice? Device { get => device; set { device = value; viewport.EffectsManager = value?.HelixEffects; } }
-    /// <summary>Whether a frame has been prepared (picking and projection need it).</summary>
-    public bool IsReady => viewport.RenderContext != null;
+    public RenderDevice? Device
+    {
+        get => device;
+        set
+        {
+            if (ReferenceEquals(device, value)) return;
+            if (device != null) device.Reinitialized -= DeviceReinitialized;
+            device = value;
+            if (viewport != null) { viewport.EffectsManager = value?.HelixEffects; return; }
+            if (value != null) value.Reinitialized += DeviceReinitialized;
+            direct!.DeviceChanged();
+        }
+    }
+    private void DeviceReinitialized(object? sender, EventArgs e) => InvalidateRender();
+    /// <summary>Whether the surface has started (picking and projection need it).</summary>
+    public bool IsReady => viewport != null ? viewport.RenderContext != null : direct!.IsReady;
     /// <summary>Whether guide nodes (<see cref="Node.IsGuide"/>) are drawn: false for Hide UI.</summary>
     public bool GuidesVisible
     {
         get => guidesVisible;
-        set { if (guidesVisible == value) return; guidesVisible = value; foreach (var node in Items) node.RefreshGuides(); }
+        set
+        {
+            if (guidesVisible == value) return;
+            guidesVisible = value;
+            if (viewport != null) foreach (var node in Items) node.RefreshGuides();
+            else InvalidateRender();
+        }
     }
 
-    public void InvalidateRender() => viewport.InvalidateRender();
+    public void InvalidateRender() { if (viewport != null) viewport.InvalidateRender(); else direct!.InvalidateRender(); }
+    /// <summary>Direct3D backend: a material or colour stream changed; every live view redraws (they share no state otherwise).</summary>
+    internal static void InvalidateAll()
+    {
+        lock (views)
+            foreach (var reference in views)
+                if (reference.TryGetTarget(out var view) && !view.disposed) view.direct?.InvalidateRender();
+    }
 
     /// <summary>
     /// Resizes the back buffer to the surface at Normal dispatcher priority, coalescing requests; nothing while the surface is
@@ -123,51 +176,74 @@ internal sealed class RenderView : IRayPicker, INodeOwner, IDisposable
         // Helix defers the D3DImage resize at Background priority. A large scene's
         // continuous rendering can starve it, stretching the initial tiny buffer
         // across the viewport. Coalesce layout changes in the normal UI queue.
-        resize = viewport.Dispatcher.BeginInvoke(DispatcherPriority.Normal, () =>
+        var element = Element;
+        resize = element.Dispatcher.BeginInvoke(DispatcherPriority.Normal, () =>
         {
             resize = null;
-            if (disposed || !viewport.IsLoaded || !viewport.IsVisible || viewport.ActualWidth < 1 || viewport.ActualHeight < 1) return;
-            try { viewport.RenderHost?.Resize((int)viewport.ActualWidth, (int)viewport.ActualHeight); }
+            if (disposed || !element.IsLoaded || !element.IsVisible || element.ActualWidth < 1 || element.ActualHeight < 1) return;
+            try
+            {
+                if (viewport != null) viewport.RenderHost?.Resize((int)viewport.ActualWidth, (int)viewport.ActualHeight);
+                else direct!.Resize((int)element.ActualWidth, (int)element.ActualHeight);
+            }
             catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException) { ResizeFailed?.Invoke(ex); }
         });
     }
     public void CancelResize() { resize?.Abort(); resize = null; }
 
-    /// <summary>A world point on the surface, in DIPs.</summary>
-    public Point Project(Point3D point) => viewport.Project(point);
-    /// <summary>The backend's pointer ray (P1: Helix's, which starts at the near plane and uses the last frame's matrices).</summary>
-    public (Vector3 Origin, Vector3 Direction) UnProject(Point point) { var ray = viewport.UnProject(point); return (ray.Position, ray.Direction); }
+    /// <summary>A world point on the surface, in DIPs (the Direct3D backend uses the current camera).</summary>
+    public Point Project(Point3D point) => viewport != null ? viewport.Project(point)
+        : direct!.Project(new((float)point.X, (float)point.Y, (float)point.Z));
+    /// <summary>The pointer's ray: from the eye through the point (perspective) or from the view plane (orthographic), current camera. The Helix adapter's starts at the near plane with the last frame's matrices.</summary>
+    public (Vector3 Origin, Vector3 Direction) UnProject(Point point)
+    {
+        if (viewport != null) { var ray = viewport.UnProject(point); return (ray.Position, ray.Direction); }
+        return camera == null ? default : RayPicking.EyeRay(camera, point, direct!.ProjectionSize);
+    }
     public IReadOnlyList<RenderHit> HitTest(Vector3 origin, Vector3 direction, Point pointer = default)
     {
+        if (viewport == null) return direct!.IsReady ? RayPicking.HitTest(this, origin, direction) : [];
         if (viewport.RenderContext is not { } context) return [];
         var hitContext = new HitTestContext(context, new Ray(origin, direction), new Vector2((float)pointer.X, (float)pointer.Y));
         List<HitTestResult> hits = [];
         foreach (var element in viewport.Items) element.HitTest(hitContext, ref hits);
         return Convert(hits);
     }
-    /// <summary>Hits under a surface point along the backend's own pointer ray, nearest first (P1: <see cref="UnProject"/>'s ray).</summary>
-    public IReadOnlyList<RenderHit> FindHits(Point point) => viewport.FindHits(point) is { } hits ? Convert(hits) : [];
-    private static RenderHit[] Convert(IEnumerable<HitTestResult> hits) => [.. hits.Where(h => h.IsValid).Select(h => new RenderHit(Node.FromHelix(h.ModelHit), h.PointHit, h.NormalAtHit,
-        h.Distance, h.Tag as int?, h.TriangleIndices is { } t ? (t.Item1, t.Item2, t.Item3) : null))];
+    /// <summary>Hits under a surface point along <see cref="UnProject"/>'s ray, nearest first.</summary>
+    public IReadOnlyList<RenderHit> FindHits(Point point)
+    {
+        if (viewport != null) return viewport.FindHits(point) is { } hits ? Convert(hits) : [];
+        if (camera == null || !direct!.IsReady) return [];
+        var (origin, direction) = UnProject(point);
+        return [.. RayPicking.HitTest(this, origin, direction).OrderBy(h => h.Distance)];
+    }
+    // Lines are never picked.
+    private static RenderHit[] Convert(IEnumerable<HitTestResult> hits) => [.. hits.Where(h => h.IsValid && Node.FromHelix(h.ModelHit) is not LineNode)
+        .Select(h => new RenderHit(Node.FromHelix(h.ModelHit), h.PointHit, h.NormalAtHit, h.Distance, h.Tag as int?, h.TriangleIndices is { } t ? (t.Item1, t.Item2, t.Item3) : null))];
 
-    // View cube (Helix face order +Z, −Z, +X, −X, +Y, −Y; edge and corner boxes neither drawn nor hit; a grey base ring around it
-    // is drawn and hit, a ring hit asking for the top or bottom view, RENDERER-GOLDENS V7; nothing is drawn while the surface is
-    // under 100 DIPs on an axis) and axes.
-    public bool ShowViewCube { get => viewport.ShowViewCube; set => viewport.ShowViewCube = value; }
-    public bool ShowCoordinateSystem { get => viewport.ShowCoordinateSystem; set => viewport.ShowCoordinateSystem = value; }
+    // View cube (face order +Z, −Z, +X, −X, +Y, −Y; edge and corner boxes neither drawn nor hit; a grey base ring around it is
+    // drawn and hit, a ring hit asking for the top or bottom view; neither the cube nor the axes are drawn or hit while the
+    // back buffer is under 100 physical pixels on an axis) and axes.
+    public bool ShowViewCube { get => viewport?.ShowViewCube ?? showCube; set { showCube = value; if (viewport != null) viewport.ShowViewCube = value; else InvalidateRender(); } }
+    public bool ShowCoordinateSystem { get => viewport?.ShowCoordinateSystem ?? showAxes; set { showAxes = value; if (viewport != null) viewport.ShowCoordinateSystem = value; else InvalidateRender(); } }
     /// <summary>The cube's centre in relative surface coordinates (−1..1, Y up; default 0.8, −0.8) and its scale (default 1).</summary>
-    public double ViewCubeHorizontalPosition { get => viewport.ViewCubeHorizontalPosition; set => viewport.ViewCubeHorizontalPosition = value; }
-    public double ViewCubeVerticalPosition { get => viewport.ViewCubeVerticalPosition; set => viewport.ViewCubeVerticalPosition = value; }
-    public double ViewCubeSize { get => viewport.ViewCubeSize; set => viewport.ViewCubeSize = value; }
+    public double ViewCubeHorizontalPosition { get => viewport?.ViewCubeHorizontalPosition ?? cubeX; set { cubeX = value; if (viewport != null) viewport.ViewCubeHorizontalPosition = value; else InvalidateRender(); } }
+    public double ViewCubeVerticalPosition { get => viewport?.ViewCubeVerticalPosition ?? cubeY; set { cubeY = value; if (viewport != null) viewport.ViewCubeVerticalPosition = value; else InvalidateRender(); } }
+    public double ViewCubeSize { get => viewport?.ViewCubeSize ?? cubeSize; set { cubeSize = value; if (viewport != null) viewport.ViewCubeSize = value; else InvalidateRender(); } }
     /// <summary>The six face images side by side (in face order), as BGRA.</summary>
-    public RenderTexture? ViewCubeTexture { get => cubeTexture; set { cubeTexture = value; viewport.ViewCubeTexture = value?.HelixTexture; } }
+    public RenderTexture? ViewCubeTexture
+    {
+        get => cubeTexture;
+        set { cubeTexture = value; if (viewport != null) viewport.ViewCubeTexture = value?.HelixTexture; else InvalidateRender(); }
+    }
     /// <summary>The cube viewport's side at scale 1, in DIPs (clamped inside the surface).</summary>
-    public double ViewCubePixelSize => viewport.Template?.FindName("PART_ViewCube", viewport) is ScreenSpacedElement3D cube &&
+    public double ViewCubePixelSize => viewport?.Template?.FindName("PART_ViewCube", viewport) is ScreenSpacedElement3D cube &&
         cube.SceneNode.RenderCore is HelixToolkit.SharpDX.Core.ScreenSpacedMeshRenderCore core ? core.Size : 100;
     /// <summary>The view direction a cube click at <paramref name="point"/> asks for (the hit face's look direction); false off the cube.</summary>
     public bool HitViewCube(Point point, out Vector3 lookNormal)
     {
         lookNormal = default;
+        if (viewport == null) return direct!.HitViewCube(point, out lookNormal);
         if (viewport.RenderContext == null || !viewport.ShowViewCube || viewport.Template?.FindName("PART_ViewCube", viewport) is not ScreenSpacedElement3D cube) return false;
         var screen = new Vector2((float)point.X, (float)point.Y);
         var ray = viewport.UnProject(screen);
@@ -179,11 +255,12 @@ internal sealed class RenderView : IRayPicker, INodeOwner, IDisposable
 
     // Capture.
     /// <summary>Renders one frame now at the current size and returns it (view cube and axes included when shown).</summary>
-    public BitmapSource? RenderBitmap() => viewport.RenderBitmap();
+    public BitmapSource? RenderBitmap() => viewport != null ? viewport.RenderBitmap() : direct!.RenderBitmap();
     /// <summary>The displayed back buffer, read without rendering, resizing or moving the camera.</summary>
     public BitmapSource CapturePresented()
     {
-        var host = viewport.RenderHost;
+        if (direct != null) return direct.CapturePresented();
+        var host = viewport!.RenderHost;
         if (host?.EffectsManager is not { } effects || host.RenderBuffer?.BackBuffer?.Resource is not SharpDX.Direct3D11.Texture2D buffer)
             throw new InvalidOperationException("The 3D view has no presented frame.");
         using var stream = new MemoryStream();
@@ -197,7 +274,12 @@ internal sealed class RenderView : IRayPicker, INodeOwner, IDisposable
     /// <summary>Calls <paramref name="presented"/> after each presented frame until the result is disposed (needs the render host).</summary>
     public IDisposable ObservePresentedFrames(Action presented)
     {
-        var host = viewport.RenderHost ?? throw new InvalidOperationException("The 3D view has no render host.");
+        if (direct != null)
+        {
+            direct.Presented += presented;
+            return new Subscription(() => direct.Presented -= presented);
+        }
+        var host = viewport!.RenderHost ?? throw new InvalidOperationException("The 3D view has no render host.");
         void Rendered(object? sender, EventArgs e) => presented();
         host.Rendered += Rendered;
         return new Subscription(() => host.Rendered -= Rendered);
@@ -208,17 +290,18 @@ internal sealed class RenderView : IRayPicker, INodeOwner, IDisposable
         public void Dispose() => Interlocked.Exchange(ref release, null)?.Invoke();
     }
     /// <summary>The render loop's state, for diagnostics.</summary>
-    public string RenderStatus => viewport.RenderHost is { } host ? $"IsRendering={host.IsRendering}, IsBusy={host.IsBusy}" : "no render host";
+    public string RenderStatus => direct != null ? direct.Status : viewport!.RenderHost is { } host ? $"IsRendering={host.IsRendering}, IsBusy={host.IsBusy}" : "no render host";
     /// <summary>The presented back buffer's size in physical pixels (0 × 0 before the first frame).</summary>
-    public (int Width, int Height) PresentedPixelSize => viewport.RenderHost?.RenderBuffer?.BackBuffer?.Resource is SharpDX.Direct3D11.Texture2D buffer
-        ? (buffer.Description.Width, buffer.Description.Height) : (0, 0);
+    public (int Width, int Height) PresentedPixelSize => direct != null ? direct.PresentedPixelSize
+        : viewport!.RenderHost?.RenderBuffer?.BackBuffer?.Resource is SharpDX.Direct3D11.Texture2D buffer ? (buffer.Description.Width, buffer.Description.Height) : (0, 0);
     /// <summary>Physical pixels per DIP applied to the back buffer, line widths and shader widths.</summary>
-    public double DpiScale => viewport.RenderHost?.DpiScale ?? 1;
+    public double DpiScale => direct?.DpiScale ?? viewport!.RenderHost?.DpiScale ?? 1;
 
-    // Backend-only shims (P1, Helix): nothing to do in an in-house backend.
+    // Backend-only shims (Helix adapter): nothing to do in the Direct3D backend.
     /// <summary>Settles the backend's own camera controller (no forces or animations left), changing no pose zStudio keeps.</summary>
     public void StopNativeCameraMotion(TimeSpan timestamp)
     {
+        if (viewport == null) return;
         bool inertia = viewport.IsInertiaEnabled, rotation = viewport.IsRotationEnabled;
         try
         {
@@ -231,17 +314,24 @@ internal sealed class RenderView : IRayPicker, INodeOwner, IDisposable
         finally { viewport.IsInertiaEnabled = inertia; viewport.IsRotationEnabled = rotation; }
     }
     /// <summary>Whether the backend installed its own mouse/keyboard gestures (zStudio owns all navigation input).</summary>
-    public bool UsesBuiltInGestures => viewport.UseDefaultGestures || viewport.InputBindings.Count != 0;
+    public bool UsesBuiltInGestures => viewport != null ? viewport.UseDefaultGestures || viewport.InputBindings.Count != 0 : direct!.Element.InputBindings.Count != 0;
 
     public void Dispose()
     {
         if (disposed) return;
-        disposed = true; CancelResize(); viewport.Dispose();
+        disposed = true; CancelResize();
+        if (viewport != null) viewport.Dispose();
+        else
+        {
+            Device = null; direct!.Dispose();
+            lock (views) views.RemoveAll(v => !v.TryGetTarget(out var target) || ReferenceEquals(target, this));
+        }
+        if (camera != null) camera.Changed = null;
     }
 
-    // Helix updates inertia here, immediately before copying the camera to the
-    // render context. Preparing in CameraChanged instead observes partial poses
-    // and recursively changes projection while another property is still updating.
+    // Helix adapter: Helix updates inertia here, immediately before copying the camera to the
+    // render context. Preparing in CameraChanged instead observes partial poses and recursively changes projection while
+    // another property is still updating.
     private sealed class FrameViewport : Viewport3DX, IViewport3DX
     {
         private readonly RenderView owner;

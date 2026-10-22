@@ -24,10 +24,14 @@ internal readonly record struct ZoneEmphasis(ZoneEmphasisMode Mode, byte Zone, f
 /// <summary>An RGBA8 (or BGRA8) texture, sampled with linear filtering, nearest mip and wrapping; uploads build a full mip chain.</summary>
 internal sealed class RenderTexture
 {
+    private TextureModel? helix;
+    private TextureResource? resource;
     private RenderTexture(byte[] pixels, int width, int height, bool bgra)
     {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(width); ArgumentOutOfRangeException.ThrowIfNegativeOrZero(height);
+        if (pixels.LongLength < 4L * width * height) throw new ArgumentException("The pixel array is smaller than the texture.", nameof(pixels));
         Pixels = pixels; Width = width; Height = height; IsBgra = bgra;
-        HelixTexture = new TextureModel(pixels, bgra ? SharpDX.DXGI.Format.B8G8R8A8_UNorm : SharpDX.DXGI.Format.R8G8B8A8_UNorm, width, height);
+        if (RenderBackend.UseHelix) helix = new TextureModel(pixels, bgra ? SharpDX.DXGI.Format.B8G8R8A8_UNorm : SharpDX.DXGI.Format.R8G8B8A8_UNorm, width, height);
     }
     public static RenderTexture FromRgba(byte[] rgba, int width, int height) => new(rgba, width, height, false);
     public static RenderTexture FromBgra(byte[] bgra, int width, int height) => new(bgra, width, height, true);
@@ -35,7 +39,10 @@ internal sealed class RenderTexture
     public int Width { get; }
     public int Height { get; }
     public bool IsBgra { get; }
-    internal TextureModel HelixTexture { get; }
+    internal TextureModel HelixTexture => helix ??= new TextureModel(Pixels, IsBgra ? SharpDX.DXGI.Format.B8G8R8A8_UNorm : SharpDX.DXGI.Format.R8G8B8A8_UNorm, Width, Height);
+    /// <summary>Direct3D backend: the uploaded texture (built on first draw for each device).</summary>
+    internal TextureResource Resource(D3DGraphics graphics) => DeviceResource.Refresh(ref resource, graphics, g => new TextureResource(g, this));
+    internal void ReleaseDeviceResources() { resource?.Dispose(); resource = null; }
 }
 
 /// <summary>
@@ -55,60 +62,91 @@ internal sealed class PreviewMaterial
 {
     private static readonly ConditionalWeakTable<HelixDiffuseMaterial, PreviewMaterial> wrappers = new();
     private readonly PreviewCore? core;
+    private readonly bool preview, horizon, vertexTint;
+    private readonly FaceOrientation? orientation;
     private RenderTexture? map;
     private ZoneEmphasis emphasis;
+    // Direct3D backend state (the Helix adapter keeps it in its material and core).
+    private Color4 diffuse = new(1, 1, 1, 1), overlay;
+    private bool unlit, polygonZones;
+    private float vertexBlending, fade;
 
-    private PreviewMaterial(HelixDiffuseMaterial material, PreviewCore? core) { HelixMaterial = material; this.core = core; }
+    private PreviewMaterial(HelixDiffuseMaterial? helix, PreviewCore? core, bool preview, bool horizon, bool vertexTint, FaceOrientation? orientation)
+    {
+        HelixMaterial = helix; this.core = core; this.preview = preview; this.horizon = horizon; this.vertexTint = vertexTint; this.orientation = orientation;
+    }
     private static PreviewMaterial Register(HelixDiffuseMaterial material, PreviewCore? core)
     {
-        var result = new PreviewMaterial(material, core); wrappers.AddOrUpdate(material, result); return result;
+        var result = new PreviewMaterial(material, core, core != null, core?.Horizon == true, core?.VertexTint == true, core?.Orientation);
+        wrappers.AddOrUpdate(material, result); return result;
     }
     public static PreviewMaterial Create(bool horizon = false, bool vertexTint = false, FaceOrientation? orientation = null)
     {
+        if (!RenderBackend.UseHelix) return new(null, null, true, horizon, vertexTint, orientation);
         var core = new PreviewCore(horizon, vertexTint, orientation);
         return Register(new HelixDiffuseMaterial(core), core);
     }
-    public static PreviewMaterial CreatePlain() => Register(new HelixDiffuseMaterial(), null);
-    /// <summary>The facade of a backend material the backend created itself (the transform gizmo's own colours).</summary>
-    internal static PreviewMaterial Wrap(HelixDiffuseMaterial material) => wrappers.GetValue(material, static m => new(m, m.Core as PreviewCore));
+    public static PreviewMaterial CreatePlain() => RenderBackend.UseHelix ? Register(new HelixDiffuseMaterial(), null) : new(null, null, false, false, false, null);
+    /// <summary>The facade of a material the Helix adapter's gizmo created itself (its own colours).</summary>
+    internal static PreviewMaterial Wrap(HelixDiffuseMaterial material) => wrappers.GetValue(material, static m =>
+        new(m, m.Core as PreviewCore, m.Core is PreviewCore, (m.Core as PreviewCore)?.Horizon == true, (m.Core as PreviewCore)?.VertexTint == true, (m.Core as PreviewCore)?.Orientation));
 
-    internal HelixDiffuseMaterial HelixMaterial { get; }
-    public bool IsPreview => core != null;
-    public bool Horizon => core?.Horizon == true;
-    public bool VertexTint => core?.VertexTint == true;
-    public FaceOrientation? Orientation => core?.Orientation;
+    /// <summary>The Helix adapter's material, null in the Direct3D backend.</summary>
+    internal HelixDiffuseMaterial? HelixMaterial { get; }
+    public bool IsPreview => preview;
+    public bool Horizon => horizon;
+    public bool VertexTint => vertexTint;
+    public FaceOrientation? Orientation => orientation;
+    private void Changed() { if (HelixMaterial == null) RenderView.InvalidateAll(); }
 
     public Color4 DiffuseColor
     {
-        get { var c = HelixMaterial.DiffuseColor; return new(c.Red, c.Green, c.Blue, c.Alpha); }
-        set => HelixMaterial.DiffuseColor = new HelixColor4(value.Red, value.Green, value.Blue, value.Alpha);
+        get { if (HelixMaterial is not { } helix) return diffuse; var c = helix.DiffuseColor; return new(c.Red, c.Green, c.Blue, c.Alpha); }
+        set { diffuse = value; if (HelixMaterial is { } helix) helix.DiffuseColor = new HelixColor4(value.Red, value.Green, value.Blue, value.Alpha); else Changed(); }
     }
-    public RenderTexture? DiffuseMap { get => map; set { map = value; HelixMaterial.DiffuseMap = value?.HelixTexture; } }
-    public bool Unlit { get => HelixMaterial.EnableUnLit; set => HelixMaterial.EnableUnLit = value; }
-    public float VertexColorBlendingFactor { get => (float)HelixMaterial.VertexColorBlendingFactor; set => HelixMaterial.VertexColorBlendingFactor = value; }
+    public RenderTexture? DiffuseMap { get => map; set { map = value; if (HelixMaterial is { } helix) helix.DiffuseMap = value?.HelixTexture; else Changed(); } }
+    public bool Unlit { get => HelixMaterial?.EnableUnLit ?? unlit; set { unlit = value; if (HelixMaterial is { } helix) helix.EnableUnLit = value; else Changed(); } }
+    public float VertexColorBlendingFactor
+    {
+        get => HelixMaterial is { } helix ? (float)helix.VertexColorBlendingFactor : vertexBlending;
+        set { vertexBlending = value; if (HelixMaterial is { } helix) helix.VertexColorBlendingFactor = value; else Changed(); }
+    }
 
-    private PreviewCore Core => core ?? throw new InvalidOperationException("Diagnostic overlays require a preview material.");
+    private void RequirePreview() { if (!preview) throw new InvalidOperationException("Diagnostic overlays require a preview material."); }
     /// <summary>Diagnostic tint: lerp(rgb, overlay.rgb, overlay.a); alpha, cutouts and depth policy unchanged. Alpha 0 is none.</summary>
     public Color4 Overlay
     {
-        get { var c = Core.Overlay; return new(c.Red, c.Green, c.Blue, c.Alpha); }
-        set => Core.Overlay = new HelixColor4(value.Red, value.Green, value.Blue, value.Alpha);
+        get { RequirePreview(); if (core == null) return overlay; var c = core.Overlay; return new(c.Red, c.Green, c.Blue, c.Alpha); }
+        set { RequirePreview(); overlay = value; if (core != null) core.Overlay = new HelixColor4(value.Red, value.Green, value.Blue, value.Alpha); else Changed(); }
     }
     /// <summary>Tints each polygon by the zone set its vertex colours carry (ids n/255 in RGB, count n/3 in A).</summary>
-    public bool PolygonZones { get => Core.PolygonZones; set => Core.PolygonZones = value; }
+    public bool PolygonZones
+    {
+        get { RequirePreview(); return core?.PolygonZones ?? polygonZones; }
+        set { RequirePreview(); polygonZones = value; if (core != null) core.PolygonZones = value; else Changed(); }
+    }
     public ZoneEmphasis Emphasis
     {
-        get { _ = Core; return emphasis; }
-        set { Core.Emphasis = new HelixColor4(value.Zone / 255f, value.Strong, value.Weak, (float)value.Mode); emphasis = value; }
+        get { RequirePreview(); return emphasis; }
+        set
+        {
+            RequirePreview();
+            if (core != null) core.Emphasis = new HelixColor4(value.Zone / 255f, value.Strong, value.Weak, (float)value.Mode); else Changed();
+            emphasis = value;
+        }
     }
     /// <summary>Draws the surfaces at 1 − fade opacity.</summary>
-    public float Fade { get => Core.Fade; set => Core.Fade = value; }
+    public float Fade
+    {
+        get { RequirePreview(); return core?.Fade ?? fade; }
+        set { RequirePreview(); fade = value; if (core != null) core.Fade = value; else Changed(); }
+    }
 
     /// <summary>A preview copy (same pass flags and state) for a mesh that must look different from the others sharing this one.</summary>
     public PreviewMaterial Copy()
     {
-        var source = Core;
-        var copy = Create(source.Horizon, source.VertexTint, source.Orientation);
+        RequirePreview();
+        var copy = Create(horizon, vertexTint, orientation);
         copy.DiffuseColor = DiffuseColor; copy.DiffuseMap = DiffuseMap; copy.Unlit = Unlit; copy.VertexColorBlendingFactor = VertexColorBlendingFactor;
         copy.Overlay = Overlay; copy.PolygonZones = PolygonZones; copy.Emphasis = Emphasis; copy.Fade = Fade;
         return copy;
@@ -122,9 +160,15 @@ internal sealed class PreviewMaterial
     /// <summary>A plain material with this one's colour, texture, lighting and vertex blending.</summary>
     public PreviewMaterial ClonePlain()
     {
-        var clone = Register((HelixDiffuseMaterial)HelixMaterial.Clone(), null);
-        clone.map = map;
-        return clone;
+        if (HelixMaterial is { } helix)
+        {
+            var clone = Register((HelixDiffuseMaterial)helix.Clone(), null);
+            clone.map = map;
+            return clone;
+        }
+        var plain = CreatePlain();
+        plain.diffuse = diffuse; plain.map = map; plain.unlit = unlit; plain.vertexBlending = vertexBlending;
+        return plain;
     }
 
     // Backend pass table (Helix 3.1.2): the stock diffuse pass for plain opaque surfaces, zStudio passes for the rest.

@@ -26,62 +26,90 @@ internal abstract class Node : IDisposable
 {
     private static readonly ConditionalWeakTable<Element3D, Node> nodes = new();
     private Visibility visibility;
-    private bool rendering = true, guide;
+    private bool rendering = true, guide, hitTestVisible = true;
     private Matrix4x4? transform;
     private bool settingTransform;
 
-    private protected Node(Element3D element)
+    /// <param name="helix">The Helix adapter's element (Helix backend only; null in the Direct3D backend).</param>
+    private protected Node(Element3D? helix)
     {
-        HelixElement = element; nodes.AddOrUpdate(element, this);
-        visibility = element.Visibility;
-        if (element.Transform is { } existing && !existing.Value.IsIdentity) transform = ToNumerics(existing.Value);
+        HelixElement = helix;
+        if (helix == null) return;
+        nodes.AddOrUpdate(helix, this);
+        visibility = helix.Visibility;
+        if (helix.Transform is { } existing && !existing.Value.IsIdentity) transform = ToNumerics(existing.Value);
     }
-    internal Element3D HelixElement { get; }
+    /// <summary>The Helix adapter's element, null in the Direct3D backend.</summary>
+    internal Element3D? HelixElement { get; }
     internal static Node? FromHelix(object? element) => element is Element3D key && nodes.TryGetValue(key, out var node) ? node : null;
     internal INodeOwner? Owner { get; set; }
     /// <summary>The view this node is shown in (through its groups), or null while it is in none.</summary>
     internal RenderView? View => Owner?.View;
+    /// <summary>The Direct3D backend redraws after a change (the Helix adapter's elements invalidate themselves).</summary>
+    private protected void Changed() { if (HelixElement == null) View?.InvalidateRender(); }
 
-    public Visibility Visibility { get => visibility; set { visibility = value; ApplyVisibility(); VisibilityChanged(); } }
+    public Visibility Visibility { get => visibility; set { visibility = value; if (HelixElement != null) ApplyVisibility(); VisibilityChanged(); Changed(); } }
     public bool IsRendering
     {
-        get => guide ? rendering : HelixElement.IsRendering;
-        set { rendering = value; ApplyRendering(); }
+        get => HelixElement != null && !guide ? HelixElement.IsRendering : rendering;
+        set { rendering = value; if (HelixElement != null) ApplyRendering(); Changed(); }
     }
-    public bool IsHitTestVisible { get => HelixElement.IsHitTestVisible; set => HelixElement.IsHitTestVisible = value; }
+    public bool IsHitTestVisible
+    {
+        get => HelixElement?.IsHitTestVisible ?? hitTestVisible;
+        set { hitTestVisible = value; if (HelixElement != null) HelixElement.IsHitTestVisible = value; }
+    }
     /// <summary>Presentation chrome: hidden while the view's guides are hidden (Hide UI), whatever its own flags say.</summary>
     public bool IsGuide
     {
         get => guide;
-        set { if (guide == value) return; if (value) rendering = HelixElement.IsRendering; guide = value; ApplyRendering(); }
+        set
+        {
+            if (guide == value) return;
+            if (value && HelixElement != null) rendering = HelixElement.IsRendering;
+            guide = value;
+            if (HelixElement != null) ApplyRendering();
+            Changed();
+        }
     }
     public Matrix4x4? Transform
     {
         get => transform;
         set
         {
-            transform = value; settingTransform = true;
+            transform = value;
+            if (HelixElement == null) { TransformSet(); Changed(); return; }
+            settingTransform = true;
             try { HelixElement.Transform = value is { } matrix ? new MatrixTransform3D(ToWpf(matrix)) : Transform3D.Identity; }
             finally { settingTransform = false; }
         }
     }
-    /// <summary>The transform the backend itself gave the node (the gizmo moving its target).</summary>
+    /// <summary>Direct3D backend: the node's transform was set (groups raise <see cref="GroupNode.TransformChanged"/>).</summary>
+    private protected virtual void TransformSet() { }
+    /// <summary>Helix adapter: the transform the backend itself gave the node (the gizmo moving its target).</summary>
     private protected void ReadBackTransform()
     {
-        if (settingTransform) return;
+        if (settingTransform || HelixElement == null) return;
         transform = HelixElement.Transform is { } current ? ToNumerics(current.Value) : null;
     }
 
     private protected virtual bool Shown => visibility == Visibility.Visible;
+    /// <summary>The node's own visibility (its visibility, instances and followed mesh; not its flags or ancestors).</summary>
+    internal bool IsShown => Shown;
+    /// <summary>The node's own rendering flag (guides: before the view's guide state).</summary>
+    internal bool RendersItself => rendering && (HelixElement == null || guide || HelixElement.IsRendering);
     private protected virtual void VisibilityChanged() { }
-    internal void ApplyVisibility() => HelixElement.Visibility = Shown ? visibility : visibility == Visibility.Visible ? Visibility.Collapsed : visibility;
-    private void ApplyRendering() => HelixElement.IsRendering = rendering && (!guide || View?.GuidesVisible != false);
+    internal void ApplyVisibility()
+    {
+        if (HelixElement != null) HelixElement.Visibility = Shown ? visibility : visibility == Visibility.Visible ? Visibility.Collapsed : visibility;
+    }
+    private void ApplyRendering() { if (HelixElement != null) HelixElement.IsRendering = rendering && (!guide || View?.GuidesVisible != false); }
     /// <summary>Guides follow their view's guide state again (attached, or the state changed).</summary>
     internal virtual void RefreshGuides() { if (guide) ApplyRendering(); }
 
-    /// <summary>Makes a transform just set visible to ray picking before the next frame (picking otherwise uses the last frame's).</summary>
-    public void UpdateHitTestTransform() => HelixElement.SceneNode.UpdateAllTransformMatrix();
-    public virtual void Dispose() => HelixElement.Dispose();
+    /// <summary>Makes a transform just set visible to ray picking before the next frame (the Helix adapter picks with the last frame's).</summary>
+    public void UpdateHitTestTransform() => HelixElement?.SceneNode.UpdateAllTransformMatrix();
+    public virtual void Dispose() => HelixElement?.Dispose();
 
     internal static Matrix3D ToWpf(Matrix4x4 m) => new(m.M11, m.M12, m.M13, m.M14, m.M21, m.M22, m.M23, m.M24, m.M31, m.M32, m.M33, m.M34, m.M41, m.M42, m.M43, m.M44);
     internal static Matrix4x4 ToNumerics(Matrix3D m) => new((float)m.M11, (float)m.M12, (float)m.M13, (float)m.M14, (float)m.M21, (float)m.M22, (float)m.M23, (float)m.M24,
@@ -92,22 +120,29 @@ internal abstract class Node : IDisposable
 internal sealed class NodeCollection : IReadOnlyList<Node>
 {
     private readonly List<Node> items = [];
-    private readonly IList<Element3D> backend;
+    private readonly IList<Element3D>? backend;
     private readonly INodeOwner owner;
-    internal NodeCollection(INodeOwner owner, IList<Element3D> backend) { this.owner = owner; this.backend = backend; }
+    internal NodeCollection(INodeOwner owner, IList<Element3D>? backend) { this.owner = owner; this.backend = backend; }
     public int Count => items.Count;
     public Node this[int index] => items[index];
     public void Add(Node node)
     {
         if (node.Owner != null) throw new InvalidOperationException("The node already belongs to a collection.");
-        items.Add(node); node.Owner = owner; backend.Add(node.HelixElement); node.RefreshGuides();
+        items.Add(node); node.Owner = owner;
+        if (backend != null && node.HelixElement != null) backend.Add(node.HelixElement);
+        node.RefreshGuides(); owner.View?.InvalidateRender();
     }
     public bool Remove(Node node)
     {
         if (!items.Remove(node)) return false;
-        backend.Remove(node.HelixElement); node.Owner = null; return true;
+        if (backend != null && node.HelixElement != null) backend.Remove(node.HelixElement);
+        node.Owner = null; owner.View?.InvalidateRender(); return true;
     }
-    public void Clear() { foreach (var node in items) node.Owner = null; items.Clear(); backend.Clear(); }
+    public void Clear()
+    {
+        foreach (var node in items) node.Owner = null;
+        items.Clear(); backend?.Clear(); owner.View?.InvalidateRender();
+    }
     public bool Contains(Node node) => items.Contains(node);
     public IEnumerator<Node> GetEnumerator() => items.GetEnumerator();
     IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
@@ -118,8 +153,8 @@ internal class GroupNode : Node, INodeOwner
 {
     private EventHandler? backendTransform;
     private Action? transformChanged;
-    public GroupNode() : this(new GroupModel3D()) { }
-    private protected GroupNode(GroupElement3D element) : base(element) => Children = new(this, element.Children);
+    public GroupNode() : this(RenderBackend.UseHelix ? new GroupModel3D() : null) { }
+    private protected GroupNode(GroupElement3D? element) : base(element) => Children = new(this, element?.Children);
     public NodeCollection Children { get; }
     RenderView? INodeOwner.View => View;
     internal override void RefreshGuides() { base.RefreshGuides(); foreach (var child in Children) child.RefreshGuides(); }
@@ -128,7 +163,7 @@ internal class GroupNode : Node, INodeOwner
     {
         add
         {
-            if (transformChanged == null)
+            if (transformChanged == null && HelixElement != null)
             {
                 backendTransform = (_, _) => { ReadBackTransform(); transformChanged?.Invoke(); };
                 DependencyPropertyDescriptor.FromProperty(Element3D.TransformProperty, HelixElement.GetType()).AddValueChanged(HelixElement, backendTransform);
@@ -141,10 +176,11 @@ internal class GroupNode : Node, INodeOwner
             if (transformChanged == null) DetachTransform();
         }
     }
+    private protected override void TransformSet() => transformChanged?.Invoke();
     private void DetachTransform()
     {
-        if (backendTransform == null) return;
-        DependencyPropertyDescriptor.FromProperty(Element3D.TransformProperty, HelixElement.GetType()).RemoveValueChanged(HelixElement, backendTransform);
+        if (backendTransform != null && HelixElement != null)
+            DependencyPropertyDescriptor.FromProperty(Element3D.TransformProperty, HelixElement.GetType()).RemoveValueChanged(HelixElement, backendTransform);
         backendTransform = null; transformChanged = null;
     }
     public override void Dispose() { DetachTransform(); base.Dispose(); }
@@ -156,12 +192,17 @@ internal class GroupNode : Node, INodeOwner
 /// </summary>
 internal sealed class SortingGroupNode : GroupNode
 {
-    public SortingGroupNode() : base(new SortingGroupModel3D { SortTransparentOnly = true, SortingInterval = 0 }) { }
-    public bool SortingEnabled { get => ((SortingGroupModel3D)HelixElement).EnableSorting; set => ((SortingGroupModel3D)HelixElement).EnableSorting = value; }
+    private bool sorting = true;
+    public SortingGroupNode() : base(RenderBackend.UseHelix ? new SortingGroupModel3D { SortTransparentOnly = true, SortingInterval = 0 } : null) { }
+    public bool SortingEnabled
+    {
+        get => HelixElement is SortingGroupModel3D helix ? helix.EnableSorting : sorting;
+        set { sorting = value; if (HelixElement is SortingGroupModel3D helix) helix.EnableSorting = value; else Changed(); }
+    }
 }
 
 /// <summary>Drawn after everything else with the depth buffer cleared: its children depth-test only among themselves.</summary>
-internal sealed class TopMostGroupNode() : GroupNode(new TopMostGroup3D());
+internal sealed class TopMostGroupNode() : GroupNode(RenderBackend.UseHelix ? new TopMostGroup3D() : null);
 
 /// <summary>
 /// Geometry drawn once per instance: world position is p · instance · <see cref="Node.Transform"/> (instances are placed in the
@@ -169,30 +210,42 @@ internal sealed class TopMostGroupNode() : GroupNode(new TopMostGroup3D());
 /// which differs whenever a node has both a non-identity transform and instances that do not commute with it, and zStudio builds
 /// no node with both). Null
 /// <see cref="Instances"/> draws once; an empty list draws (and hits) nothing. Opaque meshes and lines are drawn in ascending
-/// <see cref="RenderOrder"/> (default 0). <see cref="IsDepthClipEnabled"/> false lets the near and far planes not clip it;
-/// <see cref="DepthBias"/> is the rasterizer's integer bias on 32-bit float depth.
+/// <see cref="RenderOrder"/> (default 0; equal orders in submission order). <see cref="IsDepthClipEnabled"/> false lets the near
+/// and far planes not clip it; <see cref="DepthBias"/> is the rasterizer's integer bias on 32-bit float depth.
 /// </summary>
 internal abstract class GeometryNode : Node
 {
     private IReadOnlyList<Matrix4x4>? instances;
-    private protected GeometryNode(GeometryModel3D element) : base(element) => instances = element.Instances as IReadOnlyList<Matrix4x4>;
-    private GeometryModel3D Model => (GeometryModel3D)HelixElement;
+    private int renderOrder, depthBias;
+    private bool depthClip = true;
+    private InstanceBuffer? instanceBuffer;
+    private protected GeometryNode(GeometryModel3D? element) : base(element) => instances = element?.Instances as IReadOnlyList<Matrix4x4>;
+    private GeometryModel3D? Model => (GeometryModel3D?)HelixElement;
     public IReadOnlyList<Matrix4x4>? Instances
     {
         get => instances;
         set
         {
             instances = value;
-            Model.Instances = value == null ? null! : value as IList<Matrix4x4> ?? [.. value];
-            ApplyVisibility(); InstancesChanged();
+            if (Model is { } model) { model.Instances = value == null ? null! : value as IList<Matrix4x4> ?? [.. value]; ApplyVisibility(); }
+            InstancesChanged(); Changed();
         }
     }
     private protected virtual void InstancesChanged() { }
     private protected override bool Shown => base.Shown && instances is not { Count: 0 };
-    internal bool IsShown => Shown;
-    public int RenderOrder { get => Model.RenderOrder; set => Model.RenderOrder = value; }
-    public bool IsDepthClipEnabled { get => Model.IsDepthClipEnabled; set => Model.IsDepthClipEnabled = value; }
-    public int DepthBias { get => Model.DepthBias; set => Model.DepthBias = value; }
+    public int RenderOrder { get => Model?.RenderOrder ?? renderOrder; set { renderOrder = value; if (Model is { } model) model.RenderOrder = value; else Changed(); } }
+    public bool IsDepthClipEnabled { get => Model?.IsDepthClipEnabled ?? depthClip; set { depthClip = value; if (Model is { } model) model.IsDepthClipEnabled = value; else Changed(); } }
+    public int DepthBias { get => Model?.DepthBias ?? depthBias; set { depthBias = value; if (Model is { } model) model.DepthBias = value; else Changed(); } }
+
+    /// <summary>Direct3D backend: the instance stream (null: draw once at identity).</summary>
+    internal InstanceBuffer? InstanceStream(D3DGraphics graphics)
+    {
+        if (instances == null) { instanceBuffer?.Dispose(); instanceBuffer = null; return null; }
+        if (instanceBuffer is { IsReleased: false } current && current.Generation == graphics.Generation && ReferenceEquals(current.Source, instances) && current.Count == instances.Count) return current;
+        instanceBuffer?.Dispose(); instanceBuffer = null;
+        return instanceBuffer = new InstanceBuffer(graphics, instances);
+    }
+    public override void Dispose() { instanceBuffer?.Dispose(); instanceBuffer = null; base.Dispose(); }
 }
 
 /// <summary>A triangle mesh with a <see cref="PreviewMaterial"/>; transparent meshes are drawn after the opaque ones, without depth
@@ -201,44 +254,59 @@ internal sealed class MeshNode : GeometryNode
 {
     private MeshData? geometry;
     private PreviewMaterial? material;
+    private bool transparent;
+    private CullMode cullMode;
     private readonly List<LineNode> followers = [];
-    public MeshNode() : base(new MeshGeometryModel3D { IsThrowingShadow = false }) { }
-    /// <summary>The facade of a mesh the backend built itself (the transform gizmo's handles).</summary>
+    public MeshNode() : base(RenderBackend.UseHelix ? new MeshGeometryModel3D { IsThrowingShadow = false } : null) { }
+    /// <summary>The facade of a mesh the Helix adapter's gizmo built itself (its handles).</summary>
     internal MeshNode(MeshGeometryModel3D existing) : base(existing) { }
-    private MeshGeometryModel3D Mesh => (MeshGeometryModel3D)HelixElement;
-    public MeshData? Geometry { get => geometry; set { geometry = value; Mesh.Geometry = value?.HelixGeometry; } }
+    private MeshGeometryModel3D? Mesh => (MeshGeometryModel3D?)HelixElement;
+    public MeshData? Geometry { get => geometry; set { geometry = value; if (Mesh is { } mesh) mesh.Geometry = value?.HelixGeometry; else Changed(); } }
     public PreviewMaterial? Material
     {
-        get => material ??= Mesh.Material is HelixDiffuseMaterial backend ? PreviewMaterial.Wrap(backend) : null;
-        set { material = value; Mesh.Material = value?.HelixMaterial; }
+        get => Mesh is { } mesh ? material ??= mesh.Material is HelixDiffuseMaterial backend ? PreviewMaterial.Wrap(backend) : null : material;
+        set { material = value; if (Mesh is { } mesh) mesh.Material = value?.HelixMaterial; else Changed(); }
     }
-    public bool IsTransparent { get => Mesh.IsTransparent; set => Mesh.IsTransparent = value; }
+    public bool IsTransparent { get => Mesh?.IsTransparent ?? transparent; set { transparent = value; if (Mesh is { } mesh) mesh.IsTransparent = value; else Changed(); } }
     public CullMode CullMode
     {
-        get => Mesh.CullMode switch { SharpDX.Direct3D11.CullMode.Front => CullMode.Front, SharpDX.Direct3D11.CullMode.Back => CullMode.Back, _ => CullMode.None };
-        set => Mesh.CullMode = value switch { CullMode.Front => SharpDX.Direct3D11.CullMode.Front, CullMode.Back => SharpDX.Direct3D11.CullMode.Back, _ => SharpDX.Direct3D11.CullMode.None };
+        get => Mesh is { } mesh ? mesh.CullMode switch { SharpDX.Direct3D11.CullMode.Front => CullMode.Front, SharpDX.Direct3D11.CullMode.Back => CullMode.Back, _ => CullMode.None } : cullMode;
+        set
+        {
+            cullMode = value;
+            if (Mesh is { } mesh) mesh.CullMode = value switch { CullMode.Front => SharpDX.Direct3D11.CullMode.Front, CullMode.Back => SharpDX.Direct3D11.CullMode.Back, _ => SharpDX.Direct3D11.CullMode.None };
+            else Changed();
+        }
     }
     /// <summary>Whether triangles are filled (always: wireframe is drawn as polygon outline lines, never as a fill mode).</summary>
-    internal bool FillsTriangles => Mesh.FillMode == SharpDX.Direct3D11.FillMode.Solid;
+    internal bool FillsTriangles => Mesh is not { } mesh || mesh.FillMode == SharpDX.Direct3D11.FillMode.Solid;
     internal void Follow(LineNode line, bool follow) { if (follow) followers.Add(line); else followers.Remove(line); }
     private protected override void InstancesChanged() { foreach (var line in followers) line.FollowedChanged(); }
     private protected override void VisibilityChanged() { foreach (var line in followers) line.FollowedChanged(); }
+    /// <summary>Also releases the device copies of its geometry and texture (shared ones upload again for their other users).</summary>
+    public override void Dispose()
+    {
+        geometry?.ReleaseDeviceResources(); material?.DiffuseMap?.ReleaseDeviceResources();
+        base.Dispose();
+    }
 }
 
 /// <summary>
 /// A screen-space ribbon per index pair: <see cref="Thickness"/> DIPs to each side (2 × Thickness DIPs wide), solid, alpha-blended,
 /// depth-tested (LessEqual) with depth writes. A line following a mesh (<see cref="FollowInstancesOf"/>) uses that mesh's
-/// instances and shows only where the mesh shows.
+/// instances and shows only where the mesh shows. Lines are never ray-picked.
 /// </summary>
 internal sealed class LineNode : GeometryNode
 {
     private LineData? geometry;
     private MeshNode? followed;
-    public LineNode() : base(new LineGeometryModel3D()) { }
-    private LineGeometryModel3D Line => (LineGeometryModel3D)HelixElement;
-    public LineData? Geometry { get => geometry; set { geometry = value; Line.Geometry = value?.HelixGeometry; } }
-    public Color Color { get => Line.Color; set => Line.Color = value; }
-    public double Thickness { get => Line.Thickness; set => Line.Thickness = value; }
+    private Color color = Colors.Black;
+    private double thickness = 1;
+    public LineNode() : base(RenderBackend.UseHelix ? new LineGeometryModel3D() : null) { }
+    private LineGeometryModel3D? Line => (LineGeometryModel3D?)HelixElement;
+    public LineData? Geometry { get => geometry; set { geometry = value; if (Line is { } line) line.Geometry = value?.HelixGeometry; else Changed(); } }
+    public Color Color { get => Line?.Color ?? color; set { color = value; if (Line is { } line) line.Color = value; else Changed(); } }
+    public double Thickness { get => Line?.Thickness ?? thickness; set { thickness = value; if (Line is { } line) line.Thickness = value; else Changed(); } }
     public MeshNode? FollowInstancesOf
     {
         get => followed;
@@ -250,9 +318,9 @@ internal sealed class LineNode : GeometryNode
             FollowedChanged();
         }
     }
-    internal void FollowedChanged() { if (followed != null) Instances = followed.Instances; ApplyVisibility(); }
+    internal void FollowedChanged() { if (followed != null) Instances = followed.Instances; ApplyVisibility(); Changed(); }
     private protected override bool Shown => base.Shown && followed is not { IsShown: false };
-    public override void Dispose() { FollowInstancesOf = null; base.Dispose(); }
+    public override void Dispose() { FollowInstancesOf = null; geometry?.ReleaseDeviceResources(); base.Dispose(); }
 }
 
 /// <summary>
@@ -263,15 +331,34 @@ internal sealed class LineNode : GeometryNode
 /// </summary>
 internal sealed class GroundGridNode : Node
 {
-    public GroundGridNode() : base(new AxisPlaneGridModel3D { UpAxis = Axis.Y, GridPattern = GridPattern.Grid, RenderShadowMap = false }) { }
-    private AxisPlaneGridModel3D Grid => (AxisPlaneGridModel3D)HelixElement;
-    public double Offset { get => Grid.Offset; set => Grid.Offset = value; }
-    public bool AutoSpacing { get => Grid.AutoSpacing; set => Grid.AutoSpacing = value; }
-    public double AutoSpacingRate { get => Grid.AutoSpacingRate; set => Grid.AutoSpacingRate = value; }
-    public double GridSpacing { get => Grid.GridSpacing; set => Grid.GridSpacing = value; }
-    public double GridThickness { get => Grid.GridThickness; set => Grid.GridThickness = value; }
-    public double FadingFactor { get => Grid.FadingFactor; set => Grid.FadingFactor = value; }
-    public Color PlaneColor { get => Grid.PlaneColor; set => Grid.PlaneColor = value; }
-    public Color GridColor { get => Grid.GridColor; set => Grid.GridColor = value; }
-    public bool DrawsGridLines => Grid.GridPattern == GridPattern.Grid;
+    private double offset, rate = 5, spacing = 10, thickness = .05, fading = .2;
+    private bool autoSpacing = true;
+    private Color plane = Colors.Gray, grid = Colors.DarkGray;
+    public GroundGridNode() : base(RenderBackend.UseHelix ? new AxisPlaneGridModel3D { UpAxis = Axis.Y, GridPattern = GridPattern.Grid, RenderShadowMap = false } : null) { }
+    private AxisPlaneGridModel3D? Grid => (AxisPlaneGridModel3D?)HelixElement;
+    public double Offset { get => Grid?.Offset ?? offset; set { offset = value; if (Grid is { } g) g.Offset = value; else Changed(); } }
+    public bool AutoSpacing { get => Grid?.AutoSpacing ?? autoSpacing; set { autoSpacing = value; if (Grid is { } g) g.AutoSpacing = value; else { if (!value) ActualSpacing = (float)spacing; Changed(); } } }
+    public double AutoSpacingRate { get => Grid?.AutoSpacingRate ?? rate; set { rate = value; if (Grid is { } g) g.AutoSpacingRate = value; else Changed(); } }
+    public double GridSpacing { get => Grid?.GridSpacing ?? spacing; set { spacing = value; ActualSpacing = (float)value; if (Grid is { } g) g.GridSpacing = value; else Changed(); } }
+    public double GridThickness { get => Grid?.GridThickness ?? thickness; set { thickness = value; if (Grid is { } g) g.GridThickness = value; } }
+    public double FadingFactor { get => Grid?.FadingFactor ?? fading; set { fading = value; if (Grid is { } g) g.FadingFactor = value; } }
+    public Color PlaneColor { get => Grid?.PlaneColor ?? plane; set { plane = value; if (Grid is { } g) g.PlaneColor = value; } }
+    public Color GridColor { get => Grid?.GridColor ?? grid; set { grid = value; if (Grid is { } g) g.GridColor = value; else Changed(); } }
+    public bool DrawsGridLines => Grid is not { } g || g.GridPattern == GridPattern.Grid;
+
+    /// <summary>Direct3D backend: the spacing drawn (auto spacing keeps the last one while the look is more than 60° from vertical).</summary>
+    internal float ActualSpacing { get; private set; } = 10;
+    internal void UpdateSpacing(Vector3 eye, Vector3 look)
+    {
+        if (!autoSpacing) return;
+        look = Vector3.Normalize(look);
+        if (Math.Acos(Math.Abs(Vector3.Dot(Vector3.UnitY, look))) > Math.PI / 3) return;
+        if (look.Y == 0) return;
+        float distance = ((float)offset - eye.Y) / look.Y;
+        if (!(distance >= 0) || !float.IsFinite(distance)) return;
+        distance /= (float)rate;
+        int n = 1;
+        while (n < 1e6) { if (n > distance) { n /= 10; break; } n *= 10; }
+        ActualSpacing = n == 0 ? 1 : n;
+    }
 }

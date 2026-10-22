@@ -119,13 +119,13 @@ public sealed partial class SceneViewport
                 finally { animationGeometryReservation.Resize(animationGeometryBytes); }
             }
             ReserveRenderUnits(ref renderUnits, 2L * animationPossibleParts[pose.Model], MaximumRenderUnits);
-            // Budget as if the renderer copied every array (it shares unchanged base-part
+            // Budget the renderer's copy of every part (GeometryCopyBytes; it shares unchanged base-part
             // positions, so this over-counts): morphs and per-pose fog/alpha tint must not modify siblings.
             // Each retained mesh also owns its unclamped pre-fog RGBA. Camera
             // refresh must not repeat the frame's material-part/light product.
             long copies = checked(animationGeometryCopies[pose.Model] + 16L * animationPossibleParts[pose.Model]);
             nextGeometry = checked(nextGeometry + copies);
-            long colors = parts.Select(p => 32L * p.Colors.LongLength).DefaultIfEmpty().Max();
+            long colors = parts.Select(ColorReplacementBytes).DefaultIfEmpty().Max();
             var model = animationContext.Scene.Models[pose.Model];
             long replacement = model.Morphs.Length == model.Vertices.Length
                 ? checked(animationGeometryScratch[pose.Model] + 2 * copies) : colors;
