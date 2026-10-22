@@ -98,9 +98,10 @@ public partial class MainWindow
     {
         if (shownDocument != doc || scene == null || CurrentInspectionCard is not { } card) return false;
         if (scene.IsFlyActive || scene.IsPickupDragging) throw new StudioCommandException("busy", "Finish the transform drag or exit Fly before selecting a source object.");
-        // Selecting it again retries an object selected while hidden (the view may show it now); with no draft open, so nothing asks.
-        if (card.Selection?.SelectionNode != node || card.Selection is { Active: false } stale && stale.Target.StartsWith("source:", StringComparison.Ordinal)
-            && !HasInspectionDraft && aiPathDraft == null && parachuteDraft == null)
+        // Selecting it again: an object selected in the tree while hidden is selected in the view if the view shows it now
+        // (with no draft open, so nothing asks); otherwise the selection stays exactly as it is.
+        if (card.Selection?.SelectionNode == node) ReselectShownSelection();
+        else
         {
             if (!ResolveInspectionDrafts(doc)) return false;
             card.ClearSourceNode();

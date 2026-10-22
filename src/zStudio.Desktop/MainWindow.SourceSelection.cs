@@ -34,6 +34,7 @@ internal sealed class SourceMapSelection
     internal const string HiddenAtStart = "Hidden at the mission's start (a startup animation shows it later), so its placement can't be edited.";
     internal const string MissingTankTemplate = "The tank template is missing or ambiguous, so its placement can't be edited.";
     internal const string HiddenInTree = "Show it in the World tree to edit its placement.";
+    internal const string HiddenByIsolation = "Hidden by an isolation; end it (middle-click the isolated row's eye, or Show all) to edit its placement.";
     /// <summary>The later passes, in the order the mission adds them; a source map always has all three (an empty one says so in the tree).</summary>
     internal IReadOnlyList<SourceMapPass> Passes { get; }
     /// <summary>The difficulty the view shows (the aiv and puppies trees list the others' entries dimmed), or null.</summary>

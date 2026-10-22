@@ -90,7 +90,7 @@ public partial class MainWindow
                 project: n => new { n.Index,n.Name,n.Class, Metadata = JsonData.PreviewObject(n.Metadata, 64, 1024), actor = viewport.Mission?.InspectedActorAt(n.Index) },
                 maximumRowBytes: n => InspectionResultBudget.SceneNode(n.Name, n.Class, viewport.Mission?.InspectedActorAt(n.Index)));
         });
-        Register(r, "scene_selection", "Select/inspect a scene node with bounded metadata and inspection_truncated. Isolate includes its descendants; isolate and show_all are available only in static model/Whole world previews, matching the GUI. show_all also shows what scene_tree hide hid.", true, [PreviewParameter, P("action","string","Selection operation; isolate/show_all require a static model or Whole world preview.",true,"select","isolate","show_all"), P("node","integer","Node index.")], a =>
+        Register(r, "scene_selection", "Select/inspect a scene node with bounded metadata and inspection_truncated. Isolate includes its descendants; isolate and show_all are available only in static model/Whole world previews, matching the GUI. show_all also shows what scene_tree hide hid. In a source map, show_all and isolate, like scene_tree show, select in the view an object the card shows as hidden because it was selected in the tree while hidden, when no draft is open (the view selection, the card and scene_inspect selected change).", true, [PreviewParameter, P("action","string","Selection operation; isolate/show_all require a static model or Whole world preview.",true,"select","isolate","show_all"), P("node","integer","Node index.")], a =>
         {
             RequireNoDrafts(); var viewport = TargetViewport(a); string action = Text(a,"action");
             if ((animation != null || motion != null) && action is "isolate" or "show_all")
@@ -123,7 +123,7 @@ public partial class MainWindow
                     RevealSceneNode(node);
                 }
                 viewport.SelectFramingNode(node);
-                if (action == "isolate") { isolatedNode = node; ApplyIsolation(viewport); CurrentInspectionCard?.Refresh(); RefreshRowEyes(); }
+                if (action == "isolate") { isolatedNode = node; ApplyIsolation(viewport); ReselectShownSelection(); CurrentInspectionCard?.Refresh(); RefreshRowEyes(); }
                 if (node < 0 && sceneTree?.Reveal(node) is { Synthetic: true } sourceRow)
                     return Result(SceneTreeProperties(sourceRow));
                 if (node < 0) throw new StudioCommandException("stale_record", "Source selection owner is not in the current scene hierarchy.");

@@ -653,13 +653,16 @@ public partial class MainWindow
     /// once shown it is selected in the view again, which makes its placement editable. Only with no draft open anywhere, so
     /// nothing asks (an AI path or drop-window draft retries this when it ends), and only for the shown map's object.
     /// </summary>
-    private void ReselectShownSelection()
+    /// <returns>Whether it was selected in the view (the card is then refreshed).</returns>
+    private bool ReselectShownSelection()
     {
-        if (scene is not { } view || shownDocument is not { } doc || CurrentInspectionCard is not { HasDraft: false } card) return;
-        if (HasInspectionDraft || aiPathDraft != null || parachuteDraft != null || HasSectionDraft() || sectionCard?.Applying == true) return;
+        if (scene is not { } view || shownDocument is not { } doc || CurrentInspectionCard is not { HasDraft: false, ObjectApplying: false } card) return false;
+        if (HasInspectionDraft || aiPathDraft != null || parachuteDraft != null || HasSectionDraft() || sectionCard?.Applying == true) return false;
         if (card.Selection is not { Active: false } selected || selected.SelectionNode < 0
-            || !selected.Target.StartsWith($"source:{doc.SessionId}:", StringComparison.Ordinal)) return;
-        if (view.SelectInspectionNode(selected.SelectionNode)) card.Refresh();
+            || !selected.Target.StartsWith($"source:{doc.SessionId}:", StringComparison.Ordinal)) return false;
+        // Without a shown mesh of it the view selects nothing and nothing changes (a light, a group, an object still hidden).
+        if (!view.SelectInspectionNode(selected.SelectionNode)) return false;
+        card.Refresh(); return true;
     }
     /// <summary>
     /// Shows only the isolated object, or everything again: a source group, which owns no node of its own, brings the
@@ -766,7 +769,8 @@ public partial class MainWindow
     private void ApplyHiddenRows()
     {
         scene?.SetHiddenNodes(hiddenRows.Values.SelectMany(n => n));
-        ReselectShownSelection();
+        // The card follows at once: a unit shown again is selected, or its reason changes (an open draft, the eye).
+        if (!ReselectShownSelection()) CurrentInspectionCard?.Refresh();
         if (sceneTree == null) return;
         HashSet<int> hidden = hiddenRows.Values.SelectMany(n => n).ToHashSet();
         sceneTree.IsHiddenNode = hidden.Contains;

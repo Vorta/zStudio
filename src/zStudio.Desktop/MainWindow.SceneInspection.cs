@@ -86,10 +86,10 @@ public partial class MainWindow
                 if (viewport.HiddenNodes.Contains(node) || viewport.HiddenNodes.Contains(selection.Owner(node))) return SourceMapSelection.HiddenInTree;
                 inIsolation |= isolated && (node == isolatedNode || selection.Owner(node) == isolatedNode || members.Contains(node) || members.Contains(selection.Owner(node)));
             }
-            if (isolated && !inIsolation) return SourceMapSelection.HiddenInTree;
+            if (isolated && !inIsolation) return SourceMapSelection.HiddenByIsolation;
             // Selected in the tree while hidden and shown since (a draft kept the selection as it was).
             if (item.Target.StartsWith("source:", StringComparison.Ordinal))
-                return aiPathDraft != null || parachuteDraft != null ? "Confirm or cancel the open AI path or drop-window edit to edit its placement." : "Select it again to edit its placement.";
+                return aiPathDraft != null || parachuteDraft != null ? "Confirm or cancel the open AI path or drop-window edit to edit its placement." : "Click it in the view to edit its placement.";
         }
         if (!item.Active) return "It isn't shown, so its placement can't be edited.";
         if (shownDocument?.PickupEdits == null) return "Placements are still loading.";

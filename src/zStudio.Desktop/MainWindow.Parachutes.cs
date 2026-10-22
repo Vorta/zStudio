@@ -331,7 +331,7 @@ public partial class MainWindow
         draft.Lifetime = lifetime; ++draft.Generation; draft.Preparing?.Cancel(); draft.Preparing?.Dispose(); draft.Preparing = null;
         parachuteDraft = null; draft.Session.Viewport.SetParachutePointerMove(false); draft.Session.Viewport.ClearParachutePreview(); UpdateParachutePanel();
         // An object shown while the draft was open is selected in the view once whatever ended the draft has finished.
-        Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.ApplicationIdle, ReselectShownSelection);
+        Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.ApplicationIdle, () => ReselectShownSelection());
     }
     private bool ResolveParachuteDraft(DocumentModel? document = null)
     {
