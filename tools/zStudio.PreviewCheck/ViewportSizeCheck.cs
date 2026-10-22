@@ -1,6 +1,7 @@
 using System.IO;
 using System.Numerics;
 using System.Windows;
+using System.Windows.Media;
 using System.Windows.Threading;
 using zStudio.Core;
 using zStudio.Core.Formats;
@@ -43,20 +44,25 @@ internal static class ViewportSizeCheck
                     window.Content = fresh;
                     if (fresh.RenderSurface.IsMeasureValid || fresh.RenderSurface.ActualWidth > 0) throw new InvalidDataException("The replacement view was laid out before the capture; the check proves nothing.");
                     var image = fresh.RenderImage(320, 240);
-                    var size = fresh.PresentedPixelSize; double scale = fresh.RenderDpiScale;
+                    var size = fresh.PresentedPixelSize; double scale = WindowScale();
                     int width = (int)((int)fresh.RenderSurface.ActualWidth * scale), height = (int)((int)fresh.RenderSurface.ActualHeight * scale);
                     if (image.PixelWidth != 320 || Math.Abs(size.Width - width) > 1 || Math.Abs(size.Height - height) > 1)
                         throw new InvalidDataException($"Capture of a just-shown view: image {image.PixelWidth} × {image.PixelHeight}, buffer {size.Width} × {size.Height}, expected {width} × {height}.");
+                    // The view's own queued resize, when it runs, finds the buffer already right.
+                    await Task.Delay(200);
+                    if (fresh.PresentedPixelSize != size) throw new InvalidDataException($"The queued resize changed the captured view's buffer: {fresh.PresentedPixelSize} after {size}.");
                     window.Content = preview;
                 }
                 Console.WriteLine("PASS: a capture right after a refreshed view replaces the shown one renders at the view's size.");
 
+                // The window's own DPI scale (the larger axis, as the buffer uses), not the view's idea of it.
+                double WindowScale() { var dpi = VisualTreeHelper.GetDpi(window); return Math.Max(dpi.DpiScaleX, dpi.DpiScaleY); }
                 async Task Check(string label)
                 {
                     await Task.Delay(180);
                     // Inspect the presented GPU surface directly; never force
                     // rendering, capture scaling, or resizing to hide a stale size.
-                    var surface = preview.PresentedPixelSize; double scale = preview.RenderDpiScale;
+                    var surface = preview.PresentedPixelSize; double scale = WindowScale();
                     int width = (int)((int)preview.RenderSurface.ActualWidth * scale);
                     int height = (int)((int)preview.RenderSurface.ActualHeight * scale);
                     if (Math.Abs(surface.Width - width) > 1 || Math.Abs(surface.Height - height) > 1)

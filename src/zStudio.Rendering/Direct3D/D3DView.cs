@@ -153,14 +153,13 @@ internal sealed class Direct3DView : IDisposable
     public bool RenderFrame(bool force)
     {
         // A hidden view renders only when forced (a capture): the panel holding it may be collapsed while its scene stays live.
-        string? refusal = disposed ? "the view is closed" : busy ? "a frame is already being drawn" : failed ? "rendering failed: " + RenderException?.Message
-            : !force && !Element.IsVisible ? "the view is hidden" : owner.Device?.Graphics is not { IsDisposed: false } ? "no graphics device"
-            : owner.Camera == null ? "no camera" : renderWidth <= 10 || renderHeight <= 10 ? "the view has no size yet"
-            : !frontBufferAvailable ? "the display surface is unavailable (locked or disconnected session)"
-            : !force && !updateRequested && updateCounter >= MinimumUpdateCount ? "no frame is due" : null;
-        if (force) Refusal = refusal;
-        if (refusal != null) return false;
-        var graphics = owner.Device!.Graphics!; var camera = owner.Camera!;
+        if (disposed || busy || failed || !force && !Element.IsVisible || owner.Device?.Graphics is not { IsDisposed: false } graphics || owner.Camera is not { } camera
+            || renderWidth <= 10 || renderHeight <= 10 || !frontBufferAvailable || !force && !updateRequested && updateCounter >= MinimumUpdateCount)
+        {
+            if (force) Refusal = ForcedRefusal();
+            return false;
+        }
+        if (force) Refusal = null;
         busy = true;
         bool rendered = false;
         var timestamp = TimeSpan.FromSeconds((double)Stopwatch.GetTimestamp() / Stopwatch.Frequency);
@@ -187,13 +186,24 @@ internal sealed class Direct3DView : IDisposable
                 finally { if (locked) imageSource!.Unlock(); }
                 ready = true; rendered = true; recoveries = 0; RenderException = null;
             }
-            catch (Exception error) when (IsDeviceLost(error, graphics)) { Recover(); if (force) Refusal = "the graphics device was lost and is being rebuilt"; }
+            catch (Exception error) when (IsDeviceLost(error, graphics))
+            {
+                Recover();
+                // Past the recovery bound, or with no new device, the view stays failed.
+                if (force) Refusal = failed ? "rendering failed: " + RenderException?.Message : "the graphics device was lost and is being rebuilt";
+            }
             catch (Exception error) when (error is not OutOfMemoryException and not StackOverflowException) { Fail(error); if (force) Refusal = "rendering failed: " + error.Message; }
         }
         finally { busy = false; }
         if (rendered) Presented?.Invoke();
         return rendered;
     }
+
+    // Why a forced frame cannot render (the gate RenderFrame refused), for the capture's error.
+    private string ForcedRefusal() => disposed ? "the view is closed" : busy ? "a frame is already being drawn" : failed ? "rendering failed: " + RenderException?.Message
+        : owner.Device?.Graphics is not { IsDisposed: false } ? "no graphics device" : owner.Camera == null ? "no camera"
+        : renderWidth <= 10 || renderHeight <= 10 ? "the view has no size yet" : !frontBufferAvailable ? "the display surface is unavailable (locked or disconnected session)"
+        : "no frame was drawn";
 
     private void Draw(D3DGraphics g, RenderCamera camera)
     {
@@ -371,11 +381,12 @@ internal sealed class Direct3DView : IDisposable
     }
 
     // Applies the element's current layout size (and DPI) at once, as the queued resize will; a collapsed view keeps its size.
-    // A view just placed in a window is connected to it only by the pending layout pass, which runs first.
+    // The pending layout pass runs first, also when only an ancestor is dirty (a pane shown or hidden just before): a view just
+    // placed in a window is connected to it only by that pass. It costs nothing when no layout is pending.
     private void SizeFromLayout()
     {
         if (disposed) return;
-        if (!Element.IsMeasureValid || !Element.IsArrangeValid) Element.UpdateLayout();
+        Element.UpdateLayout();
         if (PresentationSource.FromVisual(Element) == null) return;
         int width = (int)Element.ActualWidth, height = (int)Element.ActualHeight;
         if (width < 1 || height < 1) return;
