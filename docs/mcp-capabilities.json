@@ -1313,7 +1313,7 @@
         "zstudio_scene_tree",
         "zstudio_scene_selection"
       ],
-      "note": "Middle-clicking a world object's eye isolates it (scene_tree isolate on the row, which rows report as isolated; for an object, the same as scene_selection isolate with its node); middle-clicking the isolated row's eye shows everything again (scene_tree isolate on that row; rows hidden with the eye stay hidden, unlike scene_selection show_all). Ending an isolation (and scene_selection isolate or show_all) selects in the view an object the card shows as hidden because it was selected in the tree while hidden, as a show does. Zones, AI networks, units and pickups have no isolation (scene_tree isolate refuses them)."
+      "note": "Middle-clicking a world object's eye isolates it (scene_tree isolate on the row, which rows report as isolated; for an object, the same as scene_selection isolate with its node); middle-clicking the isolated row's eye shows everything again (scene_tree isolate on that row; rows hidden with the eye stay hidden, unlike scene_selection show_all). Ending or moving an isolation (and scene_selection isolate or show_all) selects in the view an object the card shows as hidden because it was selected in the tree while hidden, as a show does. Zones, AI networks, units and pickups have no isolation (scene_tree isolate refuses them)."
     },
     {
       "gui": "MainWindow.xaml:OutlinerZoneKindClick",
