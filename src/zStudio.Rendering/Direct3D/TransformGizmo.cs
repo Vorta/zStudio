@@ -1,7 +1,5 @@
 using System.Numerics;
 using System.Windows;
-using HelixToolkit.SharpDX;
-using HelixToolkit.Wpf.SharpDX;
 
 namespace zStudio.Rendering.Direct3D;
 
@@ -20,9 +18,7 @@ namespace zStudio.Rendering.Direct3D;
 internal sealed class TransformGizmo : Node, INodeOwner
 {
     private readonly Func<MeshNode?, bool> canBegin;
-    private bool beginning, began;
     private GroupNode? target;
-    // Direct3D backend.
     private bool translation = true, rotation = true, rotationX = true, rotationZ = true;
     private double sizeScale = 1;
     private Vector3 translationVector;
@@ -34,48 +30,32 @@ internal sealed class TransformGizmo : Node, INodeOwner
     private bool captured;
 
     /// <param name="canBeginTranslation">Asked when a translation drag would start on a handle; false refuses it.</param>
-    public TransformGizmo(Func<MeshNode?, bool> canBeginTranslation) : this(RenderBackend.UseHelix ? new Manipulator() : null, canBeginTranslation) { }
-    private TransformGizmo(Manipulator? manipulator, Func<MeshNode?, bool> canBeginTranslation) : base(manipulator)
+    public TransformGizmo(Func<MeshNode?, bool> canBeginTranslation)
     {
         canBegin = canBeginTranslation;
         List<MeshNode> handles = [];
-        if (manipulator != null)
-        {
-            manipulator.Owner = this;
-            manipulator.EnableScaling = false; manipulator.EnableXRayGrid = false;
-            void Collect(Element3D element)
+        Control = new GroupNode();
+        Control.Owner = this;
+        Matrix4x4[] turns = [Matrix4x4.Identity, Matrix4x4.CreateRotationZ(MathF.PI / 2), Matrix4x4.CreateRotationY(-MathF.PI / 2)];
+        Color4[] colors = [new(1, 0, 0, 1), new(0, 128 / 255f, 0, 1), new(0, 0, 1, 1)];
+        foreach (var geometry in new[] { GizmoGeometry.Arrow, GizmoGeometry.Ring, GizmoGeometry.Scale })
+            for (int i = 0; i < 3; i++)
             {
-                if (element is MeshGeometryModel3D mesh) handles.Add(new MeshNode(mesh));
-                else if (element is GroupElement3D group) foreach (var child in group.Children) Collect(child);
+                var material = PreviewMaterial.CreatePlain(); material.DiffuseColor = colors[i];
+                var handle = new MeshNode { Geometry = geometry, Material = material, CullMode = CullMode.Back, Transform = i == 0 ? null : turns[i] };
+                Control.Children.Add(handle); handles.Add(handle);
             }
-            Collect(manipulator);
-        }
-        else
-        {
-            Control = new GroupNode();
-            Control.Owner = this;
-            Matrix4x4[] turns = [Matrix4x4.Identity, Matrix4x4.CreateRotationZ(MathF.PI / 2), Matrix4x4.CreateRotationY(-MathF.PI / 2)];
-            Color4[] colors = [new(1, 0, 0, 1), new(0, 128 / 255f, 0, 1), new(0, 0, 1, 1)];
-            foreach (var geometry in new[] { GizmoGeometry.Arrow, GizmoGeometry.Ring, GizmoGeometry.Scale })
-                for (int i = 0; i < 3; i++)
-                {
-                    var material = PreviewMaterial.CreatePlain(); material.DiffuseColor = colors[i];
-                    var handle = new MeshNode { Geometry = geometry, Material = material, CullMode = CullMode.Back, Transform = i == 0 ? null : turns[i] };
-                    Control.Children.Add(handle); handles.Add(handle);
-                }
-        }
         Handles = handles;
         ApplyEnabled(); UpdateControl();
     }
-    private Manipulator? Backend => (Manipulator?)HelixElement;
-    /// <summary>Direct3D backend: the handles' group, scaled by <see cref="SizeScale"/> and moved to the target.</summary>
-    internal GroupNode? Control { get; }
+    /// <summary>The handles' group, scaled by <see cref="SizeScale"/> and moved to the target.</summary>
+    internal GroupNode Control { get; }
     RenderView? INodeOwner.View => View;
-    public bool EnableTranslation { get => Backend?.EnableTranslation ?? translation; set { translation = value; if (Backend is { } b) b.EnableTranslation = value; else ApplyEnabled(); } }
-    public bool EnableRotation { get => Backend?.EnableRotation ?? rotation; set { rotation = value; if (Backend is { } b) b.EnableRotation = value; else ApplyEnabled(); } }
-    public bool EnableRotationX { get => Backend?.EnableRotationX ?? rotationX; set { rotationX = value; if (Backend is { } b) b.EnableRotationX = value; else ApplyEnabled(); } }
-    public bool EnableRotationZ { get => Backend?.EnableRotationZ ?? rotationZ; set { rotationZ = value; if (Backend is { } b) b.EnableRotationZ = value; else ApplyEnabled(); } }
-    public double SizeScale { get => Backend?.SizeScale ?? sizeScale; set { sizeScale = value; if (Backend is { } b) b.SizeScale = value; else UpdateControl(); } }
+    public bool EnableTranslation { get => translation; set { translation = value; ApplyEnabled(); } }
+    public bool EnableRotation { get => rotation; set { rotation = value; ApplyEnabled(); } }
+    public bool EnableRotationX { get => rotationX; set { rotationX = value; ApplyEnabled(); } }
+    public bool EnableRotationZ { get => rotationZ; set { rotationZ = value; ApplyEnabled(); } }
+    public double SizeScale { get => sizeScale; set { sizeScale = value; UpdateControl(); } }
     /// <summary>The group the gizmo is placed on and moves; assigning it (again) re-reads its transform.</summary>
     public GroupNode? Target
     {
@@ -83,7 +63,6 @@ internal sealed class TransformGizmo : Node, INodeOwner
         set
         {
             target = value;
-            if (Backend is { } b) { b.Target = value?.HelixElement; return; }
             if (value == null) { targetScale = targetRotation = Matrix4x4.Identity; translationVector = Vector3.Zero; }
             else
             {
@@ -103,14 +82,12 @@ internal sealed class TransformGizmo : Node, INodeOwner
 
     private void ApplyEnabled()
     {
-        if (Control == null) return;
         bool[] enabled = [translation, translation, translation, rotation && rotationX, rotation, rotation && rotationZ, false, false, false];
         for (int i = 0; i < Handles.Count; i++) Handles[i].IsRendering = enabled[i];
     }
     // The handles' frame: SizeScale on the diagonal, the target's translation as offset.
     private void UpdateControl()
     {
-        if (Control == null) return;
         var m = Matrix4x4.CreateTranslation(translationVector);
         m.M11 = m.M22 = m.M33 = (float)sizeScale;
         Control.Transform = m;
@@ -119,14 +96,6 @@ internal sealed class TransformGizmo : Node, INodeOwner
     /// <summary>Starts a translation drag on <paramref name="handle"/> hit at <paramref name="hit"/> under <paramref name="pointer"/> (DIPs).</summary>
     public bool BeginTranslation(MeshNode handle, Vector3 hit, Point pointer)
     {
-        if (Backend != null)
-        {
-            if (View?.HelixViewport is not { } viewport || handle.HelixElement == null) return false;
-            beginning = true; began = false;
-            try { handle.HelixElement.RaiseEvent(new MouseDown3DEventArgs(handle.HelixElement, Hit(handle, hit), pointer, viewport)); }
-            finally { beginning = false; }
-            return began;
-        }
         int index = Handles.Count >= 3 ? IndexOf(handle) : -1;
         if (target == null || index is < 0 or > 2 || !canBegin(handle)) return false;
         axis = index; dragged = handle;
@@ -141,12 +110,6 @@ internal sealed class TransformGizmo : Node, INodeOwner
     }
     public void MoveTranslation(MeshNode handle, Vector3 hit, Point pointer)
     {
-        if (Backend != null)
-        {
-            if (View?.HelixViewport is { } viewport && handle.HelixElement != null)
-                handle.HelixElement.RaiseEvent(new MouseMove3DEventArgs(handle.HelixElement, Hit(handle, hit), pointer, viewport));
-            return;
-        }
         if (!captured || View is not { } view || !PlanePoint(view, pointer, out var point)) return;
         var move = point - dragHit; dragHit = point;
         translationVector += axis switch { 0 => new(move.X, 0, 0), 1 => new(0, move.Y, 0), _ => new(0, 0, move.Z) };
@@ -155,12 +118,6 @@ internal sealed class TransformGizmo : Node, INodeOwner
     }
     public void EndTranslation(MeshNode handle, Vector3 hit, Point pointer)
     {
-        if (Backend != null)
-        {
-            if (View?.HelixViewport is { } viewport && handle.HelixElement != null)
-                handle.HelixElement.RaiseEvent(new MouseUp3DEventArgs(handle.HelixElement, Hit(handle, hit), pointer, viewport));
-            return;
-        }
         if (captured && dragged?.Material is { } material) material.DiffuseColor = draggedColor;
         captured = false; dragged = null; axis = -1;
     }
@@ -177,28 +134,16 @@ internal sealed class TransformGizmo : Node, INodeOwner
         point = origin + direction * t;
         return float.IsFinite(point.X) && float.IsFinite(point.Y) && float.IsFinite(point.Z);
     }
-    private static HitTestResult Hit(MeshNode handle, Vector3 hit) => new() { ModelHit = handle.HelixElement, PointHit = hit, IsValid = true, Distance = 0 };
 
     public override void Dispose()
     {
-        if (Control != null) { foreach (var handle in Handles) handle.Dispose(); Control.Dispose(); }
+        foreach (var handle in Handles) handle.Dispose();
+        Control.Dispose();
         base.Dispose();
-    }
-
-    private sealed class Manipulator : TransformManipulator3D
-    {
-        internal TransformGizmo? Owner { get; set; }
-        // Only drags this facade starts; the backend's own pointer routing never reaches the (unpickable) gizmo.
-        protected override bool CanBeginTransform(MouseDown3DEventArgs? e)
-        {
-            if (Owner is not { beginning: true } owner) return false;
-            owner.began = owner.canBegin(Node.FromHelix(e?.HitTestResult?.ModelHit) as MeshNode);
-            return owner.began;
-        }
     }
 }
 
-/// <summary>The gizmo's handle geometry (built as the Helix 3.1.2 manipulator builds it).</summary>
+/// <summary>The gizmo's handle geometry.</summary>
 internal static class GizmoGeometry
 {
     /// <summary>Move arrow along +X: shaft radius .02 from 0 to 1.5; cone of base radius .08 from 1.48 to 1.8 (with a radius-.04 sliver from 1.48 to 1.5).</summary>
@@ -223,7 +168,7 @@ internal static class GizmoGeometry
     }
 }
 
-/// <summary>Triangle meshes for the gizmo and the navigation aids (Helix MeshBuilder's revolved arrows, cylinders and cube faces).</summary>
+/// <summary>Triangle meshes for the gizmo and the navigation aids: revolved arrows and cylinders, tubes and cube faces.</summary>
 internal sealed class SimpleMeshBuilder
 {
     public List<Vector3> Positions { get; } = [];
@@ -233,7 +178,7 @@ internal sealed class SimpleMeshBuilder
     /// <summary>The mesh, shared by every view that draws it (nodes never release its device copies).</summary>
     public MeshData ToMesh(Color4[]? colors = null) => new([.. Positions], [.. Indices], [.. Normals], [.. TextureCoordinates], colors) { IsShared = true };
 
-    // Unit circle (−cos, sin) as Helix's GetCircle.
+    // Unit circle points (−cos, sin).
     private static Vector2[] Circle(int divisions)
     {
         var circle = new Vector2[divisions];
@@ -287,8 +232,8 @@ internal sealed class SimpleMeshBuilder
     }
     /// <summary>
     /// A closed tube of <paramref name="sides"/> sides and radius <paramref name="tube"/> along a <paramref name="segments"/>-gon of
-    /// <paramref name="radius"/> in the YZ plane (Helix MeshBuilder.AddTube: sections perpendicular to each segment, carried
-    /// along by the rotation between segments and projected onto the bisecting planes).
+    /// <paramref name="radius"/> in the YZ plane (sections perpendicular to each segment, carried along by the rotation between
+    /// segments and projected onto the bisecting planes).
     /// </summary>
     public void AddRing(float radius, float tube, int segments, int sides)
     {
@@ -335,7 +280,7 @@ internal sealed class SimpleMeshBuilder
             }
     }
     private static Vector3 ProjectOnPlane(Vector3 point, Vector3 normal) { normal = Vector3.Normalize(normal); return point - Vector3.Dot(normal, point) * normal; }
-    // The shortest rotation taking one direction to another (Helix QuaternionHelper.BetweenDirections).
+    // The shortest rotation taking one direction to another.
     private static Quaternion Between(Vector3 source, Vector3 target)
     {
         float norms = MathF.Sqrt(source.LengthSquared() * target.LengthSquared());
@@ -350,7 +295,7 @@ internal sealed class SimpleMeshBuilder
         foreach (var (normal, up) in new[] { (Vector3.UnitX, Vector3.UnitY), (-Vector3.UnitX, Vector3.UnitY), (Vector3.UnitY, Vector3.UnitZ), (-Vector3.UnitY, -Vector3.UnitZ), (Vector3.UnitZ, Vector3.UnitY), (-Vector3.UnitZ, Vector3.UnitY) })
             AddCubeFace(center, normal, up, size, size, size);
     }
-    /// <summary>One square face of a box (Helix MeshBuilder.AddCubeFace: texture (1,1) at its bottom right as seen from outside).</summary>
+    /// <summary>One square face of a box (texture (1,1) at its bottom right as seen from outside).</summary>
     public void AddCubeFace(Vector3 center, Vector3 normal, Vector3 up, float distance, float width, float height)
     {
         var right = Vector3.Cross(normal, up);

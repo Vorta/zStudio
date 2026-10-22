@@ -40,8 +40,7 @@ internal static class SceneControlsCheck
                 if (camera.IsOrthographic) throw new InvalidOperationException("No perspective camera attached.");
                 Point3D sceneCenter = camera.Position + camera.LookDirection;
                 scene.InertiaEnabled = false;
-                if (scene.UsesBuiltInGestures
-                    || SceneViewport.Gesture(MouseButton.Middle, ModifierKeys.None) != SceneViewport.NavigationGesture.Orbit
+                if (SceneViewport.Gesture(MouseButton.Middle, ModifierKeys.None) != SceneViewport.NavigationGesture.Orbit
                     || SceneViewport.Gesture(MouseButton.Middle, ModifierKeys.Shift) != SceneViewport.NavigationGesture.Pan
                     || SceneViewport.Gesture(MouseButton.Middle, ModifierKeys.Control) != SceneViewport.NavigationGesture.Zoom
                     || SceneViewport.Gesture(MouseButton.Middle, ModifierKeys.Control | ModifierKeys.Shift) != SceneViewport.NavigationGesture.Dolly)

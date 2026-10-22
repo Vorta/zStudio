@@ -26,7 +26,6 @@ internal static class BlenderNavigationChecks
         using var scene = new SceneViewport();
         var surface = scene.RenderSurface;
         scene.Measure(new(900, 600)); scene.Arrange(new(0, 0, 900, 600));
-        Assert.False(scene.UsesBuiltInGestures);
         var initial = new SceneViewport.ViewPose(new(0, 0, 10), new(0, 0, -10), new(0, 1, 0), 60);
         scene.RestoreView(initial);
         var target = initial.Position + initial.LookDirection;

@@ -1,4 +1,4 @@
-// The Direct3D 11 backend's shaders (zStudio.Rendering.Direct3D): meshes, lines, the ground grid and the navigation aids.
+// The Direct3D 11 renderer's shaders (zStudio.Rendering.Direct3D): meshes, lines, the ground grid and the navigation aids.
 // Row-vector convention: a point is transformed as mul(p, M).
 #pragma pack_matrix(row_major)
 

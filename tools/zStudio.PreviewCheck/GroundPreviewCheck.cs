@@ -44,7 +44,7 @@ internal static class GroundPreviewCheck
                 var viewport = editor.Viewport;
                 var camera = viewport.DebugCamera;
                 var plane = viewport.GroundGrids.Single();
-                Require(plane.Offset == 0 && !plane.IsHitTestVisible && plane.PlaneTransparent && plane.DrawsGridLines, "Grid configuration invalid");
+                Require(plane.Offset == 0 && !plane.IsHitTestVisible, "Grid configuration invalid");
                 foreach (double time in new[] { 1d, 5d, 8d })
                 {
                     await editor.SeekAsync(time); editor.Viewport.FrameAnimation(editor.CurrentFrame!);

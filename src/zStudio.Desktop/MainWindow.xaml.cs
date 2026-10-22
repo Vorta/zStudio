@@ -859,7 +859,7 @@ public partial class MainWindow : Window
         var assembly = typeof(MainWindow).Assembly;
         string version = assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion.Split('+')[0]
             ?? assembly.GetName().Version?.ToString(3) ?? "unknown";
-        MessageBox.Show(this, $"zStudio {version}\nWindows asset explorer\n\nTexture packs · ZAR archives · prepared scripts · animations · GameZ worlds\n\nBuilt with .NET, WPF, Helix Toolkit, CommunityToolkit.Mvvm, and NAudio. See THIRD-PARTY-NOTICES.md for licenses. Game assets are not included.", "About");
+        MessageBox.Show(this, $"zStudio {version}\nWindows asset explorer\n\nTexture packs · ZAR archives · prepared scripts · animations · GameZ worlds\n\nBuilt with .NET, WPF, Vortice.Windows, CommunityToolkit.Mvvm, and NAudio. See THIRD-PARTY-NOTICES.md for licenses. Game assets are not included.", "About");
     }
     private void Keyboard(object sender, KeyEventArgs e)
     {

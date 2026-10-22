@@ -7,7 +7,7 @@ using Vortice.DXGI;
 namespace zStudio.Rendering.Direct3D;
 
 /// <summary>
-/// Draws a view's nodes (the Direct3D backend). Per frame: opaque meshes and lines in ascending render order (among equals
+/// Draws a view's nodes. Per frame: opaque meshes and lines in ascending render order (among equals
 /// horizon materials first, then submission order), then the ground grids, then transparent meshes in submission order (a sorting group's back to front), then each
 /// top-most group over a cleared depth buffer. Composition: p · instance · transform · parent transforms.
 /// </summary>

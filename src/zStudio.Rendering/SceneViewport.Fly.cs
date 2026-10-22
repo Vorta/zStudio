@@ -86,11 +86,6 @@ public sealed partial class SceneViewport
         cameraPoseDirty = true; view.InvalidateRender();
     }
 
-    private void StopNavigationMotion()
-    {
-        // Settle anything the renderer's own camera handling still holds, then restore the exact pose.
-        var pose = CaptureView();
-        view.StopNativeCameraMotion(previousFrameTime + TimeSpan.FromMilliseconds(1));
-        RestoreView(pose);
-    }
+    // Restoring the exact current pose clears the inertia and pending orbit state.
+    private void StopNavigationMotion() => RestoreView(CaptureView());
 }

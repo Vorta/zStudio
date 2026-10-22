@@ -31,7 +31,7 @@ internal struct ObjectConstants
 }
 
 /// <summary>
-/// One Direct3D 11 device with the backend's compiled shaders, input layouts, constant buffers and pipeline states. Device
+/// One Direct3D 11 device with the renderer's compiled shaders, input layouts, constant buffers and pipeline states. Device
 /// resources made from retained CPU data (geometry, instances, textures) are cached on their owners per device and register
 /// here: disposing the device releases every one still alive, so a recovered or closed view leaks nothing (the interop does not
 /// release native objects on collection). A new device has a new <see cref="Generation"/>.

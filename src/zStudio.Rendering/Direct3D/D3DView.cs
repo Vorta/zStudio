@@ -20,7 +20,7 @@ using SwapEffect = Vortice.Direct3D9.SwapEffect;
 namespace zStudio.Rendering.Direct3D;
 
 /// <summary>
-/// The Direct3D backend of <see cref="RenderView"/>: a WPF element showing a D3DImage whose back buffer is a Direct3D 11 texture
+/// The surface behind <see cref="RenderView"/>: a WPF element showing a D3DImage whose back buffer is a Direct3D 11 texture
 /// shared with a Direct3D 9Ex surface. Rendering is driven by <see cref="CompositionTarget.Rendering"/> on demand while the
 /// element is visible: a frame renders while one was requested and for six more frames after each request (stale-frame
 /// workaround for the shared surface, and the tail hover refresh relies on). A lost device or front buffer rebuilds everything

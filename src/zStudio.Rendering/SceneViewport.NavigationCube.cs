@@ -16,7 +16,7 @@ public sealed partial class SceneViewport
     private Rect CubeBounds(double horizontal, double vertical, double scale)
     {
         if (!view.ShowViewCube) return Rect.Empty;
-        double size = view.ViewCubePixelSize * scale;
+        double size = RenderView.ViewCubePixelSize * scale;
         // The renderer clamps the cube's small screen-space viewport at the surface edges.
         // Relative center alone is wrong in short/narrow render surfaces.
         return new(Math.Clamp(viewport.ActualWidth * (1 + horizontal) / 2 - size / 2, 0, Math.Max(0, viewport.ActualWidth - size)),

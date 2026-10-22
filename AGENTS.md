@@ -4,7 +4,7 @@ Rules for coding agents (Codex reads this file; Claude Code imports it through `
 
 ## Scope
 
-- Windows 11 x64 WPF editor for RECOIL source projects (`data/` + `gamegen/`), reconstructed once from the original game files and exported back to ZBD files. C# 14, .NET 10, WPF Fluent, HelixToolkit/Direct3D 11; the format library (`zStudio.Core`) stays independent of UI and rendering.
+- Windows 11 x64 WPF editor for RECOIL source projects (`data/` + `gamegen/`), reconstructed once from the original game files and exported back to ZBD files. C# 14, .NET 10, WPF Fluent, Direct3D 11 (Vortice.Windows); the format library (`zStudio.Core`) stays independent of UI and rendering.
 - Compiled game folders open only through MCP `open_root`, read-only: inspection, preview and export. Never add compiled-asset editing in code, GUI or MCP (owner decision). The July and August 1998 demos (version-13 worlds) and MechWarrior 3 are inspection only (the September 1998 demo reconstructs like a release); MechWarrior 3 work is deferred.
 - Python exists only in the Blender extension (`blender/zstudio_recoil`), the Blender round-trip driver (`tools/blender-roundtrip.py`) and the optional export checker (`tools/check_exports.py`). The app, builds and the plain test suite never need Python or Blender.
 

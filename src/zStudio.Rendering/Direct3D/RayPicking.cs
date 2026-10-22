@@ -165,7 +165,7 @@ internal sealed class MeshBvh
     }
 }
 
-/// <summary>Ray picking over a view's nodes (the Direct3D backend): mesh nodes only, with the current transforms and instances.</summary>
+/// <summary>Ray picking over a view's nodes: mesh nodes only, with the current transforms and instances.</summary>
 internal static class RayPicking
 {
     /// <summary>Every hit in node submission order: one per hit instance (instanced nodes, <see cref="RenderHit.Tag"/> the instance) or one per node (Tag the triangle ordinal).</summary>

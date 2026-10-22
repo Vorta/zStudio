@@ -33,7 +33,7 @@ public sealed partial class SceneViewport
             || !TryNavigationRay(point, out var origin, out var direction)) return false;
         // A navigation query can precede the next render update. Facades must
         // face this camera as well as the ray; simulation poses remain unchanged.
-        if (cameraPoseDirty) RefreshAnimationCamera(updateHitTests: true);
+        if (cameraPoseDirty) RefreshAnimationCamera();
         var forward = camera.LookDirection; forward.Normalize();
         // Adaptive clipping is finalized on the next frame. Starting at the eye
         // keeps immediate/substep queries independent of the previous near plane.

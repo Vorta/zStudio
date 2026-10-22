@@ -71,8 +71,8 @@ internal static class FaceOrientationCheck
                     preview.SetFaceOrientation(false);
                     if (preview.CaptureView() != pose) throw new InvalidOperationException("Appearance changed camera state.");
 
-                    // Wireframe outlines the static meshes' polygons; it never replaces their fill.
-                    if (!preview.Wireframe || !animated && preview.PolygonOutlineCount == 0 || preview.EnumerateRenderMeshes().Any(m => !m.SolidFill)) throw new InvalidOperationException("Wireframe choice was lost.");
+                    // Wireframe outlines the static meshes' polygons.
+                    if (!preview.Wireframe || !animated && preview.PolygonOutlineCount == 0) throw new InvalidOperationException("Wireframe choice was lost.");
                 }
                 Console.WriteLine("PASS: static and animated winding, wrong normals, mirrored transforms, opaque depth in both submission orders, mesh replacement, half-tint priority and wireframe restoration.");
                 byte[] Pixel()

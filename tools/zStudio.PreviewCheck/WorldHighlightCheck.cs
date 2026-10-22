@@ -171,7 +171,7 @@ internal static class WorldHighlightCheck
                 await PresentedAfter(preview, () =>
                 {
                     preview.SetTextured(true);
-                    preview.SetWireframe(true); Require(preview.PolygonOutlineCount > 0 && meshes.All(m => m.SolidFill), "Wireframe lost highlighted meshes"); preview.SetWireframe(false);
+                    preview.SetWireframe(true); Require(preview.PolygonOutlineCount > 0, "Wireframe lost highlighted meshes"); preview.SetWireframe(false);
                 });
                 var hits = preview.HitTestScene(new Point3D(0,0,12), new Vector3D(-3.5,1.3,-12)).Where(h => h.Mesh is { } hit && meshes.Contains(hit));
                 Require(hits.Any(h => Vector3.Distance(h.Point, new(-3.5f,1.3f,0)) < .001f), "Highlight lost instance ray picking");

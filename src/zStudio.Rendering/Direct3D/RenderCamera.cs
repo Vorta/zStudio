@@ -1,10 +1,5 @@
 using System.Numerics;
-using System.Windows;
 using System.Windows.Media.Media3D;
-using HelixToolkit.SharpDX.Cameras;
-using HelixProjectionCamera = HelixToolkit.Wpf.SharpDX.ProjectionCamera;
-using HelixPerspectiveCamera = HelixToolkit.Wpf.SharpDX.PerspectiveCamera;
-using HelixOrthographicCamera = HelixToolkit.Wpf.SharpDX.OrthographicCamera;
 
 namespace zStudio.Rendering.Direct3D;
 
@@ -19,11 +14,7 @@ internal abstract class RenderCamera
     private Vector3D look = new(0, 0, -1), up = new(0, 1, 0);
     private double near = .001, far = 100;
 
-    /// <param name="helix">The Helix adapter's camera (Helix backend only).</param>
-    private protected RenderCamera(HelixProjectionCamera? helix) => HelixCamera = helix;
-    /// <summary>The Helix adapter's camera, null in the Direct3D backend.</summary>
-    internal HelixProjectionCamera? HelixCamera { get; }
-    /// <summary>Direct3D backend: the view showing this camera, told about every change.</summary>
+    /// <summary>The view showing this camera, told about every change.</summary>
     internal Action? Changed { get; set; }
     private protected void Set<T>(ref T field, T value)
     {
@@ -31,35 +22,14 @@ internal abstract class RenderCamera
         field = value; Changed?.Invoke();
     }
 
-    public Point3D Position
-    {
-        get => HelixCamera?.Position ?? position;
-        set { if (HelixCamera is { } helix) helix.Position = value; else Set(ref position, value); }
-    }
-    public Vector3D LookDirection
-    {
-        get => HelixCamera?.LookDirection ?? look;
-        set { if (HelixCamera is { } helix) helix.LookDirection = value; else Set(ref look, value); }
-    }
-    public Vector3D UpDirection
-    {
-        get => HelixCamera?.UpDirection ?? up;
-        set { if (HelixCamera is { } helix) helix.UpDirection = value; else Set(ref up, value); }
-    }
-    public double NearPlaneDistance
-    {
-        get => HelixCamera?.NearPlaneDistance ?? near;
-        set { if (HelixCamera is { } helix) helix.NearPlaneDistance = value; else Set(ref near, value); }
-    }
-    public double FarPlaneDistance
-    {
-        get => HelixCamera?.FarPlaneDistance ?? far;
-        set { if (HelixCamera is { } helix) helix.FarPlaneDistance = value; else Set(ref far, value); }
-    }
-    public Matrix4x4 CreateViewMatrix() => HelixCamera is { } helix ? helix.CreateViewMatrix()
-        : Matrix4x4.CreateLookTo(ToFloat(position), ToFloat(look), ToFloat(up));
+    public Point3D Position { get => position; set => Set(ref position, value); }
+    public Vector3D LookDirection { get => look; set => Set(ref look, value); }
+    public Vector3D UpDirection { get => up; set => Set(ref up, value); }
+    public double NearPlaneDistance { get => near; set => Set(ref near, value); }
+    public double FarPlaneDistance { get => far; set => Set(ref far, value); }
+    public Matrix4x4 CreateViewMatrix() => Matrix4x4.CreateLookTo(ToFloat(position), ToFloat(look), ToFloat(up));
     /// <summary>Perspective: vertical <see cref="PerspectiveRenderCamera.FieldOfView"/>; orthographic: <see cref="OrthographicRenderCamera.Width"/> × Width/aspect. A NaN M33/M43 becomes −1.</summary>
-    public Matrix4x4 CreateProjectionMatrix(double aspect) => HelixCamera is { } helix ? helix.CreateProjectionMatrix(aspect) : Projection((float)aspect);
+    public Matrix4x4 CreateProjectionMatrix(double aspect) => Projection((float)aspect);
     private protected abstract Matrix4x4 Projection(float aspect);
     private protected float Near => (float)near;
     private protected float Far => (float)far;
@@ -71,38 +41,13 @@ internal abstract class RenderCamera
     }
     internal static Vector3 ToFloat(Point3D p) => new((float)p.X, (float)p.Y, (float)p.Z);
     internal static Vector3 ToFloat(Vector3D v) => new((float)v.X, (float)v.Y, (float)v.Z);
-
-    // Helix 3.1.2 forms Position + LookDirection in float before constructing its
-    // view matrix. Short look vectors at map-scale positions lose their direction.
-    // Build from the direction itself, preserving navigation targets and scale.
-    private static Matrix4x4 DirectionView(CameraCore camera) => camera.CreateLeftHandSystem
-        ? Matrix4x4.CreateLookToLeftHanded(camera.Position, camera.LookDirection, camera.UpDirection)
-        : Matrix4x4.CreateLookTo(camera.Position, camera.LookDirection, camera.UpDirection);
-    private sealed class PerspectiveCore : PerspectiveCameraCore { public override Matrix4x4 CreateViewMatrix() => DirectionView(this); }
-    private sealed class OrthographicCore : OrthographicCameraCore { public override Matrix4x4 CreateViewMatrix() => DirectionView(this); }
-    private protected sealed class PerspectiveBackend : HelixPerspectiveCamera
-    {
-        protected override CameraCore CreatePortableCameraCore() => new PerspectiveCore();
-        protected override Freezable CreateInstanceCore() => new PerspectiveBackend();
-    }
-    private protected sealed class OrthographicBackend : HelixOrthographicCamera
-    {
-        protected override CameraCore CreatePortableCameraCore() => new OrthographicCore();
-        protected override Freezable CreateInstanceCore() => new OrthographicBackend();
-    }
 }
 
 internal sealed class PerspectiveRenderCamera : RenderCamera
 {
     private double fieldOfView = 45;
-    public PerspectiveRenderCamera() : base(RenderBackend.UseHelix ? new PerspectiveBackend() : null) { }
-    private PerspectiveRenderCamera(HelixProjectionCamera? camera) : base(camera) { }
     /// <summary>Vertical field of view in degrees (default 45).</summary>
-    public double FieldOfView
-    {
-        get => HelixCamera is HelixPerspectiveCamera helix ? helix.FieldOfView : fieldOfView;
-        set { if (HelixCamera is HelixPerspectiveCamera helix) helix.FieldOfView = value; else Set(ref fieldOfView, value); }
-    }
+    public double FieldOfView { get => fieldOfView; set => Set(ref fieldOfView, value); }
     private protected override Matrix4x4 Projection(float aspect)
     {
         float fov = (float)((float)fieldOfView * Math.PI / 180);
@@ -118,21 +63,14 @@ internal sealed class PerspectiveRenderCamera : RenderCamera
         float y = 1 / MathF.Tan(fov * .5f), range = Far / (Near - Far);
         return new(y / aspect, 0, 0, 0, 0, y, 0, 0, 0, 0, range, -1, 0, 0, range * Near, 0);
     }
-    public override RenderCamera Clone() => HelixCamera is { } helix ? new PerspectiveRenderCamera((HelixProjectionCamera)helix.Clone())
-        : CopyTo(new PerspectiveRenderCamera { fieldOfView = fieldOfView });
+    public override RenderCamera Clone() => CopyTo(new PerspectiveRenderCamera { fieldOfView = fieldOfView });
 }
 
 internal sealed class OrthographicRenderCamera : RenderCamera
 {
     private double width = 10;
-    public OrthographicRenderCamera() : base(RenderBackend.UseHelix ? new OrthographicBackend() : null) { }
-    private OrthographicRenderCamera(HelixProjectionCamera? camera) : base(camera) { }
     /// <summary>The view's width in world units.</summary>
-    public double Width
-    {
-        get => HelixCamera is HelixOrthographicCamera helix ? helix.Width : width;
-        set { if (HelixCamera is HelixOrthographicCamera helix) helix.Width = value; else Set(ref width, value); }
-    }
+    public double Width { get => width; set => Set(ref width, value); }
     private protected override Matrix4x4 Projection(float aspect)
     {
         float w = (float)width, h = w / aspect, farPlane = Math.Min(1e15f, Far);
@@ -143,6 +81,5 @@ internal sealed class OrthographicRenderCamera : RenderCamera
             return new(2 / w, 0, 0, 0, 0, 2 / h, 0, 0, 0, 0, range, 0, 0, 0, range * Near, 1);
         }
     }
-    public override RenderCamera Clone() => HelixCamera is { } helix ? new OrthographicRenderCamera((HelixProjectionCamera)helix.Clone())
-        : CopyTo(new OrthographicRenderCamera { width = width });
+    public override RenderCamera Clone() => CopyTo(new OrthographicRenderCamera { width = width });
 }

@@ -10,7 +10,7 @@ using Vortice.DXGI;
 namespace zStudio.Rendering.Direct3D;
 
 /// <summary>
-/// The view cube and the coordinate axes (the Direct3D backend), each drawn in its own small square viewport over a cleared
+/// The view cube and the coordinate axes, each drawn in its own small square viewport over a cleared
 /// depth buffer after everything else. The viewport is 100 × scale DIPs, centred at the relative position (−1..1, Y up) and
 /// clamped inside the surface; while the back buffer is under 100 physical pixels on an axis neither is drawn and the cube is
 /// not hit (the axes never are). Both look

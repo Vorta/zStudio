@@ -16,9 +16,8 @@ public sealed partial class SceneViewport
         {
             groundGrid = new()
             {
-                Offset = 0, AutoSpacing = true, AutoSpacingRate = 5,
-                GridSpacing = 1, GridThickness = .025, FadingFactor = .25,
-                PlaneColor = Colors.Transparent, GridColor = Color.FromArgb(155, 145, 161, 180),
+                Offset = 0, AutoSpacing = true, AutoSpacingRate = 5, GridSpacing = 1,
+                GridColor = Color.FromArgb(155, 145, 161, 180),
                 IsHitTestVisible = false, IsGuide = true
             };
             view.Items.Add(groundGrid);

@@ -399,7 +399,7 @@ public sealed partial class SceneViewport
             item.VertexTint = color;
         }
     }
-    private void RefreshAnimationCamera(bool updateHitTests = false)
+    private void RefreshAnimationCamera()
     {
         if (animationFrame is not { } frame || animationContext == null || updatingAnimation || animationToken.IsCancellationRequested) return;
         var scene = animationContext.Scene;
@@ -416,11 +416,7 @@ public sealed partial class SceneViewport
             foreach (var item in items)
             {
                 if (animationToken.IsCancellationRequested) return;
-                if (facade)
-                {
-                    item.Mesh.Transform = HorizonTransform(pose.SourceNode, CameraFacingTransform(pose, model));
-                    if (updateHitTests) item.Mesh.UpdateHitTestTransform();
-                }
+                if (facade) item.Mesh.Transform = HorizonTransform(pose.SourceNode, CameraFacingTransform(pose, model));
                 if (animationEffectLighting && frame.Fog is { Enabled: true })
                 {
                     SetAnimationColor(item, AnimationFogColor(pose, item.LitColor, frame, true));

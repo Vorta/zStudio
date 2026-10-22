@@ -39,7 +39,6 @@ public sealed partial class SceneViewport
         public bool IsDepthClipEnabled { get => node.IsDepthClipEnabled; set => node.IsDepthClipEnabled = value; }
         public int RenderOrder => node.RenderOrder;
         /// <summary>Whether the node fills its triangles (wireframe is drawn as separate outline lines, never as a fill mode).</summary>
-        public bool SolidFill => node is not MeshNode mesh || mesh.FillsTriangles;
         public IReadOnlyList<Matrix4x4>? Instances
         {
             get => node.Instances;
@@ -93,8 +92,6 @@ public sealed partial class SceneViewport
     {
         public double Offset => grid.Offset;
         public bool IsHitTestVisible => grid.IsHitTestVisible;
-        public bool PlaneTransparent => grid.PlaneColor.A == 0;
-        public bool DrawsGridLines => grid.DrawsGridLines;
         public bool Visible { get => grid.Visibility == Visibility.Visible; set => grid.Visibility = value ? Visibility.Visible : Visibility.Collapsed; }
     }
 
@@ -210,7 +207,7 @@ public sealed partial class SceneViewport
 
     internal RenderMeshHandle AddFixtureMesh(FixtureMesh fixture)
     {
-        // Fixtures use plain materials (the stock diffuse pass); a template's material is copied as a plain one.
+        // Fixtures use plain materials (the plain diffuse pass); a template's material is copied as a plain one.
         var material = fixture.MaterialFrom is { } template && RenderNode(template) is MeshNode { Material: { } source } ? source.ClonePlain() : PreviewMaterial.CreatePlain();
         if (fixture.Color is { } color) material.DiffuseColor = new Color4(color.X, color.Y, color.Z, color.W);
         if (fixture.Unlit) material.Unlit = true;
@@ -296,8 +293,6 @@ public sealed partial class SceneViewport
     internal bool InertiaEnabled { get => navigationInertia; set => navigationInertia = value; }
     /// <summary>Orbit, pan and zoom input are enabled (Fly suspends them).</summary>
     internal bool OrbitControlsEnabled => panEnabled && zoomEnabled && rotationEnabled;
-    /// <summary>Whether the backend's own mouse/keyboard gestures are installed (zStudio owns all navigation input).</summary>
-    internal bool UsesBuiltInGestures => view.UsesBuiltInGestures;
     /// <summary>Back-to-front sorting of transparent meshes (on by default; fixtures turn it off to force a draw order).</summary>
     internal void SetTransparentSorting(bool enabled) { foreach (var group in view.Items.OfType<SortingGroupNode>()) group.SortingEnabled = enabled; }
     /// <summary>The graphics interop's own exception type (first-chance evidence in tests).</summary>
@@ -314,7 +309,7 @@ internal sealed class PreviewRecoveryHarness : IDisposable
     private readonly RenderDevice owned = RenderDevice.CreateSoftware();
     public void DisposeAllResources() => owned.DisposeAllResources();
     public void Reinitialize() => owned.Reinitialize();
-    /// <summary>Raised by the backend after it reinitialized its device resources.</summary>
+    /// <summary>Raised after the device resources were reinitialized.</summary>
     public event EventHandler<EventArgs>? Reinitialized { add => owned.Reinitialized += value; remove => owned.Reinitialized -= value; }
     /// <summary>The current device's identity (null without one).</summary>
     public object? Device => owned.DeviceIdentity;

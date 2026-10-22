@@ -5,7 +5,7 @@
 | Project | Owns | Never |
 | --- | --- | --- |
 | `zStudio.Core` | Format readers and writers, source projects (reconstruction, evaluation, edits, builds, export), preview simulation (mission start, animation player) | UI, rendering or Python dependencies |
-| `zStudio.Rendering` | Helix Toolkit / Direct3D 11 resources; `SceneViewport` (picking, gizmos, overlays, navigation math) | Document lifetimes, settings |
+| `zStudio.Rendering` | In-house Direct3D 11 renderer (Vortice.Windows) and its device resources; `SceneViewport` (picking, gizmos, overlays, navigation math) | Document lifetimes, settings |
 | `zStudio.Application` | The UI-independent command contract: `StudioCommands` registry, schemas, structured results, `StudioCommandException` codes | Workspace state |
 | `zStudio.Mcp` | The official C# MCP SDK host on a same-user named pipe, the stdio connector, the embedded `CommandCatalog.json` | Editing logic |
 | `zStudio.Desktop` | WPF Fluent workbench, documents, dialogs, audio (NAudio, WASAPI), settings, command handlers marshalled to the dispatcher | Format parsing |
@@ -63,7 +63,7 @@
 - Geometry: concave polygons triangulated, indices validated, per-corner UVs kept, missing normals derived. OBJ export bakes instance transforms, uses inverse-transpose normals, fixes mirrored winding and flips V.
 - Shading: textured surfaces unlit diffuse; untextured surfaces gentle view-dependent shading. Static views simulate no game effects; the animation viewport adds instance transforms, opacity, texture cycles, morphs, facades, lighting and fog.
 - Surface highlights: world batches split by the CanModify/ClipTo bits while sharing geometry; a highlight swaps matching batches to cached unlit materials (alpha cutouts kept) without replacing meshes or moving the camera.
-- Frame pipeline (`Viewport3DX` subclass, `IViewport3DX.Update`): Helix camera inertia, then pose normalization, facade/fog/horizon refresh and clipping, then camera-matrix capture. Camera notifications only invalidate, never reapply animation poses. Rendering is on demand; regression capture reads the presented back buffer; sized exports scale a current-size bitmap, never resizing the render target.
+- Frame pipeline (`RenderView.FrameUpdate`, once per rendered frame before the camera is read): camera inertia and navigation, then pose normalization, facade/fog/horizon refresh and clipping, then camera-matrix capture. Camera notifications only invalidate, never reapply animation poses. Rendering is on demand; regression capture reads the presented back buffer; sized exports scale a current-size bitmap, never resizing the render target.
 - Clipping: near/far come from visible transformed geometry; cached local bounds reject broadly, intersecting bounds refine against triangles clipped to the four side planes and the navigation floor, in double precision, with a guard band. Invisible meshes, the horizon and the grid never count. The navigation floor (0.001–0.05 scene units) is independent of the near plane.
 - Texture lookup: sibling hardware variants, then software, then the root image pack; an explicit variant can be chosen. Caches are bounded and checked against file stamps. Ambiguous names are reported; a missing mission texture stays untextured, never substituted from another mission.
 - Compiled-folder inventories share 128 Mi units and 250,000 visited entries per operation, admitted before collections are retained.
