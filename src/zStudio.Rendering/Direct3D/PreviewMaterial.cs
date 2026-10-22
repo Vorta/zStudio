@@ -97,19 +97,24 @@ internal sealed class PreviewMaterial
     public bool Horizon => horizon;
     public bool VertexTint => vertexTint;
     public FaceOrientation? Orientation => orientation;
-    private void Changed() { if (HelixMaterial == null) RenderView.InvalidateAll(); }
+    // Direct3D backend: a changed value redraws the views (setting the same value renders nothing).
+    private static void Set<T>(ref T field, T value)
+    {
+        if (EqualityComparer<T>.Default.Equals(field, value)) return;
+        field = value; RenderView.InvalidateAll();
+    }
 
     public Color4 DiffuseColor
     {
         get { if (HelixMaterial is not { } helix) return diffuse; var c = helix.DiffuseColor; return new(c.Red, c.Green, c.Blue, c.Alpha); }
-        set { diffuse = value; if (HelixMaterial is { } helix) helix.DiffuseColor = new HelixColor4(value.Red, value.Green, value.Blue, value.Alpha); else Changed(); }
+        set { if (HelixMaterial is { } helix) { diffuse = value; helix.DiffuseColor = new HelixColor4(value.Red, value.Green, value.Blue, value.Alpha); } else Set(ref diffuse, value); }
     }
-    public RenderTexture? DiffuseMap { get => map; set { map = value; if (HelixMaterial is { } helix) helix.DiffuseMap = value?.HelixTexture; else Changed(); } }
-    public bool Unlit { get => HelixMaterial?.EnableUnLit ?? unlit; set { unlit = value; if (HelixMaterial is { } helix) helix.EnableUnLit = value; else Changed(); } }
+    public RenderTexture? DiffuseMap { get => map; set { if (HelixMaterial is { } helix) { map = value; helix.DiffuseMap = value?.HelixTexture; } else Set(ref map, value); } }
+    public bool Unlit { get => HelixMaterial?.EnableUnLit ?? unlit; set { if (HelixMaterial is { } helix) { unlit = value; helix.EnableUnLit = value; } else Set(ref unlit, value); } }
     public float VertexColorBlendingFactor
     {
         get => HelixMaterial is { } helix ? (float)helix.VertexColorBlendingFactor : vertexBlending;
-        set { vertexBlending = value; if (HelixMaterial is { } helix) helix.VertexColorBlendingFactor = value; else Changed(); }
+        set { if (HelixMaterial is { } helix) { vertexBlending = value; helix.VertexColorBlendingFactor = value; } else Set(ref vertexBlending, value); }
     }
 
     private void RequirePreview() { if (!preview) throw new InvalidOperationException("Diagnostic overlays require a preview material."); }
@@ -117,13 +122,13 @@ internal sealed class PreviewMaterial
     public Color4 Overlay
     {
         get { RequirePreview(); if (core == null) return overlay; var c = core.Overlay; return new(c.Red, c.Green, c.Blue, c.Alpha); }
-        set { RequirePreview(); overlay = value; if (core != null) core.Overlay = new HelixColor4(value.Red, value.Green, value.Blue, value.Alpha); else Changed(); }
+        set { RequirePreview(); if (core != null) { overlay = value; core.Overlay = new HelixColor4(value.Red, value.Green, value.Blue, value.Alpha); } else Set(ref overlay, value); }
     }
     /// <summary>Tints each polygon by the zone set its vertex colours carry (ids n/255 in RGB, count n/3 in A).</summary>
     public bool PolygonZones
     {
         get { RequirePreview(); return core?.PolygonZones ?? polygonZones; }
-        set { RequirePreview(); polygonZones = value; if (core != null) core.PolygonZones = value; else Changed(); }
+        set { RequirePreview(); if (core != null) { polygonZones = value; core.PolygonZones = value; } else Set(ref polygonZones, value); }
     }
     public ZoneEmphasis Emphasis
     {
@@ -131,7 +136,8 @@ internal sealed class PreviewMaterial
         set
         {
             RequirePreview();
-            if (core != null) core.Emphasis = new HelixColor4(value.Zone / 255f, value.Strong, value.Weak, (float)value.Mode); else Changed();
+            if (core == null) { Set(ref emphasis, value); return; }
+            core.Emphasis = new HelixColor4(value.Zone / 255f, value.Strong, value.Weak, (float)value.Mode);
             emphasis = value;
         }
     }
@@ -139,7 +145,7 @@ internal sealed class PreviewMaterial
     public float Fade
     {
         get { RequirePreview(); return core?.Fade ?? fade; }
-        set { RequirePreview(); fade = value; if (core != null) core.Fade = value; else Changed(); }
+        set { RequirePreview(); if (core != null) { fade = value; core.Fade = value; } else Set(ref fade, value); }
     }
 
     /// <summary>A preview copy (same pass flags and state) for a mesh that must look different from the others sharing this one.</summary>

@@ -116,7 +116,7 @@ internal sealed class RenderView : IRayPicker, INodeOwner, IDisposable
     public Color BackgroundColor
     {
         get => viewport?.BackgroundColor ?? background;
-        set { background = value; if (viewport != null) viewport.BackgroundColor = value; else InvalidateRender(); }
+        set { if (viewport == null && background != value) InvalidateRender(); background = value; if (viewport != null) viewport.BackgroundColor = value; }
     }
     /// <summary>Runs on each rendered frame (with the frame's timestamp) before the camera matrices are captured for it.</summary>
     public Action<TimeSpan>? FrameUpdate { get; set; }
@@ -222,19 +222,19 @@ internal sealed class RenderView : IRayPicker, INodeOwner, IDisposable
         .Select(h => new RenderHit(Node.FromHelix(h.ModelHit), h.PointHit, h.NormalAtHit, h.Distance, h.Tag as int?, h.TriangleIndices is { } t ? (t.Item1, t.Item2, t.Item3) : null))];
 
     // View cube (face order +Z, −Z, +X, −X, +Y, −Y; edge and corner boxes neither drawn nor hit; a grey base ring around it is
-    // drawn and hit, a ring hit asking for the top or bottom view; neither the cube nor the axes are drawn or hit while the
-    // back buffer is under 100 physical pixels on an axis) and axes.
-    public bool ShowViewCube { get => viewport?.ShowViewCube ?? showCube; set { showCube = value; if (viewport != null) viewport.ShowViewCube = value; else InvalidateRender(); } }
-    public bool ShowCoordinateSystem { get => viewport?.ShowCoordinateSystem ?? showAxes; set { showAxes = value; if (viewport != null) viewport.ShowCoordinateSystem = value; else InvalidateRender(); } }
+    // drawn and hit, a ring hit asking for the top or bottom view) and axes (never hit). While the back buffer is under 100
+    // physical pixels on an axis neither is drawn and the cube is not hit.
+    public bool ShowViewCube { get => viewport?.ShowViewCube ?? showCube; set { if (viewport == null && showCube != value) InvalidateRender(); showCube = value; if (viewport != null) viewport.ShowViewCube = value; } }
+    public bool ShowCoordinateSystem { get => viewport?.ShowCoordinateSystem ?? showAxes; set { if (viewport == null && showAxes != value) InvalidateRender(); showAxes = value; if (viewport != null) viewport.ShowCoordinateSystem = value; } }
     /// <summary>The cube's centre in relative surface coordinates (−1..1, Y up; default 0.8, −0.8) and its scale (default 1).</summary>
-    public double ViewCubeHorizontalPosition { get => viewport?.ViewCubeHorizontalPosition ?? cubeX; set { cubeX = value; if (viewport != null) viewport.ViewCubeHorizontalPosition = value; else InvalidateRender(); } }
-    public double ViewCubeVerticalPosition { get => viewport?.ViewCubeVerticalPosition ?? cubeY; set { cubeY = value; if (viewport != null) viewport.ViewCubeVerticalPosition = value; else InvalidateRender(); } }
-    public double ViewCubeSize { get => viewport?.ViewCubeSize ?? cubeSize; set { cubeSize = value; if (viewport != null) viewport.ViewCubeSize = value; else InvalidateRender(); } }
+    public double ViewCubeHorizontalPosition { get => viewport?.ViewCubeHorizontalPosition ?? cubeX; set { if (viewport == null && cubeX != value) InvalidateRender(); cubeX = value; if (viewport != null) viewport.ViewCubeHorizontalPosition = value; } }
+    public double ViewCubeVerticalPosition { get => viewport?.ViewCubeVerticalPosition ?? cubeY; set { if (viewport == null && cubeY != value) InvalidateRender(); cubeY = value; if (viewport != null) viewport.ViewCubeVerticalPosition = value; } }
+    public double ViewCubeSize { get => viewport?.ViewCubeSize ?? cubeSize; set { if (viewport == null && cubeSize != value) InvalidateRender(); cubeSize = value; if (viewport != null) viewport.ViewCubeSize = value; } }
     /// <summary>The six face images side by side (in face order), as BGRA.</summary>
     public RenderTexture? ViewCubeTexture
     {
         get => cubeTexture;
-        set { cubeTexture = value; if (viewport != null) viewport.ViewCubeTexture = value?.HelixTexture; else InvalidateRender(); }
+        set { if (viewport == null && !ReferenceEquals(cubeTexture, value)) InvalidateRender(); cubeTexture = value; if (viewport != null) viewport.ViewCubeTexture = value?.HelixTexture; }
     }
     /// <summary>The cube viewport's side at scale 1, in DIPs (clamped inside the surface).</summary>
     public double ViewCubePixelSize => viewport?.Template?.FindName("PART_ViewCube", viewport) is ScreenSpacedElement3D cube &&

@@ -131,11 +131,10 @@ internal static class AiNetworkCheck
             // Transparent meshes do not write depth in the application. Picking
             // must agree with the visible marker behind those surfaces.
             var walls = scene.EnumerateRenderMeshes().Where(m => m.Role == SceneViewport.RenderMeshRole.Scene).ToArray(); Require(walls.Length == 2, "Fixture wall batches");
-            foreach (var wall in walls) wall.IsTransparent = true;
-            await Task.Delay(200);
+            await Shown(scene, () => { foreach (var wall in walls) wall.IsTransparent = true; });
             Require(!original.SequenceEqual(Pixels(scene.CapturePresentedFrame())) && scene.PickAiNode(point) == "a", "Transparent surfaces incorrectly block AI picking");
             foreach (var wall in walls) wall.IsTransparent = false;
-            scene.SetAiOptions(false, false, null); await Task.Delay(100);
+            await Shown(scene, () => scene.SetAiOptions(false, false, null));
             Require(original.SequenceEqual(Pixels(scene.CapturePresentedFrame())), "Disabling AI did not restore the scene");
             scene.SetPlacementEditing(true);
             (string Label, AiAttackStrategy Strategy, string Hex)[] strategyCases =
@@ -155,17 +154,17 @@ internal static class AiNetworkCheck
                 {
                     // Transparent fixture walls allow both depth modes to expose the same markers.
                     foreach (var wall in walls) wall.IsTransparent = true;
-                    scene.SetAiOptions(true, through, null); await Task.Delay(120);
+                    await Shown(scene, () => scene.SetAiOptions(true, through, null));
                     var rendered = scene.CapturePresentedFrame();
                     Require(HasColor(rendered, scene, point, hex), "Wrong marker color: " + text);
                     Require(HasColor(rendered, scene, scene.ProjectToView(new Point3D(0, 0, -2)), hex), "Wrong arrow/connection color: " + text);
                     Require(HasColor(rendered, scene, scene.ProjectToView(new Point3D(-6, 5, -2)), hex), "Same strategy differs between networks: " + text);
-                    scene.SetAiOptions(true, through, "network"); await Task.Delay(100);
+                    await Shown(scene, () => scene.SetAiOptions(true, through, "network"));
                     Require(HasColor(scene.CapturePresentedFrame(), scene, point, hex), "Filtering changed strategy color: " + text);
                 }
-                Require(scene.SelectAiNode("a"), "Strategy marker selection failed"); await Task.Delay(100);
+                bool picked = false; await Shown(scene, () => picked = scene.SelectAiNode("a")); Require(picked, "Strategy marker selection failed");
                 Require(HasColor(scene.CapturePresentedFrame(), scene, point, "#FFFFFF"), "Selected marker lost white highlight");
-                Require(scene.SelectAiNode(null), "Strategy marker clearing failed"); await Task.Delay(100);
+                bool cleared = false; await Shown(scene, () => cleared = scene.SelectAiNode(null)); Require(cleared, "Strategy marker clearing failed");
                 Require(HasColor(scene.CapturePresentedFrame(), scene, point, hex), "Clearing selection did not restore strategy color: " + text);
                 Save(scene.CapturePresentedFrame(), Path.Combine(output, "strategy-" + text + ".png"));
             }
@@ -182,9 +181,9 @@ internal static class AiNetworkCheck
                 S("node_01"), A(I(12), A(F(6), F(0), F(-2)), A(I(0))),
                 S("node_02"), A([A(I(0), I(1)), ..Enumerable.Range(0, 1100).SelectMany(n => new[] { S("valve_assign"), A(S(n == 1099 ? "start" : "edge" + n), I(1)) })])));
             scene.SetAiNetworks(new("valve-fixture", [valveGraph]));
-            scene.SetAiOptions(true, true, null); scene.SetValveOptions(false); await Task.Delay(150);
+            await Shown(scene, () => { scene.SetAiOptions(true, true, null); scene.SetValveOptions(false); });
             var valveBase = Pixels(scene.CapturePresentedFrame());
-            scene.SetValveOptions(true); await Task.Delay(150);
+            await Shown(scene, () => scene.SetValveOptions(true));
             var valves = scene.CapturePresentedFrame();
             Require(!valveBase.SequenceEqual(Pixels(valves)), "Valve overlay did not render");
             Require(HasColor(valves, scene, point, "#FF6666"), "Valve cage replaced attack strategy color");
@@ -192,14 +191,14 @@ internal static class AiNetworkCheck
             byte[] valveIdle = Pixels(valves); await Task.Delay(150);
             Require(valveIdle.SequenceEqual(Pixels(scene.CapturePresentedFrame())), "Valve overlay changed at idle");
             Save(valves, Path.Combine(output, "fixture-valves.png"));
-            scene.SetValveOptions(true, "absent"); await Task.Delay(150);
+            await Shown(scene, () => scene.SetValveOptions(true, "absent"));
             Require(valveBase.SequenceEqual(Pixels(scene.CapturePresentedFrame())), "Valve name filter left unrelated overlays");
-            scene.SetValveOptions(true, "start"); await Task.Delay(150);
+            await Shown(scene, () => scene.SetValveOptions(true, "start"));
             Require(HasColor(scene.CapturePresentedFrame(), scene, scene.ProjectToView(new Point3D(-1.5, 0, -2)), "#FFCC33"), "Valve highlight dash missing");
             Require(scene.CaptureView() == pose && clip == (camera.NearPlaneDistance, camera.FarPlaneDistance), "Valve overlays altered camera/depth bounds");
             foreach (string name in new[] { "node19", "term39" })
             {
-                scene.SetValveOptions(true, name); await Task.Delay(150);
+                await Shown(scene, () => scene.SetValveOptions(true, name));
                 Require(!valveBase.SequenceEqual(Pixels(scene.CapturePresentedFrame())), "Late valve condition was not rendered: " + name);
             }
             Require(scene.CaptureView() == pose, "Late valve filtering moved the camera");
@@ -221,6 +220,13 @@ internal static class AiNetworkCheck
         }
     }
     /// <summary>The presented frame once a change has rendered and two frames 100 ms apart agree (at most about 3 s).</summary>
+    // A change, then its first presented frame (a fixed delay races the frame on a slow desktop); a change that needs no new
+    // frame keeps the presented one.
+    private static async Task Shown(SceneViewport scene, Action change)
+    {
+        try { await scene.WaitForPresentedFrameAsync(change, TimeSpan.FromSeconds(2)); }
+        catch (TimeoutException) { }
+    }
     private static async Task<BitmapSource> Settled(SceneViewport scene, Action change)
     {
         await scene.WaitForPresentedFrameAsync(change);

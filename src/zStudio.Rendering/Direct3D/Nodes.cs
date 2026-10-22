@@ -47,12 +47,28 @@ internal abstract class Node : IDisposable
     internal RenderView? View => Owner?.View;
     /// <summary>The Direct3D backend redraws after a change (the Helix adapter's elements invalidate themselves).</summary>
     private protected void Changed() { if (HelixElement == null) View?.InvalidateRender(); }
+    /// <summary>Direct3D backend: stores <paramref name="value"/> and redraws when it differs (setting the same value, as per-frame
+    /// refreshes do, renders nothing, like the Helix adapter's dependency properties).</summary>
+    private protected void Set<T>(ref T field, T value)
+    {
+        if (EqualityComparer<T>.Default.Equals(field, value)) return;
+        field = value; Changed();
+    }
 
-    public Visibility Visibility { get => visibility; set { visibility = value; if (HelixElement != null) ApplyVisibility(); VisibilityChanged(); Changed(); } }
+    public Visibility Visibility
+    {
+        get => visibility;
+        set
+        {
+            if (HelixElement != null) { visibility = value; ApplyVisibility(); VisibilityChanged(); return; }
+            if (visibility == value) return;
+            visibility = value; VisibilityChanged(); Changed();
+        }
+    }
     public bool IsRendering
     {
         get => HelixElement != null && !guide ? HelixElement.IsRendering : rendering;
-        set { rendering = value; if (HelixElement != null) ApplyRendering(); Changed(); }
+        set { if (HelixElement != null) { rendering = value; ApplyRendering(); } else Set(ref rendering, value); }
     }
     public bool IsHitTestVisible
     {
@@ -77,8 +93,14 @@ internal abstract class Node : IDisposable
         get => transform;
         set
         {
+            if (HelixElement == null)
+            {
+                bool changed = transform != value;
+                transform = value; TransformSet();
+                if (changed) Changed();
+                return;
+            }
             transform = value;
-            if (HelixElement == null) { TransformSet(); Changed(); return; }
             settingTransform = true;
             try { HelixElement.Transform = value is { } matrix ? new MatrixTransform3D(ToWpf(matrix)) : Transform3D.Identity; }
             finally { settingTransform = false; }
@@ -197,7 +219,7 @@ internal sealed class SortingGroupNode : GroupNode
     public bool SortingEnabled
     {
         get => HelixElement is SortingGroupModel3D helix ? helix.EnableSorting : sorting;
-        set { sorting = value; if (HelixElement is SortingGroupModel3D helix) helix.EnableSorting = value; else Changed(); }
+        set { if (HelixElement is SortingGroupModel3D helix) { sorting = value; helix.EnableSorting = value; } else Set(ref sorting, value); }
     }
 }
 
@@ -226,16 +248,21 @@ internal abstract class GeometryNode : Node
         get => instances;
         set
         {
-            instances = value;
-            if (Model is { } model) { model.Instances = value == null ? null! : value as IList<Matrix4x4> ?? [.. value]; ApplyVisibility(); }
-            InstancesChanged(); Changed();
+            if (Model is { } model)
+            {
+                instances = value;
+                model.Instances = value == null ? null! : value as IList<Matrix4x4> ?? [.. value]; ApplyVisibility();
+                InstancesChanged(); return;
+            }
+            if (ReferenceEquals(instances, value)) return;
+            instances = value; InstancesChanged(); Changed();
         }
     }
     private protected virtual void InstancesChanged() { }
     private protected override bool Shown => base.Shown && instances is not { Count: 0 };
-    public int RenderOrder { get => Model?.RenderOrder ?? renderOrder; set { renderOrder = value; if (Model is { } model) model.RenderOrder = value; else Changed(); } }
-    public bool IsDepthClipEnabled { get => Model?.IsDepthClipEnabled ?? depthClip; set { depthClip = value; if (Model is { } model) model.IsDepthClipEnabled = value; else Changed(); } }
-    public int DepthBias { get => Model?.DepthBias ?? depthBias; set { depthBias = value; if (Model is { } model) model.DepthBias = value; else Changed(); } }
+    public int RenderOrder { get => Model?.RenderOrder ?? renderOrder; set { if (Model is { } model) { renderOrder = value; model.RenderOrder = value; } else Set(ref renderOrder, value); } }
+    public bool IsDepthClipEnabled { get => Model?.IsDepthClipEnabled ?? depthClip; set { if (Model is { } model) { depthClip = value; model.IsDepthClipEnabled = value; } else Set(ref depthClip, value); } }
+    public int DepthBias { get => Model?.DepthBias ?? depthBias; set { if (Model is { } model) { depthBias = value; model.DepthBias = value; } else Set(ref depthBias, value); } }
 
     /// <summary>Direct3D backend: the instance stream (null: draw once at identity).</summary>
     internal InstanceBuffer? InstanceStream(D3DGraphics graphics)
@@ -292,24 +319,25 @@ internal sealed class MeshNode : GeometryNode
         {
             var previous = geometry; geometry = value;
             if (Mesh is { } mesh) { mesh.Geometry = value?.HelixGeometry; return; }
-            if (previous != null && !ReferenceEquals(previous, value)) previous.ReleaseDeviceResources();
+            if (ReferenceEquals(previous, value)) return;
+            previous?.ReleaseDeviceResources();
             Changed();
         }
     }
     public PreviewMaterial? Material
     {
         get => Mesh is { } mesh ? material ??= mesh.Material is HelixDiffuseMaterial backend ? PreviewMaterial.Wrap(backend) : null : material;
-        set { material = value; if (Mesh is { } mesh) mesh.Material = value?.HelixMaterial; else Changed(); }
+        set { if (Mesh is { } mesh) { material = value; mesh.Material = value?.HelixMaterial; } else Set(ref material, value); }
     }
-    public bool IsTransparent { get => Mesh?.IsTransparent ?? transparent; set { transparent = value; if (Mesh is { } mesh) mesh.IsTransparent = value; else Changed(); } }
+    public bool IsTransparent { get => Mesh?.IsTransparent ?? transparent; set { if (Mesh is { } mesh) { transparent = value; mesh.IsTransparent = value; } else Set(ref transparent, value); } }
     public CullMode CullMode
     {
         get => Mesh is { } mesh ? mesh.CullMode switch { SharpDX.Direct3D11.CullMode.Front => CullMode.Front, SharpDX.Direct3D11.CullMode.Back => CullMode.Back, _ => CullMode.None } : cullMode;
         set
         {
+            if (Mesh is not { } mesh) { Set(ref cullMode, value); return; }
             cullMode = value;
-            if (Mesh is { } mesh) mesh.CullMode = value switch { CullMode.Front => SharpDX.Direct3D11.CullMode.Front, CullMode.Back => SharpDX.Direct3D11.CullMode.Back, _ => SharpDX.Direct3D11.CullMode.None };
-            else Changed();
+            mesh.CullMode = value switch { CullMode.Front => SharpDX.Direct3D11.CullMode.Front, CullMode.Back => SharpDX.Direct3D11.CullMode.Back, _ => SharpDX.Direct3D11.CullMode.None };
         }
     }
     /// <summary>Whether triangles are filled (always: wireframe is drawn as polygon outline lines, never as a fill mode).</summary>
@@ -345,12 +373,13 @@ internal sealed class LineNode : GeometryNode
         {
             var previous = geometry; geometry = value;
             if (Line is { } line) { line.Geometry = value?.HelixGeometry; return; }
-            if (previous != null && !ReferenceEquals(previous, value)) previous.ReleaseDeviceResources();
+            if (ReferenceEquals(previous, value)) return;
+            previous?.ReleaseDeviceResources();
             Changed();
         }
     }
-    public Color Color { get => Line?.Color ?? color; set { color = value; if (Line is { } line) line.Color = value; else Changed(); } }
-    public double Thickness { get => Line?.Thickness ?? thickness; set { thickness = value; if (Line is { } line) line.Thickness = value; else Changed(); } }
+    public Color Color { get => Line?.Color ?? color; set { if (Line is { } line) { color = value; line.Color = value; } else Set(ref color, value); } }
+    public double Thickness { get => Line?.Thickness ?? thickness; set { if (Line is { } line) { thickness = value; line.Thickness = value; } else Set(ref thickness, value); } }
     public MeshNode? FollowInstancesOf
     {
         get => followed;
@@ -380,14 +409,14 @@ internal sealed class GroundGridNode : Node
     private Color plane = Colors.Gray, grid = Colors.DarkGray;
     public GroundGridNode() : base(RenderBackend.UseHelix ? new AxisPlaneGridModel3D { UpAxis = Axis.Y, GridPattern = GridPattern.Grid, RenderShadowMap = false } : null) { }
     private AxisPlaneGridModel3D? Grid => (AxisPlaneGridModel3D?)HelixElement;
-    public double Offset { get => Grid?.Offset ?? offset; set { offset = value; if (Grid is { } g) g.Offset = value; else Changed(); } }
+    public double Offset { get => Grid?.Offset ?? offset; set { if (Grid is { } g) { offset = value; g.Offset = value; } else Set(ref offset, value); } }
     public bool AutoSpacing { get => Grid?.AutoSpacing ?? autoSpacing; set { autoSpacing = value; if (Grid is { } g) g.AutoSpacing = value; else { if (!value) ActualSpacing = (float)spacing; Changed(); } } }
-    public double AutoSpacingRate { get => Grid?.AutoSpacingRate ?? rate; set { rate = value; if (Grid is { } g) g.AutoSpacingRate = value; else Changed(); } }
+    public double AutoSpacingRate { get => Grid?.AutoSpacingRate ?? rate; set { if (Grid is { } g) { rate = value; g.AutoSpacingRate = value; } else Set(ref rate, value); } }
     public double GridSpacing { get => Grid?.GridSpacing ?? spacing; set { spacing = value; ActualSpacing = (float)value; if (Grid is { } g) g.GridSpacing = value; else Changed(); } }
     public double GridThickness { get => Grid?.GridThickness ?? thickness; set { thickness = value; if (Grid is { } g) g.GridThickness = value; } }
     public double FadingFactor { get => Grid?.FadingFactor ?? fading; set { fading = value; if (Grid is { } g) g.FadingFactor = value; } }
     public Color PlaneColor { get => Grid?.PlaneColor ?? plane; set { plane = value; if (Grid is { } g) g.PlaneColor = value; } }
-    public Color GridColor { get => Grid?.GridColor ?? grid; set { grid = value; if (Grid is { } g) g.GridColor = value; else Changed(); } }
+    public Color GridColor { get => Grid?.GridColor ?? grid; set { if (Grid is { } g) { grid = value; g.GridColor = value; } else Set(ref grid, value); } }
     public bool DrawsGridLines => Grid is not { } g || g.GridPattern == GridPattern.Grid;
 
     /// <summary>Direct3D backend: the spacing drawn (auto spacing keeps the last one while the look is more than 60° from vertical).</summary>
