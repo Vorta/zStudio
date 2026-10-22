@@ -94,19 +94,24 @@ internal sealed class Direct3DView : IDisposable
     /// <summary>Sizes the back buffer to <paramref name="width"/> × <paramref name="height"/> DIPs (floor of each times the DPI scale, at least 2).</summary>
     public void Resize(int width, int height, bool force = false)
     {
-        if (!force && width == requestedWidth && height == requestedHeight && renderWidth == Math.Max(2, (float)(width * dpiScale))) return;
-        requestedWidth = width; requestedHeight = height;
-        renderWidth = Math.Max(2, (float)(width * dpiScale)); renderHeight = Math.Max(2, (float)(height * dpiScale));
-        failed = false;
-        ReleaseTargets();
-        // The new buffer exists at once (its first frame follows), as the presented size reports.
-        if (owner.Device?.Graphics is { IsDisposed: false } graphics && renderWidth > 10 && renderHeight > 10)
+        if (force || width != requestedWidth || height != requestedHeight || renderWidth != Math.Max(2, (float)(width * dpiScale)))
         {
-            try { EnsureTargets(graphics); }
-            catch (Exception error) when (IsDeviceLost(error, graphics)) { Recover(); }
-            catch (Exception error) when (error is not OutOfMemoryException and not StackOverflowException) { Fail(error); }
+            requestedWidth = width; requestedHeight = height;
+            renderWidth = Math.Max(2, (float)(width * dpiScale)); renderHeight = Math.Max(2, (float)(height * dpiScale));
+            failed = false;
+            ReleaseTargets();
         }
+        CreateTargets();
         InvalidateRender();
+    }
+
+    // The buffers exist as soon as the size and the device are known (the first frame follows), as the presented size reports.
+    private void CreateTargets()
+    {
+        if (failed || owner.Device?.Graphics is not { IsDisposed: false } graphics || renderWidth <= 10 || renderHeight <= 10) return;
+        try { EnsureTargets(graphics); }
+        catch (Exception error) when (IsDeviceLost(error, graphics)) { Recover(); }
+        catch (Exception error) when (error is not OutOfMemoryException and not StackOverflowException) { Fail(error); }
     }
 
     private void OnRendering(object? sender, EventArgs e)
@@ -290,7 +295,7 @@ internal sealed class Direct3DView : IDisposable
     }
 
     /// <summary>The device changed (attached, detached or recovered): targets are rebuilt on the next frame.</summary>
-    public void DeviceChanged() { failed = false; ready = false; RenderException = null; ReleaseTargets(); InvalidateRender(); }
+    public void DeviceChanged() { failed = false; ready = false; RenderException = null; ReleaseTargets(); CreateTargets(); InvalidateRender(); }
 
     /// <summary>Renders one frame now and reads it back.</summary>
     public BitmapSource? RenderBitmap()

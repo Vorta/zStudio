@@ -97,15 +97,7 @@ internal sealed class SceneRenderer
     private static float BoundsDistance(MeshNode mesh, Matrix4x4 world, Vector3 eye)
     {
         if (mesh.Geometry is not { Positions.Length: > 0 } geometry) return 0;
-        var (min, max) = geometry.Bounds;
-        Vector3 boundsMin = new(float.PositiveInfinity), boundsMax = new(float.NegativeInfinity);
-        if (mesh.Instances is { } instances)
-            foreach (var instance in instances)
-            {
-                var (a, b) = RayPicking.TransformBounds(min, max, instance * world);
-                boundsMin = Vector3.Min(boundsMin, a); boundsMax = Vector3.Max(boundsMax, b);
-            }
-        else (boundsMin, boundsMax) = RayPicking.TransformBounds(min, max, world);
+        var (boundsMin, boundsMax) = mesh.WorldBounds(world, geometry, geometry.Bounds);
         var outside = Vector3.Max(Vector3.Zero, Vector3.Max(boundsMin - eye, eye - boundsMax));
         return outside.LengthSquared();
     }

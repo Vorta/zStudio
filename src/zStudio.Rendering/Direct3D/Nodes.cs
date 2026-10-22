@@ -246,6 +246,28 @@ internal abstract class GeometryNode : Node
         return instanceBuffer = new InstanceBuffer(graphics, instances);
     }
     public override void Dispose() { instanceBuffer?.Dispose(); instanceBuffer = null; base.Dispose(); }
+
+    // Direct3D backend: the world bounds of every instance, kept while the instances, the world matrix and the geometry stay.
+    private (IReadOnlyList<Matrix4x4>? Instances, Matrix4x4 World, object? Geometry, Vector3 Min, Vector3 Max)? worldBounds;
+    /// <summary>The axis-aligned world bounds of the node's geometry over all its instances (empty geometry: min +∞).</summary>
+    internal (Vector3 Min, Vector3 Max) WorldBounds(Matrix4x4 world, object? geometry, (Vector3 Min, Vector3 Max) local)
+    {
+        if (worldBounds is { } cached && ReferenceEquals(cached.Instances, instances) && cached.World == world && ReferenceEquals(cached.Geometry, geometry))
+            return (cached.Min, cached.Max);
+        Vector3 min = new(float.PositiveInfinity), max = new(float.NegativeInfinity);
+        if (float.IsFinite(local.Min.X))
+        {
+            if (instances is { } list)
+                foreach (var instance in list)
+                {
+                    var (a, b) = RayPicking.TransformBounds(local.Min, local.Max, instance * world);
+                    min = Vector3.Min(min, a); max = Vector3.Max(max, b);
+                }
+            else (min, max) = RayPicking.TransformBounds(local.Min, local.Max, world);
+        }
+        worldBounds = (instances, world, geometry, min, max);
+        return (min, max);
+    }
 }
 
 /// <summary>A triangle mesh with a <see cref="PreviewMaterial"/>; transparent meshes are drawn after the opaque ones, without depth

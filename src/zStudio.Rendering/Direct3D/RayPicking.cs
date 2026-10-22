@@ -38,6 +38,7 @@ internal sealed class MeshBvh
             boxMin[t] = Vector3.Min(p0, Vector3.Min(p1, p2)); boxMax[t] = Vector3.Max(p0, Vector3.Max(p1, p2));
             centroids[t] = (p0 + p1 + p2) / 3;
         }
+        var keys = new float[triangles.Length];
         List<Node> built = [new()];
         Stack<(int Node, int Start, int Count)> pending = new();
         pending.Push((0, 0, triangles.Length));
@@ -59,8 +60,10 @@ internal sealed class MeshBvh
             int axis = extent.X >= extent.Y && extent.X >= extent.Z ? 0 : extent.Y >= extent.Z ? 1 : 2;
             int half = item.Count / 2;
             var span = triangles.AsSpan(item.Start, item.Count);
-            // Median split: an ordering by centroid along the axis (ties by ordinal keep it deterministic).
-            span.Sort((a, b) => { int order = Axis(centroids[a], axis).CompareTo(Axis(centroids[b], axis)); return order != 0 ? order : a.CompareTo(b); });
+            var keySpan = keys.AsSpan(item.Start, item.Count);
+            for (int i = 0; i < span.Length; i++) keySpan[i] = Axis(centroids[span[i]], axis);
+            // Median split: the triangles ordered by centroid along the axis.
+            keySpan.Sort(span);
             int left = built.Count;
             built.Add(new()); built.Add(new());
             built[item.Node] = new Node { Min = min, Max = max, Start = left, Count = 0 };
@@ -187,6 +190,10 @@ internal static class RayPicking
     {
         if (geometry.Positions.Length == 0 || geometry.Indices.Length < 3) return;
         var (min, max) = geometry.Bounds;
+        // Skip the whole node unless the ray meets the bounds of all its instances.
+        var (nodeMin, nodeMax) = node.WorldBounds(world, geometry, (min, max));
+        var inverseDirection = new Vector3(1 / direction.X, 1 / direction.Y, 1 / direction.Z);
+        if (!MeshBvh.Slab(origin, inverseDirection, nodeMin, nodeMax, float.PositiveInfinity, out _)) return;
         if (node.Instances is { } instances)
         {
             for (int i = 0; i < instances.Count; i++)
