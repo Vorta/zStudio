@@ -58,11 +58,12 @@ internal sealed class RenderDevice : IDisposable
     }
     private void Recover(Action action)
     {
-        if (Interlocked.CompareExchange(ref recovering, 1, 0) != 0)
-            throw new InvalidOperationException("3D preview graphics recovery failed repeatedly. Check the active desktop session and graphics device, then retry the preview.");
+        if (Interlocked.CompareExchange(ref recovering, 1, 0) != 0) throw new InvalidOperationException(RecoveryFailedMessage);
         try { action(); }
         finally { Volatile.Write(ref recovering, 0); }
     }
+    /// <summary>The error of a recovery refused while another runs, or of a view whose device keeps getting lost.</summary>
+    internal const string RecoveryFailedMessage = "3D preview graphics recovery failed repeatedly. Check the active desktop session and graphics device, then retry the preview.";
     private EventHandler<EventArgs>? reinitialized;
     /// <summary>Raised after the device resources were rebuilt.</summary>
     public event EventHandler<EventArgs>? Reinitialized

@@ -42,8 +42,8 @@ internal interface IRayPicker
 /// inspection refresh rely on that tail), and <see cref="FrameUpdate"/> runs once per rendered frame, before the camera is read
 /// for it.
 /// <para>
-/// Per frame: opaque meshes and lines in ascending render order (submission order among equals; the Helix adapter's sort is
-/// unstable beyond 16 nodes), then the ground grid, then transparent meshes in submission order (sorting groups sort theirs),
+/// Per frame: opaque meshes and lines in ascending render order (among equals horizon materials first, then submission order;
+/// the Helix adapter's sort is unstable beyond 16 nodes), then the ground grid, then transparent meshes in submission order (sorting groups sort theirs),
 /// then top-most groups, the view cube and the axes, each over a cleared depth buffer. 32-bit float depth, standard Z; no
 /// lights, shadows, MSAA or FXAA; an 8-bit BGRA back buffer without sRGB conversion; background <see cref="BackgroundColor"/>.
 /// </para>
@@ -86,6 +86,7 @@ internal sealed class RenderView : IRayPicker, INodeOwner, IDisposable
         }
         else
         {
+            D3DGraphics.WarmUp();
             direct = new Direct3DView(this);
             Items = new(this, null);
             lock (views) { views.RemoveAll(v => !v.TryGetTarget(out _)); views.Add(new(this)); }
@@ -126,6 +127,7 @@ internal sealed class RenderView : IRayPicker, INodeOwner, IDisposable
     public event Action<Exception>? RenderFailed;
     internal void RaiseRenderFailed(Exception error) => RenderFailed?.Invoke(error);
     public event Action<Exception>? ResizeFailed;
+    internal void RaiseResizeFailed(Exception error) => ResizeFailed?.Invoke(error);
     public Exception? RenderException => viewport != null ? viewport.RenderException : direct!.RenderException;
     /// <summary>The graphics device and its shaders; null detaches them.</summary>
     public RenderDevice? Device
@@ -168,7 +170,7 @@ internal sealed class RenderView : IRayPicker, INodeOwner, IDisposable
 
     /// <summary>
     /// Resizes the back buffer to the surface at Normal dispatcher priority, coalescing requests; nothing while the surface is
-    /// not loaded or visible or is under 1 × 1. Never moves the camera.
+    /// not loaded or is under 1 × 1 (the Helix adapter also skips it while not visible). Never moves the camera.
     /// </summary>
     public void QueueResize()
     {
@@ -180,7 +182,7 @@ internal sealed class RenderView : IRayPicker, INodeOwner, IDisposable
         resize = element.Dispatcher.BeginInvoke(DispatcherPriority.Normal, () =>
         {
             resize = null;
-            if (disposed || !element.IsLoaded || !element.IsVisible || element.ActualWidth < 1 || element.ActualHeight < 1) return;
+            if (disposed || !element.IsLoaded || viewport != null && !element.IsVisible || element.ActualWidth < 1 || element.ActualHeight < 1) return;
             try
             {
                 if (viewport != null) viewport.RenderHost?.Resize((int)viewport.ActualWidth, (int)viewport.ActualHeight);
@@ -323,6 +325,7 @@ internal sealed class RenderView : IRayPicker, INodeOwner, IDisposable
         if (viewport != null) viewport.Dispose();
         else
         {
+            cubeTexture?.ReleaseDeviceResources();
             Device = null; direct!.Dispose();
             lock (views) views.RemoveAll(v => !v.TryGetTarget(out var target) || ReferenceEquals(target, this));
         }

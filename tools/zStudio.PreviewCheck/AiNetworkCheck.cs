@@ -219,14 +219,16 @@ internal static class AiNetworkCheck
             foreach (var descendant in Descendants(child)) yield return descendant;
         }
     }
-    /// <summary>The presented frame once a change has rendered and two frames 100 ms apart agree (at most about 3 s).</summary>
-    // A change, then its first presented frame (a fixed delay races the frame on a slow desktop); a change that needs no new
-    // frame keeps the presented one.
+    /// <summary>
+    /// A change, then its first presented frame (a fixed delay races the frame on a slow desktop); a change that needs no new
+    /// frame keeps the presented one.
+    /// </summary>
     private static async Task Shown(SceneViewport scene, Action change)
     {
         try { await scene.WaitForPresentedFrameAsync(change, TimeSpan.FromSeconds(2)); }
         catch (TimeoutException) { }
     }
+    /// <summary>The presented frame once a change has rendered and two frames 100 ms apart agree (at most about 3 s).</summary>
     private static async Task<BitmapSource> Settled(SceneViewport scene, Action change)
     {
         await scene.WaitForPresentedFrameAsync(change);

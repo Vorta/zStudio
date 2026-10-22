@@ -7,8 +7,8 @@ using Vortice.DXGI;
 namespace zStudio.Rendering.Direct3D;
 
 /// <summary>
-/// Draws a view's nodes (the Direct3D backend). Per frame: opaque meshes and lines in ascending render order (submission order
-/// among equals), then the ground grids, then transparent meshes in submission order (a sorting group's back to front), then each
+/// Draws a view's nodes (the Direct3D backend). Per frame: opaque meshes and lines in ascending render order (among equals
+/// horizon materials first, then submission order), then the ground grids, then transparent meshes in submission order (a sorting group's back to front), then each
 /// top-most group over a cleared depth buffer. Composition: p · instance · transform · parent transforms.
 /// </summary>
 internal sealed class SceneRenderer
@@ -28,8 +28,10 @@ internal sealed class SceneRenderer
     {
         opaque.Clear(); transparent.Clear(); grids.Clear(); topMost.Clear(); sequence = 0;
         Collect(view, view.Items, Matrix4x4.Identity, eye);
-        // Stable: equal render orders keep submission order.
-        opaque.Sort((a, b) => a.Order != b.Order ? a.Order.CompareTo(b.Order) : a.Sequence.CompareTo(b.Sequence));
+        // Stable: equal render orders draw horizon materials first (no depth test: nothing drawn before them may be painted over),
+        // then keep submission order.
+        opaque.Sort((a, b) => a.Order != b.Order ? a.Order.CompareTo(b.Order)
+            : IsHorizon(a.Node) != IsHorizon(b.Node) ? (IsHorizon(a.Node) ? -1 : 1) : a.Sequence.CompareTo(b.Sequence));
         var context = g.Context;
         g.Write(g.FrameBuffer, frame);
         context.VSSetConstantBuffer(0, g.FrameBuffer); context.GSSetConstantBuffer(0, g.FrameBuffer); context.PSSetConstantBuffer(0, g.FrameBuffer);
@@ -118,6 +120,8 @@ internal sealed class SceneRenderer
         }
     }
 
+    private static bool IsHorizon(GeometryNode node) => node is MeshNode { Material.Horizon: true };
+
     private static void DrawNode(D3DGraphics g, in Draw draw, bool inTransparentBucket)
     {
         if (draw.Node is MeshNode mesh) DrawMesh(g, mesh, draw.World, inTransparentBucket);
@@ -131,14 +135,18 @@ internal sealed class SceneRenderer
         if (instances is { Count: 0 }) return;
         var context = g.Context;
         // Pass: the preview pass table (priority face orientation > polygon zones > overlay > vertex tint or fade), else plain.
+        // Depth: the plain diffuse pass tests LessEqual and writes (plain materials in either bucket, preview materials drawn
+        // opaque without a preview pass); the preview passes test Less and write when opaque; transparent preview surfaces
+        // test Less without writing; horizon surfaces neither test nor write.
         ID3D11PixelShader pixel;
         ID3D11DepthStencilState depth;
-        if (!material.IsPreview) { pixel = g.PSPlain; depth = g.DepthLessWrite; }
+        if (!material.IsPreview) { pixel = g.PSPlain; depth = g.DepthLessEqualWrite; }
         else
         {
             pixel = material.Orientation?.Enabled == true ? g.PSOrientation : material.PolygonZones ? g.PSPolygonZones
                 : material.Overlay.Alpha > 0 ? g.PSOverlay : material.VertexTint || material.Fade > 0 ? g.PSTint : g.PSPlain;
-            depth = material.Horizon ? g.DepthNone : transparent ? g.DepthLessNoWrite : g.DepthLessWrite;
+            depth = material.Horizon ? g.DepthNone : transparent ? g.DepthLessNoWrite
+                : ReferenceEquals(pixel, g.PSPlain) ? g.DepthLessEqualWrite : g.DepthLessWrite;
         }
         var texture = material.DiffuseMap?.Resource(g);
         var emphasis = material.IsPreview ? material.Emphasis : default;
@@ -184,8 +192,7 @@ internal sealed class SceneRenderer
         context.IASetVertexBuffers(0, 2, [buffers.Positions, instances?.Buffer ?? g.IdentityInstance], [12u, 64u], [0u, 0]);
         context.IASetIndexBuffer(buffers.Indices, Format.R32_UInt, 0);
         context.VSSetShader(g.VSLine); context.GSSetShader(g.GSLine); context.PSSetShader(g.PSLine);
-        // One bias unit behind: a line exactly on a surface loses the depth tie to it (the surface keeps its side of the ribbon).
-        context.RSSetState(g.Rasterizer(CullMode.None, node.DepthBias + 1, node.IsDepthClipEnabled));
+        context.RSSetState(g.Rasterizer(CullMode.None, node.DepthBias, node.IsDepthClipEnabled));
         context.OMSetDepthStencilState(g.DepthLessEqualWrite);
         context.DrawIndexedInstanced((uint)buffers.IndexCount, (uint)(instances?.Count ?? 1), 0, 0, 0);
         context.GSSetShader(null);

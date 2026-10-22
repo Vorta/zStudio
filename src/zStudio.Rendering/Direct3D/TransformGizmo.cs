@@ -230,7 +230,8 @@ internal sealed class SimpleMeshBuilder
     public List<Vector3> Normals { get; } = [];
     public List<Vector2> TextureCoordinates { get; } = [];
     public List<int> Indices { get; } = [];
-    public MeshData ToMesh(Color4[]? colors = null) => new([.. Positions], [.. Indices], [.. Normals], [.. TextureCoordinates], colors);
+    /// <summary>The mesh, shared by every view that draws it (nodes never release its device copies).</summary>
+    public MeshData ToMesh(Color4[]? colors = null) => new([.. Positions], [.. Indices], [.. Normals], [.. TextureCoordinates], colors) { IsShared = true };
 
     // Unit circle (−cos, sin) as Helix's GetCircle.
     private static Vector2[] Circle(int divisions)

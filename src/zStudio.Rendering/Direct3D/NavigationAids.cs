@@ -22,13 +22,22 @@ internal sealed class NavigationAids
     private const float Size = 100, CameraDistance = 20, Near = .01f, Far = 1000, CubeSide = 5;
     private const float AxisLength = 5.5f, AxisDiameter = .6f, AxisHead = 1.7f, LabelDistance = AxisLength + 1.5f;
     // The axis letters' em size in physical pixels.
-    private const double LabelEm = 19;
-    // The glyph's centre sits this many physical pixels below the projected label point.
-    private const float LabelDrop = 2;
+    // The axis letters' em size, and how far the glyph's centre sits below the projected label point, in DIPs.
+    private const double LabelEm = 12.7;
+    private const double LabelDrop = 1.33;
     private static readonly Color4 LabelColor = new(169 / 255f, 169 / 255f, 169 / 255f, 1);
     private static readonly Lazy<MeshData> CubeMesh = new(BuildCube);
     private static readonly Lazy<MeshData> AxesMesh = new(BuildAxes);
-    private static readonly Lazy<RenderTexture[]> Labels = new(() => [Label("X"), Label("Y"), Label("Z")]);
+    // The letters rendered at each DPI scale in use.
+    private static readonly Dictionary<double, RenderTexture[]> Labels = [];
+    private static RenderTexture[] LabelsAt(double dpiScale)
+    {
+        lock (Labels)
+        {
+            if (!Labels.TryGetValue(dpiScale, out var labels)) Labels[dpiScale] = labels = [Label("X", dpiScale), Label("Y", dpiScale), Label("Z", dpiScale)];
+            return labels;
+        }
+    }
     private ID3D11Buffer? labelQuad;
     private int labelGeneration;
 
@@ -60,14 +69,15 @@ internal sealed class NavigationAids
         {
             var (x, y, side) = Viewport(view.ViewCubeHorizontalPosition, view.ViewCubeVerticalPosition, view.ViewCubeSize, width, height, dpiScale);
             Begin(g, camera, depth, x, y, side, perspective: true, dpiScale);
-            DrawMesh(g, CubeMesh.Value, g.PSViewCube, texture.Resource(g).View, g.CubeSampler);
+            // The cube's pass replaces the target (no blending) and tests Less; the axes and letters blend and test LessEqual.
+            DrawMesh(g, CubeMesh.Value, g.PSViewCube, texture.Resource(g).View, g.CubeSampler, g.NoBlend, g.DepthLessWrite);
         }
         if (view.ShowCoordinateSystem)
         {
             var (x, y, side) = Viewport(-.8, -.8, 1, width, height, dpiScale);
             var frame = Begin(g, camera, depth, x, y, side, perspective: camera is PerspectiveRenderCamera, dpiScale);
-            DrawMesh(g, AxesMesh.Value, g.PSColor, null, g.SurfaceSampler);
-            DrawLabels(g, frame, side);
+            DrawMesh(g, AxesMesh.Value, g.PSColor, null, g.SurfaceSampler, g.AlphaBlend, g.DepthLessEqualWrite);
+            DrawLabels(g, frame, side, dpiScale);
         }
         context.RSSetViewport(0, 0, fullWidth, fullHeight);
         context.RSSetScissorRect(0, 0, (int)MathF.Ceiling(fullWidth), (int)MathF.Ceiling(fullHeight));
@@ -90,7 +100,8 @@ internal sealed class NavigationAids
         return frame;
     }
 
-    private static void DrawMesh(D3DGraphics g, MeshData mesh, ID3D11PixelShader pixel, ID3D11ShaderResourceView? texture, ID3D11SamplerState sampler)
+    private static void DrawMesh(D3DGraphics g, MeshData mesh, ID3D11PixelShader pixel, ID3D11ShaderResourceView? texture, ID3D11SamplerState sampler,
+        ID3D11BlendState blend, ID3D11DepthStencilState depth)
     {
         if (mesh.Buffers(g) is not { } buffers) return;
         var context = g.Context;
@@ -105,12 +116,14 @@ internal sealed class NavigationAids
         context.VSSetShader(g.VSMesh); context.GSSetShader(null); context.PSSetShader(pixel);
         context.PSSetShaderResource(0, texture!); context.PSSetSampler(0, sampler);
         context.RSSetState(g.Rasterizer(CullMode.Back, 0, true));
-        context.OMSetDepthStencilState(g.DepthLessWrite);
+        context.OMSetBlendState(blend);
+        context.OMSetDepthStencilState(depth);
         context.DrawIndexedInstanced((uint)buffers.IndexCount, 1, 0, 0, 0);
+        context.OMSetBlendState(g.AlphaBlend);
     }
 
     // The axis letters: screen-aligned quads centred on the projected label points, drawn over the arrows.
-    private void DrawLabels(D3DGraphics g, in FrameConstants frame, float side)
+    private void DrawLabels(D3DGraphics g, in FrameConstants frame, float side, double dpiScale)
     {
         var context = g.Context;
         if (labelQuad == null || labelGeneration != g.Generation)
@@ -120,12 +133,12 @@ internal sealed class NavigationAids
             labelGeneration = g.Generation;
         }
         Vector3[] anchors = [new(LabelDistance, 0, 0), new(0, LabelDistance, 0), new(0, 0, LabelDistance)];
-        var textures = Labels.Value;
+        var textures = LabelsAt(dpiScale);
         for (int i = 0; i < 3; i++)
         {
             var clip = Vector4.Transform(new Vector4(anchors[i], 1), frame.ViewProjection);
             if (clip.W <= 0) continue;
-            var center = new Vector2(clip.X / clip.W, clip.Y / clip.W - 2 * LabelDrop / side);
+            var center = new Vector2(clip.X / clip.W, clip.Y / clip.W - (float)(2 * LabelDrop * dpiScale) / side);
             var texture = textures[i];
             float hx = texture.Width / side, hy = texture.Height / side;
             float z = Math.Clamp(clip.Z / clip.W, 0, 1);
@@ -150,7 +163,7 @@ internal sealed class NavigationAids
             context.VSSetShader(g.VSLabel); context.GSSetShader(null); context.PSSetShader(g.PSLabel);
             context.PSSetShaderResource(0, texture.Resource(g).View); context.PSSetSampler(0, g.LabelSampler);
             context.RSSetState(g.Rasterizer(CullMode.None, 0, true));
-            context.OMSetDepthStencilState(g.DepthNone);
+            context.OMSetDepthStencilState(g.DepthLessEqualWrite);
             context.Draw(4, 0);
         }
     }
@@ -239,10 +252,11 @@ internal sealed class NavigationAids
         return builder.ToMesh(colors);
     }
 
-    // A white letter (alpha coverage) on transparent, Arial, sized in physical pixels, cropped to its ink (the quad centres the glyph).
-    private static RenderTexture Label(string text)
+    // A white letter (alpha coverage) on transparent, Arial at LabelEm DIPs in physical pixels, cropped to its ink (the quad
+    // centres the glyph).
+    private static RenderTexture Label(string text, double dpiScale)
     {
-        var formatted = new FormattedText(text, CultureInfo.InvariantCulture, FlowDirection.LeftToRight, new Typeface("Arial"), LabelEm, Brushes.White, 1);
+        var formatted = new FormattedText(text, CultureInfo.InvariantCulture, FlowDirection.LeftToRight, new Typeface("Arial"), LabelEm * dpiScale, Brushes.White, 1);
         int width = (int)Math.Ceiling(formatted.WidthIncludingTrailingWhitespace) + 4, height = (int)Math.Ceiling(formatted.Height) + 4;
         var visual = new DrawingVisual();
         using (var context = visual.RenderOpen()) context.DrawText(formatted, new Point(2, 2));
@@ -266,7 +280,7 @@ internal sealed class NavigationAids
                 int at = (y * w + x) * 4;
                 cropped[at] = cropped[at + 1] = cropped[at + 2] = 255; cropped[at + 3] = a;
             }
-        return RenderTexture.FromBgra(cropped, w, h);
+        return RenderTexture.FromBgra(cropped, w, h, shared: true);
     }
 
     public void Release() { labelQuad?.Dispose(); labelQuad = null; }

@@ -74,8 +74,13 @@ internal sealed class MeshBvh
     }
     private static float Axis(Vector3 v, int axis) => axis == 0 ? v.X : axis == 1 ? v.Y : v.Z;
 
-    /// <summary>Approximate managed size of a hierarchy over <paramref name="triangles"/> triangles (nodes and the triangle order).</summary>
-    public static long RetainedBytes(long triangles) => 64 + triangles * 4 + (2 * (triangles / LeafSize) + 2) * 32;
+    /// <summary>
+    /// Managed size of a hierarchy over <paramref name="triangles"/> triangles: the triangle order (4 bytes each) and about 0.8
+    /// nodes per triangle (32 bytes each: median splits leave leaves of 2–4 triangles).
+    /// </summary>
+    public static long RetainedBytes(long triangles) => checked(64 + triangles * 4 + (triangles * 4 / 5 + 2) * 32);
+    /// <summary>The transient memory of building one (centroids and bounds per triangle, sort keys, the growing node list).</summary>
+    public static long BuildBytes(long triangles) => checked(triangles * (12 + 24 + 4 + 8) + (triangles * 4 / 5 + 2) * 32 * 2);
 
     internal static (Vector3 Min, Vector3 Max) Measure(Vector3[] positions)
     {

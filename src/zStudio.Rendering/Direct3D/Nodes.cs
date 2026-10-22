@@ -232,7 +232,7 @@ internal sealed class TopMostGroupNode() : GroupNode(RenderBackend.UseHelix ? ne
 /// which differs whenever a node has both a non-identity transform and instances that do not commute with it, and zStudio builds
 /// no node with both). Null
 /// <see cref="Instances"/> draws once; an empty list draws (and hits) nothing. Opaque meshes and lines are drawn in ascending
-/// <see cref="RenderOrder"/> (default 0; equal orders in submission order). <see cref="IsDepthClipEnabled"/> false lets the near
+/// <see cref="RenderOrder"/> (default 0; among equal orders horizon materials first, then submission order). <see cref="IsDepthClipEnabled"/> false lets the near
 /// and far planes not clip it; <see cref="DepthBias"/> is the rasterizer's integer bias on 32-bit float depth.
 /// </summary>
 internal abstract class GeometryNode : Node
@@ -268,7 +268,7 @@ internal abstract class GeometryNode : Node
     internal InstanceBuffer? InstanceStream(D3DGraphics graphics)
     {
         if (instances == null) { instanceBuffer?.Dispose(); instanceBuffer = null; return null; }
-        if (instanceBuffer is { IsReleased: false } current && current.Generation == graphics.Generation && ReferenceEquals(current.Source, instances) && current.Count == instances.Count) return current;
+        if (instanceBuffer is { } current && current.IsValidFor(graphics) && ReferenceEquals(current.Source, instances) && current.Count == instances.Count) return current;
         instanceBuffer?.Dispose(); instanceBuffer = null;
         return instanceBuffer = new InstanceBuffer(graphics, instances);
     }

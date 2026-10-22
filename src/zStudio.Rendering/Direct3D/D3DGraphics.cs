@@ -32,13 +32,15 @@ internal struct ObjectConstants
 
 /// <summary>
 /// One Direct3D 11 device with the backend's compiled shaders, input layouts, constant buffers and pipeline states. Device
-/// resources made from retained CPU data (geometry, instances, textures) are cached on their owners and keyed by
-/// <see cref="Generation"/>: a new device has a new generation, so every cache rebuilds itself on first use.
+/// resources made from retained CPU data (geometry, instances, textures) are cached on their owners per device and register
+/// here: disposing the device releases every one still alive, so a recovered or closed view leaks nothing (the interop does not
+/// release native objects on collection). A new device has a new <see cref="Generation"/>.
 /// </summary>
 internal sealed class D3DGraphics : IDisposable
 {
     private static int generations;
     private readonly Dictionary<(D3DCull Cull, int Bias, bool Clip, bool Scissor), ID3D11RasterizerState> rasterizers = [];
+    private readonly HashSet<DeviceResource> resources = [];
     private bool disposed;
 
     private D3DGraphics(ID3D11Device device, ID3D11DeviceContext context, bool software)
@@ -97,6 +99,8 @@ internal sealed class D3DGraphics : IDisposable
             RenderTargetWriteMask = ColorWriteEnable.All
         };
         AlphaBlend = device.CreateBlendState(blend);
+        blend.RenderTarget[0].BlendEnable = false;
+        NoBlend = device.CreateBlendState(blend);
         DepthLessWrite = device.CreateDepthStencilState(new DepthStencilDescription(true, DepthWriteMask.All, ComparisonFunction.Less));
         DepthLessNoWrite = device.CreateDepthStencilState(new DepthStencilDescription(true, DepthWriteMask.Zero, ComparisonFunction.Less));
         DepthLessEqualWrite = device.CreateDepthStencilState(new DepthStencilDescription(true, DepthWriteMask.All, ComparisonFunction.LessEqual));
@@ -130,16 +134,47 @@ internal sealed class D3DGraphics : IDisposable
         IdentityInstance = device.CreateBuffer([Matrix4x4.Identity], BindFlags.VertexBuffer, ResourceUsage.Immutable);
     }
 
-    /// <summary>A hardware device, or the software rasterizer (WARP).</summary>
+    /// <summary>
+    /// A hardware device on the adapter WPF's Direct3D 9Ex surfaces use (its adapter 0, matched by LUID on hybrid-GPU machines),
+    /// or the software rasterizer (WARP). Every shader is shader model 5, so feature level 11_0 is required.
+    /// </summary>
     public static D3DGraphics Create(bool software)
     {
-        FeatureLevel[] levels = [FeatureLevel.Level_11_1, FeatureLevel.Level_11_0, FeatureLevel.Level_10_1, FeatureLevel.Level_10_0];
-        var result = D3D11.D3D11CreateDevice(IntPtr.Zero, software ? DriverType.Warp : DriverType.Hardware, DeviceCreationFlags.BgraSupport,
-            levels, out ID3D11Device device, out ID3D11DeviceContext context);
-        result.CheckError();
+        FeatureLevel[] levels = [FeatureLevel.Level_11_1, FeatureLevel.Level_11_0];
+        ID3D11Device device; ID3D11DeviceContext context;
+        if (software)
+            D3D11.D3D11CreateDevice(IntPtr.Zero, DriverType.Warp, DeviceCreationFlags.BgraSupport, levels, out device, out context).CheckError();
+        else
+        {
+            using var adapter = PresentationAdapter();
+            if (adapter != null) D3D11.D3D11CreateDevice(adapter, DriverType.Unknown, DeviceCreationFlags.BgraSupport, levels, out device, out context).CheckError();
+            else D3D11.D3D11CreateDevice(IntPtr.Zero, DriverType.Hardware, DeviceCreationFlags.BgraSupport, levels, out device, out context).CheckError();
+        }
         try { return new D3DGraphics(device, context, software); }
         catch { context.Dispose(); device.Dispose(); throw; }
     }
+
+    // The DXGI adapter with the LUID of Direct3D 9Ex adapter 0 (where the D3DImage surface lives); null when none matches.
+    private static IDXGIAdapter1? PresentationAdapter()
+    {
+        try
+        {
+            Vortice.Direct3D9.Luid luid;
+            using (var d3d9 = Vortice.Direct3D9.D3D9.Direct3DCreate9Ex()) luid = d3d9.GetAdapterLuid(0);
+            using var factory = DXGI.CreateDXGIFactory1<IDXGIFactory1>();
+            for (uint i = 0; factory.EnumAdapters1(i, out var adapter).Success; i++)
+            {
+                var id = adapter.Description1.Luid;
+                if (id.LowPart == luid.LowPart && id.HighPart == luid.HighPart) return adapter;
+                adapter.Dispose();
+            }
+        }
+        catch (SharpGen.Runtime.SharpGenException) { }
+        return null;
+    }
+
+    internal void Track(DeviceResource resource) { if (disposed) throw new ObjectDisposedException(nameof(D3DGraphics)); resources.Add(resource); }
+    internal void Untrack(DeviceResource resource) => resources.Remove(resource);
 
     public ID3D11Device Device { get; }
     public ID3D11DeviceContext Context { get; }
@@ -169,6 +204,7 @@ internal sealed class D3DGraphics : IDisposable
     public ID3D11Buffer FrameBuffer { get; }
     public ID3D11Buffer ObjectBuffer { get; }
     public ID3D11BlendState AlphaBlend { get; }
+    public ID3D11BlendState NoBlend { get; }
     public ID3D11DepthStencilState DepthLessWrite { get; }
     public ID3D11DepthStencilState DepthLessNoWrite { get; }
     public ID3D11DepthStencilState DepthLessEqualWrite { get; }
@@ -209,10 +245,12 @@ internal sealed class D3DGraphics : IDisposable
         if (disposed) return;
         disposed = true;
         try { Context.ClearState(); Context.Flush(); } catch (SharpGen.Runtime.SharpGenException) { }
+        foreach (var resource in resources.ToArray()) resource.Dispose();
+        resources.Clear();
         foreach (var state in rasterizers.Values) state.Dispose();
         rasterizers.Clear();
         foreach (var item in new IDisposable[] { VSMesh, PSPlain, PSTint, PSOverlay, PSPolygonZones, PSOrientation, PSColor, PSViewCube, VSLine, GSLine, PSLine,
-            VSGrid, PSGrid, VSLabel, PSLabel, MeshLayout, LineLayout, LabelLayout, FrameBuffer, ObjectBuffer, AlphaBlend, DepthLessWrite, DepthLessNoWrite,
+            VSGrid, PSGrid, VSLabel, PSLabel, MeshLayout, LineLayout, LabelLayout, FrameBuffer, ObjectBuffer, AlphaBlend, NoBlend, DepthLessWrite, DepthLessNoWrite,
             DepthLessEqualWrite, DepthLessEqualNoWrite, DepthNone, GridRasterizer, SurfaceSampler, CubeSampler, LabelSampler, ZeroBuffer, IdentityInstance })
             item.Dispose();
         Context.Dispose();
@@ -244,6 +282,9 @@ internal sealed class D3DGraphics : IDisposable
         }
         finally { blob?.Dispose(); errors?.Dispose(); }
     }
+
+    /// <summary>Starts compiling the shaders in the background (a view does on creation, before its device is needed).</summary>
+    internal static void WarmUp() { if (!ShaderCode.IsValueCreated) _ = Task.Run(() => ShaderCode.Value); }
 
     // Compiled once per process; a recovered device reuses the bytecode.
     private static readonly Lazy<CompiledShaders> ShaderCode = new(() =>

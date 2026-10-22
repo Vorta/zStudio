@@ -20,7 +20,7 @@ internal sealed class MeshData
 {
     private Color4[]? colors;
     private HelixGeometry? helix;
-    private MeshBuffers? buffers;
+    private DeviceCache<MeshBuffers>? buffers;
     private MeshBvh? bvh;
     private (Vector3 Min, Vector3 Max)? bounds;
 
@@ -59,9 +59,11 @@ internal sealed class MeshData
 
     /// <summary>The device buffers (null when there is nothing to draw).</summary>
     internal MeshBuffers? Buffers(D3DGraphics graphics) => Positions.Length == 0 || Indices.Length < 3 ? null
-        : DeviceResource.Refresh(ref buffers, graphics, g => new MeshBuffers(g, this));
-    /// <summary>Releases the device copies now (a later draw uploads them again).</summary>
-    internal void ReleaseDeviceResources() { buffers?.Dispose(); buffers = null; }
+        : (buffers ??= new()).Get(graphics, g => new MeshBuffers(g, this));
+    /// <summary>Releases the device copies now (a later draw uploads them again); shared aids keep theirs until their device goes.</summary>
+    internal void ReleaseDeviceResources() { if (!IsShared) buffers?.Release(); }
+    /// <summary>A static aid every view draws (gizmo handles, view cube, axes): nodes never release its device copies.</summary>
+    internal bool IsShared { get; init; }
     /// <summary>The picking hierarchy, built on first use.</summary>
     internal MeshBvh Bvh => bvh ??= new MeshBvh(Positions, Indices);
     /// <summary>Model-space bounds of the positions (empty geometry: min +∞, max −∞).</summary>
@@ -72,7 +74,7 @@ internal sealed class MeshData
 internal sealed class LineData
 {
     private HelixLineGeometry? helix;
-    private LineBuffers? buffers;
+    private DeviceCache<LineBuffers>? buffers;
     private (Vector3 Min, Vector3 Max)? bounds;
     public LineData(Vector3[] positions, int[] indices)
     {
@@ -84,9 +86,9 @@ internal sealed class LineData
     private HelixLineGeometry BuildHelix() => new() { Positions = HelixCollections.Positions(Positions), Indices = new IntCollection(Indices) };
     internal HelixLineGeometry HelixGeometry => helix ??= BuildHelix();
     internal LineBuffers? Buffers(D3DGraphics graphics) => Positions.Length == 0 || Indices.Length < 2 ? null
-        : DeviceResource.Refresh(ref buffers, graphics, g => new LineBuffers(g, this));
+        : (buffers ??= new()).Get(graphics, g => new LineBuffers(g, this));
     internal (Vector3 Min, Vector3 Max) Bounds => bounds ??= MeshBvh.Measure(Positions);
-    internal void ReleaseDeviceResources() { buffers?.Dispose(); buffers = null; }
+    internal void ReleaseDeviceResources() => buffers?.Release();
 }
 
 /// <summary>Helix adapter: one backend collection per positions or colours array, so geometries sharing positions share their copy and a colour array swapped back is not copied again.</summary>

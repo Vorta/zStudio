@@ -525,6 +525,8 @@ public sealed partial class SceneViewport
         animationGeometryScratch.Clear(); animationGeometryCopies.Clear(); animationPossibleParts.Clear(); animationPoses.Clear(); animationGeometryBytes = animationMeshBytes = 0;
         animationGeometryReservation?.Dispose(); animationGeometryReservation = null;
         animationMeshReservation?.Dispose(); animationMeshReservation = null;
+        // Texture cycles swap maps per frame, so a mesh holds only its current one: release every upload here.
+        foreach (var texture in animationTextureModels.Values) texture.ReleaseDeviceResources();
         animationTextureModels.Clear(); animationTextureReferences.Clear(); animationTextureCycles.Clear(); animationTextureNameUnits = 0; animationTextureLookupUnits = 0;
         animationBaseTextures.Clear();
         animationTextureCycleMembers = animationTextureCycleMemberVisits = 0; animationTextureLimitReported = false; animationTextureNotices = 0;

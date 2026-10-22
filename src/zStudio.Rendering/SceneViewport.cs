@@ -235,7 +235,9 @@ public sealed partial class SceneViewport : UserControl, IDisposable
             // Static batches share one render geometry per part, even across transparent
             // placements. The Helix adapter's colours grow from an enumerable; reserve its replacement scratch.
             long copies = geometry.Values.Sum(parts => parts.Sum(GeometryCopyBytes));
-            long colorScratch = RenderBackend.UseHelix ? geometry.Values.SelectMany(parts => parts).Select(ColorReplacementBytes).DefaultIfEmpty().Max() : 0;
+            // The Direct3D backend's transient is the picking hierarchy built for one part at a time.
+            long colorScratch = RenderBackend.UseHelix ? geometry.Values.SelectMany(parts => parts).Select(ColorReplacementBytes).DefaultIfEmpty().Max()
+                : geometry.Values.SelectMany(parts => parts).Select(p => MeshBvh.BuildBytes(p.Indices.LongLength / 3)).DefaultIfEmpty().Max();
             candidateGeometry.Resize(checked(retainedGeometry + copies + colorScratch + 512L * groups.Length));
             renderUnits = 0;
             foreach (var group in groups)
@@ -553,7 +555,10 @@ public sealed partial class SceneViewport : UserControl, IDisposable
         objectPreviewMeshes = null; objectPreviewBounds = null; objectPreviewOriginals = null; ObjectTransformPreviewNode = null; objectPreviewToken = 0;
         sceneAlphaGroup = null;
         sceneMin = new(float.PositiveInfinity); sceneMax = new(float.NegativeInfinity);
-        view.Items.Clear(); foreach (var mesh in meshes) mesh.Dispose(); foreach (var box in bounds) box.Dispose(); bounds.Clear(); meshes.Clear(); placements.Clear(); visiblePlacements.Clear(); staticMeshBounds.Clear(); textureMaps.Clear();
+        view.Items.Clear(); foreach (var mesh in meshes) mesh.Dispose(); foreach (var box in bounds) box.Dispose(); bounds.Clear(); meshes.Clear(); placements.Clear(); visiblePlacements.Clear(); staticMeshBounds.Clear();
+        // Untextured materials (Textures off) no longer hold their maps: release each upload here.
+        foreach (var texture in textureMaps.Values) texture.ReleaseDeviceResources();
+        textureMaps.Clear();
         DisposeFixtures();
         staticRenderUnits = 0;
         staticGeometry?.Dispose(); staticGeometry = null;

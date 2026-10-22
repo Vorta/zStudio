@@ -111,6 +111,6 @@ public sealed partial class SceneViewport
     private void HideTrail()
     {
         if (brushTrail == null) return;
-        view.Items.Remove(brushTrail); brushTrail = null;
+        view.Items.Remove(brushTrail); brushTrail.Dispose(); brushTrail = null;
     }
 }

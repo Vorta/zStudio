@@ -21,13 +21,14 @@ namespace zStudio.Rendering.Direct3D;
 
 /// <summary>
 /// The Direct3D backend of <see cref="RenderView"/>: a WPF element showing a D3DImage whose back buffer is a Direct3D 11 texture
-/// shared with a Direct3D 9Ex surface. Rendering is driven by <see cref="CompositionTarget.Rendering"/> on demand: a frame renders
-/// while one was requested and for six more frames after each request (stale-frame workaround for the shared surface, and the
-/// tail hover refresh relies on).
+/// shared with a Direct3D 9Ex surface. Rendering is driven by <see cref="CompositionTarget.Rendering"/> on demand while the
+/// element is visible: a frame renders while one was requested and for six more frames after each request (stale-frame
+/// workaround for the shared surface, and the tail hover refresh relies on). A lost device or front buffer rebuilds everything
+/// (both devices) from retained data; after three recoveries without a frame in between the view fails instead.
 /// </summary>
 internal sealed class Direct3DView : IDisposable
 {
-    private const int MinimumUpdateCount = 6;
+    private const int MinimumUpdateCount = 6, MaximumRecoveries = 3;
     private readonly RenderView owner;
     private readonly Image image = new() { Stretch = Stretch.Fill };
     private readonly SceneRenderer scene = new();
@@ -45,7 +46,7 @@ internal sealed class Direct3DView : IDisposable
     private float renderWidth, renderHeight;
     private double dpiScale = 1;
     private bool updateRequested = true, hooked, busy, failed, disposed, ready, frontBufferAvailable = true;
-    private int updateCounter;
+    private int updateCounter, recoveries;
     private TimeSpan lastRenderingTime = TimeSpan.MinValue;
 
     public Direct3DView(RenderView owner)
@@ -55,7 +56,8 @@ internal sealed class Direct3DView : IDisposable
         RenderOptions.SetBitmapScalingMode(image, BitmapScalingMode.Linear);
         Element.Loaded += (_, _) => { UpdateDpi(); Hook(true); owner.RaiseLayoutChanged(); };
         Element.Unloaded += (_, _) => Hook(false);
-        Element.IsVisibleChanged += (_, _) => InvalidateRender();
+        // A view loaded or resized while hidden sizes itself once shown (its resize is skipped only while unloaded).
+        Element.IsVisibleChanged += (_, e) => { if ((bool)e.NewValue) owner.RaiseLayoutChanged(); InvalidateRender(); };
     }
 
     /// <summary>The focusable input surface (DIPs).</summary>
@@ -66,7 +68,7 @@ internal sealed class Direct3DView : IDisposable
     public bool IsReady => ready;
     public double DpiScale => dpiScale;
     public (int Width, int Height) PresentedPixelSize => backBuffer != null ? (bufferWidth, bufferHeight) : (0, 0);
-    public string Status => $"IsRendering={hooked && Element.IsVisible}, IsBusy={busy}, Failed={failed}, FrontBuffer={frontBufferAvailable}, Buffer={bufferWidth}x{bufferHeight}";
+    public string Status => $"IsRendering={hooked && Element.IsVisible && !failed && frontBufferAvailable}, Loaded={hooked}, Visible={Element.IsVisible}, IsBusy={busy}, Failed={failed}, FrontBuffer={frontBufferAvailable}, Buffer={bufferWidth}x{bufferHeight}";
     /// <summary>The surface size in DIPs as the projection uses it: the integral size the buffer was made for.</summary>
     public Size ProjectionSize => requestedWidth > 0 && requestedHeight > 0 ? new(requestedWidth, requestedHeight) : new(Math.Max(1, Element.ActualWidth), Math.Max(1, Element.ActualHeight));
 
@@ -106,12 +108,13 @@ internal sealed class Direct3DView : IDisposable
     }
 
     // The buffers exist as soon as the size and the device are known (the first frame follows), as the presented size reports.
+    // A failure is a resize failure; the next frame tries again (and fails the view if it fails too).
     private void CreateTargets()
     {
-        if (failed || owner.Device?.Graphics is not { IsDisposed: false } graphics || renderWidth <= 10 || renderHeight <= 10) return;
+        if (failed || !frontBufferAvailable || owner.Device?.Graphics is not { IsDisposed: false } graphics || renderWidth <= 10 || renderHeight <= 10) return;
         try { EnsureTargets(graphics); }
         catch (Exception error) when (IsDeviceLost(error, graphics)) { Recover(); }
-        catch (Exception error) when (error is not OutOfMemoryException and not StackOverflowException) { Fail(error); }
+        catch (Exception error) when (error is not OutOfMemoryException and not StackOverflowException) { ReleaseTargets(); owner.RaiseResizeFailed(error); }
     }
 
     private void OnRendering(object? sender, EventArgs e)
@@ -124,12 +127,13 @@ internal sealed class Direct3DView : IDisposable
         RenderFrame(force: false);
     }
 
-    /// <summary>Renders a frame when one is due (or <paramref name="force"/>); false when nothing was rendered.</summary>
+    /// <summary>Renders a frame when one is due (or <paramref name="force"/>); false when no frame was rendered and presented.</summary>
     public bool RenderFrame(bool force)
     {
-        if (disposed || busy || failed || owner.Device?.Graphics is not { IsDisposed: false } graphics || owner.Camera is not { } camera
+        if (disposed || busy || failed || !Element.IsVisible || owner.Device?.Graphics is not { IsDisposed: false } graphics || owner.Camera is not { } camera
             || renderWidth <= 10 || renderHeight <= 10 || !frontBufferAvailable || !force && !updateRequested && updateCounter >= MinimumUpdateCount) return false;
         busy = true;
+        bool rendered = false;
         var timestamp = TimeSpan.FromSeconds((double)Stopwatch.GetTimestamp() / Stopwatch.Frequency);
         updateRequested = false; ++updateCounter;
         try
@@ -140,16 +144,23 @@ internal sealed class Direct3DView : IDisposable
             try
             {
                 EnsureTargets(graphics);
-                Draw(graphics, camera);
-                Present();
-                ready = true;
+                // Draw into the shared surface only while WPF is not reading it.
+                bool locked = imageSource != null && surface9 != null && imageSource.IsFrontBufferAvailable;
+                if (locked) imageSource!.Lock();
+                try
+                {
+                    Draw(graphics, camera);
+                    if (locked) imageSource!.AddDirtyRect(new Int32Rect(0, 0, imageSource.PixelWidth, imageSource.PixelHeight));
+                }
+                finally { if (locked) imageSource!.Unlock(); }
+                ready = true; rendered = true; recoveries = 0; RenderException = null;
             }
             catch (Exception error) when (IsDeviceLost(error, graphics)) { Recover(); }
             catch (Exception error) when (error is not OutOfMemoryException and not StackOverflowException) { Fail(error); }
         }
         finally { busy = false; }
-        Presented?.Invoke();
-        return true;
+        if (rendered) Presented?.Invoke();
+        return rendered;
     }
 
     private void Draw(D3DGraphics g, RenderCamera camera)
@@ -175,14 +186,6 @@ internal sealed class Direct3DView : IDisposable
         aids.Render(g, owner, camera, renderWidth, renderHeight, dpiScale, depthView!, renderWidth, renderHeight);
         context.ClearState();
         context.Flush();
-    }
-
-    private void Present()
-    {
-        if (imageSource == null || surface9 == null || !imageSource.IsFrontBufferAvailable) return;
-        imageSource.Lock();
-        try { imageSource.AddDirtyRect(new Int32Rect(0, 0, imageSource.PixelWidth, imageSource.PixelHeight)); }
-        finally { imageSource.Unlock(); }
     }
 
     private void EnsureTargets(D3DGraphics g)
@@ -222,8 +225,12 @@ internal sealed class Direct3DView : IDisposable
                 Windowed = true, SwapEffect = SwapEffect.Discard, PresentationInterval = PresentInterval.Default,
                 BackBufferWidth = 1, BackBufferHeight = 1, BackBufferFormat = D3D9Format.Unknown
             };
-            device9 = d3d9.CreateDeviceEx(0, DeviceType.Hardware, IntPtr.Zero,
-                CreateFlags.HardwareVertexProcessing | CreateFlags.Multithreaded | CreateFlags.FpuPreserve, parameters);
+            try
+            {
+                device9 = d3d9.CreateDeviceEx(0, DeviceType.Hardware, IntPtr.Zero,
+                    CreateFlags.HardwareVertexProcessing | CreateFlags.Multithreaded | CreateFlags.FpuPreserve, parameters);
+            }
+            catch { d3d9.Dispose(); d3d9 = null; throw; }
         }
         using var resource = backBuffer.QueryInterface<IDXGIResource>();
         var handle = resource.SharedHandle;
@@ -254,6 +261,8 @@ internal sealed class Direct3DView : IDisposable
         frontBufferAvailable = available;
         ReleaseSurface(device: true);
         if (!available) return;
+        // A regained front buffer is a fresh start: an earlier failure may have been the lost session.
+        failed = false;
         try
         {
             var graphics = owner.Device?.Graphics;
@@ -268,15 +277,18 @@ internal sealed class Direct3DView : IDisposable
     {
         if (error is not SharpGenException native) return false;
         uint code = (uint)native.ResultCode.Code;
-        // DXGI_ERROR_DEVICE_REMOVED, _HUNG, _RESET, _ACCESS_LOST; D3DERR_DEVICELOST.
-        if (code is 0x887A0005 or 0x887A0006 or 0x887A0007 or 0x887A0026 or 0x88760868) return true;
+        // DXGI_ERROR_DEVICE_REMOVED, _HUNG, _RESET, _ACCESS_LOST; D3DERR_DEVICELOST, _DEVICEREMOVED, _DEVICEHUNG.
+        if (code is 0x887A0005 or 0x887A0006 or 0x887A0007 or 0x887A0026 or 0x88760868 or 0x88760870 or 0x88760874) return true;
         try { return graphics.Device.DeviceRemovedReason.Failure; } catch (SharpGenException) { return true; }
     }
 
-    // Rebuilds every device resource from retained CPU data on a new device (bounded and non-reentrant: see RenderDevice).
+    // Rebuilds every device resource from retained CPU data on new Direct3D 11 and 9Ex devices (non-reentrant: see RenderDevice).
+    // A device lost again before any frame rendered counts against the bound; past it the view fails.
     private void Recover()
     {
         ReleaseTargets();
+        ReleaseSurface(device: true);
+        if (++recoveries > MaximumRecoveries) { Fail(new InvalidOperationException(RenderDevice.RecoveryFailedMessage)); return; }
         try
         {
             if (owner.Device is not { } device) return;
@@ -295,14 +307,14 @@ internal sealed class Direct3DView : IDisposable
     }
 
     /// <summary>The device changed (attached, detached or recovered): targets are rebuilt on the next frame.</summary>
-    public void DeviceChanged() { failed = false; ready = false; RenderException = null; ReleaseTargets(); CreateTargets(); InvalidateRender(); }
+    public void DeviceChanged() { failed = false; ready = false; recoveries = 0; RenderException = null; ReleaseTargets(); CreateTargets(); InvalidateRender(); }
 
-    /// <summary>Renders one frame now and reads it back.</summary>
+    /// <summary>Renders one frame now and reads it back; null when no frame could be rendered (never an older frame).</summary>
     public BitmapSource? RenderBitmap()
     {
         InvalidateRender();
-        RenderFrame(force: true);
-        return backBuffer != null && owner.Device?.Graphics is { IsDisposed: false } graphics && targetGeneration == graphics.Generation ? Read(graphics) : null;
+        if (!RenderFrame(force: true) || owner.Device?.Graphics is not { IsDisposed: false } graphics || backBuffer == null || targetGeneration != graphics.Generation) return null;
+        return Read(graphics);
     }
 
     /// <summary>The displayed back buffer, without rendering, resizing or moving the camera.</summary>

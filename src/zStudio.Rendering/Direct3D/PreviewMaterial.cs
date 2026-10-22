@@ -25,9 +25,10 @@ internal readonly record struct ZoneEmphasis(ZoneEmphasisMode Mode, byte Zone, f
 internal sealed class RenderTexture
 {
     private TextureModel? helix;
-    private TextureResource? resource;
-    private RenderTexture(byte[] pixels, int width, int height, bool bgra)
+    private DeviceCache<TextureResource>? resource;
+    private RenderTexture(byte[] pixels, int width, int height, bool bgra, bool shared = false)
     {
+        IsShared = shared;
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(width); ArgumentOutOfRangeException.ThrowIfNegativeOrZero(height);
         if (pixels.LongLength < 4L * width * height) throw new ArgumentException("The pixel array is smaller than the texture.", nameof(pixels));
         Pixels = pixels; Width = width; Height = height; IsBgra = bgra;
@@ -35,14 +36,18 @@ internal sealed class RenderTexture
     }
     public static RenderTexture FromRgba(byte[] rgba, int width, int height) => new(rgba, width, height, false);
     public static RenderTexture FromBgra(byte[] bgra, int width, int height) => new(bgra, width, height, true);
+    /// <summary>A shared aid's texture (the axis letters): nodes never release its device copies.</summary>
+    internal static RenderTexture FromBgra(byte[] bgra, int width, int height, bool shared) => new(bgra, width, height, true, shared);
+    internal bool IsShared { get; }
     public byte[] Pixels { get; }
     public int Width { get; }
     public int Height { get; }
     public bool IsBgra { get; }
     internal TextureModel HelixTexture => helix ??= new TextureModel(Pixels, IsBgra ? SharpDX.DXGI.Format.B8G8R8A8_UNorm : SharpDX.DXGI.Format.R8G8B8A8_UNorm, Width, Height);
     /// <summary>Direct3D backend: the uploaded texture (built on first draw for each device).</summary>
-    internal TextureResource Resource(D3DGraphics graphics) => DeviceResource.Refresh(ref resource, graphics, g => new TextureResource(g, this));
-    internal void ReleaseDeviceResources() { resource?.Dispose(); resource = null; }
+    internal TextureResource Resource(D3DGraphics graphics) => (resource ??= new()).Get(graphics, g => new TextureResource(g, this));
+    /// <summary>Releases the uploaded copies now (a later draw uploads them again).</summary>
+    internal void ReleaseDeviceResources() { if (!IsShared) resource?.Release(); }
 }
 
 /// <summary>
@@ -53,9 +58,10 @@ internal sealed class RenderTexture
 /// <para>
 /// A preview material (<see cref="Create"/>) draws through the zStudio pass table: priority face orientation (its
 /// <see cref="FaceOrientation"/> enabled) &gt; polygon zones &gt; overlay (overlay alpha &gt; 0) &gt; vertex tint (a vertex-tint
-/// material, or a fade &gt; 0); depth: horizon materials neither test nor write depth, transparent meshes test without writing,
-/// others test Less and write. A plain material (<see cref="CreatePlain"/>) is the stock diffuse pass only: no overlay, zones,
-/// fade or face orientation, and it writes depth even on a transparent mesh.
+/// material, or a fade &gt; 0), else the plain diffuse pass; depth: horizon materials neither test nor write depth, transparent
+/// meshes test Less without writing, opaque meshes write and test Less in a preview pass or LessEqual in the plain pass. A plain
+/// material (<see cref="CreatePlain"/>) is the stock diffuse pass only: no overlay, zones, fade or face orientation; it tests
+/// LessEqual and writes depth, even on a transparent mesh.
 /// </para>
 /// </summary>
 internal sealed class PreviewMaterial
