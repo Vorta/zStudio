@@ -121,7 +121,8 @@ internal static class GroundPreviewCheck
                 var target = camera.Position + camera.LookDirection;
                 foreach (var (name, offset) in new[] { ("top-down", new Vector3D(0, 60, 0)), ("perspective", new Vector3D(30, 35, 65)) })
                 {
-                    camera.Position = target + offset; camera.LookDirection = -offset; camera.UpDirection = new(0, 1, 0);
+                    // A restored pose keeps its target; looking straight down needs an up vector across the view.
+                    viewport.RestoreView(new(target + offset, -offset, offset.X == 0 && offset.Z == 0 ? new(0, 0, -1) : new(0, 1, 0), viewport.CaptureView().FieldOfView));
                     await Task.Delay(200, timeout.Token);
                     var on = editor.Viewport.RenderImage(1100, 740); Save(on, "height100-" + name + ".png");
                     double sceneFar = camera.FarPlaneDistance;

@@ -67,9 +67,10 @@ internal static class SceneControlsCheck
                 double height = Math.Max(1, camera.LookDirection.Length * 0.01);
                 Point center = new(viewport.ActualWidth / 2, viewport.ActualHeight / 2);
                 scene.SetFly(false);
-                camera.Position = new(surface.X, surface.Y + height, surface.Z);
-                camera.LookDirection = new(0, -height, 0); // Centered zoom intentionally retains this terrain target.
-                camera.UpDirection = new(0, 0, -1);
+                // Restored over the surface, the view orbits and zooms about it (a pose written straight to the camera would
+                // keep the framing pivot and swing the eye about it when the upright pitch limit applies). Centered zoom keeps
+                // this terrain target while the surface under the pointer is no farther than it.
+                scene.RestoreView(new(new(surface.X, surface.Y + height, surface.Z), new(0, -height, 0), new(0, 0, -1), scene.CaptureView().FieldOfView));
                 for (int step = 0; step < 25; step++)
                 {
                     await Task.Delay(25, timeout.Token);

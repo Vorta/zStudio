@@ -307,7 +307,9 @@ internal static class McpPreviewCheck
                         catch (InvalidDataException ex) when (ex.Message.Contains("context_changed", StringComparison.Ordinal)) { rejectedHighlight = true; }
                         finally { window.ViewModel.PropertyChanged -= changeHighlight; }
                         published = await Call("state", new { });
-                        if (!changedHighlight || !rejectedHighlight || (await Call("preview_state", new { preview = published["preview"]!.GetValue<string>() }))["highlight"]!.GetValue<string>() != "canModify")
+                        // The toggles combine: CanModify joins the ClipTo the successful batch above left on.
+                        string guiHighlight = ((System.Windows.Controls.Primitives.ToggleButton)window.FindName("HighlightClipTo")).IsChecked == true ? "canModifyAndClipTo" : "canModify";
+                        if (!changedHighlight || !rejectedHighlight || (await Call("preview_state", new { preview = published["preview"]!.GetValue<string>() }))["highlight"]!.GetValue<string>() != guiHighlight)
                             throw new InvalidDataException("Deferred MCP highlight overwrote the newer GUI choice.");
                     }
 
@@ -337,7 +339,8 @@ internal static class McpPreviewCheck
                     var current = await Call("state", new { });
                     if (current["preview"]!.GetValue<string>() == published["preview"]!.GetValue<string>())
                         throw new InvalidDataException("The superseding GUI scene did not publish.");
-                    if (wholeWorld && (await Call("preview_state", new { preview = current["preview"]!.GetValue<string>() }))["highlight"]!.GetValue<string>() != "canModify")
+                    string newestHighlight = ((System.Windows.Controls.Primitives.ToggleButton)window.FindName("HighlightClipTo")).IsChecked == true ? "canModifyAndClipTo" : "canModify";
+                    if (wholeWorld && (await Call("preview_state", new { preview = current["preview"]!.GetValue<string>() }))["highlight"]!.GetValue<string>() != newestHighlight)
                         throw new InvalidDataException("Superseding refresh lost the newest GUI highlight.");
                     await Call("capture", new { target = "preview", preview = current["preview"]!.GetValue<string>(), width = 800, height = 600 });
                 }

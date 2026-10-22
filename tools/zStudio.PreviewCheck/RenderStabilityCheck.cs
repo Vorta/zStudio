@@ -63,7 +63,8 @@ internal static class RenderStabilityCheck
                 var cam = preview.DebugCamera;
                 foreach (bool fly in new[] { false, true })
                 {
-                    preview.SetFly(fly); cam.Position = new(4, 5, 6); cam.LookDirection = new(0, 0, -10);
+                    // A restored pose orbits about its own target (a pose written straight to the camera keeps the framing pivot).
+                    preview.SetFly(fly); preview.RestoreView(new(new(4, 5, 6), new(0, 0, -10), new(0, 1, 0), 45));
                     var anchor = fly ? cam.Position : cam.Position + cam.LookDirection;
                     foreach (double dy in new[] { -10000d, 10000d, -10000d, 10000d })
                     {

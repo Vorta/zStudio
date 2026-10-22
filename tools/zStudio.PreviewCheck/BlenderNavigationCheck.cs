@@ -44,20 +44,16 @@ internal static class BlenderNavigationCheck
                 doc.SelectedAsset = doc.Assets.First(a => a.Record.Kind == AssetKind.World);
                 await Preview(); var scene = (SceneViewport)((ContentControl)main.FindName("SceneHost")).Content;
                 await CheckViews(scene, "world");
+                // A compiled world is read only (0.9.5): a pickup is selected and framed, never given a draft or handles.
+                // Orthographic handles are checked on the picking fixture; source-map handles by the Desktop checks.
                 var pickup = scene.Mission!.Actors.First(a => a.Pickup != null);
                 scene.SelectFramingNode(pickup.Root); scene.SelectPickup(pickup.Root);
                 var child = scene.Mission.Scene.Nodes.First(n => scene.PickupAt(n.Index)?.Root == pickup.Root && scene.SelectInspectionNode(n.Index));
-                // The compiled world is read only; show the handles a source map's draft shows.
-                scene.SetPlacementEditing(true);
-                scene.PreviewTransformDraft(pickup.Pickup!.Source, new(pickup.Pickup.Position, pickup.Pickup.Rotation), PlacementRotationKind.EulerRadians, "move", true);
                 scene.SetAxisView("top"); Require(scene.TryFrame("selected"), "Pickup framing unavailable"); await Task.Delay(200);
-                Require(scene.TransformHandlesVisible, "Orthographic pickup gizmo hidden");
-                double gizmoSize = scene.TransformHandleSizeScale!.Value; scene.DollyBy(-50); await Task.Delay(150);
-                Require(Math.Abs(scene.TransformHandleSizeScale!.Value - gizmoSize) < 1e-6, "Orthographic handle size depends on depth");
+                Require(scene.SelectionBoundsVisible && !scene.TransformHandlesVisible, "Read-only pickup selection needs bounds without handles");
                 Save(scene.CapturePresentedFrame(), Path.Combine(output, "pickup-top.png"));
                 var point = scene.ProjectToView(new Point3D(scene.PickupPosition(pickup.Root).X, scene.PickupPosition(pickup.Root).Y, scene.PickupPosition(pickup.Root).Z));
                 Require(double.IsFinite(point.X) && double.IsFinite(point.Y), "Pickup projection invalid");
-                scene.EndTransformDraft(); scene.SetPlacementEditing(false);
                 Require(scene.SetOrbitPivot(scene.CaptureView().Position + scene.CaptureView().LookDirection * .8 + new Vector3D(1, 0, 2)), "World off-center pivot unavailable");
                 var saved = scene.CaptureView();
                 ((ComboBox)main.FindName("WorldDifficulty")).SelectedItem = MissionDifficulty.Hard;
@@ -104,7 +100,7 @@ internal static class BlenderNavigationCheck
                 main.RunCameraNavigation("follow"); Require(editor.Options.FollowCamera, "Follow did not re-enable");
                 main.RunCameraNavigation("top"); Require(!editor.Options.FollowCamera && editor.Viewport.CaptureView().AxisView == "top", "Axis view failed to leave follow");
                 Require(worldHash.SequenceEqual(SHA256.HashData(File.ReadAllBytes(worldPath))) && animationHash.SequenceEqual(SHA256.HashData(File.ReadAllBytes(animationPath))), "Source bytes changed");
-                Console.WriteLine("PASS: rendered world/model/animation surface-pivot orbit, continuous zoom, GUI/MCP parity, axis views, projection scale, idle stability, pickup handles, refresh/resize retention, playback and camera follow; unchanged sources.");
+                Console.WriteLine("PASS: rendered world/model/animation surface-pivot orbit, continuous zoom, GUI/MCP parity, axis views, projection scale, idle stability, read-only pickup selection, refresh/resize retention, playback and camera follow; unchanged sources.");
                 Console.WriteLine(output);
 
                 async Task Preview() => await ((Task)typeof(MainWindow).GetField("previewWork", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(main)!).WaitAsync(timeout.Token);
@@ -121,9 +117,13 @@ internal static class BlenderNavigationCheck
                         var cubePoint = new Point(cubeBounds.Left + cubeBounds.Width / 2, cubeBounds.Top + cubeBounds.Height / 2);
                         Require(view.NavigateCubeAt(cubePoint) && view.CaptureView().AxisView == axis, "View-cube face disagrees with named view: " + axis);
                         Require(camera.NearPlaneDistance > 0 && camera.FarPlaneDistance > camera.NearPlaneDistance, "Invalid orthographic clipping");
+                        // The cube click re-applies the view: let that frame present before comparing idle frames.
+                        await Task.Delay(150, timeout.Token);
                         var image = view.CapturePresentedFrame(); Save(image, Path.Combine(output, label + "-" + axis + ".png"));
                         await Task.Delay(150, timeout.Token);
-                        Require(Pixels(image).SequenceEqual(Pixels(view.CapturePresentedFrame())), "Idle axis image changed: " + label + " " + axis);
+                        var later = view.CapturePresentedFrame();
+                        if (!Pixels(image).SequenceEqual(Pixels(later))) Save(later, Path.Combine(output, label + "-" + axis + "-later.png"));
+                        Require(Pixels(image).SequenceEqual(Pixels(later)), $"Idle axis image changed: {label} {axis} ({Pixels(image).Zip(Pixels(later)).Count(p => p.First != p.Second)} channels)");
                         var center = pose.Position + pose.LookDirection;
                         var right = Vector3D.CrossProduct(pose.LookDirection, pose.UpDirection); right.Normalize();
                         var sample = center + right * (pose.OrthographicWidth!.Value * .1);
@@ -293,7 +293,6 @@ internal static class BlenderNavigationCheck
             // Exercise world selection and rotation pointer math without any
             // physical input, CaptureMouse or native synthetic pointer events.
             typeof(SceneViewport).GetMethod("ConfigurePickups", fields)!.Invoke(view, []);
-            await CheckLockedCubeInput(view, mesh);
             view.SetPlacementEditing(false);
             Require(view.SelectInspectionNode(0) && view.SelectionBoundsVisible && !view.TransformHandlesVisible, "Read-only selection needs bounds without handles");
             Require(view.SelectInspection(null) && view.SelectInspectionNode(0), "Selection did not reopen");
@@ -303,6 +302,8 @@ internal static class BlenderNavigationCheck
             var authored = new PlacementTransform(System.Numerics.Vector3.Zero, new(.2f, -.3f, .1f));
             PlacementTransform? dragged = null;
             view.TransformDraftChanged += changed => dragged = changed;
+            // Handles show while the card's Move or Rotate toggle is on; no card is attached yet, so set it as the toggle does.
+            view.TransformHandlesEnabled = true;
             view.PreviewTransformDraft(source, authored, PlacementRotationKind.EulerRadians, "rotate", true);
             Require(view.TransformHandlesVisible, "Edit did not show rotation handles");
             foreach (var axis in new[] { System.Numerics.Vector3.UnitX, System.Numerics.Vector3.UnitY, System.Numerics.Vector3.UnitZ })
@@ -318,9 +319,16 @@ internal static class BlenderNavigationCheck
                 var actual = PlacementTransform.Orientation(PlacementRotationKind.EulerRadians, dragged!.Value.Rotation);
                 Require(Math.Abs(System.Numerics.Quaternion.Dot(expected, actual)) > .99999f, "Ring pointer changed the wrong rotation axis or angle");
             }
+            // Orthographic handles keep their on-screen size whatever the camera's distance.
+            view.SetAxisView("top"); Require(view.TryFrame("selected"), "Selection framing unavailable"); await Task.Delay(200);
+            Require(view.TransformHandlesVisible, "Orthographic gizmo hidden");
+            double gizmoSize = view.TransformHandleSizeScale!.Value; view.DollyBy(-50); await Task.Delay(150);
+            Require(view.TransformHandlesVisible && Math.Abs(view.TransformHandleSizeScale!.Value - gizmoSize) < 1e-6, "Orthographic handle size depends on depth");
             view.EndTransformDraft(); Require(!view.TransformHandlesVisible && view.SelectionBoundsVisible, "Cancel did not hide handles while retaining selection");
             view.SetPlacementEditing(false); Require(!view.TransformHandlesVisible && !viewport.IsMouseCaptured, "Read only kept the transform handles");
-            Console.WriteLine("PASS: rendered perspective/orthographic transformed instances, nearest surface, helper/horizon/hidden exclusions, empty-space fallback and orbit inertia");
+            // Last: the card this attaches stays subscribed to the view and owns its Move/Rotate toggles from then on.
+            await CheckLockedCubeInput(view, mesh);
+            Console.WriteLine("PASS: rendered perspective/orthographic transformed instances, nearest surface, helper/horizon/hidden exclusions, empty-space fallback, orbit inertia, ring rotation and constant-size orthographic handles");
         }
         finally { view.RemoveFixtureMesh(helper); window.Close(); }
     }
