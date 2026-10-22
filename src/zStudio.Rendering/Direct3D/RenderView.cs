@@ -192,6 +192,19 @@ internal sealed class RenderView : IRayPicker, INodeOwner, IDisposable
     public BitmapSource? RenderBitmap() => direct.RenderBitmap();
     /// <summary>The displayed back buffer, read without rendering, resizing or moving the camera.</summary>
     public BitmapSource CapturePresented() => direct.CapturePresented();
+    /// <summary>
+    /// Renders one frame now and at once reads the view the way WPF does, through its own Direct3D 9 device (a software render of
+    /// the element), while this device may still be drawing: checks that only finished frames reach WPF. Null without a frame.
+    /// </summary>
+    public BitmapSource? RenderAndReadAsComposed()
+    {
+        if (!direct.RenderFrame(force: true)) return null;
+        var element = direct.Element;
+        var bitmap = new RenderTargetBitmap(Math.Max(1, (int)element.ActualWidth), Math.Max(1, (int)element.ActualHeight), 96, 96, PixelFormats.Pbgra32);
+        bitmap.Render(element);
+        bitmap.Freeze();
+        return bitmap;
+    }
     /// <summary>Calls <paramref name="presented"/> after each presented frame until the result is disposed.</summary>
     public IDisposable ObservePresentedFrames(Action presented)
     {

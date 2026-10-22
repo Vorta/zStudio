@@ -142,6 +142,8 @@ public sealed partial class SceneViewport
 
     /// <summary>The displayed back buffer, read without rendering, resizing or moving the camera.</summary>
     internal BitmapSource CapturePresentedFrame() => view.CapturePresented();
+    /// <summary>Renders a frame and reads the view as WPF composes it right away (see <c>RenderView.RenderAndReadAsComposed</c>).</summary>
+    internal BitmapSource? RenderFrameReadAsComposed() => view.RenderAndReadAsComposed();
 
     /// <summary>Applies <paramref name="change"/> and waits until the next frame is presented.</summary>
     internal async Task WaitForPresentedFrameAsync(Action change, TimeSpan? timeout = null)

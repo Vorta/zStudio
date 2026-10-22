@@ -104,6 +104,20 @@ internal static class RenderStabilityCheck
                 Require((cam.Position - new Point3D(2041, 50, 1693)).Length < 1e-8 && cam.UpDirection.Y > 0, "Authored camera normalization moved its position or inverted its up vector.");
                 await preview.ShowAsync(context.World, context.World.Assets.First(a => a.Kind == AssetKind.World), resolver, null, 0, default, true, context.Mission);
                 await CheckReal("whole-world", true);
+                // Only finished frames reach WPF: with Wireframe a frame takes long enough that WPF, copying the shared surface on
+                // its own device right after a frame was submitted, showed it half drawn (the cleared background where terrain goes).
+                cam.Position = new(2065, 72, 1702); cam.LookDirection = new(-24, -40, -9); cam.UpDirection = new(0, 1, 0);
+                preview.SetWireframe(true); await Task.Delay(600);
+                Require(BackgroundPixels(preview.CapturePresentedFrame()) == 0, "The wireframe pose does not fill the view with terrain.");
+                for (int i = 0; i < 12; i++)
+                {
+                    var composed = preview.RenderFrameReadAsComposed() ?? throw new InvalidDataException("No frame was rendered for the composed read.");
+                    int missing = BackgroundPixels(composed);
+                    if (missing > 0) { Save(composed, Path.Combine(output, "wireframe-composed-partial.png")); throw new InvalidDataException($"WPF read a frame still being drawn: {missing} background pixels."); }
+                    await Task.Delay(30);
+                }
+                preview.SetWireframe(false);
+                Console.WriteLine("PASS whole-world wireframe: 12 frames read as WPF composes them right after drawing, none partly drawn.");
                 var model = context.World.Assets.First(a => a.Kind == AssetKind.Model && a.Index == 384);
                 await preview.ShowAsync(context.World, model, resolver, null, 0, default);
                 await CheckReal("sandbags-model", false);
@@ -139,6 +153,13 @@ internal static class RenderStabilityCheck
     }
     private static byte[] Pixels(BitmapSource image)
     { var bitmap = new FormatConvertedBitmap(image, PixelFormats.Bgra32, null, 0); byte[] data = new byte[bitmap.PixelWidth * bitmap.PixelHeight * 4]; bitmap.CopyPixels(data, bitmap.PixelWidth * 4, 0); return data; }
+    // Pixels of the preview background (#1A1F26): what a frame shows where nothing has been drawn yet.
+    private static int BackgroundPixels(BitmapSource image)
+    {
+        var data = Pixels(image); int count = 0;
+        for (int i = 0; i < data.Length; i += 4) if (data[i] == 38 && data[i + 1] == 31 && data[i + 2] == 26) count++;
+        return count;
+    }
     private static void Require(bool condition, string message) { if (!condition) throw new InvalidDataException(message); }
     private static void Save(BitmapSource image, string path) { PngBitmapEncoder encoder = new(); encoder.Frames.Add(BitmapFrame.Create(image)); using var stream = File.Create(path); encoder.Save(stream); }
 }

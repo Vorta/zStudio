@@ -21,7 +21,10 @@ namespace zStudio.Rendering.Direct3D;
 
 /// <summary>
 /// The surface behind <see cref="RenderView"/>: a WPF element showing a D3DImage whose back buffer is a Direct3D 11 texture
-/// shared with a Direct3D 9Ex surface. Rendering is driven by <see cref="CompositionTarget.Rendering"/> on demand while the
+/// shared with a Direct3D 9Ex surface. A frame is drawn into a private render target and copied to the shared texture in one
+/// step at its end: WPF copies the shared texture on its own Direct3D 9 device, which the GPU does not order after this
+/// device's work, so drawing into it directly let WPF show frames still being drawn (meshes flashing in and out while the
+/// camera moved, the more so the longer a frame takes, as with Wireframe). Rendering is driven by <see cref="CompositionTarget.Rendering"/> on demand while the
 /// element is visible: a frame renders while one was requested and for six more frames after each request (stale-frame
 /// workaround for the shared surface, and the tail hover refresh relies on). A lost device or front buffer rebuilds everything
 /// (both devices) from retained data; after three recoveries without a frame in between the view fails instead. A real size
@@ -41,7 +44,8 @@ internal sealed class Direct3DView : IDisposable
     private IDirect3DDevice9Ex? device9;
     private IDirect3DTexture9? texture9;
     private IDirect3DSurface9? surface9;
-    private ID3D11Texture2D? backBuffer, depthBuffer, staging;
+    // The frame is drawn into renderTarget; backBuffer (shared with the D3DImage) only receives finished frames.
+    private ID3D11Texture2D? renderTarget, backBuffer, depthBuffer, staging;
     private ID3D11RenderTargetView? targetView;
     private ID3D11DepthStencilView? depthView;
     private int targetGeneration;
@@ -158,12 +162,14 @@ internal sealed class Direct3DView : IDisposable
             try
             {
                 EnsureTargets(graphics);
-                // Draw into the shared surface only while WPF is not reading it.
+                Draw(graphics, camera);
+                // Hand the finished frame over in one copy, only while WPF is not reading the shared surface.
                 bool locked = imageSource != null && surface9 != null && imageSource.IsFrontBufferAvailable;
                 if (locked) imageSource!.Lock();
                 try
                 {
-                    Draw(graphics, camera);
+                    graphics.Context.CopyResource(backBuffer!, renderTarget!);
+                    graphics.Context.Flush();
                     if (locked) imageSource!.AddDirtyRect(new Int32Rect(0, 0, imageSource.PixelWidth, imageSource.PixelHeight));
                 }
                 finally { if (locked) imageSource!.Unlock(); }
@@ -199,7 +205,6 @@ internal sealed class Direct3DView : IDisposable
         scene.Render(g, owner, frame, eye, RenderCamera.ToFloat(camera.LookDirection));
         aids.Render(g, owner, camera, renderWidth, renderHeight, dpiScale, depthView!, renderWidth, renderHeight);
         context.ClearState();
-        context.Flush();
     }
 
     private void EnsureTargets(D3DGraphics g)
@@ -209,13 +214,14 @@ internal sealed class Direct3DView : IDisposable
         ReleaseTargets();
         bufferWidth = width; bufferHeight = height;
         var shared = !g.IsSoftware;
-        backBuffer = g.Device.CreateTexture2D(new Texture2DDescription
+        var color = new Texture2DDescription
         {
             Width = (uint)width, Height = (uint)height, MipLevels = 1, ArraySize = 1, Format = DxgiFormat.B8G8R8A8_UNorm,
-            SampleDescription = new(1, 0), Usage = ResourceUsage.Default, BindFlags = BindFlags.RenderTarget | BindFlags.ShaderResource,
-            MiscFlags = shared ? ResourceOptionFlags.Shared : ResourceOptionFlags.None
-        });
-        targetView = g.Device.CreateRenderTargetView(backBuffer);
+            SampleDescription = new(1, 0), Usage = ResourceUsage.Default, BindFlags = BindFlags.RenderTarget | BindFlags.ShaderResource
+        };
+        renderTarget = g.Device.CreateTexture2D(color);
+        targetView = g.Device.CreateRenderTargetView(renderTarget);
+        backBuffer = g.Device.CreateTexture2D(color with { MiscFlags = shared ? ResourceOptionFlags.Shared : ResourceOptionFlags.None });
         // 32-bit float depth with stencil, standard (not reversed) Z.
         depthBuffer = g.Device.CreateTexture2D(new Texture2DDescription
         {
@@ -401,6 +407,7 @@ internal sealed class Direct3DView : IDisposable
         ReleaseSurface(device: false);
         targetView?.Dispose(); targetView = null;
         depthView?.Dispose(); depthView = null;
+        renderTarget?.Dispose(); renderTarget = null;
         backBuffer?.Dispose(); backBuffer = null;
         depthBuffer?.Dispose(); depthBuffer = null;
         staging?.Dispose(); staging = null;
