@@ -48,8 +48,8 @@ internal static class RenderStabilityCheck
                     camera.Position = new(2041, 32, 1893); camera.LookDirection = new(0, 0, -200); camera.UpDirection = new(0, 1, 0);
                     await Task.Delay(300);
                     AssertRed(preview.CapturePresentedFrame(), $"inside world, instanced {instanced}, front first {frontFirst}, near {camera.NearPlaneDistance:G6}");
-                    // Use native inertia; read the last presented frame after it stops.
-                    preview.QueueNativeNavigation(zoom: -.12);
+                    // Wheel zoom with inertia; read the last presented frame after it stops.
+                    preview.WheelZoom(Center(), 120);
                     await Task.Delay(100); AssertRed(preview.CapturePresentedFrame(), "moving");
                     await Task.Delay(2400); var idle = preview.CapturePresentedFrame(); AssertRed(idle, "idle 2 s");
                     await Task.Delay(8000); var later = preview.CapturePresentedFrame(); AssertRed(later, "idle 10 s");
@@ -73,13 +73,19 @@ internal static class RenderStabilityCheck
                     }
                     cam.UpDirection = new(0, -1, 0); await Task.Delay(100); Require(cam.UpDirection.Y > 0, "External camera roll was not removed.");
                     var stopped = preview.CaptureView();
-                    preview.QueueNativeNavigation(rotateY: 1000); await Task.Delay(1800); Require(cam.UpDirection.Y > 0, "Native rotation inertia inverted the camera.");
-                    if (fly) Require(preview.CaptureView() == stopped, "Native rotation changed captured freecam.");
+                    // A fast middle-button flick leaves orbit inertia past the pole; Fly refuses the gesture.
+                    preview.BeginNavigationDrag(SceneViewport.NavigationGesture.Orbit, Center());
+                    preview.MoveNavigationDrag(Center() + new System.Windows.Vector(0, 1000)); preview.EndNavigationDrag();
+                    await Task.Delay(1800);
+                    Require(cam.UpDirection.Y > 0 && Math.Abs(cam.LookDirection.Y / cam.LookDirection.Length) <= Math.Sin(89 * Math.PI / 180) + 1e-12, "Orbit inertia crossed a pole or inverted the camera.");
+                    if (fly) Require(preview.CaptureView() == stopped, "An orbit drag changed captured freecam.");
+                    preview.StopCameraMotion();
                 }
-                Console.WriteLine("PASS: upright Orbit/Fly, large drags, pole limits, no roll, fixed orbit target/Fly position and native rotation inertia.");
+                Console.WriteLine("PASS: upright Orbit/Fly, large drags, pole limits, no roll, fixed orbit target/Fly position and orbit inertia.");
                 preview.SetFly(false);
-                preview.AnimateNativeDirection(new(0, -10, 0), new(0, 0, -1), 300);
-                await Task.Delay(600); Require(cam.UpDirection.Y > 0 && Math.Abs(cam.LookDirection.Y / cam.LookDirection.Length) <= Math.Sin(89 * Math.PI / 180) + 1e-12, "Top view animation crossed the pitch limit.");
+                // A pose written straight down (as an external camera write) is clamped to the pitch limit on the next frame.
+                cam.LookDirection = new(0, -10, 0); cam.UpDirection = new(0, 0, -1);
+                await Task.Delay(600); Require(cam.UpDirection.Y > 0 && Math.Abs(cam.LookDirection.Y / cam.LookDirection.Length) <= Math.Sin(89 * Math.PI / 180) + 1e-12, "A straight-down camera crossed the pitch limit.");
                 var animation = await resolver.OpenCachedAsync(Path.Combine(resolver.Root, "m1", "anim.zbd"), default);
                 context = await AnimationPreviewContext.LoadAsync(animation.Animations!, animation.Path, resolver);
                 var entry = context.Package.Entries.First(e => e.Name == "start_single_player");
@@ -102,10 +108,11 @@ internal static class RenderStabilityCheck
                 await CheckReal("sandbags-model", false);
                 Console.WriteLine("Images: " + output);
 
+                Point Center() => new(preview.RenderSurface.ActualWidth / 2, preview.RenderSurface.ActualHeight / 2);
                 async Task CheckReal(string label, bool world)
                 {
                     if (world) { cam.Position = new(2065, 72, 1702); cam.LookDirection = new(-24, -40, -9); cam.UpDirection = new(0, 1, 0); }
-                    await Task.Delay(400); preview.QueueNativeNavigation(zoom: -.12);
+                    await Task.Delay(400); preview.WheelZoom(Center(), 120);
                     await Task.Delay(100); Save(preview.CapturePresentedFrame(), Path.Combine(output, label + "-moving.png"));
                     await Task.Delay(2400); var idle = preview.CapturePresentedFrame(); var position = cam.Position;
                     var identities = preview.EnumerateRenderMeshes().ToArray();

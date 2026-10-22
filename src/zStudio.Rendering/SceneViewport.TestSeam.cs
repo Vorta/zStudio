@@ -27,13 +27,16 @@ public sealed partial class SceneViewport
     /// <summary>What a rendered mesh is: a static scene batch, an animation pose's mesh, or an overlay or helper.</summary>
     internal enum RenderMeshRole { Scene, Animation, Overlay }
 
+    // Only SceneViewport can name this interface, so tests and tools cannot reach the backend node behind a handle.
+    private interface IBackendNode { GeometryModel3D Node { get; } }
+    private static GeometryModel3D BackendNode(RenderMeshHandle handle) => ((IBackendNode)handle).Node;
+
     /// <summary>A live view of one rendered mesh or line node; two views are equal when they show the same node.</summary>
-    internal sealed class RenderMeshHandle : IEquatable<RenderMeshHandle>
+    internal sealed class RenderMeshHandle : IEquatable<RenderMeshHandle>, IBackendNode
     {
         private readonly GeometryModel3D node;
         internal RenderMeshHandle(GeometryModel3D node, RenderMeshRole role) { this.node = node; Role = role; }
-        /// <summary>The backend node, for SceneViewport only; tests and tools never read it.</summary>
-        internal GeometryModel3D BackendNode => node;
+        GeometryModel3D IBackendNode.Node => node;
         public RenderMeshRole Role { get; }
         public bool IsLine => node is LineGeometryModel3D;
         public bool Visible { get => node.Visibility == Visibility.Visible; set => node.Visibility = value ? Visibility.Visible : Visibility.Collapsed; }
@@ -237,7 +240,7 @@ public sealed partial class SceneViewport
 
     internal RenderMeshHandle AddFixtureMesh(FixtureMesh fixture)
     {
-        DiffuseMaterial material = fixture.MaterialFrom?.BackendNode is MaterialGeometryModel3D { Material: DiffuseMaterial source }
+        DiffuseMaterial material = fixture.MaterialFrom is { } template && BackendNode(template) is MaterialGeometryModel3D { Material: DiffuseMaterial source }
             ? (DiffuseMaterial)source.Clone() : new DiffuseMaterial();
         if (fixture.Color is { } color) material.DiffuseColor = new Color4(color.X, color.Y, color.Z, color.W);
         if (fixture.Unlit) material.EnableUnLit = true;
@@ -271,7 +274,7 @@ public sealed partial class SceneViewport
     /// <summary>Takes a fixture mesh out of the scene and every registration, and releases it.</summary>
     internal void RemoveFixtureMesh(RenderMeshHandle handle)
     {
-        var node = handle.BackendNode;
+        var node = BackendNode(handle);
         viewport.Items.Remove(node);
         if (node is MeshGeometryModel3D mesh)
         {
@@ -286,17 +289,17 @@ public sealed partial class SceneViewport
     internal void ClearRenderItems() => viewport.Items.Clear();
 
     internal void RegisterFixtureInspection(RenderMeshHandle mesh, int material, long? runtime = null, int node = -1, int model = -1)
-        => RegisterInspectionMesh((MeshGeometryModel3D)mesh.BackendNode, material, runtime, node, model);
+        => RegisterInspectionMesh((MeshGeometryModel3D)BackendNode(mesh), material, runtime, node, model);
 
     /// <summary>Shows only these placements of a fixture batch, as isolation does.</summary>
     internal void SetFixtureVisiblePlacements(RenderMeshHandle handle, ScenePlacement[] shown)
     {
-        var mesh = (MeshGeometryModel3D)handle.BackendNode;
+        var mesh = (MeshGeometryModel3D)BackendNode(handle);
         visiblePlacements[mesh] = shown; mesh.Instances = shown.Select(p => p.Transform).ToArray();
     }
 
     /// <summary>Whether this instance of the mesh can supply an orbit pivot or a selection hit.</summary>
-    internal bool OrbitSurfaceEligible(RenderMeshHandle mesh, int instance) => mesh.BackendNode is MeshGeometryModel3D node && IsOrbitSurface(node, instance);
+    internal bool OrbitSurfaceEligible(RenderMeshHandle mesh, int instance) => BackendNode(mesh) is MeshGeometryModel3D node && IsOrbitSurface(node, instance);
 
     /// <summary>Puts a pressed move handle along <paramref name="axisTransform"/>'s X axis (hit at <paramref name="hit"/>) and a fresh handle target, without input capture.</summary>
     internal void BeginFixtureHandleGesture(Matrix4x4 axisTransform, Vector3 hit)
@@ -316,8 +319,14 @@ public sealed partial class SceneViewport
     internal RenderMeshHandle? ParachuteLine => parachuteLine is { } line ? new(line, RenderMeshRole.Overlay) : null;
     internal IReadOnlyList<(RenderMeshHandle Box, ScenePlacement[] Placements)> BoundsBoxes => [.. boundsPlacements.Select(p => (new RenderMeshHandle(p.Key, RenderMeshRole.Overlay), p.Value))];
     internal IReadOnlyList<(RenderMeshHandle Mesh, ScenePlacement[] Placements)> StaticBatches => [.. placements.Select(p => (new RenderMeshHandle(p.Key, RenderMeshRole.Scene), p.Value))];
+    /// <summary>Static scene batches built for the shown scene (none after Clear or a superseded or canceled load).</summary>
+    internal int StaticBatchCount => meshes.Count;
+    /// <summary>Bounds-box line nodes built for the shown scene.</summary>
+    internal int BoundsBoxCount => bounds.Count;
+    /// <summary>Cached model-local bounds of static geometry (animated and morphed geometry never enters it).</summary>
+    internal int StaticBoundsCacheCount => staticMeshBounds.Count;
     internal IReadOnlyList<(RenderMeshHandle Mesh, int[] Polygons)> InspectionPolygonMaps => [.. inspectionPolygons.Select(p => (Handle(p.Key), p.Value))];
-    internal int[]? InspectionPolygons(RenderMeshHandle mesh) => mesh.BackendNode is MeshGeometryModel3D node ? inspectionPolygons.GetValueOrDefault(node) : null;
+    internal int[]? InspectionPolygons(RenderMeshHandle mesh) => BackendNode(mesh) is MeshGeometryModel3D node ? inspectionPolygons.GetValueOrDefault(node) : null;
     internal IReadOnlyList<RenderMeshHandle> AiLinkMeshes => [.. aiLinks.Keys.Select(m => new RenderMeshHandle(m, RenderMeshRole.Overlay))];
     internal IReadOnlyList<GroundGridHandle> GroundGrids => [.. viewport.Items.OfType<AxisPlaneGridModel3D>().Select(g => new GroundGridHandle(g))];
 
@@ -328,15 +337,6 @@ public sealed partial class SceneViewport
     internal bool OrbitControlsEnabled => viewport.IsPanEnabled && viewport.IsZoomEnabled && viewport.IsRotationEnabled;
     /// <summary>Whether the backend's own mouse/keyboard gestures are installed (zStudio owns all navigation input).</summary>
     internal bool UsesBuiltInGestures => viewport.UseDefaultGestures || viewport.InputBindings.Count != 0;
-    /// <summary>Queues camera motion the way the backend's own controller would, in pixels (pan, rotate) and zoom steps.</summary>
-    internal void QueueNativeNavigation(double panX = 0, double panY = 0, double zoom = 0, double rotateX = 0, double rotateY = 0)
-    {
-        if (panX != 0 || panY != 0) viewport.AddPanForce(panX, panY);
-        if (zoom != 0) viewport.AddZoomForce(zoom);
-        if (rotateX != 0 || rotateY != 0) viewport.AddRotateForce(rotateX, rotateY);
-    }
-    /// <summary>Turns the camera to a direction over <paramref name="milliseconds"/>, as an external controller would.</summary>
-    internal void AnimateNativeDirection(Vector3D look, Vector3D up, double milliseconds) => viewport.ChangeDirection(look, up, milliseconds);
     /// <summary>Back-to-front sorting of transparent meshes (on by default; fixtures turn it off to force a draw order).</summary>
     internal void SetTransparentSorting(bool enabled) { foreach (var group in viewport.Items.OfType<SortingGroupModel3D>()) group.EnableSorting = enabled; }
     /// <summary>The graphics interop's own exception type (first-chance evidence in tests).</summary>

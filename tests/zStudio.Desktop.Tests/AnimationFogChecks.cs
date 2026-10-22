@@ -22,6 +22,8 @@ internal static class AnimationFogChecks
         await preview.ShowAnimationAsync(context, frame, resolver, false, CancellationToken.None);
         var mesh = Assert.Single(preview.EnumerateRenderMeshes()); Assert.Equal(SceneViewport.RenderMeshRole.Animation, mesh.Role);
         var geometry = mesh.GeometryIdentity; Assert.NotNull(geometry); var positions = mesh.Positions; var transform = mesh.Transform;
+        // Fog and lighting recolour in place: the same geometry, positions, transform and material object every frame.
+        var material = mesh.MaterialIdentity; Assert.NotNull(material);
         var camera = preview.DebugCamera;
         var prepare = typeof(SceneViewport).GetMethod("PrepareCameraFrame", BindingFlags.Instance | BindingFlags.NonPublic)!;
         object? Field(string name) => typeof(SceneViewport).GetField(name, BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(preview);
@@ -31,7 +33,7 @@ internal static class AnimationFogChecks
         Assert.NotEqual(near[0], far[0]); Assert.Equal(0, far[0].X); Assert.Equal(0, far[0].Y);
         Assert.InRange(far[0].Z, .24f, .26f); Assert.Equal(.5f, far[0].W);
         Assert.Equal(1, mesh.DiffuseColor.Z); Assert.Same(frame, Field("animationFrame"));
-        Assert.Same(positions, mesh.Positions); Assert.Equal(transform, mesh.Transform); Assert.Same(geometry, mesh.GeometryIdentity);
+        Assert.Same(positions, mesh.Positions); Assert.Equal(transform, mesh.Transform); Assert.Same(geometry, mesh.GeometryIdentity); Assert.Same(material, mesh.MaterialIdentity);
         prepare.Invoke(preview, [TimeSpan.Zero]); Assert.Same(far, mesh.Colors);
         Move(3); Assert.Equal(near.ToArray(), mesh.Colors!.ToArray());
         preview.UpdateAnimationFrame(frame, effectLighting: false); var noFog = mesh.Colors;
@@ -54,13 +56,14 @@ internal static class AnimationFogChecks
         Assert.InRange(mesh.DiffuseColor.X, .82499f, .82501f);
         Assert.InRange(mesh.DiffuseColor.Y, .95624f, .95626f);
         Assert.InRange(mesh.DiffuseColor.Z, .75280f, .75283f);
-        Assert.Equal(.5f, mesh.DiffuseColor.W);
+        Assert.Equal(.5f, mesh.DiffuseColor.W); Assert.Same(material, mesh.MaterialIdentity);
         for (int i = 0; i < 8; i++) { Move(20); Move(3); }
         Assert.Equal(6, preview.AnimationLightVisits); // Fog/camera never rescan lights.
         preview.UpdateAnimationFrame(lit, effectLighting: false); Move(3);
         Assert.Equal(0, preview.AnimationLightVisits); Assert.Equal(1, mesh.DiffuseColor.X);
         preview.UpdateAnimationFrame(lit); Move(3);
         Assert.InRange(mesh.DiffuseColor.X, .82499f, .82501f); // Options refresh the cached light result.
+        Assert.Same(material, mesh.MaterialIdentity);
         await Assert.ThrowsAsync<SceneViewport.RenderLimitException>(() => preview.ShowAnimationAsync(context, tooLarge, resolver, false, TestContext.Current.CancellationToken));
         Assert.Equal(0, preview.AnimationMeshCount); Assert.Equal(0, preview.RetainedGeometryBytes);
         await preview.ShowAnimationAsync(context, lit, resolver, false, TestContext.Current.CancellationToken);

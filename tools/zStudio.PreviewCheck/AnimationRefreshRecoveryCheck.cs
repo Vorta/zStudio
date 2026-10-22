@@ -88,7 +88,7 @@ internal static class AnimationRefreshRecoveryCheck
             try { await editor.SetPreviewOptionAsync("worldPath", JsonValue.Create(context.World.Path)!); }
             finally { editor.Viewport.Information -= Replace; }
             var player = (AnimationPlayer)typeof(AnimationEditor).GetField("player", flags)!.GetValue(editor)!;
-            int meshes = ((System.Collections.ICollection)editor.Viewport.GetType().GetField("meshes", flags)!.GetValue(editor.Viewport)!).Count;
+            int meshes = editor.Viewport.StaticBatchCount;
             if (!replaced || lod.SelectedIndex != 0 || player.LodLevel != 0 || meshes != 0 || loading.Visibility != Visibility.Collapsed)
                 throw new InvalidDataException("A world rebind did not reconcile initial LOD and presentation changes made during upload.");
             await editor.SetPreviewOptionAsync("map", JsonValue.Create(true)!);
@@ -107,7 +107,7 @@ internal static class AnimationRefreshRecoveryCheck
             contextTask.SetValue(document, contextReady.Task);
             typeof(AnimationEditor).GetField("contextDirty", flags)!.SetValue(editor, true);
             typeof(AnimationEditor).GetField("resetSimulation", flags)!.SetValue(editor, true);
-            int staticMeshes = ((System.Collections.ICollection)editor.Viewport.GetType().GetField("meshes", flags)!.GetValue(editor.Viewport)!).Count;
+            int staticMeshes = editor.Viewport.StaticBatchCount;
             using var request = new CancellationTokenSource();
             bool canceled = false;
             void Cancel(string _) { if (!canceled) { canceled = true; request.Cancel(); } }
@@ -125,7 +125,7 @@ internal static class AnimationRefreshRecoveryCheck
                 contextReady.SetResult(context);
                 await Task.WhenAll(seek, change).WaitAsync(TimeSpan.FromSeconds(30));
                 var player = (AnimationPlayer)typeof(AnimationEditor).GetField("player", flags)!.GetValue(editor)!;
-                int rendered = ((System.Collections.ICollection)editor.Viewport.GetType().GetField("meshes", flags)!.GetValue(editor.Viewport)!).Count;
+                int rendered = editor.Viewport.StaticBatchCount;
                 if (!canceled || lod.SelectedIndex != 0 || player.LodLevel != 0 || rendered != staticMeshes)
                     throw new InvalidDataException($"A canceled queued LOD leaked into the GUI seek's published player or map geometry: canceled={canceled}, picker={lod.SelectedIndex}, player={player.LodLevel}, meshes={rendered}/{staticMeshes}.");
             }
@@ -169,7 +169,7 @@ internal static class AnimationRefreshRecoveryCheck
             }
             catch (StudioCommandException ex) when (ex.Code == "context_changed") { rejected = true; }
             finally { editor.Viewport.Information -= Replace; }
-            int meshes = ((System.Collections.ICollection)editor.Viewport.GetType().GetField("meshes", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(editor.Viewport)!).Count;
+            int meshes = editor.Viewport.StaticBatchCount;
             if (!replaced || !rejected || loading.Visibility != Visibility.Collapsed || meshes != 0 || editor.IsPlaying == pause)
                 throw new InvalidDataException("A GUI Map toggle during mesh upload did not supersede MCP scene options.");
             editor.Pause();

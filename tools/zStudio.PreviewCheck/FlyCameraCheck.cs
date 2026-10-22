@@ -43,9 +43,11 @@ internal static class FlyCameraCheck
                 var toolbar = (ToolBar)window.FindName("SceneToolbar");
                 var session = (FlyCameraSession)typeof(MainWindow).GetField("flyCamera", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(window)!;
                 window.Activate(); await Delay(80);
+                // Entry must discard pending orbit-camera inertia (here from a quick pan flick) and preserve the exact position/direction.
+                var flick = new Point(scene.RenderSurface.ActualWidth / 2, scene.RenderSurface.ActualHeight / 2);
+                scene.BeginNavigationDrag(SceneViewport.NavigationGesture.Pan, flick);
+                scene.MoveNavigationDrag(flick + new Vector(12, 8)); scene.EndNavigationDrag();
                 var pose = scene.CaptureView();
-                // Entry must discard queued native forces and preserve the exact position/direction.
-                scene.QueueNativeNavigation(panX: 12, panY: 8, zoom: .5);
                 // Isolate inertia from live physical pointer movement during capture.
                 scene.SetFly(true);
                 await Delay(80);
@@ -53,7 +55,10 @@ internal static class FlyCameraCheck
                 // basis finalization before comparing a complete pose across wheel input.
                 while (Math.Abs(Vector3D.DotProduct(camera.LookDirection, camera.UpDirection)) / camera.LookDirection.Length > 1e-8) await Delay(20);
                 Require((camera.Position - pose.Position).Length < 1e-6 && (camera.LookDirection - pose.LookDirection).Length < 1e-6, $"Entry applied queued camera inertia: {pose} -> {scene.CaptureView()}");
-                scene.SetFly(false); await Enter();
+                // Discarded, not suspended: leaving Fly must not resume the flick.
+                scene.SetFly(false); await Delay(120);
+                Require((camera.Position - pose.Position).Length < 1e-6 && (camera.LookDirection - pose.LookDirection).Length < 1e-6, $"Fly kept queued camera inertia: {pose} -> {scene.CaptureView()}");
+                await Enter();
                 Require(Mouse.Captured == scene && scene.IsKeyboardFocusWithin && scene.Cursor == Cursors.None, "Input was not captured/hidden/focused");
                 GetClipCursor(out var clipped);
                 var screen = scene.PointToScreen(new());

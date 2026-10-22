@@ -64,11 +64,11 @@ internal static class AnimationTextureQueueChecks
             preview.Isolate(null); preview.FrameAll();
             Assert.Equal(96, framingCorners);
             preview.StaticFramingMeasured = null;
-            Assert.Equal(12, Field<System.Collections.IList>("meshes").Count);
+            Assert.Equal(12, preview.StaticBatchCount);
             string acceptedSummary = preview.PreviewSummary;
             preview.MaximumRenderUnits = 31;
             await Assert.ThrowsAsync<SceneViewport.RenderLimitException>(() => preview.ShowAsync(context.World, asset, resolver, null, 0, token, mission: context.Mission));
-            Assert.Equal(12, Field<System.Collections.IList>("meshes").Count);
+            Assert.Equal(12, preview.StaticBatchCount);
             Assert.Equal(acceptedSummary, preview.PreviewSummary);
 
             AnimationFrame frame = Frame(4);
@@ -76,7 +76,7 @@ internal static class AnimationTextureQueueChecks
             // separately, but their combined 32 + 28 units must refuse cleanly.
             preview.MaximumRenderUnits = 59;
             await Assert.ThrowsAsync<SceneViewport.RenderLimitException>(() => preview.ShowAnimationAsync(context, frame, resolver, true, token));
-            Assert.Empty(Field<System.Collections.IList>("meshes"));
+            Assert.Equal(0, preview.StaticBatchCount);
             Assert.Equal(0, preview.AnimationMeshCount);
             preview.MaximumRenderUnits = 28;
             await preview.ShowAnimationAsync(context, frame, resolver, false, token);
@@ -101,7 +101,7 @@ internal static class AnimationTextureQueueChecks
             Assert.Equal(geometryBytes, preview.RetainedGeometryBytes);
             preview.UpdateAnimationFrame(Frame(2)); Assert.Equal(6, preview.AnimationMeshCount);
             preview.Clear(); Assert.Equal(0, preview.RetainedGeometryBytes);
-            Assert.Empty(Field<System.Collections.IDictionary>("staticMeshBounds"));
+            Assert.Equal(0, preview.StaticBoundsCacheCount);
             preview.MaximumGeometryBytes = 256L * 1024 * 1024;
 
             // A morph opens an earlier polygon and a previously absent material.
@@ -152,15 +152,15 @@ internal static class AnimationTextureQueueChecks
             Assert.Equal(1, yields);
             Assert.Same(replacement.Scene, preview.PreviewScene);
             Assert.Equal(1, preview.AnimationMeshCount);
-            Assert.Empty(Field<System.Collections.IList>("meshes"));
-            Assert.Empty(Field<System.Collections.IList>("bounds"));
+            Assert.Equal(0, preview.StaticBatchCount);
+            Assert.Equal(0, preview.BoundsBoxCount);
             Assert.Equal(summaryBefore, preview.PreviewSummary);
             Assert.Equal(replacementView, preview.CaptureView());
 
             using var canceled = CancellationTokenSource.CreateLinkedTokenSource(token);
             preview.StaticBatchYielded = () => { preview.StaticBatchYielded = null; canceled.Cancel(); return Task.CompletedTask; };
             await Assert.ThrowsAnyAsync<OperationCanceledException>(() => preview.ShowAsync(many.World, manyAsset, resolver, null, 0, canceled.Token, mission: many.Mission));
-            Assert.Null(preview.PreviewScene); Assert.Empty(Field<System.Collections.IList>("meshes"));
+            Assert.Null(preview.PreviewScene); Assert.Equal(0, preview.StaticBatchCount);
             Assert.Equal(0, preview.RetainedGeometryBytes);
             await preview.ShowAnimationAsync(replacement, Frame(1), resolver, false, token);
             Assert.Equal(1, preview.AnimationMeshCount);

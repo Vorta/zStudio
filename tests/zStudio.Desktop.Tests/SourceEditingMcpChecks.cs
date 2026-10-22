@@ -363,8 +363,8 @@ internal static class SourceEditingMcpChecks
             var before = main.SceneHost.Content;
             var retainedViewport = (zStudio.Rendering.SceneViewport)before!;
             var retainedPose = retainedViewport.CaptureView();
-            var meshesField = typeof(zStudio.Rendering.SceneViewport).GetField("placements", hidden)!;
-            var retainedMeshes = ((System.Collections.IDictionary)meshesField.GetValue(retainedViewport)!).Keys.Cast<object>().ToArray();
+            static zStudio.Rendering.SceneViewport.RenderMeshHandle[] Batches(zStudio.Rendering.SceneViewport view) => [.. view.StaticBatches.Select(b => b.Mesh)];
+            var retainedMeshes = Batches(retainedViewport);
             contentProperty.AddValueChanged(main.SceneHost, swapped);
             DocumentModel placed;
             TaskCompletionSource transformPreparing = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -394,7 +394,7 @@ internal static class SourceEditingMcpChecks
             Assert.Empty(hosted);
             Assert.Same(redone, placed); Assert.Same(before, main.SceneHost.Content);
             Assert.Equal(retainedPose, retainedViewport.CaptureView());
-            Assert.Equal(retainedMeshes, ((System.Collections.IDictionary)meshesField.GetValue(retainedViewport)!).Keys.Cast<object>().ToArray());
+            Assert.Equal(retainedMeshes, Batches(retainedViewport));
             Assert.Equal((false, (int?)ground), during);
             Assert.Empty(Directory.EnumerateFiles(fixture.Project, "*.zbd", SearchOption.AllDirectories));
             Assert.False(blanked);
@@ -556,7 +556,7 @@ internal static class SourceEditingMcpChecks
             Assert.NotNull(turretCard.ObjectEditor);
             Assert.Equal("tur_101", turretCard.ObjectEditor.State.Name);
             var turretCamera = turretViewport.CaptureView();
-            var turretMeshes = ((System.Collections.IDictionary)meshesField.GetValue(turretViewport)!).Keys.Cast<object>().ToArray();
+            var turretMeshes = Batches(turretViewport);
             string turretTarget = turretViewport.SelectedInspection!.Target;
             var originalParts = TurretParts();
             Assert.Equal(new[] { "barrel", "healthy" }, originalParts.Keys.Order(StringComparer.Ordinal));
@@ -740,7 +740,7 @@ internal static class SourceEditingMcpChecks
                 Assert.Same(turretViewport, main.SceneHost.Content);
                 Assert.False(main.IsViewReloading); Assert.Null(typeof(MainWindow).GetField("retiringScene", hidden)!.GetValue(main));
                 Assert.Equal(turretCamera, turretViewport.CaptureView()); Assert.Equal(turretTarget, turretViewport.SelectedInspection?.Target);
-                Assert.Equal(turretMeshes, ((System.Collections.IDictionary)meshesField.GetValue(turretViewport)!).Keys.Cast<object>().ToArray());
+                Assert.Equal(turretMeshes, Batches(turretViewport));
                 Assert.True(turretViewport.SelectionBoundsVisible);
                 var parts = TurretParts();
                 foreach (var (name, original) in originalParts)

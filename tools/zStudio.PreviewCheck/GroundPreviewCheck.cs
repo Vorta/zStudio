@@ -81,7 +81,7 @@ internal static class GroundPreviewCheck
                 Require(viewport.GroundGrids.Count == 1, "Horizon refresh duplicated grid");
                 ((System.Windows.Controls.Primitives.ToggleButton)editor.FindName("ShowLevel")).IsChecked = false; await Ready();
                 await editor.SeekAsync(5); editor.Viewport.FrameAnimation(editor.CurrentFrame!);
-                viewport.QueueNativeNavigation(zoom: -.12); await Task.Delay(2600, timeout.Token);
+                viewport.WheelZoom(new(viewport.RenderSurface.ActualWidth / 2, viewport.RenderSurface.ActualHeight / 2), 120); await Task.Delay(2600, timeout.Token);
                 var idle = viewport.CapturePresentedFrame(); Console.WriteLine($"Idle camera: {camera.Position} {camera.LookDirection} clips {camera.NearPlaneDistance:R}/{camera.FarPlaneDistance:R}; viewport {viewport.RenderSurface.ActualWidth}/{viewport.RenderSurface.ActualHeight}"); await Task.Delay(2500, timeout.Token);
                 var later = viewport.CapturePresentedFrame();
                 Save(idle,"idle-before.png"); Save(later,"idle-after.png"); Console.WriteLine($"Later camera: {camera.Position} {camera.LookDirection} clips {camera.NearPlaneDistance:R}/{camera.FarPlaneDistance:R}; viewport {viewport.RenderSurface.ActualWidth}/{viewport.RenderSurface.ActualHeight}; changed channels {Pixels(idle).Zip(Pixels(later)).Count(p => p.First != p.Second)}; {output}");

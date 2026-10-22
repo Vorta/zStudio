@@ -313,12 +313,7 @@ public sealed partial class SceneViewport
             // process the wheel before any camera motion or inertia is started.
             if (e.Handled || IsFlyActive || IsAiPathPointerTransform || IsParachutePointerMoving || aiPathBoxStart != null ||
                 InspectionContent is DependencyObject panel && IsInspectionInput(e.OriginalSource as DependencyObject, panel)) return;
-            if (!IsPickupDragging)
-            {
-                StopCameraMotion(); ZoomAt(e.GetPosition(viewport), e.Delta);
-                navigationGesture = NavigationGesture.Zoom;
-                if (viewport.IsInertiaEnabled) navigationVelocity = new(0, e.Delta / 120.0 * 80);
-            }
+            if (!IsPickupDragging) WheelZoom(e.GetPosition(viewport), e.Delta);
             e.Handled = true;
         };
         viewport.LostMouseCapture += (_, _) => { if (rotationPoint != null) CancelNavigation(); };
@@ -326,6 +321,13 @@ public sealed partial class SceneViewport
         Unloaded += (_, _) => { CancelNavigation(); AttachNavigationWindow(null); };
         Loaded += (_, _) => AttachNavigationWindow(Window.GetWindow(this));
         IsVisibleChanged += (_, _) => { if (!IsVisible) CancelNavigation(); };
+    }
+    /// <summary>A mouse-wheel turn at <paramref name="position"/>: zoom toward it, then glide on with zoom inertia.</summary>
+    internal void WheelZoom(Point position, int delta)
+    {
+        StopCameraMotion(); ZoomAt(position, delta);
+        navigationGesture = NavigationGesture.Zoom;
+        if (viewport.IsInertiaEnabled) navigationVelocity = new(0, delta / 120.0 * 80);
     }
     private void NavigationModifiersChanged(object sender, KeyEventArgs e)
     {
