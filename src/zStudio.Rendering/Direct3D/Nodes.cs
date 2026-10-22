@@ -165,8 +165,9 @@ internal sealed class TopMostGroupNode() : GroupNode(new TopMostGroup3D());
 
 /// <summary>
 /// Geometry drawn once per instance: world position is p · instance · <see cref="Node.Transform"/> (instances are placed in the
-/// node's frame, as every CPU bounds, framing and inspection path composes them; the Helix adapter's GPU applies the transform
-/// first, which differs only for a node with both a non-translation transform and instances, and zStudio builds none). Null
+/// node's frame, as every CPU bounds, framing and inspection path composes them; the Helix adapter applies the transform first,
+/// which differs whenever a node has both a non-identity transform and instances that do not commute with it, and zStudio builds
+/// no node with both). Null
 /// <see cref="Instances"/> draws once; an empty list draws (and hits) nothing. Opaque meshes and lines are drawn in ascending
 /// <see cref="RenderOrder"/> (default 0). <see cref="IsDepthClipEnabled"/> false lets the near and far planes not clip it;
 /// <see cref="DepthBias"/> is the rasterizer's integer bias on 32-bit float depth.
@@ -194,7 +195,8 @@ internal abstract class GeometryNode : Node
     public int DepthBias { get => Model.DepthBias; set => Model.DepthBias = value; }
 }
 
-/// <summary>A triangle mesh with a <see cref="PreviewMaterial"/>; transparent meshes are drawn after the opaque ones without depth writes.</summary>
+/// <summary>A triangle mesh with a <see cref="PreviewMaterial"/>; transparent meshes are drawn after the opaque ones, without depth
+/// writes unless the material is plain.</summary>
 internal sealed class MeshNode : GeometryNode
 {
     private MeshData? geometry;

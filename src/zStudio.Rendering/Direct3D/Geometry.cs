@@ -19,7 +19,7 @@ internal sealed class MeshData
     public MeshData(Vector3[] positions, int[] indices, Vector3[]? normals = null, Vector2[]? textureCoordinates = null, Color4[]? colors = null)
     {
         Positions = positions; Indices = indices; Normals = normals; TextureCoordinates = textureCoordinates; this.colors = colors;
-        // Backend copies (Helix constructors copy every collection, as the managed geometry budgets assume).
+        // Backend copies: one Helix collection per source array (positions shared across poses and outlines; colours per array).
         HelixGeometry = new HelixGeometry
         {
             Positions = HelixCollections.Positions(positions), Indices = new IntCollection(indices),

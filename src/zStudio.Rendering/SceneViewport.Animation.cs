@@ -119,8 +119,8 @@ public sealed partial class SceneViewport
                 finally { animationGeometryReservation.Resize(animationGeometryBytes); }
             }
             ReserveRenderUnits(ref renderUnits, 2L * animationPossibleParts[pose.Model], MaximumRenderUnits);
-            // The renderer's geometry copies every array. Every pose keeps private
-            // geometry: morphs and per-pose fog/alpha tint must not modify siblings.
+            // Budget as if the renderer copied every array (it shares unchanged base-part
+            // positions, so this over-counts): morphs and per-pose fog/alpha tint must not modify siblings.
             // Each retained mesh also owns its unclamped pre-fog RGBA. Camera
             // refresh must not repeat the frame's material-part/light product.
             long copies = checked(animationGeometryCopies[pose.Model] + 16L * animationPossibleParts[pose.Model]);

@@ -16,9 +16,7 @@ public sealed partial class SceneViewport
         set { showAxes = value; view.ShowCoordinateSystem = value && !PresentationUiHidden; }
     }
     private readonly Grid presentationOverlays = new();
-    private static readonly DependencyProperty PresentationGuidesVisibleProperty = DependencyProperty.Register(
-        nameof(PresentationGuidesVisible), typeof(bool), typeof(SceneViewport), new PropertyMetadata(true));
-    public bool PresentationGuidesVisible => (bool)GetValue(PresentationGuidesVisibleProperty);
+    public bool PresentationGuidesVisible => view.GuidesVisible;
     /// <summary>Hide UI: the view alone, for footage. Clicks select and edit nothing; navigation and Fly go on.</summary>
     public bool PresentationUiHidden { get; private set; }
 
@@ -27,7 +25,6 @@ public sealed partial class SceneViewport
     {
         if (PresentationUiHidden == hidden) return;
         PresentationUiHidden = hidden;
-        SetValue(PresentationGuidesVisibleProperty, !hidden);
         // Guide nodes hide with the chrome; their own Visibility and IsRendering stay as their owners set them.
         view.GuidesVisible = !hidden;
         view.ShowViewCube = !hidden;

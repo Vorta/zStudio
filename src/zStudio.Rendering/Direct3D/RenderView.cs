@@ -29,7 +29,7 @@ internal interface IRayPicker
 {
     /// <summary>
     /// Every hit of the ray from <paramref name="origin"/> (unit <paramref name="direction"/>) on the view's pickable nodes: shown,
-    /// rendering and hit-test-visible nodes, transparent ones included; empty before the first frame.
+    /// rendering and hit-test-visible mesh nodes, transparent ones included (line nodes are never picked); empty before the first frame.
     /// <paramref name="pointer"/> is the screen point the ray came from (DIPs).
     /// </summary>
     IReadOnlyList<RenderHit> HitTest(Vector3 origin, Vector3 direction, Point pointer = default);
@@ -150,7 +150,9 @@ internal sealed class RenderView : IRayPicker, INodeOwner, IDisposable
     private static RenderHit[] Convert(IEnumerable<HitTestResult> hits) => [.. hits.Where(h => h.IsValid).Select(h => new RenderHit(Node.FromHelix(h.ModelHit), h.PointHit, h.NormalAtHit,
         h.Distance, h.Tag as int?, h.TriangleIndices is { } t ? (t.Item1, t.Item2, t.Item3) : null))];
 
-    // View cube (Helix face order +Z, −Z, +X, −X, +Y, −Y; edge and corner boxes neither drawn nor hit) and axes.
+    // View cube (Helix face order +Z, −Z, +X, −X, +Y, −Y; edge and corner boxes neither drawn nor hit; a grey base ring around it
+    // is drawn and hit, a ring hit asking for the top or bottom view, RENDERER-GOLDENS V7; nothing is drawn while the surface is
+    // under 100 DIPs on an axis) and axes.
     public bool ShowViewCube { get => viewport.ShowViewCube; set => viewport.ShowViewCube = value; }
     public bool ShowCoordinateSystem { get => viewport.ShowCoordinateSystem; set => viewport.ShowCoordinateSystem = value; }
     /// <summary>The cube's centre in relative surface coordinates (−1..1, Y up; default 0.8, −0.8) and its scale (default 1).</summary>
@@ -264,6 +266,13 @@ internal sealed class RenderView : IRayPicker, INodeOwner, IDisposable
         protected override void OnKeyDown(KeyEventArgs e)
         {
             if (e.Key is Key.Left or Key.Right or Key.Up or Key.Down or Key.PageUp or Key.PageDown) e.Handled = true;
+        }
+        // A non-left press zStudio leaves unhandled only focuses the view: the base class also hit-tested it, capturing the mouse
+        // on geometry and turning the camera with its own animation when it hit the view cube (zStudio's left click owns the cube).
+        protected override void OnPreviewMouseDown(MouseButtonEventArgs e)
+        {
+            if (e.ChangedButton == MouseButton.Left) base.OnPreviewMouseDown(e);
+            else Focus();
         }
         // Nor on the mouse's Back/Forward buttons (the base class restored its own camera history).
         protected override void OnMouseDown(MouseButtonEventArgs e)

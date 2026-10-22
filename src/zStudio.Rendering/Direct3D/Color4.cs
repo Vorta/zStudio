@@ -2,10 +2,10 @@ using System.Numerics;
 
 namespace zStudio.Rendering.Direct3D;
 
-/// <summary>A linear RGBA colour as the shaders receive it (components are not clamped).</summary>
+/// <summary>An RGBA colour as the shaders receive it: byte / 255 with no gamma conversion (the back buffer is UNorm, not sRGB);
+/// components are not clamped.</summary>
 internal readonly record struct Color4(float Red, float Green, float Blue, float Alpha)
 {
-    public static Color4 FromColor(System.Windows.Media.Color color) => new(color.R / 255f, color.G / 255f, color.B / 255f, color.A / 255f);
     public Vector4 ToVector4() => new(Red, Green, Blue, Alpha);
 }
 
