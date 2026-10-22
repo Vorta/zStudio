@@ -14,7 +14,7 @@ internal static class McpPreviewCheck
     public static int Run(string root)
     {
         root = Path.GetFullPath(root);
-        string settings = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "zStudio", "settings.json");
+        string settings = zStudio.Desktop.StudioSettings.SettingsPath;
         byte[]? originalSettings = File.Exists(settings) ? File.ReadAllBytes(settings) : null;
         string output = Path.Combine(Path.GetTempPath(), "zstudio-mcp-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(output);

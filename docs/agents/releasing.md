@@ -22,7 +22,7 @@
    ```
 
 5. The Release workflow checks tag/version equality and `main` ancestry, restores locked dependencies, builds, tests and packages, then a separate job uploads the verified ZIP and `SHA256SUMS`. Prerelease suffixes create prereleases; ordinary versions become the latest release.
-6. Download the published ZIP into an empty folder, check it against `SHA256SUMS`, verify it, and launch its `zStudio.exe` on a private desktop ([testing](testing.md#environment)). The packaged Blender extension holds the runner's CRLF copies of the sources, so verify a downloaded release from a CRLF worktree of the tag: `git -c core.autocrlf=true worktree add --detach <temp> vX.Y.Z`, run `<temp>/tools/verify-package.ps1 -Directory <extracted> -Archive <zip> -ExpectedVersion X.Y.Z`, then remove the worktree.
+6. Download the published ZIP into an empty folder, check it against `SHA256SUMS`, verify it, and launch its `zStudio.exe` on a private desktop with a private profile ([testing](testing.md#environment)). The packaged Blender extension holds the runner's CRLF copies of the sources, so verify a downloaded release from a CRLF worktree of the tag: `git -c core.autocrlf=true worktree add --detach <temp> vX.Y.Z`, run `<temp>/tools/verify-package.ps1 -Directory <extracted> -Archive <zip> -ExpectedVersion X.Y.Z`, then remove the worktree.
 7. Never move a tag or replace published assets: fixes get a new version. A failed unpublished workflow may be rerun after an external failure; source or workflow changes need a new version once a release exists.
 
 ## Portable package
@@ -35,7 +35,8 @@
 
 ## Local artifacts
 
-- Keep `artifacts/zStudio-win-x64` and its ZIP the latest validated local build. Launch it for the user and for all live GUI/MCP work, including unreleased features; never point the user at `src/**/bin`.
+- Keep `artifacts/zStudio-win-x64` and its ZIP the latest validated local build. It is the owner's build, which the owner may be running: launch it for the user and for live GUI/MCP work on the owner's workspace, including unreleased features; never point the user at `src/**/bin`.
+- Agents' own test runs and package smoke checks never run `artifacts/zStudio-win-x64`: they use their build output or a copy extracted from the ZIP into an empty temporary folder, each with a private profile ([testing](testing.md#environment)).
 - Republish after application changes before handing off or using the changed application; stop running zStudio instances first ([AGENTS.md](../../AGENTS.md#never): publishing needs no asking).
 - Keep no superseded portable folders or ZIPs (in `artifacts`, `.agent` or temporary folders). Reports and checksum sidecars go to the OS temporary folder. A local package refresh is not a release and changes no version.
 

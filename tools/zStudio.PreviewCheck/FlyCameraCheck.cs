@@ -20,7 +20,7 @@ internal static class FlyCameraCheck
     {
         string root = Path.GetFullPath(rootArg), path = Path.Combine(root, "m1", "gamez.zbd");
         byte[] sourceHash = SHA256.HashData(File.ReadAllBytes(path));
-        string settings = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "zStudio", "settings.json");
+        string settings = zStudio.Desktop.StudioSettings.SettingsPath;
         byte[]? oldSettings = File.Exists(settings) ? File.ReadAllBytes(settings) : null;
         string output = Path.Combine(Path.GetTempPath(), "zstudio-freecam-" + DateTime.Now.ToString("yyyyMMdd-HHmmss")); Directory.CreateDirectory(output);
         var app = new App { ShutdownMode = ShutdownMode.OnExplicitShutdown, ProcessCommandLine = false };

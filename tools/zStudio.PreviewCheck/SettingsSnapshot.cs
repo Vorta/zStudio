@@ -1,9 +1,9 @@
 using System.IO;
 
-/// <summary>Keep synthetic windows and catalog generation from changing the user's layout.</summary>
+/// <summary>Keep synthetic windows and catalog generation from changing the settings of the profile in use (PrivateProfile).</summary>
 internal sealed class SettingsSnapshot : IDisposable
 {
-    private readonly string path = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "zStudio", "settings.json");
+    private readonly string path = zStudio.Desktop.StudioSettings.SettingsPath;
     private readonly byte[]? original;
     public SettingsSnapshot() => original = File.Exists(path) ? File.ReadAllBytes(path) : null;
     public void Dispose()

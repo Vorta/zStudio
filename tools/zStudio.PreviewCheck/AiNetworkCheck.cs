@@ -20,7 +20,7 @@ internal static class AiNetworkCheck
     {
         root = Path.GetFullPath(root);
         string output = Path.Combine(Path.GetTempPath(), "zstudio-ai-" + Guid.NewGuid().ToString("N")); Directory.CreateDirectory(output);
-        string settings = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "zStudio", "settings.json");
+        string settings = zStudio.Desktop.StudioSettings.SettingsPath;
         byte[]? savedSettings = File.Exists(settings) ? File.ReadAllBytes(settings) : null;
         var app = new App { ProcessCommandLine = false, ShutdownMode = ShutdownMode.OnExplicitShutdown }; app.InitializeComponent();
         int exit = 0;
