@@ -45,10 +45,9 @@ internal sealed class DeviceCache<T> where T : DeviceResource
 /// <summary>The vertex and index buffers of one <see cref="MeshData"/> (immutable streams) plus its current colour stream.</summary>
 internal sealed class MeshBuffers : DeviceResource
 {
-    // The current colour array's buffer, and the previous one's while that array is still alive elsewhere: swapping a colour
-    // array back (fog, zone colours) reuses its upload without this cache keeping the old array alive.
-    private (Color4[] Source, ID3D11Buffer Buffer)? current;
-    private (WeakReference<Color4[]> Source, ID3D11Buffer Buffer)? previous;
+    // The current colour array's buffer and the previous one's, both held weakly (the node holds its array): swapping a colour
+    // array back (fog, zone colours) reuses its upload without this cache keeping either array alive.
+    private (WeakReference<Color4[]> Source, ID3D11Buffer Buffer)? current, previous;
     public MeshBuffers(D3DGraphics graphics, MeshData mesh) : base(graphics)
     {
         try
@@ -69,20 +68,16 @@ internal sealed class MeshBuffers : DeviceResource
     public ID3D11Buffer? Colors(Color4[]? source)
     {
         if (source is not { Length: > 0 }) return null;
-        if (current is { } c && ReferenceEquals(c.Source, source)) return c.Buffer;
-        if (previous is { } p && p.Source.TryGetTarget(out var old) && ReferenceEquals(old, source))
-        {
-            var swapped = current;
-            current = (source, p.Buffer);
-            previous = swapped is { } s ? (new WeakReference<Color4[]>(s.Source), s.Buffer) : null;
-            return p.Buffer;
-        }
+        if (Holds(current, source)) return current!.Value.Buffer;
+        if (Holds(previous, source)) { (current, previous) = (previous, current); return current!.Value.Buffer; }
         previous?.Buffer.Dispose();
-        previous = current is { } last ? (new WeakReference<Color4[]>(last.Source), last.Buffer) : null;
+        previous = current; current = null;
         var buffer = Graphics.Device.CreateBuffer(source, BindFlags.VertexBuffer, ResourceUsage.Immutable);
-        current = (source, buffer);
+        current = (new WeakReference<Color4[]>(source), buffer);
         return buffer;
     }
+    private static bool Holds((WeakReference<Color4[]> Source, ID3D11Buffer Buffer)? slot, Color4[] source) =>
+        slot is { } held && held.Source.TryGetTarget(out var array) && ReferenceEquals(array, source);
     private protected override void Release()
     {
         Positions?.Dispose(); Normals?.Dispose(); TextureCoordinates?.Dispose(); Indices?.Dispose();
@@ -112,9 +107,11 @@ internal sealed class LineBuffers : DeviceResource
 /// <summary>A node's instance matrices as a per-instance vertex stream.</summary>
 internal sealed class InstanceBuffer : DeviceResource
 {
+    // Held weakly: the node holds its list.
+    private readonly WeakReference<IReadOnlyList<Matrix4x4>> source;
     public InstanceBuffer(D3DGraphics graphics, IReadOnlyList<Matrix4x4> instances) : base(graphics)
     {
-        Source = instances; Count = instances.Count;
+        source = new(instances); Count = instances.Count;
         ReadOnlySpan<Matrix4x4> data = instances switch
         {
             Matrix4x4[] array => array,
@@ -124,8 +121,21 @@ internal sealed class InstanceBuffer : DeviceResource
         try { Buffer = graphics.Device.CreateBuffer(data, BindFlags.VertexBuffer, ResourceUsage.Immutable); }
         catch { Dispose(); throw; }
     }
-    public IReadOnlyList<Matrix4x4> Source { get; }
+    /// <summary>Whether this stream was made from <paramref name="instances"/> (the same list, still the same length).</summary>
+    public bool IsFor(IReadOnlyList<Matrix4x4> instances) => Count == instances.Count && source.TryGetTarget(out var held) && ReferenceEquals(held, instances);
     public int Count { get; }
+    public ID3D11Buffer Buffer { get; } = null!;
+    private protected override void Release() => Buffer?.Dispose();
+}
+
+/// <summary>A dynamic vertex buffer rewritten for each draw.</summary>
+internal sealed class DynamicBuffer : DeviceResource
+{
+    public DynamicBuffer(D3DGraphics graphics, uint bytes) : base(graphics)
+    {
+        try { Buffer = graphics.Device.CreateBuffer(bytes, BindFlags.VertexBuffer, ResourceUsage.Dynamic, CpuAccessFlags.Write); }
+        catch { Dispose(); throw; }
+    }
     public ID3D11Buffer Buffer { get; } = null!;
     private protected override void Release() => Buffer?.Dispose();
 }

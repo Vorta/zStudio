@@ -21,7 +21,6 @@ internal sealed class NavigationAids
 {
     private const float Size = 100, CameraDistance = 20, Near = .01f, Far = 1000, CubeSide = 5;
     private const float AxisLength = 5.5f, AxisDiameter = .6f, AxisHead = 1.7f, LabelDistance = AxisLength + 1.5f;
-    // The axis letters' em size in physical pixels.
     // The axis letters' em size, and how far the glyph's centre sits below the projected label point, in DIPs.
     private const double LabelEm = 12.7;
     private const double LabelDrop = 1.33;
@@ -38,8 +37,7 @@ internal sealed class NavigationAids
             return labels;
         }
     }
-    private ID3D11Buffer? labelQuad;
-    private int labelGeneration;
+    private DynamicBuffer? labelQuad;
 
     /// <summary>The square viewport (physical pixels) of an aid at a relative position and scale on a surface of the given physical size.</summary>
     public static (float X, float Y, float Side) Viewport(double horizontal, double vertical, double scale, float width, float height, double dpiScale)
@@ -122,15 +120,15 @@ internal sealed class NavigationAids
         context.OMSetBlendState(g.AlphaBlend);
     }
 
-    // The axis letters: screen-aligned quads centred on the projected label points, drawn over the arrows.
+    // The axis letters: screen-aligned quads centred on the projected label points, depth tested at those points' depth; the
+    // letters' transparent texels are clipped, so a quad hides nothing beyond its glyph.
     private void DrawLabels(D3DGraphics g, in FrameConstants frame, float side, double dpiScale)
     {
         var context = g.Context;
-        if (labelQuad == null || labelGeneration != g.Generation)
+        if (labelQuad is not { } quadBuffer || !quadBuffer.IsValidFor(g))
         {
             labelQuad?.Dispose();
-            labelQuad = g.Device.CreateBuffer(24u * 4, BindFlags.VertexBuffer, ResourceUsage.Dynamic, CpuAccessFlags.Write);
-            labelGeneration = g.Generation;
+            labelQuad = quadBuffer = new DynamicBuffer(g, 24u * 4);
         }
         Vector3[] anchors = [new(LabelDistance, 0, 0), new(0, LabelDistance, 0), new(0, 0, LabelDistance)];
         var textures = LabelsAt(dpiScale);
@@ -142,7 +140,7 @@ internal sealed class NavigationAids
             var texture = textures[i];
             float hx = texture.Width / side, hy = texture.Height / side;
             float z = Math.Clamp(clip.Z / clip.W, 0, 1);
-            var mapped = context.Map(labelQuad, MapMode.WriteDiscard);
+            var mapped = context.Map(quadBuffer.Buffer, MapMode.WriteDiscard);
             try
             {
                 var quad = mapped.AsSpan<float>(24);
@@ -155,11 +153,11 @@ internal sealed class NavigationAids
                 ];
                 data.CopyTo(quad);
             }
-            finally { context.Unmap(labelQuad, 0); }
+            finally { context.Unmap(quadBuffer.Buffer, 0); }
             g.Write(g.ObjectBuffer, new ObjectConstants { World = Matrix4x4.Identity, Diffuse = LabelColor.ToVector4(), Textured = 1, Unlit = 1 });
             context.IASetInputLayout(g.LabelLayout);
             context.IASetPrimitiveTopology(PrimitiveTopology.TriangleStrip);
-            context.IASetVertexBuffer(0, labelQuad, 24);
+            context.IASetVertexBuffer(0, quadBuffer.Buffer, 24);
             context.VSSetShader(g.VSLabel); context.GSSetShader(null); context.PSSetShader(g.PSLabel);
             context.PSSetShaderResource(0, texture.Resource(g).View); context.PSSetSampler(0, g.LabelSampler);
             context.RSSetState(g.Rasterizer(CullMode.None, 0, true));

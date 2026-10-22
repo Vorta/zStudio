@@ -135,23 +135,31 @@ internal sealed class D3DGraphics : IDisposable
     }
 
     /// <summary>
-    /// A hardware device on the adapter WPF's Direct3D 9Ex surfaces use (its adapter 0, matched by LUID on hybrid-GPU machines),
-    /// or the software rasterizer (WARP). Every shader is shader model 5, so feature level 11_0 is required.
+    /// A hardware device on the adapter WPF's Direct3D 9Ex surfaces use (its adapter 0, matched by LUID on hybrid-GPU machines;
+    /// the default hardware adapter when none matches or that one refuses), or the software rasterizer (WARP). Every shader is
+    /// shader model 5, so feature level 11_0 is required.
     /// </summary>
     public static D3DGraphics Create(bool software)
     {
         FeatureLevel[] levels = [FeatureLevel.Level_11_1, FeatureLevel.Level_11_0];
-        ID3D11Device device; ID3D11DeviceContext context;
-        if (software)
-            D3D11.D3D11CreateDevice(IntPtr.Zero, DriverType.Warp, DeviceCreationFlags.BgraSupport, levels, out device, out context).CheckError();
+        const DeviceCreationFlags flags = DeviceCreationFlags.BgraSupport;
+        ID3D11Device? device = null; ID3D11DeviceContext? context = null;
+        SharpGen.Runtime.Result result = default;
+        bool created = false;
+        if (software) created = (result = D3D11.D3D11CreateDevice(IntPtr.Zero, DriverType.Warp, flags, levels, out device, out context)).Success;
         else
         {
-            using var adapter = PresentationAdapter();
-            if (adapter != null) D3D11.D3D11CreateDevice(adapter, DriverType.Unknown, DeviceCreationFlags.BgraSupport, levels, out device, out context).CheckError();
-            else D3D11.D3D11CreateDevice(IntPtr.Zero, DriverType.Hardware, DeviceCreationFlags.BgraSupport, levels, out device, out context).CheckError();
+            using (var adapter = PresentationAdapter())
+                if (adapter != null) created = (result = D3D11.D3D11CreateDevice(adapter, DriverType.Unknown, flags, levels, out device, out context)).Success;
+            if (!created) created = (result = D3D11.D3D11CreateDevice(IntPtr.Zero, DriverType.Hardware, flags, levels, out device, out context)).Success;
         }
-        try { return new D3DGraphics(device, context, software); }
-        catch { context.Dispose(); device.Dispose(); throw; }
+        // DXGI_ERROR_UNSUPPORTED: the adapter offers none of the requested feature levels.
+        if (!created && (uint)result.Code == 0x887A0004)
+            throw new InvalidOperationException("The 3D preview needs a Direct3D 11 graphics adapter (feature level 11_0); this one does not provide it. Update the graphics driver or use a Direct3D 11 adapter.",
+                new SharpGen.Runtime.SharpGenException(result));
+        result.CheckError();
+        try { return new D3DGraphics(device!, context!, software); }
+        catch { context!.Dispose(); device!.Dispose(); throw; }
     }
 
     // The DXGI adapter with the LUID of Direct3D 9Ex adapter 0 (where the D3DImage surface lives); null when none matches.

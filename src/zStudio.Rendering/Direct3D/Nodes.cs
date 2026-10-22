@@ -268,7 +268,7 @@ internal abstract class GeometryNode : Node
     internal InstanceBuffer? InstanceStream(D3DGraphics graphics)
     {
         if (instances == null) { instanceBuffer?.Dispose(); instanceBuffer = null; return null; }
-        if (instanceBuffer is { } current && current.IsValidFor(graphics) && ReferenceEquals(current.Source, instances) && current.Count == instances.Count) return current;
+        if (instanceBuffer is { } current && current.IsValidFor(graphics) && current.IsFor(instances)) return current;
         instanceBuffer?.Dispose(); instanceBuffer = null;
         return instanceBuffer = new InstanceBuffer(graphics, instances);
     }

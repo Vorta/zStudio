@@ -24,7 +24,9 @@ namespace zStudio.Rendering.Direct3D;
 /// shared with a Direct3D 9Ex surface. Rendering is driven by <see cref="CompositionTarget.Rendering"/> on demand while the
 /// element is visible: a frame renders while one was requested and for six more frames after each request (stale-frame
 /// workaround for the shared surface, and the tail hover refresh relies on). A lost device or front buffer rebuilds everything
-/// (both devices) from retained data; after three recoveries without a frame in between the view fails instead.
+/// (both devices) from retained data; after three recoveries without a frame in between the view fails instead. A resize after a
+/// failure (the window resized, the preview reloaded) or a regained front buffer retries with a fresh budget, recreating the
+/// device when the failed recovery left none or a removed one. A forced frame (a capture) renders while the view is hidden too.
 /// </summary>
 internal sealed class Direct3DView : IDisposable
 {
@@ -100,9 +102,9 @@ internal sealed class Direct3DView : IDisposable
         {
             requestedWidth = width; requestedHeight = height;
             renderWidth = Math.Max(2, (float)(width * dpiScale)); renderHeight = Math.Max(2, (float)(height * dpiScale));
-            failed = false;
             ReleaseTargets();
         }
+        if (failed) Retry();
         CreateTargets();
         InvalidateRender();
     }
@@ -130,7 +132,8 @@ internal sealed class Direct3DView : IDisposable
     /// <summary>Renders a frame when one is due (or <paramref name="force"/>); false when no frame was rendered and presented.</summary>
     public bool RenderFrame(bool force)
     {
-        if (disposed || busy || failed || !Element.IsVisible || owner.Device?.Graphics is not { IsDisposed: false } graphics || owner.Camera is not { } camera
+        // A hidden view renders only when forced (a capture): the panel holding it may be collapsed while its scene stays live.
+        if (disposed || busy || failed || !force && !Element.IsVisible || owner.Device?.Graphics is not { IsDisposed: false } graphics || owner.Camera is not { } camera
             || renderWidth <= 10 || renderHeight <= 10 || !frontBufferAvailable || !force && !updateRequested && updateCounter >= MinimumUpdateCount) return false;
         busy = true;
         bool rendered = false;
@@ -262,15 +265,21 @@ internal sealed class Direct3DView : IDisposable
         ReleaseSurface(device: true);
         if (!available) return;
         // A regained front buffer is a fresh start: an earlier failure may have been the lost session.
-        failed = false;
-        try
-        {
-            var graphics = owner.Device?.Graphics;
-            if (graphics is { IsDisposed: false } && graphics.Device.DeviceRemovedReason.Failure) Recover();
-            else ReleaseTargets();
-        }
-        catch (Exception error) when (error is not OutOfMemoryException and not StackOverflowException) { Fail(error); }
+        ReleaseTargets();
+        Retry();
         InvalidateRender();
+    }
+
+    // A fresh start after a failure or a lost session: the recovery budget is reset, and a device left removed, or none left by
+    // a recovery whose new device could not be created, is recreated.
+    private void Retry()
+    {
+        failed = false; recoveries = 0;
+        if (owner.Device is not { } device) return;
+        bool lost;
+        try { lost = device.Graphics is not { IsDisposed: false } graphics || graphics.Device.DeviceRemovedReason.Failure; }
+        catch (SharpGenException) { lost = true; }
+        if (lost) Recover();
     }
 
     private static bool IsDeviceLost(Exception error, D3DGraphics graphics)
