@@ -67,7 +67,15 @@ public sealed partial class SceneViewport
             this.prepare = prepare; this.resize = resize;
             Loaded += (_, _) => resize();
         }
-        public override void OnApplyTemplate() { base.OnApplyTemplate(); resize(); }
+        public override void OnApplyTemplate()
+        {
+            base.OnApplyTemplate();
+            // Touch acts as the mouse: WPF promotes touch the view leaves unhandled to mouse input. The base template's root
+            // enables manipulation, which would capture touch for the base class's camera gestures and never promote it.
+            if (System.Windows.Media.VisualTreeHelper.GetChildrenCount(this) > 0 && System.Windows.Media.VisualTreeHelper.GetChild(this, 0) is UIElement root)
+                root.IsManipulationEnabled = false;
+            resize();
+        }
         protected override void OnRenderSizeChanged(SizeChangedInfo sizeInfo) { base.OnRenderSizeChanged(sizeInfo); resize(); }
         void IViewport3DX.Update(TimeSpan timeStamp) { base.Update(timeStamp); prepare(timeStamp); }
         public void DrainNavigation(TimeSpan timestamp) => base.Update(timestamp);
@@ -77,18 +85,15 @@ public sealed partial class SceneViewport
         {
             if (e.Key is Key.Left or Key.Right or Key.Up or Key.Down or Key.PageUp or Key.PageDown) e.Handled = true;
         }
-        // Nor on the mouse's Back/Forward buttons (the base class restored its own camera history) or on touch, which the base
-        // class turned into camera manipulation; unhandled touch is promoted to the mouse input zStudio handles.
+        // Nor on the mouse's Back/Forward buttons (the base class restored its own camera history).
         protected override void OnMouseDown(MouseButtonEventArgs e)
         {
             if (e.ChangedButton is MouseButton.XButton1 or MouseButton.XButton2) { e.Handled = true; return; }
             base.OnMouseDown(e);
         }
+        // The base class's own touch handling (its pointer hit tests keyed to the touch device) stays out; promoted mouse input does the rest.
         protected override void OnTouchDown(TouchEventArgs e) { }
         protected override void OnTouchUp(TouchEventArgs e) { }
-        protected override void OnManipulationStarted(ManipulationStartedEventArgs e) { }
-        protected override void OnManipulationDelta(ManipulationDeltaEventArgs e) { }
-        protected override void OnManipulationCompleted(ManipulationCompletedEventArgs e) { }
     }
     private void CameraChanged()
     {
