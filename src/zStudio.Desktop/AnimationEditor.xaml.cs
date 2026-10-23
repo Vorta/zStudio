@@ -112,7 +112,8 @@ public partial class AnimationEditor : FieldEditor, IDisposable
         {
             token.ThrowIfCancellationRequested();
             var loaded = await document.GetAnimationContextAsync(resolver, token, worldPath, SelectedDifficulty);
-            if (generation != contextGeneration || disposed) return; context = loaded; await ConfigureMissionsAsync(token);
+            if (generation != contextGeneration || disposed) return; context = loaded;
+            if (document.SourceWorld == null) await ConfigureMissionsAsync(token);
             changing = true; Lod.ItemsSource = SceneLods.Choices(context.Lods.Count()); Lod.SelectedIndex = 0; changing = false;
             token.ThrowIfCancellationRequested(); player = CreatePlayer(token: token); frame = player.Frame(token);
             await UpdateDurationAsync(token);

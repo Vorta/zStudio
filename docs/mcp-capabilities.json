@@ -112,7 +112,7 @@
         "zstudio_scene_properties",
         "zstudio_properties_open"
       ],
-      "note": "A source map's Pickups section always holds Weapons, Ammo and Other (scene_tree category pickupGroup, sectionRow group/count/shown; hide/show/frame, never select), with a row per catalog type inside each under Group by type (scene_options pickupsByType; category pickupType). Pickup rows read as the manual-based short name and a per-type number (Label ERFPG #1); a weapon pickup shows the weapon's render, ammo, health and technology their HUD icons. scene_tree exposes pickupType, pickupKind, pickupGroup, pickupNumber, pickupShortName, pickupName (manual name), instanceName (null on other-difficulty rows) and pickupTemplate from the same catalog classification, and null for non-pickup rows; search matches every word in names, kinds and catalog/game names. Lazy hierarchy rows, bound expansion/selection and viewport reveal share context-scoped occurrence identities, source provenance and pending-draft guards. Source rows expose sourceFile/gltfNode/sourceOccurrence and optional compiledNode. Authored groups removed by compilation remain read-only sourceGroup rows with null node and selectionOwner; whole-reference owners retain framing; their editor-only Parts are MCP-only (source_map_parts). Preview hierarchy is stable during animation; stored nodes are the fallback. Motion previews scope tree/enumeration/selection/Properties/node framing to the selected assembly and retain original library indices. Expand/collapse/reveal only change presentation. MW3 mission labels use 128-character prefixes with actor NameCharacters/NameTruncated and node metadata name_characters/name_truncated, also available in scene_nodes, scene_properties and pinned Properties. Cards disclose shortened labels; original AIV names and instance identities remain intact. In a source map the World tree adds section rows (scene_tree sectionRow): Zones, AI Networks and Animations (definitions) list the map's zones, AI networks and .zad definitions; zones and networks are shown one by one with their eyes (all hidden at first), the Zones, AI Networks, AI Vehicles and Pickups rows' master eyes show or hide everything below them, and selecting one opens its card in the docked Properties pane (zone label: source_zone_label; network header: source_ai_network; definitions are read-only and outline what they bind). preview_state sections reports the eyes, emphasis, outlines and selection; drafts/resolve_drafts target section covers the card's pending input. Keyboard: Up/Down, Home/End and Page Up/Down move through every shown row (a selectable row becomes the selection; section, folder, file, pass and note rows only take focus), Left/Right reach the row's buttons, Space or Enter opens or closes a row with children or presses the focused button, Escape returns from a button to its row."
+      "note": "A source map's Pickups section always holds Weapons, Ammo and Other (scene_tree category pickupGroup, sectionRow group/count/shown; hide/show/frame, never select), with a row per catalog type inside each under Group by type (scene_options pickupsByType; category pickupType). Pickup rows read as the manual-based short name and a per-type number (Label ERFPG #1); a weapon pickup shows the weapon's render, ammo, health and technology their HUD icons. scene_tree exposes pickupType, pickupKind, pickupGroup, pickupNumber, pickupShortName, pickupName (manual name), instanceName (null on other-difficulty rows) and pickupTemplate from the same catalog classification, and null for non-pickup rows; search matches every word in names, kinds and catalog/game names. Lazy hierarchy rows, bound expansion/selection and viewport reveal share context-scoped occurrence identities, source provenance and pending-draft guards. Source rows expose sourceFile/gltfNode/sourceOccurrence and optional compiledNode. Authored groups removed by compilation remain read-only sourceGroup rows with null node and selectionOwner; whole-reference owners retain framing; their editor-only Parts are MCP-only (source_map_parts). Preview hierarchy is stable during animation; stored nodes are the fallback. Motion previews scope tree/enumeration/selection/Properties/node framing to the selected assembly and retain original library indices. Expand/collapse/reveal only change presentation. MW3 mission labels use 128-character prefixes with actor NameCharacters/NameTruncated and node metadata name_characters/name_truncated, also available in scene_nodes, scene_properties and pinned Properties. Cards disclose shortened labels; original AIV names and instance identities remain intact. In a source map the World tree adds section rows (scene_tree sectionRow): Zones, AI Networks and Animations list the map's zones, AI networks and .zad definitions; zones and networks are shown one by one with their eyes (all hidden at first), the Zones, AI Networks, AI Vehicles and Pickups rows' master eyes show or hide everything below them, and selecting one opens its card in the docked Properties pane (zone label: source_zone_label; network header: source_ai_network; definitions edit existing events, activation and prerequisites through source_animation and show motion paths through animation_paths). preview_state sections reports the eyes, emphasis, outlines and selection; drafts/resolve_drafts target section covers the card's pending input. Keyboard: Up/Down, Home/End and Page Up/Down move through every shown row (a selectable row becomes the selection; section, folder, file, pass and note rows only take focus), Left/Right reach the row's buttons, Space or Enter opens or closes a row with children or presses the focused button, Escape returns from a button to its row."
     },
     {
       "gui": "MotionEditor:Controls",
@@ -170,6 +170,8 @@
     {
       "gui": "SourceSectionCard:Fields",
       "tools": [
+        "zstudio_source_animation",
+        "zstudio_animation_paths",
         "zstudio_scene_tree",
         "zstudio_source_zone_label",
         "zstudio_source_zone_tool",
@@ -178,7 +180,12 @@
         "zstudio_resolve_drafts",
         "zstudio_preview_state"
       ],
-      "note": "Selecting a zone, AI network or animation definition in the World tree docks its card as the Properties pane (scene_tree select; properties also focuses its first field; Alt+Enter and F2 focus it). A zone's label and a network's header fields are one draft (drafts/resolve_drafts target section) with inline validation: Enter or Apply accepts one undoable change (source_zone_label; source_ai_network edit with the changed keys), Revert or Escape discards it, and selecting elsewhere, saving or closing asks first. A network's card names its fields as the developers' Net Edit dialog does (Attack Radius, Pursuit Radius Min and Max, Buddies Attack…) and says what each does in play, following the chosen type and strategy; source_ai_network read returns each field's label and stored values, and the section draft (drafts target section) reports each row's label, help line, hint, inactive and warning. Store it (shown while Buddies Attack is on in the file without Buddies Activate, which the game then ignores) checks Buddies Activate in the draft; MCP stores it with source_ai_network activate_buddy 1. Paint with this zone engages Edit zones with that zone (source_zone_tool engage). A definition's card is read-only; its Bound to rows select the objects it binds (scene_tree select on their rows), which preview_state sections.outlines reports. Close (Esc) clears the selection."
+      "note": "Selecting a zone, AI network or animation definition in the World tree docks its card as the Properties pane (scene_tree select; properties also focuses its first field; Alt+Enter and F2 focus it). A zone's label and a network's header fields are one draft (drafts/resolve_drafts target section) with inline validation: Enter or Apply accepts one undoable change (source_zone_label; source_ai_network edit with the changed keys), Revert or Escape discards it, and selecting elsewhere, saving or closing asks first. A network's card names its fields as the developers' Net Edit dialog does (Attack Radius, Pursuit Radius Min and Max, Buddies Attack…) and says what each does in play, following the chosen type and strategy; source_ai_network read returns each field's label and stored values, and the section draft (drafts target section) reports each row's label, help line, hint, inactive and warning. Store it (shown while Buddies Attack is on in the file without Buddies Activate, which the game then ignores) checks Buddies Activate in the draft; MCP stores it with source_ai_network activate_buddy 1. Paint with this zone engages Edit zones with that zone (source_zone_tool engage). A definition's card edits existing source events, activation and prerequisites; its Bound to rows select the objects it binds (scene_tree select on their rows), which preview_state sections.outlines reports. Close (Esc) clears the selection."
+    },
+    {
+      "gui": "MainWindow.SourceAnimations:Controls",
+      "tools": ["zstudio_source_animation", "zstudio_animation_paths", "zstudio_animation_options", "zstudio_animation_transport", "zstudio_scene_tree", "zstudio_preview_state"],
+      "note": "Animation definition sequence/event selection and typed fields share source_animation read/begin/set/apply/cancel with revision and draft token guards. Binding selection, Show/Hide/Frame paths and Preview/Exit use animation_paths with definition and exact entry. Range hosts the existing animation preview setup in Properties. Animation links on object cards select the canonical definition and exact recipient entry; source_animation begin plus animation_paths analyze names the same target. Path guides are presentation only; dispatch traces and sampled paths are paged by snapshot. The VTOL Drop windows section shares animation_paths operations without definition and its own checked window snapshot."
     },
     {
       "gui": "TerrainPropertiesEditor:Fields",
@@ -295,14 +302,14 @@
     {
       "gui": "MainWindow.Parachutes:ParachuteKeyboard",
       "tools": [
-        "zstudio_parachute"
+        "zstudio_animation_paths"
       ],
       "note": "Enter confirms and Escape cancels the active Parachute draft; native controls retain their keyboard behavior. Escape also cancels an in-progress flight analysis."
     },
     {
       "gui": "SceneViewport.Parachutes:HandleParachuteDown",
       "tools": [
-        "zstudio_parachute"
+        "zstudio_animation_paths"
       ],
       "note": "Exact window selection and path movement emit ordered segment/fraction identities. Preview moves all release markers of one window, preserving separate visits at path crossings. No MCP operation captures physical input."
     },
@@ -1238,21 +1245,21 @@
     {
       "gui": "MainWindow.xaml:ParachuteActionClick",
       "tools": [
-        "zstudio_parachute"
+        "zstudio_animation_paths"
       ],
       "note": "Shared Parachute flight/window selection, numeric or pointer draft, explicit confirm/cancel and project history/save. A compiled world's flights are shown and analyzed read only: its windows are neither selected nor moved. A selected unavailable flight exposes analysisRefusal while other candidates remain selectable. Samples/releases use offset/limit without query."
     },
     {
       "gui": "MainWindow.xaml:ParachuteSelectionChanged",
       "tools": [
-        "zstudio_parachute"
+        "zstudio_animation_paths"
       ],
       "note": "Shared Parachute flight/window selection, numeric or pointer draft, explicit confirm/cancel and project history/save. A compiled world's flights are shown and analyzed read only: its windows are neither selected nor moved."
     },
     {
       "gui": "MainWindow.xaml:ParachuteInputChanged",
       "tools": [
-        "zstudio_parachute"
+        "zstudio_animation_paths"
       ],
       "note": "Shared Parachute flight/window selection, numeric or pointer draft, explicit confirm/cancel and project history/save. A compiled world's flights are shown and analyzed read only: its windows are neither selected nor moved."
     },

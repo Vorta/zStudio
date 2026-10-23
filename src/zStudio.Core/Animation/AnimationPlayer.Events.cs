@@ -6,6 +6,7 @@ public sealed partial class AnimationPlayer
 {
     private int Execute(Instance instance, Sequence sequence, AnimationEvent ev, bool starting, ref float remaining)
     {
+        ObservePathDiscontinuity(instance, ev, starting);
         if (initializingScene)
         {
             // Initialization recovers poses only. Never create audio, effects, or
@@ -253,6 +254,7 @@ public sealed partial class AnimationPlayer
         for (int i = 0; i < frames.Count; i++)
         {
             var frame = frames[i]; if (state.EventElapsed < frame.Start) break;
+            ObserveKeyframeCut(node, frames, i, state.EventElapsed, remaining);
             float entry = Math.Max(cursor, frame.Start); bool finished = state.EventElapsed > frame.End;
             float time = finished ? frame.End - entry : state.EventElapsed - entry;
             if (finished) cursor = frame.End;

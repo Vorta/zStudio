@@ -202,6 +202,7 @@ public partial class MainWindow
         RegisterAiCommands(registry);
         RegisterAiPathCommands(registry);
         RegisterParachuteCommands(registry);
+        RegisterSourceAnimationCommands(registry);
         RegisterValveCommands(registry);
         RegisterInspectionCommands(registry);
         RegisterSceneTreeCommand(registry);

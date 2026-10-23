@@ -2,6 +2,14 @@
 
 Version numbers follow `MAJOR.MINOR.PATCH`; the 0.x series is under active development. Release tags and downloadable archives use the same version.
 
+## 0.9.8 — Unreleased
+
+- **Animations in the map editor.** The World tree has one **Animations** section, containing the objects placed by animations and the mission/common definitions. Selecting a definition opens its editor in Properties and shows its evaluated motion paths. Object cards link to definitions that affect the selected object.
+- **Events and activation.** Edit existing event operands, clock thresholds, sequence activation, definition activation and prerequisites in a shared Apply/Revert draft. Edits preserve source comments and formatting, are checked against every map that includes the source file, and become one project undo step. Keyframe scripts and event order remain read-only.
+- **Paths and preview.** Motion guides include child targets and cameras, direction marks and breaks at discontinuous transforms. An explicit Preview action uses the animation transport inside the source map; Range opens preview setup in Properties. Analysis is bounded and reports partial or unavailable results.
+- **Drop windows in Properties.** Selecting a flight shows its existing route and release markers, with drop-window timing and Move along path controls at the top of its animation card. The floating panel and top **Show → VTOL route** button are removed from this workflow.
+- MCP adds `zstudio_source_animation` for the shared definition draft and replaces `zstudio_parachute` with `zstudio_animation_paths` for definition paths, source preview and existing drop-window operations. `preview_state.animationPaths` reports the analyzed definitions and snapshots.
+
 ## 0.9.7 — 2026-10-23
 
 - **One file.** zStudio is now a single, compressed `zStudio.exe` with .NET included, instead of `zStudio.exe` and a `dependencies` folder (459 files in all). The ZIP holds only `zStudio.exe`, `LICENSE`, `THIRD-PARTY-NOTICES.md` (now with every licence text) and the Blender extension `zStudio-Blender-extension-0.9.7.zip`, and shrinks from 79 MB to 72 MB. The first start of each version unpacks the WPF native libraries (about 8 MB) to `%TEMP%\.net\zStudio\`. Decompressing the program in memory makes a start about 0.2 s slower than 0.9.6 and uses about 70 MB more memory. Replace an earlier version's folder rather than extracting over it: its `dependencies` folder is no longer used.

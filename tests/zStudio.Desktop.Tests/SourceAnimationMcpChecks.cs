@@ -1,0 +1,139 @@
+using System.IO;
+using System.IO.Pipes;
+using System.Reflection;
+using System.Text.Json.Nodes;
+using System.Windows;
+using System.Windows.Automation;
+using System.Windows.Controls;
+using ModelContextProtocol.Client;
+using ModelContextProtocol.Protocol;
+using zStudio.Core.Sources;
+using zStudio.Mcp;
+using zStudio.Tests;
+using Xunit;
+
+namespace zStudio.Desktop.Tests;
+
+internal static class SourceAnimationMcpChecks
+{
+    internal static async Task Run()
+    {
+        using var fixture = new SourceWorldFixture();
+        fixture.Write(VtolDropFixture.Root, VtolDropFixture.Definitions());
+        fixture.Write("data/m1/zrdr/flight.zan", VtolDropFixture.MotionScript);
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(180));
+        var token = deadline.Token;
+        var main = new MainWindow { Left = -12000, ShowInTaskbar = false }; main.Show();
+        const BindingFlags flags = BindingFlags.Instance | BindingFlags.NonPublic;
+        try
+        {
+            await using var host = new LocalMcpHost(main.Commands, "test");
+            await using var pipe = new NamedPipeClientStream(".", host.Instance.Pipe, PipeDirection.InOut, PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
+            await pipe.ConnectAsync(token);
+            await using var client = await McpClient.CreateAsync(new StreamClientTransport(pipe, pipe), cancellationToken: token);
+            await main.ViewModel.OpenRootAsync(fixture.Project, token);
+            await Job("source_world_open", new() { ["mission"] = "m1" });
+            await Preview();
+            var doc = main.ViewModel.Documents.Single(d => d.SourceWorld != null);
+            var records = (await Animation("read"))["items"]!.AsArray();
+            var activation = records[0]!["Fields"]!.AsArray().Single(f => f!["Key"]!.GetValue<string>() == "ACTIVATION")!;
+            string field = activation["Id"]!.GetValue<string>();
+            await Animation("begin");
+            var card = (SourceSectionCard)typeof(MainWindow).GetField("sectionCard", flags)!.GetValue(main)!;
+            await Animation("set", new() { ["changes"] = new[] { new { field, values = new[] { "ON_STARTUP" } } } });
+            Assert.True(card.HasDraft);
+            string draft = card.DraftToken;
+            main.SetPickupsByType(true);
+            Assert.True(card.HasDraft); Assert.Equal(draft, card.DraftToken);
+            await Animation("cancel", new() { ["token"] = draft });
+            Assert.False(card.HasDraft);
+            var controls = Descendants(card).OfType<ComboBox>().Where(c => AutomationProperties.GetName(c) == "Activation").ToArray();
+            Assert.Contains(controls, c => c.SelectedItem as string == "ON_CALL");
+            await Animation("set", new() { ["changes"] = new[] { new { field, values = new[] { "ON_STARTUP" } } } });
+            await Animation("apply", new() { ["token"] = card.DraftToken });
+            await Preview();
+            doc = main.ViewModel.Documents.Single(d => d.SourceWorld != null);
+            Assert.True(doc.IsDirty); Assert.Equal(1, doc.SourceWorld!.Workspace.UndoCount);
+            Assert.Contains("ON_STARTUP", System.Text.Encoding.Latin1.GetString(doc.SourceWorld.Workspace.Read(VtolDropFixture.Root)!));
+            Assert.Equal(VtolDropFixture.Definitions(), File.ReadAllText(fixture.Path(VtolDropFixture.Root)));
+            await Call("undo_redo", new() { ["document"] = doc.SessionId.ToString(), ["revision"] = doc.Revision, ["action"] = "undo" });
+            await Preview();
+            doc = main.ViewModel.Documents.Single(d => d.SourceWorld != null);
+            Assert.False(doc.IsDirty);
+            await Animation("begin");
+            var current = await Call("state", new());
+            var paths = await Job("animation_paths", new() { ["document"] = doc.SessionId.ToString(), ["revision"] = doc.Revision, ["preview"] = current["preview"]!.GetValue<string>(), ["definition"] = 0, ["action"] = "state" });
+            Assert.NotEmpty(paths["paths"]!["definitions"]!.AsArray());
+            var panel = (FrameworkElement)main.FindName("ParachutePanel");
+            Assert.Contains(panel, Descendants(card));
+            // A viewport pick while the specialized flight analysis is pending owns the newer selection.
+            TaskCompletionSource analyzing = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            using (var release = new SemaphoreSlim(0))
+            {
+                main.ParachuteAnalysisPreparing = ct => { analyzing.TrySetResult(); release.Wait(ct); };
+                try
+                {
+                    current = await Call("state", new());
+                    var pending = await Call("animation_paths", new() { ["document"] = doc.SessionId.ToString(), ["revision"] = doc.Revision, ["preview"] = current["preview"]!.GetValue<string>(), ["definition"] = 0, ["action"] = "analyze" });
+                    await analyzing.Task.WaitAsync(token);
+                    var viewport = Assert.IsType<zStudio.Rendering.SceneViewport>(((ContentControl)main.FindName("SceneHost")).Content);
+                    int ground = viewport.PreviewScene!.Nodes.Single(n => n.Name == "ground").Index;
+                    Assert.True(viewport.SelectInspectionNode(ground));
+                    release.Release();
+                    string operation = pending["id"]!.GetValue<string>();
+                    while (pending["State"]!.GetValue<string>() is "queued" or "running") { await Task.Delay(10, token); pending = await Call("operation", new() { ["id"] = operation }); }
+                    Assert.NotEqual("completed", pending["State"]!.GetValue<string>());
+                    Assert.Equal(ground, viewport.SelectedInspection!.SelectionNode);
+                }
+                finally { release.Release(); main.ParachuteAnalysisPreparing = null; }
+            }
+            current = await Call("state", new());
+            await Job("animation_paths", new() { ["document"] = doc.SessionId.ToString(), ["revision"] = doc.Revision, ["preview"] = current["preview"]!.GetValue<string>(), ["definition"] = 0, ["action"] = "preview" });
+            var editor = Assert.IsType<AnimationEditor>(((ContentControl)main.FindName("AnimationHost")).Content);
+            Assert.IsType<DefinitionEntry>(((SceneTreeModel)typeof(MainWindow).GetField("sceneTree", flags)!.GetValue(main)!).Selected!.Section);
+            var range = Descendants(editor).OfType<Button>().Single(b => b.Content as string == "Range…");
+            range.RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent, range));
+            Assert.NotNull(editor.PreviewSetupView.Parent);
+            main.SetPickupsByType(false);
+            Assert.True(((TreeView)main.FindName("DocumentSceneTree")).IsEnabled);
+            current = await Call("state", new());
+            await Job("scene_options", new() { ["preview"] = current["preview"]!.GetValue<string>(), ["changes"] = new { wireframe = true, textures = false, faceOrientation = true } });
+            Assert.True(editor.Viewport.Wireframe); Assert.True(editor.Viewport.FaceOrientationEnabled);
+            typeof(MainWindow).GetMethod("ClearSectionSelection", flags)!.Invoke(main, []);
+            Assert.Null(((ContentControl)main.FindName("AnimationHost")).Content);
+
+            Dictionary<string, object?> Args(string action, Dictionary<string, object?>? extra = null)
+            { var args = extra ?? new(); args["document"] = doc.SessionId.ToString(); args["revision"] = doc.Revision; args["definition"] = 0; args["action"] = action; return args; }
+            Task<JsonNode> Animation(string action, Dictionary<string, object?>? extra = null) => Job("source_animation", Args(action, extra));
+            async Task Preview() => await ((Task)typeof(MainWindow).GetField("previewWork", flags)!.GetValue(main)!).WaitAsync(token);
+            async Task<JsonNode> Call(string name, Dictionary<string, object?> args)
+            {
+                var result = await client.CallToolAsync("zstudio_" + name, args, cancellationToken: token);
+                string text = string.Join(";", result.Content.OfType<TextContentBlock>().Select(c => c.Text));
+                Assert.False(result.IsError == true, name + ": " + text); return JsonNode.Parse(text)!;
+            }
+            async Task<JsonNode> Job(string name, Dictionary<string, object?> args)
+            {
+                var job = await Call(name, args);
+                if (job["State"] == null) return job;
+                string id = job["id"]!.GetValue<string>();
+                while (job["State"]!.GetValue<string>() is "queued" or "running") { await Task.Delay(10, token); job = await Call("operation", new() { ["id"] = id }); }
+                Assert.True(job["State"]!.GetValue<string>() == "completed", job.ToJsonString()); return job["result"]!;
+            }
+        }
+        finally
+        {
+            typeof(MainWindow).GetMethod("CloseParachutes", flags)!.Invoke(main, []);
+            foreach (var document in main.ViewModel.Documents.ToArray()) main.ViewModel.CloseResolved(document);
+            main.Close();
+        }
+    }
+    private static IEnumerable<DependencyObject> Descendants(DependencyObject root)
+    {
+        for (int i = 0; i < System.Windows.Media.VisualTreeHelper.GetChildrenCount(root); i++)
+        {
+            var child = System.Windows.Media.VisualTreeHelper.GetChild(root, i); yield return child;
+            foreach (var descendant in Descendants(child)) yield return descendant;
+        }
+    }
+}

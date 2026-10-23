@@ -20,7 +20,7 @@ public partial class MainWindow
     private readonly HashSet<SceneTreeItem> collapsingSceneRows = [];
     private readonly ConditionalWeakTable<DocumentModel, Dictionary<string, SceneTreeState>> sceneTreeStates = new();
     private SceneViewport? TreeViewport => EmptyPreview.Visibility == Visibility.Collapsed && retiringScene == null ?
-        motion?.Viewport ?? animation?.Viewport ?? (SceneHost.Visibility == Visibility.Visible ? scene : null) : null;
+        sourceAnimationPreview ? scene : motion?.Viewport ?? animation?.Viewport ?? (SceneHost.Visibility == Visibility.Visible ? scene : null) : null;
 
     private void RefreshSceneTree()
     {
@@ -148,6 +148,7 @@ public partial class MainWindow
         RefreshSceneTree();
         string? target = viewport.SelectedInspection?.Target;
         if (target == treeInspectionTarget) return;
+        CancelSourceAnimationSelectionWork();
         treeInspectionTarget = target;
         if (viewport.SelectedInspection is { Node: >= 0 } selected)
         {
@@ -173,6 +174,7 @@ public partial class MainWindow
     private void ClearSceneTreeSelection(SceneViewport viewport)
     {
         if (changingSceneTree || viewport != TreeViewport || shownDocument != ViewModel.SelectedDocument) return;
+        CancelSourceAnimationSelectionWork();
         changingSceneTree = true;
         try { sceneTree?.Select(null); inspectedSceneSource = null; selectedNode = null; treeInspectionTarget = null; }
         finally { changingSceneTree = false; }
@@ -207,6 +209,8 @@ public partial class MainWindow
     }
     private void SelectSceneTreeRow(SceneTreeItem row)
     {
+        if (!selectingAnimationCard && row != sceneTree?.Selected) CancelSourceAnimationSelectionWork();
+        EndSourceAnimationPreview();
         if (row.IsSectionItem) { SelectSectionRow(row); return; }
         if (row.Owner != sceneTree || row.Index is not int node || !row.Selectable || sceneTreeDocument is not { IsDisposed: false } doc)
             throw new StudioCommandException("stale_record", "The tree node is no longer available.");

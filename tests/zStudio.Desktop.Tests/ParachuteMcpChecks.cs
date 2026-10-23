@@ -58,7 +58,7 @@ internal static class ParachuteMcpChecks
             using (var releaseAnalysis = new SemaphoreSlim(0))
             {
                 main.ParachuteAnalysisPreparing = ct => { analyzing.TrySetResult(); Assert.True(releaseAnalysis.Wait(TimeSpan.FromSeconds(20), ct)); };
-                var analysisJob = await Call("parachute", await Arguments("analyze", new() { ["entry"] = state["entry"]!.GetValue<int>() }));
+                var analysisJob = await Call("animation_paths", await Arguments("analyze", new() { ["entry"] = state["entry"]!.GetValue<int>() }));
                 var analysis = AwaitJob(analysisJob, "canceled");
                 try
                 {
@@ -83,7 +83,7 @@ internal static class ParachuteMcpChecks
             main.ParachuteAnalysisPreparing = _ => throw new IOException("Parachute analysis failure fixture");
             try
             {
-                await Job("parachute", await Arguments("analyze", new() { ["entry"] = state["entry"]!.GetValue<int>() }), "failed");
+                await Job("animation_paths", await Arguments("analyze", new() { ["entry"] = state["entry"]!.GetValue<int>() }), "failed");
                 Assert.Equal("VTOL drop-window analysis failed: Parachute analysis failure fixture", main.ViewModel.Status);
             }
             finally { main.ParachuteAnalysisPreparing = null; }
@@ -107,7 +107,7 @@ internal static class ParachuteMcpChecks
             Assert.Equal(displayedReleases, (await PathAction("releases"))["items"]!.ToJsonString());
             Assert.Equal(displayedFirstRelease, ((zStudio.Rendering.ParachuteWindowOverlay)typeof(zStudio.Rendering.SceneViewport)
                 .GetField("parachutePreview", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(Viewport())!).Releases[0].Phase);
-            Assert.Equal("invalid_argument", (await Job("parachute", await Arguments("confirm", new() { ["token"] = draft }), "failed"))["code"]!.GetValue<string>());
+            Assert.Equal("invalid_argument", (await Job("animation_paths", await Arguments("confirm", new() { ["token"] = draft }), "failed"))["code"]!.GetValue<string>());
             ((TextBox)main.FindName("ParachuteStart")).Text = "-";
             state = (await State())!;
             Assert.False(state["draft"]!["ready"]!.GetValue<bool>());
@@ -123,7 +123,7 @@ internal static class ParachuteMcpChecks
             {
                 Viewport().SetParachutePointerMove(true);
                 main.SourceEditPreparing = ct => { preparing.TrySetResult(); Assert.True(release.Wait(TimeSpan.FromSeconds(20), ct)); };
-                var canceled = Job("parachute", await Arguments("confirm", new() { ["token"] = draft }), "failed");
+                var canceled = Job("animation_paths", await Arguments("confirm", new() { ["token"] = draft }), "failed");
                 try
                 {
                     var first = await Task.WhenAny(preparing.Task, canceled).WaitAsync(token);
@@ -182,7 +182,7 @@ internal static class ParachuteMcpChecks
             main.SourceEditPreparing = _ => throw new IOException("Parachute source preparation failure fixture");
             try
             {
-                var failed = await Job("parachute", await Arguments("confirm", new() { ["token"] = draft }), "failed");
+                var failed = await Job("animation_paths", await Arguments("confirm", new() { ["token"] = draft }), "failed");
                 Assert.Equal("io_failed", failed["code"]!.GetValue<string>());
                 Assert.Equal("VTOL drop-window move failed: Parachute source preparation failure fixture", main.ViewModel.Status);
                 Assert.Equal(draft, (await State())!["draft"]!["token"]!.GetValue<string>());
@@ -199,7 +199,7 @@ internal static class ParachuteMcpChecks
             main.PreparingSourceWorldModel = _ => throw new InvalidDataException("Parachute rebuild failure fixture");
             try
             {
-                var failed = await Job("parachute", await Arguments("confirm", new() { ["token"] = draft }), "failed");
+                var failed = await Job("animation_paths", await Arguments("confirm", new() { ["token"] = draft }), "failed");
                 Assert.Equal("build_failed", failed["code"]!.GetValue<string>());
                 Assert.Contains("was reverted", main.ViewModel.Status);
                 Assert.False(world.IsDisposed); Assert.False(world.IsDirty); Assert.True(world.Revision > revisionBeforeFailure);
@@ -273,8 +273,8 @@ internal static class ParachuteMcpChecks
             // A compiled world's drop windows are shown and analyzed, never selected or moved.
             Assert.Null(state["selected"]);
             string compiledWindow = state["windows"]![0]!["id"]!.GetValue<string>();
-            Assert.Equal("read_only", (await Job("parachute", await Arguments("select", new() { ["window"] = compiledWindow }), "failed"))["code"]!.GetValue<string>());
-            Assert.Equal("read_only", (await Job("parachute", await Arguments("begin"), "failed"))["code"]!.GetValue<string>());
+            Assert.Equal("read_only", (await Job("animation_paths", await Arguments("select", new() { ["window"] = compiledWindow }), "failed"))["code"]!.GetValue<string>());
+            Assert.Equal("read_only", (await Job("animation_paths", await Arguments("begin"), "failed"))["code"]!.GetValue<string>());
             Assert.False(((ComboBox)main.FindName("ParachuteWindows")).IsEnabled);
             Assert.False(owner.IsDirty); Assert.False(world.IsDirty);
 
@@ -307,7 +307,7 @@ internal static class ParachuteMcpChecks
             Assert.NotNull(state["analysisRefusal"]); Assert.Equal(0, state["sampleCount"]!.GetValue<int>());
             Assert.StartsWith("VTOL flight unavailable:", main.ViewModel.Status);
             Assert.Equal(0, state["releaseCount"]!.GetValue<int>()); Assert.Null(state["windows"]);
-            var unsupportedQuery = await client.CallToolAsync("zstudio_parachute", await Arguments("samples", new() { ["query"] = "ignored" }), cancellationToken: token);
+            var unsupportedQuery = await client.CallToolAsync("zstudio_animation_paths", await Arguments("samples", new() { ["query"] = "ignored" }), cancellationToken: token);
             Assert.True(unsupportedQuery.IsError);
             await PathAction("hide");
             Assert.Equal("VTOL drop windows hidden.", main.ViewModel.Status);
@@ -359,7 +359,7 @@ internal static class ParachuteMcpChecks
                 if (action != "show") args["snapshot"] = (await State())!["snapshot"]!.GetValue<string>();
                 return args;
             }
-            async Task<JsonNode> PathAction(string action, Dictionary<string, object?>? extra = null) => await Job("parachute", await Arguments(action, extra));
+            async Task<JsonNode> PathAction(string action, Dictionary<string, object?>? extra = null) => await Job("animation_paths", await Arguments(action, extra));
             void Click(string action)
             {
                 var panel = (DependencyObject)main.FindName("ParachutePanel");

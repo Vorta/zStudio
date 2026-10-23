@@ -136,6 +136,7 @@ public partial class MainWindow : Window
     {
         SceneToolbar.IsEnabled = enabled;
         foreach (var part in new FrameworkElement[] { SourcePickers, SourceCameraGroup, SourceDisplayGroup, SourceOverlayGroup, SourceShowGroup, SourceZoneOverlayItems }) part.IsEnabled = enabled;
+        if (sourceAnimationPreview) UpdateSourceAnimationControls();
     }
     /// <summary>
     /// A failure the user must see: in Problems (and Diagnostics in a map), not only in the status, which a source map's
@@ -709,7 +710,11 @@ public partial class MainWindow : Window
     }
     private string? PreferredPack => (TexturePackCombo.SelectedItem as PackChoice)?.Path;
     private async void SceneSourceChanged(object sender, RoutedEventArgs e) { if (ready && !updating && SceneHost.Visibility == Visibility.Visible && ViewModel.SelectedDocument is { } doc && shownAsset != null) await ShowAsset(doc, shownAsset); }
-    private void ApplySceneOptions() { scene?.SetFaceOrientation(FaceOrientation.IsChecked == true && !ZoneToolEngaged); scene?.SetWireframe(Wireframe.IsChecked == true); scene?.SetTextured(TexturesEnabled.IsChecked == true); scene?.SetBounds(BoundsEnabled.IsChecked == true); ApplyWorldHighlight(); ApplyAiOptions(); }
+    private void ApplySceneOptions()
+    {
+        if (sourceAnimationPreview && animation != null) { animation.ApplySourceMapDisplay(Wireframe.IsChecked == true, TexturesEnabled.IsChecked == true, BoundsEnabled.IsChecked == true, FaceOrientation.IsChecked == true); return; }
+        scene?.SetFaceOrientation(FaceOrientation.IsChecked == true && !ZoneToolEngaged); scene?.SetWireframe(Wireframe.IsChecked == true); scene?.SetTextured(TexturesEnabled.IsChecked == true); scene?.SetBounds(BoundsEnabled.IsChecked == true); ApplyWorldHighlight(); ApplyAiOptions();
+    }
     private void SceneOptionsChanged(object sender, RoutedEventArgs e) { if (ready) ApplySceneOptions(); }
     private void FrameSceneClick(object sender, RoutedEventArgs e) => RunCameraNavigation("frameAsset");
     private void IsolateClick(object sender, RoutedEventArgs e)

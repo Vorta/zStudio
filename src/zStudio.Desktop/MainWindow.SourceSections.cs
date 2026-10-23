@@ -48,6 +48,7 @@ public partial class MainWindow : ISourceSectionState
     bool ISourceSectionState.ZoneShown(byte zone) => shownZones.Contains(zone);
     bool ISourceSectionState.AnyNetworkShown => shownNetworks.Count > 0;
     bool ISourceSectionState.NetworkShown(string network) => shownNetworks.Contains(network);
+    bool ISourceSectionState.AnimationShown(int definition) => shownAnimationPaths.Contains(definition);
     bool ISourceSectionState.MasterShown(string section) => MasterShown(section);
     private bool MasterShown(string section) => masterShown.TryGetValue(section, out bool shown) ? shown : InitialMasters.TryGetValue(section, out bool initial) ? initial : section.StartsWith("puppies:", StringComparison.Ordinal);
 
@@ -280,6 +281,11 @@ public partial class MainWindow : ISourceSectionState
             default:
                 switch (row.Section)
                 {
+                    case DefinitionEntry definition:
+                        if (hide ?? shownAnimationPaths.Contains(definition.Definition.Index)) HideSourceAnimationPaths(definition.Definition.Index);
+                        else if (shownDocument is { } document && definition.Definition.Entries.Count > 0)
+                            _ = ReportUi(() => AnalyzeSourceAnimationAsync(document, definition.Definition.Index, definition.Definition.Entries[0], null, CancellationToken.None));
+                        break;
                     case ZoneEntry zone:
                         if (ZoneToolEngaged) throw new StudioCommandException("busy", "Zone colours are paused while Edit zones is on.");
                         if (!zone.Zone.Used) throw new StudioCommandException("unsupported", "No polygon or object uses this zone: it has no colour to show.");
@@ -418,6 +424,8 @@ public partial class MainWindow : ISourceSectionState
     /// </summary>
     private void SelectSectionRow(SceneTreeItem row, bool restoring = false)
     {
+        if (!restoring && !selectingAnimationCard && row != sceneTree?.Selected) CancelSourceAnimationSelectionWork();
+        if (!restoring) EndSourceAnimationPreview();
         if (row.Owner != sceneTree || !row.IsSectionItem || sceneTreeDocument is not { IsDisposed: false } doc)
             throw new StudioCommandException("stale_record", "The tree row is no longer available.");
         var viewport = sceneTree.IsPreview ? TreeViewport : null;
@@ -460,7 +468,9 @@ public partial class MainWindow : ISourceSectionState
     private bool ClearSectionSelection()
     {
         if (SectionSelection == null) return false;
-        if (!ResolveSectionDraft()) return true;
+        if (!ResolveSelectionDrafts()) return true;
+        CancelSourceAnimationSelectionWork();
+        EndSourceAnimationPreview();
         changingSceneTree = true;
         try { sceneTree!.Select(null); }
         finally { changingSceneTree = false; }
@@ -489,6 +499,12 @@ public partial class MainWindow : ISourceSectionState
             if (sectionCard.Document is not { IsDisposed: false } doc) throw new StudioCommandException("stale_document", "The map was closed.");
             await EditNetworkAsync(LiveDocument(doc), network, changes, CancellationToken.None, committingSection: true);
         };
+        sectionCard.ApplyAnimation = async (definition, changes) =>
+        {
+            if (sectionCard.Document is not { IsDisposed: false } doc) throw new StudioCommandException("stale_document", "The map was closed.");
+            EndSourceAnimationPreview();
+            await EditSourceAnimationAsync(LiveDocument(doc), definition, changes, CancellationToken.None, committingSection: true);
+        };
         sectionCard.PaintZone = zone => { if (sectionCard.Document is { IsDisposed: false } doc) RunZoneTool(() => EngageZoneTool(LiveDocument(doc), erase: false, zone: zone)); };
         sectionCard.SelectObject = row =>
         {
@@ -496,7 +512,7 @@ public partial class MainWindow : ISourceSectionState
             try { SelectSceneTreeRow(found); }
             catch (StudioCommandException ex) { Report(ex); }
         };
-        sectionCard.DraftChanged += UpdateDocumentCommands;
+        sectionCard.DraftChanged += () => { if (sectionCard.HasDraft) { EndSourceAnimationPreview(); sourcePathLoading?.Cancel(); } refreshAnimationPathControls?.Invoke(); UpdateDocumentCommands(); };
         return sectionCard;
     }
     /// <summary>Shows a section row's card (again, after an edit published a new tree: the draft stays with its zone or network).</summary>
@@ -517,12 +533,15 @@ public partial class MainWindow : ISourceSectionState
                 card.ShowNetwork(doc, network.Network, header, text);
                 break;
             case DefinitionEntry definition:
+                if (card.ShowsAnimation(doc, definition)) break;
+                if (selectingAnimationCard) break;
                 var projection = sceneTree?.Projection;
                 int[] roots = sceneTree?.Sections?.DefinitionRoots.GetValueOrDefault(definition.Definition.Index) ?? [];
                 var named = roots.Select(r => (r, projection?.DisplayName(r) ?? r.ToString(CultureInfo.InvariantCulture),
                     projection?.Parent(r) is int parent ? projection.DisplayName(parent) : projection?.PassOf(r)?.Label ?? "")).ToArray();
                 var notes = doc.Document is SourceSceneSnapshot built ? built.Notes.Where(n => n.StartsWith(definition.Definition.File, StringComparison.OrdinalIgnoreCase)).Take(8).Select(n => JsonData.ShownText(n, 400)).ToArray() : [];
                 card.ShowDefinition(doc, definition, named, notes, sceneTree?.Sections?.Definitions.Rejection, Math.Min(roots.Length, SceneViewport.MaximumOutlinedNodes));
+                _ = LoadAnimationCardAsync(doc, definition, CancellationToken.None);
                 break;
         }
     }

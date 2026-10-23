@@ -215,7 +215,7 @@ public static partial class SourceBuilder
     /// <summary>The script that builds a mission's world (gamegen/mN.gs).</summary>
     internal static string WorldScript(string mission) => $"{SourceProject.GameGenFolder}/{mission}.gs";
     /// <summary>The root of a mission's animation definitions.</summary>
-    internal static string AnimationRoot(string mission) => $"data/{mission}/zrdr/anim{Animation.AnimationDefinitionSet.Extension}";
+    public static string AnimationRoot(string mission) => $"data/{mission}/zrdr/anim{Animation.AnimationDefinitionSet.Extension}";
     private static bool IsModelSource(string name) => name.EndsWith(".gltf", StringComparison.OrdinalIgnoreCase) || name.EndsWith(".glb", StringComparison.OrdinalIgnoreCase) || name.EndsWith(".bin", StringComparison.OrdinalIgnoreCase);
 
     /// <summary>The source membership of the common archive, or one mission's archive, including pending new files.</summary>

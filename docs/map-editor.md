@@ -11,14 +11,14 @@ MCP: `zstudio_source_world_list`, `zstudio_source_world_open`.
 ## Layout
 
 - **Title:** the map's name, with an **Edited** pill while the project has unsaved changes.
-- **Command bar:** the scope (back arrow, **Whole world** and the world's source model file, such as `m1.gltf`); **Save**, **Undo**, **Redo**; **LOD** (LOD 0 is each object's highest detail) and **Difficulty**; then **Camera** (Frame all, Flycam), **Display** (Wireframe, Textures, Bounds, Horizon), **Overlay** (Non-default soils, CanModify, ClipTo, Landmarks, Face orientation), **Show** (VTOL route) and **Zones** (Edit zones).
+- **Command bar:** the scope (back arrow, **Whole world** and the world's source model file, such as `m1.gltf`); **Save**, **Undo**, **Redo**; **LOD** (LOD 0 is each object's highest detail) and **Difficulty**; then **Camera** (Frame all, Flycam), **Display** (Wireframe, Textures, Bounds, Horizon), **Overlay** (Non-default soils, CanModify, ClipTo, Landmarks, Face orientation) and **Zones** (Edit zones).
 - **World tree** (left), the view (middle) and the **Properties** pane (right). Drag the gaps between them to resize.
 - **Over the view:** the **Perspective** chip (projection, named views, framing), the navigation cube, the selected object with its handles, and the surface under the pointer with its X/Y/Z.
 - **Status bar:** the selection, the mission start and difficulty, the [player tank](#player-tank) while it isn't drawn as at the start, instance and mesh batch counts, **Preview notices**, and toggles for the **World tree**, **Properties** and **Diagnostics** panes. Diagnostics lists the map's file and preview problems.
 
 ### World tree
 
-Rows come in a fixed order: **World** (the authored glTF hierarchy, including groups the build removes), **Zones**, **AI Vehicles**, **AI Networks**, **Pickups**, **Animations (keyframed)** (objects the startup animations place) and **Animations (definitions)** (the `.zad` files the mission lists). Icons show each node's type; the info button beside **Show all** opens a legend.
+Rows come in a fixed order: **World** (the authored glTF hierarchy, including groups the build removes), **Zones**, **AI Vehicles**, **AI Networks**, **Pickups**, **Animations** (objects placed by animations and the `.zad` definitions the mission lists). Icons show each node's type; the info button beside **Show all** opens a legend.
 - Objects show their zone on the right (`Zone: 12`, `Zone: Any`).
 - **AI Vehicles** and **Pickups** list every difficulty's entries, tagged with the difficulties that place them (`All`, `E/M`, `H`…). Those the shown difficulty doesn't place are dimmed and can't be selected.
 - **Pickups** holds three groups: **Weapons**, **Ammo** and **Other** (health and technology), each with its count, Frame and eye. **Group by type** (the toggle on the Pickups row, or its context menu) adds a row per pickup type inside them. A weapon pickup shows the weapon's render from the game manual, ammo its weapon's HUD icon. Pickups are named by type and numbered per type, such as `ERFPG #1` or `Proximity Mine #2`; the game's name (`pu01700`) is in the tooltip.
@@ -97,13 +97,27 @@ Moving, rotating or scaling several nodes at once uses AI path Edit mode, which 
 
 MCP: `zstudio_source_ai_network`, `zstudio_ai_networks`, `zstudio_ai_nodes`, `zstudio_ai_selection`, `zstudio_ai_path`.
 
-## VTOL routes
+## Animations
 
-**Show → VTOL route** draws a VTOL flight and its drop windows: the blue line is one flight cycle, start markers show the drop windows and release markers the positions where the VTOL can release its cargo (not where the cargo lands). Choose the flight in the selector.
+Select a definition under **Animations** in the World tree. The section contains **Objects placed by animations**, followed by the mission and Common definition files. An object's **Animations affecting this object** links open the corresponding definition and binding. Selecting a definition shows its guides and opens Properties; it does not move the camera or start playback.
 
-To move a drop window, select it in the list or at its marker, choose **Move along path** (follow the pointer along the path) or **Set start time** (seconds into the cycle), check the release markers, then **Confirm** (one undo step) or **Cancel**. The edit changes the window's `START_TIME` in the owning `.zad` definition and nothing else; a definition other entries share can't be moved this way. Reopen **VTOL route** after the world rebuilds to continue.
+**Events** lists the existing events in their stored sequence order. Select a sequence and event to edit its operands. **Sequence settings** controls whether that sequence waits for a call. **Activation and prerequisites** controls how the definition starts and the required/optional prerequisite groups. Optional groups keep their minimum-to-satisfy value. Name lists and object paths use one name per line. Unsupported fields remain read-only.
 
-MCP: `zstudio_parachute`.
+**Apply** accepts the draft as one project undo step; **Revert** restores its fields. The source file's comments and layout remain intact. A shared definition changes every expansion and every map that includes that file; **Bindings** lists the affected maps, and Apply validates those maps before accepting the change. Save writes the edited sources. A failed validation keeps the draft and leaves the project unchanged.
+
+Event times are stored thresholds on the animation, sequence or previous-event clock. They are not promises of actual dispatch time: earlier events, waits and conditions can delay execution. The editor changes existing events and activation data; it does not add, delete or reorder events, or reshape `.zan` keyframes.
+
+**Paths** selects the preview binding and shows, hides or frames its evaluated motion guides. Guides include keyframed and procedural motion targets, child animations and cameras. Crosses mark the endpoints, arrows show direction, and discontinuous transforms break the line. Previously displayed definitions remain visible with reduced emphasis. A path is one bounded preview scenario: resource failures, loops and analysis limits are reported. **Preview** opens the existing playback/scrub transport; **Range…** opens its setup in Properties. **Exit preview** returns to the static map.
+
+MCP: `zstudio_source_animation` reads records and operates the shared draft; `zstudio_animation_paths` with `definition` controls paths and preview. `zstudio_preview_state.animationPaths` supplies analysis snapshots; `samples` pages the corresponding path points and discontinuities, and `markers` pages the dispatch trace.
+
+### VTOL drop windows
+
+Select the flight's definition under **Animations**. Its **Drop windows** section appears first in Properties: the blue line is one flight cycle, start markers show the drop windows and release markers the positions where the VTOL can release its cargo (not where the cargo lands).
+
+To move a drop window, select it in the list or at its marker, choose **Move along path** (follow the pointer along the path) or **Set start time** (seconds into the cycle), check the release markers, then **Apply** (one undo step) or **Revert**. The edit changes the window's `START_TIME` in the owning `.zad` definition and nothing else; a definition other entries share can't be moved this way. Select the definition after the world rebuilds to continue.
+
+MCP: `zstudio_animation_paths`.
 
 ## Zones
 

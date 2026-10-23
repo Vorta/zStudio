@@ -44,6 +44,7 @@ internal interface ISourceSectionState
     /// <summary>A network shows (the AI overlay is on).</summary>
     bool AnyNetworkShown { get; }
     bool NetworkShown(string network);
+    bool AnimationShown(int definition);
     /// <summary>The master eye of a section ("zones", "aiNetworks") or pass ("aiv", "puppies"): shown or hidden.</summary>
     bool MasterShown(string section);
 }
@@ -91,7 +92,7 @@ internal sealed class SceneTreeModel
         {
             void Pass(string kind) { if (projection.Passes.Any(p => p.Kind == kind)) roots.Add(New(null, null, "pass:" + kind, 0)); }
             void Section(string section) { if (Sections != null) roots.Add(New(null, null, "section:" + section, 0, section: new SectionHeader(section))); }
-            Section("zones"); Pass("aiv"); Section("aiNetworks"); Pass("puppies"); Pass("anim"); Section("definitions");
+            Section("zones"); Pass("aiv"); Section("aiNetworks"); Pass("puppies"); Section("definitions");
         }
         Roots = roots;
         var retainedPath = state.SelectionPath;
@@ -149,7 +150,8 @@ internal sealed class SceneTreeModel
         int depth = path.Count - 1 + unlinkedDepth;
         if (depth > SceneHierarchy.MaximumDepth || depth == SceneHierarchy.MaximumDepth && Children(node).Count > 0) return null;
         var root = Roots.FirstOrDefault(r => r.Index == path[0]);
-        if (root == null && Projection?.PassOf(path[0]) is { } pass && Roots.FirstOrDefault(r => r.Kind == "pass:" + pass.Kind) is { } group)
+        if (root == null && Projection?.PassOf(path[0]) is { } pass && (Roots.FirstOrDefault(r => r.Kind == "pass:" + pass.Kind)
+            ?? Roots.FirstOrDefault(r => r.Section is SectionHeader { Section: "definitions" })?.Children.FirstOrDefault(r => r.Kind == "pass:" + pass.Kind)) is { } group)
         { if (expand) group.IsExpanded = true; root = PassRow(group, path[0]); }
         if (root == null && Roots.FirstOrDefault(r => r.Kind == "unlinked") is { } unlinked)
         { if (expand) unlinked.IsExpanded = true; root = unlinked.Children.FirstOrDefault(r => r.Index == path[0]); }
@@ -228,7 +230,7 @@ public sealed class SceneTreeItem : INotifyPropertyChanged
     { "object3d" when Node.ModelIndex != null => "mesh", "object3d" => "group", { } kind => kind, _ => Kind };
     public int Depth { get; }
     public bool Shared => Index is int i && (Owner.Projection?.ParentCount(i) ?? (Node != null ? Owner.Hierarchy.Parents(i).Count : 0)) > 1;
-    public int ChildCount => Problem != null ? 0 : Section is PickupGroupEntry or PickupTypeEntry ? PickupChildCount : Section != null ? SectionChildren().Count : Kind == "unlinked" ? Owner.Hierarchy.UnlinkedRoots.Count : Pass is { } pass ? pass.Kind == "puppies" ? PickupPresentation.Groups.Length : Math.Max(1, pass.Entries.Count) :
+    public int ChildCount => Problem != null ? 0 : Section is PickupGroupEntry or PickupTypeEntry ? PickupChildCount : Section != null ? SectionChildren().Count + (Section is SectionHeader { Section: "definitions" } && Owner.Projection?.Passes.Any(p => p.Kind == "anim") == true ? 1 : 0) : Kind == "unlinked" ? Owner.Hierarchy.UnlinkedRoots.Count : Pass is { } pass ? pass.Kind == "puppies" ? PickupPresentation.Groups.Length : Math.Max(1, pass.Entries.Count) :
         Index is int i && (Node != null || Synthetic) ? Owner.Children(i).Count : 0;
     public string Label => Section is SectionHeader or DefinitionScopeEntry or PickupGroupEntry or PickupTypeEntry ? $"{SectionLabel} · {Meta}" : Section != null ? SectionLabel : Pass is { } pass ? $"{pass.Label} · {pass.Entries.Count}" : Owner.Projection != null && (Selectable || IsOtherDifficulty) ? Short(DisplayName, 180) : Kind == "unlinked" ? $"Unlinked nodes · {ChildCount}" : Node is { } n ?
         $"{Short(n.Name, 180)} · {n.Class} #{n.Index}" + (ChildCount > 0 ? $" · {ChildCount} {(ChildCount == 1 ? "child" : "children")}" : "") +
@@ -360,7 +362,7 @@ public sealed class SceneTreeItem : INotifyPropertyChanged
     public bool IsHidden => MasterKey is { } master ? State?.MasterShown(master) != true : Section != null ? SectionHidden : Index is int i && Owner.IsHiddenNode?.Invoke(i) == true;
     public bool IsIsolated => Section == null && !IsPassObject && Index is int i && Owner.IsIsolatedNode?.Invoke(i) == true;
     /// <summary>A hidden row drawn faint: never a section or pass row, whose master eye shows only what pressing it does.</summary>
-    public bool IsFaded => IsHidden && !IsSectionHeader && PickupEntries == null;
+    public bool IsFaded => IsHidden && !IsSectionHeader && Section is not DefinitionEntry && PickupEntries == null;
     public string EyeIcon => IsHidden ? "EyeOff" : IsIsolated ? "Isolate" : "Eye";
     public string EyeToolTip => Section != null || HasMasterEye ? SectionEyeToolTip : IsPassObject ? (IsHidden ? "Show in viewport" : "Hide in viewport")
         : (IsHidden ? "Show in viewport" : "Hide in viewport") + (IsIsolated ? "\nMiddle-click: show all objects again" : "\nMiddle-click: hide all other objects");
@@ -442,11 +444,14 @@ public sealed class SceneTreeItem : INotifyPropertyChanged
         if (Section != null)
         {
             Dictionary<string, int> slots = [];
-            return SectionChildren().Select(entry =>
+            var rows = SectionChildren().Select(entry =>
             {
                 int occurrence = slots.GetValueOrDefault(entry.Key); slots[entry.Key] = occurrence + 1;
                 return Owner.New(null, this, KindOf(entry), occurrence, section: entry);
-            }).ToArray();
+            }).ToList();
+            if (Section is SectionHeader { Section: "definitions" } && Owner.Projection?.Passes.Any(p => p.Kind == "anim") == true)
+                rows.Insert(0, Owner.New(null, this, "pass:anim", 0));
+            return rows;
         }
         if (Kind == "unlinked") return Owner.Hierarchy.UnlinkedRoots.Select(i => Owner.New(i, this, "unlinked root", 0)).ToArray();
         // Pickups always hold Weapons, Ammo and Other, in that order (an empty one says so).
@@ -608,6 +613,7 @@ public sealed class SceneTreeItem : INotifyPropertyChanged
         SectionHeader { Section: "zones" or "aiNetworks" } => true,
         ZoneEntry zone => zone.Zone.Used,
         NetworkEntry => true,
+        DefinitionEntry { Roots: > 0 } => true,
         PickupGroupEntry or PickupTypeEntry => PickupShown,
         _ => false,
     };
@@ -615,6 +621,7 @@ public sealed class SceneTreeItem : INotifyPropertyChanged
     {
         ZoneEntry zone => State?.ZoneShown(zone.Zone.Zone) != true,
         NetworkEntry network => State?.NetworkShown(network.Network.Id) != true,
+        DefinitionEntry definition => State?.AnimationShown(definition.Definition.Index) != true,
         _ => false,
     };
     private string SectionEyeToolTip => MasterKey switch
@@ -629,6 +636,7 @@ public sealed class SceneTreeItem : INotifyPropertyChanged
             PickupGroupEntry or PickupTypeEntry => PickupEntries!.Count == 0 ? $"No {PickupNoun(2)} in this mission" : $"Placed only on other difficulties: choose one to see them",
             ZoneEntry zone => IsHidden ? $"Show {ZoneName(zone.Zone.Zone).ToLowerInvariant()}'s colour" : $"Hide {ZoneName(zone.Zone.Zone).ToLowerInvariant()}'s colour",
             NetworkEntry network => IsHidden ? $"Show {SourceMapSections.NetworkStem(network.Network)} in the view" : $"Hide {SourceMapSections.NetworkStem(network.Network)} in the view",
+            DefinitionEntry => IsHidden ? "Show animation paths" : "Hide animation paths",
             _ => "",
         },
     };

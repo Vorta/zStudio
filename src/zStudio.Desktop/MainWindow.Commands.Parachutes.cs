@@ -20,9 +20,11 @@ public partial class MainWindow
     };
     private void RegisterParachuteCommands(StudioCommands registry)
     {
-        RegisterJob(registry, "parachute", "Inspect and relocate complete existing VTOL drop windows in a Whole world. Show analyzes the first discovered flight; unavailable flights retain the candidate list, entry and analysisRefusal without a partial path. Analyze selects an exact entry. Conditional release markers come from a frozen bounded runtime, never landing predictions. A source map's windows can be moved: select/begin/set/confirm/cancel share the GUI draft and one undo step, set takes a local start time or an exact path segment plus fraction to disambiguate crossings, and the edit uses token-preserving project history and in-memory scene evaluation (Apply creates no archives; Save writes the owning animation definitions; undo/redo/save target the project). A compiled world is read only: show, analyze, samples and releases work, its windows cannot be selected or moved. Samples/releases support offset/limit pagination without query; preview_state.parachute reports bounded state. No physical input is captured.",
+        RegisterJob(registry, "animation_paths", "With definition, show/analyze bounded source animation paths for an exact binding entry, hide/frame its guides, preview/exit the shared transport, state reads snapshots, samples pages points and markers pages dispatch traces. preview_state.animationPaths reports status and diagnostics. With no definition, inspect and relocate complete existing VTOL drop windows in a Whole world. Show analyzes the first discovered flight; unavailable flights retain the candidate list, entry and analysisRefusal without a partial path. Analyze selects an exact entry. Conditional release markers come from a frozen bounded runtime, never landing predictions. A source map's windows can be moved: select/begin/set/confirm/cancel share the GUI draft and one undo step, set takes a local start time or an exact path segment plus fraction to disambiguate crossings, and the edit uses token-preserving project history and in-memory scene evaluation (Apply creates no archives; Save writes the owning animation definitions; undo/redo/save target the project). A compiled world is read only: show, analyze, samples and releases work, its windows cannot be selected or moved. Samples/releases support offset/limit pagination without query; preview_state.parachute reports bounded state. No physical input is captured.",
             [PreviewParameter, DocumentParameter, RevisionParameter,
-                P("action", "string", "Operation.", true, "show", "hide", "analyze", "select", "begin", "set", "confirm", "cancel", "undo", "redo", "save", "samples", "releases"),
+                P("action", "string", "Operation. With definition: source animation guides and preview; without definition: existing drop windows.", true, "show", "hide", "analyze", "select", "begin", "set", "confirm", "cancel", "undo", "redo", "save", "samples", "releases", "state", "frame", "preview", "exit", "markers"),
+                new("definition", "integer", "Source definition index for generic motion paths.", Minimum: 0),
+                new("seconds", "number", "Optional analyzed preview range (seconds).", NumberMinimum: 0.0166666666666667, NumberMaximum: 3600),
                 P("snapshot", "string", "Current Parachute snapshot, required except show."),
                 new("entry", "integer", "Exact discovered flight entry index for analyze.", Minimum: 0, Maximum: short.MaxValue),
                 P("window", "string", "Current drop-window UUID for select."), P("token", "string", "Current draft token for set/confirm/cancel."),
@@ -35,6 +37,8 @@ public partial class MainWindow
             if (world != shownDocument || a["revision"]!.GetValue<long>() != world.Revision)
                 throw new StudioCommandException("revision_conflict", "Read the displayed world's current document and revision.");
             string action = Text(a, "action");
+            if (a.ContainsKey("definition"))
+                return await SourceAnimationPathCommandAsync(a, world, action, token);
             if (action == "show")
             {
                 if (retiringScene != null) throw new StudioCommandException("not_ready", "The view is reloading after a source edit; read zstudio_state again shortly.");

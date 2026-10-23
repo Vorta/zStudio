@@ -175,6 +175,7 @@ public partial class MainWindow
             world.PropertyChanged += ParachuteDocumentChanged; world.Disposing += CloseParachutes;
             if (owner != null) { owner.PropertyChanged += ParachuteDocumentChanged; owner.Disposing += CloseParachutes; }
             if (parachuteLoading == cancellation) parachuteLoading = null;
+            if (world.SourceWorld != null && state.Entry is int flightEntry) { await EnsureAnimationCardForEntryAsync(world, flightEntry, cancellation.Token); Current(); ViewModel.Status = ParachuteAnalysisStatus; }
             PublishParachuteOverlay(); UpdateParachutePanel();
             CompleteParachuteStatus(request, world, viewport, ParachuteAnalysisResult(state));
         }
@@ -465,18 +466,17 @@ public partial class MainWindow
     private void UpdateParachutePanel()
     {
         if (ParachutePanel == null) return;
+        sectionCard?.SetExternalAnimationDraft(parachuteDraft != null);
         synchronizingParachutes = true;
         try
         {
-            ParachuteButton.Visibility = IsAiWorld ? Visibility.Visible : Visibility.Collapsed;
-            CommandState.SetIsOn(ParachuteButton, parachutes != null);
             ParachutePanel.Visibility = parachutes == null ? Visibility.Collapsed : Visibility.Visible;
             if (parachutes is not { } state) return;
             ParachutePanel.IsEnabled = !sourceWorkspaceBusy && parachuteLoading == null && parachuteDraft?.Accepting != true;
             bool editable = state.World.SourceWorld != null;
             ParachuteOwner.Text = editable ? "Animation sources · project undo and save" : $"{state.Owner?.Title} · read only";
             ParachuteOwner.ToolTip = state.Owner?.Path ?? state.World.SourceWorld?.DefinitionsPath;
-            ParachuteHistory.Visibility = editable ? Visibility.Visible : Visibility.Collapsed;
+            ParachuteHistory.Visibility = Visibility.Collapsed;
             ParachuteUndo.IsEnabled = state.World.SourceWorld?.Workspace.CanUndo == true;
             ParachuteRedo.IsEnabled = state.World.SourceWorld?.Workspace.CanRedo == true;
             ParachuteFlights.ItemsSource = state.Discovery.Candidates.Select(c => new ParachuteChoice(c.EntryIndex, $"#{c.EntryIndex} {ShortAiText(c.Name)} · {ShortAiText(c.RootName)}")).ToArray();
@@ -488,6 +488,7 @@ public partial class MainWindow
             ParachuteMoveButtons.Visibility = parachuteDraft == null && editable ? Visibility.Visible : Visibility.Collapsed;
             ParachuteMoveButtons.IsEnabled = selectedWindow is { MoveRefusal: null };
             ParachuteFlights.IsEnabled = parachuteDraft == null;
+            ParachuteFlights.Visibility = state.World.SourceWorld != null ? Visibility.Collapsed : Visibility.Visible;
             ParachuteWindows.IsEnabled = parachuteDraft == null && editable;
             ParachuteStart.Text = parachuteDraft?.Input ?? "";
             ParachuteConfirm.IsEnabled = parachuteDraft is { Plan: not null, Preview: not null, Error: null };

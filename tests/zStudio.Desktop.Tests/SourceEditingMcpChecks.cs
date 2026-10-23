@@ -213,7 +213,7 @@ internal static class SourceEditingMcpChecks
             var sectionRoots = await Call("scene_tree", new() { ["document"] = Id(doc) });
             string sectionContext = sectionRoots["context"]!.GetValue<string>(), sectionPreview = sectionRoots["preview"]!.GetValue<string>();
             var sectionRows = sectionRoots["children"]!["items"]!.AsArray();
-            Assert.Equal(["World", "Zones", "AI Vehicles", "AI Networks", "Pickups", "Animations (keyframed)", "Animations (definitions)"],
+            Assert.Equal(["World", "Zones", "AI Vehicles", "AI Networks", "Pickups", "Animations"],
                 sectionRows.Select(r => r!["Label"]!.GetValue<string>().Split(" · ")[0]));
             var networksRow = sectionRows.Single(r => r!["sectionRow"]?["section"]?.GetValue<string>() == "aiNetworks")!;
             var netRow = (await Call("scene_tree", new() { ["document"] = Id(doc), ["context"] = sectionContext, ["row"] = networksRow["row"]!.GetValue<string>() }))["children"]!["items"]![0]!;

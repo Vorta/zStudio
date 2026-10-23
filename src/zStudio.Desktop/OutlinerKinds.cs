@@ -15,8 +15,8 @@ internal static class OutlinerKinds
     /// <summary>The labels of the World tree's sections (the later passes keep their kinds aiv, puppies and anim).</summary>
     internal static string SectionLabel(string section) => section switch
     {
-        "zones" => "Zones", "aiNetworks" => "AI Networks", "definitions" => "Animations (definitions)",
-        "aiv" => "AI Vehicles", "puppies" => "Pickups", "anim" => "Animations (keyframed)", _ => section,
+        "zones" => "Zones", "aiNetworks" => "AI Networks", "definitions" => "Animations",
+        "aiv" => "AI Vehicles", "puppies" => "Pickups", "anim" => "Objects placed by animations", _ => section,
     };
     internal static string SectionIcon(SectionEntry section) => section switch
     {

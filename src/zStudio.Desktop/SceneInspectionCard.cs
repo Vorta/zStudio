@@ -423,7 +423,7 @@ internal sealed partial class SceneInspectionCard : Grid
         ToolTipService.SetShowOnDisabled(isolate, true);
         isolate.ToolTip = HasDraft ? "Apply or discard the edit first" : isolate.IsChecked == true ? "Show all objects" : "Isolate: show only this object";
         details = describe(selected);
-        if (RefreshSource()) { HostExtraSections(null); return; }
+        if (RefreshSource()) { HostExtraSections(ExtraSections?.Invoke(selected)); return; }
         HostExtraSections(ExtraSections?.Invoke(selected));
         var pickup = PickupNameOf?.Invoke(selected);
         heading.Text = pickup?.Name ?? Display(details["Selected object"] ?? details["Node"]); heading.ToolTip = heading.Text; selectionName.Text = heading.Text;

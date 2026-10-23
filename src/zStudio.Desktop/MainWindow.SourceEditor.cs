@@ -132,8 +132,7 @@ public partial class MainWindow
         // toolbar keeps its own toggles, out of sight here; Show keeps VTOL route.
         Restyle(HighlightZones, VisibilityProperty, Visibility.Collapsed);
         Restyle(HighlightPolygonZones, VisibilityProperty, Visibility.Collapsed);
-        Move(ParachuteButton, SourceShowItems, "CommandGroupButton", "VTOL route");
-        foreach (var moved in new FrameworkElement[] { FrameScene, FlyEnabled, Wireframe, FaceOrientation, TexturesEnabled, BoundsEnabled, BackdropEnabled, WorldHighlights, ParachuteButton })
+        foreach (var moved in new FrameworkElement[] { FrameScene, FlyEnabled, Wireframe, FaceOrientation, TexturesEnabled, BoundsEnabled, BackdropEnabled, WorldHighlights })
             Watch(moved);
         // The title keeps the map's name with an Edited pill; Save, Undo and Redo are in the command bar.
         ActiveDocumentTitle.Visibility = Visibility.Collapsed; SourceDocumentTitle.Visibility = Visibility.Visible;
@@ -255,7 +254,6 @@ public partial class MainWindow
         OutlinerPaneToggle.IsChecked = sourceOutlinerVisible; PropertiesPaneToggle.IsChecked = sourcePropertiesVisible;
         // The preference: a window too short for the pane hides it without turning it off.
         ToolsPaneToggle.IsChecked = SourceToolsVisible;
-        CommandState.SetIsOn(ParachuteButton, parachutes != null);
         RefreshSourceStatus(); RefreshViewportChips(); ApplyCardDocking();
     }
     private void RefreshSourceStatus()
@@ -328,7 +326,7 @@ public partial class MainWindow
             card.PickRecent = PickRecentSelection;
             card.WorldSummary = WorldSummary;
             var viewport = scene!;
-            card.ExtraSections = selected => PlayerTankSections(viewport, selected);
+            card.ExtraSections = selected => PlayerTankSections(viewport, selected) ?? AnimationObjectLinks(viewport, selected);
             card.PlayerTankSummary = PlayerTankRowSummary;
             card.PickPlayerTank = PickPlayerTank;
         }
@@ -605,7 +603,7 @@ public partial class MainWindow
         return row.Section switch
         {
             NetworkEntry network => viewport.TryFrameAiNetwork(network.Network.Id),
-            DefinitionEntry definition => sceneTree?.Sections?.DefinitionRoots.GetValueOrDefault(definition.Definition.Index) is { } roots && viewport.TryFrameNodes(roots.Take(4096).ToArray()),
+            DefinitionEntry definition => viewport.FrameAnimationPaths(definition.Definition.Index.ToString(CultureInfo.InvariantCulture)) || sceneTree?.Sections?.DefinitionRoots.GetValueOrDefault(definition.Definition.Index) is { } roots && viewport.TryFrameNodes(roots.Take(4096).ToArray()),
             PickupGroupEntry or PickupTypeEntry => row.PickupEntries!.Select(e => e.Row).OfType<int>().Take(4096).ToArray() is { Length: > 0 } pickups && viewport.TryFrameNodes(pickups),
             _ => false,
         };

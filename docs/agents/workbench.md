@@ -73,7 +73,7 @@ Rules for the WPF workbench. User-facing descriptions: [map editor](../map-edito
 
 ## World tree
 
-- Fixed row order: World, Zones, AI Vehicles, AI Networks, Pickups, Animations (keyframed), Animations (definitions). Section, folder, file, pass and note rows show counts, open or close on click and are never the selection. Selecting a zone, network or definition ends the object selection and opens its card in the Properties pane; Escape, Clear selection or a click on empty view space clears it.
+- Fixed row order: World, Zones, AI Vehicles, AI Networks, Pickups, Animations. Animations holds Objects placed by animations, then the mission and Common definition folders. Section, folder, file, pass and note rows show counts, open or close on click and are never the selection. Selecting a zone, network or definition ends the object selection and opens its card in the Properties pane; Escape, Clear selection or a click on empty view space clears it.
 - Keyboard: Up/Down, Home/End and Page Up/Down visit every shown row without stopping on buttons; a selectable row becomes the selection, other rows only take focus (outline) while the selection keeps its highlight and card. Left/Right step through the row's buttons (Zones switch, Pickups Group by type, Frame, eye; Left from the first returns to the row) and show their tooltips; Space or Enter opens or closes a row or presses the button; Escape returns from a button to its row.
 - After a rebuild the tree that had the keyboard gives it to the selected row. After Group by type: the Pickups row or group row that had the keyboard keeps it (a type row gives it to its group when the types go; pressing the toggle from the keyboard keeps it on Pickups); otherwise the selected row takes it, or Pickups when nothing is selected or the selection is inside a closed row.
 
@@ -100,6 +100,12 @@ Rules for the WPF workbench. User-facing descriptions: [map editor](../map-edito
 - WASD moves along the camera basis, Space/C along world Y, mouse movement looks around, the wheel changes speed without translating. Combined movement is normalized and integrated over elapsed time without inertia; speed never depends on surface hit distance.
 - Desktop owns foreground raw mouse and cursor capture with a recentered fallback for absolute or remote input; Rendering owns the motion math.
 - Release all held input, cursor confinement and capture on Escape, deactivation, focus or capture loss, an unavailable or replaced preview, and shutdown. Keep the final pose; keep the icon and speed hint in sync with the actual state; support overflow activation; never persist active capture.
+
+## Source animation card
+
+- Definitions are edited in the docked Properties pane: existing events, sequence activation, definition activation and prerequisites. Apply/Revert shares the section draft and project history; presentation refreshes retain the draft. Keyframe samples, event insertion/deletion and event order are read-only.
+- Selection reveals bounded motion paths without starting playback or moving the camera. Eyes control guides separately from object geometry. Drop windows occupy the first card section for recognized flights; their route and conditional release markers retain the existing guarded move operation.
+- Preview explicitly opens the existing transport over the source map. Range hosts setup in Properties, Exit restores the static map. Object cards link to the exact affected definition/entry. Source field edits end playback before creating their draft.
 
 ## Animation inspector
 

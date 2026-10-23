@@ -67,14 +67,15 @@ public partial class MainWindow
                 sections = SectionPreviewState(),
                 bft = PlayerTankPreviewState(),
                 parachute = ParachuteState(),
+                animationPaths = SourceAnimationPathsState(),
                 presentation = new { fullscreen=PresentationState.Fullscreen, uiHidden=PresentationState.UiHidden, available=PresentationState.Available },
                 lod = motion?.Lod ?? animation?.PreviewLod ?? (SceneHost.Visibility == Visibility.Visible ? (int?)LodCombo.SelectedIndex : null), difficulty = MissionWorldPath != null || motion != null ? null : ViewModel.Difficulty.ToString(),
                 mission = animation?.MissionArchive ?? scene?.Mission?.Layout.MissionArchive,
                 texturePacks = packs["items"], texturePackCount = packs["total"], texturePackOffset = packs["offset"], texturePackNextOffset = packs["nextOffset"],
-                textured = animation != null ? true : SceneHost.Visibility == Visibility.Visible ? TexturesEnabled.IsChecked : null,
-                wireframe = animation != null ? false : SceneHost.Visibility == Visibility.Visible ? Wireframe.IsChecked : null,
+                textured = animation != null && !sourceAnimationPreview ? true : SceneHost.Visibility == Visibility.Visible ? TexturesEnabled.IsChecked : null,
+                wireframe = animation != null && !sourceAnimationPreview ? false : SceneHost.Visibility == Visibility.Visible ? Wireframe.IsChecked : null,
                 faceOrientation = animation?.Viewport.FaceOrientationEnabled ?? (SceneHost.Visibility == Visibility.Visible ? scene?.FaceOrientationEnabled : null),
-                bounds = animation != null ? false : SceneHost.Visibility == Visibility.Visible ? BoundsEnabled.IsChecked : null,
+                bounds = animation != null && !sourceAnimationPreview ? false : SceneHost.Visibility == Visibility.Visible ? BoundsEnabled.IsChecked : null,
                 highlight = animation == null && shownAsset?.Kind == AssetKind.World && SceneHost.Visibility == Visibility.Visible && scene != null ? WorldHighlightName(scene.HighlightMode) : null,
                 horizon = animation?.Options.Horizon ?? (SceneHost.Visibility == Visibility.Visible ? BackdropEnabled.IsChecked : null),
                 texture = decoded == null ? null : new { decoded.Width, decoded.Height, zoom = ZoomSlider.Value, channel = ChannelCombo.SelectedIndex, smooth = SmoothImage.IsChecked },
@@ -134,7 +135,9 @@ public partial class MainWindow
         });
         RegisterJob(r, "scene_options", "Set static model/world options: lod(integer), difficulty(Easy/Medium/Hard; RECOIL only, MW3 uses missions), textures/wireframe/faceOrientation/bounds/horizon(boolean), texturePack(path or empty for automatic), highlight(none/nonDefaultSoils/canModify/clipTo/canModifyAndClipTo/zones/polygonZones/landmarks), aiNodes/aiThroughGeometry(boolean), aiNetwork(all or ID with aiSnapshot), pickupsByType(boolean; source maps: Group by type in the Pickups section, for the session), bftType/bftPrimary/bftSecondary (source maps: how the view draws the player tank, a preview choice for the open map: never saved, no undo; applied together and published like difficulty; preview_state.bft reports it). Highlights and AI are Whole world only. In a source map zones and AI networks are shown one by one (scene_tree show/hide): highlight zones or polygonZones chooses the kind of zone colour (every zone shows when none did), another highlight hides every zone; aiNodes shows or hides every network; aiNetwork filters and aiThroughGeometry false are refused (networks are always drawn through geometry, at half strength where it hides them).", [PreviewParameter,SceneChanges], false, async (a, token) =>
         {
-            RequirePreview(a); RequireNoDrafts(shownDocument); if (animation != null || motion != null) throw new StudioCommandException("unsupported","Use animation_options or motion_preview.");
+            RequirePreview(a); RequireNoDrafts(shownDocument); if (animation != null && !sourceAnimationPreview || motion != null) throw new StudioCommandException("unsupported","Use animation_options or motion_preview.");
+            if (sourceAnimationPreview && (a["changes"] as JsonObject)?.Any(p => p.Key is not ("textures" or "wireframe" or "bounds" or "faceOrientation" or "pickupsByType")) == true)
+                throw new StudioCommandException("unsupported", "Exit animation preview before changing map loading, overlays or placement options.");
             TargetViewport(a);
             if (shownDocument?.SourceWorld is { } sourceWorld && (sourceWorld.IsRebuilding || sourceWorkspaceBusy))
                 throw new StudioCommandException("busy", "The source scene is being evaluated; change its presentation options when it is ready.");

@@ -2424,8 +2424,8 @@
     ]
   },
   {
-    "Name": "zstudio_parachute",
-    "Description": "Inspect and relocate complete existing VTOL drop windows in a Whole world. Show analyzes the first discovered flight; unavailable flights retain the candidate list, entry and analysisRefusal without a partial path. Analyze selects an exact entry. Conditional release markers come from a frozen bounded runtime, never landing predictions. A source map\u0027s windows can be moved: select/begin/set/confirm/cancel share the GUI draft and one undo step, set takes a local start time or an exact path segment plus fraction to disambiguate crossings, and the edit uses token-preserving project history and in-memory scene evaluation (Apply creates no archives; Save writes the owning animation definitions; undo/redo/save target the project). A compiled world is read only: show, analyze, samples and releases work, its windows cannot be selected or moved. Samples/releases support offset/limit pagination without query; preview_state.parachute reports bounded state. No physical input is captured. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Name": "zstudio_animation_paths",
+    "Description": "With definition, show/analyze bounded source animation paths for an exact binding entry, hide/frame its guides, preview/exit the shared transport, state reads snapshots, samples pages points and markers pages dispatch traces. preview_state.animationPaths reports status and diagnostics. With no definition, inspect and relocate complete existing VTOL drop windows in a Whole world. Show analyzes the first discovered flight; unavailable flights retain the candidate list, entry and analysisRefusal without a partial path. Analyze selects an exact entry. Conditional release markers come from a frozen bounded runtime, never landing predictions. A source map\u0027s windows can be moved: select/begin/set/confirm/cancel share the GUI draft and one undo step, set takes a local start time or an exact path segment plus fraction to disambiguate crossings, and the edit uses token-preserving project history and in-memory scene evaluation (Apply creates no archives; Save writes the owning animation definitions; undo/redo/save target the project). A compiled world is read only: show, analyze, samples and releases work, its windows cannot be selected or moved. Samples/releases support offset/limit pagination without query; preview_state.parachute reports bounded state. No physical input is captured. Returns an operation ID; use zstudio_operation to await/read the result.",
     "Mutates": true,
     "Parameters": [
       {
@@ -2457,7 +2457,7 @@
       {
         "Name": "action",
         "Type": "string",
-        "Description": "Operation.",
+        "Description": "Operation. With definition: source animation guides and preview; without definition: existing drop windows.",
         "Required": true,
         "Choices": [
           "show",
@@ -2472,9 +2472,33 @@
           "redo",
           "save",
           "samples",
-          "releases"
+          "releases",
+          "state",
+          "frame",
+          "preview",
+          "exit",
+          "markers"
         ],
         "Properties": null
+      },
+      {
+        "Name": "definition",
+        "Type": "integer",
+        "Description": "Source definition index for generic motion paths.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": 0
+      },
+      {
+        "Name": "seconds",
+        "Type": "number",
+        "Description": "Optional analyzed preview range (seconds).",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "NumberMinimum": 0.0166666666666667,
+        "NumberMaximum": 3600
       },
       {
         "Name": "snapshot",
@@ -2559,6 +2583,142 @@
         "Properties": null,
         "Minimum": -2147483648,
         "Maximum": 2147483647
+      }
+    ]
+  },
+  {
+    "Name": "zstudio_source_animation",
+    "Description": "Inspect and edit an existing source animation definition in the docked Properties pane. Addresses belong to the document revision. Edits preserve source trivia and apply to every expansion of the definition; tracks and event order are read only. begin selects the definition; set updates the shared draft; apply accepts one project undo step; cancel reverts the draft. read pages source records; each record contains its typed fields. Save uses save_document. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Mutates": true,
+    "Parameters": [
+      {
+        "Name": "document",
+        "Type": "string",
+        "Description": "Document lifetime ID from zstudio_state.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "revision",
+        "Type": "integer",
+        "Description": "Expected current document revision. Read before editing.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": 0,
+        "Maximum": 9223372036854775807
+      },
+      {
+        "Name": "definition",
+        "Type": "integer",
+        "Description": "Definition index from scene_tree.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": 0
+      },
+      {
+        "Name": "action",
+        "Type": "string",
+        "Description": "Operation.",
+        "Required": true,
+        "Choices": [
+          "read",
+          "begin",
+          "select",
+          "set",
+          "apply",
+          "cancel"
+        ],
+        "Properties": null
+      },
+      {
+        "Name": "record",
+        "Type": "string",
+        "Description": "Sequence or event record ID for select.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "token",
+        "Type": "string",
+        "Description": "Current draft token for set (when pending), apply or cancel.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "changes",
+        "Type": "array",
+        "Description": "Fields to set.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Items": {
+          "Name": "",
+          "Type": "object",
+          "Description": "Field change.",
+          "Required": false,
+          "Choices": null,
+          "Properties": [
+            {
+              "Name": "field",
+              "Type": "string",
+              "Description": "Field ID from read.",
+              "Required": true,
+              "Choices": null,
+              "Properties": null
+            },
+            {
+              "Name": "values",
+              "Type": "array",
+              "Description": "Values as text; omit to remove an optional field.",
+              "Required": false,
+              "Choices": null,
+              "Properties": null,
+              "Items": {
+                "Name": "",
+                "Type": "string",
+                "Description": "Value.",
+                "Required": false,
+                "Choices": null,
+                "Properties": null
+              },
+              "MaxItems": 128
+            }
+          ]
+        },
+        "MaxItems": 256
+      },
+      {
+        "Name": "offset",
+        "Type": "integer",
+        "Description": "Zero-based result offset.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": -2147483648,
+        "Maximum": 2147483647
+      },
+      {
+        "Name": "limit",
+        "Type": "integer",
+        "Description": "Page size, 1\u2013200; default 100.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": -2147483648,
+        "Maximum": 2147483647
+      },
+      {
+        "Name": "query",
+        "Type": "string",
+        "Description": "Case-insensitive name/path or displayed-text filter, applied before pagination.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
       }
     ]
   },

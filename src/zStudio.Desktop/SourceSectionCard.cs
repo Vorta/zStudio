@@ -15,10 +15,10 @@ namespace zStudio.Desktop;
 
 /// <summary>
 /// The docked Properties pane's card for a World tree row that is no scene object: a zone (its label is edited here), an AI
-/// network (its header settings are edited here, in its source file) or an animation definition (read-only). Edits are a
+/// network (its header settings are edited here, in its source file) or an animation definition (existing events and activation). Edits are a
 /// draft until Apply (Enter in a zone's label), which accepts one undoable source change; Revert or Escape restores.
 /// </summary>
-internal sealed class SourceSectionCard : Border
+internal sealed partial class SourceSectionCard : Border
 {
     private readonly Border tile = new() { Width = 34, Height = 34, CornerRadius = new(6), BorderThickness = new(1), Margin = new(0, 0, 10, 0), VerticalAlignment = VerticalAlignment.Center };
     private readonly TextBlock heading = new() { FontWeight = FontWeights.SemiBold, FontSize = 15, TextTrimming = TextTrimming.CharacterEllipsis };
@@ -236,7 +236,7 @@ internal sealed class SourceSectionCard : Border
         RefreshNetwork();
     }
 
-    /// <summary>An animation definition, read-only: its source, what it binds to, its settings, sequences and notes.</summary>
+    /// <summary>Loading/fallback summary of an animation definition: its source, bindings, settings, sequences and notes.</summary>
     internal void ShowDefinition(DocumentModel document, DefinitionEntry entry, IReadOnlyList<(int Row, string Name, string Parent)> roots, IReadOnlyList<string> notes, string? rejection, int outlined)
     {
         Begin(entry, document);
@@ -313,8 +313,8 @@ internal sealed class SourceSectionCard : Border
     // ---------------------------------------------------------------- the draft
 
     /// <summary>The zone's label or a network's field differs from what is stored.</summary>
-    internal bool HasDraft => !Accepting && (Entry is ZoneEntry && label != null && label.Text.Trim() != labelInitial || Entry is NetworkEntry && inputs.Any(i => i.Changed));
-    internal string DraftToken => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes($"{draftId}|{Document?.SessionId}|{Document?.Revision}|{Entry?.Key}|{(label?.Text ?? "")}|{string.Join("\u0001", inputs.Select(i => string.Join("\u0002", i.Values)))}")));
+    internal bool HasDraft => !Accepting && (Entry is ZoneEntry && label != null && label.Text.Trim() != labelInitial || Entry is NetworkEntry && inputs.Any(i => i.Changed) || Entry is DefinitionEntry && animationChanges.Count > 0);
+    internal string DraftToken => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes($"{draftId}|{Document?.SessionId}|{Document?.Revision}|{Entry?.Key}|{(label?.Text ?? "")}|{string.Join("\u0001", inputs.Select(i => string.Join("\u0002", i.Values)))}|{System.Text.Json.JsonSerializer.Serialize(animationChanges)}")));
     /// <summary>The changes a network's draft makes, as requested values.</summary>
     internal IReadOnlyList<SourceAiNetworkEdits.Change> NetworkChanges => [.. inputs.Where(i => i.Changed).Select(i => new SourceAiNetworkEdits.Change(i.Field.Key, i.Values))];
     internal object Describe() => new
@@ -322,6 +322,7 @@ internal sealed class SourceSectionCard : Border
         token = DraftToken, pending = HasDraft, kind = Entry switch { ZoneEntry => "zone", NetworkEntry => "network", DefinitionEntry => "definition", _ => null },
         target = Entry?.Key, revision = Document?.Revision, applying = Applying,
         label = Entry is ZoneEntry ? label?.Text : null,
+        animation = AnimationDraft,
         fields = Entry is NetworkEntry ? inputs.Select(i => new { key = i.Field.Key, values = i.Values, stored = i.Initial, changed = i.Changed }).ToArray() : null,
         // What each row shows: its label, help line (or the message of an invalid value), grey hint, and any warning.
         rows = Entry is NetworkEntry ? networkRows.Select(r => new
@@ -339,6 +340,7 @@ internal sealed class SourceSectionCard : Border
     internal void Discard()
     {
         if (Applying) return;
+        animationChanges.Clear(); RefreshAnimationFields();
         if (label != null) label.Text = labelInitial;
         foreach (var input in inputs)
             for (int i = 0; i < input.Boxes.Length; i++) Restore(input.Boxes[i], input.Initial[i]);
@@ -354,6 +356,7 @@ internal sealed class SourceSectionCard : Border
         {
             if (Entry is ZoneEntry zone && ApplyLabel != null) await ApplyLabel(zone.Zone.Zone, label!.Text.Trim());
             else if (Entry is NetworkEntry network && ApplyNetwork != null) await ApplyNetwork(network.Network.Id, NetworkChanges);
+            else if (Entry is DefinitionEntry definition && ApplyAnimation != null) await ApplyAnimation(definition.Definition.Index, animationChanges.Values.ToArray());
             // Accepted: what was applied is now stored (until the rebuilt map shows the card again with its own values).
             if (ReferenceEquals(Entry, applied)) Adopt();
         }
@@ -364,6 +367,7 @@ internal sealed class SourceSectionCard : Border
     /// <summary>The shown values become the stored ones (after an accepted edit).</summary>
     private void Adopt()
     {
+        animationChanges.Clear();
         if (label != null) labelInitial = label.Text.Trim();
         // The edit stored Buddies Activate when it was checked, or when Buddies Attack was turned on (Plan adds it then).
         var attack = inputs.FirstOrDefault(i => i.Field.Key == "attack_buddy");
@@ -397,6 +401,7 @@ internal sealed class SourceSectionCard : Border
 
     private void Begin(SectionEntry entry, DocumentModel document)
     {
+        animationChanges.Clear(); animationDefinition = null; animationFieldsHost = null;
         if (Entry?.Key != entry.Key || !ReferenceEquals(Document, document)) draftId = Guid.NewGuid();
         Entry = entry; Document = document;
         body.Children.Clear(); inputs.Clear(); networkRows.Clear(); buddiesBar = null; activateWritten = false; label = null; labelInitial = "";

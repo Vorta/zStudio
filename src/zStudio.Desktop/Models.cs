@@ -165,6 +165,8 @@ public sealed partial class DocumentModel : ObservableObject, IDisposable
     private CancellationTokenSource? contextLoading;
     public Task<AnimationPreviewContext> GetAnimationContextAsync(AssetResolver resolver, CancellationToken token, string? worldPath = null, MissionDifficulty difficulty = MissionDifficulty.Medium, string? exactMission = null)
     {
+        if (Document is zStudio.Core.Sources.SourceSceneSnapshot source)
+            return Task.Run(() => AnimationPreviewContext.FromSources(source, difficulty, token), token);
         bool worldChanged = worldPath != null;
         if (worldPath != null) animationWorldPath = worldPath;
         // An explicit mission request must load exactly that reader, never a cached or fallback context.
