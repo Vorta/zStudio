@@ -195,6 +195,7 @@ public partial class MainWindow
             });
         });
         Register(registry, "capabilities", "Read all capability schemas. Unsupported formats remain read-only; MCP does not add binary patching.", false, [], _ => new(registry.Describe()));
+        RegisterHelpCommands(registry);
         RegisterWorkspaceCommands(registry);
         RegisterPreviewCommands(registry);
         RegisterAiCommands(registry);

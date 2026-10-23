@@ -33,6 +33,12 @@
     "Parameters": []
   },
   {
+    "Name": "zstudio_help",
+    "Description": "Read what the Help menu offers, without opening anything: the installed version, its online user guides and release notes (GitHub, pinned to the version\u0027s tag v\u003Cversion\u003E) and the licence and third-party notice files beside zStudio.exe that About shows (null when absent, as in a build output).",
+    "Mutates": false,
+    "Parameters": []
+  },
+  {
     "Name": "zstudio_open_root",
     "Description": "Open and index a ZBD root or source project in the visible workspace. Dirty documents must be explicitly saved or closed first. indexComplete and indexNotice disclose partial asset indexing; Files and direct opening remain available when its retention limit is reached. Returns an operation ID; use zstudio_operation to await/read the result.",
     "Mutates": true,

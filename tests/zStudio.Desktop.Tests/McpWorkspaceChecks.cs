@@ -44,6 +44,20 @@ internal static class McpWorkspaceChecks
             Assert.Equal(imageBytes,imageResult.Content.OfType<ImageContentBlock>().Single().DecodedData.ToArray());
             var resources = await client.ListResourcesAsync(); Assert.Equal(2,resources.Count);
             var state=await Call("state",new()); Assert.Equal(doc.SessionId.ToString(),state["documents"]![0]!["id"]!.GetValue<string>());
+            // Help: the menu's guides are help's, in order, each a guide of this repository; an item opens the URL help reports.
+            var help = await Call("help", new());
+            var guides = help["guides"]!.AsArray().Select(g => g!["path"]!.GetValue<string>()).ToArray();
+            var guideItems = ((MenuItem)main.FindName("HelpMenu")).Items.OfType<MenuItem>().Where(i => i.Tag is string).ToArray();
+            Assert.Equal(guideItems.Select(i => (string)i.Tag), guides);
+            string repository = AppContext.BaseDirectory;
+            while (!File.Exists(Path.Combine(repository, "zStudio.slnx"))) repository = Directory.GetParent(repository)!.FullName;
+            Assert.All(guides, g => Assert.True(File.Exists(Path.Combine(repository, g)), g));
+            string helpVersion = help["version"]!.GetValue<string>();
+            Assert.Equal($"https://github.com/Vorta/zStudio/releases/tag/v{helpVersion}", help["releaseNotes"]!.GetValue<string>());
+            string? opened = null; main.OpenLinkOverride = url => opened = url;
+            try { guideItems[2].RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent)); } finally { main.OpenLinkOverride = null; }
+            Assert.Equal($"https://github.com/Vorta/zStudio/blob/v{helpVersion}/{guides[2]}", opened);
+            Assert.Equal(opened, help["guides"]![2]!["url"]!.GetValue<string>());
             string originalPreview = state["preview"]!.GetValue<string>();
             await Dispatcher.Yield(DispatcherPriority.ApplicationIdle);
             CheckNativeCorners(main);

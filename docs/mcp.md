@@ -117,6 +117,7 @@ All tools are named `zstudio_*`. "MCP only" marks tools without a GUI path. The 
 
 | Area | Tools | In the GUI |
 | --- | --- | --- |
+| Help | `help` | **Help** menu: the online guides and release notes of the installed version, **About zStudio** |
 | Workspace | `state`, `capabilities`, `window`, `workspace_view`, `presentation`, `open_root`, `files`, `search`, `open_document`, `close_document`, `reload_document`, `assets`, `asset_filter`, `select_asset`, `related`, `problems`, `operation` | Window, **File** and **View** menus, Navigator |
 | Source project | `source_reconstruct`, `source_status`, `source_profile`, `source_dithering`, `source_export`, `source_changes`, `source_bytes`, `source_recovery`, `source_recovery_resolve`, `validate` | Welcome screen **Initialize**, **Export** menu, **Tools → Validate source file on disk** |
 | Maps | `source_world_list`, `source_world_open`, `scene_tree`, `scene_inspect`, `scene_card`, `scene_properties`, `scene_nodes`, `scene_selection`, `scene_options` | Map picker, World tree, Properties pane, command bar |

@@ -22,6 +22,8 @@ Download **[zStudio v0.9.6](https://github.com/Vorta/zStudio/releases/tag/v0.9.6
 
 ## Documentation
 
+zStudio's **Help** menu opens these guides as they are for the installed version.
+
 | Guide | Covers |
 | --- | --- |
 | [Source projects](docs/source-project.md) | initialize and open a project, its layout, saving, check and export, build profiles, texture dithering, editing source files by hand |

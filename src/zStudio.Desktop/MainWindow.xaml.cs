@@ -1,6 +1,5 @@
 using System.ComponentModel;
 using System.IO;
-using System.Reflection;
 using System.Text;
 using System.Text.Json.Nodes;
 using System.Windows;
@@ -856,13 +855,6 @@ public partial class MainWindow : Window
         SaveWorkspacePreferences();
     }
     private void HelpClick(object sender, RoutedEventArgs e) => MessageBox.Show(this, "Workspace: Initialize unpacks the retail ZBD files once into a source project (a folder with data and gamegen); File > Open workspace (Ctrl+O) opens one. Choose a map to edit it; the back arrow returns to the maps. Ctrl+Z/Ctrl+Y undo and redo, Ctrl+S saves the project's changed files, Ctrl+W closes the map. Export builds game files from the sources into a folder outside the project.\n\nView: middle drag orbits; Shift+middle drag pans; Ctrl+middle drag or the wheel zooms toward the pointer (orthographic views scale about it); Ctrl+Shift+middle drag dollies. Numpad 1/3/7 selects front/right/top (Ctrl for the opposite views), Numpad 5 toggles perspective/orthographic, Home frames everything and Numpad decimal frames the selection; the Perspective chip offers the same. F10 hides or shows the UI (the view alone, for footage; clicks then select nothing) and F11 toggles fullscreen. Flycam: WASD moves along the view, Space/C moves up/down, the mouse looks around and the wheel changes speed; Escape returns to normal controls.\n\nObjects: click one in the view or the World tree to select it; its Properties pane edits it. Move and Rotate show handles; Apply accepts the changes as one undo step, Revert discards them. Escape or a click on empty space clears the selection. Copy… asks for the copy's name and places it beside the original (in place when it shows nothing with a width).\n\nPolygon zones: the Zones group's Edit zones tool (P paints, E erases) adds a zone to, or removes it from, every polygon you drag over in the map's own models; Ctrl inverts it for a stroke, Shift+click picks a polygon's zone, [ and ] step through the map's zones, and Escape leaves the tool.\n\nWorld tree: Zones, AI Networks and Animations (definitions) list the map's zones, AI networks and animation definitions; selecting one opens its card in the Properties pane (a zone's label and a network's settings are edited there). Zones and AI networks are shown one by one with their eyes (all start hidden); the eyes on the Zones, AI Networks, AI Vehicles and Pickups rows show or hide everything below them. Middle-clicking a world object's eye shows only it. Up/Down move through the rows (a row that can be selected becomes the selection), Left/Right reach a row's buttons, Space or Enter opens or closes a row or presses the button.", "Controls and formats");
-    private void AboutClick(object sender, RoutedEventArgs e)
-    {
-        var assembly = typeof(MainWindow).Assembly;
-        string version = assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion.Split('+')[0]
-            ?? assembly.GetName().Version?.ToString(3) ?? "unknown";
-        MessageBox.Show(this, $"zStudio {version}\nWindows asset explorer\n\nTexture packs · ZAR archives · prepared scripts · animations · GameZ worlds\n\nBuilt with .NET, WPF, Vortice.Windows, CommunityToolkit.Mvvm, and NAudio. See THIRD-PARTY-NOTICES.md for licenses. Game assets are not included.", "About");
-    }
     private void Keyboard(object sender, KeyEventArgs e)
     {
         if (PresentationKey(e)) return;

@@ -25,6 +25,9 @@
   <ItemGroup>
     <Resource Include="Assets/studio.ico" />
     <Resource Include="Assets/Pickups/**/*.png" />
+    <!-- About shows the licence and notices that also ship beside zStudio.exe. -->
+    <EmbeddedResource Include="../../LICENSE" LogicalName="zStudio.LICENSE" />
+    <EmbeddedResource Include="../../THIRD-PARTY-NOTICES.md" LogicalName="zStudio.THIRD-PARTY-NOTICES.md" />
     <ProjectReference Include="../zStudio.Mcp/zStudio.Mcp.csproj" />
     <ProjectReference Include="../zStudio.Core/zStudio.Core.csproj" />
     <ProjectReference Include="../zStudio.Rendering/zStudio.Rendering.csproj" />

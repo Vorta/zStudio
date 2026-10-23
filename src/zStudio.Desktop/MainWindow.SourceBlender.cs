@@ -291,14 +291,7 @@ public partial class MainWindow
     }
 
     /// <summary>The package keeps the extension of the same version beside zStudio.exe.</summary>
-    private static string BlenderExtensionArchive
-    {
-        get
-        {
-            string version = System.Reflection.CustomAttributeExtensions.GetCustomAttribute<System.Reflection.AssemblyInformationalVersionAttribute>(typeof(MainWindow).Assembly)!.InformationalVersion.Split('+')[0];
-            return Path.Combine(AppContext.BaseDirectory, $"zstudio_recoil-{version}.zip");
-        }
-    }
+    private static string BlenderExtensionArchive => Path.Combine(AppContext.BaseDirectory, $"zstudio_recoil-{StudioVersion}.zip");
     private static object BlenderExtensionInfo()
     {
         string archive = BlenderExtensionArchive;

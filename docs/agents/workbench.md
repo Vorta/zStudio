@@ -75,6 +75,7 @@ Rules for the WPF workbench. User-facing descriptions: [map editor](../map-edito
 - One title/menu row with full-height caption controls and a Windows maximize/Snap hit region; menu and caption hit regions reserved equally on both sides.
 - Outside the source map editor the current document name is centered, trimmed, with a full-path tooltip; hidden without a document. Undo, Redo and Save exist only for source documents; compiled documents are read-only and never dirty.
 - No separate folder/document command row and no duplicate Export or Validate buttons; exports live in the Export menu.
+- Help: **Controls and formats**, then the user guides and the release notes, which open in the browser on GitHub at the installed version's tag (`v<version>`, never `main`: guides change between versions), then **About zStudio**: version, licence and third-party notices from the executable, so it works without the files beside it. MCP: `help`.
 
 ## Escape
 

@@ -602,9 +602,9 @@
     {
       "gui": "MainWindow.xaml:AboutClick",
       "tools": [
-        "zstudio_state"
+        "zstudio_help"
       ],
-      "note": "Use the semantic tool with explicit identities and arguments."
+      "note": "About shows the version, zStudio's licence and the third-party notices (embedded in the executable; the same files ship beside zStudio.exe). help returns the version and those files' paths; its Release notes button opens the releaseNotes URL help returns. MCP never opens a browser."
     },
     {
       "gui": "MainWindow.xaml:ActualImageClick",
@@ -860,6 +860,13 @@
       "note": "Stable section indices survive responsive Files detachment. Tree/content keyboard focus remembers the active section; Files and Navigator splitter widths share workspace_view preferences. Automatic reparenting never commits drafts."
     },
     {
+      "gui": "MainWindow.xaml:OnlineGuideClick",
+      "tools": [
+        "zstudio_help"
+      ],
+      "note": "Each Help guide item (its Tag is the guide's repository path) opens that guide on GitHub at the installed version's tag; help lists the same guides in menu order with their URLs. MCP never opens a browser."
+    },
+    {
       "gui": "MainWindow.xaml:PaletteClick",
       "tools": [
         "zstudio_texture_palette"
@@ -893,6 +900,13 @@
         "zstudio_workspace_view"
       ],
       "note": "Use the semantic tool with explicit identities and arguments."
+    },
+    {
+      "gui": "MainWindow.xaml:ReleaseNotesClick",
+      "tools": [
+        "zstudio_help"
+      ],
+      "note": "Help Release notes opens the installed version's GitHub release; help returns its URL as releaseNotes. MCP never opens a browser."
     },
     {
       "gui": "MainWindow.xaml:RedoDocumentClick",
