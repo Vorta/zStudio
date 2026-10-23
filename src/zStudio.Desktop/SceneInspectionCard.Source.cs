@@ -312,14 +312,15 @@ internal sealed partial class SceneInspectionCard
     }
     /// <summary>
     /// Gives the keyboard to the card: a source object's editor's first control, or a placement's first editable coordinate
-    /// while it is shown. Otherwise the keyboard stays where it is (the docked card's panel is not under this element, so
-    /// moving focus from here would reach the view's chips).
+    /// while it is shown, else the first choice of the sections a selection adds (the player tank's chosen master type).
+    /// Otherwise the keyboard stays where it is (the docked card's panel is not under this element, so moving focus from
+    /// here would reach the view's chips).
     /// </summary>
     internal void FocusObject()
     {
         if (ObjectEditor != null) { ObjectEditor.MoveFocus(new(System.Windows.Input.FocusNavigationDirection.First)); return; }
         if (values.TryGetValue(AuthoredPlacement, out var field) && field.Inputs.FirstOrDefault(i => i.IsEnabled && !i.IsReadOnly && i.IsVisible) is { } input) { input.Focus(); return; }
-        // Details collapsed under added sections (the player tank's): their first choice takes the keyboard.
+        // No editable coordinate shown (Details collapsed, or the placement read only): the added sections' first choice.
         if (extraSections.Content is PlayerTankPanel { IsVisible: true } tank) tank.FocusFirst();
     }
 }

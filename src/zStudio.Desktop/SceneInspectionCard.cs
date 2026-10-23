@@ -95,7 +95,7 @@ internal sealed partial class SceneInspectionCard : Grid
     /// <summary>The world summary the empty pane shows (label, value).</summary>
     internal Func<IReadOnlyList<(string Label, string Value)>>? WorldSummary { get; set; }
     internal sealed record RecentSelection(string Name, string Parent, string Category, string[] Path);
-    /// <summary>Sections a selection adds after Details (the player tank's Master type and Weapons), or null.</summary>
+    /// <summary>Sections a selection adds before Details (the player tank's Master type and Weapons), or null.</summary>
     internal Func<SceneInspection, FrameworkElement?>? ExtraSections { get; set; }
     /// <summary>The empty pane's Player tank row: the tank's name and how the view draws it, or why the map has none; null hides it.</summary>
     internal Func<PlayerTankRow?>? PlayerTankSummary { get; set; }

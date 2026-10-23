@@ -93,6 +93,10 @@ public partial class MainWindow
     /// </summary>
     private FrameworkElement? PlayerTankSections(SceneViewport viewport, SceneInspection selected)
     {
+        // While a structural rebuild retires the view, its card keeps the tank's sections (and Details as collapsed as it was)
+        // until the rebuilt view's card replaces it.
+        if (retiringScene != null && viewport == retiringScene && playerTankPanel is { Parent: FrameworkElement host }
+            && viewport.InspectionContent is FrameworkElement retiringCard && retiringCard.IsAncestorOf(host)) return playerTankPanel;
         if (!sourceChromeActive || viewport != scene || shownDocument?.SourceWorld is not { } session || !PlayerTankAdjustable || ShownPlayerTank is not { } tank) return null;
         if (selected.AiNode != null || viewport.PreviewScene is not { } data || !WithinTank(data, selected.SelectionNode >= 0 ? selected.SelectionNode : selected.Node, tank.Actor.Root)) return null;
         var state = ChosenTank(tank);
