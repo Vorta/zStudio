@@ -276,6 +276,14 @@ internal static class McpLiveCheck
             var data = JsonNode.Parse(reply.Content.OfType<TextContentBlock>().First().Text)!;
             if (expectedError != null)
             {
+                // A job command (save_document) accepts the request and reports its refusal as a failed operation.
+                if (reply.IsError != true && data is JsonObject job && job.ContainsKey("State"))
+                {
+                    while (data["State"]!.GetValue<string>() is "queued" or "running") { await Task.Delay(100, deadline.Token); data = await Call("operation", new { id = data["id"]!.GetValue<string>() }); }
+                    Equal("failed", data["State"]!.GetValue<string>(), name + " expected rejection");
+                    Equal(expectedError, data["result"]!["code"]!.GetValue<string>(), name + " rejection code");
+                    return data;
+                }
                 Equal(true, reply.IsError == true, name + " expected rejection");
                 Equal(expectedError, data["code"]!.GetValue<string>(), name + " rejection code");
                 return data;
