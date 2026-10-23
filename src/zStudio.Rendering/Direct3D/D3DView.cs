@@ -385,11 +385,9 @@ internal sealed class Direct3DView : IDisposable
     {
         if (on == watchingDisplay) return;
         watchingDisplay = on;
-        if (!on) { SystemEvents.DisplaySettingsChanged -= DisplayReturned; SystemEvents.SessionSwitch -= SessionSwitched; return; }
-        // SessionSwitch needs SystemEvents' hidden window; without it the view still retries on a resize or a reload.
-        try { SystemEvents.DisplaySettingsChanged += DisplayReturned; SystemEvents.SessionSwitch += SessionSwitched; }
-        catch (Exception error) when (error is System.Runtime.InteropServices.ExternalException or InvalidOperationException)
-        { SystemEvents.DisplaySettingsChanged -= DisplayReturned; SystemEvents.SessionSwitch -= SessionSwitched; watchingDisplay = false; }
+        // Without SystemEvents' hidden window no notice arrives; the view still retries on a resize or a reload.
+        if (on) { SystemEvents.DisplaySettingsChanged += DisplayReturned; SystemEvents.SessionSwitch += SessionSwitched; }
+        else { SystemEvents.DisplaySettingsChanged -= DisplayReturned; SystemEvents.SessionSwitch -= SessionSwitched; }
     }
     private void SessionSwitched(object? sender, SessionSwitchEventArgs e)
     {
