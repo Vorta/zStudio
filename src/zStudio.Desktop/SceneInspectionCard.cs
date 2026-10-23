@@ -103,6 +103,8 @@ internal sealed partial class SceneInspectionCard : Grid
     internal Action? PickPlayerTank { get; set; }
     internal sealed record PlayerTankRow(string Name, string? State, string? Absent);
     private readonly ContentControl extraSections = new() { Focusable = false, IsTabStop = false, Visibility = Visibility.Collapsed };
+    /// <summary>Whether this card hosts <paramref name="sections"/> now (docked or not).</summary>
+    internal bool HostsExtraSections(FrameworkElement sections) => ReferenceEquals(extraSections.Content, sections);
     /// <summary>Hosts <paramref name="sections"/> (taking them from another card that hosted them), or nothing.</summary>
     private void HostExtraSections(FrameworkElement? sections)
     {
