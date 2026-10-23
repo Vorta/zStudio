@@ -2,7 +2,7 @@
 
 Version numbers follow `MAJOR.MINOR.PATCH`; the 0.x series is under active development. Release tags and downloadable archives use the same version.
 
-## 0.9.6 — Unreleased
+## 0.9.6 — 2026-10-23
 
 - **New 3D renderer.** The 3D views draw with zStudio's own Direct3D 11 renderer on Vortice.Windows instead of HelixToolkit and SharpDX (archived since 2019). The old packages they brought in are gone: NETStandard.Library 1.6.1, Microsoft.NETCore.Platforms, SharpDX, HelixToolkit, Microsoft.CodeAnalysis (Roslyn), Cyotek.Drawing.BitmapFont, CommunityToolkit.Common/Diagnostics and the Windows Forms runtime. The portable ZIP shrinks from 106 MB to 79 MB (577 to 459 files). Maps show their first frame sooner, and a whole map seen from above takes about half the processor time per frame. The preview needs a Direct3D 11 (feature level 11_0) graphics adapter, which every Windows 11 PC has.
 - What changes on screen: polygon edges and bounds near the horizon are no longer cut by the sky; of two surfaces lying exactly on top of each other, the same one always shows (before, it depended on the renderer's internal sort); clicks and the navigation cube use the current camera exactly; the axis letters are Arial at the display's scale. VTOL drop-window and AI path selection markers no longer leave a marker at the world origin when there is nothing to mark.
