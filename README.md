@@ -37,7 +37,7 @@ zStudio's **Help** menu opens these guides as they are for the installed version
 
 ## Blender
 
-The download includes the **zStudio RECOIL** extension for Blender 5.2 LTS (`zstudio_recoil-<version>.zip`, beside `zStudio.exe`). **Tools → Edit in Blender…** checks out a model with every file it references; **Tools → Update from Blender export…** applies the Blender export as one undoable edit. See the [extension guide](blender/zstudio_recoil/README.md).
+The download includes the **zStudio RECOIL** extension for Blender 5.2 LTS (`zStudio-Blender-extension-<version>.zip`, beside `zStudio.exe`). **Tools → Edit in Blender…** checks out a model with every file it references; **Tools → Update from Blender export…** applies the Blender export as one undoable edit. See the [extension guide](blender/zstudio_recoil/README.md).
 
 ## AI agents (MCP)
 

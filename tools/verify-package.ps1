@@ -6,7 +6,7 @@ param(
 $ErrorActionPreference = 'Stop'
 if ($ExpectedVersion -notmatch '^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$') { throw 'ExpectedVersion must be a release version.' }
 $root = (Resolve-Path -LiteralPath $Directory).Path.TrimEnd([IO.Path]::DirectorySeparatorChar)
-$extensionName = "zstudio_recoil-$ExpectedVersion.zip"
+$extensionName = "zStudio-Blender-extension-$ExpectedVersion.zip"
 # Only the executable and the files the owner keeps beside it: no runtime, guides, symbols or folders.
 $expectedRoot = @('LICENSE', 'THIRD-PARTY-NOTICES.md', 'zStudio.exe', $extensionName) | Sort-Object
 $actualRoot = @(Get-ChildItem -LiteralPath $root -Force | Select-Object -ExpandProperty Name | Sort-Object)

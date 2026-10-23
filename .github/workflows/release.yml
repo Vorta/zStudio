@@ -62,7 +62,7 @@ jobs:
           $heading = [regex]::Escape("## $env:RELEASE_VERSION")
           $notes = [regex]::Match($changelog, "(?ms)^$heading(?: — [^\r\n]+)?\r?\n(.*?)(?=^## |\z)")
           if (-not $notes.Success) { throw 'Missing changelog entry for release.' }
-          $body = $notes.Groups[1].Value.Trim() + "`n`nDownload the win-x64 ZIP, extract it, and run zStudio.exe; the Blender extension, LICENSE and THIRD-PARTY-NOTICES.md come beside it. SHA256SUMS verifies the download. Game files are not included."
+          $body = $notes.Groups[1].Value.Trim() + "`n`nDownload the win-x64 ZIP, extract it, and run zStudio.exe; the Blender extension (zStudio-Blender-extension-$env:RELEASE_VERSION.zip), LICENSE and THIRD-PARTY-NOTICES.md come beside it. SHA256SUMS verifies the download. Game files are not included."
           $body | Set-Content -LiteralPath (Join-Path $bundle 'release-notes.md') -Encoding utf8
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:

@@ -291,7 +291,7 @@ public partial class MainWindow
     }
 
     /// <summary>The package keeps the extension of the same version beside zStudio.exe.</summary>
-    private static string BlenderExtensionArchive => Path.Combine(AppContext.BaseDirectory, $"zstudio_recoil-{StudioVersion}.zip");
+    private static string BlenderExtensionArchive => Path.Combine(AppContext.BaseDirectory, $"zStudio-Blender-extension-{StudioVersion}.zip");
     private static object BlenderExtensionInfo()
     {
         string archive = BlenderExtensionArchive;

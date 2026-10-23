@@ -32,7 +32,7 @@ Tests that need data return early unless their variable is set, so the plain sui
 | `ZSTUDIO_DEMO_CORPUS` | a RECOIL demo's `zbd` folder (July or August 1998, version-13 worlds) | every version-13 world reads without diagnostics and every rebuilt node box gives back the stored corners |
 | `ZSTUDIO_SOURCE_PROJECT` | a reconstructed project (read only; `data` and `gamegen` are copied to a temporary folder) | the terrain conversion corpus test without reconstructing first |
 | `ZSTUDIO_BLENDER` | Blender 5.2.x executable | `BlenderGraphTests`: installs the packaged extension in a factory-startup background Blender with a fresh user-resource folder, round-trips shared references, flags, zones and geometry, saves and reopens a `.blend` with its baseline cache missing; never touches the user's Blender preferences or windows |
-| `ZSTUDIO_BLENDER_HELPER` | the package's `zStudio.exe`, with the extension ZIP beside it (required with `ZSTUDIO_BLENDER`); locally an extracted copy, not `artifacts/zStudio-win-x64` | the helper the extension calls; run after packaging |
+| `ZSTUDIO_BLENDER_HELPER` | the package's `zStudio.exe`, with `zStudio-Blender-extension-<version>.zip` beside it (required with `ZSTUDIO_BLENDER`); locally an extracted copy, not `artifacts/zStudio-win-x64` | the helper the extension calls; run after packaging |
 | `ZSTUDIO_BLENDER_SOURCE` | any value | `tools/blender-roundtrip.py` loads the extension from `blender/` instead of the packaged ZIP |
 | `ZSTUDIO_INSPECTION_CAPTURE` | an output folder | screenshots from the Desktop inspection checks |
 

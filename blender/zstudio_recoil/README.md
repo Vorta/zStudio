@@ -5,7 +5,7 @@ This extension imports and exports zStudio source glTF graphs in **Blender 5.2 L
 ## Install
 
 1. In Blender, open **Edit → Preferences → Get Extensions** and choose **Install from Disk** in the upper-right menu.
-2. Select `zstudio_recoil-<version>.zip` from your zStudio folder, beside `zStudio.exe` (the version is zStudio's), and enable it.
+2. Select `zStudio-Blender-extension-<version>.zip` from your zStudio folder, beside `zStudio.exe` (the version is zStudio's), and enable it. Blender lists it as **zStudio RECOIL**.
 3. In **Preferences → Add-ons**, expand **zStudio RECOIL** and set **zStudio executable** to that folder's `zStudio.exe`.
 
 The extension and zStudio share one version; update them together and keep the extension's ZIP beside `zStudio.exe`.
