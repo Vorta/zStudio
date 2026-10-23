@@ -13,7 +13,7 @@ Rules for coding agents (Codex reads this file; Claude Code imports it through `
 - Write into `zbd_1998/`, `zbd_1999/` or the external reconstruction/decompilation projects; they are read-only evidence, never build dependencies, never committed.
 - Commit game data, extracted assets, build output, corpus reports, credentials, `.agent/` or `design/`.
 - Discard or overwrite pre-existing changes.
-- Enable MCP access yourself, change the user's MCP opt-in, or capture or move the user's physical mouse (only the pointer-owning PreviewCheck modes do, in their own window: [testing](docs/agents/testing.md#tools)).
+- Enable MCP access in the user's profile yourself, change the user's MCP opt-in, or capture or move the user's physical mouse (only the pointer-owning PreviewCheck modes do, in their own window: [testing](docs/agents/testing.md#tools)).
 - Close, signal or kill a zStudio this session did not start: a plain `zStudio.exe` (the user's GUI) and `zStudio.exe --mcp-host` (the visible MCP workspace) may hold documents, drafts and unsaved work; wait or tell the user. Without asking you may stop: for a test run, the stdio connectors the MCP client launched (`zStudio.exe --mcp`, optionally `--instance <id>`; match the argument, `--mcp-host` must not match; the client may need to reconnect); before publishing a build, any instance (owner decision).
 - Let an export overwrite its inputs or escape its destination, or replace game files without explicit consent.
 - Put zStudio validation results, test counts or history in tracked docs (they go to the PR description and `.agent/`); `CHANGELOG.md` is the only history. Measurements of the shipped data ([D] in engine evidence) are evidence, not results.

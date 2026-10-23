@@ -36,7 +36,7 @@
 ## Local artifacts
 
 - Keep `artifacts/zStudio-win-x64` and its ZIP the latest validated local build. It is the owner's build, which the owner may be running: launch it for the user and for live GUI/MCP work on the owner's workspace, including unreleased features; never point the user at `src/**/bin`.
-- Agents' own test runs and package smoke checks never run `artifacts/zStudio-win-x64`: they use their build output or a copy extracted from the ZIP into an empty temporary folder, each with a private profile ([testing](testing.md#environment)).
+- Agents' own test runs and package smoke checks never run this folder ([testing](testing.md#environment)).
 - Republish after application changes before handing off or using the changed application; stop running zStudio instances first ([AGENTS.md](../../AGENTS.md#never): publishing needs no asking).
 - Keep no superseded portable folders or ZIPs (in `artifacts`, `.agent` or temporary folders). Reports and checksum sidecars go to the OS temporary folder. A local package refresh is not a release and changes no version.
 
