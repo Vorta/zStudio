@@ -144,6 +144,10 @@ public sealed partial class SceneViewport
     internal BitmapSource CapturePresentedFrame() => view.CapturePresented();
     /// <summary>Renders a frame and reads the view as WPF composes it right away (see <c>RenderView.RenderAndReadAsComposed</c>; 96 DPI).</summary>
     internal BitmapSource? RenderFrameReadAsComposed() => view.RenderAndReadAsComposed();
+    /// <summary>Runs the view's reaction to WPF reporting its front buffer lost (false) or available again (true).</summary>
+    internal void SimulateFrontBufferAvailability(bool available) => view.SimulateFrontBufferAvailability(available);
+    /// <summary>Whether WPF reports the view's front buffer available (null before the view has a surface).</summary>
+    internal bool? FrontBufferAvailable => view.FrontBufferAvailable;
 
     /// <summary>Applies <paramref name="change"/> and waits until the next frame is presented.</summary>
     internal async Task WaitForPresentedFrameAsync(Action change, TimeSpan? timeout = null)

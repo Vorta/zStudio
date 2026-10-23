@@ -27,11 +27,13 @@ namespace zStudio.Rendering.Direct3D;
 /// takes, as with Wireframe). Now WPF sees a finished frame: the previous one until the copy completes (at worst a rare tear
 /// between two finished frames). Rendering is driven by <see cref="CompositionTarget.Rendering"/> on demand while the
 /// element is visible: a frame renders while one was requested and for six more frames after each request (stale-frame
-/// workaround for the shared surface, and the tail hover refresh relies on). A lost device or front buffer rebuilds everything
-/// (both devices) from retained data; after three recoveries without a frame in between the view fails instead. A real size
-/// change after a failure, a regained front buffer or <see cref="RetryIfFailed"/> (the preview loaded again) retries with a fresh
-/// budget, recreating the device when the failed recovery left none or a removed one. A forced frame (a capture) renders while
-/// the view is hidden too.
+/// workaround for the shared surface, and the tail hover refresh relies on). While WPF reports its front buffer unavailable
+/// (software composition as over Remote Desktop, a display change, a locked session, a reset device) the view keeps drawing:
+/// the D3DImage's software fallback shows its frames. When the front buffer is available again the surface is rebuilt. A lost
+/// Direct3D device rebuilds everything (both devices) from retained data; after three recoveries without a frame in between
+/// the view fails instead. A real size change after a failure, a regained front buffer or <see cref="RetryIfFailed"/> (the
+/// preview loaded again) retries with a fresh budget, recreating the device when the failed recovery left none or a removed
+/// one. A forced frame (a capture) renders while the view is hidden too.
 /// </summary>
 internal sealed class Direct3DView : IDisposable
 {
@@ -53,7 +55,7 @@ internal sealed class Direct3DView : IDisposable
     private int requestedWidth, requestedHeight, bufferWidth, bufferHeight;
     private float renderWidth, renderHeight;
     private double dpiScale = 1;
-    private bool updateRequested = true, hooked, busy, failed, disposed, ready, frontBufferAvailable = true;
+    private bool updateRequested = true, hooked, busy, failed, disposed, ready;
     private int updateCounter, recoveries;
     private TimeSpan lastRenderingTime = TimeSpan.MinValue;
 
@@ -76,7 +78,7 @@ internal sealed class Direct3DView : IDisposable
     public bool IsReady => ready;
     public double DpiScale => dpiScale;
     public (int Width, int Height) PresentedPixelSize => backBuffer != null ? (bufferWidth, bufferHeight) : (0, 0);
-    public string Status => $"IsRendering={hooked && Element.IsVisible && !failed && frontBufferAvailable}, Loaded={hooked}, Visible={Element.IsVisible}, IsBusy={busy}, Failed={failed}, FrontBuffer={frontBufferAvailable}, Buffer={bufferWidth}x{bufferHeight}";
+    public string Status => $"IsRendering={hooked && Element.IsVisible && !failed}, Loaded={hooked}, Visible={Element.IsVisible}, IsBusy={busy}, Failed={failed}, FrontBuffer={FrontBufferAvailable?.ToString() ?? "none"}, Buffer={bufferWidth}x{bufferHeight}";
     /// <summary>The surface size in DIPs as the projection uses it: the integral size the buffer was made for.</summary>
     public Size ProjectionSize => requestedWidth > 0 && requestedHeight > 0 ? new(requestedWidth, requestedHeight) : new(Math.Max(1, Element.ActualWidth), Math.Max(1, Element.ActualHeight));
 
@@ -129,7 +131,7 @@ internal sealed class Direct3DView : IDisposable
     // A failure is a resize failure; the next frame tries again (and fails the view if it fails too).
     private void CreateTargets()
     {
-        if (failed || !frontBufferAvailable || owner.Device?.Graphics is not { IsDisposed: false } graphics || renderWidth <= 10 || renderHeight <= 10) return;
+        if (failed || owner.Device?.Graphics is not { IsDisposed: false } graphics || renderWidth <= 10 || renderHeight <= 10) return;
         try { EnsureTargets(graphics); }
         catch (Exception error) when (IsDeviceLost(error, graphics)) { Recover(); }
         catch (Exception error) when (error is not OutOfMemoryException and not StackOverflowException) { ReleaseTargets(); owner.RaiseResizeFailed(error); }
@@ -145,6 +147,8 @@ internal sealed class Direct3DView : IDisposable
         RenderFrame(force: false);
     }
 
+    /// <summary>Whether WPF reports the front buffer available (null before the view has a surface).</summary>
+    internal bool? FrontBufferAvailable => imageSource?.IsFrontBufferAvailable;
     /// <summary>Why the last forced frame did not render (null after a rendered one), for the capture's error.</summary>
     public string? Refusal { get; private set; }
 
@@ -153,7 +157,7 @@ internal sealed class Direct3DView : IDisposable
     {
         // A hidden view renders only when forced (a capture): the panel holding it may be collapsed while its scene stays live.
         if (disposed || busy || failed || !force && !Element.IsVisible || owner.Device?.Graphics is not { IsDisposed: false } graphics || owner.Camera is not { } camera
-            || renderWidth <= 10 || renderHeight <= 10 || !frontBufferAvailable || !force && !updateRequested && updateCounter >= MinimumUpdateCount)
+            || renderWidth <= 10 || renderHeight <= 10 || !force && !updateRequested && updateCounter >= MinimumUpdateCount)
         {
             if (force) Refusal = ForcedRefusal();
             return false;
@@ -173,8 +177,9 @@ internal sealed class Direct3DView : IDisposable
                 EnsureTargets(graphics);
                 Draw(graphics, camera);
                 // Hand the frame over in one copy. The lock waits until WPF's previous read is done; a later read that overlaps the
-                // copy shows the previous finished frame (or, rarely, a tear between two finished frames).
-                bool locked = imageSource != null && surface9 != null && imageSource.IsFrontBufferAvailable;
+                // copy shows the previous finished frame (or, rarely, a tear between two finished frames). Also while the front
+                // buffer is unavailable: WPF's software fallback copies the surface on Present.
+                bool locked = imageSource != null && surface9 != null;
                 if (locked) imageSource!.Lock();
                 try
                 {
@@ -201,8 +206,7 @@ internal sealed class Direct3DView : IDisposable
     // Why a forced frame cannot render (the gate RenderFrame refused), for the capture's error.
     private string ForcedRefusal() => disposed ? "the view is closed" : busy ? "a frame is already being drawn" : failed ? "rendering failed: " + RenderException?.Message
         : owner.Device?.Graphics is not { IsDisposed: false } ? "no graphics device" : owner.Camera == null ? "no camera"
-        : renderWidth <= 10 || renderHeight <= 10 ? "the view has no size yet" : !frontBufferAvailable ? "the display surface is unavailable (locked or disconnected session)"
-        : "no frame was drawn";
+        : renderWidth <= 10 || renderHeight <= 10 ? "the view has no size yet" : "no frame was drawn";
 
     private void Draw(D3DGraphics g, RenderCamera camera)
     {
@@ -304,17 +308,22 @@ internal sealed class Direct3DView : IDisposable
         finally { imageSource.Unlock(); }
     }
 
-    // Screen saver, sleep, a locked or disconnected session: the front buffer goes and comes back; rebuild the surface then.
-    private void FrontBufferChanged(object? sender, DependencyPropertyChangedEventArgs e)
+    // WPF reports its front buffer lost (software composition as over Remote Desktop, a display change, a locked session, a
+    // reset device) and available again. The D3DImage keeps our surface meanwhile and, with software fallback, shows our frames
+    // from a software copy, so the view keeps drawing. Never set a null back buffer here: that detaches WPF's bitmap, which then
+    // never reports the front buffer available again. Once it is back, the surface is rebuilt (WPF asks for SetBackBuffer again)
+    // after a fresh start, which recreates the devices only when Direct3D 11 reports its device removed.
+    private void FrontBufferChanged(object? sender, DependencyPropertyChangedEventArgs e) => FrontBufferAvailabilityChanged((bool)e.NewValue);
+    internal void FrontBufferAvailabilityChanged(bool available)
     {
-        bool available = (bool)e.NewValue;
-        if (available == frontBufferAvailable) return;
-        frontBufferAvailable = available;
-        ReleaseSurface(device: true);
-        if (!available) return;
-        // A regained front buffer is a fresh start: an earlier failure may have been the lost session.
-        ReleaseTargets();
-        Retry();
+        if (disposed) return;
+        if (available)
+        {
+            // A fresh start: an earlier failure may have been the lost session.
+            Retry();
+            ReleaseTargets();
+            CreateTargets();
+        }
         InvalidateRender();
     }
 
