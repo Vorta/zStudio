@@ -4,11 +4,10 @@ namespace zStudio.Core;
 
 /// <summary>
 /// The mission's opening takes over the player's start (docs/agents/engine-evidence.md, player start): an entry of its
-/// startup chain takes the controls and gives them back from the pose of the tank's node. <paramref name="Opening"/> is the
-/// entry that takes the controls; <paramref name="SetsPose"/> whether the chain also moves or turns the tank's root, which
-/// then decides where the player starts (m2–m6).
+/// startup chain takes the controls and gives them back from the pose of the tank's node. <paramref name="SetsPose"/> is
+/// whether the chain also moves or turns the tank's root, which then decides where the player starts (m2–m6).
 /// </summary>
-public sealed record MissionStartControl(string Opening, bool SetsPose);
+public sealed record MissionStartControl(bool SetsPose);
 
 public static partial class MissionSceneLoader
 {
@@ -32,7 +31,7 @@ public static partial class MissionSceneLoader
             work.Reserve(1L + name.Length);
             if (lookup.Find(name, token) is { } entry && work.Root(entry) is >= 0 and int root) Enqueue(entry, root, context.Binding(entry, root, work));
         }
-        string? opening = null; bool releases = false, setsPose = false;
+        bool holds = false, releases = false, setsPose = false;
         while (pending.TryDequeue(out var item))
         {
             token.ThrowIfCancellationRequested();
@@ -47,7 +46,7 @@ public static partial class MissionSceneLoader
                     if (ev.Type == 35)
                     {
                         int value = ev.I32(12);
-                        if (value == TakeControls) opening ??= entry.Name;
+                        holds |= value == TakeControls;
                         gives |= value == ReleaseControls; syncs |= value == SyncPoseFromNode;
                         continue;
                     }
@@ -63,7 +62,7 @@ public static partial class MissionSceneLoader
                 releases |= gives && syncs;
             }
         }
-        return opening != null && releases ? new(opening, setsPose) : null;
+        return holds && releases ? new(setsPose) : null;
 
         void Enqueue(AnimationEntry entry, int root, AnimationBinding binding)
         {

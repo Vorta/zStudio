@@ -240,9 +240,11 @@ public partial class MainWindow
         }
         if (known && edits!.Coordinate(source!) is { Kind: "tank" } vehicle && (!vehicle.MissionSpecific && (vehicle.TemplateSourceNode == null || vehicle.Difficulties.Count == 0))) known = false;
         // A placement its selection boundary locks (the player's start under the mission's opening) is shown, never edited.
-        if (known && sourceSelection?.Boundaries.GetValueOrDefault(owner)?.ReadOnlyReason != null) { known = false; info.Remove("Edit scope"); }
+        if (known && sourceSelection?.Boundaries.GetValueOrDefault(owner)?.ReadOnlyReason != null) known = false;
         // A compiled world is read only: its placements are inspected, never moved.
         bool readOnly = shownDocument?.SourceWorld == null;
+        // Only an editable placement names what an edit would change.
+        if (!known || readOnly) info.Remove("Edit scope");
         info["Editable"] = known && !readOnly;
         info["Rotation axes"] = known ? edits!.RotationKind(source!) switch { PlacementRotationKind.EulerRadians => "XYZ", PlacementRotationKind.HeadingDegrees => "Y", _ => "None" } : "None";
         info["Editing"] = readOnly ? "Read only: edit the source project instead" : known ? "Edit position and supported rotation; confirm together as one undo step" : "Read-only inspection";

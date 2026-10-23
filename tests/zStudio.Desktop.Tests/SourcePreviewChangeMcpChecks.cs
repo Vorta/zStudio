@@ -108,11 +108,16 @@ internal static class SourcePreviewChangeMcpChecks
             var tankRow = (await Call("scene_tree", new() { ["document"] = Id(tankMap), ["search"] = "bft_00" }))["matches"]!["items"]!.AsArray()
                 .Single(m => m!["item"]!["playerTank"]?.GetValue<bool>() == true)!["item"]!;
             Assert.Equal(bft["node"]!.GetValue<int>(), tankRow["node"]!.GetValue<int>());
-            // The world loads the tank as bft_00 itself: its record places that node, which is its own template, so it moves.
+            // The world loads the tank as bft_00 itself: its record places that node, which is its own template.
             var tankPlacements = await tankMap.GetPickupEditsAsync(main.ViewModel.Resolver!, token);
             Assert.NotNull(tankPlacements.OtherCoordinates.Single(c => c.Kind == "tank" && c.Source.ResourceName == "AIV.ZRD").TemplateSourceNode);
             // The map's opening holds the controls and gives them back from the tank's pose: the start is read only.
             Assert.Equal("The mission's opening holds the controls and releases them from this pose, so its placement can't be edited.", tankRow["readOnlyReason"]?.GetValue<string>());
+            var lockedTree = await Call("scene_tree", new() { ["document"] = Id(tankMap) });
+            await Call("scene_tree", new() { ["document"] = Id(tankMap), ["context"] = lockedTree["context"]!.GetValue<string>(), ["preview"] = preview, ["action"] = "select", ["row"] = tankRow["row"]!.GetValue<string>() });
+            var locked = await client.CallToolAsync("zstudio_scene_card", new Dictionary<string, object?> { ["preview"] = preview, ["action"] = "begin", ["document"] = Id(tankMap), ["revision"] = tankMap.Revision }, cancellationToken: token);
+            string lockedText = string.Join(";", locked.Content.OfType<TextContentBlock>().Select(c => c.Text));
+            Assert.True(locked.IsError == true, lockedText); Assert.Contains("read_only", lockedText); Assert.Contains("releases them from this pose", lockedText);
             await Job("scene_options", new() { ["preview"] = preview, ["changes"] = new Dictionary<string, object?> { ["bftType"] = "hover", ["bftSecondary"] = "NAPALM" } });
             preview = (await Call("scene_tree", new() { ["document"] = Id(tankMap) }))["preview"]!.GetValue<string>();
             bft = (await Call("preview_state", new() { ["preview"] = preview }))["bft"]!;
