@@ -35,6 +35,7 @@ public partial class MainWindow
     private bool selectingAnimationCard;
     private ComboBox? sourceAnimationBindings;
     private bool synchronizingAnimationBinding;
+    internal Action<CancellationToken>? SourceAnimationReading { get; set; }
     private void CancelSourceAnimationSelectionWork()
     {
         sourceAnimationLoading?.Cancel(); sourcePathLoading?.Cancel(); ++sourceAnimationGeneration;
@@ -44,6 +45,7 @@ public partial class MainWindow
     {
         SourcePickers.IsEnabled = SourceZoneOverlayItems.IsEnabled = !sourceAnimationPreview && !sourceWorkspaceBusy;
         WorldHighlights.IsEnabled = BackdropEnabled.IsEnabled = !sourceAnimationPreview;
+        FlyEnabled.IsEnabled = !sourceAnimationPreview;
     }
 
     private FrameworkElement? AnimationObjectLinks(SceneViewport viewport, SceneInspection selected)
@@ -104,12 +106,14 @@ public partial class MainWindow
         CancelSourceAnimationSelectionWork();
         if (document != shownDocument || ViewModel.Resolver == null || scene == null) throw new StudioCommandException("not_ready", "Open a source map first.");
         if (scene.IsFlyActive || scene.IsPickupDragging || ZoneToolEngaged) throw new StudioCommandException("busy", "Finish navigation or zone editing before starting preview.");
+        var sourceViewport = scene; long revision = document.Revision;
         await EnsureAnimationCardForEntryAsync(document, entry, document.Lifetime.Token);
         RequireNoDrafts();
-        if (document != shownDocument) throw new StudioCommandException("context_changed", "The selected map changed while opening the preview.");
+        if (document != shownDocument || scene != sourceViewport || document.Revision != revision) throw new StudioCommandException("context_changed", "The selected map changed while opening the preview.");
+        if (scene.IsFlyActive || scene.IsPickupDragging || ZoneToolEngaged) throw new StudioCommandException("busy", "Finish navigation or zone editing before starting preview.");
         var pose = scene.CaptureView();
         var editor = new AnimationEditor(document, entry, ViewModel.Resolver, document.Lifetime.Token, ViewModel);
-        editor.SetSourceMapPreview(); animation = editor; sourceAnimationPreview = true;
+        editor.SetSourceMapPreview(); animation = editor; sourceAnimationPreview = true; previewId = Guid.NewGuid();
         UpdateSourceAnimationControls();
         refreshAnimationPathControls?.Invoke();
         editor.SetupRequested += () => SectionCard().SetAnimationSetup(editor.PreviewSetupView, true);
@@ -127,7 +131,7 @@ public partial class MainWindow
     {
         if (!sourceAnimationPreview) return;
         sectionCard?.SetAnimationSetup(null);
-        sourceAnimationPreview = false; animation?.Dispose(); animation = null;
+        sourceAnimationPreview = false; animation?.Dispose(); animation = null; previewId = Guid.NewGuid();
         AnimationHost.Content = null; AnimationHost.Visibility = Visibility.Collapsed;
         UpdateSourceAnimationControls(); ApplySceneOptions();
         refreshAnimationPathControls?.Invoke();
@@ -147,7 +151,11 @@ public partial class MainWindow
         try
         {
             var workspace = document.SourceWorld!.Workspace.BeginPreparedEdit().Workspace;
-            var model = await Task.Run(() => SourceAnimationEdits.Read(workspace, document.SourceWorld.Mission, definition.Definition.Index, loading.Token), loading.Token);
+            var model = await Task.Run(() =>
+            {
+                SourceAnimationReading?.Invoke(loading.Token);
+                return SourceAnimationEdits.Read(workspace, document.SourceWorld.Mission, definition.Definition.Index, loading.Token);
+            }, loading.Token);
             loading.Token.ThrowIfCancellationRequested();
             if (document != shownDocument || document.Revision != revision || SectionSelection?.Section?.Key != definition.Key) return;
             var controls = AnimationPathControls(document, definition);
@@ -314,11 +322,11 @@ public partial class MainWindow
                     var row = sceneTree.FindSection(new DefinitionEntry(entry, listing, false, 0, true).Key) ?? throw new StudioCommandException("stale_record", "The definition row is unavailable.");
                     SelectSceneTreeRow(row);
                     await LoadAnimationCardAsync(doc, (DefinitionEntry)row.Section!, token);
+                    RequireAnimationCard();
                 }
                 else
                 {
-                    var card = SectionCard();
-                    if (card.Entry is not DefinitionEntry current || current.Definition.Index != definition) throw new StudioCommandException("context_changed", "Select this definition before editing.");
+                    var card = RequireAnimationCard();
                     if (action == "select") card.SelectAnimationRecord(Text(a, "record"));
                     else if (action == "set")
                     {
@@ -331,6 +339,15 @@ public partial class MainWindow
                     else { card.RequireDraft(Text(a, "token")); if (action == "cancel") card.Discard(); else { await card.ApplyAsync(); if (card.HasDraft) throw new StudioCommandException("edit_failed", "The edit was not accepted; the Properties draft retains its error."); } }
                 }
                 return Result(new { draft = SectionCard().AnimationDraft });
+
+                SourceSectionCard RequireAnimationCard()
+                {
+                    var card = SectionCard();
+                    if (doc != shownDocument || doc.Revision != a["revision"]!.GetValue<long>() ||
+                        SectionSelection?.Section is not DefinitionEntry current || current.Definition.Index != definition || !card.ShowsAnimation(doc, current))
+                        throw new StudioCommandException("context_changed", "Select this definition in the current map before editing.");
+                    return card;
+                }
             });
     }
 

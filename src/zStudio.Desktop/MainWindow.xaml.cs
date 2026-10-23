@@ -875,7 +875,7 @@ public partial class MainWindow : Window
         { e.Handled = true; sectionCard?.FocusFirst(); return; }
         if (e.Key == Key.Escape && (scene?.CancelPickupDrag() == true || scene?.CancelTerrainStroke() == true)) { e.Handled = true; return; }
         if (e.Key == Key.Space && System.Windows.Input.Keyboard.Modifiers == ModifierKeys.None &&
-            (shownAsset?.Kind == AssetKind.Animation && ViewModel.SelectedDocument?.Document.Animations != null || motion != null) &&
+            (sourceAnimationPreview || shownAsset?.Kind == AssetKind.Animation && ViewModel.SelectedDocument?.Document.Animations != null || motion != null) &&
             AnimationSpaceTarget(e.OriginalSource as DependencyObject))
         {
             e.Handled = true;

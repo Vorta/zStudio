@@ -9,6 +9,7 @@ Version numbers follow `MAJOR.MINOR.PATCH`; the 0.x series is under active devel
 - **Paths and preview.** Motion guides include child targets and cameras, direction marks and breaks at discontinuous transforms. An explicit Preview action uses the animation transport inside the source map; Range opens preview setup in Properties. Analysis is bounded and reports partial or unavailable results.
 - **Drop windows in Properties.** Selecting a flight shows its existing route and release markers, with drop-window timing and Move along path controls at the top of its animation card. The floating panel and top **Show → VTOL route** button are removed from this workflow.
 - MCP adds `zstudio_source_animation` for the shared definition draft and replaces `zstudio_parachute` with `zstudio_animation_paths` for definition paths, source preview and existing drop-window operations. `preview_state.animationPaths` reports the analyzed definitions and snapshots.
+- Animation editing checks the visible map, selection and revision, and changing the preview retires its previous MCP identity. Optional event flags can be disabled and re-enabled; clicking a retained drop-window marker reopens its animation card. Source preview starts with the same ground-collision scenario as its paths and supports the Space playback shortcut.
 
 ## 0.9.7 — 2026-10-23
 

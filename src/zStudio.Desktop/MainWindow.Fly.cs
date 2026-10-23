@@ -27,6 +27,7 @@ public partial class MainWindow
         Dispatcher.BeginInvoke(DispatcherPriority.ContextIdle, () =>
         {
             if (request != flyRequest || FlyEnabled.IsChecked != true) return;
+            if (sourceAnimationPreview) { SynchronizeFly(); return; }
             if (flyCamera == null) { SynchronizeFly(); return; }
             if (!flyCamera.TryStart(out string? error)) { Notice(error ?? "Fly camera unavailable."); SynchronizeFly(); }
         });

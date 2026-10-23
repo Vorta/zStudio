@@ -49,6 +49,7 @@ public partial class MainWindow
     private ParachuteSession? parachutes;
     private ParachuteDraft? parachuteDraft;
     private CancellationTokenSource? parachuteLoading;
+    private Task parachuteSelectionWork = Task.CompletedTask;
     private long parachuteGeneration;
     private const string ParachuteAnalysisStatus = "Analyzing VTOL drop windows…";
     private bool synchronizingParachutes, acceptingParachute;
@@ -60,7 +61,15 @@ public partial class MainWindow
     {
         viewport.ParachuteSelectionChanging = () => parachuteLoading == null && parachuteDraft == null && ResolvePropertiesDrafts();
         viewport.ParachuteWindowSelected += id =>
-        { if (parachutes is { } state && state.Viewport == viewport) { state.Selected = id; UpdateParachutePanel(); } };
+        {
+            if (parachutes is not { } state || state.Viewport != viewport) return;
+            state.Selected = id; UpdateParachutePanel();
+            if (id != null && state.World.SourceWorld != null && state.Entry is int entry)
+            {
+                parachuteSelectionWork = RevealParachuteCardAsync(state, entry);
+                _ = ReportUi(() => parachuteSelectionWork);
+            }
+        };
         viewport.ParachuteMoveRequested += (segment, fraction) =>
         {
             if (parachuteDraft is not { Accepting: false } draft || draft.Session.Viewport != viewport) return;
@@ -75,6 +84,14 @@ public partial class MainWindow
         };
         viewport.ParachuteConfirmRequested += () => _ = ReportUi(ConfirmParachuteFromGuiAsync);
         viewport.ParachuteCancelRequested += CancelParachuteDraft;
+    }
+
+    private async Task RevealParachuteCardAsync(ParachuteSession state, int entry)
+    {
+        await EnsureAnimationCardForEntryAsync(state.World, entry, state.World.Lifetime.Token);
+        if (parachutes != state || shownDocument != state.World || state.World.Revision != state.WorldRevision)
+            throw new StudioCommandException("context_changed", "The selected flight changed while opening its controls.");
+        UpdateParachutePanel();
     }
 
     private void CloseParachutes()
@@ -261,7 +278,7 @@ public partial class MainWindow
         state.Selected = selected;
         if (selected != null && state.World.SourceWorld != null) state.Viewport.SelectParachuteWindow(selected);
     }
-    private void SelectParachute(Guid id)
+    private async Task SelectParachuteAsync(Guid id)
     {
         var state = RequireParachutes(); RequireNoDrafts();
         if (state.World.SourceWorld == null) throw new StudioCommandException("read_only", "This world is read only: edit its source project instead.");
@@ -270,6 +287,7 @@ public partial class MainWindow
         try { accepted = state.Viewport.SelectParachuteWindow(id); }
         catch (InvalidOperationException ex) { throw new StudioCommandException("busy", ex.Message); }
         if (!accepted) throw new StudioCommandException("busy", "Finish the current selection operation first.");
+        await parachuteSelectionWork;
         state.Selected = id; UpdateParachutePanel();
     }
     private void BeginParachute(bool pointer = false)
@@ -443,7 +461,7 @@ public partial class MainWindow
             {
                 if (!await ResolvePropertiesDraftsAsync()) return;
                 if (sender == ParachuteFlights && ParachuteFlights.SelectedItem is ParachuteChoice flight) await AnalyzeParachuteAsync(flight.Entry, CancellationToken.None);
-                else if (ParachuteWindows.SelectedItem is ParachuteWindowChoice window) SelectParachute(window.Id);
+                else if (ParachuteWindows.SelectedItem is ParachuteWindowChoice window) await SelectParachuteAsync(window.Id);
             }
             finally { UpdateParachutePanel(); }
         });

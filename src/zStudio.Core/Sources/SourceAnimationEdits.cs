@@ -124,6 +124,7 @@ public static class SourceAnimationEdits
             foreach (var (key, at, value) in keys)
             {
                 token.ThrowIfCancellationRequested();
+                if (allowed == "ACTIVATION" && key is not ("NAME" or "ACTIVATION")) continue;
                 if (key is "SEQUENCE_DEFINITION" or "RESET_STATE" or "ACTIVATION_PREREQUISITE" or "REQUIRED" or "OPTIONS" or "OBJECT_ACTIVE_LIST") continue;
                 if (value?.Children.Any(c => c.Kind == ZrdKind.Array) == true)
                 {
@@ -138,6 +139,8 @@ public static class SourceAnimationEdits
                 foreach (string key in Settings.Where(k => !keys.Any(p => p.Key == k))) Add(key, -1, null);
             else if (allowed.Split(' ').Contains("START_TIME") && !keys.Any(p => p.Key == "START_TIME")) Add("START_TIME", -1, null);
             else if (allowed == "ACTIVATION" && !keys.Any(p => p.Key == "ACTIVATION")) Add("ACTIVATION", -1, null);
+            foreach (string flag in new[] { "WAIT_FOR_COMPLETION", "RESET" })
+                if (allowed.Split(' ').Contains(flag) && !keys.Any(p => p.Key == flag)) Add(flag, -1, null);
             return fields;
 
             void Add(string key, int at, ZrdNode? value)
@@ -156,8 +159,8 @@ public static class SourceAnimationEdits
                 if (key == "STATE" && allowed == "NAME STATE START_TIME" && values.Length == 1 && values[0] is "ACTIVE" or "INACTIVE") choices = ["ACTIVE", "INACTIVE"];
                 if (at < 0)
                 {
-                    values = key switch { "START_TIME" => ["ANIMATION_OFFSET", "0"], "ACTIVATION" => [settings ? "WEAPON_HIT" : "ON_CALL"], "SAVE_LOG" or "NETWORK_LOG" => ["ON"], "EXECUTION_PRIORITY" => ["4"], "EXECUTION_BY_ZONE" => [], _ => ["0"] };
-                    kinds = key switch { "START_TIME" => ["text", "number"], "ACTIVATION" or "SAVE_LOG" or "NETWORK_LOG" => ["text"], "EXECUTION_PRIORITY" => ["integer"], "EXECUTION_BY_ZONE" => [], _ => ["number"] };
+                    values = key switch { "START_TIME" => ["ANIMATION_OFFSET", "0"], "ACTIVATION" => [settings ? "WEAPON_HIT" : "ON_CALL"], "SAVE_LOG" or "NETWORK_LOG" => ["ON"], "EXECUTION_PRIORITY" => ["4"], "EXECUTION_BY_ZONE" or "WAIT_FOR_COMPLETION" or "RESET" => [], _ => ["0"] };
+                    kinds = key switch { "START_TIME" => ["text", "number"], "ACTIVATION" or "SAVE_LOG" or "NETWORK_LOG" => ["text"], "EXECUTION_PRIORITY" => ["integer"], "EXECUTION_BY_ZONE" or "WAIT_FOR_COMPLETION" or "RESET" => [], _ => ["number"] };
                 }
                 locations.Add(fieldId, (parent, at, value));
                 fields.Add(new(fieldId, Safe(key), Caption(key), values, kinds, choices, at >= 0, settings || key == "START_TIME" || allowed == "ACTIVATION" || key is "WAIT_FOR_COMPLETION" or "RESET", reason));

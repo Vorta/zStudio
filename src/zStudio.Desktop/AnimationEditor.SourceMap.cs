@@ -12,7 +12,7 @@ public partial class AnimationEditor
     internal void SetSourceMapPreview()
     {
         changing = true;
-        try { ShowLevel.IsChecked = true; FollowCamera.IsChecked = false; }
+        try { ShowLevel.IsChecked = true; FollowCamera.IsChecked = false; GroundCollision.IsChecked = false; }
         finally { changing = false; }
         // The map owns presentation controls; this host supplies its existing viewport and transport.
         if (EditorRoot.Children.Count > 0) EditorRoot.Children[0].Visibility = Visibility.Collapsed;

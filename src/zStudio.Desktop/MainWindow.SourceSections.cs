@@ -12,8 +12,8 @@ namespace zStudio.Desktop;
 
 /// <summary>
 /// The World tree's sections beyond the scene: Zones (the zone overlay, each zone's colour and its label), AI Networks (the
-/// AI overlay, each network's markers and its header settings) and Animations (definitions) (read-only, outlining what each
-/// binds to). Their eyes are view only and last for the session; their cards edit the sources through the shared edit path.
+/// AI overlay, each network's markers and its header settings) and Animations (definitions, events and paths).
+/// Their eyes are view only and last for the session; their cards edit the sources through the shared edit path.
 /// </summary>
 public partial class MainWindow : ISourceSectionState
 {
@@ -534,14 +534,13 @@ public partial class MainWindow : ISourceSectionState
                 break;
             case DefinitionEntry definition:
                 if (card.ShowsAnimation(doc, definition)) break;
-                if (selectingAnimationCard) break;
                 var projection = sceneTree?.Projection;
                 int[] roots = sceneTree?.Sections?.DefinitionRoots.GetValueOrDefault(definition.Definition.Index) ?? [];
                 var named = roots.Select(r => (r, projection?.DisplayName(r) ?? r.ToString(CultureInfo.InvariantCulture),
                     projection?.Parent(r) is int parent ? projection.DisplayName(parent) : projection?.PassOf(r)?.Label ?? "")).ToArray();
                 var notes = doc.Document is SourceSceneSnapshot built ? built.Notes.Where(n => n.StartsWith(definition.Definition.File, StringComparison.OrdinalIgnoreCase)).Take(8).Select(n => JsonData.ShownText(n, 400)).ToArray() : [];
                 card.ShowDefinition(doc, definition, named, notes, sceneTree?.Sections?.Definitions.Rejection, Math.Min(roots.Length, SceneViewport.MaximumOutlinedNodes));
-                _ = LoadAnimationCardAsync(doc, definition, CancellationToken.None);
+                if (!selectingAnimationCard) _ = LoadAnimationCardAsync(doc, definition, CancellationToken.None);
                 break;
         }
     }

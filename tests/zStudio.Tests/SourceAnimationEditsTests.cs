@@ -8,6 +8,35 @@ namespace zStudio.Tests;
 public sealed class SourceAnimationEditsTests
 {
     [Fact]
+    public void OptionalEventFlagsCanBeDisabledAndEnabledAfterReload()
+    {
+        var token = TestContext.Current.CancellationToken;
+        var files = VtolDropFixture.Files();
+        files.Content[VtolDropFixture.Root] = Encoding.ASCII.GetBytes("""
+            ANIMATION_DEFINITIONS ( ANIMATION_LIST ( ANIMATION_DEFINITION (
+              NAME ( ground ) ACTIVATION ( ON_CALL )
+              SEQUENCE_DEFINITION ( NAME ( main )
+                CALL_ANIMATION ( NAME ( child ) WAIT_FOR_COMPLETION () )
+                OBJECT_CYCLE_TEXTURE ( NAME ( ground ) RESET () )
+              )
+            ) ) )
+            """);
+        var model = SourceAnimationEdits.Read(files, VtolDropFixture.Root, 0, token);
+        Assert.All(model.Records.Single(r => r.Kind == "sequence").Fields, f => Assert.Contains(f.Key, new[] { "NAME", "ACTIVATION" }));
+        string[] flags = ["WAIT_FOR_COMPLETION", "RESET"];
+        var removed = SourceAnimationEdits.Plan(files, VtolDropFixture.Root, 0,
+            model.Records.SelectMany(r => r.Fields).Where(f => flags.Contains(f.Key)).Select(f => new SourceAnimationEdits.Change(f.Id, null)).ToArray(), token);
+        files.Content[removed.File] = removed.Content;
+        model = SourceAnimationEdits.Read(files, VtolDropFixture.Root, 0, token);
+        var absent = model.Records.SelectMany(r => r.Fields).Where(f => flags.Contains(f.Key)).ToArray();
+        Assert.Equal(2, absent.Length); Assert.All(absent, f => { Assert.False(f.Present); Assert.True(f.Optional); Assert.Empty(f.Values); });
+        var restored = SourceAnimationEdits.Plan(files, VtolDropFixture.Root, 0, absent.Select(f => new SourceAnimationEdits.Change(f.Id, [])).ToArray(), token);
+        files.Content[restored.File] = restored.Content;
+        Assert.All(SourceAnimationEdits.Read(files, VtolDropFixture.Root, 0, token).Records.SelectMany(r => r.Fields).Where(f => flags.Contains(f.Key)), f => Assert.True(f.Present));
+        Assert.Null(AnimationCompiler.Evaluate(files, VtolDropFixture.Root, ["ground"], token: token).EngineRejection);
+    }
+
+    [Fact]
     public void PathsBreakAtCutsInsideOneKeyframeEvent()
     {
         var token = TestContext.Current.CancellationToken;

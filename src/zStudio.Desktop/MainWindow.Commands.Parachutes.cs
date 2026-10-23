@@ -61,8 +61,8 @@ public partial class MainWindow
                 if (!a.ContainsKey("entry")) throw new StudioCommandException("invalid_argument", "Supply the flight entry index.");
                 await AnalyzeParachuteAsync(Int(a, "entry"), token);
             }
-            else if (action == "select") SelectParachute(GuidArg(a, "window"));
-            else if (action == "begin") BeginParachute();
+            else if (action == "select") await SelectParachuteAsync(GuidArg(a, "window"));
+            else if (action == "begin") { await parachuteSelectionWork; BeginParachute(); }
             else if (action is "undo" or "redo") await ParachuteHistoryAsync(action == "redo", token);
             else if (action == "save")
             {

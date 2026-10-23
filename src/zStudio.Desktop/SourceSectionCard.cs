@@ -388,14 +388,21 @@ internal sealed partial class SourceSectionCard : Border
     {
         if (Applying) return Accepting;
         if (!HasDraft) return true;
-        var answer = MessageBox.Show(Window.GetWindow(this), (Entry is ZoneEntry ? "Apply the pending zone label?" : "Apply the pending network changes?") + "\nYes: apply · No: discard · Cancel: keep editing",
-            Entry is ZoneEntry ? "Zone label draft" : "AI network draft", MessageBoxButton.YesNoCancel, MessageBoxImage.Question);
+        string subject = Entry switch { ZoneEntry => "zone label", DefinitionEntry => "animation changes", _ => "network changes" };
+        string title = Entry switch { ZoneEntry => "Zone label draft", DefinitionEntry => "Animation draft", _ => "AI network draft" };
+        var answer = MessageBox.Show(Window.GetWindow(this), $"Apply the pending {subject}?\nYes: apply · No: discard · Cancel: keep editing",
+            title, MessageBoxButton.YesNoCancel, MessageBoxImage.Question);
         if (answer == MessageBoxResult.Cancel) return false;
         if (answer == MessageBoxResult.No) { Discard(); return !HasDraft; }
         await ApplyAsync();
         return !HasDraft;
     }
-    internal void FocusFirst() { if (label != null) { label.Focus(); label.SelectAll(); } else if (inputs.FirstOrDefault()?.Boxes[0] is { } first) first.Focus(); }
+    internal void FocusFirst()
+    {
+        if (label != null) { label.Focus(); label.SelectAll(); }
+        else if (Entry is DefinitionEntry) animationSequencePicker?.Focus();
+        else if (inputs.FirstOrDefault()?.Boxes[0] is { } first) first.Focus();
+    }
 
     // ---------------------------------------------------------------- building
 
