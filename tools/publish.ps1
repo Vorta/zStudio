@@ -66,7 +66,11 @@ try {
     foreach ($stale in @(Get-ChildItem -LiteralPath $parent -Directory -Filter ((Split-Path -Leaf $outputPath) + '.previous-*'))) {
         Assert-ArtifactPath $stale.FullName
         if ($stale.FullName -in $preservedPaths) { Write-Warning "Retaining explicitly protected superseded folder: $($stale.FullName)"; continue }
-        if (-not (Test-StudioPackage $stale.FullName)) { Write-Warning "Not deleting a folder that is not a Studio publish: $($stale.FullName)"; continue }
+        # A delete that stopped at a running zStudio.exe leaves only that exe (its companions sort first): still ours.
+        $leftover = @(Get-ChildItem -LiteralPath $stale.FullName -Force)
+        $partial = $leftover.Count -eq 1 -and $leftover[0].Name -eq 'zStudio.exe' -and
+            (Get-Item -LiteralPath $leftover[0].FullName).VersionInfo.ProductName -eq 'zStudio'
+        if (-not $partial -and -not (Test-StudioPackage $stale.FullName)) { Write-Warning "Not deleting a folder that is not a Studio publish: $($stale.FullName)"; continue }
         try { Remove-Item -LiteralPath $stale.FullName -Recurse -Force -ErrorAction Stop }
         catch { Write-Warning "Superseded build is still in use and will be deleted by the next publish: $($stale.FullName)" }
     }

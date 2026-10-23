@@ -80,7 +80,9 @@ def call(executable, operation, **arguments):
     # The extension and zStudio share one version; the helper says which it is, wherever the extension's ZIP is.
     version = helper_version(executable)
     if version != VERSION:
-        raise ValueError(f"Select the zStudio.exe of version {VERSION}, matching this RECOIL extension; the selected one is {version or 'older than 0.9.7'}")
+        if version:
+            raise ValueError(f"The selected zStudio.exe is version {version} and this RECOIL extension {VERSION}: install zStudio-Blender-extension-{version}.zip from beside that zStudio.exe, or select a zStudio.exe of version {VERSION}")
+        raise ValueError(f"Select the zStudio.exe of version {VERSION}, matching this RECOIL extension; the selected one is older than 0.9.7")
     return run(executable, dict(protocol=PROTOCOL, operation=operation, **arguments))
 
 

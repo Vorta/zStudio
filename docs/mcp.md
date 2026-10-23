@@ -101,7 +101,7 @@ The camera is moved semantically: `zstudio_camera` reads the pose and orbits, pa
 
 ## Updates
 
-`zstudio_state` reports `update`: whether a newer zStudio release is published (`status` `available`, `current`, `unknown` with a `reason`, `disabled` or `checking`), the `current` and `latest` versions, the release page `url` and when GitHub was last asked (`checkedUtc`). `zstudio_update_check` reads the same, asks GitHub now (`check`, as **Help → Check for updates**; this works with automatic checks off, because you or the agent asked) or turns automatic checks on or off (`automatic`, as **Help → Check for updates automatically**). MCP never opens the release page; the status bar's **Update available** does that when you click it.
+`zstudio_state` reports `update`: whether a newer zStudio release is published (`status` `available`, `current`, `unknown` with a `reason`, `disabled` or `checking`), the `current` and `latest` versions, the release page `url` and when GitHub last answered (`checkedUtc`, the last successful check). `zstudio_update_check` reads the same, asks GitHub now (`check`, as **Help → Check for updates**; this works with automatic checks off, because you or the agent asked) or turns automatic checks on or off (`automatic`, as **Help → Check for updates automatically**). MCP never opens the release page; the status bar's **Update available** does that when you click it.
 
 ## Example
 
