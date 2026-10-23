@@ -307,6 +307,8 @@ internal sealed class SourceWorldFixture : IDisposable
               wep_3.1 ( NAME ( NAPALM ) CATCHES_FIRE ( 1 ) ) wep_8.0 ( NAME ( LO-EM ) )
             ) )
             """);
+        // As m1's opening: it takes the controls and gives them back from the tank's pose, without moving the tank.
+        Write("data/m3/zrdr/startanims.zrd", "( NEW_GAME_START ( ( m3_start_animation ) ) )");
         Write("data/m3/zrdr/anim.zad", """
             (
               ANIMATION_DEFINITIONS (
@@ -327,6 +329,11 @@ internal sealed class SourceWorldFixture : IDisposable
                   ANIMATION_DEFINITION (
                     NAME ( bft_00 ) ANIMATION_NAME ( none_to_hover ) ACTIVATION ( ON_CALL ) RESET_TIME ( -1.0 -1.0 )
                     SEQUENCE_DEFINITION ( NAME ( unfold ) OBJECT_ACTIVE_STATE ( NAME ( wings_hover ) STATE ( ACTIVE ) ) )
+                  )
+                  ANIMATION_DEFINITION (
+                    NAME ( ground ) ANIMATION_NAME ( m3_start_animation ) ACTIVATION ( ON_CALL ) RESET_TIME ( 0 -1 )
+                    RESET_STATE ( CALLBACK ( VALUE ( 15 ) ) CALLBACK ( VALUE ( 10 ) ) )
+                    SEQUENCE_DEFINITION ( NAME ( hold ) CALLBACK ( VALUE ( 14 ) ) )
                   )
                 )
               )

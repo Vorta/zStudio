@@ -37,6 +37,8 @@ public sealed partial class MissionSceneContext
     public MissionActor? LocalPlayer { get; init; }
     /// <summary>Why the local player's tank could not be prepared (<see cref="PlayerTank"/> is then null).</summary>
     public string? PlayerTankFailure { get; init; }
+    /// <summary>How the mission's opening holds the player's start (its placement is then read only), or null.</summary>
+    public MissionStartControl? PlayerStartControl { get; init; }
     private readonly int originalNodeCount;
     private readonly MissionActorIndex actorIndex;
     /// <summary>Roots that several actors place (retail m2 Easy lists bft_00 twice), each with the first of them.</summary>
@@ -383,6 +385,12 @@ public static partial class MissionSceneLoader
                 tankFailure = ex.Message;
                 notes.Add($"Player tank: {ex.Message}");
             }
+        // The opening's hold on the player's start, read from the same startup list and bindings as the frontier.
+        MissionStartControl? startControl = null;
+        if (context != null && localPlayer != null && startup.Length > 0)
+            try { startControl = PlayerStartControl(context, bindings!, startup, localPlayer.Root, token); }
+            catch (InvalidDataException ex) when (!budget.Exhausted) { notes.Add($"Player start: the opening could not be read: {ex.Message}"); }
+            catch (IOException) when (bindings!.Exhausted) { notes.Add("Player start: the opening could not be read within the scene's binding allowance."); }
         HashSet<int> dormant = [];
         if (context != null)
         {
@@ -451,7 +459,7 @@ public static partial class MissionSceneLoader
         var animationUses = context == null ? new Dictionary<int, MissionAnimationUses>() :
             CollectAnimationUses(context, original, bindings!, entryRoots, animationSeeds, actors, vehicles, weapons, selection, notes, token);
         return new(scene, sources, actors, dormant, notes, selection, original.Nodes.Count, token)
-        { InitializationTransforms = dependencies, AnimationEntryRoots = entryRoots, AnimationUses = animationUses, LocalPlayer = localPlayer, PlayerTank = tank, PlayerTankFailure = tankFailure };
+        { InitializationTransforms = dependencies, AnimationEntryRoots = entryRoots, AnimationUses = animationUses, LocalPlayer = localPlayer, PlayerTank = tank, PlayerTankFailure = tankFailure, PlayerStartControl = startControl };
 
         MissionPickupSource? CoordinateSource(int recordIndex)
         {

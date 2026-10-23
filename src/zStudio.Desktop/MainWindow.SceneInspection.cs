@@ -239,6 +239,8 @@ public partial class MainWindow
             if (edits.Coordinate(source) is { Kind: "tank" } tank) { info["Template"] = tank.Template; info[SceneInspectionCard.AuthoredHeading] = rotation.Y; }
         }
         if (known && edits!.Coordinate(source!) is { Kind: "tank" } vehicle && (!vehicle.MissionSpecific && (vehicle.TemplateSourceNode == null || vehicle.Difficulties.Count == 0))) known = false;
+        // A placement its selection boundary locks (the player's start under the mission's opening) is shown, never edited.
+        if (known && sourceSelection?.Boundaries.GetValueOrDefault(owner)?.ReadOnlyReason != null) { known = false; info.Remove("Edit scope"); }
         // A compiled world is read only: its placements are inspected, never moved.
         bool readOnly = shownDocument?.SourceWorld == null;
         info["Editable"] = known && !readOnly;
@@ -351,6 +353,8 @@ public partial class MainWindow
             throw new StudioCommandException("not_ready", "Select a mission placement first.");
         if (!ResolvePropertiesDrafts(doc)) return;
         if (card.ObjectEditor != null) { card.BeginObjectEdit(); return; }
+        if (SourceSelection(doc, scene.PreviewScene) is { } locks && locks.Boundaries.GetValueOrDefault(locks.Owner(selection.Node))?.ReadOnlyReason is { } locked)
+            throw new StudioCommandException("read_only", locked);
         var source = InspectionSource(scene, selection);
         var edits = doc.PickupEdits;
         if (source == null || edits == null || edits.Find(source) == null && edits.Coordinate(source) == null)

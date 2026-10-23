@@ -111,6 +111,8 @@ internal static class SourcePreviewChangeMcpChecks
             // The world loads the tank as bft_00 itself: its record places that node, which is its own template, so it moves.
             var tankPlacements = await tankMap.GetPickupEditsAsync(main.ViewModel.Resolver!, token);
             Assert.NotNull(tankPlacements.OtherCoordinates.Single(c => c.Kind == "tank" && c.Source.ResourceName == "AIV.ZRD").TemplateSourceNode);
+            // The map's opening holds the controls and gives them back from the tank's pose: the start is read only.
+            Assert.Equal("The mission's opening holds the controls and releases them from this pose, so its placement can't be edited.", tankRow["readOnlyReason"]?.GetValue<string>());
             await Job("scene_options", new() { ["preview"] = preview, ["changes"] = new Dictionary<string, object?> { ["bftType"] = "hover", ["bftSecondary"] = "NAPALM" } });
             preview = (await Call("scene_tree", new() { ["document"] = Id(tankMap) }))["preview"]!.GetValue<string>();
             bft = (await Call("preview_state", new() { ["preview"] = preview }))["bft"]!;

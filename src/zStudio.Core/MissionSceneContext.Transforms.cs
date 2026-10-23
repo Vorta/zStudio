@@ -112,7 +112,7 @@ public sealed partial class MissionSceneContext
                 if (lookup.First(query.Root, query.Name, query.Limit) != query.Result) return null;
         }
         return new(scene, SourceNodes.ToList(), Actors.ToList(), new(DormantRoots), Diagnostics, Layout, originalNodeCount, token)
-        { AiNetworks = AiNetworks, InitializationTransforms = dependencies, AnimationEntryRoots = AnimationEntryRoots, AnimationUses = AnimationUses, LocalPlayer = LocalPlayer, PlayerTank = PlayerTank, PlayerTankFailure = PlayerTankFailure };
+        { AiNetworks = AiNetworks, InitializationTransforms = dependencies, AnimationEntryRoots = AnimationEntryRoots, AnimationUses = AnimationUses, LocalPlayer = LocalPlayer, PlayerTank = PlayerTank, PlayerTankFailure = PlayerTankFailure, PlayerStartControl = PlayerStartControl };
     }
 
     /// <summary>
@@ -138,7 +138,7 @@ public sealed partial class MissionSceneContext
             scene.Models[i] = b;
         }
         return new(scene, SourceNodes.ToList(), Actors.ToList(), new(DormantRoots), Diagnostics, Layout, originalNodeCount, token)
-        { AiNetworks = AiNetworks, InitializationTransforms = InitializationTransforms, AnimationEntryRoots = AnimationEntryRoots, AnimationUses = AnimationUses, LocalPlayer = LocalPlayer, PlayerTank = PlayerTank, PlayerTankFailure = PlayerTankFailure };
+        { AiNetworks = AiNetworks, InitializationTransforms = InitializationTransforms, AnimationEntryRoots = AnimationEntryRoots, AnimationUses = AnimationUses, LocalPlayer = LocalPlayer, PlayerTank = PlayerTank, PlayerTankFailure = PlayerTankFailure, PlayerStartControl = PlayerStartControl };
     }
 
     private static readonly string[] BoundsFields =["node_bbox", "model_bbox", "child_bbox", "area_partition", "update_flags"];

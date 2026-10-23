@@ -164,7 +164,7 @@ An addition is refused when a folder the mission searches first holds another fi
 
 ## Limits
 
-- AI links, new groups and Add model can't be edited in the GUI; positions that startup animations set can't be moved, nor a unit that two records of the shown difficulty place (m2 Easy lists the player tank twice; its AI Vehicles rows say so in their tooltips) or a unit hidden at the mission's start (the player tank in m2, m4 and m5).
+- AI links, new groups and Add model can't be edited in the GUI; positions that startup animations set can't be moved, nor a unit that two records of the shown difficulty place (m2 Easy lists the player tank twice; its AI Vehicles rows say so in their tooltips) or a unit hidden at the mission's start. The player start can't be moved where the mission's opening holds the controls and decides where the player starts (m1–m6; it moves in m7–m13).
 - Deleting or copying an object an animation names, or changing the model of an object whose parts a bound animation names, isn't refused: the rebuild and the export report it in Problems.
 - The view is the mission's starting scene, without simulating gameplay; not every kind of change has been tested in the game.
 - The AI overlay draws at most 16,384 nodes and 32,768 links.

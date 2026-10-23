@@ -31,6 +31,10 @@ internal sealed record SourceMapPassEntry(int? Row, string Key, string Name, IRe
 /// <summary>Immutable editor projection. Negative row IDs denote source-only groups, never scene slots.</summary>
 internal sealed class SourceMapSelection
 {
+    /// <summary>The player's start under the mission's opening (owner decision 2026-10-23, docs/agents/sources.md): it moves the tank there.</summary>
+    internal const string OpeningSetsStart = "The mission's opening animation sets where the player starts and when the controls are released, so its placement can't be edited.";
+    /// <summary>The player's start under the mission's opening, which holds the controls without moving the tank (m1).</summary>
+    internal const string OpeningHoldsStart = "The mission's opening holds the controls and releases them from this pose, so its placement can't be edited.";
     internal const string HiddenAtStart = "Hidden at the mission's start (a startup animation shows it later), so its placement can't be edited.";
     internal const string MissingTankTemplate = "The tank template is missing or ambiguous, so its placement can't be edited.";
     internal const string HiddenInTree = "Show it in the World tree to edit its placement.";
@@ -148,6 +152,8 @@ internal sealed class SourceMapSelection
             if (repeatedRoot)
                 return $"{mission!.Actors.Count(a => a.Root == actor.Root)} records of the shown difficulty place this object, so editing its placement is unavailable.";
             if (actor.Pickup == null && actor.CoordinateSource == null) return "This object's placement is controlled by startup animation. Editing that placement is unavailable.";
+            // The opening's hold on the player's start comes before its hiding the tank, which it also causes (m2, m4, m5).
+            if (ReferenceEquals(actor, mission!.LocalPlayer) && mission.PlayerStartControl is { } opening) return opening.SetsPose ? OpeningSetsStart : OpeningHoldsStart;
             if (actor.Root >= 0 && actor.Root < scene.Nodes.Count && (scene.Nodes[actor.Root].Metadata.UInt("flags") & 4) == 0)
                 return HiddenAtStart;
             if (actor.CoordinateSource is { } record && placements?.Coordinate(record) is { Kind: "tank", MissionSpecific: false } vehicle && (vehicle.TemplateSourceNode == null || vehicle.Difficulties.Count == 0))
