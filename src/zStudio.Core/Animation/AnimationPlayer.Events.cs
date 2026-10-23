@@ -302,26 +302,42 @@ public sealed partial class AnimationPlayer
                     gravity = Vector3.TransformNormal(gravity, Matrix4x4.Transpose(World(instance, node)));
                 ev.SetVector(100, ev.Vector(100) + gravity);
             }
-            if ((flags & 1) != 0) AddNote(GroundPlaneEnabled
-                ? "Flat-ground preview collision at Y=0 uses mesh-based contact and retail impact responses; mission terrain is not sampled."
+            if ((flags & 1) != 0) AddNote(Terrain != null ? "Preview collision uses standable map surfaces captured at preview start."
+                : GroundPlaneEnabled ? "Flat-ground preview collision at Y=0 uses mesh-based contact and retail impact responses."
                 : "Ground collision is disabled; gravity and launch motion are simulated.", "Support", "Information");
             if ((flags & 2) != 0) AddNote("Inherited gameplay launch velocity is unavailable.", "Support", "Information");
         }
         float dt = (flags & 0x400) != 0 ? Math.Clamp(ev.F32(ev.Version == 39 ? 328 : 248) - (state.EventElapsed - remaining), 0, remaining) : remaining;
-        bool ground = GroundPlaneEnabled && (flags & 1) != 0 && (flags & 12) != 0 && dt > 0;
+        bool translating = (flags & 12) != 0;
+        Vector3 previousOrigin = World(instance, node).Translation;
+        if (translating && ConstrainProcedural(instance, node, previousOrigin))
+        {
+            NoteProceduralLimit(instance, node);
+            remaining -= dt; return 2;
+        }
+        bool ground = (GroundPlaneEnabled || Terrain != null) && (flags & 1) != 0 && translating && dt > 0
+            && context.Scene.Nodes[node.Source].Class != "camera";
         // Depenetrate initial overlap without emitting a contact. All subsequent
         // motion (including spin/morph) is considered before resolving the floor.
         float previousBottom = ground ? PrepareGround(instance, node) : 0;
+        previousOrigin = World(instance, node).Translation;
+        List<Vector3>? previousPoints = ground && Terrain != null ? GroundPoints(instance, node) : null;
         if ((flags & 12) != 0) Position(node, ev.Vector(88) * dt, true);
         if ((flags & 0x20) != 0) { Rotation(node, ev.Vector(160) * dt, true); ev.SetVector(160, ev.Vector(160) + ev.Vector(148) * dt); }
         if ((flags & 0x40) != 0) Rotation(node, new Vector3(ev.F32(96), 0, -ev.F32(88)) * (dt * ev.F32(132)), true);
         if ((flags & 0x80) != 0) { Rotation(node, new Vector3(ev.F32(120), 0, -ev.F32(112)) * (dt * ev.F32(132)), true); ev.SetFloat(132, ev.F32(132) + ev.F32(128) * dt); }
         if ((flags & 0x100) != 0) { node.Scale = Vector3.Max(new(.001f), node.Scale + ev.Vector(196) * dt); node.Changed = true; }
         if ((flags & 0x200) != 0) node.Morph = Math.Clamp(node.Morph + ev.F32(28) * dt, 0, 1);
-        bool settled = ground && ResolveGround(instance, node, ev, previousBottom);
+        bool limited = translating && ConstrainProcedural(instance, node, previousOrigin), contact = false;
+        bool settled = ground && (Terrain != null
+            ? ResolveTerrain(instance, node, ev, previousPoints!, previousOrigin, out contact)
+            : ResolveGround(instance, node, ev, previousBottom, out contact));
+        // A surface crossed before the boundary owns the contact. Bounds themselves never emit impact cues.
+        limited = limited && !contact;
+        if (limited) NoteProceduralLimit(instance, node);
         if ((flags & 12) != 0) ev.SetVector(88, ev.Vector(88) + ev.Vector(100) * dt);
         remaining -= dt;
-        return settled || (flags & 0x400) != 0 && state.EventElapsed > ev.F32(ev.Version == 39 ? 328 : 248) ? 2 : 1;
+        return limited || settled || (flags & 0x400) != 0 && state.EventElapsed > ev.F32(ev.Version == 39 ? 328 : 248) ? 2 : 1;
         float RandomRange(int offset) => ev.F32(offset) + (ev.F32(offset + 4) - ev.F32(offset)) * RandomUnit();
     }
     private int Beam(Instance instance, Sequence state, AnimationEvent ev, ref float remaining)

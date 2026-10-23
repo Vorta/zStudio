@@ -42,7 +42,7 @@ Open a mission's `anim.zbd` and select an animation in Assets. Its world, textur
 - **Settings** shows the binding and mission, and sets the seed, forced conditions, activation points and **Range in seconds** (**Auto** restores the calculated range, labelled **Looping**, **Open-ended** or **Partial** when there is no fixed end).
 - **References** lists the stored reference tables.
 
-The preview is not the game: terrain and object collision, AI, gameplay prerequisites, exact lighting, fog and translucency sorting are approximated or left out, as the support notices in Problems say. MCP: `zstudio_animation_records`, `zstudio_animation_select`, `zstudio_animation_transport`, `zstudio_animation_options`, `zstudio_animation_runtime`, `zstudio_references`, `zstudio_event_catalog`.
+Procedural object movement stops at world Y −500 or 500, including the Height offset; keyframes and cameras are unrestricted. The preview is not the game: terrain and object collision, AI, gameplay prerequisites, exact lighting, fog and translucency sorting are approximated or left out, as the support notices in Problems say. Source-map previews separately use standable map terrain. MCP: `zstudio_animation_records`, `zstudio_animation_select`, `zstudio_animation_transport`, `zstudio_animation_options`, `zstudio_animation_runtime`, `zstudio_references`, `zstudio_event_catalog`.
 
 ## Export
 

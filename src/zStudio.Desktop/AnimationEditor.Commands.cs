@@ -16,6 +16,8 @@ public partial class AnimationEditor
     {
         entry = entryIndex, playing, time = frame?.Time, duration, range = SeekSlider.Maximum, customRange,
         options = Options, height = appliedHeight, lod = Lod.SelectedIndex, difficulty = Mw3WorldPath == null ? SelectedDifficulty.ToString() : null, mission = MissionArchive,
+        collisionMode = sourceMapPreview ? "terrain" : GroundCollision.IsChecked == true ? "plane" : "none",
+        proceduralYLimits = new { minimum = -500, maximum = 500, behavior = "stop", cameras = false, keyframes = false },
         speed = new[] { .25, .5, 1, 2, 4 }[Math.Clamp(Speed.SelectedIndex, 0, 4)], replay = Loop.IsChecked == true,
         mute = Mute.IsChecked == true, volume = Volume.Value, phase = Phase.SelectedIndex == 0 ? "runtime" : "cleanup", seed = appliedSeed,
         condition = Condition.SelectedIndex, activationStart, activationTarget, root = context?.ResolveRoot(Entry),
@@ -71,7 +73,9 @@ public partial class AnimationEditor
             case "horizon": ShowHorizon.IsChecked = value.GetValue<bool>(); break;
             case "grid": ShowGrid.IsChecked = value.GetValue<bool>(); break;
             case "faceOrientation": ShowFaceOrientation.IsChecked = value.GetValue<bool>(); break;
-            case "collision": GroundCollision.IsChecked = value.GetValue<bool>(); break;
+            case "collision":
+                if (sourceMapPreview) throw new StudioCommandException("unsupported", "Source-map animation previews always use standable terrain. Flat-plane collision is an isolated-preview option.");
+                GroundCollision.IsChecked = value.GetValue<bool>(); break;
             case "followCamera": FollowCamera.IsChecked = value.GetValue<bool>(); break;
             case "effects": Lighting.IsChecked = value.GetValue<bool>(); break;
             case "height": PreviewHeight.Text = Numeric(-999,999).ToString(CultureInfo.InvariantCulture); break;

@@ -68,6 +68,10 @@ public sealed partial class AnimationPlayer
     public Vector3? ActivationStart { get; init; }
     /// <summary>Preview-only mesh contact with the infinite world Y=0 plane.</summary>
     public bool GroundPlaneEnabled { get; init; }
+    /// <summary>Static standable map geometry, captured at preview start. Takes precedence over the flat plane.</summary>
+    public AnimationTerrain? Terrain { get; init; }
+    /// <summary>Stop procedural translations at world Y -500 or 500; authored keyframes are unaffected.</summary>
+    public bool ProceduralLimitsEnabled { get; init; }
     private float previewHeight;
     /// <summary>Preview-only world-Y offset, in game units. Authored coordinates remain unchanged.</summary>
     public float PreviewHeight
@@ -383,6 +387,7 @@ public sealed partial class AnimationPlayer
                     node.Rotation = saved.Rotation; node.Exact = saved.Exact; node.Changed = saved.Changed; node.Morph = 0;
                     node.PendingPlacement = saved.PendingPlacement; node.PositionWritten = saved.PositionWritten;
                     node.GroundSupported = saved.GroundSupported;
+                    node.GroundHeight = saved.GroundHeight;
                 }
             }
         // The dispatch snapshot can still hold the replaced sequences until the frontier finishes.
@@ -482,6 +487,7 @@ public sealed partial class AnimationPlayer
         public Vector3 Position, Euler, Scale;
         public Quaternion Rotation;
         public float Alpha = 1, Morph, Fov = MathF.PI / 3;
+        public float GroundHeight;
         public bool Active, Changed, AlphaEnabled, PendingPlacement, PositionWritten, GroundSupported;
         public double CycleStart;
         public Matrix4x4 Local => Changed ? Matrix4x4.CreateScale(Scale) * Matrix4x4.CreateFromQuaternion(Rotation) * Matrix4x4.CreateTranslation(Position) : Exact;

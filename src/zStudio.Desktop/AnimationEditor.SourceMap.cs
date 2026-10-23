@@ -4,6 +4,7 @@ namespace zStudio.Desktop;
 
 public partial class AnimationEditor
 {
+    private bool sourceMapPreview;
     internal void ApplySourceMapDisplay(bool wireframe, bool textured, bool bounds, bool faceOrientation)
     {
         viewport.SetWireframe(wireframe); viewport.SetTextured(textured); viewport.SetBounds(bounds);
@@ -11,6 +12,8 @@ public partial class AnimationEditor
     }
     internal void SetSourceMapPreview()
     {
+        sourceMapPreview = true;
+        GroundCollision.Visibility = Visibility.Collapsed;
         changing = true;
         try { ShowLevel.IsChecked = true; FollowCamera.IsChecked = false; GroundCollision.IsChecked = false; }
         finally { changing = false; }

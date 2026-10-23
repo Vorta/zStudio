@@ -181,6 +181,13 @@ public partial class MainWindow
         if (bindings.Items.Cast<ComboBoxItem>().FirstOrDefault(i => (int)i.Tag == sourceAnimationEntry) is { } chosen) bindings.SelectedItem = chosen;
         AutomationProperties.SetName(bindings, "Animation binding entry"); panel.Children.Add(bindings);
         TextBlock note = new() { Text = "Paths use the selected binding. Selecting an animation does not start playback.", TextWrapping = TextWrapping.Wrap, Margin = new(0, 5, 0, 5) }; panel.Children.Add(note);
+        WrapPanel legend = new() { Margin = new(0, 0, 0, 6) }; panel.Children.Add(legend);
+        foreach (var (label, color) in new[] { ("Objects", "#6FC8D6"), ("Cameras", "#F5A742") })
+        {
+            StackPanel item = new() { Orientation = Orientation.Horizontal, Margin = new(0, 0, 14, 2) };
+            item.Children.Add(new Border { Width = 18, Height = 3, CornerRadius = new(1.5), Background = OutlinerKinds.Frozen(color), VerticalAlignment = VerticalAlignment.Center, Margin = new(0, 0, 6, 0) });
+            item.Children.Add(new TextBlock { Text = label }); legend.Children.Add(item);
+        }
         WrapPanel actions = new(); panel.Children.Add(actions);
         Button Button(string name, Func<Task> action)
         {
@@ -249,7 +256,7 @@ public partial class MainWindow
             var result = await Task.Run(() =>
             {
                 var context = AnimationPreviewContext.FromSources(snapshot, difficulty, token);
-                var player = new AnimationPlayer(context, entry, 1, false, token);
+                var player = new AnimationPlayer(context, entry, 1, false, token) { Terrain = context.Terrain, ProceduralLimitsEnabled = true };
                 double range = seconds ?? player.MeasureDuration(token).Seconds;
                 return (Context: context, Analysis: player.AnalyzePaths(Math.Max(1.0 / 60, range), token));
             }, token);
@@ -379,7 +386,7 @@ public partial class MainWindow
             definition = p.Key, snapshot = p.Value.Id, entry = p.Value.Entry, shown = shownAnimationPaths.Contains(p.Key),
             seconds = p.Value.Analysis.Seconds, status = p.Value.Analysis.Status,
             diagnostics = p.Value.Analysis.Diagnostics.Select(d => Bounded(d, 512)).ToArray(),
-            paths = p.Value.Analysis.Paths.Select(t => new { t.Id, t.Entry, t.Instance, t.Node, name = Bounded(t.Name, 128), samples = t.Points.Count }).ToArray(),
+            paths = p.Value.Analysis.Paths.Select(t => new { t.Id, t.Entry, t.Instance, t.Node, t.Kind, name = Bounded(t.Name, 128), samples = t.Points.Count }).ToArray(),
             eventCount = p.Value.Analysis.Events.Count
         }).ToArray()
     };

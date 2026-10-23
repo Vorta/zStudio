@@ -157,13 +157,14 @@ public partial class AnimationEditor : FieldEditor, IDisposable
     {
         // Only capture controls on the dispatcher; cold binding can then run in the owning request's worker.
         int selectedEntry = entryIndex, seed = appliedSeed;
-        bool reset = Phase.SelectedIndex == 1, ground = GroundCollision.IsChecked == true;
+        bool reset = Phase.SelectedIndex == 1, ground = !sourceMapPreview && GroundCollision.IsChecked == true;
+        var terrain = sourceMapPreview ? source.Terrain : null;
         bool? condition = Condition.SelectedIndex switch { 1 => true, 2 => false, _ => null };
         var start = activationStart; var target = activationTarget; float height = appliedHeight;
         int lod = Math.Clamp(player?.LodLevel ?? Math.Max(0, Lod.SelectedIndex), 0, Math.Max(0, source.Lods.Count() - 1));
         return () => new(source, selectedEntry, seed, reset, token)
         { ConditionOverride = condition, ActivationStart = start, ReferencePosition = target,
-            LodLevel = lod, GroundPlaneEnabled = ground, PreviewHeight = height };
+            LodLevel = lod, GroundPlaneEnabled = ground, Terrain = terrain, ProceduralLimitsEnabled = true, PreviewHeight = height };
     }
     private void SetPlaying(bool value)
     {
@@ -380,7 +381,8 @@ public partial class AnimationEditor : FieldEditor, IDisposable
         if (frame.Time == 0 || Math.Round(frame.Time * 60) % 6 == 0 || !playing)
         {
             string camera = frame.Camera is { } currentCamera ? $"Camera: {currentCamera.Name} #{currentCamera.SourceNode} · {currentCamera.FieldOfView:0.#}° horizontal FOV" : "Camera: no animated camera pose at this time";
-            string ground = GroundCollision.IsChecked == true ? "Ground: Y=0 · mesh-based flat-ground collision" : "Ground: collision disabled (authored gravity retained)";
+            string ground = sourceMapPreview ? "Ground: standable map surfaces · procedural Y limits −500 to 500"
+                : GroundCollision.IsChecked == true ? "Ground: Y=0 · mesh-based flat-ground collision" : "Ground: collision disabled (authored gravity retained)";
             FollowCamera.Tag = "Follow the authored animation camera when available. " + camera;
             Diagnostics.Text = context?.Mission?.Layout.Description + "\n" + RootBindingLabel.Text + "\n" + camera + "\n" + ground + $" · preview height offset {appliedHeight:0.###} game units" + "\n\n" + string.Join("\n", frame.Diagnostics.Concat(audioDiagnostics));
             List<string> overrides = [];

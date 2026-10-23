@@ -4,7 +4,10 @@ using System.Numerics;
 namespace zStudio.Core.Animation;
 
 public sealed record AnimationPathPoint(double Time, Vector3 Position, bool Break);
-public sealed record AnimationPath(string Id, int Entry, long Instance, int Node, string Name, IReadOnlyList<AnimationPathPoint> Points);
+public sealed record AnimationPath(string Id, int Entry, long Instance, int Node, string Name, IReadOnlyList<AnimationPathPoint> Points)
+{
+    public string Kind { get; init; } = "object";
+}
 public sealed record AnimationPaths(double Seconds, string Status, IReadOnlyList<AnimationPath> Paths, IReadOnlyList<AnimationTrace> Events, IReadOnlyList<string> Diagnostics);
 
 public sealed partial class AnimationPlayer
@@ -81,6 +84,7 @@ public sealed partial class AnimationPlayer
                 {
                     if (retained >= maximumPoints) { status = "Partial: path sample limit"; break; }
                     Vector3 position = ancestry.Get(track.Instance, track.Node).World.Translation;
+                    position.Y += PreviewHeight;
                     if (!float.IsFinite(position.X) || !float.IsFinite(position.Y) || !float.IsFinite(position.Z)) throw new InvalidDataException("An animated target has a non-finite position.");
                     bool discontinuity = track.Points.Count == 0;
                     Node? ancestor = track.Node; HashSet<int> visited = [];
@@ -89,7 +93,10 @@ public sealed partial class AnimationPlayer
                         discontinuity |= pathDiscontinuities.Contains(ancestor);
                         ancestor = ParentNode(track.Instance, ancestor.Parent);
                     }
-                    track.Points.Add(new(Time, position, discontinuity)); retained++;
+                    // Keep the stationary endpoint once; later movement still gets its true start time.
+                    if (!discontinuity && track.Points.Count > 1 && track.Points[^1].Position == position && track.Points[^2].Position == position)
+                        track.Points[^1] = new(Time, position, false);
+                    else { track.Points.Add(new(Time, position, discontinuity)); retained++; }
                 }
             }
             finally { EndFrameAncestry(ancestry); }
@@ -100,8 +107,14 @@ public sealed partial class AnimationPlayer
         }
         if (status == "Preview range" && instances.Any(i => i.Sequences.Any(s => s.ObservedInfiniteLoop))) status = "Looping · preview range";
         var paths = tracks.Select(t => new AnimationPath($"{t.Key.Instance}:{t.Key.Node}", t.Value.Instance.Entry.Index,
-            t.Key.Instance, t.Key.Node, t.Key.Node >= 0 && t.Key.Node < context.Scene.Nodes.Count ? context.Scene.Nodes[t.Key.Node].Name : "Motion target", t.Value.Points)).ToArray();
+            t.Key.Instance, t.Key.Node, t.Key.Node >= 0 && t.Key.Node < context.Scene.Nodes.Count ? context.Scene.Nodes[t.Key.Node].Name : "Motion target", Trim(t.Value.Points))
+            { Kind = context.Scene.Nodes[t.Key.Node].Class == "camera" ? "camera" : "object" }).ToArray();
         pathDiscontinuities = null;
         return new(Time, status, paths, trace.Take(4096).ToArray(), notes.Order(StringComparer.Ordinal).Take(256).ToArray());
+        static IReadOnlyList<AnimationPathPoint> Trim(List<AnimationPathPoint> points)
+        {
+            while (points.Count > 1 && !points[^1].Break && points[^1].Position == points[^2].Position) points.RemoveAt(points.Count - 1);
+            return points;
+        }
     }
 }

@@ -19,10 +19,12 @@ public sealed partial class SceneViewport
         foreach (var path in paths)
         {
             var points = path.Points;
+            Color color = path.Kind == "camera" ? Color.FromRgb(0xf5, 0xa7, 0x42) : Color.FromRgb(0x6f, 0xc8, 0xd6);
+            color.A = selected ? (byte)255 : (byte)95;
             if (points.Any(p => !Finite(p.Position) || !double.IsFinite(p.Time))) throw new ArgumentException("Animation guide samples must be finite.");
             var indices = Enumerable.Range(1, Math.Max(0, points.Count - 1)).Where(i => !points[i].Break).SelectMany(i => new[] { i - 1, i }).ToArray();
             group.Children.Add(new LineNode { Geometry = new LineData(points.Select(p => p.Position).ToArray(), indices),
-                Color = selected ? Color.FromRgb(0x6f, 0xc8, 0xd6) : Color.FromArgb(110, 0x6f, 0xc8, 0xd6), Thickness = selected ? 1.8 : 1.1,
+                Color = color, Thickness = selected ? 1.8 : 1.1,
                 IsHitTestVisible = false, IsDepthClipEnabled = false });
             if (points.Count == 0) continue;
             Vector3 min = points[0].Position, max = min;
@@ -43,7 +45,7 @@ public sealed partial class SceneViewport
                 Edge(points[i].Position, points[i].Position - direction * size * 2 + side * size);
                 Edge(points[i].Position, points[i].Position - direction * size * 2 - side * size);
             }
-            group.Children.Add(new LineNode { Geometry = new LineData(marks.ToArray(), edges.ToArray()), Color = Color.FromRgb(0x6f, 0xc8, 0xd6), Thickness = 2, IsHitTestVisible = false, IsDepthClipEnabled = false });
+            group.Children.Add(new LineNode { Geometry = new LineData(marks.ToArray(), edges.ToArray()), Color = color, Thickness = 2, IsHitTestVisible = false, IsDepthClipEnabled = false });
         }
         animationPathGuides[definition] = group; animationGuidePaths[definition] = paths.ToArray();
         view.Items.Add(group); view.InvalidateRender();
@@ -51,7 +53,11 @@ public sealed partial class SceneViewport
     public void EmphasizeAnimationPaths(string definition)
     {
         foreach (var (key, group) in animationPathGuides)
-            foreach (var line in group.Children.OfType<LineNode>()) line.Color = key == definition ? Color.FromRgb(0x6f, 0xc8, 0xd6) : Color.FromArgb(95, 0x6f, 0xc8, 0xd6);
+            foreach (var line in group.Children.OfType<LineNode>())
+            {
+                Color color = line.Color; color.A = key == definition ? (byte)255 : (byte)95;
+                line.Color = color;
+            }
         view.InvalidateRender();
     }
     public void ClearAnimationPaths(string? definition = null)

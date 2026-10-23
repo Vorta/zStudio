@@ -35,6 +35,7 @@ public sealed partial class AnimationPreviewContext
     internal MissionInitializationTransforms? InitializationTransforms { get; init; }
     public required AnimationPackage Package { get; init; }
     public required ISceneDocument World { get; init; }
+    public AnimationTerrain? Terrain { get; private set; }
     private MissionSceneContext? mission;
     /// <summary>Replacing the mission replaces <see cref="Scene"/>, so scene-derived lookups are rebuilt.</summary>
     public MissionSceneContext? Mission { get => mission; set { mission = value; roots.Clear(); nodes.Clear(); trackedNodes.Clear(); lods = null; loadedNames = null; rootPositions = null; } }
@@ -74,7 +75,7 @@ public sealed partial class AnimationPreviewContext
         var package = new AnimationPackage { Prefix = Package.Prefix, Tail = Package.Tail };
         package.Entries.AddRange(Package.Entries.Select(e => e.Clone()));
         package.Diagnostics.AddRange(Package.Diagnostics);
-        var copy = new AnimationPreviewContext { Package = package, World = World, Mission = Mission, InspectionNodes = InspectionNodes, LoadedNodeCount = LoadedNodeCount };
+        var copy = new AnimationPreviewContext { Package = package, World = World, Mission = Mission, InspectionNodes = InspectionNodes, LoadedNodeCount = LoadedNodeCount, Terrain = Terrain };
         foreach (var pair in Effects) copy.Effects.Add(pair.Key, pair.Value);
         copy.effectMaps = effectMaps;
         foreach (var pair in Sounds) copy.Sounds.Add(pair.Key, pair.Value);

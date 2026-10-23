@@ -30,7 +30,8 @@ public sealed partial class AnimationPlayer
                 () => RetainedStateBytes + (otherRetainedState?.Invoke() ?? 0))
             {
                 ConditionOverride = ConditionOverride, EffectLevel = EffectLevel,
-                ReferencePosition = ReferencePosition, ActivationStart = ActivationStart, GroundPlaneEnabled = GroundPlaneEnabled, PreviewHeight = PreviewHeight, measuringDuration = true
+                ReferencePosition = ReferencePosition, ActivationStart = ActivationStart, GroundPlaneEnabled = GroundPlaneEnabled, Terrain = Terrain,
+                ProceduralLimitsEnabled = ProceduralLimitsEnabled, PreviewHeight = PreviewHeight, measuringDuration = true
             };
         }
         catch (StateLimitException)
@@ -81,7 +82,8 @@ public sealed partial class AnimationPlayer
     }
 
     private bool IsUnboundedMotion(Sequence state) => state.State == 1 && state.Work is { Type: 10 } ev && (ev.U32(12) & 0x400) == 0
-        && !(GroundPlaneEnabled && (ev.U32(12) & 1) != 0 && (ev.U32(12) & 12) != 0);
+        && !((GroundPlaneEnabled || Terrain != null || ProceduralLimitsEnabled) && (ev.U32(12) & 12) != 0
+            && ((ev.U32(12) & 1) != 0 || ev.Vector(88).Y != 0 || ev.Vector(100).Y != 0));
     // A later random branch, child, or named stop can terminate an otherwise unbounded loop.
     private static bool IsUnconditionalLoop(Sequence state) => state.ObservedInfiniteLoop &&
         state.Data.Events.All(e => e.Type is not (19 or 24 or 25 or 26 or 27 or 31 or 33));

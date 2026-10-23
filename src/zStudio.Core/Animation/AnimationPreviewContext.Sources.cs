@@ -31,6 +31,7 @@ public sealed partial class AnimationPreviewContext
         if (!source.TextureScripts.ContainsKey(script)) script = "support\\tex_fx.gw";
         context.ReadTextureScript(script, source.TextureScripts, token);
         context.BindEffectCycles(token);
+        context.Terrain = new AnimationTerrain(context.Scene, token);
         return context;
     }
 }

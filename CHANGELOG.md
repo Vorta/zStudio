@@ -4,6 +4,7 @@ Version numbers follow `MAJOR.MINOR.PATCH`; the 0.x series is under active devel
 
 ## 0.9.8 — Unreleased
 
+- Camera animation paths are orange; object paths remain teal, with a color key in Paths. Gravity-driven objects in source previews land on standable map surfaces, including terrain and bridges. Procedural movement stops at world Y −500 or 500 without triggering an impact; keyframes and cameras remain unrestricted. Paths, playback and seeking share these rules.
 - Playback controls have an opaque, theme-aware background, including their margins and wrapped rows, so the underlying map does not show through.
 - **Animations in the map editor.** The World tree has one **Animations** section, containing the objects placed by animations and the mission/common definitions. Selecting a definition opens its editor in Properties and shows its evaluated motion paths. Object cards link to definitions that affect the selected object.
 - **Events and activation.** Edit existing event operands, clock thresholds, sequence activation, definition activation and prerequisites in a shared Apply/Revert draft. Edits preserve source comments and formatting, are checked against every map that includes the source file, and become one project undo step. Keyframe scripts and event order remain read-only.

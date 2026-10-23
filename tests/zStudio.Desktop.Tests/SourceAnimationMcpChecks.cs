@@ -65,6 +65,8 @@ internal static class SourceAnimationMcpChecks
             // A restored card may still be analyzing automatically; explicitly await the analysis whose markers we use.
             var paths = await Job("animation_paths", new() { ["document"] = doc.SessionId.ToString(), ["revision"] = doc.Revision, ["preview"] = current["preview"]!.GetValue<string>(), ["definition"] = 0, ["action"] = "analyze" });
             Assert.NotEmpty(paths["paths"]!["definitions"]!.AsArray());
+            Assert.All(paths["paths"]!["definitions"]!.AsArray().SelectMany(d => d!["paths"]!.AsArray()),
+                p => Assert.Contains(p!["Kind"]!.GetValue<string>(), new[] { "object", "camera" }));
             Assert.True(paths["parachute"]?["windows"] is JsonArray, paths.ToJsonString() + " · " + main.ViewModel.Status);
             var panel = (FrameworkElement)main.FindName("ParachutePanel");
             Assert.Contains(panel, Descendants(card));
@@ -127,6 +129,10 @@ internal static class SourceAnimationMcpChecks
             Assert.True(((TreeView)main.FindName("DocumentSceneTree")).IsEnabled);
             current = await Call("state", new());
             string animationPreview = current["preview"]!.GetValue<string>();
+            var previewState = await Call("preview_state", new() { ["preview"] = animationPreview });
+            Assert.Equal("terrain", previewState["animation"]!["collisionMode"]!.GetValue<string>());
+            Assert.Equal(-500, previewState["animation"]!["proceduralYLimits"]!["minimum"]!.GetValue<int>());
+            Assert.Equal("unsupported", (await Job("animation_options", new() { ["preview"] = animationPreview, ["changes"] = new { collision = false } }, "failed"))["code"]!.GetValue<string>());
             await Job("scene_options", new() { ["preview"] = current["preview"]!.GetValue<string>(), ["changes"] = new { wireframe = true, textures = false, faceOrientation = true } });
             Assert.True(editor.Viewport.Wireframe); Assert.True(editor.Viewport.FaceOrientationEnabled);
             typeof(MainWindow).GetMethod("ClearSectionSelection", flags)!.Invoke(main, []);

@@ -734,7 +734,7 @@
   },
   {
     "Name": "zstudio_preview_state",
-    "Description": "Read active preview options, camera and playback state. reloading is true while a replacement presentation loads over the frozen previous scene; viewport commands answer not_ready until it is published. Source edits evaluate in memory without archives; ordinary transform updates retain the viewport. objectTransformPreviewNode identifies an object currently drawn with a provisional transform while its source change is evaluated. bft describes the player tank of a Whole world (null without one): vehicle and node (its scene_tree row), adjustable (a source map\u0027s choice; compiled worlds draw the defaults), the choice type/primary/secondary, shown (what the view draws: Tracked after a failed or unavailable type, the weapon the game switches to in sub), defaults, types with availability, transitions and reason, secondaries with their gun model and sub-mode permission, gun (drawn nodes, model, missing, sharedWith, line), posing, rebuilding, failure, substitution, hiddenAtStart and the card\u0027s note. texturePacks retains full choice names and paths on a bounded page (offset/limit, default 100, maximum 200); follow texturePackNextOffset and texturePackCount. Long or escaped paths shorten the page.",
+    "Description": "Read active preview options, camera and playback state. animation.collisionMode is terrain, plane or none; proceduralYLimits describes preview bounds and status includes limit diagnostics. reloading is true while a replacement presentation loads over the frozen previous scene; viewport commands answer not_ready until it is published. Source edits evaluate in memory without archives; ordinary transform updates retain the viewport. objectTransformPreviewNode identifies an object currently drawn with a provisional transform while its source change is evaluated. bft describes the player tank of a Whole world (null without one): vehicle and node (its scene_tree row), adjustable (a source map\u0027s choice; compiled worlds draw the defaults), the choice type/primary/secondary, shown (what the view draws: Tracked after a failed or unavailable type, the weapon the game switches to in sub), defaults, types with availability, transitions and reason, secondaries with their gun model and sub-mode permission, gun (drawn nodes, model, missing, sharedWith, line), posing, rebuilding, failure, substitution, hiddenAtStart and the card\u0027s note. texturePacks retains full choice names and paths on a bounded page (offset/limit, default 100, maximum 200); follow texturePackNextOffset and texturePackCount. Long or escaped paths shorten the page.",
     "Mutates": false,
     "Parameters": [
       {
@@ -1277,7 +1277,7 @@
   },
   {
     "Name": "zstudio_animation_options",
-    "Description": "Set animation options: map/grid/collision/horizon/faceOrientation/followCamera/effects/replay/mute/followLog(bool), height(-999..999), lod, difficulty(RECOIL only; MW3 uses missions), speed, volume, phase(runtime/cleanup), seed, condition(0/1/2), range/traceRange(seconds), autoRange/fitTrace(true), problemFilter(0..4), worldPath, root, activationOrigin/activationTarget(XYZ text or blank). Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Description": "Set animation options (collision toggles the isolated flat plane; source-map previews always use terrain): map/grid/collision/horizon/faceOrientation/followCamera/effects/replay/mute/followLog(bool), height(-999..999), lod, difficulty(RECOIL only; MW3 uses missions), speed, volume, phase(runtime/cleanup), seed, condition(0/1/2), range/traceRange(seconds), autoRange/fitTrace(true), problemFilter(0..4), worldPath, root, activationOrigin/activationTarget(XYZ text or blank). Returns an operation ID; use zstudio_operation to await/read the result.",
     "Mutates": true,
     "Parameters": [
       {
@@ -1315,14 +1315,6 @@
             "Name": "grid",
             "Type": "boolean",
             "Description": "grid",
-            "Required": false,
-            "Choices": null,
-            "Properties": null
-          },
-          {
-            "Name": "collision",
-            "Type": "boolean",
-            "Description": "collision",
             "Required": false,
             "Choices": null,
             "Properties": null
@@ -1387,6 +1379,14 @@
             "Name": "fitTrace",
             "Type": "boolean",
             "Description": "fitTrace",
+            "Required": false,
+            "Choices": null,
+            "Properties": null
+          },
+          {
+            "Name": "collision",
+            "Type": "boolean",
+            "Description": "Flat-plane collision in isolated preview; refused in source-map preview, which always uses standable terrain.",
             "Required": false,
             "Choices": null,
             "Properties": null
@@ -2425,7 +2425,7 @@
   },
   {
     "Name": "zstudio_animation_paths",
-    "Description": "With definition, show/analyze bounded source animation paths for an exact binding entry, hide/frame its guides, preview/exit the shared transport, state reads snapshots, samples pages points and markers pages dispatch traces. preview_state.animationPaths reports status and diagnostics. With no definition, inspect and relocate complete existing VTOL drop windows in a Whole world. Show analyzes the first discovered flight; unavailable flights retain the candidate list, entry and analysisRefusal without a partial path. Analyze selects an exact entry. Conditional release markers come from a frozen bounded runtime, never landing predictions. A source map\u0027s windows can be moved: select/begin/set/confirm/cancel share the GUI draft and one undo step, set takes a local start time or an exact path segment plus fraction to disambiguate crossings, and the edit uses token-preserving project history and in-memory scene evaluation (Apply creates no archives; Save writes the owning animation definitions; undo/redo/save target the project). A compiled world is read only: show, analyze, samples and releases work, its windows cannot be selected or moved. Samples/releases support offset/limit pagination without query; preview_state.parachute reports bounded state. No physical input is captured. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Description": "With definition, show/analyze bounded source animation paths for an exact binding entry, hide/frame its guides, preview/exit the shared transport, state reads snapshots, samples pages points and markers pages dispatch traces. preview_state.animationPaths reports status, diagnostics and per-path Kind (object or camera). Source paths use standable map terrain and stop procedural object motion at world Y -500 or 500 without impact cues; keyframes and cameras are unrestricted. Camera guides are orange, objects teal. With no definition, inspect and relocate complete existing VTOL drop windows in a Whole world. Show analyzes the first discovered flight; unavailable flights retain the candidate list, entry and analysisRefusal without a partial path. Analyze selects an exact entry. Conditional release markers come from a frozen bounded runtime, never landing predictions. A source map\u0027s windows can be moved: select/begin/set/confirm/cancel share the GUI draft and one undo step, set takes a local start time or an exact path segment plus fraction to disambiguate crossings, and the edit uses token-preserving project history and in-memory scene evaluation (Apply creates no archives; Save writes the owning animation definitions; undo/redo/save target the project). A compiled world is read only: show, analyze, samples and releases work, its windows cannot be selected or moved. Samples/releases support offset/limit pagination without query; preview_state.parachute reports bounded state. No physical input is captured. Returns an operation ID; use zstudio_operation to await/read the result.",
     "Mutates": true,
     "Parameters": [
       {
