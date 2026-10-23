@@ -45,9 +45,12 @@ public partial class MainWindow
         // (1080p at 175%, 768p at 125%), leaving the view at least 250.
         double available = Math.Max(0, Workbench.ActualHeight - 250);
         bool tools = open && SourceToolsVisible && available >= 80;
-        ToolsRow.Height = new(tools ? Math.Min(sourceToolsHeight ?? Layout.ToolsHeight, available) : 0);
+        bool transport = open && HasWorldAnimationTarget;
+        UpdateWorldAnimationDock(tools);
+        ToolsRow.Height = new(tools ? Math.Min(Math.Max(180, sourceToolsHeight ?? 300), available) : transport ? Math.Min(106, available) : 0);
         ToolsSplitterRow.Height = new(tools ? 6 : 0);
-        BottomTools.Visibility = ToolsSplitter.Visibility = tools ? Visibility.Visible : Visibility.Collapsed;
+        BottomTools.Visibility = tools || transport ? Visibility.Visible : Visibility.Collapsed;
+        ToolsSplitter.Visibility = tools ? Visibility.Visible : Visibility.Collapsed;
         RefreshSourceChrome();
     }
 

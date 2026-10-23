@@ -44,7 +44,12 @@ public sealed class AnimationAudio : IDisposable, IAsyncDisposable
     }
 
     /// <param name="snapshot">A caller-owned frozen context; never the mutable edit package.</param>
-    public async Task PrepareAsync(AnimationPreviewContext snapshot, int entryIndex, CancellationToken token = default)
+    public Task PrepareAsync(AnimationPreviewContext snapshot, int entryIndex, CancellationToken token = default)
+        => PrepareAsync(snapshot, entryIndex, null, true, token);
+
+    /// <summary>Source world sessions defer device creation until explicit forward playback.</summary>
+    public async Task PrepareAsync(AnimationPreviewContext snapshot, int entryIndex, AnimationExecutionPolicy? policy,
+        bool openOutput, CancellationToken token = default)
     {
         ObjectDisposedException.ThrowIf(disposed, this);
         Stop(); IsPrepared = false; bank.Clear();
@@ -55,7 +60,7 @@ public sealed class AnimationAudio : IDisposable, IAsyncDisposable
         Preparation? result = null;
         try
         {
-            result = await Task.Run(() => Prepare(snapshot, entryIndex, linked.Token), linked.Token);
+            result = await Task.Run(() => Prepare(snapshot, entryIndex, policy, openOutput, linked.Token), linked.Token);
             linked.Token.ThrowIfCancellationRequested();
             if (disposed || generation != preparationGeneration) return;
             bank = result.Bank; IsPrepared = result.Error == null;
@@ -70,9 +75,10 @@ public sealed class AnimationAudio : IDisposable, IAsyncDisposable
         }
     }
 
-    private Preparation Prepare(AnimationPreviewContext snapshot, int entryIndex, CancellationToken token)
+    private Preparation Prepare(AnimationPreviewContext snapshot, int entryIndex, AnimationExecutionPolicy? policy,
+        bool openOutput, CancellationToken token)
     {
-        var dependencies = AnimationAudioDependencies.Collect(snapshot.Package, entryIndex, token);
+        var dependencies = AnimationAudioDependencies.Collect(snapshot.Package, entryIndex, policy, token);
         List<string> diagnostics = [.. dependencies.Diagnostics];
         Dictionary<string, AnimationSound> names = new(StringComparer.Ordinal);
         Dictionary<ReadOnlyMemory<byte>, AnimationSound> requested = [];
@@ -127,11 +133,35 @@ public sealed class AnimationAudio : IDisposable, IAsyncDisposable
         Dictionary<string, Binding> next = new(StringComparer.Ordinal);
         foreach (var (name, sound) in names)
             if (!unavailable.Contains(sound.Bytes) && cache.TryGetValue(sound.Bytes, out var sample)) next.Add(name, new(sample, sound.Loop));
-        string? error = null;
+        string? error = openOutput ? OpenOutput(next.Count > 0) : null;
+        token.ThrowIfCancellationRequested();
+        return new(next, diagnostics, error);
+    }
+
+    /// <summary>Open the output on a worker only after the session has accepted forward playback.</summary>
+    public async Task StartOutputAsync(CancellationToken token = default)
+    {
+        ObjectDisposedException.ThrowIf(disposed, this);
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(token, lifetime.Token);
+        await preparationGate.WaitAsync(linked.Token);
+        try
+        {
+            if (!IsPrepared) return;
+            bool needed = bank.Count > 0;
+            string? error = await Task.Run(() => OpenOutput(needed), linked.Token);
+            linked.Token.ThrowIfCancellationRequested();
+            if (error != null) Fail(error);
+        }
+        finally { preparationGate.Release(); }
+    }
+
+    // Called only under preparationGate, including disposal; native device work never runs on the dispatcher.
+    private string? OpenOutput(bool needed)
+    {
         try
         {
             if (Volatile.Read(ref outputFaulted)) RetireOutput();
-            if (next.Count > 0 && output == null)
+            if (needed && output == null)
             {
                 int current = Interlocked.Increment(ref outputGeneration);
                 output = createOutput();
@@ -144,9 +174,8 @@ public sealed class AnimationAudio : IDisposable, IAsyncDisposable
             }
         }
         catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException)
-        { error = ex.Message; RetireOutput(); }
-        token.ThrowIfCancellationRequested();
-        return new(next, diagnostics, error);
+        { RetireOutput(); return ex.Message; }
+        return null;
     }
 
     public void Update(AnimationFrame frame, bool playing, bool seek = false)
@@ -156,7 +185,7 @@ public sealed class AnimationAudio : IDisposable, IAsyncDisposable
             if (error.Output == Volatile.Read(ref outputGeneration))
             { Volatile.Write(ref outputFaulted, true); Fail(error.Message); return; }
         if (!playing || Muted) { if (voices.Count != 0 || completed.Count != 0) Stop(); return; }
-        if (!IsPrepared) return;
+        if (!IsPrepared || output == null) return;
         if (seek) Stop();
         while (mixer.TryTakeEnded(out var ended))
             if (ended.Generation == mixer.Generation) { voices.Remove(ended.Id); completed.Add(ended.Id); }

@@ -20,7 +20,7 @@ public partial class MainWindow
     private void DetachPickupEditor()
     {
         sourceAnimationLoading?.Cancel(); sourcePathLoading?.Cancel(); ++sourceAnimationGeneration;
-        EndSourceAnimationPreview(); sourceAnimationPaths.Clear(); shownAnimationPaths.Clear(); scene?.ClearAnimationPaths();
+        ClearWorldAnimationTarget(); sourceAnimationPaths.Clear(); shownAnimationPaths.Clear(); scene?.ClearAnimationPaths();
         CloseParachutes();
         CancelAiPathDraft(); scene?.SetAiPathEditing(null);
         scene?.CancelPickupDrag();

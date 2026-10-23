@@ -20,6 +20,7 @@ public sealed partial class SceneViewport
         var nextBounds = boundsPlacements.ToDictionary(pair => pair.Key, pair => pair.Value.Select(row => update.Placements[Original(row)]).ToArray());
         objectPreviewMeshes = null; objectPreviewBounds = null; objectPreviewOriginals = null; ObjectTransformPreviewNode = null; objectPreviewToken = 0;
         Mission = mission; PreviewScene = mission.Scene;
+        ++worldSceneGeneration;
         ConfigureHorizon(mission.Scene);
         RefreshZoneModels(update.ZoneModels);
         placementDeltas.Clear(); pickupBasePlacements.Clear();

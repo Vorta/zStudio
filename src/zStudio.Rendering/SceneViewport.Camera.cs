@@ -134,6 +134,7 @@ public sealed partial class SceneViewport
     {
         if (IsFlyActive) { LookFlyBy(horizontal, vertical); return; }
         if (IsPickupDragging || IsAiPathPointerTransform || IsParachutePointerMoving || !rotationEnabled || horizontal == 0 && vertical == 0) return;
+        DisengageWorldAnimationCamera();
         ManualNavigationStarting?.Invoke();
         if (autoPerspective) ChangeProjection("perspective");
         string? previousAxis = axisView; axisView = null; autoPerspective = false;

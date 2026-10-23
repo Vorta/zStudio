@@ -13,6 +13,7 @@ public sealed partial class SceneViewport
     private AnimationPreviewContext? animationContext;
     private AssetResolver? animationResolver;
     private CancellationToken animationToken;
+    private int animationGeneration;
     private readonly Dictionary<long, AnimatedMesh[]> animatedMeshes = [];
     private readonly Dictionary<int, IReadOnlyList<MeshPart>> animationGeometry = [];
     private GeometryReservation? animationGeometryReservation, animationMeshReservation;
@@ -140,7 +141,7 @@ public sealed partial class SceneViewport
         foreach (long expired in animatedMeshes.Where(pair => !poses.TryGetValue(pair.Key, out var pose) ||
             !animationPoses.TryGetValue(pair.Key, out var prior) || prior.Node != pose.SourceNode || prior.Model != pose.Model).Select(pair => pair.Key).ToArray())
         {
-            foreach (var item in animatedMeshes[expired]) { inspectionMeshes.Remove(item.Mesh); inspectionPolygons.Remove(item.Mesh); animationGroup?.Children.Remove(item.Mesh); item.Mesh.Dispose(); }
+            foreach (var item in animatedMeshes[expired]) RemoveAnimationMesh(item);
             animatedMeshes.Remove(expired);
             animationPoses.Remove(expired);
         }
@@ -151,9 +152,14 @@ public sealed partial class SceneViewport
         if (replacementChanged) { replacedNodes.Clear(); replacedNodes.UnionWith(replacement); }
         if (replacementChanged) foreach (var mesh in meshes)
         {
-            var visible = placements[mesh].Where(p => !replacedNodes.Contains(p.NodeIndex)).ToArray();
+            var visible = placements[mesh].Where(IsShownPlacement).ToArray();
             visiblePlacements[mesh] = visible; mesh.Instances = visible.Select(p => p.Transform).ToList();
             mesh.Visibility = visible.Length == 0 ? Visibility.Collapsed : Visibility.Visible;
+        }
+        if (replacementChanged)
+        {
+            RefreshBoundsBoxes(); RefreshZoneVisibility();
+            if (worldAnimation != null) { RecalculateSceneBounds(); levelMin = sceneMin; levelMax = sceneMax; }
         }
         sceneMin = levelMin; sceneMax = levelMax;
         foreach (var pose in frame.Nodes)
@@ -180,7 +186,9 @@ public sealed partial class SceneViewport
                     {
                         if (remaining.Remove(part.MaterialIndex, out var item))
                         {
+                            RemoveAnimationPolygonSource(item.Mesh);
                             item.Mesh.Geometry = Mesh(part); item.Part = part; item.VertexTint = null;
+                            if (worldAnimation != null) RegisterPolygonSource(item.Mesh.Geometry, part, scene.Models, pose.Model);
                             inspectionPolygons[item.Mesh] = part.VertexPolygons;
                         }
                         else { item = CreateAnimationMesh(pose, part); created.Add(item); }
@@ -201,7 +209,8 @@ public sealed partial class SceneViewport
             {
                 animationToken.ThrowIfCancellationRequested();
                 bool horizon = IsHorizon(pose.SourceNode);
-                item.Mesh.Visibility = pose.Visible && pose.Opacity > 0 && (!horizon || horizonEnabled) ? Visibility.Visible : Visibility.Collapsed;
+                item.Mesh.Visibility = pose.Visible && pose.Opacity > 0 && (!horizon || horizonEnabled) &&
+                    (worldAnimation == null || IsShownNode(pose.SourceNode)) ? Visibility.Visible : Visibility.Collapsed;
                 var transform = CameraFacingTransform(pose, model);
                 item.Mesh.Transform = HorizonTransform(pose.SourceNode, transform);
                 JsonMaterial(scene, item.Part.MaterialIndex, out var color, out int textureIndex);
@@ -239,16 +248,18 @@ public sealed partial class SceneViewport
                 if (textureName != null)
                 {
                     if (textureSlot?.Texture is { } texture) { diffuseMap = texture; alphaTexture = textureSlot.Alpha; }
-                    else item.Mesh.Visibility = Visibility.Collapsed;
+                    else if (worldAnimation == null || texturesEnabled) item.Mesh.Visibility = Visibility.Collapsed;
                 }
-                item.Material.DiffuseMap = diffuseMap;
+                item.Material.DiffuseMap = worldAnimation != null && !texturesEnabled ? null : diffuseMap;
+                item.Material.Unlit = worldAnimation == null || texturesEnabled;
                 float alpha = pose.Opacity * color.Alpha;
                 item.LitColor = AnimationLitColor(pose, color, frame, effectLighting);
                 SetAnimationColor(item, AnimationFogColor(pose, item.LitColor, frame, effectLighting));
                 item.Mesh.IsTransparent = !horizon && (alphaTexture || alpha < 1);
-                if (!horizon && pose.Visible && item.Mesh.Geometry is { Positions: var positions }) IncludeBounds(positions, transform);
+                if (!horizon && item.Mesh.Visibility == Visibility.Visible) IncludeBounds(item.LocalBounds.Min, item.LocalBounds.Max, transform);
             }
         }
+        if (worldAnimation != null && wireframe) ShowPolygonEdges(true);
         if (followCamera && frame.Camera is { } c)
         {
             ChangeProjection("perspective"); axisView = null; autoPerspective = false;
@@ -282,6 +293,7 @@ public sealed partial class SceneViewport
         {
             RegisterInspectionMesh(mesh, part.MaterialIndex, pose.Id, pose.SourceNode, pose.Model);
             inspectionPolygons[mesh] = part.VertexPolygons;
+            if (worldAnimation != null) RegisterPolygonSource(mesh.Geometry!, part, animationContext!.Scene.Models, pose.Model);
             // Clicks select through HandleScenePointerDown's inspection probe, which skips the horizon.
             animationGroup!.Children.Add(mesh);
             return new(mesh, material, part);
@@ -294,8 +306,17 @@ public sealed partial class SceneViewport
     }
     private void RemoveAnimationMesh(AnimatedMesh item)
     {
+        RemoveAnimationPolygonSource(item.Mesh);
         inspectionMeshes.Remove(item.Mesh); inspectionPolygons.Remove(item.Mesh);
         animationGroup?.Children.Remove(item.Mesh); item.Mesh.Dispose();
+    }
+    private void RemoveAnimationPolygonSource(MeshNode mesh)
+    {
+        if (polygonEdges.Remove(mesh, out var edges))
+            foreach (var line in new[] { edges.Halo, edges.Core }) { view.Items.Remove(line); line.Dispose(); }
+        if (mesh.Geometry is not { } geometry || !polygonSources.Remove(geometry)) return;
+        foreach (var list in polygonGeometries.Values) list.Remove(geometry);
+        polygonZoneColors.Remove(geometry); filteredZoneColors.Remove(geometry); polygonEdgeGeometries.Remove(geometry);
     }
     private Matrix4x4 CameraFacingTransform(AnimationNodePose pose, GameModel model)
     {
@@ -462,7 +483,7 @@ public sealed partial class SceneViewport
         { AnimationTextureLimit("Animation texture request limit reached (4096 names / 1,000,000 retained name characters)."); return null; }
         animationTextureNameUnits += name.Length + 1L;
         slot = new(); animationTextureSlots.Add(name, slot); animationTextureReferences.Add(name, slot);
-        int current = generation; var cache = previewTextures; var token = animationToken;
+        int current = generation, currentAnimation = animationGeneration; var cache = previewTextures; var token = animationToken;
         var use = cache.Retain();
         slot.Load = Load(); return slot;
         async Task Load()
@@ -470,7 +491,7 @@ public sealed partial class SceneViewport
             try
             {
                 var decoded = await Task.Run(() => cache.GetAsync(name, token), token);
-                if (current != generation || token.IsCancellationRequested) return;
+                if (current != generation || currentAnimation != animationGeneration || token.IsCancellationRequested) return;
                 if (decoded != null)
                 {
                     var image = decoded.Image;
@@ -481,8 +502,8 @@ public sealed partial class SceneViewport
                 else TextureNotice("Missing animation texture: ", name);
             }
             catch (OperationCanceledException) { }
-            catch (ObjectDisposedException) when (current != generation || disposed) { }
-            catch (Exception ex) when (ex is System.IO.IOException or InvalidDataException or UnauthorizedAccessException) { if (current == generation) TextureNotice("Animation texture: ", ex.Message); }
+            catch (ObjectDisposedException) when (current != generation || currentAnimation != animationGeneration || disposed) { }
+            catch (Exception ex) when (ex is System.IO.IOException or InvalidDataException or UnauthorizedAccessException) { if (current == generation && currentAnimation == animationGeneration && !token.IsCancellationRequested) TextureNotice("Animation texture: ", ex.Message); }
             finally { use.Dispose(); }
         }
         void TextureNotice(string prefix, string detail)
@@ -496,10 +517,8 @@ public sealed partial class SceneViewport
         if (animationTextureLimitReported) return;
         animationTextureLimitReported = true; Information?.Invoke(message);
     }
-    private void IncludeBounds(IEnumerable<Vector3> positions, Matrix4x4 transform)
+    private void IncludeBounds(Vector3 min, Vector3 max, Matrix4x4 transform)
     {
-        Vector3 min = new(float.PositiveInfinity), max = new(float.NegativeInfinity);
-        foreach (var p in positions) { min = Vector3.Min(min, p); max = Vector3.Max(max, p); }
         if (!float.IsFinite(min.X)) return;
         for (int corner = 0; corner < 8; corner++)
         {
@@ -512,8 +531,12 @@ public sealed partial class SceneViewport
     private static Matrix3D ToWpf(Matrix4x4 m) => new(m.M11,m.M12,m.M13,m.M14,m.M21,m.M22,m.M23,m.M24,m.M31,m.M32,m.M33,m.M34,m.M41,m.M42,m.M43,m.M44);
     private void ClearAnimationResources()
     {
-        foreach (var items in animatedMeshes.Values) foreach (var item in items) item.Mesh.Dispose();
-        if (animationGroup != null) { animationGroup.Children.Clear(); animationGroup.Dispose(); animationGroup = null; }
+        ++animationGeneration;
+        foreach (var items in animatedMeshes.Values) foreach (var item in items) RemoveAnimationMesh(item);
+        // Static transparent meshes can share this sorting group. Detach must never dispose them.
+        if (animationGroup != null && !ReferenceEquals(animationGroup, sceneAlphaGroup))
+        { view.Items.Remove(animationGroup); animationGroup.Dispose(); }
+        animationGroup = null;
         animatedMeshes.Clear(); animationGeometry.Clear(); animationTextureSlots.Clear(); replacedNodes.Clear(); animationContext = null; animationResolver = null; animationFrame = null;
         animationGeometryScratch.Clear(); animationGeometryCopies.Clear(); animationPossibleParts.Clear(); animationPoses.Clear(); animationGeometryBytes = animationMeshBytes = 0;
         animationGeometryReservation?.Dispose(); animationGeometryReservation = null;
@@ -535,7 +558,15 @@ public sealed partial class SceneViewport
     {
         public MeshNode Mesh { get; } = mesh;
         public PreviewMaterial Material { get; } = material;
-        public MeshPart Part { get; set; } = part;
+        private MeshPart part = part;
+        public MeshPart Part { get => part; set { part = value; LocalBounds = Bounds(value); } }
+        public (Vector3 Min, Vector3 Max) LocalBounds { get; private set; } = Bounds(part);
+        private static (Vector3 Min, Vector3 Max) Bounds(MeshPart value)
+        {
+            Vector3 min = new(float.PositiveInfinity), max = new(float.NegativeInfinity);
+            foreach (var point in value.Positions) { min = Vector3.Min(min, point); max = Vector3.Max(max, point); }
+            return (min, max);
+        }
         public Color4? VertexTint { get; set; }
         public Color4 LitColor { get; set; }
     }

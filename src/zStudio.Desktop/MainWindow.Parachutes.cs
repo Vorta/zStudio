@@ -26,6 +26,10 @@ public partial class MainWindow
         public VtolDropSnapshot? Analysis;
         public int? Entry;
         public string? AnalysisRefusal;
+        public bool Stale;
+        public readonly Guid Scenario = Guid.NewGuid();
+        public Guid Run = Guid.NewGuid();
+        public readonly int SceneGeneration = viewport.SceneGeneration;
         public Guid? Selected;
     }
     private sealed class ParachuteDraft(ParachuteSession session, VtolDropWindow window)
@@ -123,7 +127,8 @@ public partial class MainWindow
         var state = parachutes ?? throw new StudioCommandException("not_ready", "Open Parachute in a Whole world first.");
         if (snapshot != null && snapshot != state.Id) throw new StudioCommandException("stale_snapshot", "Read the current Parachute snapshot.");
         if (!IsAiWorld || shownDocument != state.World || scene != state.Viewport || state.World.IsDisposed || state.Owner?.IsDisposed == true ||
-            state.World.Revision != state.WorldRevision || (state.Owner?.Revision ?? state.World.Revision) != state.OwnerRevision)
+            state.World.Revision != state.WorldRevision || (state.Owner?.Revision ?? state.World.Revision) != state.OwnerRevision ||
+            state.Viewport.SceneGeneration != state.SceneGeneration || state.Stale)
             throw new StudioCommandException("context_changed", "The world or animation changed; close and reopen the route editor.");
         if (edit)
         {
@@ -141,6 +146,7 @@ public partial class MainWindow
             throw new StudioCommandException("unsupported", "Open a Whole world to inspect VTOL drop windows.");
         CloseParachutes();
         var viewport = scene!; long request = ++parachuteGeneration, revision = world.Revision;
+        int baselineGeneration = viewport.SceneGeneration;
         started?.Invoke(request);
         using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(token, world.Lifetime.Token, ViewModel.WorkspaceToken, shutdownToken);
         parachuteLoading = cancellation;
@@ -148,7 +154,7 @@ public partial class MainWindow
         void Current()
         {
             cancellation.Token.ThrowIfCancellationRequested();
-            if (request != parachuteGeneration || shownDocument != world || scene != viewport || world.Revision != revision)
+            if (request != parachuteGeneration || shownDocument != world || scene != viewport || world.Revision != revision || viewport.SceneGeneration != baselineGeneration)
                 throw new StudioCommandException("context_changed", "The world changed while its drop windows were analyzed.");
         }
         try
@@ -158,8 +164,7 @@ public partial class MainWindow
             if (world.SourceWorld != null)
             {
                 if (world.SourceInputsChanged(verifyContent: false)) throw new StudioCommandException("stale_document", "Reload the world after source changes.");
-                context = await Task.Run(() => AnimationPreviewContext.FromSources((zStudio.Core.Sources.SourceSceneSnapshot)world.Document,
-                    ViewModel.Difficulty, cancellation.Token), cancellation.Token);
+                context = await PrepareWorldAnimationContextAsync(world, cancellation.Token);
                 Current();
             }
             else
@@ -187,13 +192,13 @@ public partial class MainWindow
             Current();
             if (owner != null && (owner.IsDisposed || owner.Revision != ownerRevision)) throw new StudioCommandException("context_changed", "The animation owner changed during analysis.");
             RequireParachutePublication(viewport);
-            // A compiled world's drop windows are shown, never selected for a move.
-            state.Selected = world.SourceWorld == null ? null : state.Analysis?.Windows.FirstOrDefault()?.Id; parachutes = state;
+            // Analysis publishes evidence only. Selecting a window is an explicit inspection action;
+            // doing it here would replace an unpinned animation candidate and its configured scenario.
+            state.Selected = null; parachutes = state;
             world.PropertyChanged += ParachuteDocumentChanged; world.Disposing += CloseParachutes;
             if (owner != null) { owner.PropertyChanged += ParachuteDocumentChanged; owner.Disposing += CloseParachutes; }
             if (parachuteLoading == cancellation) parachuteLoading = null;
-            if (world.SourceWorld != null && state.Entry is int flightEntry) { await EnsureAnimationCardForEntryAsync(world, flightEntry, cancellation.Token); Current(); ViewModel.Status = ParachuteAnalysisStatus; }
-            PublishParachuteOverlay(); UpdateParachutePanel();
+            PublishParachuteOverlay(); RefreshWorldAnimationDropRelationships(); UpdateParachutePanel();
             CompleteParachuteStatus(request, world, viewport, ParachuteAnalysisResult(state));
         }
         catch (Exception ex) when (request != parachuteGeneration && ex is OperationCanceledException or StudioCommandException or IOException or InvalidDataException or UnauthorizedAccessException)
@@ -221,8 +226,8 @@ public partial class MainWindow
             RequireParachutes(state.Id); cancellation.Token.ThrowIfCancellationRequested();
             RequireParachutePublication(state.Viewport);
             if (parachuteLoading == cancellation) parachuteLoading = null;
-            state.Entry = candidate.EntryIndex; (state.Analysis, state.AnalysisRefusal) = result;
-            state.Selected = state.World.SourceWorld == null ? null : state.Analysis?.Windows.FirstOrDefault()?.Id; PublishParachuteOverlay(); UpdateParachutePanel();
+            state.Entry = candidate.EntryIndex; state.Run = Guid.NewGuid(); (state.Analysis, state.AnalysisRefusal) = result;
+            state.Selected = null; PublishParachuteOverlay(); UpdateParachutePanel();
             CompleteParachuteStatus(request, state.World, state.Viewport, ParachuteAnalysisResult(state));
         }
         catch (Exception ex) when (request != parachuteGeneration && ex is OperationCanceledException or StudioCommandException or IOException or InvalidDataException or UnauthorizedAccessException)
@@ -293,6 +298,7 @@ public partial class MainWindow
     private void BeginParachute(bool pointer = false)
     {
         var state = RequireParachutes(edit: true); RequireNoDrafts();
+        StopWorldAnimationForEdit();
         EndZoneToolFor("moving a drop window");
         var window = state.Analysis?.Windows.FirstOrDefault(w => w.Id == state.Selected) ?? throw new StudioCommandException("selection_required", "Select a drop window.");
         if (!state.Viewport.SelectParachuteWindow(window.Id)) throw new StudioCommandException("busy", "Finish the current selection operation first.");
@@ -488,7 +494,10 @@ public partial class MainWindow
         synchronizingParachutes = true;
         try
         {
-            ParachutePanel.Visibility = parachutes == null ? Visibility.Collapsed : Visibility.Visible;
+            bool matchingCard = parachutes is { } visibleState && (visibleState.World.SourceWorld == null ||
+                sectionCard?.Document == visibleState.World && sectionCard.Entry is DefinitionEntry definition &&
+                visibleState.Entry is int entry && definition.Definition.Entries.Contains(entry));
+            ParachutePanel.Visibility = matchingCard ? Visibility.Visible : Visibility.Collapsed;
             if (parachutes is not { } state) return;
             ParachutePanel.IsEnabled = !sourceWorkspaceBusy && parachuteLoading == null && parachuteDraft?.Accepting != true;
             bool editable = state.World.SourceWorld != null;
@@ -504,16 +513,16 @@ public partial class MainWindow
             ParachuteDraftPanel.Visibility = parachuteDraft == null ? Visibility.Collapsed : Visibility.Visible;
             var selectedWindow = state.Analysis?.Windows.FirstOrDefault(w => w.Id == state.Selected);
             ParachuteMoveButtons.Visibility = parachuteDraft == null && editable ? Visibility.Visible : Visibility.Collapsed;
-            ParachuteMoveButtons.IsEnabled = selectedWindow is { MoveRefusal: null };
+            ParachuteMoveButtons.IsEnabled = !state.Stale && selectedWindow is { MoveRefusal: null };
             ParachuteFlights.IsEnabled = parachuteDraft == null;
             ParachuteFlights.Visibility = state.World.SourceWorld != null ? Visibility.Collapsed : Visibility.Visible;
             ParachuteWindows.IsEnabled = parachuteDraft == null && editable;
             ParachuteStart.Text = parachuteDraft?.Input ?? "";
             ParachuteConfirm.IsEnabled = parachuteDraft is { Plan: not null, Preview: not null, Error: null };
-            ParachuteMessage.Text = parachuteDraft is { } d ? d.Error ?? (d.Preview == null ? "Analyzing proposed release positions…" : $"Start range {d.Window.MinimumStart:G6}–{d.Window.MaximumStart:G6} s. Confirm accepts one undo step.")
+            ParachuteMessage.Text = state.Stale ? "Drop analysis is stale after an event draft. Apply or discard the draft, then explicitly analyze drop windows again." : parachuteDraft is { } d ? d.Error ?? (d.Preview == null ? "Analyzing proposed release positions…" : $"Start range {d.Window.MinimumStart:G6}–{d.Window.MaximumStart:G6} s. Confirm accepts one undo step.")
                 : state.AnalysisRefusal ?? selectedWindow?.MoveRefusal ?? (state.Analysis is { } a ? $"{a.CycleSeconds:G6} s cycle · {a.Releases.Count} eligible releases. Conditions still apply; markers are not landing predictions."
                 : state.Discovery.Diagnostics.Count == 0 ? "No supported callback-911 flight programs in this mission." : string.Join("\n", state.Discovery.Diagnostics.Take(3).Select(s => Bounded(s, 300))));
         }
-        finally { synchronizingParachutes = false; }
+        finally { synchronizingParachutes = false; RefreshWorldAnimationTimeline(); }
     }
 }

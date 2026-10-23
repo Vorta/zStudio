@@ -33,6 +33,8 @@ public partial class MainWindow
             // Editing the object takes over from the polygon zone tool (its strokes would wait on this draft).
             if (scene?.IsZonePainting == true || zoneTool.Applying) throw new StudioCommandException("busy", "Finish the polygon zone strokes before editing the object.");
             LeaveZoneTool();
+            StopWorldAnimationForEdit();
+            current.RebindSourceEditSelection();
             inspectionDraft = current;
         };
         card.BrowseModel = () =>

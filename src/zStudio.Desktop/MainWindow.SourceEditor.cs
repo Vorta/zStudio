@@ -33,7 +33,7 @@ public partial class MainWindow
     private void SetToolsVisible(bool visible, bool problems = false)
     {
         // Only a change is remembered: a report that shows the open pane again writes nothing.
-        if (ViewModel.IsSourceProject) { bool changed = SourceToolsVisible != visible; sourceToolsVisible = visible; if (changed) RememberSourceTools(); }
+        if (ViewModel.IsSourceProject) { bool changed = SourceToolsVisible != visible; sourceToolsVisible = visible; if (problems) SetWorldAnimationDockView("diagnostics"); if (changed) RememberSourceTools(); }
         else { Layout.ToolsVisible = visible; if (problems) ToolTabs.SelectedIndex = 2; }
         ArrangeWorkspace();
     }
@@ -129,7 +129,7 @@ public partial class MainWindow
         Restyle(HighlightLandmarks, "CommandToggle", "Landmarks — geometry and objects that are never culled");
         Move(FaceOrientation, SourceOverlayItems, "CommandToggle", "Face orientation — show normal direction");
         // The zone overlays and the AI overlay are the World tree's Zones and AI Networks rows (their eyes): the compiled
-        // toolbar keeps its own toggles, out of sight here; Show keeps VTOL route.
+        // toolbar keeps its own toggles, out of sight here. Animation guides belong to the animation controls.
         Restyle(HighlightZones, VisibilityProperty, Visibility.Collapsed);
         Restyle(HighlightPolygonZones, VisibilityProperty, Visibility.Collapsed);
         foreach (var moved in new FrameworkElement[] { FrameScene, FlyEnabled, Wireframe, FaceOrientation, TexturesEnabled, BoundsEnabled, BackdropEnabled, WorldHighlights })
@@ -143,10 +143,11 @@ public partial class MainWindow
         if (DocumentSceneTree.Parent is ContentControl tab) tab.Content = null;
         SourceTreeHost.Content = DocumentSceneTree;
         Restyle(DocumentSceneTree, ScrollViewer.HorizontalScrollBarVisibilityProperty, ScrollBarVisibility.Disabled);
-        // Diagnostics is the problems page alone: no Related or Bytes, and no tabs.
-        Move(ProblemsPage, SourceDiagnosticsHost);
+        // The source dock shares one transport across Timeline and Diagnostics.
+        InitializeWorldAnimationDock();
+        Move(ProblemsPage, sourceDiagnosticsContent!);
         Restyle(ToolTabs, VisibilityProperty, Visibility.Collapsed); Restyle(SourceDiagnosticsHost, VisibilityProperty, Visibility.Visible);
-        // Its notices stay open (no collapse), and the status bar's Diagnostics toggle replaces maximize and hide.
+        // Diagnostic notices stay open; the source pane toggle collapses the dock body.
         Restyle(DiagnosticsExpander, StyleProperty, FindResource("FixedExpander")); Restyle(DiagnosticsExpander, Expander.IsExpandedProperty, true);
         Restyle(ToolsButtons, VisibilityProperty, Visibility.Collapsed);
         PreviewHost.SizeChanged += ClipPreviewHost; ClipPreviewHost(null, null);
@@ -529,7 +530,7 @@ public partial class MainWindow
             }
             string name = row.Pass?.Label ?? row.DisplayName;
             string childPath = current.Path.Length == 0 ? name : current.Path + " › " + name;
-            var children = row.Children;
+            var children = row.SearchChildren;
             for (int i = children.Count - 1; i >= 0; i--) pending.Push((children[i], childPath));
         }
         return hits;

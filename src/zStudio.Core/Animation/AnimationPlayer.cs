@@ -20,14 +20,34 @@ public sealed record AnimationTrace(long Instance, Guid Sequence, Guid Event, st
 {
     public long Occurrence { get; init; }
     public int Entry { get; init; } = -1;
+    public string InstancePath { get; init; } = "";
+    public string? Disposition { get; init; }
+    public int? ChildEntry { get; init; }
+    public long? ChildInstance { get; init; }
+    public long? ExistingInstance { get; init; }
 }
-public sealed record AnimationSequenceStatus(long Instance, Guid Sequence, string Name, int EventIndex, string State, int Iteration);
+public sealed record AnimationSequenceStatus(long Instance, Guid Sequence, string Name, int EventIndex, string State, int Iteration)
+{
+    public double AnimationElapsed { get; init; }
+    public double SequenceElapsed { get; init; }
+    public double EventElapsed { get; init; }
+    public string InstancePath { get; init; } = "";
+}
+public sealed record AnimationInstanceStatus(long Instance, int Entry, int Root, string Name, string Path,
+    long? ParentInstance, Guid? CallEvent, double StartedAt, bool Finished, bool Cleanup);
+public sealed record AnimationConditionResult(long Instance, Guid Event, string InstancePath, double Time, bool Value,
+    bool Forced, long Occurrence);
 public sealed record AnimationFrame(double Time, IReadOnlyList<AnimationNodePose> Nodes, IReadOnlyList<AnimationLight> Lights,
     IReadOnlyList<AnimationSoundCue> Sounds, IReadOnlyList<AnimationSoundCue> ActiveSounds, AnimationCamera? Camera, AnimationFog? Fog,
     Vector4 ScreenColor, Vector4 ScreenWave, IReadOnlyList<AnimationTrace> Trace, IReadOnlyList<AnimationSequenceStatus> Sequences, IReadOnlyList<string> Diagnostics)
 {
     public IReadOnlyList<AnimationPreviewDiagnostic> Issues { get; init; } = [];
     public long TraceDropped { get; init; }
+    public IReadOnlyList<AnimationInstanceStatus> Instances { get; init; } = [];
+    public IReadOnlyList<AnimationConditionResult> Conditions { get; init; } = [];
+    public long ConditionsDropped { get; init; }
+    public bool DependencyBlocked { get; init; }
+    public bool HasExcludedCalls { get; init; }
 }
 
 /// <summary>Retail event-clock semantics on a deterministic, device-independent 60 Hz clock.</summary>
@@ -48,6 +68,9 @@ public sealed partial class AnimationPlayer
     private AnimationBindingOperation? bindingOperation;
     private List<Effect> effects = [];
     private List<AnimationTrace> trace = [];
+    private List<AnimationConditionResult> conditions = [];
+    private long conditionsDropped;
+    private bool hasExcludedCalls;
     private HashSet<string> notes = [];
     private Dictionary<long, AnimationLight> lights = [];
     private Dictionary<long, AnimationSoundCue> activeSounds = [];
@@ -64,6 +87,13 @@ public sealed partial class AnimationPlayer
     public int Seed { get; }
     public int EffectLevel { get; init; } = 2;
     public bool? ConditionOverride { get; init; }
+    /// <summary>Finite preview-only child admission. Null retains the ordinary runtime's unrestricted calls.</summary>
+    private AnimationExecutionPolicy? executionPolicy;
+    public AnimationExecutionPolicy? ExecutionPolicy
+    {
+        get => executionPolicy;
+        init { RequireState(value?.RetainedBytes ?? 0); executionPolicy = value; }
+    }
     public Vector3? ReferencePosition { get; init; }
     public Vector3? ActivationStart { get; init; }
     /// <summary>Preview-only mesh contact with the infinite world Y=0 plane.</summary>
@@ -86,6 +116,13 @@ public sealed partial class AnimationPlayer
     }
     public double Time => ticks * StepSeconds;
     public bool IsComplete => instances.All(i => i.Finished) && effects.Count == 0;
+    public bool HasExcludedCalls => hasExcludedCalls;
+    public bool HasBlockedDependencies => instances.Any(i => !i.Finished && i.Sequences.Any(s => s.State == 5));
+    /// <summary>Excluded waited calls remain, with no runnable work able to change their dependency boundary.</summary>
+    public bool IsDependencyBlocked => HasBlockedDependencies && effects.Count == 0 &&
+        instances.Where(i => !i.Finished).All(i => i.StopDelay < 0 && i.Sequences.All(s =>
+            s.State != 0 && (s.State != 1 || s.Work is { Type: 24 } call && (call.I16(46) & 16) != 0 &&
+                instances.Any(child => child.Id == s.Child && !child.Finished))));
 
     public AnimationPlayer(AnimationPreviewContext context, int entryIndex, int seed = 1, bool resetPhase = false)
         : this(context, entryIndex, seed, resetPhase, default) { }
@@ -127,10 +164,11 @@ public sealed partial class AnimationPlayer
         InvalidateRetainedState();
         ticks = nextId = traceOrdinal = traceDropped = 0; previewIssues.Clear(); diagnosticContext = new(entryIndex); measuredEnd = 0; unavailableDuration = false; randomIndex = 0; randomState = unchecked((uint)Seed);
         for (int i = 0; i < randomTable.Length; i++) { randomState = unchecked(randomState * 214013 + 2531011); randomTable[i] = ((randomState >> 16) & 32767) / 32767f; }
-        instances = []; sharedNodes = []; effects = []; trace = []; notes = []; foreach (string message in context.Diagnostics) AddNote(message, "Resource", "Unclassified"); lights = []; activeSounds = []; cues.Clear(); checkpoints.Clear();
+        instances = []; sharedNodes = []; effects = []; trace = []; conditions = []; conditionsDropped = 0; hasExcludedCalls = false;
+        notes = []; foreach (string message in context.Diagnostics) AddNote(message, "Resource", "Unclassified"); lights = []; activeSounds = []; cues.Clear(); checkpoints.Clear();
         screenColor = screenWave = Vector4.Zero; fog = null;
         AddInstance(context.Package.Entries[entryIndex], null, null, resetPhase);
-        RequireState(StateBytes(instances, sharedNodes) + CloneScratch(instances, sharedNodes));
+        RequireState(StateBytes(instances, sharedNodes) + ConditionBytes(conditions.Count) + CloneScratch(instances, sharedNodes));
         checkpoints[0] = CaptureCheckpoint(token);
         InvalidateRetainedState();
         resetInitialized = true;
@@ -195,7 +233,7 @@ public sealed partial class AnimationPlayer
                 else continue;
             }
             foreach (var sequence in instance.Sequences.ToArray()) if (sequence.State is 0 or 1) Run(instance, sequence);
-            if (instance.Sequences.All(s => s.State is not (0 or 1)))
+            if (instance.Sequences.All(s => s.State is not (0 or 1 or 5)))
             {
                 if (instance.Cleanup || instance.Entry.F32(164) < 0) Finish(instance);
                 else { instance.StopDelay = instance.Entry.F32(164); if (instance.StopDelay == 0) BeginCleanup(instance); }
@@ -245,7 +283,8 @@ public sealed partial class AnimationPlayer
                 state.EventElapsed = remaining; if (state.Cursor == 0) state.Elapsed = remaining;
                 state.Work = ev.Clone(); state.Child = -1; state.KeyOffset = 0; state.KeyTime = 0;
                 if (trace.Count >= 20000) { trace.RemoveRange(0, 10000); traceDropped += 10000; }
-                trace.Add(new(instance.Id, state.Data.Id, ev.Id, ev.Name, Math.Max(0, Time - remaining), null, ev.Spec.Support) { Occurrence = ++traceOrdinal, Entry = instance.Entry.Index });
+                trace.Add(new(instance.Id, state.Data.Id, ev.Id, ev.Name, Math.Max(0, Time - remaining), null, ev.Spec.Support)
+                    { Occurrence = ++traceOrdinal, Entry = instance.Entry.Index, InstancePath = instance.CallPath });
                 if (ev.Spec.Support != "Engine-based") AddNote(ev.Spec.Support, "Support", "Information");
             }
             int result;
@@ -271,7 +310,8 @@ public sealed partial class AnimationPlayer
     /// <param name="started">The instance is a child started at <paramref name="boundRoot"/> (ActivateRuntime binds it there
     /// again even when it is the entry's own root), not a stop at it (StopAndCleanup, which turrets call, only at another node).</param>
     /// <param name="prerequisitesCleared">The NEW_GAME_START list clears the entry's activation prerequisites first (0x4192d0).</param>
-    private Instance? AddInstance(AnimationEntry entry, Vector3? position, int? boundRoot, bool primary = false, bool started = false, bool prerequisitesCleared = false)
+    private Instance? AddInstance(AnimationEntry entry, Vector3? position, int? boundRoot, bool primary = false, bool started = false, bool prerequisitesCleared = false,
+        string callPath = "", long? parentInstance = null, Guid? callEvent = null, double? startedAt = null)
     {
         var operation = bindingOperation ?? throw new InvalidOperationException("Animation binding requires an active operation.");
         operation.Reserve(1);
@@ -306,9 +346,10 @@ public sealed partial class AnimationPlayer
                 { operation.Reserve(40); sourceNodes.Add(child); }
         }
         // Admit the whole prospective instance before allocating Nodes/SavedNodes or changing shared poses.
-        AdmitInstance(sourceNodes, shared, primary ? 1 : entry.Sequences.Count);
+        AdmitInstance(sourceNodes, shared, primary ? 1 : entry.Sequences.Count, callPath);
         operation.Reserve(256L * sourceNodes.Count + 32L * entry.Sequences.Count);
-        Instance instance = new() { Id = ++nextId, Entry = entry, Root = root, Binding = binding, Cleanup = primary, Shared = shared };
+        Instance instance = new() { Id = ++nextId, Entry = entry, Root = root, Binding = binding, Cleanup = primary, Shared = shared,
+            CallPath = callPath, ParentInstance = parentInstance, CallEvent = callEvent, StartedAt = startedAt ?? Time };
         foreach (int index in sourceNodes)
         {
             operation.Reserve(256L + context.Scene.Nodes[index].Parents.Length);
@@ -474,7 +515,15 @@ public sealed partial class AnimationPlayer
         token.ThrowIfCancellationRequested();
         var result = new AnimationFrame(Time, poses, lights.Values.Select(l => l with { Position = l.Position + origin }).ToArray(),
             cues.Select(c => c with { Position = c.Position + origin }).ToArray(), activeSounds.Values.Select(c => c with { Position = c.Position + origin }).ToArray(), camera, fog, screenColor, screenWave, trace.ToArray(),
-            instances.SelectMany(i => i.Sequences.Select(s => new AnimationSequenceStatus(i.Id, s.Data.Id, s.Data.Name, s.Cursor, s.State switch { 0 => "Waiting for threshold", 1 => "Running", 2 => "Complete", 3 => "Waiting for release", _ => "Unavailable" }, s.Iteration))).ToArray(), notes.Order(StringComparer.Ordinal).ToArray()) { Issues = previewIssues.Values.ToArray(), TraceDropped = traceDropped };
+            instances.SelectMany(i => i.Sequences.Select(s => new AnimationSequenceStatus(i.Id, s.Data.Id, s.Data.Name, s.Cursor, s.State switch { 0 => "Waiting for threshold", 1 => "Running", 2 => "Complete", 3 => "Waiting for release", 5 => "Awaiting excluded dependency", _ => "Unavailable" }, s.Iteration)
+                { AnimationElapsed = i.Elapsed, SequenceElapsed = s.Elapsed, EventElapsed = s.EventElapsed, InstancePath = i.CallPath })).ToArray(), notes.Order(StringComparer.Ordinal).ToArray())
+        {
+            Issues = previewIssues.Values.ToArray(), TraceDropped = traceDropped,
+            Instances = instances.Select(i => new AnimationInstanceStatus(i.Id, i.Entry.Index, i.Root, i.Entry.Name, i.CallPath,
+                i.ParentInstance, i.CallEvent, i.StartedAt, i.Finished, i.Cleanup)).ToArray(),
+            Conditions = conditions.ToArray(), ConditionsDropped = conditionsDropped,
+            DependencyBlocked = IsDependencyBlocked, HasExcludedCalls = hasExcludedCalls
+        };
         token.ThrowIfCancellationRequested();
         return result;
     }
@@ -518,6 +567,10 @@ public sealed partial class AnimationPlayer
     {
         public required AnimationEntry Entry;
         public long Id;
+        public string CallPath = "";
+        public long? ParentInstance;
+        public Guid? CallEvent;
+        public double StartedAt;
         public int Root;
         public AnimationBinding Binding;
         public float Elapsed, StopDelay = -1;
@@ -541,17 +594,18 @@ public sealed partial class AnimationPlayer
         public Effect Clone() => (Effect)MemberwiseClone();
     }
     private sealed record Checkpoint(long Ticks, long NextId, int RandomIndex, List<Instance> Instances, Dictionary<int, Node> SharedNodes, List<Effect> Effects, List<AnimationTrace> Trace,
-        HashSet<string> Notes, long TraceOrdinal, long TraceDropped, Dictionary<DiagnosticKey, AnimationPreviewDiagnostic> Issues, Dictionary<long, AnimationLight> Lights, Dictionary<long, AnimationSoundCue> Sounds, Vector4 Color, Vector4 Wave, AnimationFog? Fog);
+        HashSet<string> Notes, long TraceOrdinal, long TraceDropped, Dictionary<DiagnosticKey, AnimationPreviewDiagnostic> Issues, Dictionary<long, AnimationLight> Lights, Dictionary<long, AnimationSoundCue> Sounds, Vector4 Color, Vector4 Wave, AnimationFog? Fog,
+        List<AnimationConditionResult> Conditions, long ConditionsDropped, bool HasExcludedCalls);
     private Checkpoint CaptureCheckpoint(CancellationToken token)
     {
         Dictionary<Node, Node> copies = [];
         Node Copy(Node n) { token.ThrowIfCancellationRequested(); if (!copies.TryGetValue(n, out var copy)) copies[n] = copy = n.Clone(); return copy; }
-        return new(ticks, nextId, randomIndex, instances.Select(i => i.Clone(Copy, token)).ToList(), sharedNodes.ToDictionary(p => p.Key, p => Copy(p.Value)), effects.Select(e => e.Clone()).ToList(), [.. trace], [.. notes], traceOrdinal, traceDropped, new(previewIssues), new(lights), new(activeSounds), screenColor, screenWave, fog);
+        return new(ticks, nextId, randomIndex, instances.Select(i => i.Clone(Copy, token)).ToList(), sharedNodes.ToDictionary(p => p.Key, p => Copy(p.Value)), effects.Select(e => e.Clone()).ToList(), [.. trace], [.. notes], traceOrdinal, traceDropped, new(previewIssues), new(lights), new(activeSounds), screenColor, screenWave, fog, [.. conditions], conditionsDropped, hasExcludedCalls);
     }
     private void Restore(Checkpoint c, CancellationToken token)
     {
         token.ThrowIfCancellationRequested();
-        if (!AdmitState(StateBytes(c.Instances, c.SharedNodes) + CloneScratch(c.Instances, c.SharedNodes), c)) throw new StateLimitException();
+        if (!AdmitState(StateBytes(c.Instances, c.SharedNodes) + ConditionBytes(c.Conditions.Count) + CloneScratch(c.Instances, c.SharedNodes), c)) throw new StateLimitException();
         Dictionary<Node, Node> copies = [];
         Node Copy(Node n) { token.ThrowIfCancellationRequested(); if (!copies.TryGetValue(n, out var copy)) copies[n] = copy = n.Clone(); return copy; }
         // Stage the complete replacement while the accepted state and checkpoint are still accounted.
@@ -560,10 +614,12 @@ public sealed partial class AnimationPlayer
         var restoredEffects = c.Effects.Select(e => e.Clone()).ToList();
         var restoredTrace = new List<AnimationTrace>(c.Trace); var restoredNotes = new HashSet<string>(c.Notes);
         var restoredIssues = new Dictionary<DiagnosticKey, AnimationPreviewDiagnostic>(c.Issues);
+        var restoredConditions = new List<AnimationConditionResult>(c.Conditions);
         var restoredLights = new Dictionary<long, AnimationLight>(c.Lights); var restoredSounds = new Dictionary<long, AnimationSoundCue>(c.Sounds);
         token.ThrowIfCancellationRequested();
         ticks = c.Ticks; nextId = c.NextId; randomIndex = c.RandomIndex; instances = restored; sharedNodes = shared; effects = restoredEffects;
         trace = restoredTrace; notes = restoredNotes; traceOrdinal = c.TraceOrdinal; traceDropped = c.TraceDropped; previewIssues = restoredIssues; lights = restoredLights; activeSounds = restoredSounds; screenColor = c.Color; screenWave = c.Wave; fog = c.Fog;
+        conditions = restoredConditions; conditionsDropped = c.ConditionsDropped; hasExcludedCalls = c.HasExcludedCalls;
         retiredSequences.Clear(); InvalidateRetainedState(); interrupted = false;
     }
 }

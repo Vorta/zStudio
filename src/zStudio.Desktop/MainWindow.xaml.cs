@@ -712,8 +712,8 @@ public partial class MainWindow : Window
     private async void SceneSourceChanged(object sender, RoutedEventArgs e) { if (ready && !updating && SceneHost.Visibility == Visibility.Visible && ViewModel.SelectedDocument is { } doc && shownAsset != null) await ShowAsset(doc, shownAsset); }
     private void ApplySceneOptions()
     {
-        if (sourceAnimationPreview && animation != null) { animation.ApplySourceMapDisplay(Wireframe.IsChecked == true, TexturesEnabled.IsChecked == true, BoundsEnabled.IsChecked == true, FaceOrientation.IsChecked == true); return; }
         scene?.SetFaceOrientation(FaceOrientation.IsChecked == true && !ZoneToolEngaged); scene?.SetWireframe(Wireframe.IsChecked == true); scene?.SetTextured(TexturesEnabled.IsChecked == true); scene?.SetBounds(BoundsEnabled.IsChecked == true); ApplyWorldHighlight(); ApplyAiOptions();
+        ApplyWorldAnimationScreenEffects(worldAnimationSession?.CurrentFrame);
     }
     private void SceneOptionsChanged(object sender, RoutedEventArgs e) { if (ready) ApplySceneOptions(); }
     private void FrameSceneClick(object sender, RoutedEventArgs e) => RunCameraNavigation("frameAsset");
@@ -875,11 +875,11 @@ public partial class MainWindow : Window
         { e.Handled = true; sectionCard?.FocusFirst(); return; }
         if (e.Key == Key.Escape && (scene?.CancelPickupDrag() == true || scene?.CancelTerrainStroke() == true)) { e.Handled = true; return; }
         if (e.Key == Key.Space && System.Windows.Input.Keyboard.Modifiers == ModifierKeys.None &&
-            (sourceAnimationPreview || shownAsset?.Kind == AssetKind.Animation && ViewModel.SelectedDocument?.Document.Animations != null || motion != null) &&
+            (HasWorldAnimationTarget || shownAsset?.Kind == AssetKind.Animation && ViewModel.SelectedDocument?.Document.Animations != null || motion != null) &&
             AnimationSpaceTarget(e.OriginalSource as DependencyObject))
         {
             e.Handled = true;
-            if (!e.IsRepeat) { if (motion != null) motion.TogglePlayback(); else if (animation != null) animation.TogglePlayback(); else pendingAnimationPlay = !pendingAnimationPlay; }
+            if (!e.IsRepeat) { if (HasWorldAnimationTarget) _ = ReportUi(() => WorldAnimationTransportAsync(worldAnimationSession?.IsPlaying == true ? "pause" : "play")); else if (motion != null) motion.TogglePlayback(); else if (animation != null) animation.TogglePlayback(); else pendingAnimationPlay = !pendingAnimationPlay; }
             return;
         }
         bool ctrl = KeyboardModifiers(); if (ctrl && e.Key == Key.O) OpenWorkspaceClick(this, e); else if (ctrl && e.Key == Key.S) SaveCurrentClick(this, e); else if (ctrl && e.Key == Key.Z && e.OriginalSource is not TextBoxBase) UndoDocumentClick(this, e); else if (ctrl && e.Key == Key.Y && e.OriginalSource is not TextBoxBase) RedoDocumentClick(this, e); else if (ctrl && e.Key == Key.W) CloseCurrentClick(this, e); else if (e.Key == Key.F5) ReloadClick(this, e); else if (e.Key == Key.Escape && OperationRunning && !zoneTool.Applying) CancelRunningOperation(); else return; e.Handled = true;
@@ -891,6 +891,7 @@ public partial class MainWindow : Window
             // Let text entry and controls with their own Space action keep normal keyboard behavior.
             if (current is TextBoxBase or PasswordBox or ComboBox or ButtonBase or MenuItem or Slider or Thumb) return false;
             if (current == AssetGrid || current == AnimationHost || current == ProgramHost) return true;
+            if (HasWorldAnimationTarget && current == SceneHost) return true;
         }
         return false;
     }

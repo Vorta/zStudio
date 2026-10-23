@@ -160,9 +160,20 @@ internal static class PresentationMcpChecks
         // PrepareCameraFrame before RenderContext captures the pose. Await that real frame,
         // with no presentation transition, forced render, resize or direct preparation call.
         using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-        while (!viewport.IsOrbitPickingReady || (bool)typeof(SceneViewport).GetField("cameraPoseDirty", Fields)!.GetValue(viewport)! ||
-            (TimeSpan)typeof(SceneViewport).GetField("previousFrameTime", Fields)!.GetValue(viewport)! == TimeSpan.Zero)
-            await Task.Delay(10, deadline.Token);
+        try
+        {
+            while (!viewport.IsOrbitPickingReady || (bool)typeof(SceneViewport).GetField("cameraPoseDirty", Fields)!.GetValue(viewport)! ||
+                (TimeSpan)typeof(SceneViewport).GetField("previousFrameTime", Fields)!.GetValue(viewport)! == TimeSpan.Zero)
+                await Task.Delay(10, deadline.Token);
+        }
+        catch (OperationCanceledException) when (deadline.IsCancellationRequested)
+        {
+            var window = Window.GetWindow(viewport);
+            List<string> ancestors = [];
+            for (DependencyObject? item = viewport; item != null; item = System.Windows.Media.VisualTreeHelper.GetParent(item))
+                if (item is FrameworkElement element) ancestors.Add($"{element.GetType().Name}#{element.Name}: {element.Visibility}/{element.IsVisible} {element.ActualWidth}x{element.ActualHeight}");
+            throw new TimeoutException($"Camera did not settle: ready={viewport.IsOrbitPickingReady}, dirty={typeof(SceneViewport).GetField("cameraPoseDirty", Fields)!.GetValue(viewport)}, previousFrame={typeof(SceneViewport).GetField("previousFrameTime", Fields)!.GetValue(viewport)}, render={viewport.RenderStatus}, loaded={viewport.IsLoaded}, frontBuffer={viewport.FrontBufferAvailable}, pixels={viewport.PresentedPixelSize}, window={window?.WindowState}/{window?.IsActive}/{window?.IsVisible}, source={PresentationSource.FromVisual(viewport) != null}, error={viewport.RenderException}. Ancestors: {string.Join("; ", ancestors)}");
+        }
         var settled = viewport.CaptureView(); await Idle(); Assert.Equal(settled, viewport.CaptureView());
     }
     private static void Send(UIElement target, Key key) => target.RaiseEvent(new KeyEventArgs(Keyboard.PrimaryDevice, PresentationSource.FromVisual(target), Environment.TickCount, key) { RoutedEvent = Keyboard.PreviewKeyDownEvent });

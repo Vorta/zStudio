@@ -1,4 +1,5 @@
 using zStudio.Core;
+using zStudio.Core.Animation;
 using zStudio.Core.Sources;
 
 namespace zStudio.Desktop;
@@ -87,6 +88,15 @@ internal sealed record DefinitionFileEntry(SourceAnimationListing Listing, IRead
 /// <summary>A definition: its identity is its file, its position there and which listing of the file read it (never its name).</summary>
 internal sealed record DefinitionEntry(SourceAnimationDefinition Definition, SourceAnimationListing Listing, bool Compact, int Roots, bool BindingKnown)
     : SectionEntry($"definition:{Definition.File}#{Definition.Ordinal.ToString(System.Globalization.CultureInfo.InvariantCulture)}@{Listing.Occurrence.ToString(System.Globalization.CultureInfo.InvariantCulture)}");
+/// <summary>An exact compiled expansion of a source definition; opening it only reads source structure.</summary>
+internal sealed record AnimationBindingEntry(DefinitionEntry Definition, AnimationStructureEntry Binding)
+    : SectionEntry($"animationBinding:{Binding.Entry}");
+/// <summary>A single call site, identified by its finite path from an exact binding (never by target name alone).</summary>
+internal sealed record AnimationCallEntry(int RootEntry, string ParentPath, AnimationStructureCall Call, DefinitionEntry? Definition)
+    : SectionEntry("animationCall:" + Call.Path);
+/// <summary>Another bounded page of direct bindings or calls. Expanding it never recursively follows a call.</summary>
+internal sealed record AnimationPageEntry(DefinitionEntry? Definition, int RootEntry, int Entry, string ParentPath, int Offset)
+    : SectionEntry($"animationPage:{RootEntry}:{Entry}:{ParentPath}:{Offset}");
 internal sealed record MissingFileEntry(SourceAnimationListing Listing) : SectionEntry($"missing:{Listing.Index}:{Listing.File}");
 /// <summary>A tertiary line in an empty section saying why it is empty.</summary>
 internal sealed record NoteEntry(string Text) : SectionEntry("note");

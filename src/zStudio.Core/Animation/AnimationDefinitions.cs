@@ -21,6 +21,8 @@ public sealed class AnimationItem(string key, ZrdNode? values, string source)
     public ZrdNode? Values { get; } = values;
     /// <summary>The definition file the item came from, for diagnostics.</summary>
     public string Source { get; } = source;
+    /// <summary>Keyword index in the containing syntax list, scoped to this source revision; -1 for constructed items.</summary>
+    public int SyntaxIndex { get; init; } = -1;
     public IReadOnlyList<ZrdNode> Scalars
     {
         get
@@ -105,7 +107,8 @@ public sealed class AnimationItem(string key, ZrdNode? values, string source)
             if (c[i].Kind != ZrdKind.String) continue;
             reserve?.Invoke(96); // The operation-owned item and its eventual cached lookup fields.
             ZrdNode? values = i + 1 < c.Count && c[i + 1].Kind == ZrdKind.Array ? c[i + 1] : null;
-            yield return reserve == null ? new(c[i].Text, values, source) : new(c[i].Text, values, source, reserve);
+            yield return reserve == null ? new(c[i].Text, values, source) { SyntaxIndex = i }
+                : new(c[i].Text, values, source, reserve) { SyntaxIndex = i };
             if (values != null) i++;
         }
     }

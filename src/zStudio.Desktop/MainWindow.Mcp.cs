@@ -190,7 +190,7 @@ public partial class MainWindow
             {
                 version = typeof(MainWindow).Assembly.GetName().Version?.ToString(), ViewModel.HasRoot, ViewModel.RootPath, Status = ViewModel.Status.Length <= 512 ? ViewModel.Status : Bounded(ViewModel.Status, 511), statusTruncated = ViewModel.Status.Length > 512, ViewModel.IsBusy,
                 documents = page.Documents.Select(DocumentState).ToArray(), total = page.Total, offset = page.Offset, nextOffset = page.NextOffset, activeDocument = ViewModel.SelectedDocument?.SessionId,
-                preview = previewId, selectedAsset = shownAsset?.Id, animationTime = animation?.CurrentFrame?.Time, animationPlaying = animation?.IsPlaying,
+                preview = previewId, selectedAsset = shownAsset?.Id, animationTime = worldAnimationSession?.State.Time ?? animation?.CurrentFrame?.Time, animationPlaying = worldAnimationSession?.IsPlaying ?? animation?.IsPlaying,
                 pendingPropertiesDrafts = propertiesWindow?.HasPendingDrafts == true, pendingPreviewDrafts = animation?.HasAutomationDrafts == true, pendingSceneDrafts = HasInspectionDraft, pendingAiPathDrafts = HasAiPathDraft,
                 update = UpdateState(),
             });
@@ -203,6 +203,7 @@ public partial class MainWindow
         RegisterAiPathCommands(registry);
         RegisterParachuteCommands(registry);
         RegisterSourceAnimationCommands(registry);
+        RegisterWorldAnimationCommands(registry);
         RegisterValveCommands(registry);
         RegisterInspectionCommands(registry);
         RegisterSceneTreeCommand(registry);

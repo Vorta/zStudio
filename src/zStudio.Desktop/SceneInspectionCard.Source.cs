@@ -166,6 +166,15 @@ internal sealed partial class SceneInspectionCard
         if (!ObjectEditor.CanEdit) throw new StudioCommandException("read_only", "This object has nothing to edit here.");
         if (!ObjectEditor.IsEnabled) throw new StudioCommandException("busy", "Wait for the world to finish its current edit.");
     }
+    /// <summary>A shared animated node becomes its static-world target when editing stops playback; keep its exact pending input.</summary>
+    internal void RebindSourceEditSelection()
+    {
+        var selected = Selection;
+        var current = SourceObject?.Invoke();
+        if (selected == null || current == null || objectBinding == null || current.Document != objectBinding.Document || current.State.Node != objectBinding.State.Node)
+            throw new StudioCommandException("context_changed", "The source object changed while returning to the static world. Select it again before editing.");
+        objectTarget = selected.Target;
+    }
     /// <summary>Revert, or the accepted draft's release: the fields return to the accepted values; shown handles stay.</summary>
     private void EndObjectEditing()
     {
@@ -186,6 +195,8 @@ internal sealed partial class SceneInspectionCard
         if (viewport.IsPickupDragging) throw new StudioCommandException("busy", "Finish or cancel the active transform drag.");
         if (mode is not ("move" or "rotate" or "none")) throw new StudioCommandException("invalid_argument", "Invalid transform mode.");
         if (ObjectEditor.State.Transform == null) throw new StudioCommandException("read_only", "This object has no transform.");
+        // Enabling handles explicitly enters editing. Passive selection and the MCP begin check remain observational.
+        if (mode != "none") SourceDraftStarted?.Invoke(this);
         if (mode == "none") handlesShown = false; else { handlesShown = true; transformMode = mode; }
         viewport.TransformHandlesEnabled = handlesShown;
         UpdateObjectHandles(); RefreshModeControls();

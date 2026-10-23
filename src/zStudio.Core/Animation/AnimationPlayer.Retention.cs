@@ -32,13 +32,13 @@ public sealed partial class AnimationPlayer
     {
         get
         {
-            if (retainedStateBytes is long cached) return cached;
+            if (retainedStateBytes is long cached) return cached + (ExecutionPolicy?.RetainedBytes ?? 0);
             HashSet<Dictionary<int, Node>> saved = new(ReferenceEqualityComparer.Instance);
-            long bytes = StateBytes(instances, sharedNodes, saved);
+            long bytes = StateBytes(instances, sharedNodes, saved) + ConditionBytes(conditions.Count);
             RetainedAccountingSequenceVisits += instances.Sum(i => (long)i.Sequences.Count);
             foreach (var checkpoint in checkpoints.Values)
             {
-                bytes += StateBytes(checkpoint.Instances, checkpoint.SharedNodes, saved);
+                bytes += StateBytes(checkpoint.Instances, checkpoint.SharedNodes, saved) + ConditionBytes(checkpoint.Conditions.Count);
                 RetainedAccountingSequenceVisits += checkpoint.Instances.Sum(i => (long)i.Sequences.Count);
             }
             foreach (var retired in retiredSequences)
@@ -48,7 +48,7 @@ public sealed partial class AnimationPlayer
                 RetainedAccountingSequenceVisits += retired.Count;
             }
             retainedStateBytes = bytes;
-            return bytes;
+            return bytes + (ExecutionPolicy?.RetainedBytes ?? 0);
         }
     }
     private void InvalidateRetainedState() => retainedStateBytes = null;
@@ -83,11 +83,13 @@ public sealed partial class AnimationPlayer
             // replacement. Release it so the reset is admitted exactly as a new player's; until that completes the
             // player stays interrupted, and the next seek, step or playback resets again. An accepted state is kept.
             ReleaseState();
-            replacement = new(context, entryIndex, Seed, resetPhase, token, maximumRetainedStateBytes, otherRetainedState);
+            replacement = new(context, entryIndex, Seed, resetPhase, token, maximumRetainedStateBytes,
+                () => (ExecutionPolicy?.RetainedBytes ?? 0) + (otherRetainedState?.Invoke() ?? 0));
         }
         token.ThrowIfCancellationRequested();
         instances = replacement.instances; sharedNodes = replacement.sharedNodes;
         effects = replacement.effects; trace = replacement.trace; notes = replacement.notes;
+        conditions = replacement.conditions; conditionsDropped = replacement.conditionsDropped; hasExcludedCalls = replacement.hasExcludedCalls;
         lights = replacement.lights; activeSounds = replacement.activeSounds; checkpoints = replacement.checkpoints;
         previewIssues = replacement.previewIssues; diagnosticContext = replacement.diagnosticContext;
         entryLookup = replacement.entryLookup; bindingIndexes = replacement.bindingIndexes;
@@ -106,11 +108,12 @@ public sealed partial class AnimationPlayer
     private void ReleaseState()
     {
         interrupted = true;
-        instances = []; sharedNodes = []; effects = []; checkpoints = []; retiredSequences.Clear();
+        instances = []; sharedNodes = []; effects = []; conditions = []; checkpoints = []; retiredSequences.Clear();
         InvalidateRetainedState();
     }
     private static long MapBytes(int count) => 128L + MapEntryBytes * count;
     private static long WorkBytes(AnimationEvent? work) => work == null ? 0 : 256L + 16L * work.Bytes.LongLength;
+    private static long ConditionBytes(int count) => 128L + 128L * count;
     // The factor includes the raw event copy and worst-case sparse keyframe index/playback objects.
     // Playback already refuses above16,384 keys; reserving before Clone also protects non-keyframe tails.
     private static long StateBytes(List<Instance> state, Dictionary<int, Node> shared, HashSet<Dictionary<int, Node>>? saved = null)
@@ -118,7 +121,7 @@ public sealed partial class AnimationPlayer
         long bytes = 256 + MapBytes(shared.Count) + NodeBytes * shared.Count;
         foreach (var instance in state)
         {
-            bytes += 256 + MapBytes(instance.Nodes.Count) + MapBytes(instance.Children.Count)
+            bytes += 320 + 2L * instance.CallPath.Length + MapBytes(instance.Nodes.Count) + MapBytes(instance.Children.Count)
                 + (instance.Shared ? 0 : NodeBytes * instance.Nodes.Count) + SequenceBytes * instance.Sequences.Count;
             foreach (var sequence in instance.Sequences) bytes += WorkBytes(sequence.Work);
             if (saved?.Add(instance.SavedNodes) == true)
@@ -146,11 +149,11 @@ public sealed partial class AnimationPlayer
     {
         if (!AdmitState(additional)) throw new StateLimitException();
     }
-    private void AdmitInstance(IReadOnlySet<int> nodes, bool shared, int sequences)
+    private void AdmitInstance(IReadOnlySet<int> nodes, bool shared, int sequences, string callPath)
     {
         long freshShared = 0;
         if (shared) foreach (int index in nodes) if (!sharedNodes.ContainsKey(index)) freshShared++;
-        long bytes = 256 + MapEntryBytes + 2 * MapBytes(nodes.Count) + MapBytes(0) + SequenceBytes * sequences
+        long bytes = 320 + 2L * callPath.Length + MapEntryBytes + 2 * MapBytes(nodes.Count) + MapBytes(0) + SequenceBytes * sequences
             + NodeBytes * nodes.Count // immutable reset state
             + (shared ? (NodeBytes + MapEntryBytes) * freshShared : NodeBytes * nodes.Count);
         RequireState(bytes);
@@ -158,7 +161,7 @@ public sealed partial class AnimationPlayer
     private static long CloneScratch(List<Instance> state, Dictionary<int, Node> shared)
         => 128 + 64L * (shared.Count + state.Where(i => !i.Shared).Sum(i => (long)i.Nodes.Count));
 
-    private bool CanCaptureState() => FitsState(StateBytes(instances, sharedNodes) + CloneScratch(instances, sharedNodes));
+    private bool CanCaptureState() => FitsState(StateBytes(instances, sharedNodes) + ConditionBytes(conditions.Count) + CloneScratch(instances, sharedNodes));
     private void SaveCheckpoint(CancellationToken token)
     {
         int maximum = instances.Sum(i => (long)i.Nodes.Count) > 10000 ? 2 : 8;

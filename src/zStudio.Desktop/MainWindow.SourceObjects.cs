@@ -422,8 +422,11 @@ public partial class MainWindow
             int edited = EditableSourceSelectionNode(doc, node);
             var state = DescribeSourceObject(doc, edited);
             if (shown != null && state.Transform is { } before && before != transform && SourceObjectEdits.CopiesOf(state.Origin, SourceWorldProvenance(doc).Values).Take(2).Count() == 1)
+            {
+                StopWorldAnimationForEdit();
                 preview = shown.PreviewObjectTransform(edited, before.Matrix(), transform.Matrix(),
                     positionOnly: before.RotationDegrees == transform.RotationDegrees && before.Scale == transform.Scale);
+            }
         }
         catch (StudioCommandException) { } // The edit reports the same refusal.
         catch (Exception ex) when (ex is not (OutOfMemoryException or StackOverflowException))

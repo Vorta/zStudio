@@ -101,11 +101,14 @@ public sealed partial class AnimationPlayer
             }
             finally { EndFrameAncestry(ancestry); }
             if (retained >= maximumPoints) break;
+            if (IsDependencyBlocked) { status = "Partial: awaiting excluded dependency"; break; }
             if (unavailableDuration || instances.Any(i => i.Sequences.Any(s => s.State == 4))) { status = "Partial: an event or resource is unavailable"; break; }
             if (IsComplete) { status = instances.Any(i => i.Sequences.Any(s => s.State == 3)) ? "Open-ended: waiting for a sequence call" : "Finite"; break; }
             if (step > 0 && step % 60 == 0 && watch.Elapsed > TimeSpan.FromSeconds(15)) { status = "Partial: analysis work limit"; break; }
         }
         if (status == "Preview range" && instances.Any(i => i.Sequences.Any(s => s.ObservedInfiniteLoop))) status = "Looping · preview range";
+        if (HasBlockedDependencies && !status.StartsWith("Partial:", StringComparison.Ordinal)) status = "Partial: an excluded dependency remains blocked · " + status;
+        else if (hasExcludedCalls && !status.StartsWith("Partial:", StringComparison.Ordinal)) status += " · excluded child calls omitted";
         var paths = tracks.Select(t => new AnimationPath($"{t.Key.Instance}:{t.Key.Node}", t.Value.Instance.Entry.Index,
             t.Key.Instance, t.Key.Node, t.Key.Node >= 0 && t.Key.Node < context.Scene.Nodes.Count ? context.Scene.Nodes[t.Key.Node].Name : "Motion target", Trim(t.Value.Points))
             { Kind = context.Scene.Nodes[t.Key.Node].Class == "camera" ? "camera" : "object" }).ToArray();

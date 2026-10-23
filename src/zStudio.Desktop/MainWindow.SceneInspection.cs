@@ -363,6 +363,7 @@ public partial class MainWindow
                 ? reason : "This node has no verified editable placement.");
         if (edits.Coordinate(source) is { Kind: "tank" } vehicle && (!vehicle.MissionSpecific && (vehicle.TemplateSourceNode == null || vehicle.Difficulties.Count == 0)))
             throw new StudioCommandException("read_only", SourceMapSelection.MissingTankTemplate);
+        StopWorldAnimationForEdit();
         inspectionDraft = card; card.StartDraft(doc, source, edits.Position(source));
     }
     private Task? ApplyInspectionEdit(SceneInspectionCard card)

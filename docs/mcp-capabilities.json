@@ -184,8 +184,23 @@
     },
     {
       "gui": "MainWindow.SourceAnimations:Controls",
-      "tools": ["zstudio_source_animation", "zstudio_animation_paths", "zstudio_animation_options", "zstudio_animation_transport", "zstudio_scene_tree", "zstudio_preview_state"],
-      "note": "Animation definition sequence/event selection and typed fields share source_animation read/begin/set/apply/cancel with revision and draft token guards. Binding selection, Show/Hide/Frame paths and Preview/Exit use animation_paths with definition and exact entry. Range hosts the existing animation preview setup in Properties. Animation links on object cards select the canonical definition and exact recipient entry; source_animation begin plus animation_paths analyze names the same target. Path metadata Kind is object or camera (teal/orange guides). Source preview and path analysis use standable terrain; procedural object motion stops at world Y -500/500, without impact cues, while keyframes/cameras remain unrestricted. preview_state.animation reports collisionMode and proceduralYLimits; flat-plane collision options are refused in source-map preview. Path guides are presentation only; dispatch traces and sampled paths are paged by snapshot. The VTOL Drop windows section shares animation_paths operations without definition and its own checked window snapshot."
+      "tools": ["zstudio_source_animation", "zstudio_animation_paths", "zstudio_animation_timeline", "zstudio_animation_options", "zstudio_animation_transport", "zstudio_scene_tree", "zstudio_preview_state"],
+      "note": "Animation definition sequence/event selection and typed fields share source_animation read/begin/set/apply/cancel with revision and draft token guards. Selection and expansion inspect structure without player construction, duration measurement, audio or path evaluation. animation_timeline target chooses an exact candidate binding; first Play/Seek pins it, use_selection stops and pins without playing, and exit releases it. Show/Hide guides only toggle compatible cached paths; animation_paths analyze evaluates explicitly, frame frames cached paths, clear releases the cache. Analysis is independent of the main frame, audio, camera and dock view. Kind is object or camera (teal/orange). Source preview and paths use initialized standable terrain; procedural object motion stops at world Y -500/500 without impact cues, while keyframes/cameras remain unrestricted. The separate VTOL Drop windows section uses animation_paths without definition and its own snapshot/scenario/purpose; its certified move changes the CALL offset while preserving the paired STOP duration. Generic event editing remains available and invalidates the prior window analysis."
+    },
+    {
+      "gui": "WorldAnimationTimeline:Controls",
+      "tools": ["zstudio_animation_timeline", "zstudio_animation_transport", "zstudio_animation_runtime", "zstudio_animation_select", "zstudio_animation_paths", "zstudio_source_animation"],
+      "note": "One opaque bottom dock shares a single world-view transport with Timeline and Diagnostics; animation_timeline dock changes the view or collapses the body while retaining active transport. Source lists authored sequences, thresholds, keyframes and child references; Run lists actual instances, clocks and observed dispatches. structure pages entries/sequences/events/calls/keyframes/ignored at 100 rows, with revision-scoped provenance; keyframes are read only. Children are opt-in per finite canonical callsite path, with included ancestors required; expanding is passive. Ruler/playhead seek uses animation_transport; row select only inspects, F2 opens existing timing Properties. rows returns bounded metadata with markCount; marks pages up to 100 marks for an exact row, with pre-projection budgets and nextOffset. animation_runtime instances/conditions exposes lineage and scoped results. options controls source/run projection, ticks, followPlayhead, visibleRange, labelWidth (80–720 DIP), fit and independent playback range. Scenario in Properties shares phase, height, seed, referencePosition, activationStart, effectLevel and per-lineage conditions; changing it stops and detaches without auto-play. Excluded waited calls block the caller, included unavailable calls advance and report incomplete coverage, and duplicate launches retain Core semantics. Stop restores the existing initialized baseline at zero; Pause keeps the evaluated frame silently."
+    },
+    {
+      "gui": "WorldAnimationThresholdEditor:ValueProposed",
+      "tools": ["zstudio_source_animation"],
+      "note": "The native-clock ruler and numeric timing field update the same existing source_animation draft. Viewing preserves valid negative and off-grid thresholds; runtime seek bounds never clamp source timing. Apply is one overlay history transaction; Save and Export remain separate. Verified drop-window move grips use animation_paths set/confirm and never resize the paired STOP duration."
+    },
+    {
+      "gui": "MainWindow.WorldAnimationDock:Controls",
+      "tools": ["zstudio_animation_timeline"],
+      "note": "Timeline and Diagnostics buttons share animation_timeline dock; collapsing hides the body while retaining active transport. View changes do not stop playback or discard drafts."
     },
     {
       "gui": "TerrainPropertiesEditor:Fields",
@@ -1319,6 +1334,11 @@
         "zstudio_camera"
       ],
       "note": "A row's Frame selection is scene_tree select on that row, then camera frame target selected. On the Pickups section's Weapons, Ammo and Other rows and their type rows (never selected) it is scene_tree action frame on that row."
+    },
+    {
+      "gui": "MainWindow.xaml:OutlinerAnimationIncludeClick",
+      "tools": ["zstudio_animation_timeline"],
+      "note": "A child call's Include checkbox shares animation_timeline include with root, canonical path and included. Ancestors must be included; removing one removes descendant inclusions. Expansion through scene_tree only reads structure."
     },
     {
       "gui": "MainWindow.xaml:OutlinerEyeClick",

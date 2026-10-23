@@ -117,7 +117,13 @@ public static class VtolDropWindows
     {
         CheckCandidate(frozenContext.Package, candidate, token);
         // The caller supplies a frozen context. The player creates its own runtime nodes and never mutates serialized entries.
-        return new AnimationPlayer(frozenContext, candidate.EntryIndex, 1, false, token) { ConditionOverride = true }
+        // A window analysis is its own recipe, independent of the interactive preview's inclusion
+        // policy. Recognition proves these direct callsites target the sole callback-911 program;
+        // that program cannot launch children. Admit only those exact callsite paths.
+        var policy = new AnimationExecutionPolicy(candidate.Windows.Select(window =>
+            AnimationExecutionPolicy.ChildPath("", candidate.EntryIndex, window.CallEventId, candidate.CallbackEntryIndex)));
+        return new AnimationPlayer(frozenContext, candidate.EntryIndex, 1, false, token)
+            { ConditionOverride = true, ExecutionPolicy = policy }
             .AnalyzeVtol(candidate, token);
     }
 

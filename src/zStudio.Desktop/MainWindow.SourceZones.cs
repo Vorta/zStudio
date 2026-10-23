@@ -188,6 +188,7 @@ public partial class MainWindow
             if (viewport.AiPathEditingNetwork != null || viewport.HasParachutePreview)
                 throw new StudioCommandException("busy", "Finish the AI path or VTOL route editing before painting polygon zones.");
             ZoneFolder(session, build);
+            StopWorldAnimationForEdit();
             if (flyCamera?.IsActive == true) flyCamera.End();
             if (terrainBrush != null) SetTerrainBrush(null);
         }

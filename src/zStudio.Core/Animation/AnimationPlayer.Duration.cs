@@ -3,7 +3,7 @@ using System.Numerics;
 
 namespace zStudio.Core.Animation;
 
-public enum AnimationDurationKind { Finite, Looping, OpenEnded, Unavailable, AnalysisLimit }
+public enum AnimationDurationKind { Finite, Looping, OpenEnded, Unavailable, AnalysisLimit, DependencyBlocked }
 
 /// <summary>A finite preview duration, or an explicitly bounded view of an event program with no known end.</summary>
 public sealed record AnimationDuration(int Frames, AnimationDurationKind Kind, string Explanation)
@@ -30,7 +30,7 @@ public sealed partial class AnimationPlayer
             probe = new AnimationPlayer(context, entryIndex, Seed, resetPhase, token, maximumRetainedStateBytes,
                 () => RetainedStateBytes + (otherRetainedState?.Invoke() ?? 0))
             {
-                ConditionOverride = ConditionOverride, EffectLevel = EffectLevel,
+                ConditionOverride = ConditionOverride, EffectLevel = EffectLevel, ExecutionPolicy = ExecutionPolicy,
                 ReferencePosition = ReferencePosition, ActivationStart = ActivationStart, GroundPlaneEnabled = GroundPlaneEnabled, Terrain = Terrain,
                 ProceduralLimitsEnabled = ProceduralLimitsEnabled, PreviewHeight = PreviewHeight, measuringDuration = true
             };
@@ -55,6 +55,8 @@ public sealed partial class AnimationPlayer
             foreach (var cue in activeSounds.Values.Where(c => !c.Persistent))
                 tailsEnd = Math.Max(tailsEnd, cue.StartedAt + context.Sounds[cue.Name].Duration);
             foreach (var effect in effects) tailsEnd = Math.Max(tailsEnd, Time + Math.Max(0, 1 - effect.Age));
+            if (IsDependencyBlocked)
+                return Result(Math.Max(5, Time), AnimationDurationKind.DependencyBlocked, "An excluded waited child blocks this scenario. Include that call to evaluate beyond its dependency boundary.");
             // Only this analysis's own refusals count: notes also hold the context's inherited diagnostics,
             // such as a limit another program reached while the mission scene was prepared.
             bool unavailable = unavailableDuration || instances.Any(i => i.Sequences.Any(s => s.State == 4));
@@ -64,7 +66,9 @@ public sealed partial class AnimationPlayer
                 if (unavailable) return Result(Math.Max(5, end), AnimationDurationKind.Unavailable, "An unavailable event or resource prevents a complete duration calculation.");
                 if (instances.Any(i => i.Sequences.Any(s => s.State == 3 && s.Data.Events.Count > 0)))
                     return Result(Math.Max(5, end), AnimationDurationKind.OpenEnded, "A sequence waits for release; this is a preview range, not a total duration.");
-                return Result(end, AnimationDurationKind.Finite, "Calculated for the current phase, seed and conditions, including nested animations, cleanup, effects and sound tails.");
+                return Result(end, AnimationDurationKind.Finite, hasExcludedCalls
+                    ? "Calculated for this scenario with excluded child calls omitted; this is not the full animation's duration."
+                    : "Calculated for the current phase, seed and conditions, including nested animations, cleanup, effects and sound tails.");
             }
             var live = instances.Where(i => !i.Finished).ToArray();
             var active = live.SelectMany(i => i.Sequences.Where(s => s.State is 0 or 1).Select(s => (Instance: i, Sequence: s))).ToArray();

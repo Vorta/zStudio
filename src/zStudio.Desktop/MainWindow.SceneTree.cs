@@ -72,7 +72,7 @@ public partial class MainWindow
                 }
                 var projection = SourceSelection(doc, data);
                 sceneTree = new(data, source, true, state, TreeIdentities(data, viewport.Mission, doc.PickupEdits), viewport.InspectionNodes, projection,
-                    projection != null ? MapSections(doc, data, viewport.Mission, projection) : null, pickupsByType) { SectionState = this };
+                    projection != null ? MapSections(doc, data, viewport.Mission, projection) : null, pickupsByType, sectionState: this);
             }
             if (sceneTree != null) { sceneTree.Collapsing += SceneTreeCollapsing; sceneTree.SelectionChanged += SceneTreeSelectionChanged; var hidden = hiddenRows.Values.SelectMany(n => n).ToHashSet(); sceneTree.IsHiddenNode = hidden.Contains; sceneTree.IsIsolatedNode = node => isolatedNode == node; }
             DocumentSceneTree.ItemsSource = sceneTree?.Roots;
@@ -149,6 +149,7 @@ public partial class MainWindow
         string? target = viewport.SelectedInspection?.Target;
         if (target == treeInspectionTarget) return;
         CancelSourceAnimationSelectionWork();
+        if (!selectingAnimationCard && viewport.SelectedInspection != null) ClearWorldAnimationCandidate();
         treeInspectionTarget = target;
         if (viewport.SelectedInspection is { Node: >= 0 } selected)
         {
@@ -175,6 +176,7 @@ public partial class MainWindow
     {
         if (changingSceneTree || viewport != TreeViewport || shownDocument != ViewModel.SelectedDocument) return;
         CancelSourceAnimationSelectionWork();
+        if (!selectingAnimationCard) ClearWorldAnimationCandidate();
         changingSceneTree = true;
         try { sceneTree?.Select(null); inspectedSceneSource = null; selectedNode = null; treeInspectionTarget = null; }
         finally { changingSceneTree = false; }
@@ -210,12 +212,12 @@ public partial class MainWindow
     private void SelectSceneTreeRow(SceneTreeItem row)
     {
         if (!selectingAnimationCard && row != sceneTree?.Selected) CancelSourceAnimationSelectionWork();
-        EndSourceAnimationPreview();
         if (row.IsSectionItem) { SelectSectionRow(row); return; }
         if (row.Owner != sceneTree || row.Index is not int node || !row.Selectable || sceneTreeDocument is not { IsDisposed: false } doc)
             throw new StudioCommandException("stale_record", "The tree node is no longer available.");
         var viewport = sceneTree.IsPreview ? TreeViewport : null;
         if (viewport?.IsPickupDragging == true || viewport?.IsFlyActive == true) throw new StudioCommandException("busy", "Finish the pickup drag or exit Fly before selecting a node.");
+        if (!selectingAnimationCard) ClearWorldAnimationCandidate();
         changingSceneTree = true;
         try
         {

@@ -53,7 +53,7 @@ public sealed partial class SceneViewport
     private void ShowPolygonEdges(bool enabled)
     {
         if (!enabled) { RemovePolygonEdges(); return; }
-        foreach (var mesh in meshes)
+        foreach (var mesh in meshes.Concat(animatedMeshes.Values.SelectMany(items => items).Select(item => item.Mesh)))
         {
             if (polygonEdges.ContainsKey(mesh) || mesh.Geometry is not { } geometry || !polygonSources.TryGetValue(geometry, out var source)) continue;
             if (!polygonEdgeGeometries.TryGetValue(geometry, out var edges)) polygonEdgeGeometries[geometry] = edges = PolygonEdgeGeometry(geometry, source.Part, source.Model);

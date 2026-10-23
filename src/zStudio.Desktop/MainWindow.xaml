@@ -48,6 +48,7 @@
     </Border>
     <DockPanel x:Name="SourceRow" Visibility="Collapsed" Height="28" Background="Transparent" local:OutlinerRowStretch.Enabled="True" MouseLeftButtonDown="OutlinerRowMouseDown" FocusVisualStyle="{StaticResource OutlinerFocusRing}">
      <Button x:Name="RowEye" DockPanel.Dock="Right" Style="{StaticResource OutlinerEye}" Focusable="False" Click="OutlinerEyeClick" PreviewMouseUp="OutlinerEyeMiddleClick" Tag="{Binding}" ToolTip="{Binding EyeToolTip}" ToolTipService.ShowOnDisabled="True" ToolTipService.InitialShowDelay="0" AutomationProperties.Name="{Binding EyeToolTip}"><local:PreviewIcon Kind="{Binding EyeIcon}" Width="14" Height="14"/></Button>
+     <CheckBox x:Name="RowAnimationInclude" DockPanel.Dock="Right" Visibility="Collapsed" Focusable="False" IsChecked="{Binding AnimationIncluded,Mode=OneWay}" IsEnabled="{Binding AnimationIncludeEnabled}" Click="OutlinerAnimationIncludeClick" Tag="{Binding}" Margin="4,0,6,0" VerticalAlignment="Center" ToolTip="{Binding AnimationIncludeToolTip}" ToolTipService.ShowOnDisabled="True" AutomationProperties.Name="Include child animation in preview"/>
      <!-- The Pickups row's Group by type: a row per catalog type inside Weapons, Ammo and Other. -->
      <Button x:Name="RowGroupByType" DockPanel.Dock="Right" Visibility="Collapsed" Style="{StaticResource OutlinerEye}" Focusable="False" Click="OutlinerGroupByTypeClick" Tag="{Binding}" Margin="0,0,2,0" ToolTipService.InitialShowDelay="0" ToolTip="Group by type: inside Weapons, Ammo and Other, one row per type with its count" AutomationProperties.Name="{Binding GroupByTypeName}"><local:PreviewIcon Kind="GroupByType" Width="14" Height="14"/></Button>
      <!-- The Zones row's Objects | Polygons switch: the kind of colour its shown zones take. -->
@@ -111,6 +112,7 @@
     <DataTrigger Binding="{Binding IsEmptyPickupGroup}" Value="True"><Setter TargetName="RowEye" Property="Visibility" Value="Visible"/><Setter TargetName="RowEye" Property="IsEnabled" Value="False"/><Setter TargetName="RowEye" Property="Opacity" Value="0.36"/><Setter TargetName="RowFrame" Property="Visibility" Value="Visible"/><Setter TargetName="RowFrame" Property="IsEnabled" Value="False"/><Setter TargetName="RowFrame" Property="Opacity" Value="0.36"/></DataTrigger>
     <DataTrigger Binding="{Binding IsOtherDifficultyGroup}" Value="True"><Setter TargetName="RowEye" Property="Visibility" Value="Hidden"/><Setter TargetName="RowFrame" Property="Visibility" Value="Hidden"/></DataTrigger>
     <DataTrigger Binding="{Binding HasGroupByType}" Value="True"><Setter TargetName="RowGroupByType" Property="Visibility" Value="Visible"/></DataTrigger>
+    <DataTrigger Binding="{Binding HasAnimationInclude}" Value="True"><Setter TargetName="RowAnimationInclude" Property="Visibility" Value="Visible"/></DataTrigger>
     <DataTrigger Binding="{Binding PickupsByTypeOn}" Value="True"><Setter TargetName="RowGroupByType" Property="local:CommandState.IsOn" Value="True"/></DataTrigger>
     <DataTrigger Binding="{Binding SectionKind}" Value="zones"><Setter TargetName="ZoneHeaderControls" Property="Visibility" Value="Visible"/></DataTrigger>
     <MultiDataTrigger><MultiDataTrigger.Conditions><Condition Binding="{Binding ZoneKindPolygons}" Value="True"/><Condition Binding="{Binding HeaderActive}" Value="True"/></MultiDataTrigger.Conditions><Setter TargetName="ZoneKindPolygons" Property="Background" Value="{DynamicResource AccentFillColorDefaultBrush}"/><Setter TargetName="ZoneKindPolygons" Property="Foreground" Value="{DynamicResource TextOnAccentFillColorPrimaryBrush}"/></MultiDataTrigger>
@@ -336,6 +338,8 @@
          </Grid>
         </ScrollViewer>
         <ContentControl x:Name="SceneHost" Visibility="Collapsed" />
+        <Border x:Name="WorldAnimationScreenOverlay" IsHitTestVisible="False"/>
+        <Canvas x:Name="WorldAnimationWaveOverlay" IsHitTestVisible="False" ClipToBounds="True"/>
         <!-- While an edit takes longer than a moment: a card naming the step; the scene darkens under it while the view reloads. -->
         <Grid x:Name="ReloadingView" Visibility="Collapsed" IsHitTestVisible="False" Panel.ZIndex="11" AutomationProperties.Name="{Binding Text,ElementName=ReloadingTitle}" AutomationProperties.LiveSetting="Polite">
          <Border HorizontalAlignment="Center" VerticalAlignment="Center" Padding="20,16" MinWidth="280" MaxWidth="460" CornerRadius="8" Background="{DynamicResource SolidBackgroundFillColorBaseBrush}" BorderBrush="{DynamicResource CardStrokeColorDefaultBrush}" BorderThickness="1">
@@ -415,7 +419,7 @@
     <GridSplitter x:Name="ToolsSplitter" Grid.Row="1" Height="6" HorizontalAlignment="Stretch" ResizeDirection="Rows" DragCompleted="WorkspaceSplitterCompleted" AutomationProperties.Name="Resize bottom tools"/>
     <DockPanel x:Name="BottomTools" Grid.Row="2">
      <StackPanel x:Name="ToolsButtons" DockPanel.Dock="Right" Orientation="Vertical"><Button Content="↕" Tag="Layout" Click="MaximizeToolsClick" ToolTip="Maximize / restore tools" AutomationProperties.Name="Maximize or restore bottom tools"/><Button Content="×" Tag="Layout" Click="ToolsButtonClick" ToolTip="Hide tools" AutomationProperties.Name="Hide bottom tools"/></StackPanel>
-     <!-- A source map shows only the problems (moved into SourceDiagnosticsHost), without tabs. -->
+     <!-- A source map hosts its shared animation transport, Timeline and Diagnostics here. -->
      <Grid><ContentControl x:Name="SourceDiagnosticsHost" Visibility="Collapsed" Focusable="False"/>
      <TabControl x:Name="ToolTabs" SelectionChanged="ToolSelectionChanged">
       <TabItem Header="Dispatch" x:Name="DispatchTab"><ContentControl x:Name="DispatchHost"/></TabItem>

@@ -10,7 +10,7 @@ public sealed partial class AnimationCompiler
     private const short InputNode = -200;
 
     /// <summary>Compiles one definition bound to one root into an entry.</summary>
-    private sealed class EntryBuilder(AnimationCompiler compiler, AnimationDefinition definition, string root, string digits, int index)
+    private sealed class EntryBuilder(AnimationCompiler compiler, AnimationDefinition definition, string root, string digits, int index, int definitionIndex)
     {
         private readonly AnimationItem item = definition.Item;
         // Reference tables in file order: tracked nodes, node references, lights, sound nodes, samples, effect
@@ -64,14 +64,14 @@ public sealed partial class AnimationCompiler
             BinaryPrimitives.WriteSingleLittleEndian(header.AsSpan(176), health);
 
             AnimationEntry entry = new(header, index, -1);
-            entry.Primary = Sequence("RESET_SEQUENCE", item.Item("RESET_STATE")?.Items ?? []);
+            entry.Primary = Sequence("RESET_SEQUENCE", item.Item("RESET_STATE"), cleanup: true);
             // A sequence named more than once takes its last NAME, as the original compiler did: the shipped deathmulti
             // and sbarm definitions name sequences twice and compiled to the second name. (Inside an event the first of
             // a repeated attribute counts, as the shipped machine and pipetrig definitions show.)
             foreach (var sequence in item.All("SEQUENCE_DEFINITION"))
             {
                 if (entry.Sequences.Count >= 255) throw item.Error("more than 255 sequences.");
-                entry.Sequences.Add(Sequence(sequence.All("NAME").LastOrDefault() is { Scalars.Count: > 0 } named ? named.Text() : "", sequence.Items));
+                entry.Sequences.Add(Sequence(sequence.All("NAME").LastOrDefault() is { Scalars.Count: > 0 } named ? named.Text() : "", sequence));
             }
             // The loader creates the entry's lights and sound nodes by name before it resolves node references, so
             // those names need not be in the world; any other missing node makes the game reject the file.
@@ -179,11 +179,14 @@ public sealed partial class AnimationCompiler
 
         // ------------------------------------------------------------ sequences
 
-        private AnimationSequence Sequence(string name, IEnumerable<AnimationItem> items)
+        private AnimationSequence Sequence(string name, AnimationItem? source, bool cleanup = false)
         {
             byte[] header = new byte[64]; if (name.Length > 0) Text(header, 0, Bound(name), 32, "sequence NAME");
             AnimationSequence sequence = new(header);
-            foreach (var key in items)
+            string? record = source is { SyntaxIndex: >= 0 } ? $"sequence/{source.SyntaxIndex}" : null;
+            compiler.sourceProvenance?.Sequence(new(index, sequence.Id, definitionIndex, definition.File, definition.Ordinal,
+                record, cleanup, source?.Has("START_TIME") == true, record == null ? "Synthetic cleanup sequence has no source record." : null));
+            foreach (var key in source?.Items ?? [])
             {
                 compiler.token.ThrowIfCancellationRequested();
                 switch (key.Key)
@@ -193,7 +196,25 @@ public sealed partial class AnimationCompiler
                     // The original compiler ignored a START_TIME given to a whole sequence; every shipped one is unused.
                     case "START_TIME": continue;
                 }
-                if (Event(key) is { } ev) { compiler.Grow(ev.Bytes.Length); sequence.Events.Add(ev); }
+                if (Event(key) is { } ev)
+                {
+                    compiler.Grow(ev.Bytes.Length); sequence.Events.Add(ev);
+                    if (compiler.sourceProvenance != null)
+                    {
+                        string? eventRecord = record == null || key.SyntaxIndex < 0 ? null : $"{record}/event/{key.SyntaxIndex}";
+                        var timing = key.Item("START_TIME");
+                        string? timingField = eventRecord == null ? null : eventRecord + "/" +
+                            (timing is { SyntaxIndex: >= 0 } ? timing.SyntaxIndex.ToString(System.Globalization.CultureInfo.InvariantCulture) : "@START_TIME");
+                        compiler.sourceProvenance.Event(new(index, sequence.Id, ev.Id, definitionIndex, definition.File,
+                            definition.Ordinal, eventRecord, timingField, timing != null, key.Key,
+                            ev.Type == 12 ? key.Item("SCRIPT_FRAME_RATE")?.Number() ?? 30 : null,
+                            ev.Type == 12 ? Bound(key.TextOf("SCRIPT_FILENAME") ?? "") : null,
+                            eventRecord == null ? "Synthetic event has no source record." : null));
+                    }
+                }
+                else if (compiler.sourceProvenance != null)
+                    compiler.sourceProvenance.Ignored(new(index, sequence.Id, record == null ? null : $"{record}/event/{key.SyntaxIndex}",
+                        key.Key, "The compiler ignores this source item."));
             }
             return sequence;
         }

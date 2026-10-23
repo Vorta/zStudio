@@ -33,7 +33,9 @@ public partial class MainWindow
                 if (!active.TryFrame(action == "frameAll" ? "all" : action == "frameAsset" ? "asset" : "selected"))
                     Notice("No visible geometry is available to frame.");
                 break;
-            case "follow": if (animation == null) return false; animation.ToggleCameraFollow(); break;
+            case "follow":
+                if (HasWorldAnimationTarget) { _ = ReportUi(() => WorldAnimationOptionAsync("followCamera", !(worldAnimationSession?.FollowCamera ?? worldAnimationFollowCamera))); break; }
+                if (animation == null) return false; animation.ToggleCameraFollow(); break;
             case "orbitLeft": active.OrbitStep(-15, 0); break;
             case "orbitRight": active.OrbitStep(15, 0); break;
             case "orbitUp": active.OrbitStep(0, 15); break;
@@ -66,7 +68,7 @@ public partial class MainWindow
     internal static bool CameraInputIsNative(DependencyObject? source)
     {
         for (var current = source; current != null; current = current is Visual or System.Windows.Media.Media3D.Visual3D ? VisualTreeHelper.GetParent(current) : LogicalTreeHelper.GetParent(current))
-            if (current is TextBoxBase or PasswordBox or ComboBox or ButtonBase or MenuItem or Slider or Thumb or Selector or TreeView or AnimationTimeline)
+            if (current is TextBoxBase or PasswordBox or ComboBox or ButtonBase or MenuItem or Slider or Thumb or Selector or TreeView or AnimationTimeline or WorldAnimationTimeline or WorldAnimationThresholdEditor)
                 return true;
         return false;
     }

@@ -101,6 +101,8 @@ public sealed class WindowClosingTests
                     await MotionDeferredSelectionChecks.Run();
                     Volatile.Write(ref phase, "animation, drafts and document preparation");
                     await AnimationFogChecks.Run();
+                    await WorldAnimationAttachmentChecks.Run();
+                    await WorldAnimationTimelineChecks.Run();
                     await AnimationTextureQueueChecks.Run();
                     await NavigationMcpChecks.Run();
                     await GuiNavigationChecks.Run();

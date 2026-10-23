@@ -33,6 +33,7 @@ public sealed class PropertiesWindow : Window
     private IEnumerable<FieldEditor> Editors => new FieldEditor?[] { PickupFields, SourceFields }.OfType<FieldEditor>();
     public Func<DocumentModel, Task<bool>>? SaveRequested { get; set; }
     public Action<DocumentModel, bool>? UndoRequested { get; set; }
+    internal event Action? PendingDraftStarted;
     public JsonObject? CurrentJson => PickupFields?.Json ?? SourceFields?.Json ?? snapshot;
 
     public PropertiesWindow(Window owner, MainViewModel preferences)
@@ -111,13 +112,14 @@ public sealed class PropertiesWindow : Window
     {
         if (!BeginTarget(document)) return false;
         label = title; PickupFields = new(document, source, json, sourceMove);
-        PickupFields.Changed += Refresh; body.Content = PickupFields; Refresh(); return true;
+        PickupFields.Changed += Refresh; PickupFields.PendingDraftStarted += OnPendingDraftStarted; body.Content = PickupFields; Refresh(); return true;
     }
     internal bool SetSourceObject(DocumentModel document, SourcePropertiesEditor fields)
     {
         if (!BeginTarget(document)) { fields.Dispose(); return false; }
-        label = fields.Title; SourceFields = fields; fields.Changed += Refresh; body.Content = fields; Refresh(); return true;
+        label = fields.Title; SourceFields = fields; fields.Changed += Refresh; fields.PendingDraftStarted += OnPendingDraftStarted; body.Content = fields; Refresh(); return true;
     }
+    private void OnPendingDraftStarted() => PendingDraftStarted?.Invoke();
     private bool BeginTarget(DocumentModel document)
     {
         if (!ResolvePendingDrafts() || document.IsDisposed) return false;
@@ -132,6 +134,8 @@ public sealed class PropertiesWindow : Window
         {
             doc.Disposing -= DocumentDisposing; doc.PropertyChanged -= DocumentChanged;
         }
+        if (PickupFields != null) PickupFields.PendingDraftStarted -= OnPendingDraftStarted;
+        if (SourceFields != null) SourceFields.PendingDraftStarted -= OnPendingDraftStarted;
         PickupFields?.Dispose(); SourceFields?.Dispose(); SourceFields = null;
         PickupFields = null; Document = null; snapshot = null; body.Content = null;
     }

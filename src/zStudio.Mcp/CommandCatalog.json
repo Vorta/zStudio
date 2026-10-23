@@ -1586,14 +1586,16 @@
       {
         "Name": "section",
         "Type": "string",
-        "Description": "Data section.",
+        "Description": "Data section; instances and conditions are source-world run observations.",
         "Required": true,
         "Choices": [
           "status",
           "sequences",
           "events",
           "problems",
-          "scene"
+          "scene",
+          "instances",
+          "conditions"
         ],
         "Properties": null
       },
@@ -1629,7 +1631,7 @@
   },
   {
     "Name": "zstudio_animation_select",
-    "Description": "Select an authored sequence/event without changing playback phase or retargeting Properties.",
+    "Description": "Select an authored sequence/event without changing playback phase. Source-world selection opens its Properties record without seeking or retargeting the pinned root. Returns an operation ID; use zstudio_operation to await/read the result.",
     "Mutates": true,
     "Parameters": [
       {
@@ -2425,7 +2427,7 @@
   },
   {
     "Name": "zstudio_animation_paths",
-    "Description": "With definition, show/analyze bounded source animation paths for an exact binding entry, hide/frame its guides, preview/exit the shared transport, state reads snapshots, samples pages points and markers pages dispatch traces. preview_state.animationPaths reports status, diagnostics and per-path Kind (object or camera). Source paths use standable map terrain and stop procedural object motion at world Y -500 or 500 without impact cues; keyframes and cameras are unrestricted. Camera guides are orange, objects teal. With no definition, inspect and relocate complete existing VTOL drop windows in a Whole world. Show analyzes the first discovered flight; unavailable flights retain the candidate list, entry and analysisRefusal without a partial path. Analyze selects an exact entry. Conditional release markers come from a frozen bounded runtime, never landing predictions. A source map\u0027s windows can be moved: select/begin/set/confirm/cancel share the GUI draft and one undo step, set takes a local start time or an exact path segment plus fraction to disambiguate crossings, and the edit uses token-preserving project history and in-memory scene evaluation (Apply creates no archives; Save writes the owning animation definitions; undo/redo/save target the project). A compiled world is read only: show, analyze, samples and releases work, its windows cannot be selected or moved. Samples/releases support offset/limit pagination without query; preview_state.parachute reports bounded state. No physical input is captured. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Description": "With definition, analyze explicitly evaluates bounded source animation paths for an exact binding using the current finite child-inclusion policy; show/hide only changes compatible cached guides and never evaluates; clear discards the selected definition\u0027s cached paths. Frame its guides, preview/exit the shared world transport, state reads snapshots, samples pages points and markers pages dispatch traces. Selection and expansion are passive. preview_state.animationPaths reports status, diagnostics and per-path Kind (object or camera). Source paths use standable map terrain and stop procedural object motion at world Y -500 or 500 without impact cues; keyframes and cameras are unrestricted. Camera guides are orange, objects teal. With no definition, inspect and relocate complete existing VTOL drop windows in a Whole world. Show analyzes the first discovered flight; unavailable flights retain the candidate list, entry and analysisRefusal without a partial path. Analyze selects an exact entry. The independent verified-drop scenario admits only recognized flight-to-callback-911 callsites and does not change the main preview policy or playback. Conditional release markers come from a frozen bounded runtime, never landing predictions. A source map\u0027s windows can be moved: select/begin/set/confirm/cancel share the GUI draft and one undo step, set takes a local start time or an exact path segment plus fraction to disambiguate crossings, and the edit uses token-preserving project history and in-memory scene evaluation (Apply creates no archives; Save writes the owning animation definitions; undo/redo/save target the project). A compiled world is read only: show, analyze, samples and releases work, its windows cannot be selected or moved. Samples/releases support offset/limit pagination without query; preview_state.parachute reports bounded state. No physical input is captured. Returns an operation ID; use zstudio_operation to await/read the result.",
     "Mutates": true,
     "Parameters": [
       {
@@ -2477,7 +2479,8 @@
           "frame",
           "preview",
           "exit",
-          "markers"
+          "markers",
+          "clear"
         ],
         "Properties": null
       },
@@ -2719,6 +2722,482 @@
         "Required": false,
         "Choices": null,
         "Properties": null
+      }
+    ]
+  },
+  {
+    "Name": "zstudio_animation_timeline",
+    "Description": "Inspect and operate the source world\u0027s integrated animation timeline. Selection and structural paging never evaluate animation. First Play/Seek pins the selected exact binding; use_selection stops and pins without playing. Calls are excluded by default and enabled per finite callsite path. Source thresholds and Run observations are distinct. Keyframe samples are read only. Scenario changes stop and detach the run. Existing animation_transport controls playback; animation_paths explicitly evaluates guides independently. Source timing edits use source_animation, verified drop moves use animation_paths without definition. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Mutates": true,
+    "Parameters": [
+      {
+        "Name": "preview",
+        "Type": "string",
+        "Description": "Current preview lifetime ID from zstudio_state.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "document",
+        "Type": "string",
+        "Description": "Document lifetime ID from zstudio_state.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "revision",
+        "Type": "integer",
+        "Description": "Expected current document revision. Read before editing.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": 0,
+        "Maximum": 9223372036854775807
+      },
+      {
+        "Name": "action",
+        "Type": "string",
+        "Description": "Operation.",
+        "Required": true,
+        "Choices": [
+          "read",
+          "structure",
+          "rows",
+          "marks",
+          "expand",
+          "row",
+          "target",
+          "include",
+          "options",
+          "select",
+          "use_selection",
+          "exit",
+          "dock",
+          "evaluate_paths",
+          "duration",
+          "scenario"
+        ],
+        "Properties": null
+      },
+      {
+        "Name": "section",
+        "Type": "string",
+        "Description": "Structural page.",
+        "Required": false,
+        "Choices": [
+          "entries",
+          "sequences",
+          "events",
+          "calls",
+          "keyframes",
+          "ignored"
+        ],
+        "Properties": null
+      },
+      {
+        "Name": "definition",
+        "Type": "integer",
+        "Description": "Source definition index for target.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": 0
+      },
+      {
+        "Name": "entry",
+        "Type": "integer",
+        "Description": "Exact compiled binding index; required when the definition expands to several bindings.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": 0
+      },
+      {
+        "Name": "root",
+        "Type": "integer",
+        "Description": "Root binding for a call inclusion change.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": 0
+      },
+      {
+        "Name": "sequence",
+        "Type": "string",
+        "Description": "Sequence GUID.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "event",
+        "Type": "string",
+        "Description": "Event GUID.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "path",
+        "Type": "string",
+        "Description": "Canonical callsite path from the structural plan; empty for root.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "included",
+        "Type": "boolean",
+        "Description": "Include this call path.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "view",
+        "Type": "string",
+        "Description": "Rows projection.",
+        "Required": false,
+        "Choices": [
+          "source",
+          "run"
+        ],
+        "Properties": null
+      },
+      {
+        "Name": "row",
+        "Type": "string",
+        "Description": "Timeline row identity from rows.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "expanded",
+        "Type": "boolean",
+        "Description": "Expand or collapse a source row.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "occurrence",
+        "Type": "integer",
+        "Description": "Retained Run mark occurrence to inspect; does not seek.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": 0,
+        "Maximum": 9223372036854775807
+      },
+      {
+        "Name": "dock",
+        "Type": "string",
+        "Description": "Bottom dock view.",
+        "Required": false,
+        "Choices": [
+          "timeline",
+          "diagnostics",
+          "collapsed"
+        ],
+        "Properties": null
+      },
+      {
+        "Name": "changes",
+        "Type": "object",
+        "Description": "Preview scenario and timeline presentation; source timing is edited through source_animation.",
+        "Required": false,
+        "Choices": null,
+        "Properties": [
+          {
+            "Name": "phase",
+            "Type": "string",
+            "Description": "Runtime or cleanup; selecting a cleanup row never changes phase.",
+            "Required": false,
+            "Choices": [
+              "runtime",
+              "cleanup"
+            ],
+            "Properties": null
+          },
+          {
+            "Name": "seed",
+            "Type": "integer",
+            "Description": "Deterministic seed.",
+            "Required": false,
+            "Choices": null,
+            "Properties": null,
+            "Minimum": -2147483648,
+            "Maximum": 2147483647
+          },
+          {
+            "Name": "height",
+            "Type": "number",
+            "Description": "Preview-only world height.",
+            "Required": false,
+            "Choices": null,
+            "Properties": null,
+            "NumberMinimum": -999,
+            "NumberMaximum": 999
+          },
+          {
+            "Name": "effectLevel",
+            "Type": "integer",
+            "Description": "Effect detail level.",
+            "Required": false,
+            "Choices": null,
+            "Properties": null,
+            "Minimum": 0,
+            "Maximum": 2
+          },
+          {
+            "Name": "referencePosition",
+            "Type": "string",
+            "Description": "Reference XYZ as comma-separated numbers, or blank for default.",
+            "Required": false,
+            "Choices": null,
+            "Properties": null
+          },
+          {
+            "Name": "activationStart",
+            "Type": "string",
+            "Description": "Activation start XYZ as comma-separated numbers, or blank for default.",
+            "Required": false,
+            "Choices": null,
+            "Properties": null
+          },
+          {
+            "Name": "includedCalls",
+            "Type": "array",
+            "Description": "Finite canonical call paths; ancestors must be included. Replaces the policy.",
+            "Required": false,
+            "Choices": null,
+            "Properties": null,
+            "Items": {
+              "Name": "",
+              "Type": "string",
+              "Description": "Call path.",
+              "Required": false,
+              "Choices": null,
+              "Properties": null
+            },
+            "MaxItems": 4096
+          },
+          {
+            "Name": "conditions",
+            "Type": "array",
+            "Description": "Scoped condition overrides; replaces the override list.",
+            "Required": false,
+            "Choices": null,
+            "Properties": null,
+            "Items": {
+              "Name": "",
+              "Type": "object",
+              "Description": "Override.",
+              "Required": false,
+              "Choices": null,
+              "Properties": [
+                {
+                  "Name": "instancePath",
+                  "Type": "string",
+                  "Description": "Canonical instance lineage, empty for root.",
+                  "Required": true,
+                  "Choices": null,
+                  "Properties": null
+                },
+                {
+                  "Name": "entry",
+                  "Type": "integer",
+                  "Description": "Entry index.",
+                  "Required": true,
+                  "Choices": null,
+                  "Properties": null,
+                  "Minimum": 0
+                },
+                {
+                  "Name": "event",
+                  "Type": "string",
+                  "Description": "Event GUID.",
+                  "Required": true,
+                  "Choices": null,
+                  "Properties": null
+                },
+                {
+                  "Name": "value",
+                  "Type": "boolean",
+                  "Description": "Condition value.",
+                  "Required": true,
+                  "Choices": null,
+                  "Properties": null
+                }
+              ]
+            },
+            "MaxItems": 4096
+          },
+          {
+            "Name": "view",
+            "Type": "string",
+            "Description": "Timeline projection.",
+            "Required": false,
+            "Choices": [
+              "source",
+              "run"
+            ],
+            "Properties": null
+          },
+          {
+            "Name": "labelWidth",
+            "Type": "number",
+            "Description": "Preferred timeline label width in DIP; displayed width also fits the viewport.",
+            "Required": false,
+            "Choices": null,
+            "Properties": null,
+            "NumberMinimum": 80,
+            "NumberMaximum": 720
+          },
+          {
+            "Name": "ticks",
+            "Type": "boolean",
+            "Description": "Display 60 Hz tick labels.",
+            "Required": false,
+            "Choices": null,
+            "Properties": null
+          },
+          {
+            "Name": "followPlayhead",
+            "Type": "boolean",
+            "Description": "Scroll with live playback.",
+            "Required": false,
+            "Choices": null,
+            "Properties": null
+          },
+          {
+            "Name": "fit",
+            "Type": "string",
+            "Description": "Fit the timeline viewport.",
+            "Required": false,
+            "Choices": [
+              "selection",
+              "evaluated",
+              "range"
+            ],
+            "Properties": null
+          },
+          {
+            "Name": "visibleRange",
+            "Type": "array",
+            "Description": "Visible start/end seconds; independent of playback range.",
+            "Required": false,
+            "Choices": null,
+            "Properties": null,
+            "Items": {
+              "Name": "",
+              "Type": "number",
+              "Description": "Seconds.",
+              "Required": false,
+              "Choices": null,
+              "Properties": null,
+              "NumberMinimum": 0,
+              "NumberMaximum": 3600
+            },
+            "MinItems": 2,
+            "MaxItems": 2
+          },
+          {
+            "Name": "range",
+            "Type": "array",
+            "Description": "Playback start/end seconds.",
+            "Required": false,
+            "Choices": null,
+            "Properties": null,
+            "Items": {
+              "Name": "",
+              "Type": "number",
+              "Description": "Seconds.",
+              "Required": false,
+              "Choices": null,
+              "Properties": null,
+              "NumberMinimum": 0,
+              "NumberMaximum": 3600
+            },
+            "MinItems": 2,
+            "MaxItems": 2
+          },
+          {
+            "Name": "followCamera",
+            "Type": "boolean",
+            "Description": "Follow the evaluated camera; manual navigation disengages.",
+            "Required": false,
+            "Choices": null,
+            "Properties": null
+          },
+          {
+            "Name": "effects",
+            "Type": "boolean",
+            "Description": "Preview effects.",
+            "Required": false,
+            "Choices": null,
+            "Properties": null
+          },
+          {
+            "Name": "replay",
+            "Type": "boolean",
+            "Description": "Replay the playback range.",
+            "Required": false,
+            "Choices": null,
+            "Properties": null
+          },
+          {
+            "Name": "mute",
+            "Type": "boolean",
+            "Description": "Mute audio.",
+            "Required": false,
+            "Choices": null,
+            "Properties": null
+          },
+          {
+            "Name": "volume",
+            "Type": "number",
+            "Description": "Audio volume.",
+            "Required": false,
+            "Choices": null,
+            "Properties": null,
+            "NumberMinimum": 0,
+            "NumberMaximum": 1
+          },
+          {
+            "Name": "speed",
+            "Type": "number",
+            "Description": "Playback rate: 0.25, 0.5, 1, 2 or 4.",
+            "Required": false,
+            "Choices": null,
+            "Properties": null,
+            "NumberMinimum": 0.25,
+            "NumberMaximum": 4
+          }
+        ]
+      },
+      {
+        "Name": "offset",
+        "Type": "integer",
+        "Description": "Page offset.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": 0,
+        "Maximum": 2147483647
+      },
+      {
+        "Name": "limit",
+        "Type": "integer",
+        "Description": "Page size, default 100.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": 1,
+        "Maximum": 100
       }
     ]
   },

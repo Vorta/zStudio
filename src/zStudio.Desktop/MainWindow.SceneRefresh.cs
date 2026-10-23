@@ -55,6 +55,7 @@ public partial class MainWindow
 
     private async Task<Guid?> RefreshStaticSceneCoreAsync(DocumentModel doc, AssetRecord asset, IReadOnlyDictionary<string, bool>? partOverrides = null)
     {
+        if (doc.SourceWorld != null) StopWorldAnimationForEdit();
         var previous = scene!;
         var retainedOptions = publishedStaticOptions!;
         var requested = ReadStaticSceneOptions();
@@ -110,6 +111,7 @@ public partial class MainWindow
                 int mapped = mission!.RemapNodeFrom(previous.Mission!, oldNode, matches);
                 return mapped >= 0 ? mapped : null;
             }
+            var savedAnimation = CaptureWorldAnimationRebuild();
             previous.CancelPickupDrag(); DetachPickupEditor();
             flyRequest++;
             scene = replacement; replacement = null; swapped = true;
@@ -154,6 +156,7 @@ public partial class MainWindow
             EmptyPreview.Visibility = Visibility.Collapsed;
             RefreshPresentation(previewSettled: true);
             RefreshSceneTree();
+            RestoreWorldAnimationRebuild(savedAnimation);
             if (selectedNode is int retainedNode) RevealSceneNode(retainedNode);
             previous.Dispose(); SynchronizeFly();
             ViewModel.Status = mission?.Layout.Description ?? scene.PreviewSummary;

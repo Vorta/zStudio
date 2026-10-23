@@ -4,16 +4,21 @@ namespace zStudio.Core.Animation;
 public sealed record AnimationAudioDependencies(IReadOnlySet<string> Names, IReadOnlyList<string> Diagnostics)
 {
     public static AnimationAudioDependencies Collect(AnimationPackage package, int entryIndex, CancellationToken token = default)
+        => Collect(package, entryIndex, null, token);
+
+    /// <summary>Discover only calls admitted by the same finite scenario as playback, including dormant branches and cleanup.</summary>
+    public static AnimationAudioDependencies Collect(AnimationPackage package, int entryIndex, AnimationExecutionPolicy? policy, CancellationToken token = default)
     {
         ArgumentOutOfRangeException.ThrowIfNegative(entryIndex);
         ArgumentOutOfRangeException.ThrowIfGreaterThanOrEqual(entryIndex, package.Entries.Count);
         HashSet<string> names = new(StringComparer.Ordinal);
         BoundedDiagnostics diagnostics = new();
         AnimationEntryLookup entries = new(package);
-        HashSet<AnimationEntry> scheduled = [package.Entries[entryIndex]];
-        Stack<AnimationEntry> pending = new([package.Entries[entryIndex]]);
-        while (pending.TryPop(out var entry))
+        HashSet<(AnimationEntry Entry, string Path)> scheduled = [(package.Entries[entryIndex], "")];
+        Stack<(AnimationEntry Entry, string Path)> pending = new([(package.Entries[entryIndex], "")]);
+        while (pending.TryPop(out var item))
         {
+            var (entry, path) = item;
             token.ThrowIfCancellationRequested();
             foreach (var ev in entry.AllSequences.SelectMany(s => s.Events))
             {
@@ -34,8 +39,31 @@ public sealed record AnimationAudioDependencies(IReadOnlySet<string> Names, IRea
                     if (ev.I32(52) == 1) names.Add(ev.Text(12));
                 }
                 else if (entries.ResolveChild(ev, token) is { } child)
-                { if (scheduled.Add(child)) pending.Push(child); }
-                else diagnostics.Add($"Audio preparation: unresolved child animation in #{entry.Index} ({entry.Name}).");
+                {
+                    string childPath = "";
+                    if (policy != null)
+                    {
+                        string candidate;
+                        try { candidate = AnimationExecutionPolicy.ChildPath(path, entry.Index, ev.Id, child.Index); }
+                        catch (InvalidDataException) { continue; }
+                        if (!policy.TryInclude(candidate, out childPath)) continue;
+                        if (scheduled.Contains((child, childPath))) continue;
+                        if (scheduled.Count >= AnimationExecutionPolicy.MaximumPaths + 1)
+                            throw new InvalidDataException("Audio discovery exceeds the preview dependency-path allowance.");
+                    }
+                    if (scheduled.Add((child, childPath))) pending.Push((child, childPath));
+                }
+                else
+                {
+                    if (policy != null)
+                    {
+                        string candidate;
+                        try { candidate = AnimationExecutionPolicy.ChildPath(path, entry.Index, ev.Id, -1); }
+                        catch (InvalidDataException) { continue; }
+                        if (!policy.Includes(candidate)) continue;
+                    }
+                    diagnostics.Add($"Audio preparation: unresolved child animation in #{entry.Index} ({entry.Name}).");
+                }
             }
         }
         return new(names, diagnostics.Messages);

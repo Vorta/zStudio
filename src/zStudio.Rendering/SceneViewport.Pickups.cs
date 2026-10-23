@@ -218,8 +218,10 @@ public sealed partial class SceneViewport
         var inverseFrame = selectionFrame; inverseFrame.Invert();
         if (SelectedInspection?.AiNode is { } ai && AiNetworks.Find(ai) is { } node)
         { float radius = AiScale(node.Node.Position, 5.5); min = node.Node.Position - new Vector3(radius); max = node.Node.Position + new Vector3(radius); }
+        long selectedRuntimeOwner = (SelectedInspection?.RuntimeInstance ?? 0) >> 32;
         foreach (var (mesh, items) in visiblePlacements)
         {
+            if (worldAnimation != null && selectedRuntimeOwner != 0) continue;
             if (!mesh.IsRendering || mesh.Visibility != Visibility.Visible || !mesh.IsDepthClipEnabled ||
                 mesh.Geometry is not { } geometry ||
                 !staticMeshBounds.TryGetValue(geometry, out var local) || !Finite(local.Min) || !Finite(local.Max)) continue;
@@ -238,6 +240,26 @@ public sealed partial class SceneViewport
                 }
             }
         }
+        if (worldAnimation != null && animationFrame != null)
+            foreach (var pose in animationFrame.Nodes)
+            {
+                if (!selectedNodes.Contains(pose.SourceNode) || !animatedMeshes.TryGetValue(pose.Id, out var animated) ||
+                    selectedRuntimeOwner != pose.Id >> 32) continue;
+                foreach (var item in animated)
+                {
+                    if (item.Mesh.Visibility != Visibility.Visible || !item.Mesh.IsRendering || !item.Mesh.IsDepthClipEnabled) continue;
+                    var (localMin, localMax) = item.LocalBounds;
+                    if (!Finite(localMin) || !Finite(localMax)) continue;
+                    var transform = ToWpf(item.Mesh.Transform ?? Matrix4x4.Identity); transform.Append(inverseFrame);
+                    for (int c = 0; c < 8; c++)
+                    {
+                        var point = transform.Transform(new Point3D((c & 1) == 0 ? localMin.X : localMax.X,
+                            (c & 2) == 0 ? localMin.Y : localMax.Y, (c & 4) == 0 ? localMin.Z : localMax.Z));
+                        Vector3 v = new((float)point.X, (float)point.Y, (float)point.Z);
+                        min = Vector3.Min(min, v); max = Vector3.Max(max, v);
+                    }
+                }
+            }
         if (!Finite(min) || !Finite(max)) { selectionBox.Visibility = pickupManipulator.Visibility = Visibility.Collapsed; return; }
         Vector3[] corners = [new(min.X,min.Y,min.Z), new(max.X,min.Y,min.Z), new(max.X,max.Y,min.Z), new(min.X,max.Y,min.Z), new(min.X,min.Y,max.Z), new(max.X,min.Y,max.Z), new(max.X,max.Y,max.Z), new(min.X,max.Y,max.Z)];
         for (int i = 0; i < corners.Length; i++)

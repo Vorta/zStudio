@@ -40,6 +40,17 @@ internal static class SourceAnimationMcpChecks
             string field = activation["Id"]!.GetValue<string>();
             await Animation("begin");
             var card = (SourceSectionCard)typeof(MainWindow).GetField("sectionCard", flags)!.GetValue(main)!;
+            var firstCall = records.First(record => record!["Kind"]!.GetValue<string>() == "CALL_ANIMATION")!;
+            card.SelectAnimationRecord(firstCall["Id"]!.GetValue<string>());
+            main.UpdateLayout();
+            var thresholdEditor = Descendants(card).OfType<WorldAnimationThresholdEditor>().Single(editor => editor.ClockMode == "SEQUENCE_OFFSET");
+            var thresholdText = Descendants(thresholdEditor).OfType<TextBox>().Single();
+            thresholdText.Text = "-";
+            Assert.True(card.HasDraft);
+            var pendingThreshold = System.Text.Json.JsonSerializer.SerializeToNode(card.AnimationDraft)!["changes"]!.AsArray();
+            Assert.Contains(pendingThreshold, change => change!["Values"]!.AsArray().Last()!.GetValue<string>() == "-");
+            await Animation("cancel", new() { ["token"] = card.DraftToken });
+            Assert.False(card.HasDraft);
             await Animation("set", new() { ["changes"] = new[] { new { field, values = new[] { "ON_STARTUP" } } } });
             Assert.True(card.HasDraft);
             string draft = card.DraftToken;
@@ -62,13 +73,45 @@ internal static class SourceAnimationMcpChecks
             Assert.False(doc.IsDirty);
             await Animation("begin");
             var current = await Call("state", new());
-            // A restored card may still be analyzing automatically; explicitly await the analysis whose markers we use.
+            Assert.Null(typeof(MainWindow).GetField("worldAnimationSession", flags)!.GetValue(main));
+            Assert.Null(((ContentControl)main.FindName("AnimationHost")).Content);
+            int deliveryEntry = Assert.Single(Assert.IsType<SourceSceneSnapshot>(doc.Document).AnimationDefinitions.Definitions.Single(d => d.Index == 0).Entries);
+            var structure = await Timeline("structure", new() { ["section"] = "calls", ["entry"] = deliveryEntry });
+            var calls = structure["page"]!["Rows"]!.AsArray();
+            Assert.NotEmpty(calls);
+            Assert.Null(typeof(MainWindow).GetField("worldAnimationSession", flags)!.GetValue(main));
+            await Timeline("options", new() { ["changes"] = new { range = new[] { 0.0, 60.0 }, labelWidth = 260.0 } });
+            // Browsing a definition only inspects source; explicit path evaluation has separate state.
             var paths = await Job("animation_paths", new() { ["document"] = doc.SessionId.ToString(), ["revision"] = doc.Revision, ["preview"] = current["preview"]!.GetValue<string>(), ["definition"] = 0, ["action"] = "analyze" });
             Assert.NotEmpty(paths["paths"]!["definitions"]!.AsArray());
+            Assert.Equal(60, paths["paths"]!["definitions"]![0]!["seconds"]!.GetValue<double>());
+            Assert.Null(typeof(MainWindow).GetField("worldAnimationSession", flags)!.GetValue(main));
             Assert.All(paths["paths"]!["definitions"]!.AsArray().SelectMany(d => d!["paths"]!.AsArray()),
                 p => Assert.Contains(p!["Kind"]!.GetValue<string>(), new[] { "object", "camera" }));
+            // Dedicated flight analysis must not replace another unpinned candidate or reset its scenario.
+            await Timeline("target", new() { ["definition"] = 1 });
+            await Timeline("options", new() { ["changes"] = new { seed = 17 } });
+            var candidateBeforeDrops = typeof(MainWindow).GetField("worldAnimationCandidate", flags)!.GetValue(main);
+            var scenarioBeforeDrops = typeof(MainWindow).GetField("worldAnimationScenarioEpoch", flags)!.GetValue(main);
+            Assert.NotNull(candidateBeforeDrops);
+            Assert.Null(typeof(MainWindow).GetField("worldAnimationPinned", flags)!.GetValue(main));
+            paths = await Job("animation_paths", new() { ["document"] = doc.SessionId.ToString(), ["revision"] = doc.Revision, ["preview"] = current["preview"]!.GetValue<string>(), ["action"] = "show" });
             Assert.True(paths["parachute"]?["windows"] is JsonArray, paths.ToJsonString() + " · " + main.ViewModel.Status);
+            Assert.Equal(candidateBeforeDrops, typeof(MainWindow).GetField("worldAnimationCandidate", flags)!.GetValue(main));
+            Assert.Equal(scenarioBeforeDrops, typeof(MainWindow).GetField("worldAnimationScenarioEpoch", flags)!.GetValue(main));
+            Assert.Equal(17, Assert.IsType<WorldAnimationScenario>(typeof(MainWindow).GetField("worldAnimationConfiguration", flags)!.GetValue(main)).Seed);
+            Assert.Equal(1, Assert.IsType<DefinitionEntry>(card.Entry).Definition.Index);
+            Assert.Null(paths["parachute"]!["selected"]);
+            Assert.Equal(Visibility.Collapsed, ((FrameworkElement)main.FindName("ParachutePanel")).Visibility);
+            paths = await Job("animation_paths", new() { ["document"] = doc.SessionId.ToString(), ["revision"] = doc.Revision, ["preview"] = current["preview"]!.GetValue<string>(), ["action"] = "analyze", ["snapshot"] = paths["parachute"]!["snapshot"]!.GetValue<string>(), ["entry"] = deliveryEntry });
+            Assert.Equal(candidateBeforeDrops, typeof(MainWindow).GetField("worldAnimationCandidate", flags)!.GetValue(main));
+            Assert.Equal(scenarioBeforeDrops, typeof(MainWindow).GetField("worldAnimationScenarioEpoch", flags)!.GetValue(main));
+            Assert.Equal(17, Assert.IsType<WorldAnimationScenario>(typeof(MainWindow).GetField("worldAnimationConfiguration", flags)!.GetValue(main)).Seed);
+            Assert.Null(paths["parachute"]!["selected"]);
+            paths = await Job("animation_paths", new() { ["document"] = doc.SessionId.ToString(), ["revision"] = doc.Revision, ["preview"] = current["preview"]!.GetValue<string>(), ["action"] = "select", ["snapshot"] = paths["parachute"]!["snapshot"]!.GetValue<string>(), ["window"] = paths["parachute"]!["windows"]![0]!["id"]!.GetValue<string>() });
+            Assert.Equal(0, Assert.IsType<DefinitionEntry>(card.Entry).Definition.Index);
             var panel = (FrameworkElement)main.FindName("ParachutePanel");
+            Assert.Equal(Visibility.Visible, panel.Visibility);
             Assert.Contains(panel, Descendants(card));
             // A retained flight marker must reopen its docked card after another section replaced it.
             var tree = (SceneTreeModel)typeof(MainWindow).GetField("sceneTree", flags)!.GetValue(main)!;
@@ -93,38 +136,42 @@ internal static class SourceAnimationMcpChecks
             }
             Assert.IsType<DefinitionEntry>(tree.Selected!.Section);
             Assert.Contains(panel, Descendants(card)); Assert.True(panel.IsVisible);
-            // A viewport pick while the specialized flight analysis is pending owns the newer selection.
+            // Generic path analysis is independent of inspection. A viewport pick owns the newer selection,
+            // while the already requested analysis may publish its compatible guides without opening a card.
             TaskCompletionSource analyzing = new(TaskCreationOptions.RunContinuationsAsynchronously);
             using (var release = new SemaphoreSlim(0))
             {
-                main.ParachuteAnalysisPreparing = ct => { analyzing.TrySetResult(); release.Wait(ct); };
+                main.SourceAnimationPathPreparing = ct => { analyzing.TrySetResult(); release.Wait(ct); };
                 try
                 {
                     current = await Call("state", new());
                     var pending = await Call("animation_paths", new() { ["document"] = doc.SessionId.ToString(), ["revision"] = doc.Revision, ["preview"] = current["preview"]!.GetValue<string>(), ["definition"] = 0, ["action"] = "analyze" });
-                    await analyzing.Task.WaitAsync(token);
+                    await analyzing.Task.WaitAsync(TimeSpan.FromSeconds(15), token);
                     var viewport = Assert.IsType<zStudio.Rendering.SceneViewport>(((ContentControl)main.FindName("SceneHost")).Content);
                     int ground = viewport.PreviewScene!.Nodes.Single(n => n.Name == "ground").Index;
                     Assert.True(viewport.SelectInspectionNode(ground));
                     release.Release();
-                    string operation = pending["id"]!.GetValue<string>();
-                    while (pending["State"]!.GetValue<string>() is "queued" or "running") { await Task.Delay(10, token); pending = await Call("operation", new() { ["id"] = operation }); }
-                    Assert.NotEqual("completed", pending["State"]!.GetValue<string>());
+                    var analyzed = await AwaitJob(pending);
+                    Assert.NotEmpty(analyzed["paths"]!["definitions"]!.AsArray());
                     Assert.Equal(ground, viewport.SelectedInspection!.SelectionNode);
+                    Assert.Null(typeof(MainWindow).GetField("worldAnimationCandidate", flags)!.GetValue(main));
+                    Assert.Null(typeof(MainWindow).GetField("worldAnimationSession", flags)!.GetValue(main));
                 }
-                finally { release.Release(); main.ParachuteAnalysisPreparing = null; }
+                finally { release.Release(); main.SourceAnimationPathPreparing = null; }
             }
             current = await Call("state", new());
             string mapPreview = current["preview"]!.GetValue<string>();
             await Job("animation_paths", new() { ["document"] = doc.SessionId.ToString(), ["revision"] = doc.Revision, ["preview"] = current["preview"]!.GetValue<string>(), ["definition"] = 0, ["action"] = "preview" });
-            var editor = Assert.IsType<AnimationEditor>(((ContentControl)main.FindName("AnimationHost")).Content);
-            Assert.False(editor.Options.Collision);
+            Assert.Null(((ContentControl)main.FindName("AnimationHost")).Content);
+            Assert.Same(mapViewport, ((ContentControl)main.FindName("SceneHost")).Content);
+            var session = Assert.IsType<WorldAnimationSession>(typeof(MainWindow).GetField("worldAnimationSession", flags)!.GetValue(main));
+            Assert.Empty(session.Scenario.Policy.IncludedCalls);
+            Assert.True(session.IsAttached);
             Assert.False(((Control)main.FindName("FlyEnabled")).IsEnabled);
             Assert.Equal("stale_preview", (await Job("animation_transport", new() { ["preview"] = mapPreview, ["action"] = "pause" }, "failed"))["code"]!.GetValue<string>());
             Assert.IsType<DefinitionEntry>(((SceneTreeModel)typeof(MainWindow).GetField("sceneTree", flags)!.GetValue(main)!).Selected!.Section);
-            var range = Descendants(editor).OfType<Button>().Single(b => b.Content as string == "Range…");
-            range.RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent, range));
-            Assert.NotNull(editor.PreviewSetupView.Parent);
+            await Timeline("scenario");
+            Assert.Contains(Descendants(card).OfType<Expander>(), e => e.Header as string == "Scenario");
             main.SetPickupsByType(false);
             Assert.True(((TreeView)main.FindName("DocumentSceneTree")).IsEnabled);
             current = await Call("state", new());
@@ -134,10 +181,71 @@ internal static class SourceAnimationMcpChecks
             Assert.Equal(-500, previewState["animation"]!["proceduralYLimits"]!["minimum"]!.GetValue<int>());
             Assert.Equal("unsupported", (await Job("animation_options", new() { ["preview"] = animationPreview, ["changes"] = new { collision = false } }, "failed"))["code"]!.GetValue<string>());
             await Job("scene_options", new() { ["preview"] = current["preview"]!.GetValue<string>(), ["changes"] = new { wireframe = true, textures = false, faceOrientation = true } });
-            Assert.True(editor.Viewport.Wireframe); Assert.True(editor.Viewport.FaceOrientationEnabled);
+            Assert.True(mapViewport.Wireframe); Assert.True(mapViewport.FaceOrientationEnabled);
             typeof(MainWindow).GetMethod("ClearSectionSelection", flags)!.Invoke(main, []);
+            Assert.Same(session, typeof(MainWindow).GetField("worldAnimationSession", flags)!.GetValue(main));
+            Assert.Null(typeof(MainWindow).GetField("worldAnimationCandidate", flags)!.GetValue(main));
+            Assert.NotNull(typeof(MainWindow).GetField("worldAnimationPinned", flags)!.GetValue(main));
+            Assert.True(session.IsAttached);
+            // Reselecting the already cached definition restores only the candidate; it must not replace or run the pinned session.
+            var currentTree = (SceneTreeModel)typeof(MainWindow).GetField("sceneTree", flags)!.GetValue(main)!;
+            var cachedAnimationRow = currentTree.FindSection(card.Entry!.Key)!;
+            typeof(MainWindow).GetMethod("SelectSectionRow", flags)!.Invoke(main, [cachedAnimationRow, false]);
+            Assert.NotNull(typeof(MainWindow).GetField("worldAnimationCandidate", flags)!.GetValue(main));
+            Assert.Same(session, typeof(MainWindow).GetField("worldAnimationSession", flags)!.GetValue(main));
+            Assert.True(session.IsAttached);
+            await Job("animation_transport", new() { ["preview"] = animationPreview, ["action"] = "seek", ["seconds"] = 2.0 });
+            Assert.False(session.IsPlaying);
+            Assert.All(session.CurrentFrame!.Instances, instance => Assert.Equal(deliveryEntry, instance.Entry));
+            var scriptEvent = session.Context.Package.Entries[deliveryEntry].AllSequences.SelectMany(s => s.Events).Single(e => e.Type == 12);
+            var activeScript = session.CurrentFrame.Trace.Single(t => t.Event == scriptEvent.Id && t.End == null);
+            var observedRows = (IReadOnlyList<WorldAnimationTimelineRow>)typeof(MainWindow).GetField("worldAnimationRunRows", flags)!.GetValue(main)!;
+            var observedScript = observedRows.SelectMany(r => r.Marks).Single(m => m.Occurrence == activeScript.Occurrence);
+            Assert.Equal(WorldAnimationTimelineMarkKind.Running, observedScript.Kind);
+            Assert.Equal(activeScript.Start, observedScript.Start); Assert.Equal(2, observedScript.End);
+            // Selecting an animated source object is passive. Its first actual field draft returns to the static world,
+            // preserving the typed text and rebinding the animated inspection identity to the baseline target.
+            int animatedGround = mapViewport.PreviewScene!.Nodes.Single(n => n.Name == "ground").Index;
+            await Job("scene_card", new() { ["preview"] = animationPreview, ["action"] = "select", ["node"] = animatedGround });
+            var objectCard = Assert.IsType<SceneInspectionCard>(mapViewport.InspectionContent);
+            var objectEditor = Assert.IsType<SourceObjectCardEditor>(objectCard.ObjectEditor);
+            Assert.True(session.IsAttached);
+            await Job("scene_card", new() { ["preview"] = animationPreview, ["action"] = "begin", ["document"] = doc.SessionId.ToString(), ["revision"] = doc.Revision });
+            Assert.True(session.IsAttached);
+            var positionX = Descendants(objectEditor).OfType<TextBox>().Single(box => AutomationProperties.GetName(box) == "Position X");
+            positionX.Text = "3";
+            Assert.False(session.IsAttached); Assert.Null(session.CurrentFrame);
+            Assert.Same(objectEditor, objectCard.ObjectEditor);
+            Assert.True(objectCard.HasObjectDraft); Assert.Equal("3", positionX.Text);
+            Assert.Equal(objectCard.Selection!.Target, objectCard.DraftTarget);
+            Assert.True(mapViewport.HasTransformDraft);
+            await Job("scene_card", new() { ["preview"] = animationPreview, ["action"] = "cancel", ["document"] = doc.SessionId.ToString(), ["revision"] = doc.Revision, ["token"] = objectCard.DraftToken });
+            Assert.False(objectCard.HasDraft); Assert.False(session.IsAttached);
+            await Job("animation_transport", new() { ["preview"] = animationPreview, ["action"] = "seek", ["seconds"] = 2.0 });
+            await Job("animation_transport", new() { ["preview"] = animationPreview, ["action"] = "stop" });
+            Assert.False(session.IsAttached); Assert.Null(session.CurrentFrame);
+            Assert.Same(mapViewport, ((ContentControl)main.FindName("SceneHost")).Content);
             Assert.Null(((ContentControl)main.FindName("AnimationHost")).Content);
             Assert.True(((Control)main.FindName("FlyEnabled")).IsEnabled);
+            await Timeline("include", new() { ["root"] = deliveryEntry, ["path"] = calls[0]!["Path"]!.GetValue<string>(), ["included"] = true });
+            await Job("animation_transport", new() { ["preview"] = animationPreview, ["action"] = "seek", ["seconds"] = 2.0 });
+            Assert.Contains(session.CurrentFrame!.Instances, instance => instance.Entry != deliveryEntry);
+            await Timeline("options", new() { ["changes"] = new { view = "run" } });
+            var runRows = (await Timeline("rows", new() { ["view"] = "run" }))["rows"]!.AsArray();
+            Assert.All(runRows, row => Assert.Null(row!["Marks"]));
+            var eventRow = runRows.First(row => row!["markCount"]!.GetValue<int>() > 1)!;
+            string rowId = eventRow["Id"]!.GetValue<string>();
+            var markPage = await Timeline("marks", new() { ["row"] = rowId, ["limit"] = 1 });
+            Assert.Single(markPage["items"]!.AsArray()); Assert.Equal(1, markPage["nextOffset"]!.GetValue<int>());
+            var mark = markPage["items"]![0]!;
+            var selectedMark = await Timeline("row", new() { ["row"] = rowId, ["occurrence"] = mark["Occurrence"]!.GetValue<long>() });
+            Assert.Equal(mark["Id"]!.GetValue<string>(), selectedMark["presentation"]!["SelectedMark"]!.GetValue<string>());
+            Assert.Equal(2, session.CurrentFrame.Time);
+            var instances = await Call("animation_runtime", new() { ["preview"] = animationPreview, ["section"] = "instances" });
+            Assert.NotEmpty(instances["items"]!.AsArray());
+            await Call("animation_runtime", new() { ["preview"] = animationPreview, ["section"] = "conditions" });
+            typeof(MainWindow).GetMethod("ClearSectionSelection", flags)!.Invoke(main, []);
+            await Timeline("exit");
             Assert.Equal("stale_preview", (await Job("animation_transport", new() { ["preview"] = animationPreview, ["action"] = "pause" }, "failed"))["code"]!.GetValue<string>());
             var changes = new[] { new { field, values = new[] { "ON_STARTUP" } } };
             Assert.Equal("context_changed", (await Job("source_animation", Args("set", new() { ["changes"] = changes }), "failed"))["code"]!.GetValue<string>());
@@ -185,6 +293,13 @@ internal static class SourceAnimationMcpChecks
             Dictionary<string, object?> Args(string action, Dictionary<string, object?>? extra = null)
             { var args = extra ?? new(); args["document"] = doc.SessionId.ToString(); args["revision"] = doc.Revision; args["definition"] = 0; args["action"] = action; return args; }
             Task<JsonNode> Animation(string action, Dictionary<string, object?>? extra = null) => Job("source_animation", Args(action, extra));
+            async Task<JsonNode> Timeline(string action, Dictionary<string, object?>? extra = null)
+            {
+                var state = await Call("state", new()); var args = extra ?? new();
+                args["document"] = doc.SessionId.ToString(); args["revision"] = doc.Revision;
+                args["preview"] = state["preview"]!.GetValue<string>(); args["action"] = action;
+                return await Job("animation_timeline", args);
+            }
             async Task Preview() => await ((Task)typeof(MainWindow).GetField("previewWork", flags)!.GetValue(main)!).WaitAsync(token);
             async Task<JsonNode> Call(string name, Dictionary<string, object?> args)
             {

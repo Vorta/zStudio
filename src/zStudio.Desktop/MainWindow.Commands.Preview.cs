@@ -60,7 +60,7 @@ public partial class MainWindow
             var packs = Page(animation == null && SceneHost.Visibility == Visibility.Visible ? TexturePackCombo.Items.Cast<PackChoice>() : [], a,
                 maximumRowBytes: p => InspectionResultBudget.Pack(p.Name, p.Path)).Data;
             return Result(new { preview = previewId, asset = shownAsset?.Id, reloading = IsViewReloading, objectTransformPreviewNode = (retiringScene ?? scene)?.ObjectTransformPreviewNode,
-                animation = animation?.PreviewState(), motion = motion?.State,
+                animation = shownDocument?.SourceWorld != null && HasWorldAnimationTarget ? WorldAnimationCommandState : animation?.PreviewState(), motion = motion?.State,
                 camera = motion?.Viewport.CaptureView() ?? animation?.Viewport.CaptureView() ?? (SceneHost.Visibility == Visibility.Visible ? (retiringScene ?? scene)?.CaptureView() : null),
                 framingSelection = motion?.Viewport.FramingSelection ?? animation?.Viewport.FramingSelection ?? (SceneHost.Visibility == Visibility.Visible ? scene?.FramingSelection : null),
                 ai = AiPreviewState(),
@@ -136,8 +136,8 @@ public partial class MainWindow
         RegisterJob(r, "scene_options", "Set static model/world options: lod(integer), difficulty(Easy/Medium/Hard; RECOIL only, MW3 uses missions), textures/wireframe/faceOrientation/bounds/horizon(boolean), texturePack(path or empty for automatic), highlight(none/nonDefaultSoils/canModify/clipTo/canModifyAndClipTo/zones/polygonZones/landmarks), aiNodes/aiThroughGeometry(boolean), aiNetwork(all or ID with aiSnapshot), pickupsByType(boolean; source maps: Group by type in the Pickups section, for the session), bftType/bftPrimary/bftSecondary (source maps: how the view draws the player tank, a preview choice for the open map: never saved, no undo; applied together and published like difficulty; preview_state.bft reports it). Highlights and AI are Whole world only. In a source map zones and AI networks are shown one by one (scene_tree show/hide): highlight zones or polygonZones chooses the kind of zone colour (every zone shows when none did), another highlight hides every zone; aiNodes shows or hides every network; aiNetwork filters and aiThroughGeometry false are refused (networks are always drawn through geometry, at half strength where it hides them).", [PreviewParameter,SceneChanges], false, async (a, token) =>
         {
             RequirePreview(a); RequireNoDrafts(shownDocument); if (animation != null && !sourceAnimationPreview || motion != null) throw new StudioCommandException("unsupported","Use animation_options or motion_preview.");
-            if (sourceAnimationPreview && (a["changes"] as JsonObject)?.Any(p => p.Key is not ("textures" or "wireframe" or "bounds" or "faceOrientation" or "pickupsByType")) == true)
-                throw new StudioCommandException("unsupported", "Exit animation preview before changing map loading, overlays or placement options.");
+            if (sourceAnimationPreview && (a["changes"] as JsonObject)?.Any(p => p.Key is "lod" or "difficulty" or "texturePack" or "bftType" or "bftPrimary" or "bftSecondary") == true)
+                StopWorldAnimationForEdit();
             TargetViewport(a);
             if (shownDocument?.SourceWorld is { } sourceWorld && (sourceWorld.IsRebuilding || sourceWorkspaceBusy))
                 throw new StudioCommandException("busy", "The source scene is being evaluated; change its presentation options when it is ready.");
@@ -276,6 +276,12 @@ public partial class MainWindow
         });
         RegisterJob(r, "animation_options", "Set animation options (collision toggles the isolated flat plane; source-map previews always use terrain): map/grid/collision/horizon/faceOrientation/followCamera/effects/replay/mute/followLog(bool), height(-999..999), lod, difficulty(RECOIL only; MW3 uses missions), speed, volume, phase(runtime/cleanup), seed, condition(0/1/2), range/traceRange(seconds), autoRange/fitTrace(true), problemFilter(0..4), worldPath, root, activationOrigin/activationTarget(XYZ text or blank).", [PreviewParameter,AnimationChanges], false, async (a, _) =>
         {
+            if (shownDocument?.SourceWorld != null)
+            {
+                RequirePreview(a); RequireNoDrafts(shownDocument);
+                foreach (var (name, value) in (JsonObject)a["changes"]!) await WorldAnimationOptionAsync(name, value ?? throw new StudioCommandException("invalid_argument", "Use an explicit value."));
+                return Result(WorldAnimationCommandState);
+            }
             var editor = TargetAnimation(a); RequireNoDrafts(shownDocument);
             var animationChanges = (JsonObject)a["changes"]!;
             if (animationChanges.ContainsKey("difficulty") && !animationChanges.ContainsKey("worldPath") && editor.Mw3WorldPath != null)
@@ -284,12 +290,27 @@ public partial class MainWindow
             return Result(editor.PreviewState());
         });
         RegisterJob(r, "animation_transport", "Play/pause/stop, frame-step or seek the current animation.", [PreviewParameter,P("action","string","Transport action.",true,"play","pause","stop","previous","next","seek"),P("seconds","number","Seek time in seconds.")], false, async (a, _) =>
-        { var editor = TargetAnimation(a); RequireNoDrafts(shownDocument); await editor.TransportAsync(Text(a,"action"),Number(a,"seconds")); return Result(editor.PreviewState()); });
-        Register(r, "animation_runtime", "Read preview status, sequence runtime, dispatched event occurrences, problems or bound scene nodes. Scene metadata previews retain at most 64 JSON nodes and 1024 text characters, with inspection_truncated; full metadata is available through JSON export. Identities remain complete; long rows shorten pages, so follow nextOffset. Timing thresholds and observed dispatches remain distinct.", false,
-            [PreviewParameter,P("section","string","Data section.",true,"status","sequences","events","problems","scene"),.. PageParameters], a => Result(TargetAnimation(a).RuntimeData(Text(a,"section"),Int(a,"offset"),Int(a,"limit",100),Text(a,"query"))));
-        Register(r, "animation_select", "Select an authored sequence/event without changing playback phase or retargeting Properties.", true,
-            [PreviewParameter,P("sequence","string","Sequence GUID; omit for entry."),P("event","string","Event GUID; omit for sequence.")], a =>
         {
+            if (shownDocument?.SourceWorld != null) { RequirePreview(a); await WorldAnimationTransportAsync(Text(a,"action"), Number(a,"seconds")); return Result(WorldAnimationCommandState); }
+            var editor = TargetAnimation(a); RequireNoDrafts(shownDocument); await editor.TransportAsync(Text(a,"action"),Number(a,"seconds")); return Result(editor.PreviewState());
+        });
+        Register(r, "animation_runtime", "Read preview status, sequence runtime, dispatched event occurrences, problems or bound scene nodes. Scene metadata previews retain at most 64 JSON nodes and 1024 text characters, with inspection_truncated; full metadata is available through JSON export. Identities remain complete; long rows shorten pages, so follow nextOffset. Timing thresholds and observed dispatches remain distinct.", false,
+            [PreviewParameter,P("section","string","Data section; instances and conditions are source-world run observations.",true,"status","sequences","events","problems","scene","instances","conditions"),.. PageParameters], a =>
+            {
+                RequirePreview(a);
+                if (shownDocument?.SourceWorld == null && Text(a, "section") is "instances" or "conditions")
+                    throw new StudioCommandException("unsupported", "Instance and scoped-condition observations belong to source-world animation runs.");
+                return Result(shownDocument?.SourceWorld != null ? WorldAnimationRuntimeData(Text(a,"section"),Int(a,"offset"),Int(a,"limit",100),Text(a,"query"))
+                    : TargetAnimation(a).RuntimeData(Text(a,"section"),Int(a,"offset"),Int(a,"limit",100),Text(a,"query")));
+            });
+        RegisterJob(r, "animation_select", "Select an authored sequence/event without changing playback phase. Source-world selection opens its Properties record without seeking or retargeting the pinned root.",
+            [PreviewParameter,P("sequence","string","Sequence GUID; omit for entry."),P("event","string","Event GUID; omit for sequence.")], false, async (a, token) =>
+        {
+            if (shownDocument?.SourceWorld != null)
+            {
+                RequirePreview(a); await WorldAnimationSelectSourceAsync(GuidArg(a,"sequence"), GuidArg(a,"event"), token);
+                return Result(WorldAnimationCommandState);
+            }
             var editor = TargetAnimation(a); RequireNoDrafts(shownDocument);
             Guid sequence=GuidArg(a,"sequence"), ev=GuidArg(a,"event");
             var entry=shownDocument!.Document.Animations!.Entries[editor.EntryIndex];

@@ -169,6 +169,7 @@ public sealed partial class SceneViewport
     /// <summary>A world point on the render surface, in DIPs.</summary>
     internal Point ProjectToView(Point3D point) => view.Project(point);
     internal Exception? RenderException => view.RenderException;
+    internal string RenderStatus => view.RenderStatus;
     /// <summary>Renders one frame now at the current size (unlike <see cref="CapturePresentedFrame"/>).</summary>
     internal BitmapSource RenderCurrentFrame() => view.RenderBitmap() ?? throw new InvalidOperationException($"The graphics device did not produce a frame ({view.CaptureRefusal ?? "no frame was read"}).");
 

@@ -97,7 +97,7 @@ public sealed partial class AnimationPlayer
             case 19:
             case 24:
                 if (starting) vtolWindowEvent?.Invoke(instance, sequence, ev);
-                return Launch(instance, sequence, ev, starting);
+                return Launch(instance, sequence, ev, starting, Math.Max(0, Time - remaining));
             case 20:
             case 21:
                 node = NodeRef(instance, ev.I32(16));
@@ -138,7 +138,7 @@ public sealed partial class AnimationPlayer
                 sequence.ObservedInfiniteLoop = (stop & 1) != 0 ? (ev.U32(16) & 65535) == 65535 : (stop & 2) == 0 || ev.F32(16) < 0;
                 instance.Elapsed = Math.Min(instance.Elapsed, 86400); sequence.Reset(); return 0;
             case 31:
-                while (!Condition(instance, ev))
+                while (!Condition(instance, ev, Math.Max(0, Time - remaining)))
                 {
                     int next = sequence.Cursor + 1;
                     while (next < sequence.Data.Events.Count && sequence.Data.Events[next].Type is not (32 or 33 or 34)) next++;
@@ -205,23 +205,56 @@ public sealed partial class AnimationPlayer
         cues.Add(cue); activeSounds[key] = cue;
     }
     private static int StableHash(string name) { uint hash = 2166136261; foreach (char c in name) hash = unchecked((hash ^ c) * 16777619); return (int)(hash & 0x7fffffff); }
-    private bool Condition(Instance instance, AnimationEvent ev)
+    private bool Condition(Instance instance, AnimationEvent ev, double dispatchedAt)
     {
-        if (ConditionOverride is bool forced) return forced;
         uint mask = ev.U32(12);
-        if ((mask & 1) != 0) return RandomUnit() <= ev.F32(20);
-        if ((mask & 2) != 0) return ReferencePosition is Vector3 p && NodeRef(instance, -100) is Node root && Vector3.DistanceSquared(p, World(instance, root).Translation) <= ev.F32(20);
-        if ((mask & 0x18) != 0) { AddNote("Collision conditions are not matched by default; choose a condition override to inspect that branch.", "Support", "Information"); return false; }
-        return (mask & 4) != 0 && EffectLevel >= ev.I32(20);
+        bool forced = false, value;
+        if ((mask & 0x1f) != 0 && ExecutionPolicy?.TryCondition(instance.CallPath, instance.Entry.Index, ev.Id, out value) == true) forced = true;
+        else if (ConditionOverride is bool global) { value = global; forced = true; }
+        else if ((mask & 1) != 0) value = RandomUnit() <= ev.F32(20);
+        else if ((mask & 2) != 0) value = ReferencePosition is Vector3 p && NodeRef(instance, -100) is Node root && Vector3.DistanceSquared(p, World(instance, root).Translation) <= ev.F32(20);
+        else if ((mask & 0x18) != 0)
+        {
+            AddNote("Collision conditions are not matched by default; choose a condition override to inspect that branch.", "Support", "Information");
+            value = false;
+        }
+        else value = (mask & 4) != 0 && EffectLevel >= ev.I32(20);
+        if (!initializingScene)
+        {
+            if (conditions.Count >= 20000) { conditions.RemoveRange(0, 10000); conditionsDropped += 10000; InvalidateRetainedState(); }
+            RequireState(128);
+            conditions.Add(new(instance.Id, ev.Id, instance.CallPath, dispatchedAt, value, forced, trace.Count == 0 ? 0 : trace[^1].Occurrence));
+            AdjustRetainedBytes(128);
+        }
+        return value;
     }
-    private int Launch(Instance parent, Sequence sequence, AnimationEvent ev, bool starting)
+    private int Launch(Instance parent, Sequence sequence, AnimationEvent ev, bool starting, double dispatchedAt)
     {
         int slot = ev.I16(50);
         if (starting)
         {
             string name = AnimationAudioDependencies.ChildName(ev);
             var target = entryLookup.ResolveChild(ev);
-            if (target == null) { unavailableDuration = true; AddNote($"Unresolved child animation: {name}"); return 2; }
+            string path = "";
+            if (!initializingScene && ExecutionPolicy is { } policy)
+            {
+                string candidate;
+                try { candidate = AnimationExecutionPolicy.ChildPath(parent.CallPath, parent.Entry.Index, ev.Id, target?.Index ?? -1); }
+                catch (InvalidDataException) { candidate = ""; }
+                if (!policy.TryInclude(candidate, out path))
+                {
+                    hasExcludedCalls = true;
+                    bool waited = ev.Type == 24 && (ev.I16(46) & 16) != 0;
+                    LaunchTrace(waited ? "excluded_wait" : "excluded", target?.Index);
+                    if (waited) AddNote($"{sequence.Data.Name}: awaiting excluded child {name}.", "Preview", "Information");
+                    return waited ? 5 : 2;
+                }
+            }
+            if (target == null)
+            {
+                unavailableDuration = true; AddNote($"Unresolved child animation: {name}");
+                LaunchTrace("unresolved", null); return 2;
+            }
             Vector3? position = null; int? bound = null;
             if (ev.Type == 19) position = OffsetPosition(parent, ev.I16(52), ev.Vector(56));
             else
@@ -230,16 +263,36 @@ public sealed partial class AnimationPlayer
                 if ((flags & 9) != 0) position = OffsetPosition(parent, ev.I16(52), ev.Vector(56));
                 if (ev.I16(44) > 0 && NodeRef(parent, ev.I16(44)) is Node n) bound = n.Source;
             }
-            var child = AddInstance(target, position, bound, started: true);
+            int targetRoot = bound ?? bindingOperation!.Root(target);
+            bool shared = targetRoot >= 0 && IsWorldNode(targetRoot) && ((target.U32(148) & 0x8000) == 0 || bound.HasValue);
+            var existing = shared ? instances.FirstOrDefault(i => i.Entry.Index == target.Index && i.Root == targetRoot && !i.Finished) : null;
+            var child = AddInstance(target, position, bound, started: true, callPath: path, parentInstance: parent.Id, callEvent: ev.Id, startedAt: dispatchedAt);
             if (child != null)
             {
                 sequence.Child = child.Id; if (slot >= 0) parent.Children[slot] = child.Id;
                 if (ev.Type == 24 && (ev.I16(46) & 4) != 0 && child.Nodes.TryGetValue(child.Root, out var root)) Rotation(root, ev.Vector(68));
             }
+            LaunchTrace(child != null ? "launched" : existing != null ? "duplicate" : "unavailable", target.Index, child?.Id, existing?.Id);
             AddNote("Nested animation activation uses deterministic preview ordering; gameplay velocity and activation references may differ.", "Support", "Information");
         }
         if (ev.Type == 24 && (ev.I16(46) & 16) != 0 && instances.Any(i => i.Id == sequence.Child && !i.Finished)) return 1;
         return 2;
+
+        void LaunchTrace(string disposition, int? childEntry, long? childInstance = null, long? existingInstance = null)
+        {
+            if (initializingScene || trace.Count == 0) return;
+            int index = trace.FindLastIndex(t => t.Instance == parent.Id && t.Event == ev.Id && t.End == null);
+            if (index >= 0) trace[index] = trace[index] with
+            {
+                Disposition = disposition, ChildEntry = childEntry, ChildInstance = childInstance, ExistingInstance = existingInstance,
+                Status = disposition switch
+                {
+                    "excluded" => "Child omitted by scenario", "excluded_wait" => "Awaiting excluded dependency",
+                    "duplicate" => "Already running; start suppressed", "unresolved" => "Unresolved child; preview incomplete",
+                    "unavailable" => "Child activation unavailable", _ => trace[index].Status
+                }
+            };
+        }
     }
     private int Keyframes(Instance instance, Sequence state, AnimationEvent ev, ref float remaining)
     {

@@ -283,8 +283,13 @@ public partial class MainWindow : ISourceSectionState
                 {
                     case DefinitionEntry definition:
                         if (hide ?? shownAnimationPaths.Contains(definition.Definition.Index)) HideSourceAnimationPaths(definition.Definition.Index);
-                        else if (shownDocument is { } document && definition.Definition.Entries.Count > 0)
-                            _ = ReportUi(() => AnalyzeSourceAnimationAsync(document, definition.Definition.Index, definition.Definition.Entries[0], null, CancellationToken.None));
+                        else if (shownDocument is { } document)
+                        {
+                            int entry = definition.Definition.Entries.Contains(sourceAnimationEntry ?? -1) ? sourceAnimationEntry!.Value
+                                : definition.Definition.Entries.Count == 1 ? definition.Definition.Entries[0] : -1;
+                            if (entry < 0) throw new StudioCommandException("not_ready", "Select an exact binding in Properties, then Evaluate paths before showing its cached guides.");
+                            ShowSourceAnimationPaths(document, definition.Definition.Index, entry);
+                        }
                         break;
                     case ZoneEntry zone:
                         if (ZoneToolEngaged) throw new StudioCommandException("busy", "Zone colours are paused while Edit zones is on.");
@@ -409,7 +414,7 @@ public partial class MainWindow : ISourceSectionState
         for (var at = e.OriginalSource as DependencyObject; at != null && at != sender; at = at is System.Windows.Media.Visual ? System.Windows.Media.VisualTreeHelper.GetParent(at) : LogicalTreeHelper.GetParent(at))
             if (at is System.Windows.Controls.Primitives.ButtonBase) { e.Handled = true; return; }
         if (e.ClickCount > 1 && (sender as FrameworkElement)?.DataContext is SceneTreeItem { IsSourceMap: true, Selectable: false }) { e.Handled = true; return; }
-        if ((sender as FrameworkElement)?.DataContext is not SceneTreeItem { Section: SectionHeader or DefinitionScopeEntry or DefinitionFileEntry or PickupGroupEntry or PickupTypeEntry } row && (sender as FrameworkElement)?.DataContext is not SceneTreeItem { Pass: not null }) return;
+        if ((sender as FrameworkElement)?.DataContext is not SceneTreeItem { Section: SectionHeader or DefinitionScopeEntry or DefinitionFileEntry or AnimationPageEntry or PickupGroupEntry or PickupTypeEntry } row && (sender as FrameworkElement)?.DataContext is not SceneTreeItem { Pass: not null }) return;
         var item = (SceneTreeItem)((FrameworkElement)sender).DataContext;
         if (item.ChildCount == 0) return;
         e.Handled = true;
@@ -425,11 +430,11 @@ public partial class MainWindow : ISourceSectionState
     private void SelectSectionRow(SceneTreeItem row, bool restoring = false)
     {
         if (!restoring && !selectingAnimationCard && row != sceneTree?.Selected) CancelSourceAnimationSelectionWork();
-        if (!restoring) EndSourceAnimationPreview();
         if (row.Owner != sceneTree || !row.IsSectionItem || sceneTreeDocument is not { IsDisposed: false } doc)
             throw new StudioCommandException("stale_record", "The tree row is no longer available.");
         var viewport = sceneTree.IsPreview ? TreeViewport : null;
         if (viewport?.IsPickupDragging == true || viewport?.IsFlyActive == true) throw new StudioCommandException("busy", "Finish the pickup drag or exit Fly before selecting.");
+        if (!restoring && !selectingAnimationCard && row.Section is not (DefinitionEntry or AnimationBindingEntry or AnimationCallEntry)) ClearWorldAnimationCandidate();
         changingSceneTree = true;
         try
         {
@@ -470,7 +475,7 @@ public partial class MainWindow : ISourceSectionState
         if (SectionSelection == null) return false;
         if (!ResolveSelectionDrafts()) return true;
         CancelSourceAnimationSelectionWork();
-        EndSourceAnimationPreview();
+        ClearWorldAnimationCandidate();
         changingSceneTree = true;
         try { sceneTree!.Select(null); }
         finally { changingSceneTree = false; }
@@ -502,7 +507,7 @@ public partial class MainWindow : ISourceSectionState
         sectionCard.ApplyAnimation = async (definition, changes) =>
         {
             if (sectionCard.Document is not { IsDisposed: false } doc) throw new StudioCommandException("stale_document", "The map was closed.");
-            EndSourceAnimationPreview();
+            StopWorldAnimationForEdit();
             await EditSourceAnimationAsync(LiveDocument(doc), definition, changes, CancellationToken.None, committingSection: true);
         };
         sectionCard.PaintZone = zone => { if (sectionCard.Document is { IsDisposed: false } doc) RunZoneTool(() => EngageZoneTool(LiveDocument(doc), erase: false, zone: zone)); };
@@ -512,7 +517,7 @@ public partial class MainWindow : ISourceSectionState
             try { SelectSceneTreeRow(found); }
             catch (StudioCommandException ex) { Report(ex); }
         };
-        sectionCard.DraftChanged += () => { if (sectionCard.HasDraft) { EndSourceAnimationPreview(); sourcePathLoading?.Cancel(); } refreshAnimationPathControls?.Invoke(); UpdateDocumentCommands(); };
+        sectionCard.DraftChanged += () => { if (sectionCard.HasDraft) { StopWorldAnimationForEdit(); InvalidateWorldAnimationDropsForEdit(); sourcePathLoading?.Cancel(); } refreshAnimationPathControls?.Invoke(); UpdateDocumentCommands(); };
         return sectionCard;
     }
     /// <summary>Shows a section row's card (again, after an edit published a new tree: the draft stays with its zone or network).</summary>
@@ -522,6 +527,9 @@ public partial class MainWindow : ISourceSectionState
         var card = SectionCard();
         switch (row.Section)
         {
+            case AnimationBindingEntry or AnimationCallEntry:
+                _ = ReportUi(() => ShowWorldAnimationTreeCardAsync(doc, row));
+                break;
             case ZoneEntry zone:
                 string? master = null;
                 try { master = doc.SourceBuild is { } build ? ZoneMaster(session, build) : null; } catch (StudioCommandException) { }
@@ -533,7 +541,7 @@ public partial class MainWindow : ISourceSectionState
                 card.ShowNetwork(doc, network.Network, header, text);
                 break;
             case DefinitionEntry definition:
-                if (card.ShowsAnimation(doc, definition)) break;
+                if (card.ShowsAnimation(doc, definition)) { SetWorldAnimationDefinitionCandidate(doc, definition); break; }
                 var projection = sceneTree?.Projection;
                 int[] roots = sceneTree?.Sections?.DefinitionRoots.GetValueOrDefault(definition.Definition.Index) ?? [];
                 var named = roots.Select(r => (r, projection?.DisplayName(r) ?? r.ToString(CultureInfo.InvariantCulture),
@@ -645,6 +653,12 @@ public partial class MainWindow : ISourceSectionState
         DefinitionEntry definition => new { definitionFile = definition.Definition.File, ordinal = definition.Definition.Ordinal, occurrence = definition.Listing.Occurrence, name = definition.Definition.Name,
             rootName = definition.Definition.RootName, roots = definition.BindingKnown ? definition.Roots : (int?)null, bound = definition.BindingKnown ? definition.Roots > 0 : (bool?)null,
             rootNodes = sceneTree?.Sections?.DefinitionRoots.GetValueOrDefault(definition.Definition.Index)?.Take(64).ToArray() },
+        AnimationBindingEntry binding => new { kind = "animationBinding", entry = binding.Binding.Entry, definition = binding.Definition.Definition.Index,
+            rootName = binding.Binding.Root, name = binding.Binding.Name },
+        AnimationCallEntry call => new { kind = "animationCall", rootEntry = call.RootEntry, callerEntry = call.Call.Entry, targetEntry = call.Call.TargetEntry,
+            sequence = call.Call.Sequence, @event = call.Call.Event, path = call.Call.Path, parentPath = call.ParentPath, waitForCompletion = call.Call.WaitForCompletion,
+            included = row.AnimationIncluded, inclusionEnabled = row.AnimationIncludeEnabled },
+        AnimationPageEntry page => new { kind = "animationPage", rootEntry = page.RootEntry, entry = page.Entry, parentPath = page.ParentPath, offset = page.Offset },
         MissingFileEntry missing => new { definitionFile = missing.Listing.File, missing = true, listedBy = missing.Listing.ListedBy },
         NoteEntry note => new { note = note.Text },
         PickupGroupEntry group => new { kind = "pickupGroup", group = group.Group, count = group.Entries.Count, shown = group.Entries.Count(e => e.Row != null) },

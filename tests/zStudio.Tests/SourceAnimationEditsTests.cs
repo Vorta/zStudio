@@ -148,6 +148,27 @@ public sealed class SourceAnimationEditsTests
     }
 
     [Fact]
+    public void GenericRecognizedStopTimingRemainsEditableIncludingNegativeOffGridThresholds()
+    {
+        var token = TestContext.Current.CancellationToken;
+        var files = VtolDropFixture.Files();
+        var original = VtolDropFixture.Compile(files, token).Package;
+        Assert.Single(VtolDropWindows.Discover(original, token).Candidates);
+        var definition = SourceAnimationEdits.Read(files, VtolDropFixture.Root, 0, token);
+        var timing = definition.Records.Where(record => record.Kind == "STOP_ANIMATION")
+            .SelectMany(record => record.Fields).First(field => field.Key == "START_TIME" && field.Values[0] == "EVENT_OFFSET");
+        var edit = SourceAnimationEdits.Plan(files, VtolDropFixture.Root, 0,
+            [new(timing.Id, ["EVENT_OFFSET", "-0.1234567"])], token);
+        files.Content[edit.File] = edit.Content;
+        var read = SourceAnimationEdits.Read(files, VtolDropFixture.Root, 0, token);
+        var after = read.Records.SelectMany(record => record.Fields).Single(field => field.Id == timing.Id);
+        Assert.Equal("EVENT_OFFSET", after.Values[0]);
+        Assert.Equal(-0.1234567f, float.Parse(after.Values[1], System.Globalization.CultureInfo.InvariantCulture));
+        var compiled = VtolDropFixture.Compile(files, token).Package;
+        Assert.Empty(VtolDropWindows.Discover(compiled, token).Candidates);
+    }
+
+    [Fact]
     public void GenericPathsUseRuntimeMotionWithoutChangingTheContext()
     {
         var token = TestContext.Current.CancellationToken;

@@ -43,6 +43,11 @@ public partial class MainWindow
         };
         window.Closed += (_, _) => { if (presentationProperties == window) presentationProperties = null; if (propertiesWindow == window) { propertiesWindow = null; ++propertyRequest; } };
         window.Retargeted += UpdateSourceInputBlock;
+        window.PendingDraftStarted += () =>
+        {
+            if (window.Document?.SourceWorld is { } editing && shownDocument?.SourceWorld?.Workspace == editing.Workspace)
+                StopWorldAnimationForEdit();
+        };
         propertiesWindow = window; return window;
     }
     private void PresentProperties(PropertiesWindow window, bool accepted)

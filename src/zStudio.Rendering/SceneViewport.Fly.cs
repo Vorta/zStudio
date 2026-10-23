@@ -31,6 +31,8 @@ public sealed partial class SceneViewport
         rotationVelocity = default; rotationPoint = null; flyMovement = default; flyFrameTime = null;
         if (enabled)
         {
+            DisengageWorldAnimationCamera();
+            ManualNavigationStarting?.Invoke();
             ZonePaintActive = false;
             RestoreView(UprightPose(CaptureView() with { Projection = "perspective", OrthographicWidth = null }));
             if (!flySpeedInitialized)

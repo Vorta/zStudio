@@ -32,7 +32,7 @@ public sealed partial class SceneViewport
     /// <summary>A source object's handle gesture ended: released or canceled.</summary>
     public event Action? ObjectGestureEnded;
     private long objectGesture;
-    private bool CanManipulate => PlacementEditingEnabled && HasTransformDraft && transformValid && TransformHandlesEnabled &&
+    private bool CanManipulate => worldAnimation == null && PlacementEditingEnabled && HasTransformDraft && transformValid && TransformHandlesEnabled &&
         SelectedInspection is { Active: true } selected && selected.Target == transformTarget;
     private bool transformHandlesEnabled = true;
     /// <summary>Whether a draft's handles are shown: the card's Move and Rotate toggles can hide them without ending the draft.</summary>

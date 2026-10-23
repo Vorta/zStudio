@@ -1,6 +1,7 @@
 using System.Windows;
 using System.Windows.Automation;
 using System.Windows.Controls;
+using System.Globalization;
 using zStudio.Core.Sources;
 
 namespace zStudio.Desktop;
@@ -19,6 +20,13 @@ internal sealed partial class SourceSectionCard
     private Expander? animationSetup;
     private ComboBox? animationSequencePicker;
     private ListBox? animationEventList;
+    private readonly HashSet<string> animationWindowRecords = [];
+    internal void SetAnimationWindowRecords(IEnumerable<string> records)
+    {
+        animationWindowRecords.Clear();
+        foreach (string record in records) animationWindowRecords.Add(record);
+        RefreshAnimationFields();
+    }
     internal void SetExternalAnimationDraft(bool active)
     {
         if (animationDefinition == null) return;
@@ -31,7 +39,7 @@ internal sealed partial class SourceSectionCard
     {
         if (animationPathsHost == null) return;
         if (animationSetup != null) { animationSetup.Content = null; animationPathsHost.Children.Remove(animationSetup); animationSetup = null; }
-        if (setup != null) { animationSetup = new() { Header = "Preview setup", Content = setup, IsExpanded = expand, MaxHeight = 480 }; animationPathsHost.Children.Add(animationSetup); }
+        if (setup != null) { animationSetup = new() { Header = "Scenario", Content = setup, IsExpanded = expand, MaxHeight = 480 }; animationPathsHost.Children.Add(animationSetup); }
     }
     private string? animationRecord;
     internal object? AnimationDraft => animationDefinition == null ? null : new { definition = animationDefinition.Index, file = animationDefinition.File, ordinal = animationDefinition.Ordinal, missions = animationDefinition.Missions, sequence = animationSequence, record = animationRecord, token = DraftToken, changes = animationChanges.Values.ToArray(), pending = HasDraft };
@@ -43,12 +51,20 @@ internal sealed partial class SourceSectionCard
         animationSequencePicker!.SelectedItem = sequence;
         if (record != sequence) animationEventList!.SelectedItem = record;
     }
+    internal void FocusAnimationTiming()
+    {
+        var timing = animationFieldsHost?.Children.OfType<StackPanel>()
+            .SelectMany(panel => panel.Children.OfType<WorldAnimationThresholdEditor>()).FirstOrDefault();
+        if (timing == null) return;
+        timing.BringIntoView();
+        timing.MoveFocus(new System.Windows.Input.TraversalRequest(System.Windows.Input.FocusNavigationDirection.First));
+    }
 
     internal void ShowAnimation(DocumentModel document, DefinitionEntry entry, SourceAnimationEdits.Definition definition, FrameworkElement paths, FrameworkElement drops)
     {
         var kept = Entry?.Key == entry.Key && Document == document ? animationChanges.Values.ToArray() : [];
         string? selected = animationRecord;
-        Begin(entry, document); animationDefinition = definition; animationRevision = document.Revision;
+        Begin(entry, document); animationDefinition = definition; animationRevision = document.Revision; animationWindowRecords.Clear();
         foreach (var change in kept) animationChanges[change.Field] = change;
         heading.Text = definition.Name; subtitle.Text = "Animation · " + System.IO.Path.GetFileName(definition.File);
         subtitle.ToolTip = definition.File;
@@ -103,6 +119,8 @@ internal sealed partial class SourceSectionCard
         if (animationDefinition.Records.FirstOrDefault(r => r.Id == animationRecord) is not { } record) return;
         animationFieldsHost.Children.Add(new TextBlock { Text = record.Name, FontWeight = FontWeights.SemiBold, Margin = new(0, 0, 0, 6) });
         animationFieldsHost.ToolTip = record.Kind;
+        if (animationWindowRecords.Contains(record.Id)) animationFieldsHost.Children.Add(AnimationHelp(
+            "Editing this event can change or remove its drop-window relationship. Verified window-move guarantees apply only to Move drop window."));
         foreach (var field in record.Fields) AnimationField(animationFieldsHost, field);
     }
 
@@ -133,6 +151,12 @@ internal sealed partial class SourceSectionCard
         }
         else line.Children.Add(new TextBlock { Text = field.Label, Margin = new(0, 0, 0, 4) });
         List<Control> controls = [];
+        WorldAnimationThresholdEditor? threshold = null;
+        void RefreshThreshold()
+        {
+            if (threshold != null && values.Length == 2 && double.TryParse(values[1], NumberStyles.Float, CultureInfo.InvariantCulture, out double value) && double.IsFinite(value))
+                threshold.SetValue(values[0], value, (enabled?.IsChecked ?? true) && field.ReadOnly == null);
+        }
         void Update()
         {
             if (Applying) return;
@@ -144,6 +168,7 @@ internal sealed partial class SourceSectionCard
             }
             if (on == field.Present && values.SequenceEqual(field.Values)) animationChanges.Remove(field.Id);
             else animationChanges[field.Id] = new(field.Id, on ? values.ToArray() : null);
+            RefreshThreshold();
             Changed();
         }
         for (int i = 0; i < values.Length; i++)
@@ -163,6 +188,17 @@ internal sealed partial class SourceSectionCard
             control.Margin = new(0, 0, 0, 3); control.MinHeight = 30;
             AutomationProperties.SetName(control, field.Label + (values.Length > 1 ? $" {i + 1}" : ""));
             controls.Add(control); line.Children.Add(control);
+        }
+        if (field.Key == "START_TIME" && values.Length == 2 && controls[1] is TextBox timing &&
+            double.TryParse(values[1], NumberStyles.Float, CultureInfo.InvariantCulture, out double initial) && double.IsFinite(initial))
+        {
+            // The ruler and numeric proposal write the same existing source-field draft. Keeping
+            // the original control as the backing input preserves optional-field and mode handling.
+            timing.Visibility = Visibility.Collapsed;
+            threshold = new(); RefreshThreshold();
+            threshold.TextEdited += text => timing.Text = text;
+            threshold.ValueProposed += value => timing.Text = value.ToString("R", CultureInfo.InvariantCulture);
+            line.Children.Add(threshold);
         }
         if (enabled != null) { enabled.Checked += (_, _) => Update(); enabled.Unchecked += (_, _) => Update(); }
         if (field.ReadOnly != null) line.Children.Add(AnimationHelp(field.ReadOnly));
