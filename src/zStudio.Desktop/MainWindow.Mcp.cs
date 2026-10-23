@@ -179,7 +179,7 @@ public partial class MainWindow
     private StudioCommands CreateCommands()
     {
         StudioCommands registry = new();
-        Register(registry, "state", "Read the visible workspace and page document identities/revisions, preserving complete paths. Offset defaults to 0; limit defaults to 64, maximum 64. Documents have a 1 MiB pre-projection metadata allowance, so a page may be shorter; follow nextOffset, with total and offset. A single unsupported oversized row returns too_large. Status is a 512-character preview with statusTruncated. Source document workspace summaries contain counts and undo/redo state; read source_changes for the shared dirty-file and history details. Command results preview at most 64 file paths of 512 characters, with Truncated flags for longer lists or paths.", false,
+        Register(registry, "state", "Read the visible workspace and page document identities/revisions, preserving complete paths. Offset defaults to 0; limit defaults to 64, maximum 64. Documents have a 1 MiB pre-projection metadata allowance, so a page may be shorter; follow nextOffset, with total and offset. A single unsupported oversized row returns too_large. Status is a 512-character preview with statusTruncated. Source document workspace summaries contain counts and undo/redo state; read source_changes for the shared dirty-file and history details. Command results preview at most 64 file paths of 512 characters, with Truncated flags for longer lists or paths. update is the update check's state (zstudio_update_check).", false,
             [new("offset", "integer", "Zero-based document offset; default 0.", Minimum: 0, Maximum: int.MaxValue), new("limit", "integer", "Document page size 1–64; default 64. Follow nextOffset for shorter metadata-bounded pages.", Minimum: 1, Maximum: 64)], a =>
         {
             var page = StateDocumentPage.Select(ViewModel.Documents, Int(a, "offset"), Int(a, "limit", 64));
@@ -192,9 +192,11 @@ public partial class MainWindow
                 documents = page.Documents.Select(DocumentState).ToArray(), total = page.Total, offset = page.Offset, nextOffset = page.NextOffset, activeDocument = ViewModel.SelectedDocument?.SessionId,
                 preview = previewId, selectedAsset = shownAsset?.Id, animationTime = animation?.CurrentFrame?.Time, animationPlaying = animation?.IsPlaying,
                 pendingPropertiesDrafts = propertiesWindow?.HasPendingDrafts == true, pendingPreviewDrafts = animation?.HasAutomationDrafts == true, pendingSceneDrafts = HasInspectionDraft, pendingAiPathDrafts = HasAiPathDraft,
+                update = UpdateState(),
             });
         });
         Register(registry, "capabilities", "Read all capability schemas. Unsupported formats remain read-only; MCP does not add binary patching.", false, [], _ => new(registry.Describe()));
+        RegisterHelpCommands(registry);
         RegisterWorkspaceCommands(registry);
         RegisterPreviewCommands(registry);
         RegisterAiCommands(registry);
@@ -215,6 +217,7 @@ public partial class MainWindow
         RegisterSourceBlenderCommands(registry);
         RegisterSourceRecoveryCommands(registry); RegisterSourceTerrainCommands(registry); RegisterSourceZoneCommands(registry); RegisterSourceSectionCommands(registry);
         RegisterWorldCompareCommands(registry);
+        RegisterUpdateCommands(registry);
         return registry;
     }
 }

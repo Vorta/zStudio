@@ -22,7 +22,7 @@ def refused(operation, **kwargs):
 
 repo, helper, fixture, output = map(Path, sys.argv[sys.argv.index("--") + 1:])
 version = tomllib.loads((repo / "blender/zstudio_recoil/blender_manifest.toml").read_text(encoding="utf-8"))["version"]
-archive = helper.parent / f"dependencies/blender/zstudio_recoil-{version}.zip"
+archive = helper.parent / f"zStudio-Blender-extension-{version}.zip"
 if not os.environ.get("ZSTUDIO_BLENDER_SOURCE"):
     assert archive.is_file(), f"Missing matching packaged extension: {archive}"
     assert os.environ.get("BLENDER_USER_RESOURCES"), "Installing the integration fixture requires an isolated Blender user directory"

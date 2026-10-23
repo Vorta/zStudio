@@ -184,7 +184,7 @@ public partial class MainWindow
         // A project that changed during the copy leaves the copy unusable: say so (and where it is) rather than nothing.
         catch (StudioCommandException ex) when (ex.Code == "context_changed") { Report(ex); return; }
         finally { blenderCheckoutRunning = false; }
-        string message = $"{model} is checked out for Blender.\n\nInstall the bundled extension from dependencies/blender in Blender 5.2 LTS Preferences → Get Extensions → Install from Disk. Set its zStudio executable preference.\n\n1. Use File → Import → RECOIL glTF:\n{checkout.Input}\n2. Use Export RECOIL glTF to:\n{checkout.Outbox}\n3. Choose Tools → Update from Blender export in zStudio. Review the update, then Save to write the source files.\n\nOpen the checkout folder now?";
+        string message = $"{model} is checked out for Blender.\n\nInstall the extension {Path.GetFileName(BlenderExtensionArchive)} from zStudio's folder in Blender 5.2 LTS Preferences → Get Extensions → Install from Disk. Set its zStudio executable preference to zStudio.exe.\n\n1. Use File → Import → RECOIL glTF:\n{checkout.Input}\n2. Use Export RECOIL glTF to:\n{checkout.Outbox}\n3. Choose Tools → Update from Blender export in zStudio. Review the update, then Save to write the source files.\n\nOpen the checkout folder now?";
         if (MessageBox.Show(this, message, "Edit in Blender", MessageBoxButton.YesNo, MessageBoxImage.Information) == MessageBoxResult.Yes)
             Process.Start(new ProcessStartInfo { FileName = checkout.Folder, UseShellExecute = true });
     });
@@ -290,10 +290,11 @@ public partial class MainWindow
             });
     }
 
+    /// <summary>The package keeps the extension of the same version beside zStudio.exe.</summary>
+    private static string BlenderExtensionArchive => Path.Combine(AppContext.BaseDirectory, $"zStudio-Blender-extension-{StudioVersion}.zip");
     private static object BlenderExtensionInfo()
     {
-        string version = System.Reflection.CustomAttributeExtensions.GetCustomAttribute<System.Reflection.AssemblyInformationalVersionAttribute>(typeof(MainWindow).Assembly)!.InformationalVersion.Split('+')[0];
-        string archive = Path.Combine(AppContext.BaseDirectory, "blender", $"zstudio_recoil-{version}.zip");
+        string archive = BlenderExtensionArchive;
         return new { archive, available = File.Exists(archive), blenderMin = "5.2.0", blenderMaxExclusive = "5.3.0", protocol = SourceBlender.GraphProtocol,
             helper = Environment.ProcessPath, install = "Blender Preferences → Get Extensions → Install from Disk; select the archive, then set the extension's zStudio executable preference." };
     }

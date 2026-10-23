@@ -602,9 +602,9 @@
     {
       "gui": "MainWindow.xaml:AboutClick",
       "tools": [
-        "zstudio_state"
+        "zstudio_help"
       ],
-      "note": "Use the semantic tool with explicit identities and arguments."
+      "note": "About shows the version, zStudio's licence and the third-party notices (embedded in the executable; the same files ship beside zStudio.exe). help returns the version and those files' paths; its Release notes button opens the releaseNotes URL help returns. MCP never opens a browser."
     },
     {
       "gui": "MainWindow.xaml:ActualImageClick",
@@ -860,6 +860,13 @@
       "note": "Stable section indices survive responsive Files detachment. Tree/content keyboard focus remembers the active section; Files and Navigator splitter widths share workspace_view preferences. Automatic reparenting never commits drafts."
     },
     {
+      "gui": "MainWindow.xaml:OnlineGuideClick",
+      "tools": [
+        "zstudio_help"
+      ],
+      "note": "Each Help guide item (its Tag is the guide's repository path) opens that guide on GitHub at the installed version's tag; help lists the same guides in menu order with their URLs. MCP never opens a browser."
+    },
+    {
       "gui": "MainWindow.xaml:PaletteClick",
       "tools": [
         "zstudio_texture_palette"
@@ -893,6 +900,13 @@
         "zstudio_workspace_view"
       ],
       "note": "Use the semantic tool with explicit identities and arguments."
+    },
+    {
+      "gui": "MainWindow.xaml:ReleaseNotesClick",
+      "tools": [
+        "zstudio_help"
+      ],
+      "note": "Help Release notes opens the installed version's GitHub release; help returns its URL as releaseNotes. MCP never opens a browser."
     },
     {
       "gui": "MainWindow.xaml:RedoDocumentClick",
@@ -1342,6 +1356,28 @@
         "zstudio_open_root"
       ],
       "note": "File > Open workspace… (Ctrl+O): open_root with project true, which refuses a folder that is not a source project (not_project, naming the missing data or gamegen folder), one that is or lies below a link, or one in an earlier source format."
+    },
+    {
+      "gui": "MainWindow.xaml:CheckForUpdatesClick",
+      "tools": [
+        "zstudio_update_check"
+      ],
+      "note": "Help > Check for updates: update_check action check asks GitHub now (an explicit request, also with automatic checks off); the status bar item shows Checking for updates…, then Update available or the result for a few seconds. A private test profile never contacts GitHub."
+    },
+    {
+      "gui": "MainWindow.xaml:AutomaticUpdatesClick",
+      "tools": [
+        "zstudio_update_check"
+      ],
+      "note": "Help > Check for updates automatically: update_check action automatic with enabled (saved setting, default on; at most one check a day after zStudio starts). state and update_check report it as update.automatic."
+    },
+    {
+      "gui": "MainWindow.xaml:UpdateStatusClick",
+      "tools": [
+        "zstudio_update_check",
+        "zstudio_state"
+      ],
+      "note": "The status bar's Update available item (directly left of Preview notices) opens update.url, a page of github.com/Vorta/zStudio/releases, in the browser; MCP returns the url (state update or update_check) and opens nothing on the user's desktop. Clicking a check's result dismisses it."
     }
   ],
   "animationAssociationResults": "scene_tree animations includes initial-root and statically known indirect recipients. animationUses contains up to eight entryIndex/name/origin/reason records; origin is initialRoot or indirect. animationUsesTruncated discloses omissions. animationHasInitialRoot and animationHasIndirect retain both origin summaries when details are capped. GUI tree/search uses #6FC8D6 for any initial root, #89B5BC for indirect-only recipients; same glyph and opacity. Read-only position references and unknown impact targets are excluded."

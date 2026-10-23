@@ -45,7 +45,7 @@ $head = gh pr view <n> --json headRefOid --jq .headRefOid
 - One approval notice per head; an approval found while a notice is outstanding waits for its acknowledgment; an unexpected head change suspends approval until re-armed. A notice is only a candidate. Before merging:
   1. Confirm the recorded authorization and the user's latest instructions; read a fresh snapshot, all review threads and bot summaries; no unhandled feedback or unresolved conversations remain.
   2. Require completed bot review and passing required CI for the current full SHA, a clean checkout and mergeability; recheck immediately before `gh pr merge <n> --squash --match-head-commit <sha>`. A changed SHA needs review again.
-  3. Follow [releasing](releasing.md): release the version the merged source declares; never overwrite a tag or release; verify the workflow and the published ZIP/checksum; keep the portable folder and ZIP current.
+  3. Follow [releasing](releasing.md): release the version the merged source declares; never overwrite a tag or release; verify the workflow and the published ZIP/checksum; keep the local package folder and ZIP (`artifacts`) current.
   4. Delete only branches proven to belong to merged PRs (squash merges need PR evidence), keeping protected and unrelated work; record results and stop the watch.
 - The worker stops when GitHub reports the PR closed or merged. A queued approval never authorizes a release after the user paused, stopped or changed scope.
 

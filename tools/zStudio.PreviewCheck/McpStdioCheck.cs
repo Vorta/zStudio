@@ -12,22 +12,22 @@ internal static class McpStdioCheck
         if (LocalMcpHost.Discover(executable).Count > 0) throw new InvalidOperationException("Close this test installation first.");
         // Never overlap the user's zStudio: refuse a copy that is running, and a build that would ignore this
         // check's private profile and use the user's own settings and MCP registrations.
-        if (IsRunning(executable)) throw new InvalidOperationException("This zStudio copy is running. Check a separate copy (extract the portable ZIP into an empty folder).");
+        if (IsRunning(executable)) throw new InvalidOperationException("This zStudio copy is running. Check a separate copy (extract the package ZIP into an empty folder).");
         if (executable.Replace('/', '\\').Contains(@"\artifacts\zStudio-win-x64\", StringComparison.OrdinalIgnoreCase))
-            throw new InvalidOperationException("artifacts/zStudio-win-x64 is the user's build. Check a separate copy (extract the portable ZIP into an empty folder).");
-        if (zStudio.Automation.StudioProfile.IsPrivate && !UsesProfileOverride(executable)) throw new InvalidOperationException("This build predates ZSTUDIO_PROFILE and would use the user's own profile. Check a newer build.");
+            throw new InvalidOperationException("artifacts/zStudio-win-x64 is the user's build. Check a separate copy (extract the package ZIP into an empty folder).");
+        if (zStudio.Automation.StudioProfile.IsPrivate && !UsesProfileOverride(executable)) throw new InvalidOperationException("Not a single-file 0.9.7+ package (or a build output that reads ZSTUDIO_PROFILE), so it could use the user's own profile. Check a current build.");
         string path = zStudio.Desktop.StudioSettings.SettingsPath;
         var settings = File.Exists(path) ? JsonNode.Parse(File.ReadAllText(path))!.AsObject() : new JsonObject();
         if (settings["McpEnabled"]?.GetValue<bool>() != true)
         {
             // Access is the user's decision in their own profile; a private test profile is the check's own.
-            if (!zStudio.Automation.StudioProfile.IsPrivate) throw new InvalidOperationException("Enable MCP manually before this portable check. The check never changes the user's access settings.");
+            if (!zStudio.Automation.StudioProfile.IsPrivate) throw new InvalidOperationException("Enable MCP manually before this package check. The check never changes the user's access settings.");
             settings["McpEnabled"] = true; Directory.CreateDirectory(Path.GetDirectoryName(path)!); File.WriteAllText(path, settings.ToJsonString());
         }
         async Task<McpClient> Connect()
         {
             using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
-            return await McpClient.CreateAsync(new StdioClientTransport(new() { Command = executable, Arguments = ["--mcp"], Name = "zStudio portable test" }), cancellationToken: timeout.Token);
+            return await McpClient.CreateAsync(new StdioClientTransport(new() { Command = executable, Arguments = ["--mcp"], Name = "zStudio package test" }), cancellationToken: timeout.Token);
         }
         try
         {
@@ -43,7 +43,7 @@ internal static class McpStdioCheck
                 if (LocalMcpHost.Discover(executable).Count != 0) throw new InvalidDataException("Handshake/discovery opened a GUI.");
                 var states = await Task.WhenAll(client.CallToolAsync("zstudio_state").AsTask(), second.CallToolAsync("zstudio_state").AsTask());
                 if (states.Any(s => s.IsError == true) || LocalMcpHost.Discover(executable).Count != 1) throw new InvalidDataException("Concurrent first calls must start exactly one workspace.");
-                Console.WriteLine($"Portable stdio: {tools.Count} tools, {resources.Count} resources; discovery stayed windowless and concurrent first calls opened one GUI.");
+                Console.WriteLine($"Package stdio: {tools.Count} tools, {resources.Count} resources; discovery stayed windowless and concurrent first calls opened one GUI.");
                 if (root != null)
                 {
                     if (File.Exists(Path.Combine(root, "c1", "gamez.zbd")) && zStudio.Core.Formats.FormatRegistry.Probe(Path.Combine(root, "c1", "gamez.zbd")).Version == 27)
@@ -77,11 +77,12 @@ internal static class McpStdioCheck
         return false;
     }
 
-    /// <summary>Whether the build beside <paramref name="executable"/> (build output or portable layout) reads <c>ZSTUDIO_PROFILE</c>.</summary>
+    /// <summary>Whether <paramref name="executable"/> reads <c>ZSTUDIO_PROFILE</c>: a build output's zStudio.Application.dll names it.</summary>
     private static bool UsesProfileOverride(string executable)
     {
-        string folder = Path.GetDirectoryName(executable)!;
-        string? library = new[] { Path.Combine(folder, "zStudio.Application.dll"), Path.Combine(folder, "dependencies", "zStudio.Application.dll") }.FirstOrDefault(File.Exists);
-        return library != null && File.ReadAllBytes(library).AsSpan().IndexOf(System.Text.Encoding.Unicode.GetBytes(zStudio.Automation.StudioProfile.OverrideVariable)) >= 0;
+        string library = Path.Combine(Path.GetDirectoryName(executable)!, "zStudio.Application.dll");
+        if (File.Exists(library)) return File.ReadAllBytes(library).AsSpan().IndexOf(System.Text.Encoding.Unicode.GetBytes(zStudio.Automation.StudioProfile.OverrideVariable)) >= 0;
+        // The single-file package compresses its assemblies inside zStudio.exe; it exists from 0.9.7, which reads the variable.
+        return Version.TryParse(System.Diagnostics.FileVersionInfo.GetVersionInfo(executable).FileVersion, out var version) && version >= new Version(0, 9, 7);
     }
 }

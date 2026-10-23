@@ -10,26 +10,31 @@
     <PublishTrimmed>false</PublishTrimmed><PublishReadyToRun>true</PublishReadyToRun>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
+  <!-- The package (tools/publish.ps1 passes StudioPackage=true): one self-contained, compressed single-file bundle.
+       Only the WPF native libraries extract, to %TEMP%\.net\zStudio\<bundle id>; the managed assemblies load from the
+       bundle. Per-assembly ReadyToRun: the SDK's composite default is larger and starts slower. The single-file
+       analyzer would add an implicit ILLink package and break locked restores; it reports nothing for these sources. -->
+  <PropertyGroup Condition="'$(StudioPackage)' == 'true'">
+    <SelfContained>true</SelfContained>
+    <PublishSingleFile>true</PublishSingleFile>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+    <PublishReadyToRunComposite>false</PublishReadyToRunComposite>
+    <EnableSingleFileAnalyzer>false</EnableSingleFileAnalyzer>
+  </PropertyGroup>
   <ItemGroup>
     <Resource Include="Assets/studio.ico" />
     <Resource Include="Assets/Pickups/**/*.png" />
+    <!-- About shows the licence and notices that also ship beside zStudio.exe. -->
+    <EmbeddedResource Include="../../LICENSE" LogicalName="zStudio.LICENSE" />
+    <EmbeddedResource Include="../../THIRD-PARTY-NOTICES.md" LogicalName="zStudio.THIRD-PARTY-NOTICES.md" />
     <ProjectReference Include="../zStudio.Mcp/zStudio.Mcp.csproj" />
     <ProjectReference Include="../zStudio.Core/zStudio.Core.csproj" />
     <ProjectReference Include="../zStudio.Rendering/zStudio.Rendering.csproj" />
     <PackageReference Include="CommunityToolkit.Mvvm" />
     <PackageReference Include="NAudio.Core" /><PackageReference Include="NAudio.Wasapi" />
   </ItemGroup>
-  <!-- Use the SDK's native host and keep the managed app and runtime together.
-       The relative DLL binding also makes hostfxr resolve inside dependencies. -->
-  <Target Name="CreatePortableLauncher" AfterTargets="Publish" Condition="'$(PortableLayout)' == 'true'">
-    <Error Condition="'$(RuntimeIdentifier)' != 'win-x64' or '$(SelfContained)' != 'true' or '$(PublishSingleFile)' == 'true'"
-           Text="PortableLayout requires a self-contained, non-single-file win-x64 publish." />
-    <CreateAppHost AppHostSourcePath="$(AppHostSourcePath)"
-                   AppHostDestinationPath="$(PublishDir)../zStudio.exe"
-                   AppBinaryName="dependencies/$(AssemblyName)$(TargetExt)"
-                   IntermediateAssembly="@(IntermediateAssembly->'%(FullPath)')"
-                   WindowsGraphicalUserInterface="true"
-                   EnableMacOSCodeSign="false" />
-    <Delete Files="$(PublishDir)$(AssemblyName).exe" />
+  <Target Name="CheckStudioPackage" BeforeTargets="_CheckForInvalidConfigurationAndPlatform" Condition="'$(StudioPackage)' == 'true'">
+    <Error Condition="'$(RuntimeIdentifier)' != 'win-x64'" Text="StudioPackage requires a win-x64 publish." />
   </Target>
 </Project>

@@ -37,6 +37,7 @@ Rules for coding agents (Codex reads this file; Claude Code imports it through `
 - After changing MCP commands, build Release, regenerate the catalog, then rebuild: `dotnet run --project tools/zStudio.PreviewCheck -c Release --no-build -- --mcp-catalog src/zStudio.Mcp/CommandCatalog.json`. Full catalog parity is tested.
 - Tests are minimal and must-have only. Test environment, corpus-gated tests, tools and in-game checks: [testing](docs/agents/testing.md). Delete scratch corpus diagnostics before committing.
 - Before a release, merge the open Dependabot PRs, then update and revalidate the release branch (owner decision; steps: [releasing](docs/agents/releasing.md#cutting-a-release)).
+- The package is one self-contained, compressed `zStudio.exe` with only `LICENSE`, `THIRD-PARTY-NOTICES.md` and the Blender extension ZIP beside it (owner decision): [package](docs/agents/releasing.md#package).
 - `artifacts/zStudio-win-x64` and its ZIP are the latest validated build: the owner's build, used for the user and live GUI/MCP work on the owner's workspace. Agents' own test runs and package smoke checks use separate folders and private profiles. Republish after application changes ([local artifacts](docs/agents/releasing.md#local-artifacts)).
 
 ## Engineering invariants

@@ -1,7 +1,7 @@
 [
   {
     "Name": "zstudio_state",
-    "Description": "Read the visible workspace and page document identities/revisions, preserving complete paths. Offset defaults to 0; limit defaults to 64, maximum 64. Documents have a 1 MiB pre-projection metadata allowance, so a page may be shorter; follow nextOffset, with total and offset. A single unsupported oversized row returns too_large. Status is a 512-character preview with statusTruncated. Source document workspace summaries contain counts and undo/redo state; read source_changes for the shared dirty-file and history details. Command results preview at most 64 file paths of 512 characters, with Truncated flags for longer lists or paths.",
+    "Description": "Read the visible workspace and page document identities/revisions, preserving complete paths. Offset defaults to 0; limit defaults to 64, maximum 64. Documents have a 1 MiB pre-projection metadata allowance, so a page may be shorter; follow nextOffset, with total and offset. A single unsupported oversized row returns too_large. Status is a 512-character preview with statusTruncated. Source document workspace summaries contain counts and undo/redo state; read source_changes for the shared dirty-file and history details. Command results preview at most 64 file paths of 512 characters, with Truncated flags for longer lists or paths. update is the update check\u0027s state (zstudio_update_check).",
     "Mutates": false,
     "Parameters": [
       {
@@ -29,6 +29,12 @@
   {
     "Name": "zstudio_capabilities",
     "Description": "Read all capability schemas. Unsupported formats remain read-only; MCP does not add binary patching.",
+    "Mutates": false,
+    "Parameters": []
+  },
+  {
+    "Name": "zstudio_help",
+    "Description": "Read what the Help menu offers, without opening anything: the installed version, its online user guides and release notes (GitHub, pinned to the version\u0027s tag v\u003Cversion\u003E) and the licence and third-party notice files beside zStudio.exe that About shows (null when absent, as in a build output).",
     "Mutates": false,
     "Parameters": []
   },
@@ -5978,6 +5984,33 @@
         "Name": "query",
         "Type": "string",
         "Description": "Case-insensitive text: rows whose node name, or a name below them, contains it. Independent of the window\u0027s filter.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      }
+    ]
+  },
+  {
+    "Name": "zstudio_update_check",
+    "Description": "Read or run the update check, as the status bar\u0027s Update available item (directly left of Preview notices) and Help \u2192 Check for updates / Check for updates automatically do. It asks GitHub for zStudio\u0027s latest published release (https://api.github.com/repos/Vorta/zStudio/releases/latest; drafts and prereleases excluded) and compares its tag with this build\u0027s version (SemVer; a prerelease build sees its release as an update). action state (default) reads the same update object as zstudio_state: status available (a newer release; the GUI shows Update available), current, unknown (reason: not checked yet, a check asked for that failed, offline, GitHub refused or its rate limit is used up, or a private test profile, which never contacts GitHub), disabled (automatic checks are off and no check was asked for this session) or checking; automatic; current and latest versions; url, the release page on github.com/Vorta/zStudio/releases (the GUI\u0027s click opens it in the browser; MCP returns it and opens nothing); checkedUtc of the last successful check. check asks GitHub now (an explicit request, also when automatic checks are off; the request times out after 10 seconds; system proxy discovery, which the timeout cannot interrupt, can take longer) and adds failure when it failed. automatic with enabled turns automatic checks on or off (saved; after zStudio starts, at most one a day: a check, successful or not, makes the next wait a day); turning them on checks at once when the last check is a day old. zstudio_state reports the same update object without waiting for changes in progress.",
+    "Mutates": true,
+    "Parameters": [
+      {
+        "Name": "action",
+        "Type": "string",
+        "Description": "state (default) reads; check asks GitHub now; automatic sets automatic checks.",
+        "Required": false,
+        "Choices": [
+          "state",
+          "check",
+          "automatic"
+        ],
+        "Properties": null
+      },
+      {
+        "Name": "enabled",
+        "Type": "boolean",
+        "Description": "For automatic (required there): whether zStudio checks for updates by itself after it starts.",
         "Required": false,
         "Choices": null,
         "Properties": null

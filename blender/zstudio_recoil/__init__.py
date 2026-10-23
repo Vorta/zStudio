@@ -621,7 +621,7 @@ class RecoilPreferences(bpy.types.AddonPreferences):
 
     def draw(self, context):
         self.layout.prop(self, "zstudio_path")
-        self.layout.label(text="Select the portable zStudio.exe. No zStudio window is required.")
+        self.layout.label(text=f"Select the zStudio.exe of version {bridge.VERSION}. No zStudio window is required.")
 
 
 class glTF2ImportUserExtension:

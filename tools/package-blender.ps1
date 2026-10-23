@@ -9,7 +9,7 @@ if ($manifest -notmatch '(?m)^version\s*=\s*"([^"]+)"\s*$' -or $Matches[1] -ne $
     throw 'Blender extension and zStudio versions must match.'
 }
 New-Item -ItemType Directory -Path $Destination -Force | Out-Null
-$zipPath = Join-Path $Destination "zstudio_recoil-$version.zip"
+$zipPath = Join-Path $Destination "zStudio-Blender-extension-$version.zip"
 $temporary = $zipPath + '.' + [Guid]::NewGuid().ToString('N') + '.tmp'
 $zip = [IO.Compression.ZipFile]::Open($temporary, [IO.Compression.ZipArchiveMode]::Create)
 try {
@@ -19,7 +19,3 @@ try {
     [void][IO.Compression.ZipFileExtensions]::CreateEntryFromFile($zip, (Join-Path (Split-Path -Parent $PSScriptRoot) 'LICENSE'), 'LICENSE', [IO.Compression.CompressionLevel]::Optimal)
 } finally { $zip.Dispose() }
 [IO.File]::Move($temporary, $zipPath, $true)
-# The docs/*.md guides link ../blender/zstudio_recoil/README.md; keep that path in the portable documentation.
-$guide = Join-Path $Destination 'zstudio_recoil'
-New-Item -ItemType Directory -Path $guide -Force | Out-Null
-Copy-Item -LiteralPath (Join-Path $source 'README.md') -Destination (Join-Path $guide 'README.md')

@@ -2,6 +2,14 @@
 
 Version numbers follow `MAJOR.MINOR.PATCH`; the 0.x series is under active development. Release tags and downloadable archives use the same version.
 
+## 0.9.7 — 2026-10-23
+
+- **One file.** zStudio is now a single, compressed `zStudio.exe` with .NET included, instead of `zStudio.exe` and a `dependencies` folder (459 files in all). The ZIP holds only `zStudio.exe`, `LICENSE`, `THIRD-PARTY-NOTICES.md` (now with every licence text) and the Blender extension `zStudio-Blender-extension-0.9.7.zip`, and shrinks from 79 MB to 72 MB. The first start of each version unpacks the WPF native libraries (about 8 MB) to `%TEMP%\.net\zStudio\`. Decompressing the program in memory makes a start about 0.2 s slower than 0.9.6 and uses about 70 MB more memory. Replace an earlier version's folder rather than extracting over it: its `dependencies` folder is no longer used.
+- The guides are no longer in the download: **Help** opens each guide, and the release notes, on GitHub as they are for the installed version. **About zStudio** shows zStudio's licence and the third-party notices.
+- The Blender extension is now `zStudio-Blender-extension-<version>.zip` (it was `zstudio_recoil-<version>.zip`), beside `zStudio.exe` instead of in `dependencies\blender`; install it from there. Blender still lists it as **zStudio RECOIL**. It now asks the selected `zStudio.exe` for its version and works with the one of its own version, so the ZIP no longer has to stay beside `zStudio.exe` after installing.
+- MCP: `zstudio_help` returns the installed version, the links Help opens and the licence and notice files beside `zStudio.exe`.
+- **Update check.** The status bar shows **Update available** (left of Preview notices, also without a map) when a newer release is on GitHub; click it for the release page. zStudio checks at most once a day (**Help → Check for updates automatically**, on by default); **Help → Check for updates** checks now. MCP: `zstudio_update_check`, and `zstudio_state` reports `update`. With it and `zstudio_help` the catalog has 103 tools.
+
 ## 0.9.6 — 2026-10-23
 
 - **New 3D renderer.** The 3D views draw with zStudio's own Direct3D 11 renderer on Vortice.Windows instead of HelixToolkit and SharpDX (archived since 2019). The old packages they brought in are gone: NETStandard.Library 1.6.1, Microsoft.NETCore.Platforms, SharpDX, HelixToolkit, Microsoft.CodeAnalysis (Roslyn), Cyotek.Drawing.BitmapFont, CommunityToolkit.Common/Diagnostics and the Windows Forms runtime. The portable ZIP shrinks from 106 MB to 79 MB (577 to 459 files). Maps show their first frame sooner, and a whole map seen from above takes about half the processor time per frame. The preview needs a Direct3D 11 (feature level 11_0) graphics adapter, which every Windows 11 PC has.

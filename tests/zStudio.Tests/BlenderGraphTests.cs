@@ -19,7 +19,7 @@ public sealed class BlenderGraphTests
     public async Task InstalledBlenderRoundTrip()
     {
         if (Environment.GetEnvironmentVariable("ZSTUDIO_BLENDER") is not { Length: > 0 } blender) return;
-        string helper = Environment.GetEnvironmentVariable("ZSTUDIO_BLENDER_HELPER") ?? throw new InvalidOperationException("Set ZSTUDIO_BLENDER_HELPER to the validated portable zStudio.exe.");
+        string helper = Environment.GetEnvironmentVariable("ZSTUDIO_BLENDER_HELPER") ?? throw new InvalidOperationException("Set ZSTUDIO_BLENDER_HELPER to the zStudio.exe of a verified package, with its Blender extension ZIP beside it.");
         var repository = new DirectoryInfo(AppContext.BaseDirectory);
         while (repository != null && !File.Exists(Path.Combine(repository.FullName, "zStudio.slnx"))) repository = repository.Parent;
         Assert.NotNull(repository);
@@ -409,6 +409,13 @@ public sealed class BlenderGraphTests
             using MemoryStream invalid = new(Encoding.UTF8.GetBytes(request.ToJsonString())); using MemoryStream error = new();
             Assert.Equal(1, await BlenderBridge.RunAsync(invalid, error, TestContext.Current.CancellationToken));
             Assert.False(JsonNode.Parse(error.ToArray())!["ok"]!.GetValue<bool>());
+            // The extension accepts only a helper of its own version, which info reports.
+            using MemoryStream infoRequest = new(Encoding.UTF8.GetBytes("""{"protocol":1,"operation":"info"}""")); using MemoryStream info = new();
+            Assert.Equal(0, await BlenderBridge.RunAsync(infoRequest, info, TestContext.Current.CancellationToken));
+            string repository = AppContext.BaseDirectory;
+            while (!File.Exists(Path.Combine(repository, "zStudio.slnx"))) repository = Directory.GetParent(repository)!.FullName;
+            string extensionManifest = File.ReadAllText(Path.Combine(repository, "blender/zstudio_recoil/blender_manifest.toml"));
+            Assert.Equal(System.Text.RegularExpressions.Regex.Match(extensionManifest, "(?m)^version\\s*=\\s*\"([^\"]+)\"").Groups[1].Value, JsonNode.Parse(info.ToArray())!["version"]!.GetValue<string>());
         }
         finally { Directory.Delete(folder, recursive: true); }
     }
