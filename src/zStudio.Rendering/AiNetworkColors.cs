@@ -1,5 +1,5 @@
-using HelixToolkit.Maths;
 using zStudio.Core;
+using zStudio.Rendering.Direct3D;
 
 namespace zStudio.Rendering;
 
@@ -17,7 +17,7 @@ public static class AiNetworkColors
     private static uint Rgb(AiAttackStrategy strategy) => strategy.State == AiAttackStrategyState.Missing
         ? MissingRgb : Palette.FirstOrDefault(p => p.Kind == strategy.Kind, Palette[^1]).Rgb;
     public static string Hex(AiAttackStrategy strategy) => $"#{Rgb(strategy):X6}";
-    public static Color4 Color(AiAttackStrategy strategy)
+    internal static Color4 Color(AiAttackStrategy strategy)
     {
         uint rgb = Rgb(strategy);
         return new(((rgb >> 16) & 255) / 255f, ((rgb >> 8) & 255) / 255f, (rgb & 255) / 255f, 1);

@@ -149,7 +149,7 @@ public sealed class AnimationAudio : IDisposable, IAsyncDisposable
         return new(next, diagnostics, error);
     }
 
-    public void Update(AnimationFrame frame, AnimationPreviewContext context, bool playing, bool seek = false)
+    public void Update(AnimationFrame frame, bool playing, bool seek = false)
     {
         if (disposed) return;
         while (IsPrepared && errors.TryDequeue(out var error))

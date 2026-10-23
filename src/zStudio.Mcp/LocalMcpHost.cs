@@ -12,7 +12,7 @@ public sealed record McpInstance(string Id, string Pipe, int ProcessId, long Sta
 
 public sealed class LocalMcpHost : IAsyncDisposable
 {
-    public static string RegistrationDirectory => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "zStudio", "mcp-instances");
+    public static string RegistrationDirectory => Path.Combine(StudioProfile.Directory, "mcp-instances");
     private readonly CancellationTokenSource lifetime = new();
     private readonly ConcurrentDictionary<int, NamedPipeServerStream> connections = new();
     private readonly List<Task> sessions = [];
@@ -156,6 +156,7 @@ public sealed class LocalMcpHost : IAsyncDisposable
 
     private static void StartVisibleWorkspace(string executable)
     {
+        if (StudioProfile.IsPrivate) { StartPrivateWorkspace(executable); return; }
         // Explorer brokers the launch so MCP clients that kill their connector's
         // process tree cannot terminate the shared workspace and unsaved edits.
         var type = Type.GetTypeFromProgID("Shell.Application") ?? throw new InvalidOperationException("Windows Shell is unavailable. Open zStudio manually before connecting.");
@@ -173,5 +174,19 @@ public sealed class LocalMcpHost : IAsyncDisposable
             broker.ShellExecute(executable, "--mcp-host", Path.GetDirectoryName(executable)!, "open", 1);
         }
         finally { foreach (object item in objects.AsEnumerable().Reverse()) System.Runtime.InteropServices.Marshal.ReleaseComObject(item); }
+    }
+
+    /// <summary>
+    /// Tests and tools on a private profile only (<see cref="StudioProfile.OverrideVariable"/>). Explorer would start the
+    /// workspace with the user's environment and desktop, which carry neither the private profile nor a private test
+    /// desktop. A short-lived cmd.exe passes this process's environment and desktop on and exits, so the workspace still
+    /// outlives the connector's process tree; ShellExecute keeps the connector's protocol pipes from being inherited.
+    /// </summary>
+    private static void StartPrivateWorkspace(string executable)
+    {
+        if (executable.IndexOfAny(['"', '%', '!', '^']) >= 0) throw new InvalidOperationException("Open zStudio manually before connecting: a private-profile launch cannot pass on this executable path.");
+        ProcessStartInfo start = new(Path.Combine(Environment.SystemDirectory, "cmd.exe"), $"/d /e:on /v:off /c start \"\" \"{executable}\" --mcp-host")
+        { UseShellExecute = true, WindowStyle = ProcessWindowStyle.Hidden, WorkingDirectory = Path.GetDirectoryName(executable)! };
+        using var starter = Process.Start(start) ?? throw new InvalidOperationException("The private-profile workspace could not be started.");
     }
 }

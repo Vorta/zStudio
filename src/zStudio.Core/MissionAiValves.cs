@@ -1,5 +1,4 @@
 using System.Globalization;
-using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Security.Cryptography;
 using System.Text;
@@ -46,9 +45,6 @@ public static class MissionAiValves
     public static readonly string[] Conditions = ["all_zero", "all_nonzero", "any_nonzero"];
     public static bool IsResource(string name) => name.Equals("valves.zrd", StringComparison.OrdinalIgnoreCase) ||
         name.Equals("objectives.zrd", StringComparison.OrdinalIgnoreCase) || MissionAiNetworks.IsCandidate(name);
-    /// <summary>Semantic valve Properties require authored valve structure; RECOIL shares the objectives.zrd name.</summary>
-    public static bool HasSemanticRecords(string member, ZrdNode root, CancellationToken token = default) =>
-        MissionAiNetworks.IsCandidate(member) ? IsNetwork(root) : IsResource(member) && Records(member, root, token).Any();
     public static string Short(string text, int maximum = 256) => text.Length <= maximum ? text : text[..maximum] + "…";
     public static bool MatchesSearch(AiValveRecord record, string query) => record.Name.Contains(query, StringComparison.OrdinalIgnoreCase) ||
         (record.NodeIndex?.ToString(CultureInfo.InvariantCulture)?.Contains(query, StringComparison.OrdinalIgnoreCase) ?? false) ||

@@ -1,7 +1,7 @@
 using System.IO;
+using System.Reflection;
 using System.Windows;
 using System.Windows.Controls;
-using HelixToolkit.Wpf.SharpDX;
 using zStudio.Core;
 using zStudio.Desktop;
 using zStudio.Rendering;
@@ -11,7 +11,7 @@ internal static class LodCheck
     public static int Run(string root)
     {
         int exit = 0; root = Path.GetFullPath(root);
-        string settings = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "zStudio", "settings.json");
+        string settings = zStudio.Desktop.StudioSettings.SettingsPath;
         byte[]? originalSettings = File.Exists(settings) ? File.ReadAllBytes(settings) : null;
         var app = new App { ShutdownMode = ShutdownMode.OnExplicitShutdown, ProcessCommandLine = false }; app.InitializeComponent();
         app.Startup += async (_, _) =>
@@ -38,20 +38,22 @@ internal static class LodCheck
                         var preview = (SceneViewport)((ContentControl)window.FindName("SceneHost")).Content;
                         var displayed = preview.PreviewScene ?? data;
                         var expected = SceneBuilder.ForAsset(displayed, asset.Record, level);
-                        // Scene overview excludes the optional horizon backdrop.
-                        HashSet<int> backdrop = []; Stack<int> pending = new(displayed.Nodes.Where(n => n.Name.Equals("horizon", StringComparison.OrdinalIgnoreCase)).Select(n => n.Index));
+                        // Whole world shows the mission scene; with its Horizon toggle off (the default) the horizon subtrees are left out.
+                        HashSet<int> backdrop = [];
+                        bool horizon = ((System.Windows.Controls.Primitives.ToggleButton)window.FindName("BackdropEnabled")).IsChecked == true;
+                        Stack<int> pending = new(asset.Record.Kind == AssetKind.World && !horizon ? MissionSceneContext.FindHorizons(displayed).Select(h => h.Root) : []);
                         while (pending.TryPop(out int i)) { if (!backdrop.Add(i)) continue; foreach (int child in SceneBuilder.Children(displayed.Nodes[i])) pending.Push(child); }
-                        int target = expected.Placements.Where(p => asset.Record.Kind != AssetKind.World || !backdrop.Contains(p.NodeIndex)).Sum(p => GeometryBuilder.Build(data.Models[p.ModelIndex]).Sum(part => part.Indices.Length/3));
-                        var viewport = (Viewport3DX)((SceneViewport)((ContentControl)window.FindName("SceneHost")).Content).RenderSurface;
-                        var meshes = viewport.Items.OfType<MeshGeometryModel3D>().Concat(viewport.Items.OfType<SortingGroupModel3D>().SelectMany(g => g.Children.OfType<MeshGeometryModel3D>()));
-                        int drawn = meshes.Where(m => m.Visibility == Visibility.Visible).Sum(m => m.Geometry!.Indices!.Count / 3 * (m.Instances?.Count ?? 1));
+                        int target = expected.Placements.Where(p => !backdrop.Contains(p.NodeIndex)).Sum(p => GeometryBuilder.Build(displayed.Models[p.ModelIndex]).Sum(part => part.Indices.Length/3));
+                        int drawn = preview.RenderedTriangleCount;
                         if (drawn != target) throw new InvalidDataException($"Rendered LOD triangle count {drawn} != {target}."); return drawn;
                     }
                 }
                 async Task Wait()
                 {
-                    var empty = (TextBlock)window.FindName("EmptyPreview"); using CancellationTokenSource timeout = new(TimeSpan.FromSeconds(60));
-                    do { await Task.Delay(50, timeout.Token); } while (empty.Visibility == Visibility.Visible && empty.Text == "Loading preview…");
+                    // A LOD change refreshes the shown scene in place: wait for that refresh, not for a placeholder.
+                    await Task.Delay(50);
+                    await ((Task)typeof(MainWindow).GetField("previewWork", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(window)!).WaitAsync(TimeSpan.FromSeconds(60));
+                    var empty = (TextBlock)window.FindName("EmptyPreview");
                     if (empty.Visibility == Visibility.Visible) throw new InvalidDataException(empty.Text);
                 }
             }

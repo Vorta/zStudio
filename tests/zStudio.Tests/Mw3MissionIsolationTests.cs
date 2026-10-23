@@ -1,6 +1,4 @@
 using System.Buffers.Binary;
-using System.IO;
-using System.Numerics;
 using System.Text;
 using zStudio.Core;
 using zStudio.Core.Formats;
@@ -223,8 +221,8 @@ public sealed class Mw3MissionIsolationTests
                 string second = Path.Combine(root, "second.zbd"); File.WriteAllBytes(second, File.ReadAllBytes(library));
                 var ambiguous = await Assert.ThrowsAsync<InvalidDataException>(() => MotionLibrary.LoadAsync(Path.Combine(root, "motion.zbd"), resolver, Token));
                 Assert.Contains("Multiple mech libraries", ambiguous.Message, StringComparison.Ordinal);
-                File.Delete(second); await resolver.InvalidateAsync([second], Token);
-                File.Delete(library); await resolver.InvalidateAsync([library], Token);
+                File.Delete(second);
+                File.Delete(library);
                 var error = await Assert.ThrowsAsync<InvalidDataException>(() => MotionLibrary.LoadAsync(Path.Combine(root, "motion.zbd"), resolver, Token));
                 Assert.Contains("could not be read", error.Message);
             }

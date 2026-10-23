@@ -7,7 +7,6 @@ using System.Windows.Controls.Primitives;
 using ModelContextProtocol.Client;
 using ModelContextProtocol.Protocol;
 using zStudio.Core;
-using zStudio.Desktop;
 using zStudio.Mcp;
 using zStudio.Rendering;
 using Xunit;
@@ -181,17 +180,16 @@ internal static class WorldHighlightMcpChecks
             using var viewport = new SceneViewport();
             await viewport.ShowAsync(source, source.Assets.Single(a => a.Kind == AssetKind.World), resolver, null, 0, token);
             viewport.SetWorldHighlightMode(WorldHighlightMode.Zones);
-            var batches = (System.Collections.IDictionary)typeof(SceneViewport).GetField("placements", BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(viewport)!;
+            var batches = viewport.StaticBatches;
             Assert.Equal(2, batches.Count);
             var colors = new HashSet<string>();
-            foreach (System.Collections.DictionaryEntry batch in batches)
+            foreach (var (mesh, placements) in batches)
             {
-                var mesh = (HelixToolkit.Wpf.SharpDX.MeshGeometryModel3D)batch.Key;
-                var placement = Assert.Single((ScenePlacement[])batch.Value!);
+                var placement = Assert.Single(placements);
                 int zone = WorldSurfaceHighlights.NodeZone(source.Scene!, placement.NodeIndex);
-                var actual = PreviewMaterials.OverlayColor(Assert.IsType<HelixToolkit.Wpf.SharpDX.DiffuseMaterial>(mesh.Material));
+                var actual = mesh.OverlayColor;
                 var expected = WorldSurfaceHighlights.ZoneColor(zone);
-                Assert.Equal(expected.R, actual.Red); Assert.Equal(expected.G, actual.Green); Assert.Equal(expected.B, actual.Blue); Assert.Equal(.5f, actual.Alpha);
+                Assert.Equal(expected.R, actual.X); Assert.Equal(expected.G, actual.Y); Assert.Equal(expected.B, actual.Z); Assert.Equal(.5f, actual.W);
                 colors.Add(actual.ToString()); Assert.Single(mesh.Instances!);
             }
             Assert.Equal(2, colors.Count);

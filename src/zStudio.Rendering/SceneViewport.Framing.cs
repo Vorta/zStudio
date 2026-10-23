@@ -1,8 +1,8 @@
 using System.Windows;
+using System.Numerics;
 using System.Windows.Media.Media3D;
-using HelixToolkit.Wpf.SharpDX;
 using zStudio.Core;
-using MeshGeometry3D = HelixToolkit.SharpDX.MeshGeometry3D;
+using zStudio.Rendering.Direct3D;
 
 namespace zStudio.Rendering;
 
@@ -13,7 +13,7 @@ public sealed partial class SceneViewport
     /// <summary>Frames an AI network: all of its nodes (the overlay needs not show it).</summary>
     public bool TryFrameAiNetwork(string network)
     {
-        if (IsPickupDragging || IsFlyActive || IsAiPathPointerTransform || IsParachutePointerMoving || viewport.Camera is not ProjectionCamera) return false;
+        if (IsPickupDragging || IsFlyActive || IsAiPathPointerTransform || IsParachutePointerMoving || view.Camera is not RenderCamera) return false;
         if (AiNetworks.Networks.FirstOrDefault(n => n.Id == network) is not { Nodes.Count: > 0 } found) return false;
         Rect3D bounds = Rect3D.Empty;
         foreach (var item in found.Nodes) bounds.Union(new Rect3D(item.Position.X - 2, item.Position.Y - 2, item.Position.Z - 2, 4, 4, 4));
@@ -28,7 +28,7 @@ public sealed partial class SceneViewport
     private bool TryFrame(string target, int? node, bool manual, IReadOnlyCollection<int>? roots)
     {
         if (target is not ("all" or "asset" or "selected")) throw new ArgumentException("Unknown framing target.", nameof(target));
-        if (IsPickupDragging || IsFlyActive || IsAiPathPointerTransform || IsParachutePointerMoving || viewport.Camera is not ProjectionCamera) return false;
+        if (IsPickupDragging || IsFlyActive || IsAiPathPointerTransform || IsParachutePointerMoving || view.Camera is not RenderCamera) return false;
         long? selectedRuntime = target == "selected" && node == null && FramingSelection == SelectedInspection?.SelectionNode
             ? SelectedInspection?.RuntimeInstance : null;
         if (selectedRuntime != null && InspectTarget(SelectedInspection!.Target)?.Active != true) return false;
@@ -63,7 +63,7 @@ public sealed partial class SceneViewport
                 {
                     if (IsHorizon(items[i].NodeIndex) || selected != null && !selected.Contains(items[i].NodeIndex)) continue;
                     var transform = ToWpf(mesh.Instances is { } instances && i < instances.Count ? instances[i] : items[i].Transform);
-                    transform.Append(mesh.Transform?.Value ?? Matrix3D.Identity); IncludeStatic(mesh, transform);
+                    transform.Append(ToWpf(mesh.Transform ?? Matrix4x4.Identity)); IncludeStatic(mesh, transform);
                 }
             }
         StaticFramingMeasured?.Invoke(staticCorners);
@@ -74,13 +74,13 @@ public sealed partial class SceneViewport
                 if (IsHorizon(pose.SourceNode) || selected != null && !selected.Contains(pose.SourceNode) || !animatedMeshes.TryGetValue(pose.Id, out var items)) continue;
                 foreach (var item in items)
                     if (item.Mesh.Visibility == Visibility.Visible && item.Mesh.IsRendering)
-                        Include(item.Mesh, item.Mesh.Transform?.Value ?? Matrix3D.Identity);
+                        Include(item.Mesh, ToWpf(item.Mesh.Transform ?? Matrix4x4.Identity));
             }
         return FrameBounds(bounds, manual);
 
-        void IncludeStatic(MeshGeometryModel3D mesh, Matrix3D transform)
+        void IncludeStatic(MeshNode mesh, Matrix3D transform)
         {
-            if (mesh.Geometry is not MeshGeometry3D geometry || !staticMeshBounds.TryGetValue(geometry, out var local) || !float.IsFinite(local.Min.X)) return;
+            if (mesh.Geometry is not { } geometry || !staticMeshBounds.TryGetValue(geometry, out var local) || !float.IsFinite(local.Min.X)) return;
             // A transformed local box can loosen the fit under rotation, but contains
             // every static vertex without revisiting shared geometry per placement.
             // Animated/morphed geometry below and clipped depth refinement stay exact.
@@ -95,9 +95,9 @@ public sealed partial class SceneViewport
             }
         }
 
-        void Include(MeshGeometryModel3D mesh, Matrix3D transform)
+        void Include(MeshNode mesh, Matrix3D transform)
         {
-            if (mesh.Geometry is not MeshGeometry3D geometry || geometry.Positions == null) return;
+            if (mesh.Geometry is not { } geometry) return;
             foreach (var p in geometry.Positions)
             {
                 var point = transform.Transform(new Point3D(p.X, p.Y, p.Z));

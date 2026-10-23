@@ -8,19 +8,14 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Automation;
-using System.Windows.Input;
-using System.Windows.Threading;
 using System.Windows.Media;
 using ModelContextProtocol.Client;
 using ModelContextProtocol.Protocol;
 using zStudio.Core;
 using zStudio.Core.Formats;
-using zStudio.Desktop;
 using zStudio.Mcp;
 using zStudio.Rendering;
 using Xunit;
-using HelixToolkit;
-using HelixToolkit.Wpf.SharpDX;
 
 namespace zStudio.Desktop.Tests;
 
@@ -77,12 +72,8 @@ internal static class SceneInspectionMcpChecks
         world.Scene.Nodes[3] = world.Scene.Nodes[3] with { Data = TransformData(secondLocal) };
         var ownerTransform = baseTransform * parentTransform;
         ScenePlacement[] instances = [new(2, -1, "first", firstLocal * ownerTransform), new(3, -1, "second", secondLocal * ownerTransform)];
-        var mesh = new MeshGeometryModel3D { Geometry = new HelixToolkit.SharpDX.MeshGeometry3D { Positions = new Vector3Collection([new(0, 0, 0), new(1, 0, 0), new(0, 1, 0)]), Indices = new IntCollection([0, 1, 2]) }, Instances = instances.Select(p => p.Transform).ToArray() };
-        ((List<MeshGeometryModel3D>)typeof(SceneViewport).GetField("meshes", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(viewport)!).Add(mesh);
-        ((Dictionary<HelixToolkit.SharpDX.MeshGeometry3D, (Vector3 Min, Vector3 Max)>)typeof(SceneViewport).GetField("staticMeshBounds", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(viewport)!).Add((HelixToolkit.SharpDX.MeshGeometry3D)mesh.Geometry!, (Vector3.Zero, new(1, 1, 0)));
-        foreach (string key in new[] { "placements", "visiblePlacements" })
-            ((Dictionary<MeshGeometryModel3D, ScenePlacement[]>)typeof(SceneViewport).GetField(key, BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(viewport)!).Add(mesh, instances);
-        typeof(SceneViewport).GetMethod("RegisterInspectionMesh", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(viewport, [mesh, -1, null, -1, -1]);
+        var mesh = viewport.AddFixtureMesh(new([new(0, 0, 0), new(1, 0, 0), new(0, 1, 0)], [0, 1, 2]) { Instances = instances.Select(p => p.Transform).ToArray(), Placements = instances, Rendered = false });
+        viewport.RegisterFixtureInspection(mesh, -1);
         typeof(SceneViewport).GetMethod("ConfigurePickups", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(viewport, []);
         viewport.RestoreView(new(new(0, 0, 20), new(0, 0, -20), new(0, 1, 0), 60));
         viewport.SetAiNetworks(graph); viewport.SetAiOptions(true, true, null);
@@ -159,7 +150,7 @@ internal static class SceneInspectionMcpChecks
             Assert.DoesNotContain(strategyReadout, Fields(inspectionCard));
             Assert.Null((await Call("scene_inspect", new() { ["preview"] = preview }))["attackStrategy"]);
             Assert.True(viewport.SelectionBoundsVisible); Assert.False(viewport.TransformHandlesVisible);
-            var box = (LineGeometryModel3D)typeof(SceneViewport).GetField("selectionBox", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(viewport)!;
+            var box = viewport.SelectionBox!;
             AssertSelectionBox(ownerTransform, new(-2, 0, 0), new(9, 3, 0));
             // The same two parts can belong to a reconstructed synthetic owner.
             // Its common physical ancestor supplies the frame without inventing a node.
@@ -167,13 +158,12 @@ internal static class SceneInspectionMcpChecks
             typeof(SceneViewport).GetProperty(nameof(SceneViewport.SelectedInspection))!.SetValue(viewport, selected with { OwnerNode = -2 });
             viewport.SelectionOwner = n => n is 2 or 3 ? -2 : n;
             RefreshBox(); AssertSelectionBox(ownerTransform, new(-2, 0, 0), new(9, 3, 0));
-            var visible = (Dictionary<MeshGeometryModel3D, ScenePlacement[]>)typeof(SceneViewport).GetField("visiblePlacements", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(viewport)!;
-            visible[mesh] = [instances[0]]; mesh.Instances = [instances[0].Transform];
+            viewport.SetFixtureVisiblePlacements(mesh, [instances[0]]);
             RefreshBox(); AssertSelectionBox(ownerTransform, new(-2, 0, 0), new(0, 3, 0));
-            visible[mesh] = instances; mesh.Instances = instances.Select(p => p.Transform).ToArray();
+            viewport.SetFixtureVisiblePlacements(mesh, instances);
             var secondNode = world.Scene.Nodes[3]; world.Scene.Nodes[3] = secondNode with { Parents = [] };
             RefreshBox();
-            var fallbackEdge = box.Geometry!.Positions![1] - box.Geometry.Positions[0];
+            var fallbackEdge = box.Positions[1] - box.Positions[0];
             Assert.True(fallbackEdge.X > 0); Assert.Equal(0, fallbackEdge.Y); Assert.Equal(0, fallbackEdge.Z);
             world.Scene.Nodes[3] = secondNode; viewport.SelectionOwner = null;
             typeof(SceneViewport).GetProperty(nameof(SceneViewport.SelectedInspection))!.SetValue(viewport, selected);
@@ -214,7 +204,7 @@ internal static class SceneInspectionMcpChecks
             {
                 Vector3[] expected = [new(min.X,min.Y,min.Z), new(max.X,min.Y,min.Z), new(max.X,max.Y,min.Z), new(min.X,max.Y,min.Z),
                     new(min.X,min.Y,max.Z), new(max.X,min.Y,max.Z), new(max.X,max.Y,max.Z), new(min.X,max.Y,max.Z)];
-                var actual = box.Geometry!.Positions!;
+                var actual = box.Positions;
                 Assert.Equal(8, actual.Count);
                 for (int i = 0; i < expected.Length; i++)
                     Assert.True(Vector3.Distance(Vector3.Transform(expected[i], frame), actual[i]) < .0001f,

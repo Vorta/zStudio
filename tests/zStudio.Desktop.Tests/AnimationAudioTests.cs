@@ -4,7 +4,6 @@ using System.Numerics;
 using NAudio.Wave;
 using zStudio.Core;
 using zStudio.Core.Animation;
-using zStudio.Desktop;
 using zStudio.Desktop.Audio;
 using Xunit;
 
@@ -21,11 +20,11 @@ public sealed class AnimationAudioTests
         await using AnimationAudio audio = new(() => output, (_, _) => new(Enumerable.Repeat(.5f, 96000).ToArray())) { Volume = 1 };
         await audio.PrepareAsync(context, 0, Token);
         var cue = Cue(1) with { Gain = .2f };
-        audio.Update(Frame(.1, cue), context, true); Assert.InRange(output.Read(2)[0], .0999f, .1001f);
-        audio.Update(Frame(.2, cue), context, false); Assert.Equal(0, output.Read(2)[0]);
-        audio.Update(Frame(.3, cue), context, true); Assert.InRange(output.Read(2)[0], .0999f, .1001f);
-        audio.Muted = true; audio.Update(Frame(.4, cue), context, true); Assert.Equal(0, output.Read(2)[0]);
-        audio.Muted = false; audio.Update(Frame(.5, cue), context, true); Assert.InRange(output.Read(2)[0], .0999f, .1001f);
+        audio.Update(Frame(.1, cue), true); Assert.InRange(output.Read(2)[0], .0999f, .1001f);
+        audio.Update(Frame(.2, cue), false); Assert.Equal(0, output.Read(2)[0]);
+        audio.Update(Frame(.3, cue), true); Assert.InRange(output.Read(2)[0], .0999f, .1001f);
+        audio.Muted = true; audio.Update(Frame(.4, cue), true); Assert.Equal(0, output.Read(2)[0]);
+        audio.Muted = false; audio.Update(Frame(.5, cue), true); Assert.InRange(output.Read(2)[0], .0999f, .1001f);
         Assert.Equal(1, output.Starts);
     }
 
@@ -91,7 +90,7 @@ public sealed class AnimationAudioTests
         Assert.True(audio.IsPrepared); Assert.Equal(1, decoded); Assert.Equal(1, audio.PreparedSoundCount);
         for (int i = 0; i < 100; i++)
         {
-            audio.Update(Frame(0, Cue(i + 1)), context, true); output.Read(20); audio.Stop();
+            audio.Update(Frame(0, Cue(i + 1)), true); output.Read(20); audio.Stop();
         }
         await audio.PrepareAsync(context, 0, Token);
         Assert.Equal(1, decoded); Assert.Equal(1, output.Starts); Assert.Equal(0, output.Disposals);
@@ -99,8 +98,8 @@ public sealed class AnimationAudioTests
 
         // Leave both an active voice and a queued voice when replacing the bank. A device need not
         // call Read again to release old samples and make room for the next preparation.
-        audio.Update(Frame(0, Cue(1001)), context, true); Assert.Contains(output.Read(2), v => v != 0);
-        audio.Update(Frame(0, Cue(1001), Cue(1002)), context, true);
+        audio.Update(Frame(0, Cue(1001)), true); Assert.Contains(output.Read(2), v => v != 0);
+        audio.Update(Frame(0, Cue(1001), Cue(1002)), true);
         context.Sounds["replacement"] = new("replacement", "replacement.wav", false, Wave(8, 8000, 1));
         context.Package.Entries[0].Primary.Events.Add(SoundEvent("replacement"));
         await audio.PrepareAsync(context, 0, Token);
@@ -117,7 +116,7 @@ public sealed class AnimationAudioTests
         await audio.PrepareAsync(context, 0, Token);
         Assert.True(audio.IsPrepared); Assert.Equal(1, audio.PreparedSoundCount); Assert.Equal(2, decoded);
         Assert.All(output.Read(2), v => Assert.Equal(0, v)); // Neither old active nor queued voice survived.
-        audio.Update(Frame(0, Cue(1003) with { Name = "replacement" }), context, true);
+        audio.Update(Frame(0, Cue(1003) with { Name = "replacement" }), true);
         Assert.Contains(output.Read(128), v => v != 0);
         Assert.Equal(1, output.Starts); Assert.Equal(0, output.Disposals);
     }
@@ -156,20 +155,20 @@ public sealed class AnimationAudioTests
         await using AnimationAudio audio = new(() => output, (_, _) => new(ramp)) { Volume = 1 };
         await audio.PrepareAsync(context, 0, Token);
         var cue = Cue(10);
-        audio.Update(Frame(.25, cue), context, true);
+        audio.Update(Frame(.25, cue), true);
         Assert.InRange(output.Read(2)[0], .2499f, .2501f);
-        audio.Stop(); audio.Update(Frame(.5, cue), context, true);
+        audio.Stop(); audio.Update(Frame(.5, cue), true);
         Assert.InRange(output.Read(2)[0], .4999f, .5001f);
-        audio.Muted = true; audio.Update(Frame(.5, cue), context, true);
+        audio.Muted = true; audio.Update(Frame(.5, cue), true);
         Assert.All(output.Read(10), v => Assert.Equal(0, v));
-        audio.Muted = false; audio.Update(Frame(.75, cue), context, true);
+        audio.Muted = false; audio.Update(Frame(.75, cue), true);
         Assert.InRange(output.Read(2)[0], .7499f, .7501f);
         output.Read(48000); // Hardware finishes while slowed simulation still reports an active one-shot.
-        audio.Update(Frame(.8, cue), context, true);
+        audio.Update(Frame(.8, cue), true);
         Assert.Equal(0, audio.VoiceCount); Assert.All(output.Read(10), v => Assert.Equal(0, v));
-        audio.Update(Frame(.1, cue), context, true, seek: true);
+        audio.Update(Frame(.1, cue), true, seek: true);
         Assert.InRange(output.Read(2)[0], .0999f, .1001f);
-        audio.Update(Frame(.1, cue), context, false);
+        audio.Update(Frame(.1, cue), false);
         Assert.All(output.Read(10), v => Assert.Equal(0, v));
     }
 
@@ -180,9 +179,9 @@ public sealed class AnimationAudioTests
         await using AnimationAudio audio = new(() => output);
         await audio.PrepareAsync(context, 0, Token);
         var cues = Enumerable.Range(1, 40).Select(i => Cue(i) with { Persistent = true }).ToArray();
-        audio.Update(Frame(0, cues), context, true); Assert.Equal(32, audio.VoiceCount);
+        audio.Update(Frame(0, cues), true); Assert.Equal(32, audio.VoiceCount);
         Assert.Contains(output.Read(20), v => v != 0);
-        audio.Update(Frame(.1), context, true);
+        audio.Update(Frame(.1), true);
         Assert.Equal(0, audio.VoiceCount); Assert.All(output.Read(20), v => Assert.Equal(0, v));
         Assert.Equal(1, output.Starts); Assert.Equal(0, output.Disposals);
     }
@@ -204,7 +203,7 @@ public sealed class AnimationAudioTests
             var context = Context(); Task preparation = audio.PrepareAsync(context, 0, Token);
             await started.Task.WaitAsync(TimeSpan.FromSeconds(10), Token);
             Assert.False(preparation.IsCompleted);
-            audio.Update(Frame(0, Cue(1)), context, true); audio.Stop(); Assert.Equal(0, audio.VoiceCount);
+            audio.Update(Frame(0, Cue(1)), true); audio.Stop(); Assert.Equal(0, audio.VoiceCount);
             startRelease.Set(); await preparation;
             audio.Dispose();
             await disposing.Task.WaitAsync(TimeSpan.FromSeconds(10), Token);
@@ -226,10 +225,10 @@ public sealed class AnimationAudioTests
         await started.Task.WaitAsync(TimeSpan.FromSeconds(10), Token);
         canceled.Cancel(); release.Set();
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => preparation);
-        Assert.False(audio.IsPrepared); audio.Update(Frame(0, Cue(1)), context, true);
+        Assert.False(audio.IsPrepared); audio.Update(Frame(0, Cue(1)), true);
         Assert.All(output.Read(20), v => Assert.Equal(0, v));
         await audio.PrepareAsync(context, 0, Token);
-        audio.Update(Frame(0, Cue(2)), context, true); Assert.Contains(output.Read(20), v => v != 0);
+        audio.Update(Frame(0, Cue(2)), true); Assert.Contains(output.Read(20), v => v != 0);
         Assert.Equal(1, output.Starts);
     }
 
@@ -240,11 +239,11 @@ public sealed class AnimationAudioTests
         await using AnimationAudio audio = new(() => { var output = new FakeOutput(); outputs.Add(output); return output; });
         List<string> diagnostics = []; audio.Diagnostic += diagnostics.Add;
         await audio.PrepareAsync(context, 0, Token);
-        outputs[0].Fail("test device removed"); audio.Update(Frame(0), context, true);
+        outputs[0].Fail("test device removed"); audio.Update(Frame(0), true);
         Assert.True(audio.Muted); Assert.False(audio.IsPrepared); Assert.Single(diagnostics);
         audio.Muted = false; await audio.PrepareAsync(context, 0, Token);
         Assert.Equal(2, outputs.Count); Assert.Equal(1, outputs[0].Disposals);
-        outputs[0].Fail("late old callback"); audio.Update(Frame(0, Cue(1)), context, true);
+        outputs[0].Fail("late old callback"); audio.Update(Frame(0, Cue(1)), true);
         Assert.False(audio.Muted); Assert.Equal(1, audio.VoiceCount);
         Assert.Contains(outputs[1].Read(20), v => v != 0);
     }
@@ -258,7 +257,7 @@ public sealed class AnimationAudioTests
         List<string> diagnostics = []; audio.Diagnostic += diagnostics.Add;
         await audio.PrepareAsync(context, 0, Token);
         Assert.True(audio.IsPrepared); Assert.False(audio.Muted); Assert.Single(diagnostics);
-        audio.Update(Frame(0, Cue(1)), context, true); Assert.Contains(output.Read(20), v => v != 0);
+        audio.Update(Frame(0, Cue(1)), true); Assert.Contains(output.Read(20), v => v != 0);
     }
 
     [Fact]
@@ -270,8 +269,8 @@ public sealed class AnimationAudioTests
         var ev = context.Package.Entries[0].Primary.Events[0]; ev.SetText(12, "replacement");
         context.Sounds["replacement"] = new("replacement", "replacement.wav", false, Wave(8, 22050, 1));
         await audio.PrepareAsync(context.Snapshot(), 0, Token);
-        audio.Update(Frame(0, Cue(1)), context, true); Assert.Equal(0, audio.VoiceCount);
-        audio.Update(Frame(0, Cue(2) with { Name = "replacement" }), context, true);
+        audio.Update(Frame(0, Cue(1)), true); Assert.Equal(0, audio.VoiceCount);
+        audio.Update(Frame(0, Cue(2) with { Name = "replacement" }), true);
         Assert.Equal(1, audio.VoiceCount); Assert.Contains(output.Read(20), v => v != 0);
         Assert.Equal(2, decoded); Assert.Equal(1, output.Starts); Assert.Equal(1, audio.PreparedSoundCount);
     }
@@ -286,9 +285,9 @@ public sealed class AnimationAudioTests
         await audio.PrepareAsync(context, 0, Token);
         Assert.True(audio.Muted); Assert.False(audio.IsPrepared); Assert.Equal(1, failed.Disposals);
         Assert.Contains("No endpoint", Assert.Single(diagnostics));
-        audio.Update(Frame(0, Cue(1)), context, true); Assert.Equal(0, audio.VoiceCount);
+        audio.Update(Frame(0, Cue(1)), true); Assert.Equal(0, audio.VoiceCount);
         audio.Muted = false; await audio.PrepareAsync(context, 0, Token);
-        audio.Update(Frame(0, Cue(2)), context, true);
+        audio.Update(Frame(0, Cue(2)), true);
         Assert.True(audio.IsPrepared); Assert.False(audio.Muted); Assert.Contains(working.Read(20), v => v != 0);
     }
 

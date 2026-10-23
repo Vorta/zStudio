@@ -1,10 +1,6 @@
 using System.Windows;
-using System.Windows.Input;
 using System.Windows.Media.Media3D;
-using System.Diagnostics;
-using HelixToolkit.SharpDX;
-using HelixToolkit.Wpf.SharpDX;
-using HCamera = HelixToolkit.Wpf.SharpDX.PerspectiveCamera;
+using zStudio.Rendering.Direct3D;
 
 namespace zStudio.Rendering;
 
@@ -20,33 +16,33 @@ public sealed partial class SceneViewport
     private double? navigationReferenceDistance;
     private string? reportedViewMode;
     /// <summary>The view's projection and named view, as a label: Perspective, Orthographic, or the axis view (Top, Front…).</summary>
-    public string ViewMode => axisView is { } named ? char.ToUpperInvariant(named[0]) + named[1..] : viewport.Camera is OrthographicCamera ? "Orthographic" : "Perspective";
+    public string ViewMode => axisView is { } named ? char.ToUpperInvariant(named[0]) + named[1..] : view.Camera is OrthographicRenderCamera ? "Orthographic" : "Perspective";
     /// <summary>The projection or named view changed (see <see cref="ViewMode"/>).</summary>
     public event Action? ViewModeChanged;
-    public ViewPose CaptureView() => viewport.Camera is ProjectionCamera camera
-        ? new(camera.Position, camera.LookDirection, camera.UpDirection, camera is HCamera p ? p.FieldOfView : perspectiveFieldOfView,
-            camera is OrthographicCamera ? "orthographic" : "perspective", (camera as OrthographicCamera)?.Width, axisView, autoPerspective,
+    public ViewPose CaptureView() => view.Camera is RenderCamera camera
+        ? new(camera.Position, camera.LookDirection, camera.UpDirection, camera is PerspectiveRenderCamera p ? p.FieldOfView : perspectiveFieldOfView,
+            camera is OrthographicRenderCamera ? "orthographic" : "perspective", (camera as OrthographicRenderCamera)?.Width, axisView, autoPerspective,
             orbitPivot ?? camera.Position + camera.LookDirection, navigationReferenceDistance ?? camera.LookDirection.Length)
         : throw new InvalidOperationException("No projection camera.");
     public void RestoreView(ViewPose pose)
     {
         if (IsAiPathPointerTransform || IsParachutePointerMoving) return;
-        if (viewport.Camera is not ProjectionCamera previous) return;
-        ProjectionCamera camera = pose.Projection == "orthographic"
-            ? previous as NavigationOrthographicCamera ?? new NavigationOrthographicCamera()
-            : previous as NavigationPerspectiveCamera ?? new NavigationPerspectiveCamera();
-        viewport.StopSpin(); rotationVelocity = default; rotationPoint = null; pendingOrbitPoint = null;
+        if (view.Camera is not RenderCamera previous) return;
+        RenderCamera camera = pose.Projection == "orthographic"
+            ? previous as OrthographicRenderCamera ?? new OrthographicRenderCamera()
+            : previous as PerspectiveRenderCamera ?? new PerspectiveRenderCamera();
+        rotationVelocity = default; rotationPoint = null; pendingOrbitPoint = null;
         navigationVelocity = default;
         camera.NearPlaneDistance = previous.NearPlaneDistance; camera.FarPlaneDistance = previous.FarPlaneDistance;
         camera.Position = pose.Position; camera.LookDirection = pose.LookDirection; camera.UpDirection = pose.UpDirection;
         perspectiveFieldOfView = pose.FieldOfView;
-        if (camera is HCamera perspective) perspective.FieldOfView = pose.FieldOfView;
-        if (camera is OrthographicCamera orthographic) orthographic.Width = pose.OrthographicWidth ?? ViewWidth(pose);
+        if (camera is PerspectiveRenderCamera perspective) perspective.FieldOfView = pose.FieldOfView;
+        if (camera is OrthographicRenderCamera orthographic) orthographic.Width = pose.OrthographicWidth ?? ViewWidth(pose);
         axisView = pose.AxisView; autoPerspective = pose.AutoPerspective;
         orbitPivot = pose.OrbitPivot ?? pose.Position + pose.LookDirection;
         navigationReferenceDistance = pose.NavigationReferenceDistance ?? pose.LookDirection.Length;
-        if (!ReferenceEquals(camera, previous)) viewport.Camera = camera;
-        cameraPoseDirty = true; viewport.InvalidateRender();
+        if (!ReferenceEquals(camera, previous)) view.Camera = camera;
+        cameraPoseDirty = true; view.InvalidateRender();
     }
     private bool preparingCamera, cameraPoseDirty = true, authoredCameraPose;
     private Point? rotationPoint;
@@ -55,29 +51,19 @@ public sealed partial class SceneViewport
     private TimeSpan previousFrameTime;
     private Vector3D lastForward = new(0, 0, -1);
 
-    // Helix updates inertia here, immediately before copying the camera to the
-    // render context. Preparing in CameraChanged instead observes partial poses
-    // and recursively changes projection while another property is still updating.
-    private sealed class FrameViewport : Viewport3DX, IViewport3DX
-    {
-        private readonly Action<TimeSpan> prepare;
-        private readonly Action resize;
-        public FrameViewport(Action<TimeSpan> prepare, Action resize)
-        {
-            this.prepare = prepare; this.resize = resize;
-            Loaded += (_, _) => resize();
-        }
-        public override void OnApplyTemplate() { base.OnApplyTemplate(); resize(); }
-        protected override void OnRenderSizeChanged(SizeChangedInfo sizeInfo) { base.OnRenderSizeChanged(sizeInfo); resize(); }
-        void IViewport3DX.Update(TimeSpan timeStamp) { base.Update(timeStamp); prepare(timeStamp); }
-        public void DrainNavigation(TimeSpan timestamp) => base.Update(timestamp);
-    }
+    // zStudio's own navigation state; the renderer has no camera control of its own.
+    private bool navigationInertia = true, rotationEnabled = true, panEnabled = true, zoomEnabled = true, walkAroundCamera;
+    private const double CameraInertiaFactor = .93, RotationSensitivity = 1;
+
     private void CameraChanged()
     {
         if (preparingCamera || updatingClipping) return;
         cameraPoseDirty = true;
-        viewport.InvalidateRender();
+        view.InvalidateRender();
     }
+    // Runs on each rendered frame after the renderer's own update and before the camera matrices are captured for the frame.
+    // Preparing in CameraChanged instead observes partial poses and recursively changes projection while another property is
+    // still updating.
     private void PrepareCameraFrame(TimeSpan timeStamp)
     {
         if (preparingCamera) return;
@@ -88,11 +74,11 @@ public sealed partial class SceneViewport
             if (IsPickupDragging && pickupCameraPose != null) RestoreView(pickupCameraPose);
             double seconds = Math.Clamp((timeStamp - previousFrameTime).TotalSeconds, 0, .05); previousFrameTime = timeStamp;
             AdvanceNavigationInertia(seconds);
-            if (rotationPoint == null && rotationVelocity.LengthSquared > 1 && viewport.IsInertiaEnabled)
+            if (rotationPoint == null && rotationVelocity.LengthSquared > 1 && navigationInertia)
             {
                 RotateBy(rotationVelocity.X * seconds, rotationVelocity.Y * seconds); cameraPoseDirty = true;
-                rotationVelocity *= Math.Pow(Math.Clamp(viewport.CameraInertiaFactor, .01, .99), seconds / .02);
-                viewport.InvalidateRender();
+                rotationVelocity *= Math.Pow(Math.Clamp(CameraInertiaFactor, .01, .99), seconds / .02);
+                view.InvalidateRender();
             }
             if (cameraPoseDirty)
             {
@@ -110,7 +96,7 @@ public sealed partial class SceneViewport
     }
     private void KeepCameraUpright()
     {
-        if (viewport.Camera is not ProjectionCamera camera || camera.LookDirection.LengthSquared < 1e-12) return;
+        if (view.Camera is not RenderCamera camera || camera.LookDirection.LengthSquared < 1e-12) return;
         if (axisView is "top" or "bottom" && !authoredCameraPose) return;
         var look = camera.LookDirection; double length = look.Length; look.Normalize();
         double yaw = Math.Atan2(look.X, -look.Z), pitch = Math.Asin(Math.Clamp(look.Y, -1, 1));
@@ -119,7 +105,7 @@ public sealed partial class SceneViewport
         var forward = UprightDirection(yaw, pitch);
         if ((forward - look).LengthSquared > 1e-20)
         {
-            if (viewport.CameraMode == CameraMode.Inspect && !authoredCameraPose) RotateEyeAboutPivot(camera, forward);
+            if (!walkAroundCamera && !authoredCameraPose) RotateEyeAboutPivot(camera, forward);
             camera.LookDirection = forward * length;
         }
         var right = Vector3D.CrossProduct(forward, new(0, 1, 0)); right.Normalize();
@@ -147,16 +133,16 @@ public sealed partial class SceneViewport
     public void RotateBy(double horizontal, double vertical)
     {
         if (IsFlyActive) { LookFlyBy(horizontal, vertical); return; }
-        if (IsPickupDragging || IsAiPathPointerTransform || IsParachutePointerMoving || !viewport.IsRotationEnabled || horizontal == 0 && vertical == 0) return;
+        if (IsPickupDragging || IsAiPathPointerTransform || IsParachutePointerMoving || !rotationEnabled || horizontal == 0 && vertical == 0) return;
         ManualNavigationStarting?.Invoke();
         if (autoPerspective) ChangeProjection("perspective");
         string? previousAxis = axisView; axisView = null; autoPerspective = false;
-        if (viewport.Camera is not ProjectionCamera camera || camera.LookDirection.LengthSquared < 1e-12) return;
+        if (view.Camera is not RenderCamera camera || camera.LookDirection.LengthSquared < 1e-12) return;
         var look = camera.LookDirection; double length = look.Length; look.Normalize();
-        double speed = (viewport.CameraMode == CameraMode.Inspect ? -.5 : .1) * Math.PI / 180 * viewport.RotationSensitivity;
+        double speed = (!walkAroundCamera ? -.5 : .1) * Math.PI / 180 * RotationSensitivity;
         double yaw = previousAxis is "top" or "bottom" ? 0 : Math.Atan2(look.X, -look.Z);
         var direction = UprightDirection(yaw - horizontal * speed, Math.Asin(Math.Clamp(look.Y, -1, 1)) + vertical * speed);
-        if (viewport.CameraMode == CameraMode.Inspect) RotateEyeAboutPivot(camera, direction);
+        if (!walkAroundCamera) RotateEyeAboutPivot(camera, direction);
         camera.LookDirection = direction * length;
         var right = Vector3D.CrossProduct(direction, new(0, 1, 0)); right.Normalize();
         camera.UpDirection = Vector3D.CrossProduct(right, direction);
@@ -164,7 +150,7 @@ public sealed partial class SceneViewport
 
     // Rotate the eye offset and viewing basis together. An off-center picked
     // surface keeps its screen position, including when orbit leaves an axis view.
-    private void RotateEyeAboutPivot(ProjectionCamera camera, Vector3D direction)
+    private void RotateEyeAboutPivot(RenderCamera camera, Vector3D direction)
     {
         var pivot = orbitPivot ?? camera.Position + camera.LookDirection;
         var forward = camera.LookDirection; forward.Normalize();

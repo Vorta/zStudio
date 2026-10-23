@@ -107,7 +107,7 @@ public static class TerrainCompiler
         if (compiler.Count - unpainted > PaintedPolygonNotice)
             warnings.Add($"Its painted regions cut its surfaces' {unpainted:N0} polygons into {compiler.Count:N0}. Every shipped world holds under {PaintedPolygonNotice:N0} polygons in all, and the engine draws each polygon on its own, so frame rate falls as they grow; paint fewer, larger strokes, or erase detail that is not needed.");
         compiler.RepairJunctions();
-        var pieces = compiler.Pieces(label, recipe, surfaces, materials, grid, warnings);
+        var pieces = compiler.Pieces(label, surfaces, materials, grid);
         return new(pieces, warnings);
     }
 
@@ -974,7 +974,7 @@ public static class TerrainCompiler
             return lo;
         }
 
-        public List<TerrainPiece> Pieces(string label, TerrainRecipe recipe, IReadOnlyList<TerrainSurfaceGeometry> surfaces, IReadOnlyList<TerrainMaterialInfo> materials, TerrainGrid grid, List<string> warnings)
+        public List<TerrainPiece> Pieces(string label, IReadOnlyList<TerrainSurfaceGeometry> surfaces, IReadOnlyList<TerrainMaterialInfo> materials, TerrainGrid grid)
         {
             // Group parts by surface, cell and node attributes; with an automatic node zone, also by polygon zones.
             var groups = new SortedDictionary<(int Surface, int Row, int Column, uint Carried, int NodeZone, uint ZoneKey), List<Part>>();

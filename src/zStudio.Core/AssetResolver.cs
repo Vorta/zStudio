@@ -34,7 +34,6 @@ public sealed class AssetResolver : IDisposable
     private readonly SemaphoreSlim gate = new(1, 1);
     private readonly Dictionary<string, (AssetDocument Document, long Used)> cache = new(StringComparer.OrdinalIgnoreCase);
     private long clock;
-    public IEnumerable<string> ResourceDirectories(string context) => ResourceDirectories(context, new CompiledInventory());
     internal IEnumerable<string> ResourceDirectories(string context, CompiledInventory inventory)
     {
         inventory.Path(context.Length); inventory.Path(Root.Length);
@@ -108,11 +107,5 @@ public sealed class AssetResolver : IDisposable
     }
     public TextureLookupOperation BeginTextureLookup(string context, string? preferredPack = null) => new(this, context, preferredPack);
     internal static bool HasTextureLookupStamp(string path, FileStamp stamp) => FileStamp.Read(path) == stamp;
-    public async Task InvalidateAsync(IEnumerable<string> paths, CancellationToken token = default)
-    {
-        await gate.WaitAsync(token).ConfigureAwait(false);
-        try { foreach (string path in paths) cache.Remove(path); }
-        finally { gate.Release(); }
-    }
     public void Dispose() { cache.Clear(); gate.Dispose(); }
 }

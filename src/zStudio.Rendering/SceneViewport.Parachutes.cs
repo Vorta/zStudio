@@ -3,15 +3,12 @@ using System.Windows;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Media3D;
-using HelixToolkit;
-using HelixToolkit.Maths;
-using HelixToolkit.SharpDX;
-using HelixToolkit.Wpf.SharpDX;
+using zStudio.Rendering.Direct3D;
 
 namespace zStudio.Rendering;
 
 public sealed record ParachutePathPoint(double Phase, Vector3 Position);
-public sealed record ParachuteRelease(double Phase, Vector3 Position, bool Conditional = true);
+public sealed record ParachuteRelease(double Phase, Vector3 Position);
 public sealed record ParachuteWindowOverlay(Guid Id, double Start, IReadOnlyList<ParachuteRelease> Releases);
 
 public sealed partial class SceneViewport
@@ -21,9 +18,9 @@ public sealed partial class SceneViewport
     private int[] parachuteNextMoving = [], parachutePreviousMoving = [];
     private ParachuteWindowOverlay[] parachuteWindows = [];
     private ParachuteWindowOverlay? parachutePreview;
-    private TopMostGroup3D? parachuteOverlay;
-    private LineGeometryModel3D? parachuteLine;
-    private MeshGeometryModel3D? parachuteStarts, parachuteReleases, parachuteSelected;
+    private TopMostGroupNode? parachuteOverlay;
+    private LineNode? parachuteLine;
+    private MeshNode? parachuteStarts, parachuteReleases, parachuteSelected;
     private ViewPose? parachuteMarkerPose;
     private double parachuteMarkerWidth, parachuteMarkerHeight;
     private int parachutePointerSegment;
@@ -78,13 +75,13 @@ public sealed partial class SceneViewport
             if (frozenPath[i].Position != frozenPath[i + 1].Position) moving = i;
             parachuteNextMoving[i] = moving;
         }
-        parachuteOverlay = new(); PresentationGuide(parachuteOverlay); viewport.Items.Add(parachuteOverlay);
+        parachuteOverlay = new() { IsGuide = true }; view.Items.Add(parachuteOverlay);
         parachuteLine = new()
         {
-            Geometry = new LineGeometry3D { Positions = new(parachutePath.Select(p => p.Position)),
+            Geometry = new LineData([.. parachutePath.Select(p => p.Position)],
                 // Sample zero is the pre-flight pose. Keep its time for release/edit calculations,
                 // but do not draw the initial jump from that pose to the flight path.
-                Indices = new(Enumerable.Range(1, parachutePath.Length - 2).SelectMany(i => new[] { i, i + 1 })) },
+                [.. Enumerable.Range(1, parachutePath.Length - 2).SelectMany(i => new[] { i, i + 1 })]),
             // The overlay does not enlarge authored scene depth bounds, just like its release markers.
             Color = Colors.DeepSkyBlue, Thickness = 1.6, IsHitTestVisible = false, IsDepthClipEnabled = false
         };
@@ -92,7 +89,7 @@ public sealed partial class SceneViewport
         parachuteStarts = ParachuteMesh(new(0, .8f, 1, 1));
         parachuteReleases = ParachuteMesh(new(1, .6f, .15f, 1));
         parachuteSelected = ParachuteMesh(new(1, 1, 1, 1));
-        UpdateParachuteMarkers(); viewport.InvalidateRender();
+        UpdateParachuteMarkers(); view.InvalidateRender();
     }
 
     private static void ValidateParachuteWindow(ParachuteWindowOverlay window, double first, double last)
@@ -102,11 +99,11 @@ public sealed partial class SceneViewport
             throw new ArgumentException("Flight starts and release markers must lie inside the finite analyzed cycle.");
     }
 
-    private MeshGeometryModel3D ParachuteMesh(Color4 color)
+    private MeshNode ParachuteMesh(Color4 color)
     {
-        var material = PreviewMaterials.Create(true); material.DiffuseColor = color; material.EnableUnLit = true;
-        var mesh = new MeshGeometryModel3D { Geometry = AiOctahedron(), Material = material, IsHitTestVisible = false,
-            IsTransparent = true, CullMode = SharpDX.Direct3D11.CullMode.None, IsDepthClipEnabled = false };
+        var material = PreviewMaterials.Create(true); material.DiffuseColor = color; material.Unlit = true;
+        var mesh = new MeshNode { Geometry = AiOctahedron(), Material = material, IsHitTestVisible = false,
+            IsTransparent = true, CullMode = CullMode.None, IsDepthClipEnabled = false };
         parachuteOverlay!.Children.Add(mesh); return mesh;
     }
 
@@ -197,13 +194,13 @@ public sealed partial class SceneViewport
         var selected = windows.FirstOrDefault(w => w.Id == SelectedParachuteWindow);
         parachuteSelected!.Instances = selected == null ? [] : selected.Releases.Select(r => Instance(r.Position, 5))
             .Prepend(Instance(ParachutePosition(selected.Start), 8)).ToArray();
-        viewport.InvalidateRender();
+        view.InvalidateRender();
     }
 
     private bool ProjectParachute(Vector3 position, out Point screen)
     {
         screen = default;
-        if (viewport.Camera is not ProjectionCamera camera || viewport.ActualWidth <= 0 || viewport.ActualHeight <= 0) return false;
+        if (view.Camera is not RenderCamera camera || viewport.ActualWidth <= 0 || viewport.ActualHeight <= 0) return false;
         // Match TryNavigationRay's current-camera projection; the render context may still hold the previous frame.
         var forward = camera.LookDirection; forward.Normalize();
         var right = Vector3D.CrossProduct(forward, camera.UpDirection); right.Normalize();
@@ -211,9 +208,9 @@ public sealed partial class SceneViewport
         var offset = new Point3D(position.X, position.Y, position.Z) - camera.Position;
         double depth = Vector3D.DotProduct(offset, forward);
         // Orthographic overlay geometry remains visible on either side of the eye plane when depth clipping is disabled.
-        if (camera is not OrthographicCamera && depth <= 0) return false;
+        if (camera is not OrthographicRenderCamera && depth <= 0) return false;
         var projection = camera.CreateProjectionMatrix(Aspect);
-        double divisor = camera is OrthographicCamera ? 1 : depth;
+        double divisor = camera is OrthographicRenderCamera ? 1 : depth;
         double x = Vector3D.DotProduct(offset, right) * projection.M11 / divisor;
         double y = Vector3D.DotProduct(offset, up) * projection.M22 / divisor;
         screen = new((x + 1) * viewport.ActualWidth / 2, (1 - y) * viewport.ActualHeight / 2);
@@ -332,7 +329,7 @@ public sealed partial class SceneViewport
         IsParachutePointerMoving = false; parachutePreview = null; parachutePath = []; parachuteWindows = [];
         parachuteNextMoving = []; parachutePreviousMoving = [];
         SelectedParachuteWindow = null; parachuteMarkerPose = null;
-        if (parachuteOverlay != null) { viewport.Items.Remove(parachuteOverlay); parachuteOverlay.Children.Clear(); parachuteOverlay.Dispose(); parachuteOverlay = null; }
+        if (parachuteOverlay != null) { view.Items.Remove(parachuteOverlay); parachuteOverlay.Children.Clear(); parachuteOverlay.Dispose(); parachuteOverlay = null; }
         parachuteLine?.Dispose(); parachuteStarts?.Dispose(); parachuteReleases?.Dispose(); parachuteSelected?.Dispose();
         parachuteLine = null; parachuteStarts = parachuteReleases = parachuteSelected = null;
         ParachuteWindowSelected?.Invoke(null);

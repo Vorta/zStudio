@@ -293,7 +293,7 @@ public static partial class SourceObjectEdits
             string? own = mission == null ? null : SourceBuilder.WorldScript(mission);
             // (A line taking its values from a macro cannot change in place: the value is set after it instead.)
             bool Here(string command) => own != null && origin.Writers.GetValueOrDefault(command) is { } w && w.Script.Equals(own, StringComparison.OrdinalIgnoreCase) && !w.Tokens.Skip(1).Any(t => t.Contains('%'));
-            if (InThisMission(workspace, nodeName, label, writers.Select(w => w.Script).Append(anchor.Script), Lines(translateOnly: false, Here), executions, token, mission, world, write, inspection, edit =>
+            if (InThisMission(nodeName, label, writers.Select(w => w.Script).Append(anchor.Script), Lines(translateOnly: false, Here), executions, token, mission, world, write, inspection, edit =>
                 {
                     if (position && Here("Object3DTranslate")) edit.Set(origin.Writers["Object3DTranslate"], "Object3DTranslate", requested.Position, Vector3.Zero, origin.Writers["Object3DTranslate"], current?.Position);
                     if (rotation && Here("Object3DRotate")) edit.Set(origin.Writers["Object3DRotate"], "Object3DRotate", requested.RotationDegrees, Vector3.Zero, origin.Writers["Object3DRotate"], current?.RotationDegrees);
@@ -301,7 +301,7 @@ public static partial class SourceObjectEdits
                 }) is { } mine) return mine;
             if (writers.Select(w => w.Script).Append(anchor.Script).Distinct(StringComparer.OrdinalIgnoreCase).Count() > 1)
                 throw new InvalidDataException($"{nodeName}'s transform is set in several scripts; edit them in the scripts directly.");
-            ScriptEdit edit = new(workspace, anchor.Script, executions, token, mission, inspection);
+            ScriptEdit edit = new(anchor.Script, executions, token, mission, inspection);
             // Shown as the scripts store them (ObjectTransform.Of), each value changes alone; components the request keeps
             // keep their tokens.
             if (position) edit.Set(origin.Writers.GetValueOrDefault("Object3DTranslate"), "Object3DTranslate", requested.Position, Vector3.Zero, anchor, current?.Position);
@@ -323,13 +323,13 @@ public static partial class SourceObjectEdits
                 + $"{(elsewhere.Certain ? "" : " (it finds a node of that name once the file is loaded)")}, which keeps them there.");
         if (position && translate != null)
         {
-            if (InThisMission(workspace, nodeName, label, [translate.Script], Lines(translateOnly: true), executions, token, mission, world, write, inspection) is { } mine)
+            if (InThisMission(nodeName, label, [translate.Script], Lines(translateOnly: true), executions, token, mission, world, write, inspection) is { } mine)
             {
                 changes.AddRange(mine.Changes); scripts.AddRange(mine.Scripts); notes.AddRange(mine.Notes); places.Add(mine.Target);
             }
             else
             {
-                ScriptEdit edit = new(workspace, translate.Script, executions, token, mission, inspection);
+                ScriptEdit edit = new(translate.Script, executions, token, mission, inspection);
                 edit.Set(translate, "Object3DTranslate", requested.Position, Vector3.Zero, translate, current?.Position);
                 changes.AddRange(edit.Changes()); scripts.Add(edit); notes.AddRange(edit.Notes); places.Add($"{translate.Script} line {translate.Line}");
             }
@@ -414,8 +414,8 @@ public static partial class SourceObjectEdits
         {
             // A flag command sets one bit of the current node, so a later one decides it: set in a script other missions run
             // too (weapons.gw's templates), this mission sets it again before writing its world.
-            if (InThisMission(workspace, nodeName, label, [writer.Script], [[command, value]], executions, token, mission, world, write, inspection) is { } mine) return Finish(mine);
-            ScriptEdit edit = new(workspace, writer.Script, executions, token, mission, inspection);
+            if (InThisMission(nodeName, label, [writer.Script], [[command, value]], executions, token, mission, world, write, inspection) is { } mine) return Finish(mine);
+            ScriptEdit edit = new(writer.Script, executions, token, mission, inspection);
             edit.Replace(writer, new() { [1] = value });
             return Finish(new(label, edit.Changes(), $"{writer.Script} line {writer.Line}", edit.Notes) { Scripts = [edit] });
         }
@@ -434,7 +434,7 @@ public static partial class SourceObjectEdits
         }
         if (command == null) throw new InvalidDataException($"No script command sets flag 0x{bit:X}; {nodeName} was created by a script.");
         var anchor = origin.Created ?? throw new InvalidDataException($"{nodeName} was neither loaded from a model nor created by a script instruction.");
-        return Finish(Insert(workspace, nodeName, anchor, [command, value], label, executions, token, mission, world, write, inspection));
+        return Finish(Insert(nodeName, anchor, [command, value], label, executions, token, mission, world, write, inspection));
     }
     /// <summary>
     /// Whether a source can set flag <paramref name="bit"/> of the node of class <paramref name="nodeClass"/> that
@@ -463,23 +463,23 @@ public static partial class SourceObjectEdits
         if (origin.Writers.TryGetValue(command, out var writer))
         {
             // Property commands set their values outright: set in a shared script, this mission sets them again at the end.
-            if (InThisMission(workspace, nodeName, label, [writer.Script], [[command, .. args]], executions, token, mission, world, write, inspection) is { } mine) return mine;
-            ScriptEdit edit = new(workspace, writer.Script, executions, token, mission, inspection);
+            if (InThisMission(nodeName, label, [writer.Script], [[command, .. args]], executions, token, mission, world, write, inspection) is { } mine) return mine;
+            ScriptEdit edit = new(writer.Script, executions, token, mission, inspection);
             if (writer.Tokens.Count - 1 != args.Count) edit.ReplaceLine(writer, [command, .. args]);
             else edit.Replace(writer, args.Select((a, i) => (Index: i + 1, Value: a)).ToDictionary(p => p.Index, p => p.Value));
             return new(label, edit.Changes(), $"{writer.Script} line {writer.Line}", edit.Notes) { Scripts = [edit] };
         }
         var anchor = origin.Created ?? throw new InvalidDataException($"No instruction sets {command} for {nodeName}, and no script created it.");
-        return Insert(workspace, nodeName, anchor, [command, .. args], label, executions, token, mission, world, write, inspection);
+        return Insert(nodeName, anchor, [command, .. args], label, executions, token, mission, world, write, inspection);
     }
     /// <summary>
     /// Adds an instruction right after the one that created a node; when other missions run that script too, before this
     /// mission's world is written instead, after a FindNode of the node (see <see cref="PlanCommand"/>).
     /// </summary>
-    private static SourceEditPlan Insert(SourceWorkspace workspace, string nodeName, SourceInstruction anchor, IReadOnlyList<string> tokens, string label, IReadOnlyDictionary<(string Script, int Line), int> executions, CancellationToken token, string? mission, GameZWorld? world, SourceInstruction? write, SourceScriptInspection inspection)
+    private static SourceEditPlan Insert(string nodeName, SourceInstruction anchor, IReadOnlyList<string> tokens, string label, IReadOnlyDictionary<(string Script, int Line), int> executions, CancellationToken token, string? mission, GameZWorld? world, SourceInstruction? write, SourceScriptInspection inspection)
     {
-        if (InThisMission(workspace, nodeName, label, [anchor.Script], [tokens], executions, token, mission, world, write, inspection) is { } mine) return mine;
-        ScriptEdit insert = new(workspace, anchor.Script, executions, token, mission, inspection);
+        if (InThisMission(nodeName, label, [anchor.Script], [tokens], executions, token, mission, world, write, inspection) is { } mine) return mine;
+        ScriptEdit insert = new(anchor.Script, executions, token, mission, inspection);
         insert.Insert(anchor, tokens);
         return new(label, insert.Changes(), $"{anchor.Script} line {anchor.Line}", insert.Notes) { Scripts = [insert] };
     }
@@ -492,7 +492,7 @@ public static partial class SourceObjectEdits
     /// this mission. FindNode finds the newest node of a name, so the name must be the only one in the world. Null when no
     /// such script is shared (the edit changes the scripts as usual); refused when one is but the lines cannot be placed.
     /// </summary>
-    private static SourceEditPlan? InThisMission(SourceWorkspace workspace, string nodeName, string label, IEnumerable<string> scripts, IReadOnlyList<IReadOnlyList<string>> lines, IReadOnlyDictionary<(string Script, int Line), int> executions, CancellationToken token, string? mission, GameZWorld? world, SourceInstruction? write, SourceScriptInspection inspection, Action<ScriptEdit>? inPlace = null)
+    private static SourceEditPlan? InThisMission(string nodeName, string label, IEnumerable<string> scripts, IReadOnlyList<IReadOnlyList<string>> lines, IReadOnlyDictionary<(string Script, int Line), int> executions, CancellationToken token, string? mission, GameZWorld? world, SourceInstruction? write, SourceScriptInspection inspection, Action<ScriptEdit>? inPlace = null)
     {
         if (mission == null || world == null) return null;
         string own = SourceBuilder.WorldScript(mission);
@@ -501,7 +501,7 @@ public static partial class SourceObjectEdits
         {
             // This mission's world script changes as usual (refused there when another mission runs it too).
             if (script.Equals(own, StringComparison.OrdinalIgnoreCase)) continue;
-            others = [.. MissionsRunning(workspace, script, mission, token, inspection)];
+            others = [.. MissionsRunning(script, mission, token, inspection)];
             if (others.Length > 0) { shared = script; break; }
         }
         if (shared == null) return null;
@@ -513,7 +513,7 @@ public static partial class SourceObjectEdits
         if (lines.Count > 0 && count != 1)
             throw new InvalidDataException($"{shared} also runs in {missions}, so the value would be set in {own} before the world is written, where FindNode finds the node by name; {(nodeName.Length == 0 ? "the node has no name" : $"{count} nodes are named {nodeName}")}. Edit it in the scripts directly.");
         if (lines.Count == 0 && inPlace == null) return new(label, [], nodeName, []);
-        ScriptEdit end = new(workspace, own, executions, token, mission, inspection);
+        ScriptEdit end = new(own, executions, token, mission, inspection);
         // Values this mission's world script already sets change where they are (see inPlace).
         inPlace?.Invoke(end);
         if (lines.Count > 0) end.InsertBeforeWrite([["FindNode", Token(nodeName)], .. lines], write);
@@ -592,7 +592,7 @@ public static partial class SourceObjectEdits
         // DeleteTree before the world is written would free its nodes, but their slots would stay in the world's node table
         // (as freed slots with their names) where a world that never made it numbers the later nodes from them.
         foreach (string script in instructions.Select(i => i.Script).Distinct(StringComparer.OrdinalIgnoreCase))
-            if (MissionsRunning(target.Workspace, script, target.Mission, token, inspection) is { Count: > 0 } others)
+            if (MissionsRunning(script, target.Mission, token, inspection) is { Count: > 0 } others)
                 throw new InvalidDataException($"{script} also runs in {string.Join(", ", others.Take(6))}{(others.Count > 6 ? $" and {others.Count - 6} more" : "")}: taking its lines out would delete {node.Name} there too, "
                     + $"and no line of this mission deletes it exactly (a DeleteTree before the world is written would leave its nodes' slots in the world's node table, which a world that never made it numbers differently). Delete it in the scripts directly.");
         ScriptEdits edits = new(target, token, inspection);
@@ -715,7 +715,7 @@ public static partial class SourceObjectEdits
             if (placed.Scale != Vector3.One) lines.Add(["Object3DScale", Number(placed.Scale.X), Number(placed.Scale.Y), Number(placed.Scale.Z)]);
         }
         lines.Add(["FindNode", parent.Name]); lines.Add(["AddChild", name]);
-        ScriptEdit edit = new(target.Workspace, SourceBuilder.WorldScript(target.Mission), target.Executions, token, target.Mission, inspection);
+        ScriptEdit edit = new(SourceBuilder.WorldScript(target.Mission), target.Executions, token, target.Mission, inspection);
         edit.InsertBeforeWrite(lines, target.Write);
         return new(label, edit.Changes(), $"{SourceBuilder.WorldScript(target.Mission)}, before the world is written", notes)
         {
@@ -1791,7 +1791,7 @@ public static partial class SourceObjectEdits
     }
 
     /// <summary>Token replacements and inserted lines of one script, applied together: replacements first, then insertions from the bottom up.</summary>
-    internal sealed class ScriptEdit(SourceWorkspace workspace, string script, IReadOnlyDictionary<(string Script, int Line), int> executions, CancellationToken token, string? mission, SourceScriptInspection inspection)
+    internal sealed class ScriptEdit(string script, IReadOnlyDictionary<(string Script, int Line), int> executions, CancellationToken token, string? mission, SourceScriptInspection inspection)
     {
         private readonly Dictionary<int, Dictionary<int, string>> replacements = [];
         private readonly Dictionary<int, List<IReadOnlyList<string>>> insertions = [];
@@ -1813,7 +1813,7 @@ public static partial class SourceObjectEdits
         {
             if (mission == null || sharedChecked) return;
             sharedChecked = true;
-            var others = MissionsRunning(workspace, script, mission, token, inspection);
+            var others = MissionsRunning(script, mission, token, inspection);
             if (others.Count > 0) throw new InvalidDataException($"{script} also runs in {string.Join(", ", others.Take(6))}{(others.Count > 6 ? $" and {others.Count - 6} more" : "")}; editing it would change those missions too. Edit it in the script directly.");
         }
         public void Replace(SourceInstruction instruction, Dictionary<int, string> values)
@@ -1939,7 +1939,7 @@ public static partial class SourceObjectEdits
     private sealed class ScriptEdits(SourceObjectTarget target, CancellationToken token, SourceScriptInspection inspection)
     {
         private readonly Dictionary<string, ScriptEdit> edits = new(StringComparer.OrdinalIgnoreCase);
-        public ScriptEdit this[string script] => edits.TryGetValue(script, out var edit) ? edit : edits[script] = new(target.Workspace, script, target.Executions, token, target.Mission, inspection);
+        public ScriptEdit this[string script] => edits.TryGetValue(script, out var edit) ? edit : edits[script] = new(script, target.Executions, token, target.Mission, inspection);
         public IReadOnlyList<(string Relative, byte[] Content)> Changes() => [.. edits.Values.SelectMany(e => e.Changes())];
         /// <summary>How <see cref="Changes"/> renumbered the scripts' lines (call it first).</summary>
         public ScriptLineChanges Lines() => LinesOf(edits.Values);
@@ -1958,15 +1958,15 @@ public static partial class SourceObjectEdits
     /// this mission's alone. Missing scripts cannot build; unreadable scripts and exhausted inspection budgets refuse the edit.
     /// </summary>
     internal static IReadOnlyList<string> MissionsRunning(SourceWorkspace workspace, string script, string mission, CancellationToken token) =>
-        MissionsRunning(workspace, script, mission, token, new(workspace, token));
+        MissionsRunning(script, mission, token, new(workspace, token));
 
-    internal static IReadOnlyList<string> MissionsRunning(SourceWorkspace workspace, string script, string mission, CancellationToken token, SourceScriptInspection inspection) =>
-        MissionsRunning(workspace, script, mission, SourceProject.MaximumFiles, WorldAssembler.MaximumInstructions, token, inspection);
+    internal static IReadOnlyList<string> MissionsRunning(string script, string mission, CancellationToken token, SourceScriptInspection inspection) =>
+        MissionsRunning(script, mission, SourceProject.MaximumFiles, WorldAssembler.MaximumInstructions, token, inspection);
 
     internal static IReadOnlyList<string> MissionsRunning(SourceWorkspace workspace, string script, string mission, int maximumScripts, int maximumSources, CancellationToken token) =>
-        MissionsRunning(workspace, script, mission, maximumScripts, maximumSources, token, new(workspace, token));
+        MissionsRunning(script, mission, maximumScripts, maximumSources, token, new(workspace, token));
 
-    private static IReadOnlyList<string> MissionsRunning(SourceWorkspace workspace, string script, string mission, int maximumScripts, int maximumSources, CancellationToken token, SourceScriptInspection inspection)
+    private static IReadOnlyList<string> MissionsRunning(string script, string mission, int maximumScripts, int maximumSources, CancellationToken token, SourceScriptInspection inspection)
     {
         inspection.ReserveWork(inspection.Worlds().Count);
         var worlds = inspection.Worlds().Where(p => !Path.GetFileNameWithoutExtension(p).Equals(mission, StringComparison.OrdinalIgnoreCase)).ToArray();

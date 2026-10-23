@@ -1,7 +1,5 @@
 using System.Globalization;
-using System.Numerics;
 using System.Text.Json.Nodes;
-using System.Windows.Controls;
 using zStudio.Core;
 using zStudio.Core.Sources;
 using zStudio.Core.Worlds;
@@ -30,12 +28,6 @@ internal sealed record SourceObjectState(int Node, string Name, string Class, Ob
     public bool ZoneCanInherit => ZoneEditable && Origin.ModelFile != null;
     /// <summary>The zone as the card's Zone field shows it: Inherit, Any or the zone number.</summary>
     public string ZoneText => Origin.ImportedZoneInherited == true && ZoneCanInherit ? "Inherit" : (Zone & 0xFF) == 0xFF ? "Any" : (Zone & 0xFF).ToString(CultureInfo.InvariantCulture);
-    /// <summary>The zone readout lines; the selected-object card edits object zones and the polygon zone tool polygon zones.</summary>
-    public IEnumerable<string> ZoneLines()
-    {
-        yield return $"Zone: {ZoneReadout.Zone(Zone, Origin.ImportedZoneInherited)} · altitude zone check {((Flags & WorldGltf.ZoneGate) != 0 ? "on" : "off")}";
-        if (ZoneReadout.Source(Origin) is { } source) yield return "Zone source: " + source;
-    }
     /// <summary>The node's class, which <see cref="Class"/> names.</summary>
     public WorldNodeClass NodeClass => Enum.TryParse(Class, out WorldNodeClass nodeClass) ? nodeClass : WorldNodeClass.Plain;
     public JsonObject Json()

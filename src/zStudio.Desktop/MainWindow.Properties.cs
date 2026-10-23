@@ -149,7 +149,7 @@ public partial class MainWindow
             string name = (motion?.Viewport.PreviewScene ?? scene?.PreviewScene ?? doc.Document.Scene)?.Nodes.ElementAtOrDefault(node)?.Name ?? "Scene object";
             // A source world's own objects edit their sources; placed copies and mission actors open here: a pickup in its editable placement form, vehicles and animation-placed objects read-only.
             if (doc.SourceWorld != null && scene?.PickupAt(node) == null && SourceObjectNode(node) is int sourceNode && doc.SourceBuild?.Provenance.ContainsKey(sourceNode) == true
-                && scene?.Mission?.ActorAt(SourceSelectionOwner(doc, sourceNode)) == null)
+                && scene?.Mission?.InspectedActorAt(SourceSelectionOwner(doc, sourceNode)) == null)
             {
                 try { await ShowSourceObjectPropertiesAsync(doc, sourceNode); }
                 catch (StudioCommandException ex) when (ex.Code == "busy") { Notice(ex.Message); }

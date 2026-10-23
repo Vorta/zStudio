@@ -4,16 +4,13 @@ using System.Runtime.InteropServices;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Windows;
-using System.Windows.Automation;
 using System.Windows.Controls;
 using System.Windows.Interop;
-using System.Windows.Media;
 using System.Windows.Threading;
 using ModelContextProtocol.Client;
 using ModelContextProtocol.Protocol;
 using zStudio.Core;
 using zStudio.Core.Animation;
-using zStudio.Desktop;
 using zStudio.Mcp;
 using Xunit;
 
@@ -259,6 +256,4 @@ internal static class McpWorkspaceChecks
     [DllImport("user32.dll")] private static extern nint SendMessage(nint handle,uint message,nint wParam,nint lParam);
     [DllImport("gdi32.dll")] private static extern nint CreateRectRgn(int left,int top,int right,int bottom);
     [DllImport("gdi32.dll")] private static extern bool DeleteObject(nint handle);
-    private static IEnumerable<DependencyObject> Descendants(DependencyObject root)
-    { yield return root; for(int i=0;i<VisualTreeHelper.GetChildrenCount(root);i++) foreach(var child in Descendants(VisualTreeHelper.GetChild(root,i))) yield return child; }
 }

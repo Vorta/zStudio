@@ -31,18 +31,16 @@ public sealed class NumericTextTests
     }
 
     [Fact]
-    public void FormattingFieldsDoesNotMutateRecordsAndExponentInputStillWorks()
+    public void ExponentInputWritesTheStoredValueAndItsDecimalTextWritesItBack()
     {
         var record = AnimationCatalog.Create(10);
         var field = new AnimationField("Initial velocity", 64, AnimationFieldKind.Vector);
         field.Write(record, "1, -2, 3.874302E-07");
         byte[] before = record.Bytes.ToArray();
-        string text = field.FormatForEditor(record);
+        string text = string.Join(", ", Enumerable.Range(0, 3).Select(axis => record.F32(64 + axis * 4).ToEditorText()));
         Assert.Equal("1, -2, 0.0000003874302", text);
-        Assert.Equal(before, record.Bytes);
         field.Write(record, text);
         Assert.Equal(before, record.Bytes);
-        Assert.Equal("0.0000003874302", new AnimationField("Z", 72, AnimationFieldKind.Float).FormatForEditor(record));
     }
 
     private static void AssertRoundTrip(float value)

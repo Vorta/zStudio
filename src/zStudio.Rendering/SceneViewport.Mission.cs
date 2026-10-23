@@ -1,8 +1,6 @@
 using System.Numerics;
-using System.Windows.Media.Media3D;
-using HelixToolkit.Wpf.SharpDX;
 using zStudio.Core;
-using HCamera = HelixToolkit.Wpf.SharpDX.ProjectionCamera;
+using zStudio.Rendering.Direct3D;
 
 namespace zStudio.Rendering;
 
@@ -39,7 +37,7 @@ public sealed partial class SceneViewport
     private bool IsHorizon(int index) => horizonNodes.ContainsKey(index);
     private Matrix4x4 HorizonTransform(int index, Matrix4x4 transform)
     {
-        if (!horizonNodes.TryGetValue(index, out var horizon) || viewport.Camera is not HCamera camera) return transform;
+        if (!horizonNodes.TryGetValue(index, out var horizon) || view.Camera is not RenderCamera camera) return transform;
         Vector3 origin = animationFrame?.Nodes.FirstOrDefault(p => p.SourceNode == horizon.Binding.Root)?.Transform.Translation ?? horizon.Origin;
         var p = camera.Position;
         transform.Translation += new Vector3((float)p.X, horizon.Binding.FollowHeight ? (float)p.Y : origin.Y, (float)p.Z) - origin;
@@ -53,7 +51,7 @@ public sealed partial class SceneViewport
         if (animationFrame != null)
             foreach (var pose in animationFrame.Nodes.Where(p => IsHorizon(p.SourceNode)))
                 if (animatedMeshes.TryGetValue(pose.Id, out var items))
-                    foreach (var item in items) item.Mesh.Transform = new MatrixTransform3D(ToWpf(HorizonTransform(pose.SourceNode, pose.Transform)));
+                    foreach (var item in items) item.Mesh.Transform = HorizonTransform(pose.SourceNode, pose.Transform);
     }
     public static Matrix4x4 WorldTransform(GameScene scene, int index)
     {

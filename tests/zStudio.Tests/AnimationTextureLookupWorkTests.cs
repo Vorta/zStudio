@@ -1,7 +1,6 @@
 using System.Text.Json.Nodes;
 using zStudio.Core;
 using zStudio.Core.Animation;
-using zStudio.Core.Formats;
 using zStudio.Core.Worlds;
 using Xunit;
 

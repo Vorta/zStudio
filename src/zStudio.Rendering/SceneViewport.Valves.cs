@@ -1,8 +1,7 @@
 using System.Numerics;
 using System.Windows.Media.Media3D;
-using HelixToolkit.Maths;
 using zStudio.Core;
-using MeshGeometry3D = HelixToolkit.SharpDX.MeshGeometry3D;
+using zStudio.Rendering.Direct3D;
 
 namespace zStudio.Rendering;
 
@@ -46,7 +45,7 @@ public sealed partial class SceneViewport
                 .Select(e => (From: endpoints[e.From], To: endpoints[e.To])).ToArray();
             remainingEdges -= edges.Length;
             if (edges.Length > 0) { var mesh = AiMesh(Links(), color); aiLinks.Add(mesh, Links); }
-            MeshGeometry3D Links()
+            MeshData Links()
             {
                 List<Vector3> positions = []; List<int> indices = [];
                 var pose = CaptureView(); var forward = Vector3.Normalize(new Vector3((float)pose.LookDirection.X, (float)pose.LookDirection.Y, (float)pose.LookDirection.Z));
@@ -62,15 +61,15 @@ public sealed partial class SceneViewport
                         int i = positions.Count; positions.AddRange([a - side, a + side, b + side, b - side]); indices.AddRange([i, i + 1, i + 2, i, i + 2, i + 3]);
                     }
                 }
-                return new() { Positions = new(positions), Indices = new(indices), Normals = new(positions.Select(_ => Vector3.UnitY)) };
+                return new([.. positions], [.. indices], [.. positions.Select(_ => Vector3.UnitY)]);
             }
         }
     }
-    private static MeshGeometry3D ValveCage()
+    private static MeshData ValveCage()
     {
         var source = AiOctahedron(); List<Vector3> positions = []; List<int> indices = [];
-        var sourceIndices = source.Indices!; var sourcePositions = source.Positions!;
-        for (int i = 0; i < sourceIndices.Count; i += 3)
+        var sourceIndices = source.Indices; var sourcePositions = source.Positions;
+        for (int i = 0; i < sourceIndices.Length; i += 3)
         {
             Vector3[] p = [sourcePositions[sourceIndices[i]], sourcePositions[sourceIndices[i + 1]], sourcePositions[sourceIndices[i + 2]]];
             var center = (p[0] + p[1] + p[2]) / 3;
@@ -81,6 +80,6 @@ public sealed partial class SceneViewport
                 indices.AddRange([at, at + 1, at + 2, at, at + 2, at + 3]);
             }
         }
-        return new() { Positions = new(positions), Indices = new(indices), Normals = new(positions.Select(p => Vector3.Normalize(p))) };
+        return new([.. positions], [.. indices], [.. positions.Select(p => Vector3.Normalize(p))]);
     }
 }

@@ -3,9 +3,7 @@ using System.Windows;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Media.Media3D;
-using HelixToolkit.SharpDX;
-using HelixToolkit.Wpf.SharpDX;
-using HitTestResult = HelixToolkit.SharpDX.HitTestResult;
+using zStudio.Rendering.Direct3D;
 
 namespace zStudio.Rendering;
 
@@ -13,16 +11,13 @@ public sealed partial class SceneViewport
 {
     private double cubeHomeX, cubeHomeY, cubeHomeSize;
     /// <summary>The screen-space cube viewport in DIPs, reserved by the inspection overlay.</summary>
-    public Rect NavigationCubeBounds => CubeBounds(viewport.ViewCubeHorizontalPosition, viewport.ViewCubeVerticalPosition, viewport.ViewCubeSize);
+    public Rect NavigationCubeBounds => CubeBounds(view.ViewCubeHorizontalPosition, view.ViewCubeVerticalPosition, view.ViewCubeSize);
     public Rect NavigationCubeHomeBounds => CubeBounds(cubeHomeX, cubeHomeY, cubeHomeSize);
     private Rect CubeBounds(double horizontal, double vertical, double scale)
     {
-        if (!viewport.ShowViewCube) return Rect.Empty;
-        double size = 100;
-        if (viewport.Template?.FindName("PART_ViewCube", viewport) is ScreenSpacedElement3D cube &&
-            cube.SceneNode.RenderCore is HelixToolkit.SharpDX.Core.ScreenSpacedMeshRenderCore core) size = core.Size;
-        size *= scale;
-        // Helix clamps its small screen-space viewport at the surface edges.
+        if (!view.ShowViewCube) return Rect.Empty;
+        double size = RenderView.ViewCubePixelSize * scale;
+        // The renderer clamps the cube's small screen-space viewport at the surface edges.
         // Relative center alone is wrong in short/narrow render surfaces.
         return new(Math.Clamp(viewport.ActualWidth * (1 + horizontal) / 2 - size / 2, 0, Math.Max(0, viewport.ActualWidth - size)),
             Math.Clamp(viewport.ActualHeight * (1 - vertical) / 2 - size / 2, 0, Math.Max(0, viewport.ActualHeight - size)), size, size);
@@ -49,15 +44,15 @@ public sealed partial class SceneViewport
             x = 2 * (bounds.Left - 10 - size / 2) / viewport.ActualWidth - 1;
             y = 1 - 2 * (10 + size / 2) / viewport.ActualHeight;
         }
-        if (viewport.ViewCubeHorizontalPosition != x) viewport.ViewCubeHorizontalPosition = x;
-        if (viewport.ViewCubeVerticalPosition != y) viewport.ViewCubeVerticalPosition = y;
-        if (viewport.ViewCubeSize != scale) viewport.ViewCubeSize = scale;
+        if (view.ViewCubeHorizontalPosition != x) view.ViewCubeHorizontalPosition = x;
+        if (view.ViewCubeVerticalPosition != y) view.ViewCubeVerticalPosition = y;
+        if (view.ViewCubeSize != scale) view.ViewCubeSize = scale;
     }
 
     private void ConfigureNavigationCube()
     {
-        cubeHomeX = viewport.ViewCubeHorizontalPosition; cubeHomeY = viewport.ViewCubeVerticalPosition; cubeHomeSize = viewport.ViewCubeSize;
-        // Helix's Y-up face order is +Z, -Z, +X, -X, +Y, -Y.
+        cubeHomeX = view.ViewCubeHorizontalPosition; cubeHomeY = view.ViewCubeVerticalPosition; cubeHomeSize = view.ViewCubeSize;
+        // The cube's Y-up face order is +Z, -Z, +X, -X, +Y, -Y.
         // Recoil's front is -Z; explicitly label the same axes used by numpad views.
         const int size = 96;
         var drawing = new DrawingVisual();
@@ -76,17 +71,12 @@ public sealed partial class SceneViewport
         }
         var bitmap = new RenderTargetBitmap(size * 6, size, 96, 96, PixelFormats.Pbgra32); bitmap.Render(drawing);
         byte[] pixels = new byte[size * size * 6 * 4]; bitmap.CopyPixels(pixels, size * 6 * 4, 0);
-        viewport.ViewCubeTexture = new TextureModel(pixels, SharpDX.DXGI.Format.B8G8R8A8_UNorm, size * 6, size);
+        view.ViewCubeTexture = RenderTexture.FromBgra(pixels, size * 6, size);
     }
     internal bool NavigateCubeAt(Point point)
     {
-        if (viewport.RenderContext == null || !viewport.ShowViewCube || viewport.Template?.FindName("PART_ViewCube", viewport) is not ScreenSpacedElement3D cube) return false;
-        var screen = new System.Numerics.Vector2((float)point.X, (float)point.Y);
-        var ray = viewport.UnProject(screen);
-        List<HitTestResult> hits = [];
-        if (!cube.HitTest(new HitTestContext(viewport.RenderContext, ray, screen), ref hits) || hits.Count == 0) return false;
+        if (!view.HitViewCube(point, out var normal)) return false;
         if (!BeginManualNavigation()) return true;
-        var normal = hits[0].NormalAtHit;
         string? axis = normal.X > .999 ? "left" : normal.X < -.999 ? "right" : normal.Y > .999 ? "bottom" : normal.Y < -.999 ? "top"
             : normal.Z > .999 ? "front" : normal.Z < -.999 ? "back" : null;
         if (axis != null) SetAxisView(axis);

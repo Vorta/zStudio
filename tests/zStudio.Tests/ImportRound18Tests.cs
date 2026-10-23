@@ -1,6 +1,5 @@
 using System.Buffers.Binary;
 using System.Text;
-using zStudio.Core;
 using zStudio.Core.Formats;
 using zStudio.Core.Gltf;
 using zStudio.Core.Sources;

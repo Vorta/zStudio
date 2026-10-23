@@ -54,7 +54,8 @@ public sealed class SourceSceneSnapshot : AssetDocument
         Freed = Freed, AuthoredHierarchy = AuthoredHierarchy, Executions = Executions, WriteInstruction = WriteInstruction
     };
 
-    public MissionSceneContext MissionScene(MissionDifficulty difficulty, CancellationToken token = default)
+    /// <param name="playerTank">How to draw the local player's tank (a preview choice); the defaults when null.</param>
+    public MissionSceneContext MissionScene(MissionDifficulty difficulty, CancellationToken token = default, PlayerTankState? playerTank = null)
     {
         var requested = MissionLayoutSelection.For(difficulty);
         List<string> notes = [.. Notes];
@@ -67,7 +68,7 @@ public sealed class SourceSceneSnapshot : AssetDocument
         JsonNode? Decode(string name) => Resources.TryGetValue(name, out var resource) ? resource.Root?.ToJson(token) : null;
         MissionResourceSource? Source(string name) => Resources.TryGetValue(name, out var resource) ? new(System.IO.Path.Combine(Root, resource.Path), 0, name) : null;
         var scene = MissionSceneLoader.Build(this, Animations, Decode(aiv), Decode(vehicles), Decode("startanims.zrd"), notes, token,
-            new(difficulty, aiv, vehicles, pickups), Decode("ai.zrd"), Decode(pickups), Source(pickups), Source(aiv), Decode("weapons.zrd"));
+            new(difficulty, aiv, vehicles, pickups), Decode("ai.zrd"), Decode(pickups), Source(pickups), Source(aiv), Decode("weapons.zrd"), playerTank);
         List<AiNetwork> networks = []; int retainedNotes = 0; long omittedNotes = 0;
         foreach (var (name, resource) in Resources)
         {

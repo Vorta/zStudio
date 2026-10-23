@@ -40,10 +40,61 @@ public partial class MainWindow
         }
         PreviewNotices.Content = $"{staticPreviewProblems.Count} preview notices";
         PreviewNotices.Visibility = staticPreviewProblems.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
-        PreviewInfo.Text = (scene.Mission is { } mission ? mission.Layout.Label + " · " : "") + scene.PreviewSummary;
-        PreviewInfo.ToolTip = scene.Mission?.Layout.Description ?? scene.PreviewSummary;
+        ShowPreviewFooter(scene);
         RefreshSourceStatus();
     }
+    // The loaded preview's footer (also restored when the view renders again after a render failure); a render failure the
+    // view still has stays in view.
+    private void ShowPreviewFooter(zStudio.Rendering.SceneViewport preview)
+    {
+        if (preview.RenderFailure is { } failure) { PreviewInfo.Text = failure; PreviewInfo.ToolTip = failure; return; }
+        PreviewInfo.Text = (preview.Mission is { } mission ? mission.Layout.Label + " · " : "") + preview.PreviewSummary;
+        PreviewInfo.ToolTip = preview.Mission?.Layout.Description ?? preview.PreviewSummary;
+    }
+    private StudioProblem? previewFailureProblem;
+    // A failure reported while a map was opening (no Problems pane then), listed when the map is entered if the view still has it.
+    private string? pendingPreviewFailure;
+    // Entering or leaving the source map: lists the failure of the opening, or drops the listed one. The change runs after the
+    // current dispatch, because the switch can run inside a Problems change event (CollectionChanged forbids changing it then).
+    private void SourceChromeChangedPreviewFailure(bool entered)
+    {
+        string? pending = entered ? pendingPreviewFailure : null;
+        pendingPreviewFailure = null;
+        Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Normal, () =>
+        {
+            if (sourceChromeActive != entered) return;
+            if (!entered) ClearPreviewFailure();
+            else if (pending != null && previewFailureProblem == null && scene?.RenderFailure == pending) ShowPreviewFailure(pending);
+        });
+    }
+    // A source map hides the footer: there a render failure goes to Problems and opens Diagnostics, as the map's other failures
+    // do. The next good frame, the next failure report (a load reports again when its retry fails) or a new view replaces it;
+    // leaving the map drops it, and a rebuild's report of the map's problems keeps it.
+    private void ShowPreviewFailure(string text)
+    {
+        ClearPreviewFailure();
+        // Outside a source map the footer shows it; only a map that is opening lists it once entered.
+        if (!sourceChromeActive) { pendingPreviewFailure = sourceMapOpening != null ? text : null; return; }
+        previewFailureProblem = new StudioProblem("Error", "Preview", text, ViewModel.SelectedDocument?.Path);
+        ViewModel.Problems.Add(previewFailureProblem);
+        SetToolsVisible(true, problems: true);
+    }
+    private void ClearPreviewFailure()
+    {
+        pendingPreviewFailure = null;
+        if (previewFailureProblem == null) return;
+        ViewModel.Problems.Remove(previewFailureProblem); previewFailureProblem = null;
+    }
+    // A preview that becomes the current one (it has rendered nothing yet): the last one's failure goes.
+    private void WatchPreviewFailures(zStudio.Rendering.SceneViewport preview)
+    {
+        ClearPreviewFailure();
+        preview.PreviewFailed += text => { if (ReferenceEquals(preview, scene)) ShowPreviewFailure(text); };
+        preview.PreviewRestored += () => { if (ReferenceEquals(preview, scene)) { ClearPreviewFailure(); ShowPreviewFooter(preview); } };
+    }
+    /// <summary>A problem the preview lists (its notices, a render failure), which a source build's report must not replace.</summary>
+    private bool IsPreviewProblem(StudioProblem problem) =>
+        ReferenceEquals(problem, previewFailureProblem) || staticPreviewProblems.Any(listed => ReferenceEquals(listed, problem));
     private void PreviewNoticesClick(object sender, RoutedEventArgs e)
     {
         SetToolsVisible(true, problems: true);

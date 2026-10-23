@@ -33,7 +33,7 @@ public sealed class WorldNodeNameBudgetTests
             WorldNode node = new("initial", WorldNodeClass.Object3D);
             for (int i = 0; i < node.NameField.Length; i++) node.NameField[i] = (byte)('A' + i % 26);
             byte[] expected = (byte[])node.NameField.Clone();
-            byte[] encoded = Encoding.Latin1.GetBytes(name); // Small independent full-input legacy oracle.
+            byte[] encoded = Encoding.Latin1.GetBytes(name); // Small independent full-input oracle.
             if (encoded.Length >= expected.Length) { encoded.AsSpan(0, 34).CopyTo(expected); expected[35] = 0; }
             else { encoded.CopyTo(expected, 0); expected[encoded.Length] = 0; }
             node.Name = name;

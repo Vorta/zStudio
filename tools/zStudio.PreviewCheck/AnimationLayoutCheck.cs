@@ -1,12 +1,9 @@
-using System.Diagnostics;
 using System.IO;
 using System.Security.Cryptography;
 using System.Runtime.InteropServices;
 using System.Windows.Interop;
 using System.Windows;
-using System.Windows.Automation;
 using System.Windows.Controls;
-using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
@@ -19,7 +16,7 @@ internal static class AnimationLayoutCheck
     public static int Run(string root, bool treeOnly = false, bool toolbarOnly = false)
     {
         string output = Path.Combine(Path.GetTempPath(), "zstudio-fluent-" + DateTime.Now.ToString("yyyyMMdd-HHmmss")); Directory.CreateDirectory(output);
-        string settings = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "zStudio", "settings.json");
+        string settings = zStudio.Desktop.StudioSettings.SettingsPath;
         byte[]? original = File.Exists(settings) ? File.ReadAllBytes(settings) : null;
         var app = new App { ShutdownMode = ShutdownMode.OnExplicitShutdown, ProcessCommandLine = false }; app.InitializeComponent(); int exit = 0;
         app.Startup += async (_, _) =>
@@ -287,7 +284,6 @@ internal static class AnimationLayoutCheck
     [StructLayout(LayoutKind.Sequential)] private struct NativeRect { public int Left,Top,Right,Bottom; }
     [DllImport("user32.dll",EntryPoint="SendMessageW")] private static extern nint SendMessage(nint handle,uint message,nint wparam,nint lparam);
     [DllImport("user32.dll")] [return:MarshalAs(UnmanagedType.Bool)] private static extern bool GetWindowRect(nint handle,out NativeRect rect);
-    [DllImport("dwmapi.dll")] private static extern int DwmGetWindowAttribute(nint handle,int attribute,out NativeRect value,int size);
     private static void Require(bool condition,string message) { if (!condition) throw new InvalidDataException(message); }
     private static IEnumerable<DependencyObject> Descendants(DependencyObject root)
     { for (int i = 0;i < VisualTreeHelper.GetChildrenCount(root);i++) { var child = VisualTreeHelper.GetChild(root,i); yield return child; foreach (var descendant in Descendants(child)) yield return descendant; } }

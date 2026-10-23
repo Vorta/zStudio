@@ -44,5 +44,4 @@ public sealed class ResourceMembers
         if (member.TypedDecodeLimited) throw new InvalidDataException("This archive member exceeds the shared typed-decoding budget; use raw inspection or exact member export.");
         return member.Tree ?? trees.GetOrAdd(member.Id, _ => ZrdDecoder.Read(member.Data, token));
     }
-    public AssetRecord? OriginalAsset(ResourceMember member) => member.SourceIndex is int i ? source.Assets.Single(a => a.Index == i) : null;
 }

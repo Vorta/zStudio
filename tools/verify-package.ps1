@@ -13,6 +13,23 @@ $extensionRelative = "dependencies/blender/zstudio_recoil-$ExpectedVersion.zip"
 foreach ($required in @('dependencies/zStudio.Desktop.dll', 'dependencies/zStudio.Desktop.runtimeconfig.json', 'dependencies/hostfxr.dll', 'dependencies/README.md', 'dependencies/LICENSE', 'dependencies/THIRD-PARTY-NOTICES.md', $extensionRelative)) {
     if (-not (Test-Path -LiteralPath (Join-Path $root $required) -PathType Leaf)) { throw "Missing portable file: $required" }
 }
+# Every shipped package has its notice row (same version) and every notice row a shipped package; every licence link resolves.
+if (-not (Test-Path -LiteralPath (Join-Path $root 'dependencies/licenses') -PathType Container)) { throw 'Missing portable folder: dependencies/licenses' }
+$notices = Get-Content -LiteralPath (Join-Path $root 'dependencies/THIRD-PARTY-NOTICES.md') -Raw
+foreach ($link in [regex]::Matches($notices, '\]\((licenses/[^)\s]+)\)')) {
+    if (-not (Test-Path -LiteralPath (Join-Path $root ('dependencies/' + $link.Groups[1].Value)) -PathType Leaf)) { throw "Notice links a missing licence: $($link.Groups[1].Value)" }
+}
+$noticeRows = @{}
+foreach ($row in [regex]::Matches($notices, '(?m)^\| ([^|]+?) \| ([^|]+?) \| \[')) { $noticeRows[$row.Groups[1].Value] = $row.Groups[2].Value }
+$packages = @((Get-Content -LiteralPath (Join-Path $root 'dependencies/zStudio.Desktop.deps.json') -Raw | ConvertFrom-Json).libraries.PSObject.Properties |
+    Where-Object { $_.Value.type -eq 'package' } | ForEach-Object { $_.Name })
+foreach ($package in $packages) {
+    $name, $packageVersion = $package -split '/', 2
+    if ($noticeRows[$name] -ne $packageVersion) { throw "Shipped package without its notice row: $package" }
+}
+foreach ($name in $noticeRows.Keys) {
+    if (-not ($packages -contains "$name/$($noticeRows[$name])")) { throw "Notice row for a package that is not shipped: $name $($noticeRows[$name])" }
+}
 $repository = Split-Path -Parent $PSScriptRoot
 $guides = @('dependencies/CHANGELOG.md', 'dependencies/CONTRIBUTING.md', 'dependencies/SECURITY.md', 'dependencies/blender/zstudio_recoil/README.md')
 $guides += @(Get-ChildItem -LiteralPath (Join-Path $repository 'docs') -File -Filter '*.md') + @(Get-ChildItem -LiteralPath (Join-Path $repository 'docs/images') -File) |

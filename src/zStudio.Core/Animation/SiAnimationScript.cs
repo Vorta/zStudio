@@ -75,7 +75,6 @@ public static class SiAnimationScript
     /// comment is the header (a UTF-8 byte order mark before it is ignored). zStudio's keyframe format starts with
     /// comments and OBJECT or FRAME lines instead.
     /// </summary>
-    public static bool Recognize(ReadOnlySpan<byte> bytes) => Recognize(bytes, default);
     public static bool Recognize(ReadOnlySpan<byte> bytes, CancellationToken token) => Recognize(bytes, token, null);
     internal static bool Recognize(ReadOnlySpan<byte> bytes, CancellationToken token, Action<int>? scanned)
     {

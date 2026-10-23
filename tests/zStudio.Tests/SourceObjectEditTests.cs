@@ -1,9 +1,6 @@
-using System.IO;
 using System.Numerics;
 using System.Text;
 using System.Text.Json.Nodes;
-using zStudio.Core;
-using zStudio.Core.Formats;
 using zStudio.Core.Sources;
 using zStudio.Core.Worlds;
 using Xunit;

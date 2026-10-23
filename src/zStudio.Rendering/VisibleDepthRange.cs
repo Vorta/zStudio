@@ -1,7 +1,6 @@
 using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Windows.Media.Media3D;
-using MeshGeometry3D = HelixToolkit.SharpDX.MeshGeometry3D;
 
 namespace zStudio.Rendering;
 
@@ -9,7 +8,8 @@ namespace zStudio.Rendering;
 /// A world AABB containing the camera cannot provide a useful near plane.</summary>
 internal sealed class VisibleDepthRange
 {
-    private static readonly ConditionalWeakTable<MeshGeometry3D, Bounds> bounds = new();
+    // Local bounds per position list: a geometry keeps its list while only its colours change.
+    private static readonly ConditionalWeakTable<IReadOnlyList<Vector3>, Bounds> bounds = new();
     private readonly Point3D eye;
     private readonly Vector3D forward, right, up;
     private readonly double horizontal, vertical, floor;
@@ -29,10 +29,10 @@ internal sealed class VisibleDepthRange
         if (orthographicWidth is { } width) { horizontal = width * .525; vertical = horizontal / aspect; }
     }
 
-    public void Include(MeshGeometry3D mesh, Matrix3D transform)
+    public void Include(IReadOnlyList<Vector3> positions, IReadOnlyList<int> indices, Matrix3D transform)
     {
-        if (mesh.Positions is not { Count: > 0 } positions || mesh.Indices is not { Count: > 0 } indices) return;
-        var box = bounds.GetValue(mesh, static m => new(m));
+        if (positions.Count == 0 || indices.Count == 0) return;
+        var box = bounds.GetValue(positions, static p => new(p));
         Span<Vector3D> corners = stackalloc Vector3D[8];
         for (int i = 0; i < 8; i++) corners[i] = Camera(new((i & 1) == 0 ? box.Min.X : box.Max.X, (i & 2) == 0 ? box.Min.Y : box.Max.Y, (i & 4) == 0 ? box.Min.Z : box.Max.Z), transform);
         bool contained = true;
@@ -81,7 +81,7 @@ internal sealed class VisibleDepthRange
     {
         public Vector3 Min { get; } = new(float.PositiveInfinity);
         public Vector3 Max { get; } = new(float.NegativeInfinity);
-        public Bounds(MeshGeometry3D geometry)
-        { foreach (var p in geometry.Positions!) { Min = Vector3.Min(Min, p); Max = Vector3.Max(Max, p); } }
+        public Bounds(IReadOnlyList<Vector3> positions)
+        { foreach (var p in positions) { Min = Vector3.Min(Min, p); Max = Vector3.Max(Max, p); } }
     }
 }

@@ -5,7 +5,6 @@ using System.Windows;
 using System.Windows.Automation;
 using System.Windows.Controls;
 using System.Windows.Media;
-using zStudio.Core;
 
 namespace zStudio.Desktop;
 

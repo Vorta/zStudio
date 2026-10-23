@@ -100,7 +100,7 @@ public static partial class SourceBlender
             var triangleOrigins = (json["meshes"] as JsonArray ?? []).Select((mesh, index) => (index, Origins: mesh!["primitives"]!.AsArray()
                 .SelectMany(p => p!["extras"]![BridgeKey]!["origins"]!.AsArray().Select(v => v!.GetValue<int>())).ToArray())).ToDictionary(p => p.index, p => p.Origins);
             bool geometry = row["geometryChanged"]?.GetValue<bool>() == true || StructuralChange(before.Json, json, mapping);
-            geometry |= ChangedPolygonZones(before, exported, json, mapping, token);
+            geometry |= ChangedPolygonZones(before, json, mapping, token);
             var result = geometry ? json : MergeMetadata(before, json, mapping, token);
             if (geometry)
             {
@@ -367,7 +367,7 @@ public static partial class SourceBlender
         target["extras"]![WorldGltf.Key] = value.DeepClone();
     }
 
-    private static bool ChangedPolygonZones(GraphModel before, GltfDocument after, JsonObject json, GraphMapping mapping, CancellationToken token)
+    private static bool ChangedPolygonZones(GraphModel before, JsonObject json, GraphMapping mapping, CancellationToken token)
     {
         var layout = WorldGltf.ZoneLayout.Read(before.Document, token);
         var profile = WorldGltf.WriteZoneOverride(WorldGltf.CaptureZoneProfile(before.Document, token: token), token);

@@ -40,6 +40,11 @@ internal sealed class SourceWorldSession : IDisposable
     /// and reloads wait for it, so the world shown always matches the workspace and only edits it was built with are saved.
     /// </summary>
     internal bool IsRebuilding { get; set; }
+    /// <summary>
+    /// How the view draws the player tank while this map stays open (a preview choice: never saved, no undo); every opening
+    /// starts at the mission's start (null until the first build shows it), and rebuilds, undo, saves and difficulty changes keep it.
+    /// </summary>
+    internal zStudio.Core.PlayerTankState? PlayerTank { get; set; }
     public bool IsDisposed { get; private set; }
 
     public SourceWorldSession(SourceWorkspace workspace, string mission, CancellationToken token = default)

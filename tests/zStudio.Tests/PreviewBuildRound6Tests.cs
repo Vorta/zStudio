@@ -1,5 +1,3 @@
-using System.IO;
-using zStudio.Core;
 using zStudio.Core.Sources;
 using Xunit;
 

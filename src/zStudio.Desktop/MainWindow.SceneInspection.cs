@@ -1,5 +1,4 @@
 using System.Globalization;
-using System.Numerics;
 using System.Text.Json.Nodes;
 using System.Windows;
 using zStudio.Automation;
@@ -65,6 +64,35 @@ public partial class MainWindow
         var actor = viewport.ActorAt(inspection.Node);
         if (actor == null || viewport.Mission!.Actors.Count(a => a.Root == actor.Root) != 1) return null;
         return actor.Pickup?.Source ?? actor.CoordinateSource;
+    }
+    /// <summary>
+    /// Why a source map's placed object can't be edited now: its selection boundary's reason (repeated, hidden at the start,
+    /// missing template, startup animation), else a passing cause (an animation preview, hidden with a World tree eye,
+    /// placements loading); null for an object of the map's own sources.
+    /// </summary>
+    private string? PlacementReadOnlyReason(SceneViewport viewport, SceneInspection item, SourceMapSelection selection)
+    {
+        if (selection.Boundaries.GetValueOrDefault(selection.Owner(item.Node))?.ReadOnlyReason is { } reason) return reason;
+        if (viewport.Mission?.InspectedActorAt(item.Node) is not { } actor) return null;
+        if (animation != null || motion != null || viewport != scene) return "Not editable while an animation preview is open.";
+        if (!item.Active && viewport.PreviewScene is { } data)
+        {
+            // Hidden by an eye, or by another object's isolation (which its eye ends).
+            bool isolated = isolatedNode != null, inIsolation = false;
+            int[] members = isolatedNode is int group && group < 0 && sceneTree != null ? HiddenNodesFor(sceneTree, group) : [];
+            for (int node = item.Node, depth = 0; depth < 1024 && node >= 0 && node < data.Nodes.Count; depth++, node = data.Nodes[node].Parents.FirstOrDefault(-1))
+            {
+                if (viewport.HiddenNodes.Contains(node) || viewport.HiddenNodes.Contains(selection.Owner(node))) return SourceMapSelection.HiddenInTree;
+                inIsolation |= isolated && (node == isolatedNode || selection.Owner(node) == isolatedNode || members.Contains(node) || members.Contains(selection.Owner(node)));
+            }
+            if (isolated && !inIsolation) return SourceMapSelection.HiddenByIsolation;
+            // Selected in the tree while hidden and shown since (a draft kept the selection as it was).
+            if (item.Target.StartsWith("source:", StringComparison.Ordinal))
+                return aiPathDraft != null || parachuteDraft != null ? "Confirm or cancel the open AI path or drop-window edit to edit its placement." : "Click it in the view to edit its placement.";
+        }
+        if (!item.Active) return "It isn't shown, so its placement can't be edited.";
+        if (shownDocument?.PickupEdits == null) return "Placements are still loading.";
+        return $"The placement record of {JsonData.ShownText(actor.Name, 64)} could not be matched, so it can't be edited.";
     }
     private readonly System.Runtime.CompilerServices.ConditionalWeakTable<GameScene, Dictionary<int, JsonObject>> objectPolygonZones = new();
     private JsonObject DescribeInspection(SceneViewport viewport, SceneInspection item)
@@ -169,7 +197,8 @@ public partial class MainWindow
             info["Authored link slot count"] = ai.Node.LinkCount;
             if (ai.Node.LinksTruncated) info["Link preview"] = $"First {AiNode.MaximumPreviewLinks} slots shown. Inspect/export the ZRD resource for the complete list.";
         }
-        var actor = viewport.ActorAt(item.Node);
+        // A root several records place (m2 Easy) shows its first record's placement, read only.
+        var actor = viewport.Mission?.InspectedActorAt(item.Node);
         if (actor != null)
         {
             info["Placed instance"] = Short(actor.Name) + $" · root #{actor.Root}";
@@ -182,6 +211,7 @@ public partial class MainWindow
                 info["Authored amount"] = pickup.AuthoredAmount; info["Respawn seconds"] = pickup.RespawnDelay;
                 info["Rotation radians"] = JsonData.Vector(pickup.Rotation);
             }
+            if (actor.CoordinateSource is { } record && shownDocument?.PickupEdits?.Coordinate(record) is { Kind: "tank" } placed) info["Template"] = placed.Template;
         }
         var edits = shownDocument?.PickupEdits;
         bool known = source != null && edits != null && (edits.Find(source) != null || edits.Coordinate(source) != null);
@@ -208,14 +238,22 @@ public partial class MainWindow
             if (edits.Coordinate(source) is { Kind: "tank" } tank) { info["Template"] = tank.Template; info[SceneInspectionCard.AuthoredHeading] = rotation.Y; }
         }
         if (known && edits!.Coordinate(source!) is { Kind: "tank" } vehicle && (!vehicle.MissionSpecific && (vehicle.TemplateSourceNode == null || vehicle.Difficulties.Count == 0))) known = false;
+        // A placement its selection boundary locks (the player's start under the mission's opening) is shown, never edited.
+        if (known && sourceSelection?.Boundaries.GetValueOrDefault(owner)?.ReadOnlyReason != null) known = false;
         // A compiled world is read only: its placements are inspected, never moved.
         bool readOnly = shownDocument?.SourceWorld == null;
+        // Only an editable placement names what an edit would change.
+        if (!known || readOnly) info.Remove("Edit scope");
         info["Editable"] = known && !readOnly;
         info["Rotation axes"] = known ? edits!.RotationKind(source!) switch { PlacementRotationKind.EulerRadians => "XYZ", PlacementRotationKind.HeadingDegrees => "Y", _ => "None" } : "None";
         info["Editing"] = readOnly ? "Read only: edit the source project instead" : known ? "Edit position and supported rotation; confirm together as one undo step" : "Read-only inspection";
         if (!known && shownDocument is { SourceWorld: not null } sourceDoc && SourceSelection(sourceDoc, data) is { } editSelection)
-            info["Editing"] = editSelection.Boundaries.GetValueOrDefault(item.SelectionNode)?.ReadOnlyReason
-                ?? "Edit this object in the selected-object panel.";
+        {
+            // A placement's reason shows in the card as its Placement editing row (Editing is the footer's tooltip).
+            string? reason = PlacementReadOnlyReason(viewport, item, editSelection);
+            info["Editing"] = reason ?? "Edit this object in the selected-object panel.";
+            if (reason != null) info["Placement editing"] = reason;
+        }
         info["Document revision"] = shownDocument?.Revision;
         return info;
 
@@ -316,12 +354,15 @@ public partial class MainWindow
             throw new StudioCommandException("not_ready", "Select a mission placement first.");
         if (!ResolvePropertiesDrafts(doc)) return;
         if (card.ObjectEditor != null) { card.BeginObjectEdit(); return; }
+        if (SourceSelection(doc, scene.PreviewScene) is { } locks && locks.Boundaries.GetValueOrDefault(locks.Owner(selection.Node))?.ReadOnlyReason is { } locked)
+            throw new StudioCommandException("read_only", locked);
         var source = InspectionSource(scene, selection);
         var edits = doc.PickupEdits;
         if (source == null || edits == null || edits.Find(source) == null && edits.Coordinate(source) == null)
-            throw new StudioCommandException("read_only", "This node has no verified editable placement.");
+            throw new StudioCommandException("read_only", SourceSelection(doc, scene.PreviewScene) is { } projection && PlacementReadOnlyReason(scene, selection, projection) is { } reason
+                ? reason : "This node has no verified editable placement.");
         if (edits.Coordinate(source) is { Kind: "tank" } vehicle && (!vehicle.MissionSpecific && (vehicle.TemplateSourceNode == null || vehicle.Difficulties.Count == 0)))
-            throw new StudioCommandException("read_only", "The tank template is missing or ambiguous.");
+            throw new StudioCommandException("read_only", SourceMapSelection.MissingTankTemplate);
         inspectionDraft = card; card.StartDraft(doc, source, edits.Position(source));
     }
     private Task? ApplyInspectionEdit(SceneInspectionCard card)
@@ -374,7 +415,7 @@ public partial class MainWindow
                 panel = (viewport.InspectionContent as SceneInspectionCard)?.DescribePanel(),
                 recentSelections = sourceChromeActive && recentDocument == shownDocument ? recentSelections.Select(s => new { name = s.Name, parent = s.Parent, category = s.Category, node = RecentRow(s)?.Index }).ToArray() : null });
         });
-        Register(commands, "scene_card", "Expand/clear selected-object details below the permanent top-right hover readout, copy fields, or begin/set/apply/cancel the shared draft. Source objects expose local transform, name, model, flags and command fields in this panel, editable at once: the first change opens the draft (begin only checks an edit could start); set takes fields and/or transformMode (move/rotate handles, move arrows along the object's own axes, or none), Apply accepts one atomic source transaction and cancel is the footer's Revert. Placements start their draft with begin, a GUI field change or showing handles. Placement values are stored as the shipped files write them: positions and AIV headings with one decimal, pickup rotations in radians with four; a change below that precision changes nothing (apply then ends the draft without an edit and returns no document). Compiled worlds are read only: their cards show values, and begin/apply are refused. Move and supported Rotate toggles in the transform header show or hide their handles; unsupported Rotate stays hidden; Apply and Revert (footer) are enabled only once a draft changes something; transforms preview until apply creates one undo step. Edit actions require document/revision; set/apply/cancel require the current draft token. Copy optionally writes the clipboard.", true,
+        Register(commands, "scene_card", "Expand/clear selected-object details below the permanent top-right hover readout, copy fields, or begin/set/apply/cancel the shared draft. Source objects expose local transform, name, model, flags and command fields in this panel, editable at once: the first change opens the draft (begin only checks an edit could start); set takes fields and/or transformMode (move/rotate handles, move arrows along the object's own axes, or none), Apply accepts one atomic source transaction and cancel is the footer's Revert. Placements start their draft with begin, a GUI field change or showing handles. Placement values are stored as the shipped files write them: positions and AIV headings with one decimal, pickup rotations in radians with four; a change below that precision changes nothing (apply then ends the draft without an edit and returns no document). Compiled worlds are read only: their cards show values, and begin/apply are refused. Move and supported Rotate toggles in the transform header show or hide their handles; unsupported Rotate stays hidden; Apply and Revert (footer) are enabled only once a draft changes something; transforms preview until apply creates one undo step. Edit actions require document/revision; set/apply/cancel require the current draft token. Copy optionally writes the clipboard. In a source map, select with the node or target of an object selected in the tree while hidden selects it in the view once the view shows it, as scene_tree select of its row does.", true,
             [PreviewParameter, P("action", "string", "Card action.", true, "select", "clear", "copy", "begin", "set", "apply", "cancel"),
                 P("target", "string", "Opaque inspection target for select."), P("node", "integer", "Alternative scene node for selection."),
                 P("runtime", "string", "Optional runtime instance ID with node."), P("field", "string", "Copy field label; omitted copies all details."), P("clipboard", "boolean", "Write copy text to clipboard; default false."),
@@ -394,7 +435,12 @@ public partial class MainWindow
                     throw new StudioCommandException("invalid_argument", "Select by target, or by node with an optional runtime instance.");
                 RequireNoSelectionDrafts(); bool selected;
                 if (action == "clear") { selected = viewport.SelectInspection(null, false); if (selected) { card.ClearSourceNode(); card.Refresh(); } }
-                else if (a["target"] != null) selected = card.Selection?.Target == Text(a, "target") || viewport.SelectInspection(Text(a, "target"), false);
+                else if (a["target"] != null)
+                {
+                    // The card's own selection: one made in the tree while hidden is selected in the view once shown, as by node.
+                    if (card.Selection?.Target == Text(a, "target")) { ReselectShownSelection(); selected = true; }
+                    else selected = viewport.SelectInspection(Text(a, "target"), false);
+                }
                 else if (a["node"] != null)
                 {
                     long? runtime = a["runtime"] == null ? null : long.TryParse(Text(a, "runtime"), out long id) ? id : throw new StudioCommandException("invalid_argument", "Invalid runtime instance.");

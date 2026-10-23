@@ -22,12 +22,12 @@
    ```
 
 5. The Release workflow checks tag/version equality and `main` ancestry, restores locked dependencies, builds, tests and packages, then a separate job uploads the verified ZIP and `SHA256SUMS`. Prerelease suffixes create prereleases; ordinary versions become the latest release.
-6. Download the published ZIP into an empty folder, check it against `SHA256SUMS`, verify it, and launch its `zStudio.exe` on a private desktop ([testing](testing.md#environment)). The packaged Blender extension holds the runner's CRLF copies of the sources, so verify a downloaded release from a CRLF worktree of the tag: `git -c core.autocrlf=true worktree add --detach <temp> vX.Y.Z`, run `<temp>/tools/verify-package.ps1 -Directory <extracted> -Archive <zip> -ExpectedVersion X.Y.Z`, then remove the worktree.
+6. Download the published ZIP into an empty folder, check it against `SHA256SUMS`, verify it, and launch its `zStudio.exe` on a private desktop with a private profile ([testing](testing.md#environment)). The packaged Blender extension holds the runner's CRLF copies of the sources, so verify a downloaded release from a CRLF worktree of the tag: `git -c core.autocrlf=true worktree add --detach <temp> vX.Y.Z`, run `<temp>/tools/verify-package.ps1 -Directory <extracted> -Archive <zip> -ExpectedVersion X.Y.Z`, then remove the worktree.
 7. Never move a tag or replace published assets: fixes get a new version. A failed unpublished workflow may be rerun after an external failure; source or workflow changes need a new version once a release exists.
 
 ## Portable package
 
-- `./tools/publish.ps1` creates `artifacts/zStudio-win-x64/` and `artifacts/zStudio-<version>-win-x64.zip` and runs `tools/verify-package.ps1`: the root layout, required files and user guides, the absence of `docs/agents/`, `docs/mcp-capabilities.json` and of `.zbd`, `.zrd`, `.bndb`, `.pfx`, `.p12` or `.key` files, file versions, the relative apphost binding, the Blender extension's version and file hashes against its sources, and SHA-256 parity of every ZIP entry.
+- `./tools/publish.ps1` creates `artifacts/zStudio-win-x64/` and `artifacts/zStudio-<version>-win-x64.zip` and runs `tools/verify-package.ps1`: the root layout, required files and user guides, the absence of `docs/agents/`, `docs/mcp-capabilities.json` and of `.zbd`, `.zrd`, `.bndb`, `.pfx`, `.p12` or `.key` files, file versions, the relative apphost binding, the Blender extension's version and file hashes against its sources, the licence notices (every package in the packaged `deps.json` has a `THIRD-PARTY-NOTICES.md` row of the same version, every row a shipped package, every licence link a file in `dependencies/licenses/`), and SHA-256 parity of every ZIP entry.
 - The ZIP root holds exactly `zStudio.exe` and `dependencies/`: managed and native runtime, `LICENSE`, `THIRD-PARTY-NOTICES.md` and `licenses/`, `README.md`, `CHANGELOG.md`, `CONTRIBUTING.md`, `SECURITY.md`, the user guides (`docs/` without `docs/agents/` and `docs/mcp-capabilities.json`) and the Blender extension ZIP plus its guide under `dependencies/blender/`. Self-contained and unsigned.
 - `zStudio.exe` is the SDK apphost bound to `dependencies/zStudio.Desktop.dll` by relative path; no wrapper process and no custom assembly resolver. The icon is the checked-in `src/zStudio.Desktop/Assets/studio.ico` (the owner's artwork).
 - Publishing stages a fresh build below `artifacts/`, moves the previous output aside, swaps in the new one and deletes the old folder and older ZIPs; a custom `-Output` must also be below `artifacts/`.
@@ -35,7 +35,8 @@
 
 ## Local artifacts
 
-- Keep `artifacts/zStudio-win-x64` and its ZIP the latest validated local build. Launch it for the user and for all live GUI/MCP work, including unreleased features; never point the user at `src/**/bin`.
+- Keep `artifacts/zStudio-win-x64` and its ZIP the latest validated local build. It is the owner's build, which the owner may be running: launch it for the user and for live GUI/MCP work on the owner's workspace, including unreleased features; never point the user at `src/**/bin`.
+- Agents' own test runs and package smoke checks never run this folder ([testing](testing.md#environment)).
 - Republish after application changes before handing off or using the changed application; stop running zStudio instances first ([AGENTS.md](../../AGENTS.md#never): publishing needs no asking).
 - Keep no superseded portable folders or ZIPs (in `artifacts`, `.agent` or temporary folders). Reports and checksum sidecars go to the OS temporary folder. A local package refresh is not a release and changes no version.
 

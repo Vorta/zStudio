@@ -7,7 +7,6 @@ using ModelContextProtocol.Protocol;
 using zStudio.Automation;
 using zStudio.Core;
 using zStudio.Core.Animation;
-using zStudio.Desktop;
 using zStudio.Mcp;
 using Xunit;
 

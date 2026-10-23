@@ -6,7 +6,6 @@ using System.Windows.Controls;
 using ModelContextProtocol.Client;
 using ModelContextProtocol.Protocol;
 using zStudio.Core.Worlds;
-using zStudio.Desktop;
 using zStudio.Mcp;
 using Xunit;
 

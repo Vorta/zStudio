@@ -509,7 +509,6 @@ public static partial class WorldGltf
         internal Dictionary<GltfDocument, ZoneLayout> ZoneLayouts { get; } = new(ReferenceEqualityComparer.Instance);
         internal Stack<EmbeddedZoneScope> EmbeddedZoneScopes { get; } = new();
         internal BoundedDiagnostics Diagnostics { get; init; } = new();
-        public List<string> Warnings => Diagnostics.Snapshot();
         /// <summary>
         /// Called for each node a glTF node becomes, with the file's path, the glTF node (a shared node once, from its first
         /// copy) and, for a shared node or a node inside one, its place there.
@@ -570,8 +569,6 @@ public static partial class WorldGltf
             terrainLabels.Add(recipePath, chosen);
             return chosen;
         }
-        /// <summary>Texture files the load referenced, by texture name.</summary>
-        public Dictionary<string, string> TextureFiles { get; } = new(StringComparer.OrdinalIgnoreCase);
         /// <summary>Each texture's clamp word (1 clamps U, 2 clamps V) from the first sampler that uses it; the pack stores it.</summary>
         public Dictionary<string, int> TextureAddressing { get; } = new(StringComparer.OrdinalIgnoreCase);
         /// <summary>
@@ -946,7 +943,7 @@ public static partial class WorldGltf
         {
             var (doc, referencedPath) = context.Reference(uri, path);
             context.referencing.Add(node);
-            using var refZones = PushZoneOverrides(context, source, doc, referencedPath, path);
+            using var refZones = PushZoneOverrides(context, source, path);
             try { foreach (var child in Import(doc, referencedPath, Reading(reading, uri), zone, context, depth + 1, mirrored)) Link(child); }
             finally { context.referencing.RemoveAt(context.referencing.Count - 1); }
         }
@@ -1212,10 +1209,6 @@ public static partial class WorldGltf
         }
     }
 
-    /// <summary>The single supported shape key's delta, with an absent stream equivalent to zero.</summary>
-    internal static Vector3 MorphDelta(GltfPrimitive primitive, int corner) =>
-        primitive.Targets.Count > 0 && primitive.Targets[0].Count == primitive.Positions.Count ? primitive.Targets[0][corner] : Vector3.Zero;
-
     /// <summary>Whether a shape key lets alternate polygon diagonals retain the same surface throughout interpolation.</summary>
     internal static bool MorphPreservesSurface(GltfPrimitive primitive, IReadOnlyList<int> corners, PolygonWorkBudget work)
     {
@@ -1334,8 +1327,6 @@ public static partial class WorldGltf
     /// <summary>A glTF node's engine name: its recorded name, else its glTF name without an editor's copy suffix (".001").</summary>
     public static string EngineName(GltfNode node) =>
         (node.Extras?[Key] as JsonObject)?["name"] is JsonValue n && n.TryGetValue(out string? named) ? named : BlenderSuffix().Replace(node.Name, "");
-    /// <summary>A name without the <c>.001</c>-style suffix Blender gives a repeated name.</summary>
-    internal static string StripBlenderSuffix(string name) => BlenderSuffix().Replace(name, "");
     private static string ValidatedEngineName(GltfNode node, string path)
     {
         string name;

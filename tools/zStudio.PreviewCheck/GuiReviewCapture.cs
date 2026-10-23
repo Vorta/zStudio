@@ -9,8 +9,6 @@ using System.Windows.Media.Imaging;
 using System.Windows.Media;
 using System.Windows.Media.Media3D;
 using System.Windows.Threading;
-using HelixToolkit.SharpDX;
-using HelixToolkit.Wpf.SharpDX;
 using zStudio.Core;
 using zStudio.Desktop;
 using zStudio.Rendering;
@@ -22,7 +20,7 @@ internal static class GuiReviewCapture
     {
         string output = Path.Combine(Path.GetTempPath(), "zstudio-gui-review-" + DateTime.Now.ToString("yyyyMMdd-HHmmss"));
         Directory.CreateDirectory(output); Console.WriteLine("Screenshots: " + output);
-        string settings = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "zStudio", "settings.json");
+        string settings = zStudio.Desktop.StudioSettings.SettingsPath;
         byte[]? original = File.Exists(settings) ? File.ReadAllBytes(settings) : null;
         var app = new App { ShutdownMode = ShutdownMode.OnExplicitShutdown, ProcessCommandLine = false }; app.InitializeComponent(); int exit = 0;
         nint previousWindow = GetForegroundWindow();
@@ -202,23 +200,21 @@ internal static class GuiReviewCapture
                 ((TabControl)window.FindName("ToolTabs")).SelectedIndex = 4;
                 var actor = scene.Mission!.Actors.Single(a => a.Pickup?.Source.RecordIndex == 49);
                 Console.WriteLine("Nanite matched save scope: " + string.Join("; ",world.PickupEdits!.Scope(actor.Pickup!.Source).Sources.Select(s => $"{Path.GetFileName(s.ArchivePath)}/{s.ResourceName} asset#{s.AssetIndex} record#{s.RecordIndex}")));
-                var viewport = (Viewport3DX)scene.RenderSurface;
-                var camera = (HelixToolkit.Wpf.SharpDX.PerspectiveCamera)viewport.Camera!;
+                var camera = scene.DebugCamera;
                 var vertices = SceneBuilder.Assemble(scene.Mission.Scene).Placements.Where(p => scene.PickupAt(p.NodeIndex)?.Root == actor.Root)
                     .SelectMany(p => scene.Mission.Scene.Models[p.ModelIndex].Vertices.Select(v => Vector3.Transform(v, p.Transform))).ToArray();
                 var center = (vertices.Aggregate(Vector3.Min) + vertices.Aggregate(Vector3.Max)) * .5f;
                 camera.Position = new(center.X + 4, center.Y + 3, center.Z + 5); camera.LookDirection = new(-4, -3, -5); camera.UpDirection = new(0, 1, 0);
                 await Task.Delay(500, timeout.Token);
-                var point = viewport.Project(new Point3D(center.X, center.Y, center.Z));
+                var point = scene.ProjectToView(new Point3D(center.X, center.Y, center.Z));
                 bool selected = false;
                 for (int y = -36; y <= 36 && !selected; y += 2)
                     for (int x = -36; x <= 36 && !selected; x += 2)
                     {
                         var p = point + new System.Windows.Vector(x, y);
-                        var hit = viewport.FindHits(p).OrderBy(h => h.Distance).FirstOrDefault();
-                        if (hit?.ModelHit is not MeshGeometryModel3D || Vector3.Distance(new(hit.PointHit.X, hit.PointHit.Y, hit.PointHit.Z), actor.Pickup!.Position) > 3) continue;
-                        var args = new MouseButtonEventArgs(Mouse.PrimaryDevice, Environment.TickCount, MouseButton.Left);
-                        if (!scene.HandlePickupPointerDown(p, args)) typeof(Viewport3DX).GetMethod("MouseDownHitTest", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.Invoke(viewport, [p, args]);
+                        var hit = scene.HitTestScene(p).FirstOrDefault(h => h.Mesh is { IsDepthClipEnabled: true });
+                        if (hit?.Mesh is not { IsLine: false } || Vector3.Distance(hit.Point, actor.Pickup!.Position) > 3) continue;
+                        scene.HandleScenePointerDown(p, new MouseButtonEventArgs(Mouse.PrimaryDevice, Environment.TickCount, MouseButton.Left));
                         selected = scene.SelectedPickupRoot == actor.Root;
                     }
                 Require(selected, "Could not select Nanite for review");
@@ -230,19 +226,19 @@ internal static class GuiReviewCapture
                 var animationDoc = await Open(Path.Combine("m1", "anim.zbd"));
                 Require(((TabControl)window.FindName("NavigationTabs")).SelectedItem == window.FindName("AssetsTab"),"Switching away from a scene document left an unavailable page selected");
                 var editor = await Animation("vtol_destruction1");
-                await editor.SeekAsync(.6); editor.Viewport.FrameAnimation(editor.CurrentFrame!); await Capture("11-animation-entry");
+                await editor.SeekAsync(.6); editor.Viewport.FrameAnimation(); await Capture("11-animation-entry");
                 var inspector = (TabControl)window.FindName("InspectorTabs"); var tools = (TabControl)window.FindName("ToolTabs");
                 inspector.SelectedItem = window.FindName("ProgramTab"); await Capture("44-program-right");
                 Require(editor.ProgramView.IsDescendantOf(inspector) && !editor.ProgramView.IsDescendantOf((FrameworkElement)window.FindName("NavigatorHost")),"Program is not hosted solely in the right Inspector");
                 inspector.SelectedItem = window.FindName("PreviewSetupTab"); ((TextBox)editor.FindName("PreviewHeight")).Text = "40";
-                await Task.Delay(1000, timeout.Token); await editor.SeekAsync(1); editor.Viewport.FrameAnimation(editor.CurrentFrame!); await Capture("12-preview-setup");
+                await Task.Delay(1000, timeout.Token); await editor.SeekAsync(1); editor.Viewport.FrameAnimation(); await Capture("12-preview-setup");
                 inspector.SelectedItem = window.FindName("ReferencesTab"); await Capture("13-references");
                 editor = await Animation("redsprks.flt");
                 var entry = animationDoc.Document.Animations!.Entries[editor.EntryIndex];
                 var sequence = entry.Sequences.First(s => s.Events.Any(e => e.Type == 10));
                 editor.SelectSource(sequence.Id); await Capture("14-sequence");
                 editor.SelectSource(sequence.Id, sequence.Events.First(e => e.Type == 10).Id);
-                await editor.SeekAsync(.4); editor.Viewport.FrameAnimation(editor.CurrentFrame!); await Capture("15-procedural-event");
+                await editor.SeekAsync(.4); editor.Viewport.FrameAnimation(); await Capture("15-procedural-event");
                 tools.SelectedIndex = 1; await Capture("16-event-log"); tools.SelectedIndex = 2; await Capture("17-problems");
                 tools.SelectedIndex = 3; await Capture("18-runtime"); tools.SelectedIndex = 5; await Capture("19-bytes"); tools.SelectedIndex = 0;
                 tools.SelectedIndex = 1; ((DataGrid)editor.FindName("EventLog")).SelectedIndex = 0;

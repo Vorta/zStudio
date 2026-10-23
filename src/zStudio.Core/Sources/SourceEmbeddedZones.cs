@@ -1,6 +1,5 @@
 using System.Buffers.Binary;
 using System.Globalization;
-using System.Text.Json;
 using System.Text.Json.Nodes;
 using zStudio.Core.Gltf;
 using zStudio.Core.Worlds;

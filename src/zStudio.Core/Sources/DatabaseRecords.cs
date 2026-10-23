@@ -252,7 +252,7 @@ internal static partial class DatabaseRecords
         {
             foreach (var (variant, path) in Variants())
             {
-                if (Parts.Infer(slot, isReference, database, variant, before, mission, shipped.Restore, budget, retained, token, search, kept) is { } tried && (parts == null || tried.Inexact == null || tried.Matched > parts.Matched))
+                if (Parts.Infer(slot, isReference, database, variant, before, shipped.Restore, budget, retained, token, search, kept) is { } tried && (parts == null || tried.Inexact == null || tried.Matched > parts.Matched))
                 { parts = tried; list = variant; laterPaths = path is { } chosen ? [chosen] : []; }
                 if (parts is { Inexact: null }) break;
             }

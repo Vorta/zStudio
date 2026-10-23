@@ -323,7 +323,6 @@ public static class WorldLookups
         fingerprints.Key(node) + "|" + (node.Class == WorldNodeClass.Object3D && WorldUpdate.LocalMatrix(node) is { } m ? m.ToString() : "") + "|" + Convert.ToHexString(node.Payload.AsSpan(0, Math.Min(node.Payload.Length, 4))))));
 
     /// <summary>A node's path: its first parents' names from the top (a world's name for its members), unnamed nodes as "(unnamed)".</summary>
-    public static string Path(WorldNode node) => Path(node, default, null);
     private static string Path(WorldNode node, CancellationToken token, LookupWorkBudget? work)
     {
         List<string> names = []; HashSet<WorldNode> seen = new(ReferenceEqualityComparer.Instance);

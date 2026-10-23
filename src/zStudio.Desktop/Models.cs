@@ -7,7 +7,6 @@ using System.Windows.Data;
 using System.Windows.Media.Imaging;
 using CommunityToolkit.Mvvm.ComponentModel;
 using zStudio.Core;
-using zStudio.Core.Formats;
 using zStudio.Core.Animation;
 
 namespace zStudio.Desktop;
@@ -330,7 +329,7 @@ public sealed class StudioSettings
     public string CompareRetail { get; set; } = "";
     public string CompareRebuilt { get; set; } = "";
     public List<string> RecentRoots { get; set; } = [];
-    internal static string SettingsPath => System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "zStudio", "settings.json");
+    internal static string SettingsPath => System.IO.Path.Combine(zStudio.Automation.StudioProfile.Directory, "settings.json");
     public static StudioSettings Load()
     {
         try { return File.Exists(SettingsPath) ? JsonSerializer.Deserialize<StudioSettings>(File.ReadAllText(SettingsPath)) ?? new() : new(); }

@@ -2,7 +2,6 @@ using System.Buffers.Binary;
 using System.Numerics;
 using System.Text;
 using System.Text.Json.Nodes;
-using zStudio.Core;
 using zStudio.Core.Export;
 using zStudio.Core.Gltf;
 using zStudio.Core.Sources;

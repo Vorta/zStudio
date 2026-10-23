@@ -3,19 +3,16 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
-using System.Windows.Input;
 using System.Windows.Automation;
 using System.Windows.Media.Media3D;
-using HelixToolkit.Wpf.SharpDX;
 using zStudio.Desktop;
-using HCamera = HelixToolkit.Wpf.SharpDX.PerspectiveCamera;
 
 internal static class GroundPreviewCheck
 {
     public static int Run(string root)
     {
         string output = Path.Combine(Path.GetTempPath(), "zbd-ground-" + Path.GetFileName(root) + "-" + DateTime.Now.ToString("yyyyMMdd-HHmmss")); Directory.CreateDirectory(output);
-        string settings = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "zStudio", "settings.json");
+        string settings = zStudio.Desktop.StudioSettings.SettingsPath;
         byte[]? original = File.Exists(settings) ? File.ReadAllBytes(settings) : null;
         var app = new App { ShutdownMode = ShutdownMode.OnExplicitShutdown, ProcessCommandLine = false }; app.InitializeComponent(); int exit = 0;
         app.Startup += async (_, _) =>
@@ -43,19 +40,19 @@ internal static class GroundPreviewCheck
                 ((TabControl)window.FindName("InspectorTabs")).SelectedItem = window.FindName("PreviewSetupTab");
                 Require(grid.IsChecked == true, "Grid must default checked");
                 ((CheckBox)editor.FindName("Mute")).IsChecked = true;
-                var viewport = (Viewport3DX)editor.Viewport.RenderSurface;
-                var camera = (HCamera)viewport.Camera!;
-                var plane = viewport.Items.OfType<AxisPlaneGridModel3D>().Single();
-                Require(plane.Offset == 0 && !plane.IsHitTestVisible && plane.PlaneColor.A == 0 && plane.GridPattern == HelixToolkit.SharpDX.GridPattern.Grid, "Grid configuration invalid");
+                var viewport = editor.Viewport;
+                var camera = viewport.DebugCamera;
+                var plane = viewport.GroundGrids.Single();
+                Require(plane.Offset == 0 && !plane.IsHitTestVisible, "Grid configuration invalid");
                 foreach (double time in new[] { 1d, 5d, 8d })
                 {
-                    await editor.SeekAsync(time); editor.Viewport.FrameAnimation(editor.CurrentFrame!);
+                    await editor.SeekAsync(time); editor.Viewport.FrameAnimation();
                     await Task.Delay(200, timeout.Token); Save(editor.Viewport.RenderImage(1100, 740), $"vtol-{time:00}s.png");
                 }
                 var eye = camera.Position; var look = camera.LookDirection; double near = camera.NearPlaneDistance, far = camera.FarPlaneDistance;
                 grid.IsChecked = false; await Ready();
                 Require(Math.Abs(editor.CurrentFrame!.Time - 8) < .001, "Paused grid toggle moved playhead");
-                Require(!editor.IsPlaying && plane.Visibility == Visibility.Visible, "Collision toggle incorrectly hid the visual grid");
+                Require(!editor.IsPlaying && plane.Visible, "Collision toggle incorrectly hid the visual grid");
                 Require(editor.CurrentFrame.Nodes.Any(n => n.Transform.M42 < -5), "Grid off still constrains debris");
                 grid.IsChecked = true; await Ready();
                 Require(Math.Abs(editor.CurrentFrame.Time - 8) < .001 && editor.Duration!.IsFinite, "Grid enable failed to reconstruct playhead/duration");
@@ -76,17 +73,17 @@ internal static class GroundPreviewCheck
                 await Task.Delay(350, timeout.Token); editor.Pause();
                 Require(editor.CurrentFrame.Time > before, "Grid toggle did not resume playback");
                 ((System.Windows.Controls.Primitives.ToggleButton)editor.FindName("ShowLevel")).IsChecked = true; await Ready();
-                Require(viewport.Items.OfType<AxisPlaneGridModel3D>().Single().Visibility == Visibility.Visible, "Mission refresh lost grid");
+                Require(viewport.GroundGrids.Single().Visible, "Mission refresh lost grid");
                 ((System.Windows.Controls.Primitives.ToggleButton)editor.FindName("ShowHorizon")).IsChecked = false; grid.IsChecked = false; await Ready();
                 Require(((TextBox)editor.FindName("Diagnostics")).Text.Contains("collision disabled", StringComparison.Ordinal), "Grid change during scene reload was lost");
                 grid.IsChecked = true; await Ready();
-                Require(viewport.Items.OfType<AxisPlaneGridModel3D>().Count() == 1, "Horizon refresh duplicated grid");
+                Require(viewport.GroundGrids.Count == 1, "Horizon refresh duplicated grid");
                 ((System.Windows.Controls.Primitives.ToggleButton)editor.FindName("ShowLevel")).IsChecked = false; await Ready();
-                await editor.SeekAsync(5); editor.Viewport.FrameAnimation(editor.CurrentFrame!);
-                viewport.AddZoomForce(-.12); await Task.Delay(2600, timeout.Token);
-                var idle = RenderStabilityCheck.Capture(viewport); Console.WriteLine($"Idle camera: {camera.Position} {camera.LookDirection} clips {camera.NearPlaneDistance:R}/{camera.FarPlaneDistance:R}; viewport {viewport.ActualWidth}/{viewport.ActualHeight}"); await Task.Delay(2500, timeout.Token);
-                var later = RenderStabilityCheck.Capture(viewport);
-                Save(idle,"idle-before.png"); Save(later,"idle-after.png"); Console.WriteLine($"Later camera: {camera.Position} {camera.LookDirection} clips {camera.NearPlaneDistance:R}/{camera.FarPlaneDistance:R}; viewport {viewport.ActualWidth}/{viewport.ActualHeight}; changed channels {Pixels(idle).Zip(Pixels(later)).Count(p => p.First != p.Second)}; {output}");
+                await editor.SeekAsync(5); editor.Viewport.FrameAnimation();
+                viewport.WheelZoom(new(viewport.RenderSurface.ActualWidth / 2, viewport.RenderSurface.ActualHeight / 2), 120); await Task.Delay(2600, timeout.Token);
+                var idle = viewport.CapturePresentedFrame(); Console.WriteLine($"Idle camera: {camera.Position} {camera.LookDirection} clips {camera.NearPlaneDistance:R}/{camera.FarPlaneDistance:R}; viewport {viewport.RenderSurface.ActualWidth}/{viewport.RenderSurface.ActualHeight}"); await Task.Delay(2500, timeout.Token);
+                var later = viewport.CapturePresentedFrame();
+                Save(idle,"idle-before.png"); Save(later,"idle-after.png"); Console.WriteLine($"Later camera: {camera.Position} {camera.LookDirection} clips {camera.NearPlaneDistance:R}/{camera.FarPlaneDistance:R}; viewport {viewport.RenderSurface.ActualWidth}/{viewport.RenderSurface.ActualHeight}; changed channels {Pixels(idle).Zip(Pixels(later)).Count(p => p.First != p.Second)}; {output}");
                 Require(Pixels(idle).SequenceEqual(Pixels(later)), "Ground grid changed while idle"); Save(later, "vtol-idle.png");
                 var height = (TextBox)editor.FindName("PreviewHeight");
                 Require(height.Text == "0", "Height must default to zero");
@@ -118,17 +115,18 @@ internal static class GroundPreviewCheck
                 Require(height.Text == "100", "Invalid height was accepted");
                 Require(!heightMessages.Any(m => m.Contains("Height must", StringComparison.Ordinal)), "Typing or leaving an incomplete height raised an error");
                 await editor.SeekAsync(.1);
-                plane = viewport.Items.OfType<AxisPlaneGridModel3D>().Single();
-                editor.Viewport.FrameAnimation(editor.CurrentFrame); await Task.Delay(200, timeout.Token);
+                plane = viewport.GroundGrids.Single();
+                editor.Viewport.FrameAnimation(); await Task.Delay(200, timeout.Token);
                 var target = camera.Position + camera.LookDirection;
                 foreach (var (name, offset) in new[] { ("top-down", new Vector3D(0, 60, 0)), ("perspective", new Vector3D(30, 35, 65)) })
                 {
-                    camera.Position = target + offset; camera.LookDirection = -offset; camera.UpDirection = new(0, 1, 0);
+                    // A restored pose keeps its target; looking straight down needs an up vector across the view.
+                    viewport.RestoreView(new(target + offset, -offset, offset.X == 0 && offset.Z == 0 ? new(0, 0, -1) : new(0, 1, 0), viewport.CaptureView().FieldOfView));
                     await Task.Delay(200, timeout.Token);
                     var on = editor.Viewport.RenderImage(1100, 740); Save(on, "height100-" + name + ".png");
                     double sceneFar = camera.FarPlaneDistance;
-                    plane.Visibility = Visibility.Collapsed; await Task.Delay(100, timeout.Token);
-                    var off = editor.Viewport.RenderImage(1100, 740); plane.Visibility = Visibility.Visible;
+                    plane.Visible = false; await Task.Delay(100, timeout.Token);
+                    var off = editor.Viewport.RenderImage(1100, 740); plane.Visible = true;
                     Require(Math.Abs(sceneFar - camera.FarPlaneDistance) < .001, "Grid extended scene clipping planes");
                     var a = Pixels(on); var b = Pixels(off); int[] bands = new int[4];
                     for (int y = 0; y < 740; y++) for (int x = 0; x < 1100; x++)

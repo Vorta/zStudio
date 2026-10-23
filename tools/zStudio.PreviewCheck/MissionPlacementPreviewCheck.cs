@@ -2,12 +2,10 @@ using System.IO;
 using System.Numerics;
 using System.Windows;
 using System.Windows.Media.Imaging;
-using HelixToolkit.Wpf.SharpDX;
 using zStudio.Core;
 using zStudio.Core.Animation;
 using zStudio.Desktop;
 using zStudio.Rendering;
-using HCamera = HelixToolkit.Wpf.SharpDX.PerspectiveCamera;
 
 internal static class MissionPlacementPreviewCheck
 {
@@ -15,7 +13,7 @@ internal static class MissionPlacementPreviewCheck
     {
         string root = Path.GetFullPath(rootArg), output = Path.Combine(Path.GetTempPath(), "zbd-placements-ui-" + DateTime.Now.ToString("yyyyMMdd-HHmmss"));
         Directory.CreateDirectory(output);
-        string settings = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "zStudio", "settings.json");
+        string settings = zStudio.Desktop.StudioSettings.SettingsPath;
         byte[]? saved = File.Exists(settings) ? File.ReadAllBytes(settings) : null;
         var app = new App { ShutdownMode = ShutdownMode.OnExplicitShutdown, ProcessCommandLine = false }; app.InitializeComponent(); int exit = 0;
         app.Startup += async (_, _) =>
@@ -28,8 +26,8 @@ internal static class MissionPlacementPreviewCheck
                 var document = await resolver.OpenCachedAsync(Path.Combine(root, "m1", "anim.zbd"), timeout.Token);
                 var context = await AnimationPreviewContext.LoadAsync(document.Animations!, document.Path, resolver, token: timeout.Token);
                 var worldAsset = context.World.Assets.First(a => a.Kind == AssetKind.World);
-                var viewport = (Viewport3DX)preview.RenderSurface; viewport.IsInertiaEnabled = false; viewport.ShowViewCube = viewport.ShowCoordinateSystem = false;
-                var camera = (HCamera)viewport.Camera!;
+                preview.InertiaEnabled = false; preview.SetNavigationAids(false, false);
+                var camera = preview.DebugCamera;
                 var scene = context.Scene; var baseline = SceneBuilder.Assemble(scene).Placements;
                 var sky = new HashSet<int>(); foreach (var horizon in context.Mission!.Horizons) sky.UnionWith(context.Descendants(horizon.Root));
                 var withoutPickups = baseline.Where(p => !context.Mission.Actors.Where(a => a.Pickup != null).Any(a => context.Descendants(a.Root).Contains(p.NodeIndex))).ToArray();
@@ -78,8 +76,7 @@ internal static class MissionPlacementPreviewCheck
 
                 int ModelTriangles(int model) => GeometryBuilder.Build(scene.Models[model]).Sum(p => p.Indices.Length / 3);
                 int Triangles(IEnumerable<ScenePlacement> placements) => placements.Sum(p => ModelTriangles(p.ModelIndex));
-                int RenderedTriangles() => viewport.Items.OfType<MeshGeometryModel3D>().Concat(viewport.Items.OfType<SortingGroupModel3D>().SelectMany(g => g.Children.OfType<MeshGeometryModel3D>()))
-                    .Where(m => m.Visibility == Visibility.Visible).Sum(m => m.Geometry!.Indices!.Count / 3 * (m.Instances?.Count ?? 1));
+                int RenderedTriangles() => preview.RenderedTriangleCount;
                 void Aim(Vector3 target, Vector3 offset)
                 { camera.Position = new(target.X + offset.X, target.Y + offset.Y, target.Z + offset.Z); camera.LookDirection = new(-offset.X, -offset.Y, -offset.Z); camera.UpDirection = new(0, 1, 0); }
                 async Task Capture(string name)

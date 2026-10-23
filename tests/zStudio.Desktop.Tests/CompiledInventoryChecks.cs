@@ -6,8 +6,6 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using zStudio.Core;
-using zStudio.Core.Formats;
-using zStudio.Desktop;
 using Xunit;
 
 namespace zStudio.Desktop.Tests;

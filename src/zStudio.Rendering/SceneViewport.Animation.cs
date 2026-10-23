@@ -1,20 +1,10 @@
 using System.Numerics;
 using System.IO;
-using System.Text.Json.Nodes;
 using System.Windows;
-using System.Windows.Media;
 using System.Windows.Media.Media3D;
-using HelixToolkit;
-using HelixToolkit.Maths;
-using HelixToolkit.SharpDX;
-using HelixToolkit.Wpf.SharpDX;
 using zStudio.Core;
 using zStudio.Core.Animation;
-using zStudio.Core.Formats;
-using SharpDX.Direct3D11;
-using DiffuseMaterial = HelixToolkit.Wpf.SharpDX.DiffuseMaterial;
-using MeshGeometry3D = HelixToolkit.SharpDX.MeshGeometry3D;
-using HCamera = HelixToolkit.Wpf.SharpDX.PerspectiveCamera;
+using zStudio.Rendering.Direct3D;
 
 namespace zStudio.Rendering;
 
@@ -34,7 +24,7 @@ public sealed partial class SceneViewport
     private readonly Dictionary<string, AnimationTextureSlot> animationTextureSlots = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, AnimationTextureSlot> animationTextureReferences = new(ReferenceEqualityComparer.Instance);
     private readonly Dictionary<IReadOnlyList<string>, Dictionary<string, AnimationTextureSlot?>> animationTextureCycles = new(ReferenceEqualityComparer.Instance);
-    private readonly Dictionary<DecodedImage, TextureModel> animationTextureModels = [];
+    private readonly Dictionary<DecodedImage, RenderTexture> animationTextureModels = [];
     private readonly Dictionary<int, (string? Name, AnimationTextureSlot? Slot)> animationBaseTextures = [];
     private long animationTextureNameUnits;
     private long animationTextureLookupUnits;
@@ -51,8 +41,7 @@ public sealed partial class SceneViewport
     internal long MaximumAnimationLightingWork { get; set; } = 1_000_000;
     internal long AnimationLightingWork { get; private set; }
     internal long AnimationLightVisits { get; private set; }
-    private SortingGroupModel3D? animationGroup;
-    private OITRenderType previousTransparency;
+    private SortingGroupNode? animationGroup;
     public int AnimationMeshCount => animatedMeshes.Values.Sum(m => m.Length);
 
     public async Task ShowAnimationAsync(AnimationPreviewContext context, AnimationFrame frame, AssetResolver resolver, bool includeLevel, CancellationToken token, int lod = 0, bool showHorizon = true, CancellationToken? previewLifetime = null)
@@ -70,11 +59,9 @@ public sealed partial class SceneViewport
             : new PreviewTextureCache(textureMemory, resolver.BeginTextureLookup(context.World.Path), masks: false);
         animationContext = context; animationResolver = resolver; animationToken = token;
         Mission = context.Mission; PreviewScene = context.Scene; InspectionNodes = context.InspectionNodes; InspectionSourcePath = context.World.Path; horizonEnabled = showHorizon; ConfigureHorizon(context.Scene);
-        // Helix 3.1.2's OIT paths drop the unlit DiffuseMaterial effect cards.
-        // Standard alpha blending with a sorted group renders their actual alpha.
-        previousTransparency = viewport.OITRenderMode; viewport.OITRenderMode = OITRenderType.None;
-        animationGroup = sceneAlphaGroup ?? new() { EnableSorting = true, SortTransparentOnly = true, SortingInterval = 0 };
-        if (sceneAlphaGroup == null) viewport.Items.Add(animationGroup);
+        // Standard alpha blending with a sorted group renders the effect cards' actual alpha (the view has no order-independent transparency).
+        animationGroup = sceneAlphaGroup ?? new() { SortingEnabled = true };
+        if (sceneAlphaGroup == null) view.Items.Add(animationGroup);
         levelMin = sceneMin; levelMax = sceneMax;
         // Spawned effect cards can change on their first visible tick. Prepare the
         // template maps before enabling playback, as with bound material cycles.
@@ -83,7 +70,7 @@ public sealed partial class SceneViewport
         await Task.WhenAll(animationTextureSlots.Values.Select(slot => slot.Load).ToArray());
         token.ThrowIfCancellationRequested(); if (generation != expectedGeneration) return; UpdateAnimationFrame(frame);
         animationToken = previewLifetime ?? token;
-        if (includeLevel) FrameAll(); else FrameAnimation(frame);
+        if (includeLevel) FrameAll(); else FrameAnimation();
         }
         catch
         {
@@ -129,13 +116,13 @@ public sealed partial class SceneViewport
                 finally { animationGeometryReservation.Resize(animationGeometryBytes); }
             }
             ReserveRenderUnits(ref renderUnits, 2L * animationPossibleParts[pose.Model], MaximumRenderUnits);
-            // Helix constructors copy every collection. Every pose keeps private
-            // geometry: morphs and per-pose fog/alpha tint must not modify siblings.
+            // Budget the renderer's copy of every part (GeometryCopyBytes; it shares unchanged base-part
+            // positions, so this over-counts): morphs and per-pose fog/alpha tint must not modify siblings.
             // Each retained mesh also owns its unclamped pre-fog RGBA. Camera
             // refresh must not repeat the frame's material-part/light product.
             long copies = checked(animationGeometryCopies[pose.Model] + 16L * animationPossibleParts[pose.Model]);
             nextGeometry = checked(nextGeometry + copies);
-            long colors = parts.Select(p => 32L * p.Colors.LongLength).DefaultIfEmpty().Max();
+            long colors = parts.Select(ColorReplacementBytes).DefaultIfEmpty().Max();
             var model = animationContext.Scene.Models[pose.Model];
             long replacement = model.Morphs.Length == model.Vertices.Length
                 ? checked(animationGeometryScratch[pose.Model] + 2 * copies) : colors;
@@ -216,7 +203,7 @@ public sealed partial class SceneViewport
                 bool horizon = IsHorizon(pose.SourceNode);
                 item.Mesh.Visibility = pose.Visible && pose.Opacity > 0 && (!horizon || horizonEnabled) ? Visibility.Visible : Visibility.Collapsed;
                 var transform = CameraFacingTransform(pose, model);
-                item.Mesh.Transform = new MatrixTransform3D(ToWpf(HorizonTransform(pose.SourceNode, transform)));
+                item.Mesh.Transform = HorizonTransform(pose.SourceNode, transform);
                 JsonMaterial(scene, item.Part.MaterialIndex, out var color, out int textureIndex);
                 string? textureName;
                 AnimationTextureSlot? textureSlot;
@@ -248,7 +235,7 @@ public sealed partial class SceneViewport
                 }
                 else { textureName = null; textureSlot = null; }
                 bool alphaTexture = false;
-                TextureModel? diffuseMap = null;
+                RenderTexture? diffuseMap = null;
                 if (textureName != null)
                 {
                     if (textureSlot?.Texture is { } texture) { diffuseMap = texture; alphaTexture = textureSlot.Alpha; }
@@ -259,20 +246,20 @@ public sealed partial class SceneViewport
                 item.LitColor = AnimationLitColor(pose, color, frame, effectLighting);
                 SetAnimationColor(item, AnimationFogColor(pose, item.LitColor, frame, effectLighting));
                 item.Mesh.IsTransparent = !horizon && (alphaTexture || alpha < 1);
-                if (!horizon && pose.Visible && item.Mesh.Geometry?.Positions is { } positions) IncludeBounds(positions, transform);
+                if (!horizon && pose.Visible && item.Mesh.Geometry is { Positions: var positions }) IncludeBounds(positions, transform);
             }
         }
         if (followCamera && frame.Camera is { } c)
         {
             ChangeProjection("perspective"); axisView = null; autoPerspective = false;
-            var live = (HCamera)viewport.Camera!;
+            var live = (PerspectiveRenderCamera)view.Camera!;
             authoredCameraPose = true;
             live.Position = new(c.Position.X, c.Position.Y, c.Position.Z);
             var look = c.Target - c.Position; if (look.LengthSquared() > 1e-8f) live.LookDirection = new(look.X, look.Y, look.Z);
             live.FieldOfView = Math.Clamp(c.FieldOfView, 1, 170);
             orbitPivot = null; navigationReferenceDistance = null;
         }
-        if (!preparingCamera) viewport.InvalidateRender();
+        if (!preparingCamera) view.InvalidateRender();
         animationMeshBytes = nextGeometry;
         animationMeshReservation.Resize(checked(nextGeometry + scratch));
         }
@@ -288,19 +275,14 @@ public sealed partial class SceneViewport
     private AnimatedMesh CreateAnimationMesh(AnimationNodePose pose, MeshPart part)
     {
         bool horizon = IsHorizon(pose.SourceNode);
-        var material = PreviewMaterials.Create(horizon, part.Colors.Length != 0, faceOrientation); material.EnableUnLit = true;
+        var material = PreviewMaterials.Create(horizon, part.Colors.Length != 0, faceOrientation); material.Unlit = true;
         material.VertexColorBlendingFactor = part.Colors.Length == 0 ? 0 : 1;
-        var mesh = new MeshGeometryModel3D { Geometry = Mesh(part), Material = material, CullMode = CullMode.None, IsThrowingShadow = false, RenderOrder = horizon ? 0 : 1, IsDepthClipEnabled = !horizon };
+        var mesh = new MeshNode { Geometry = Mesh(part), Material = material, CullMode = CullMode.None, RenderOrder = horizon ? 0 : 1, IsDepthClipEnabled = !horizon };
         try
         {
             RegisterInspectionMesh(mesh, part.MaterialIndex, pose.Id, pose.SourceNode, pose.Model);
             inspectionPolygons[mesh] = part.VertexPolygons;
-            // The horizon is backdrop: clicking the sky selects nothing.
-            int source = pose.SourceNode; if (!horizon) mesh.MouseDown3D += (_, e) =>
-            {
-                if (!IsPickupDragging && e is MouseDown3DEventArgs { OriginalInputEventArgs: System.Windows.Input.MouseButtonEventArgs { ChangedButton: System.Windows.Input.MouseButton.Left } })
-                { SelectFramingNode(source); NodeSelected?.Invoke(source); }
-            };
+            // Clicks select through HandleScenePointerDown's inspection probe, which skips the horizon.
             animationGroup!.Children.Add(mesh);
             return new(mesh, material, part);
         }
@@ -319,10 +301,10 @@ public sealed partial class SceneViewport
     {
         var transform = pose.Transform;
         // The retail facade projection differs; this preview keeps effect cards readable.
-        if ((pose.Texture != null || model.Metadata.Int("model_type") == 1) && viewport.Camera is ProjectionCamera camera && Matrix4x4.Decompose(transform, out var size, out _, out var position))
+        if ((pose.Texture != null || model.Metadata.Int("model_type") == 1) && view.Camera is RenderCamera camera && Matrix4x4.Decompose(transform, out var size, out _, out var position))
         {
             var p = camera.Position; var facing = new Vector3((float)p.X, (float)p.Y, (float)p.Z);
-            if (camera is OrthographicCamera) facing = position - new Vector3((float)camera.LookDirection.X, (float)camera.LookDirection.Y, (float)camera.LookDirection.Z);
+            if (camera is OrthographicRenderCamera) facing = position - new Vector3((float)camera.LookDirection.X, (float)camera.LookDirection.Y, (float)camera.LookDirection.Z);
             if ((model.Metadata.UInt("flags") & 0x10) == 0 && pose.Texture == null) facing.Y = position.Y;
             var up = camera.UpDirection;
             var billboardUp = Math.Abs(Vector3.Dot(Vector3.Normalize(facing - position), Vector3.UnitY)) > .999f
@@ -395,7 +377,7 @@ public sealed partial class SceneViewport
     private Color4 AnimationFogColor(AnimationNodePose pose, Color4 lit, AnimationFrame frame, bool effectLighting)
     {
         Vector3 rgb = new(lit.Red, lit.Green, lit.Blue);
-        if (effectLighting && frame.Fog is { Enabled: true } fog && viewport.Camera is ProjectionCamera camera)
+        if (effectLighting && frame.Fog is { Enabled: true } fog && view.Camera is RenderCamera camera)
         {
             var p = camera.Position;
             float distance = Vector3.Distance(pose.Transform.Translation, new((float)p.X, (float)p.Y, (float)p.Z));
@@ -408,13 +390,13 @@ public sealed partial class SceneViewport
     {
         item.Material.DiffuseColor = color;
         // The vertex-tint shader consumes geometry colors, including fog and opacity.
-        if (item.Part.Colors.Length != 0 && item.VertexTint != color && item.Mesh.Geometry is MeshGeometry3D colored)
+        if (item.Part.Colors.Length != 0 && item.VertexTint != color && item.Mesh.Geometry is { } colored)
         {
             colored.Colors = VertexColors(item.Part, color);
             item.VertexTint = color;
         }
     }
-    private void RefreshAnimationCamera(bool updateHitTests = false)
+    private void RefreshAnimationCamera()
     {
         if (animationFrame is not { } frame || animationContext == null || updatingAnimation || animationToken.IsCancellationRequested) return;
         var scene = animationContext.Scene;
@@ -431,11 +413,7 @@ public sealed partial class SceneViewport
             foreach (var item in items)
             {
                 if (animationToken.IsCancellationRequested) return;
-                if (facade)
-                {
-                    item.Mesh.Transform = new MatrixTransform3D(ToWpf(HorizonTransform(pose.SourceNode, CameraFacingTransform(pose, model))));
-                    if (updateHitTests) item.Mesh.SceneNode.UpdateAllTransformMatrix();
-                }
+                if (facade) item.Mesh.Transform = HorizonTransform(pose.SourceNode, CameraFacingTransform(pose, model));
                 if (animationEffectLighting && frame.Fog is { Enabled: true })
                 {
                     SetAnimationColor(item, AnimationFogColor(pose, item.LitColor, frame, true));
@@ -444,7 +422,7 @@ public sealed partial class SceneViewport
         }
     }
 
-    public void FrameAnimation(AnimationFrame frame)
+    public void FrameAnimation()
     {
         TryFrame("asset", manual: false);
     }
@@ -496,7 +474,7 @@ public sealed partial class SceneViewport
                 if (decoded != null)
                 {
                     var image = decoded.Image;
-                    if (!animationTextureModels.TryGetValue(image, out var map)) animationTextureModels[image] = map = new TextureModel(image.Rgba, SharpDX.DXGI.Format.R8G8B8A8_UNorm, image.Width, image.Height);
+                    if (!animationTextureModels.TryGetValue(image, out var map)) animationTextureModels[image] = map = RenderTexture.FromRgba(image.Rgba, image.Width, image.Height);
                     slot.Texture = map; slot.Alpha = decoded.Alpha;
                     if (animationFrame != null) UpdateAnimationFrame(animationFrame, false, animationEffectLighting);
                 }
@@ -529,17 +507,19 @@ public sealed partial class SceneViewport
             sceneMin = Vector3.Min(sceneMin, p); sceneMax = Vector3.Max(sceneMax, p);
         }
     }
-    private static MeshGeometry3D Mesh(MeshPart p) => new() { Positions = new Vector3Collection(p.Positions), Normals = new Vector3Collection(p.Normals), TextureCoordinates = new Vector2Collection(p.TextureCoordinates), Indices = new IntCollection(p.Indices), Colors = new Color4Collection(p.Colors.Select(v => new Color4(v.X, v.Y, v.Z, v.W))) };
-    private static Color4Collection VertexColors(MeshPart part, Color4 tint) => new(part.Colors.Select(v => new Color4(v.X * tint.Red, v.Y * tint.Green, v.Z * tint.Blue, v.W * tint.Alpha)));
+    private static MeshData Mesh(MeshPart p) => new(p.Positions, p.Indices, p.Normals, p.TextureCoordinates, [.. p.Colors.Select(v => new Color4(v.X, v.Y, v.Z, v.W))]);
+    private static Color4[] VertexColors(MeshPart part, Color4 tint) => [.. part.Colors.Select(v => new Color4(v.X * tint.Red, v.Y * tint.Green, v.Z * tint.Blue, v.W * tint.Alpha))];
     private static Matrix3D ToWpf(Matrix4x4 m) => new(m.M11,m.M12,m.M13,m.M14,m.M21,m.M22,m.M23,m.M24,m.M31,m.M32,m.M33,m.M34,m.M41,m.M42,m.M43,m.M44);
     private void ClearAnimationResources()
     {
         foreach (var items in animatedMeshes.Values) foreach (var item in items) item.Mesh.Dispose();
-        if (animationGroup != null) { animationGroup.Children.Clear(); animationGroup.Dispose(); animationGroup = null; viewport.OITRenderMode = previousTransparency; }
+        if (animationGroup != null) { animationGroup.Children.Clear(); animationGroup.Dispose(); animationGroup = null; }
         animatedMeshes.Clear(); animationGeometry.Clear(); animationTextureSlots.Clear(); replacedNodes.Clear(); animationContext = null; animationResolver = null; animationFrame = null;
         animationGeometryScratch.Clear(); animationGeometryCopies.Clear(); animationPossibleParts.Clear(); animationPoses.Clear(); animationGeometryBytes = animationMeshBytes = 0;
         animationGeometryReservation?.Dispose(); animationGeometryReservation = null;
         animationMeshReservation?.Dispose(); animationMeshReservation = null;
+        // Texture cycles swap maps per frame, so a mesh holds only its current one: release every upload here.
+        foreach (var texture in animationTextureModels.Values) texture.ReleaseDeviceResources();
         animationTextureModels.Clear(); animationTextureReferences.Clear(); animationTextureCycles.Clear(); animationTextureNameUnits = 0; animationTextureLookupUnits = 0;
         animationBaseTextures.Clear();
         animationTextureCycleMembers = animationTextureCycleMemberVisits = 0; animationTextureLimitReported = false; animationTextureNotices = 0;
@@ -548,13 +528,13 @@ public sealed partial class SceneViewport
     private sealed class AnimationTextureSlot
     {
         internal Task Load { get; set; } = Task.CompletedTask;
-        internal TextureModel? Texture { get; set; }
+        internal RenderTexture? Texture { get; set; }
         internal bool Alpha { get; set; }
     }
-    private sealed class AnimatedMesh(MeshGeometryModel3D mesh, DiffuseMaterial material, MeshPart part)
+    private sealed class AnimatedMesh(MeshNode mesh, PreviewMaterial material, MeshPart part)
     {
-        public MeshGeometryModel3D Mesh { get; } = mesh;
-        public DiffuseMaterial Material { get; } = material;
+        public MeshNode Mesh { get; } = mesh;
+        public PreviewMaterial Material { get; } = material;
         public MeshPart Part { get; set; } = part;
         public Color4? VertexTint { get; set; }
         public Color4 LitColor { get; set; }

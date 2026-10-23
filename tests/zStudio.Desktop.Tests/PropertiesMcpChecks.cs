@@ -1,16 +1,11 @@
 using System.IO;
 using System.IO.Pipes;
 using System.Text.Json.Nodes;
-using System.Windows;
-using System.Windows.Automation;
-using System.Windows.Controls;
-using System.Windows.Media;
 using ModelContextProtocol.Client;
 using ModelContextProtocol.Protocol;
 using zStudio.Automation;
 using zStudio.Core;
 using zStudio.Core.Animation;
-using zStudio.Desktop;
 using zStudio.Mcp;
 using Xunit;
 
@@ -99,11 +94,5 @@ internal static class PropertiesMcpChecks
             Assert.Null(main.OpenPropertiesWindow);
         }
         finally { main.OpenPropertiesWindow?.CloseResolved(); main.Close(); }
-    }
-    private static IEnumerable<DependencyObject> Descendants(DependencyObject root)
-    {
-        yield return root;
-        for (int i = 0; i < VisualTreeHelper.GetChildrenCount(root); i++)
-            foreach (var child in Descendants(VisualTreeHelper.GetChild(root, i))) yield return child;
     }
 }

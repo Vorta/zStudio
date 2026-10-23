@@ -4,7 +4,7 @@ Rules for coding agents (Codex reads this file; Claude Code imports it through `
 
 ## Scope
 
-- Windows 11 x64 WPF editor for RECOIL source projects (`data/` + `gamegen/`), reconstructed once from the original game files and exported back to ZBD files. C# 14, .NET 10, WPF Fluent, HelixToolkit/Direct3D 11; the format library (`zStudio.Core`) stays independent of UI and rendering.
+- Windows 11 x64 WPF editor for RECOIL source projects (`data/` + `gamegen/`), reconstructed once from the original game files and exported back to ZBD files. C# 14, .NET 10, WPF Fluent, Direct3D 11 (Vortice.Windows); the format library (`zStudio.Core`) stays independent of UI and rendering.
 - Compiled game folders open only through MCP `open_root`, read-only: inspection, preview and export. Never add compiled-asset editing in code, GUI or MCP (owner decision). The July and August 1998 demos (version-13 worlds) and MechWarrior 3 are inspection only (the September 1998 demo reconstructs like a release); MechWarrior 3 work is deferred.
 - Python exists only in the Blender extension (`blender/zstudio_recoil`), the Blender round-trip driver (`tools/blender-roundtrip.py`) and the optional export checker (`tools/check_exports.py`). The app, builds and the plain test suite never need Python or Blender.
 
@@ -13,7 +13,7 @@ Rules for coding agents (Codex reads this file; Claude Code imports it through `
 - Write into `zbd_1998/`, `zbd_1999/` or the external reconstruction/decompilation projects; they are read-only evidence, never build dependencies, never committed.
 - Commit game data, extracted assets, build output, corpus reports, credentials, `.agent/` or `design/`.
 - Discard or overwrite pre-existing changes.
-- Enable MCP access yourself, change the user's MCP opt-in, or capture or move the user's physical mouse (only the pointer-owning PreviewCheck modes do, in their own window: [testing](docs/agents/testing.md#tools)).
+- Change the user's MCP opt-in (only `PreviewCheck --mcp-stdio` enables access, in its own private profile), or capture or move the user's physical mouse (only the pointer-owning PreviewCheck modes do, in their own window: [testing](docs/agents/testing.md#tools)).
 - Close, signal or kill a zStudio this session did not start: a plain `zStudio.exe` (the user's GUI) and `zStudio.exe --mcp-host` (the visible MCP workspace) may hold documents, drafts and unsaved work; wait or tell the user. Without asking you may stop: for a test run, the stdio connectors the MCP client launched (`zStudio.exe --mcp`, optionally `--instance <id>`; match the argument, `--mcp-host` must not match; the client may need to reconnect); before publishing a build, any instance (owner decision).
 - Let an export overwrite its inputs or escape its destination, or replace game files without explicit consent.
 - Put zStudio validation results, test counts or history in tracked docs (they go to the PR description and `.agent/`); `CHANGELOG.md` is the only history. Measurements of the shipped data ([D] in engine evidence) are evidence, not results.
@@ -37,7 +37,7 @@ Rules for coding agents (Codex reads this file; Claude Code imports it through `
 - After changing MCP commands, build Release, regenerate the catalog, then rebuild: `dotnet run --project tools/zStudio.PreviewCheck -c Release --no-build -- --mcp-catalog src/zStudio.Mcp/CommandCatalog.json`. Full catalog parity is tested.
 - Tests are minimal and must-have only. Test environment, corpus-gated tests, tools and in-game checks: [testing](docs/agents/testing.md). Delete scratch corpus diagnostics before committing.
 - Before a release, merge the open Dependabot PRs, then update and revalidate the release branch (owner decision; steps: [releasing](docs/agents/releasing.md#cutting-a-release)).
-- `artifacts/zStudio-win-x64` and its ZIP are the latest validated build, used for the user and all live GUI/MCP work; republish after application changes ([local artifacts](docs/agents/releasing.md#local-artifacts)).
+- `artifacts/zStudio-win-x64` and its ZIP are the latest validated build: the owner's build, used for the user and live GUI/MCP work on the owner's workspace. Agents' own test runs and package smoke checks use separate folders and private profiles. Republish after application changes ([local artifacts](docs/agents/releasing.md#local-artifacts)).
 
 ## Engineering invariants
 

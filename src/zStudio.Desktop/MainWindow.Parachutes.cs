@@ -5,9 +5,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using zStudio.Automation;
-using zStudio.Core;
 using zStudio.Core.Animation;
-using zStudio.Core.Formats;
 using zStudio.Core.Sources;
 using zStudio.Rendering;
 
@@ -258,7 +256,7 @@ public partial class MainWindow
         Guid? selected = state.Selected;
         state.Viewport.SetParachuteOverlay(analysis.Samples.Select(p => new ParachutePathPoint(p.Time, p.Position)).ToArray(),
             analysis.Windows.Select(w => new ParachuteWindowOverlay(w.Id, w.EffectiveStart,
-                analysis.Releases.Where(r => r.WindowId == w.Id).Select(r => new ParachuteRelease(r.Time, r.Position, r.Conditional)).ToArray())).ToArray());
+                analysis.Releases.Where(r => r.WindowId == w.Id).Select(r => new ParachuteRelease(r.Time, r.Position)).ToArray())).ToArray());
         state.Selected = selected;
         if (selected != null && state.World.SourceWorld != null) state.Viewport.SelectParachuteWindow(selected);
     }
@@ -280,7 +278,7 @@ public partial class MainWindow
         var window = state.Analysis?.Windows.FirstOrDefault(w => w.Id == state.Selected) ?? throw new StudioCommandException("selection_required", "Select a drop window.");
         if (!state.Viewport.SelectParachuteWindow(window.Id)) throw new StudioCommandException("busy", "Finish the current selection operation first.");
         parachuteDraft = new(state, window) { Plan = VtolDropWindows.PlanMove(state.Analysis!, window.Id, window.Start), Preview = state.Analysis, DisplayedPreview = state.Analysis };
-        state.Viewport.SetParachutePreview(window.Id, window.EffectiveStart, state.Analysis!.Releases.Where(r => r.WindowId == window.Id).Select(r => new ParachuteRelease(r.Time, r.Position, r.Conditional)).ToArray());
+        state.Viewport.SetParachutePreview(window.Id, window.EffectiveStart, state.Analysis!.Releases.Where(r => r.WindowId == window.Id).Select(r => new ParachuteRelease(r.Time, r.Position)).ToArray());
         state.Viewport.SetParachutePointerMove(pointer); UpdateParachutePanel();
     }
     private ParachuteDraft RequireParachuteDraft(string? token = null)
@@ -311,7 +309,7 @@ public partial class MainWindow
                 if (draft.Generation != generation) return;
                 draft.Plan = plan; draft.Preview = preview;
                 draft.Session.Viewport.SetParachutePreview(draft.Window.Id, preview.Windows.Single(w => w.Id == draft.Window.Id).EffectiveStart,
-                    preview.Releases.Where(r => r.WindowId == draft.Window.Id).Select(r => new ParachuteRelease(r.Time, r.Position, r.Conditional)).ToArray());
+                    preview.Releases.Where(r => r.WindowId == draft.Window.Id).Select(r => new ParachuteRelease(r.Time, r.Position)).ToArray());
                 draft.DisplayedPreview = preview;
             }
             catch (OperationCanceledException) { if (draft.Generation == generation && parachuteDraft == draft) draft.Error = "Preview canceled; enter the start time again to retry."; }
@@ -330,6 +328,8 @@ public partial class MainWindow
         if (parachuteDraft is not { } draft) return;
         draft.Lifetime = lifetime; ++draft.Generation; draft.Preparing?.Cancel(); draft.Preparing?.Dispose(); draft.Preparing = null;
         parachuteDraft = null; draft.Session.Viewport.SetParachutePointerMove(false); draft.Session.Viewport.ClearParachutePreview(); UpdateParachutePanel();
+        // An object shown while the draft was open is selected in the view once whatever ended the draft has finished.
+        Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.ApplicationIdle, () => ReselectShownSelection());
     }
     private bool ResolveParachuteDraft(DocumentModel? document = null)
     {
@@ -397,7 +397,7 @@ public partial class MainWindow
                     state.WorldRevision = state.OwnerRevision = state.World.Revision;
                     draft.RolledBackRevision = null; draft.Lifetime = AiPathDraftLifetime.Pending; parachuteDraft = draft;
                     if (draft.Preview is { } preview) state.Viewport.SetParachutePreview(draft.Window.Id, preview.Windows.Single(w => w.Id == draft.Window.Id).EffectiveStart,
-                        preview.Releases.Where(r => r.WindowId == draft.Window.Id).Select(r => new ParachuteRelease(r.Time, r.Position, r.Conditional)).ToArray());
+                        preview.Releases.Where(r => r.WindowId == draft.Window.Id).Select(r => new ParachuteRelease(r.Time, r.Position)).ToArray());
                     UpdateParachutePanel();
                 }
                 if (preparationToken is { } owned && operation == null && generation == parachuteGeneration && parachutes == state &&

@@ -1,4 +1,3 @@
-using System.Text;
 using System.Text.Json;
 using System.Windows;
 using System.Windows.Automation;
@@ -9,7 +8,6 @@ using System.Windows.Threading;
 using zStudio.Automation;
 using zStudio.Core.Terrain;
 using zStudio.Core.Worlds;
-using zStudio.Desktop;
 using Xunit;
 
 namespace zStudio.Desktop.Tests;

@@ -2,9 +2,7 @@ using System.Numerics;
 using System.Windows;
 using System.Windows.Input;
 using System.Windows.Media.Media3D;
-using HelixToolkit.SharpDX;
-using HelixToolkit.Wpf.SharpDX;
-using HitTestResult = HelixToolkit.SharpDX.HitTestResult;
+using zStudio.Rendering.Direct3D;
 
 namespace zStudio.Rendering;
 
@@ -12,29 +10,31 @@ public sealed partial class SceneViewport
 {
     // WPF logical pixels: the entire shaft and tip get a 24-DIP-wide target at every zoom/DPI.
     private const double PickupHandleHitRadius = 12;
-    private readonly List<MeshGeometryModel3D> pickupArrows = [];
-    private HitTestResult? activePickupHandle;
+    private readonly List<MeshNode> pickupArrows = [];
+    /// <summary>A transform handle picked in screen space, and the world point it was picked at.</summary>
+    private sealed record PickupHandleHit(MeshNode Handle, Vector3 Point);
+    private PickupHandleHit? activePickupHandle;
     private bool pickupHover;
     private Cursor? pickupPreviousCursor;
 
     private bool IsInsidePickupViewport(Point point) => point.X >= 0 && point.Y >= 0 &&
         point.X <= viewport.ActualWidth && point.Y <= viewport.ActualHeight;
 
-    private HitTestResult? PickPickupHandle(Point point)
+    private PickupHandleHit? PickPickupHandle(Point point)
     {
         if (PresentationUiHidden || !CanManipulate ||
-            pickupManipulator?.Visibility != Visibility.Visible || viewport.Camera is not HelixToolkit.Wpf.SharpDX.ProjectionCamera camera ||
+            pickupManipulator?.Visibility != Visibility.Visible || view.Camera is not RenderCamera camera ||
             !IsInsidePickupViewport(point)) return null;
         var origin = transformDraft.Position;
-        var start = viewport.Project(new Point3D(origin.X, origin.Y, origin.Z));
+        var start = view.Project(new Point3D(origin.X, origin.Y, origin.Z));
         double nearest = PickupHandleHitRadius * PickupHandleHitRadius;
-        MeshGeometryModel3D? chosen = null;
+        MeshNode? chosen = null;
         Vector3 hitPoint = origin;
         foreach (var arrow in pickupArrows)
         {
             if (TransformMode == "rotate")
             {
-                var basis = arrow.Transform?.Value ?? Matrix3D.Identity;
+                var basis = ToWpf(arrow.Transform ?? Matrix4x4.Identity);
                 for (int i = 0; i < 64; i++)
                 {
                     Vector3 Ring(int index)
@@ -46,7 +46,7 @@ public sealed partial class SceneViewport
                     var a = Ring(i); var b = Ring(i + 1);
                     var pa = new Point3D(a.X, a.Y, a.Z); var pb = new Point3D(b.X, b.Y, b.Z);
                     if (Vector3D.DotProduct(pa - camera.Position, camera.LookDirection) <= 0 || Vector3D.DotProduct(pb - camera.Position, camera.LookDirection) <= 0) continue;
-                    var screenA = viewport.Project(pa); var line = viewport.Project(pb) - screenA;
+                    var screenA = view.Project(pa); var line = view.Project(pb) - screenA;
                     if (!double.IsFinite(line.LengthSquared) || line.LengthSquared < 1e-8) continue;
                     double ringAlong = Math.Clamp(System.Windows.Vector.Multiply(point - screenA, line) / line.LengthSquared, 0, 1);
                     double ringDistance = (point - (screenA + line * ringAlong)).LengthSquared;
@@ -55,18 +55,18 @@ public sealed partial class SceneViewport
                 }
                 continue;
             }
-            var axis = (arrow.Transform?.Value ?? Matrix3D.Identity).Transform(new Vector3D(1, 0, 0));
+            var axis = ToWpf(arrow.Transform ?? Matrix4x4.Identity).Transform(new Vector3D(1, 0, 0));
             var tip = new Point3D(origin.X, origin.Y, origin.Z) + axis * (pickupManipulator.SizeScale * 1.8);
             // Do not select the mirrored projection of an endpoint behind the camera.
             if (Vector3D.DotProduct(tip - camera.Position, camera.LookDirection) <= 0) continue;
-            var end = viewport.Project(tip); var segment = end - start;
+            var end = view.Project(tip); var segment = end - start;
             if (!double.IsFinite(segment.LengthSquared) || segment.LengthSquared < 1) continue;
             double along = Math.Clamp(System.Windows.Vector.Multiply(point - start, segment) / segment.LengthSquared, 0, 1);
             double distance = (point - (start + segment * along)).LengthSquared;
             if (distance > nearest) continue;
             nearest = distance; chosen = arrow;
         }
-        return chosen == null ? null : new HitTestResult { ModelHit = chosen, PointHit = hitPoint, IsValid = true, Distance = 0 };
+        return chosen == null ? null : new(chosen, hitPoint);
     }
 
     internal bool HandlePickupPointerDown(Point point, MouseButtonEventArgs e)
@@ -75,25 +75,24 @@ public sealed partial class SceneViewport
         if (IsPickupDragging) return true;
         SetPickupHover(false);
         if (e.ChangedButton != MouseButton.Left) return false;
-        if (PickPickupHandle(point) is not { ModelHit: MeshGeometryModel3D arrow } hit) return false;
-        // A rejected handle click must not fall through to Helix and start a drag.
+        if (PickPickupHandle(point) is not { Handle: var arrow } hit) return false;
+        // A rejected handle click must not fall through to the view and start a drag.
         if (CanStartPickupEdit?.Invoke() == false) { if (objectDraftNode != null) ObjectGestureEnded?.Invoke(); return true; }
         PickupInteractionStarting?.Invoke();
-        // Use the native axis constraint, but own routing/capture for the whole drag. Do not let
+        // Use the gizmo's axis constraint, but own routing/capture for the whole drag. Do not let
         // scene depth or another triangle choose a different target after this screen-space pick.
-        var down = new MouseDown3DEventArgs(arrow, hit, point, viewport, e);
         if (TransformMode == "rotate")
         {
-            var axis = (arrow.Transform?.Value ?? Matrix3D.Identity).Transform(new Vector3D(1, 0, 0));
-            if (BeginPickupDrag(down)) BeginRotationPointer(point, new((float)axis.X, (float)axis.Y, (float)axis.Z), hit.PointHit);
+            var axis = ToWpf(arrow.Transform ?? Matrix4x4.Identity).Transform(new Vector3D(1, 0, 0));
+            if (BeginPickupDrag(arrow)) BeginRotationPointer(point, new((float)axis.X, (float)axis.Y, (float)axis.Z), hit.Point);
         }
         else if (objectDraftNode != null)
         {
             // Source objects move along the arrow as drawn (it may follow the object's rotation), on the plane facing the camera.
-            if (BeginPickupDrag(down))
+            if (BeginPickupDrag(arrow))
             {
                 activePickupHandle = hit;
-                var direction = (arrow.Transform?.Value ?? Matrix3D.Identity).Transform(new Vector3D(1, 0, 0));
+                var direction = ToWpf(arrow.Transform ?? Matrix4x4.Identity).Transform(new Vector3D(1, 0, 0));
                 pickupPresentationAxis = Vector3.Normalize(new((float)direction.X, (float)direction.Y, (float)direction.Z));
                 var look = CaptureView().LookDirection;
                 var forward = Vector3.Normalize(new((float)look.X, (float)look.Y, (float)look.Z));
@@ -103,7 +102,7 @@ public sealed partial class SceneViewport
                 if (!pickupPresentationConstraint) CancelPickupDrag();
             }
         }
-        else arrow.RaiseEvent(down);
+        else pickupManipulator?.BeginTranslation(arrow, hit.Point, point);
         if (IsPickupDragging) activePickupHandle = hit;
         // A gesture that could not begin ends here (its draft may have opened for it).
         else if (objectDraftNode != null) ObjectGestureEnded?.Invoke();
@@ -113,7 +112,7 @@ public sealed partial class SceneViewport
     internal bool HandlePickupPointerMove(Point point)
     {
         if (IsFlyActive) return true;
-        if (IsPickupDragging && activePickupHandle?.ModelHit is MeshGeometryModel3D arrow)
+        if (IsPickupDragging && activePickupHandle != null)
         {
             // Captured input can arrive outside without MouseLeave. Check after the handle
             // starts; CaptureMouse can synchronously resend an earlier pointer position.
@@ -127,7 +126,7 @@ public sealed partial class SceneViewport
             if (RebasePickupPointer(point)) return true;
             if (TransformMode == "rotate") MoveRotationPointer(point);
             else if (pickupPresentationConstraint) MovePresentationPickup(point);
-            else arrow.RaiseEvent(new MouseMove3DEventArgs(arrow, activePickupHandle, point, viewport));
+            else pickupManipulator?.MoveTranslation(point);
             return true;
         }
         SetPickupHover(Mouse.LeftButton == MouseButtonState.Released && Mouse.RightButton == MouseButtonState.Released &&
@@ -140,8 +139,7 @@ public sealed partial class SceneViewport
         if (IsFlyActive) return true;
         if (!IsPickupDragging || e.ChangedButton != MouseButton.Left) return false;
         if (!IsInsidePickupViewport(point)) { CancelPickupDrag(); return true; }
-        if (TransformMode == "move" && objectDraftNode == null && activePickupHandle?.ModelHit is MeshGeometryModel3D arrow)
-            arrow.RaiseEvent(new MouseUp3DEventArgs(arrow, activePickupHandle, point, viewport, e));
+        if (TransformMode == "move" && objectDraftNode == null && activePickupHandle != null) pickupManipulator?.EndTranslation();
         activePickupHandle = null; IsPickupDragging = false;
         ResumePickupCamera(); viewport.ReleaseMouseCapture();
         // Completing a gesture updates the card draft only. The document service

@@ -3,14 +3,10 @@ using System.Numerics;
 using System.Windows;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
-using System.Windows.Media.Media3D;
-using HelixToolkit.SharpDX;
-using HelixToolkit.Wpf.SharpDX;
 using zStudio.Core;
 using zStudio.Core.Animation;
 using zStudio.Desktop;
 using zStudio.Rendering;
-using HCamera = HelixToolkit.Wpf.SharpDX.PerspectiveCamera;
 
 internal static class MissionPreviewCheck
 {
@@ -33,8 +29,8 @@ internal static class MissionPreviewCheck
                 var context = new AnimationPreviewContext { Package = new() { Prefix=[],Tail=[] }, World = new AssetDocument("fixture",new(0,DateTime.MinValue),new(FormatFamily.GameZ,15,Recognition.Supported,""),ReadOnlyMemory<byte>.Empty) { Scene=scene } };
                 AnimationFrame frame = new(0,[new(1,1,1,Matrix4x4.Identity,true,1,-1,0,0),new(2,2,0,Matrix4x4.Identity,true,1,-1,0,0)],[],[],[],null,null,Vector4.Zero,Vector4.Zero,[],[],[]);
                 await preview.ShowAnimationAsync(context,frame,resolver,false,CancellationToken.None);
-                var viewport = (Viewport3DX)preview.RenderSurface; viewport.ShowCoordinateSystem = viewport.ShowViewCube = false; viewport.IsInertiaEnabled = false;
-                var camera = (HCamera)viewport.Camera!; camera.Position = new(0,0,1000); camera.LookDirection = new(0,0,-1000); camera.UpDirection = new(0,1,0);
+                preview.SetNavigationAids(false, false); preview.InertiaEnabled = false;
+                var camera = preview.DebugCamera; camera.Position = new(0,0,1000); camera.LookDirection = new(0,0,-1000); camera.UpDirection = new(0,1,0);
                 await Task.Delay(200);
                 var rendered = preview.RenderImage(300,200);
                 var front = Pixel(rendered,150,100); var sky = Pixel(rendered,10,10);
@@ -57,17 +53,16 @@ internal static class MissionPreviewCheck
                 await Task.Delay(250); Save(preview.RenderImage(960,640),Path.Combine(output,"vtol-flight.png"));
                 int horizon = context.Scene.Nodes.First(n=>n.Name=="horizon").Index;
                 var horizonPose = live.Nodes.Single(n=>n.SourceNode==horizon);
-                var group = viewport.Items.OfType<SortingGroupModel3D>().Single();
-                var skyMeshes = group.Children.OfType<MeshGeometryModel3D>().Where(m=>m.RenderOrder==0).ToArray();
+                var skyMeshes = preview.EnumerateRenderMeshes().Where(m=>m.Role==SceneViewport.RenderMeshRole.Animation && m.RenderOrder==0).ToArray();
                 Require(skyMeshes.Length>0,"Missing horizon geometry");
                 foreach (var mesh in skyMeshes)
                 {
-                    var matrix = mesh.Transform.Value;
-                    Require(Math.Abs(matrix.OffsetX-camera.Position.X)<.01 && Math.Abs(matrix.OffsetY-camera.Position.Y)<.01 && Math.Abs(matrix.OffsetZ-camera.Position.Z)<.01,"Paused free camera did not move the horizon");
+                    var matrix = mesh.Transform!.Value;
+                    Require(Math.Abs(matrix.M41-camera.Position.X)<.01 && Math.Abs(matrix.M42-camera.Position.Y)<.01 && Math.Abs(matrix.M43-camera.Position.Z)<.01,"Paused free camera did not move the horizon");
                 }
                 preview.UpdateAnimationFrame(live with { Camera=new(new(2010,160,3400),new(1800,60,3400),60) },true);
                 await Task.Delay(100); // Camera-dependent appearance is finalized at the render boundary.
-                Require(Math.Abs(skyMeshes[0].Transform.Value.OffsetY-160)<.01,"Authored camera did not move horizon");
+                Require(Math.Abs(skyMeshes[0].Transform!.Value.M42-160)<.01,"Authored camera did not move horizon");
                 var world = context.World.Assets.First(a=>a.Kind==AssetKind.World);
                 await preview.ShowAsync(context.World,world,resolver,null,0,default,false,context.Mission); var without = camera.Position;
                 await preview.ShowAsync(context.World,world,resolver,null,0,default,true,context.Mission);

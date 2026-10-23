@@ -2,7 +2,6 @@ using System.IO;
 using System.Text.Json.Nodes;
 using zStudio.Automation;
 using zStudio.Core;
-using zStudio.Core.Animation;
 using zStudio.Core.Export;
 using zStudio.Core.Formats;
 

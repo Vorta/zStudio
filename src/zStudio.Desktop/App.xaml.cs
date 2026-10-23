@@ -15,6 +15,17 @@ public partial class App : Application
             int result = await Task.Run(() => zStudio.Core.Sources.BlenderBridge.RunAsync(Console.OpenStandardInput(), Console.OpenStandardOutput()));
             Shutdown(result); return;
         }
+        if (ProcessCommandLine)
+        {
+            // A malformed test profile override must stop here, never fall back to the user's profile.
+            try { _ = zStudio.Automation.StudioProfile.Directory; }
+            catch (InvalidOperationException ex)
+            {
+                await Console.Error.WriteLineAsync("zStudio: " + ex.Message);
+                if (e.Args.FirstOrDefault() != "--mcp") MessageBox.Show(ex.Message, "zStudio", MessageBoxButton.OK, MessageBoxImage.Error);
+                Shutdown(2); return;
+            }
+        }
         if (ProcessCommandLine && e.Args.FirstOrDefault() == "--mcp")
         {
             ShutdownMode = ShutdownMode.OnExplicitShutdown;
@@ -25,7 +36,7 @@ public partial class App : Application
         }
         DispatcherUnhandledException += (_, error) =>
         {
-            string log = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "zStudio", "error.log");
+            string log = Path.Combine(zStudio.Automation.StudioProfile.Directory, "error.log");
             try { Directory.CreateDirectory(Path.GetDirectoryName(log)!); File.AppendAllText(log, $"{DateTime.UtcNow:O}\n{error.Exception}\n"); } catch (IOException) { }
             MessageBox.Show("The operation could not finish.\n\n" + error.Exception.Message + "\n\nDetails: " + log, "zStudio", MessageBoxButton.OK, MessageBoxImage.Error);
             error.Handled = true;

@@ -3,7 +3,6 @@ using System.Security.Cryptography;
 using System.Text.Json;
 using zStudio.Core;
 using zStudio.Core.Animation;
-using zStudio.Core.Formats;
 
 internal static class MissionCheck
 {

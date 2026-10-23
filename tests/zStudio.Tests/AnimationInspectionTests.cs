@@ -1,6 +1,5 @@
 using System.Buffers.Binary;
 using zStudio.Core.Animation;
-using zStudio.Core;
 using zStudio.Core.Export;
 using zStudio.Core.Formats;
 using Xunit;

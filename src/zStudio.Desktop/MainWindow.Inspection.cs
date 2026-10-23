@@ -1,6 +1,5 @@
 using zStudio.Automation;
 using zStudio.Core;
-using zStudio.Core.Animation;
 using System.Text.Json.Nodes;
 
 namespace zStudio.Desktop;

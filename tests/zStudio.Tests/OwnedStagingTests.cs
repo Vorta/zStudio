@@ -60,7 +60,6 @@ public sealed class OwnedStagingTests : IDisposable
         using var staged = await SealedFile.CreateAsync(At("stage"), new byte[] { 1, 2 }, directories, TestContext.Current.CancellationToken);
         Assert.ThrowsAny<IOException>(() => File.WriteAllBytes(At("stage"), [9]));
         Assert.ThrowsAny<IOException>(() => File.Move(At("stage"), At("foreign")));
-        Assert.Equal(new byte[] { 1, 2 }, await staged.ReadAllAsync(2, TestContext.Current.CancellationToken));
         staged.Dispose(); Assert.False(File.Exists(At("stage")));
     }
 

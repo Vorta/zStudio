@@ -6,7 +6,6 @@ using System.Text.Json.Nodes;
 using ModelContextProtocol.Client;
 using ModelContextProtocol.Protocol;
 using zStudio.Core.Sources;
-using zStudio.Desktop;
 using zStudio.Mcp;
 using zStudio.Tests;
 using Xunit;
@@ -363,8 +362,8 @@ internal static class SourceEditingMcpChecks
             var before = main.SceneHost.Content;
             var retainedViewport = (zStudio.Rendering.SceneViewport)before!;
             var retainedPose = retainedViewport.CaptureView();
-            var meshesField = typeof(zStudio.Rendering.SceneViewport).GetField("placements", hidden)!;
-            var retainedMeshes = ((System.Collections.IDictionary)meshesField.GetValue(retainedViewport)!).Keys.Cast<object>().ToArray();
+            static zStudio.Rendering.SceneViewport.RenderMeshHandle[] Batches(zStudio.Rendering.SceneViewport view) => [.. view.StaticBatches.Select(b => b.Mesh)];
+            var retainedMeshes = Batches(retainedViewport);
             contentProperty.AddValueChanged(main.SceneHost, swapped);
             DocumentModel placed;
             TaskCompletionSource transformPreparing = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -394,7 +393,7 @@ internal static class SourceEditingMcpChecks
             Assert.Empty(hosted);
             Assert.Same(redone, placed); Assert.Same(before, main.SceneHost.Content);
             Assert.Equal(retainedPose, retainedViewport.CaptureView());
-            Assert.Equal(retainedMeshes, ((System.Collections.IDictionary)meshesField.GetValue(retainedViewport)!).Keys.Cast<object>().ToArray());
+            Assert.Equal(retainedMeshes, Batches(retainedViewport));
             Assert.Equal((false, (int?)ground), during);
             Assert.Empty(Directory.EnumerateFiles(fixture.Project, "*.zbd", SearchOption.AllDirectories));
             Assert.False(blanked);
@@ -492,9 +491,24 @@ internal static class SourceEditingMcpChecks
             async Task<bool> AivMaster() => (await Call("scene_tree", new() { ["document"] = Id(second) }))["children"]!["items"]!.AsArray().Single(r => r!["pass"]?.GetValue<string>() == "aiv")!["master"]!.GetValue<bool>();
             await Call("scene_tree", new() { ["document"] = Id(second), ["context"] = treeContext, ["preview"] = found["preview"]!.GetValue<string>(), ["action"] = "hide", ["row"] = aivRow["row"]!.GetValue<string>() });
             Assert.Contains(tankActor.Root, tankViewport.HiddenNodes); Assert.False(await AivMaster());
+            // Selected while hidden, the unit is selected in the view once shown, so its placement can be edited (begin below).
+            await Call("scene_tree", new() { ["document"] = Id(second), ["context"] = treeContext, ["preview"] = found["preview"]!.GetValue<string>(), ["action"] = "select", ["row"] = tankListed["row"]!.GetValue<string>() });
+            Assert.Null(tankViewport.SelectedInspection);
             await Call("scene_tree", new() { ["document"] = Id(second), ["context"] = treeContext, ["preview"] = found["preview"]!.GetValue<string>(), ["action"] = "show", ["row"] = tankListed["row"]!.GetValue<string>() });
             Assert.Empty(tankViewport.HiddenNodes); Assert.True(await AivMaster());
-            Assert.True(tankViewport.SelectInspectionNode(tankActor.Root));
+            Assert.Equal(tankActor.Root, tankViewport.SelectedInspection?.SelectionNode);
+            // Another object's isolation hides it too: ending it (scene_tree isolate on the isolated row, a middle-click on its eye) selects it in the view.
+            string isolationPreview = found["preview"]!.GetValue<string>();
+            var isolatedRow = (await Call("scene_tree", new() { ["document"] = Id(second), ["context"] = treeContext, ["row"] = rootRows.First(r => r!["pass"] == null)!["row"]!.GetValue<string>(), ["limit"] = 200 }))
+                ["children"]!["items"]!.AsArray().First(r => r!["node"] is { } n && n.GetValue<int>() >= 0 && r["category"]?.GetValue<string>() is "object" or "geometry")!;
+            await Call("scene_card", new() { ["preview"] = isolationPreview, ["action"] = "clear" });
+            await Call("scene_tree", new() { ["document"] = Id(second), ["context"] = treeContext, ["preview"] = isolationPreview, ["action"] = "isolate", ["row"] = isolatedRow["row"]!.GetValue<string>() });
+            await Call("scene_tree", new() { ["document"] = Id(second), ["context"] = treeContext, ["preview"] = isolationPreview, ["action"] = "select", ["row"] = tankListed["row"]!.GetValue<string>() });
+            Assert.Null(tankViewport.SelectedInspection);
+            await Call("scene_tree", new() { ["document"] = Id(second), ["context"] = treeContext, ["preview"] = isolationPreview, ["action"] = "isolate", ["row"] = isolatedRow["row"]!.GetValue<string>() });
+            Assert.Equal(tankActor.Root, tankViewport.SelectedInspection?.SelectionNode);
+            // Units are never isolated, by node either (the World tree has no isolation for them).
+            Assert.Contains("unsupported", (await Call("scene_selection", new() { ["preview"] = isolationPreview, ["action"] = "isolate", ["node"] = tankActor.Root }, error: true)).GetValue<string>());
             string tankTarget = tankViewport.SelectedInspection!.Target;
             // Clicking the pass row (no object of its own) keeps the selected unit. A refused click restores the previous row only
             // after WPF has moved focus: restoring inside that change made the two rows trade focus until the stack overflowed.
@@ -556,7 +570,7 @@ internal static class SourceEditingMcpChecks
             Assert.NotNull(turretCard.ObjectEditor);
             Assert.Equal("tur_101", turretCard.ObjectEditor.State.Name);
             var turretCamera = turretViewport.CaptureView();
-            var turretMeshes = ((System.Collections.IDictionary)meshesField.GetValue(turretViewport)!).Keys.Cast<object>().ToArray();
+            var turretMeshes = Batches(turretViewport);
             string turretTarget = turretViewport.SelectedInspection!.Target;
             var originalParts = TurretParts();
             Assert.Equal(new[] { "barrel", "healthy" }, originalParts.Keys.Order(StringComparer.Ordinal));
@@ -740,7 +754,7 @@ internal static class SourceEditingMcpChecks
                 Assert.Same(turretViewport, main.SceneHost.Content);
                 Assert.False(main.IsViewReloading); Assert.Null(typeof(MainWindow).GetField("retiringScene", hidden)!.GetValue(main));
                 Assert.Equal(turretCamera, turretViewport.CaptureView()); Assert.Equal(turretTarget, turretViewport.SelectedInspection?.Target);
-                Assert.Equal(turretMeshes, ((System.Collections.IDictionary)meshesField.GetValue(turretViewport)!).Keys.Cast<object>().ToArray());
+                Assert.Equal(turretMeshes, Batches(turretViewport));
                 Assert.True(turretViewport.SelectionBoundsVisible);
                 var parts = TurretParts();
                 foreach (var (name, original) in originalParts)

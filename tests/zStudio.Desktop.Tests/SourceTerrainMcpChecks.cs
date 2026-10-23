@@ -10,7 +10,6 @@ using zStudio.Automation;
 using zStudio.Core.Sources;
 using zStudio.Core.Terrain;
 using zStudio.Core.Worlds;
-using zStudio.Desktop;
 using zStudio.Mcp;
 using zStudio.Rendering;
 using zStudio.Tests;

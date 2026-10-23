@@ -1,7 +1,6 @@
 using System.Numerics;
 using System.Windows;
 using System.Windows.Media.Media3D;
-using HelixToolkit.Wpf.SharpDX;
 using zStudio.Core;
 
 namespace zStudio.Rendering;
@@ -154,12 +153,12 @@ public sealed partial class SceneViewport
 
     private bool RotationPoint(Point point, Vector3 axis, Vector3 origin, out Vector3 unit)
     {
-        var ray = viewport.UnProject(point);
-        float denominator = Vector3.Dot(ray.Direction, axis);
+        var (rayOrigin, rayDirection) = view.UnProject(point);
+        float denominator = Vector3.Dot(rayDirection, axis);
         unit = default;
         if (Math.Abs(denominator) < .02f) return false;
-        float distance = Vector3.Dot(origin - ray.Position, axis) / denominator;
-        var radial = ray.Position + ray.Direction * distance - origin;
+        float distance = Vector3.Dot(origin - rayOrigin, axis) / denominator;
+        var radial = rayOrigin + rayDirection * distance - origin;
         if (distance < 0 || !Finite(radial) || radial.LengthSquared() < 1e-10f) return false;
         unit = Vector3.Normalize(radial); return true;
     }
@@ -175,7 +174,7 @@ public sealed partial class SceneViewport
         if (!Finite(radial) || radial.LengthSquared() < 1e-10f) radial = Vector3.Cross(axis, axis.Y == 0 ? Vector3.UnitY : Vector3.UnitX);
         rotationStartRadial = Vector3.Normalize(radial);
         var tangent = Vector3.Normalize(Vector3.Cross(rotationAxis, rotationStartRadial));
-        Point Project(Vector3 p) => viewport.Project(new Point3D(p.X, p.Y, p.Z));
+        Point Project(Vector3 p) => view.Project(new Point3D(p.X, p.Y, p.Z));
         var segment = Project(hit + tangent * (float)pickupGizmoSize) - Project(hit);
         rotationScreenRadius = Math.Max(8, segment.Length); rotationScreenTangent = segment;
         if (segment.Length > .001) rotationScreenTangent.Normalize(); else rotationScreenTangent = new(1, 0);

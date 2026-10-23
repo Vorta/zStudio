@@ -259,7 +259,9 @@ public sealed partial class AnimationPlayer
             else if (state.Data.ResetMode == 3) { state.Reset(); return; }
         }
     }
-    private void Block(Sequence sequence, string message) { sequence.State = 4; unavailableDuration = true; AddNote(sequence.Data.Name + ": " + message); }
+    private void Block(Sequence sequence, string message) { sequence.State = 4; unavailableDuration = true; blockedSequences++; AddNote(sequence.Data.Name + ": " + message); }
+    /// <summary>How many sequences an unavailable event stopped (see <see cref="Block"/>).</summary>
+    private int blockedSequences;
     private float RandomUnit() { float result = randomTable[randomIndex]; randomIndex = (randomIndex + 1) % randomTable.Length; return result; }
 
     /// <param name="started">The instance is a child started at <paramref name="boundRoot"/> (ActivateRuntime binds it there

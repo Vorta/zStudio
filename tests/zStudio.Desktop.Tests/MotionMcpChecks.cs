@@ -1,17 +1,12 @@
 using System.Buffers.Binary;
 using System.IO;
 using System.IO.Pipes;
-using System.Numerics;
 using System.Reflection;
 using System.Text.Json.Nodes;
-using System.Windows;
-using System.Windows.Controls;
 using ModelContextProtocol.Client;
 using ModelContextProtocol.Protocol;
 using zStudio.Core;
-using zStudio.Core.Animation;
 using zStudio.Core.Formats;
-using zStudio.Desktop;
 using zStudio.Mcp;
 using Xunit;
 
@@ -203,7 +198,7 @@ internal static class MotionMcpChecks
             {
                 await File.WriteAllBytesAsync(libraryPath, MotionFixture.Library(textured: true), token);
                 await File.WriteAllBytesAsync(Path.Combine(folder, "image.zbd"), zStudio.Tests.ContentFixture.Texture(2, 2, false), token);
-                var resolver = main.ViewModel.Resolver!; await resolver.InvalidateAsync([libraryPath], token);
+                var resolver = main.ViewModel.Resolver!;
                 await editor.SelectAssemblyAsync(3, token);
                 await CheckBindingSupersession();
                 var gate = (SemaphoreSlim)typeof(AssetResolver).GetField("gate", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(resolver)!;

@@ -64,6 +64,7 @@ internal static class Program
         if (args.Length == 2 && args[0] == "--mission") return MissionPreviewCheck.Run(args[1]);
         if (args.Length == 2 && args[0] == "--alpha") return AlphaCheck.Run(args[1]);
         if (args.Length == 2 && args[0] == "--viewport-size") return ViewportSizeCheck.Run(args[1]);
+        if (args.Length == 2 && args[0] == "--software-composition") return SoftwareCompositionCheck.Run(args[1]);
         if (args.Length == 2 && args[0] == "--lod") return LodCheck.Run(args[1]);
         if (args.Length == 2 && args[0] == "--overview") { Overview(args[1]); return 0; }
         if (args.Length == 2 && args[0] == "--lifecycle") return Lifecycle(args[1]);
@@ -135,6 +136,8 @@ internal static class Program
     private static int Lifecycle(string root)
     {
         var app = new App { ShutdownMode = ShutdownMode.OnExplicitShutdown, ProcessCommandLine = false }; app.InitializeComponent(); int result = 0;
+        // Reports and the game-derived copy go to the OS temporary folder, never into the repository's artifacts.
+        string output = Path.Combine(Path.GetTempPath(), "zstudio-lifecycle-" + Guid.NewGuid().ToString("N")); Directory.CreateDirectory(output);
         app.Startup += async (_, _) =>
         {
             var window = (MainWindow)app.MainWindow;
@@ -156,14 +159,15 @@ internal static class Program
                 if (empty.Visibility == Visibility.Visible) throw new Exception(empty.Text);
                 var scene = (SceneViewport)((ContentControl)window.FindName("SceneHost")).Content;
                 scene.SetWireframe(true); scene.SetTextured(false); scene.SetFly(true); scene.SetBounds(true); scene.Isolate(-1); scene.FrameAll(); await Task.Delay(200);
-                Save(scene.RenderImage(800, 600), Path.Combine("artifacts", "individual-model.png"));
+                Save(scene.RenderImage(800, 600), Path.Combine(output, "individual-model.png"));
                 window.ViewModel.Close(modelDoc);
-                string copy = Path.GetFullPath(Path.Combine("artifacts", "lifecycle-copy.zbd")); File.Copy(file.Path, copy, true);
+                string copy = Path.Combine(output, "lifecycle-copy.zbd"); File.Copy(file.Path, copy, true);
                 var changed = await window.ViewModel.OpenFileAsync(copy) ?? throw new Exception("Copied file open failed");
                 File.SetLastWriteTimeUtc(copy, changed.Document.Stamp.LastWriteUtc.AddSeconds(2)); window.ViewModel.CheckExternalChanges();
                 if (!changed.IsStale) throw new Exception("External file change not detected"); await window.ViewModel.ReloadAsync();
                 if (window.ViewModel.SelectedDocument?.IsStale != false) throw new Exception("Reload did not clear stale state");
                 Console.WriteLine("PASS: automatic cancellation on root replacement, opening afterward, duplicate tabs, rapid selection, individual model rendering/options/isolation, external changes and reload");
+                Console.WriteLine("Individual model render: " + Path.Combine(output, "individual-model.png"));
             }
             catch (Exception ex) { Console.Error.WriteLine(ex); result = 1; }
             finally { window.Close(); app.Shutdown(result); }

@@ -114,8 +114,6 @@ internal sealed class SceneTreeModel
         return row;
     }
     internal SceneTreeItem? Find(string id) => rows.GetValueOrDefault(id);
-    /// <summary>A section's header row (zones, aiNetworks or definitions), or null.</summary>
-    internal SceneTreeItem? SectionRow(string section) => Roots.FirstOrDefault(r => r.Section is SectionHeader header && header.Section == section);
     /// <summary>A section row found by its entry key (a zone, a network, a definition), created along its path if needed.</summary>
     internal SceneTreeItem? FindSection(string key)
     {
@@ -372,7 +370,7 @@ public sealed class SceneTreeItem : INotifyPropertyChanged
             nameof(ZoneKindPolygons), nameof(ZoneKindsEnabled), nameof(ZoneKindsToolTip), nameof(IsPaintZone), nameof(HeaderControlsToolTip), nameof(AccessibleName) }) Changed(name);
     }
     public string ToolTip => (Section != null ? SectionToolTip : Pass is { } pass ? pass.Description + PickupSummary(pass) : PickupName != null ? PickupToolTip
-        : IsOtherDifficulty ? OtherDifficultyToolTip : ToolTipCore) + (Animations is { } animations ? "\nAnimations: " + string.Join(", ", animations.Select(a => Short(a, 64))) : "");
+        : IsOtherDifficulty ? OtherDifficultyToolTip : ToolTipCore + (Placement is { Detail.Length: > 0 } placed ? "\nPlacement: " + placed.Detail : "")) + (Animations is { } animations ? "\nAnimations: " + string.Join(", ", animations.Select(a => Short(a, 64))) : "");
     /// <summary>The Pickups row's summary line: "64 pickups: 8 weapons, 44 ammo, 12 health." (kinds with none left out).</summary>
     private static string PickupSummary(SourceMapPass pass)
     {
@@ -394,7 +392,8 @@ public sealed class SceneTreeItem : INotifyPropertyChanged
             string difficulties = !IsOtherDifficulty ? $"Placed on {Joined(placement.Difficulties)}"
                 : $"Placed on {Joined(placement.Difficulties)}. The view shows {ShownDifficulty}: " + (placement.Difficulties.Count == 1 ? $"choose {placement.Difficulties[0]} to see it." : "choose one of these to see it.");
             return $"{PickupName} · {pickup.Kind} pickup{(IsOtherDifficulty ? " · not on " + ShownDifficulty : "")}\n{pickup.ManualName}\n" +
-                $"{pickup.Type} · {(IsOtherDifficulty ? "template " + pickup.TemplateName : "game name " + Short(placement.Name, 128))}" + (located.Length > 0 ? "\n" + located : "") + "\n" + difficulties;
+                $"{pickup.Type} · {(IsOtherDifficulty ? "template " + pickup.TemplateName : "game name " + Short(placement.Name, 128))}" + (located.Length > 0 ? "\n" + located : "") + "\n" + difficulties
+                + (placement.Listed is { Length: > 0 } listed ? "\n" + char.ToUpperInvariant(listed[0]) + listed[1..] : "");
         }
     }
     private string ToolTipCore => Authored is { } authored ? $"{Short(DisplayName, 2048)} · {(IsEmptyNode ? "empty\n" + OutlinerKinds.EmptyNote : NodeType)}\nSource: {Short(authored.File, 2048)} · glTF node #{authored.SourceNode}\n" +

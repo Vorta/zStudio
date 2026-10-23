@@ -1,5 +1,4 @@
 using System.Buffers.Binary;
-using System.IO;
 using System.Text;
 using zStudio.Core.Gltf;
 using zStudio.Core.Sources;

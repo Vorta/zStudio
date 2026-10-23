@@ -5,7 +5,6 @@ using System.Windows.Media;
 using System.Windows.Threading;
 using zStudio.Core;
 using zStudio.Core.Sources;
-using zStudio.Desktop;
 using Xunit;
 
 namespace zStudio.Desktop.Tests;
@@ -20,7 +19,7 @@ public sealed class WindowClosingTests
         string phase = "window close lifecycle";
         Thread thread = new(() =>
         {
-            string settings = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "zStudio", "settings.json");
+            string settings = zStudio.Desktop.StudioSettings.SettingsPath;
             byte[]? previousSettings = File.Exists(settings) ? File.ReadAllBytes(settings) : null;
             // Match the Fluent theme used by the production application.
 #pragma warning disable WPF0001

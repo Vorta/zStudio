@@ -34,7 +34,7 @@ public sealed class MissionSessionIdentityTests
     }
 
     [Fact]
-    public void NegativeMemoRegistrationAndResetKeepStoredHashesAndEqualQueriesValid()
+    public void NegativeMemoRegistrationKeepsStoredHashesAndEqualQueriesValid()
     {
         var comparer = new MissionSourceComparer();
         var source = new MissionPickupSource("C:\\stable\\archive.zbd", 2, "NET_01.ZRD", 8);
@@ -43,7 +43,6 @@ public sealed class MissionSessionIdentityTests
         comparer.Register(source);
         Dictionary<MissionPickupSource, int> values = new(comparer) { [source] = 91 };
         Assert.Equal(91, values[external]);
-        comparer.Reset([Copy(source)]);
         Assert.Equal(hash, comparer.GetHashCode(external)); Assert.Equal(91, values[Copy(source)]);
         var other = source with { ArchivePath = "C:\\fresh\\archive.zbd" };
         comparer.Register(other); values.Add(other, 92);
@@ -64,24 +63,6 @@ public sealed class MissionSessionIdentityTests
         Assert.Equal(before + 2, comparer.PrefixResolutions);
         foreach (var key in keys) Assert.Equal(key.RecordIndex, values[key with { ArchivePath = otherArchive, ResourceName = otherMember }]);
         Assert.Equal(before + 2, comparer.PrefixResolutions);
-    }
-
-    [Fact]
-    public async Task ConcurrentReadMemoizationAndRegistryReplacementPreserveEquality()
-    {
-        var comparer = new MissionSourceComparer();
-        var keys = Enumerable.Range(0, 8).Select(i => new MissionPickupSource("C:\\shared\\archive.zbd", 2, "net.zrd", i)).ToArray();
-        foreach (var key in keys) comparer.Register(key);
-        var map = keys.ToDictionary(k => k, k => k.RecordIndex, comparer);
-        var queries = keys.Select(Copy).ToArray();
-        await Task.WhenAll(Task.Run(() =>
-        {
-            for (int pass = 0; pass < 20; pass++)
-                foreach (var query in queries) Assert.Equal(query.RecordIndex, map[query]);
-        }, Token), Task.Run(() =>
-        {
-            for (int pass = 0; pass < 20; pass++) comparer.Reset(keys);
-        }, Token));
     }
 
     [Fact]

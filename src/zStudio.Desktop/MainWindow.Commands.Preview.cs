@@ -1,10 +1,7 @@
-using System.Globalization;
 using System.IO;
 using System.Text.Json.Nodes;
 using System.Windows;
-using System.Windows.Controls;
 using System.Windows.Media.Imaging;
-using System.Windows.Media.Media3D;
 using NAudio.Wave;
 using zStudio.Automation;
 using zStudio.Core;
@@ -56,7 +53,7 @@ public partial class MainWindow
             }
             return Result(new { header = asset.Metadata, palette = Page(colors, a, color => System.Text.Json.JsonSerializer.Serialize(color)).Data });
         });
-        Register(r, "preview_state", "Read active preview options, camera and playback state. reloading is true while a replacement presentation loads over the frozen previous scene; viewport commands answer not_ready until it is published. Source edits evaluate in memory without archives; ordinary transform updates retain the viewport. objectTransformPreviewNode identifies an object currently drawn with a provisional transform while its source change is evaluated. texturePacks retains full choice names and paths on a bounded page (offset/limit, default 100, maximum 200); follow texturePackNextOffset and texturePackCount. Long or escaped paths shorten the page.", false,
+        Register(r, "preview_state", "Read active preview options, camera and playback state. reloading is true while a replacement presentation loads over the frozen previous scene; viewport commands answer not_ready until it is published. Source edits evaluate in memory without archives; ordinary transform updates retain the viewport. objectTransformPreviewNode identifies an object currently drawn with a provisional transform while its source change is evaluated. bft describes the player tank of a Whole world (null without one): vehicle and node (its scene_tree row), adjustable (a source map's choice; compiled worlds draw the defaults), the choice type/primary/secondary, shown (what the view draws: Tracked after a failed or unavailable type, the weapon the game switches to in sub), defaults, types with availability, transitions and reason, secondaries with their gun model and sub-mode permission, gun (drawn nodes, model, missing, sharedWith, line), posing, rebuilding, failure, substitution, hiddenAtStart and the card's note. texturePacks retains full choice names and paths on a bounded page (offset/limit, default 100, maximum 200); follow texturePackNextOffset and texturePackCount. Long or escaped paths shorten the page.", false,
             [PreviewParameter, new("offset", "integer", "Zero-based texture-pack choice offset; default 0.", Minimum: 0, Maximum: int.MaxValue), new("limit", "integer", "Texture-pack page size, 1–200; default 100.", Minimum: 1, Maximum: 200)], a =>
         {
             RequirePreview(a);
@@ -68,6 +65,7 @@ public partial class MainWindow
                 framingSelection = motion?.Viewport.FramingSelection ?? animation?.Viewport.FramingSelection ?? (SceneHost.Visibility == Visibility.Visible ? scene?.FramingSelection : null),
                 ai = AiPreviewState(),
                 sections = SectionPreviewState(),
+                bft = PlayerTankPreviewState(),
                 parachute = ParachuteState(),
                 presentation = new { fullscreen=PresentationState.Fullscreen, uiHidden=PresentationState.UiHidden, available=PresentationState.Available },
                 lod = motion?.Lod ?? animation?.PreviewLod ?? (SceneHost.Visibility == Visibility.Visible ? (int?)LodCombo.SelectedIndex : null), difficulty = MissionWorldPath != null || motion != null ? null : ViewModel.Difficulty.ToString(),
@@ -86,10 +84,10 @@ public partial class MainWindow
         Register(r, "scene_nodes", "List active assembled scene nodes by index (motion previews include only the selected assembly), including instance metadata (64 JSON nodes/1024 text characters per row, inspection_truncated when shortened). Full actor/source identities are retained; long or escaped text shortens pages, so follow nextOffset. MW3 actor labels/query matching use 128-character prefixes; actor NameCharacters/NameTruncated disclose shortening. Full authored data remains available through JSON export.", false, [PreviewParameter, .. PageParameters], a =>
         {
             var viewport = TargetViewport(a); return Page(viewport.InspectableNodes.Where(n => n.Name.Contains(Text(a,"query"),StringComparison.OrdinalIgnoreCase)), a,
-                project: n => new { n.Index,n.Name,n.Class, Metadata = JsonData.PreviewObject(n.Metadata, 64, 1024), actor = viewport.ActorAt(n.Index) },
-                maximumRowBytes: n => InspectionResultBudget.SceneNode(n.Name, n.Class, viewport.ActorAt(n.Index)));
+                project: n => new { n.Index,n.Name,n.Class, Metadata = JsonData.PreviewObject(n.Metadata, 64, 1024), actor = viewport.Mission?.InspectedActorAt(n.Index) },
+                maximumRowBytes: n => InspectionResultBudget.SceneNode(n.Name, n.Class, viewport.Mission?.InspectedActorAt(n.Index)));
         });
-        Register(r, "scene_selection", "Select/inspect a scene node with bounded metadata and inspection_truncated. Isolate includes its descendants; isolate and show_all are available only in static model/Whole world previews, matching the GUI. show_all also shows what scene_tree hide hid.", true, [PreviewParameter, P("action","string","Selection operation; isolate/show_all require a static model or Whole world preview.",true,"select","isolate","show_all"), P("node","integer","Node index.")], a =>
+        Register(r, "scene_selection", "Select/inspect a scene node with bounded metadata and inspection_truncated. Isolate includes its descendants; isolate and show_all are available only in static model/Whole world previews, matching the GUI. show_all also shows what scene_tree hide hid. In a source map, units and pickups are not isolated (unsupported), as in the World tree; show_all and isolate, like scene_tree show, select in the view an object the card shows as hidden because it was selected in the tree while hidden, when no draft is open (the view selection, the card and scene_inspect selected change).", true, [PreviewParameter, P("action","string","Selection operation; isolate/show_all require a static model or Whole world preview.",true,"select","isolate","show_all"), P("node","integer","Node index.")], a =>
         {
             RequireNoDrafts(); var viewport = TargetViewport(a); string action = Text(a,"action");
             if ((animation != null || motion != null) && action is "isolate" or "show_all")
@@ -105,6 +103,10 @@ public partial class MainWindow
                     // A picked pickup mesh represents its whole placed instance,
                     // matching the GUI's selection and subsequent Isolate command.
                     node = viewport.SelectionOwner?.Invoke(node) ?? viewport.PickupAt(node)?.Root ?? node;
+                    // As in the World tree: a source map's units and pickups are shown and hidden one by one, never isolated.
+                    if (action == "isolate" && shownDocument is { SourceWorld: not null } isolating && SourceSelection(isolating, viewport.PreviewScene) is { } projection
+                        && projection.PassOf(projection.Owner(node)) is { Kind: "aiv" or "puppies" })
+                        throw new StudioCommandException("unsupported", "AI vehicles and pickups are shown and hidden one by one (scene_tree hide/show on their rows), or all at once on their section's row; they are not isolated.");
                     if (node < 0)
                     {
                         RefreshSceneTree();
@@ -122,7 +124,7 @@ public partial class MainWindow
                     RevealSceneNode(node);
                 }
                 viewport.SelectFramingNode(node);
-                if (action == "isolate") { isolatedNode = node; ApplyIsolation(viewport); CurrentInspectionCard?.Refresh(); RefreshRowEyes(); }
+                if (action == "isolate") { isolatedNode = node; ApplyIsolation(viewport); ReselectShownSelection(); CurrentInspectionCard?.Refresh(); RefreshRowEyes(); }
                 if (node < 0 && sceneTree?.Reveal(node) is { Synthetic: true } sourceRow)
                     return Result(SceneTreeProperties(sourceRow));
                 if (node < 0) throw new StudioCommandException("stale_record", "Source selection owner is not in the current scene hierarchy.");
@@ -130,7 +132,7 @@ public partial class MainWindow
             }
             return Result(new { visible = "all" });
         });
-        RegisterJob(r, "scene_options", "Set static model/world options: lod(integer), difficulty(Easy/Medium/Hard; RECOIL only, MW3 uses missions), textures/wireframe/faceOrientation/bounds/horizon(boolean), texturePack(path or empty for automatic), highlight(none/nonDefaultSoils/canModify/clipTo/canModifyAndClipTo/zones/polygonZones/landmarks), aiNodes/aiThroughGeometry(boolean), aiNetwork(all or ID with aiSnapshot), pickupsByType(boolean; source maps: Group by type in the Pickups section, for the session). Highlights and AI are Whole world only. In a source map zones and AI networks are shown one by one (scene_tree show/hide): highlight zones or polygonZones chooses the kind of zone colour (every zone shows when none did), another highlight hides every zone; aiNodes shows or hides every network; aiNetwork filters and aiThroughGeometry false are refused (networks are always drawn through geometry, at half strength where it hides them).", [PreviewParameter,SceneChanges], false, async (a, token) =>
+        RegisterJob(r, "scene_options", "Set static model/world options: lod(integer), difficulty(Easy/Medium/Hard; RECOIL only, MW3 uses missions), textures/wireframe/faceOrientation/bounds/horizon(boolean), texturePack(path or empty for automatic), highlight(none/nonDefaultSoils/canModify/clipTo/canModifyAndClipTo/zones/polygonZones/landmarks), aiNodes/aiThroughGeometry(boolean), aiNetwork(all or ID with aiSnapshot), pickupsByType(boolean; source maps: Group by type in the Pickups section, for the session), bftType/bftPrimary/bftSecondary (source maps: how the view draws the player tank, a preview choice for the open map: never saved, no undo; applied together and published like difficulty; preview_state.bft reports it). Highlights and AI are Whole world only. In a source map zones and AI networks are shown one by one (scene_tree show/hide): highlight zones or polygonZones chooses the kind of zone colour (every zone shows when none did), another highlight hides every zone; aiNodes shows or hides every network; aiNetwork filters and aiThroughGeometry false are refused (networks are always drawn through geometry, at half strength where it hides them).", [PreviewParameter,SceneChanges], false, async (a, token) =>
         {
             RequirePreview(a); RequireNoDrafts(shownDocument); if (animation != null || motion != null) throw new StudioCommandException("unsupported","Use animation_options or motion_preview.");
             TargetViewport(a);
@@ -177,6 +179,20 @@ public partial class MainWindow
             if (changes.ContainsKey("pickupsByType") && (!sourceChromeActive || doc.SourceWorld == null))
                 throw new StudioCommandException("unsupported", "Group by type applies to a source map's Pickups section.");
             if (changes.ContainsKey("pickupsByType") && Flag(changes, "pickupsByType") != pickupsByType) RequirePickupsTreeReady();
+            // The player tank: the whole requested state, checked against the shown map before anything changes.
+            PlayerTankState? requestedTank = null;
+            if (changes.Any(p => p.Key is "bftType" or "bftPrimary" or "bftSecondary"))
+            {
+                var current = scene?.Mission?.PlayerTank is { } shownTank ? ChosenTank(shownTank) : PlayerTankState.Default;
+                requestedTank = current with
+                {
+                    Type = changes.ContainsKey("bftType") ? PlayerTankPresentation.Parse(Text(changes, "bftType")) ?? throw new StudioCommandException("invalid_argument", "Use tracked, amphibious, hover or sub.") : current.Type,
+                    Primary = changes.ContainsKey("bftPrimary") ? Text(changes, "bftPrimary") : current.Primary,
+                    Secondary = changes.ContainsKey("bftSecondary") ? Text(changes, "bftSecondary") : current.Secondary,
+                };
+                RequirePlayerTankChange(requestedTank, changes.ContainsKey("bftSecondary"));
+            }
+            bool tankApplied = false;
             long highlightGeneration = worldHighlightGeneration;
             // As in the GUI, whose overlay buttons are disabled while the polygon zone tool is engaged.
             if (ZoneToolEngaged && (changes.ContainsKey("highlight") || changes.ContainsKey("faceOrientation")))
@@ -196,6 +212,11 @@ public partial class MainWindow
                     case "wireframe": Wireframe.IsChecked = value!.GetValue<bool>(); ApplySceneOptions(); break;
                     case "bounds": BoundsEnabled.IsChecked = value!.GetValue<bool>(); ApplySceneOptions(); break;
                     case "pickupsByType": SetPickupsByType(value!.GetValue<bool>()); break;
+                    case "bftType": case "bftPrimary": case "bftSecondary":
+                        if (tankApplied) break;
+                        tankApplied = true;
+                        if (posingTank == null && ShownPlayerTank is { } drawn && requestedTank == ChosenTank(drawn)) break;
+                        refresh = StartPlayerTankRefresh(doc, asset, requestedTank!); await (previewWork = refresh); break;
                     case "difficulty":
                         if (!Enum.TryParse<MissionDifficulty>(value!.GetValue<string>(),out var difficulty) || !Enum.IsDefined(difficulty)) throw new StudioCommandException("invalid_argument","Use Easy, Medium or Hard.");
                         bool changedDifficulty = ViewModel.Difficulty != difficulty;

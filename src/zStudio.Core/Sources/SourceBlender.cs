@@ -42,10 +42,7 @@ public sealed record BlenderUpdatePlan(string Label, IReadOnlyList<(string Relat
 }
 /// <summary>An update refused because project files it would replace changed since the checkout (another edit, or another update).</summary>
 public sealed class BlenderConflictException(IReadOnlyList<string> files, string? reason = null) : IOException(reason ??
-    $"The export would replace {string.Join(", ", files.Take(8))}{(files.Count > 8 ? $" and {files.Count - 8} more" : "")}, which changed in the project since the checkout or were not part of it (another model's texture of the same name). Check the model out again, rename the texture in Blender, or update anyway to replace them.")
-{
-    public IReadOnlyList<string> Files { get; } = files;
-}
+    $"The export would replace {string.Join(", ", files.Take(8))}{(files.Count > 8 ? $" and {files.Count - 8} more" : "")}, which changed in the project since the checkout or were not part of it (another model's texture of the same name). Check the model out again, rename the texture in Blender, or update anyway to replace them.");
 
 /// <summary>
 /// The reference-aware Blender round trip. <see cref="Checkout"/> copies one project graph into

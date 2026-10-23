@@ -1,6 +1,5 @@
 using System.Text.Json.Nodes;
 using zStudio.Core.Worlds;
-using zStudio.Desktop;
 using Xunit;
 
 namespace zStudio.Desktop.Tests;

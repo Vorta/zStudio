@@ -1,4 +1,3 @@
-using System.Numerics;
 using System.Text.Json.Nodes;
 using zStudio.Core.Gltf;
 using zStudio.Core.Terrain;

@@ -4,7 +4,6 @@ using System.Text;
 using System.Text.Json.Nodes;
 using ModelContextProtocol.Client;
 using ModelContextProtocol.Protocol;
-using zStudio.Desktop;
 using zStudio.Mcp;
 using zStudio.Tests;
 using Xunit;

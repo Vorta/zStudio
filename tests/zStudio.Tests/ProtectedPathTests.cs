@@ -1,7 +1,6 @@
 using System.ComponentModel;
 using System.Runtime.InteropServices;
 using zStudio.Core;
-using zStudio.Core.Formats;
 using Xunit;
 
 namespace zStudio.Tests;

@@ -57,7 +57,9 @@ public sealed class WorkspaceStateTests
         }
         var current = new StudioSettings(); var layout = current.GetWorkspace();
         Assert.False(current.McpEnabled);
-        Assert.Equal(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "zStudio", "settings.json"), StudioSettings.SettingsPath);
+        Assert.Equal(Path.Combine(zStudio.Automation.StudioProfile.Directory, "settings.json"), StudioSettings.SettingsPath);
+        // Tests never write the user's own profile (PrivateProfile).
+        Assert.True(zStudio.Automation.StudioProfile.IsPrivate);
         layout.NavigatorWidth = double.NaN; layout.InspectorWidth = 1; layout.ToolsHeight = double.PositiveInfinity; layout.Preset = "corrupt"; layout.Groups = null!;
         layout.Normalize(); Assert.Equal(294, layout.NavigatorWidth); Assert.Equal(320, layout.InspectorWidth); Assert.Equal(180, layout.ToolsHeight); Assert.Equal("Edit",layout.Preset); Assert.NotNull(layout.Groups);
         Assert.Equal(layout.InspectorWidth, JsonSerializer.Deserialize<StudioSettings>(JsonSerializer.Serialize(current))!.GetWorkspace().InspectorWidth);
@@ -82,19 +84,6 @@ public sealed class WorkspaceStateTests
         restored.FilesWidth = double.NaN; restored.Normalize(); Assert.Equal(240,restored.FilesWidth);
         restored.FilesWidth = 20; restored.Normalize(); Assert.Equal(200,restored.FilesWidth);
         restored.FilesWidth = 900; restored.Normalize(); Assert.Equal(650,restored.FilesWidth);
-    }
-    [Fact]
-    public void EveryCatalogFieldHasAReachablePresentationGroup()
-    {
-        foreach (var spec in AnimationCatalog.Events)
-        foreach (var field in spec.Fields)
-        {
-            Assert.False(string.IsNullOrWhiteSpace(AnimationFieldPresentation.Group(spec.Type,field)));
-            if (field.ReadOnly) Assert.Equal("Serialized state / provenance",AnimationFieldPresentation.Group(spec.Type,field));
-            if (field.Kind == AnimationFieldKind.Vector) Assert.Equal(3, AnimationFieldPresentation.Components(spec.Type,field).Length);
-        }
-        Assert.Equal("Additional stored fields", AnimationFieldPresentation.Group(255,new("Unmapped",12,AnimationFieldKind.Float)));
-        Assert.Equal(new[] { "Start","End","Rate" },AnimationFieldPresentation.Components(21,AnimationCatalog.Find(21)!.Fields.Single(f => f.Offset == 20)));
     }
     [Fact]
     public void GridAndCollisionAreIndependentDefaults()

@@ -1,17 +1,17 @@
 using System.Numerics;
 using System.Windows;
 using System.Windows.Media.Media3D;
-using HelixToolkit.Wpf.SharpDX;
 using zStudio.Core;
+using zStudio.Rendering.Direct3D;
 
 namespace zStudio.Rendering;
 
 public sealed partial class SceneViewport
 {
-    private static Matrix3D SelectionPlacementTransform(MeshGeometryModel3D mesh, ScenePlacement[] items, int index)
+    private static Matrix3D SelectionPlacementTransform(MeshNode mesh, ScenePlacement[] items, int index)
     {
         var transform = ToWpf(mesh.Instances is { } instances && index < instances.Count ? instances[index] : items[index].Transform);
-        transform.Append(mesh.Transform?.Value ?? Matrix3D.Identity);
+        transform.Append(ToWpf(mesh.Transform ?? Matrix4x4.Identity));
         return transform;
     }
 
@@ -41,7 +41,7 @@ public sealed partial class SceneViewport
         foreach (var (mesh, items) in visiblePlacements)
         {
             if (!mesh.IsRendering || mesh.Visibility != Visibility.Visible || !mesh.IsDepthClipEnabled ||
-                mesh.Geometry is not HelixToolkit.SharpDX.MeshGeometry3D geometry ||
+                mesh.Geometry is not { } geometry ||
                 !staticMeshBounds.TryGetValue(geometry, out var local) || !Finite(local.Min) || !Finite(local.Max)) continue;
             for (int i = 0; i < items.Length; i++)
             {
@@ -85,7 +85,7 @@ public sealed partial class SceneViewport
             {
                 int current = items[i].NodeIndex;
                 if (!selectedNodes.Contains(current)) continue;
-                rendererFrame ??= mesh.Transform?.Value ?? Matrix3D.Identity;
+                rendererFrame ??= ToWpf(mesh.Transform ?? Matrix4x4.Identity);
                 Matrix4x4 local = Matrix4x4.Identity; HashSet<int> seen = [];
                 while (current != owner && current >= 0 && current < PreviewScene.Nodes.Count && seen.Add(current))
                 {

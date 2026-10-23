@@ -15,7 +15,6 @@ internal sealed class GameZLayouts(uint version)
     {
         15 => recoil, 13 => demo, 27 => mw, _ => throw new InvalidDataException("Unsupported world version.")
     };
-    internal uint Version => version;
     /// <summary>
     /// Version 13 stores a node's cached box as its eight corners in the parent's space (the box transformed by the node's
     /// matrix) where version 15 stores the box itself, and an Object3D's translation component beside its rotation and scale

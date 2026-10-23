@@ -1,6 +1,4 @@
 using System.Numerics;
-using System.Security.Cryptography;
-using System.Text;
 using zStudio.Core;
 using zStudio.Core.Formats;
 using Xunit;

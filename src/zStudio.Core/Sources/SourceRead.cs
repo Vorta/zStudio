@@ -35,11 +35,6 @@ public static class SourceRead
         await using FileStream stream = new(path, FileMode.Open, FileAccess.Read, Sharing, 65536, FileOptions.Asynchronous | FileOptions.SequentialScan);
         return await AllAsync(stream, path, maximum, token).ConfigureAwait(false);
     }
-    internal static async Task<byte[]> AllAsync(string path, long maximum, DirectoryLease directories, CancellationToken token = default)
-    {
-        await using FileStream stream = directories.OpenFile(path, FileMode.Open, FileAccess.Read, Sharing, 65536, FileOptions.Asynchronous | FileOptions.SequentialScan);
-        return await AllAsync(stream, path, maximum, token).ConfigureAwait(false);
-    }
     internal static async Task<byte[]> AllAsync(Stream stream, string path, long maximum, CancellationToken token)
     {
         token.ThrowIfCancellationRequested();

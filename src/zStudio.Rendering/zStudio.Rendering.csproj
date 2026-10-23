@@ -6,9 +6,10 @@
   <PropertyGroup><TargetFramework>net10.0-windows</TargetFramework><UseWPF>true</UseWPF></PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="../zStudio.Core/zStudio.Core.csproj" />
-    <PackageReference Include="HelixToolkit.Wpf.SharpDX" />
-    <EmbeddedResource Include="GroundGrid.hlsl" />
-    <EmbeddedResource Include="VertexTint.hlsl" />
-    <EmbeddedResource Include="FaceOrientation.hlsl" />
+    <PackageReference Include="Vortice.Direct3D11" />
+    <PackageReference Include="Vortice.DXGI" />
+    <PackageReference Include="Vortice.Direct3D9" />
+    <PackageReference Include="Vortice.D3DCompiler" />
+    <EmbeddedResource Include="Direct3D/Scene.hlsl" />
   </ItemGroup>
 </Project>

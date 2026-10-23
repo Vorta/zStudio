@@ -31,10 +31,36 @@ public sealed partial class MissionSceneContext
     public IReadOnlyList<string> Diagnostics { get; }
     public MissionLayoutSelection Layout { get; }
     public AiNetworkSnapshot AiNetworks { get; internal set; } = AiNetworkSnapshot.Empty;
+    /// <summary>The local player's tank and how the preview draws it (docs/agents/preview.md); null without a spawned vehicle.</summary>
+    public MissionPlayerTank? PlayerTank { get; init; }
+    /// <summary>The local player's vehicle: the first AIV actor that spawns, or null.</summary>
+    public MissionActor? LocalPlayer { get; init; }
+    /// <summary>Why the local player's tank could not be prepared (<see cref="PlayerTank"/> is then null).</summary>
+    public string? PlayerTankFailure { get; init; }
+    /// <summary>How the mission's opening holds the player's start (its placement is then read only), or null.</summary>
+    public MissionStartControl? PlayerStartControl { get; init; }
     private readonly int originalNodeCount;
     private readonly MissionActorIndex actorIndex;
+    /// <summary>Roots that several actors place (retail m2 Easy lists bft_00 twice), each with the first of them.</summary>
+    private readonly Dictionary<int, MissionActor> repeatedRoots;
     /// <summary>The unique authored actor occurrence owning this node, or null for absent/ambiguous ownership.</summary>
     public MissionActor? ActorAt(int node) => actorIndex.At(node);
+    /// <summary>
+    /// The actor an inspection shows for a node: <see cref="ActorAt"/>, else, for a node at or below a root that several
+    /// records place, the first of them. Never an edit identity: such a placement is read only.
+    /// </summary>
+    public MissionActor? InspectedActorAt(int node) => ActorAt(node) ?? (actorIndex.IsAmbiguous(node) ? RepeatedPlacementAt(Scene, node) : null);
+    /// <summary>For a node of <paramref name="scene"/> at or below a root several records place, the first of them (nearest such ancestor by first parents); otherwise null.</summary>
+    public MissionActor? RepeatedPlacementAt(GameScene scene, int node)
+    {
+        if (repeatedRoots.Count == 0) return null;
+        for (int depth = 0; depth <= 1024 && node >= 0 && node < scene.Nodes.Count; depth++)
+        {
+            if (repeatedRoots.TryGetValue(node, out var first)) return first;
+            node = scene.Nodes[node].Parents.FirstOrDefault(-1);
+        }
+        return null;
+    }
 
     /// <summary>Prepare ownership for the actual preview topology, reusing this baseline's index only for its own scene.</summary>
     public MissionActorIndex PrepareActorIndex(GameScene scene, CancellationToken token = default)
@@ -48,6 +74,7 @@ public sealed partial class MissionSceneContext
         Layout = layout; this.originalNodeCount = originalNodeCount;
         Scene = scene; SourceNodes = sources.AsReadOnly(); Actors = actors.AsReadOnly(); DormantRoots = dormant;
         actorIndex = MissionActorIndex.Build(scene, Actors, token);
+        repeatedRoots = Actors.GroupBy(a => a.Root).Where(g => g.Count() > 1).ToDictionary(g => g.Key, g => g.First());
         Diagnostics = diagnostics.Distinct(StringComparer.Ordinal).ToArray(); Horizons = FindHorizons(scene);
     }
     /// <summary>Match an instance and its source node; never carry clone indices between layouts.</summary>
@@ -122,17 +149,18 @@ public static partial class MissionSceneLoader
 
     /// <param name="mission">MW3 reader requested by the caller. Omitted, the resolver selection is captured before any await.</param>
     /// <param name="exactMission">Fail when the requested MW3 reader is unavailable instead of reporting a fallback.</param>
+    /// <param name="playerTank">A source map's player tank choice; compiled worlds always draw the defaults.</param>
     public static Task<MissionSceneContext> LoadAsync(ISceneDocument world, AssetResolver resolver, AnimationPackage? package = null, CancellationToken token = default, MissionDifficulty difficulty = MissionDifficulty.Medium,
-        string? mission = null, bool exactMission = false)
+        string? mission = null, bool exactMission = false, PlayerTankState? playerTank = null)
         => world is Sources.SourceSceneSnapshot source
-            ? Task.Run(() => source.MissionScene(difficulty, token), token)
+            ? Task.Run(() => source.MissionScene(difficulty, token, playerTank), token)
             : world is AssetDocument compiled ? LoadAsync(compiled, resolver, package, token, difficulty, mission, exactMission)
             : throw new InvalidDataException("This scene has no mission source provider.");
 
     public static async Task<MissionSceneContext> LoadAsync(AssetDocument world, AssetResolver resolver, AnimationPackage? package = null, CancellationToken token = default, MissionDifficulty difficulty = MissionDifficulty.Medium,
-        string? mission = null, bool exactMission = false)
+        string? mission = null, bool exactMission = false, PlayerTankState? playerTank = null)
     {
-        if (world is Sources.SourceSceneSnapshot source) return await Task.Run(() => source.MissionScene(difficulty, token), token).ConfigureAwait(false);
+        if (world is Sources.SourceSceneSnapshot source) return await Task.Run(() => source.MissionScene(difficulty, token, playerTank), token).ConfigureAwait(false);
         token.ThrowIfCancellationRequested();
         bool mw3 = world.Game == GameVariant.MechWarrior3;
         string? requested = mw3 ? mission ?? resolver.SelectedMission(world.Path) : null;
@@ -250,14 +278,15 @@ public static partial class MissionSceneLoader
         }
     }
 
+    /// <param name="playerTank">How to draw the local player's tank; the defaults (the game's fresh start) when null.</param>
     public static MissionSceneContext Build(ISceneDocument world, AnimationPackage? package, JsonNode? aiv, JsonNode? vehicles, JsonNode? starts, IEnumerable<string>? initialDiagnostics = null, CancellationToken token = default, MissionLayoutSelection? selection = null,
-        JsonNode? ai = null, JsonNode? pickups = null, MissionResourceSource? pickupSource = null, MissionResourceSource? aivSource = null, JsonNode? weapons = null)
-        => BuildWithBudget(world, new MissionPlacementBudget(token), package, aiv, vehicles, starts, initialDiagnostics, token, selection, ai, pickups, pickupSource, aivSource, weapons: weapons);
+        JsonNode? ai = null, JsonNode? pickups = null, MissionResourceSource? pickupSource = null, MissionResourceSource? aivSource = null, JsonNode? weapons = null, PlayerTankState? playerTank = null)
+        => BuildWithBudget(world, new MissionPlacementBudget(token), package, aiv, vehicles, starts, initialDiagnostics, token, selection, ai, pickups, pickupSource, aivSource, weapons: weapons, playerTank: playerTank);
 
     internal static MissionSceneContext BuildWithBudget(ISceneDocument world, MissionPlacementBudget budget, AnimationPackage? package, JsonNode? aiv, JsonNode? vehicles, JsonNode? starts,
         IEnumerable<string>? initialDiagnostics = null, CancellationToken token = default, MissionLayoutSelection? selection = null,
         JsonNode? ai = null, JsonNode? pickups = null, MissionResourceSource? pickupSource = null, MissionResourceSource? aivSource = null,
-        long? maximumBindingWork = null, JsonNode? weapons = null)
+        long? maximumBindingWork = null, JsonNode? weapons = null, PlayerTankState? playerTank = null)
     {
         selection ??= MissionLayoutSelection.For(MissionDifficulty.Medium);
         token.ThrowIfCancellationRequested();
@@ -271,7 +300,8 @@ public static partial class MissionSceneLoader
         List<int> sources = original.Nodes.Select(n => n.Index).ToList(); List<MissionActor> actors = []; List<string> notes = initialDiagnostics?.ToList() ?? [];
         HashSet<int> positioned = [];
         var previewWorld = new SceneDocument(world.Path, scene, world.Game);
-        AnimationPreviewContext? context = package == null ? null : new() { Package = package, World = previewWorld, LoadedNodeCount = original.Nodes.Count, InitializationTransforms = new() };
+        MissionInitializationTransforms dependencies = new();
+        AnimationPreviewContext? context = package == null ? null : new() { Package = package, World = previewWorld, LoadedNodeCount = original.Nodes.Count, InitializationTransforms = dependencies };
         // One allowance for every phase, scaled with the world's own nodes (AnimationBindingOperation.Allowance) like the copy above.
         AnimationBindingOperation? bindings = context == null ? null : new(context, token, maximumBindingWork);
         HashSet<string> vehicleNames = new(StringComparer.Ordinal);
@@ -289,6 +319,8 @@ public static partial class MissionSceneLoader
         MissionPlacementState placement = new(scene, original.Nodes.Count, worldRoot, budget); placement.Initialize();
         BoundedDiagnostics placementNotes = new(notes);
         MissionResourceSource? coordinateSource = null; string? actorLabel = null;
+        // InitMissionRuntimeFromWorldAndCamera (0x41fe90) makes the first vehicle it creates the local player.
+        MissionActor? localPlayer = null;
         if (vehicles == null) notes.Add($"Mission starting layout: {selection.VehicleResource} is unavailable; vehicle definitions could not be recovered.");
         if (aiv == null) notes.Add($"Mission starting layout: {selection.AivResource} is unavailable; vehicle spawn positions could not be recovered.");
         else if (worldRoot >= 0)
@@ -328,6 +360,7 @@ public static partial class MissionSceneLoader
                     if (actorLabel == null) { budget.TextCopy(selection.AivResource.Length + 32L); actorLabel = $"{selection.AivResource} · {selection.Difficulty}"; }
                     positioned.Add(root); actors.Add(new(root, sources[root], name, actorLabel, CoordinateSource: CoordinateSource(recordIndex),
                         PlacementPosition: position, PlacementRotation: new(0, heading, 0)));
+                    localPlayer ??= actors[^1];
                 }
                 catch (InvalidDataException ex) when (!budget.Exhausted) { placementNotes.Add($"Mission actor {name}: {ex.Message}"); }
             }
@@ -338,6 +371,26 @@ public static partial class MissionSceneLoader
         // startup frontier builds its indexes again, and the dormant scan keeps them, as the turrets kept the load's.
         placement.PublishChildren();
         if (context != null) Initialize(false);
+        // The player's tank as chosen, on the starting scene: only flags and poses change, so the startup indexes stand.
+        MissionPlayerTank? tank = null; string? tankFailure = null;
+        if (localPlayer != null)
+            try
+            {
+                tank = PreparePlayerTank(scene, localPlayer, playerTank, context, bindings, vehicles, weapons, selection, MissionNumber(world), positioned, dependencies, notes, budget, token);
+                // The labels name what the view draws when it is not the game's start of the mission.
+                if (tank.Shown != tank.Defaults) selection = selection with { PlayerTank = tank.Shown };
+            }
+            catch (InvalidDataException ex) when (!budget.Exhausted)
+            {
+                tankFailure = ex.Message;
+                notes.Add($"Player tank: {ex.Message}");
+            }
+        // The opening's hold on the player's start, read from the same startup list and bindings as the frontier.
+        MissionStartControl? startControl = null;
+        if (context != null && localPlayer != null && startup.Length > 0)
+            try { startControl = PlayerStartControl(context, bindings!, startup, localPlayer.Root, token); }
+            catch (InvalidDataException ex) when (!budget.Exhausted) { notes.Add($"Player start: the opening could not be read: {ex.Message}"); }
+            catch (IOException) when (bindings!.Exhausted) { notes.Add("Player start: the opening could not be read within the scene's binding allowance."); }
         HashSet<int> dormant = [];
         if (context != null)
         {
@@ -406,7 +459,7 @@ public static partial class MissionSceneLoader
         var animationUses = context == null ? new Dictionary<int, MissionAnimationUses>() :
             CollectAnimationUses(context, original, bindings!, entryRoots, animationSeeds, actors, vehicles, weapons, selection, notes, token);
         return new(scene, sources, actors, dormant, notes, selection, original.Nodes.Count, token)
-        { InitializationTransforms = context?.InitializationTransforms ?? new(), AnimationEntryRoots = entryRoots, AnimationUses = animationUses };
+        { InitializationTransforms = dependencies, AnimationEntryRoots = entryRoots, AnimationUses = animationUses, LocalPlayer = localPlayer, PlayerTank = tank, PlayerTankFailure = tankFailure, PlayerStartControl = startControl };
 
         MissionPickupSource? CoordinateSource(int recordIndex)
         {
@@ -510,6 +563,12 @@ public static partial class MissionSceneLoader
             }
             catch { scene.Nodes.RemoveRange(before, scene.Nodes.Count - before); sources.RemoveRange(before, sources.Count - before); throw; }
         }
+    }
+    /// <summary>The mission number a world's folder or source map names (m6 → 6), or null.</summary>
+    private static int? MissionNumber(ISceneDocument world)
+    {
+        string name = world is Sources.SourceSceneSnapshot source ? source.Mission : Path.GetFileName(Path.GetDirectoryName(world.Path) ?? "");
+        return name.Length > 1 && char.ToLowerInvariant(name[0]) == 'm' && int.TryParse(name.AsSpan(1), System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out int number) ? number : null;
     }
     public static string VehicleTemplateName(string name)
     {

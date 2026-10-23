@@ -47,9 +47,7 @@ public sealed class GameGenScriptSyntax
         Lines = lines; Newline = crlf > lf ? "\r\n" : "\n";
     }
 
-    public static GameGenScriptSyntax Parse(ReadOnlySpan<byte> bytes) => Parse(bytes, CancellationToken.None);
     internal static GameGenScriptSyntax Parse(ReadOnlySpan<byte> bytes, CancellationToken token) => new(GameGenScriptText.Decode(bytes, token), token);
-    public static GameGenScriptSyntax Parse(string text) => new(text);
     internal static GameGenScriptSyntax Parse(string text, CancellationToken token) => new(text, token);
     public byte[] Encode() => Encoding.Latin1.GetBytes(Text);
     /// <summary>The line with a 1-based number.</summary>
@@ -59,7 +57,6 @@ public sealed class GameGenScriptSyntax
     /// The text with tokens of one line replaced (token index → new text). The line must still read as the same number of
     /// tokens with the new values; nothing else in the file changes.
     /// </summary>
-    public string ReplaceTokens(int number, IReadOnlyDictionary<int, string> replacements) => ReplaceTokens(number, replacements, CancellationToken.None);
     internal string ReplaceTokens(int number, IReadOnlyDictionary<int, string> replacements, CancellationToken token)
     {
         token.ThrowIfCancellationRequested();
@@ -85,7 +82,6 @@ public sealed class GameGenScriptSyntax
     }
 
     /// <summary>The text with whole instruction lines inserted before line <paramref name="number"/> (one past the last line appends).</summary>
-    public string InsertLines(int number, IReadOnlyList<IReadOnlyList<string>> instructions) => InsertLines(number, instructions, CancellationToken.None);
     internal string InsertLines(int number, IReadOnlyList<IReadOnlyList<string>> instructions, CancellationToken token)
     {
         token.ThrowIfCancellationRequested();
@@ -107,7 +103,6 @@ public sealed class GameGenScriptSyntax
     }
 
     /// <summary>The text with an instruction line turned into a comment, which keeps it readable and lets it be restored by hand.</summary>
-    public string CommentOut(int number) => CommentOut(number, CancellationToken.None);
     internal string CommentOut(int number, CancellationToken token)
     {
         token.ThrowIfCancellationRequested();

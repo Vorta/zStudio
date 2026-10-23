@@ -1,5 +1,4 @@
 using System.Globalization;
-using zStudio.Core.Animation;
 
 namespace zStudio.Desktop;
 
@@ -27,11 +26,4 @@ internal static class NumericText
                 : digits.Insert(decimalPosition, "."));
     }
 
-    public static string FormatForEditor(this AnimationField field, AnimationRecord record) => field.Kind switch
-    {
-        AnimationFieldKind.Float => record.F32(field.Offset).ToEditorText(),
-        AnimationFieldKind.Vector => string.Join(", ", Enumerable.Range(0, 3)
-            .Select(axis => record.F32(field.Offset + axis * 4).ToEditorText())),
-        _ => field.Format(record)
-    };
 }

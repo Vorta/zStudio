@@ -1,16 +1,13 @@
 using System.Windows;
 using System.Windows.Media.Media3D;
-using HelixToolkit.SharpDX;
-using HelixToolkit.Wpf.SharpDX;
-using Vector2 = System.Numerics.Vector2;
+using zStudio.Rendering.Direct3D;
 using Vector3 = System.Numerics.Vector3;
-using HitTestResult = HelixToolkit.SharpDX.HitTestResult;
 
 namespace zStudio.Rendering;
 
 public sealed partial class SceneViewport
 {
-    public bool IsOrbitPickingReady => viewport.RenderContext != null && viewport.ActualWidth > 0 && viewport.ActualHeight > 0;
+    public bool IsOrbitPickingReady => view.IsReady && viewport.ActualWidth > 0 && viewport.ActualHeight > 0;
     public bool IsNavigationPointInside(Point point) => double.IsFinite(point.X) && double.IsFinite(point.Y)
         && point.X >= 0 && point.Y >= 0 && point.X < viewport.ActualWidth && point.Y < viewport.ActualHeight;
 
@@ -26,29 +23,26 @@ public sealed partial class SceneViewport
     {
         surface = default;
         if (!TrySceneSurface(point, out var hit)) return false;
-        surface = new(hit!.PointHit.X, hit.PointHit.Y, hit.PointHit.Z); return true;
+        surface = new(hit!.Point.X, hit.Point.Y, hit.Point.Z); return true;
     }
     /// <param name="accept">Skips hits it declines (the polygon zone tool looks through what it cannot paint).</param>
-    private bool TrySceneSurface(Point point, out HitTestResult? surface, Func<HitTestResult, bool>? accept = null)
+    private bool TrySceneSurface(Point point, out RenderHit? surface, Func<RenderHit, bool>? accept = null)
     {
         surface = null;
-        if (!IsOrbitPickingReady || viewport.Camera is not ProjectionCamera camera
+        if (!IsOrbitPickingReady || view.Camera is not RenderCamera camera
             || !TryNavigationRay(point, out var origin, out var direction)) return false;
         // A navigation query can precede the next render update. Facades must
         // face this camera as well as the ray; simulation poses remain unchanged.
-        if (cameraPoseDirty) RefreshAnimationCamera(updateHitTests: true);
+        if (cameraPoseDirty) RefreshAnimationCamera();
         var forward = camera.LookDirection; forward.Normalize();
         // Adaptive clipping is finalized on the next frame. Starting at the eye
         // keeps immediate/substep queries independent of the previous near plane.
-        var ray = new HelixToolkit.Maths.Ray(new Vector3((float)origin.X, (float)origin.Y, (float)origin.Z),
+        var hits = view.HitTest(new Vector3((float)origin.X, (float)origin.Y, (float)origin.Z),
             new Vector3((float)direction.X, (float)direction.Y, (float)direction.Z));
-        var context = new HitTestContext(viewport.RenderContext, ray, new Vector2((float)point.X, (float)point.Y));
-        List<HitTestResult> hits = [];
-        foreach (var element in viewport.Items) element.HitTest(context, ref hits);
         foreach (var hit in hits.OrderBy(h => h.Distance))
         {
-            if (!hit.IsValid || hit.ModelHit is not MeshGeometryModel3D mesh || !IsOrbitSurface(mesh, hit.Tag)) continue;
-            var candidate = new Point3D(hit.PointHit.X, hit.PointHit.Y, hit.PointHit.Z);
+            if (hit.Node is not MeshNode mesh || !IsOrbitSurface(mesh, hit.Tag)) continue;
+            var candidate = new Point3D(hit.Point.X, hit.Point.Y, hit.Point.Z);
             if (!double.IsFinite(candidate.X) || !double.IsFinite(candidate.Y) || !double.IsFinite(candidate.Z)
                 || Vector3D.DotProduct(candidate - camera.Position, forward) < 1e-6 || accept?.Invoke(hit) == false) continue;
             surface = hit; return true;
@@ -64,8 +58,8 @@ public sealed partial class SceneViewport
     {
         origin = default; direction = default;
         if (!double.IsFinite(point.X) || !double.IsFinite(point.Y) || viewport.ActualWidth <= 0 || viewport.ActualHeight <= 0 ||
-            requireInside && !IsNavigationPointInside(point) || viewport.Camera is not ProjectionCamera camera) return false;
-        // FindHits/UnProject uses the previous render context's camera matrices.
+            requireInside && !IsNavigationPointInside(point) || view.Camera is not RenderCamera camera) return false;
+        // The renderer's own pointer rays use the previous frame's camera matrices.
         // Use the current pose without forcing a render or controller tick.
         var projection = camera.CreateProjectionMatrix(Aspect);
         var forward = camera.LookDirection; forward.Normalize();
@@ -75,13 +69,13 @@ public sealed partial class SceneViewport
         double y = (1 - 2 * point.Y / viewport.ActualHeight) / projection.M22;
         origin = camera.Position;
         direction = forward;
-        if (camera is OrthographicCamera) origin += right * x + up * y;
+        if (camera is OrthographicRenderCamera) origin += right * x + up * y;
         else { direction += right * x + up * y; direction.Normalize(); }
         return double.IsFinite(origin.X) && double.IsFinite(origin.Y) && double.IsFinite(origin.Z)
             && double.IsFinite(direction.X) && double.IsFinite(direction.Y) && double.IsFinite(direction.Z);
     }
 
-    private bool IsOrbitSurface(MeshGeometryModel3D mesh, object? instance)
+    private bool IsOrbitSurface(MeshNode mesh, int? instance)
     {
         if (!mesh.IsRendering || !mesh.IsHitTestVisible || mesh.Visibility != Visibility.Visible || !mesh.IsDepthClipEnabled) return false;
         if (visiblePlacements.TryGetValue(mesh, out var items))
@@ -91,7 +85,7 @@ public sealed partial class SceneViewport
 
     internal bool SetOrbitPivot(Point3D point)
     {
-        if (viewport.Camera is not ProjectionCamera camera || !double.IsFinite(point.X) || !double.IsFinite(point.Y) || !double.IsFinite(point.Z)) return false;
+        if (view.Camera is not RenderCamera camera || !double.IsFinite(point.X) || !double.IsFinite(point.Y) || !double.IsFinite(point.Z)) return false;
         var forward = camera.LookDirection; forward.Normalize();
         double depth = Vector3D.DotProduct(point - camera.Position, forward);
         if (!double.IsFinite(depth) || depth < 1e-6) return false;

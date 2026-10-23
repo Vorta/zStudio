@@ -3,11 +3,9 @@ using System.IO;
 using System.Numerics;
 using System.Text.Json.Nodes;
 using System.Windows;
-using System.Windows.Controls;
 using System.Windows.Input;
 using zStudio.Automation;
 using zStudio.Core;
-using zStudio.Core.Sources;
 using zStudio.Rendering;
 
 namespace zStudio.Desktop;
@@ -207,6 +205,8 @@ public partial class MainWindow
         aiPathDraft = null;
         if (scene == draft.Viewport) { scene.SetAiPathPointerTransform(false); scene.SetAiPathPreview(null); }
         UpdateAiPathPanel();
+        // An object shown while the draft was open is selected in the view once whatever ended the draft has finished.
+        Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.ApplicationIdle, () => ReselectShownSelection());
     }
     private bool ResolveAiPathDraft(DocumentModel? document = null)
     {

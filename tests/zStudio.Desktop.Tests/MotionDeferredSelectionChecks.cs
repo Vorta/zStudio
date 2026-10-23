@@ -8,9 +8,6 @@ using System.Windows.Data;
 using System.Windows.Threading;
 using ModelContextProtocol.Client;
 using ModelContextProtocol.Protocol;
-using zStudio.Core;
-using zStudio.Core.Formats;
-using zStudio.Desktop;
 using zStudio.Mcp;
 using Xunit;
 

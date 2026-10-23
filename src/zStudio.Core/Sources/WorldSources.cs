@@ -1,6 +1,4 @@
 using System.Security.Cryptography;
-using System.Text;
-using System.Text.Json;
 using System.Text.Json.Nodes;
 using zStudio.Core.Formats;
 using zStudio.Core.Gltf;
@@ -144,7 +142,7 @@ internal static partial class WorldSources
                 if (!scriptMissions.TryGetValue(instruction.Script, out var runs)) scriptMissions[instruction.Script] = runs = [];
                 runs.Add(mission.Mission);
             }
-            var decomposition = WorldDecomposer.DecomposeAll(mission.World, trace, notes, token, diagnostics);
+            var decomposition = WorldDecomposer.DecomposeAll(mission.World, trace, token, diagnostics);
             var decomposed = decomposition.Loads.ToList();
             foreach (var load in decomposed) if (load.Root != null) roots.Add(load.Root);
             // The database in its file's record order, with the groups the build deleted.

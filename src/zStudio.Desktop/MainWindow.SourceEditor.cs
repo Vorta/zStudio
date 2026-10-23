@@ -82,11 +82,13 @@ public partial class MainWindow
         {
             sourceChromeActive = wanted;
             if (wanted) EnterSourceChrome(); else LeaveSourceChrome();
+            SourceChromeChangedPreviewFailure(wanted);
         }
         if (scene?.InspectionContent is SceneInspectionCard card)
         {
             card.IsSourceWorld = shownDocument?.SourceWorld != null;
-            if (!sourceChromeActive) { card.WorldRebuilding = null; card.CategoryOf = null; card.PickupNameOf = null; card.ZoneLabel = null; card.RecentSelections = null; card.PickRecent = null; card.WorldSummary = null; }
+            if (!sourceChromeActive) { card.WorldRebuilding = null; card.CategoryOf = null; card.PickupNameOf = null; card.ZoneLabel = null; card.RecentSelections = null; card.PickRecent = null; card.WorldSummary = null;
+                card.ExtraSections = null; card.PlayerTankSummary = null; card.PickPlayerTank = null; }
         }
         RefreshSourceChrome();
     }
@@ -266,6 +268,7 @@ public partial class MainWindow
             ZoneEntry zone => section.OutlinerLabel + (zone.Zone.Label is { } label ? " · " + label : ""), _ => section.OutlinerLabel,
         } : card?.SelectionLabel ?? "No selection";
         StatusMission.Text = scene?.Mission?.Layout.Label ?? "";
+        RefreshPlayerTankStatus();
         StatusCounts.Text = scene?.PreviewSummary ?? "";
         StatusNoticeCount.Text = staticPreviewProblems.Count.ToString(CultureInfo.InvariantCulture);
         StatusNotices.Visibility = staticPreviewProblems.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
@@ -324,6 +327,10 @@ public partial class MainWindow
             card.RecentSelections = () => recentDocument == shownDocument ? recentSelections : [];
             card.PickRecent = PickRecentSelection;
             card.WorldSummary = WorldSummary;
+            var viewport = scene!;
+            card.ExtraSections = selected => PlayerTankSections(viewport, selected);
+            card.PlayerTankSummary = PlayerTankRowSummary;
+            card.PickPlayerTank = PickPlayerTank;
         }
         if (dockedCard != null && !ReferenceEquals(dockedCard, card)) UndockCard();
         if (card != null && dockedCard == null)
@@ -375,7 +382,8 @@ public partial class MainWindow
         if (recentDocument != sceneTreeDocument) { recentSelections.Clear(); recentDocument = sceneTreeDocument; }
         string[] path = row.Owner.State.SelectionPath.ToArray();
         recentSelections.RemoveAll(r => r.Path.SequenceEqual(path));
-        string parent = row.Parent?.PickupEntries != null ? string.Join(" › ", Ancestors(row).Reverse()) : row.Parent?.DisplayName ?? "";
+        // A pass row (AI Vehicles) has no node of its own: its label names it.
+        string parent = row.Parent?.PickupEntries != null ? string.Join(" › ", Ancestors(row).Reverse()) : row.Parent?.Pass?.Label ?? row.Parent?.DisplayName ?? "";
         recentSelections.Insert(0, new(row.DisplayName, parent, row.Category, path));
         // A pickup is found under Pickups › Weapons (› its type).
         static IEnumerable<string> Ancestors(SceneTreeItem row)
@@ -638,7 +646,23 @@ public partial class MainWindow
             if (CurrentInspectionCard?.HasDraft == true) throw new StudioCommandException("pending_drafts", "Apply or discard the edit first.");
             isolatedNode = node;
         }
-        ApplyIsolation(); CurrentInspectionCard?.Refresh(); RefreshRowEyes();
+        ApplyIsolation(); ReselectShownSelection(); CurrentInspectionCard?.Refresh(); RefreshRowEyes();
+    }
+    /// <summary>
+    /// An object selected in the tree while hidden (by its eye or another object's isolation) shows in its card as inactive;
+    /// once shown it is selected in the view again, which makes its placement editable. Only with no draft open anywhere, so
+    /// nothing asks (an AI path or drop-window draft retries this when it ends), and only for the shown map's object.
+    /// </summary>
+    /// <returns>Whether it was selected in the view (the card is then refreshed).</returns>
+    private bool ReselectShownSelection()
+    {
+        if (scene is not { } view || shownDocument is not { } doc || CurrentInspectionCard is not { HasDraft: false, ObjectApplying: false } card) return false;
+        if (HasInspectionDraft || aiPathDraft != null || parachuteDraft != null || HasSectionDraft() || sectionCard?.Applying == true) return false;
+        if (card.Selection is not { Active: false } selected || selected.SelectionNode < 0
+            || !selected.Target.StartsWith($"source:{doc.SessionId}:", StringComparison.Ordinal)) return false;
+        // Without a shown mesh of it the view selects nothing and nothing changes (a light, a group, an object still hidden).
+        if (!view.SelectInspectionNode(selected.SelectionNode)) return false;
+        card.Refresh(); return true;
     }
     /// <summary>
     /// Shows only the isolated object, or everything again: a source group, which owns no node of its own, brings the
@@ -745,6 +769,8 @@ public partial class MainWindow
     private void ApplyHiddenRows()
     {
         scene?.SetHiddenNodes(hiddenRows.Values.SelectMany(n => n));
+        // The card follows at once: a unit shown again is selected, or its reason changes (an open draft, the eye).
+        if (!ReselectShownSelection()) CurrentInspectionCard?.Refresh();
         if (sceneTree == null) return;
         HashSet<int> hidden = hiddenRows.Values.SelectMany(n => n).ToHashSet();
         sceneTree.IsHiddenNode = hidden.Contains;

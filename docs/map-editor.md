@@ -14,7 +14,7 @@ MCP: `zstudio_source_world_list`, `zstudio_source_world_open`.
 - **Command bar:** the scope (back arrow, **Whole world** and the world's source model file, such as `m1.gltf`); **Save**, **Undo**, **Redo**; **LOD** (LOD 0 is each object's highest detail) and **Difficulty**; then **Camera** (Frame all, Flycam), **Display** (Wireframe, Textures, Bounds, Horizon), **Overlay** (Non-default soils, CanModify, ClipTo, Landmarks, Face orientation), **Show** (VTOL route) and **Zones** (Edit zones).
 - **World tree** (left), the view (middle) and the **Properties** pane (right). Drag the gaps between them to resize.
 - **Over the view:** the **Perspective** chip (projection, named views, framing), the navigation cube, the selected object with its handles, and the surface under the pointer with its X/Y/Z.
-- **Status bar:** the selection, the mission start and difficulty, instance and mesh batch counts, **Preview notices**, and toggles for the **World tree**, **Properties** and **Diagnostics** panes. Diagnostics lists the map's file and preview problems.
+- **Status bar:** the selection, the mission start and difficulty, the [player tank](#player-tank) while it isn't drawn as at the start, instance and mesh batch counts, **Preview notices**, and toggles for the **World tree**, **Properties** and **Diagnostics** panes. Diagnostics lists the map's file and preview problems.
 
 ### World tree
 
@@ -31,9 +31,19 @@ MCP: `zstudio_scene_tree`, `zstudio_scene_selection`.
 
 ## Select and inspect
 
-Click an object in the view or the World tree. The Properties pane shows its card: its icon, name and type (with its source file in the tooltip), and collapsible sections. Clicking a mesh inside a turret or vehicle selects the whole object; the clicked polygon is under **Surface**. Clear the selection with **Escape**, **Clear selection** or a click on empty space. With nothing selected, the pane shows **Recently selected** and a summary of the world. **Alt+Enter** focuses the card; it opens the Properties window instead for a terrain piece (its recipe), for a pickup, vehicle, object the startup animations place, AI node or AI path selected in the view, and with nothing selected.
+Click an object in the view or the World tree. The Properties pane shows its card: its icon, name and type (with its source file in the tooltip), and collapsible sections. Clicking a mesh inside a turret or vehicle selects the whole object; the clicked polygon is under **Surface**. Clear the selection with **Escape**, **Clear selection** or a click on empty space. With nothing selected, the pane shows **Recently selected**, the **Player tank** and a summary of the world. **Alt+Enter** focuses the card; it opens the Properties window instead for a terrain piece (its recipe), for a pickup, vehicle, object the startup animations place, AI node or AI path selected in the view, and with nothing selected. When a placement can't be edited, its card's **Placement editing** row says why; a unit selected while hidden becomes editable as soon as it shows again (its eye, the end of an isolation or **Show all**).
 
 MCP: `zstudio_scene_inspect`, `zstudio_scene_card` (`select`, `clear`, `copy`).
+
+## Player tank
+
+The player tank's card (the first vehicle the mission spawns, `bft_00` in the shipped maps) also chooses how the view draws it, marked **Preview**: nothing is saved or undone, and Apply and Revert leave it alone. Its **Master type** and **Weapons** come first; **Details** (the placement, and why it can't be edited where it can't) follows, collapsed until you open it.
+- **Master type:** **Tracked**, **Amphibious**, **Hover** or **Sub**. Each shows the end of the mission's own transition from tracked, with the tank parked (no wake, floating or diving). A type the map's tank has no transition for is disabled (shipped: m1 tracked only; m2 adds amphibious; m3 and m4 hover; m5, m6 and the multiplayer maps sub). The note under the radios also gives the game's single-player rules, which allow amphibious from mission 3, hover from 4 and sub in 6 only.
+- **Weapons:** **Primary** (RFPG or ERFPG) and **Secondary** (the 16 secondary weapons, by weapon slot). The box under them shows the weapon's render, its manual name and the gun model it draws; several weapons share a model (the remote mines the proximity mines', the missiles and nukes one rail). In sub the beam and fire weapons are disabled, and choosing sub with one selected switches to the weapon the game picks.
+- The choice lasts while the map is open (rebuilds, undo, save and difficulty keep it); opening a map starts as a new game of that mission does (Tracked, RFPG and HE Mortar in the shipped maps). While the choice differs from that start, the status bar names it, and with nothing selected the pane's **Player tank** row shows it and selects the tank. A change redraws the view; with a pending edit on the card the map first asks to apply or discard it, and Cancel leaves the tank as it was. A mission whose opening drops the tank in (m2, m4, m5) hides it at the start, as the game does.
+- The keyboard: **Tab** enters each group at its chosen radio; the arrow keys, **Home** and **End** move and choose.
+
+MCP: `zstudio_scene_options` (`bftType`, `bftPrimary`, `bftSecondary`), `zstudio_preview_state` (`bft`).
 
 ## Edit objects
 
@@ -154,7 +164,7 @@ An addition is refused when a folder the mission searches first holds another fi
 
 ## Limits
 
-- AI links, new groups and Add model can't be edited in the GUI; positions that startup animations set can't be moved.
+- AI links, new groups and Add model can't be edited in the GUI; positions that startup animations set can't be moved, nor a unit that two records of the shown difficulty place (m2 Easy lists the player tank twice; its AI Vehicles rows say so in their tooltips) or a unit hidden at the mission's start. The player start can't be moved where the mission's opening holds the controls and releases them from the tank's pose (m1–m6): in m2–m6 the opening also sets where the player starts; in m1 the start is the placed pose. It moves in m7–m13.
 - Deleting or copying an object an animation names, or changing the model of an object whose parts a bound animation names, isn't refused: the rebuild and the export report it in Problems.
 - The view is the mission's starting scene, without simulating gameplay; not every kind of change has been tested in the game.
 - The AI overlay draws at most 16,384 nodes and 32,768 links.

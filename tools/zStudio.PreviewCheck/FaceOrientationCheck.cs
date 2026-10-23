@@ -4,7 +4,6 @@ using System.Text.Json.Nodes;
 using System.Windows;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
-using HelixToolkit.Wpf.SharpDX;
 using zStudio.Core;
 using zStudio.Core.Animation;
 using zStudio.Rendering;
@@ -51,8 +50,7 @@ internal static class FaceOrientationCheck
                     var frame = new AnimationFrame(0, transforms.Select((m,i) => new AnimationNodePose(i + 1, i + 1, 0, m, true, 1, -1, 0, 0)).ToArray(), [], [], [], null, null, default, default, [], [], []);
                     if (animated) await preview.ShowAnimationAsync(context, frame, resolver, false, default);
                     else await preview.ShowAsync(world, asset, resolver, null, 0, default);
-                    var surface = (Viewport3DX)preview.RenderSurface;
-                    surface.ShowViewCube = surface.ShowCoordinateSystem = false;
+                    preview.SetNavigationAids(false, false);
                     preview.RestoreView(new(new(0,0,5), new(0,0,-5), new(0,1,0), 45));
                     var pose = preview.CaptureView();
                     preview.SetWireframe(true);
@@ -73,8 +71,8 @@ internal static class FaceOrientationCheck
                     preview.SetFaceOrientation(false);
                     if (preview.CaptureView() != pose) throw new InvalidOperationException("Appearance changed camera state.");
 
-                    // Wireframe outlines the static meshes' polygons; it never replaces their fill.
-                    if (!preview.Wireframe || !animated && preview.PolygonOutlineCount == 0 || surface.Items.OfType<MeshGeometryModel3D>().Any(m => m.FillMode != SharpDX.Direct3D11.FillMode.Solid)) throw new InvalidOperationException("Wireframe choice was lost.");
+                    // Wireframe outlines the static meshes' polygons.
+                    if (!preview.Wireframe || !animated && preview.PolygonOutlineCount == 0) throw new InvalidOperationException("Wireframe choice was lost.");
                 }
                 Console.WriteLine("PASS: static and animated winding, wrong normals, mirrored transforms, opaque depth in both submission orders, mesh replacement, half-tint priority and wireframe restoration.");
                 byte[] Pixel()

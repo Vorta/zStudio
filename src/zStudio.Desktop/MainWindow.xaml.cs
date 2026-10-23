@@ -13,7 +13,6 @@ using System.Windows.Threading;
 using Microsoft.Win32;
 using NAudio.Wave;
 using zStudio.Core;
-using zStudio.Core.Export;
 using zStudio.Core.Formats;
 using zStudio.Rendering;
 
@@ -434,7 +433,8 @@ public partial class MainWindow : Window
                 SceneMenus.Visibility = doc.SourceWorld != null ? Visibility.Collapsed : Visibility.Visible; WorldDifficultyGroup.Visibility = asset.Kind == AssetKind.World && snapshot.Game != GameVariant.MechWarrior3 ? Visibility.Visible : Visibility.Collapsed; WorldMission.Visibility = Visibility.Collapsed;
                 if (scene == null)
                 {
-                    scene = new(); scene.Information += s => { PreviewInfo.Text = s; PreviewInfo.ToolTip = s; }; scene.NodeSelected += InspectNode; ConfigureAiScene(scene); ConfigurePickupScene(scene);
+                    scene = new(); scene.Information += s => { PreviewInfo.Text = s; PreviewInfo.ToolTip = s; }; scene.NodeSelected += InspectNode;
+                    WatchPreviewFailures(scene); ConfigureAiScene(scene); ConfigurePickupScene(scene);
                     // During a handoff the retiring scene stays in the host until this one has loaded.
                     if (retiringScene == null) SceneHost.Content = scene;
                     ConfigureFlyScene(scene);
@@ -442,7 +442,8 @@ public partial class MainWindow : Window
                 }
                 if (asset.Kind == AssetKind.World) await PopulateWorldMissionsAsync(doc, token);
                 string? exactMission = ExactMissionFor(doc.Path, ViewModel.Resolver.SelectedMission(doc.Path));
-                var mission = asset.Kind == AssetKind.World ? await MissionSceneLoader.LoadAsync(doc.Document, ViewModel.Resolver, token: token, difficulty: ViewModel.Difficulty, mission: exactMission, exactMission: exactMission != null) : null;
+                var mission = asset.Kind == AssetKind.World ? await MissionSceneLoader.LoadAsync(doc.Document, ViewModel.Resolver, token: token, difficulty: ViewModel.Difficulty, mission: exactMission, exactMission: exactMission != null,
+                    playerTank: doc.SourceWorld?.PlayerTank) : null;
                 // A source world's placement edits are carried back to its sources (see MoveSourcePlacementAsync).
                 if (mission != null) { await doc.GetPickupEditsAsync(ViewModel.Resolver, token); await PopulateWorldMissionsAsync(doc, token); }
                 if (mission != null) await PrepareSourceMapSelectionAsync(doc, mission.Scene, mission, token);
@@ -453,7 +454,9 @@ public partial class MainWindow : Window
                 // A rebuilt source world keeps the camera of the build it replaced.
                 if (pendingSourceView is { } rebuilt && rebuilt.Document == doc) { pendingSourceView = null; scene.RestoreView(rebuilt.View); }
                 var shownOptions = ReadStaticSceneOptions();
-                publishedStaticOptions = shownOptions with { Difficulty = mission is { Layout.DifficultyApplies: true } ? mission.Layout.Difficulty : ViewModel.Difficulty, Mission = mission?.Layout.MissionArchive ?? shownOptions.Mission };
+                publishedStaticOptions = shownOptions with { Difficulty = mission is { Layout.DifficultyApplies: true } ? mission.Layout.Difficulty : ViewModel.Difficulty, Mission = mission?.Layout.MissionArchive ?? shownOptions.Mission,
+                    Tank = mission?.PlayerTank?.Requested ?? shownOptions.Tank };
+                AdoptPlayerTank(doc, mission);
                 ApplyTerrainBrush(scene);
                 if (mission != null) ViewModel.AdoptMissionFallback(doc.Path, mission.Layout);
                 if (asset.Kind == AssetKind.World) AttachPickupEditor(doc);
@@ -858,7 +861,7 @@ public partial class MainWindow : Window
         var assembly = typeof(MainWindow).Assembly;
         string version = assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion.Split('+')[0]
             ?? assembly.GetName().Version?.ToString(3) ?? "unknown";
-        MessageBox.Show(this, $"zStudio {version}\nWindows asset explorer\n\nTexture packs · ZAR archives · prepared scripts · animations · GameZ worlds\n\nBuilt with .NET, WPF, Helix Toolkit, CommunityToolkit.Mvvm, and NAudio. See THIRD-PARTY-NOTICES.md for licenses. Game assets are not included.", "About");
+        MessageBox.Show(this, $"zStudio {version}\nWindows asset explorer\n\nTexture packs · ZAR archives · prepared scripts · animations · GameZ worlds\n\nBuilt with .NET, WPF, Vortice.Windows, CommunityToolkit.Mvvm, and NAudio. See THIRD-PARTY-NOTICES.md for licenses. Game assets are not included.", "About");
     }
     private void Keyboard(object sender, KeyEventArgs e)
     {

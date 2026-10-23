@@ -1,4 +1,3 @@
-using System.Text;
 using zStudio.Core.Formats;
 using zStudio.Core.Worlds;
 
@@ -1006,11 +1005,11 @@ public static partial class SourceBuilder
     {
         "archive" => BuildArchive(plan, snapshot, token),
         "scripts" => BuildScripts(root, plan, snapshot, token),
-        "sounds" => BuildSounds(root, plan, snapshot, token),
+        "sounds" => BuildSounds(plan, snapshot, token),
         "images" => BuildImages(plan, snapshot, token),
         "textures" => BuildTexturePack(plan, snapshot, token),
         "world" => BuildWorld(plan, snapshot, token),
-        "animations" => BuildAnimations(root, plan, snapshot, token),
+        "animations" => BuildAnimations(plan, snapshot, token),
         _ => throw new InvalidDataException($"Unknown output family '{plan.Family}'.")
     };
 
@@ -1278,7 +1277,7 @@ public static partial class SourceBuilder
     /// effect templates that the effects.zrd the game reads does not define: the common one when data/common has one,
     /// otherwise the mission's) prevent publication.
     /// </summary>
-    private static Built BuildAnimations(string root, SourceOutputPlan plan, Snapshot snapshot, CancellationToken token)
+    private static Built BuildAnimations(SourceOutputPlan plan, Snapshot snapshot, CancellationToken token)
     {
         string mission = plan.Path.Split('/')[0];
         List<string> warnings = [];
@@ -1347,7 +1346,7 @@ public static partial class SourceBuilder
         return image;
     }
 
-    private static Built BuildSounds(string root, SourceOutputPlan plan, Snapshot snapshot, CancellationToken token)
+    private static Built BuildSounds(SourceOutputPlan plan, Snapshot snapshot, CancellationToken token)
     {
         long retained = 8L + plan.Inputs.Count * ArchiveSources.RecordSize;
         FormatRegistry.ValidateDocumentSize(retained);

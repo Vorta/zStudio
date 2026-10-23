@@ -268,8 +268,10 @@ internal sealed partial class SceneInspectionCard
     {
         var recentNow = RecentSelections?.Invoke() ?? [];
         var summaryNow = WorldSummary?.Invoke() ?? [];
+        var tankNow = PlayerTankSummary?.Invoke();
         string signature = string.Join("\u0001", recentNow.Select(r => r.Name + "\u0002" + r.Parent + "\u0002" + r.Category + "\u0002" + string.Join("/", r.Path)))
-            + "\u0003" + string.Join("\u0001", summaryNow.Select(s => s.Label + "\u0002" + s.Value));
+            + "\u0003" + string.Join("\u0001", summaryNow.Select(s => s.Label + "\u0002" + s.Value))
+            + "\u0004" + (tankNow == null ? "" : tankNow.Name + "\u0002" + tankNow.State + "\u0002" + tankNow.Absent);
         if (signature == emptySignature && emptyBody.Children.Count > 0) return;
         emptySignature = signature;
         emptyBody.Children.Clear();
@@ -310,6 +312,42 @@ internal sealed partial class SceneInspectionCard
             }
             emptyBody.Children.Add(section);
         }
+        // The player tank: a readout of how the view draws it and a shortcut to its card (which holds the choice).
+        if (tankNow != null)
+        {
+            TextBlock tag = new() { Text = "Preview", FontSize = 11, VerticalAlignment = VerticalAlignment.Center };
+            tag.SetResourceReference(TextBlock.ForegroundProperty, "TextFillColorSecondaryBrush");
+            Border preview = new() { Child = tag, Height = 20, Padding = new(8, 0, 8, 0), CornerRadius = new(10), VerticalAlignment = VerticalAlignment.Center, ToolTip = PlayerTankPresentation.PreviewToolTip };
+            preview.SetResourceReference(Border.BackgroundProperty, "ControlFillColorSecondaryBrush");
+            var (section, rows) = EmptySection("Player tank", preview);
+            if (tankNow.Absent is { } absent)
+            {
+                TextBlock none = new() { Text = absent, FontSize = 12, TextWrapping = TextWrapping.Wrap, Margin = new(8, 2, 8, 8) };
+                none.SetResourceReference(TextBlock.ForegroundProperty, "TextFillColorTertiaryBrush");
+                rows.Children.Add(none);
+            }
+            else
+            {
+                DockPanel line = new() { Height = 34 };
+                TextBlock state = new() { Text = tankNow.State, FontSize = 12, TextTrimming = TextTrimming.CharacterEllipsis, VerticalAlignment = VerticalAlignment.Center, Margin = new(8, 0, 0, 0) };
+                state.SetResourceReference(TextBlock.ForegroundProperty, "TextFillColorSecondaryBrush");
+                DockPanel.SetDock(state, Dock.Right); line.Children.Add(state);
+                var icon = new PreviewIcon { Kind = OutlinerKinds.PassIcon("aiv"), Width = 15, Height = 15, Margin = new(0, 0, 10, 0), VerticalAlignment = VerticalAlignment.Center };
+                icon.SetValue(System.Windows.Documents.TextElement.ForegroundProperty, OutlinerKinds.PassBrush("aiv"));
+                line.Children.Add(icon);
+                line.Children.Add(new TextBlock { Text = tankNow.Name, VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis });
+                string label = $"Select {tankNow.Name} to change its type and weapons";
+                Button pick = new() { Content = line, Height = 34, HorizontalContentAlignment = HorizontalAlignment.Stretch, Padding = new(8, 0, 8, 0), Margin = new(0), ToolTip = label };
+                pick.SetResourceReference(StyleProperty, "CommandButton");
+                pick.Width = double.NaN; pick.HorizontalAlignment = HorizontalAlignment.Stretch;
+                // The button style centres its content: the row spans the button, the state at its right.
+                pick.SizeChanged += (_, e) => line.Width = Math.Max(0, e.NewSize.Width - 18);
+                AutomationProperties.SetName(pick, label);
+                pick.Click += (_, _) => PickPlayerTank?.Invoke();
+                rows.Children.Add(pick);
+            }
+            emptyBody.Children.Add(section);
+        }
         if (summaryNow is { Count: > 0 } summary)
         {
             var (section, rows) = EmptySection("World");
@@ -327,10 +365,13 @@ internal sealed partial class SceneInspectionCard
             rows.Children.Add(table);
             emptyBody.Children.Add(section);
         }
-        static (Border Section, StackPanel Rows) EmptySection(string title)
+        static (Border Section, StackPanel Rows) EmptySection(string title, FrameworkElement? trailing = null)
         {
             StackPanel rows = new() { Margin = new(4, 0, 4, 6) };
-            rows.Children.Add(new TextBlock { Text = title, FontSize = 13, FontWeight = FontWeights.SemiBold, Margin = new(8, 10, 8, 4) });
+            DockPanel heading = new() { Margin = new(8, 10, 8, 4) };
+            if (trailing != null) { DockPanel.SetDock(trailing, Dock.Right); heading.Children.Add(trailing); }
+            heading.Children.Add(new TextBlock { Text = title, FontSize = 13, FontWeight = FontWeights.SemiBold, VerticalAlignment = VerticalAlignment.Center });
+            rows.Children.Add(heading);
             Border section = new() { Child = rows, CornerRadius = new(6), BorderThickness = new(1), Margin = new(0, 0, 0, 6) };
             section.SetResourceReference(Border.BackgroundProperty, "CardBackgroundFillColorDefaultBrush");
             section.SetResourceReference(Border.BorderBrushProperty, "CardStrokeColorDefaultBrush");

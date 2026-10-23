@@ -115,10 +115,10 @@ internal sealed class SourceWorldFixture : IDisposable
         builder.Add(new([new(0, y, 0), new(size, y, 0), new(size, y, -size), new(0, y, -size)], [new(0, 0), new(1, 0), new(1, 1), new(0, 1)], [], [], material));
         return builder.Finish();
     }
-    private void Model(string folder, string stem, string textures, WorldNode root)
+    private void Model(string folder, string stem, string textures, params WorldNode[] roots)
     {
         // These authored fixture loads participate in altitude/collision probing at their load root as well as their mesh.
-        var (json, bin) = WorldGltf.Export([root], 0xFF, new() { Texture = t => ($"{textures}/{t.Name}.png", 0) }, loadRoot: Node(stem + ".flt")).Write(stem + ".bin");
+        var (json, bin) = WorldGltf.Export(roots, 0xFF, new() { Texture = t => ($"{textures}/{t.Name}.png", 0) }, loadRoot: Node(stem + ".flt")).Write(stem + ".bin");
         Write($"{folder}/{stem}.bin", bin); Write($"{folder}/{stem}.gltf", json);
     }
     /// <summary>
@@ -268,6 +268,77 @@ internal sealed class SourceWorldFixture : IDisposable
             Group = groups.Contains, Reference = n => ReferenceEquals(n, part) ? "m1_01.gltf" : null, Content = n => ReferenceEquals(n, part) ? [.. n.Children] : null,
         }).Write("m1.bin");
         Write("data/m1/models/m1.bin", bin); Write("data/m1/models/m1.gltf", json);
+    }
+
+    /// <summary>
+    /// Adds m3, whose world loads a player tank as <c>bft_00</c> (the first AIV record): tracks, hover wings the load cleanup
+    /// hides, turret doors and a gun holding five weapons' models. Its vehicle resource lists five weapons and the track
+    /// block's lists; its animations hold the transitions to hover only, so amphibious and sub are unavailable.
+    /// </summary>
+    public void WritePlayerTank()
+    {
+        WorldTexture rock = new("rock");
+        Write("gamegen/m3.gs", WorldScript("m3", "SetModelDirectory ..\\data\\m3\\models\\bft\r\nLoadGameGen bft.gltf bft_00"));
+        Model("data/m3/models", "m3", "../textures", Node("ground", Quad(new() { Texture = rock, Flags = 0x1FF }, 64, 0)));
+        Png("data/m3/textures/rock.png", 255, 0, 0);
+        WorldNode Part(string name, float y) => Node(name, Quad(new() { Texture = rock, Flags = 0x1FF }, 1, y));
+        var body = Node("body"); body.Children.Add(Part("tracks", 0)); body.Children.Add(Part("wings_hover", 0.5f));
+        var gun = Node("gun");
+        foreach (string weapon in new[] { "RFPG_L", "RFPG_R", "ERFPG_L", "ERFPG_R", "HEM", "NAPALM", "LO-EM" }) gun.Children.Add(Part(weapon, 2));
+        var turret = Node("turret"); turret.Children.Add(Part("doorleft", 1.5f)); turret.Children.Add(Part("doorright", 1.5f)); turret.Children.Add(gun);
+        Model("data/m3/models/bft", "bft", "../../textures", body, turret);
+        Write("data/m3/zrdr/aiv.zrd", "( bft_00 ( 0 ( 10.0 0.0 -10.0 ) 0.0 ) )");
+        // As retail m2 Easy: the player twice.
+        Write("data/m3/zrdr/aiv_easy.zrd", "( bft_00 ( 0 ( 10.0 0.0 -10.0 ) 0.0 ) bft_00 ( 0 ( 10.0 0.0 -10.0 ) 0.0 ) )");
+        Write("data/m3/zrdr/vehicle.zrd", """
+            ( bft (
+              common_mode ( weapons (
+                ( wep_2.0 1 0 3 1.2 5.0 5.0 1 1 ) ( wep_1.0 1 1 123456789 0.15 5.0 100.0 1 2 ) ( wep_1.1 2 1 300 0.12 5.0 300.0 1 2 )
+                ( wep_3.1 2 0 40 0.35 5.0 20.0 1 1 ) ( wep_8.0 3 0 5 2.0 5.0 3.0 0 1 ) ) )
+              track_mode ( mode ( track ) t2a_anims ( tracks_to_none none_to_amphib ) t2h_anims ( tracks_to_none none_to_hover ) )
+              amphib_mode ( mode ( amphib ) a2s_anims ( amphib_to_none body_to_sub ) )
+              hover_mode ( mode ( hover ) )
+              sub_mode ( mode ( sub ) )
+            ) )
+            """);
+        Write("data/m3/zrdr/weapons.zrd", """
+            ( BALLISTICS (
+              wep_1.0 ( NAME ( RFPG ) ) wep_1.1 ( NAME ( ERFPG ) ) wep_2.0 ( NAME ( HEM ) )
+              wep_3.1 ( NAME ( NAPALM ) CATCHES_FIRE ( 1 ) ) wep_8.0 ( NAME ( LO-EM ) )
+            ) )
+            """);
+        // As m1's opening: it takes the controls and gives them back from the tank's pose, without moving the tank.
+        Write("data/m3/zrdr/startanims.zrd", "( NEW_GAME_START ( ( m3_start_animation ) ) )");
+        Write("data/m3/zrdr/anim.zad", """
+            (
+              ANIMATION_DEFINITIONS (
+                GRAVITY ( -9.8 )
+                ANIMATION_LIST ( ANIMATION_DEFINITION_FILE ( "..\\data\\m3\\zrdr\\bftm3.zad" ) )
+              )
+            )
+            """);
+        Write("data/m3/zrdr/bftm3.zad", """
+            (
+              ANIMATION_DEFINITIONS (
+                ANIMATION_LIST (
+                  ANIMATION_DEFINITION (
+                    NAME ( bft_00 ) ANIMATION_NAME ( tracks_to_none ) ACTIVATION ( ON_CALL ) RESET_TIME ( -1.0 )
+                    RESET_STATE ( OBJECT_ACTIVE_STATE ( NAME ( wings_hover ) STATE ( INACTIVE ) ) )
+                    SEQUENCE_DEFINITION ( NAME ( fold ) OBJECT_ACTIVE_STATE ( NAME ( tracks ) STATE ( INACTIVE ) ) )
+                  )
+                  ANIMATION_DEFINITION (
+                    NAME ( bft_00 ) ANIMATION_NAME ( none_to_hover ) ACTIVATION ( ON_CALL ) RESET_TIME ( -1.0 -1.0 )
+                    SEQUENCE_DEFINITION ( NAME ( unfold ) OBJECT_ACTIVE_STATE ( NAME ( wings_hover ) STATE ( ACTIVE ) ) )
+                  )
+                  ANIMATION_DEFINITION (
+                    NAME ( ground ) ANIMATION_NAME ( m3_start_animation ) ACTIVATION ( ON_CALL ) RESET_TIME ( 0 -1 )
+                    RESET_STATE ( CALLBACK ( VALUE ( 15 ) ) CALLBACK ( VALUE ( 10 ) ) )
+                    SEQUENCE_DEFINITION ( NAME ( hold ) CALLBACK ( VALUE ( 14 ) ) )
+                  )
+                )
+              )
+            )
+            """);
     }
 
     public void Dispose() { try { Directory.Delete(Root, true); } catch (IOException) { } }

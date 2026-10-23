@@ -1,12 +1,8 @@
-using System.IO;
 using System.Numerics;
-using System.Text.Json;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
-using zStudio.Core;
 using zStudio.Core.Animation;
-using zStudio.Desktop;
 using Xunit;
 
 namespace zStudio.Desktop.Tests;

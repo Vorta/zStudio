@@ -6,7 +6,6 @@ using System.Windows.Threading;
 using zStudio.Automation;
 using zStudio.Core;
 using zStudio.Core.Formats;
-using zStudio.Desktop;
 using zStudio.Tests;
 using Xunit;
 

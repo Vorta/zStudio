@@ -1,4 +1,3 @@
-using System.IO;
 using System.Buffers.Binary;
 using System.Text;
 using zStudio.Core.Sources;
@@ -38,14 +37,14 @@ public sealed class SourceMissionInspectionBudgetTests
         fixture.Write("gamegen/m3.gs", "#" + new string('b', 79));
         SourceWorkspace workspace = new(fixture.Project);
         SourceScriptInspection inspection = new(workspace, Token, maximumBytes: 120);
-        var error = Assert.Throws<IOException>(() => SourceObjectEdits.MissionsRunning(workspace, "gamegen/shared.gw", "m1", Token, inspection));
+        var error = Assert.Throws<IOException>(() => SourceObjectEdits.MissionsRunning("gamegen/shared.gw", "m1", Token, inspection));
         Assert.Contains("script input limits", error.Message);
         Assert.Equal(1, inspection.ParsedScripts);
         Assert.Equal(0, workspace.Revision);
         Assert.False(workspace.CanUndo);
         Assert.False(workspace.IsDirty);
         Assert.Equal("#" + new string('a', 79), File.ReadAllText(fixture.Path("gamegen/m2.gs")));
-        Assert.Empty(SourceObjectEdits.MissionsRunning(workspace, "gamegen/shared.gw", "m1", Token, new(workspace, Token, maximumBytes: 160)));
+        Assert.Empty(SourceObjectEdits.MissionsRunning("gamegen/shared.gw", "m1", Token, new(workspace, Token, maximumBytes: 160)));
     }
 
     [Theory]
@@ -72,8 +71,8 @@ public sealed class SourceMissionInspectionBudgetTests
         fixture.Write("gamegen/other.gw", "# other\n");
         SourceWorkspace workspace = new(fixture.Project);
         SourceScriptInspection inspection = new(workspace, Token, maximumBytes: 100, maximumWork: 1000);
-        Assert.Equal(["m2"], SourceObjectEdits.MissionsRunning(workspace, "gamegen/shared.gw", "m1", Token, inspection));
-        Assert.Equal(["m2"], SourceObjectEdits.MissionsRunning(workspace, "gamegen/other.gw", "m1", Token, inspection));
+        Assert.Equal(["m2"], SourceObjectEdits.MissionsRunning("gamegen/shared.gw", "m1", Token, inspection));
+        Assert.Equal(["m2"], SourceObjectEdits.MissionsRunning("gamegen/other.gw", "m1", Token, inspection));
         Assert.Equal(3, inspection.ParsedScripts);
         var original = inspection.Read("gamegen/shared.gw");
         Assert.Same(original, inspection.Read("GAMEGEN\\SHARED.GW"));
@@ -81,7 +80,7 @@ public sealed class SourceMissionInspectionBudgetTests
         // These queries use only cached source, so a byte-only or per-query budget would never stop them.
         Assert.Contains("inspection work", Assert.Throws<IOException>(() =>
         {
-            for (int i = 0; i < 20; i++) SourceObjectEdits.MissionsRunning(workspace, "gamegen/shared.gw", "m1", Token, inspection);
+            for (int i = 0; i < 20; i++) SourceObjectEdits.MissionsRunning("gamegen/shared.gw", "m1", Token, inspection);
         }).Message);
         Assert.Equal(3, inspection.ParsedScripts);
         Assert.False(workspace.IsDirty);
@@ -168,8 +167,8 @@ public sealed class SourceMissionInspectionBudgetTests
         SourceWorkspace workspace = new(fixture.Project);
         var prepared = workspace.BeginPreparedEdit();
         SourceScriptInspection inspection = new(prepared.Workspace, Token);
-        Assert.Equal(["m2"], SourceObjectEdits.MissionsRunning(prepared.Workspace, "gamegen/shared.gw", "m1", Token, inspection));
-        Assert.Equal(["m2"], SourceObjectEdits.MissionsRunning(prepared.Workspace, "gamegen/shared.gw", "m1", Token, inspection));
+        Assert.Equal(["m2"], SourceObjectEdits.MissionsRunning("gamegen/shared.gw", "m1", Token, inspection));
+        Assert.Equal(["m2"], SourceObjectEdits.MissionsRunning("gamegen/shared.gw", "m1", Token, inspection));
         fixture.Write("gamegen/m2.gs", "source different.gw\n");
         Assert.Throws<SourceFileChangedException>(() => workspace.VerifyPreparedEdit(prepared, Token));
         Assert.Equal(0, workspace.Revision);

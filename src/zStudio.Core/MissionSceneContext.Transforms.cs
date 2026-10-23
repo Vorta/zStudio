@@ -42,7 +42,7 @@ public sealed partial class MissionSceneContext
                 if (before.Class != "object3d" || initialized.Name != before.Name || initialized.Class != before.Class
                     || !initialized.Parents.AsSpan().SequenceEqual(before.Parents) || !initialized.Children.AsSpan().SequenceEqual(before.Children)
                     || SourceNodes[i] != i || dependencies.Reads.Contains(i) || dependencies.Writes.Contains(i)
-                    || DormantRoots.Contains(i) || ActorAt(i) is { Root: var actorRoot } actor && actorRoot == i && (actor.PlacementPosition.HasValue || actor.CoordinateSource != null || actor.Pickup != null)
+                    || DormantRoots.Contains(i) || repeatedRoots.ContainsKey(i) || ActorAt(i) is { Root: var actorRoot } actor && actorRoot == i && (actor.PlacementPosition.HasValue || actor.CoordinateSource != null || actor.Pickup != null)
                     || SceneBuilder.LocalTransform(initialized) != SceneBuilder.LocalTransform(before)) return null;
                 changed.Add(i);
             }
@@ -112,13 +112,15 @@ public sealed partial class MissionSceneContext
                 if (lookup.First(query.Root, query.Name, query.Limit) != query.Result) return null;
         }
         return new(scene, SourceNodes.ToList(), Actors.ToList(), new(DormantRoots), Diagnostics, Layout, originalNodeCount, token)
-        { AiNetworks = AiNetworks, InitializationTransforms = dependencies, AnimationEntryRoots = AnimationEntryRoots, AnimationUses = AnimationUses };
+        { AiNetworks = AiNetworks, InitializationTransforms = dependencies, AnimationEntryRoots = AnimationEntryRoots, AnimationUses = AnimationUses, LocalPlayer = LocalPlayer, PlayerTank = PlayerTank, PlayerTankFailure = PlayerTankFailure, PlayerStartControl = PlayerStartControl };
     }
 
     /// <summary>
     /// Rebase an initialized mission onto a source update that replaced only built models' polygon zones (see
     /// SourceWorlds.TryUpdatePolygonZones): nodes, materials and textures are the same objects, so initialization, which
     /// reads no polygon zone, stands. Null when the update replaced anything else or the mission does not show those models.
+    /// Models of the mission's own past the source's (parts the player tank's mode change left morphed) share their source model's
+    /// polygons, so a copy of a replaced model takes its new polygons too.
     /// </summary>
     public MissionSceneContext? WithSourcePolygonZones(GameScene beforeSource, GameScene afterSource, CancellationToken token = default)
     {
@@ -137,8 +139,16 @@ public sealed partial class MissionSceneContext
             if (!ReferenceEquals(Scene.Models[i], a) || a.Polygons.Length != b.Polygons.Length || !ReferenceEquals(a.Vertices, b.Vertices)) return null;
             scene.Models[i] = b;
         }
+        for (int i = beforeSource.Models.Count; i < Scene.Models.Count; i++)
+        {
+            token.ThrowIfCancellationRequested();
+            var copy = Scene.Models[i];
+            for (int j = 0; j < beforeSource.Models.Count; j++)
+                if (!ReferenceEquals(beforeSource.Models[j], afterSource.Models[j]) && ReferenceEquals(copy.Polygons, beforeSource.Models[j].Polygons))
+                { scene.Models[i] = copy with { Polygons = afterSource.Models[j].Polygons }; break; }
+        }
         return new(scene, SourceNodes.ToList(), Actors.ToList(), new(DormantRoots), Diagnostics, Layout, originalNodeCount, token)
-        { AiNetworks = AiNetworks, InitializationTransforms = InitializationTransforms, AnimationEntryRoots = AnimationEntryRoots, AnimationUses = AnimationUses };
+        { AiNetworks = AiNetworks, InitializationTransforms = InitializationTransforms, AnimationEntryRoots = AnimationEntryRoots, AnimationUses = AnimationUses, LocalPlayer = LocalPlayer, PlayerTank = PlayerTank, PlayerTankFailure = PlayerTankFailure, PlayerStartControl = PlayerStartControl };
     }
 
     private static readonly string[] BoundsFields =["node_bbox", "model_bbox", "child_bbox", "area_partition", "update_flags"];

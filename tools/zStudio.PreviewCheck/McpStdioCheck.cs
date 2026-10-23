@@ -1,7 +1,6 @@
 using System.IO;
 using System.Text.Json.Nodes;
 using ModelContextProtocol.Client;
-using ModelContextProtocol.Protocol;
 using zStudio.Mcp;
 
 internal static class McpStdioCheck
@@ -11,9 +10,20 @@ internal static class McpStdioCheck
     {
         using var savedSettings = new SettingsSnapshot();
         if (LocalMcpHost.Discover(executable).Count > 0) throw new InvalidOperationException("Close this test installation first.");
-        string path = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "zStudio", "settings.json");
+        // Never overlap the user's zStudio: refuse a copy that is running, and a build that would ignore this
+        // check's private profile and use the user's own settings and MCP registrations.
+        if (IsRunning(executable)) throw new InvalidOperationException("This zStudio copy is running. Check a separate copy (extract the portable ZIP into an empty folder).");
+        if (executable.Replace('/', '\\').Contains(@"\artifacts\zStudio-win-x64\", StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("artifacts/zStudio-win-x64 is the user's build. Check a separate copy (extract the portable ZIP into an empty folder).");
+        if (zStudio.Automation.StudioProfile.IsPrivate && !UsesProfileOverride(executable)) throw new InvalidOperationException("This build predates ZSTUDIO_PROFILE and would use the user's own profile. Check a newer build.");
+        string path = zStudio.Desktop.StudioSettings.SettingsPath;
         var settings = File.Exists(path) ? JsonNode.Parse(File.ReadAllText(path))!.AsObject() : new JsonObject();
-        if (settings["McpEnabled"]?.GetValue<bool>() != true) throw new InvalidOperationException("Enable MCP manually before this portable check. The check never changes access settings.");
+        if (settings["McpEnabled"]?.GetValue<bool>() != true)
+        {
+            // Access is the user's decision in their own profile; a private test profile is the check's own.
+            if (!zStudio.Automation.StudioProfile.IsPrivate) throw new InvalidOperationException("Enable MCP manually before this portable check. The check never changes the user's access settings.");
+            settings["McpEnabled"] = true; Directory.CreateDirectory(Path.GetDirectoryName(path)!); File.WriteAllText(path, settings.ToJsonString());
+        }
         async Task<McpClient> Connect()
         {
             using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
@@ -56,5 +66,22 @@ internal static class McpStdioCheck
             return 0;
         }
         catch (Exception ex) { Console.Error.WriteLine(ex); return 1; }
+    }
+
+    private static bool IsRunning(string executable)
+    {
+        foreach (var process in System.Diagnostics.Process.GetProcessesByName(Path.GetFileNameWithoutExtension(executable)))
+            using (process)
+                try { if (string.Equals(process.MainModule?.FileName, executable, StringComparison.OrdinalIgnoreCase)) return true; }
+                catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException) { }
+        return false;
+    }
+
+    /// <summary>Whether the build beside <paramref name="executable"/> (build output or portable layout) reads <c>ZSTUDIO_PROFILE</c>.</summary>
+    private static bool UsesProfileOverride(string executable)
+    {
+        string folder = Path.GetDirectoryName(executable)!;
+        string? library = new[] { Path.Combine(folder, "zStudio.Application.dll"), Path.Combine(folder, "dependencies", "zStudio.Application.dll") }.FirstOrDefault(File.Exists);
+        return library != null && File.ReadAllBytes(library).AsSpan().IndexOf(System.Text.Encoding.Unicode.GetBytes(zStudio.Automation.StudioProfile.OverrideVariable)) >= 0;
     }
 }

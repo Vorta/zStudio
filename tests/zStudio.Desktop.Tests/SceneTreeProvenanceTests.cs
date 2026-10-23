@@ -1,8 +1,6 @@
 using System.IO;
-using System.Text.Json.Nodes;
 using zStudio.Core;
 using zStudio.Core.Formats;
-using zStudio.Desktop;
 using Xunit;
 
 namespace zStudio.Desktop.Tests;

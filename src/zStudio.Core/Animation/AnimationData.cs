@@ -94,7 +94,7 @@ public sealed class AnimationEvent(byte[] bytes, long sourceOffset = -1) : Anima
         foreach (var frame in frames) { frame.Validate(); output.Write(frame.ForVersion(Version).Bytes); count++; }
         var result = new AnimationEvent(output.ToArray(), SourceOffset) { Id = Id, Version = Version }; result.SetInt(4, result.Bytes.Length); if (Version == 39) result.SetInt(16, count); return result;
     }
-    /// <summary>Why a structurally valid stream cannot be previewed, or null. Inspection, editing and export remain available.</summary>
+    /// <summary>Why a structurally valid stream cannot be previewed, or null. Inspection and export remain available.</summary>
     public string? KeyframePreviewDiagnostic(CancellationToken token = default)
     {
         if (Type != 12) return null;
@@ -148,16 +148,6 @@ public sealed class AnimationKeyframe(byte[] bytes) : AnimationRecord(bytes)
     public float Start { get => F32(4); set => SetFloat(4, value); }
     public float End { get => F32(8); set => SetFloat(8, value); }
     public int ChannelStride => Bytes.Length == 12 + 76 * BitOperations.PopCount((uint)Flags & 7) ? 76 : 28;
-    public AnimationKeyframe WithChannels(int flags, uint version)
-    {
-        if (flags is < 1 or > 7) throw new InvalidDataException("Choose position, rotation and/or scale channels.");
-        var original = ForVersion(version); var next = Create(flags).ForVersion(version);
-        next.Start = Start; next.End = End;
-        for (int channel = 0; channel < 3; channel++)
-            if (original.ChannelOffset(channel) is >= 0 and int from && next.ChannelOffset(channel) is >= 0 and int to)
-                original.Bytes.AsSpan(from, original.ChannelStride).CopyTo(next.Bytes.AsSpan(to));
-        return next;
-    }
     public AnimationKeyframe ForVersion(uint version)
     {
         int stride = version == 39 ? 76 : 28; if (stride == ChannelStride) return this;
@@ -221,7 +211,6 @@ public sealed class AnimationSequence(byte[] header, long offset = -1) : Animati
     public List<AnimationEvent> Events { get; } = [];
     public byte[] OpaqueTail { get; internal set; } = [];
     public bool IsEditable => OpaqueTail.Length == 0;
-    public AnimationSequence Clone() => Clone(default);
     public AnimationSequence Clone(CancellationToken token)
     {
         var copy = new AnimationSequence(SnapshotBytes(Bytes, token), SourceOffset) { Id = Id, OpaqueTail = SnapshotBytes(OpaqueTail, token) };

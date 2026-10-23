@@ -1,16 +1,12 @@
 using System.IO;
 using System.IO.Pipes;
-using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using ModelContextProtocol.Client;
 using ModelContextProtocol.Protocol;
-using zStudio.Core;
-using zStudio.Core.Export;
 using zStudio.Core.Formats;
 using zStudio.Core.Sources;
-using zStudio.Desktop;
 using zStudio.Mcp;
 using zStudio.Tests;
 using Xunit;

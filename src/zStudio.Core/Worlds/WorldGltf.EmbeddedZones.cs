@@ -22,8 +22,7 @@ public static partial class WorldGltf
         if (push) context.EmbeddedZoneScopes.Push(new(path, [], [], []));
         return new EmbeddedZoneLease(context, push);
     }
-    private static IDisposable PushZoneOverrides(ImportContext context, GltfNode source, GltfDocument referenced,
-        string referencedPath, string ownerPath)
+    private static IDisposable PushZoneOverrides(ImportContext context, GltfNode source, string ownerPath)
     {
         var parent = context.EmbeddedZoneScopes.Peek();
         List<JsonObject> scopes = [];

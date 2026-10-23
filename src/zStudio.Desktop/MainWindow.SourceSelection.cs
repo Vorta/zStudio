@@ -24,11 +24,21 @@ internal sealed record SourceMapPassEntry(int? Row, string Key, string Name, IRe
     private static readonly int AllDifficulties = Enum.GetValues<MissionDifficulty>().Length;
     /// <summary>A pickup's number among the section's pickups of its catalog type (1, 2…), in list order over every difficulty; 0 for units.</summary>
     internal int Number { get; init; }
+    /// <summary>How often its resource lists this placement ("listed twice in aiv_easy.zrd") when more than once, else null; <see cref="Detail"/> ends with it.</summary>
+    internal string? Listed { get; init; }
 }
 
 /// <summary>Immutable editor projection. Negative row IDs denote source-only groups, never scene slots.</summary>
 internal sealed class SourceMapSelection
 {
+    /// <summary>The player's start under the mission's opening (owner decision 2026-10-23, docs/agents/sources.md): it moves the tank there.</summary>
+    internal const string OpeningSetsStart = "The mission's opening animation sets where the player starts and when the controls are released, so its placement can't be edited.";
+    /// <summary>The player's start under the mission's opening, which holds the controls without moving the tank (m1).</summary>
+    internal const string OpeningHoldsStart = "The mission's opening holds the controls and releases them from this pose, so its placement can't be edited.";
+    internal const string HiddenAtStart = "Hidden at the mission's start (a startup animation shows it later), so its placement can't be edited.";
+    internal const string MissingTankTemplate = "The tank template is missing or ambiguous, so its placement can't be edited.";
+    internal const string HiddenInTree = "Show it in the World tree to edit its placement.";
+    internal const string HiddenByIsolation = "Hidden by an isolation; end it (middle-click the isolated row's eye, or Show all) to edit its placement.";
     /// <summary>The later passes, in the order the mission adds them; a source map always has all three (an empty one says so in the tree).</summary>
     internal IReadOnlyList<SourceMapPass> Passes { get; }
     /// <summary>The difficulty the view shows (the aiv and puppies trees list the others' entries dimmed), or null.</summary>
@@ -95,8 +105,15 @@ internal sealed class SourceMapSelection
             token.ThrowIfCancellationRequested();
             int sourceNode = mission != null && node < mission.SourceNodes.Count ? mission.SourceNodes[node] : node;
             var actor = actors?.At(node);
-            // Ambiguous actors must never fall through to a shared template's source edit path.
-            if (actors?.IsAmbiguous(node) == true) throw new InvalidDataException("Several mission placements share a node; source-map selection is ambiguous.");
+            bool repeatedRoot = false;
+            // Ambiguous actors must never fall through to a shared template's source edit path. Records that place one node
+            // themselves (retail m2 Easy lists bft_00 twice): the first of them owns the node and everything below it, read
+            // only, since an edit could not tell which record to change.
+            if (actors?.IsAmbiguous(node) == true)
+            {
+                actor = mission!.RepeatedPlacementAt(scene, node) ?? throw new InvalidDataException("Several mission placements share a node; source-map selection is ambiguous.");
+                repeatedRoot = true;
+            }
             int owner = actor?.Root ?? source.Owners.GetValueOrDefault(sourceNode, node);
             owners[node] = owner;
             if (actor == null) sourceRows.TryAdd(source.Owners.GetValueOrDefault(sourceNode, sourceNode), owner);
@@ -114,8 +131,7 @@ internal sealed class SourceMapSelection
                 retainPart &= stableActor != null;
                 if (stableActor == null && !unretainedActors.ContainsKey(actor)) unretainedActors[actor] = "unretained:" + Guid.NewGuid().ToString("N");
                 string actorKey = stableActor ?? unretainedActors[actor];
-                boundaries[owner] = new(owner, actorKey, actor.Name, actor.PlacementSource, false,
-                    actor.Pickup == null && actor.CoordinateSource == null ? "This object's placement is controlled by startup animation. Editing that placement is unavailable." : null);
+                boundaries[owner] = new(owner, actorKey, actor.Name, actor.PlacementSource, false, PlacementReadOnlyReason(actor, repeatedRoot));
                 identities[owner] = actorKey;
                 physical = actorKey + ":" + physical;
             }
@@ -129,6 +145,21 @@ internal sealed class SourceMapSelection
         }
         foreach (var (key, nodes) in partUses)
             if (nodes.Count == 1) parts[nodes[0]] = key;
+
+        // Why a placed object's placement can't be edited (the card, scene_tree readOnlyReason, scene_card begin), or null.
+        string? PlacementReadOnlyReason(MissionActor actor, bool repeatedRoot)
+        {
+            if (repeatedRoot)
+                return $"{mission!.Actors.Count(a => a.Root == actor.Root)} records of the shown difficulty place this object, so editing its placement is unavailable.";
+            if (actor.Pickup == null && actor.CoordinateSource == null) return "This object's placement is controlled by startup animation. Editing that placement is unavailable.";
+            // The opening's hold on the player's start comes before its hiding the tank, which it also causes (m2, m4, m5).
+            if (ReferenceEquals(actor, mission!.LocalPlayer) && mission.PlayerStartControl is { } opening) return opening.SetsPose ? OpeningSetsStart : OpeningHoldsStart;
+            if (actor.Root >= 0 && actor.Root < scene.Nodes.Count && (scene.Nodes[actor.Root].Metadata.UInt("flags") & 4) == 0)
+                return HiddenAtStart;
+            if (actor.CoordinateSource is { } record && placements?.Coordinate(record) is { Kind: "tank", MissionSpecific: false } vehicle && (vehicle.TemplateSourceNode == null || vehicle.Difficulties.Count == 0))
+                return MissingTankTemplate;
+            return null;
+        }
         Owners = owners; Boundaries = boundaries; Identities = identities; PartIdentities = parts;
         MemberSlots = members.ToDictionary(p => p.Key, p => p.Value.ToArray());
 
@@ -277,6 +308,13 @@ internal sealed class SourceMapSelection
                     MissionPickupType.Catalog.FirstOrDefault(t => t.Name == r.Type)?.TemplateName ?? r.Type, $"{r.Type} pickup · {Position(r.OriginalPosition)}", true, r.Type, r.OriginalPosition))
                 : placements.OtherCoordinates.Where(c => c.Kind == "tank").Select(c => new PassRecord(c.Source, c.Difficulties, c.Name,
                     $"{c.Template} · {Position(c.OriginalPosition)} · heading {c.Rotation.Y.ToString("0.#", System.Globalization.CultureInfo.InvariantCulture)}°", c.TemplateSourceNode != null));
+            // A resource that lists one placement more than once says so on each of its entries: retail m2 aiv_easy.zrd lists
+            // bft_00 twice, which places one unit (two equal pickup records spawn two copies).
+            records = records.ToList();
+            var listings = records.GroupBy(r => (r.Source.ResourceName, r.Name, r.Detail)).Where(g => g.Count() > 1).ToDictionary(g => g.Key, g => g.Count());
+            records = records.Select(r => listings.TryGetValue((r.Source.ResourceName, r.Name, r.Detail), out int listed)
+                && $"listed {(listed == 2 ? "twice" : listed.ToString(System.Globalization.CultureInfo.InvariantCulture) + " times")} in {r.Source.ResourceName.ToLowerInvariant()}" is var note
+                ? r with { Detail = r.Detail + " · " + note, Listed = note } : r).ToList();
             foreach (var record in records)
             {
                 token.ThrowIfCancellationRequested();
@@ -305,9 +343,9 @@ internal sealed class SourceMapSelection
                 string key = first.Source.ResourceName + ":" + (placements.SourcePresentationKey(first.Source) ?? "#" + first.Source.RecordIndex.ToString(System.Globalization.CultureInfo.InvariantCulture));
                 // A record the shown difficulty places that the view could not show (its notices say why) stays out, as does
                 // one whose template the world lacks: the game skips both.
-                if (group.Row is int row) entries.Add((Placed(row, key, difficulties, first.Detail), order));
+                if (group.Row is int row) entries.Add((Placed(row, key, difficulties, first.Detail) with { Listed = first.Listed }, order));
                 else if (!difficulties.Contains(current) && group.Records.Any(r => r.Placeable))
-                    entries.Add((new(null, key, first.Name, difficulties, first.Detail, first.PickupType, Position: first.Position), order));
+                    entries.Add((new(null, key, first.Name, difficulties, first.Detail, first.PickupType, Position: first.Position) { Listed = first.Listed }, order));
             }
             return entries.OrderBy(e => e.Order).Select(e => e.Entry).ToList();
         }
@@ -315,7 +353,7 @@ internal sealed class SourceMapSelection
     }
 
     private sealed record PassRecord(MissionPickupSource Source, IReadOnlyList<MissionDifficulty> Difficulties, string Name, string Detail, bool Placeable, string? PickupType = null,
-        System.Numerics.Vector3? Position = null);
+        System.Numerics.Vector3? Position = null, string? Listed = null);
     private sealed class PassGroup
     {
         internal List<PassRecord> Records { get; } = [];
@@ -351,13 +389,16 @@ public partial class MainWindow
     {
         node = SourceSelectionOwner(doc, node);
         var projection = SourceSelection(doc, doc == shownDocument ? scene?.PreviewScene : null);
+        // A placed unit's source refusal names what it is, and why its placement can't be edited either when it is locked.
+        if (doc == shownDocument && scene?.Mission?.InspectedActorAt(node) is { } actor)
+            throw new StudioCommandException("read_only", actor.Pickup == null && actor.CoordinateSource == null
+                ? "This object's placement is controlled by startup animation. Editing that placement is unavailable."
+                : projection?.Boundaries.GetValueOrDefault(node)?.ReadOnlyReason is { } locked
+                ? "This is a resource-placed instance, so its shared model source isn't edited here. " + locked
+                : "This is a resource-placed instance. Edit its mission placement instead of its shared model source.");
         if (projection?.Boundaries.GetValueOrDefault(node)?.ReadOnlyReason is { } reason)
             throw new StudioCommandException("read_only", reason);
         if (node < 0) throw new StudioCommandException("read_only", "This reference group has no compiled node. Its parts cannot be edited independently.");
-        if (doc == shownDocument && scene?.Mission?.ActorAt(node) is { } actor)
-            throw new StudioCommandException("read_only", actor.Pickup != null || actor.CoordinateSource != null
-                ? "This is a resource-placed instance. Edit its mission placement instead of its shared model source."
-                : "This object's placement is controlled by startup animation. Editing that placement is unavailable.");
         return node;
     }
 }

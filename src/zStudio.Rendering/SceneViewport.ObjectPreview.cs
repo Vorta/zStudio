@@ -1,7 +1,7 @@
 using System.IO;
 using System.Numerics;
-using HelixToolkit.Wpf.SharpDX;
 using zStudio.Core;
+using zStudio.Rendering.Direct3D;
 
 namespace zStudio.Rendering;
 
@@ -9,8 +9,8 @@ public sealed partial class SceneViewport
 {
     // Per changed mesh and bounds box: the rows as shown before and the rows the preview put in their place. Clearing restores
     // only rows the preview still owns, so a later Isolate or pickup update is not undone.
-    private Dictionary<MeshGeometryModel3D, (ScenePlacement[] Before, ScenePlacement[] Moved)>? objectPreviewMeshes;
-    private Dictionary<LineGeometryModel3D, (ScenePlacement[] Before, ScenePlacement[] Moved)>? objectPreviewBounds;
+    private Dictionary<MeshNode, (ScenePlacement[] Before, ScenePlacement[] Moved)>? objectPreviewMeshes;
+    private Dictionary<LineNode, (ScenePlacement[] Before, ScenePlacement[] Moved)>? objectPreviewBounds;
     private Dictionary<ScenePlacement, ScenePlacement>? objectPreviewOriginals;
     private long objectPreviewSerial, objectPreviewToken;
     public int? ObjectTransformPreviewNode { get; private set; }
@@ -60,8 +60,8 @@ public sealed partial class SceneViewport
             originals.TryAdd(moved, p);
             return moved;
         }
-        Dictionary<MeshGeometryModel3D, (ScenePlacement[], ScenePlacement[])> meshes = [];
-        Dictionary<LineGeometryModel3D, (ScenePlacement[], ScenePlacement[])> boxes = [];
+        Dictionary<MeshNode, (ScenePlacement[], ScenePlacement[])> meshes = [];
+        Dictionary<LineNode, (ScenePlacement[], ScenePlacement[])> boxes = [];
         // Recorded before any row moves, so a failure part way can still be cleared.
         objectPreviewMeshes = meshes; objectPreviewBounds = boxes; objectPreviewOriginals = originals;
         ObjectTransformPreviewNode = node; objectPreviewToken = ++objectPreviewSerial;
@@ -117,7 +117,7 @@ public sealed partial class SceneViewport
     {
         ++inspectionSerial;
         RecalculateSceneBounds(); RefreshPickupSelection();
-        cameraPoseDirty = true; viewport.InvalidateRender();
+        cameraPoseDirty = true; view.InvalidateRender();
         InspectionChanged?.Invoke();
     }
 
