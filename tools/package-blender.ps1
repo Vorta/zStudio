@@ -19,7 +19,3 @@ try {
     [void][IO.Compression.ZipFileExtensions]::CreateEntryFromFile($zip, (Join-Path (Split-Path -Parent $PSScriptRoot) 'LICENSE'), 'LICENSE', [IO.Compression.CompressionLevel]::Optimal)
 } finally { $zip.Dispose() }
 [IO.File]::Move($temporary, $zipPath, $true)
-# The docs/*.md guides link ../blender/zstudio_recoil/README.md; keep that path in the portable documentation.
-$guide = Join-Path $Destination 'zstudio_recoil'
-New-Item -ItemType Directory -Path $guide -Force | Out-Null
-Copy-Item -LiteralPath (Join-Path $source 'README.md') -Destination (Join-Path $guide 'README.md')

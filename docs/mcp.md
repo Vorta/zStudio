@@ -20,7 +20,7 @@ zStudio lets local AI agents work in its visible workspace through the Model Con
 
 3. Ask the agent for the workspace state. The first workspace request opens zStudio, or attaches to the running instance of that installation. Starting the agent and discovering tools leaves zStudio closed.
 
-Keep `zStudio.exe` and its `dependencies` folder together at a stable path. If several instances of the same installation run, add `"--instance", "ID"` to `args`, with the ID shown in the integration window (valid for that running instance). **Disconnect clients** drops current connections; restart the agent's connection afterwards. Unchecking **Enable local MCP access** revokes access. A workspace call that answers `access_disabled` means access is off. After moving or updating zStudio, check the configured path and restart the connection. Any process running as your Windows user can connect while access is enabled.
+Keep `zStudio.exe` at a stable path. If several instances of the same installation run, add `"--instance", "ID"` to `args`, with the ID shown in the integration window (valid for that running instance). **Disconnect clients** drops current connections; restart the agent's connection afterwards. Unchecking **Enable local MCP access** revokes access. A workspace call that answers `access_disabled` means access is off. After moving or updating zStudio, check the configured path and restart the connection. Any process running as your Windows user can connect while access is enabled.
 
 ### Codex
 

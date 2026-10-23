@@ -10,7 +10,7 @@
 | `zStudio.Mcp` | The official C# MCP SDK host on a same-user named pipe, the stdio connector, the embedded `CommandCatalog.json` | Editing logic |
 | `zStudio.Desktop` | WPF Fluent workbench, documents, dialogs, audio (NAudio, WASAPI), settings, command handlers marshalled to the dispatcher | Format parsing |
 
-- `zStudio.exe` is the SDK apphost (Desktop `CreatePortableLauncher` target); packaging rules: [releasing](releasing.md#portable-package).
+- `zStudio.exe` is the .NET single-file bundle of `zStudio.Desktop`, renamed after publishing; packaging rules: [releasing](releasing.md#package).
 - WPF Fluent runtime theme switching is experimental upstream: the `WPF0001` opt-in is scoped to the theme-switch method.
 - Tests run on Microsoft.Testing.Platform (`dotnet test --solution`).
 

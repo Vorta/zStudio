@@ -64,8 +64,9 @@ def call(executable, operation, **arguments):
     executable = Path(executable)
     if not executable.is_file() or executable.name.lower() != "zstudio.exe":
         raise ValueError("Select the installed zStudio.exe in the extension preferences")
-    if not (executable.parent / f"dependencies/blender/zstudio_recoil-{VERSION}.zip").is_file():
-        raise ValueError(f"Select the portable zStudio {VERSION} bundle matching this RECOIL extension")
+    # The zStudio download keeps the extension of its own version beside zStudio.exe.
+    if not (executable.parent / f"zstudio_recoil-{VERSION}.zip").is_file():
+        raise ValueError(f"Select the zStudio.exe of version {VERSION}, with zstudio_recoil-{VERSION}.zip beside it, matching this RECOIL extension")
     request = json.dumps(dict(protocol=PROTOCOL, operation=operation, **arguments)).encode("utf-8")
     if len(request) > 65536:
         raise ValueError("The helper request exceeds 64 KiB")

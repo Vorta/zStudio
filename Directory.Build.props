@@ -11,6 +11,8 @@
     <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
     <!-- Keep the restore graph identical for ordinary builds and win-x64 publish. -->
     <RuntimeIdentifiers>win-x64</RuntimeIdentifiers>
+    <!-- The single-file package keeps every assembly's symbols inside it, so no .pdb ships beside zStudio.exe. -->
+    <DebugType Condition="'$(StudioPackage)' == 'true'">embedded</DebugType>
     <Company>Vorta</Company>
     <Product>zStudio</Product>
     <Description>Advanced viewer and editor for Zipper Interactive's ZBD files</Description>

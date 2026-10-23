@@ -12,7 +12,7 @@ Download **[zStudio v0.9.6](https://github.com/Vorta/zStudio/releases/tag/v0.9.6
 
 ## Quick start
 
-1. Download `zStudio-<version>-win-x64.zip` from [Releases](https://github.com/Vorta/zStudio/releases), extract it and run **zStudio.exe**. Keep the **dependencies** folder beside it. It needs Windows 11 x64 and a Direct3D 11 graphics device; .NET is included.
+1. Download `zStudio-<version>-win-x64.zip` from [Releases](https://github.com/Vorta/zStudio/releases), extract it and run **zStudio.exe**, a single program file (.NET is included); the Blender extension, `LICENSE` and `THIRD-PARTY-NOTICES.md` come beside it. It needs Windows 11 x64 and a Direct3D 11 graphics device.
 2. On the welcome screen, under **Work with source project**, choose **Initialize**, enter the game's zbd folder (the one holding `image.zbd` and the mission folders `m1`, `m2`, …) as the **Retail ZBD folder** and an empty project folder, and choose **Initialize and open**.
 3. Pick a map. Select objects in the view or the World tree and edit them in the Properties pane; **Apply** accepts an edit, **Undo**/**Redo** take it back.
 4. **Save** writes the changed source files.
@@ -33,7 +33,7 @@ Download **[zStudio v0.9.6](https://github.com/Vorta/zStudio/releases/tag/v0.9.6
 
 ## Blender
 
-The portable folder includes the **zStudio RECOIL** extension for Blender 5.2 LTS. **Tools → Edit in Blender…** checks out a model with every file it references; **Tools → Update from Blender export…** applies the Blender export as one undoable edit. See the [extension guide](blender/zstudio_recoil/README.md).
+The download includes the **zStudio RECOIL** extension for Blender 5.2 LTS (`zstudio_recoil-<version>.zip`, beside `zStudio.exe`). **Tools → Edit in Blender…** checks out a model with every file it references; **Tools → Update from Blender export…** applies the Blender export as one undoable edit. See the [extension guide](blender/zstudio_recoil/README.md).
 
 ## AI agents (MCP)
 
@@ -54,7 +54,7 @@ Game files are not included; use your own copy of the game.
 - Exported files work in the game but are not byte-identical to the shipped ones ([differences](docs/source-project.md#differences-from-the-shipped-files)). Not every kind of edit has been tested in the game.
 - Some edits are available only through MCP, such as adding a model to a world or moving an object to another parent.
 - Previews show each mission's starting scene; they don't simulate gameplay.
-- The portable build is unsigned.
+- `zStudio.exe` is unsigned.
 
 ## Contributing
 

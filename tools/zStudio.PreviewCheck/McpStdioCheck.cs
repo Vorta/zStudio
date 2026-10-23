@@ -77,11 +77,12 @@ internal static class McpStdioCheck
         return false;
     }
 
-    /// <summary>Whether the build beside <paramref name="executable"/> (build output or portable layout) reads <c>ZSTUDIO_PROFILE</c>.</summary>
+    /// <summary>Whether <paramref name="executable"/> reads <c>ZSTUDIO_PROFILE</c>: a build output's zStudio.Application.dll names it.</summary>
     private static bool UsesProfileOverride(string executable)
     {
-        string folder = Path.GetDirectoryName(executable)!;
-        string? library = new[] { Path.Combine(folder, "zStudio.Application.dll"), Path.Combine(folder, "dependencies", "zStudio.Application.dll") }.FirstOrDefault(File.Exists);
-        return library != null && File.ReadAllBytes(library).AsSpan().IndexOf(System.Text.Encoding.Unicode.GetBytes(zStudio.Automation.StudioProfile.OverrideVariable)) >= 0;
+        string library = Path.Combine(Path.GetDirectoryName(executable)!, "zStudio.Application.dll");
+        if (File.Exists(library)) return File.ReadAllBytes(library).AsSpan().IndexOf(System.Text.Encoding.Unicode.GetBytes(zStudio.Automation.StudioProfile.OverrideVariable)) >= 0;
+        // The single-file package compresses its assemblies inside zStudio.exe; it exists from 0.9.7, which reads the variable.
+        return Version.TryParse(System.Diagnostics.FileVersionInfo.GetVersionInfo(executable).FileVersion, out var version) && version >= new Version(0, 9, 7);
     }
 }
