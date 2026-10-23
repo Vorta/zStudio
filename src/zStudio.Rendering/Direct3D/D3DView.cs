@@ -373,8 +373,8 @@ internal sealed class Direct3DView : IDisposable
     {
         failed = true; RenderException = error;
         ReleaseTargets();
-        WatchDisplay(true);
         owner.RaiseRenderFailed(error);
+        if (failed) WatchDisplay(true);
     }
 
     // A failed view has released its surface (WPF's bitmap is detached and reports nothing more), so it retries when the display
@@ -385,15 +385,19 @@ internal sealed class Direct3DView : IDisposable
     {
         if (on == watchingDisplay) return;
         watchingDisplay = on;
-        if (on) { SystemEvents.DisplaySettingsChanged += DisplayReturned; SystemEvents.SessionSwitch += SessionSwitched; }
-        else { SystemEvents.DisplaySettingsChanged -= DisplayReturned; SystemEvents.SessionSwitch -= SessionSwitched; }
+        if (!on) { SystemEvents.DisplaySettingsChanged -= DisplayReturned; SystemEvents.SessionSwitch -= SessionSwitched; return; }
+        // SessionSwitch needs SystemEvents' hidden window; without it the view still retries on a resize or a reload.
+        try { SystemEvents.DisplaySettingsChanged += DisplayReturned; SystemEvents.SessionSwitch += SessionSwitched; }
+        catch (Exception error) when (error is System.Runtime.InteropServices.ExternalException or InvalidOperationException)
+        { SystemEvents.DisplaySettingsChanged -= DisplayReturned; SystemEvents.SessionSwitch -= SessionSwitched; watchingDisplay = false; }
     }
     private void SessionSwitched(object? sender, SessionSwitchEventArgs e)
     {
         if (e.Reason is SessionSwitchReason.SessionUnlock or SessionSwitchReason.ConsoleConnect or SessionSwitchReason.RemoteConnect or SessionSwitchReason.SessionLogon)
             DisplayReturned(sender, e);
     }
-    // SystemEvents raises these on its own thread.
+    // SystemEvents raises these through the subscriber's synchronization context (here the UI dispatcher, synchronously, while its own
+    // thread waits) or on its own thread: the retry is posted, so it runs after the notification returns either way.
     private void DisplayReturned(object? sender, EventArgs e) =>
         Element.Dispatcher.BeginInvoke(DispatcherPriority.Normal, () => { if (!disposed && failed) RetryIfFailed(); });
 
