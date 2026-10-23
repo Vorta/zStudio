@@ -4,6 +4,7 @@ Version numbers follow `MAJOR.MINOR.PATCH`; the 0.x series is under active devel
 
 ## 0.9.8 — Unreleased
 
+- Playback controls have an opaque, theme-aware background, including their margins and wrapped rows, so the underlying map does not show through.
 - **Animations in the map editor.** The World tree has one **Animations** section, containing the objects placed by animations and the mission/common definitions. Selecting a definition opens its editor in Properties and shows its evaluated motion paths. Object cards link to definitions that affect the selected object.
 - **Events and activation.** Edit existing event operands, clock thresholds, sequence activation, definition activation and prerequisites in a shared Apply/Revert draft. Edits preserve source comments and formatting, are checked against every map that includes the source file, and become one project undo step. Keyframe scripts and event order remain read-only.
 - **Paths and preview.** Motion guides include child targets and cameras, direction marks and breaks at discontinuous transforms. An explicit Preview action uses the animation transport inside the source map; Range opens preview setup in Properties. Analysis is bounded and reports partial or unavailable results.

@@ -30,7 +30,7 @@
  <ToggleButton x:Name="FollowCamera" Style="{StaticResource PreviewIconToggle}" IsChecked="{Binding Options.FollowCamera,ElementName=Editor,Mode=TwoWay}" Checked="PresentationChanged" Unchecked="PresentationChanged" AutomationProperties.Name="Follow camera" Tag="Follow the authored animation camera when a camera pose is available."><local:PreviewIcon Kind="Camera" IsChecked="{Binding IsChecked,RelativeSource={RelativeSource AncestorType=ToggleButton}}"/></ToggleButton>
  <Menu ToolBar.OverflowMode="AsNeeded" Margin="6,0,0,0"><MenuItem Header="Scene"><MenuItem Header="Choose GameZ…" Click="WorldClick"/><MenuItem Header="Bind root…" Click="BindClick"/></MenuItem></Menu>
 </ToolBar>
- <Grid Grid.Row="1" x:Name="PlayerArea"><Grid.RowDefinitions><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+ <Grid Grid.Row="1" x:Name="PlayerArea" Background="{DynamicResource SolidBackgroundFillColorBaseBrush}"><Grid.RowDefinitions><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
   <Grid Grid.Row="0" x:Name="ViewportArea" ClipToBounds="True" >
    <ContentControl x:Name="ViewportHost"/>
    <Border x:Name="ScreenOverlay" IsHitTestVisible="False"/>
