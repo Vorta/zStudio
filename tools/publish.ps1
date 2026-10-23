@@ -17,9 +17,12 @@ try {
             }
         }
     }
-    # A package folder holds zStudio.exe with its licence and notices beside it.
+    # A package folder holds zStudio.exe with its licence and notices beside it, or (the 0.9.6 layout, which the
+    # first single-file publish replaces) zStudio.exe with the app in dependencies/.
     function Test-StudioPackage([string]$Path) {
-        @('zStudio.exe', 'LICENSE', 'THIRD-PARTY-NOTICES.md').Where({ -not (Test-Path -LiteralPath (Join-Path $Path $_) -PathType Leaf) }).Count -eq 0
+        if (-not (Test-Path -LiteralPath (Join-Path $Path 'zStudio.exe') -PathType Leaf)) { return $false }
+        @('LICENSE', 'THIRD-PARTY-NOTICES.md').Where({ -not (Test-Path -LiteralPath (Join-Path $Path $_) -PathType Leaf) }).Count -eq 0 -or
+            (Test-Path -LiteralPath (Join-Path $Path 'dependencies/zStudio.Desktop.runtimeconfig.json') -PathType Leaf)
     }
     Assert-ArtifactPath $outputPath
     $preservedPaths = @($PreserveSuperseded | ForEach-Object { Assert-ArtifactPath $_; [IO.Path]::GetFullPath($_, $repository) })

@@ -19,7 +19,7 @@ public sealed class BlenderGraphTests
     public async Task InstalledBlenderRoundTrip()
     {
         if (Environment.GetEnvironmentVariable("ZSTUDIO_BLENDER") is not { Length: > 0 } blender) return;
-        string helper = Environment.GetEnvironmentVariable("ZSTUDIO_BLENDER_HELPER") ?? throw new InvalidOperationException("Set ZSTUDIO_BLENDER_HELPER to the validated portable zStudio.exe.");
+        string helper = Environment.GetEnvironmentVariable("ZSTUDIO_BLENDER_HELPER") ?? throw new InvalidOperationException("Set ZSTUDIO_BLENDER_HELPER to the zStudio.exe of a verified package, with its Blender extension ZIP beside it.");
         var repository = new DirectoryInfo(AppContext.BaseDirectory);
         while (repository != null && !File.Exists(Path.Combine(repository.FullName, "zStudio.slnx"))) repository = repository.Parent;
         Assert.NotNull(repository);

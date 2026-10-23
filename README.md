@@ -59,6 +59,7 @@ Game files are not included; use your own copy of the game.
 - Some edits are available only through MCP, such as adding a model to a world or moving an object to another parent.
 - Previews show each mission's starting scene; they don't simulate gameplay.
 - `zStudio.exe` is unsigned.
+- On the first start of each version, zStudio unpacks WPF's native files (about 8 MB) to `%TEMP%\.net\zStudio\`. Where a policy blocks programs in `%TEMP%`, set the environment variable `DOTNET_BUNDLE_EXTRACT_BASE_DIR` to another writable folder. Folders of older versions there can be deleted.
 
 ## Contributing
 

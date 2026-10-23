@@ -36,7 +36,7 @@ public sealed class StudioBundle
         using var reader = new BinaryReader(new MemoryStream(all), Encoding.UTF8);
         reader.BaseStream.Position = header;
         var bundle = new StudioBundle { Major = reader.ReadUInt32(), Minor = reader.ReadUInt32() };
-        if (bundle.Major < 6) throw new InvalidDataException("Unsupported bundle format " + bundle.Major + "." + bundle.Minor + ".");
+        if (bundle.Major != 6) throw new InvalidDataException("Unsupported bundle format " + bundle.Major + "." + bundle.Minor + " (expected 6).");
         int count = reader.ReadInt32();
         if (count <= 0 || count > 100000) throw new InvalidDataException("Implausible bundle entry count " + count + ".");
         bundle.Id = reader.ReadString();
@@ -72,7 +72,7 @@ foreach ($entry in $bundle.Entries) {
     if ($entries.ContainsKey($entry.Path)) { throw "Duplicate bundle entry: $($entry.Path)" }
     $entries[$entry.Path] = $entry
 }
-# Entry types: 1 assembly, 2 native library, 3 deps.json, 4 runtimeconfig.json.
+# Entry types: 1 assembly, 2 native library, 3 deps.json, 4 runtimeconfig.json, 5 symbols.
 foreach ($required in @(@('zStudio.Desktop.dll', 1), @('zStudio.Desktop.deps.json', 3), @('zStudio.Desktop.runtimeconfig.json', 4))) {
     if (-not $entries.ContainsKey($required[0]) -or $entries[$required[0]].Type -ne $required[1]) { throw "The bundle lacks $($required[0])." }
 }
@@ -82,8 +82,10 @@ $expectedNatives = @('D3DCompiler_47_cor3.dll', 'PenImc_cor3.dll', 'Presentation
 if (@(Compare-Object $expectedNatives $natives).Count -ne 0) { throw "Unexpected native libraries in the bundle: $($natives -join ', ')" }
 # Per-assembly ReadyToRun: a composite image (the SDK default) is larger and starts slower.
 if ($bundle.Entries.Where({ $_.Path -like '*.r2r.dll' }).Count -gt 0) { throw 'The bundle holds a composite ReadyToRun image.' }
-if ($bundle.Entries.Where({ [IO.Path]::GetExtension($_.Path) -in @('.zbd', '.zrd', '.bndb', '.pfx', '.p12', '.key', '.pdb') }).Count -gt 0) {
-    throw 'The bundle contains game data, research databases, key files or loose symbols.'
+# Symbols stay embedded in the assemblies; a symbols entry would be a loose PDB.
+if ($bundle.Entries.Where({ $_.Type -eq 5 }).Count -gt 0) { throw 'The bundle contains loose symbol files.' }
+if ($bundle.Entries.Where({ [IO.Path]::GetExtension($_.Path) -in @('.zbd', '.zrd', '.bndb', '.pfx', '.p12', '.key') }).Count -gt 0) {
+    throw 'The bundle contains game data, research databases or key files.'
 }
 
 # Every shipped package has its notice row (same version) and every notice row a shipped package; every licence link is a section of the notices.
@@ -98,6 +100,7 @@ $noticeRows = @{}
 foreach ($row in [regex]::Matches($notices, '(?m)^\| ([^|]+?) \| ([^|]+?) \| \[[^\]]+\]\(([^)]*)\) \|\s*$')) {
     $link = $row.Groups[3].Value
     if (-not $link.StartsWith('#') -or -not $anchors.Contains($link.Substring(1))) { throw "Notice row links no licence section of the notices: $($row.Groups[1].Value) $link" }
+    if ($noticeRows.ContainsKey($row.Groups[1].Value)) { throw "Duplicate notice row: $($row.Groups[1].Value)" }
     $noticeRows[$row.Groups[1].Value] = $row.Groups[2].Value
 }
 if ($noticeRows.Count -eq 0) { throw 'THIRD-PARTY-NOTICES.md lists no packages.' }

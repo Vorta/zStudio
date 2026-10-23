@@ -11,6 +11,7 @@
 | `zStudio.Desktop` | WPF Fluent workbench, documents, dialogs, audio (NAudio, WASAPI), settings, command handlers marshalled to the dispatcher | Format parsing |
 
 - `zStudio.exe` is the .NET single-file bundle of `zStudio.Desktop`, renamed after publishing; packaging rules: [releasing](releasing.md#package).
+- Single-file rules (the single-file analyzer is off, so no build warning catches them): never use `Assembly.Location`, `CodeBase` or other file paths of assemblies; files beside `zStudio.exe` come from `AppContext.BaseDirectory`, shipped texts from embedded resources.
 - WPF Fluent runtime theme switching is experimental upstream: the `WPF0001` opt-in is scoped to the theme-switch method.
 - Tests run on Microsoft.Testing.Platform (`dotnet test --solution`).
 
