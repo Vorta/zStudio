@@ -5,7 +5,7 @@ Push-Location $repository
 try {
     # Every path we replace or remove must stay inside this repository's artifacts.
     $artifacts = [IO.Path]::GetFullPath((Join-Path $repository 'artifacts'))
-    $outputPath = [IO.Path]::GetFullPath($Output, $repository).TrimEnd([IO.Path]::DirectorySeparatorChar)
+    $outputPath = [IO.Path]::TrimEndingDirectorySeparator([IO.Path]::GetFullPath($Output, $repository))
     function Assert-ArtifactPath([string]$Path) {
         $fullPath = [IO.Path]::GetFullPath($Path)
         if (-not $fullPath.StartsWith($artifacts + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) {
@@ -25,7 +25,7 @@ try {
             (Test-Path -LiteralPath (Join-Path $Path 'dependencies/zStudio.Desktop.runtimeconfig.json') -PathType Leaf)
     }
     Assert-ArtifactPath $outputPath
-    $preservedPaths = @($PreserveSuperseded | ForEach-Object { $full = [IO.Path]::GetFullPath($_, $repository).TrimEnd([IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar); Assert-ArtifactPath $full; $full })
+    $preservedPaths = @($PreserveSuperseded | ForEach-Object { $full = [IO.Path]::TrimEndingDirectorySeparator([IO.Path]::GetFullPath($_, $repository)); Assert-ArtifactPath $full; $full })
     if ((Test-Path -LiteralPath $outputPath) -and -not (Test-StudioPackage $outputPath)) {
         throw "Refusing to replace a folder that is not a Studio publish: $outputPath"
     }
