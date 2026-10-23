@@ -149,7 +149,7 @@ public partial class MainWindow
     private (DocumentModel Document, AssetRecord Asset, MissionPlayerTank Tank) RequirePlayerTankChange(PlayerTankState next, bool secondaryChanged)
     {
         if (sourceMapOpening != null || sourceWorldsOpening > 0)
-            throw new StudioCommandException("not_ready", "The map is still opening; change the player tank once it is shown.");
+            throw new StudioCommandException("not_ready", "A map is opening; change the player tank once it is shown.");
         if (!sourceChromeActive || shownDocument?.SourceWorld is not { } session || shownAsset is not { Kind: AssetKind.World } asset || scene?.Mission is not { } mission)
             throw new StudioCommandException("unsupported", "The player tank's type and weapons are a source map preview.");
         if (mission.PlayerTank is not { } tank)

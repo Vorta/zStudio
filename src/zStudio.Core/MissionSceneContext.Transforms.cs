@@ -118,14 +118,15 @@ public sealed partial class MissionSceneContext
     /// <summary>
     /// Rebase an initialized mission onto a source update that replaced only built models' polygon zones (see
     /// SourceWorlds.TryUpdatePolygonZones): nodes, materials and textures are the same objects, so initialization, which
-    /// reads no polygon zone, stands. Null when the update replaced anything else or the mission does not show those models,
-    /// and when the mission draws a model of its own (a part the player tank's mode change left morphed), whose zones would stay old.
+    /// reads no polygon zone, stands. Null when the update replaced anything else or the mission does not show those models.
+    /// Models of the mission's own past the source's (parts the player tank's mode change left morphed) share their source model's
+    /// polygons, so a copy of a replaced model takes its new polygons too.
     /// </summary>
     public MissionSceneContext? WithSourcePolygonZones(GameScene beforeSource, GameScene afterSource, CancellationToken token = default)
     {
         token.ThrowIfCancellationRequested();
         if (beforeSource.Nodes.Count != afterSource.Nodes.Count || beforeSource.Models.Count != afterSource.Models.Count
-            || Scene.Models.Count != beforeSource.Models.Count || beforeSource.Materials.Count != afterSource.Materials.Count || beforeSource.Textures.Count != afterSource.Textures.Count
+            || Scene.Models.Count < beforeSource.Models.Count || beforeSource.Materials.Count != afterSource.Materials.Count || beforeSource.Textures.Count != afterSource.Textures.Count
             || !beforeSource.Nodes.Zip(afterSource.Nodes).All(pair => ReferenceEquals(pair.First, pair.Second))
             || !beforeSource.Materials.Zip(afterSource.Materials).All(pair => ReferenceEquals(pair.First, pair.Second))
             || !beforeSource.Textures.Zip(afterSource.Textures).All(pair => ReferenceEquals(pair.First, pair.Second))) return null;
@@ -137,6 +138,14 @@ public sealed partial class MissionSceneContext
             var (a, b) = (beforeSource.Models[i], afterSource.Models[i]);
             if (!ReferenceEquals(Scene.Models[i], a) || a.Polygons.Length != b.Polygons.Length || !ReferenceEquals(a.Vertices, b.Vertices)) return null;
             scene.Models[i] = b;
+        }
+        for (int i = beforeSource.Models.Count; i < Scene.Models.Count; i++)
+        {
+            token.ThrowIfCancellationRequested();
+            var copy = Scene.Models[i];
+            for (int j = 0; j < beforeSource.Models.Count; j++)
+                if (!ReferenceEquals(beforeSource.Models[j], afterSource.Models[j]) && ReferenceEquals(copy.Polygons, beforeSource.Models[j].Polygons))
+                { scene.Models[i] = copy with { Polygons = afterSource.Models[j].Polygons }; break; }
         }
         return new(scene, SourceNodes.ToList(), Actors.ToList(), new(DormantRoots), Diagnostics, Layout, originalNodeCount, token)
         { AiNetworks = AiNetworks, InitializationTransforms = InitializationTransforms, AnimationEntryRoots = AnimationEntryRoots, AnimationUses = AnimationUses, LocalPlayer = LocalPlayer, PlayerTank = PlayerTank, PlayerTankFailure = PlayerTankFailure, PlayerStartControl = PlayerStartControl };
