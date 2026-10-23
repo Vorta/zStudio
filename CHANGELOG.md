@@ -2,7 +2,7 @@
 
 Version numbers follow `MAJOR.MINOR.PATCH`; the 0.x series is under active development. Release tags and downloadable archives use the same version.
 
-## 0.9.7 — Unreleased
+## 0.9.7 — 2026-10-23
 
 - **One file.** zStudio is now a single, compressed `zStudio.exe` with .NET included, instead of `zStudio.exe` and a `dependencies` folder (459 files in all). The ZIP holds only `zStudio.exe`, `LICENSE`, `THIRD-PARTY-NOTICES.md` (now with every licence text) and the Blender extension `zStudio-Blender-extension-0.9.7.zip`, and shrinks from 79 MB to 72 MB. The first start of each version unpacks the WPF native libraries (about 8 MB) to `%TEMP%\.net\zStudio\`. Decompressing the program in memory makes a start about 0.2 s slower than 0.9.6 and uses about 70 MB more memory. Replace an earlier version's folder rather than extracting over it: its `dependencies` folder is no longer used.
 - The guides are no longer in the download: **Help** opens each guide, and the release notes, on GitHub as they are for the installed version. **About zStudio** shows zStudio's licence and the third-party notices.
