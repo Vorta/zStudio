@@ -1,5 +1,4 @@
 using System.Numerics;
-using System.Windows.Media.Media3D;
 using zStudio.Core;
 using zStudio.Rendering.Direct3D;
 

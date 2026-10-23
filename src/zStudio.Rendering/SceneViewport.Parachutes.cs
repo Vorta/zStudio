@@ -8,7 +8,7 @@ using zStudio.Rendering.Direct3D;
 namespace zStudio.Rendering;
 
 public sealed record ParachutePathPoint(double Phase, Vector3 Position);
-public sealed record ParachuteRelease(double Phase, Vector3 Position, bool Conditional = true);
+public sealed record ParachuteRelease(double Phase, Vector3 Position);
 public sealed record ParachuteWindowOverlay(Guid Id, double Start, IReadOnlyList<ParachuteRelease> Releases);
 
 public sealed partial class SceneViewport

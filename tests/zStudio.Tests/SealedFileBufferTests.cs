@@ -53,7 +53,6 @@ public sealed class SealedFileBufferTests : IDisposable
         using (var created = asynchronous ? await SealedFile.CreateAsync(At("stage"), bytes, directories, Token)
             : SealedFile.Create(At("stage"), bytes, directories))
         {
-            Assert.Equal(bytes, await created.ReadAllAsync(bytes.Length, Token));
             receipt = created.RetainCreated();
             Assert.ThrowsAny<IOException>(() => File.WriteAllBytes(receipt.Path, [9]));
         }

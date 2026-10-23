@@ -325,8 +325,6 @@ internal sealed class SourceMapZoneBindings
         foreach (var owner in owners) foreach (var asset in owner.Assets) WorldGltf.ValidateZoneProfile(layout, asset.Profile, asset.GeometryPath, token);
     }
 
-    /// <summary>The logical assets of every map that bind this geometry, with the map file that holds each.</summary>
-    internal IEnumerable<(string Map, SourceMapZoneAsset Asset)> Assets => owners.SelectMany(o => o.Assets.Select(a => (o.Path, a)));
     /// <summary>The mission folders containing physical sources that own assignments on this geometry.</summary>
     internal IEnumerable<string> Missions => owners.Select(o => o.Path.Split('/')[1]);
 

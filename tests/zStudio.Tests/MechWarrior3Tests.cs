@@ -115,8 +115,6 @@ public sealed class MechWarrior3Tests
         Assert.DoesNotContain(AnimationCatalog.ForVersion(39), e => e.Support.StartsWith("Engine-based", StringComparison.Ordinal));
         frame.SetInt(frame.ChannelOffset(0) + 32, unchecked((int)0x7FA12345));
         Assert.Equal(frame.Bytes, ev.WithKeyframes([frame]).Keyframes(TestContext.Current.CancellationToken)[0].Bytes);
-        var channels = frame.WithChannels(7, 39); Assert.Equal(frame.Bytes.AsSpan(12, 76).ToArray(), channels.Bytes.AsSpan(12, 76).ToArray());
-        Assert.Equal(frame.Bytes, channels.WithChannels(1, 39).Bytes);
         var procedural = AnimationCatalog.Create(10, 39); Assert.Equal(-1, procedural.I16(240)); Assert.Equal(-1, procedural.I16(280)); Assert.Equal(-1, procedural.I16(320));
     }
     [Theory]

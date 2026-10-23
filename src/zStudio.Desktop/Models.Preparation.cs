@@ -1,5 +1,4 @@
 using zStudio.Core;
-using zStudio.Core.Formats;
 
 namespace zStudio.Desktop;
 

@@ -33,7 +33,6 @@ internal static partial class DatabaseRecords
         private readonly HashSet<int> freed;
         private readonly Dictionary<int, int> deletedParent = [];
         private readonly Dictionary<int, List<int>> deletedChildren = [];
-        private readonly string mission;
         private readonly CancellationToken token;
         /// <summary>The inference's budget for mirrored cache nodes, shared by every reading it tries.</summary>
         private readonly OriginalLoader.MirrorBudget budget;
@@ -57,8 +56,6 @@ internal static partial class DatabaseRecords
         /// <summary>After the caches: the slots their loads freed and nothing took again (last freed first), and the high-water mark.</summary>
         public List<int>? Leftover { get; private set; }
         public int HighWater { get; private set; }
-        /// <summary>The slot the database's root takes after the caches.</summary>
-        public int ExpectedRoot => Leftover is { Count: > 0 } leftover ? leftover[0] : HighWater;
         /// <summary>How many nodes the replay gave their shipped slots before the first that missed.</summary>
         public int Matched { get; private set; }
         /// <summary>How many entries of the free list, from its bottom, the caches (and what was freed before them) account for.</summary>
@@ -75,9 +72,9 @@ internal static partial class DatabaseRecords
         /// <param name="deletion">The deletion's part of the free list, from its top.</param>
         /// <param name="tolerant">Whether nodes the order leaves out (records made from slots it does not know yet) are passed over.</param>
         /// <param name="nested">Whether the deletion's tree nests by the order nodes were freed in (else by the order they were made in).</param>
-        private Parts(IReadOnlyDictionary<WorldNode, int> slot, Func<WorldNode, bool> isModelReference, LoadedModel database, IReadOnlyList<int> order, List<int> deletion, string mission, OriginalLoader.MirrorBudget budget, RetainedMatchBudget retainedBudget, CancellationToken token, bool tolerant = false, bool nested = true, Retained? prefix = null)
+        private Parts(IReadOnlyDictionary<WorldNode, int> slot, Func<WorldNode, bool> isModelReference, LoadedModel database, IReadOnlyList<int> order, List<int> deletion, OriginalLoader.MirrorBudget budget, RetainedMatchBudget retainedBudget, CancellationToken token, bool tolerant = false, bool nested = true, Retained? prefix = null)
         {
-            this.slot = slot; this.isModelReference = isModelReference; this.mission = mission; this.budget = budget; this.token = token; this.tolerant = tolerant; this.prefix = prefix;
+            this.slot = slot; this.isModelReference = isModelReference; this.budget = budget; this.token = token; this.tolerant = tolerant; this.prefix = prefix;
             this.retainedBudget = retainedBudget;
             token.ThrowIfCancellationRequested();
             deletedSlots = [.. deletion];
@@ -154,7 +151,7 @@ internal static partial class DatabaseRecords
         /// <param name="kept">Names the world's free slots kept (a world that left slots free), by slot.</param>
         /// <param name="restore">Puts the database's nodes' children back in the world's order: each reading starts from it.</param>
         /// <param name="mirrors">The inference's budget for mirrored cache nodes; exhausting it stops the inference, not just one reading.</param>
-        public static Parts? Infer(IReadOnlyDictionary<WorldNode, int> slot, Func<WorldNode, bool> isModelReference, LoadedModel database, List<int> list, Table before, string mission,
+        public static Parts? Infer(IReadOnlyDictionary<WorldNode, int> slot, Func<WorldNode, bool> isModelReference, LoadedModel database, List<int> list, Table before,
             Action restore, OriginalLoader.MirrorBudget mirrors, RetainedMatchBudget retainedBudget, CancellationToken token, bool search = false, IReadOnlyDictionary<int, string>? kept = null)
         {
             if (list.Count == 0 || database.Content.Count == 0) return null;
@@ -278,7 +275,7 @@ internal static partial class DatabaseRecords
             {
                 token.ThrowIfCancellationRequested();
                 restore();
-                Parts parts = new(slot, isModelReference, database, order, deletion, mission, mirrors, retainedBudget, token, tolerant, nested, prefix);
+                Parts parts = new(slot, isModelReference, database, order, deletion, mirrors, retainedBudget, token, tolerant, nested, prefix);
                 if (!parts.Covered || !parts.Walk()) return null;
                 // One child order for everything after the walk: the order the records were made in.
                 if (!tolerant) parts.OrderChildren();
@@ -698,8 +695,6 @@ internal static partial class DatabaseRecords
         private bool Cached(WorldNode node) => Content.ContainsKey(node) || isModelReference(node) && !Made.ContainsKey(node);
 
         /// <summary>The database's references in record order, not looking inside parts' content.</summary>
-        public List<WorldNode> References() => ReferencesInOrder();
-
         private List<WorldNode> ReferencesInOrder()
         {
             // A walk passing over records made before the fresh slots: their references were among the first (those not

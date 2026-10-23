@@ -186,7 +186,7 @@ public partial class AnimationEditor : FieldEditor, IDisposable
             }
             playbackTarget = time; frame = player.AdvanceTo(time, token: lifetime.Token); if (!Render()) return;
             long audioStart = Stopwatch.GetTimestamp();
-            audio.Update(frame, context, playing);
+            audio.Update(frame, playing);
             AudioUpdated?.Invoke(now, Stopwatch.GetElapsedTime(audioStart).TotalMilliseconds);
         }
         catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException) { SetPlaying(false); RecordPreviewError(ex.Message); }
@@ -641,7 +641,7 @@ public partial class AnimationEditor : FieldEditor, IDisposable
         DockPanel panel = new(); DockPanel.SetDock(query, Dock.Top); DockPanel.SetDock(bind, Dock.Bottom); panel.Children.Add(query); panel.Children.Add(bind); panel.Children.Add(list);
         Window dialog = new() { Owner = Window.GetWindow(this), Title = "Preview root binding · first 500 matches", Width = 520, Height = 600, Content = panel, WindowStartupLocation = WindowStartupLocation.CenterOwner };
         bind.Click += (_, _) => { if (list.SelectedItem != null) dialog.DialogResult = true; };
-        if (dialog.ShowDialog() == true && !disposed && ReferenceEquals(context, bindingContext) && list.SelectedItem is AnimationRootChoices.Choice selected) { bindingContext.RootOverrides[entryIndex] = selected.Index; resetSimulation = true; await SeekAsync(0); if (frame != null) viewport.FrameAnimation(frame); Note("Preview root bound to " + selected.Label); }
+        if (dialog.ShowDialog() == true && !disposed && ReferenceEquals(context, bindingContext) && list.SelectedItem is AnimationRootChoices.Choice selected) { bindingContext.RootOverrides[entryIndex] = selected.Index; resetSimulation = true; await SeekAsync(0); if (frame != null) viewport.FrameAnimation(); Note("Preview root bound to " + selected.Label); }
     }
     private void Note(string text) { if (disposed) return; StatusChanged?.Invoke(text); Diagnostics.Text = text + "\n" + Diagnostics.Text; }
     public void Pause() { levelResume = false; pendingPlay = false; SetPlaying(false); }

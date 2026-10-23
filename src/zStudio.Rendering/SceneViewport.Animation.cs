@@ -1,12 +1,9 @@
 using System.Numerics;
 using System.IO;
-using System.Text.Json.Nodes;
 using System.Windows;
-using System.Windows.Media;
 using System.Windows.Media.Media3D;
 using zStudio.Core;
 using zStudio.Core.Animation;
-using zStudio.Core.Formats;
 using zStudio.Rendering.Direct3D;
 
 namespace zStudio.Rendering;
@@ -73,7 +70,7 @@ public sealed partial class SceneViewport
         await Task.WhenAll(animationTextureSlots.Values.Select(slot => slot.Load).ToArray());
         token.ThrowIfCancellationRequested(); if (generation != expectedGeneration) return; UpdateAnimationFrame(frame);
         animationToken = previewLifetime ?? token;
-        if (includeLevel) FrameAll(); else FrameAnimation(frame);
+        if (includeLevel) FrameAll(); else FrameAnimation();
         }
         catch
         {
@@ -425,7 +422,7 @@ public sealed partial class SceneViewport
         }
     }
 
-    public void FrameAnimation(AnimationFrame frame)
+    public void FrameAnimation()
     {
         TryFrame("asset", manual: false);
     }

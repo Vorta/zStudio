@@ -70,8 +70,6 @@ public static partial class MissionSceneLoader
     /// Resolve the requested reader once. A remembered selection that no longer qualifies falls
     /// back to the first reader with a diagnostic; an exact request fails instead of loading another.
     /// </summary>
-    internal static Task<Mw3Resources> Mw3ResourcesAsync(string worldPath, AssetResolver resolver, string? requested, bool exact, CancellationToken token)
-        => Mw3ResourcesAsync(worldPath, resolver, requested, exact, token, new AssetReadBudget());
     internal static Task<Mw3Resources> Mw3ResourcesAsync(string worldPath, AssetResolver resolver, string? requested, bool exact,
         CancellationToken token, PreviewResourceBudget preview)
         => Mw3ResourcesAsync(worldPath, resolver, requested, exact, token, preview.Reads, preview);

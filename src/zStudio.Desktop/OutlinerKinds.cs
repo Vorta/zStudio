@@ -43,7 +43,6 @@ internal static class OutlinerKinds
     internal static string PassIcon(string kind) => kind switch { "aiv" => "Tank", "puppies" => "Pickup", "anim" => "Animation", _ => "Folder" };
     internal static Brush PassBrush(string kind) => kind switch { "aiv" => VehicleBrush, "puppies" => PickupBrush, "anim" => AnimationBrush, _ => GroupBrush };
     private static readonly Brush VehicleBrush = Frozen(0xE8, 0x90, 0x7F), PickupBrush = Frozen(0x8F, 0xD1, 0x8B), AnimationBrush = Frozen(0x6F, 0xC8, 0xD6);
-    internal static string Label(string category) => category switch { "world" => "World", "group" => "Group", "geometry" => "Geometry", "empty" => "Empty", "object" => "Object", _ => "Node" };
     // Empty nodes are slate: lighter on the dark theme, darker on the light one.
     private static readonly Brush EmptyDarkBrush = Frozen(0x9F, 0xB0, 0xC2), EmptyLightBrush = Frozen(0x5B, 0x6B, 0x7C);
     private static Brush EmptyBrush => LightTheme ? EmptyLightBrush : EmptyDarkBrush;

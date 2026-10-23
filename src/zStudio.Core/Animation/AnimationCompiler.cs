@@ -268,8 +268,8 @@ public sealed partial class AnimationCompiler
         return package;
     }
 
-    /// <summary>Complete the derived record fields before the package enters shared preview and edit services.
-    /// Archive writing used to supply these fields; source evaluation has no archive or physical source offsets.</summary>
+    /// <summary>Complete the derived record fields before the package enters shared preview and edit services;
+    /// source evaluation writes no archive, so nothing else fills them in.</summary>
     private void CompleteHeaders(AnimationEntry entry)
     {
         token.ThrowIfCancellationRequested();

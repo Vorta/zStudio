@@ -10,7 +10,6 @@ using SharpGen.Runtime;
 using Vortice.Direct3D11;
 using Vortice.Direct3D9;
 using Vortice.DXGI;
-using Color = System.Windows.Media.Color;
 using D3D9Format = Vortice.Direct3D9.Format;
 using DxgiFormat = Vortice.DXGI.Format;
 using Usage = Vortice.Direct3D9.Usage;

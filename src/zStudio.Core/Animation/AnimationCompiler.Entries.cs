@@ -71,7 +71,7 @@ public sealed partial class AnimationCompiler
             foreach (var sequence in item.All("SEQUENCE_DEFINITION"))
             {
                 if (entry.Sequences.Count >= 255) throw item.Error("more than 255 sequences.");
-                entry.Sequences.Add(Sequence(sequence.All("NAME").LastOrDefault() is { Scalars.Count: > 0 } named ? named.Text() : "", sequence.Items, sequence));
+                entry.Sequences.Add(Sequence(sequence.All("NAME").LastOrDefault() is { Scalars.Count: > 0 } named ? named.Text() : "", sequence.Items));
             }
             // The loader creates the entry's lights and sound nodes by name before it resolves node references, so
             // those names need not be in the world; any other missing node makes the game reject the file.
@@ -179,7 +179,7 @@ public sealed partial class AnimationCompiler
 
         // ------------------------------------------------------------ sequences
 
-        private AnimationSequence Sequence(string name, IEnumerable<AnimationItem> items, AnimationItem? owner = null)
+        private AnimationSequence Sequence(string name, IEnumerable<AnimationItem> items)
         {
             byte[] header = new byte[64]; if (name.Length > 0) Text(header, 0, Bound(name), 32, "sequence NAME");
             AnimationSequence sequence = new(header);

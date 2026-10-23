@@ -7,7 +7,6 @@ using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
-using zStudio.Core;
 using zStudio.Core.Animation;
 using zStudio.Desktop;
 using NAudio.Wave;
@@ -60,7 +59,7 @@ internal static class AnimationCheck
                         var context = await document.GetAnimationContextAsync(window.ViewModel.Resolver!, CancellationToken.None);
                         var cycles = editor.CurrentFrame!.Nodes.SelectMany(p => context.Scene.Models[p.Model].Polygons).Select(p => p.MaterialIndex).Distinct().Where(context.MaterialCycles.ContainsKey).Select(m => context.MaterialCycles[m]).ToArray();
                         if (!cycles.Any(c => c.Textures.Count == 12 && c.Speed == 10 && c.Loop)) throw new InvalidDataException("Fire's runtime material cycle was not bound.");
-                        await editor.SeekAsync(.2); editor.Viewport.FrameAnimation(editor.CurrentFrame!); await Task.Delay(200);
+                        await editor.SeekAsync(.2); editor.Viewport.FrameAnimation(); await Task.Delay(200);
                         var first = Pixels(editor.Viewport.RenderImage(480, 320));
                         await editor.SeekAsync(.5); await Task.Delay(200);
                         var second = Pixels(editor.Viewport.RenderImage(480, 320));
@@ -84,7 +83,7 @@ internal static class AnimationCheck
                         level.IsChecked = false; await WaitEditor(window, item.Index); lod.SelectedIndex = 0;
                         Console.WriteLine("Animation LOD picker switches variants without restarting playback or changing pose state.");
                     }
-                    await editor.SeekAsync(.2); await Task.Delay(350); editor.Viewport.FrameAnimation(editor.CurrentFrame!);
+                    await editor.SeekAsync(.2); await Task.Delay(350); editor.Viewport.FrameAnimation();
                     var earlyFrame = editor.CurrentFrame!;
                     if (editor.Viewport.AnimationMeshCount == 0) throw new InvalidDataException(name + ": no animation meshes");
                     if (editor.CurrentFrame!.Nodes.All(n => !n.Visible || n.Opacity <= 0)) throw new InvalidDataException(name + ": all preview geometry is invisible");
@@ -140,7 +139,7 @@ internal static class AnimationCheck
                         soundEvent.SetText(12, sample.Name); soundEvent.SetInt(52, 1);
                         audioContext.Package.Entries[item.Index].Primary.Events.Add(soundEvent);
                         await audio.PrepareAsync(audioContext, item.Index);
-                        audio.Update(reset with { Time = .01, Sounds = [cue], ActiveSounds = [] },context,true);
+                        audio.Update(reset with { Time = .01, Sounds = [cue], ActiveSounds = [] },true);
                         if (audio.VoiceCount != 1) throw new InvalidDataException("Animation WASAPI voice did not start.");
                         audio.Stop(); if (audio.VoiceCount != 0) throw new InvalidDataException("Animation voice did not stop.");
                         Console.WriteLine($"Resolved {context.Sounds.Count} sounds ({context.Sounds.Values.Count(s => s.Loop)} looped) and {context.Effects.Count} effects; mission/reset/audio checks passed.");
@@ -347,7 +346,7 @@ internal static class AnimationCheck
         };
         capture.StartRecording();
         var cue = new AnimationSoundCue(9901, sound.Name, false, true, 0, System.Numerics.Vector3.Zero);
-        audio.Update(frame with { Time = 0, Sounds = [cue], ActiveSounds = [cue] }, snapshot, true);
+        audio.Update(frame with { Time = 0, Sounds = [cue], ActiveSounds = [cue] }, true);
         await Task.Delay(TimeSpan.FromSeconds(sound.Duration + .15));
         Interlocked.Exchange(ref peak, 0);
         await Task.Delay(TimeSpan.FromSeconds(Math.Max(.2, sound.Duration)));

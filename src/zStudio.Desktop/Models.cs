@@ -7,7 +7,6 @@ using System.Windows.Data;
 using System.Windows.Media.Imaging;
 using CommunityToolkit.Mvvm.ComponentModel;
 using zStudio.Core;
-using zStudio.Core.Formats;
 using zStudio.Core.Animation;
 
 namespace zStudio.Desktop;

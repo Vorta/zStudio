@@ -1,4 +1,3 @@
-using System.Globalization;
 using System.IO;
 
 namespace zStudio.Desktop;
@@ -50,28 +49,4 @@ internal static class ComponentText
     }
 
     internal static string[] Display(string value, string separator, int maximum) => TrySplit(value, separator, maximum, out var parts) ? parts : [value];
-
-    internal static string[] Require(string value, string separator, int count)
-    {
-        if (!TrySplit(value, separator, count, out var parts) || parts.Length != count)
-            throw new InvalidDataException($"Enter all {count} components.");
-        return parts;
-    }
-
-    internal static float[] ParseFinite(string value, int count, bool commaOnly = false)
-    {
-        CheckNumeric(value);
-        float[] numbers = new float[count]; int at = 0;
-        foreach (var range in value.AsSpan().SplitAny(commaOnly ? "," : ", "))
-        {
-            var text = value.AsSpan()[range];
-            if (commaOnly) text = text.Trim();
-            if (!commaOnly && text.IsEmpty) continue;
-            if (at == count || !float.TryParse(text, NumberStyles.Float | NumberStyles.AllowThousands, CultureInfo.InvariantCulture, out float number) || !float.IsFinite(number))
-                throw new InvalidDataException($"Enter {count} finite components.");
-            numbers[at++] = number;
-        }
-        if (at != count) throw new InvalidDataException($"Enter {count} finite components.");
-        return numbers;
-    }
 }

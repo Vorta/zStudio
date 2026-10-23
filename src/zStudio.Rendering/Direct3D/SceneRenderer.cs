@@ -1,5 +1,4 @@
 using System.Numerics;
-using System.Windows;
 using Vortice.Direct3D;
 using Vortice.Direct3D11;
 using Vortice.DXGI;

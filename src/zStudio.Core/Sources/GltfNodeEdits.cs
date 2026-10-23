@@ -661,13 +661,6 @@ public static class GltfNodeEdits
             foreach (int child in Children(nodes, i)) Walk(child, zone, depth + 1);
         }
     }
-    /// <summary>States <paramref name="zone"/> on every copy of the shared node <paramref name="mark"/>, so it has that zone whichever copy import reads.</summary>
-    public static void SetInstanceZone(JsonObject root, long mark, uint zone)
-    {
-        foreach (var node in Nodes(root).OfType<JsonObject>())
-            if ((node["extras"] as JsonObject)?[WorldGltf.Key] is JsonObject engine && Instance(engine["instance"]) == mark)
-                SetExplicitZone(engine, zone);
-    }
     /// <summary>The roots import reads, in its order: the default scene's nodes, or without scenes every node no node lists as a child.</summary>
     private static IEnumerable<int> ImportRoots(JsonObject root, JsonArray nodes)
     {

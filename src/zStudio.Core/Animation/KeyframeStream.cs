@@ -1,6 +1,5 @@
 using System.Buffers.Binary;
 using System.Collections;
-using zStudio.Core.Formats;
 
 namespace zStudio.Core.Animation;
 

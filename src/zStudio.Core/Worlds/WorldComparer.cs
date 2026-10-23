@@ -222,7 +222,7 @@ public static class WorldComparer
         var worldA = expected.Nodes.FirstOrDefault(n => n.Class == WorldNodeClass.World); var worldB = actual.Nodes.FirstOrDefault(n => n.Class == WorldNodeClass.World);
         if (worldA != null)
         {
-            // Slots may reorder distinct worlds. Prefer the unique authored name before the legacy single-root pairing.
+            // Slots may reorder distinct worlds. Prefer the unique authored name before the first world node.
             var named = actual.Nodes.Where(n => n.Class == WorldNodeClass.World && n.Name == worldA.Name).Take(2).ToArray();
             if (named.Length == 1) worldB = named[0];
         }

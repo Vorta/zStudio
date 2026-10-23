@@ -1,4 +1,3 @@
-using System.IO;
 using zStudio.Core;
 using zStudio.Core.Sources;
 using zStudio.Core.Worlds;
@@ -170,7 +169,7 @@ public sealed class ScriptTraceBudgetTests
         List<string> notes = [];
         BoundedDiagnostics diagnostics = new(notes);
         long before = GC.GetAllocatedBytesForCurrentThread();
-        Assert.Empty(WorldDecomposer.DecomposeAll(world, trace, notes, Token, diagnostics).Loads);
+        Assert.Empty(WorldDecomposer.DecomposeAll(world, trace, Token, diagnostics).Loads);
         Assert.InRange(GC.GetAllocatedBytesForCurrentThread() - before, 0, 2L << 20);
         Assert.Single(notes);
         Assert.True(notes[0].Length <= BoundedDiagnostics.MaximumMessageCharacters);

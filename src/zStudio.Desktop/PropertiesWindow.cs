@@ -9,7 +9,6 @@ using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Threading;
 using zStudio.Core;
-using zStudio.Core.Export;
 
 namespace zStudio.Desktop;
 

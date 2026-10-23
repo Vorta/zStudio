@@ -60,8 +60,6 @@ internal sealed class CardSection : Border
     }
     /// <summary>An element before the summary text (null for none).</summary>
     internal UIElement? SummaryLead { set { summaryLead.Child = value; summaryLead.Visibility = value == null ? Visibility.Collapsed : Visibility.Visible; } }
-    /// <summary>The header toggle, which opens and closes the body.</summary>
-    internal ToggleButton Header => header;
     /// <summary>A control at the header's right edge (detached from any earlier parent by the caller).</summary>
     internal UIElement? Trailing { get => trailing.Child; set => trailing.Child = value; }
     private void Apply()

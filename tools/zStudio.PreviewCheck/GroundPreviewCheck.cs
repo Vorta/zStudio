@@ -3,7 +3,6 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
-using System.Windows.Input;
 using System.Windows.Automation;
 using System.Windows.Media.Media3D;
 using zStudio.Desktop;
@@ -47,7 +46,7 @@ internal static class GroundPreviewCheck
                 Require(plane.Offset == 0 && !plane.IsHitTestVisible, "Grid configuration invalid");
                 foreach (double time in new[] { 1d, 5d, 8d })
                 {
-                    await editor.SeekAsync(time); editor.Viewport.FrameAnimation(editor.CurrentFrame!);
+                    await editor.SeekAsync(time); editor.Viewport.FrameAnimation();
                     await Task.Delay(200, timeout.Token); Save(editor.Viewport.RenderImage(1100, 740), $"vtol-{time:00}s.png");
                 }
                 var eye = camera.Position; var look = camera.LookDirection; double near = camera.NearPlaneDistance, far = camera.FarPlaneDistance;
@@ -80,7 +79,7 @@ internal static class GroundPreviewCheck
                 grid.IsChecked = true; await Ready();
                 Require(viewport.GroundGrids.Count == 1, "Horizon refresh duplicated grid");
                 ((System.Windows.Controls.Primitives.ToggleButton)editor.FindName("ShowLevel")).IsChecked = false; await Ready();
-                await editor.SeekAsync(5); editor.Viewport.FrameAnimation(editor.CurrentFrame!);
+                await editor.SeekAsync(5); editor.Viewport.FrameAnimation();
                 viewport.WheelZoom(new(viewport.RenderSurface.ActualWidth / 2, viewport.RenderSurface.ActualHeight / 2), 120); await Task.Delay(2600, timeout.Token);
                 var idle = viewport.CapturePresentedFrame(); Console.WriteLine($"Idle camera: {camera.Position} {camera.LookDirection} clips {camera.NearPlaneDistance:R}/{camera.FarPlaneDistance:R}; viewport {viewport.RenderSurface.ActualWidth}/{viewport.RenderSurface.ActualHeight}"); await Task.Delay(2500, timeout.Token);
                 var later = viewport.CapturePresentedFrame();
@@ -117,7 +116,7 @@ internal static class GroundPreviewCheck
                 Require(!heightMessages.Any(m => m.Contains("Height must", StringComparison.Ordinal)), "Typing or leaving an incomplete height raised an error");
                 await editor.SeekAsync(.1);
                 plane = viewport.GroundGrids.Single();
-                editor.Viewport.FrameAnimation(editor.CurrentFrame); await Task.Delay(200, timeout.Token);
+                editor.Viewport.FrameAnimation(); await Task.Delay(200, timeout.Token);
                 var target = camera.Position + camera.LookDirection;
                 foreach (var (name, offset) in new[] { ("top-down", new Vector3D(0, 60, 0)), ("perspective", new Vector3D(30, 35, 65)) })
                 {

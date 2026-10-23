@@ -2,7 +2,6 @@ using System.Collections.Concurrent;
 using System.Globalization;
 using System.Numerics;
 using System.Runtime.CompilerServices;
-using System.Text.Json.Nodes;
 using zStudio.Core.Formats;
 using zStudio.Core.Worlds;
 

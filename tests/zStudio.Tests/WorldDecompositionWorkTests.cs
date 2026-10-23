@@ -15,7 +15,7 @@ public sealed class WorldDecompositionWorkTests
         var world = ReadWorld();
         var trace = Trace();
         var work = new LookupWorkBudget(20_000, Token);
-        var result = WorldDecomposer.DecomposeAll(world, trace, [], Token, new BoundedDiagnostics([]), work);
+        var result = WorldDecomposer.DecomposeAll(world, trace, Token, new BoundedDiagnostics([]), work);
         var load = Assert.Single(result.Loads);
         Assert.Equal(["part0", "part1", "part2", "part3"], load.Content.Select(n => n.Name));
         Assert.All(load.Content, node => Assert.Same(load.Root, Assert.Single(node.Parents)));
@@ -59,7 +59,7 @@ public sealed class WorldDecompositionWorkTests
     {
         var world = ReadWorld();
         byte[] before = GameZWriter.Write(world, Token);
-        Assert.Throws<InvalidDataException>(() => WorldDecomposer.DecomposeAll(world, Trace(), [], Token,
+        Assert.Throws<InvalidDataException>(() => WorldDecomposer.DecomposeAll(world, Trace(), Token,
             new BoundedDiagnostics([]), new LookupWorkBudget(1, Token)));
         Assert.Equal(before, GameZWriter.Write(world, Token));
         Assert.Equal(4, Assert.Single(WorldDecomposer.DecomposeAll(ReadWorld(), Trace(), [], Token).Loads).Content.Count);

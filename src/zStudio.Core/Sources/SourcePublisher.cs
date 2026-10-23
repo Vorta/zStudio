@@ -121,8 +121,6 @@ public sealed partial class SourcePublisher
         SourceProject.RejectLinkedProject(root);
     }
 
-    public string Root => root;
-
     /// <summary>Test hook called before each step with its name and file index (-1 for steps of the whole save); it may throw to simulate a failure, or <see cref="Crash"/> to simulate the process ending.</summary>
     internal Action<string, int>? Fault { get; set; }
     /// <summary>Deterministic cancellation barrier inside recursive cleanup, independent of transaction steps.</summary>

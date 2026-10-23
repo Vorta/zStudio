@@ -125,16 +125,6 @@ internal sealed partial class SealedFile : IDisposable
         }
     }
 
-    /// <summary>Reads the already owned, verified file; never resolves its temporary pathname again.</summary>
-    internal async Task<byte[]> ReadAllAsync(int expectedLength, CancellationToken token)
-    {
-        token.ThrowIfCancellationRequested();
-        if (stream == null || stream.Length != expectedLength) throw new IOException("The staged file length changed.");
-        byte[] bytes = new byte[expectedLength]; stream.Position = 0;
-        await stream.ReadExactlyAsync(bytes, token).ConfigureAwait(false);
-        token.ThrowIfCancellationRequested(); return bytes;
-    }
-
     /// <summary>
     /// Holds <paramref name="path"/> and checks that it has <paramref name="expected"/>. Throws <see cref="IOException"/>,
     /// holding nothing, when it differs, is missing or a link, or another program has it open for writing or renaming.

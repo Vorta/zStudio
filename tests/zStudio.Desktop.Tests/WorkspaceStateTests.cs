@@ -86,19 +86,6 @@ public sealed class WorkspaceStateTests
         restored.FilesWidth = 900; restored.Normalize(); Assert.Equal(650,restored.FilesWidth);
     }
     [Fact]
-    public void EveryCatalogFieldHasAReachablePresentationGroup()
-    {
-        foreach (var spec in AnimationCatalog.Events)
-        foreach (var field in spec.Fields)
-        {
-            Assert.False(string.IsNullOrWhiteSpace(AnimationFieldPresentation.Group(spec.Type,field)));
-            if (field.ReadOnly) Assert.Equal("Serialized state / provenance",AnimationFieldPresentation.Group(spec.Type,field));
-            if (field.Kind == AnimationFieldKind.Vector) Assert.Equal(3, AnimationFieldPresentation.Components(spec.Type,field).Length);
-        }
-        Assert.Equal("Additional stored fields", AnimationFieldPresentation.Group(255,new("Unmapped",12,AnimationFieldKind.Float)));
-        Assert.Equal(new[] { "Start","End","Rate" },AnimationFieldPresentation.Components(21,AnimationCatalog.Find(21)!.Fields.Single(f => f.Offset == 20)));
-    }
-    [Fact]
     public void GridAndCollisionAreIndependentDefaults()
     {
         AnimationPreviewOptions options = new(); Assert.True(options.Grid); Assert.True(options.Collision);

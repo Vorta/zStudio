@@ -149,9 +149,9 @@ public static partial class SourceWorlds
 
     /// <summary>Checks an addition against the project and the tokens a script can hold.</summary>
     public static void Validate(string root, SourceModelAddition addition)
-        => Validate(new SourceWorkspace(root), null, addition);
+        => Validate(new SourceWorkspace(root), addition);
 
-    public static void Validate(SourceWorkspace workspace, string? mission, SourceModelAddition addition, CancellationToken token = default)
+    public static void Validate(SourceWorkspace workspace, SourceModelAddition addition, CancellationToken token = default)
     {
         ValidateTokens(addition);
         ValidateModelClosure(workspace, addition.Model, token);
@@ -200,7 +200,6 @@ public static partial class SourceWorlds
     /// <paramref name="script"/> (a world script's bytes) with the lines of each addition inserted before the line that
     /// writes the world. Everything else, including line endings, is kept.
     /// </summary>
-    public static byte[] InsertIntoScript(ReadOnlySpan<byte> script, IEnumerable<SourceModelAddition> additions, string name = "the world script") => InsertIntoScript(script, additions, name, CancellationToken.None);
     internal static byte[] InsertIntoScript(ReadOnlySpan<byte> script, IEnumerable<SourceModelAddition> additions, string name, CancellationToken token)
     {
         string text = GameGenScriptText.Decode(script, token);

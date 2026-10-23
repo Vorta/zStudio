@@ -1,10 +1,7 @@
-using System.Globalization;
 using System.IO;
 using System.Text.Json.Nodes;
 using System.Windows;
-using System.Windows.Controls;
 using System.Windows.Media.Imaging;
-using System.Windows.Media.Media3D;
 using NAudio.Wave;
 using zStudio.Automation;
 using zStudio.Core;

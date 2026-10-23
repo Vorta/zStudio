@@ -94,7 +94,6 @@ internal sealed class NodeCollection : IReadOnlyList<Node>
         foreach (var node in items) node.Owner = null;
         items.Clear(); owner.View?.InvalidateRender();
     }
-    public bool Contains(Node node) => items.Contains(node);
     public IEnumerator<Node> GetEnumerator() => items.GetEnumerator();
     IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
 }

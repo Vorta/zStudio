@@ -32,14 +32,6 @@ internal sealed class MissionSourceComparer : IEqualityComparer<MissionPickupSou
         memo = new();
         memo.Add(text, new(resolved.Prefix, true));
     }
-    internal void Reset(IEnumerable<MissionPickupSource> sources)
-    {
-        lock (gate)
-        {
-            retained.Clear(); memo = new();
-            foreach (var source in sources) { Register(source.ArchivePath); Register(source.ResourceName); }
-        }
-    }
     private Resolution Resolve(string text)
     {
         if (memo.TryGetValue(text, out var result)) return result;
@@ -70,7 +62,6 @@ internal sealed class MissionSourceComparer : IEqualityComparer<MissionPickupSou
         lock (gate) return HashCode.Combine(source.ArchivePath == null ? 0 : Resolve(source.ArchivePath).Prefix.Hash,
             source.AssetIndex, source.ResourceName == null ? 0 : Resolve(source.ResourceName).Prefix.Hash, source.RecordIndex);
     }
-    internal bool SameArchive(string a, string b) { lock (gate) return Same(a, b); }
     internal Prefix ArchiveIdentity(MissionPickupSource source)
     {
         lock (gate) return Resolve(source.ArchivePath).Prefix;

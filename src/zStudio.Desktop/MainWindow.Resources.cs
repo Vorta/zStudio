@@ -1,5 +1,4 @@
 using System.IO;
-using System.Text.Json.Nodes;
 using zStudio.Automation;
 using zStudio.Core;
 using zStudio.Core.Formats;

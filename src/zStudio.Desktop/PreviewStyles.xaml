@@ -70,19 +70,6 @@
     </ControlTemplate.Triggers>
    </ControlTemplate></Setter.Value></Setter>
   </Style>
-  <!-- Edit's confirm state: the accent fill marks the action that applies the draft. -->
-  <Style x:Key="CardAccentButton" TargetType="Button" BasedOn="{StaticResource CardIconButton}">
-   <Setter Property="Background" Value="{DynamicResource AccentFillColorDefaultBrush}"/><Setter Property="Foreground" Value="{DynamicResource TextOnAccentFillColorPrimaryBrush}"/>
-   <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="Button">
-    <Border x:Name="Chrome" Background="{TemplateBinding Background}" BorderThickness="1" BorderBrush="Transparent" CornerRadius="4"><ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/></Border>
-    <ControlTemplate.Triggers>
-     <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="Chrome" Property="Opacity" Value="0.9"/></Trigger>
-     <Trigger Property="IsPressed" Value="True"><Setter TargetName="Chrome" Property="Opacity" Value="0.8"/></Trigger>
-     <Trigger Property="IsKeyboardFocused" Value="True"><Setter TargetName="Chrome" Property="BorderBrush" Value="{DynamicResource TextFillColorPrimaryBrush}"/></Trigger>
-     <Trigger Property="IsEnabled" Value="False"><Setter Property="Opacity" Value="0.4"/></Trigger>
-    </ControlTemplate.Triggers>
-   </ControlTemplate></Setter.Value></Setter>
-  </Style>
   <Style x:Key="CardSegmentToggle" TargetType="ToggleButton">
    <Setter Property="Width" Value="30"/><Setter Property="Height" Value="26"/><Setter Property="Margin" Value="1"/><Setter Property="Padding" Value="0"/>
    <Setter Property="Background" Value="Transparent"/><Setter Property="Foreground" Value="{DynamicResource TextFillColorSecondaryBrush}"/>
@@ -166,8 +153,6 @@
     </ControlTemplate.Triggers>
    </ControlTemplate></Setter.Value></Setter>
   </Style>
-  <!-- A labelled toggle (See-through): an icon and text, accent when on. -->
-  <Style x:Key="CommandPill" TargetType="ToggleButton" BasedOn="{StaticResource CommandButton}"><Setter Property="Width" Value="NaN"/><Setter Property="Height" Value="28"/><Setter Property="Padding" Value="8,0,10,0"/><Setter Property="FontSize" Value="12"/></Style>
   <!-- A chip floating over the 3D view: the theme background at 80% under a hairline border. -->
   <Style TargetType="local:ViewportChip">
    <Setter Property="Padding" Value="10,0,12,0"/><Setter Property="MinHeight" Value="30"/><Setter Property="FontSize" Value="12"/>

@@ -1,7 +1,6 @@
 using System.Buffers.Binary;
 using System.Numerics;
 using System.Text.Json.Nodes;
-using zStudio.Core.Formats;
 
 namespace zStudio.Core.Worlds;
 

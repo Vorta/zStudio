@@ -56,12 +56,10 @@ internal sealed class MeshData
 internal sealed class LineData
 {
     private DeviceCache<LineBuffers>? buffers;
-    private (Vector3 Min, Vector3 Max)? bounds;
     public LineData(Vector3[] positions, int[] indices) { Positions = positions; Indices = indices; }
     public Vector3[] Positions { get; }
     public int[] Indices { get; }
     internal LineBuffers? Buffers(D3DGraphics graphics) => Positions.Length == 0 || Indices.Length < 2 ? null
         : (buffers ??= new()).Get(graphics, g => new LineBuffers(g, this));
-    internal (Vector3 Min, Vector3 Max) Bounds => bounds ??= MeshBvh.Measure(Positions);
     internal void ReleaseDeviceResources() => buffers?.Release();
 }

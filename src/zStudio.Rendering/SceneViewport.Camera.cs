@@ -1,7 +1,5 @@
 using System.Windows;
-using System.Windows.Input;
 using System.Windows.Media.Media3D;
-using System.Diagnostics;
 using zStudio.Rendering.Direct3D;
 
 namespace zStudio.Rendering;

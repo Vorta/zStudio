@@ -9,9 +9,7 @@ namespace zStudio.Core;
 internal sealed class RetainedDocumentBudget(long maximumBytes)
 {
     private readonly HashSet<object> decoded = new(ReferenceEqualityComparer.Instance);
-    private readonly long capacity = maximumBytes;
     private long remaining = maximumBytes;
-    internal long UsedBytes => capacity - remaining;
     internal bool Exhausted => remaining < 0;
     private void Remember(object value) => decoded.Add(value);
     internal void Reserve(long bytes, CancellationToken token)
@@ -24,13 +22,6 @@ internal sealed class RetainedDocumentBudget(long maximumBytes)
     {
         token.ThrowIfCancellationRequested();
         if (remaining < 0) throw new InvalidDataException("Retained decoded content exceeds its allowance.");
-    }
-    internal void Bytes(ReadOnlyMemory<byte> bytes, CancellationToken token)
-    {
-        if (bytes.IsEmpty) return;
-        if (!MemoryMarshal.TryGetArray(bytes, out var segment) || segment.Array == null)
-            throw new InvalidDataException("The edited content has an unsupported backing buffer.");
-        First(segment.Array, 32L + segment.Array.LongLength, token);
     }
     internal void Document(AssetDocument document, CancellationToken token)
     {
@@ -107,7 +98,6 @@ internal sealed class RetainedDocumentBudget(long maximumBytes)
                             foreach (string text in instruction.Tokens) Text(text, token);
                 }
     }
-    internal bool Object(object value, long bytes, CancellationToken token) => First(value, bytes, token);
     private bool First(object value, long bytes, CancellationToken token)
     {
         Check(token);

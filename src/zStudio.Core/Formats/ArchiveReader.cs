@@ -85,16 +85,6 @@ internal sealed class ArchiveZrdBudget(long maximumAllocation = ArchiveZrdBudget
     internal void Node() => Reserve(192);
     internal void Text(int characters) => Reserve(24L + 2L * characters);
     internal void Children(int count) => Reserve(40L * count);
-    internal void Tree(ZrdNode tree, CancellationToken token)
-    {
-        token.ThrowIfCancellationRequested(); Node();
-        if (tree.Kind == ZrdKind.String) Text(tree.Text.Length);
-        if (tree.Kind == ZrdKind.Array)
-        {
-            Children(tree.Children.Count);
-            foreach (var child in tree.Children) Tree(child, token);
-        }
-    }
     private void Reserve(long bytes)
     {
         if (bytes > remaining) throw new ZrdBudgetExceededException();

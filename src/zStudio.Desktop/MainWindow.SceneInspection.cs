@@ -1,5 +1,4 @@
 using System.Globalization;
-using System.Numerics;
 using System.Text.Json.Nodes;
 using System.Windows;
 using zStudio.Automation;

@@ -14,7 +14,6 @@ public static class GameGenScriptText
     private static bool IsSpace(char c) => c is ' ' or '\t' or '\n' or '\v' or '\f' or '\r';
 
     /// <summary>A script file's text, bounded before it is decoded.</summary>
-    public static string Decode(ReadOnlySpan<byte> bytes) => Decode(bytes, CancellationToken.None);
     internal static string Decode(ReadOnlySpan<byte> bytes, CancellationToken token)
     {
         token.ThrowIfCancellationRequested();

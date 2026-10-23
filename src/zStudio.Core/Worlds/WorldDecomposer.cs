@@ -34,9 +34,9 @@ public static class WorldDecomposer
 
     /// <inheritdoc cref="Decompose"/>
     public static WorldDecomposition DecomposeAll(GameZWorld world, IReadOnlyList<TracedInstruction> trace, List<string> notes, CancellationToken token = default)
-        => DecomposeAll(world, trace, notes, token, new BoundedDiagnostics(notes));
+        => DecomposeAll(world, trace, token, new BoundedDiagnostics(notes));
 
-    internal static WorldDecomposition DecomposeAll(GameZWorld world, IReadOnlyList<TracedInstruction> trace, List<string> notes, CancellationToken token,
+    internal static WorldDecomposition DecomposeAll(GameZWorld world, IReadOnlyList<TracedInstruction> trace, CancellationToken token,
         BoundedDiagnostics diagnostics, LookupWorkBudget? work = null)
     {
         token.ThrowIfCancellationRequested();

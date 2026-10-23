@@ -14,8 +14,6 @@ public static class TerrainEdits
         return Checked(recipe with { Surfaces = [.. recipe.Surfaces.Select(s => s.Id == id ? s with { Defaults = defaults } : s)] });
     }
 
-    public static TerrainRecipe AddSurface(TerrainRecipe recipe, TerrainSurface surface) => Checked(recipe with { Surfaces = [.. recipe.Surfaces, surface] });
-
     /// <summary>Removes a surface and its mention in regions; a region that named only it is refused, since without a list it would cover every surface.</summary>
     public static TerrainRecipe RemoveSurface(TerrainRecipe recipe, string id)
     {

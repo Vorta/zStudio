@@ -114,8 +114,6 @@ internal sealed class SceneTreeModel
         return row;
     }
     internal SceneTreeItem? Find(string id) => rows.GetValueOrDefault(id);
-    /// <summary>A section's header row (zones, aiNetworks or definitions), or null.</summary>
-    internal SceneTreeItem? SectionRow(string section) => Roots.FirstOrDefault(r => r.Section is SectionHeader header && header.Section == section);
     /// <summary>A section row found by its entry key (a zone, a network, a definition), created along its path if needed.</summary>
     internal SceneTreeItem? FindSection(string key)
     {

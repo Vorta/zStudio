@@ -10,7 +10,7 @@ using zStudio.Rendering.Direct3D;
 namespace zStudio.Rendering;
 
 // The renderer seam for the Desktop tests and PreviewCheck. Only WPF, System.Numerics and
-// Core types cross it, so the backend behind SceneViewport can change without its callers.
+// Core types cross it, so its callers never depend on the renderer's own types.
 public sealed partial class SceneViewport
 {
     /// <summary>What a rendered mesh is: a static scene batch, an animation pose's mesh, or an overlay or helper.</summary>
@@ -114,7 +114,7 @@ public sealed partial class SceneViewport
     }
 
     /// <summary>One ray hit, nearest first: <see cref="Instance"/> is the hit instance (instanced meshes) or the triangle ordinal.</summary>
-    internal sealed record SceneHit(RenderMeshHandle? Mesh, Vector3 Point, Vector3 Normal, double Distance, int? Instance);
+    internal sealed record SceneHit(RenderMeshHandle? Mesh, Vector3 Point, int? Instance);
 
     /// <summary>A test mesh added to this view. <see cref="Placements"/> registers it as a static scene batch.</summary>
     internal sealed record FixtureMesh(Vector3[] Positions, int[] Indices)
@@ -197,7 +197,7 @@ public sealed partial class SceneViewport
         if (!view.IsReady || direction.LengthSquared <= 0) return [];
         direction.Normalize();
         var hits = view.HitTest(new Vector3((float)origin.X, (float)origin.Y, (float)origin.Z), new Vector3((float)direction.X, (float)direction.Y, (float)direction.Z));
-        return hits.OrderBy(h => h.Distance).Select(h => new SceneHit(h.Node is GeometryNode node ? Handle(node) : null, h.Point, h.Normal, h.Distance, h.Tag)).ToArray();
+        return hits.OrderBy(h => h.Distance).Select(h => new SceneHit(h.Node is GeometryNode node ? Handle(node) : null, h.Point, h.Tag)).ToArray();
     }
 
     /// <summary>Hits under a render-surface point (DIPs) along the current camera's ray from the eye, not from the near plane.</summary>

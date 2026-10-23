@@ -3,11 +3,9 @@ using System.IO;
 using System.Numerics;
 using System.Text.Json.Nodes;
 using System.Windows;
-using System.Windows.Controls;
 using System.Windows.Input;
 using zStudio.Automation;
 using zStudio.Core;
-using zStudio.Core.Sources;
 using zStudio.Rendering;
 
 namespace zStudio.Desktop;

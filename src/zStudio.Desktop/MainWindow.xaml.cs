@@ -13,7 +13,6 @@ using System.Windows.Threading;
 using Microsoft.Win32;
 using NAudio.Wave;
 using zStudio.Core;
-using zStudio.Core.Export;
 using zStudio.Core.Formats;
 using zStudio.Rendering;
 
