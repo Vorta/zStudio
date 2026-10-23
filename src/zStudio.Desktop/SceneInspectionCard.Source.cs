@@ -318,6 +318,8 @@ internal sealed partial class SceneInspectionCard
     internal void FocusObject()
     {
         if (ObjectEditor != null) { ObjectEditor.MoveFocus(new(System.Windows.Input.FocusNavigationDirection.First)); return; }
-        if (values.TryGetValue(AuthoredPlacement, out var field) && field.Inputs.FirstOrDefault(i => i.IsEnabled && !i.IsReadOnly && i.IsVisible) is { } input) input.Focus();
+        if (values.TryGetValue(AuthoredPlacement, out var field) && field.Inputs.FirstOrDefault(i => i.IsEnabled && !i.IsReadOnly && i.IsVisible) is { } input) { input.Focus(); return; }
+        // Details collapsed under added sections (the player tank's): their first choice takes the keyboard.
+        if (extraSections.Content is PlayerTankPanel { IsVisible: true } tank) tank.FocusFirst();
     }
 }

@@ -113,6 +113,9 @@ internal sealed partial class SceneInspectionCard : Grid
             extraSections.Content = sections;
         }
         extraSections.Visibility = sections == null ? Visibility.Collapsed : Visibility.Visible;
+        // With added sections first, Details starts collapsed and keeps its own remembered state (owner request 2026-10-23),
+        // so collapsing it there leaves every other object's Details as the user left it.
+        detailsSection.RememberAs(sections == null ? detailsSection.Title : detailsSection.Title + " (with added sections)", expandedByDefault: sections == null);
     }
     /// <summary>Clears the selection (the ✕ and Escape), asking about a pending draft first.</summary>
     internal bool ClearSelection()
@@ -185,7 +188,8 @@ internal sealed partial class SceneInspectionCard : Grid
         SetRow(footer, 2); layout.Children.Add(footer);
         // The edit scope (which records an edit changes, or why it is read only) belongs to the placement: Details.
         modesFrame.Child = modes; detailsSection.Trailing = modesFrame; detailsSection.Body.Children.Add(scope); detailsSection.Body.Children.Add(rows); detailsSection.Body.Margin = new(10, 0, 10, 8);
-        StackPanel body = new(); body.Children.Add(error); body.Children.Add(terrainEdit); body.Children.Add(sourceRows); body.Children.Add(detailsSection); body.Children.Add(extraSections);
+        // Sections a selection adds (the player tank's Master type and Weapons) come before Details.
+        StackPanel body = new(); body.Children.Add(error); body.Children.Add(terrainEdit); body.Children.Add(sourceRows); body.Children.Add(extraSections); body.Children.Add(detailsSection);
         emptyView = new ScrollViewer { Content = emptyBody, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled, Margin = new(0, 6, 0, 0), Visibility = Visibility.Collapsed };
         SetRow(emptyView, 1); layout.Children.Add(emptyView);
         terrainEdit.Click += (_, _) => { if (ResolvePending()) EditTerrain?.Invoke(); };

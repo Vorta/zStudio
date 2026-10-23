@@ -9,7 +9,8 @@ namespace zStudio.Desktop;
 /// <summary>
 /// A collapsible group of the selected-object card: a rounded panel whose header (chevron, title, optional summary and an
 /// optional trailing control such as the gizmo mode) shows or hides its body. Whether a title is expanded is remembered
-/// for the session, so rebinding the card to another object keeps the user's choice.
+/// for the session, so rebinding the card to another object keeps the user's choice; a section can remember under another
+/// key for some objects (<see cref="RememberAs"/>).
 /// </summary>
 internal sealed class CardSection : Border
 {
@@ -22,10 +23,12 @@ internal sealed class CardSection : Border
     private readonly Border summaryLead = new() { VerticalAlignment = VerticalAlignment.Center, Margin = new(8, 0, 0, 0), Visibility = Visibility.Collapsed };
     internal StackPanel Body { get; } = new() { Margin = new(12, 4, 12, 12) };
     internal string Title { get; }
+    /// <summary>The key its expansion is remembered under: its title, unless <see cref="RememberAs"/> chose another.</summary>
+    private string memory;
 
     internal CardSection(string title, bool expanded = true)
     {
-        Title = title;
+        Title = title; memory = title;
         CornerRadius = new(6); BorderThickness = new(1); Margin = new(0, 0, 0, 8);
         SetResourceReference(BackgroundProperty, "CardBackgroundFillColorDefaultBrush");
         SetResourceReference(BorderBrushProperty, "CardStrokeColorDefaultBrush");
@@ -62,10 +65,21 @@ internal sealed class CardSection : Border
     internal UIElement? SummaryLead { set { summaryLead.Child = value; summaryLead.Visibility = value == null ? Visibility.Collapsed : Visibility.Visible; } }
     /// <summary>A control at the header's right edge (detached from any earlier parent by the caller).</summary>
     internal UIElement? Trailing { get => trailing.Child; set => trailing.Child = value; }
+    /// <summary>
+    /// Remembers its expansion under <paramref name="key"/> from now on (expanded by default as given), showing what that key
+    /// remembers: the same section can keep one choice for most objects and another for some (the player tank's Details).
+    /// </summary>
+    internal void RememberAs(string key, bool expandedByDefault)
+    {
+        if (key == memory) return;
+        memory = key;
+        bool open = Expanded.GetValueOrDefault(key, expandedByDefault);
+        if (header.IsChecked == open) Apply(); else header.IsChecked = open;
+    }
     private void Apply()
     {
         bool open = header.IsChecked == true;
-        Expanded[Title] = open;
+        Expanded[memory] = open;
         Body.Visibility = open ? Visibility.Visible : Visibility.Collapsed;
         chevron.RenderTransformOrigin = new(.5, .5);
         chevron.RenderTransform = open ? Transform.Identity : new RotateTransform(-90);

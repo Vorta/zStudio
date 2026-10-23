@@ -89,6 +89,8 @@ internal sealed class PlayerTankPanel : StackPanel
         };
     }
 
+    /// <summary>Gives the keyboard to the first group's entry radio (the chosen master type), as Tab would.</summary>
+    internal bool FocusFirst() => types.Children.OfType<RadioButton>().FirstOrDefault(r => r.IsTabStop && r.IsEnabled && r.IsVisible) is { } entry && entry.Focus();
     /// <summary>Before a card hosts the panel: whether its radios had the keyboard, to give it back once hosted again.</summary>
     internal void PrepareMove() { if (IsKeyboardFocusWithin) restoreFocus = true; }
     /// <summary>The next <see cref="Show"/> draws again even with the same inputs (the radios return to them after a refused click).</summary>
