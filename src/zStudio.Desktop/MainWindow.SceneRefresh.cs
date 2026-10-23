@@ -67,6 +67,7 @@ public partial class MainWindow
         // The player tank's radios wait for this refresh unless it draws their choice.
         RefreshPlayerTankViews();
         SceneViewport? replacement = null;
+        bool swapped = false;
         bool OwnsRequest() => staticRefresh == request && scene == previous && shownDocument == doc && shownAsset?.Id == asset.Id && !doc.IsDisposed;
         ViewModel.Status = "Updating preview…";
         try
@@ -111,7 +112,7 @@ public partial class MainWindow
             }
             previous.CancelPickupDrag(); DetachPickupEditor();
             flyRequest++;
-            scene = replacement; replacement = null;
+            scene = replacement; replacement = null; swapped = true;
             PublishSourceMapParts(scene, doc);
             scene.Information += text => { PreviewInfo.Text = text; PreviewInfo.ToolTip = text; };
             WatchPreviewFailures(scene);
@@ -169,6 +170,9 @@ public partial class MainWindow
         finally
         {
             replacement?.Dispose();
+            // Once swapped, the retired view goes even when publishing the new one failed: its devices and GPU buffers are native
+            // (released only by Dispose, which is idempotent).
+            if (swapped) previous.Dispose();
             if (staticRefresh == request) { staticRefresh = null; RefreshPlayerTankViews(); }
         }
         return null;

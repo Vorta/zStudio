@@ -212,10 +212,14 @@ internal sealed class MeshNode : GeometryNode
     internal void Follow(LineNode line, bool follow) { if (follow) followers.Add(line); else followers.Remove(line); }
     private protected override void InstancesChanged() { foreach (var line in followers) line.FollowedChanged(); }
     private protected override void VisibilityChanged() { foreach (var line in followers) line.FollowedChanged(); }
-    /// <summary>Also releases the device copies of its geometry and texture (shared ones upload again for their other users).</summary>
+    /// <summary>
+    /// Also releases the device copy of its geometry (a shared one uploads again for its other users). Its texture's copy stays:
+    /// textures are shared by image among many meshes (animation cards come and go every frame), and the scene that made one
+    /// releases it when it clears.
+    /// </summary>
     public override void Dispose()
     {
-        geometry?.ReleaseDeviceResources(); material?.DiffuseMap?.ReleaseDeviceResources();
+        geometry?.ReleaseDeviceResources();
         base.Dispose();
     }
 }
