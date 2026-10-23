@@ -389,11 +389,13 @@ public partial class MainWindow
     {
         node = SourceSelectionOwner(doc, node);
         var projection = SourceSelection(doc, doc == shownDocument ? scene?.PreviewScene : null);
-        // A placed unit's source refusal names what it is; its boundary's reason is about editing its placement.
+        // A placed unit's source refusal names what it is, and why its placement can't be edited either when it is locked.
         if (doc == shownDocument && scene?.Mission?.InspectedActorAt(node) is { } actor)
-            throw new StudioCommandException("read_only", actor.Pickup != null || actor.CoordinateSource != null
-                ? "This is a resource-placed instance. Edit its mission placement instead of its shared model source."
-                : "This object's placement is controlled by startup animation. Editing that placement is unavailable.");
+            throw new StudioCommandException("read_only", actor.Pickup == null && actor.CoordinateSource == null
+                ? "This object's placement is controlled by startup animation. Editing that placement is unavailable."
+                : projection?.Boundaries.GetValueOrDefault(node)?.ReadOnlyReason is { } locked
+                ? "This is a resource-placed instance, so its shared model source isn't edited here. " + locked
+                : "This is a resource-placed instance. Edit its mission placement instead of its shared model source.");
         if (projection?.Boundaries.GetValueOrDefault(node)?.ReadOnlyReason is { } reason)
             throw new StudioCommandException("read_only", reason);
         if (node < 0) throw new StudioCommandException("read_only", "This reference group has no compiled node. Its parts cannot be edited independently.");

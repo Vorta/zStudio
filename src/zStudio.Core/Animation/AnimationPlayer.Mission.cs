@@ -228,7 +228,7 @@ public sealed partial class AnimationPlayer
                     && scene.Models[model] is { } shape && shape.Morphs.Length == shape.Vertices.Length)
                     morphed.Add((node.Source, shape, node.Morph));
             // Every write is admitted before the first: a refusal never leaves a partial pose.
-            operation.Reserve(64L * nodes.Length + morphed.Sum(m => 64L + m.Shape.Vertices.Length));
+            operation.Reserve(64L * nodes.Length + morphed.Sum(m => 64L + 12L * m.Shape.Vertices.Length + 64L * m.Shape.Metadata.Count));
         }
         catch (Exception ex) when (ex is InvalidDataException or StateLimitException or IOException) { return ex.Message; }
         player.Publish(nodes, positioned, admitted: true);

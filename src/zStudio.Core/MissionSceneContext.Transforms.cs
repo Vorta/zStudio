@@ -42,7 +42,7 @@ public sealed partial class MissionSceneContext
                 if (before.Class != "object3d" || initialized.Name != before.Name || initialized.Class != before.Class
                     || !initialized.Parents.AsSpan().SequenceEqual(before.Parents) || !initialized.Children.AsSpan().SequenceEqual(before.Children)
                     || SourceNodes[i] != i || dependencies.Reads.Contains(i) || dependencies.Writes.Contains(i)
-                    || DormantRoots.Contains(i) || ActorAt(i) is { Root: var actorRoot } actor && actorRoot == i && (actor.PlacementPosition.HasValue || actor.CoordinateSource != null || actor.Pickup != null)
+                    || DormantRoots.Contains(i) || repeatedRoots.ContainsKey(i) || ActorAt(i) is { Root: var actorRoot } actor && actorRoot == i && (actor.PlacementPosition.HasValue || actor.CoordinateSource != null || actor.Pickup != null)
                     || SceneBuilder.LocalTransform(initialized) != SceneBuilder.LocalTransform(before)) return null;
                 changed.Add(i);
             }
@@ -118,13 +118,14 @@ public sealed partial class MissionSceneContext
     /// <summary>
     /// Rebase an initialized mission onto a source update that replaced only built models' polygon zones (see
     /// SourceWorlds.TryUpdatePolygonZones): nodes, materials and textures are the same objects, so initialization, which
-    /// reads no polygon zone, stands. Null when the update replaced anything else or the mission does not show those models.
+    /// reads no polygon zone, stands. Null when the update replaced anything else or the mission does not show those models,
+    /// and when the mission draws a model of its own (a part the player tank's mode change left morphed), whose zones would stay old.
     /// </summary>
     public MissionSceneContext? WithSourcePolygonZones(GameScene beforeSource, GameScene afterSource, CancellationToken token = default)
     {
         token.ThrowIfCancellationRequested();
         if (beforeSource.Nodes.Count != afterSource.Nodes.Count || beforeSource.Models.Count != afterSource.Models.Count
-            || Scene.Models.Count < beforeSource.Models.Count || beforeSource.Materials.Count != afterSource.Materials.Count || beforeSource.Textures.Count != afterSource.Textures.Count
+            || Scene.Models.Count != beforeSource.Models.Count || beforeSource.Materials.Count != afterSource.Materials.Count || beforeSource.Textures.Count != afterSource.Textures.Count
             || !beforeSource.Nodes.Zip(afterSource.Nodes).All(pair => ReferenceEquals(pair.First, pair.Second))
             || !beforeSource.Materials.Zip(afterSource.Materials).All(pair => ReferenceEquals(pair.First, pair.Second))
             || !beforeSource.Textures.Zip(afterSource.Textures).All(pair => ReferenceEquals(pair.First, pair.Second))) return null;

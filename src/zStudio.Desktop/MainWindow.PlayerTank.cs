@@ -29,6 +29,8 @@ public partial class MainWindow
     private long playerTankGeneration;
     /// <summary>The last pose failure and sub-mode weapon switch of the shown map, as the card says them.</summary>
     private string? playerTankFailure, playerTankSubstitution;
+    /// <summary>The weapon the game switched to in sub, while the note about it stands (the map keeps that weapon as its choice).</summary>
+    private string? substitutedSecondary;
 
     /// <summary>The shown world's mission scene (a source map's or a compiled world's Whole world), or null.</summary>
     private MissionSceneContext? ShownWorldMission => animation == null && motion == null && SceneHost.Visibility == Visibility.Visible && shownAsset?.Kind == AssetKind.World
@@ -62,8 +64,14 @@ public partial class MainWindow
             if (publishedStaticOptions != null && ReferenceEquals(doc, shownDocument)) publishedStaticOptions = publishedStaticOptions with { Tank = session.PlayerTank };
             playerTankFailure = tank.Failure == null ? null
                 : $"Couldn't show {PlayerTankPresentation.Label(tank.Requested.Type)}: {tank.Failure} (see Diagnostics). The view shows {PlayerTankPresentation.Label(tank.Shown.Type)}.";
-            playerTankSubstitution = tank.SecondarySubstituted
-                ? $"In sub the game switches {PlayerTankPresentation.ShortName(tank.Requested.Secondary)} to {PlayerTankPresentation.ShortName(tank.Shown.Secondary)}." : null;
+            // The map keeps the weapon the game switched to, so later rebuilds draw it without switching: the note stays while
+            // the tank is in sub with that weapon.
+            if (tank.SecondarySubstituted)
+            {
+                playerTankSubstitution = $"In sub the game switches {PlayerTankPresentation.ShortName(tank.Requested.Secondary)} to {PlayerTankPresentation.ShortName(tank.Shown.Secondary)}.";
+                substitutedSecondary = tank.Shown.Secondary;
+            }
+            else if (tank.Shown.Type != PlayerTankType.Sub || tank.Shown.Secondary != substitutedSecondary) playerTankSubstitution = substitutedSecondary = null;
             if (tank.Failure != null && sourceChromeActive) SetToolsVisible(true, problems: true);
         }
         RefreshPlayerTankViews();
@@ -140,6 +148,8 @@ public partial class MainWindow
     /// </summary>
     private (DocumentModel Document, AssetRecord Asset, MissionPlayerTank Tank) RequirePlayerTankChange(PlayerTankState next, bool secondaryChanged)
     {
+        if (sourceMapOpening != null || sourceWorldsOpening > 0)
+            throw new StudioCommandException("not_ready", "The map is still opening; change the player tank once it is shown.");
         if (!sourceChromeActive || shownDocument?.SourceWorld is not { } session || shownAsset is not { Kind: AssetKind.World } asset || scene?.Mission is not { } mission)
             throw new StudioCommandException("unsupported", "The player tank's type and weapons are a source map preview.");
         if (mission.PlayerTank is not { } tank)
@@ -231,7 +241,7 @@ public partial class MainWindow
             types = tank.Types.Select(t => new { id = PlayerTankPresentation.Id(t.Type), available = t.Available, transitions = t.Transitions.Count == 0 ? null : t.Transitions,
                 reason = PlayerTankPresentation.Reason(missionName, tank, t.Type) }).ToArray(),
             secondaries = tank.Weapons.Where(w => !w.Weapon.IsPrimary).Select(w => new { id = w.Weapon.Id, key = w.Weapon.Key, model = w.Model, present = w.Present,
-                allowedInSub = w.AllowedInSub, available = !(tank.Shown.Type == PlayerTankType.Sub && !w.AllowedInSub) }).ToArray(),
+                allowedInSub = w.AllowedInSub, available = !(state.Type == PlayerTankType.Sub && !w.AllowedInSub) }).ToArray(),
             gun = new { drawn = tank.Drawn, model = secondary.Model, missing = secondary.Listed && secondary.Model != null && !secondary.Present ? secondary.Model : null,
                 sharedWith = PlayerTankPresentation.SharedWith(tank, state.Secondary), line = PlayerTankPresentation.ModelLine(tank, state.Secondary) },
             posing = adjustable && posingTank != null, rebuilding = adjustable && PlayerTankRebuilding,

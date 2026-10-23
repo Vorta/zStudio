@@ -3,7 +3,8 @@ using zStudio.Core.Animation;
 namespace zStudio.Core;
 
 /// <summary>
-/// The mission's opening takes over the player's start (docs/agents/engine-evidence.md, player start): an entry of its
+/// The mission's opening takes over the player's start (docs/agents/engine-evidence.md, "`objectives.zrd` and `startanims.zrd`",
+/// "Openings and the player"): an entry of its
 /// startup chain takes the controls and gives them back from the pose of the tank's node. <paramref name="SetsPose"/> is
 /// whether the chain also moves or turns the tank's root, which then decides where the player starts (m2–m6).
 /// </summary>
