@@ -153,7 +153,7 @@ public sealed class UpdateChecker
     /// <summary>
     /// One check; only <paramref name="token"/> cancels it (thrown), everything else is reported in the result. The request runs
     /// on the thread pool, never on the caller's thread: the first one can block in the system's proxy discovery (WPAD or a PAC
-    /// script) before the timeout applies.
+    /// script), which the timeout cannot interrupt.
     /// </summary>
     public Task<UpdateCheckResult> CheckAsync(CancellationToken token)
     {

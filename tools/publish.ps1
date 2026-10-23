@@ -25,7 +25,7 @@ try {
             (Test-Path -LiteralPath (Join-Path $Path 'dependencies/zStudio.Desktop.runtimeconfig.json') -PathType Leaf)
     }
     Assert-ArtifactPath $outputPath
-    $preservedPaths = @($PreserveSuperseded | ForEach-Object { Assert-ArtifactPath $_; [IO.Path]::GetFullPath($_, $repository) })
+    $preservedPaths = @($PreserveSuperseded | ForEach-Object { Assert-ArtifactPath $_; [IO.Path]::GetFullPath($_, $repository).TrimEnd([IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar) })
     if ((Test-Path -LiteralPath $outputPath) -and -not (Test-StudioPackage $outputPath)) {
         throw "Refusing to replace a folder that is not a Studio publish: $outputPath"
     }
