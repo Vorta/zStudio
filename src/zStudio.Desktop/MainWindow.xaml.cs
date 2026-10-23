@@ -85,6 +85,7 @@ public partial class MainWindow : Window
         InitializeWorkspace();
         InitializeContentEditors();
         InitializeSourceEditor();
+        InitializeUpdates();
         ApplyTheme(s.Theme); UpdateRecent(); ready = true;
         PreviewKeyDown += Keyboard; PreviewKeyUp += ZoneToolKeyUp; PreviewKeyUp += (_, e) => PresentationKeyUp(e);
         // After the focused control: a dropdown, a field's restore, a stroke or a grip uses Escape first.

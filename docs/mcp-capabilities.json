@@ -1356,6 +1356,28 @@
         "zstudio_open_root"
       ],
       "note": "File > Open workspace… (Ctrl+O): open_root with project true, which refuses a folder that is not a source project (not_project, naming the missing data or gamegen folder), one that is or lies below a link, or one in an earlier source format."
+    },
+    {
+      "gui": "MainWindow.xaml:CheckForUpdatesClick",
+      "tools": [
+        "zstudio_update_check"
+      ],
+      "note": "Help > Check for updates: update_check action check asks GitHub now (an explicit request, also with automatic checks off); the status bar item shows Checking for updates…, then Update available or the result for a few seconds. A private test profile never contacts GitHub."
+    },
+    {
+      "gui": "MainWindow.xaml:AutomaticUpdatesClick",
+      "tools": [
+        "zstudio_update_check"
+      ],
+      "note": "Help > Check for updates automatically: update_check action automatic with enabled (saved setting, default on; at most one check a day after zStudio starts). state and update_check report it as update.automatic."
+    },
+    {
+      "gui": "MainWindow.xaml:UpdateStatusClick",
+      "tools": [
+        "zstudio_update_check",
+        "zstudio_state"
+      ],
+      "note": "The status bar's Update available item (directly left of Preview notices) opens update.url, a page of github.com/Vorta/zStudio/releases, in the browser; MCP returns the url (state update or update_check) and opens nothing on the user's desktop. Clicking a check's result dismisses it."
     }
   ],
   "animationAssociationResults": "scene_tree animations includes initial-root and statically known indirect recipients. animationUses contains up to eight entryIndex/name/origin/reason records; origin is initialRoot or indirect. animationUsesTruncated discloses omissions. animationHasInitialRoot and animationHasIndirect retain both origin summaries when details are capped. GUI tree/search uses #6FC8D6 for any initial root, #89B5BC for indirect-only recipients; same glyph and opacity. Read-only position references and unknown impact targets are excluded."

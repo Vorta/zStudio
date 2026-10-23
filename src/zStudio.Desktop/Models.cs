@@ -329,6 +329,12 @@ public sealed class StudioSettings
     public string CompareRetail { get; set; } = "";
     public string CompareRebuilt { get; set; } = "";
     public List<string> RecentRoots { get; set; } = [];
+    /// <summary>Whether zStudio asks GitHub for a newer release by itself after it starts, at most once a day (Help menu).</summary>
+    public bool CheckForUpdates { get; set; } = true;
+    /// <summary>The last successful update check and the latest release it found.</summary>
+    public DateTimeOffset? UpdateCheckedUtc { get; set; }
+    public string? UpdateLatestVersion { get; set; }
+    public string? UpdateLatestUrl { get; set; }
     internal static string SettingsPath => System.IO.Path.Combine(zStudio.Automation.StudioProfile.Directory, "settings.json");
     public static StudioSettings Load()
     {

@@ -42,7 +42,7 @@ public partial class App : Application
             error.Handled = true;
         };
         MainWindow window = new(); MainWindow = window; window.Show();
-        if (ProcessCommandLine) window.InitializeMcp();
+        if (ProcessCommandLine) { window.InitializeMcp(); window.StartAutomaticUpdateCheck(); }
         if (ProcessCommandLine && e.Args.Length > 0 && e.Args[0] != "--mcp-host") window.OpenStartupPath(e.Args[0]);
     }
 }
