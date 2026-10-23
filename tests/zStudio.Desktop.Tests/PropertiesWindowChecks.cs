@@ -1,13 +1,9 @@
 using System.IO;
 using System.Windows;
-using System.Windows.Automation;
 using System.Windows.Controls;
-using System.Windows.Input;
-using System.Windows.Media;
 using System.Windows.Threading;
 using zStudio.Core;
 using zStudio.Core.Animation;
-using zStudio.Desktop;
 using Xunit;
 
 namespace zStudio.Desktop.Tests;

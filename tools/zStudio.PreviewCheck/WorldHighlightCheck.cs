@@ -215,14 +215,6 @@ internal static class WorldHighlightCheck
     private static GameModel Quad(int index, int material, float x0, float x1, float y0, float y1, float z) => new(index,[new(x0,y0,z),new(x1,y0,z),new(x1,y1,z),new(x0,y1,z)],[],[],[new(material,0,[0,1,2,3],[],[Vector2.Zero,Vector2.UnitX,Vector2.One,Vector2.UnitY],[])],[]);
     private static string Snapshot(GameScene scene) => string.Join('|', scene.Materials.Select(m => m.ToJsonString()).Concat(scene.Nodes.Select(n => n.Metadata.ToJsonString() + n.Data.ToJsonString())));
     private static Task PreviewWork(MainWindow window) => (Task)typeof(MainWindow).GetField("previewWork", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(window)!;
-    private static IEnumerable<DependencyObject> VisualChildren(DependencyObject root)
-    {
-        for (int i = 0; i < VisualTreeHelper.GetChildrenCount(root); i++)
-        {
-            var child = VisualTreeHelper.GetChild(root,i); yield return child;
-            foreach (var nested in VisualChildren(child)) yield return nested;
-        }
-    }
     // The scene's own surfaces: static batches and animation meshes, not overlays.
     private static IEnumerable<SceneViewport.RenderMeshHandle> Meshes(SceneViewport preview) => preview.EnumerateRenderMeshes().Where(m => m.Role != SceneViewport.RenderMeshRole.Overlay);
     private static async Task PresentedAfter(SceneViewport preview, Action change)

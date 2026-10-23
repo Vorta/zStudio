@@ -1,4 +1,3 @@
-using System.IO;
 using System.Buffers.Binary;
 using System.Text;
 using zStudio.Core.Animation;

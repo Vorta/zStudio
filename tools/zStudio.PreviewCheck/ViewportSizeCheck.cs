@@ -1,10 +1,8 @@
 using System.IO;
-using System.Numerics;
 using System.Windows;
 using System.Windows.Media;
 using System.Windows.Threading;
 using zStudio.Core;
-using zStudio.Core.Formats;
 using zStudio.Rendering;
 
 internal static class ViewportSizeCheck

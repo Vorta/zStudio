@@ -2,7 +2,6 @@ using System.IO;
 using System.IO.Pipes;
 using System.Text.Json.Nodes;
 using System.Windows;
-using System.Windows.Automation;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Input;
@@ -12,7 +11,6 @@ using ModelContextProtocol.Client;
 using ModelContextProtocol.Protocol;
 using zStudio.Core;
 using zStudio.Core.Animation;
-using zStudio.Desktop;
 using zStudio.Mcp;
 using Xunit;
 

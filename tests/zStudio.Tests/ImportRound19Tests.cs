@@ -139,4 +139,3 @@ public sealed class ImportRound19Tests
         else await SourceExtractor.ExtractAsync(fixture.Corpus,fixture.Project,token:Token);
     }
 }
-

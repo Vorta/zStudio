@@ -1,4 +1,3 @@
-using System.IO;
 using System.IO.Pipes;
 using System.Reflection;
 using System.Text.Json.Nodes;
@@ -9,7 +8,6 @@ using ModelContextProtocol.Protocol;
 using zStudio.Core;
 using zStudio.Core.Sources;
 using zStudio.Core.Worlds;
-using zStudio.Desktop;
 using zStudio.Mcp;
 using zStudio.Rendering;
 using Xunit;

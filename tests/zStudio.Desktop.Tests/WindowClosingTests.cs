@@ -5,7 +5,6 @@ using System.Windows.Media;
 using System.Windows.Threading;
 using zStudio.Core;
 using zStudio.Core.Sources;
-using zStudio.Desktop;
 using Xunit;
 
 namespace zStudio.Desktop.Tests;

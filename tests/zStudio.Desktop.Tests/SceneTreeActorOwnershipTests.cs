@@ -4,7 +4,6 @@ using zStudio.Core;
 using zStudio.Core.Formats;
 using zStudio.Core.Sources;
 using zStudio.Core.Worlds;
-using zStudio.Desktop;
 using Xunit;
 
 namespace zStudio.Desktop.Tests;

@@ -1,6 +1,5 @@
 using System.Numerics;
 using System.Text;
-using zStudio.Core;
 using zStudio.Core.Formats;
 using zStudio.Core.Gltf;
 using zStudio.Core.Sources;
@@ -51,7 +50,6 @@ public sealed class SourceWorldTests
         Assert.Contains("LoadGameGen a.gltf a\nGameZWriteZBDFileExtra", rewritten);
     }
     private static CancellationToken Token => TestContext.Current.CancellationToken;
-    private sealed class OnReport(Action<SourceProgress> action) : IProgress<SourceProgress> { public void Report(SourceProgress value) => action(value); }
 
     [Fact]
     public void ModelLinesGoBeforeTheWorldIsWritten()

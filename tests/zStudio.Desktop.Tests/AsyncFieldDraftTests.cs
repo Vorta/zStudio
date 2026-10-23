@@ -1,5 +1,4 @@
 using System.IO;
-using zStudio.Desktop;
 using Xunit;
 
 namespace zStudio.Desktop.Tests;

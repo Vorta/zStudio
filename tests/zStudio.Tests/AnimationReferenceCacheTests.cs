@@ -1,7 +1,6 @@
 using System.Buffers.Binary;
 using zStudio.Core;
 using zStudio.Core.Animation;
-using zStudio.Core.Formats;
 using Xunit;
 
 namespace zStudio.Tests;

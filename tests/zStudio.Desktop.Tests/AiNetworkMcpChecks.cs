@@ -1,4 +1,3 @@
-using System.IO;
 using System.IO.Pipes;
 using System.Numerics;
 using System.Reflection;
@@ -9,7 +8,6 @@ using System.Windows.Controls.Primitives;
 using ModelContextProtocol.Client;
 using ModelContextProtocol.Protocol;
 using zStudio.Core;
-using zStudio.Desktop;
 using zStudio.Mcp;
 using zStudio.Rendering;
 using Xunit;

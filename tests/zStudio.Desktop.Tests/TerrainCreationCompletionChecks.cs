@@ -1,12 +1,8 @@
 using System.Collections.Specialized;
 using System.IO;
 using System.Text.Json.Nodes;
-using System.Windows;
-using System.Windows.Controls;
 using ModelContextProtocol.Client;
 using ModelContextProtocol.Protocol;
-using zStudio.Core.Sources;
-using zStudio.Desktop;
 using zStudio.Tests;
 using Xunit;
 

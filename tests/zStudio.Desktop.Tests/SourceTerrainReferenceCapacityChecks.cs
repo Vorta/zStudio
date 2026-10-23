@@ -8,8 +8,6 @@ using ModelContextProtocol.Client;
 using ModelContextProtocol.Protocol;
 using zStudio.Automation;
 using zStudio.Core.Sources;
-using zStudio.Core.Terrain;
-using zStudio.Desktop;
 using zStudio.Mcp;
 using zStudio.Tests;
 using Xunit;

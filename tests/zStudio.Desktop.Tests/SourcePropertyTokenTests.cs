@@ -1,4 +1,3 @@
-using zStudio.Desktop;
 using Xunit;
 
 namespace zStudio.Desktop.Tests;
@@ -31,7 +30,7 @@ public sealed class SourcePropertyTokenTests
         Assert.Equal(["1\r2"], ComponentText.BoundedTokens("1\r2", " ,\t", 1, 8, 64, "Invalid args."));
         Assert.Equal(["a\tb"], ComponentText.BoundedTokens("a\tb", ", ", 0, 256, 32, "Invalid surfaces."));
         Assert.Empty(ComponentText.BoundedTokens(" , ", ", ", 0, 256, 32, "Invalid surfaces."));
-        Assert.Empty(ComponentText.BoundedTokens(", ,", " ,", 0, 3, 4096, "Invalid zones.")); // Legacy separator-only zones mean an empty (any) list.
+        Assert.Empty(ComponentText.BoundedTokens(", ,", " ,", 0, 3, 4096, "Invalid zones.")); // Separator-only zones are an empty (any) list.
     }
 
     [Fact]

@@ -1,10 +1,8 @@
 using System.IO;
 using System.Text.Json.Nodes;
 using System.Windows.Threading;
-using zStudio.Automation;
 using zStudio.Core;
 using zStudio.Core.Export;
-using zStudio.Desktop;
 using Xunit;
 
 namespace zStudio.Desktop.Tests;

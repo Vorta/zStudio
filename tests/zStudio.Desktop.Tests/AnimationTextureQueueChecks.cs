@@ -2,7 +2,6 @@ using System.IO;
 using System.Numerics;
 using System.Reflection;
 using System.Text;
-using System.Windows;
 using zStudio.Core;
 using zStudio.Core.Animation;
 using zStudio.Rendering;

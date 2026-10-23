@@ -1,5 +1,4 @@
 using zStudio.Core.Sources;
-using zStudio.Desktop;
 using Xunit;
 
 namespace zStudio.Desktop.Tests;

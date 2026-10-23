@@ -4,7 +4,6 @@ using System.Text.Json.Nodes;
 using zStudio.Core.Export;
 using zStudio.Core.Formats;
 using zStudio.Core.Sources;
-using zStudio.Desktop;
 using Xunit;
 
 namespace zStudio.Desktop.Tests;

@@ -1,4 +1,3 @@
-using System.IO;
 using System.Numerics;
 using System.Text;
 using zStudio.Core.Gltf;

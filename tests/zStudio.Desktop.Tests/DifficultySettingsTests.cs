@@ -1,6 +1,5 @@
 using System.Text.Json;
 using zStudio.Core;
-using zStudio.Desktop;
 using Xunit;
 
 namespace zStudio.Desktop.Tests;

@@ -4,8 +4,6 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using ModelContextProtocol.Client;
 using ModelContextProtocol.Protocol;
-using zStudio.Core;
-using zStudio.Core.Formats;
 
 /// <summary>Corpus regression through the packaged stdio connector and its real visible GUI.</summary>
 internal static class McpLiveCheck

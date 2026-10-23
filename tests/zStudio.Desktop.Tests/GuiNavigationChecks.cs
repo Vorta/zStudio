@@ -1,7 +1,6 @@
 using System.IO;
 using zStudio.Automation;
 using zStudio.Core;
-using zStudio.Desktop;
 using Xunit;
 
 namespace zStudio.Desktop.Tests;

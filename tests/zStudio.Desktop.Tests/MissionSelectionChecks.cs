@@ -4,7 +4,6 @@ using System.Windows;
 using System.Windows.Controls;
 using zStudio.Automation;
 using zStudio.Core;
-using zStudio.Desktop;
 using zStudio.Rendering;
 using zStudio.Tests;
 using Xunit;

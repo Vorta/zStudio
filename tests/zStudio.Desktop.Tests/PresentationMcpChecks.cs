@@ -1,21 +1,15 @@
-using System.ComponentModel;
 using System.IO;
 using System.Reflection;
 using System.Runtime.InteropServices;
-using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Windows;
-using System.Windows.Automation;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Interop;
-using System.Windows.Media;
 using System.Windows.Shell;
 using System.Windows.Threading;
 using zStudio.Automation;
-using zStudio.Core.Animation;
-using zStudio.Desktop;
 using zStudio.Rendering;
 using zStudio.Tests;
 using Xunit;
@@ -172,8 +166,6 @@ internal static class PresentationMcpChecks
         var settled = viewport.CaptureView(); await Idle(); Assert.Equal(settled, viewport.CaptureView());
     }
     private static void Send(UIElement target, Key key) => target.RaiseEvent(new KeyEventArgs(Keyboard.PrimaryDevice, PresentationSource.FromVisual(target), Environment.TickCount, key) { RoutedEvent = Keyboard.PreviewKeyDownEvent });
-    private static IEnumerable<DependencyObject> Descendants(DependencyObject root)
-    { yield return root; for (int i = 0; i < VisualTreeHelper.GetChildrenCount(root); i++) foreach (var child in Descendants(VisualTreeHelper.GetChild(root, i))) yield return child; }
     private static NativePlacement Placement(nint handle)
     { Assert.Equal(44, Marshal.SizeOf<NativePlacement>()); var result = new NativePlacement { Length = Marshal.SizeOf<NativePlacement>() }; Assert.True(GetWindowPlacement(handle, ref result)); return result; }
     [StructLayout(LayoutKind.Sequential)] private struct NativeRect { public int Left, Top, Right, Bottom; }

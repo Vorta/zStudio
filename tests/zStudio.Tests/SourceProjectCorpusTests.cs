@@ -1,4 +1,3 @@
-using zStudio.Core;
 using zStudio.Core.Animation;
 using zStudio.Core.Formats;
 using zStudio.Core.Sources;

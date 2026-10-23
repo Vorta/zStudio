@@ -1,7 +1,6 @@
 using System.Collections;
 using System.Numerics;
 using zStudio.Core;
-using zStudio.Core.Formats;
 using Xunit;
 
 namespace zStudio.Tests;

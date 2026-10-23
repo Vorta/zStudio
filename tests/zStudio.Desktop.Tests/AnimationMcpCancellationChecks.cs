@@ -7,7 +7,6 @@ using NAudio.Wave;
 using zStudio.Automation;
 using zStudio.Core;
 using zStudio.Core.Animation;
-using zStudio.Desktop;
 using zStudio.Desktop.Audio;
 using Xunit;
 

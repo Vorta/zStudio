@@ -1,7 +1,6 @@
 using System.IO;
 using System.Text.Json.Nodes;
 using ModelContextProtocol.Client;
-using ModelContextProtocol.Protocol;
 using zStudio.Mcp;
 
 internal static class McpStdioCheck

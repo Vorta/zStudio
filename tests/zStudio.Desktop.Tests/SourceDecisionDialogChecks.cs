@@ -1,4 +1,3 @@
-using System.IO;
 using System.Numerics;
 using System.Text.Json.Nodes;
 using System.Windows;
@@ -7,7 +6,6 @@ using System.Windows.Media;
 using System.Windows.Threading;
 using zStudio.Core.Sources;
 using zStudio.Core.Worlds;
-using zStudio.Desktop;
 using zStudio.Tests;
 using Xunit;
 

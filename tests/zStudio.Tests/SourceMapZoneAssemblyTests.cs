@@ -2,7 +2,6 @@ using System.Numerics;
 using System.Text;
 using System.Text.Json.Nodes;
 using zStudio.Core.Gltf;
-using zStudio.Core.Sources;
 using zStudio.Core.Worlds;
 using Xunit;
 

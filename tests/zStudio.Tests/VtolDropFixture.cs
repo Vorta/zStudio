@@ -1,6 +1,5 @@
 using System.Text;
 using zStudio.Core.Animation;
-using zStudio.Core.Sources;
 using zStudio.Core.Worlds;
 
 namespace zStudio.Tests;

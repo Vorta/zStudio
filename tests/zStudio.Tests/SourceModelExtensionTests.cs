@@ -1,7 +1,5 @@
 using System.Buffers.Binary;
-using System.IO;
 using System.Text;
-using zStudio.Core.Formats;
 using zStudio.Core.Sources;
 using zStudio.Core.Worlds;
 using Xunit;

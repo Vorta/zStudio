@@ -1,11 +1,8 @@
-using System.Numerics;
 using System.Text;
-using zStudio.Core;
 using zStudio.Core.Animation;
 using zStudio.Core.Gltf;
 using zStudio.Core.Formats;
 using zStudio.Core.Sources;
-using zStudio.Core.Worlds;
 using Xunit;
 
 namespace zStudio.Tests;

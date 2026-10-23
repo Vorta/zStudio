@@ -7,7 +7,6 @@ using System.Windows;
 using ModelContextProtocol.Client;
 using ModelContextProtocol.Protocol;
 using zStudio.Core;
-using zStudio.Desktop;
 using zStudio.Mcp;
 using zStudio.Rendering;
 using zStudio.Tests;
