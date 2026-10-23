@@ -331,6 +331,8 @@ public sealed class StudioSettings
     public List<string> RecentRoots { get; set; } = [];
     /// <summary>Whether zStudio asks GitHub for a newer release by itself after it starts, at most once a day (Help menu).</summary>
     public bool CheckForUpdates { get; set; } = true;
+    /// <summary>The last check that asked GitHub, successful or not: automatic checks wait a day after it.</summary>
+    public DateTimeOffset? UpdateAttemptedUtc { get; set; }
     /// <summary>The last successful update check and the latest release it found.</summary>
     public DateTimeOffset? UpdateCheckedUtc { get; set; }
     public string? UpdateLatestVersion { get; set; }

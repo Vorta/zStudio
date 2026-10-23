@@ -256,29 +256,35 @@ internal static class McpWorkspaceChecks
                     Assert.Equal(bar.Children.IndexOf(right) + 1, bar.Children.IndexOf(item)); Assert.Equal(Dock.Right, DockPanel.GetDock(item));
                     Assert.Same(main.FindName("StatusNotices"), ((Panel)right).Children[0]);
 
+                    await Call("update_check", new() { ["action"] = "automatic" }, "invalid_argument");
+                    await Call("update_check", new() { ["enabled"] = false }, "invalid_argument");
+                    update = await Call("update_check", new() { ["action"] = "automatic", ["enabled"] = false });
+                    Assert.Equal((false, "disabled"), (update["automatic"]!.GetValue<bool>(), update["status"]!.GetValue<string>()));
+                    Assert.False(((MenuItem)main.FindName("AutomaticUpdatesMenu")).IsChecked);
+
+                    // Asked for with automatic checks off, a failed check reports why (not disabled); its time counts as a check.
                     github.Next = FakeGitHub.RateLimited;
                     update = await Call("update_check", new() { ["action"] = "check" });
                     Assert.Equal("unknown", update["status"]!.GetValue<string>());
                     Assert.Contains("limit", update["failure"]!.GetValue<string>()); Assert.Equal(update["failure"]!.GetValue<string>(), update["reason"]!.GetValue<string>());
                     Assert.Equal((Visibility.Visible, "Couldn't check for updates"), (item.Visibility, text.Text));
+                    var saved = StudioSettings.Load(); Assert.Equal((false, true, false), (saved.CheckForUpdates, saved.UpdateAttemptedUtc != null, saved.UpdateCheckedUtc != null));
 
                     const string page = "https://github.com/Vorta/zStudio/releases/tag/v0.9.8";
                     github.Next = () => FakeGitHub.Release("v0.9.8", page);
                     update = await Call("update_check", new() { ["action"] = "check" });
+                    // Found by an explicit check, the update shows with automatic checks off.
                     Assert.Equal(("available", "0.9.8", page), (update["status"]!.GetValue<string>(), update["latest"]!.GetValue<string>(), update["url"]!.GetValue<string>()));
                     Assert.Null(update["failure"]); Assert.Null(update["reason"]); Assert.NotNull(update["checkedUtc"]);
                     Assert.Equal((Visibility.Visible, "Update available", "0.9.8"), (item.Visibility, text.Text, ((TextBlock)main.FindName("StatusUpdateVersionText")).Text));
-                    Assert.Equal((new Uri(zStudio.Automation.UpdateChecker.LatestReleaseApi), "zStudio/0.9.7", "application/vnd.github+json", "2022-11-28"), github.Requests[^1]);
+                    var request = github.Requests[^1];
+                    Assert.Equal((new Uri(zStudio.Automation.UpdateChecker.LatestReleaseApi), "zStudio/0.9.7", "application/vnd.github+json", "2022-11-28"), (request.Uri, request.UserAgent, request.Accept, request.ApiVersion));
+                    // Never on the UI thread: proxy discovery can block the first request.
+                    Assert.NotEqual(main.Dispatcher.Thread.ManagedThreadId, request.Thread);
                     update.AsObject().Remove("failure");
                     Assert.True(JsonNode.DeepEquals(update, (await Call("state", new()))["update"]));
+                    saved = StudioSettings.Load(); Assert.Equal((false, "0.9.8", page), (saved.CheckForUpdates, saved.UpdateLatestVersion, saved.UpdateLatestUrl));
 
-                    await Call("update_check", new() { ["action"] = "automatic" }, "invalid_argument");
-                    await Call("update_check", new() { ["enabled"] = false }, "invalid_argument");
-                    update = await Call("update_check", new() { ["action"] = "automatic", ["enabled"] = false });
-                    // Found by an explicit check, the update still shows.
-                    Assert.Equal((false, "available"), (update["automatic"]!.GetValue<bool>(), update["status"]!.GetValue<string>()));
-                    Assert.False(((MenuItem)main.FindName("AutomaticUpdatesMenu")).IsChecked);
-                    var saved = StudioSettings.Load(); Assert.Equal((false, "0.9.8", page), (saved.CheckForUpdates, saved.UpdateLatestVersion, saved.UpdateLatestUrl));
                     int requests = github.Requests.Count;
                     update = await Call("update_check", new() { ["action"] = "automatic", ["enabled"] = true });
                     // Checked minutes ago: turning automatic checks on asks GitHub again only a day later.
@@ -290,7 +296,7 @@ internal static class McpWorkspaceChecks
                     // Later windows of the chain load the settings: no saved release may show Update available there.
                     main.Updates = original;
                     var settings = main.ViewModel.Settings;
-                    settings.CheckForUpdates = true; settings.UpdateCheckedUtc = null; settings.UpdateLatestVersion = null; settings.UpdateLatestUrl = null; settings.Save();
+                    settings.CheckForUpdates = true; settings.UpdateAttemptedUtc = null; settings.UpdateCheckedUtc = null; settings.UpdateLatestVersion = null; settings.UpdateLatestUrl = null; settings.Save();
                 }
             }
 

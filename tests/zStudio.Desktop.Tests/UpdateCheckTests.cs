@@ -44,15 +44,16 @@ public sealed class UpdateCheckTests
     private static ReleaseVersion Version(string text) => ReleaseVersion.TryParse(text, out var version) ? version : throw new FormatException(text);
 }
 
-/// <summary>GitHub's latest-release endpoint for tests: answers with <see cref="Next"/> and records each request's headers.</summary>
+/// <summary>GitHub's latest-release endpoint for tests: answers with <see cref="Next"/> and records each request's headers and thread.</summary>
 internal sealed class FakeGitHub : HttpMessageHandler
 {
     public Func<HttpResponseMessage> Next { get; set; } = () => new(HttpStatusCode.NotFound);
-    public List<(Uri? Uri, string UserAgent, string Accept, string ApiVersion)> Requests { get; } = [];
+    public sealed record Request(Uri? Uri, string UserAgent, string Accept, string ApiVersion, int Thread);
+    public List<Request> Requests { get; } = [];
     protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
     {
         string Header(string name) => request.Headers.TryGetValues(name, out var values) ? string.Join(",", values) : "";
-        Requests.Add((request.RequestUri, Header("User-Agent"), Header("Accept"), Header("X-GitHub-Api-Version")));
+        Requests.Add(new(request.RequestUri, Header("User-Agent"), Header("Accept"), Header("X-GitHub-Api-Version"), Environment.CurrentManagedThreadId));
         return Task.FromResult(Next());
     }
     public static HttpResponseMessage Release(string tag, string url) => new(HttpStatusCode.OK)

@@ -150,11 +150,20 @@ public sealed class UpdateChecker
         return page.Length > ReleasePagePrefix.Length && page.Length <= MaximumUrlLength && page.StartsWith(ReleasePagePrefix, StringComparison.Ordinal) ? page : null;
     }
 
-    /// <summary>One check; only <paramref name="token"/> cancels it (thrown), everything else is reported in the result.</summary>
-    public async Task<UpdateCheckResult> CheckAsync(CancellationToken token)
+    /// <summary>
+    /// One check; only <paramref name="token"/> cancels it (thrown), everything else is reported in the result. The request runs
+    /// on the thread pool, never on the caller's thread: the first one can block in the system's proxy discovery (WPAD or a PAC
+    /// script) before the timeout applies.
+    /// </summary>
+    public Task<UpdateCheckResult> CheckAsync(CancellationToken token)
     {
-        if (client == null) return new(null, PrivateProfileReason);
-        if (!ReleaseVersion.TryParse(CurrentVersion, out _)) return new(null, $"This build's version ({Bounded(CurrentVersion, 64)}) can't be compared with releases.");
+        if (client == null) return Task.FromResult(new UpdateCheckResult(null, PrivateProfileReason));
+        if (!ReleaseVersion.TryParse(CurrentVersion, out _)) return Task.FromResult(new UpdateCheckResult(null, $"This build's version ({Bounded(CurrentVersion, 64)}) can't be compared with releases."));
+        return Task.Run(() => RequestAsync(client, token), token);
+    }
+
+    private async Task<UpdateCheckResult> RequestAsync(HttpClient client, CancellationToken token)
+    {
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(token);
         timeout.CancelAfter(Timeout);
         try

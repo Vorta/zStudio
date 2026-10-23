@@ -23,6 +23,8 @@ public partial class MainWindow
     private UpdateRelease? latestRelease;
     /// <summary>An explicit check found <see cref="latestRelease"/> this session, so it shows even with automatic checks off.</summary>
     private bool latestReleaseRequested;
+    /// <summary>An explicit check finished this session (whatever its outcome), so its result shows even with automatic checks off.</summary>
+    private bool updateRequested;
     private string? updateFailure;
     /// <summary>Explicit checks waiting for their result: the item shows "Checking for updates…".</summary>
     private int updateRequests;
@@ -49,11 +51,11 @@ public partial class MainWindow
             if (ViewModel.Settings.CheckForUpdates && AutomaticUpdateCheckDue() && !shutdownToken.IsCancellationRequested) _ = CheckForUpdatesAsync(requested: false, CancellationToken.None);
         });
     }
-    /// <summary>No successful check in the last 24 hours (a check time in the future, after a clock change, counts as none).</summary>
+    /// <summary>No check in the last 24 hours, successful or not (a check time in the future, after a clock change, counts as none).</summary>
     private bool AutomaticUpdateCheckDue()
     {
-        if (latestRelease is not { } known) return true;
-        var age = DateTimeOffset.UtcNow - known.CheckedUtc;
+        if (ViewModel.Settings.UpdateAttemptedUtc is not { } attempted) return true;
+        var age = DateTimeOffset.UtcNow - attempted;
         return age >= UpdateChecker.Interval || age < -TimeSpan.FromMinutes(5);
     }
 
@@ -76,6 +78,7 @@ public partial class MainWindow
             var result = await work.WaitAsync(token);
             if (requested && !shutdownToken.IsCancellationRequested)
             {
+                updateRequested = true;
                 if (result.Release != null) latestReleaseRequested = true;
                 ShowUpdateNotice(result);
             }
@@ -87,6 +90,9 @@ public partial class MainWindow
     {
         try
         {
+            var s = ViewModel.Settings;
+            // Every check that asks GitHub counts, so a failing one (offline, refused, rate limited) waits a day too.
+            if (Updates.CanCheck) s.UpdateAttemptedUtc = DateTimeOffset.UtcNow;
             UpdateCheckResult result;
             try { result = await Updates.CheckAsync(shutdownToken); }
             catch (Exception ex) when (ex is not OperationCanceledException and not OutOfMemoryException and not StackOverflowException)
@@ -94,35 +100,39 @@ public partial class MainWindow
             if (result.Release is { } release)
             {
                 latestRelease = release; updateFailure = null;
-                var s = ViewModel.Settings;
                 s.UpdateCheckedUtc = release.CheckedUtc; s.UpdateLatestVersion = release.Version; s.UpdateLatestUrl = release.Url;
-                // Closing saves the settings itself.
-                if (!shutdownToken.IsCancellationRequested)
-                    try { s.Save(); } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
             }
             else updateFailure = result.Failure;
+            // Closing saves the settings itself.
+            if (Updates.CanCheck && !shutdownToken.IsCancellationRequested)
+                try { s.Save(); } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
             return result;
         }
         finally { updateCheckWork = null; ShowUpdateStatus(); }
     }
 
-    private string UpdateStatus()
+    /// <summary>
+    /// What the update item knows: checking; available or current from the last successful check that counts (with automatic
+    /// checks off, only one asked for this session); disabled when automatic checks are off and no check was asked for; otherwise
+    /// unknown, with the reason (an explicit check that failed, offline, refused, a private test profile, not checked yet).
+    /// </summary>
+    private (string Status, string? Reason) UpdateStatus()
     {
-        if (updateCheckWork != null) return "checking";
-        if (!ViewModel.Settings.CheckForUpdates && !latestReleaseRequested) return "disabled";
-        return latestRelease is { } release ? Updates.IsNewer(release.Version) switch { true => "available", false => "current", null => "unknown" } : "unknown";
+        if (updateCheckWork != null) return ("checking", null);
+        bool automatic = ViewModel.Settings.CheckForUpdates;
+        if (latestRelease is { } release && (automatic || latestReleaseRequested))
+            return Updates.IsNewer(release.Version) switch
+            {
+                true => ("available", null), false => ("current", null),
+                null => ("unknown", $"This build's version ({Updates.CurrentVersion}) can't be compared with releases.")
+            };
+        if (!automatic && !updateRequested) return ("disabled", "Automatic update checks are off (Help → Check for updates automatically); update_check check asks GitHub now.");
+        return ("unknown", updateFailure ?? (Updates.CanCheck ? "Not checked yet." : UpdateChecker.PrivateProfileReason));
     }
     /// <summary>MCP: what the status bar's update item knows (<c>state</c>'s <c>update</c>, <c>update_check</c>).</summary>
     private JsonObject UpdateState()
     {
-        string status = UpdateStatus();
-        string? reason = status switch
-        {
-            "disabled" => "Automatic update checks are off (Help → Check for updates automatically); update_check check asks GitHub now.",
-            "unknown" when latestRelease != null => $"This build's version ({Updates.CurrentVersion}) can't be compared with releases.",
-            "unknown" => updateFailure ?? (Updates.CanCheck ? "Not checked yet." : UpdateChecker.PrivateProfileReason),
-            _ => null
-        };
+        var (status, reason) = UpdateStatus();
         return new()
         {
             ["status"] = status, ["automatic"] = ViewModel.Settings.CheckForUpdates, ["current"] = Updates.CurrentVersion,
@@ -152,7 +162,7 @@ public partial class MainWindow
         (string Glyph, string Text, string ToolTip, string? Version)? shown =
             updateRequests > 0 ? ("", "Checking for updates…", "Asking GitHub for the latest zStudio release", null)
             : updateNotice is { } notice ? (notice.Glyph, notice.Text, notice.ToolTip, null)
-            : UpdateStatus() == "available" && release != null ? ("", "Update available", $"zStudio {release.Version} is available; this is {Updates.CurrentVersion}. Open its release page on GitHub.", release.Version)
+            : UpdateStatus().Status == "available" && release != null ? ("", "Update available", $"zStudio {release.Version} is available; this is {Updates.CurrentVersion}. Open its release page on GitHub.", release.Version)
             : null;
         StatusUpdate.Visibility = shown == null ? Visibility.Collapsed : Visibility.Visible;
         if (shown is not { } item) return;
@@ -169,7 +179,7 @@ public partial class MainWindow
     {
         if (updateRequests > 0) return;
         if (updateNotice != null) { updateNoticeTimer.Stop(); updateNotice = null; ShowUpdateStatus(); return; }
-        if (UpdateStatus() != "available" || latestRelease is not { } release) return;
+        if (UpdateStatus().Status != "available" || latestRelease is not { } release) return;
         // Only a page of zStudio's releases on GitHub opens.
         string page = UpdateChecker.ReleasePage(release.Url) ?? UpdateChecker.LatestReleasePage;
         OpenLink(page);
@@ -186,14 +196,14 @@ public partial class MainWindow
         s.CheckForUpdates = enabled; AutomaticUpdatesMenu.IsChecked = enabled;
         try { s.Save(); }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { Notice("Couldn't save the update check setting: " + ex.Message); }
-        // Turned on, it checks at once when the last successful check is a day old.
+        // Turned on, it checks at once when the last check is a day old.
         if (enabled && updateCheckWork == null && AutomaticUpdateCheckDue() && !shutdownToken.IsCancellationRequested) _ = CheckForUpdatesAsync(requested: false, CancellationToken.None);
         ShowUpdateStatus();
     }
 
     private void RegisterUpdateCommands(StudioCommands registry)
     {
-        Register(registry, "update_check", $"Read or run the update check, as the status bar's Update available item (directly left of Preview notices) and Help → Check for updates / Check for updates automatically do. It asks GitHub for zStudio's latest published release ({UpdateChecker.LatestReleaseApi}; drafts and prereleases excluded) and compares its tag with this build's version (SemVer; a prerelease build sees its release as an update). action state (default) reads the same update object as zstudio_state: status available (a newer release; the GUI shows Update available), current, unknown (reason: not checked yet, offline, GitHub refused or its rate limit is used up, or a private test profile, which never contacts GitHub), disabled (automatic checks are off and no check was asked for this session) or checking; automatic; current and latest versions; url, the release page on github.com/Vorta/zStudio/releases (the GUI's click opens it in the browser; MCP returns it and opens nothing); checkedUtc of the last successful check. check asks GitHub now (an explicit request, also when automatic checks are off; at most {UpdateChecker.Timeout.TotalSeconds:0} seconds) and adds failure when it failed. automatic with enabled turns automatic checks on or off (saved; at most one a day after zStudio starts); turning them on checks at once when the last successful check is a day old.", true,
+        Register(registry, "update_check", $"Read or run the update check, as the status bar's Update available item (directly left of Preview notices) and Help → Check for updates / Check for updates automatically do. It asks GitHub for zStudio's latest published release ({UpdateChecker.LatestReleaseApi}; drafts and prereleases excluded) and compares its tag with this build's version (SemVer; a prerelease build sees its release as an update). action state (default) reads the same update object as zstudio_state: status available (a newer release; the GUI shows Update available), current, unknown (reason: not checked yet, a check asked for that failed, offline, GitHub refused or its rate limit is used up, or a private test profile, which never contacts GitHub), disabled (automatic checks are off and no check was asked for this session) or checking; automatic; current and latest versions; url, the release page on github.com/Vorta/zStudio/releases (the GUI's click opens it in the browser; MCP returns it and opens nothing); checkedUtc of the last successful check. check asks GitHub now (an explicit request, also when automatic checks are off; at most {UpdateChecker.Timeout.TotalSeconds:0} seconds) and adds failure when it failed. automatic with enabled turns automatic checks on or off (saved; after zStudio starts, at most one a day: a check, successful or not, makes the next wait a day); turning them on checks at once when the last check is a day old. zstudio_state reports the same update object without waiting for changes in progress.", true,
             [P("action", "string", "state (default) reads; check asks GitHub now; automatic sets automatic checks.", false, "state", "check", "automatic"),
              P("enabled", "boolean", "For automatic (required there): whether zStudio checks for updates by itself after it starts.")], async (a, token) =>
         {
