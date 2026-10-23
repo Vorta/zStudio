@@ -6,7 +6,7 @@
 | --- | --- | --- |
 | `zStudio.Core` | Format readers and writers, source projects (reconstruction, evaluation, edits, builds, export), preview simulation (mission start, animation player) | UI, rendering or Python dependencies |
 | `zStudio.Rendering` | In-house Direct3D 11 renderer (Vortice.Windows) and its device resources; `SceneViewport` (picking, gizmos, overlays, navigation math) | Document lifetimes, settings |
-| `zStudio.Application` | The UI-independent command contract: `StudioCommands` registry, schemas, structured results, `StudioCommandException` codes | Workspace state |
+| `zStudio.Application` | The UI-independent command contract: `StudioCommands` registry, schemas, structured results, `StudioCommandException` codes; `StudioProfile`; the update check (`UpdateChecker`: GitHub's latest release, `ReleaseVersion` SemVer comparison, the release page rule) | Workspace state |
 | `zStudio.Mcp` | The official C# MCP SDK host on a same-user named pipe, the stdio connector, the embedded `CommandCatalog.json` | Editing logic |
 | `zStudio.Desktop` | WPF Fluent workbench, documents, dialogs, audio (NAudio, WASAPI), settings, command handlers marshalled to the dispatcher | Format parsing |
 
@@ -79,5 +79,5 @@
 
 - Solution `zStudio.slnx`; projects, assemblies, namespaces, embedded resources and friend assemblies use `zStudio.*`.
 - `%LOCALAPPDATA%/zStudio` holds settings (`StudioSettings`), the error log and local MCP registrations; `StudioProfile` (zStudio.Application) resolves the folder for every reader and writer. No settings import from other versions, no runtime aliases. A fresh profile keeps MCP disabled. Settings load with default `System.Text.Json` options, so unknown keys are ignored and dropped on the next save.
-- Tests and tools only, not a user feature (the user guides don't mention it): `ZSTUDIO_PROFILE`, an absolute folder read once, replaces the profile for the process and the processes it starts ([testing](testing.md#environment)). On a private profile a connector that has to start the workspace does so through a short-lived `cmd.exe /c start` instead of Explorer, so the workspace inherits the profile and the desktop and outlives a parent-tree kill of the connector (not a job-object kill without breakaway, which the Explorer launch survives).
+- Tests and tools only, not a user feature (the user guides don't mention it): `ZSTUDIO_PROFILE`, an absolute folder read once, replaces the profile for the process and the processes it starts ([testing](testing.md#environment)). A private profile never contacts GitHub: its update checker has no connection, and tests give the window one over a fake handler ([workbench](workbench.md#update-check)). On a private profile a connector that has to start the workspace does so through a short-lived `cmd.exe /c start` instead of Explorer, so the workspace inherits the profile and the desktop and outlives a parent-tree kill of the connector (not a job-object kill without breakaway, which the Explorer launch survives).
 - A project's only zStudio data is its hidden `.zstudio/` folder ([sources](sources.md); settings: `SourceProjectSettings`).

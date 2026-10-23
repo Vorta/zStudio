@@ -8,6 +8,8 @@ zStudio is a Windows desktop application. It unpacks RECOIL's retail game files 
 
 Download **[zStudio v0.9.6](https://github.com/Vorta/zStudio/releases/tag/v0.9.6)** for Windows x64.
 
+zStudio tells you when a newer release is out: **Update available** appears in the status bar; click it for the release page. zStudio asks GitHub's public release API at most once a day and sends nothing but its version; **Help → Check for updates** asks now, and **Help → Check for updates automatically** turns the daily check off.
+
 [Releases](https://github.com/Vorta/zStudio/releases) · [Report a bug or request a feature](https://github.com/Vorta/zStudio/issues/new/choose) · [Contribute](CONTRIBUTING.md) · [Changelog](CHANGELOG.md)
 
 ## Quick start
