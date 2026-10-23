@@ -25,6 +25,9 @@ public sealed partial class AnimationPlayer
                 float? height = Terrain.Height(new(point.X, origin.Y, point.Z), point.Y, groundNodes[(instance.Entry, instance.Root, node.Source)], ReserveGround);
                 if (height is float y) lift = Math.Max(lift, y - point.Y);
             }
+            var (min, max) = GroundBounds(points);
+            if (Terrain.FootprintHeight(min, max, origin.Y, groundNodes[(instance.Entry, instance.Root, node.Source)], ReserveGround) is float support)
+                lift = Math.Max(lift, support - bottom);
             if (lift > 0) { LiftFromGround(instance, node, lift); bottom += lift; }
             return bottom;
         }
@@ -187,6 +190,8 @@ public sealed partial class AnimationPlayer
         float? first = null;
         for (int i = 0; i < Math.Min(before.Count, after.Count); i++)
             if (Terrain!.Contact(before[i], after[i], excluded, ReserveGround) is float t && (first == null || t < first)) first = t;
+        var (fromMin, fromMax) = GroundBounds(before); var (toMin, toMax) = GroundBounds(after);
+        if (Terrain!.ContactFootprint(fromMin, fromMax, toMin, toMax, excluded, ReserveGround) is float footprint && (first == null || footprint < first)) first = footprint;
         contact = first != null;
         if (first is not float fraction) return false;
         Vector3 origin = World(instance, node).Translation;
@@ -212,4 +217,10 @@ public sealed partial class AnimationPlayer
     }
     private void NoteProceduralLimit(Instance instance, Node node) => AddNote(
         $"Procedural motion for node #{node.Source} stopped at the preview Y limit ({World(instance, node).Translation.Y + PreviewHeight:0.###}).", "Support", "Information");
+    private static (Vector3 Min, Vector3 Max) GroundBounds(List<Vector3> points)
+    {
+        Vector3 min = points[0], max = points[0];
+        foreach (var point in points) { min = Vector3.Min(min, point); max = Vector3.Max(max, point); }
+        return (min, max);
+    }
 }

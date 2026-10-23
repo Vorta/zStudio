@@ -111,5 +111,74 @@ public sealed class AnimationTerrain
         var end = new Vector3(position.X, bottom - .001f, position.Z);
         return Contact(position, end, excluded, reserve) is float t ? Vector3.Lerp(position, end, t).Y : null;
     }
+
+    /// <summary>
+    /// Continuous overlap of the mesh's conservative bottom footprint with a triangle. Point rays alone
+    /// miss a small bridge/platform beneath a face interior. Bounds interpolate over the tick, so this
+    /// also catches narrow surfaces crossed between frames, without any fixed sample spacing.
+    /// </summary>
+    internal float? ContactFootprint(Vector3 fromMin, Vector3 fromMax, Vector3 toMin, Vector3 toMax,
+        IReadOnlySet<int> excluded, Action<long> reserve)
+    {
+        if (branches.Count == 0) return null;
+        fromMax.Y = fromMin.Y; toMax.Y = toMin.Y;
+        var min = Vector3.Min(fromMin, toMin) - new Vector3(.0001f);
+        var max = Vector3.Max(fromMax, toMax) + new Vector3(.0001f);
+        float? first = null;
+        Visit(0); return first;
+
+        void Visit(int index)
+        {
+            reserve(1); var branch = branches[index];
+            if (min.X > branch.Max.X || max.X < branch.Min.X || min.Y > branch.Max.Y + .0001f || max.Y < branch.Min.Y - .0001f || min.Z > branch.Max.Z || max.Z < branch.Min.Z) return;
+            if (branch.Count == 0) { Visit(branch.Left); Visit(branch.Right); return; }
+            for (int i = branch.Start; i < branch.Start + branch.Count; i++)
+            {
+                reserve(1); var triangle = triangles[i];
+                if (excluded.Contains(triangle.Source)) continue;
+                var normal = triangle.Normal;
+                Project(fromMin, fromMax, normal, out float fromLow, out float fromHigh);
+                Project(toMin, toMax, normal, out float toLow, out float toHigh);
+                float plane = Vector3.Dot(triangle.A, normal), tolerance = .0001f * normal.Y;
+                // An upward-facing floor only catches approach from above, never an underside.
+                if (fromHigh < plane - tolerance || toLow > plane + tolerance || toLow >= fromLow && toHigh >= fromHigh) continue;
+                float enter = 0, leave = first ?? 1;
+                if (!Axis(Vector3.UnitX) || !Axis(Vector3.UnitY) || !Axis(Vector3.UnitZ) || !Axis(normal)) continue;
+                if (!Edges(triangle.B - triangle.A) || !Edges(triangle.C - triangle.B) || !Edges(triangle.A - triangle.C)) continue;
+                first = enter;
+
+                bool Edges(Vector3 edge) => Axis(Vector3.Cross(edge, Vector3.UnitX)) && Axis(Vector3.Cross(edge, Vector3.UnitY)) && Axis(Vector3.Cross(edge, Vector3.UnitZ));
+                bool Axis(Vector3 axis)
+                {
+                    if (axis.LengthSquared() < 1e-12f) return true;
+                    float a = Vector3.Dot(triangle.A, axis), b = Vector3.Dot(triangle.B, axis), c = Vector3.Dot(triangle.C, axis);
+                    float low = Math.Min(a, Math.Min(b, c)), high = Math.Max(a, Math.Max(b, c));
+                    Project(fromMin, fromMax, axis, out float oldLow, out float oldHigh);
+                    Project(toMin, toMax, axis, out float newLow, out float newHigh);
+                    return Positive(oldHigh - low, newHigh - low) && Positive(high - oldLow, high - newLow);
+                }
+                bool Positive(float start, float end)
+                {
+                    if (start < 0 && end < 0) return false;
+                    if (start < 0) enter = Math.Max(enter, start / (start - end));
+                    else if (end < 0) leave = Math.Min(leave, start / (start - end));
+                    return enter <= leave;
+                }
+            }
+        }
+        static void Project(Vector3 low, Vector3 high, Vector3 axis, out float minimum, out float maximum)
+        {
+            Vector3 a = low * axis, b = high * axis;
+            Vector3 min = Vector3.Min(a, b), max = Vector3.Max(a, b);
+            minimum = min.X + min.Y + min.Z; maximum = max.X + max.Y + max.Z;
+        }
+    }
+
+    internal float? FootprintHeight(Vector3 min, Vector3 max, float top, IReadOnlySet<int> excluded, Action<long> reserve)
+    {
+        if (top < min.Y) return null;
+        var from = min with { Y = top }; var to = min with { Y = min.Y - .001f };
+        return ContactFootprint(from, max, to, max, excluded, reserve) is float t ? float.Lerp(top, to.Y, t) : null;
+    }
     private static bool Finite(Vector3 p) => float.IsFinite(p.X) && float.IsFinite(p.Y) && float.IsFinite(p.Z);
 }

@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Numerics;
 
 namespace zStudio.Core.Animation;
 
@@ -66,11 +67,12 @@ public sealed partial class AnimationPlayer
                 return Result(end, AnimationDurationKind.Finite, "Calculated for the current phase, seed and conditions, including nested animations, cleanup, effects and sound tails.");
             }
             var live = instances.Where(i => !i.Finished).ToArray();
-            var active = live.SelectMany(i => i.Sequences).Where(s => s.State is 0 or 1).ToArray();
+            var active = live.SelectMany(i => i.Sequences.Where(s => s.State is 0 or 1).Select(s => (Instance: i, Sequence: s))).ToArray();
+            using var classification = BeginBinding(token);
             // Do not stop at a loop if another sequence can still stop it or launch a finite child.
-            if (active.Length > 0 && live.All(i => i.StopDelay < 0) && active.All(s => IsUnconditionalLoop(s) || IsUnboundedMotion(s)))
+            if (active.Length > 0 && live.All(i => i.StopDelay < 0) && active.All(s => IsUnconditionalLoop(s.Sequence) || IsUnboundedMotion(s.Instance, s.Sequence)))
             {
-                bool looping = active.Any(s => s.ObservedInfiniteLoop);
+                bool looping = active.Any(s => s.Sequence.ObservedInfiniteLoop);
                 return Result(Math.Max(5, Math.Max(Time, tailsEnd)), looping ? AnimationDurationKind.Looping : AnimationDurationKind.OpenEnded,
                     looping ? "The active program repeats indefinitely. This is a preview range; extend it in Preview options."
                             : "Motion has no timed end and depends on game state or collision. Extend the preview range in Preview options.");
@@ -81,9 +83,15 @@ public sealed partial class AnimationPlayer
         return Result(3600, AnimationDurationKind.AnalysisLimit, "The program exceeds the one-hour preview limit.");
     }
 
-    private bool IsUnboundedMotion(Sequence state) => state.State == 1 && state.Work is { Type: 10 } ev && (ev.U32(12) & 0x400) == 0
-        && !((GroundPlaneEnabled || Terrain != null || ProceduralLimitsEnabled) && (ev.U32(12) & 12) != 0
-            && ((ev.U32(12) & 1) != 0 || ev.Vector(88).Y != 0 || ev.Vector(100).Y != 0));
+    private bool IsUnboundedMotion(Instance instance, Sequence state)
+    {
+        if (state.State != 1 || state.Work is not { Type: 10 } ev || (ev.U32(12) & 0x400) != 0) return false;
+        if ((ev.U32(12) & 12) == 0 || NodeRef(instance, ev.I32(16)) is not { } node || context.Scene.Nodes[node.Source].Class == "camera") return true;
+        if ((GroundPlaneEnabled || Terrain != null) && (ev.U32(12) & 1) != 0) return false;
+        if (!ProceduralLimitsEnabled) return true;
+        Matrix4x4 parent = ParentNode(instance, node.Parent) is { } ancestor ? World(instance, ancestor) : Matrix4x4.Identity;
+        return Vector3.TransformNormal(ev.Vector(88), parent).Y == 0 && Vector3.TransformNormal(ev.Vector(100), parent).Y == 0;
+    }
     // A later random branch, child, or named stop can terminate an otherwise unbounded loop.
     private static bool IsUnconditionalLoop(Sequence state) => state.ObservedInfiniteLoop &&
         state.Data.Events.All(e => e.Type is not (19 or 24 or 25 or 26 or 27 or 31 or 33));

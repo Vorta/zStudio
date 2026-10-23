@@ -88,6 +88,45 @@ public sealed partial class AnimationTests
         Assert.Contains(player.EvaluateForTest(4).Trace, t => t.Event == mark.Id);
     }
 
+    [Theory]
+    [InlineData(20, -6000)]
+    [InlineData(10.5f, 12)]
+    public void SmallPlatformUnderAFaceInteriorSupportsFastFallsAndInitialOverlap(float start, float velocity)
+    {
+        var (context, motion) = GroundFixture(start); AddFloor(context, 10);
+        context.Scene.Models[0] = context.Scene.Models[0] with
+        {
+            Vertices = [new(-2, -1, -2), new(-2, -1, 2), new(2, -1, 2), new(2, -1, -2), new(-2, 1, -2), new(-2, 1, 2), new(2, 1, 2), new(2, 1, -2)],
+            Polygons = [new(0, 0, [0, 1, 2, 3], [], [], []), new(0, 0, [4, 5, 6, 7], [], [], [])]
+        };
+        context.Scene.Models[1] = context.Scene.Models[1] with { Vertices = [new(.5f, 10, -1), new(.5f, 10, 1), new(1.5f, 10, 1), new(1.5f, 10, -1)] };
+        motion.SetVector(64, new(0, velocity, 0)); motion.SetInt(12, 0x805); motion.SetText(208, "landed"); motion.SetShort(240, -1);
+        var waiting = new AnimationSequence(new byte[64]) { Name = "landed", ResetMode = 3 };
+        var mark = AnimationCatalog.Create(14); mark.SetFloat(32, 1); waiting.Events.Add(mark); context.Package.Entries[0].Sequences.Add(waiting);
+        var player = new AnimationPlayer(context, 0) { Terrain = new(context.Scene), ProceduralLimitsEnabled = true };
+        var first = player.Step(TestContext.Current.CancellationToken);
+        if (velocity > 0) Assert.DoesNotContain(first.Trace, t => t.Event == mark.Id);
+        var end = player.EvaluateForTest(4);
+        Assert.InRange(end.Nodes.Single(n => n.SourceNode == 0).Transform.M42, 10.999f, 11.001f);
+        Assert.Contains(end.Trace, t => t.Event == mark.Id); Assert.True(player.IsComplete);
+    }
+
+    [Fact]
+    public void DurationUsesWorldVerticalMotionUnderRotatedParents()
+    {
+        var (context, motion) = GroundFixture(0);
+        var root = context.Scene.Nodes[0];
+        root.Data["transform"] = GroundMatrix(new Matrix4x4(0, 1, 0, 0, -1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1));
+        context.Scene.Nodes[0] = root with { ModelIndex = null, Children = [1] };
+        context.Scene.Nodes.Add(new(1, "piece", "object3d", 0, [0], [], new JsonObject { ["flags"] = 4 }, new JsonObject { ["flags"] = 8 }));
+        var reference = new AnimationRecord(new byte[40]); reference.SetText(0, "piece", 36); context.Package.Entries[0].References[1].Add(reference);
+        motion.SetInt(16, 2); motion.SetInt(12, 4); motion.SetVector(64, new(100, 0, 0));
+        var player = new AnimationPlayer(context, 0) { ProceduralLimitsEnabled = true };
+        var duration = player.MeasureDuration(TestContext.Current.CancellationToken);
+        Assert.True(duration.IsFinite); Assert.InRange(duration.Seconds, 5, 5.1);
+        Assert.InRange(player.EvaluateForTest(duration.Seconds).Nodes[0].Transform.M42, 499.999f, 500.001f);
+    }
+
     [Fact]
     public void AuthoredKeyframesAndCameraPathsRemainOutsideTheProceduralBounds()
     {
