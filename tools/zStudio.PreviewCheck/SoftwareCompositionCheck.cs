@@ -31,6 +31,8 @@ internal static class SoftwareCompositionCheck
                 var low = new SceneViewport.ViewPose(new(2065, 72, 1702), new(-24, -40, -9), new(0, 1, 0), 45);
                 preview.RestoreView(low); await Task.Delay(1200);
                 Console.WriteLine($"Software composition: render tier {RenderCapability.Tier >> 16}, front buffer available {preview.FrontBufferAvailable?.ToString() ?? "(no surface)"}.");
+                // The point of the check: WPF composing in software reports the front buffer unavailable, as over Remote Desktop.
+                if (preview.FrontBufferAvailable != false) throw new InvalidDataException("WPF did not report its front buffer unavailable under software composition; the check no longer tests that path.");
                 Check("software composition");
                 // Lost: the view keeps drawing (WPF shows its software copy) and capturing, also after the camera moves.
                 preview.SimulateFrontBufferAvailability(false);

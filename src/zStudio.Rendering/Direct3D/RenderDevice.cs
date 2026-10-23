@@ -2,8 +2,9 @@ namespace zStudio.Rendering.Direct3D;
 
 /// <summary>
 /// The graphics device with the preview's shaders, shared by a view's materials, geometry and textures. Device loss (removed,
-/// reset, hung, front buffer lost) rebuilds every device resource from retained CPU data; a recovery that fails while another is
-/// running is refused ("3D preview graphics recovery failed repeatedly…") rather than nesting.
+/// reset, hung) rebuilds every device resource from retained CPU data; a lost front buffer does not (the view keeps drawing
+/// through WPF's software fallback). A recovery that fails while another is running is refused ("3D preview graphics recovery
+/// failed repeatedly…") rather than nesting.
 /// </summary>
 internal sealed class RenderDevice : IDisposable
 {

@@ -6,6 +6,8 @@ using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
+using System.Windows.Threading;
+using Microsoft.Win32;
 using SharpGen.Runtime;
 using Vortice.Direct3D11;
 using Vortice.Direct3D9;
@@ -31,7 +33,8 @@ namespace zStudio.Rendering.Direct3D;
 /// (software composition as over Remote Desktop, a display change, a locked session, a reset device) the view keeps drawing:
 /// the D3DImage's software fallback shows its frames. When the front buffer is available again the surface is rebuilt. A lost
 /// Direct3D device rebuilds everything (both devices) from retained data; after three recoveries without a frame in between
-/// the view fails instead. A real size change after a failure, a regained front buffer or <see cref="RetryIfFailed"/> (the
+/// the view fails instead. A real size change after a failure, a regained front buffer, the display or session coming back (a
+/// failed view has released its surface, so WPF no longer tells it about the front buffer) or <see cref="RetryIfFailed"/> (the
 /// preview loaded again) retries with a fresh budget, recreating the device when the failed recovery left none or a removed
 /// one. A forced frame (a capture) renders while the view is hidden too.
 /// </summary>
@@ -332,6 +335,7 @@ internal sealed class Direct3DView : IDisposable
     private void Retry()
     {
         failed = false; recoveries = 0;
+        WatchDisplay(false);
         if (owner.Device is not { } device) return;
         bool lost;
         try { lost = device.Graphics is not { IsDisposed: false } graphics || graphics.Device.DeviceRemovedReason.Failure; }
@@ -369,11 +373,32 @@ internal sealed class Direct3DView : IDisposable
     {
         failed = true; RenderException = error;
         ReleaseTargets();
+        WatchDisplay(true);
         owner.RaiseRenderFailed(error);
     }
 
+    // A failed view has released its surface (WPF's bitmap is detached and reports nothing more), so it retries when the display
+    // or the session comes back: display settings changed (a driver reset or update, a monitor change), or the session unlocked
+    // or reconnected. Watched only while failed: SystemEvents holds its handlers statically.
+    private bool watchingDisplay;
+    private void WatchDisplay(bool on)
+    {
+        if (on == watchingDisplay) return;
+        watchingDisplay = on;
+        if (on) { SystemEvents.DisplaySettingsChanged += DisplayReturned; SystemEvents.SessionSwitch += SessionSwitched; }
+        else { SystemEvents.DisplaySettingsChanged -= DisplayReturned; SystemEvents.SessionSwitch -= SessionSwitched; }
+    }
+    private void SessionSwitched(object? sender, SessionSwitchEventArgs e)
+    {
+        if (e.Reason is SessionSwitchReason.SessionUnlock or SessionSwitchReason.ConsoleConnect or SessionSwitchReason.RemoteConnect or SessionSwitchReason.SessionLogon)
+            DisplayReturned(sender, e);
+    }
+    // SystemEvents raises these on its own thread.
+    private void DisplayReturned(object? sender, EventArgs e) =>
+        Element.Dispatcher.BeginInvoke(DispatcherPriority.Normal, () => { if (!disposed && failed) RetryIfFailed(); });
+
     /// <summary>The device changed (attached, detached or recovered): targets are rebuilt on the next frame.</summary>
-    public void DeviceChanged() { failed = false; ready = false; recoveries = 0; RenderException = null; ReleaseTargets(); CreateTargets(); InvalidateRender(); }
+    public void DeviceChanged() { failed = false; ready = false; recoveries = 0; RenderException = null; WatchDisplay(false); ReleaseTargets(); CreateTargets(); InvalidateRender(); }
 
     /// <summary>
     /// Renders one frame now and reads it back; null when no frame could be rendered (never an older frame). A view shown since
@@ -480,6 +505,7 @@ internal sealed class Direct3DView : IDisposable
     {
         if (disposed) return;
         disposed = true;
+        WatchDisplay(false);
         Hook(false);
         ReleaseTargets();
         ReleaseSurface(device: true);
