@@ -14,7 +14,7 @@ Rules for the WPF workbench. User-facing descriptions: [map editor](../map-edito
 - Fluent workbench, always compact; no density setting (owner decision).
 - Compiled explorer (MCP-opened compiled roots; in a source project the Navigator and Inspector are collapsed, Reset layout is hidden and the [source map editor](#source-map-editor) applies): one Navigator (Files, Assets, Search, Document scene), the central preview with persistent transport, one Inspector (animation tabs), bottom tools (Dispatch, Event log, Problems, Runtime, Related, Bytes), and a separate [Properties window](#properties-window).
 - Keep both side panes visible when the viewport has room. Hide the whole right pane for non-animation viewers.
-- Preferred pane dimensions, groups and tabs persist; automatic narrow collapse never overwrites them. Settings keys for a docked Properties pane height or a Program pane height are ignored.
+- Preferred pane dimensions, groups and tabs persist; automatic narrow collapse never overwrites them.
 - Resizing, fullscreen and theme changes never replace or dispose the editor or commit drafts.
 - Grouped native ToolBar overflow.
 - Problems keeps the emitter's severity and source context and separates file/operation issues from preview, resource and support notices. Event log holds observed dispatches with distinct occurrence identities and discloses its caps. Runtime holds the current simulation state.
