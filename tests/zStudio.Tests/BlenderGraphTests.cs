@@ -409,6 +409,13 @@ public sealed class BlenderGraphTests
             using MemoryStream invalid = new(Encoding.UTF8.GetBytes(request.ToJsonString())); using MemoryStream error = new();
             Assert.Equal(1, await BlenderBridge.RunAsync(invalid, error, TestContext.Current.CancellationToken));
             Assert.False(JsonNode.Parse(error.ToArray())!["ok"]!.GetValue<bool>());
+            // The extension accepts only a helper of its own version, which info reports.
+            using MemoryStream infoRequest = new(Encoding.UTF8.GetBytes("""{"protocol":1,"operation":"info"}""")); using MemoryStream info = new();
+            Assert.Equal(0, await BlenderBridge.RunAsync(infoRequest, info, TestContext.Current.CancellationToken));
+            string repository = AppContext.BaseDirectory;
+            while (!File.Exists(Path.Combine(repository, "zStudio.slnx"))) repository = Directory.GetParent(repository)!.FullName;
+            string extensionManifest = File.ReadAllText(Path.Combine(repository, "blender/zstudio_recoil/blender_manifest.toml"));
+            Assert.Equal(System.Text.RegularExpressions.Regex.Match(extensionManifest, "(?m)^version\\s*=\\s*\"([^\"]+)\"").Groups[1].Value, JsonNode.Parse(info.ToArray())!["version"]!.GetValue<string>());
         }
         finally { Directory.Delete(folder, recursive: true); }
     }

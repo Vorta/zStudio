@@ -60,14 +60,33 @@ def write_json(path, value):
         stream.write(encoded)
 
 
+# The helper version of each zStudio.exe file state already asked: (path, modified, size) -> version.
+_helper_versions = {}
+
+
+def helper_version(executable):
+    """The zStudio version the selected helper reports (None before 0.9.7, whose helper doesn't say)."""
+    status = executable.stat()
+    key = (str(executable.resolve()), status.st_mtime_ns, status.st_size)
+    if key not in _helper_versions:
+        _helper_versions[key] = run(executable, dict(protocol=PROTOCOL, operation="info")).get("version")
+    return _helper_versions[key]
+
+
 def call(executable, operation, **arguments):
     executable = Path(executable)
     if not executable.is_file() or executable.name.lower() != "zstudio.exe":
-        raise ValueError("Select the installed zStudio.exe in the extension preferences")
-    # The zStudio download keeps the extension of its own version beside zStudio.exe.
-    if not (executable.parent / f"zStudio-Blender-extension-{VERSION}.zip").is_file():
-        raise ValueError(f"Select the zStudio.exe of version {VERSION}, with zStudio-Blender-extension-{VERSION}.zip beside it, matching this RECOIL extension")
-    request = json.dumps(dict(protocol=PROTOCOL, operation=operation, **arguments)).encode("utf-8")
+        raise ValueError(f"Select the installed zStudio.exe of version {VERSION} in the extension preferences")
+    # The extension and zStudio share one version; the helper says which it is, wherever the extension's ZIP is.
+    version = helper_version(executable)
+    if version != VERSION:
+        raise ValueError(f"Select the zStudio.exe of version {VERSION}, matching this RECOIL extension; the selected one is {version or 'older than 0.9.7'}")
+    return run(executable, dict(protocol=PROTOCOL, operation=operation, **arguments))
+
+
+def run(executable, request):
+    """One helper process for one request."""
+    request = json.dumps(request).encode("utf-8")
     if len(request) > 65536:
         raise ValueError("The helper request exceeds 64 KiB")
     # No shell, no network, no detached helper, and no console window stealing focus.

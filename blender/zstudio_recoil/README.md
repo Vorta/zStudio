@@ -8,7 +8,7 @@ This extension imports and exports zStudio source glTF graphs in **Blender 5.2 L
 2. Select `zStudio-Blender-extension-<version>.zip` from your zStudio folder, beside `zStudio.exe` (the version is zStudio's), and enable it. Blender lists it as **zStudio RECOIL**.
 3. In **Preferences → Add-ons**, expand **zStudio RECOIL** and set **zStudio executable** to that folder's `zStudio.exe`.
 
-The extension and zStudio share one version; update them together and keep the extension's ZIP beside `zStudio.exe`.
+The extension and zStudio share one version: the extension works only with the `zStudio.exe` of its own version, so update them together. The ZIP need not stay beside `zStudio.exe` once the extension is installed.
 
 ## Import and edit
 

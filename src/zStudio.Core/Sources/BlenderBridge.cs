@@ -1,3 +1,4 @@
+using System.Reflection;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 
@@ -6,6 +7,9 @@ namespace zStudio.Core.Sources;
 /// <summary>Windowless, one-request file adapter. Does not access a live workspace or enable automation.</summary>
 public static class BlenderBridge
 {
+    /// <summary>zStudio's version without build metadata (all its assemblies carry the same): the extension works only with a helper of its own version.</summary>
+    public static string Version { get; } = typeof(BlenderBridge).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion.Split('+')[0] ?? "";
+
     public static async Task<int> RunAsync(Stream input, Stream output, CancellationToken token = default)
     {
         JsonObject result; int exit = 0;
@@ -22,7 +26,7 @@ public static class BlenderBridge
             string Text(string name) => request[name]?.GetValue<string>() is { Length: > 0 and <= 32767 } text ? text : throw new InvalidDataException($"Missing or invalid {name}.");
             result = Text("operation") switch
             {
-                "info" => new() { ["protocol"] = SourceBlender.GraphProtocol, ["sourceFormat"] = 4, ["blenderMin"] = "5.2.0", ["blenderMax"] = "5.3.0" },
+                "info" => new() { ["protocol"] = SourceBlender.GraphProtocol, ["version"] = Version, ["sourceFormat"] = 4, ["blenderMin"] = "5.2.0", ["blenderMax"] = "5.3.0" },
                 "import" => SourceBlender.PrepareBlenderImport(Text("root"), Text("model"), Text("destination"), token),
                 "export" => SourceBlender.PrepareBlenderExport(Text("edits"), Text("destination"), token),
                 _ => throw new InvalidDataException("Unknown Blender helper operation."),
