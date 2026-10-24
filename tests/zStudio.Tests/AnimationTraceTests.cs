@@ -5,6 +5,21 @@ namespace zStudio.Tests;
 
 public sealed partial class AnimationTests
 {
+    [Theory]
+    [InlineData(1, 1.1)]
+    [InlineData(2, 1.1)]
+    [InlineData(3, 1.6)]
+    public void CallbackTimingWaitsForItsClockAndEarlierRunningEvent(byte mode, double dispatchedBy)
+    {
+        var package = Fixture(); var sequence = package.Entries[0].Sequences[0];
+        var motion = AnimationCatalog.Create(11); motion.SetInt(16, 1);
+        var callback = AnimationCatalog.Create(35); callback.SetInt(12, 912); callback.StartMode = mode; callback.Threshold = .5f;
+        sequence.Events.AddRange([motion, callback]);
+        var player = new AnimationPlayer(Context(package), 0);
+        Assert.DoesNotContain(player.EvaluateForTest(.75).Issues, i => i.Message.StartsWith("Game callback", StringComparison.Ordinal));
+        if (mode == 3) Assert.DoesNotContain(player.EvaluateForTest(1.4).Issues, i => i.Message.StartsWith("Game callback", StringComparison.Ordinal));
+        Assert.Contains(player.EvaluateForTest(dispatchedBy).Issues, i => i.Message.StartsWith("Game callback 912", StringComparison.Ordinal));
+    }
     [Fact]
     public void EqualTimeDispatchesHaveDistinctStableOccurrencesAndContext()
     {

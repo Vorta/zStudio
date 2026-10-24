@@ -32,7 +32,7 @@ public partial class MainWindow
                 return action switch
                 {
                     "diagnostics" => Page(doc.Diagnostics, args, search: x => x.Code + " " + x.Message + " " + x.Mission, maximumRowBytes: _ => 16384),
-                    "completion" => Page(project.Complete(doc.Path, position), args, search: x => x.Label, maximumRowBytes: x => 256 + 12L * (x.Label.Length + x.InsertText.Length + x.Detail.Length)),
+                    "completion" => Page(project.Complete(doc.Path, position), args, search: x => x.Label, maximumRowBytes: x => 256 + 12L * (x.Label.Length + x.InsertText.Length + x.Detail.Length + (x.Documentation?.Length ?? 0))),
                     "hover" => Result(new { hover = RecoilLanguage.Hover(doc, position) }),
                     "definition" => Page(project.Definition(doc.Path, position), args, search: x => x.Path + " " + x.Context, maximumRowBytes: x => 256 + 12L * (x.Path.Length + (x.Context?.Length ?? 0))),
                     "symbols" => Page(Flatten(doc.Symbols, ""), args, search: x => x.Name + " " + x.Parent, maximumRowBytes: _ => 16384),

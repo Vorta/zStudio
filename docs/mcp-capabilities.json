@@ -8,7 +8,7 @@
     {
       "gui": "GameZScript:LanguageFeatures",
       "tools": ["zstudio_source_language"],
-      "note": "VS Code GameZ Script diagnostics, completion, hover, outline, definition and Validate Project use the same Core service as source_language. MCP analyzes zStudio's accepted source overlay; VS Code buffers are private to its language server. UTF-16 offsets, paged results, read-only analysis and revision checks apply."
+      "note": "VS Code GameZ Script diagnostics, completion, hover, outline, definition and Validate Project use the same Core service as source_language. MCP analyzes zStudio's accepted source overlay; VS Code buffers are private to its language server. Completion Detail and optional Markdown Documentation share contextual engine/argument help with hover. UTF-16 offsets, paged results, read-only analysis and revision checks apply."
     },
     {
       "gui": "MainWindow.Navigation:CameraNavigationClick",

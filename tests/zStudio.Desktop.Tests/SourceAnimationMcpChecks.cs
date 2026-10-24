@@ -44,6 +44,10 @@ internal static class SourceAnimationMcpChecks
             var languageHover = await Job("source_language", new() { ["action"] = "hover", ["path"] = VtolDropFixture.Root,
                 ["position"] = VtolDropFixture.Definitions().IndexOf("ANIMATION_DEFINITIONS", StringComparison.Ordinal) });
             Assert.Contains("ANIMATION_DEFINITIONS", languageHover["hover"]!["Markdown"]!.GetValue<string>());
+            var languageCompletion = await Job("source_language", new() { ["action"] = "completion", ["path"] = VtolDropFixture.Root,
+                ["position"] = VtolDropFixture.Definitions().IndexOf("ANIMATION_DEFINITIONS", StringComparison.Ordinal) });
+            Assert.Contains(languageCompletion["items"]!.AsArray(), item => item!["Label"]!.GetValue<string>() == "ANIMATION_DEFINITIONS"
+                && item["Documentation"]!.GetValue<string>().Contains("shared gravity", StringComparison.Ordinal));
             var records = (await Animation("read"))["items"]!.AsArray();
             var activation = records[0]!["Fields"]!.AsArray().Single(f => f!["Key"]!.GetValue<string>() == "ACTIVATION")!;
             string field = activation["Id"]!.GetValue<string>();

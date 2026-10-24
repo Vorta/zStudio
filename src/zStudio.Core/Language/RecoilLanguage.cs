@@ -82,7 +82,8 @@ public static partial class RecoilLanguage
             if (key.Kind != ZrdKind.String) continue;
             var value = i + 1 < children.Count ? children[i + 1] : null;
             // Animation flags and positional resource strings are not forced into key/value pairs.
-            bool paired = value?.Kind == ZrdKind.Array || (parent?.Key.StartsWith("MISSION", StringComparison.Ordinal) == true && value?.Kind != ZrdKind.Array);
+            bool paired = value?.Kind == ZrdKind.Array || (parent?.Key.StartsWith("MISSION", StringComparison.Ordinal) == true && value?.Kind != ZrdKind.Array)
+                || key.Text is "HIGH" or "MED" or "LOW" && Ancestors(parent).Contains("SETS") && value?.Kind == ZrdKind.String;
             var record = new LanguageRecord(key.Text, key, paired ? value : null, parent);
             doc.Records.Add(record);
             if (paired && value != null)
@@ -123,24 +124,53 @@ public static partial class RecoilLanguage
     public static IReadOnlyList<LanguageCompletion> Complete(LanguageDocument document, int offset)
     {
         offset = Math.Clamp(offset, 0, document.Text.Length);
-        var context = Context(document, offset);
-        var field = Field(document.Family, context.LastOrDefault() ?? "", context.Count > 1 ? context[^2] : "");
+        if (ScalarOperand(document, offset) is { } scalarRecord)
+        {
+            var scalarField = Field(document.Family, scalarRecord.Key, scalarRecord.Parent?.Key ?? "", Ancestors(scalarRecord.Parent));
+            return scalarField?.Choices?.Select(c => new LanguageCompletion(c, scalarField.Description, c, "enumMember", FieldDocumentation(scalarField))).ToArray() ?? [];
+        }
+        var context = Context(document, offset).Where(p => p.Length > 0).ToArray();
+        string parent = context.Length > 1 ? context[^2] : "";
+        var field = Field(document.Family, context.LastOrDefault() ?? "", parent, context[..Math.Max(0, context.Length - 1)]);
+        int argument = ArgumentIndex(document, offset);
+        if (document.Family == "animation" && field?.Name == "VALUE" && parent == "CALLBACK" && argument == 0)
+            return CallbackIds.Select(pair => new LanguageCompletion(pair.Key.ToString(CultureInfo.InvariantCulture), pair.Value, pair.Key.ToString(CultureInfo.InvariantCulture), "enumMember", CallbackHelp(pair.Key))).ToArray();
         if (field?.Choices is { Length: > 0 } choices)
-            return choices.Select(c => new LanguageCompletion(c, field.Description, c, "enumMember")).ToArray();
-        return Fields(document.Family, context.LastOrDefault() ?? "").Take(MaximumResults)
-            .Select(f => new LanguageCompletion(f.Name, f.Description, f.Name)).ToArray();
+            return argument == 0 ? choices.Select(c => new LanguageCompletion(c, field.Description, c, "enumMember", FieldDocumentation(field))).ToArray() : [];
+        if (document.Family == "animation" && field?.Name is "OPACITY_FROM" or "OPACITY_TO" && argument == 1)
+            return new[] { "ON", "OFF" }.Select(c => new LanguageCompletion(c, "Alpha override at this endpoint", c, "enumMember", FieldDocumentation(field))).ToArray();
+        return Fields(document.Family, context.LastOrDefault() ?? "", context).Where(f => f.Suggested).Take(MaximumResults)
+            .Select(f => new LanguageCompletion(f.Name, f.Description, f.Name, Documentation: FieldDocumentation(f))).ToArray();
     }
 
     public static LanguageHover? Hover(LanguageDocument document, int offset)
     {
         var item = document.Tokens.FirstOrDefault(t => t.Span.Start <= offset && t.Span.End > offset);
-        if (item == null || item.Kind != "string") return null;
+        if (item == null) return null;
         var record = document.Records.FirstOrDefault(r => document.Span(r.KeyNode) == item.Span);
-        var context = Context(document, item.Span.Start);
-        var field = Field(document.Family, item.Text, record?.Parent?.Key ?? context.LastOrDefault() ?? "");
-        if (field == null) return null;
-        return new($"**{field.Name}**\n\n{field.Description}" + (field.Shape.Length > 0 ? $"\n\nValues: `{field.Shape}`." : "")
-            + (field.Choices is { Length: > 0 } c ? "\n\nChoices: " + string.Join(", ", c.Select(v => "`" + v + "`")) : ""), item.Span);
+        var context = Context(document, item.Span.Start).Where(p => p.Length > 0).ToArray();
+        var field = Field(document.Family, item.Text, record?.Parent?.Key ?? context.LastOrDefault() ?? "", record == null ? context : Ancestors(record.Parent));
+        if (field != null) return new(FieldDocumentation(field), item.Span);
+        if (ScalarOperand(document, item.Span.Start) is { } scalarRecord &&
+            Field(document.Family, scalarRecord.Key, scalarRecord.Parent?.Key ?? "", Ancestors(scalarRecord.Parent)) is { } scalarField)
+            return new(FieldDocumentation(scalarField), item.Span);
+        if (document.Family == "animation" && context.Length >= 2 && context[^1] == "VALUE" && context[^2] == "CALLBACK" && int.TryParse(item.Text, out int callback))
+            return new(CallbackHelp(callback), item.Span);
+        if (context.Length > 0)
+        {
+            var owner = Field(document.Family, context[^1], context.Length > 1 ? context[^2] : "", context[..^1]);
+            if (owner?.Choices?.Contains(item.Text, StringComparer.Ordinal) == true) return new(FieldDocumentation(owner), item.Span);
+        }
+        return null;
+    }
+    private static bool IsWeatherScalar(string key) => key is "TYPE" or "PARTICLES" or "WIND_DIR" or "WIND_VEL" or "GRAVITY";
+    private static LanguageRecord? ScalarOperand(LanguageDocument document, int offset)
+    {
+        if (document.Family != "weather") return null;
+        return document.Records.FirstOrDefault(r => IsWeatherScalar(r.Key) && r.Parent?.Key.StartsWith("MISSION", StringComparison.Ordinal) == true &&
+            (r.Value is { Kind: not ZrdKind.Array } value && document.Span(r.KeyNode).End < offset && offset <= document.Span(value).End ||
+             r.Value == null && document.Span(r.KeyNode).End < offset &&
+             !document.Tokens.Any(t => t.Span.Start >= document.Span(r.KeyNode).End && t.Span.Start < offset)));
     }
     // Delimiters and scalar tokens come from the strict parser even when a final ')' is still being typed.
     internal static List<string> Context(LanguageDocument doc, int offset)

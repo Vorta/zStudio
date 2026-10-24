@@ -218,7 +218,7 @@ public sealed class GameZLanguageServer : IDisposable
     {
         var (doc, project, offset) = await Document(args, token);
         var items = project?.Complete(doc.Path, offset) ?? RecoilLanguage.Complete(doc, offset);
-        return new { isIncomplete = items.Count >= RecoilLanguage.MaximumResults, items = items.Select(i => new { label = i.Label, detail = i.Detail, insertText = i.InsertText, kind = i.Kind == "reference" ? 18 : i.Kind == "enumMember" ? 20 : 14 }) };
+        return new { isIncomplete = items.Count >= RecoilLanguage.MaximumResults, items = items.Select(i => new { label = i.Label, detail = i.Detail, documentation = i.Documentation == null ? null : new { kind = "markdown", value = i.Documentation }, insertText = i.InsertText, kind = i.Kind == "reference" ? 18 : i.Kind == "enumMember" ? 20 : 14 }) };
     }
     [JsonRpcMethod("textDocument/hover", UseSingleObjectParameterDeserialization = true)]
     public async Task<object?> Hover(JsonObject args, CancellationToken token)

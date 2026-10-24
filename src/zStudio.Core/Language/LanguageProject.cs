@@ -109,7 +109,7 @@ public sealed class LanguageProject
         foreach (var doc in documents.Values)
             foreach (var r in doc.Records)
             {
-                var field = RecoilLanguage.Field(doc.Family, r.Key, r.Parent?.Key ?? "");
+                var field = RecoilLanguage.Field(doc.Family, r.Key, r.Parent?.Key ?? "", RecoilLanguage.Ancestors(r.Parent));
                 if (field?.Reference is not ("sound" or "effect" or "weapon" or "message") || !resources.TryGetValue(field.Reference, out var all)) continue;
                 bool commonEffects = field.Reference == "effect" && documents.Keys.Any(p => p.StartsWith("data/common/", StringComparison.OrdinalIgnoreCase) && Path.GetFileName(p).Equals("effects.zrd", StringComparison.OrdinalIgnoreCase));
                 var available = all.Where(x => x.Location.Path.StartsWith("data/common/", StringComparison.OrdinalIgnoreCase) || !commonEffects && Mission(x.Location.Path) == Mission(doc.Path)).ToArray();
@@ -146,7 +146,7 @@ public sealed class LanguageProject
                 foreach (var r in doc.Records)
                 {
                     token.ThrowIfCancellationRequested();
-                    var field = RecoilLanguage.Field(doc.Family, r.Key, r.Parent?.Key ?? "");
+                    var field = RecoilLanguage.Field(doc.Family, r.Key, r.Parent?.Key ?? "", RecoilLanguage.Ancestors(r.Parent));
                     if (field?.Reference == "animation")
                     {
                         MergeNames(doc, r, entries.Select(e => e.Name));

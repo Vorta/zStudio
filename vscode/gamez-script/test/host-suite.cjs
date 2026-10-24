@@ -17,6 +17,8 @@ exports.run = async function() {
   await editor.edit(edit=>edit.replace(new vscode.Range(doc.positionAt(0),doc.positionAt(doc.getText().length)),partial));
   const completion = await vscode.commands.executeCommand('vscode.executeCompletionItemProvider',file,doc.positionAt(partial.length));
   assert(completion.items.some(i=>(typeof i.label==='string'?i.label:i.label.label)==='ON_CALL'),'Contextual completion');
+  const onCall = completion.items.find(i=>(typeof i.label==='string'?i.label:i.label.label)==='ON_CALL');
+  assert(onCall.documentation.value.includes('WEAPON_HIT'),'Markdown completion documentation');
   await editor.edit(edit=>edit.insert(doc.positionAt(doc.getText().length),'é'));
   await new Promise(resolve=>setTimeout(resolve,800));
   assert(vscode.languages.getDiagnostics(file).some(d=>d.code==='GAMEZ_FILE_ENCODING'),'Encoding mismatch');

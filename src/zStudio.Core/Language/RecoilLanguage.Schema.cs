@@ -55,7 +55,7 @@ public static partial class RecoilLanguage
             F("BUTTONS", "Named button definitions."), F("TEXT", "Text widget configuration."), F("ROLLOVER", "Rollover presentation.")],
         ["turrets"] = [F("TURRET", "Turret pattern and definition pairs; each * matches one decimal digit."), F("DESTROY_ANIM", "Destruction animation.", "s", reference: "animation"),
             F("FIRE_ANIM", "Firing animation.", "s", reference: "animation"), F("HEALTH", "Turret health.", "f"), F("PARTS", "Two to four names under the healthy node.", "s s s? s?"),
-            F("AMMO", "Ammunition count.", "i"), F("DAMAGE_MODIFIER", "Weapon damage multiplier.", "f"), F("DETECTION_RANGE", "Detection distance.", "f"),
+            F("WEAPON", "Turret weapon configuration."), F("AMMO", "Ammunition count.", "i"), F("DAMAGE_MODIFIER", "Weapon damage multiplier.", "f"), F("DETECTION_RANGE", "Detection distance.", "f"),
             F("FIRE_RATE", "Turret firing interval.", "f"), F("FIRE_LIMITS", "Minimum and maximum firing limits.", "f f"), F("NAME", "Weapon definition name.", "s", reference: "weapon")],
         ["startanims"] = [F("NEW_GAME_START", "List of animation records called for a new game.", reference: "animation"), F("LOAD_GAME_START", "List of animation records called for a loaded game.", reference: "animation")],
         ["resource"] = []
@@ -84,73 +84,36 @@ public static partial class RecoilLanguage
         if (file is "puppies" or "puppies_easy" or "puppies_hard" && body.Children.Any(n => n.Kind == ZrdKind.Array && n.Children.FirstOrDefault()?.Kind == ZrdKind.String)) return "pickup-placements";
         return "resource";
     }
-    internal static IEnumerable<LanguageField> Fields(string family, string parent)
-    {
-        if (family != "animation") return ResourceFields.GetValueOrDefault(family) ?? [];
-        IEnumerable<string> names = parent switch
-        {
-            "" => ["ANIMATION_DEFINITIONS"],
-            "ANIMATION_DEFINITIONS" => ["GRAVITY", "ANIMATION_PATH", "ANIMATION_LIST"],
-            "ANIMATION_LIST" => ["ANIMATION_DEFINITION_FILE", "ANIMATION_DEFINITION"],
-            "ANIMATION_DEFINITION" => AnimationSourceFields.Settings.Concat(["NAME", "ANIMATION_NAME", "ANIMATION_ROOT_NAME", "ACTIVATION_PREREQUISITE", "RESET_STATE", "SEQUENCE_DEFINITION"]),
-            "SEQUENCE_DEFINITION" => AnimationSourceFields.EventFields.Keys.Concat(["NAME", "ACTIVATION", "START_TIME"]),
-            "RESET_STATE" => AnimationSourceFields.EventFields.Keys,
-            "ACTIVATION_PREREQUISITE" => ["REQUIRED", "OPTIONS"],
-            "REQUIRED" or "OPTIONS" => ["OBJECT_ACTIVE_LIST"],
-            "BOUNCE_SOUND" => ["NAME", "FULL_VOLUME_VELOCITY"],
-            _ => AnimationSourceFields.EventFields.TryGetValue(parent, out string? fields) ? fields.Split(' ', StringSplitOptions.RemoveEmptyEntries).Concat(["START_TIME"]) : []
-        };
-        return names.Distinct(StringComparer.Ordinal).Select(n => AnimationField(n, parent));
-    }
-    internal static LanguageField? Field(string family, string name, string parent) => Fields(family, parent).FirstOrDefault(f => f.Name == name);
-    private static LanguageField AnimationField(string name, string parent)
-    {
-        string? reference = name switch { "SCRIPT_FILENAME" or "ANIMATION_DEFINITION_FILE" => "file", "NAME" when parent is "CALL_ANIMATION" or "CALL_OBJECT_CONNECTOR" or "STOP_ANIMATION" or "RESET_ANIMATION" or "INVALIDATE_ANIMATION" => "animation", "BOUNCE_SEQUENCE" => "sequence", "NAME" when parent is "CALL_SEQUENCE" or "STOP_SEQUENCE" => "sequence", "NAME" when parent is "SOUND" or "SOUND_NODE" or "BOUNCE_SOUND" => "sound", "NAME" when parent == "EFFECT" => "effect", _ => null };
-        string shape = name switch
-        {
-            "NAME" when parent is "ANIMATION_DEFINITION" or "SEQUENCE_DEFINITION" => "s ...",
-            "START_TIME" => "s n", "NAME" or "ANIMATION_NAME" or "ANIMATION_ROOT_NAME" or "LOCAL_NAME" or "SCRIPT_FILENAME" or "ANIMATION_DEFINITION_FILE" or "ANIMATION_PATH" => "s",
-            "RUN_TIME" or "SCRIPT_FRAME_RATE" or "HEALTH" or "EXECUTION_BY_RANGE" or "LOOP_TIME" => "n",
-            "OPACITY_FROM" or "OPACITY_TO" => "n s?",
-            "RESET_TIME" => "n n?", "EXECUTION_PRIORITY" or "LOOP_COUNT" or "VALUE" => "n",
-            "TRANSLATION" => "n n n? n?",
-            "TRANSLATION_RANGE_MIN" or "TRANSLATION_RANGE_MAX" => "n n n n",
-            "XYZ_ROTATION" => "n n n n? n? n?",
-            "PARENT_CHILD" => "s s",
-            "GRAVITY" when parent == "ANIMATION_DEFINITIONS" => "n",
-            _ => ""
-        };
-        var choices = AnimationSourceFields.Options.GetValueOrDefault(name);
-        if (choices != null && shape.Length == 0) shape = "s";
-        string description = name switch
-        {
-            "START_TIME" => "Eligibility threshold in animation, sequence or previous-event seconds; earlier events, waits and conditions can delay actual dispatch.",
-            "WAIT_FOR_COMPLETION" => "The calling sequence waits until this child animation completes.",
-            "RESET_TIME" => "Animation reset timing. The optional second value changes the reset behavior; negative values are valid.",
-            "SCRIPT_FILENAME" => "SI keyframe script, resolved through the mission animation search path.",
-            "ANIMATION_PATH" => "Semicolon-separated definition and keyframe search folders in compiler order.",
-            "ACTIVATION" => "What makes this animation or sequence eligible to run.",
-            "ANIMATION_NAME" => "Logical animation name used by calls and mission startup lists.",
-            "NAME" when parent == "SEQUENCE_DEFINITION" => "Sequence name. If repeated, the last NAME wins.",
-            "CALL_ANIMATION" => "Launch a named child animation at this event; callsite options determine its binding and wait behavior.",
-            _ => reference != null ? $"{name}: {reference} reference." : $"{name}: RECOIL {parent.ToLowerInvariant().Replace('_', ' ')} field."
-        };
-        return F(name, description, shape, choices, reference);
-    }
-
     private static void Validate(LanguageDocument doc, CancellationToken token)
     {
         foreach (var record in doc.Records)
         {
             token.ThrowIfCancellationRequested();
-            var field = Field(doc.Family, record.Key, record.Parent?.Key ?? "");
+            var field = Field(doc.Family, record.Key, record.Parent?.Key ?? "", Ancestors(record.Parent));
             if (field == null || record.Value == null) continue;
+            if (doc.Family == "weather" && IsWeatherScalar(record.Key) && record.Value.Kind == ZrdKind.Array)
+            {
+                doc.Report("RECOIL_TYPE", "error", $"Weather {record.Key} requires a bare scalar value, without parentheses around the value.", doc.Span(record.Value));
+                continue;
+            }
+            if (!field.Suggested)
+            {
+                doc.Report("RECOIL_IGNORED", "warning", field.Description + " " + field.Notes, doc.Span(record.KeyNode));
+                continue;
+            }
+            if (doc.Family == "animation" && record.Key == "ACTIVATION" && record.Parent?.Key == "SEQUENCE_DEFINITION" && record.FirstText != "ON_CALL")
+                doc.Report("RECOIL_IGNORED", "warning", "Only ON_CALL has an effect on sequence activation; this value is ignored.", doc.Span(record.KeyNode));
             // Empty PARTS is a shipped no-part turret form; the loader only binds parts for 2–4 names.
-            if (field.Shape.Length > 0 && !(doc.Family == "turrets" && record.Key == "PARTS" && record.Values.Count == 0)) CheckShape(doc, record, field.Shape);
-            if (field.Choices is { Length: > 0 } choices && record.Scalars.FirstOrDefault() is { Kind: ZrdKind.String } scalar && !choices.Contains(scalar.Text, StringComparer.Ordinal))
+            bool filenameVariant = doc.Family == "sounds" && record.Key is "HIGH" or "MED" or "LOW" && record.Value.Kind == ZrdKind.String;
+            if (field.Shape.Length > 0 && !filenameVariant && !(doc.Family == "turrets" && record.Key == "PARTS" && record.Values.Count == 0)) CheckShape(doc, record, field.Shape);
+            if (doc.Family == "animation" && record.Key == "ANIMATION_LIST" && Ancestors(record.Parent).Contains("ACTIVATION_PREREQUISITE"))
+                foreach (var value in record.Values.Skip(1)) CheckShape(doc, record with { Value = value }, "s");
+            // Most engine switches have fallbacks; completion choices are advisory, not closed enums.
+            bool closedEnum = doc.Family == "animation" && (record.Key is "START_TIME" or "ANIMATION_LOD" || record.Key == "ACTIVATION" && record.Parent?.Key == "ANIMATION_DEFINITION");
+            if (closedEnum && field.Choices is { Length: > 0 } choices && record.Scalars.FirstOrDefault() is { Kind: ZrdKind.String } scalar && !choices.Contains(scalar.Text, StringComparer.Ordinal))
                 doc.Report("RECOIL_ENUM", "error", $"{record.Key} expects {string.Join(", ", choices)}.", doc.Span(scalar));
-            if (doc.Family == "animation" && record.Key is "OPACITY_FROM" or "OPACITY_TO" && record.Values.Count > 1 && record.Values[1] is { Kind: ZrdKind.String } flag && flag.Text is not ("ON" or "OFF"))
-                doc.Report("RECOIL_ENUM", "error", "Opacity override expects ON or OFF.", doc.Span(flag));
+            if (doc.Family == "animation" && record.Key == "VALUE" && record.Parent?.Key == "CALLBACK" && record.Scalars.FirstOrDefault() is { } id && Numeric(id) is double number && (number < int.MinValue || number > int.MaxValue))
+                doc.Report("RECOIL_RANGE", "error", "Callback VALUE must fit in a signed 32-bit integer.", doc.Span(id));
             if (doc.Family == "animation" && record.Key == "EXECUTION_PRIORITY" && record.Scalars.FirstOrDefault() is { } priority && Numeric(priority) is double p && (p < 0 || p > 255))
                 doc.Report("RECOIL_RANGE", "error", "Execution priority must fit in one byte (0–255).", doc.Span(priority));
             if (doc.Family == "weapons" && record.Key is "FIRE_RATE" or "BEAM" && record.Scalars.FirstOrDefault() is { } rate && Numeric(rate) == 0)
@@ -234,7 +197,7 @@ public static partial class RecoilLanguage
         int required = expected.Count(s => s != "..." && !s.EndsWith('?'));
         bool extra = expected[^1] == "...";
         if (actual.Count < required || !extra && actual.Count > expected.Length)
-        { doc.Report("RECOIL_ARITY", "error", $"{record.Key} expects ({shape}); found {actual.Count} values.", doc.Span(record.Value!)); return; }
+        { doc.Report("RECOIL_ARITY", "error", $"{record.Key} expects {ReadableShape(shape)}; found {actual.Count} values.", doc.Span(record.Value!)); return; }
         for (int i = 0; i < actual.Count && i < expected.Length && expected[i] != "..."; i++)
         {
             var value = actual[i]; char kind = expected[i][0];
