@@ -194,7 +194,7 @@ public partial class MainWindow
                     if (rows.Count >= AnimationStructurePlan.MaximumDependencyRecords) break;
                     string id = sequenceId + ":event:" + ev.Id;
                     bool expanded = worldAnimationExpanded.Contains(id);
-                    Add(new(id, ev.Name)
+                    Add(new(id, ev.Call is { } targetCall ? "→ " + targetCall.TargetName : ev.Name)
                     {
                         Depth = depth, Expandable = ev.Call?.TargetEntry != null || ev.KeyframeCount > 0, Expanded = expanded,
                         Included = ev.Call != null ? worldAnimationConfiguration.Policy.Includes(ev.Call.Path) : null,
@@ -202,7 +202,7 @@ public partial class MainWindow
                         InclusionReason = "Include this callsite in preview; parent calls must also be included",
                         CanEditTiming = ev.Source?.TimingFieldId != null && ev.Source.ReadOnlyReason == null,
                         TimingLabel = $"{ClockLabel(ev.Clock)} ≥ {ev.Threshold.ToString("G9", CultureInfo.InvariantCulture)} s",
-                        Detail = ev.Call is { } call ? $"{call.TargetName} · {(call.WaitForCompletion ? "waits for child completion; excluded call blocks this sequence" : "does not wait; excluded call is omitted")}" : ev.Diagnostic ?? ev.Support
+                        Detail = ev.Call is { } call ? $"{ev.Name} · {call.TargetName} · {(call.WaitForCompletion ? "waits for child completion; excluded call blocks this sequence" : "does not wait; excluded call is omitted")}" : ev.Diagnostic ?? ev.Support
                     }, new(entry, path, sequence.Id, ev.Id, ev.Call));
                     if (expanded && ev.Call?.TargetEntry is int child) AddEntry(child, ev.Call.Path, depth + 1);
                     if (expanded && ev.KeyframeCount > 0) AddKeys(entry, path, sequence.Id, ev.Id, id, depth + 1);

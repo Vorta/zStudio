@@ -33,8 +33,9 @@ public sealed class WorldAnimationTimelineRowView : Grid
         var text = new Grid(); text.ColumnDefinitions.Add(new() { Width = new(1, GridUnitType.Star) }); text.ColumnDefinitions.Add(new() { Width = GridLength.Auto, MaxWidth = 85 });
         text.Children.Add(label); Grid.SetColumn(timing, 1); text.Children.Add(timing); left.Children.Add(text); Children.Add(left);
         plot = new(this); Grid.SetColumn(plot, 1); Children.Add(plot);
+        plot.SizeChanged += (_, _) => Owner?.AlignRuler(plot);
         DataContextChanged += (_, _) => { row = DataContext as WorldAnimationTimelineRow; Refresh(); };
-        Loaded += (_, _) => { if (Owner != null) { Owner.ViewChanged -= Refresh; Owner.ViewChanged += Refresh; } Refresh(); };
+        Loaded += (_, _) => { if (Owner != null) { Owner.ViewChanged -= Refresh; Owner.ViewChanged += Refresh; } Refresh(); Owner?.AlignRuler(plot); };
         Unloaded += (_, _) => { if (Owner != null) Owner.ViewChanged -= Refresh; };
         expand.Click += (_, _) => { if (row != null) Owner?.Expand(row, !row.Expanded); };
         include.Click += (_, _) => { if (!changing && row != null) Owner?.Include(row, include.IsChecked == true); };

@@ -33,11 +33,12 @@ public sealed class WorldAnimationTimeline : UserControl
     private readonly CheckBox replay = new() { Content = "Replay range", VerticalAlignment = VerticalAlignment.Center, Margin = new(5, 0, 5, 0) };
     private readonly ValueTextBox rangeStart = new() { Text = "0", Width = 48, Padding = new(4, 0, 4, 0) };
     private readonly ValueTextBox rangeEnd = new() { Text = "30", Width = 48, Padding = new(4, 0, 4, 0) };
-    private readonly ComboBox view = new() { ItemsSource = new[] { "Source", "Run" }, SelectedIndex = 0, Width = 83 };
+    private readonly ComboBox view = new() { ItemsSource = new[] { "Source", "Run" }, SelectedIndex = 0, Width = 96 };
     private readonly CheckBox ticks = new() { Content = "Ticks", VerticalAlignment = VerticalAlignment.Center, Margin = new(5, 0, 5, 0) };
     private readonly CheckBox follow = new() { Content = "Follow playhead", IsChecked = true, VerticalAlignment = VerticalAlignment.Center, Margin = new(5, 0, 5, 0) };
     private readonly WorldAnimationTimeRuler ruler;
     private readonly ColumnDefinition rulerLabels = new() { Width = new(220) };
+    private readonly Grid rulerGrid = new() { Height = 28 };
     private bool changing, changingRows;
     private string? selectedId, selectedMarkId;
     private double visibleStart, visibleEnd = 30;
@@ -111,7 +112,6 @@ public sealed class WorldAnimationTimeline : UserControl
         presentation.Items.Add(Command("Scenario", "scenario", "Focus preview configuration in Properties"));
         ToolBarTray.SetIsLocked(presentation, true); presentation.SetResourceReference(BackgroundProperty, "SolidBackgroundFillColorBaseBrush");
         main.Children.Add(presentation);
-        var rulerGrid = new Grid { Height = 28, Margin = new(0, 0, SystemParameters.VerticalScrollBarWidth, 0) };
         rulerGrid.ColumnDefinitions.Add(rulerLabels); rulerGrid.ColumnDefinitions.Add(new() { Width = new(1, GridUnitType.Star) });
         var label = new TextBlock { Text = "Source / inclusion / clock", FontSize = 11, Margin = new(6, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center }; rulerGrid.Children.Add(label);
         var labelGrip = new Thumb { Width = 5, HorizontalAlignment = HorizontalAlignment.Right, Cursor = Cursors.SizeWE, Background = Brushes.Transparent, Focusable = true, ToolTip = "Resize timeline labels" };
@@ -152,7 +152,7 @@ public sealed class WorldAnimationTimeline : UserControl
         volume.ValueChanged += (_, _) => { if (!changing) OptionRequested?.Invoke("volume", volume.Value); };
         rangeStart.KeyDown += RangeKeyDown; rangeEnd.KeyDown += RangeKeyDown;
         rangeStart.LostKeyboardFocus += (_, _) => ProposeRange(); rangeEnd.LostKeyboardFocus += (_, _) => ProposeRange();
-        SizeChanged += (_, _) => { rulerLabels.Width = new(LabelWidth); bool narrow = ActualWidth < 640; foreach (var element in new UIElement[] { previous, next, speed, replay, mute, volume, camera, range }) ToolBar.SetOverflowMode(element, narrow ? OverflowMode.Always : OverflowMode.AsNeeded); RefreshView(); };
+        SizeChanged += (_, _) => { if (displayed.Count == 0) rulerLabels.Width = new(LabelWidth); bool narrow = ActualWidth < 640; foreach (var element in new UIElement[] { previous, next, speed, replay, mute, volume, camera, range }) ToolBar.SetOverflowMode(element, narrow ? OverflowMode.Always : OverflowMode.AsNeeded); RefreshView(); };
         SetState(state);
     }
 
@@ -227,7 +227,7 @@ public sealed class WorldAnimationTimeline : UserControl
     }
     public void SetBodyVisible(bool visible) { root.RowDefinitions[2].Height = visible ? new(1, GridUnitType.Star) : new(0); root.Children[2].Visibility = visible ? Visibility.Visible : Visibility.Collapsed; }
     public void SetLabelWidth(double width)
-    { if (!double.IsFinite(width) || width is < 80 or > 720) throw new ArgumentOutOfRangeException(nameof(width)); preferredLabelWidth = width; rulerLabels.Width = new(LabelWidth); RefreshView(); }
+    { if (!double.IsFinite(width) || width is < 80 or > 720) throw new ArgumentOutOfRangeException(nameof(width)); preferredLabelWidth = width; if (displayed.Count == 0) rulerLabels.Width = new(LabelWidth); RefreshView(); }
     public void SetVisibleRange(double start, double end)
     {
         if (!double.IsFinite(start) || !double.IsFinite(end) || start < 0 || end > 3600 || end - start < Step - 1e-9) throw new ArgumentException("Visible range must span at least one tick within 0–3600 seconds.");
@@ -246,6 +246,17 @@ public sealed class WorldAnimationTimeline : UserControl
         double margin = Math.Max(Step, (end - begin) * .05); SetVisibleRange(Math.Max(0, begin - margin), Math.Min(3600, end + margin));
     }
     internal void RefreshView() { ruler.InvalidateVisual(); ViewChanged?.Invoke(); }
+    internal void AlignRuler(FrameworkElement plot)
+    {
+        if (plot.ActualWidth <= 0 || ActualWidth <= 0) return;
+        // Fluent uses an overlay scrollbar. Use the realized content's bounds rather than
+        // assuming a reserved system scrollbar gutter or a particular item border thickness.
+        double left = plot.TranslatePoint(new(), this).X;
+        double right = Math.Max(0, ActualWidth - left - plot.ActualWidth);
+        if (!double.IsFinite(left) || left < 0 || left >= ActualWidth) return;
+        if (Math.Abs(rulerLabels.Width.Value - left) > .01) rulerLabels.Width = new(left);
+        if (Math.Abs(rulerGrid.Margin.Right - right) > .01) rulerGrid.Margin = new(0, 0, right, 0);
+    }
     internal void RequestSeek(double seconds)
     { if (state.CanSeek && double.IsFinite(seconds)) SeekRequested?.Invoke(Math.Clamp(Math.Round(seconds * 60) / 60, 0, 3600)); }
     internal void Select(WorldAnimationTimelineRow row, WorldAnimationTimelineMark? mark = null)

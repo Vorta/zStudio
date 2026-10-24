@@ -56,11 +56,47 @@ internal static class WorldAnimationTimelineChecks
         timeline.SetView("source");
         timeline.Measure(new Size(360, 300)); timeline.Arrange(new Rect(0, 0, 360, 300)); timeline.UpdateLayout();
         var list = Descendants(timeline).OfType<ListBox>().Single(); Assert.Equal(14, list.Items.Count);
+        var timeRuler = Descendants(timeline).OfType<WorldAnimationTimeRuler>().Single();
+        var plot = Descendants(timeline).OfType<WorldAnimationRowPlot>().First();
+        Assert.Equal(plot.ActualWidth, timeRuler.ActualWidth, 2);
+        Assert.Equal(plot.TranslatePoint(new(), timeline).X, timeRuler.TranslatePoint(new(), timeline).X, 2);
         var play = Descendants(timeline).OfType<Button>().Single(b => AutomationProperties.GetName(b) == "Play");
         timeline.SetBodyVisible(false); Assert.True(play.IsEnabled); timeline.SetBodyVisible(true);
         Assert.Same(play, Descendants(timeline).OfType<Button>().Single(b => AutomationProperties.GetName(b) == "Play"));
         Assert.Equal(0, seeks); Assert.Equal(0, inclusions);
+        var surface = new Window { Content = timeline, Width = 1000, Height = 450, ShowInTaskbar = false, ShowActivated = false };
+#pragma warning disable WPF0001
+        var previousTheme = Application.Current.ThemeMode;
+        try
+        {
+            surface.Show();
+            foreach (var theme in new[] { ThemeMode.Light, ThemeMode.Dark })
+            {
+                Application.Current.ThemeMode = theme;
+                foreach (double width in new[] { 900d, 396d })
+                {
+                    timeline.Width = width; timeline.Height = 300;
+                    foreach (double labels in new[] { 220d, 300d, 120d, 220d })
+                    {
+                        timeline.SetLabelWidth(labels); surface.UpdateLayout(); AssertAligned();
+                    }
+                    timeline.SetRows([], []); timeline.SetView("run"); timeline.SetLabelWidth(300); surface.UpdateLayout();
+                    timeline.SetRows(source, source); surface.UpdateLayout(); AssertAligned(); timeline.SetView("source");
+                }
+            }
+        }
+        finally { Application.Current.ThemeMode = previousTheme; surface.Content = null; surface.Close(); }
+#pragma warning restore WPF0001
         return Task.CompletedTask;
+        void AssertAligned()
+        {
+            var actualRuler = Descendants(timeline).OfType<WorldAnimationTimeRuler>().Single();
+            foreach (var actualPlot in Descendants(timeline).OfType<WorldAnimationRowPlot>())
+            {
+                Assert.Equal(actualPlot.ActualWidth, actualRuler.ActualWidth, 2);
+                Assert.Equal(actualPlot.TranslatePoint(new(), timeline).X, actualRuler.TranslatePoint(new(), timeline).X, 2);
+            }
+        }
     }
 
     private static IEnumerable<DependencyObject> Descendants(DependencyObject parent)

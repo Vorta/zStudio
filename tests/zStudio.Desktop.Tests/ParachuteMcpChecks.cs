@@ -46,12 +46,20 @@ internal static class ParachuteMcpChecks
             var state = (await PathAction("show"))["parachute"]!;
             Assert.Equal(2, state["windows"]!.AsArray().Count);
             Assert.True(state["cycleSeconds"]!.GetValue<double>() >= 10);
-            // A source world has no editing lock: Show selects the first window.
-            Assert.Equal(Guid.Parse(state["windows"]![0]!["id"]!.GetValue<string>()), state["selected"]!.GetValue<Guid>());
+            // Analysis is passive; choosing a window explicitly opens its editable source card.
+            Assert.Null(state["selected"]); Assert.Null(Viewport().SelectedParachuteWindow);
             Assert.StartsWith("VTOL drop windows ready:", main.ViewModel.Status);
+            Guid secondWindow = Guid.Parse(state["windows"]![1]!["id"]!.GetValue<string>());
+            Assert.True(Viewport().SelectParachuteWindow(secondWindow));
+            await ((Task)typeof(MainWindow).GetField("parachuteSelectionWork", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(main)!).WaitAsync(token);
+            main.UpdateLayout();
+            Assert.True(((FrameworkElement)main.FindName("ParachutePanel")).IsVisible);
+            Assert.Equal(secondWindow, (await State())!["selected"]!.GetValue<Guid>());
             var windowsPicker = (ComboBox)main.FindName("ParachuteWindows");
-            Assert.True(windowsPicker.IsEnabled);
+            Assert.True(windowsPicker.IsVisible); Assert.True(windowsPicker.IsEnabled);
             windowsPicker.SelectedIndex = 0;
+            await ((Task)typeof(MainWindow).GetField("parachuteSelectionWork", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(main)!).WaitAsync(token);
+            Assert.Equal(Guid.Parse(state["windows"]![0]!["id"]!.GetValue<string>()), (await State())!["selected"]!.GetValue<Guid>());
             Assert.Equal((await State())!["selected"]!.GetValue<Guid>(), Viewport().SelectedParachuteWindow);
             Assert.True(((FrameworkElement)main.FindName("ParachuteMoveButtons")).IsEnabled);
             TaskCompletionSource analyzing = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -76,7 +84,7 @@ internal static class ParachuteMcpChecks
                     await PathAction("analyze", new() { ["entry"] = state["entry"]!.GetValue<int>() });
                     Assert.StartsWith("VTOL drop windows ready:", main.ViewModel.Status);
                     Assert.True(((UIElement)main.FindName("ParachutePanel")).IsEnabled);
-                    Assert.Equal((await State())!["selected"]!.GetValue<Guid>(), Viewport().SelectedParachuteWindow);
+                    Assert.Null((await State())!["selected"]); Assert.Null(Viewport().SelectedParachuteWindow);
                 }
                 finally { releaseAnalysis.Release(); main.ParachuteAnalysisPreparing = null; }
             }
@@ -87,7 +95,9 @@ internal static class ParachuteMcpChecks
                 Assert.Equal("VTOL drop-window analysis failed: Parachute analysis failure fixture", main.ViewModel.Status);
             }
             finally { main.ParachuteAnalysisPreparing = null; }
-            await PathAction("analyze", new() { ["entry"] = state["entry"]!.GetValue<int>() });
+            state = (await PathAction("analyze", new() { ["entry"] = state["entry"]!.GetValue<int>() }))["parachute"]!;
+            Assert.Null(state["selected"]);
+            await PathAction("select", new() { ["window"] = state["windows"]![0]!["id"]!.GetValue<string>() });
             state = (await PathAction("begin"))["parachute"]!;
             string draft = state["draft"]!["token"]!.GetValue<string>();
             var baselineReleases = (await PathAction("releases"))["items"]!.ToJsonString();
