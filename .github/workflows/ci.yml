@@ -37,6 +37,11 @@ jobs:
         run: dotnet test --solution zStudio.slnx -c Release --no-build --max-parallel-test-modules 1
       - name: Validate the single-file package
         run: ./tools/publish.ps1
+      - name: Package and test GameZ Script
+        run: ./tools/package-gamez-script.ps1
+      - name: Test GameZ Script in VS Code
+        working-directory: vscode/gamez-script
+        run: npm run test:host
       - name: Validate RECOIL Blender round trip
         run: |
           $archive = Join-Path $env:RUNNER_TEMP 'blender-5.2.2-windows-x64.zip'

@@ -4,6 +4,8 @@ Version numbers follow `MAJOR.MINOR.PATCH`; the 0.x series is under active devel
 
 ## 0.9.8 — Unreleased
 
+- **GameZ Script for VS Code.** A separate Windows x64 extension highlights `.zad` and `.zrd` sources and adds live linting, contextual completion, hover, outline, reference navigation and project validation. The bundled language server shares zStudio's source parser, animation metadata and project services. Unsaved buffers participate in analysis; sources and exports remain untouched. MCP exposes the same analysis through `source_language` over zStudio's accepted workspace overlay.
+
 - Camera animation paths are orange; object paths remain teal, with a color key in Paths. Gravity-driven objects in source previews land on standable map surfaces, including terrain and bridges. Procedural movement stops at world Y −500 or 500 without triggering an impact; keyframes and cameras remain unrestricted. Paths, playback and seeking share these rules.
 - Playback controls have an opaque, theme-aware background, including their margins and wrapped rows, so the underlying map does not show through.
 - **Animations in the map editor.** The World tree has one **Animations** section, containing objects placed by animations and the mission/common definitions. Selecting a definition opens Properties and a structural timeline without running the animation or evaluating paths. Object cards link to exact affected definitions and bindings.

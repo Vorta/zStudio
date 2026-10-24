@@ -44,3 +44,10 @@ Thumbs.db
 
 # Local design handoff (not part of the repository)
 /design/
+
+# VS Code extension build products
+node_modules/
+.vscode-test/
+vscode/gamez-script/dist/
+vscode/gamez-script/server/
+*.vsix

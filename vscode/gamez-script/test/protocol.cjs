@@ -1,0 +1,44 @@
+const assert = require('node:assert/strict');
+const cp = require('node:child_process');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const { pathToFileURL } = require('node:url');
+const rpc = require('vscode-jsonrpc/node');
+(async () => {
+  const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'gamez-lsp-'));
+  const executable = process.env.GAMEZ_SERVER || path.resolve(__dirname, '../server/zStudio.LanguageServer.exe');
+  const child = cp.spawn(executable, [], { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
+  let errors = ''; child.stderr.on('data', b => errors += b);
+  const connection = rpc.createMessageConnection(new rpc.StreamMessageReader(child.stdout), new rpc.StreamMessageWriter(child.stdin));
+  const notices = []; connection.onNotification('textDocument/publishDiagnostics', n => notices.push(n)); connection.listen();
+  const deadline = setTimeout(() => { child.kill(); throw new Error('Language server timeout: ' + errors); }, 60000);
+  try {
+    fs.mkdirSync(path.join(temporary, 'gamegen')); fs.mkdirSync(path.join(temporary, 'data/m1/zrdr'), {recursive:true});
+    const file = path.join(temporary, 'data/m1/zrdr/anim.zad');
+    const source = '(ANIMATION_DEFINITIONS (ANIMATION_LIST (ANIMATION_DEFINITION (NAME (root) ANIMATION_NAME (child)))))';
+    fs.writeFileSync(file, source);
+    const vscodeUri = p => pathToFileURL(p).href.replace(/^file:\/\/\/([A-Za-z]):/, 'file:///$1%3A');
+    const init = await connection.sendRequest('initialize', { processId: process.pid, workspaceFolders: [{uri:vscodeUri(temporary), name:'fixture'}], initializationOptions:{trusted:true} });
+    assert.equal(init.serverInfo.name, 'GameZ Script');
+    await connection.sendNotification('initialized', {});
+    const uri = vscodeUri(file);
+    await connection.sendNotification('textDocument/didOpen', {textDocument:{uri,languageId:'gamez-script',version:1,text:source}});
+    const symbols = await connection.sendRequest('textDocument/documentSymbol', {textDocument:{uri}});
+    assert(symbols.length > 0);
+    const hover = await connection.sendRequest('textDocument/hover', {textDocument:{uri},position:{line:0,character:2}});
+    assert(hover.contents.value.includes('ANIMATION_DEFINITIONS'));
+    const validation = await connection.sendRequest('workspace/executeCommand', {command:'gamez.server.validateProject',arguments:[uri]});
+    assert.equal(validation.files, 1, 'Encoded drive URI resolves the project');
+    const incomplete = '(ANIMATION_DEFINITIONS (ANIMATION_LIST (ANIMATION_DEFINITION (ACTIVATION ( ';
+    await connection.sendNotification('textDocument/didChange', {textDocument:{uri,version:2},contentChanges:[{text:incomplete}]});
+    const completion = await connection.sendRequest('textDocument/completion', {textDocument:{uri},position:{line:0,character:incomplete.length}});
+    assert(completion.items.some(i=>i.label==='ON_CALL'));
+    await connection.sendNotification('textDocument/didChange', {textDocument:{uri,version:3},contentChanges:[{text:source}]});
+    await new Promise(resolve=>setTimeout(resolve,1200));
+    const latest = notices.filter(n=>decodeURIComponent(n.uri).toLowerCase()===decodeURIComponent(uri).toLowerCase()).at(-1); assert.equal(latest.version,3); assert.equal(latest.diagnostics.length,0);
+    await connection.sendNotification('textDocument/didClose', {textDocument:{uri}});
+    await connection.sendRequest('shutdown'); await connection.sendNotification('exit');
+    console.log('PASS GameZ Script LSP initialization, live buffers, hover, completion, symbols, diagnostic versions');
+  } finally { clearTimeout(deadline); connection.dispose(); child.kill(); fs.rmSync(temporary,{recursive:true,force:true}); }
+})().catch(e=>{console.error(e);process.exitCode=1;});

@@ -1,0 +1,19 @@
+# GameZ Script
+
+Syntax highlighting, linting and navigation for RECOIL text `.zad` animation definitions and `.zrd` resources. Both extensions use the **GameZ Script** language in VS Code.
+
+Install the Windows x64 VSIX with **Extensions → … → Install from VSIX…**, then open your reconstructed source project folder containing `data/` and `gamegen/`. VS Code 1.140 or later is required. The extension includes its language server and .NET runtime; zStudio does not need to be running. The extension has no network service or telemetry.
+
+The editor provides comments, strings, numeric literals, keywords and bracket highlighting; contextual field and enum completion; hover descriptions; a document outline; and Go to Definition for recognized animation, sequence, file and resource references. Diagnostics update from unsaved buffers, including dependencies open in the same server. Mission-specific results identify their mission. Multiple matching definitions remain separate navigation targets.
+
+**GameZ Script: Validate Project** checks the project and assembles each mission's world/animation context in memory. It adds compiler and world-binding findings to Problems. It does not export game files, launch game tools, or change sources. Editing invalidates the previous project results; automatic checks are lighter than this explicit command. **GameZ Script: Restart Language Server** restarts analysis if needed.
+
+The shared zStudio parser checks parentheses, strings/escapes, integer and float syntax, raw float bits and Latin-1 representability. Resource rules cover evidence-backed fields in player, weapons, weather, objectives, sounds, effects, pickups, vehicles, navigation networks, HUD, fonts, dialogs, turrets and placement lists. Numeric storage matters: a field read as a float needs `10.0`, not `10`. Unknown resource structures receive syntax and structural navigation without invented semantic errors. Animation checks include known fields, required operands, enums, sequence/call references and mission search paths.
+
+Save non-ASCII sources as **Western (ISO 8859-1)** using **Save with Encoding**. Plain ASCII UTF-8 without a BOM is byte-compatible. UTF-8 BOM, UTF-16 and non-ASCII UTF-8 are diagnosed. The extension never changes a file's encoding automatically.
+
+Project indexing requires a trusted, local workspace. Restricted Mode retains document-local analysis and highlighting. Open the project root or an ancestor: opening only `data/` cannot establish the enclosing project. Compiled binary ZRD is outside this text language. The language does not add editing support for `.zan`, `.gs` or `.gw`, and does not format, rename or automatically fix sources. Incomplete files retain syntax errors; missing final parentheses can be recovered for navigation/completion only, never for compilation. World-dependent wildcard binding and engine-load checks require Validate Project. A clean lint result does not prove engine compatibility.
+
+Analysis is bounded: 16 MiB per document, 64 MiB total project text, two million project tokens, 250,000 tokens per document and 200 diagnostics or navigation/completion results per document/query. An incomplete-analysis diagnostic or log explains a limit/failure. Other project files continue to use zStudio's source-read safety limits.
+
+For developers: from the repository root run `./tools/package-gamez-script.ps1`. It restores locked dependencies, publishes the self-contained server, bundles the client, runs grammar/protocol tests and verifies the VSIX contents. `npm run test:host` in this directory runs an isolated VS Code extension-host test; `GAMEZ_VSCODE` can select an installed VS Code executable. The VSIX is a separate artifact from the zStudio application package.
