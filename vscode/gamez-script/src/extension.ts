@@ -28,7 +28,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     const start = async (): Promise<void> => {
         const server: ServerOptions = { command: context.asAbsolutePath(path.join('server', 'zStudio.LanguageServer.exe')), options: { cwd: context.extensionPath } };
         watcher?.dispose();
-        watcher = vscode.workspace.createFileSystemWatcher('**/*.{zad,zrd,zan,gs,gw,gltf,bin}');
+        watcher = vscode.workspace.createFileSystemWatcher('**/*.{zad,zrd,zan,gs,gw,gltf,bin,json}');
         const options: LanguageClientOptions = {
             documentSelector: [{ scheme: 'file', language: 'gamez-script' }],
             initializationOptions: { trusted: vscode.workspace.isTrusted },

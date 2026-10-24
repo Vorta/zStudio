@@ -218,7 +218,11 @@ public sealed class GameZLanguageServer : IDisposable
     {
         var (doc, project, offset) = await Document(args, token);
         var items = project?.Complete(doc.Path, offset) ?? RecoilLanguage.Complete(doc, offset);
-        return new { isIncomplete = items.Count >= RecoilLanguage.MaximumResults, items = items.Select(i => new { label = i.Label, detail = i.Detail, documentation = i.Documentation == null ? null : new { kind = "markdown", value = i.Documentation }, insertText = i.InsertText, kind = i.Kind == "reference" ? 18 : i.Kind == "enumMember" ? 20 : 14 }) };
+        bool Quoted(LanguageCompletion item) => item.ReplacementSpan is { Length: > 0 } span && doc.Text[span.Start] == '"';
+        // Core already filters decoded prefixes. Keep the client's filter compatible with source quotes/escapes,
+        // and re-query such lists as the user types instead of filtering a cached decoded spelling.
+        string Filter(LanguageCompletion item) => Quoted(item) ? doc.Text[item.ReplacementSpan!.Value.Start..offset] + item.Label : item.Label;
+        return new { isIncomplete = items.Count >= RecoilLanguage.MaximumResults || items.Any(i => i.Kind == "reference" || Quoted(i)), items = items.Select(i => new { label = i.Label, filterText = Filter(i), detail = i.Detail, documentation = i.Documentation == null ? null : new { kind = "markdown", value = i.Documentation }, textEdit = new { range = Range(doc.Text, i.ReplacementSpan ?? new(offset, 0)), newText = i.InsertText }, kind = i.Kind == "reference" ? 18 : i.Kind == "enumMember" ? 20 : 14 }) };
     }
     [JsonRpcMethod("textDocument/hover", UseSingleObjectParameterDeserialization = true)]
     public async Task<object?> Hover(JsonObject args, CancellationToken token)

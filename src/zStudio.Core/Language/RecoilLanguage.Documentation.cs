@@ -40,7 +40,7 @@ public static partial class RecoilLanguage
         {
             if (token.Span.Start >= offset) break;
             if (token.Kind == "delimiter") { if (token.Text == "(") argument = 0; }
-            else if (token.Span.End < offset || token.Span.End == offset && offset < document.Text.Length && char.IsWhiteSpace(document.Text[offset])) argument++;
+            else if (token.Span.End < offset) argument++;
         }
         return argument;
     }

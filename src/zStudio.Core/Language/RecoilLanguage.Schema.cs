@@ -90,7 +90,13 @@ public static partial class RecoilLanguage
         {
             token.ThrowIfCancellationRequested();
             var field = Field(doc.Family, record.Key, record.Parent?.Key ?? "", Ancestors(record.Parent));
-            if (field == null || record.Value == null) continue;
+            if (field == null) continue;
+            if (record.Value == null)
+            {
+                if (field.Suggested && field.Shape.Split(' ', StringSplitOptions.RemoveEmptyEntries).Any(part => part != "..." && !part.EndsWith('?')))
+                    doc.Report("RECOIL_REQUIRED", "error", $"{record.Key} needs {ReadableShape(field.Shape)}.", doc.Span(record.KeyNode));
+                continue;
+            }
             if (doc.Family == "weather" && IsWeatherScalar(record.Key) && record.Value.Kind == ZrdKind.Array)
             {
                 doc.Report("RECOIL_TYPE", "error", $"Weather {record.Key} requires a bare scalar value, without parentheses around the value.", doc.Span(record.Value));
@@ -112,6 +118,10 @@ public static partial class RecoilLanguage
             bool closedEnum = doc.Family == "animation" && (record.Key is "START_TIME" or "ANIMATION_LOD" || record.Key == "ACTIVATION" && record.Parent?.Key == "ANIMATION_DEFINITION");
             if (closedEnum && field.Choices is { Length: > 0 } choices && record.Scalars.FirstOrDefault() is { Kind: ZrdKind.String } scalar && !choices.Contains(scalar.Text, StringComparer.Ordinal))
                 doc.Report("RECOIL_ENUM", "error", $"{record.Key} expects {string.Join(", ", choices)}.", doc.Span(scalar));
+            if (doc.Family == "animation" && record.Key is "OPACITY_FROM" or "OPACITY_TO" && record.Values.Count > 1 && record.Values[1] is { Kind: ZrdKind.String } flag && flag.Text is not ("ON" or "OFF"))
+                doc.Report("RECOIL_ENUM", "error", "Opacity endpoint override expects ON or OFF.", doc.Span(flag));
+            if (doc.Family == "animation" && record.Key == "GRAVITY" && record.Parent?.Key == "OBJECT_MOTION" && record.FirstText == "LOCAL" && record.Values.Count < 2)
+                doc.Report("RECOIL_REQUIRED", "error", "LOCAL gravity needs a numeric magnitude after LOCAL.", doc.Span(record.KeyNode));
             if (doc.Family == "animation" && record.Key == "VALUE" && record.Parent?.Key == "CALLBACK" && record.Scalars.FirstOrDefault() is { } id && Numeric(id) is double number && (number < int.MinValue || number > int.MaxValue))
                 doc.Report("RECOIL_RANGE", "error", "Callback VALUE must fit in a signed 32-bit integer.", doc.Span(id));
             if (doc.Family == "animation" && record.Key == "EXECUTION_PRIORITY" && record.Scalars.FirstOrDefault() is { } priority && Numeric(priority) is double p && (p < 0 || p > 255))
@@ -129,6 +139,7 @@ public static partial class RecoilLanguage
             {
                 string[] required = record.Key switch
                 {
+                    "FBFX_COLOR_FROM_TO" => ["FROM", "TO"],
                     "OBJECT_MOTION_SI_SCRIPT" => ["NAME", "SCRIPT_FILENAME"],
                     "OBJECT_ADD_CHILD" or "OBJECT_DELETE_CHILD" => ["PARENT_CHILD"],
                     "BOUNCE_SOUND" => ["NAME"],
@@ -138,6 +149,8 @@ public static partial class RecoilLanguage
                 foreach (string name in required)
                     if (!doc.Records.Any(r => ReferenceEquals(r.Parent, record) && r.Key == name && r.Scalars.Any()))
                         doc.Report("RECOIL_REQUIRED", "error", $"{record.Key} needs {name}.", doc.Span(record.KeyNode));
+                if (record.Key is "IF" or "ELSEIF" && !doc.Records.Any(r => ReferenceEquals(r.Parent, record) && r.Key is "ANIMATION_LOD" or "PLAYER_RANGE" or "RANDOM_WEIGHT" or "NODE_UNDERCOVER"))
+                    doc.Report("RECOIL_REQUIRED", "error", $"{record.Key} needs ANIMATION_LOD, PLAYER_RANGE, RANDOM_WEIGHT or NODE_UNDERCOVER.", doc.Span(record.KeyNode));
             }
             foreach (var record in doc.Records.Where(r => r.Value != null && r.Parent != null))
             {

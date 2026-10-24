@@ -9,6 +9,56 @@ public sealed class GameZLanguageTests
     private static LanguageDocument Analyze(string path, string text) => RecoilLanguage.Analyze(path, text, TestContext.Current.CancellationToken);
     private static string Animation(string body) => "(ANIMATION_DEFINITIONS (ANIMATION_LIST (ANIMATION_DEFINITION (NAME (root) SEQUENCE_DEFINITION (NAME (main) " + body + ")))))";
     [Fact]
+    public void LiveLintChecksCompilerRequiredConditionsAndEndpointSwitches()
+    {
+        var invalid = Analyze("a.zad", Animation("OBJECT_OPACITY_FROM_TO (NAME (root) OPACITY_FROM (1 ENABLED)) FBFX_COLOR_FROM_TO (FROM (0 0 0 0)) IF () ELSEIF () OBJECT_MOTION (NAME (root) GRAVITY (LOCAL)) IF (PLAYER_RANGE) ELSEIF (ANIMATION_LOD) OBJECT_MOTION (NAME (root) GRAVITY)"));
+        Assert.Single(invalid.Diagnostics, d => d.Code == "RECOIL_ENUM");
+        Assert.Equal(7, invalid.Diagnostics.Count(d => d.Code == "RECOIL_REQUIRED"));
+        var valid = Analyze("a.zad", Animation("OBJECT_OPACITY_FROM_TO (NAME (root) OPACITY_FROM (1 ON) OPACITY_TO (0 OFF)) OBJECT_OPACITY_STATE (NAME (root) STATE (ANYTHING)) FBFX_COLOR_FROM_TO (FROM (0 0 0 0) TO (1 1 1 1)) IF (PLAYER_RANGE (10)) ELSEIF (ANIMATION_LOD (HIGH)) ENDIF () OBJECT_MOTION (NAME (root) GRAVITY (LOCAL 9.8))"));
+        Assert.Empty(valid.Diagnostics);
+    }
+    [Fact]
+    public void ProjectCompletionFiltersBeforeCappingAndReplacesTheWholeSourceToken()
+    {
+        using var fixture = new SourceWorldFixture();
+        const string path = "data/m1/zrdr/anim.zad";
+        var definitions = string.Concat(Enumerable.Range(0, 205).Select(i => $"ANIMATION_DEFINITION (NAME (early_{i})) "));
+        string text = "(ANIMATION_DEFINITIONS (ANIMATION_LIST (" + definitions + "ANIMATION_DEFINITION (NAME (\"rocket_port1*\")) ANIMATION_DEFINITION (NAME (caller) SEQUENCE_DEFINITION (CALL_ANIMATION (NAME (\"rocket_p\")))))))";
+        fixture.Write(path, text);
+        var project = LanguageProject.Analyze(fixture.Project, token: TestContext.Current.CancellationToken);
+        int at = text.LastIndexOf("rocket_p\"", StringComparison.Ordinal) + "rocket_p".Length;
+        var completion = Assert.Single(project.Complete(path, at));
+        Assert.Equal("rocket_port1*", completion.Label);
+        var span = completion.ReplacementSpan!.Value;
+        string changed = text[..span.Start] + completion.InsertText + text[span.End..];
+        Assert.Contains("CALL_ANIMATION (NAME (\"rocket_port1*\"))", changed);
+        Assert.Empty(Analyze(path, changed).Diagnostics);
+        Assert.Contains(project.Complete(path, at + 2), c => c.Label == "WITH_NODE"); // After the closed NAME array.
+        string partial = text[..(at + 1)]; // A closed string in an unfinished NAME array at EOF.
+        var unfinished = LanguageProject.Analyze(fixture.Project, new Dictionary<string, string> { [path] = partial }, token: TestContext.Current.CancellationToken);
+        Assert.Contains(unfinished.Complete(path, partial.Length), c => c.Label == "rocket_port1*");
+        var callback = Analyze("a.zad", Animation("CALLBACK (VALUE (9))"));
+        at = callback.Text.IndexOf("(9)", StringComparison.Ordinal) + 2;
+        var numeric = RecoilLanguage.Complete(callback, at).Single(c => c.Label == "912");
+        Assert.DoesNotContain(RecoilLanguage.Complete(callback, at), c => c.Label == "0");
+        span = numeric.ReplacementSpan!.Value;
+        Assert.Equal("9", callback.Text.Substring(span.Start, span.Length));
+    }
+    [Fact]
+    public void CommonResourceMembersHideMissionOverridesForReferenceNavigation()
+    {
+        using var fixture = new SourceWorldFixture();
+        fixture.Write("data/common/zrdr/weapons.zrd", "(BALLISTICS (common_gun (DAMAGE (1.0))))");
+        fixture.Write("data/m1/zrdr/weapons.zrd", "(BALLISTICS (mission_gun (DAMAGE (2.0))))");
+        const string path = "data/m1/zrdr/ai.zrd";
+        const string text = "(TURRET (tur_01 (WEAPON (NAME (mission_gun)))))";
+        fixture.Write(path, text);
+        var project = LanguageProject.Analyze(fixture.Project, token: TestContext.Current.CancellationToken);
+        int at = text.IndexOf("mission_gun", StringComparison.Ordinal);
+        Assert.Empty(project.Definition(path, at));
+        Assert.Equal(["common_gun"], project.Complete(path, at).Select(c => c.Label));
+    }
+    [Fact]
     public void CallbackHelpExplainsEngineDispatchAndOffersAdvisoryIds()
     {
         string text = Animation("CALLBACK (START_TIME (EVENT_OFFSET 0.5) VALUE (912)) CALLBACK (VALUE (12345))");

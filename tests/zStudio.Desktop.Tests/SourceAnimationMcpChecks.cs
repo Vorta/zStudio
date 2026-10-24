@@ -48,6 +48,7 @@ internal static class SourceAnimationMcpChecks
                 ["position"] = VtolDropFixture.Definitions().IndexOf("ANIMATION_DEFINITIONS", StringComparison.Ordinal) });
             Assert.Contains(languageCompletion["items"]!.AsArray(), item => item!["Label"]!.GetValue<string>() == "ANIMATION_DEFINITIONS"
                 && item["Documentation"]!.GetValue<string>().Contains("shared gravity", StringComparison.Ordinal));
+            Assert.Contains(languageCompletion["items"]!.AsArray(), item => item!["ReplacementSpan"]?["Length"]?.GetValue<int>() == "ANIMATION_DEFINITIONS".Length);
             var records = (await Animation("read"))["items"]!.AsArray();
             var activation = records[0]!["Fields"]!.AsArray().Single(f => f!["Key"]!.GetValue<string>() == "ACTIVATION")!;
             string field = activation["Id"]!.GetValue<string>();

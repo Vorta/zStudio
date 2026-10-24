@@ -10,6 +10,7 @@ namespace zStudio.Core.Language;
 public sealed class LanguageProject
 {
     public const long MaximumTextBytes = 64L * 1024 * 1024;
+    private const int MaximumReferenceNames = 50_000;
     public string Root { get; }
     public IReadOnlyDictionary<string, LanguageDocument> Documents => documents;
     private readonly Dictionary<string, LanguageDocument> documents = new(StringComparer.OrdinalIgnoreCase);
@@ -72,10 +73,17 @@ public sealed class LanguageProject
     public IReadOnlyList<LanguageCompletion> Complete(string path, int offset)
     {
         if (!documents.TryGetValue(path, out var doc)) return [];
-        var record = doc.Records.Where(r => r.Value != null && doc.Span(r.Value).Start <= offset && doc.Span(r.Value).End >= offset)
+        offset = Math.Clamp(offset, 0, doc.Text.Length);
+        var record = doc.Records.Where(r => r.Value != null && doc.Span(r.Value).Start <= offset &&
+            (doc.Span(r.Value).End > offset || offset == doc.Text.Length && doc.CompletionText != null && doc.spans[r.Value.Id].End > offset))
             .MinBy(r => doc.Span(r.Value!).Length);
         if (record != null && referenceNames.TryGetValue((doc.Path, doc.Span(record.KeyNode).Start), out var names))
-            return names.Take(RecoilLanguage.MaximumResults).Select(n => new LanguageCompletion(n, "Project reference", ZrdText.Scalar(new(Guid.Empty, ZrdKind.String, 0, n, [])), "reference")).ToArray();
+        {
+            string prefix = RecoilLanguage.CompletionPrefix(doc, offset);
+            var span = RecoilLanguage.CompletionSpan(doc, offset);
+            return names.Where(n => n.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)).Take(RecoilLanguage.MaximumResults)
+                .Select(n => new LanguageCompletion(n, "Project reference", ZrdText.Scalar(new(Guid.Empty, ZrdKind.String, 0, n, [])), "reference", ReplacementSpan: span)).ToArray();
+        }
         return RecoilLanguage.Complete(doc, offset);
     }
 
@@ -106,14 +114,16 @@ public sealed class LanguageProject
                 foreach (var child in node.Children) if (child.Kind == ZrdKind.Array) SoundRows(child);
             }
         }
+        var commonMembers = documents.Keys.Where(p => p.StartsWith("data/common/", StringComparison.OrdinalIgnoreCase))
+            .Select(Path.GetFileName).ToHashSet(StringComparer.OrdinalIgnoreCase);
         foreach (var doc in documents.Values)
             foreach (var r in doc.Records)
             {
                 var field = RecoilLanguage.Field(doc.Family, r.Key, r.Parent?.Key ?? "", RecoilLanguage.Ancestors(r.Parent));
                 if (field?.Reference is not ("sound" or "effect" or "weapon" or "message") || !resources.TryGetValue(field.Reference, out var all)) continue;
-                bool commonEffects = field.Reference == "effect" && documents.Keys.Any(p => p.StartsWith("data/common/", StringComparison.OrdinalIgnoreCase) && Path.GetFileName(p).Equals("effects.zrd", StringComparison.OrdinalIgnoreCase));
-                var available = all.Where(x => x.Location.Path.StartsWith("data/common/", StringComparison.OrdinalIgnoreCase) || !commonEffects && Mission(x.Location.Path) == Mission(doc.Path)).ToArray();
-                referenceNames[(doc.Path, doc.Span(r.KeyNode).Start)] = available.Select(x => x.Name).Distinct(StringComparer.Ordinal).Take(RecoilLanguage.MaximumResults).ToArray();
+                var available = all.Where(x => x.Location.Path.StartsWith("data/common/", StringComparison.OrdinalIgnoreCase) ||
+                    Mission(x.Location.Path) == Mission(doc.Path) && !commonMembers.Contains(Path.GetFileName(x.Location.Path))).ToArray();
+                referenceNames[(doc.Path, doc.Span(r.KeyNode).Start)] = available.Select(x => x.Name).Distinct(StringComparer.Ordinal).Take(MaximumReferenceNames).ToArray();
                 if (r.Scalars.FirstOrDefault() is { Kind: ZrdKind.String } value)
                     Link(doc, value, available.Where(x => x.Name == value.Text).Select(x => x.Location), missing: false);
             }
@@ -190,7 +200,7 @@ public sealed class LanguageProject
     private void MergeNames(LanguageDocument doc, LanguageRecord record, IEnumerable<string> names)
     {
         var key = (doc.Path, doc.Span(record.KeyNode).Start);
-        referenceNames[key] = (referenceNames.GetValueOrDefault(key) ?? []).Concat(names).Distinct(StringComparer.Ordinal).Take(RecoilLanguage.MaximumResults).ToArray();
+        referenceNames[key] = (referenceNames.GetValueOrDefault(key) ?? []).Concat(names).Distinct(StringComparer.Ordinal).Take(MaximumReferenceNames).ToArray();
     }
     private void Link(LanguageDocument doc, ZrdNode node, IEnumerable<LanguageLocation> targets, bool missing, string? mission = null)
     {

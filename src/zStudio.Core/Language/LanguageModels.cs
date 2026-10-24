@@ -6,7 +6,7 @@ namespace zStudio.Core.Language;
 public sealed record LanguageDiagnostic(string Code, string Severity, string Message, TextSpan Span, string? Mission = null);
 public sealed record LanguageToken(TextSpan Span, string Text, string Kind);
 public sealed record LanguageSymbol(string Name, string Kind, TextSpan Span, TextSpan Selection, IReadOnlyList<LanguageSymbol> Children);
-public sealed record LanguageCompletion(string Label, string Detail, string InsertText, string Kind = "keyword", string? Documentation = null);
+public sealed record LanguageCompletion(string Label, string Detail, string InsertText, string Kind = "keyword", string? Documentation = null, TextSpan? ReplacementSpan = null);
 public sealed record LanguageLocation(string Path, TextSpan Span, string? Context = null);
 public sealed record LanguageHover(string Markdown, TextSpan Span);
 public sealed record LanguageField(string Name, string Description, string Shape = "", string[]? Choices = null, string? Reference = null,

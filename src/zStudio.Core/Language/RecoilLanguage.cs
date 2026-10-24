@@ -124,6 +124,31 @@ public static partial class RecoilLanguage
     public static IReadOnlyList<LanguageCompletion> Complete(LanguageDocument document, int offset)
     {
         offset = Math.Clamp(offset, 0, document.Text.Length);
+        var replacement = CompletionSpan(document, offset);
+        string prefix = CompletionPrefix(document, offset);
+        return CompletionItems(document, offset).Where(item => item.Label.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+            .Select(item => item with { ReplacementSpan = replacement }).ToArray();
+    }
+    internal static TextSpan CompletionSpan(LanguageDocument document, int offset) =>
+        document.Tokens.FirstOrDefault(t => t.Kind != "delimiter" && t.Span.Start <= offset && offset <= t.Span.End)?.Span ?? new(offset, 0);
+    internal static string CompletionPrefix(LanguageDocument document, int offset)
+    {
+        var span = CompletionSpan(document, offset);
+        if (span.Length == 0) return "";
+        var item = document.Tokens.First(t => t.Span == span);
+        if (document.Text[span.Start] != '"') return item.Text[..Math.Min(offset - span.Start, item.Text.Length)];
+        // Use the decoded token, counting complete source escapes before the cursor.
+        int count = 0;
+        for (int at = span.Start + 1; at < Math.Min(offset, span.End - 1);)
+        {
+            int width = document.Text[at] == '\\' ? document.Text[at + 1] == 'x' ? 4 : 2 : 1;
+            if (at + width > offset) break;
+            at += width; count++;
+        }
+        return item.Text[..Math.Min(count, item.Text.Length)];
+    }
+    private static IReadOnlyList<LanguageCompletion> CompletionItems(LanguageDocument document, int offset)
+    {
         if (ScalarOperand(document, offset) is { } scalarRecord)
         {
             var scalarField = Field(document.Family, scalarRecord.Key, scalarRecord.Parent?.Key ?? "", Ancestors(scalarRecord.Parent));
