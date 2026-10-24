@@ -64,6 +64,13 @@ public static partial class RecoilLanguage
             while (root.Children.Count == 1 && root.Children[0].Kind == ZrdKind.Array) root = root.Children[0];
             Collect(result, root, null, token);
             result.Family = Classify(result);
+            if (result.Family is "sounds" or "effects")
+            {
+                // Classification needs the outer tags. Once known, collect mixed positional/tagged
+                // records with their actual roles rather than interpreting user names as settings.
+                result.Records.Clear();
+                Collect(result, root, null, token, structured: true);
+            }
             if (result.Complete) Validate(result, token);
             int remaining = MaximumResults;
             result.Symbols = Symbols(result, null, ref remaining);
@@ -71,14 +78,20 @@ public static partial class RecoilLanguage
         return result;
     }
 
-    private static void Collect(LanguageDocument doc, ZrdNode array, LanguageRecord? parent, CancellationToken token)
+    private static void Collect(LanguageDocument doc, ZrdNode array, LanguageRecord? parent, CancellationToken token, bool structured = false, int start = 0)
     {
         var children = array.Children;
-        for (int i = 0; i < children.Count; i++)
+        for (int i = 0; i < children.Count && i < start; i++) doc.PositionalValues.Add(doc.Span(children[i]));
+        for (int i = start; i < children.Count; i++)
         {
             token.ThrowIfCancellationRequested();
             var key = children[i];
-            if (key.Kind == ZrdKind.Array) { Collect(doc, key, parent, token); continue; }
+            if (key.Kind == ZrdKind.Array)
+            {
+                int header = structured ? ResourceRowHeader(doc, parent, key) : 0;
+                Collect(doc, key, parent, token, structured, header);
+                continue;
+            }
             if (key.Kind != ZrdKind.String) continue;
             var value = i + 1 < children.Count ? children[i + 1] : null;
             // Animation flags and positional resource strings are not forced into key/value pairs.
@@ -88,7 +101,7 @@ public static partial class RecoilLanguage
             var record = new LanguageRecord(key.Text, key, paired ? value : null, parent);
             doc.Records.Add(record);
             if (paired && value != null)
-            { i++; if (value.Kind == ZrdKind.Array) Collect(doc, value, record, token); }
+            { i++; if (value.Kind == ZrdKind.Array) Collect(doc, value, record, token, structured); }
         }
     }
 
@@ -150,6 +163,7 @@ public static partial class RecoilLanguage
     }
     private static IReadOnlyList<LanguageCompletion> CompletionItems(LanguageDocument document, int offset)
     {
+        if (document.PositionalValues.Any(span => span.Start <= offset && offset <= span.End)) return [];
         if (ScalarOperand(document, offset) is { } scalarRecord)
         {
             var scalarField = Field(document.Family, scalarRecord.Key, scalarRecord.Parent?.Key ?? "", Ancestors(scalarRecord.Parent));
@@ -173,6 +187,7 @@ public static partial class RecoilLanguage
     {
         var item = document.Tokens.FirstOrDefault(t => t.Span.Start <= offset && t.Span.End > offset);
         if (item == null) return null;
+        if (document.PositionalValues.Any(span => span.Start <= offset && offset < span.End)) return null;
         var record = document.Records.FirstOrDefault(r => document.Span(r.KeyNode) == item.Span);
         var context = Context(document, item.Span.Start).Where(p => p.Length > 0).ToArray();
         var field = Field(document.Family, item.Text, record?.Parent?.Key ?? context.LastOrDefault() ?? "", record == null ? context : Ancestors(record.Parent));

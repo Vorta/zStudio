@@ -76,7 +76,8 @@ public static partial class RecoilLanguage
         if (doc.Records.Any(r => r.Parent?.Key.StartsWith("MISSION", StringComparison.Ordinal) == true && r.Key == "TYPE")) return "weather";
         if (Has("OBJECTIVE1") || Has("READ_TIME") && Has("REVIEW_DELAY")) return "objectives";
         if (Has("NEW_GAME_START") || Has("LOAD_GAME_START")) return "startanims";
-        if (Has("FONTS")) return Has("TYPEI") || Has("TYPEII") ? "hud" : "fonts";
+        if (doc.Records.Any(r => r.Parent == null && r.Key is "TYPEI" or "TYPEII")) return "hud";
+        if (Has("FONTS")) return "fonts";
         if (doc.Records.Any(r => r.Key.StartsWith("node_", StringComparison.Ordinal) && r.Value?.Kind == ZrdKind.Array)) return "network";
         string file = System.IO.Path.GetFileNameWithoutExtension(doc.Path).ToLowerInvariant();
         var body = doc.Root!; while (body.Children.Count == 1 && body.Children[0].Kind == ZrdKind.Array && body.Children[0].Children.FirstOrDefault()?.Kind == ZrdKind.Array) body = body.Children[0];
@@ -96,7 +97,9 @@ public static partial class RecoilLanguage
             if (!field.ValidateValues) continue;
             if (record.Value == null)
             {
-                if (field.Shape.Split(' ', StringSplitOptions.RemoveEmptyEntries).Any(part => part != "..." && !part.EndsWith('?')))
+                if (MinimumResourceValues(doc, record) is > 0 and var minimum)
+                    doc.Report("RECOIL_REQUIRED", "error", $"{record.Key} needs at least {minimum} values.", doc.Span(record.KeyNode));
+                else if (field.Shape.Split(' ', StringSplitOptions.RemoveEmptyEntries).Any(part => part != "..." && !part.EndsWith('?')))
                     doc.Report("RECOIL_REQUIRED", "error", $"{record.Key} needs {ReadableShape(field.Shape)}.", doc.Span(record.KeyNode));
                 continue;
             }

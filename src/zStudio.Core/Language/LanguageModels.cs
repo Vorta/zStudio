@@ -29,6 +29,7 @@ public sealed class LanguageDocument
     internal ZrdNode? Root;
     internal string? CompletionText;
     internal List<LanguageRecord> Records = [];
+    internal List<TextSpan> PositionalValues = [];
     internal LanguageDocument(string path, string text) { Path = path; Text = text; }
     internal TextSpan Span(ZrdNode node)
     {

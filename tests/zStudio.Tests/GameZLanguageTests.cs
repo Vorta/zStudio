@@ -23,7 +23,7 @@ public sealed class GameZLanguageTests
     [InlineData("sounds.zrd", "(SETS (group ((sound file 1.5 TRUE FALSE TRUE))))", "1.5")]
     [InlineData("weather.zrd", "(MISSION1 (TYPE RAIN WIND_VEL 1.5))", "1.5")]
     [InlineData("objective.zrd", "(OBJECTIVE1 (READ_SOUND (sample 1.5)))", "1.5")]
-    [InlineData("hud.zrd", "(FONTS () TYPEI ((0 0 640 480)) SENSOR ((image 0 0 FALSE FALSE) 1.5 (0 0) (10 10) 400))", "1.5")]
+    [InlineData("hud.zrd", "(FONTS () TYPEI ((0 0 640 480)) SENSOR ((image 0 0 FALSE FALSE) 1.5 (0 0) (10 10) 400 (target 0 0 TRUE TRUE) (0 0 10 10)))", "1.5")]
     [InlineData("dialog.zrd", "(SHARED_IMAGE_PATH (images) MENU (BACKGROUND_SOUNDS ((sound 1.5))))", "1.5")]
     public void DirectFloatReadsRejectIntegersAtTheEditedToken(string path, string text, string number)
     {
@@ -74,7 +74,47 @@ public sealed class GameZLanguageTests
         Assert.DoesNotContain(RecoilLanguage.Complete(doc, text.IndexOf("(RATE", StringComparison.Ordinal) + 1), c => c.Label == "RATE");
         Assert.Empty(Analyze("sounds.zrd", "(SYNTAX (2) SETS () SOUND_GROUPS ((group DELAY_REPEAT 1)))").Diagnostics);
         Assert.Single(Analyze("sounds.zrd", "(SYNTAX (2) SETS () SOUND_GROUPS ((group DELAY_REPEAT (1.0))))").Diagnostics, d => d.Code == "RECOIL_TYPE");
-        Assert.Single(Analyze("hud.zrd", "(FONTS () TYPEI ((0 0 640 480)) SENSOR ((image 0 0 FALSE FALSE) (4.0) (0 0) (10 10) 400))").Diagnostics, d => d.Code == "RECOIL_TYPE");
+        Assert.Single(Analyze("hud.zrd", "(FONTS () TYPEI ((0 0 640 480)) SENSOR ((image 0 0 FALSE FALSE) (4.0) (0 0) (10 10) 400 (target 0 0 TRUE TRUE) (0 0 10 10)))").Diagnostics, d => d.Code == "RECOIL_TYPE");
+        Assert.Single(Analyze("ui.zrd", "(SHARED_IMAGE_PATH (images) MENU (BUTTONS (CURSOR (FONT 1.0))))").Diagnostics, d => d.Code == "RECOIL_TYPE");
+    }
+    [Fact]
+    public void PositionalResourceNamesDoNotBecomeFieldsAndStillResolve()
+    {
+        const string text = "(SYNTAX (2) SETS (group ((VOLUME RANGE RANGE (1.0 20.0)) (RANGE volume.wav VOLUME 1))))";
+        var doc = Analyze("sounds.zrd", text);
+        Assert.Empty(doc.Diagnostics);
+        int name = text.IndexOf("VOLUME", StringComparison.Ordinal);
+        Assert.Null(RecoilLanguage.Hover(doc, name));
+        Assert.Empty(RecoilLanguage.Complete(doc, name + 3));
+        Assert.Single(Analyze("sounds.zrd", text.Replace("1.0", "1", StringComparison.Ordinal)).Diagnostics, d => d.Code == "RECOIL_TYPE");
+        Assert.Empty(Analyze("sounds.zrd", "(SETS (group ((RANGE volume.wav 1.0 TRUE FALSE TRUE))))").Diagnostics);
+        Assert.Empty(Analyze("effects.zrd", "(EFFECTS ((SPEED NAME (effect) SPEED 1)))").Diagnostics);
+        Assert.Empty(Analyze("weapons.zrd", "(BALLISTICS (gun (IMPACT (DAMAGE_ANIM_ON_HEALTH ((1.0 RANDOM_ROTATE))))))").Diagnostics);
+        using var fixture = new SourceWorldFixture();
+        fixture.Write("data/common/zrdr/sounds.zrd", text);
+        const string pickup = "(PICKUP_DATA (ammo (SOUND (RANGE))))";
+        const string path = "data/common/zrdr/pickup.zrd";
+        fixture.Write(path, pickup);
+        var project = LanguageProject.Analyze(fixture.Project, token: TestContext.Current.CancellationToken);
+        Assert.Single(project.Definition(path, pickup.IndexOf("RANGE", StringComparison.Ordinal)));
+    }
+    [Theory]
+    [InlineData("vehicle.zrd", "(stealth (common_mode (camback ((0.0 0.0 0.0) (0.0 0.0 0.0)))))")]
+    [InlineData("ui.zrd", "(SHARED_IMAGE_PATH (images) MENU (BUTTONS (button (LIST_OFFSET ((1 2))))))")]
+    [InlineData("hud.zrd", "(FONTS () TYPEI ((0 0 640 480)) SENSOR ((image 0 0 FALSE FALSE)))")]
+    public void RemovingRequiredNestedValuesReportsAnArityError(string path, string text)
+    {
+        Assert.Single(Analyze(path, text).Diagnostics, d => d.Code == "RECOIL_ARITY" && d.Severity == "error");
+    }
+    [Theory]
+    [InlineData("vehicle.zrd", "(stealth (common_mode (camback)))")]
+    [InlineData("ui.zrd", "(SHARED_IMAGE_PATH (images) MENU (BUTTONS (button (LIST_OFFSET))))")]
+    [InlineData("hud.zrd", "(FONTS () TYPEI ((0 0 640 480)) SENSOR)")]
+    [InlineData("hud.zrd", "(FONTS () TYPEI)")]
+    [InlineData("hud.zrd", "(FONTS () TYPEII)")]
+    public void RemovingTheWholeRequiredLayoutAlsoReportsAnError(string path, string text)
+    {
+        Assert.Single(Analyze(path, text).Diagnostics, d => d.Code == "RECOIL_REQUIRED" && d.Severity == "error");
     }
     [Fact]
     public void LiveLintChecksCompilerRequiredConditionsAndEndpointSwitches()

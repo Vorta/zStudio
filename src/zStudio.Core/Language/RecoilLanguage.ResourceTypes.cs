@@ -4,6 +4,25 @@ namespace zStudio.Core.Language;
 
 public static partial class RecoilLanguage
 {
+    private static int ResourceRowHeader(LanguageDocument doc, LanguageRecord? parent, ZrdNode row)
+    {
+        if (doc.Family == "effects" && parent is { Key: "EFFECTS", Parent: null }) return 1;
+        if (doc.Family == "sounds" && parent?.Parent is { Key: "SETS", Parent: null })
+            return SoundSyntax(doc) == 2 ? 2 : row.Children.Count;
+        return 0;
+    }
+    private static double? SoundSyntax(LanguageDocument doc)
+    {
+        var root = doc.Root!;
+        while (root.Children.Count == 1 && root.Children[0].Kind == ZrdKind.Array) root = root.Children[0];
+        for (int i = 0; i + 1 < root.Children.Count; i++)
+            if (root.Children[i] is { Kind: ZrdKind.String, Text: "SYNTAX" })
+            {
+                var value = root.Children[i + 1];
+                return value.Kind == ZrdKind.Array ? value.Children.FirstOrDefault() is { } first ? Numeric(first) : null : Numeric(value);
+            }
+        return 1;
+    }
     private static bool IsResourceScalar(string key, IReadOnlyList<string> path) =>
         path.Count == 0 && key is "SYNTAX" or "SPEED_OF_SOUND"
         || path.Contains("SETS") && key is "VOLUME" or "A3DDIST"
@@ -54,7 +73,8 @@ public static partial class RecoilLanguage
                 ("LOCK_ON_LEAD TETHER_GUIDED IMPACT FIRE FLYOUT", "", "Projectile behavior configuration.")],
             ("weapons", "IMPACT") => [("FREEZE HEAT DESIGNATE DAMAGE_ANIM_ON_HEALTH", "", "Impact feedback parameters."),
                 ("KILL_ANIMATION DAMAGE_ANIMATION", "s", "Impact animation name."), ("ANIMATION_ALWAYS", "", "Always run impact animation.")],
-            ("weapons", _) when parent is "FIRE" or "FLYOUT" || outer == "IMPACT" => [
+            ("weapons", _) when parent is "FIRE" or "FLYOUT" || outer == "IMPACT"
+                && parent is not ("FREEZE" or "HEAT" or "DESIGNATE" or "DAMAGE_ANIM_ON_HEALTH" or "KILL_ANIMATION" or "DAMAGE_ANIMATION" or "ANIMATION_ALWAYS") => [
                 ("RANDOM_ROTATE", "i", "Randomize effect rotation."),
                 ("EFFECT MODEL ANIMATION_ATTACHED MODEL_ANIMATION ANIMATION", "s?", "Optional effect resource name."),
                 ("SOUND BOUNCE_SOUND", "...", "Effect sound samples.")],
@@ -72,7 +92,7 @@ public static partial class RecoilLanguage
             ("hud", "") => [("NANITE OBJECTIVE STATS TARGET WEAPON MODES BRIEFING", "", "HUD layout configuration.")],
             ("hud", "FONTS") => [("OBJ_SUMMARY OBJ_DESCRIPTION STRINGS MESSAGES AMMO", "s i i i ...", "Font family, height, width and weight.")],
             ("ui", _) when path.Length == 1 => [("BACKGROUND_VIDEOS BACKGROUND_TEXT BACKGROUND_SOUNDS CURSOR PRIMITIVES", "", "Dialog background configuration.")],
-            ("ui", "CURSOR") => [("CENTER", "i i", "Cursor center offset."), ("CAPTURE", "i", "Cursor capture flag.")],
+            ("ui", "CURSOR") when path.Length == 2 => [("CENTER", "i i", "Cursor center offset."), ("CAPTURE", "i", "Cursor capture flag.")],
             ("ui", _) when IsWidgetContainer(path) => [
                 ("FONT SELECTED_FONT LIST_FONT SPACING", "i", "Integer font style or list spacing."),
                 ("TEXT_OFFSET WORDWRAP ENDP_REL ENDP_ABS", "i i", "Integer pixel coordinates or dimensions."),
@@ -87,9 +107,26 @@ public static partial class RecoilLanguage
             foreach (string name in rule.Names.Split(' ')) yield return F(name, rule.Help, rule.Shape);
     }
 
+    private static int MinimumResourceValues(LanguageDocument doc, LanguageRecord record) => (doc.Family, record.Parent?.Key ?? "", record.Key) switch
+    {
+        ("vehicle", "common_mode", "camback") => 3,
+        ("ui", _, "LIST_OFFSET") => 2,
+        ("hud", "", "TYPEI") => 1,
+        ("hud", "", "TYPEII") => 5,
+        ("hud", "", "SENSOR") => 7,
+        ("hud", "", "STATS" or "OBJECTIVE") => 8,
+        ("hud", "", "MODES" or "NANITE") => 4,
+        ("hud", "", "WEAPON") => 9,
+        ("hud", "", "SHIELD") => 3,
+        _ => 0
+    };
+
     private static void ValidateResourceValues(LanguageDocument doc, LanguageRecord record)
     {
         string parent = record.Parent?.Key ?? "";
+        int minimum = MinimumResourceValues(doc, record);
+        if (record.Values.Count < minimum)
+            doc.Report("RECOIL_ARITY", "error", $"{record.Key} requires at least {minimum} values; found {record.Values.Count}.", doc.Span(record.Value!));
         void Rows(string shape, int maximum = int.MaxValue)
         {
             foreach (var row in record.Values.Take(maximum))
@@ -138,8 +175,7 @@ public static partial class RecoilLanguage
         if (doc.Family == "sounds" && record.Key == "CD_TRACKS" && record.Parent == null) Rows("s i");
         if (doc.Family == "sounds" && record.Key == "SETS" && record.Parent == null)
         {
-            var syntax = doc.Records.FirstOrDefault(r => r.Parent == null && r.Key == "SYNTAX")?.Values.FirstOrDefault();
-            double? version = syntax == null ? 1 : Numeric(syntax);
+            double? version = SoundSyntax(doc);
             foreach (var set in record.Values.Where(v => v.Kind == ZrdKind.Array))
                 foreach (var row in set.Children.Where(v => v.Kind == ZrdKind.Array))
                 {
