@@ -29,7 +29,7 @@ public static partial class RecoilLanguage
         (part.EndsWith('?') ? "optional " : "") + (part[0] switch { 's' => "text", 'i' => "stored integer", 'f' => "stored float", 'n' => "number", _ => "value" })));
     private static string FieldDocumentation(LanguageField field) => $"**{field.Name}**\n\n{field.Description}"
         + (field.Arguments != null ? "\n\n**Arguments:** " + field.Arguments + "." : "")
-        + (field.Shape.Length > 0 ? "\n\n**Value types:** " + ReadableShape(field.Shape) + "." : "")
+        + (field.ValidateValues && field.Shape.Length > 0 ? "\n\n**Value types:** " + ReadableShape(field.Shape) + "." : "")
         + (field.Notes != null ? "\n\n" + field.Notes : "")
         + (field.Choices is { Length: > 0 } choices ? "\n\n**Suggested values:** " + string.Join(", ", choices.Select(c => "`" + c + "`")) + "." : "")
         + (field.Example != null ? "\n\n```gamez-script\n" + field.Example + "\n```" : "");

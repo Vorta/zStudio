@@ -8,6 +8,74 @@ public sealed class GameZLanguageTests
 {
     private static LanguageDocument Analyze(string path, string text) => RecoilLanguage.Analyze(path, text, TestContext.Current.CancellationToken);
     private static string Animation(string body) => "(ANIMATION_DEFINITIONS (ANIMATION_LIST (ANIMATION_DEFINITION (NAME (root) SEQUENCE_DEFINITION (NAME (main) " + body + ")))))";
+    [Theory]
+    [InlineData("vehicle.zrd", "(stealth (common_mode (camera_ud_swing (5.5 2.5 1.2 1.2))))", "5.5")]
+    [InlineData("vehicle.zrd", "(stealth (common_mode (camback ((0.0 4.5 9.0) (0.0 3.0 2.0) (0.0 3.0 2.0)))) )", "4.5")]
+    [InlineData("vehicle.zrd", "(stealth (common_mode (weapons ((gun 1 0 3 1.2 5.0 325.0 1 1)))))", "1.2")]
+    [InlineData("vehicle.zrd", "(stealth (common_mode () basic_mode (platform ((0.0 4.5 9.0)))) )", "4.5")]
+    [InlineData("vehicle.zrd", "(stealth (common_mode () basic_mode (sounds (pitch_scale (1.5)))))", "1.5")]
+    [InlineData("player.zrd", "(camera_zone (0.9) nom_gravity (28.5))", "28.5")]
+    [InlineData("net_01.zrd", "(node_00 (0 (0.0 0.0 0.0) (-1 -1 -1)) pursuit_range (20.5 30.0))", "20.5")]
+    [InlineData("weapons.zrd", "(BALLISTICS (gun (TURN_RATE (1.5))))", "1.5")]
+    [InlineData("weapons.zrd", "(BALLISTICS (gun (IMPACT (FREEZE (1.5 2.0 3.0 4.0 5.0 6.0)))))", "1.5")]
+    [InlineData("ai.zrd", "(TURRET (tur_01 (EFFECT (flash 1.5))))", "1.5")]
+    [InlineData("sounds.zrd", "(SYNTAX (2) SETS (group ((sound file RANGE (1.5 20.0)))) )", "1.5")]
+    [InlineData("sounds.zrd", "(SETS (group ((sound file 1.5 TRUE FALSE TRUE))))", "1.5")]
+    [InlineData("weather.zrd", "(MISSION1 (TYPE RAIN WIND_VEL 1.5))", "1.5")]
+    [InlineData("objective.zrd", "(OBJECTIVE1 (READ_SOUND (sample 1.5)))", "1.5")]
+    [InlineData("hud.zrd", "(FONTS () TYPEI ((0 0 640 480)) SENSOR ((image 0 0 FALSE FALSE) 1.5 (0 0) (10 10) 400))", "1.5")]
+    [InlineData("dialog.zrd", "(SHARED_IMAGE_PATH (images) MENU (BACKGROUND_SOUNDS ((sound 1.5))))", "1.5")]
+    public void DirectFloatReadsRejectIntegersAtTheEditedToken(string path, string text, string number)
+    {
+        Assert.DoesNotContain(Analyze(path, text).Diagnostics, d => d.Severity == "error");
+        int start = text.IndexOf(number, StringComparison.Ordinal);
+        string changed = text[..start] + "7" + text[(start + number.Length)..];
+        var diagnostic = Assert.Single(Analyze(path, changed).Diagnostics, d => d.Code == "RECOIL_TYPE");
+        Assert.Equal("error", diagnostic.Severity);
+        Assert.Equal(new TextSpan(start, 1), diagnostic.Span);
+        Assert.Contains("7 is an integer. Use 7.0", diagnostic.Message);
+    }
+    [Fact]
+    public void UnusedFieldsGiveUsageWarningsWithoutInventingNumericRequirements()
+    {
+        const string text = "(stealth (common_mode (position (1 2 3) rotation (0 0 0) not_pursuit_dwell (2))))";
+        var doc = Analyze("vehicle.zrd", text);
+        var warnings = doc.Diagnostics.Where(d => d.Severity == "warning").ToArray();
+        Assert.Equal(2, warnings.Length);
+        Assert.Equal("position is not used in common_mode. Set the vehicle's position in aiv.zrd.", warnings[0].Message);
+        Assert.Equal("rotation is not used in common_mode. Set the vehicle's heading in aiv.zrd.", warnings[1].Message);
+        Assert.Single(doc.Diagnostics, d => d.Code == "RECOIL_TYPE"); // Read, even though not applied later.
+        foreach (var warning in warnings)
+            Assert.Equal(warning.Message.Split(' ')[0], text.Substring(warning.Span.Start, warning.Span.Length));
+        Assert.DoesNotContain("Value types", RecoilLanguage.Hover(doc, text.IndexOf("position", StringComparison.Ordinal))!.Markdown);
+    }
+    [Fact]
+    public void ConvertingConsumersAcceptIntegersAndNestedIntegerConsumersRejectFloats()
+    {
+        Assert.Empty(Analyze("effects.zrd", "(EFFECTS ((model NAME (effect) SPEED (5) MAPS (map))))").Diagnostics);
+        Assert.Empty(Analyze("effects.zrd", "(EFFECTS ((model NAME (effect) SPEED 5 MAPS (map))))").Diagnostics);
+        Assert.Empty(Analyze("sounds.zrd", "(SYNTAX (2) SPEED_OF_SOUND 343 SETS (group ((sample file VOLUME 1 A3DDIST (2)))))").Diagnostics);
+        Assert.Empty(Analyze("a.zad", Animation("CALLBACK (VALUE (25) START_TIME (ANIMATION_OFFSET 1))")).Diagnostics);
+        const string font = "(SHARED_IMAGE_PATH (images) MENU (FONTS ((0 Arial 12 ((255 255 255) (0 0 0)) 1 400 LEFT))))";
+        Assert.Empty(Analyze("dialog.zrd", font).Diagnostics);
+        var badFont = Analyze("dialog.zrd", font.Replace("255 255", "255.0 255", StringComparison.Ordinal));
+        Assert.Single(badFont.Diagnostics, d => d.Code == "RECOIL_TYPE" && d.Severity == "error");
+        Assert.Empty(Analyze("sounds.zrd", "(SYNTAX (2) SETS (group ((sample file HIGH variant.wav))))").Diagnostics);
+    }
+    [Fact]
+    public void WidgetScalarStorageAndCaptionContextsStayDistinct()
+    {
+        const string text = "(SHARED_IMAGE_PATH (images) MENU (CURSOR (CAPTURE 1) BUTTONS (button (FONT 1 LABEL ((COLOR 1 2 0) (RATE 1 2 0) (FONT 1 2 0) (POSITION 1 2 0)) SOUND (COLOR 1.0)))))";
+        var doc = Analyze("ui.zrd", text);
+        Assert.Empty(doc.Diagnostics);
+        Assert.Empty(Analyze("ui.zrd", text.Replace("CAPTURE 1", "CAPTURE (1)", StringComparison.Ordinal)).Diagnostics);
+        var bad = Analyze("ui.zrd", text.Replace("FONT 1 LABEL", "FONT (1) LABEL", StringComparison.Ordinal));
+        Assert.Single(bad.Diagnostics, d => d.Code == "RECOIL_TYPE" && d.Message.Contains("bare integer"));
+        Assert.DoesNotContain(RecoilLanguage.Complete(doc, text.IndexOf("(RATE", StringComparison.Ordinal) + 1), c => c.Label == "RATE");
+        Assert.Empty(Analyze("sounds.zrd", "(SYNTAX (2) SETS () SOUND_GROUPS ((group DELAY_REPEAT 1)))").Diagnostics);
+        Assert.Single(Analyze("sounds.zrd", "(SYNTAX (2) SETS () SOUND_GROUPS ((group DELAY_REPEAT (1.0))))").Diagnostics, d => d.Code == "RECOIL_TYPE");
+        Assert.Single(Analyze("hud.zrd", "(FONTS () TYPEI ((0 0 640 480)) SENSOR ((image 0 0 FALSE FALSE) (4.0) (0 0) (10 10) 400))").Diagnostics, d => d.Code == "RECOIL_TYPE");
+    }
     [Fact]
     public void LiveLintChecksCompilerRequiredConditionsAndEndpointSwitches()
     {

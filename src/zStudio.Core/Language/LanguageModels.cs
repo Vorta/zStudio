@@ -10,7 +10,8 @@ public sealed record LanguageCompletion(string Label, string Detail, string Inse
 public sealed record LanguageLocation(string Path, TextSpan Span, string? Context = null);
 public sealed record LanguageHover(string Markdown, TextSpan Span);
 public sealed record LanguageField(string Name, string Description, string Shape = "", string[]? Choices = null, string? Reference = null,
-    string? Arguments = null, string? Notes = null, string? Example = null, bool Suggested = true);
+    string? Arguments = null, string? Notes = null, string? Example = null, bool Suggested = true,
+    string? UsageWarning = null, bool ValidateValues = true);
 
 /// <summary>One immutable editor buffer. Offsets are UTF-16, matching LSP's negotiated default.</summary>
 public sealed class LanguageDocument

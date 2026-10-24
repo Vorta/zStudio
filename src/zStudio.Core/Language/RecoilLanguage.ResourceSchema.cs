@@ -22,11 +22,14 @@ public static partial class RecoilLanguage
             "hud" => parent.Length == 0 ? ["VERSION", "FONTS", "RETICULE", "TYPEI", "TYPEII", "SENSOR", "SHIELD"] : [],
             "fonts" or "startanims" => parent.Length == 0 ? null : [],
             // Dialogs have named sections/widgets. Never offer pixel-layout keys inside scalar value lists.
-            "ui" => parent.Length == 0 ? ["SHARED_IMAGE_PATH"] : path.Any(p => p is "POSITION" or "BITMAP" or "FONTS" or "IMAGE_PATH" or "SHARED_IMAGE_PATH") ? [] : null,
+            "ui" => parent.Length == 0 ? ["SHARED_IMAGE_PATH"]
+                : path.Length >= 3 && path[1] is "BUTTONS" or "PRIMITIVES" && !IsWidgetContainer(path) ? []
+                : path.Any(p => p is "POSITION" or "BITMAP" or "FONTS" or "IMAGE_PATH" or "SHARED_IMAGE_PATH") ? [] : null,
             _ => []
         };
         var fields = ResourceFields.GetValueOrDefault(family) ?? [];
-        return fields.Where(f => allowed == null || allowed.Contains(f.Name, StringComparer.Ordinal)).Select(f => ResourceHelp(family, f));
+        return fields.Where(f => allowed == null || allowed.Contains(f.Name, StringComparer.Ordinal)).Select(f => ResourceHelp(family, f))
+            .Concat(AdditionalResourceFields(family, path)).DistinctBy(f => f.Name);
     }
 
     private static LanguageField ResourceHelp(string family, LanguageField field)
@@ -40,10 +43,10 @@ public static partial class RecoilLanguage
             ("vehicle", "turns") => "Set yaw acceleration and maximum yaw rate.",
             ("vehicle", "rate_damping") => "Set acceleration and deceleration damping.",
             ("vehicle", "mode_alt") => "Set the locomotion mode's altitude-transition time.",
-            ("vehicle", "position") or ("vehicle", "rotation") => "Retained authored field; the retail common-mode loader does not apply it.",
+            ("vehicle", "position") or ("vehicle", "rotation") => "This field is not used in common_mode.",
             ("network", "path_width") => "Set the corridor width copied into AI link probe data.",
             ("network", "activate_buddy") => "Read an unused activation-buddy flag; presence also affects attack_buddy loading.",
-            ("network", "attack_range") => "Ignored spelling in the retail AI network loader.",
+            ("network", "attack_range") => "This field is not recognized in an AI network.",
             ("weapons", "BEAM") => "Enable beam behavior and set its reciprocal timing, interpolation parameter and flag.",
             ("weapons", "CATCHES_FIRE") => "Set bit 12 of the weapon flags from the low bit of this integer.",
             ("weapons", "MINE") => "Set the mine/full-probe-damage flag and enable the shared low flag bit.",
@@ -58,8 +61,8 @@ public static partial class RecoilLanguage
             ("turrets", "FIRE_LIMITS") => "Set the two firing-limit values passed to the turret weapon controller.",
             ("turrets", "PARTS") => "Bind the turret's barrel and firing points, optionally with a rotating base.",
             ("turrets", "WEAPON") => "Configure this turret's weapon, ammunition and firing behavior.",
-            ("fonts", "FONTS") => "Retained bitmap-font resource list; retail RECOIL does not request fonts.zrd.",
-            ("hud", "VERSION") => "Retained source version marker; the retail HUD loader does not read it.",
+            ("fonts", "FONTS") => "Bitmap-font resource list. The game does not load this file.",
+            ("hud", "VERSION") => "This field is not used by the HUD loader.",
             ("hud", "FONTS") => "Assign font descriptions to HUD roles such as objective summary and messages.",
             ("hud", "TYPEI") => "Configure the software-renderer HUD viewport layout.",
             ("hud", "TYPEII") => "Configure the hardware-renderer HUD viewport and image layout.",
@@ -76,7 +79,7 @@ public static partial class RecoilLanguage
             ("player", "low_shield_snd") => "Warning sample, interval in seconds, looping sample",
             ("player", "max_cam_tether_angle") => "Angle in degrees",
             ("player", "max_slope") => "Slope comparison threshold (default 0.707)",
-            ("player", "burning_anim") => "Animation name; trailing authored values are not read here",
+            ("player", "burning_anim") => "Animation name; additional values are not used",
             ("vehicle", "health") => "Single-player health, multiplayer health (second value used for player-controlled types)",
             ("vehicle", "rates") => "Acceleration, maximum speed",
             ("vehicle", "turns") => "Yaw acceleration, maximum yaw rate (radians)",
@@ -130,11 +133,11 @@ public static partial class RecoilLanguage
             ("vehicle", "collision_d") => "Defaults: 0.5 and 0.15. The exact artistic interpretation of each coefficient is not established.",
             ("vehicle", "mode_alt") => "Default: 2.0 seconds.",
             ("vehicle", "mode") => "The loader dispatches on the first two letters; suggestions list the established full spellings.",
-            ("vehicle", "position") or ("vehicle", "rotation") => "Use the aiv.zrd placement record to position a vehicle. This field is preserved for inspection but is not suggested for new authoring.",
-            ("network", "path_width") => "Default: 10. The recorded retail data-flow audit found no reader of the resulting probe data.",
-            ("network", "activate_buddy") => "Its own stored value is unused. Omitting this field also zeroes attack_buddy in the retail loader.",
+            ("vehicle", "position") or ("vehicle", "rotation") => "Set vehicle placement in aiv.zrd.",
+            ("network", "path_width") => "Default: 10. The resulting probe width is not used during gameplay.",
+            ("network", "activate_buddy") => "Its own stored value is unused. Omitting this field also zeroes attack_buddy in the loader.",
             ("network", "attack_buddy") => "A nonzero flag allows an attacking or hit vehicle to alert active peers in its network. Missing activate_buddy clears this flag.",
-            ("network", "attack_range") => "The supported pursuit-distance fields are pursuit_params or pursuit_range. attack_range is preserved but is not suggested or type-validated as an effective field.",
+            ("network", "attack_range") => "Use pursuit_params or pursuit_range to set pursuit distances.",
             ("network", "type") => "The first two letters select standard, hide, fixed or defilade; unrecognized values fall back to standard.",
             ("weapons", "AMMO_LIMIT") => "Default: 50. Stored as an integer before conversion to the weapon's float capacity.",
             ("weapons", "DAMAGE") => "Default: 0.1.",
@@ -145,12 +148,12 @@ public static partial class RecoilLanguage
             ("weapons", "NAME") => "Defaults to the weapon's BALLISTICS key when absent.",
             ("weapons", "KILL_VERB") => "The optional weapon catalog resolves this message key. When absent it uses localized message 0x250.",
             ("weapons", "DESC") or ("weapons", "MILITARY_NAME") => "The loader resolves a message key with a fallback. When absent it uses the weapon's BALLISTICS key.",
-            ("weapons", "CATCHES_FIRE") => "The spelling is historical. The reconstructed runtime calls this the immediate-probe-impact flag; a broader fire-related effect is not established by the loader alone.",
+            ("weapons", "CATCHES_FIRE") => "Enables the immediate-probe-impact flag.",
             ("weather", "PARTICLES") => "Default: 100.",
             ("weather", "TYPE") => "Only exact RAIN and SNOW create an emitter. Other fields apply only after an emitter is created.",
             ("objectives", "READ_TIME") or ("objectives", "REVIEW_DELAY") => "Default: 4 seconds. The loader reads stored integers, so 4.0 is not equivalent to 4.",
             ("objectives", "ACTIVE") or ("objectives", "INACTIVE") => "ACTIVE takes precedence when both fields exist. An unresolved path never completes the objective.",
-            ("objectives", "FINAL_MISSION") => "Presence flag. Retail mission flow ends the game on the fifth objective completion when this is set.",
+            ("objectives", "FINAL_MISSION") => "Presence flag. Mission flow ends the game on the fifth objective completion when this is set.",
             ("objectives", "AUTOPLAY") => "Presence flag, commonly written AUTOPLAY ( ).",
             ("sounds", "HIGH") => "Default: 44100 Hz, 16 bits, 2 channels. A scalar filename selects a named variant instead.",
             ("sounds", "SYNTAX") => "1 selects legacy positional sets (the default); 2 selects named samples with tagged settings. Other values load neither syntax.",
@@ -174,7 +177,15 @@ public static partial class RecoilLanguage
         };
         bool suggested = key is not (("vehicle", "position" or "rotation") or ("network", "attack_range") or ("hud", "VERSION"));
         return field with { Description = description ?? field.Description, Arguments = arguments, Notes = notes, Suggested = suggested,
-            Shape = key == ("network", "attack_range") ? "" : field.Shape,
+            UsageWarning = key switch
+            {
+                ("vehicle", "position") => "position is not used in common_mode. Set the vehicle's position in aiv.zrd.",
+                ("vehicle", "rotation") => "rotation is not used in common_mode. Set the vehicle's heading in aiv.zrd.",
+                ("network", "attack_range") => "attack_range is not recognized in an AI network. Use pursuit_params or pursuit_range.",
+                ("hud", "VERSION") => "VERSION is not used by the HUD loader.",
+                _ => null
+            },
+            ValidateValues = suggested && family != "fonts",
             Choices = key == ("vehicle", "mode") ? ["basic", "track", "hover", "amphib", "sub", "fly"] : field.Choices };
     }
 }

@@ -83,7 +83,8 @@ public static partial class RecoilLanguage
             var value = i + 1 < children.Count ? children[i + 1] : null;
             // Animation flags and positional resource strings are not forced into key/value pairs.
             bool paired = value?.Kind == ZrdKind.Array || (parent?.Key.StartsWith("MISSION", StringComparison.Ordinal) == true && value?.Kind != ZrdKind.Array)
-                || key.Text is "HIGH" or "MED" or "LOW" && Ancestors(parent).Contains("SETS") && value?.Kind == ZrdKind.String;
+                || key.Text is "HIGH" or "MED" or "LOW" && Ancestors(parent).Contains("SETS") && value?.Kind == ZrdKind.String
+                || value != null && IsResourceScalar(key.Text, Ancestors(parent));
             var record = new LanguageRecord(key.Text, key, paired ? value : null, parent);
             doc.Records.Add(record);
             if (paired && value != null)
@@ -191,8 +192,8 @@ public static partial class RecoilLanguage
     private static bool IsWeatherScalar(string key) => key is "TYPE" or "PARTICLES" or "WIND_DIR" or "WIND_VEL" or "GRAVITY";
     private static LanguageRecord? ScalarOperand(LanguageDocument document, int offset)
     {
-        if (document.Family != "weather") return null;
-        return document.Records.FirstOrDefault(r => IsWeatherScalar(r.Key) && r.Parent?.Key.StartsWith("MISSION", StringComparison.Ordinal) == true &&
+        return document.Records.FirstOrDefault(r => (document.Family == "weather" && IsWeatherScalar(r.Key) && r.Parent?.Key.StartsWith("MISSION", StringComparison.Ordinal) == true
+            || document.Family is "sounds" or "ui" or "effects" && IsResourceScalar(r.Key, Ancestors(r.Parent))) &&
             (r.Value is { Kind: not ZrdKind.Array } value && document.Span(r.KeyNode).End < offset && offset <= document.Span(value).End ||
              r.Value == null && document.Span(r.KeyNode).End < offset &&
              !document.Tokens.Any(t => t.Span.Start >= document.Span(r.KeyNode).End && t.Span.Start < offset)));

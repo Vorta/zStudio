@@ -15,7 +15,7 @@ public static partial class RecoilLanguage
             F("nom_gravity", "Normal gravity.", "f"), F("wat_gravity", "Underwater gravity.", "f"), F("qsd_gravity", "Quicksand gravity.", "f"),
             F("qsand_sink", "Quicksand sinking speed.", "f"), F("lava_sink", "Lava sinking speed.", "f"), F("max_slope", "Slope threshold.", "f"),
             F("make_hot", "Weapon applied by heat.", "s", reference: "weapon"), F("make_cold", "Weapon applied by cold.", "s", reference: "weapon"),
-            F("burning_anim", "Animation used for burning; trailing source parameters are preserved.", "s ...", reference: "animation"),
+            F("burning_anim", "Animation used for burning; additional parameters are not used.", "s ...", reference: "animation"),
             F("low_shield_snd", "Warning sample, interval, and looping sample.", "s f s")],
         ["weapons"] = [F("VERSION", "Weapon resource version.", "i"), F("BALLISTICS", "Named weapon definitions."),
             F("AMMO_LIMIT", "Maximum ammunition, stored as an integer.", "i"), F("DAMAGE", "Damage per impact.", "f"),
@@ -45,7 +45,7 @@ public static partial class RecoilLanguage
             F("turns", "Turning rates.", "f f"), F("turn_damping", "Turn damping.", "f"), F("rate_damping", "Rate damping parameters.", "f f"),
             F("collision_d", "Collision response parameters.", "f f"), F("mode_alt", "Mode altitude.", "f")],
         ["network"] = [F("type", "AI network type.", "s"), F("path_width", "Navigation corridor width.", "f"), F("attack_buddy", "Alert other vehicles in this network.", "i"),
-            F("activate_buddy", "Authored activation-buddy flag.", "i"), F("attack_range", "Attack strategy distance pair.", "f f")],
+            F("activate_buddy", "Activation-buddy flag.", "i"), F("attack_range", "Attack strategy distance pair.", "f f")],
         ["hud"] = [F("VERSION", "HUD resource version.", "i"), F("FONTS", "Named font roles."), F("RETICULE", "Range, off and on reticle images.", "s s s"),
             F("TYPEI", "Type-I viewport configuration."), F("TYPEII", "Type-II viewport and image layout."), F("SENSOR", "Sensor layout and tuning."), F("SHIELD", "Shield display layout.")],
         ["fonts"] = [F("FONTS", "Ordered bitmap font resource names.", "s ...")],
@@ -70,7 +70,7 @@ public static partial class RecoilLanguage
         if (Has("BALLISTICS")) return "weapons";
         if (Has("PICKUP_DATA")) return "pickups";
         if (Has("EFFECTS")) return "effects";
-        if (Has("SETS") && Has("SYNTAX")) return "sounds";
+        if (Has("SETS")) return "sounds";
         if (doc.Records.Any(r => r.Parent?.Parent == null && r.Key == "common_mode" && r.Value?.Kind == ZrdKind.Array)) return "vehicle";
         if (Has("camera_zone") || Has("underwater_cam")) return "player";
         if (doc.Records.Any(r => r.Parent?.Key.StartsWith("MISSION", StringComparison.Ordinal) == true && r.Key == "TYPE")) return "weather";
@@ -91,9 +91,12 @@ public static partial class RecoilLanguage
             token.ThrowIfCancellationRequested();
             var field = Field(doc.Family, record.Key, record.Parent?.Key ?? "", Ancestors(record.Parent));
             if (field == null) continue;
+            if (field.UsageWarning is { } usage)
+                doc.Report("RECOIL_IGNORED", "warning", usage, doc.Span(record.KeyNode));
+            if (!field.ValidateValues) continue;
             if (record.Value == null)
             {
-                if (field.Suggested && field.Shape.Split(' ', StringSplitOptions.RemoveEmptyEntries).Any(part => part != "..." && !part.EndsWith('?')))
+                if (field.Shape.Split(' ', StringSplitOptions.RemoveEmptyEntries).Any(part => part != "..." && !part.EndsWith('?')))
                     doc.Report("RECOIL_REQUIRED", "error", $"{record.Key} needs {ReadableShape(field.Shape)}.", doc.Span(record.KeyNode));
                 continue;
             }
@@ -102,9 +105,14 @@ public static partial class RecoilLanguage
                 doc.Report("RECOIL_TYPE", "error", $"Weather {record.Key} requires a bare scalar value, without parentheses around the value.", doc.Span(record.Value));
                 continue;
             }
-            if (!field.Suggested)
+            if (doc.Family == "ui" && IsBareWidgetInteger(record.Key) && record.Value.Kind == ZrdKind.Array)
             {
-                doc.Report("RECOIL_IGNORED", "warning", field.Description + " " + field.Notes, doc.Span(record.KeyNode));
+                doc.Report("RECOIL_TYPE", "error", $"{record.Key} requires a bare integer, without parentheses around the value.", doc.Span(record.Value));
+                continue;
+            }
+            if (doc.Family == "sounds" && Ancestors(record.Parent).Contains("SOUND_GROUPS") && field.Shape == "n" && record.Value.Kind == ZrdKind.Array)
+            {
+                doc.Report("RECOIL_TYPE", "error", $"{record.Key} requires a bare number, without parentheses around the value.", doc.Span(record.Value));
                 continue;
             }
             if (doc.Family == "animation" && record.Key == "ACTIVATION" && record.Parent?.Key == "SEQUENCE_DEFINITION" && record.FirstText != "ON_CALL")
@@ -112,6 +120,7 @@ public static partial class RecoilLanguage
             // Empty PARTS is a shipped no-part turret form; the loader only binds parts for 2–4 names.
             bool filenameVariant = doc.Family == "sounds" && record.Key is "HIGH" or "MED" or "LOW" && record.Value.Kind == ZrdKind.String;
             if (field.Shape.Length > 0 && !filenameVariant && !(doc.Family == "turrets" && record.Key == "PARTS" && record.Values.Count == 0)) CheckShape(doc, record, field.Shape);
+            ValidateResourceValues(doc, record);
             if (doc.Family == "animation" && record.Key == "ANIMATION_LIST" && Ancestors(record.Parent).Contains("ACTIVATION_PREREQUISITE"))
                 foreach (var value in record.Values.Skip(1)) CheckShape(doc, record with { Value = value }, "s");
             // Most engine switches have fallbacks; completion choices are advisory, not closed enums.
@@ -187,7 +196,7 @@ public static partial class RecoilLanguage
                 var values = row.Values;
                 if (values.Count != 3 || values[1].Kind != ZrdKind.Array) { doc.Report("RECOIL_PLACEMENT", "error", "Vehicle placement expects a network integer, XYZ tuple, and yaw float.", doc.Span(row.Value!)); continue; }
                 CheckShape(doc, row with { Value = values[1] }, "f f f");
-                if (values[0].Kind != ZrdKind.Int || values[2].Kind != ZrdKind.Float) doc.Report("RECOIL_TYPE", "error", "Vehicle placement network must be an integer and yaw a stored float.", doc.Span(row.Value!));
+                CheckShape(doc, row, "i a f");
             }
             return;
         }
@@ -195,8 +204,9 @@ public static partial class RecoilLanguage
         foreach (var row in root.Children.Where(n => n.Kind == ZrdKind.Array))
         {
             var values = row.Children;
-            if (values.Count != 5 || values[0].Kind != ZrdKind.String || values[1].Kind != ZrdKind.Int || values[2].Kind != ZrdKind.Array || values[3].Kind != ZrdKind.Array || values[4].Kind != ZrdKind.Float)
+            if (values.Count != 5 || values[2].Kind != ZrdKind.Array || values[3].Kind != ZrdKind.Array)
             { doc.Report("RECOIL_PLACEMENT", "error", "Pickup row expects type, integer amount, XYZ tuple, rotation tuple, and float respawn delay.", doc.Span(row)); continue; }
+            CheckShape(doc, new LanguageRecord("Pickup", values[0], row, null), "s i a a f");
             if (!zStudio.Core.MissionPickupType.Catalog.Any(t => t.Name == values[0].Text))
                 doc.Report("RECOIL_PICKUP_TYPE", "error", "Unknown pickup type.", doc.Span(values[0]));
             var record = new LanguageRecord("Pickup position", values[0], values[2], null); CheckShape(doc, record, "f f f");
@@ -214,8 +224,14 @@ public static partial class RecoilLanguage
         for (int i = 0; i < actual.Count && i < expected.Length && expected[i] != "..."; i++)
         {
             var value = actual[i]; char kind = expected[i][0];
-            bool valid = kind switch { 's' => value.Kind == ZrdKind.String, 'i' => value.Kind == ZrdKind.Int, 'f' => value.Kind == ZrdKind.Float, 'n' => value.Kind is ZrdKind.Float or ZrdKind.Int, _ => true };
-            if (!valid) doc.Report("RECOIL_TYPE", "error", $"{record.Key} value {i + 1} requires {(kind == 'f' ? "a stored float (for example 10.0, not 10)" : kind == 'i' ? "a stored integer" : kind == 'n' ? "a number" : "a string")}.", doc.Span(value));
+            bool valid = kind switch { 'a' => value.Kind == ZrdKind.Array, 's' => value.Kind == ZrdKind.String, 'i' => value.Kind == ZrdKind.Int, 'f' => value.Kind == ZrdKind.Float, 'n' => value.Kind is ZrdKind.Float or ZrdKind.Int, _ => true };
+            if (!valid)
+            {
+                string explanation = kind == 'f' && value.Kind == ZrdKind.Int
+                    ? $"a float; {Numeric(value)} is an integer. Use {Numeric(value)}.0"
+                    : kind == 'f' ? "a float (for example 10.0)" : kind == 'i' ? "an integer" : kind == 'n' ? "a number" : kind == 'a' ? "an array" : "a string";
+                doc.Report("RECOIL_TYPE", "error", $"{record.Key} value {i + 1} requires {explanation}.", doc.Span(value));
+            }
             else if (kind is 'f' or 'n' && Numeric(value) is double n && !double.IsFinite(n)) doc.Report("RECOIL_FINITE", "error", $"{record.Key} requires a finite number.", doc.Span(value));
         }
     }

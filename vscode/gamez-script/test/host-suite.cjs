@@ -49,6 +49,24 @@ exports.run = async function() {
   await new Promise(resolve=>setTimeout(resolve,800));
   assert(vscode.languages.getDiagnostics(file).some(d=>d.code==='GAMEZ_FILE_ENCODING'),'Encoding mismatch');
   await vscode.commands.executeCommand('workbench.action.revertAndCloseActiveEditor');
+  const vehicleUri = vscode.Uri.joinPath(vscode.workspace.workspaceFolders[0].uri,'data/m1/zrdr/vehicle.zrd');
+  await vscode.workspace.fs.writeFile(vehicleUri,Buffer.from('(stealth (common_mode (position (1 2 3) camera_ud_swing (5.5 2.5 1.2 1.2))))'));
+  const vehicle = await vscode.workspace.openTextDocument(vehicleUri);
+  const vehicleEditor = await vscode.window.showTextDocument(vehicle);
+  const at = vehicle.getText().indexOf('5.5');
+  await vehicleEditor.edit(edit=>edit.replace(new vscode.Range(vehicle.positionAt(at), vehicle.positionAt(at+3)), '5'));
+  const typeErrors = ()=>vscode.languages.getDiagnostics(vehicle.uri).filter(d=>d.code==='RECOIL_TYPE');
+  for(let attempt=0;attempt<50 && typeErrors().length===0;attempt++) await new Promise(resolve=>setTimeout(resolve,100));
+  assert.equal(typeErrors().length,1,'Unsaved float-to-integer edit produces one error');
+  assert.equal(typeErrors()[0].severity,vscode.DiagnosticSeverity.Error,'Float type mismatch is red/error severity');
+  assert.equal(vehicle.getText(typeErrors()[0].range),'5','Underline covers only the changed integer');
+  const unused = vscode.languages.getDiagnostics(vehicle.uri).find(d=>d.code==='RECOIL_IGNORED');
+  assert.equal(unused.message,"position is not used in common_mode. Set the vehicle's position in aiv.zrd.");
+  assert.equal(unused.severity,vscode.DiagnosticSeverity.Warning);
+  await vehicleEditor.edit(edit=>edit.replace(typeErrors()[0].range,'5.0'));
+  for(let attempt=0;attempt<50 && typeErrors().length>0;attempt++) await new Promise(resolve=>setTimeout(resolve,100));
+  assert.equal(typeErrors().length,0,'Restoring a float clears the error');
+  await vscode.commands.executeCommand('workbench.action.revertAndCloseActiveEditor');
   for (const name of ['bom.zrd','utf16.zrd']) {
     const uri = vscode.Uri.joinPath(vscode.workspace.workspaceFolders[0].uri,'data/m1/zrdr',name);
     await vscode.workspace.openTextDocument(uri);

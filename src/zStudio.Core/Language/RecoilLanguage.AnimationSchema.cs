@@ -48,7 +48,7 @@ public static partial class RecoilLanguage
                 "OBJECT_SCALE_STATE" => "Set a node's XYZ scale immediately.",
                 "OBJECT_ROTATE_STATE" => "Set a node's XYZ rotation or copy orientation from another node.",
                 "OBJECT_MOTION" => "Move a node procedurally using velocity, acceleration, gravity, rotation or scale rates.",
-                "OBJECT_MOTION_FROM_TO" => "Interpolate authored translation, rotation, scale or morph endpoints over time.",
+                "OBJECT_MOTION_FROM_TO" => "Interpolate translation, rotation, scale or morph endpoints over time.",
                 "OBJECT_MOTION_SI_SCRIPT" => "Play the named node's keyframe track from an SI script at the supplied frame rate.",
                 "OBJECT_OPACITY_STATE" => "Set a node's alpha override flag and optionally its opacity.",
                 "OBJECT_OPACITY_FROM_TO" => "Interpolate node opacity and optionally change alpha override at each endpoint.",
@@ -74,7 +74,7 @@ public static partial class RecoilLanguage
                 "CALLBACK" => "Call the engine/game event identified by VALUE through this animation's registered callback.",
                 "FBFX_COLOR_FROM_TO" => "Interpolate a full-screen color overlay's red, green, blue and alpha values.",
                 "FBFX_CSINWAVE_FROM_TO" => "Animate the radial cosine-wave screen overlay and its position or radius.",
-                "ANIM_VERBOSE" => "Store an animation verbosity marker; the retail handler performs no action.",
+                "ANIM_VERBOSE" => "Store an animation verbosity marker; the engine handler performs no action.",
                 _ => throw new InvalidOperationException("Missing animation vocabulary description: " + name)
             };
             return new(name, summary, name == "ANIM_VERBOSE" ? "s" : "", name == "ANIM_VERBOSE" ? ["ON", "OFF"] : null,
@@ -84,9 +84,9 @@ public static partial class RecoilLanguage
                     "IF" or "ELSEIF" => "Only the first available condition is compiled, in this order: ANIMATION_LOD, PLAYER_RANGE, RANDOM_WEIGHT, NODE_UNDERCOVER.",
                     "LOOP" => "LOOP_COUNT takes precedence over LOOP_TIME. Without either, the loop repeats indefinitely. A bare EVENT_OFFSET field is ignored; put it inside START_TIME.",
                     "OBJECT_MOTION_FROM_TO" => "A channel is enabled when either endpoint is supplied; an absent endpoint is zero. Omitted or nonpositive RUN_TIME uses a 0.001-second interval in the compiler.",
-                    "ANIM_VERBOSE" => "Use the scalar form ANIM_VERBOSE ( ON ). This retail marker is ignored; no nested VALUE or timing fields are suggested.",
+                    "ANIM_VERBOSE" => "Use the scalar form ANIM_VERBOSE ( ON ). This marker has no effect; no nested VALUE or timing fields are suggested.",
                     _ => null
-                }, Example: name == "CALLBACK" ? "CALLBACK ( START_TIME ( ANIMATION_OFFSET 0.5 ) VALUE ( 25 ) )" : null, Suggested: name != "ANIM_VERBOSE");
+                }, Example: name == "CALLBACK" ? "CALLBACK ( START_TIME ( ANIMATION_OFFSET 0.5 ) VALUE ( 25 ) )" : null, Suggested: name != "ANIM_VERBOSE", UsageWarning: name == "ANIM_VERBOSE" ? "ANIM_VERBOSE has no effect during playback." : null, ValidateValues: name != "ANIM_VERBOSE");
         }
         string? reference = name switch
         {
@@ -97,8 +97,8 @@ public static partial class RecoilLanguage
             "NAME" when parent is "SOUND" or "SOUND_NODE" or "BOUNCE_SOUND" => "sound", "NAME" when parent == "EFFECT" => "effect", _ => null
         };
         var field = AnimationOperand(name, parent, prerequisite) with { Reference = reference };
-        if (name == "ACTIVATION" && parent == "SEQUENCE_DEFINITION") return field with { Choices = ["ON_CALL"], Notes = "ON_CALL waits for CALL_SEQUENCE; other authored activation values are ignored. Without ON_CALL the sequence runs when its animation starts." };
-        if (name == "START_TIME" && parent == "SEQUENCE_DEFINITION") return field with { Suggested = false, Description = "Ignored when placed directly on a sequence.", Notes = "Put START_TIME on an event inside the sequence to delay that event. Existing sequence-level timing text is preserved." };
+        if (name == "ACTIVATION" && parent == "SEQUENCE_DEFINITION") return field with { Choices = ["ON_CALL"], Notes = "ON_CALL waits for CALL_SEQUENCE; other activation values are ignored. Without ON_CALL the sequence runs when its animation starts." };
+        if (name == "START_TIME" && parent == "SEQUENCE_DEFINITION") return field with { Suggested = false, UsageWarning = "START_TIME is not used on a sequence. Put it on an event.", ValidateValues = false, Description = "Ignored when placed directly on a sequence.", Notes = "Put START_TIME on an event inside the sequence to delay that event." };
         return field;
     }
 
@@ -112,7 +112,7 @@ public static partial class RecoilLanguage
             "ANIMATION_LIST" when prerequisite => Operand("Animation names that must satisfy this prerequisite group.", "s? ...", "Zero or more animation names", "These reference existing animations; this is not a definition/include list."),
             "ANIMATION_LIST" => Operand("Ordered inline definitions and included definition files."),
             "ANIMATION_DEFINITION" => Operand("Define an animation bound to one or more named scene roots."),
-            "SEQUENCE_DEFINITION" => Operand("An ordered event stream belonging to this animation.", notes: "Sequences run alongside one another. Within a sequence, an earlier event can delay the next event despite its authored START_TIME."),
+            "SEQUENCE_DEFINITION" => Operand("An ordered event stream belonging to this animation.", notes: "Sequences run alongside one another. Within a sequence, an earlier event can delay the next event despite its START_TIME."),
             "RESET_STATE" => Operand("Cleanup event stream used by the animation's stop/reset lifecycle.", notes: "This is not a second normal playback sequence. RESET_TIME controls restoration and cleanup behavior."),
             "ANIMATION_DEFINITION_FILE" => Operand("Include definitions from a file resolved through the animation search path.", "s", "Definition filename"),
             "ANIMATION_PATH" => Operand("Set semicolon-separated folders searched for animation definitions and keyframe scripts.", "s", "Search folders in compiler order"),
@@ -135,7 +135,7 @@ public static partial class RecoilLanguage
             "OPTIONS" => Operand("Alternative prerequisites counted toward MINIMUM_TO_SATISFY."),
             "MINIMUM_TO_SATISFY" => Operand("Set the minimum number of optional prerequisites required.", "n", "Count integer, 0–255"),
             "OBJECT_ACTIVE_LIST" => Operand("List node paths whose final nodes must be active.", arguments: "Nested paths: ( root child ... )"),
-            "RUN_TIME" => Operand("Set this event's running or interpolation duration.", "n", "Seconds", parent == "OBJECT_MOTION" ? "When absent, procedural motion has no authored time limit; other completion conditions may still stop it." : "Default: 0. Zero-time interpolation behavior depends on this event; it is not a universal delay."),
+            "RUN_TIME" => Operand("Set this event's running or interpolation duration.", "n", "Seconds", parent == "OBJECT_MOTION" ? "When absent, procedural motion has no time limit; other completion conditions may still stop it." : "Default: 0. Zero-time interpolation behavior depends on this event; it is not a universal delay."),
             "SCRIPT_FILENAME" => Operand("SI keyframe script containing the NAME node's track.", "s", "Script filename, normally .zan"),
             "SCRIPT_FRAME_RATE" => Operand("Convert keyframe frame numbers to playback time.", "n", "Frames per second", "Default: 30. Keyframe tracks remain read-only in this editor version."),
             "VALUE" => Operand("Integer event ID sent to the animation's registered game callback.", "n", "Event ID", "The shared compiler converts numeric source values to a signed 32-bit integer, truncating fractional values. Missing VALUE compiles as 0. Known ID suggestions describe Player::AsyncCommandCallback; other handlers can interpret the same ID differently."),
