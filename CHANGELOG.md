@@ -4,11 +4,8 @@ Version numbers follow `MAJOR.MINOR.PATCH`; the 0.x series is under active devel
 
 ## 0.9.8 — Unreleased
 
-- GameZ Script reports unused fields with direct, contextual warnings and checks exact float/integer storage across additional vehicle, weapon, turret, sound, AI, HUD and dialog fields, including nested records. Float-only values written as integers get an error on the numeric token with a decimal spelling suggestion; converting numeric fields continue to accept both kinds.
-- GameZ Script keeps sound/effect names and impact animation names separate from settings, checks widgets named `CURSOR` correctly, and reports missing required camera tuples and HUD/dialog layout values.
-- **GameZ Script for VS Code.** A separate Windows x64 extension highlights `.zad` and `.zrd` sources and adds live linting, contextual completion, hover, outline, reference navigation and project validation. The bundled language server shares zStudio's source parser, animation metadata and project services. Unsaved buffers participate in analysis; sources and exports remain untouched. MCP exposes the same analysis through `source_language` over zStudio's accepted workspace overlay.
-- GameZ Script hover and completion documentation now explain engine behavior, argument meanings and context-specific resource fields. Callback help describes registered event-ID dispatch, supported event timing and advisory game-handler IDs. Ignored sequence timing and other known ineffective fields remain inspectable with warnings and are omitted from normal suggestions; vehicle movement rates, light range animation and weapon/turret firing-rate meanings are corrected.
-- GameZ Script completion replaces whole numeric and quoted tokens, matches typed prefixes before limiting results, and excludes mission resources hidden by common archive members. Live lint catches missing condition/gravity/color operands and invalid opacity endpoint switches; saved terrain recipe changes invalidate previous project-validation findings.
+- GameZ Script has moved to its own standalone repository and release. The VS Code extension, language server and source_language MCP command are no longer included in zStudio.
+
 
 - Camera animation paths are orange; object paths remain teal, with a color key in Paths. Gravity-driven objects in source previews land on standable map surfaces, including terrain and bridges. Procedural movement stops at world Y −500 or 500 without triggering an impact; keyframes and cameras remain unrestricted. Paths, playback and seeking share these rules.
 - Playback controls have an opaque, theme-aware background, including their margins and wrapped rows, so the underlying map does not show through.

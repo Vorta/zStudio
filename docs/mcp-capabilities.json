@@ -6,11 +6,6 @@
   "fileOperationResults": "Save path previews are bounded before retained result serialization: save_document returns at most 64 written paths of 512 characters each, with writtenCount and writtenTruncated, and saves every file. Other command results preview file paths with the same bounds and Truncated flags. Global state pages complete document identities with offset/limit (maximum 64), total/nextOffset and a 1 MiB escaped metadata allowance before row construction; status text is a 512-character preview with statusTruncated. Source document workspace summaries return counts and undo/redo state; source_changes returns the shared bounded details. Full internal identities are preserved.",
   "interactions": [
     {
-      "gui": "GameZScript:LanguageFeatures",
-      "tools": ["zstudio_source_language"],
-      "note": "VS Code GameZ Script diagnostics, completion, hover, outline, definition and Validate Project use the same Core service as source_language. MCP analyzes zStudio's accepted source overlay; VS Code buffers are private to its language server. Completion Detail and optional Markdown Documentation share contextual engine/argument help with hover; ReplacementSpan identifies the complete source token to replace. UTF-16 offsets, paged results, read-only analysis and revision checks apply."
-    },
-    {
       "gui": "MainWindow.Navigation:CameraNavigationClick",
       "tools": [
         "zstudio_camera",

@@ -35,20 +35,6 @@ internal static class SourceAnimationMcpChecks
             await Job("source_world_open", new() { ["mission"] = "m1" });
             await Preview();
             var doc = main.ViewModel.Documents.Single(d => d.SourceWorld != null);
-            var languageJob = await Call("source_language", new() { ["action"] = "symbols", ["path"] = VtolDropFixture.Root });
-            Assert.True(languageJob["Cancellable"]!.GetValue<bool>());
-            var languageSymbols = await AwaitJob(languageJob);
-            Assert.NotEmpty(languageSymbols["items"]!.AsArray());
-            var filteredLanguage = await Job("source_language", new() { ["action"] = "symbols", ["path"] = VtolDropFixture.Root, ["query"] = "no-such-symbol" });
-            Assert.Empty(filteredLanguage["items"]!.AsArray());
-            var languageHover = await Job("source_language", new() { ["action"] = "hover", ["path"] = VtolDropFixture.Root,
-                ["position"] = VtolDropFixture.Definitions().IndexOf("ANIMATION_DEFINITIONS", StringComparison.Ordinal) });
-            Assert.Contains("ANIMATION_DEFINITIONS", languageHover["hover"]!["Markdown"]!.GetValue<string>());
-            var languageCompletion = await Job("source_language", new() { ["action"] = "completion", ["path"] = VtolDropFixture.Root,
-                ["position"] = VtolDropFixture.Definitions().IndexOf("ANIMATION_DEFINITIONS", StringComparison.Ordinal) });
-            Assert.Contains(languageCompletion["items"]!.AsArray(), item => item!["Label"]!.GetValue<string>() == "ANIMATION_DEFINITIONS"
-                && item["Documentation"]!.GetValue<string>().Contains("shared gravity", StringComparison.Ordinal));
-            Assert.Contains(languageCompletion["items"]!.AsArray(), item => item!["ReplacementSpan"]?["Length"]?.GetValue<int>() == "ANIMATION_DEFINITIONS".Length);
             var records = (await Animation("read"))["items"]!.AsArray();
             var activation = records[0]!["Fields"]!.AsArray().Single(f => f!["Key"]!.GetValue<string>() == "ACTIVATION")!;
             string field = activation["Id"]!.GetValue<string>();

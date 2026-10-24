@@ -1,6 +1,5 @@
 <Project>
   <ItemGroup>
-    <PackageVersion Include="StreamJsonRpc" Version="2.26.150" />
     <PackageVersion Include="ModelContextProtocol.Core" Version="2.3.0" />
     <PackageVersion Include="CommunityToolkit.Mvvm" Version="8.4.2" />
     <PackageVersion Include="Vortice.Direct3D11" Version="3.8.3" />

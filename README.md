@@ -35,10 +35,6 @@ zStudio's **Help** menu opens these guides as they are for the installed version
 | [MCP](docs/mcp.md) | connecting an AI agent |
 | [Compiled files](docs/compiled-files.md) | inspecting and exporting compiled game folders through MCP |
 
-## GameZ Script in VS Code
-
-For `.zad` and `.zrd` text sources, install the separate Windows x64 **[GameZ Script](vscode/gamez-script/README.md)** extension. It adds syntax highlighting, linting, completion, hover, outline, reference navigation and explicit project validation.
-
 ## Blender
 
 The download includes the **zStudio RECOIL** extension for Blender 5.2 LTS (`zStudio-Blender-extension-<version>.zip`, beside `zStudio.exe`). **Tools → Edit in Blender…** checks out a model with every file it references; **Tools → Update from Blender export…** applies the Blender export as one undoable edit. See the [extension guide](blender/zstudio_recoil/README.md).
