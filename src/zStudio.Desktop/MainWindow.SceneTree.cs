@@ -17,6 +17,7 @@ public partial class MainWindow
     private bool changingSceneTree;
     private string? treeInspectionTarget;
     private int sceneTreeRevealGeneration;
+    private bool retainingOutlinerViewport;
     private readonly HashSet<SceneTreeItem> collapsingSceneRows = [];
     private readonly ConditionalWeakTable<DocumentModel, Dictionary<string, SceneTreeState>> sceneTreeStates = new();
     private SceneViewport? TreeViewport => EmptyPreview.Visibility == Visibility.Collapsed && retiringScene == null ?
@@ -272,6 +273,7 @@ public partial class MainWindow
     }
     private void ScheduleSceneTreeReveal(SceneTreeItem? reveal = null)
     {
+        if (retainingOutlinerViewport) return;
         var model = sceneTree; var selected = reveal ?? model?.Selected;
         int generation = ++sceneTreeRevealGeneration;
         if (selected == null) return;

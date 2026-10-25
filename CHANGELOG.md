@@ -4,6 +4,7 @@ Version numbers follow `MAJOR.MINOR.PATCH`; the 0.x series is under active devel
 
 ## 0.9.8 — Unreleased
 
+- Fixed World tree scrolling away when hiding, showing or resetting object parts. Visibility changes retain the expanded rows, horizontal and vertical scroll position, and keyboard focus, including filtered results.
 - Expand imported objects in the World tree to select and edit their supported child objects and geometry. Map clicks still select the whole object. Hidden healthy/destroyed branches are listed with their initialized eye states; their eyes can hide healthy and show destroyed without changing source files. Reset part visibility restores the defaults.
 - Fixed single-object ClipTo edits failing with a 4,096-source-file error when shared-model validation searches many missing paths. Missing-file checks now have a separate allowance while existing-file verification and shared-mission crater-mode checks remain enforced. Acceptance checks the project boundaries once around the file checks, reducing UI stalls on these edits.
 

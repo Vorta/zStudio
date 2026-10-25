@@ -68,6 +68,7 @@ public partial class MainWindow
         // The player tank's radios wait for this refresh unless it draws their choice.
         RefreshPlayerTankViews();
         SceneViewport? replacement = null;
+        bool wasRetainingOutlinerViewport = false, retainedOutliner = false;
         bool swapped = false;
         bool OwnsRequest() => staticRefresh == request && scene == previous && shownDocument == doc && shownAsset?.Id == asset.Id && !doc.IsDisposed;
         ViewModel.Status = "Updating preview…";
@@ -75,7 +76,10 @@ public partial class MainWindow
         {
             token.ThrowIfCancellationRequested();
             // The mission is captured with the other options; a concurrent selection cannot change it mid-load.
-            var mission = asset.Kind == AssetKind.World ? await MissionSceneLoader.LoadAsync(doc.Document, resolver, token: token, difficulty: requested.Difficulty,
+            // Part gates change drawing only. Retain the initialized mission and its authored tree rather than
+            // replacing equivalent data, which discards virtualized row containers, scroll anchors and focus.
+            bool partsOnly = partOverrides != null && requested == retainedOptions;
+            var mission = partsOnly ? previous.Mission : asset.Kind == AssetKind.World ? await MissionSceneLoader.LoadAsync(doc.Document, resolver, token: token, difficulty: requested.Difficulty,
                 mission: requested.Mission, exactMission: ExactMissionFor(doc.Path, requested.Mission) != null, playerTank: requested.Tank) : null;
             if (mission != null) await doc.GetPickupEditsAsync(resolver, token);
             token.ThrowIfCancellationRequested();
@@ -92,6 +96,13 @@ public partial class MainWindow
             if (doc.Revision != inspectionRevision || HasInspectionDraft || HasAiPathDraft || parachuteDraft != null)
                 throw new InvalidOperationException("Preview refresh retained the current scene because a new edit or position draft arrived.");
 
+            if (partsOnly && sceneTreeDocument == doc && sceneTree is { } retainedTree && retainedTree.Hierarchy.Scene == replacement.PreviewScene
+                && ReferenceEquals(retainedTree.Hierarchy.Included, replacement.InspectionNodes))
+            {
+                wasRetainingOutlinerViewport = retainingOutlinerViewport; retainedOutliner = true;
+                retainingOutlinerViewport = true;
+                ++sceneTreeRevealGeneration; // Invalidate any reveal queued before publication.
+            }
             var view = previous.CaptureView();
             string? aiSelection = previous.SelectedAiNode;
             int? selection = selectedNode, isolate = isolatedNode;
@@ -171,6 +182,7 @@ public partial class MainWindow
         }
         finally
         {
+            if (retainedOutliner) retainingOutlinerViewport = wasRetainingOutlinerViewport;
             replacement?.Dispose();
             // Once swapped, the retired view goes even when publishing the new one failed: its devices and GPU buffers are native
             // (released only by Dispose, which is idempotent).
