@@ -34,7 +34,7 @@ public sealed class SourceWorkspaceTests : IDisposable
         }
         // The budget must win before verification tries to open even the first dependency.
         using var held = new FileStream(At("data/m1/present0.zrd"), FileMode.Open, FileAccess.ReadWrite, FileShare.None);
-        Assert.Contains("4,096", Assert.Throws<InvalidDataException>(() => workspace.VerifyPreparedEdit(edit, Token)).Message);
+        Assert.Contains($"{4096:N0} existing source files", Assert.Throws<InvalidDataException>(() => workspace.VerifyPreparedEdit(edit, Token)).Message);
     }
 
     [Fact]

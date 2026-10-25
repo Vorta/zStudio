@@ -266,8 +266,15 @@ public sealed class SourceWorkspace
             throw new InvalidOperationException("The prepared content verification is no longer valid.");
         verified?.CheckRoot();
         var fork = prepared.Workspace;
-        foreach (var (relative, present) in fork.preparedPresence!)
-            if (DiskPresence(relative, token) != present) PresenceChanged(relative);
+        if (fork.preparedPresence!.Count != 0)
+        {
+            // A single edit can search thousands of absent model/texture candidates. On the owning thread,
+            // check the project boundaries around the batch, not every mission's format for every candidate.
+            CheckPresenceProject(token);
+            foreach (var (relative, present) in fork.preparedPresence)
+                if (DiskPresenceInCheckedProject(relative, token) != present) PresenceChanged(relative);
+            CheckPresenceProject(token);
+        }
         foreach (var (relative, baseline) in fork.preparedReads!)
         {
             token.ThrowIfCancellationRequested();
@@ -470,10 +477,19 @@ public sealed class SourceWorkspace
     }
     private bool DiskPresence(string relative, CancellationToken token)
     {
+        CheckPresenceProject(token);
+        return DiskPresenceInCheckedProject(relative, token);
+    }
+    private void CheckPresenceProject(CancellationToken token)
+    {
+        token.ThrowIfCancellationRequested();
+        SourceProject.RejectLinkedProject(Root);
+        SourceProject.RequireCurrentFormat(Root, token);
+    }
+    private bool DiskPresenceInCheckedProject(string relative, CancellationToken token)
+    {
         token.ThrowIfCancellationRequested();
         string path = SourceProject.Resolve(Root, relative);
-        SourceProject.RejectLinkedProject(Root);
-        SourceProject.RequireCurrentFormat(Root);
         SourceProject.RejectNestedLinks(Root, relative);
         token.ThrowIfCancellationRequested();
         return SourceRead.FileExists(path);

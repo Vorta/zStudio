@@ -4,7 +4,7 @@ Version numbers follow `MAJOR.MINOR.PATCH`; the 0.x series is under active devel
 
 ## 0.9.8 — Unreleased
 
-- Fixed single-object ClipTo edits failing with a 4,096-source-file error when shared-model validation searches many missing paths. Missing-file checks now have a separate allowance while existing-file verification and shared-mission crater-mode checks remain enforced.
+- Fixed single-object ClipTo edits failing with a 4,096-source-file error when shared-model validation searches many missing paths. Missing-file checks now have a separate allowance while existing-file verification and shared-mission crater-mode checks remain enforced. Acceptance checks the project boundaries once around the file checks, reducing UI stalls on these edits.
 
 - GameZ Script has moved to its own standalone repository and release. The VS Code extension, language server and source_language MCP command are no longer included in zStudio.
 
