@@ -72,7 +72,7 @@ public partial class MainWindow
         return panel;
     }
 
-    private async Task EnsureAnimationCardForEntryAsync(DocumentModel document, int entry, CancellationToken token)
+    private async Task EnsureAnimationCardForEntryAsync(DocumentModel document, int entry, CancellationToken token, bool preserveTimeline = false)
     {
         if (document.SourceWorld == null || sceneTree?.Sections is not { } sections) return;
         var definition = sections.Definitions.Definitions.FirstOrDefault(d => d.Entries.Contains(entry));
@@ -94,7 +94,7 @@ public partial class MainWindow
             finally { synchronizingAnimationBinding = false; }
             return;
         }
-        await LoadAnimationCardCoreAsync(document, target, token, false);
+        await LoadAnimationCardCoreAsync(document, target, token, false, preserveTimeline);
         if (!SectionCard().ShowsAnimation(document, target)) throw new StudioCommandException("not_ready", "The animation definition could not be opened; inspect the reported source error.");
     }
 
@@ -121,9 +121,9 @@ public partial class MainWindow
 
     private Task LoadAnimationCardAsync(DocumentModel document, DefinitionEntry definition, CancellationToken token)
         => LoadAnimationCardCoreAsync(document, definition, token, false);
-    private async Task LoadAnimationCardCoreAsync(DocumentModel document, DefinitionEntry definition, CancellationToken token, bool analyze)
+    private async Task LoadAnimationCardCoreAsync(DocumentModel document, DefinitionEntry definition, CancellationToken token, bool analyze, bool preserveTimeline = false)
     {
-        if (SectionCard().ShowsAnimation(document, definition)) { SetWorldAnimationDefinitionCandidate(document, definition); return; }
+        if (SectionCard().ShowsAnimation(document, definition)) { if (!preserveTimeline) SetWorldAnimationDefinitionCandidate(document, definition); return; }
         if (parachutes?.Entry is int priorEntry && !definition.Definition.Entries.Contains(priorEntry)) CloseParachutes();
         sourceAnimationLoading?.Cancel();
         using var loading = CancellationTokenSource.CreateLinkedTokenSource(token, document.Lifetime.Token, shutdownToken);
@@ -142,7 +142,7 @@ public partial class MainWindow
             var controls = AnimationPathControls(document, definition);
             SectionCard().ShowAnimation(document, definition, model, controls, ParachutePanel);
             RefreshWorldAnimationDropRelationships();
-            SetWorldAnimationDefinitionCandidate(document, definition);
+            if (!preserveTimeline) SetWorldAnimationDefinitionCandidate(document, definition);
         }
         catch (OperationCanceledException) { }
         catch (Exception ex) when (ex is IOException or InvalidDataException or StudioCommandException)
@@ -293,9 +293,10 @@ public partial class MainWindow
 
     private void RegisterSourceAnimationCommands(StudioCommands registry)
     {
-        RegisterJob(registry, "source_animation", "Inspect and edit an existing source animation definition in the docked Properties pane. Addresses belong to the document revision. Edits preserve source trivia and apply to every expansion of the definition; tracks and event order are read only. begin selects the definition; set updates the shared draft; apply accepts one project undo step; cancel reverts the draft. read pages source records; each record contains its typed fields. Save uses save_document.",
+        RegisterJob(registry, "source_animation", "Inspect and edit an existing source animation definition in the docked Properties pane. Addresses belong to the document revision. Edits preserve source trivia and apply to every expansion of the definition; tracks and event order are read only. begin selects the definition; set updates the shared draft; apply accepts one project undo step; cancel reverts the draft. read pages source records; each record contains its typed fields. context returns bounded read-only definition/script excerpts for a record, optionally near scriptTime. Save uses save_document.",
             [DocumentParameter, RevisionParameter, new("definition", "integer", "Definition index from scene_tree.", true, Minimum: 0),
-             P("action", "string", "Operation.", true, "read", "begin", "select", "set", "apply", "cancel"), P("record", "string", "Sequence or event record ID for select."), P("token", "string", "Current draft token for set (when pending), apply or cancel."),
+             P("action", "string", "Operation.", true, "read", "context", "begin", "select", "set", "apply", "cancel"), P("record", "string", "Sequence or event record ID for select or context."), P("token", "string", "Current draft token for set (when pending), apply or cancel."),
+             new("scriptTime", "number", "Optional script-local seconds for read-only frame context."),
              new("changes", "array", "Fields to set.", Items: new("", "object", "Field change.", Properties: [P("field", "string", "Field ID from read.", true),
                  new("values", "array", "Values as text; omit to remove an optional field.", Items: new("", "string", "Value."), MaxItems: 128)]), MaxItems: 256), ..PageParameters], false,
             async (a, token) =>
@@ -303,6 +304,7 @@ public partial class MainWindow
                 var doc = TargetDocument(a);
                 if (doc.SourceWorld == null || doc != shownDocument || doc.Revision != a["revision"]!.GetValue<long>()) throw new StudioCommandException("revision_conflict", "Read the shown source map's current revision.");
                 int definition = Int(a, "definition"); string action = Text(a, "action");
+                if (action == "context") return Result(await ReadAnimationContextAsync(doc, definition, Text(a, "record"), a.ContainsKey("scriptTime") ? Number(a, "scriptTime") : null, token));
                 if (action == "read")
                 {
                     var prepared = doc.SourceWorld.Workspace.BeginPreparedEdit().Workspace;

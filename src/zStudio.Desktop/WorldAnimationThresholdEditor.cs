@@ -1,4 +1,5 @@
 using System.Globalization;
+using zStudio.Core.Animation;
 using System.Windows;
 using System.Windows.Automation;
 using System.Windows.Automation.Peers;
@@ -14,10 +15,11 @@ public sealed class WorldAnimationThresholdEditor : UserControl
 {
     private readonly TextBlock modeLabel = new() { FontWeight = FontWeights.SemiBold, Margin = new(0, 0, 0, 4) };
     private readonly ValueTextBox number = new() { MinWidth = 70 };
+    private readonly ValueTextBox frameNumber = new() { MinWidth = 70 };
     private readonly ThresholdRuler ruler;
     private readonly TextBlock error = new() { TextWrapping = TextWrapping.Wrap, FontSize = 11 };
-    private readonly Button previous = new() { Content = "−1 tick", Padding = new(5, 2, 5, 2), Margin = new(0, 2, 3, 2) };
-    private readonly Button next = new() { Content = "+1 tick", Padding = new(5, 2, 5, 2), Margin = new(0, 2, 3, 2) };
+    private readonly Button previous = new() { Content = "−1 frame", Padding = new(5, 2, 5, 2), Margin = new(0, 2, 3, 2) };
+    private readonly Button next = new() { Content = "+1 frame", Padding = new(5, 2, 5, 2), Margin = new(0, 2, 3, 2) };
     private double value;
     private string mode = "ANIMATION_OFFSET";
     private bool editable;
@@ -30,11 +32,25 @@ public sealed class WorldAnimationThresholdEditor : UserControl
     public WorldAnimationThresholdEditor()
     {
         SetResourceReference(BackgroundProperty, "SolidBackgroundFillColorBaseBrush"); SetResourceReference(ForegroundProperty, "TextFillColorPrimaryBrush");
-        var panel = new StackPanel(); Content = panel; panel.Children.Add(modeLabel); panel.Children.Add(number);
+        var panel = new StackPanel(); Content = panel; panel.Children.Add(modeLabel); panel.Children.Add(new TextBlock { Text = "Frame (40 fps)" }); panel.Children.Add(frameNumber); panel.Children.Add(new TextBlock { Text = "Seconds" }); panel.Children.Add(number);
         ruler = new(this) { Height = 44, Margin = new(0, 5, 0, 3) }; panel.Children.Add(ruler);
         var buttons = new StackPanel { Orientation = Orientation.Horizontal }; buttons.Children.Add(previous); buttons.Children.Add(next); panel.Children.Add(buttons);
-        panel.Children.Add(new TextBlock { Text = "Eligibility threshold in this clock; not an observed dispatch time. Drag snaps to 1/60 s.", FontSize = 11, TextWrapping = TextWrapping.Wrap }); panel.Children.Add(error);
+        panel.Children.Add(new TextBlock { Text = "Eligibility threshold in this clock; not an observed dispatch time. Drag snaps to 1/40 s. Frame 1 is time zero.", FontSize = 11, TextWrapping = TextWrapping.Wrap }); panel.Children.Add(error);
         AutomationProperties.SetName(number, "Source timing threshold in seconds");
+        AutomationProperties.SetName(frameNumber, "Source timing frame at 40 fps");
+        frameNumber.TextChanged += (_, _) =>
+        {
+            if (updating || !editable) return;
+            if (double.TryParse(frameNumber.Text, NumberStyles.Float, CultureInfo.InvariantCulture, out double frame) && double.IsFinite(frame) && double.IsFinite(AnimationTimelineFrames.Seconds(frame)))
+            {
+                string seconds = Format(AnimationTimelineFrames.Seconds(frame));
+                if (number.Text == seconds) TextEdited?.Invoke(seconds);
+                else number.Text = seconds;
+                error.Text = "";
+            }
+            else { error.Text = "Enter a finite frame number."; TextEdited?.Invoke(frameNumber.Text); }
+        };
+        frameNumber.KeyDown += (_, e) => { if (e.Key == Key.Enter) { ProposeText(); e.Handled = true; } };
         previous.Click += (_, _) => Propose(value - WorldAnimationTimeline.Step);
         next.Click += (_, _) => Propose(value + WorldAnimationTimeline.Step);
         number.KeyDown += (_, e) => { if (e.Key == Key.Enter) { ProposeText(); e.Handled = true; } else if (e.Key == Key.Escape) { number.Text = Format(value); error.Text = ""; e.Handled = true; } };
@@ -54,9 +70,9 @@ public sealed class WorldAnimationThresholdEditor : UserControl
         mode = clockMode; value = threshold; editable = canEdit;
         modeLabel.Text = WorldAnimationTimeline.Shown(clockMode + " · seconds");
         updating = true;
-        try { if (!number.IsKeyboardFocusWithin) number.Text = Format(value); }
+        try { if (!number.IsKeyboardFocusWithin) number.Text = Format(value); if (!frameNumber.IsKeyboardFocusWithin) frameNumber.Text = Format(AnimationTimelineFrames.Frame(value)); }
         finally { updating = false; }
-        number.IsReadOnly = !editable; previous.IsEnabled = next.IsEnabled = ruler.IsEnabled = editable;
+        number.IsReadOnly = frameNumber.IsReadOnly = !editable; previous.IsEnabled = next.IsEnabled = ruler.IsEnabled = editable;
         error.Text = ""; ruler.InvalidateVisual();
     }
     private static string Format(double n) => n.ToString("0.####################################################################################################################################################################################################################################################################################################################################", CultureInfo.InvariantCulture);
@@ -109,7 +125,7 @@ public sealed class WorldAnimationThresholdEditor : UserControl
         {
             base.OnMouseMove(e); if (!IsMouseCaptured || Math.Abs(e.GetPosition(this).X - dragStartX) < 3) return;
             double delta = (e.GetPosition(this).X - dragStartX) / Math.Max(1, ActualWidth) * (dragEnd - dragStart);
-            double candidate = Math.Round((dragStartValue + delta) * 60) / 60;
+            double candidate = AnimationTimelineFrames.Snap(dragStartValue + delta);
             if (double.IsFinite(candidate)) proposed = candidate; InvalidateVisual();
         }
         protected override void OnMouseLeftButtonUp(MouseButtonEventArgs e)

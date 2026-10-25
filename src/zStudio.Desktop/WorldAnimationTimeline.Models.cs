@@ -24,12 +24,14 @@ public sealed record WorldAnimationTimelineRow(string Id, string Label)
     /// <summary>Read-only native sample/flight-clock strip. Null uses the global run-time ruler.</summary>
     public double? NativeClockStart { get; init; }
     public double? NativeClockEnd { get; init; }
+    public bool IsSourceClock { get; init; }
+    public double? StartThreshold { get; init; }
 }
 
 public enum WorldAnimationTimelineMarkKind { Authored, Instant, Interval, Running, Call, Blocked, Loop, Keyframe, Truncation, Window }
 
 public sealed record WorldAnimationTimelineMark(string Id, WorldAnimationTimelineMarkKind Kind, double Start,
-    double? End = null, string Label = "", long? Occurrence = null);
+    double? End = null, string Label = "", long? Occurrence = null, int? KeyIndex = null);
 
 public sealed record WorldAnimationTimelineState
 {
@@ -57,4 +59,5 @@ public sealed record WorldAnimationTimelineState
 }
 
 public sealed record WorldAnimationTimelinePresentation(string View, double VisibleStart, double VisibleEnd,
-    bool FollowPlayhead, bool ShowTicks, string? SelectedRow, string? SelectedMark, double LabelWidth = 220);
+    bool FollowPlayhead, string? SelectedRow, string? SelectedMark, double LabelWidth = 220,
+    double? RequestedFrame = null, int FrameRate = 40, int FrameOrigin = 1);

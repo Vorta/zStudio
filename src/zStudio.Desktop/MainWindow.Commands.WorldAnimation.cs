@@ -20,8 +20,7 @@ public partial class MainWindow
         [P("instancePath", "string", "Canonical instance lineage, empty for root.", true), new("entry", "integer", "Entry index.", true, Minimum: 0),
          P("event", "string", "Event GUID.", true), P("value", "boolean", "Condition value.", true)]), MaxItems: 4096),
         P("view", "string", "Timeline projection.", false, "source", "run"),
-        new("labelWidth", "number", "Preferred timeline label width in DIP; displayed width also fits the viewport.", NumberMinimum: 80, NumberMaximum: 720),
-        P("ticks", "boolean", "Display 60 Hz tick labels."), P("followPlayhead", "boolean", "Scroll with live playback."),
+        new("labelWidth", "number", "Preferred timeline label width in DIP; displayed width also fits the viewport.", NumberMinimum: 80, NumberMaximum: 720), P("followPlayhead", "boolean", "Scroll with live playback."),
         P("fit", "string", "Fit the timeline viewport.", false, "selection", "evaluated", "range"),
         new("visibleRange", "array", "Visible start/end seconds; independent of playback range.", Items: new("", "number", "Seconds.", NumberMinimum: 0, NumberMaximum: 3600), MinItems: 2, MaxItems: 2),
         new("range", "array", "Playback start/end seconds.", Items: new("", "number", "Seconds.", NumberMinimum: 0, NumberMaximum: 3600), MinItems: 2, MaxItems: 2),
@@ -33,9 +32,9 @@ public partial class MainWindow
 
     private void RegisterWorldAnimationCommands(StudioCommands registry)
     {
-        RegisterJob(registry, "animation_timeline", "Inspect and operate the source world's integrated animation timeline. Selection and structural paging never evaluate animation. First Play/Seek pins the selected exact binding; use_selection stops and pins without playing. Calls are excluded by default and enabled per finite callsite path. Source thresholds and Run observations are distinct. Keyframe samples are read only. Scenario changes stop and detach the run. Existing animation_transport controls playback; animation_paths explicitly evaluates guides independently. Source timing edits use source_animation, verified drop moves use animation_paths without definition.",
+        RegisterJob(registry, "animation_timeline", "Inspect and operate the source world's integrated animation timeline. Structural paging and row selection never evaluate animation. The 40 fps cell action inspects source and optionally seeks a current occurrence; frame seeks a one-based editing position, timing proposes its existing event threshold draft. First Play/Seek pins the selected exact binding; use_selection stops and pins without playing. Calls are excluded by default and enabled per finite callsite path. Source thresholds and Run observations are distinct. Keyframe samples are read only. Scenario changes stop and detach the run. Existing animation_transport controls playback; animation_paths explicitly evaluates guides independently. Source timing edits use source_animation, verified drop moves use animation_paths without definition.",
             [PreviewParameter, DocumentParameter, RevisionParameter,
-             P("action", "string", "Operation.", true, "read", "structure", "rows", "marks", "expand", "row", "target", "include", "options", "select", "use_selection", "exit", "dock", "evaluate_paths", "duration", "scenario"),
+             P("action", "string", "Operation.", true, "read", "structure", "rows", "marks", "cell", "frame", "timing", "expand", "row", "target", "include", "options", "select", "use_selection", "exit", "dock", "evaluate_paths", "duration", "scenario"),
              P("section", "string", "Structural page.", false, "entries", "sequences", "events", "calls", "keyframes", "ignored"),
              new("definition", "integer", "Source definition index for target.", Minimum: 0),
              new("entry", "integer", "Exact compiled binding index; required when the definition expands to several bindings.", Minimum: 0),
@@ -45,6 +44,9 @@ public partial class MainWindow
              P("included", "boolean", "Include this call path."),
              P("view", "string", "Rows projection.", false, "source", "run"),
              P("row", "string", "Timeline row identity from rows."), P("expanded", "boolean", "Expand or collapse a source row."),
+             P("mark", "string", "Exact cell item identity from marks for cell inspection."),
+             P("seek", "boolean", "For cell: also seek an available current execution occurrence; ambiguous occurrences are returned for selection."),
+             new("frame", "number", "40 fps editing frame: frame 1 is time zero. frame seeks; timing proposes the row's existing event-start draft. Fractional frames preserve precise times."),
              new("occurrence", "integer", "Retained Run mark occurrence to inspect; does not seek.", Minimum: 0, Maximum: long.MaxValue),
              P("dock", "string", "Bottom dock view.", false, "timeline", "diagnostics", "collapsed"),
              WorldTimelineChanges,
@@ -60,6 +62,21 @@ public partial class MainWindow
             string action = Text(a, "action");
             if (action == "rows") return Result(WorldAnimationTimelineRows(a.ContainsKey("view") ? Text(a, "view") : WorldTimeline.ViewMode, Int(a, "offset"), Int(a, "limit", 100)));
             if (action == "marks") return Result(WorldAnimationTimelineMarks(Text(a, "row"), Int(a, "offset"), Int(a, "limit", 100)));
+            if (action == "cell") return Result(await WorldAnimationCellAsync(Text(a, "row"), Text(a, "mark"), Flag(a, "seek"),
+                a.ContainsKey("occurrence") ? a["occurrence"]!.GetValue<long>() : null, Int(a, "offset"), token));
+            if (action is "frame" or "timing")
+            {
+                if (!a.ContainsKey("frame")) throw new StudioCommandException("invalid_argument", "Supply a frame number.");
+                double frame = Number(a, "frame"), seconds = AnimationTimelineFrames.Seconds(frame);
+                if (!double.IsFinite(frame) || !double.IsFinite(seconds)) throw new StudioCommandException("invalid_argument", "Use a finite frame number.");
+                if (action == "timing") await ProposeWorldAnimationFrameAsync(Text(a, "row"), frame, token);
+                else
+                {
+                    if (seconds is < 0 or > 3600) throw new StudioCommandException("invalid_argument", "Preview frames must be within 1–144001.");
+                    await SeekWorldAnimationFrameAsync(seconds, token);
+                }
+                return Result(new { presentation = WorldTimeline.PresentationState, actualSeconds = worldAnimationSession?.State.Time, draft = SectionCard().AnimationDraft });
+            }
             if (action == "structure")
             {
                 var plan = GetWorldAnimationStructurePlan();

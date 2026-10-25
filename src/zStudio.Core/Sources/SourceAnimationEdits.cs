@@ -7,7 +7,7 @@ using zStudio.Core.Worlds;
 namespace zStudio.Core.Sources;
 
 /// <summary>Lossless, definition-scoped edits. Record addresses belong to one revision, never to a display name.</summary>
-public static class SourceAnimationEdits
+public static partial class SourceAnimationEdits
 {
     public const int MaximumFields = 4096;
     public sealed record Field(string Id, string Key, string Label, string[] Values, string[] Kinds, string[] Choices,

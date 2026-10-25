@@ -1,3 +1,4 @@
+using zStudio.Core.Animation;
 using System.Globalization;
 using System.Windows;
 using System.Windows.Automation;
@@ -15,16 +16,16 @@ internal sealed class WorldAnimationTimeRuler : FrameworkElement
     {
         this.owner = owner; Focusable = true; ClipToBounds = true;
         AutomationProperties.SetName(this, "Animation playhead in seconds");
-        ToolTip = "Drag to seek silently · Ctrl+wheel zooms · Shift+wheel pans · arrows step one tick";
+        ToolTip = "40 fps · Frame 1 is 0 seconds · Drag to seek silently · Ctrl+wheel zooms · Shift+wheel pans · arrows step one frame";
     }
     protected override void OnRender(DrawingContext dc)
     {
         base.OnRender(dc); Brush ink = SystemParameters.HighContrast ? SystemColors.WindowTextBrush : owner.Foreground;
         dc.DrawRectangle(SystemParameters.HighContrast ? SystemColors.WindowBrush : owner.Background, null, new(0, 0, ActualWidth, ActualHeight));
-        WorldAnimationTimelineDrawing.Grid(dc, owner.VisibleStart, owner.VisibleEnd, ActualWidth, ActualHeight, ink, owner.ShowTicks, true, this);
-        if (owner.State.Time >= owner.VisibleStart && owner.State.Time <= owner.VisibleEnd)
+        WorldAnimationTimelineDrawing.Grid(dc, owner.VisibleStart, owner.VisibleEnd, ActualWidth, ActualHeight, ink, true, true, this);
+        if ((owner.RequestedTime ?? owner.State.Time) >= owner.VisibleStart && (owner.RequestedTime ?? owner.State.Time) <= owner.VisibleEnd)
         {
-            double x = (owner.State.Time - owner.VisibleStart) / (owner.VisibleEnd - owner.VisibleStart) * ActualWidth;
+            double x = ((owner.RequestedTime ?? owner.State.Time) - owner.VisibleStart) / (owner.VisibleEnd - owner.VisibleStart) * ActualWidth;
             WorldAnimationTimelineDrawing.Diamond(dc, new(x, ActualHeight - 5), ink, new(ink, 1));
         }
     }
@@ -55,16 +56,35 @@ internal static class WorldAnimationTimelineDrawing
     public static void Grid(DrawingContext dc, double start, double end, double width, double height, Brush ink, bool ticks, bool labels, Visual visual)
     {
         if (!double.IsFinite(start) || !double.IsFinite(end) || end <= start || width <= 0) return;
+        if (ticks)
+        {
+            double cellWidth = width / ((end - start) * AnimationTimelineFrames.Rate);
+            double stride = 5 * Math.Max(1, Math.Ceiling(70 / Math.Max(.000001, cellWidth * 5)));
+            double firstFrame = Math.Ceiling(start * AnimationTimelineFrames.Rate / stride) * stride;
+            for (int i = 0; i < 200; i++)
+            {
+                double frame = firstFrame + i * stride, seconds = frame / AnimationTimelineFrames.Rate;
+                if (seconds > end) break;
+                double x = (seconds - start) / (end - start) * width;
+                dc.DrawLine(new Pen(ink, .8), new(x, 28), new(x, height));
+                if (labels)
+                {
+                    Text(dc, (frame + 1).ToString("0", CultureInfo.InvariantCulture) + "f", x + 3, 0, ink, visual);
+                    dc.PushOpacity(.65); Text(dc, seconds.ToString("0.###", CultureInfo.InvariantCulture) + "s", x + 3, 12, ink, visual); dc.Pop();
+                }
+            }
+            return;
+        }
         double desired = (end - start) / Math.Max(1, width / 80), power = Math.Pow(10, Math.Floor(Math.Log10(desired)));
         double fraction = desired / power, step = (fraction <= 1 ? 1 : fraction <= 2 ? 2 : fraction <= 5 ? 5 : 10) * power;
-        if (ticks) step = Math.Max(WorldAnimationTimeline.Step, Math.Ceiling(step * 60) / 60);
+        if (ticks) step = Math.Max(WorldAnimationTimeline.Step, Math.Ceiling(step * 40) / 40);
         double first = Math.Ceiling(start / step) * step;
         for (int i = 0; i < 100; i++)
         {
             double value = first + i * step; if (value > end + step * .001) break;
             double x = (value - start) / (end - start) * width;
             dc.DrawLine(new Pen(ink, labels ? .5 : .15), new(x, labels ? 17 : 0), new(x, height));
-            if (labels) Text(dc, ticks ? Math.Round(value * 60).ToString("0", CultureInfo.InvariantCulture) + "f" : value.ToString("0.###", CultureInfo.InvariantCulture) + "s", x + 3, 1, ink, visual);
+            if (labels) Text(dc, ticks ? AnimationTimelineFrames.Frame(value).ToString("0", CultureInfo.InvariantCulture) + "f" : value.ToString("0.###", CultureInfo.InvariantCulture) + "s", x + 3, 1, ink, visual);
         }
     }
     public static void Text(DrawingContext dc, string value, double x, double y, Brush ink, Visual visual, double? maximumWidth = null)

@@ -5,6 +5,7 @@ using System.Windows.Automation.Provider;
 using System.Windows.Controls;
 using System.Windows.Media;
 using Xunit;
+using zStudio.Core.Animation;
 
 namespace zStudio.Desktop.Tests;
 
@@ -20,7 +21,7 @@ internal static class WorldAnimationTimelineChecks
         threshold.SetValue("EVENT_OFFSET", authored);
         threshold.Measure(new Size(320, 240)); threshold.Arrange(new Rect(0, 0, 320, 240)); threshold.UpdateLayout();
         Assert.Equal(authored, threshold.Value); Assert.Empty(proposals); Assert.Empty(edits);
-        var numeric = Descendants(threshold).OfType<TextBox>().Single();
+        var numeric = Descendants(threshold).OfType<TextBox>().Single(b => AutomationProperties.GetName(b) == "Source timing threshold in seconds");
         numeric.Text = "-";
         Assert.Equal("-", Assert.Single(edits)); Assert.Empty(proposals);
         numeric.Text = "-2.25";
@@ -34,6 +35,17 @@ internal static class WorldAnimationTimelineChecks
         Assert.Equal(-2.000123, Assert.Single(proposals)); Assert.Equal(authored, threshold.Value);
         threshold.SetValue("EVENT_OFFSET", -2.000123, false);
         Assert.Throws<ElementNotEnabledException>(() => value.SetValue("3"));
+        threshold.SetValue("EVENT_OFFSET", .04);
+        var frames = Descendants(threshold).OfType<TextBox>().Single(b => AutomationProperties.GetName(b) == "Source timing frame at 40 fps");
+        Assert.Equal("2.6", frames.Text);
+        frames.Text = "41";
+        Assert.Equal("1", numeric.Text);
+        frames.Text = ""; frames.Text = "41";
+        Assert.Equal("1", edits.Last()); // Recovery must replace an incomplete shared draft even if seconds did not change.
+        Assert.Equal(1, AnimationTimelineFrames.Frame(0));
+        Assert.Equal(1, AnimationTimelineFrames.Seconds(41));
+        Assert.Equal(2, AnimationTimelineFrames.Cell(.04));
+        Assert.Equal(3, AnimationTimelineFrames.Cell((double)(float).05));
 
         var timeline = new WorldAnimationTimeline();
         int seeks = 0, inclusions = 0; timeline.SeekRequested += _ => seeks++; timeline.InclusionRequested += (_, _) => inclusions++;
@@ -64,6 +76,22 @@ internal static class WorldAnimationTimelineChecks
         timeline.SetBodyVisible(false); Assert.True(play.IsEnabled); timeline.SetBodyVisible(true);
         Assert.Same(play, Descendants(timeline).OfType<Button>().Single(b => AutomationProperties.GetName(b) == "Play"));
         Assert.Equal(0, seeks); Assert.Equal(0, inclusions);
+        timeline.SetState(timeline.State with { HasSession = true, Status = "Paused" });
+        timeline.RequestSeek(.025);
+        Assert.Equal(.025, timeline.RequestedTime);
+        Assert.Equal(2, timeline.PresentationState.RequestedFrame);
+        timeline.SetState(timeline.State with { Time = 1.0 / 60 });
+        Assert.Equal(.025, timeline.RequestedTime); // Actual preview ticks never move the requested editing cell.
+        var horizontal = Descendants(timeline).OfType<System.Windows.Controls.Primitives.ScrollBar>().Single(b => AutomationProperties.GetName(b) == "Timeline horizontal scroll");
+        horizontal.Value = 12;
+        Assert.Equal(12, timeline.VisibleStart); Assert.False(timeline.FollowPlayhead);
+        timeline.SetRows([new("point", "Partial occupied cell") { Marks = [new("point", WorldAnimationTimelineMarkKind.Authored, .10)] }], []);
+        timeline.SetVisibleRange(.11, 1.11); timeline.UpdateLayout();
+        plot = Descendants(timeline).OfType<WorldAnimationRowPlot>().First();
+        Assert.Single(plot.Hit(0)); Assert.Equal(.10, plot.CellStart(0), 8);
+        timeline.SetVisibleRange(0, 1); timeline.UpdateLayout();
+        Assert.Equal(0, plot.CellStart(plot.ActualWidth / 40 * .9));
+        timeline.SetRows(source, source);
         var surface = new Window { Content = timeline, Width = 1000, Height = 450, ShowInTaskbar = false, ShowActivated = false };
 #pragma warning disable WPF0001
         var previousTheme = Application.Current.ThemeMode;

@@ -19,6 +19,33 @@ internal sealed partial class SourceSectionCard
     private StackPanel? animationPathsHost;
     private Expander? animationSetup;
     private ComboBox? animationSequencePicker;
+    private StackPanel? animationContextHost;
+    private CardSection? animationContextSection;
+    internal void SetAnimationContext(SourceAnimationEdits.SourceContext? context, string detail,
+        IReadOnlyList<(long Id, string Label)> choices, Action<long> select, Action? more = null)
+    {
+        if (animationContextHost == null) return;
+        if (animationContextSection != null) animationContextSection.Visibility = Visibility.Visible;
+        animationContextHost.Children.Clear();
+        animationContextHost.Children.Add(AnimationHelp(detail));
+        foreach (var choice in choices)
+        {
+            var button = new Button { Content = choice.Label, Margin = new(0, 2, 0, 2) };
+            button.Click += (_, _) => select(choice.Id); animationContextHost.Children.Add(button);
+        }
+        if (more != null) { var button = new Button { Content = "Next 100 occurrences" }; button.Click += (_, _) => more(); animationContextHost.Children.Add(button); }
+        if (context == null) return;
+        foreach (var excerpt in new[] { context.Definition, context.Script }.OfType<SourceAnimationEdits.SourceExcerpt>())
+        {
+            animationContextHost.Children.Add(AnimationHelp(excerpt.File + $" · line {excerpt.FirstLine}" + (excerpt.Truncated ? " · excerpt" : "")));
+            var text = new TextBox { Text = excerpt.Text, IsReadOnly = true, AcceptsReturn = true, FontFamily = new("Consolas"),
+                MaxHeight = 240, HorizontalScrollBarVisibility = ScrollBarVisibility.Auto, VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
+            AutomationProperties.SetName(text, "Animation source excerpt"); animationContextHost.Children.Add(text);
+        }
+        if (context.Note != null) animationContextHost.Children.Add(AnimationHelp(context.Note));
+        animationContextHost.UpdateLayout();
+        if (animationContextHost.Children[0] is FrameworkElement heading) heading.BringIntoView();
+    }
     private ListBox? animationEventList;
     private readonly HashSet<string> animationWindowRecords = [];
     internal void SetAnimationWindowRecords(IEnumerable<string> records)
@@ -42,6 +69,8 @@ internal sealed partial class SourceSectionCard
         if (setup != null) { animationSetup = new() { Header = "Scenario", Content = setup, IsExpanded = expand, MaxHeight = 480 }; animationPathsHost.Children.Add(animationSetup); }
     }
     private string? animationRecord;
+    internal bool IsAnimationRecord(DocumentModel document, int definition, string record) =>
+        Document == document && animationRevision == document.Revision && animationDefinition?.Index == definition && animationRecord == record;
     internal object? AnimationDraft => animationDefinition == null ? null : new { definition = animationDefinition.Index, file = animationDefinition.File, ordinal = animationDefinition.Ordinal, missions = animationDefinition.Missions, sequence = animationSequence, record = animationRecord, token = DraftToken, changes = animationChanges.Values.ToArray(), pending = HasDraft };
     internal void SelectAnimationRecord(string id)
     {
@@ -71,6 +100,9 @@ internal sealed partial class SourceSectionCard
         var dropSection = Section("Drop windows");
         dropSection.Body.Children.Add(drops);
         dropSection.SetBinding(VisibilityProperty, new System.Windows.Data.Binding("Visibility") { Source = drops });
+        animationContextSection = Section("Frame and source");
+        animationContextSection.Visibility = Visibility.Collapsed;
+        animationContextHost = animationContextSection.Body;
         var events = Section("Events");
         var sequences = definition.Records.Where(r => r.Kind == "sequence").ToArray();
         ComboBox sequence = new() { ItemsSource = sequences, DisplayMemberPath = "Name", Margin = new(0, 0, 0, 6) };
@@ -83,7 +115,7 @@ internal sealed partial class SourceSectionCard
         animationSequenceHost = new(); events.Body.Children.Add(new Expander { Header = "Sequence settings", Content = animationSequenceHost, IsExpanded = false, Margin = new(0, 0, 0, 6) });
         events.Body.Children.Add(list);
         animationFieldsHost = new(); events.Body.Children.Add(animationFieldsHost);
-        list.SelectionChanged += (_, _) => { animationRecord = (list.SelectedItem as SourceAnimationEdits.Record)?.Id; RefreshAnimationFields(); };
+        list.SelectionChanged += (_, _) => { animationContextHost?.Children.Clear(); if (animationContextSection != null) animationContextSection.Visibility = Visibility.Collapsed; animationRecord = (list.SelectedItem as SourceAnimationEdits.Record)?.Id; RefreshAnimationFields(); };
         sequence.SelectionChanged += (_, _) =>
         {
             string? id = (sequence.SelectedItem as SourceAnimationEdits.Record)?.Id;

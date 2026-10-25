@@ -167,6 +167,7 @@ public partial class MainWindow
                 bool previouslyAttached = sourceAnimationPreview;
                 sourceAnimationPreview = session.IsAttached || session.IsLoading;
                 var actual = session.State;
+                if (actual.Status == "Stopped") { ++worldAnimationEditingSeek; worldTimeline?.SetRequestedTime(null); }
                 worldAnimationFollowCamera = actual.FollowCamera; worldAnimationMuted = actual.Muted; worldAnimationEffects = actual.Effects;
                 worldAnimationRangeStart = actual.RangeStart; worldAnimationRangeEnd = actual.RangeEnd; worldAnimationSpeed = actual.Speed;
                 worldAnimationReplay = actual.Replay; worldAnimationVolume = actual.Volume;
@@ -181,7 +182,7 @@ public partial class MainWindow
         finally { if (request == worldAnimationPreparation) { worldAnimationPreparing = false; RefreshWorldAnimationTimeline(); } }
     }
 
-    private async Task WorldAnimationTransportAsync(string action, double seconds = 0, CancellationToken token = default)
+    private async Task WorldAnimationTransportAsync(string action, double seconds = 0, CancellationToken token = default, bool editingFrame = false)
     {
         if (action == "exit") { ExitWorldAnimation(); return; }
         if (action == "stop") { StopWorldAnimationForEdit(); return; }
@@ -213,12 +214,15 @@ public partial class MainWindow
         }
         if (scene?.IsFlyActive == true || scene?.IsPickupDragging == true || ZoneToolEngaged || scene?.TerrainBrushActive == true || scene?.HasTransformDraft == true || scene?.AiPathEditingNetwork != null)
             throw new StudioCommandException("busy", "Finish navigation or zone editing before playing an animation.");
+        if (!editingFrame && action is "seek" or "previous" or "next") { ++worldAnimationEditingSeek; worldTimeline?.SetRequestedTime(null); }
         var session = await EnsureWorldAnimationSessionAsync(token);
         OpenWorldAnimationTimeline(); await session.TransportAsync(action, seconds, token);
     }
 
     private void StopWorldAnimationForEdit()
     {
+        ++worldAnimationEditingSeek;
+        worldTimeline?.SetRequestedTime(null);
         ++worldAnimationPreparation; worldAnimationPreparing = false; worldAnimationSession?.Stop();
         sourceAnimationPreview = false; ApplyWorldAnimationScreenEffects(null);
         RefreshWorldAnimationTimeline(); UpdateSourceAnimationControls();
@@ -226,6 +230,8 @@ public partial class MainWindow
 
     private void ExitWorldAnimation()
     {
+        ++worldAnimationEditingSeek;
+        worldTimeline?.SetRequestedTime(null);
         ++worldAnimationPreparation; worldAnimationPreparing = false;
         var session = worldAnimationSession; worldAnimationSession = null; session?.Dispose();
         bool pinned = worldAnimationPinned != null; worldAnimationPinned = null; sourceAnimationPreview = false;
@@ -242,6 +248,8 @@ public partial class MainWindow
 
     private void ResetWorldAnimationConfiguration()
     {
+        ++worldAnimationEditingSeek;
+        worldTimeline?.SetRequestedTime(null);
         worldAnimationConfiguration = new(); worldAnimationScenarioEpoch = Guid.NewGuid(); worldAnimationDuration = null;
         worldAnimationExpanded.Clear(); worldAnimationCollapsed.Clear(); worldAnimationPageCounts.Clear();
     }

@@ -61,7 +61,7 @@ public partial class MainWindow
         switch (name)
         {
             case "view": WorldTimeline.SetView(data.GetValue<string>()); return;
-            case "ticks": WorldTimeline.ShowTicks = FlagValue(); return;
+
             case "labelWidth": WorldTimeline.SetLabelWidth(NumberValue()); return;
             case "followPlayhead": WorldTimeline.FollowPlayhead = FlagValue(); return;
             case "fit": WorldTimeline.Fit(data.GetValue<string>()); return;

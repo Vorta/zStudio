@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using zStudio.Core.Animation;
 using System.Globalization;
 using System.Windows;
 using System.Windows.Automation;
@@ -13,12 +14,14 @@ namespace zStudio.Desktop;
 /// <summary>The source world's sole timeline/transport. It presents snapshots and emits intent, never edits source.</summary>
 public sealed class WorldAnimationTimeline : UserControl
 {
-    internal const double Step = 1.0 / 60;
+    internal const double Step = AnimationTimelineFrames.Step;
     private const int MaximumRows = 65536, MaximumMarks = 40000;
     private readonly ObservableCollection<WorldAnimationTimelineRow> displayed = [];
     private IReadOnlyList<WorldAnimationTimelineRow> sourceRows = [], runRows = [];
     private readonly Grid root = new();
     private readonly ListBox rows = new();
+    private readonly ScrollBar horizontal = new() { Orientation = Orientation.Horizontal, Minimum = 0, SmallChange = Step };
+    private bool syncingScroll;
     private readonly TextBlock target = new() { TextTrimming = TextTrimming.CharacterEllipsis, FontWeight = FontWeights.SemiBold };
     private readonly TextBlock status = new() { TextTrimming = TextTrimming.CharacterEllipsis, FontSize = 11 };
     private readonly TextBlock time = new() { FontFamily = new("Consolas"), VerticalAlignment = VerticalAlignment.Center, Margin = new(6, 0, 6, 0) };
@@ -34,14 +37,16 @@ public sealed class WorldAnimationTimeline : UserControl
     private readonly ValueTextBox rangeStart = new() { Text = "0", Width = 48, Padding = new(4, 0, 4, 0) };
     private readonly ValueTextBox rangeEnd = new() { Text = "30", Width = 48, Padding = new(4, 0, 4, 0) };
     private readonly ComboBox view = new() { ItemsSource = new[] { "Source", "Run" }, SelectedIndex = 0, Width = 96 };
-    private readonly CheckBox ticks = new() { Content = "Ticks", VerticalAlignment = VerticalAlignment.Center, Margin = new(5, 0, 5, 0) };
+    private readonly TextBlock rate = new() { Text = "40 fps", VerticalAlignment = VerticalAlignment.Center, Margin = new(5, 0, 5, 0) };
     private readonly CheckBox follow = new() { Content = "Follow playhead", IsChecked = true, VerticalAlignment = VerticalAlignment.Center, Margin = new(5, 0, 5, 0) };
     private readonly WorldAnimationTimeRuler ruler;
     private readonly ColumnDefinition rulerLabels = new() { Width = new(220) };
-    private readonly Grid rulerGrid = new() { Height = 28 };
+    private readonly Grid rulerGrid = new() { Height = 40 };
     private bool changing, changingRows;
     private string? selectedId, selectedMarkId;
-    private double visibleStart, visibleEnd = 30;
+    private double visibleStart, visibleEnd = 1;
+    private bool initialZoom = true;
+    public double? RequestedTime { get; private set; }
     private double preferredLabelWidth = 220;
     private WorldAnimationTimelineState state = new();
 
@@ -54,6 +59,7 @@ public sealed class WorldAnimationTimeline : UserControl
     public event Action<WorldAnimationTimelineRow, bool>? GuideVisibilityRequested;
     public event Action<WorldAnimationTimelineRow>? EditTimingRequested;
     public event Action<WorldAnimationTimelineRow, double>? WindowMoveRequested;
+    public event Action<WorldAnimationTimelineRow, double>? TimingMoveRequested;
     public event Action<string, object>? OptionRequested;
     internal event Action? ViewChanged;
 
@@ -64,9 +70,9 @@ public sealed class WorldAnimationTimeline : UserControl
     public double LabelWidth => Math.Min(preferredLabelWidth, Math.Max(0, ActualWidth - SystemParameters.VerticalScrollBarWidth) * .42);
     public string? SelectedRowId => selectedId;
     public string? SelectedMarkId => selectedMarkId;
-    public WorldAnimationTimelinePresentation PresentationState => new(ViewMode, visibleStart, visibleEnd, FollowPlayhead, ShowTicks, selectedId, selectedMarkId, preferredLabelWidth);
+    public WorldAnimationTimelinePresentation PresentationState => new(ViewMode, visibleStart, visibleEnd, FollowPlayhead, selectedId, selectedMarkId, preferredLabelWidth, RequestedTime is double requested ? AnimationTimelineFrames.Frame(requested) : null);
     public bool FollowPlayhead { get => follow.IsChecked == true; set { follow.IsChecked = value; RefreshView(); } }
-    public bool ShowTicks { get => ticks.IsChecked == true; set { ticks.IsChecked = value; RefreshView(); } }
+
 
     public WorldAnimationTimeline()
     {
@@ -84,8 +90,8 @@ public sealed class WorldAnimationTimeline : UserControl
         root.Children.Add(heading);
         play = Command("Play", "play", "Play or pause (Space on the timeline)");
         stop = Command("Stop", "stop", "Stop and restore the initialized static world");
-        previous = Command("−1f", "previous", "Previous runtime tick");
-        next = Command("+1f", "next", "Next runtime tick");
+        previous = Command("−1f", "previous", "Previous 40 fps editing frame");
+        next = Command("+1f", "next", "Next 40 fps editing frame");
         exit = Command("Exit", "exit", "Stop and release this timeline's pinned target");
         foreach (var element in new UIElement[] { play, stop, previous, next, time, exit }) transport.Items.Add(element);
         foreach (var element in new UIElement[] { play, stop, time, exit }) ToolBar.SetOverflowMode(element, OverflowMode.Never);
@@ -101,7 +107,7 @@ public sealed class WorldAnimationTimeline : UserControl
 
         var main = new Grid(); main.RowDefinitions.Add(new() { Height = GridLength.Auto }); main.RowDefinitions.Add(new() { Height = GridLength.Auto }); main.RowDefinitions.Add(new() { Height = new(1, GridUnitType.Star) }); main.RowDefinitions.Add(new() { Height = GridLength.Auto });
         Grid.SetRow(main, 2); root.Children.Add(main);
-        presentation.Items.Add(view); presentation.Items.Add(ticks); presentation.Items.Add(follow);
+        presentation.Items.Add(view); presentation.Items.Add(rate); presentation.Items.Add(follow);
         var fit = new Button { Content = "Fit", Padding = new(7, 2, 7, 2), ToolTip = "Fit selection, evaluated events, or preview range" };
         var fitMenu = new ContextMenu();
         foreach (var pair in new[] { ("Selection", "selection"), ("Evaluated events", "evaluated"), ("Preview range", "range") })
@@ -130,7 +136,11 @@ public sealed class WorldAnimationTimeline : UserControl
         var factory = new FrameworkElementFactory(typeof(WorldAnimationTimelineRowView));
         factory.SetBinding(WorldAnimationTimelineRowView.OwnerProperty, new Binding { RelativeSource = new(RelativeSourceMode.FindAncestor, typeof(WorldAnimationTimeline), 1) });
         rows.ItemTemplate = new DataTemplate { VisualTree = factory }; Grid.SetRow(rows, 2); main.Children.Add(rows);
-        Grid.SetRow(coverage, 3); main.Children.Add(coverage);
+        main.RowDefinitions.Add(new() { Height = GridLength.Auto });
+        Grid.SetRow(horizontal, 3); main.Children.Add(horizontal);
+        AutomationProperties.SetName(horizontal, "Timeline horizontal scroll");
+        horizontal.ValueChanged += (_, e) => { if (syncingScroll) return; double start = e.NewValue, span = visibleEnd - visibleStart; FollowPlayhead = false; SetVisibleRange(start, start + span); OptionRequested?.Invoke("visibleRange", new[] { visibleStart, visibleEnd }); };
+        Grid.SetRow(coverage, 4); main.Children.Add(coverage);
         AutomationProperties.SetName(rows, "Animation timeline rows"); AutomationProperties.SetName(view, "Timeline projection");
         rows.SelectionChanged += (_, _) => { if (changingRows) return; if (rows.SelectedItem is WorldAnimationTimelineRow row) { selectedId = row.Id; selectedMarkId = null; RowSelected?.Invoke(row); RefreshView(); } };
         rows.PreviewKeyDown += RowsKeyDown;
@@ -143,7 +153,7 @@ public sealed class WorldAnimationTimeline : UserControl
             if (HandleWheel(e.Delta, Keyboard.Modifiers, .5)) e.Handled = true;
         };
         view.SelectionChanged += (_, _) => { if (changing) return; UpdateDisplayedRows(); OptionRequested?.Invoke("view", ViewMode); };
-        ticks.Click += (_, _) => { RefreshView(); OptionRequested?.Invoke("ticks", ShowTicks); };
+
         follow.Click += (_, _) => { RefreshView(); OptionRequested?.Invoke("followPlayhead", FollowPlayhead); };
         speed.SelectionChanged += (_, _) => { if (!changing) OptionRequested?.Invoke("speed", new[] { .25, .5, 1, 2, 4 }[Math.Clamp(speed.SelectedIndex, 0, 4)]); };
         mute.Click += (_, _) => { if (!changing) OptionRequested?.Invoke("mute", mute.IsChecked == true); };
@@ -160,13 +170,13 @@ public sealed class WorldAnimationTimeline : UserControl
     {
         var button = new Button { Content = text, ToolTip = tip, MinHeight = 28, MinWidth = 30, Padding = new(6, 2, 6, 2), Margin = new(1, 0, 1, 0) };
         AutomationProperties.SetName(button, text);
-        button.Click += (_, _) => TransportRequested?.Invoke(action == "play" && state.Playing ? "pause" : action);
+        button.Click += (_, _) => { if (action is "previous" or "next") RequestSeek((RequestedTime ?? state.Time) + (action == "previous" ? -Step : Step)); else TransportRequested?.Invoke(action == "play" && state.Playing ? "pause" : action); };
         return button;
     }
 
     public void SetState(WorldAnimationTimelineState value)
     {
-        ArgumentNullException.ThrowIfNull(value); state = value; changing = true;
+        ArgumentNullException.ThrowIfNull(value); state = value; if (value.Playing) RequestedTime = null; changing = true;
         try
         {
             target.Text = Shown(value.Target); target.ToolTip = value.Target;
@@ -176,7 +186,8 @@ public sealed class WorldAnimationTimeline : UserControl
             play.IsEnabled = value.CanPlay; stop.IsEnabled = value.CanStop; exit.IsEnabled = value.CanExit;
             previous.IsEnabled = next.IsEnabled = ruler.IsEnabled = value.CanSeek;
             useSelection.Visibility = value.CanUseSelection ? Visibility.Visible : Visibility.Collapsed;
-            time.Text = $"{value.Time:0.000} s · {Math.Floor(value.Time * 60 + 1e-7):0}f";
+            time.Text = $"Frame {AnimationTimelineFrames.Frame(RequestedTime ?? value.Time):0.###} · {value.Time:0.000} s";
+            time.ToolTip = $"40 fps editing position; evaluated preview {value.Time:G9} seconds.";
             coverage.Text = Shown(value.Coverage); coverage.ToolTip = value.Coverage;
             speed.SelectedIndex = Math.Max(0, Array.IndexOf(new[] { .25, .5, 1, 2, 4 }, value.Speed));
             mute.IsChecked = value.Muted; volume.Value = Math.Clamp(value.Volume, 0, 1); camera.IsChecked = value.FollowCamera; replay.IsChecked = value.Replay;
@@ -231,26 +242,33 @@ public sealed class WorldAnimationTimeline : UserControl
     public void SetVisibleRange(double start, double end)
     {
         if (!double.IsFinite(start) || !double.IsFinite(end) || start < 0 || end > 3600 || end - start < Step - 1e-9) throw new ArgumentException("Visible range must span at least one tick within 0–3600 seconds.");
-        visibleStart = start; visibleEnd = end; RefreshView();
+        initialZoom = false; visibleStart = start; visibleEnd = end; RefreshView();
     }
     public void Fit(string target)
     {
         if (target == "range") { SetVisibleRange(state.RangeStart, Math.Max(state.RangeStart + Step, state.RangeEnd)); return; }
         if (target is not ("selection" or "evaluated")) throw new ArgumentException("Fit must target selection, evaluated, or range.");
         // Local keyframe/flight clocks are not positions on the global preview ruler.
-        var candidates = displayed.Where(r => !r.IsWindowClock && r.NativeClockStart == null && r.NativeClockEnd == null && (target != "selection" || r.Id == selectedId))
-            .SelectMany(r => r.Marks).Where(m => double.IsFinite(m.Start) && m.Kind != WorldAnimationTimelineMarkKind.Authored).ToArray();
+        var candidates = displayed.Where(r => target == "selection" ? r.Id == selectedId : !r.IsSourceClock && !r.IsWindowClock)
+            .SelectMany(r => r.Marks).Where(m => double.IsFinite(m.Start)).ToArray();
         if (candidates.Length == 0) return;
         double begin = Math.Clamp(candidates.Min(m => m.Start), 0, 3600 - Step);
         double end = Math.Clamp(candidates.Max(m => m.End is double e && double.IsFinite(e) ? e : Math.Max(m.Start, state.Time)), begin + Step, 3600);
         double margin = Math.Max(Step, (end - begin) * .05); SetVisibleRange(Math.Max(0, begin - margin), Math.Min(3600, end + margin));
     }
-    internal void RefreshView() { ruler.InvalidateVisual(); ViewChanged?.Invoke(); }
+    internal void RefreshView()
+    {
+        syncingScroll = true;
+        try { horizontal.Maximum = Math.Max(0, 3600 - (visibleEnd - visibleStart)); horizontal.ViewportSize = visibleEnd - visibleStart; horizontal.LargeChange = visibleEnd - visibleStart; horizontal.Value = visibleStart; }
+        finally { syncingScroll = false; }
+        ruler.InvalidateVisual(); ViewChanged?.Invoke();
+    }
     internal void AlignRuler(FrameworkElement plot)
     {
         if (plot.ActualWidth <= 0 || ActualWidth <= 0) return;
         // Fluent uses an overlay scrollbar. Use the realized content's bounds rather than
         // assuming a reserved system scrollbar gutter or a particular item border thickness.
+        if (initialZoom) visibleEnd = Math.Clamp(plot.ActualWidth / 18 * Step, Step, 3600);
         double left = plot.TranslatePoint(new(), this).X;
         double right = Math.Max(0, ActualWidth - left - plot.ActualWidth);
         if (!double.IsFinite(left) || left < 0 || left >= ActualWidth) return;
@@ -258,7 +276,8 @@ public sealed class WorldAnimationTimeline : UserControl
         if (Math.Abs(rulerGrid.Margin.Right - right) > .01) rulerGrid.Margin = new(0, 0, right, 0);
     }
     internal void RequestSeek(double seconds)
-    { if (state.CanSeek && double.IsFinite(seconds)) SeekRequested?.Invoke(Math.Clamp(Math.Round(seconds * 60) / 60, 0, 3600)); }
+    { if (state.CanSeek && double.IsFinite(seconds)) { RequestedTime = Math.Clamp(AnimationTimelineFrames.Snap(seconds), 0, 3600); SeekRequested?.Invoke(RequestedTime.Value); RefreshView(); } }
+    internal void SetRequestedTime(double? seconds) { RequestedTime = seconds; time.Text = $"Frame {AnimationTimelineFrames.Frame(RequestedTime ?? state.Time):0.###} · {state.Time:0.000} s"; RefreshView(); }
     internal void Select(WorldAnimationTimelineRow row, WorldAnimationTimelineMark? mark = null)
     {
         // An occurrence owns the exact source selection; do not also dispatch the row's sequence selection.
@@ -273,6 +292,7 @@ public sealed class WorldAnimationTimeline : UserControl
     internal void ShowGuides(WorldAnimationTimelineRow row, bool shown) => GuideVisibilityRequested?.Invoke(row, shown);
     internal void EditTiming(WorldAnimationTimelineRow row) { if (row.CanEditTiming) EditTimingRequested?.Invoke(row); }
     internal void MoveWindow(WorldAnimationTimelineRow row, double value) { if (row.IsWindowClock && row.CanMoveWindow && double.IsFinite(value)) WindowMoveRequested?.Invoke(row, value); }
+    internal void MoveTiming(WorldAnimationTimelineRow row, double seconds) { if (row.CanEditTiming && double.IsFinite(seconds)) TimingMoveRequested?.Invoke(row, seconds); }
     internal bool HandleWheel(int delta, ModifierKeys modifiers, double fraction)
     {
         double span = visibleEnd - visibleStart;
@@ -295,8 +315,8 @@ public sealed class WorldAnimationTimeline : UserControl
         double amount = Keyboard.Modifiers == ModifierKeys.Shift ? 10 * Step : Step;
         switch (e.Key)
         {
-            case Key.Left: RequestSeek(state.Time - amount); break;
-            case Key.Right: RequestSeek(state.Time + amount); break;
+            case Key.Left: RequestSeek((RequestedTime ?? state.Time) - amount); break;
+            case Key.Right: RequestSeek((RequestedTime ?? state.Time) + amount); break;
             case Key.Home: RequestSeek(Keyboard.Modifiers == ModifierKeys.Control ? 0 : state.RangeStart); break;
             case Key.End: RequestSeek(state.RangeEnd); break;
             case Key.Space when Keyboard.Modifiers == ModifierKeys.None: if (state.CanPlay) TransportRequested?.Invoke(state.Playing ? "pause" : "play"); break;
