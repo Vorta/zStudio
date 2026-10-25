@@ -146,9 +146,12 @@ public sealed class SourceObjectEditTests
             SourceWorkspace workspace = new(fixture.Project);
             var (build, world) = await BuildAsync(fixture, workspace);
             var ground = world.Nodes.Single(n => n.Name == "ground");
-            var plan = SourceObjectEdits.PlanFlag(workspace, ground, build.Provenance[Slot(world, "ground")], build.Executions,
+            var prepared = workspace.BeginPreparedEdit();
+            var plan = SourceObjectEdits.PlanFlag(prepared.Workspace, ground, build.Provenance[Slot(world, "ground")], build.Executions,
                 toModify ? 0x10000u : 0x20000u, true, Token, "m2", null, world, build.WriteInstruction);
-            workspace.Apply(plan.Label, plan.Changes.Select(c => (c.Relative, (byte[]?)c.Content)), Token);
+            prepared.Workspace.Apply(plan.Label, plan.Changes.Select(c => (c.Relative, (byte[]?)c.Content)), Token);
+            using (var verified = workspace.VerifyPreparedEdit(prepared, Token))
+                Assert.NotNull(workspace.AcceptPreparedEdit(prepared, Token, verified));
             var (_, after) = await BuildAsync(fixture, workspace);
             Assert.Equal(toModify ? 0x10000u : 0x20000u, after.Nodes.Single(n => n.Name == "ground").Flags & 0x30000u);
             workspace.Undo();

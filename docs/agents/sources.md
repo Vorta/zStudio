@@ -179,7 +179,7 @@ Refusals name the input and what to reduce; nothing is shortened silently.
 | Text sources (scripts, `.zrd`/`.zad`/`.zan`) | 16 MiB each; scripts 1,000,000 lines, 4,000,000 tokens; tokens 4,096 bytes |
 | Prepared-script export | 64 MiB, 1,000,000 instructions, 4,000,000 tokens together |
 | Reconstruction | 1.5 GiB retained input estimate (releases ~500 MiB); 4 GiB initial input; 512 MiB world output, 512 MiB animation output; 200,000 reference visits per walk, 4,194,304 per run |
-| Edit buffers | 1 GiB retained; 4,096 prepared dependencies |
+| Edit buffers | 1 GiB retained; 131,072 distinct prepared dependency paths, at most 4,096 existing files held during verification |
 | Save/recovery | 128 Mi path-work units; journals 64 MiB and 50,000 rows; 250,000 folders per manifest |
 | Inventories | 50,000 files; 1,000,000 input references per plan; 128 Mi path units |
 | World build | 131,072 existence probes; 1 GiB model bytes read; 64 MiB / 4,000,000 tokens script cache |
