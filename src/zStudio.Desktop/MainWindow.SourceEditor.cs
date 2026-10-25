@@ -142,7 +142,7 @@ public partial class MainWindow
         AiLabel.Margin = new(10, 100, 10, 10);
         if (DocumentSceneTree.Parent is ContentControl tab) tab.Content = null;
         SourceTreeHost.Content = DocumentSceneTree;
-        Restyle(DocumentSceneTree, ScrollViewer.HorizontalScrollBarVisibilityProperty, ScrollBarVisibility.Disabled);
+        Restyle(DocumentSceneTree, ScrollViewer.HorizontalScrollBarVisibilityProperty, ScrollBarVisibility.Auto);
         // The source dock shares one transport across Timeline and Diagnostics.
         InitializeWorldAnimationDock();
         Move(ProblemsPage, sourceDiagnosticsContent!);
@@ -365,7 +365,7 @@ public partial class MainWindow
     {
         if (sceneTree?.Selected is { Index: int index } row && index == selected.SelectionNode) return row.Category;
         var data = scene?.PreviewScene; int node = selected.SelectionNode >= 0 ? selected.SelectionNode : selected.Node;
-        if (shownDocument is { SourceWorld: not null } doc && SourceSelection(doc, data) is { } projection && projection.IsBoundary(projection.Owner(node))) return "object";
+        if (shownDocument is { SourceWorld: not null } doc && SourceSelection(doc, data) is { } projection && projection.IsBoundary(node)) return "object";
         if (data == null || node < 0 || node >= data.Nodes.Count) return "node";
         var n = data.Nodes[node];
         return n.Class switch
@@ -573,7 +573,7 @@ public partial class MainWindow
         foreach (var row in sceneTree.CreatedRows.ToArray()) row.IsExpanded = false;
     }
     /// <summary>
-    /// Show all shows every hidden object (units and pickups too) and ends isolation; zones and AI networks keep their own eyes.
+    /// Show all clears row hiding (units and pickups too) and isolation; part gates, zones and AI networks keep their own eyes.
     /// The AI Vehicles and Pickups master eyes follow.
     /// </summary>
     private void ShowAllSections() => ApplySectionPresentation();
@@ -611,7 +611,7 @@ public partial class MainWindow
     }
 
     // Hide in viewport: presentation only, never a source edit.
-    private void OutlinerEyeClick(object sender, RoutedEventArgs e)
+    private async void OutlinerEyeClick(object sender, RoutedEventArgs e)
     {
         e.Handled = true;
         if ((sender as FrameworkElement)?.Tag is SceneTreeItem { CanHide: true } section && (section.Section != null || section.HasMasterEye))
@@ -621,8 +621,7 @@ public partial class MainWindow
             return;
         }
         if ((sender as FrameworkElement)?.Tag is not SceneTreeItem { CanHide: true, Index: int index } row) return;
-        try { SetRowHidden(row, index, !row.IsHidden); }
-        catch (StudioCommandException ex) { Report(ex); }
+        await RunUi(() => SetTreeRowHiddenAsync(row, index, !row.IsHidden));
     }
     // Middle-click on a world object's eye: show only this object (what Isolate did), or everything again on the isolated one.
     // Zones, networks, units and pickups are shown and hidden one by one, and their sections' rows show or hide them all.
@@ -660,7 +659,7 @@ public partial class MainWindow
         if (card.Selection is not { Active: false } selected || selected.SelectionNode < 0
             || !selected.Target.StartsWith($"source:{doc.SessionId}:", StringComparison.Ordinal)) return false;
         // Without a shown mesh of it the view selects nothing and nothing changes (a light, a group, an object still hidden).
-        if (!view.SelectInspectionNode(selected.SelectionNode)) return false;
+        if (!view.SelectInspectionNode(selected.SelectionNode, exact: selected.ExactSelection)) return false;
         card.Refresh(); return true;
     }
     /// <summary>
@@ -720,7 +719,7 @@ public partial class MainWindow
             .Where(r => r.Index is int index && r.Problem == null && hiddenRows.ContainsKey(index)).Distinct().ToArray();
         string[] layout = [.. rows.Select(r => HiddenPath(r, paths)).Distinct()];
         HashSet<int> placed = [.. rows.Select(r => r.Index!.Value)];
-        string[] keys = [.. hiddenRows.Keys.Where(k => !placed.Contains(k)).Select(k => projection.Identities.GetValueOrDefault(projection.Owner(k))).OfType<string>().Distinct()];
+        string[] keys = [.. hiddenRows.Keys.Where(k => !placed.Contains(k)).Select(k => projection.Identities.GetValueOrDefault(k)).OfType<string>().Distinct()];
         pendingHidden = layout.Length == 0 && keys.Length == 0 ? null : (shownDocument.Path, layout, keys);
     }
     /// <summary>Hides again, in the rebuilt map, the rows found at the same layout paths and the objects whose identity matches exactly one row; the rest show.</summary>

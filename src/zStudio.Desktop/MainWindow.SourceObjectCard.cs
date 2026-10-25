@@ -18,7 +18,7 @@ public partial class MainWindow
             if (viewport != scene || shownDocument is not { SourceWorld: not null, IsDisposed: false } doc || card.Selection is not { } selected) return null;
             try
             {
-                int node = EditableSourceSelectionNode(doc, selected.Node);
+                int node = EditableSourceSelectionNode(doc, selected.SelectionNode);
                 var state = DescribeSourceObject(doc, node);
                 if (state.Origin.Terrain != null) { card.TerrainAvailable = true; return null; }
                 return new SceneInspectionCard.ObjectBinding(doc, state);
@@ -74,7 +74,7 @@ public partial class MainWindow
         card.EditTerrain = () => _ = RunUi(async () =>
         {
             if (shownDocument is not { SourceWorld: not null } doc || card.Selection is not { } selected) return;
-            var state = DescribeSourceObject(doc, EditableSourceSelectionNode(doc, selected.Node));
+            var state = DescribeSourceObject(doc, EditableSourceSelectionNode(doc, selected.SelectionNode));
             if (state.Origin.Terrain is not { } recipe) return;
             // Properties leaves what it shows (pending input) only once that is resolved.
             if (!await ResolvePropertiesDraftsAsync()) return;
@@ -107,12 +107,12 @@ public partial class MainWindow
         {
             if (!ResolveInspectionDrafts(doc)) return false;
             card.ClearSourceNode();
-            if (!scene.SelectInspectionNode(node, null))
+            if (!scene.SelectInspectionNode(node, exact: true))
             {
                 var projection = SourceSelection(doc, scene.PreviewScene);
                 if (!SourceWorldModel(doc).Slots.ContainsKey(node) && projection?.AuthoredNodes.ContainsKey(node) != true && projection?.Boundaries.ContainsKey(node) != true) return false;
                 if (!scene.SelectInspection(null, false)) return false;
-                card.SelectSourceNode(new($"source:{doc.SessionId}:{node}", node, -1, -1, null, null, null, null, null, false, null));
+                card.SelectSourceNode(new($"source:{doc.SessionId}:{node}", node, -1, -1, null, null, null, null, null, false, null) { ExactSelection = true });
                 if (sceneTreeDocument == doc && sceneTree is { } tree)
                 {
                     bool changing = changingSceneTree; changingSceneTree = true;

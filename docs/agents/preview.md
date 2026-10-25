@@ -11,6 +11,7 @@ Rules for model, Whole world, mission and animation previews. Engine facts and a
 - Unplaced scripted actors stay hidden in world context, with a diagnostic, until placed; explicit individual inspection may use a clearly labeled stored pose. No generic offset on static terrain or ordinary zero transforms.
 - Names never identify instances; cloned vehicles keep their source-node provenance. Shared world animation bindings share state and checkpoint aliases; copied animation roots and effects keep separate identities.
 - Edits invalidate the frozen preview context and rebuild the baseline.
+- Source World child rows expose initialized hidden branches. Their eyes use the shared part-visibility overrides before scene traversal, so enabling destroyed geometry prepares its meshes rather than merely clearing a hide mask. Overrides never modify source flags, simulation state or history; a parent gate, pending placement and LOD still constrain traversal. Exact tree selection is retained separately from whole-object hit ownership through inspection refresh and animation attachment changes.
 
 ## Player tank
 

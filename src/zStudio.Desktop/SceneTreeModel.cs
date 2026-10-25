@@ -72,6 +72,7 @@ internal sealed class SceneTreeModel
     internal event Action? SelectionChanged;
     /// <summary>Whether a node is hidden in the view (the outliner's eye); null outside source maps.</summary>
     internal Func<int, bool>? IsHiddenNode { get; set; }
+    internal Func<int, SourceMapNodeVisibility?>? PartVisibility { get; set; }
     /// <summary>Whether the view shows only this node (middle-click on its eye).</summary>
     internal Func<int, bool>? IsIsolatedNode { get; set; }
     /// <summary>Every row created so far, for refreshing their hidden state.</summary>
@@ -154,7 +155,6 @@ internal sealed class SceneTreeModel
     /// <summary>The row of a node, created along its path if needed; with <paramref name="expand"/> its ancestors open.</summary>
     internal SceneTreeItem? Reveal(int node, bool expand = true)
     {
-        node = Projection?.Owner(node) ?? node;
         if (Selected?.Index == node) { if (expand) ExpandAncestors(Selected); return Selected; }
         var path = Projection?.Path(node) ?? Hierarchy.PathTo(node);
         if (path.Count == 0) return null;
@@ -377,13 +377,16 @@ public sealed class SceneTreeItem : INotifyPropertyChanged
     public bool IsPassObject => addedPass != null && Section == null;
     /// <summary>The row's Frame selection button: a selectable object, piece of geometry or node (not a group the build removes), an AI network, a bound definition or a Pickups group or type.</summary>
     public bool CanFrame => IsSourceMap && (Section != null ? Section is NetworkEntry || Section is DefinitionEntry { Roots: > 0 } || PickupShown : Index is int && Selectable && !SourceGroup && !IsEmptyNode);
-    public bool IsHidden => MasterKey is { } master ? State?.MasterShown(master) != true : Section != null ? SectionHidden : Index is int i && Owner.IsHiddenNode?.Invoke(i) == true;
+    internal SourceMapNodeVisibility? VisibilityState => Index is int i ? Owner.PartVisibility?.Invoke(i) : null;
+    public bool IsHidden => MasterKey is { } master ? State?.MasterShown(master) != true : Section != null ? SectionHidden
+        : VisibilityState is { } part ? !part.Visible : Index is int i && Owner.IsHiddenNode?.Invoke(i) == true;
     public bool IsIsolated => Section == null && !IsPassObject && Index is int i && Owner.IsIsolatedNode?.Invoke(i) == true;
     /// <summary>A hidden row drawn faint: never a section or pass row, whose master eye shows only what pressing it does.</summary>
-    public bool IsFaded => IsHidden && !IsSectionHeader && Section is not DefinitionEntry && PickupEntries == null;
+    public bool IsFaded => (IsHidden || VisibilityState?.EffectiveVisible == false) && !IsSectionHeader && Section is not DefinitionEntry && PickupEntries == null;
     public string EyeIcon => IsHidden ? "EyeOff" : IsIsolated ? "Isolate" : "Eye";
     public string EyeToolTip => Section != null || HasMasterEye ? SectionEyeToolTip : IsPassObject ? (IsHidden ? "Show in viewport" : "Hide in viewport")
-        : (IsHidden ? "Show in viewport" : "Hide in viewport") + (IsIsolated ? "\nMiddle-click: show all objects again" : "\nMiddle-click: hide all other objects");
+        : (IsHidden ? "Show in viewport" : "Hide in viewport") + (VisibilityState?.Reason is { } reason ? "\n" + reason : "")
+            + (IsIsolated ? "\nMiddle-click: show all objects again" : "\nMiddle-click: hide all other objects");
     internal void NotifyHidden()
     {
         foreach (string name in new[] { nameof(IsHidden), nameof(IsIsolated), nameof(IsFaded), nameof(EyeIcon), nameof(EyeToolTip), nameof(HeaderActive), nameof(HeaderPaused),

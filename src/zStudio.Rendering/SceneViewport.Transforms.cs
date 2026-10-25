@@ -140,7 +140,11 @@ public sealed partial class SceneViewport
             if (selected != null) SelectedInspection = InspectAi(selected);
         }
         RefreshPickupSelection();
-        if (SelectedInspection is { } selectedInspection) SelectedInspection = InspectTarget(selectedInspection.Target) ?? selectedInspection;
+        if (SelectedInspection is { } selectedInspection)
+            SelectedInspection = InspectTarget(selectedInspection.Target) is { } refreshed
+                ? refreshed with { OwnerNode = selectedInspection.ExactSelection ? selectedInspection.OwnerNode : refreshed.OwnerNode,
+                    ExactSelection = selectedInspection.ExactSelection }
+                : selectedInspection;
         InspectionChanged?.Invoke();
     }
 

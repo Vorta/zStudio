@@ -62,7 +62,7 @@ internal sealed partial class SceneInspectionCard
         if (SourceObject == null) return false;
         // Rebase accepted fields only after publication/Apply completes. Drafts and the old editor
         // must survive preparation failures so their exact input and lifetime can be restored.
-        if (!ObjectApplying && !HasObjectDraft && (ObjectEditor == null || objectTarget != Selection?.Target
+        if (!ObjectApplying && !HasObjectDraft && (ObjectEditor == null || objectTarget != Selection?.Target || objectBinding?.State.Node != Selection?.SelectionNode
             || objectBinding?.Document.IsDisposed == true
             || objectBinding != null && !ReferenceEquals(objectBinding.Snapshot, objectBinding.Document.Document)))
         {
@@ -94,7 +94,8 @@ internal sealed partial class SceneInspectionCard
         detailsSection.Visibility = Visibility.Collapsed;
         if (ObjectEditor.TransformSection is { } transformSection) PlaceModes(transformSection);
         ObjectEditor.IsEnabled = !objectBinding!.Document.SourceWorld!.IsRebuilding && !ObjectApplying;
-        copyObject.IsEnabled = deleteObject.IsEnabled = ObjectEditor.IsEnabled;
+        copyObject.IsEnabled = deleteObject.IsEnabled = ObjectEditor.IsEnabled && objectBinding!.State.Object == null;
+        copyObject.ToolTip = deleteObject.ToolTip = objectBinding!.State.Object != null ? "This is a shared model part. Structural changes are made in its model source; select the whole object to copy or delete its placement." : null;
         heading.Text = objectBinding.State.Name; heading.ToolTip = objectBinding.State.Name; selectionName.Text = heading.Text;
         // The node's type and its built node, as the header's second line; the tooltip names the model (or the file holding it).
         var state = objectBinding.State;

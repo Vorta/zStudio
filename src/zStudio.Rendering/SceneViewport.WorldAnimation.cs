@@ -123,7 +123,8 @@ public sealed partial class SceneViewport
                     if (current?.Active == true) break;
                 }
             }
-            SelectedInspection = current ?? selected with { Active = false, Origin = null, Surface = null, Normal = null };
+            SelectedInspection = current != null ? current with { OwnerNode = selected.ExactSelection ? selected.OwnerNode : current.OwnerNode, ExactSelection = selected.ExactSelection }
+                : selected with { Active = false, Origin = null, Surface = null, Normal = null };
         }
         HoverInspection = null; ++inspectionSerial;
         RefreshPickupSelection(); InspectionChanged?.Invoke();

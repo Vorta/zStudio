@@ -227,6 +227,10 @@ public partial class MainWindow
         SceneGroupByTypeMenu.Visibility = addPickup && contextScene!.HasGroupByType ? Visibility.Visible : Visibility.Collapsed;
         SceneGroupByTypeMenu.IsChecked = pickupsByType;
         SceneGroupByTypeMenu.IsEnabled = SceneAddPickupMenu.IsEnabled;
+        bool resetParts = contextScene?.Owner == sceneTree && contextScene?.Index is int partNode && sceneTree?.Projection is { } partProjection
+            && partProjection.IsBoundary(partProjection.Owner(partNode)) && sceneContextDocument == shownDocument;
+        SceneResetPartsMenu.Visibility = resetParts ? Visibility.Visible : Visibility.Collapsed;
+        SceneResetPartsMenu.IsEnabled = resetParts && !sourceMapPartsBusy && !sourceWorkspaceBusy;
         if (sceneContextDocument?.SourceWorld != null)
         {
             // Source rows offer Rename, and the Pickups pass offers creation.
@@ -234,7 +238,7 @@ public partial class MainWindow
             bool rename = contextScene?.Authored is { } authored && CanRenameRemoved(sceneContextDocument, authored) && contextScene.Owner == sceneTree && sceneContextDocument == shownDocument;
             SceneRenameMenu.Visibility = rename ? Visibility.Visible : Visibility.Collapsed;
             SceneRenameMenu.IsEnabled = rename && sceneContextDocument.SourceWorld is { IsRebuilding: false } && !sourceWorkspaceBusy;
-            if (!rename && !addPickup && sender is ContextMenu menu) menu.IsOpen = false;
+            if (!rename && !addPickup && !resetParts && sender is ContextMenu menu) menu.IsOpen = false;
             e.Handled = true; return;
         }
         SceneRenameMenu.Visibility = Visibility.Collapsed;

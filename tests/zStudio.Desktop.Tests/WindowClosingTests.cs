@@ -87,6 +87,7 @@ public sealed class WindowClosingTests
                     await WorldCompareBudgetChecks.Run();
                     await LookupMcpChecks.Run();
                     await SourceObjectPlanMcpChecks.Run();
+                    await SourceWorldTreeChecks.Run();
                     Volatile.Write(ref phase, "navigation, lifecycle and content editing");
                     await ResponsiveNavigatorChecks.Run(app);
                     await WorldHighlightMcpChecks.Run();

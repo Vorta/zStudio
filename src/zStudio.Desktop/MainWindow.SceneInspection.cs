@@ -118,7 +118,7 @@ public partial class MainWindow
         if (node != null && shownDocument is { SourceWorld: not null } sourceDocument && SourceSelection(sourceDocument, data) is { } selection)
         {
             sourceSelection = selection;
-            owner = selection.Owner(item.Node);
+            owner = item.SelectionNode;
             var boundary = selection.Boundaries.GetValueOrDefault(owner);
             string? name = boundary?.Name ?? (owner >= 0 && owner < data!.Nodes.Count ? data.Nodes[owner].Name : null);
             if (name != null)

@@ -532,6 +532,7 @@ public sealed partial class SceneViewport : UserControl, IDisposable
     }
     private HashSet<int> isolatedNodes = [], hiddenNodes = [];
     private bool IsShownPlacement(ScenePlacement p) => !replacedNodes.Contains(p.NodeIndex) && IsShownNode(p.NodeIndex);
+    public bool IsNodeShown(int node) => IsShownNode(node);
     private bool IsShownNode(int node) => (isolatedRoot == null || isolatedNodes.Contains(node) || pickupRoots.TryGetValue(node, out int pickup) && (pickup == isolatedRoot || isolatedNodes.Contains(pickup)))
         && !hiddenNodes.Contains(node) && !hiddenNodes.Contains(pickupRoots.GetValueOrDefault(node, -1));
     private void ApplyNodeVisibility()

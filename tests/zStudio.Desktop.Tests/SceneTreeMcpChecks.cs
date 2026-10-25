@@ -200,12 +200,12 @@ internal static class SceneTreeMcpChecks
             var additionalOrigins = new Dictionary<int, WorldNodeProvenance> { [0] = new(), [1] = firstPart, [2] = secondPart, [3] = new() };
             ownership = SourceSelectionIndex.Build(additionalOrigins, deadline.Token, authored: authored);
             var sharedProjection = new SourceMapSelection(data, null, ownership, i => new("node:" + i, i, null), deadline.Token);
-            Assert.Contains(sharedProjection.Children(3), edge => edge.Node == sharedProjection.Owner(1));
-            Assert.DoesNotContain(sharedProjection.Children(0), edge => edge.Node == sharedProjection.Owner(1));
+            Assert.Contains(sharedProjection.Children(3), edge => edge.Node == 1);
+            Assert.DoesNotContain(sharedProjection.Children(0), edge => edge.Node == 1);
             ownership = SourceSelectionIndex.Build(additionalOrigins, deadline.Token,
                 authored: authored with { FlattenedEdges = [new(0, 1)], ScriptEdges = [new(0, 2)] });
             sharedProjection = new SourceMapSelection(data, null, ownership, i => new("node:" + i, i, null), deadline.Token);
-            Assert.Contains(sharedProjection.Children(0), edge => edge.Node == sharedProjection.Owner(1));
+            Assert.Contains(sharedProjection.Children(0), edge => edge.Node == 2);
             // A detached component can retain a physical imported child after its original root was deleted.
             // It has an owner but no path in the world tree: reject before changing selection, never index -2.
             data = new();

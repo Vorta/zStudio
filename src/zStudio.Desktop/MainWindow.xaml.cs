@@ -730,7 +730,6 @@ public partial class MainWindow : Window
         inspectedSceneSource = null;
         if (shownDocument is { SourceWorld: not null } sourceDocument && SourceSelection(sourceDocument, scene?.PreviewScene) is { } projection)
         {
-            index = projection.Owner(index);
             if (index < 0)
             {
                 RevealSceneNode(index);

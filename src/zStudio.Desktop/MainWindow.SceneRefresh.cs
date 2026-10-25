@@ -101,8 +101,7 @@ public partial class MainWindow
             {
                 if (SourceSelection(doc, previous.PreviewScene) is { } before && SourceSelection(doc, mission?.Scene) is { } after)
                 {
-                    int owner = before.Owner(oldNode);
-                    if (!before.Identities.TryGetValue(owner, out string? key)) return null;
+                    if (!before.Identities.TryGetValue(oldNode, out string? key)) return null;
                     var matchesByIdentity = after.Identities.Where(p => p.Value == key).Take(2).Select(p => p.Key).ToArray();
                     return matchesByIdentity.Length == 1 ? matchesByIdentity[0] : null;
                 }
@@ -141,7 +140,7 @@ public partial class MainWindow
             {
                 InspectNode(node);
                 // A source map's tree-only selection (a light, a hidden object) has nothing to pick in the view: the card selects it.
-                if (!scene.SelectInspectionNode(node) && doc.SourceWorld != null)
+                if (!scene.SelectInspectionNode(node, exact: doc.SourceWorld != null) && doc.SourceWorld != null)
                     try { FocusSourceObjectCard(doc, node); } catch (zStudio.Automation.StudioCommandException) { }
             }
             if (aiSelection != null && previous.AiNetworks.Find(aiSelection) is { } oldAi && scene.AiNetworks.Find(aiSelection) is { } newAi &&

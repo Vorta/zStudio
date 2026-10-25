@@ -143,6 +143,11 @@ internal static class SceneSelectionMcpChecks
             Assert.Equal(1, viewport.SelectedInspection!.Node);
             Assert.Equal(-10, viewport.SelectedInspection.SelectionNode);
             Assert.Equal(-10, viewport.FramingSelection);
+            Assert.True(viewport.SelectInspectionNode(1, exact: true));
+            Assert.Equal(1, viewport.SelectedInspection!.SelectionNode);
+            Assert.True(viewport.SelectedInspection.ExactSelection);
+            Assert.True(viewport.SelectInspection(viewport.SelectedInspection.Target));
+            Assert.Equal(-10, viewport.SelectedInspection!.SelectionNode);
             Assert.Throws<InvalidOperationException>(() => viewport.PreviewTransformDraft(new("fixture", 0, "fixture", 0),
                 new(Vector3.Zero, Vector3.Zero), PlacementRotationKind.None, "move", true));
             Assert.NotNull(viewport.SelectedInspection);

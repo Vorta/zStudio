@@ -103,6 +103,10 @@ The camera is moved semantically: `zstudio_camera` reads the pose and orbits, pa
 
 `zstudio_state` reports `update`: whether a newer zStudio release is published (`status` `available`, `current`, `unknown` with a `reason`, `disabled` or `checking`), the `current` and `latest` versions, the release page `url` and when a check last got the latest release from GitHub (`checkedUtc`). `zstudio_update_check` reads the same, asks GitHub now (`check`, as **Help → Check for updates**; this works with automatic checks off, because you or the agent asked) or turns automatic checks on or off (`automatic`, as **Help → Check for updates automatically**). MCP never opens the release page; the status bar's **Update available** does that when you click it.
 
+World objects in `zstudio_scene_tree` expand into their authored child objects, geometry and LOD branches, including initialized hidden states. Selecting a child selects that exact node; map picks still select the whole placed object. Child `hide`/`show` changes a preview-only visibility gate and can replace the preview, so retain the returned `context` and `preview`. Each physical part row reports `visibility` (`DefaultVisible`, `Visible`, `Override`, `EffectiveVisible`, `Reason`); a visible gate can still be blocked by its parent, isolation or LOD. `zstudio_source_map_parts_visibility` with `action: "reset"` restores the object's initialized gates. **Show all** clears ordinary row hiding and isolation while retaining these part gates.
+
+For exact child inspection and supported source edits, pass `scope: "node"` to `zstudio_source_world_object`, `zstudio_source_world_command` or `zstudio_source_world_object_edit`. The default `scope: "object"` retains whole-object targeting. Unsupported child copy, delete or reparent operations are refused instead of targeting the parent. Source edits to a shared model still affect every load of that model; visibility overrides apply only to the current preview occurrence.
+
 ## Example
 
 Move an object in a map and check that the project still builds:

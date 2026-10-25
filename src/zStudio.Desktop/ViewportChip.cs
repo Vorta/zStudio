@@ -25,7 +25,7 @@ public sealed class InverseBool : System.Windows.Data.IValueConverter
 
 /// <summary>
 /// Stretches a source outliner row to the tree's visible width (the tree item's own template sizes its header to the content),
-/// so the row's eye and Frame buttons line up at the pane's right edge at every depth, clear of the overlaid scroll bar.
+/// so the row's eye and Frame buttons line up at the pane's right edge. Deep rows retain room for names and scroll horizontally.
 /// </summary>
 public static class OutlinerRowStretch
 {
@@ -47,10 +47,9 @@ public static class OutlinerRowStretch
         for (DependencyObject? parent = System.Windows.Media.VisualTreeHelper.GetParent(row); parent != null && viewer == null; parent = System.Windows.Media.VisualTreeHelper.GetParent(parent))
             viewer = parent as ScrollViewer;
         if (viewer == null || viewer.ViewportWidth <= 0) return;
-        double left = row.TranslatePoint(new Point(0, 0), viewer).X;
-        double width = Math.Floor(viewer.ViewportWidth - left - 16);
-        // Too deep for the pane: keep the row's own width rather than squeezing its name away.
-        if (width < 80) { if (!double.IsNaN(row.Width)) row.ClearValue(FrameworkElement.WidthProperty); return; }
+        // Measure indentation in content coordinates so scrolling does not change the row's width or extent.
+        double left = row.TranslatePoint(new Point(0, 0), viewer).X + viewer.HorizontalOffset;
+        double width = Math.Max(240, Math.Floor(viewer.ViewportWidth - left - 16));
         if (Math.Abs(row.Width - width) > 0.5 || double.IsNaN(row.Width)) row.Width = width;
     }
 }

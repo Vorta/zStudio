@@ -102,7 +102,7 @@ public partial class MainWindow
             if(data == null || !sourceGroup && !viewport.CanInspectNode(node)) throw new StudioCommandException("stale_record","Scene node unavailable.");
             if (sceneTree?.Projection != null && sceneTreeDocument == shownDocument && sceneTree.Hierarchy.Scene == data)
             {
-                var row = sceneTree.Reveal(node);
+                var row = sceneTree.Reveal(sceneTree.Projection.Owner(node));
                 if (row?.Selectable != true || shownDocument is not { } doc) throw new StudioCommandException("stale_record", "Source selection owner unavailable.");
                 var metadata = SceneTreeProperties(row);
                 if (Flag(a, "open"))
