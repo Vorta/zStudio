@@ -523,11 +523,14 @@
       <local:PreviewIcon x:Name="OutlinerSearchIcon" Kind="Search" Width="14" Height="14" HorizontalAlignment="Right" VerticalAlignment="Center" Margin="0,0,12,0" TextElement.Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
      </Grid>
      <Grid>
-      <ContentControl x:Name="SourceTreeHost" Margin="6,0,6,8" Focusable="False"/>
+      <ContentControl x:Name="SourceTreeHost" Margin="6,0,6,8" Focusable="False">
+       <ContentControl.Resources><Style TargetType="ScrollViewer" BasedOn="{StaticResource OutlinerScrollStyle}"/></ContentControl.Resources>
+      </ContentControl>
       <ListBox x:Name="OutlinerResults" Visibility="Collapsed" Margin="6,0,6,8" Background="Transparent" BorderThickness="0" SelectionChanged="OutlinerResultSelected" HorizontalContentAlignment="Stretch" ScrollViewer.HorizontalScrollBarVisibility="Disabled" VirtualizingPanel.IsVirtualizing="True" VirtualizingPanel.VirtualizationMode="Recycling" AutomationProperties.Name="Matching nodes">
+       <ListBox.Resources><Style TargetType="ScrollViewer" BasedOn="{StaticResource OutlinerScrollStyle}"/></ListBox.Resources>
        <ListBox.ItemContainerStyle><Style TargetType="ListBoxItem" BasedOn="{StaticResource {x:Type ListBoxItem}}"><Setter Property="AutomationProperties.Name" Value="{Binding Row.AccessibleName,Mode=OneWay}"/><Setter Property="AutomationProperties.HelpText" Value="{Binding Row.AnimationsToolTip,Mode=OneWay,TargetNullValue=''}"/></Style></ListBox.ItemContainerStyle>
        <ListBox.ItemTemplate><DataTemplate>
-        <DockPanel x:Name="MatchRow" Height="28" ToolTip="{Binding Row.ToolTip}" Background="Transparent" Margin="0,0,10,0">
+        <DockPanel x:Name="MatchRow" Height="28" ToolTip="{Binding Row.ToolTip}" Background="Transparent" Margin="0,0,4,0">
          <Button x:Name="MatchEye" DockPanel.Dock="Right" Style="{StaticResource OutlinerEye}" Click="OutlinerEyeClick" Tag="{Binding Row}" ToolTip="{Binding Row.EyeToolTip}" AutomationProperties.Name="{Binding Row.EyeToolTip}"><local:PreviewIcon Kind="{Binding Row.EyeIcon}" Width="14" Height="14"/></Button>
          <Button x:Name="MatchFrame" DockPanel.Dock="Right" Style="{StaticResource OutlinerEye}" Click="OutlinerFrameClick" Tag="{Binding Row}" ToolTip="Frame selection" AutomationProperties.Name="Frame selection"><local:PreviewIcon Kind="FrameSelection" Width="14" Height="14"/></Button>
          <TextBlock DockPanel.Dock="Right" Text="{Binding Row.Meta}" FontSize="11" Margin="6,0,10,0" VerticalAlignment="Center" Foreground="{DynamicResource TextFillColorTertiaryBrush}"/>

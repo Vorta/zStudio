@@ -4,6 +4,8 @@ Version numbers follow `MAJOR.MINOR.PATCH`; the 0.x series is under active devel
 
 ## 0.9.8 — Unreleased
 
+- Kept World-tree eye and Frame buttons clear of the vertical scrollbar, including deep horizontally scrolled branches and filtered results.
+
 - Redesigned the source-world animation timeline with a Flash-style 40 fps frame grid, horizontal motion-key tracks, source excerpts and frame-based event timing drafts. Frame 1 is time zero; original off-grid keys remain precise.
 
 - Fixed World tree scrolling away when hiding, showing or resetting object parts. Visibility changes retain the expanded rows, horizontal and vertical scroll position, and keyboard focus, including filtered results.

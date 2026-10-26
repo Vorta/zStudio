@@ -61,6 +61,7 @@ internal static class SourceWorldTreeChecks
             double vertical = scroll.VerticalOffset, horizontal = scroll.HorizontalOffset;
             var retainedTree = TreeModel();
             Assert.True(vertical > 0 && horizontal > 0);
+            CheckGutter(scroll);
             await Tree("hide", "healthy");
             await CheckScroll();
             await Tree("show", "wreck");
@@ -102,6 +103,7 @@ internal static class SourceWorldTreeChecks
             var matchEye = Descendants(main.OutlinerResults).OfType<Button>().First(b => b.Name == "MatchEye" && b.Tag is SceneTreeItem r && r.Index == Node("healthy"));
             Assert.True(matchEye.Focus()); await Idle();
             var matchScroll = Descendants(main.OutlinerResults).OfType<ScrollViewer>().First();
+            CheckGutter(matchScroll);
             double matchOffset = matchScroll.VerticalOffset;
             await ClickEye(matchEye);
             Assert.Same(matches, main.OutlinerResults.ItemsSource); Assert.Same(matchEye, System.Windows.Input.Keyboard.FocusedElement);
@@ -234,6 +236,16 @@ internal static class SourceWorldTreeChecks
             foreach (var doc in main.ViewModel.Documents.ToArray()) main.ViewModel.CloseResolved(doc);
             main.Close();
         }
+    }
+    private static void CheckGutter(ScrollViewer scroll)
+    {
+        // Deep rows can extend beyond the viewport; their visible/hit-testable content must end before the full scrollbar track.
+        var content = Assert.IsType<ScrollContentPresenter>(scroll.Template.FindName("PART_ScrollContentPresenter", scroll));
+        var bar = Assert.IsType<ScrollBar>(scroll.Template.FindName("PART_VerticalScrollBar", scroll));
+        Assert.True(bar.IsVisible); Assert.True(content.ClipToBounds);
+        double right = content.TranslatePoint(new(content.ActualWidth, 0), scroll).X;
+        double left = bar.TranslatePoint(new(), scroll).X;
+        Assert.True(left - right >= 3.5, $"World scrollbar overlaps row content: gap {left - right} DIP");
     }
     private static IEnumerable<System.Windows.DependencyObject> Descendants(System.Windows.DependencyObject root)
     {

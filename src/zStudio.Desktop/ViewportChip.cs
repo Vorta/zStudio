@@ -46,10 +46,10 @@ public static class OutlinerRowStretch
         ScrollViewer? viewer = null;
         for (DependencyObject? parent = System.Windows.Media.VisualTreeHelper.GetParent(row); parent != null && viewer == null; parent = System.Windows.Media.VisualTreeHelper.GetParent(parent))
             viewer = parent as ScrollViewer;
-        if (viewer == null || viewer.ViewportWidth <= 0) return;
+        if (viewer?.Template.FindName("PART_ScrollContentPresenter", viewer) is not ScrollContentPresenter content || content.ActualWidth <= 0) return;
         // Measure indentation in content coordinates so scrolling does not change the row's width or extent.
-        double left = row.TranslatePoint(new Point(0, 0), viewer).X + viewer.HorizontalOffset;
-        double width = Math.Max(240, Math.Floor(viewer.ViewportWidth - left - 16));
+        double left = row.TranslatePoint(new Point(0, 0), content).X + viewer.HorizontalOffset;
+        double width = Math.Max(240, Math.Floor(content.ActualWidth - left - 4));
         if (Math.Abs(row.Width - width) > 0.5 || double.IsNaN(row.Width)) row.Width = width;
     }
 }
