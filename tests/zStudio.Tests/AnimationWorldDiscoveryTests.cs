@@ -15,7 +15,7 @@ public sealed class AnimationWorldDiscoveryTests
     {
         using var fixture = new Fixture(28, 15, 27);
         var context = new AnimationPreviewContext { Package = fixture.Package, World = fixture.MatchingWorld };
-        context.ReadEffects(ZrdText.Parse("( model NAME ( first ) NAME ( later ) MAPS ( tex1 tex2 ) SPEED ( 3.5 ) LOOPING ( ON ) )", TestContext.Current.CancellationToken), TestContext.Current.CancellationToken);
+        context.ReadEffects(ZrdText.Parse("( model NAME ( first ) NAME ( later ) MAPS ( tex1.tif \"textures/tex2.png\" ) SPEED ( 3.5 ) LOOPING ( ON ) )", TestContext.Current.CancellationToken), TestContext.Current.CancellationToken);
         var effect = Assert.Single(context.Effects).Value;
         Assert.Equal("first", effect.Name); Assert.Equal("model", effect.ModelName);
         Assert.Equal(["tex1", "tex2"], effect.Textures); Assert.Equal(3.5f, effect.Speed); Assert.True(effect.Loop);

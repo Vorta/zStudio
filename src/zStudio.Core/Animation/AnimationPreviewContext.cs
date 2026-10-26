@@ -229,7 +229,7 @@ public sealed partial class AnimationPreviewContext
             var maps = Value(array, "MAPS", false)?.Children ?? [];
             if (Effects.Count >= 4096 || maps.Count > 65536 - effectMaps)
                 throw new InvalidDataException("Animation effect resources exceed 4,096 templates or 65,536 texture maps in one preview.");
-            string[] textures = maps.Select(Text).Where(s => s.Length > 0).ToArray();
+            string[] textures = maps.Select(Text).Where(s => s.Length > 0).Select(WorldAssembler.TextureName).ToArray();
             float speed = float.TryParse(Text(Value(array, "SPEED")), NumberStyles.Float, CultureInfo.InvariantCulture, out float f) && float.IsFinite(f) ? f : 15;
             // zeff_init FindByTypeAndName: highest live slot, shared by every effect lookup.
             if (named == null)

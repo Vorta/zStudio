@@ -167,7 +167,7 @@ public sealed partial class AnimationPreviewContext
                     }
                     else if (Is("FindSubNode")) node = node >= 0 ? FindSubBelow(node, arg, LoadedCount, lookupWork, lookupVisited, lookupPending, lookupChildren) : -1;
                     else if (Is("CycleTextureSetLooping")) { loop = arg.Equals("on", StringComparison.OrdinalIgnoreCase) || arg.Equals("true", StringComparison.OrdinalIgnoreCase); Publish(); }
-                    else if (Is("CycleTextureSetMap")) { if (maps.Count < count) maps.Add(arg); Publish(); }
+                    else if (Is("CycleTextureSetMap")) { if (maps.Count < count) maps.Add(WorldAssembler.TextureName(arg)); Publish(); }
                     // Without a current node (a failed FindNode) the game only reports it: the previous cycle stays current,
                     // and the maps, speed and looping that follow apply to it.
                     else if (Is("CycleTextureSetOn") && node >= 0)

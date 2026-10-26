@@ -11,6 +11,16 @@ public sealed class AnimationTextureLookupWorkTests
     private static CancellationToken Token => TestContext.Current.CancellationToken;
 
     [Theory]
+    [InlineData("watr01.png")]
+    [InlineData("textures\\watr01.tga")]
+    public void ScriptCycleUsesTheTextureDirectoryName(string path)
+    {
+        var context = Context(2);
+        context.ReadTextureScript("mission", Scripts([["FindNode", "n1"], ["CycleTextureSetOn", "1"], ["CycleTextureSetMap", path]]), Token);
+        Assert.Equal("watr01", context.MaterialCycles[0].At(0));
+    }
+
+    [Theory]
     [InlineData(false)]
     [InlineData(true)]
     public void RepeatedFailedAndSuccessfulFullSubtreeSearchesReuseTraversalStorage(bool found)
