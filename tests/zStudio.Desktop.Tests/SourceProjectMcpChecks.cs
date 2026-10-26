@@ -172,6 +172,38 @@ internal static class SourceProjectMcpChecks
             await Job("source_export_selection", new() { ["action"] = "clear", ["outputs"] = new[] { "m1/zrdr.zbd" }, ["limit"] = 0 }, "failed");
             Assert.Equal(1, (await Job("source_export_selection", new()))["selectedCount"]!.GetValue<int>());
             await Job("source_export_selection", new() { ["action"] = "select" });
+            // A command already scanning must not save behind a dialog's older checkbox snapshot.
+            using (ManualResetEventSlim releasePlan = new())
+            {
+                TaskCompletionSource planning = new(TaskCreationOptions.RunContinuationsAsynchronously);
+                main.SourceExportPlanning = ct =>
+                {
+                    Assert.False(main.Dispatcher.CheckAccess()); planning.TrySetResult();
+                    Assert.True(releasePlan.Wait(TimeSpan.FromSeconds(20), ct));
+                };
+                var pendingClear = Job("source_export_selection", new() { ["action"] = "clear" }, "failed");
+                try
+                {
+                    await planning.Task.WaitAsync(token);
+                    main.SourceExportPlanning = null;
+                    var concurrentPicker = main.CreateExportSelectionDialog();
+                    Drive(concurrentPicker, async () =>
+                    {
+                        while (concurrentPicker.Selection == null) { token.ThrowIfCancellationRequested(); await Task.Delay(10, token); }
+                        Assert.Equal(6, concurrentPicker.Selection.SelectedCount);
+                        releasePlan.Set();
+                        Assert.Equal("busy", (await pendingClear)["code"]!.GetValue<string>());
+                        Assert.Empty(main.ViewModel.Settings.ExportUncheckedOutputs);
+                        Assert.Empty(StudioSettings.Load().ExportUncheckedOutputs);
+                        concurrentPicker.Close();
+                    });
+                }
+                finally { main.SourceExportPlanning = null; releasePlan.Set(); }
+                Assert.Equal(6, (await Job("source_export_selection", new()))["selectedCount"]!.GetValue<int>());
+                await Job("source_export_selection", new() { ["action"] = "clear" });
+                Assert.Equal(0, (await Job("source_export_selection", new()))["selectedCount"]!.GetValue<int>());
+                await Job("source_export_selection", new() { ["action"] = "select" });
+            }
             // Build profiles: the GUI's choice and source_status list the same profiles; source_export names the one it built with.
             var profiles = (MenuItem)main.FindName("SourceProfileMenu");
             while (profiles.Items.Count != 2) await Task.Delay(10, token);

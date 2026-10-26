@@ -5,6 +5,7 @@ Version numbers follow `MAJOR.MINOR.PATCH`; the 0.x series is under active devel
 ## 0.9.8 — Unreleased
 
 - Replaced the single-file export submenu with a grouped checkbox window. Select individual files or whole missions, and remember the last choices across projects and restarts, including when closing without export.
+- Prevented an MCP export-selection change from saving behind a checkbox dialog opened while the command was loading.
 
 - Added shared animation preview schedules with independent start times, 40 fps activation markers and GUI/MCP controls. Corrected source-map impacts to query current surfaces beneath moving origins, so M4 bridge splashes wait for contact and respond to the animated canal level.
 - Fixed animated texture lookup for script filenames, keeping the canal water visible while its level changes.

@@ -8,6 +8,8 @@ namespace zStudio.Desktop;
 
 public partial class MainWindow
 {
+    internal Action<CancellationToken>? SourceExportPlanning { get; set; }
+
     private async Task<SourceExportSelection> LoadExportSelectionAsync(CancellationToken token)
     {
         string root = SourceProjectRoot ?? throw new StudioCommandException("no_project", "Open a source project first.");
@@ -16,7 +18,11 @@ public partial class MainWindow
         string? name = await SourceProfileForAsync(root, cancellation.Token);
         var choice = sourceProfileChoice;
         var profile = await Task.Run(() => BuildProfiles.Find(root, name, token: cancellation.Token), cancellation.Token);
-        var plan = await Task.Run(() => SourceBuilder.Plan(root, null, profile, token: cancellation.Token), cancellation.Token);
+        var plan = await Task.Run(() =>
+        {
+            SourceExportPlanning?.Invoke(cancellation.Token);
+            return SourceBuilder.Plan(root, null, profile, token: cancellation.Token);
+        }, cancellation.Token);
         bool Current() => !shutdownToken.IsCancellationRequested && generation == ViewModel.WorkspaceGeneration && root == SourceProjectRoot && choice == sourceProfileChoice;
         cancellation.Token.ThrowIfCancellationRequested();
         if (!Current()) throw new StudioCommandException("context_changed", "The project or build profile changed; choose the export again.");
@@ -64,7 +70,12 @@ public partial class MainWindow
                 else if (args.ContainsKey("outputs")) throw new StudioCommandException("invalid_argument", "Outputs applies only to select or clear.");
                 var result = Result(new { profile = model.Profile, selectedCount = model.SelectedCount, total = model.Files.Count,
                     outputs = Page(model.Files, args, f => f.Path, f => new { path = f.Path, group = f.Group, selected = f.IsChecked == true }, maximumRowBytes: f => 256 + 12L * f.Path.Length).Data });
-                if (action != "get") { model.Remember(ViewModel.Settings); CommitRunningJob(); }
+                if (action != "get")
+                {
+                    // A dialog may have opened while the plan was loading; its snapshot must remain authoritative.
+                    RequireAutomationMutationAvailable();
+                    model.Remember(ViewModel.Settings); CommitRunningJob();
+                }
                 return result;
             });
     }
