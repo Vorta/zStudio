@@ -34,7 +34,7 @@ public partial class MainWindow
     internal Func<Task>? SourceExportFinishing { get; set; }
     /// <summary>Test hook: pauses a completed reconstruction before its optional workspace publication.</summary>
     internal Func<Task>? SourceReconstructionFinishing { get; set; }
-    private long sourceMenuGeneration;
+
 
     /// <summary>
     /// Reconstructs a source project and optionally opens it (source_reconstruct; the welcome screen's Initialize writes and
@@ -203,7 +203,7 @@ public partial class MainWindow
         ++sourceProfileMenuRequest; // A scan started before this choice must not replace its menu.
         if (profiles != null) FillSourceProfileMenu(root, profiles);
         else { SourceProfileMenu.Items.Clear(); SourceProfileMenu.Items.Add(new MenuItem { Header = new TextBlock { Text = menuError, MaxWidth = 420, TextWrapping = TextWrapping.Wrap }, IsEnabled = false }); }
-        _ = FillExportSourceFileMenuAsync(root);
+
         ViewModel.Status = $"Exports build the {profile.Name} profile.";
         return new { project = root, profile = profile.Name, usesDefault = profile.IsDefault };
     }
@@ -221,8 +221,6 @@ public partial class MainWindow
         if (generation != ViewModel.WorkspaceGeneration || sourceProfileChoice != choice) throw new StudioCommandException("context_changed", "The project or profile choice changed.");
         if (exists) return choice.Name;
         sourceProfileChoice = null;
-        // Another pending output scan may still hold the removed choice and refuse its result.
-        _ = FillExportSourceFileMenuAsync(root);
         return null;
     }
     /// <summary>A project's build profile, refused as an invalid argument when its files are malformed or the name is unknown.</summary>
@@ -367,6 +365,7 @@ public partial class MainWindow
 
     private void RegisterSourceCommands(StudioCommands r)
     {
+        RegisterSourceExportSelectionCommands(r);
         RegisterJob(r, "source_reconstruct", "Reconstruct a RECOIL source project (data/ and gamegen/ in the original build layout, without zStudio metadata) from a shipped data folder into a new or empty folder. Only the original shipped files can be unpacked (their resource archives carry the animation definitions); exported files are refused. Resources become text .zrd files in their recorded folders and animation definitions .zad files beside them (pickup.zrd keeps its pickup data, its animation goes to pickup.zad), prepared scripts become .gs/.gw text, each sound keeps its best-quality WAV and each texture its best-quality PNG, mission worlds become glTF models loaded by the build scripts, and animations keep their definitions with .zan keyframe scripts; files it does not reconstruct are listed. Optionally opens the project as the workspace root; dirty documents must be resolved first.",
             [P("source", "string", "Full path of the shipped game data folder (for example the folder containing interp.zbd and m1\\).", true), P("destination", "string", "Full path of a new or empty project folder outside the source folder.", true),
              P("open", "boolean", "Open the project as the workspace root afterwards; default true.")], true,
@@ -459,7 +458,7 @@ public partial class MainWindow
         });
     }
     private async void ExportSourceClick(object sender, RoutedEventArgs e) => await RunUi(() => ExportSourceInteractiveAsync(null));
-    private async Task ExportSourceInteractiveAsync(IReadOnlyCollection<string>? outputs)
+    private async Task ExportSourceInteractiveAsync(IReadOnlyCollection<string>? outputs, SourceExportSelection? selection = null)
     {
         string root = SourceProjectRoot ?? throw new StudioCommandException("no_project", "Open a source project first.");
         long generation = ViewModel.WorkspaceGeneration;
@@ -468,10 +467,11 @@ public partial class MainWindow
         RequireNoDrafts();
         if (ViewModel.Documents.FirstOrDefault(d => d.IsDirty && d.SourceWorld != null) is { } dirty)
             throw new StudioCommandException("unsaved_changes", $"Save or discard the edits to {dirty.SourceWorld!.Label} before exporting.");
-        OpenFolderDialog folder = new() { Title = outputs == null ? "Choose a folder for the game files" : $"Choose a folder for {string.Join(", ", outputs)}" };
+        OpenFolderDialog folder = new() { Title = outputs == null ? "Choose a folder for the game files" : $"Choose a folder for {GameFiles(outputs.Count)}" };
         if (folder.ShowDialog(this) != true) return;
         RequireExportGeneration(generation);
-        string? profileName = await SourceProfileForAsync(root, ViewModel.WorkspaceToken);
+        if (selection != null && !selection.IsCurrent()) throw new StudioCommandException("context_changed", "The project or build profile changed; choose the export again.");
+        string? profileName = selection?.Profile ?? await SourceProfileForAsync(root, ViewModel.WorkspaceToken);
         // Existing game files are replaced only after an explicit confirmation, asked by the export itself once it has planned
         // its outputs: the list is exactly what it would replace (an export of every output names the automatic pack from the
         // textures as its build counts them, which PNG headers alone can misjudge), and it replaces only those.
@@ -484,8 +484,8 @@ public partial class MainWindow
         }).Task;
         SourceExportReport? report = null;
         // While it runs, a modal dialog shows what is being built; the workspace below cannot be used.
-        exportDialog = new(this, outputs == null ? "Export all ZBD files" : "Export ZBD file",
-            $"Exporting {(outputs == null ? "every game file" : string.Join(", ", outputs))} to {folder.FolderName}", writes: true,
+        exportDialog = new(this, outputs == null ? "Export all ZBD files" : "Export ZBD files",
+            $"Exporting {(outputs == null ? "every game file" : GameFiles(outputs.Count))} to {folder.FolderName}", writes: true,
             async (shown, token) => report = await ExportSourceProjectAsync(folder.FolderName, outputs, false, token, profileName, generation, Confirm, shown));
         try { exportDialog.Run(); }
         catch (StudioCommandException ex) when (NoMapOpen && ex.Code != "context_changed") { ShowPickerFailure("Export ZBD files", ex); return; }
@@ -562,7 +562,7 @@ public partial class MainWindow
     private void ExportMenuOpened(object sender, RoutedEventArgs e)
     {
         if (e.OriginalSource != sender || SourceProjectRoot is not { } root) return;
-        _ = FillExportSourceFileMenuAsync(root); _ = FillSourceProfileMenuAsync(root); _ = ReportUi(async () => ShowDithering(await ReadDitheringAsync(root, CancellationToken.None)));
+        _ = FillSourceProfileMenuAsync(root); _ = ReportUi(async () => ShowDithering(await ReadDitheringAsync(root, CancellationToken.None)));
     }
 
     // Export → Texture dithering: the project's choice, kept in its hidden .zstudio folder and passed to every export and check.
@@ -620,8 +620,6 @@ public partial class MainWindow
         if (sourceProfileChoice is { } stale && stale.Root == root && !profiles.Any(p => p.Name.Equals(stale.Name, StringComparison.OrdinalIgnoreCase)))
         {
             sourceProfileChoice = null;
-            // Refresh even when this scan wins the race with an output scan checking the removed profile.
-            _ = FillExportSourceFileMenuAsync(root);
         }
         string chosen = sourceProfileChoice is { } choice && choice.Root == root ? choice.Name : profiles.Single(p => p.IsDefault).Name;
         foreach (var profile in profiles)
@@ -651,66 +649,6 @@ public partial class MainWindow
                 _ = RunUi(async () => { await SelectSourceProfileAsync(root, name); });
             };
             SourceProfileMenu.Items.Add(item);
-        }
-    }
-    /// <summary>Lists the project's game files off the UI thread; a newer menu opening or root supersedes the listing.</summary>
-    private async Task FillExportSourceFileMenuAsync(string root)
-    {
-        long request = ++sourceMenuGeneration, generation = ViewModel.WorkspaceGeneration;
-        ExportSourceFileMenu.Items.Clear();
-        ExportSourceFileMenu.Items.Add(new MenuItem { Header = "Reading source project…", IsEnabled = false });
-        IReadOnlyList<SourceOutputPlan>? plan = null; string? error = null;
-        CancellationToken token = ViewModel.WorkspaceToken;
-        var choice = sourceProfileChoice;
-        try
-        {
-            string? profile = await SourceProfileForAsync(root, token);
-            if (request != sourceMenuGeneration) return; // A removed-profile fallback already scheduled the replacement scan.
-            choice = sourceProfileChoice; // A removed choice may have fallen back to the default.
-            plan = await Task.Run(() => SourceBuilder.Plan(root, null, BuildProfiles.Find(root, profile, token: token), token: token), token);
-        }
-        catch (OperationCanceledException) { return; }
-        catch (StudioCommandException) { return; }
-        catch (Exception ex) when (ex is InvalidDataException or IOException or UnauthorizedAccessException) { error = ex.Message; }
-        bool Current() => !token.IsCancellationRequested && !shutdownToken.IsCancellationRequested && request == sourceMenuGeneration &&
-            generation == ViewModel.WorkspaceGeneration && SourceProjectRoot == root && sourceProfileChoice == choice;
-        if (!Current()) return;
-        ExportSourceFileMenu.Items.Clear();
-        if (plan == null || plan.Count == 0) { ExportSourceFileMenu.Items.Add(new MenuItem { Header = new TextBlock { Text = error == null ? "Nothing to build yet" : Bounded(error, 512) }, IsEnabled = false }); return; }
-        FillSourceOutputMenu(ExportSourceFileMenu, plan, Current, path => _ = RunUi(() => ExportSourceInteractiveAsync([path])));
-    }
-
-    /// <summary>At most 64 output controls, plus a count and two navigation controls; visited pages are replaced.</summary>
-    internal const int SourceOutputMenuPageSize = 64;
-    internal static void FillSourceOutputMenu(MenuItem menu, IReadOnlyList<SourceOutputPlan> plan, Func<bool> current, Action<string> export)
-    {
-        Show(0);
-        void Show(int offset)
-        {
-            if (!current()) return;
-            menu.Items.Clear();
-            int end = offset + Math.Min(SourceOutputMenuPageSize, plan.Count - offset);
-            if (plan.Count > SourceOutputMenuPageSize)
-                menu.Items.Add(new MenuItem { Header = new TextBlock { Text = $"Files {offset + 1:N0}–{end:N0} of {plan.Count:N0}" }, IsEnabled = false });
-            if (offset > 0) Navigation("Previous outputs", offset - SourceOutputMenuPageSize);
-            for (int index = offset; index < end; index++)
-            {
-                var output = plan[index];
-                // Paths remain complete literal identities, not menu access-key labels.
-                MenuItem item = new() { Header = new TextBlock { Text = output.Path }, ToolTip = $"{output.Inputs.Count:N0} source files ({output.Family})" };
-                System.Windows.Automation.AutomationProperties.SetName(item, output.Path);
-                string path = output.Path;
-                item.Click += (_, _) => { if (current()) export(path); };
-                menu.Items.Add(item);
-            }
-            if (end < plan.Count) Navigation("Next outputs", end);
-        }
-        void Navigation(string label, int offset)
-        {
-            MenuItem item = new() { Header = new TextBlock { Text = label }, StaysOpenOnClick = true };
-            System.Windows.Automation.AutomationProperties.SetName(item, label);
-            item.Click += (_, _) => Show(offset);
-            menu.Items.Add(item);
         }
     }
 }

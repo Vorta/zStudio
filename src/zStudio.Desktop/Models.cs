@@ -307,6 +307,14 @@ public sealed record StudioProblem(string Severity, string Category, string Mess
 }
 public sealed class StudioSettings
 {
+    internal const int MaximumExportChoices = 4096;
+    private List<string> exportUncheckedOutputs = [];
+    public List<string> ExportUncheckedOutputs
+    {
+        get => exportUncheckedOutputs;
+        set => exportUncheckedOutputs = (value ?? []).Take(MaximumExportChoices).Where(p => !string.IsNullOrEmpty(p) && p.Length <= 260)
+            .Select(SourceExportSelection.Normalize).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+    }
     public bool McpEnabled { get; set; }
     public WorkspaceLayout? Workspace { get; set; }
     public WorkspaceLayout GetWorkspace()

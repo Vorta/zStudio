@@ -25,7 +25,7 @@ public partial class MainWindow
         NavigationTabs.SelectedIndex = layout.BrowserTab; InspectorTabs.SelectedIndex = layout.InspectorTab; ToolTabs.SelectedIndex = layout.ToolTab;
         InitializeResponsiveNavigator();
         InitializeChrome(); ApplyMetrics();
-        foreach (var submenu in new[] { RecentMenu,ExportSourceFileMenu })
+        foreach (var submenu in new[] { RecentMenu })
             submenu.Loaded += (_,_) =>
             {
                 // Fluent's submenu-header template omits the shared checkbox gutter

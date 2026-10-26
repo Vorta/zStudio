@@ -17,6 +17,18 @@ namespace zStudio.Desktop.Tests;
 /// <summary>Source projects through the real named-pipe MCP connection and the shared GUI operations.</summary>
 internal static class SourceProjectMcpChecks
 {
+    private static bool? Drive(Window window, Func<Task> drive)
+    {
+        Exception? failure = null;
+        _ = window.Dispatcher.InvokeAsync(async () =>
+        {
+            try { await drive(); }
+            catch (Exception ex) { failure = ex; if (window.IsVisible) window.Close(); }
+        });
+        bool? shown = window.ShowDialog();
+        if (failure != null) throw new Xunit.Sdk.XunitException("Driving the dialog failed: " + failure);
+        return shown;
+    }
     internal static async Task Run()
     {
         using var fixture = new SourceFixture();
@@ -37,7 +49,7 @@ internal static class SourceProjectMcpChecks
             Assert.Equal(Path.GetFullPath(Path.Combine(fixture.Root, "initialized")), Path.GetFullPath(reopened["RootPath"]!.GetValue<string>()));
             Assert.Equal(["MCP integration…", "Compare worlds…", "-", "Add pickup…", "Add model to world…", "Edit in Blender…", "Update from Blender export…", "Paint polygon zones", "Erase polygon zones", "Create terrain…", "Convert to editable terrain…", "-", "Validate source file on disk", "Reload current file"], ToolsMenu(main));
             // The export commands and the texture dithering choice have their own menu, between Tools and Help.
-            Assert.Equal(["Export all ZBD files…", "Export ZBD file", "Check source project", "Build profile", "-", "Texture dithering"], ToolsMenu(main, "ExportMenu", "ExportMenuOpened"));
+            Assert.Equal(["Export all ZBD files…", "Export ZBD files…", "Check source project", "Build profile", "-", "Texture dithering"], ToolsMenu(main, "ExportMenu", "ExportMenuOpened"));
             // Project preflight also precedes navigation: a slow folder check must not replace a newer clean root.
             // Cover both a pending VM root and another project preflight that has not reached the VM yet.
             foreach (bool projectPreflight in new[] { false, true })
@@ -132,14 +144,34 @@ internal static class SourceProjectMcpChecks
             Assert.Equal("m1/zrdr.zbd", mission["path"]!.GetValue<string>()); Assert.Equal(2, mission["inputCount"]!.GetValue<int>());
             Assert.Equal(2, status["families"]!["archive"]!.GetValue<int>()); Assert.Equal(3, status["families"]!["sounds"]!.GetValue<int>());
 
-            // The Export menu appears once a source project is the root; the one-file menu lists every buildable game file.
+            // The export leaf opens a grouped window; GUI and MCP share globally remembered choices.
             main.SourceProfilesReading = ct => Assert.False(main.Dispatcher.CheckAccess());
             typeof(MainWindow).GetMethod("ExportMenuOpened", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(main, [main, new RoutedEventArgs(MenuItem.SubmenuOpenedEvent, main)]);
             Assert.Equal(Visibility.Visible, ((MenuItem)main.FindName("ExportMenu")).Visibility);
             var single = (MenuItem)main.FindName("ExportSourceFileMenu");
-            while (single.Items.Count != 6) { token.ThrowIfCancellationRequested(); await Task.Delay(10, token); }
-            Assert.Equal(["zrdr.zbd", "interp.zbd", "soundsh.zbd", "soundsm.zbd", "soundsl.zbd", "m1/zrdr.zbd"], single.Items.Cast<MenuItem>().Select(i => ((TextBlock)i.Header).Text));
-            CheckOutputMenuPages();
+            Assert.Empty(single.Items);
+            var selection = await Job("source_export_selection", new());
+            Assert.Equal(6, selection["selectedCount"]!.GetValue<int>());
+            var picker = main.CreateExportSelectionDialog();
+            Assert.NotEqual(true, Drive(picker, async () =>
+            {
+                while (picker.Selection == null) { token.ThrowIfCancellationRequested(); await Task.Delay(10, token); }
+                Assert.Equal(["Shared files", "m1"], picker.Selection.Rows.Where(r => r.IsGroup).Select(r => r.Path));
+                picker.Selection.SetAll(false);
+                Assert.False(Find<Button>(picker, b => b.Content as string == "Export selected…").IsEnabled);
+                picker.Selection.Files.Single(r => r.Path == "m1/zrdr.zbd").IsChecked = true;
+                picker.Close(); // Closing without export still remembers the selection.
+            }));
+            selection = await Job("source_export_selection", new());
+            Assert.Equal(1, selection["selectedCount"]!.GetValue<int>());
+            Assert.Equal(5, StudioSettings.Load().ExportUncheckedOutputs.Count);
+            var otherPlan = new SourceExportSelection([new("zrdr.zbd", "archive", []), new("m1/zrdr.zbd", "archive", []), new("m2/gamez.zbd", "world", []), new("m10/gamez.zbd", "world", [])], StudioSettings.Load(), "test", () => true);
+            Assert.Equal(3, otherPlan.SelectedCount); // A matching checked path and new paths stay checked.
+            Assert.False(otherPlan.Files.Single(f => f.Path == "zrdr.zbd").IsChecked);
+            Assert.Equal(["Shared files", "m1", "m2", "m10"], otherPlan.Rows.Where(r => r.IsGroup).Select(r => r.Path));
+            await Job("source_export_selection", new() { ["action"] = "clear", ["outputs"] = new[] { "m1/zrdr.zbd" }, ["limit"] = 0 }, "failed");
+            Assert.Equal(1, (await Job("source_export_selection", new()))["selectedCount"]!.GetValue<int>());
+            await Job("source_export_selection", new() { ["action"] = "select" });
             // Build profiles: the GUI's choice and source_status list the same profiles; source_export names the one it built with.
             var profiles = (MenuItem)main.FindName("SourceProfileMenu");
             while (profiles.Items.Count != 2) await Task.Delay(10, token);
@@ -381,37 +413,6 @@ internal static class SourceProjectMcpChecks
             return shown;
         }
     }
-    // Consequential regression: a valid source plan can hold thousands of outputs. Keep WPF publication bounded
-    // while the final output remains selectable through the same callback, including stale retained controls.
-    private static void CheckOutputMenuPages()
-    {
-        var plan = Enumerable.Range(1, 129).Select(i => new SourceOutputPlan($"m{i}/texture_max.zbd", "textures", [])).ToArray();
-        MenuItem menu = new(); bool current = true; string? selected = null;
-        MainWindow.FillSourceOutputMenu(menu, plan, () => current, path => selected = path);
-        MenuItem Item(string name) => menu.Items.Cast<MenuItem>().Single(i => System.Windows.Automation.AutomationProperties.GetName(i) == name);
-        void Click(MenuItem item) => item.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
-        Assert.InRange(menu.Items.Count, 1, 67);
-        var first = Item("m1/texture_max.zbd"); var oldNext = Item("Next outputs");
-        Assert.IsType<TextBlock>(first.Header); // Underscores remain literal, and the full path is its identity.
-        Click(first); Assert.Equal(plan[0].Path, selected);
-        Assert.True(oldNext.StaysOpenOnClick);
-        Click(oldNext);
-        Assert.InRange(menu.Items.Count, 1, 67);
-        Assert.DoesNotContain(first, menu.Items.Cast<MenuItem>());
-        Assert.NotNull(Item("m65/texture_max.zbd"));
-        Click(Item("Next outputs"));
-        Assert.InRange(menu.Items.Count, 1, 67);
-        var last = Item("m129/texture_max.zbd"); Click(last); Assert.Equal(plan[^1].Path, selected);
-        Assert.DoesNotContain(menu.Items.Cast<MenuItem>(), i => System.Windows.Automation.AutomationProperties.GetName(i) == "Next outputs");
-        Click(Item("Previous outputs"));
-        Assert.NotNull(Item("m65/texture_max.zbd"));
-        var retained = menu.Items.Cast<MenuItem>().ToArray();
-        current = false;
-        Click(oldNext); Click(first);
-        Assert.Equal(retained, menu.Items.Cast<MenuItem>());
-        Assert.Equal(plan[^1].Path, selected);
-    }
-
     /// <summary>The Tools menu's visible entries as the menu shows them once opened ("-" for a separator).</summary>
     internal static string[] ToolsMenu(MainWindow main, string menu = "ToolsMenu", string opened = "ToolsMenuOpened")
     {

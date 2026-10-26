@@ -76,13 +76,13 @@ MCP: `zstudio_save_document`, `zstudio_undo_redo`, `zstudio_source_changes`, `zs
 The **Export** menu builds game files from the project's files on disk, so save or discard unsaved changes first.
 - **Check source project** builds everything in memory and reports failures and warnings without writing.
 - **Export all ZBD files…** builds every game file into a folder outside the project: an empty folder, or the zbd folder of a copy of the game.
-- **Export ZBD file** builds one game file you choose.
+- **Export ZBD files…** opens a checkbox window with all buildable files, grouped into shared files and numbered missions. Select individual files, use a mission's checkbox, or choose **Select all** / **Clear all**. **Export selected…** asks for the destination and builds only the checked files. All files start checked; the latest choices are remembered across projects and restarts by relative output path, even when you cancel or close the window. Newly encountered files start checked.
 
 A progress window shows the file being built; **Cancel** or **Escape** stops it. Every output is built, read back and staged first; if any fails, nothing is written. When the destination already holds some of the game files, one confirmation lists them: **Yes** replaces them, **No** cancels the export. Other files in the destination stay. A texture pack there that the export doesn't build (such as an `rtexture8.zbd` the profile leaves out) stays too, and the game may load it instead; the export warns about it. An export canceled while it replaces files finishes or restores them. Replaced original files are gone for good.
 
 Check and export also list in Problems each node the game finds by name as a mission loads (animation roots, texture-effect `FindNode`), with the node it finds. Where several nodes share a name the game takes the one made last; an export that changes which node a lookup finds warns about it.
 
-MCP: `zstudio_source_export` (without `destination` it checks; `outputs` selects files; `overwrite` allows replacing), `zstudio_source_status`.
+MCP: `zstudio_source_export` (without `destination` it checks; `outputs` selects files; `overwrite` allows replacing), `zstudio_source_status`, and `zstudio_source_export_selection` (read or change the remembered checkboxes without exporting).
 
 ## Build profiles
 
