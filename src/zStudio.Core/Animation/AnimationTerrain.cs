@@ -11,23 +11,33 @@ public sealed class AnimationTerrain
     private readonly Triangle[] triangles;
     private readonly List<Branch> branches = [];
     private const int MaximumTriangles = 1_000_000;
+    internal int TriangleCount => triangles.Length;
 
     public AnimationTerrain(GameScene scene, CancellationToken token = default)
+        : this(scene, token, null, default, 0, null) { }
+
+    internal AnimationTerrain(GameScene scene, int node, Matrix4x4 transform, float morph, Action<long> reserve)
+        : this(scene, default, node, transform, morph, reserve) { }
+
+    private AnimationTerrain(GameScene scene, CancellationToken token, int? runtimeNode, Matrix4x4 transform, float runtimeMorph, Action<long>? reserve)
     {
         var work = new LookupWorkBudget(64 * 1024 * 1024, token);
+        void Reserve(long units) { work.Reserve(units); reserve?.Invoke(units); }
         List<Triangle> collected = [];
         // Fixed nearest LOD and authored active flags; no renderer visibility overrides.
-        var view = SceneBuilder.Assemble(scene, token: token);
-        foreach (var placement in view.Placements)
+        IEnumerable<ScenePlacement> placements = runtimeNode is int source
+            ? [new(source, scene.Nodes[source].ModelIndex!.Value, scene.Nodes[source].Name, transform)]
+            : SceneBuilder.Assemble(scene, token: token).Placements;
+        foreach (var placement in placements)
         {
-            work.Reserve(1);
+            Reserve(1);
             var node = scene.Nodes[placement.NodeIndex];
-            if ((node.Metadata.UInt("flags") & 12) != 12) continue;
+            if (runtimeNode == null && (node.Metadata.UInt("flags") & 12) != 12) continue;
             var model = scene.Models[placement.ModelIndex];
-            float morph = model.Metadata.Float("morph_factor");
+            float morph = runtimeNode != null ? runtimeMorph : model.Metadata.Float("morph_factor");
             foreach (var polygon in model.Polygons)
             {
-                work.Reserve(1L + polygon.Vertices.Length);
+                Reserve(1L + polygon.Vertices.Length);
                 if (polygon.Vertices.Length < 3) continue;
                 if (polygon.Vertices.Length > 8192 || collected.Count + (long)polygon.Vertices.Length - 2 > MaximumTriangles)
                     throw new InvalidDataException("Standable preview geometry exceeds its triangle allowance.");
@@ -41,7 +51,7 @@ public sealed class AnimationTerrain
                     if (!Finite(vertices[i])) throw new InvalidDataException($"Standable node #{node.Index} has nonfinite geometry.");
                 }
                 // Triangulation is quadratic for nonconvex polygons: admit its work before allocating.
-                work.Reserve((long)vertices.Length * vertices.Length);
+                Reserve((long)vertices.Length * vertices.Length);
                 var indices = (polygon.Flags & 1024) != 0 ? GeometryBuilder.TriangleStrip(vertices.Length) : GeometryBuilder.Triangulate(vertices);
                 for (int i = 0; i < indices.Length; i += 3)
                 {
@@ -58,7 +68,7 @@ public sealed class AnimationTerrain
 
         int Build(int start, int count)
         {
-            work.Reserve(count);
+            Reserve(count);
             var min = new Vector3(float.PositiveInfinity); var max = new Vector3(float.NegativeInfinity);
             for (int i = start; i < start + count; i++) { min = Vector3.Min(min, triangles[i].Min); max = Vector3.Max(max, triangles[i].Max); }
             int index = branches.Count; branches.Add(default);

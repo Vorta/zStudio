@@ -31,7 +31,7 @@ public partial class MainWindow
             timeline.RowSelected += row => _ = ReportUi(() => SelectWorldAnimationTimelineRowAsync(row));
             timeline.EditTimingRequested += row => _ = ReportUi(async () => { await SelectWorldAnimationTimelineRowAsync(row); sectionCard?.FocusAnimationTiming(); });
             timeline.OccurrenceSelected += (row, mark) => _ = ReportUi(async () => { await WorldAnimationCellAsync(row.Id, mark.Id, true); });
-            timeline.TimingMoveRequested += (row, time) => _ = ReportUi(() => ProposeWorldAnimationFrameAsync(row.Id, AnimationTimelineFrames.Frame(time), CancellationToken.None));
+            timeline.TimingMoveRequested += (row, time) => _ = ReportUi(() => row.ActivationId is Guid id ? MoveWorldAnimationActivation(id, time) : ProposeWorldAnimationFrameAsync(row.Id, AnimationTimelineFrames.Frame(time), CancellationToken.None));
             timeline.InclusionRequested += (row, included) => _ = ReportUi(() =>
             {
                 if (worldAnimationRowSources.TryGetValue(row.Id, out var source) && source.Call != null && WorldAnimationTargetNow is { } target)
@@ -99,7 +99,7 @@ public partial class MainWindow
         {
             row.Id, row.Label, row.Depth, row.IsGroup, row.Expandable, row.Expanded,
             row.Included, row.InclusionEnabled, row.InclusionReason, row.GuidesShown,
-            row.CanEditTiming, row.TimingLabel, row.Detail, markCount = row.Marks.Count,
+            row.CanEditTiming, row.ActivationId, row.TimingLabel, row.Detail, markCount = row.Marks.Count,
             row.IsWindowClock, row.WindowClockEnd, row.CanMoveWindow, row.WindowMoveReason,
             row.WindowStartThreshold, row.NativeClockStart, row.NativeClockEnd, row.IsSourceClock, row.StartThreshold
         }, maximumRowBytes: row => 2048 + InspectionResultBudget.Text(row.Id) + InspectionResultBudget.Text(row.Label)
@@ -136,7 +136,7 @@ public partial class MainWindow
             var mark = row.Marks.FirstOrDefault(m => m.Occurrence == ordinal) ?? throw new StudioCommandException("stale_record", "The occurrence is not on this row.");
             var frame = worldAnimationSession?.CurrentFrame ?? worldAnimationSession?.LastFrame;
             var dispatched = frame?.Trace.FirstOrDefault(t => t.Occurrence == ordinal) ?? throw new StudioCommandException("stale_record", "The occurrence is no longer retained.");
-            await WorldAnimationSelectSourceAsync(dispatched.Sequence, dispatched.Event, CancellationToken.None, dispatched.Entry, dispatched.InstancePath);
+            await WorldAnimationSelectSourceAsync(dispatched.Sequence, dispatched.Event, CancellationToken.None, dispatched.Entry, dispatched.InstancePath, preserveTimeline: true);
             WorldTimeline.SelectRow(id, mark.Id);
         }
         else { await SelectWorldAnimationTimelineRowAsync(row); WorldTimeline.SelectRow(id); }
@@ -145,7 +145,7 @@ public partial class MainWindow
     private IReadOnlyList<WorldAnimationTimelineRow> WorldAnimationSourceRows(WorldAnimationTarget target)
     {
         var plan = GetWorldAnimationStructurePlan(); List<WorldAnimationTimelineRow> rows = []; int remainingMarks = 40000;
-        AddEntry(target.Entry, "", 0, true);
+        foreach (var activation in WorldAnimationActivations()) AddEntry(activation.Entry, activation.Path, 0, true);
         if (rows.Count >= AnimationStructurePlan.MaximumDependencyRecords || remainingMarks == 0)
             rows.Add(new("source:limit", "Structural display limit reached") { Detail = "Collapse branches to display other records; all records remain available through paged structure inspection." });
         rows.AddRange(WorldAnimationDropRows(target.Entry));
@@ -154,15 +154,24 @@ public partial class MainWindow
         void AddEntry(int entry, string path, int depth, bool root = false)
         {
             if (rows.Count >= AnimationStructurePlan.MaximumDependencyRecords) return;
-            string id = "entry:" + entry + ":" + path; bool expanded = root || worldAnimationExpanded.Contains(id);
+            string id = "entry:" + entry + ":" + path;
+            bool expanded = root ? !worldAnimationCollapsed.Contains(id) : worldAnimationExpanded.Contains(id);
             var value = plan.Entry(entry);
             Add(new(id, value.Name + $" · #{entry}")
             {
                 Depth = depth, IsGroup = true, Expandable = true, Expanded = expanded,
-                GuidesShown = root ? shownAnimationPaths.Contains(target.Definition) : null,
+                GuidesShown = root && path.Length == 0 ? shownAnimationPaths.Contains(target.Definition) : null,
                 Detail = $"Bound root: {value.Root}; source structure, no execution implied"
             }, new(entry, path));
             if (!expanded) return;
+            if (root && WorldAnimationActivations().FirstOrDefault(s => s.Path == path) is { } start)
+                Add(new("activation:" + start.Id, "Start animation")
+                {
+                    Depth = depth + 1, ActivationId = start.Id,
+                    TimingLabel = $"Frame {AnimationTimelineFrames.Frame(start.Seconds):0.###} · {start.Seconds:0.###} s",
+                    Detail = "Preview activation on the shared timeline; drag to change start time",
+                    Marks = [new("activation:" + start.Id, WorldAnimationTimelineMarkKind.Instant, start.Seconds)]
+                }, new(entry, path));
             int requested = worldAnimationPageCounts.GetValueOrDefault(id, 100);
             for (int offset = 0; offset < requested && rows.Count < AnimationStructurePlan.MaximumDependencyRecords; offset += 100)
             {
@@ -317,6 +326,7 @@ public partial class MainWindow
 
     private async Task SelectWorldAnimationTimelineRowAsync(WorldAnimationTimelineRow row)
     {
+        if (row.ActivationId.HasValue) { await OpenWorldAnimationScenario(); return; }
         if (row.Id.StartsWith("drop:", StringComparison.Ordinal)) { await SelectWorldAnimationDropAsync(row, CancellationToken.None); return; }
         if (!worldAnimationRowSources.TryGetValue(row.Id, out var source)) return;
         if (source.MoreKey is { } more)
@@ -324,7 +334,7 @@ public partial class MainWindow
             worldAnimationPageCounts[more] = Math.Min(AnimationStructurePlan.MaximumDependencyRecords, worldAnimationPageCounts.GetValueOrDefault(more, 100) + 100);
             RefreshWorldAnimationTimeline(); return;
         }
-        await WorldAnimationSelectSourceAsync(source.Sequence, source.Event, CancellationToken.None, source.Entry, source.Path);
+        await WorldAnimationSelectSourceAsync(source.Sequence, source.Event, CancellationToken.None, source.Entry, source.Path, preserveTimeline: true);
     }
 
     private async Task WorldAnimationSelectSourceAsync(Guid sequence, Guid ev, CancellationToken token, int? entry = null, string path = "", bool preserveTimeline = false)

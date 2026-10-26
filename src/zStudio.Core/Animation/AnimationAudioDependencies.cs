@@ -7,15 +7,15 @@ public sealed record AnimationAudioDependencies(IReadOnlySet<string> Names, IRea
         => Collect(package, entryIndex, null, token);
 
     /// <summary>Discover only calls admitted by the same finite scenario as playback, including dormant branches and cleanup.</summary>
-    public static AnimationAudioDependencies Collect(AnimationPackage package, int entryIndex, AnimationExecutionPolicy? policy, CancellationToken token = default)
+    public static AnimationAudioDependencies Collect(AnimationPackage package, int entryIndex, AnimationExecutionPolicy? policy, CancellationToken token = default, AnimationSchedule? activations = null)
     {
         ArgumentOutOfRangeException.ThrowIfNegative(entryIndex);
         ArgumentOutOfRangeException.ThrowIfGreaterThanOrEqual(entryIndex, package.Entries.Count);
         HashSet<string> names = new(StringComparer.Ordinal);
         BoundedDiagnostics diagnostics = new();
         AnimationEntryLookup entries = new(package);
-        HashSet<(AnimationEntry Entry, string Path)> scheduled = [(package.Entries[entryIndex], "")];
-        Stack<(AnimationEntry Entry, string Path)> pending = new([(package.Entries[entryIndex], "")]);
+        HashSet<(AnimationEntry Entry, string Path)> scheduled = activations == null ? [(package.Entries[entryIndex], "")] : activations.Starts.Select(s => (package.Entries[s.Entry], s.Path)).ToHashSet();
+        Stack<(AnimationEntry Entry, string Path)> pending = new(scheduled);
         while (pending.TryPop(out var item))
         {
             var (entry, path) = item;
@@ -48,7 +48,7 @@ public sealed record AnimationAudioDependencies(IReadOnlySet<string> Names, IRea
                         catch (InvalidDataException) { continue; }
                         if (!policy.TryInclude(candidate, out childPath)) continue;
                         if (scheduled.Contains((child, childPath))) continue;
-                        if (scheduled.Count >= AnimationExecutionPolicy.MaximumPaths + 1)
+                        if (scheduled.Count >= AnimationExecutionPolicy.MaximumPaths + AnimationSchedule.MaximumStarts)
                             throw new InvalidDataException("Audio discovery exceeds the preview dependency-path allowance.");
                     }
                     if (scheduled.Add((child, childPath))) pending.Push((child, childPath));

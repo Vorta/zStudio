@@ -18,6 +18,9 @@ public sealed record WorldAnimationScenario
     public Vector3? ActivationStart { get; init; }
     public int EffectLevel { get; init; } = 2;
     public AnimationExecutionPolicy Policy { get; init; } = AnimationExecutionPolicy.RootOnly;
+    public IReadOnlyList<AnimationScheduledStart> Activations { get; init; } = [];
+    public AnimationSchedule Schedule(int primary, int entryCount) => new(Activations.Count == 0
+        ? [new(Guid.Empty, primary, 0)] : Activations, entryCount);
 }
 
 public sealed record WorldAnimationSessionState(Guid Session, Guid Scenario, Guid? Run, string Status,
@@ -155,6 +158,9 @@ public sealed class WorldAnimationSession : IDisposable
     public void SetScenario(WorldAnimationScenario scenario)
     {
         Verify(); ArgumentNullException.ThrowIfNull(scenario); ArgumentNullException.ThrowIfNull(scenario.Policy);
+        var schedule = scenario.Schedule(EntryIndex, Context.Package.Entries.Count);
+        if (schedule.Starts.Single(s => s.Id == Guid.Empty).Entry != EntryIndex) throw Invalid("The primary activation must match the preview binding.");
+        scenario = scenario with { Activations = Array.AsReadOnly(scenario.Activations.ToArray()) };
         if (!float.IsFinite(scenario.Height) || scenario.Height is < -999 or > 999)
             throw Invalid("Preview height must be between -999 and 999 game units.");
         if (scenario.EffectLevel is < 0 or > 2) throw Invalid("Effect level must be 0, 1 or 2.");
@@ -238,9 +244,9 @@ public sealed class WorldAnimationSession : IDisposable
     }
 
     private AnimationPlayer CreatePlayer(WorldAnimationScenario scenario, CancellationToken token)
-        => new(Context, EntryIndex, scenario.Seed, scenario.Cleanup, token)
+        => new(Context, EntryIndex, scenario.Seed, scenario.Cleanup, token, scenario.Schedule(EntryIndex, Context.Package.Entries.Count))
         {
-            ExecutionPolicy = scenario.Policy, Terrain = Context.Terrain, ProceduralLimitsEnabled = true,
+            ExecutionPolicy = scenario.Policy, Terrain = Context.Terrain, OriginCollision = true, ProceduralLimitsEnabled = true,
             PreviewHeight = scenario.Height, ReferencePosition = scenario.ReferencePosition,
             ActivationStart = scenario.ActivationStart, EffectLevel = scenario.EffectLevel, LodLevel = lod
         };
@@ -353,7 +359,7 @@ public sealed class WorldAnimationSession : IDisposable
     private async Task PrepareAudioAsync(WorldAnimationScenario scenario, CancellationToken token)
     {
         if (!audioDirty && audio.IsPrepared) return;
-        await audio.PrepareAsync(Context, EntryIndex, scenario.Policy, false, token);
+        await audio.PrepareAsync(Context, EntryIndex, scenario.Policy, false, token, scenario.Schedule(EntryIndex, Context.Package.Entries.Count));
         token.ThrowIfCancellationRequested(); audioDirty = false;
     }
 

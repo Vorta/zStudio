@@ -107,7 +107,9 @@ internal sealed class WorldAnimationRowPlot(WorldAnimationTimelineRowView contai
         base.OnMouseMove(e);
         if (!IsMouseCaptured || Row is not { } row || row.Id != pressedRow || pressedMark == null) return;
         if (Math.Abs(e.GetPosition(this).X - pressed.X) < 4) return;
-        if (row.CanEditTiming && pressedMark.Kind == WorldAnimationTimelineMarkKind.Authored)
+        if (row.ActivationId.HasValue)
+            proposed = AnimationTimelineFrames.Snap(pressedMark.Start + At(e.GetPosition(this).X) - At(pressed.X));
+        else if (row.CanEditTiming && pressedMark.Kind == WorldAnimationTimelineMarkKind.Authored)
             proposed = AnimationTimelineFrames.Snap(pressedMark.Start + At(e.GetPosition(this).X) - At(pressed.X));
         else if (row.CanMoveWindow && pressedMark.Kind == WorldAnimationTimelineMarkKind.Window)
             proposed = AnimationTimelineFrames.Snap((row.WindowStartThreshold ?? pressedMark.Start) + At(e.GetPosition(this).X) - At(pressed.X));
@@ -120,7 +122,7 @@ internal sealed class WorldAnimationRowPlot(WorldAnimationTimelineRowView contai
         if (Timeline is not { } owner || Row is not { } row || row.Id != id) return;
         if (value is double seconds && mark != null && row.Marks.Any(m => m.Id == mark.Id))
         {
-            if (row.CanEditTiming) owner.MoveTiming(row, seconds); else owner.MoveWindow(row, seconds);
+            if (row.CanEditTiming || row.ActivationId.HasValue) owner.MoveTiming(row, seconds); else owner.MoveWindow(row, seconds);
         }
         else
         {

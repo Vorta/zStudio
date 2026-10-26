@@ -49,7 +49,7 @@ public sealed class AnimationAudio : IDisposable, IAsyncDisposable
 
     /// <summary>Source world sessions defer device creation until explicit forward playback.</summary>
     public async Task PrepareAsync(AnimationPreviewContext snapshot, int entryIndex, AnimationExecutionPolicy? policy,
-        bool openOutput, CancellationToken token = default)
+        bool openOutput, CancellationToken token = default, AnimationSchedule? schedule = null)
     {
         ObjectDisposedException.ThrowIf(disposed, this);
         Stop(); IsPrepared = false; bank.Clear();
@@ -60,7 +60,7 @@ public sealed class AnimationAudio : IDisposable, IAsyncDisposable
         Preparation? result = null;
         try
         {
-            result = await Task.Run(() => Prepare(snapshot, entryIndex, policy, openOutput, linked.Token), linked.Token);
+            result = await Task.Run(() => Prepare(snapshot, entryIndex, policy, openOutput, linked.Token, schedule), linked.Token);
             linked.Token.ThrowIfCancellationRequested();
             if (disposed || generation != preparationGeneration) return;
             bank = result.Bank; IsPrepared = result.Error == null;
@@ -76,9 +76,9 @@ public sealed class AnimationAudio : IDisposable, IAsyncDisposable
     }
 
     private Preparation Prepare(AnimationPreviewContext snapshot, int entryIndex, AnimationExecutionPolicy? policy,
-        bool openOutput, CancellationToken token)
+        bool openOutput, CancellationToken token, AnimationSchedule? schedule)
     {
-        var dependencies = AnimationAudioDependencies.Collect(snapshot.Package, entryIndex, policy, token);
+        var dependencies = AnimationAudioDependencies.Collect(snapshot.Package, entryIndex, policy, token, schedule);
         List<string> diagnostics = [.. dependencies.Diagnostics];
         Dictionary<string, AnimationSound> names = new(StringComparer.Ordinal);
         Dictionary<ReadOnlyMemory<byte>, AnimationSound> requested = [];

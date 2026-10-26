@@ -48,7 +48,7 @@ public sealed partial class AnimationPlayer
             return link;
         }
 
-        internal Pose Get(Instance instance, Node node)
+        internal Pose Get(Instance instance, Node node, int? lod = null)
         {
             work.Reserve(1);
             var key = (instance, node);
@@ -72,7 +72,7 @@ public sealed partial class AnimationPlayer
                 // Keep the existing child-to-root, left-associated arithmetic exactly. Multiplying
                 // by a cached parent's world matrix would change floating-point rounding.
                 world *= link.Local;
-                if (visible && (!parent.Active || parent.PendingPlacement || !player.context.Lods.Includes(parent.Source, child.Source, player.LodLevel))) visible = false;
+                if (visible && (!parent.Active || parent.PendingPlacement || !player.context.Lods.Includes(parent.Source, child.Source, lod ?? player.LodLevel))) visible = false;
                 if (!alphaFound && parent.AlphaEnabled) { opacity = Math.Clamp(parent.Alpha, 0, 1); alphaFound = true; }
                 child = parent;
             }

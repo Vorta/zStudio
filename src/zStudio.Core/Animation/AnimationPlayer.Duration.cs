@@ -28,10 +28,10 @@ public sealed partial class AnimationPlayer
         try
         {
             probe = new AnimationPlayer(context, entryIndex, Seed, resetPhase, token, maximumRetainedStateBytes,
-                () => RetainedStateBytes + (otherRetainedState?.Invoke() ?? 0))
+                () => RetainedStateBytes + (otherRetainedState?.Invoke() ?? 0), schedule)
             {
                 ConditionOverride = ConditionOverride, EffectLevel = EffectLevel, ExecutionPolicy = ExecutionPolicy,
-                ReferencePosition = ReferencePosition, ActivationStart = ActivationStart, GroundPlaneEnabled = GroundPlaneEnabled, Terrain = Terrain,
+                ReferencePosition = ReferencePosition, ActivationStart = ActivationStart, GroundPlaneEnabled = GroundPlaneEnabled, Terrain = Terrain, OriginCollision = OriginCollision,
                 ProceduralLimitsEnabled = ProceduralLimitsEnabled, PreviewHeight = PreviewHeight, measuringDuration = true
             };
         }
@@ -45,7 +45,7 @@ public sealed partial class AnimationPlayer
     private AnimationDuration MeasureCore(CancellationToken token)
     {
         token.ThrowIfCancellationRequested();
-        if (instances.Count == 0) return Result(5, AnimationDurationKind.Unavailable, "Bind a scene root to determine the duration.");
+        if (instances.Count == 0 && !PendingStarts) return Result(5, AnimationDurationKind.Unavailable, "Bind a scene root to determine the duration.");
         var budget = Stopwatch.StartNew();
         double tailsEnd = 0;
         // Bounded work even for malformed, recursive, collision-driven or very long programs.
@@ -74,7 +74,7 @@ public sealed partial class AnimationPlayer
             var active = live.SelectMany(i => i.Sequences.Where(s => s.State is 0 or 1).Select(s => (Instance: i, Sequence: s))).ToArray();
             using var classification = BeginBinding(token);
             // Do not stop at a loop if another sequence can still stop it or launch a finite child.
-            if (active.Length > 0 && live.All(i => i.StopDelay < 0) && active.All(s => IsUnconditionalLoop(s.Sequence) || IsUnboundedMotion(s.Instance, s.Sequence)))
+            if (!PendingStarts && active.Length > 0 && live.All(i => i.StopDelay < 0) && active.All(s => IsUnconditionalLoop(s.Sequence) || IsUnboundedMotion(s.Instance, s.Sequence)))
             {
                 bool looping = active.Any(s => s.Sequence.ObservedInfiniteLoop);
                 return Result(Math.Max(5, Math.Max(Time, tailsEnd)), looping ? AnimationDurationKind.Looping : AnimationDurationKind.OpenEnded,

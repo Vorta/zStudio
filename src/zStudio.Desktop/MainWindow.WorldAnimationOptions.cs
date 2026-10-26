@@ -89,6 +89,8 @@ public partial class MainWindow
             case "phase":
                 string phase = data.GetValue<string>(); if (phase is not ("runtime" or "cleanup")) throw new StudioCommandException("invalid_argument", "Phase must be runtime or cleanup.");
                 SetWorldAnimationScenario(worldAnimationConfiguration with { Cleanup = phase == "cleanup" }); break;
+            case "activations": ReadWorldAnimationActivations(data); break;
+            case "fitScenario": if (FlagValue()) await FitWorldAnimationScenario(); break;
             case "seed": SetWorldAnimationScenario(worldAnimationConfiguration with { Seed = data.GetValue<int>() }); break;
             case "height": SetWorldAnimationScenario(worldAnimationConfiguration with { Height = (float)NumberValue() }); break;
             case "effectLevel": SetWorldAnimationScenario(worldAnimationConfiguration with { EffectLevel = data.GetValue<int>() }); break;
@@ -101,10 +103,10 @@ public partial class MainWindow
                 var included = paths.Select(p => p!.GetValue<string>()).ToHashSet(StringComparer.Ordinal);
                 foreach (string path in included)
                 {
-                    if (path.Length == 0) throw new StudioCommandException("invalid_argument", "The root is always included.");
+                    if (IsWorldAnimationActivationPath(path)) throw new StudioCommandException("invalid_argument", "The root is always included.");
                     ValidateWorldAnimationCallPath(root, path);
                     string parent = path[..Math.Max(0, path.LastIndexOf('/'))];
-                    if (parent.Length != 0 && !included.Contains(parent)) throw new StudioCommandException("invalid_argument", "Every included call requires its ancestor calls.");
+                    if (!IsWorldAnimationActivationPath(parent) && !included.Contains(parent)) throw new StudioCommandException("invalid_argument", "Every included call requires its ancestor calls.");
                 }
                 SetWorldAnimationScenario(worldAnimationConfiguration with { Policy = new(included, worldAnimationConfiguration.Policy.ConditionOverrides) }); break;
             case "conditions":
@@ -148,12 +150,18 @@ public partial class MainWindow
     {
         var target = WorldAnimationTargetNow is { Entry: >= 0 } active ? active : throw new StudioCommandException("not_ready", "Choose an exact animation binding.");
         await EnsureAnimationCardForEntryAsync(target.Document, target.Entry, CancellationToken.None);
-        SectionCard().SetAnimationSetup(WorldAnimationScenarioPanel(), true);
+        var panel = WorldAnimationScenarioPanel();
+        SectionCard().SetAnimationSetup(panel, true);
+        await Dispatcher.InvokeAsync(() =>
+        {
+            if (WorldAnimationTargetNow == target) SectionCard().FocusAnimationSetup(panel);
+        }, System.Windows.Threading.DispatcherPriority.ContextIdle);
     }
 
     private FrameworkElement WorldAnimationScenarioPanel(int? selectedEntry = null, string path = "", Guid selectedEvent = default)
     {
         StackPanel panel = new();
+        if (WorldAnimationTargetNow is { Entry: >= 0 }) panel.Children.Add(WorldAnimationSchedulePanel());
         panel.Children.Add(new TextBlock { Text = "Manual preview bypasses activation and prerequisites. It does not simulate a hit or mission startup. Scenario changes stop playback and restore the world.", TextWrapping = TextWrapping.Wrap, Margin = new(0, 5, 0, 8) });
         ComboBox phase = new() { ItemsSource = new[] { "Runtime", "Cleanup" }, SelectedIndex = worldAnimationConfiguration.Cleanup ? 1 : 0, MinHeight = 28 };
         Field("Phase", phase); phase.SelectionChanged += (_, _) => _ = ReportUi(() => WorldAnimationOptionAsync("phase", phase.SelectedIndex == 1 ? "cleanup" : "runtime"));

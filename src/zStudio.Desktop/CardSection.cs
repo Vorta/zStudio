@@ -23,6 +23,7 @@ internal sealed class CardSection : Border
     private readonly Border summaryLead = new() { VerticalAlignment = VerticalAlignment.Center, Margin = new(8, 0, 0, 0), Visibility = Visibility.Collapsed };
     internal StackPanel Body { get; } = new() { Margin = new(12, 4, 12, 12) };
     internal string Title { get; }
+    internal void Expand() => header.IsChecked = true;
     /// <summary>The key its expansion is remembered under: its title, unless <see cref="RememberAs"/> chose another.</summary>
     private string memory;
 

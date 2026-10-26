@@ -4,6 +4,8 @@ Version numbers follow `MAJOR.MINOR.PATCH`; the 0.x series is under active devel
 
 ## 0.9.8 — Unreleased
 
+- Added shared animation preview schedules with independent start times, 40 fps activation markers and GUI/MCP controls. Corrected source-map impacts to query current surfaces beneath moving origins, so M4 bridge splashes wait for contact and respond to the animated canal level.
+
 - Kept World-tree eye and Frame buttons clear of the vertical scrollbar, including deep horizontally scrolled branches and filtered results.
 
 - Redesigned the source-world animation timeline with a Flash-style 40 fps frame grid, horizontal motion-key tracks, source excerpts and frame-based event timing drafts. Frame 1 is time zero; original off-grid keys remain precise.

@@ -11,6 +11,7 @@ public sealed record WorldAnimationTimelineRow(string Id, string Label)
     public bool InclusionEnabled { get; init; } = true;
     public string InclusionReason { get; init; } = "";
     public bool? GuidesShown { get; init; }
+    public Guid? ActivationId { get; init; }
     public bool CanEditTiming { get; init; }
     public string TimingLabel { get; init; } = "";
     public string Detail { get; init; } = "";

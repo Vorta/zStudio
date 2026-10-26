@@ -17,6 +17,7 @@ internal sealed partial class SourceSectionCard
     private string? animationSequence;
     private long animationRevision = -1;
     private StackPanel? animationPathsHost;
+    private CardSection? animationPathsSection;
     private Expander? animationSetup;
     private ComboBox? animationSequencePicker;
     private StackPanel? animationContextHost;
@@ -66,7 +67,15 @@ internal sealed partial class SourceSectionCard
     {
         if (animationPathsHost == null) return;
         if (animationSetup != null) { animationSetup.Content = null; animationPathsHost.Children.Remove(animationSetup); animationSetup = null; }
-        if (setup != null) { animationSetup = new() { Header = "Scenario", Content = setup, IsExpanded = expand, MaxHeight = 480 }; animationPathsHost.Children.Add(animationSetup); }
+        if (setup != null) { animationSetup = new() { Header = "Scenario", Content = setup, IsExpanded = expand }; animationPathsHost.Children.Add(animationSetup); }
+    }
+    internal void FocusAnimationSetup(FrameworkElement expected)
+    {
+        if (animationSetup?.Content != expected || !IsLoaded || !contentScroll.IsAncestorOf(animationSetup)) return;
+        animationPathsSection?.Expand(); animationSetup.IsExpanded = true;
+        contentScroll.UpdateLayout();
+        if (contentScroll.Content is UIElement content)
+            contentScroll.ScrollToVerticalOffset(animationSetup.TranslatePoint(new(), content).Y);
     }
     private string? animationRecord;
     internal bool IsAnimationRecord(DocumentModel document, int definition, string record) =>
@@ -124,7 +133,7 @@ internal sealed partial class SourceSectionCard
             list.SelectedItem = list.Items.Cast<SourceAnimationEdits.Record>().FirstOrDefault(r => r.Id == selected) ?? list.Items.Cast<SourceAnimationEdits.Record>().FirstOrDefault();
         };
         sequence.SelectedItem = sequences.FirstOrDefault(s => selected?.StartsWith(s.Id + "/", StringComparison.Ordinal) == true) ?? sequences.FirstOrDefault();
-        var pathSection = Section("Paths"); pathSection.Body.Children.Add(paths); animationPathsHost = pathSection.Body;
+        var pathSection = Section("Paths"); pathSection.Body.Children.Add(paths); animationPathsHost = pathSection.Body; animationPathsSection = pathSection;
         var activation = Section("Activation and prerequisites", false);
         animationActivationHost = activation.Body;
         RefreshAnimationFields();

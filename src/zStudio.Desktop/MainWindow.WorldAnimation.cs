@@ -125,9 +125,10 @@ public partial class MainWindow
     }
 
     private AnimationPlayer CreateWorldAnalysisPlayer(AnimationPreviewContext context, int entry, WorldAnimationScenario configuration, CancellationToken token, int lod = 0)
-        => new(context, entry, configuration.Seed, configuration.Cleanup, token)
+        => new(context, configuration.Activations.FirstOrDefault(s => s.Id == Guid.Empty)?.Entry ?? entry, configuration.Seed, configuration.Cleanup, token,
+            configuration.Schedule(configuration.Activations.FirstOrDefault(s => s.Id == Guid.Empty)?.Entry ?? entry, context.Package.Entries.Count))
         {
-            ExecutionPolicy = configuration.Policy, Terrain = context.Terrain, ProceduralLimitsEnabled = true,
+            ExecutionPolicy = configuration.Policy, Terrain = context.Terrain, OriginCollision = true, ProceduralLimitsEnabled = true,
             PreviewHeight = configuration.Height, ReferencePosition = configuration.ReferencePosition,
             ActivationStart = configuration.ActivationStart, EffectLevel = configuration.EffectLevel,
             LodLevel = Math.Max(0, lod)
@@ -257,6 +258,12 @@ public partial class MainWindow
     private void SetWorldAnimationScenario(WorldAnimationScenario configuration)
     {
         RequireNoDrafts();
+        if (WorldAnimationTargetNow is { Entry: >= 0 } target)
+        {
+            var schedule = configuration.Schedule(target.Entry, target.Document.Document.Animations!.Entries.Count);
+            if (schedule.Starts.Single(s => s.Id == Guid.Empty).Entry != target.Entry)
+                throw new StudioCommandException("invalid_argument", "Keep the primary activation bound to the selected animation.");
+        }
         // Validate before publishing a scenario even when the run has not been prepared.
         if (!float.IsFinite(configuration.Height) || configuration.Height is < -999 or > 999 || configuration.EffectLevel is < 0 or > 2)
             throw new StudioCommandException("invalid_argument", "Height must be -999..999 and effect level 0..2.");
@@ -270,11 +277,11 @@ public partial class MainWindow
         => WorldAnimationTargetNow?.Entry == rootEntry && worldAnimationConfiguration.Policy.Includes(path);
 
     private bool CanIncludeWorldAnimationCall(int rootEntry, string parentPath)
-        => WorldAnimationTargetNow?.Entry == rootEntry && (parentPath.Length == 0 || worldAnimationConfiguration.Policy.Includes(parentPath));
+        => WorldAnimationTargetNow?.Entry == rootEntry && (IsWorldAnimationActivationPath(parentPath) || worldAnimationConfiguration.Policy.Includes(parentPath));
 
     private void SetWorldAnimationCallIncluded(int rootEntry, string path, bool value)
     {
-        if (path.Length == 0) throw new StudioCommandException("invalid_argument", "The root is always included; choose a child call path.");
+        if (IsWorldAnimationActivationPath(path)) throw new StudioCommandException("invalid_argument", "The root is always included; choose a child call path.");
         string parentPath = path[..Math.Max(0, path.LastIndexOf('/'))];
         if (!CanIncludeWorldAnimationCall(rootEntry, parentPath)) throw new StudioCommandException("not_ready", "Use this root as the preview target and include its parent call first.");
         ValidateWorldAnimationCallPath(rootEntry, path);
@@ -288,7 +295,15 @@ public partial class MainWindow
     {
         if (path.Length > AnimationExecutionPolicy.MaximumPathCharacters) throw new StudioCommandException("invalid_argument", "The dependency path is too long.");
         var plan = GetWorldAnimationStructurePlan(); int current = rootEntry; string parent = "";
-        foreach (string segment in path.Split('/', StringSplitOptions.RemoveEmptyEntries))
+        string remainder = path;
+        if (path.StartsWith("/@", StringComparison.Ordinal))
+        {
+            string prefix = path.Split('/')[1];
+            var activation = WorldAnimationActivations().FirstOrDefault(s => s.Path == "/" + prefix)
+                ?? throw new StudioCommandException("stale_record", "The scheduled activation is unavailable.");
+            current = activation.Entry; parent = activation.Path; remainder = path[parent.Length..];
+        }
+        foreach (string segment in remainder.Split('/', StringSplitOptions.RemoveEmptyEntries))
         {
             string expected = parent + "/" + segment; AnimationStructureCall? found = null;
             for (int offset = 0; ;)

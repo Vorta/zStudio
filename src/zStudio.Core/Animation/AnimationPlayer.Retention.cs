@@ -15,11 +15,11 @@ public sealed partial class AnimationPlayer
     internal sealed class StateLimitException() : IOException(RetainedStateRefusal) { }
 
     internal AnimationPlayer(AnimationPreviewContext context, int entryIndex, int seed, bool resetPhase,
-        CancellationToken token, long maximumRetainedStateBytes, Func<long>? otherRetainedState = null)
+        CancellationToken token, long maximumRetainedStateBytes, Func<long>? otherRetainedState = null, AnimationSchedule? schedule = null)
     {
         if (maximumRetainedStateBytes is < 1 or > MaximumRetainedStateBytes) throw new ArgumentOutOfRangeException(nameof(maximumRetainedStateBytes));
         this.context = context; this.entryIndex = entryIndex; this.resetPhase = resetPhase; Seed = seed;
-        this.maximumRetainedStateBytes = maximumRetainedStateBytes; this.otherRetainedState = otherRetainedState;
+        this.schedule = schedule; this.maximumRetainedStateBytes = maximumRetainedStateBytes; this.otherRetainedState = otherRetainedState;
         Reset(token);
     }
 
@@ -75,7 +75,7 @@ public sealed partial class AnimationPlayer
         try
         {
             replacement = new(context, entryIndex, Seed, resetPhase, token, maximumRetainedStateBytes,
-                () => RetainedStateBytes + (otherRetainedState?.Invoke() ?? 0));
+                () => RetainedStateBytes + (otherRetainedState?.Invoke() ?? 0), schedule);
         }
         catch (StateLimitException) when (interrupted)
         {
@@ -84,7 +84,7 @@ public sealed partial class AnimationPlayer
             // player stays interrupted, and the next seek, step or playback resets again. An accepted state is kept.
             ReleaseState();
             replacement = new(context, entryIndex, Seed, resetPhase, token, maximumRetainedStateBytes,
-                () => (ExecutionPolicy?.RetainedBytes ?? 0) + (otherRetainedState?.Invoke() ?? 0));
+                () => (ExecutionPolicy?.RetainedBytes ?? 0) + (otherRetainedState?.Invoke() ?? 0), schedule);
         }
         token.ThrowIfCancellationRequested();
         instances = replacement.instances; sharedNodes = replacement.sharedNodes;
@@ -93,7 +93,7 @@ public sealed partial class AnimationPlayer
         lights = replacement.lights; activeSounds = replacement.activeSounds; checkpoints = replacement.checkpoints;
         previewIssues = replacement.previewIssues; diagnosticContext = replacement.diagnosticContext;
         entryLookup = replacement.entryLookup; bindingIndexes = replacement.bindingIndexes;
-        ticks = replacement.ticks; nextId = replacement.nextId; traceOrdinal = replacement.traceOrdinal;
+        nextScheduled = replacement.nextScheduled; originTerrain.Clear(); ticks = replacement.ticks; nextId = replacement.nextId; traceOrdinal = replacement.traceOrdinal;
         traceDropped = replacement.traceDropped; randomState = replacement.randomState; randomIndex = replacement.randomIndex;
         replacement.randomTable.CopyTo(randomTable, 0);
         screenColor = replacement.screenColor; screenWave = replacement.screenWave; fog = replacement.fog;

@@ -59,6 +59,10 @@ public sealed partial class AnimationPlayer
     private AnimationEntryLookup entryLookup = null!;
     private readonly int entryIndex;
     private readonly bool resetPhase;
+    private readonly AnimationSchedule? schedule;
+    private int nextScheduled;
+    public AnimationSchedule? Schedule => schedule;
+    public bool OriginCollision { get; init; }
     public int LodLevel { get; set; }
     private List<Instance> instances = [];
     private Dictionary<int, Node> sharedNodes = [];
@@ -115,11 +119,12 @@ public sealed partial class AnimationPlayer
         }
     }
     public double Time => ticks * StepSeconds;
-    public bool IsComplete => instances.All(i => i.Finished) && effects.Count == 0;
+    private bool PendingStarts => schedule != null && nextScheduled < schedule.Starts.Count;
+    public bool IsComplete => !PendingStarts && instances.All(i => i.Finished) && effects.Count == 0;
     public bool HasExcludedCalls => hasExcludedCalls;
     public bool HasBlockedDependencies => instances.Any(i => !i.Finished && i.Sequences.Any(s => s.State == 5));
     /// <summary>Excluded waited calls remain, with no runnable work able to change their dependency boundary.</summary>
-    public bool IsDependencyBlocked => HasBlockedDependencies && effects.Count == 0 &&
+    public bool IsDependencyBlocked => !PendingStarts && HasBlockedDependencies && effects.Count == 0 &&
         instances.Where(i => !i.Finished).All(i => i.StopDelay < 0 && i.Sequences.All(s =>
             s.State != 0 && (s.State != 1 || s.Work is { Type: 24 } call && (call.I16(46) & 16) != 0 &&
                 instances.Any(child => child.Id == s.Child && !child.Finished))));
@@ -127,8 +132,13 @@ public sealed partial class AnimationPlayer
     public AnimationPlayer(AnimationPreviewContext context, int entryIndex, int seed = 1, bool resetPhase = false)
         : this(context, entryIndex, seed, resetPhase, default) { }
     public AnimationPlayer(AnimationPreviewContext context, int entryIndex, int seed, bool resetPhase, CancellationToken token)
+        : this(context, entryIndex, seed, resetPhase, token, null) { }
+    public AnimationPlayer(AnimationPreviewContext context, int entryIndex, int seed, bool resetPhase, CancellationToken token, AnimationSchedule? schedule)
     {
-        this.context = context; this.entryIndex = entryIndex; this.resetPhase = resetPhase; Seed = seed; Reset(token);
+        this.context = context; this.entryIndex = entryIndex; this.resetPhase = resetPhase; this.schedule = schedule; Seed = seed;
+        if (schedule != null && schedule.Starts.Single(s => s.Id == Guid.Empty).Entry != entryIndex)
+            throw new InvalidDataException("The schedule primary must match the preview binding.");
+        Reset(token);
     }
     private AnimationPlayer(AnimationPreviewContext context, AnimationBindingOperation operation)
     {
@@ -167,7 +177,9 @@ public sealed partial class AnimationPlayer
         instances = []; sharedNodes = []; effects = []; trace = []; conditions = []; conditionsDropped = 0; hasExcludedCalls = false;
         notes = []; foreach (string message in context.Diagnostics) AddNote(message, "Resource", "Unclassified"); lights = []; activeSounds = []; cues.Clear(); checkpoints.Clear();
         screenColor = screenWave = Vector4.Zero; fog = null;
-        AddInstance(context.Package.Entries[entryIndex], null, null, resetPhase);
+        nextScheduled = 0; originTerrain.Clear();
+        if (schedule == null) AddInstance(context.Package.Entries[entryIndex], null, null, resetPhase);
+        else StartScheduled();
         RequireState(StateBytes(instances, sharedNodes) + ConditionBytes(conditions.Count) + CloneScratch(instances, sharedNodes));
         checkpoints[0] = CaptureCheckpoint(token);
         InvalidateRetainedState();
@@ -221,6 +233,7 @@ public sealed partial class AnimationPlayer
         using var binding = BeginBinding(CancellationToken.None);
         ReleaseReplacedSequences();
         interrupted = true;
+        StartScheduled();
         ticks++; dispatchBudget = 10000; screenColor = screenWave = Vector4.Zero;
         foreach (var instance in instances.ToArray())
         {
@@ -255,11 +268,23 @@ public sealed partial class AnimationPlayer
             if (!cue.Persistent && Time - cue.StartedAt >= context.Sounds[cue.Name].Duration)
                 activeSounds.Remove(id);
         // Keep completed root geometry as the final pose, but release nested instances.
-        if (instances.RemoveAll(i => i.Finished && i.Id != 1 && !instances.Any(p => p.Children.Values.Contains(i.Id))) > 0)
+        if (instances.RemoveAll(i => i.Finished && i.Id != 1 && !i.Scheduled && !instances.Any(p => p.Children.Values.Contains(i.Id))) > 0)
             InvalidateRetainedState();
         interrupted = false;
         // The tick is complete; canceling its optional checkpoint only leaves a later seek to replay from an earlier one.
         if (!measuringDuration && ticks % 60 == 0) SaveCheckpoint(token);
+    }
+    private void StartScheduled()
+    {
+        if (schedule == null) return;
+        while (nextScheduled < schedule.Starts.Count && schedule.Starts[nextScheduled].Tick <= ticks)
+        {
+            var start = schedule.Starts[nextScheduled++];
+            var instance = AddInstance(context.Package.Entries[start.Entry], null, null, resetPhase,
+                callPath: start.Path, startedAt: Time);
+            if (instance != null) instance.Scheduled = true;
+            else AddNote($"Scheduled activation {start.Id}: entry #{start.Entry} could not start (unavailable or already running).", "Preview", "Information");
+        }
     }
     private void Run(Instance instance, Sequence state, float step = (float)StepSeconds)
     {
@@ -369,7 +394,7 @@ public sealed partial class AnimationPlayer
             if (!initializingScene) rootNode.Active = true;
             // Explicitly inspecting an unplaced actor's destruction/effect still
             // needs a local preview. World controllers never enable dormant actors.
-            if (!initializingScene && instance.Id == 1 && rootNode.PendingPlacement && !entry.Sequences.SelectMany(s => s.Events).Any(e =>
+            if (!initializingScene && (schedule == null ? instance.Id == 1 : callPath.Length == 0 && entry.Index == entryIndex) && rootNode.PendingPlacement && !entry.Sequences.SelectMany(s => s.Events).Any(e =>
                 e.Spec != null && e.Bytes.Length >= e.Spec.Size && (e.Type == 12 && context.ResolveInstanceNode(entry,e.I32(12),root,binding,operation) == root || e.Type == 7 && context.ResolveInstanceNode(entry,e.I16(28),root,binding,operation) == root)))
             { rootNode.PendingPlacement = false; AddNote("The selected actor has no recovered starting position; this individual preview uses its stored pose.", "Support", "Information"); }
             if (position is Vector3 p) { Position(rootNode, p); rootNode.Parent = -1; }
@@ -472,6 +497,15 @@ public sealed partial class AnimationPlayer
                 else AddNote($"Camera {source.Name} #{index}: invalid transform or field of view; follow pose is unavailable.");
             }
         }
+        // Finished children can leave lasting world changes (for example, a filled canal).
+        // Their shared nodes outlive the child instance and still replace the static world.
+        if (OriginCollision && instances.FirstOrDefault(i => i.Shared) is { } owner)
+            foreach (var (index, node) in sharedNodes.ToArray())
+                if (context.Scene.Nodes[index].ModelIndex is >= 0 and int model && rendered.Add(node.RenderId))
+                {
+                    var pose = ancestry.Get(owner, node);
+                    poses.Add(new(node.RenderId, index, model, pose.World, pose.Visible, pose.Opacity, node.Variant, node.Morph, Math.Max(0, Time - node.CycleStart)));
+                }
         EndFrameAncestry(ancestry);
         foreach (var effect in effects)
         {
@@ -574,7 +608,7 @@ public sealed partial class AnimationPlayer
         public int Root;
         public AnimationBinding Binding;
         public float Elapsed, StopDelay = -1;
-        public bool Cleanup, Finished, FinishRequested, Shared;
+        public bool Cleanup, Finished, FinishRequested, Shared, Scheduled;
         public Dictionary<int, Node> Nodes = [], SavedNodes = [];
         public List<Sequence> Sequences = [];
         public Dictionary<int, long> Children = [];
@@ -595,12 +629,12 @@ public sealed partial class AnimationPlayer
     }
     private sealed record Checkpoint(long Ticks, long NextId, int RandomIndex, List<Instance> Instances, Dictionary<int, Node> SharedNodes, List<Effect> Effects, List<AnimationTrace> Trace,
         HashSet<string> Notes, long TraceOrdinal, long TraceDropped, Dictionary<DiagnosticKey, AnimationPreviewDiagnostic> Issues, Dictionary<long, AnimationLight> Lights, Dictionary<long, AnimationSoundCue> Sounds, Vector4 Color, Vector4 Wave, AnimationFog? Fog,
-        List<AnimationConditionResult> Conditions, long ConditionsDropped, bool HasExcludedCalls);
+        List<AnimationConditionResult> Conditions, long ConditionsDropped, bool HasExcludedCalls, int NextScheduled);
     private Checkpoint CaptureCheckpoint(CancellationToken token)
     {
         Dictionary<Node, Node> copies = [];
         Node Copy(Node n) { token.ThrowIfCancellationRequested(); if (!copies.TryGetValue(n, out var copy)) copies[n] = copy = n.Clone(); return copy; }
-        return new(ticks, nextId, randomIndex, instances.Select(i => i.Clone(Copy, token)).ToList(), sharedNodes.ToDictionary(p => p.Key, p => Copy(p.Value)), effects.Select(e => e.Clone()).ToList(), [.. trace], [.. notes], traceOrdinal, traceDropped, new(previewIssues), new(lights), new(activeSounds), screenColor, screenWave, fog, [.. conditions], conditionsDropped, hasExcludedCalls);
+        return new(ticks, nextId, randomIndex, instances.Select(i => i.Clone(Copy, token)).ToList(), sharedNodes.ToDictionary(p => p.Key, p => Copy(p.Value)), effects.Select(e => e.Clone()).ToList(), [.. trace], [.. notes], traceOrdinal, traceDropped, new(previewIssues), new(lights), new(activeSounds), screenColor, screenWave, fog, [.. conditions], conditionsDropped, hasExcludedCalls, nextScheduled);
     }
     private void Restore(Checkpoint c, CancellationToken token)
     {
@@ -620,6 +654,7 @@ public sealed partial class AnimationPlayer
         ticks = c.Ticks; nextId = c.NextId; randomIndex = c.RandomIndex; instances = restored; sharedNodes = shared; effects = restoredEffects;
         trace = restoredTrace; notes = restoredNotes; traceOrdinal = c.TraceOrdinal; traceDropped = c.TraceDropped; previewIssues = restoredIssues; lights = restoredLights; activeSounds = restoredSounds; screenColor = c.Color; screenWave = c.Wave; fog = c.Fog;
         conditions = restoredConditions; conditionsDropped = c.ConditionsDropped; hasExcludedCalls = c.HasExcludedCalls;
+        nextScheduled = c.NextScheduled; originTerrain.Clear();
         retiredSequences.Clear(); InvalidateRetainedState(); interrupted = false;
     }
 }

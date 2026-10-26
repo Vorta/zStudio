@@ -292,7 +292,7 @@ public sealed class WorldAnimationTimeline : UserControl
     internal void ShowGuides(WorldAnimationTimelineRow row, bool shown) => GuideVisibilityRequested?.Invoke(row, shown);
     internal void EditTiming(WorldAnimationTimelineRow row) { if (row.CanEditTiming) EditTimingRequested?.Invoke(row); }
     internal void MoveWindow(WorldAnimationTimelineRow row, double value) { if (row.IsWindowClock && row.CanMoveWindow && double.IsFinite(value)) WindowMoveRequested?.Invoke(row, value); }
-    internal void MoveTiming(WorldAnimationTimelineRow row, double seconds) { if (row.CanEditTiming && double.IsFinite(seconds)) TimingMoveRequested?.Invoke(row, seconds); }
+    internal void MoveTiming(WorldAnimationTimelineRow row, double seconds) { if ((row.CanEditTiming || row.ActivationId.HasValue) && double.IsFinite(seconds)) TimingMoveRequested?.Invoke(row, seconds); }
     internal bool HandleWheel(int delta, ModifierKeys modifiers, double fraction)
     {
         double span = visibleEnd - visibleStart;

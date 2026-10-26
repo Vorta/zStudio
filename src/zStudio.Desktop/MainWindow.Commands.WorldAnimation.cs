@@ -9,6 +9,9 @@ public partial class MainWindow
 {
     private static StudioParameter WorldTimelineChanges => new("changes", "object", "Preview scenario and timeline presentation; source timing is edited through source_animation.", Properties:
     [
+        new("activations", "array", "Replace the preview schedule, including primary id 00000000-0000-0000-0000-000000000000. Times use the shared clock; calls remain opt-in.", Items: new("", "object", "Scheduled activation.", Properties:
+        [P("id", "string", "Stable activation GUID; empty GUID identifies the primary.", true), new("entry", "integer", "Exact compiled entry.", true, Minimum: 0), new("seconds", "number", "Requested start seconds.", true, NumberMinimum: 0, NumberMaximum: 3600)]), MinItems: 1, MaxItems: 32),
+        P("fitScenario", "boolean", "Fit the visible and playback ranges through the latest scheduled start plus 30 seconds."),
         P("phase", "string", "Runtime or cleanup; selecting a cleanup row never changes phase.", false, "runtime", "cleanup"),
         new("seed", "integer", "Deterministic seed.", Minimum: int.MinValue, Maximum: int.MaxValue),
         new("height", "number", "Preview-only world height.", NumberMinimum: -999, NumberMaximum: 999),
@@ -39,6 +42,7 @@ public partial class MainWindow
              new("definition", "integer", "Source definition index for target.", Minimum: 0),
              new("entry", "integer", "Exact compiled binding index; required when the definition expands to several bindings.", Minimum: 0),
              new("root", "integer", "Root binding for a call inclusion change.", Minimum: 0),
+             P("activation", "string", "Optional scheduled activation GUID for structural calls, inclusion and selection; otherwise paths are canonical and primary is the default."),
              P("sequence", "string", "Sequence GUID."), P("event", "string", "Event GUID."),
              P("path", "string", "Canonical callsite path from the structural plan; empty for root."),
              P("included", "boolean", "Include this call path."),
@@ -81,8 +85,9 @@ public partial class MainWindow
             {
                 var plan = GetWorldAnimationStructurePlan();
                 int offset = Int(a, "offset"), limit = Int(a, "limit", 100);
-                int entry = a.ContainsKey("entry") ? Int(a, "entry") : WorldAnimationTargetNow?.Entry ?? -1;
-                string section = Text(a, "section"), path = Text(a, "path");
+                string section = Text(a, "section"), path = WorldAnimationScopedPath(a);
+                int entry = a.ContainsKey("entry") ? Int(a, "entry") : a.ContainsKey("activation")
+                    ? WorldAnimationActivations().Single(s => s.Id == GuidArg(a, "activation")).Entry : WorldAnimationTargetNow?.Entry ?? -1;
                 if (section == "entries")
                 {
                     List<AnimationStructureEntry> rows = [];
@@ -122,13 +127,13 @@ public partial class MainWindow
                     if (!a.ContainsKey("included")) throw new StudioCommandException("invalid_argument", "Supply included.");
                     int root = a.ContainsKey("root") ? Int(a, "root") : WorldAnimationTargetNow?.Entry ?? -1;
                     if (root < 0) throw new StudioCommandException("invalid_argument", "Choose a root binding first.");
-                    SetWorldAnimationCallIncluded(root, Text(a, "path"), Flag(a, "included"));
+                    SetWorldAnimationCallIncluded(root, WorldAnimationScopedPath(a), Flag(a, "included"));
                     break;
                 case "options":
                     var changes = a["changes"] as JsonObject ?? throw new StudioCommandException("invalid_argument", "Supply changes.");
                     foreach (var (name, value) in changes) await WorldAnimationOptionAsync(name, value ?? throw new StudioCommandException("invalid_argument", "Supply explicit option values."), token);
                     break;
-                case "select": await WorldAnimationSelectSourceAsync(GuidArg(a, "sequence"), GuidArg(a, "event"), token, a.ContainsKey("entry") ? Int(a, "entry") : null, Text(a, "path")); break;
+                case "select": await WorldAnimationSelectSourceAsync(GuidArg(a, "sequence"), GuidArg(a, "event"), token, a.ContainsKey("entry") ? Int(a, "entry") : a.ContainsKey("activation") ? WorldAnimationActivations().Single(s => s.Id == GuidArg(a, "activation")).Entry : null, WorldAnimationScopedPath(a), preserveTimeline: true); break;
                 case "use_selection": await WorldAnimationTransportAsync("useSelection", 0, token); break;
                 case "exit": await WorldAnimationTransportAsync("exit", 0, token); break;
                 case "evaluate_paths": await WorldAnimationTransportAsync("evaluatePaths", 0, token); break;

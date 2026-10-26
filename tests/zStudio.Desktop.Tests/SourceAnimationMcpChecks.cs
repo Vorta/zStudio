@@ -79,6 +79,60 @@ internal static class SourceAnimationMcpChecks
             var structure = await Timeline("structure", new() { ["section"] = "calls", ["entry"] = deliveryEntry });
             var calls = structure["page"]!["Rows"]!.AsArray();
             Assert.NotEmpty(calls);
+            // A second scheduled binding must stay part of the same unpinned timeline when inspected.
+            int secondaryEntry = calls.First(c => c!["TargetEntry"] != null)!["TargetEntry"]!.GetValue<int>();
+            Guid scheduledActivation = Guid.NewGuid();
+            var primaryCandidate = typeof(MainWindow).GetField("worldAnimationCandidate", flags)!.GetValue(main);
+            await Timeline("options", new() { ["changes"] = new { activations = new[]
+            {
+                new { id = Guid.Empty, entry = deliveryEntry, seconds = 2d },
+                new { id = scheduledActivation, entry = secondaryEntry, seconds = 0d }
+            } } });
+            var scheduledRows = (await Timeline("rows", new() { ["view"] = "source" }))["rows"]!.AsArray();
+            Assert.Equal(2, scheduledRows.Count(r => r!["ActivationId"] != null));
+            string secondaryRow = $"entry:{secondaryEntry}:/@{scheduledActivation:N}";
+            await Timeline("expand", new() { ["row"] = secondaryRow, ["expanded"] = false });
+            var collapsedRows = (await Timeline("rows", new() { ["view"] = "source" }))["rows"]!.AsArray();
+            Assert.False(collapsedRows.Single(r => r!["Id"]!.GetValue<string>() == secondaryRow)!["Expanded"]!.GetValue<bool>());
+            Assert.DoesNotContain(collapsedRows, r => r!["ActivationId"]?.GetValue<Guid>() == scheduledActivation);
+            await Timeline("expand", new() { ["row"] = secondaryRow, ["expanded"] = true });
+            await Timeline("row", new() { ["row"] = secondaryRow });
+            await Timeline("select", new() { ["activation"] = scheduledActivation, ["entry"] = secondaryEntry });
+            Assert.Equal(primaryCandidate, typeof(MainWindow).GetField("worldAnimationCandidate", flags)!.GetValue(main));
+            var scheduleTimeline = Assert.IsType<WorldAnimationTimeline>(typeof(MainWindow).GetField("worldTimeline", flags)!.GetValue(main));
+            var scheduledModels = Assert.IsAssignableFrom<IReadOnlyList<WorldAnimationTimelineRow>>(typeof(MainWindow).GetField("worldAnimationSourceRows", flags)!.GetValue(main));
+            scheduleTimeline.MoveTiming(scheduledModels.Single(r => r.ActivationId == Guid.Empty), 2.125);
+            var configured = Assert.IsType<WorldAnimationScenario>(typeof(MainWindow).GetField("worldAnimationConfiguration", flags)!.GetValue(main));
+            Assert.Equal(2.125, configured.Activations.Single(s => s.Id == Guid.Empty).Seconds);
+            Assert.False(doc.IsDirty);
+            await Timeline("options", new() { ["changes"] = new { fitScenario = true } });
+            Assert.Equal(32.125, scheduleTimeline.PresentationState.VisibleEnd);
+            await Timeline("scenario");
+            Assert.Contains(Descendants(card).OfType<Button>(), b => b.Content as string == "Add animation");
+            // Scenario navigation must reveal its header even when its parent section was collapsed.
+            var pathsSection = Assert.IsType<CardSection>(typeof(SourceSectionCard).GetField("animationPathsSection", flags)!.GetValue(card));
+            var pathsToggle = Assert.IsType<System.Windows.Controls.Primitives.ToggleButton>(typeof(CardSection).GetField("header", flags)!.GetValue(pathsSection));
+            pathsToggle.IsChecked = false;
+            await Timeline("scenario");
+            var scenarioExpander = Descendants(card).OfType<Expander>().Single(e => e.Header as string == "Scenario");
+            var cardScroll = Assert.IsType<ScrollViewer>(typeof(SourceSectionCard).GetField("contentScroll", flags)!.GetValue(card));
+            card.UpdateLayout();
+            Assert.True(pathsToggle.IsChecked);
+            Assert.True(scenarioExpander.IsExpanded);
+            Assert.InRange(scenarioExpander.TranslatePoint(new(), cardScroll).Y, 0, cardScroll.ViewportHeight - 30);
+            Assert.True(double.IsPositiveInfinity(scenarioExpander.MaxHeight));
+            var scheduleChoices = Descendants(card).OfType<ComboBox>().Single(c => AutomationProperties.GetName(c) == "Animation binding to schedule");
+            Assert.NotEmpty(scheduleChoices.Items);
+            Assert.All(scheduleChoices.Items.Cast<object>(), choice => Assert.True((int)choice.GetType().GetProperty("Entry")!.GetValue(choice)! > 0));
+            var scenarioHost = Assert.IsType<StackPanel>(scenarioExpander.Parent);
+            int setupIndex = scenarioHost.Children.IndexOf(scenarioExpander);
+            var setupContent = Assert.IsAssignableFrom<FrameworkElement>(scenarioExpander.Content);
+            scenarioHost.Children.Remove(scenarioExpander); card.UpdateLayout();
+            double offsetBeforeStaleFocus = cardScroll.VerticalOffset;
+            card.FocusAnimationSetup(setupContent);
+            Assert.Equal(offsetBeforeStaleFocus, cardScroll.VerticalOffset);
+            scenarioHost.Children.Insert(setupIndex, scenarioExpander);
+            await Timeline("options", new() { ["changes"] = new { activations = new[] { new { id = Guid.Empty, entry = deliveryEntry, seconds = 0d } } } });
             // Inspecting a called definition before Play must preserve the unpinned structural root.
             var unpinnedRoot = typeof(MainWindow).GetField("worldAnimationCandidate", flags)!.GetValue(main);
             var beforeRows = (await Timeline("rows", new() { ["view"] = "source" }))["rows"]!.AsArray();

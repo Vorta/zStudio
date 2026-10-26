@@ -2836,6 +2836,14 @@
         "Minimum": 0
       },
       {
+        "Name": "activation",
+        "Type": "string",
+        "Description": "Optional scheduled activation GUID for structural calls, inclusion and selection; otherwise paths are canonical and primary is the default.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
         "Name": "sequence",
         "Type": "string",
         "Description": "Sequence GUID.",
@@ -2947,6 +2955,60 @@
         "Required": false,
         "Choices": null,
         "Properties": [
+          {
+            "Name": "activations",
+            "Type": "array",
+            "Description": "Replace the preview schedule, including primary id 00000000-0000-0000-0000-000000000000. Times use the shared clock; calls remain opt-in.",
+            "Required": false,
+            "Choices": null,
+            "Properties": null,
+            "Items": {
+              "Name": "",
+              "Type": "object",
+              "Description": "Scheduled activation.",
+              "Required": false,
+              "Choices": null,
+              "Properties": [
+                {
+                  "Name": "id",
+                  "Type": "string",
+                  "Description": "Stable activation GUID; empty GUID identifies the primary.",
+                  "Required": true,
+                  "Choices": null,
+                  "Properties": null
+                },
+                {
+                  "Name": "entry",
+                  "Type": "integer",
+                  "Description": "Exact compiled entry.",
+                  "Required": true,
+                  "Choices": null,
+                  "Properties": null,
+                  "Minimum": 0
+                },
+                {
+                  "Name": "seconds",
+                  "Type": "number",
+                  "Description": "Requested start seconds.",
+                  "Required": true,
+                  "Choices": null,
+                  "Properties": null,
+                  "NumberMinimum": 0,
+                  "NumberMaximum": 3600
+                }
+              ]
+            },
+            "MinItems": 1,
+            "MaxItems": 32
+          },
+          {
+            "Name": "fitScenario",
+            "Type": "boolean",
+            "Description": "Fit the visible and playback ranges through the latest scheduled start plus 30 seconds.",
+            "Required": false,
+            "Choices": null,
+            "Properties": null
+          },
           {
             "Name": "phase",
             "Type": "string",

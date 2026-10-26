@@ -20,6 +20,7 @@ namespace zStudio.Desktop;
 /// </summary>
 internal sealed partial class SourceSectionCard : Border
 {
+    private readonly ScrollViewer contentScroll;
     private readonly Border tile = new() { Width = 34, Height = 34, CornerRadius = new(6), BorderThickness = new(1), Margin = new(0, 0, 10, 0), VerticalAlignment = VerticalAlignment.Center };
     private readonly TextBlock heading = new() { FontWeight = FontWeights.SemiBold, FontSize = 15, TextTrimming = TextTrimming.CharacterEllipsis };
     private readonly TextBlock subtitle = new() { FontSize = 12, TextTrimming = TextTrimming.CharacterEllipsis };
@@ -102,6 +103,7 @@ internal sealed partial class SourceSectionCard : Border
         layout.Children.Add(title);
         StackPanel content = new(); content.Children.Add(error); content.Children.Add(body);
         ScrollViewer scroll = new() { Content = content, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled, Margin = new(0, 6, 0, 0) };
+        contentScroll = scroll;
         scroll.SetResourceReference(Control.TemplateProperty, "InspectionScrollTemplate");
         Grid.SetRow(scroll, 1); layout.Children.Add(scroll);
         Grid.SetRow(footer, 2); layout.Children.Add(footer);

@@ -90,7 +90,7 @@ public sealed partial class AnimationPlayer
 
     private void ConstrainSettledGround()
     {
-        if (!GroundPlaneEnabled && Terrain == null) return;
+        if (OriginCollision && Terrain != null || !GroundPlaneEnabled && Terrain == null) return;
         HashSet<Node> corrected = [];
         foreach (var instance in instances)
             foreach (var node in instance.Nodes.Values.Where(n => n.GroundSupported && n.Active && !n.PendingPlacement))
