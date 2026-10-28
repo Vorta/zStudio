@@ -26,6 +26,8 @@ internal sealed partial class AnimationTimingView
         private AnimationTimingStart? dragging; private double? dragTime; private Point pressed;
         private AnimationTimingMark? thresholdDrag; private double? thresholdValue;
         private object? hovered;
+        private readonly List<(Rect Bounds, AnimationTimingDropBar Bar)> dropHits = [];
+        private AnimationTimingDropBar? dropDrag; private double? dropStart;
         internal int DrawnRows { get; private set; }
         internal int DrawnMarks { get; private set; }
 
@@ -48,7 +50,7 @@ internal sealed partial class AnimationTimingView
 
         protected override void OnRender(DrawingContext dc)
         {
-            hits.Clear(); bandHits.Clear(); startHits.Clear(); rowHits.Clear(); handle = null; DrawnRows = DrawnMarks = 0;
+            hits.Clear(); bandHits.Clear(); startHits.Clear(); rowHits.Clear(); dropHits.Clear(); handle = null; DrawnRows = DrawnMarks = 0;
             var ink = owner.Palette; var g = ink.Graph;
             dc.DrawRectangle(g.Pane, null, new Rect(0, 0, ActualWidth, ActualHeight));
             var timing = owner.Timing;
@@ -57,7 +59,7 @@ internal sealed partial class AnimationTimingView
             double top = -owner.ScrollOffset;
             Dictionary<string, double> centers = new(StringComparer.Ordinal);
             List<(AnimationTimingLane Lane, double Top)> shown = [];
-            foreach (var lane in timing.Lanes)
+            foreach (var lane in owner.Rows)
             {
                 double height = RowHeight(lane);
                 centers[lane.Id] = top + height / 2;
@@ -168,6 +170,7 @@ internal sealed partial class AnimationTimingView
             var ink = owner.Palette; var g = ink.Graph;
             double height = RowHeight(lane), mid = y + height / 2;
             if (lane.Kind == AnimationTimingLaneKind.Starts) { DrawStarts(dc, lane, y, height); return; }
+            if (lane.Id == DropLaneId) { DrawDrops(dc, y, height); return; }
             // Bands: the lane's state over time, labelled where they fit; a completion's ✓ waits for the marks (it sits beside them).
             List<(double X, AnimationTimingBand Band)> checks = [];
             foreach (var band in lane.Bands)
@@ -263,6 +266,44 @@ internal sealed partial class AnimationTimingView
                 if (left > lastRight - label.Width - 4) startHits.Add((new Rect(left, y, label.Width, 14), start));
             }
             if (off.Count > 0) { var text = Text("◂ " + string.Join(", ", off), 10, g.T3, g.Text, Math.Max(40, ClockWidth * .4)); dc.DrawText(text, new Point(ClockLeft + 3, y + height - text.Height - 2)); }
+        }
+
+        /// <summary>
+        /// The Drop windows lane: each window of each flight cycle as a bar on the flight sequence's clock (cyan, like its start
+        /// marker in the view), numbered; the selected window outlined; a dragged one as a ghost at its proposed start.
+        /// </summary>
+        private void DrawDrops(DrawingContext dc, double y, double height)
+        {
+            var g = owner.Palette.Graph;
+            if (owner.State.Drops is not { } drops) return;
+            var fill = new SolidColorBrush(Color.FromArgb(g.Dark ? (byte)110 : (byte)90, 0x22, 0xC6, 0xE6)); fill.Freeze();
+            var edge = new Pen(new SolidColorBrush(Color.FromRgb(0x22, 0xC6, 0xE6)), 1.25); edge.Freeze();
+            var ghost = new Pen(g.Accent, 1.5) { DashStyle = new DashStyle([2, 2], 0) }; ghost.Freeze();
+            if (drops.Bars.Count == 0 && drops.Note.Length > 0)
+            {
+                var note = Text(drops.Note, 10.5, g.T3, g.Italic, Math.Max(40, ClockWidth - 8));
+                dc.DrawText(note, new Point(ClockLeft + 6, y + (height - note.Height) / 2));
+                return;
+            }
+            foreach (var bar in drops.Bars)
+            {
+                double a = X(bar.Cycle + bar.Start), b = X(bar.End);
+                if (b < ClockLeft - 2 || a > ActualWidth + 2) continue;
+                var rect = new Rect(Math.Max(a, ClockLeft - 2), y + 4, Math.Max(2, Math.Min(b, ActualWidth + 2) - Math.Max(a, ClockLeft - 2)), height - 8);
+                dc.DrawRoundedRectangle(fill, edge, rect, 3, 3);
+                if (drops.Selected == bar.Window) dc.DrawRoundedRectangle(null, g.AccentOutline, new Rect(rect.X - 2, rect.Y - 2, rect.Width + 4, rect.Height + 4), 4, 4);
+                var number = Text(bar.Number.ToString(CultureInfo.InvariantCulture), 10, g.T1, g.Strong);
+                if (rect.Width >= number.Width + 6) dc.DrawText(number, new Point(rect.X + 4, y + (height - number.Height) / 2));
+                dropHits.Add((new Rect(rect.X - 3, y, rect.Width + 6, height), bar));
+                if (dropDrag is { } dragged && dropStart is double proposed && dragged.Window == bar.Window && dragged.Cycle == bar.Cycle)
+                {
+                    double ga = X(bar.Cycle + proposed), gb = X(bar.Cycle + proposed + bar.Duration);
+                    dc.DrawRoundedRectangle(null, ghost, new Rect(ga, y + 3, Math.Max(2, gb - ga), height - 6), 3, 3);
+                    var label = Text("starts " + AnimationSeconds.Format(proposed), 10, g.Accent, g.Text);
+                    dc.DrawRoundedRectangle(g.Pane, null, new Rect(gb + 4, y + (height - label.Height) / 2 - 1, label.Width + 6, label.Height + 2), 3, 3);
+                    dc.DrawText(label, new Point(gb + 7, y + (height - label.Height) / 2));
+                }
+            }
         }
 
         /// <summary>Threshold brackets for events whose anchor occurred: anchor → anchor + threshold, labelled; the selected event's end drags.</summary>
@@ -481,6 +522,13 @@ internal sealed partial class AnimationTimingView
             base.OnMouseLeftButtonDown(e);
             Focus(); var p = e.GetPosition(this); pressed = p;
             if (handle is { } h && Inflate(h.Bounds, 3).Contains(p) && CaptureMouse()) { thresholdDrag = h.Mark; thresholdValue = null; e.Handled = true; return; }
+            if (p.X >= ClockLeft && dropHits.LastOrDefault(d => d.Bounds.Contains(p)) is { Bar: not null } drop)
+            {
+                // A click selects the window; with an editable lane a drag (past 3 DIP) moves its start, never its length.
+                dropStart = null;
+                if (owner.State.Drops?.Editable == true && CaptureMouse()) dropDrag = drop.Bar; else owner.SelectDropWindow(drop.Bar.Window);
+                e.Handled = true; return;
+            }
             if (p.X >= ClockLeft && startHits.FirstOrDefault(s => s.Bounds.Contains(p)) is { Start: not null } start)
             {
                 owner.ShowScenario();
@@ -513,6 +561,14 @@ internal sealed partial class AnimationTimingView
         {
             base.OnMouseMove(e);
             var p = e.GetPosition(this);
+            if (IsMouseCaptured && dropDrag is { } dropping)
+            {
+                if (Math.Abs(p.X - pressed.X) < 3 && dropStart == null) return;
+                double proposed = AnimationSeconds.Snap(dropping.Start + At(p.X) - At(pressed.X), Snap());
+                dropStart = Math.Clamp(proposed, Math.Max(0, dropping.Minimum), dropping.Maximum);
+                ToolTip = $"Drop window {dropping.Number} starts at {AnimationSeconds.Format(dropStart.Value)} on the flight sequence's clock (0.025 s; Shift 0.1 s; Ctrl free)";
+                InvalidateVisual(); return;
+            }
             if (IsMouseCaptured && dragging != null)
             {
                 if (Math.Abs(p.X - pressed.X) < 3 && dragTime == null) return;
@@ -522,6 +578,8 @@ internal sealed partial class AnimationTimingView
             }
             if (IsMouseCaptured && thresholdDrag?.Bracket is { } bracket)
             {
+                // The same 3 DIP dead zone as a start drag: a click on the handle proposes nothing.
+                if (Math.Abs(p.X - pressed.X) < 3 && thresholdValue == null) return;
                 thresholdValue = Math.Max(0, AnimationSeconds.Snap(Math.Max(0, At(p.X) - bracket.Anchor), Snap()));
                 ToolTip = "Start threshold ≥ " + AnimationSeconds.Short(thresholdValue.Value) + (bracket.Clock switch { 2 => " after the sequence starts", 3 => " after previous", _ => " after the animation starts" })
                     + " (0.025 s; Shift 0.1 s; Ctrl free)";
@@ -534,13 +592,15 @@ internal sealed partial class AnimationTimingView
             base.OnMouseLeftButtonUp(e);
             if (!IsMouseCaptured) return;
             var start = dragging; double? moved = dragTime; var drag = thresholdDrag; double? proposed = thresholdValue;
+            var window = dropDrag; double? windowStart = dropStart; dropDrag = null; dropStart = null;
             dragging = null; dragTime = null; thresholdDrag = null; thresholdValue = null;
             ReleaseMouseCapture(); InvalidateVisual();
             if (start != null && moved is double seconds && Math.Abs(seconds - start.Seconds) > 1e-9) owner.MoveStart(start.Id, seconds);
+            if (window != null) { if (windowStart is double local && Math.Abs(local - window.Start) > 1e-9) owner.MoveDropWindow(window.Window, local); else owner.SelectDropWindow(window.Window); }
             if (drag != null && proposed is double threshold && drag.Bracket is { } b && Math.Abs(threshold - b.Threshold) > 1e-9) owner.ProposeThreshold(drag, threshold);
             e.Handled = true;
         }
-        protected override void OnLostMouseCapture(MouseEventArgs e) { base.OnLostMouseCapture(e); if (dragging != null || thresholdDrag != null) { dragging = null; dragTime = null; thresholdDrag = null; thresholdValue = null; InvalidateVisual(); } }
+        protected override void OnLostMouseCapture(MouseEventArgs e) { base.OnLostMouseCapture(e); if (dragging != null || thresholdDrag != null || dropDrag != null) { dragging = null; dragTime = null; thresholdDrag = null; thresholdValue = null; dropDrag = null; dropStart = null; InvalidateVisual(); } }
         protected override void OnMouseRightButtonUp(MouseButtonEventArgs e)
         {
             base.OnMouseRightButtonUp(e);
@@ -560,7 +620,13 @@ internal sealed partial class AnimationTimingView
         private void Hover(Point p)
         {
             object? found = null; string? tip = null; Cursor? cursor = null;
-            if (handle is { } h && Inflate(h.Bounds, 3).Contains(p)) { found = h.Mark; tip = "Drag to propose a new start threshold in this event's clock (0.025 s; Shift 0.1 s; Ctrl free)"; cursor = Cursors.SizeWE; }
+            if (p.X >= ClockLeft && dropHits.LastOrDefault(d => d.Bounds.Contains(p)) is { Bar: not null } window)
+            {
+                var bar = window.Bar; found = bar; cursor = owner.State.Drops?.Editable == true ? Cursors.SizeWE : null;
+                tip = $"Drop window {bar.Number} · starts {AnimationSeconds.Format(bar.Start)} on the flight sequence's clock ({AnimationSeconds.Format(bar.Cycle + bar.Start)} on the shared clock) · lasts {AnimationSeconds.Format(bar.Duration)}"
+                    + (owner.State.Drops?.Editable == true ? "\nClick to select it; drag to move its start (0.025 s; Shift 0.1 s; Ctrl free); Apply in the Inspector keeps it" : "");
+            }
+            else if (handle is { } h && Inflate(h.Bounds, 3).Contains(p)) { found = h.Mark; tip = "Drag to propose a new start threshold in this event's clock (0.025 s; Shift 0.1 s; Ctrl free)"; cursor = Cursors.SizeWE; }
             else if (p.X >= ClockLeft && startHits.FirstOrDefault(s => s.Bounds.Contains(p)) is { Start: not null } start)
             {
                 found = start.Start; cursor = Cursors.SizeWE;
@@ -611,7 +677,7 @@ internal sealed partial class AnimationTimingView
         internal bool HandleKey(Key key, ModifierKeys modifiers)
         {
             var timing = owner.Timing; var state = owner.State;
-            var lanes = timing?.Lanes ?? [];
+            var lanes = owner.Rows;
             int index = -1;
             for (int i = 0; i < lanes.Count; i++) if (lanes[i].Id == owner.SelectedLane) { index = i; break; }
             switch (key)
@@ -665,7 +731,7 @@ internal sealed partial class AnimationTimingView
             protected override List<AutomationPeer>? GetChildrenCore()
             {
                 List<AutomationPeer> children = [];
-                var shown = surface.owner.Timing?.Lanes ?? [];
+                var shown = surface.owner.Rows;
                 // Rows of lanes no longer shown go; a kept row lists its marks again (they change with every frame).
                 HashSet<string> ids = new(shown.Select(l => l.Id), StringComparer.Ordinal);
                 foreach (string gone in rows.Keys.Where(k => !ids.Contains(k)).ToArray()) rows.Remove(gone);
@@ -685,7 +751,7 @@ internal sealed partial class AnimationTimingView
             {
                 if (PresentationSource.FromVisual(surface) == null || surface.owner.Timing is not { } timing) return Rect.Empty;
                 double top = -surface.owner.ScrollOffset;
-                foreach (var row in timing.Lanes)
+                foreach (var row in surface.owner.Rows)
                 {
                     double height = RowHeight(row);
                     if (row.Id == lane)
@@ -712,7 +778,7 @@ internal sealed partial class AnimationTimingView
         internal sealed class RowPeer(SurfacePeer parent, string lane) : TimingPeer(parent), ISelectionItemProvider, IExpandCollapseProvider
         {
             private readonly Dictionary<string, AutomationPeer> marks = new(StringComparer.Ordinal);
-            internal AnimationTimingLane? Lane => Owner.Surface.owner.Timing?.Lane(lane);
+            internal AnimationTimingLane? Lane => Owner.Surface.owner.RowLane(lane);
             protected override string GetNameCore() => Lane is not { } row ? lane : row.Kind switch
             {
                 AnimationTimingLaneKind.Starts => $"Starts, {row.Starts.Count.ToString(CultureInfo.InvariantCulture)} of 32",

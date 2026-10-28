@@ -33,6 +33,7 @@ public partial class MainWindow
     {
         if (offset < 0 || limit is < 1 or > 200) throw new StudioCommandException("invalid_argument", "Use offset >= 0 and limit 1–200.");
         if (section == "status") return WorldAnimationCommandState;
+        if (section == "player") return RuntimePlayer(offset, limit);
         if (section == "notices")
         {
             if (!InAnimationMode) throw new StudioCommandException("not_ready", "Notices belong to the animation opened in Animation mode.");
@@ -82,7 +83,9 @@ public partial class MainWindow
             case "replay": worldAnimationReplay = FlagValue(); if (worldAnimationSession != null) worldAnimationSession.Replay = worldAnimationReplay; break;
             case "followCamera": worldAnimationFollowCamera = FlagValue(); if (worldAnimationSession != null) worldAnimationSession.FollowCamera = worldAnimationFollowCamera; break;
             case "effects": worldAnimationEffects = FlagValue(); if (worldAnimationSession != null) worldAnimationSession.Effects = worldAnimationEffects; ApplyWorldAnimationScreenEffects(worldAnimationSession?.CurrentFrame); break;
-            case "range" or "playbackRange":
+            // In a source map the transport's playback range is playbackRange (the Range flyout); range is the compiled editor's.
+            case "range": throw new StudioCommandException("unsupported", "In a source map the playback range is playbackRange [start, end] (the transport's range flyout); range belongs to compiled animation previews.");
+            case "playbackRange":
                 double[] range = data is JsonArray ? Pair() : [0, NumberValue()];
                 if (!range.All(double.IsFinite) || range[0] < 0 || range[1] > 3600 || range[1] <= range[0]) throw new StudioCommandException("invalid_argument", "Use an increasing range within 0–3600 seconds.");
                 worldAnimationSession?.SetRange(range[0], range[1]); worldAnimationRangeStart = Math.Floor(range[0] * 60 + 1e-7) / 60; worldAnimationRangeEnd = Math.Ceiling(range[1] * 60 - 1e-7) / 60; break;

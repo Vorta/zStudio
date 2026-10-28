@@ -44,6 +44,8 @@ public partial class MainWindow
             view.ThresholdProposed += (mark, seconds) => _ = ReportUi(() => ProposeTimingThresholdAsync(mark.Event, seconds, CancellationToken.None));
             view.EditTimingRequested += () => _ = ReportUi(() => { ShowAnimationRightTab("inspector"); sectionCard?.FocusAnimationTiming(); return Task.CompletedTask; });
             view.ScenarioRequested += () => { if (InAnimationMode) ShowAnimationRightTab("scenario"); };
+            view.DropWindowSelected += id => _ = ReportUi(() => SelectDropWindowAsync(id));
+            view.DropWindowMoved += (id, start) => _ = ReportUi(() => MoveDropWindowAsync(id, start));
             return view;
         }
     }
@@ -57,7 +59,7 @@ public partial class MainWindow
         var target = WorldAnimationTargetNow; var state = worldAnimationSession?.State;
         bool current = target != null && target.Document == shownDocument && target.Revision == target.Document.Revision;
         string? blocked = sectionCard?.HasDraft == true && target != null ? $"Apply or revert the change to {DefinitionName(target.Definition)} to play"
-            : parachuteDraft != null ? "Confirm or cancel the drop-window move to play" : null;
+            : parachuteDraft != null ? "Apply or revert the drop-window move to play" : null;
         bool playable = current && target!.Entry > 0 && blocked == null;
         var frame = worldAnimationSession?.CurrentFrame;
         string coverage = frame is { } shown ? $"Evaluated 0–{AnimationSeconds.Short(Math.Round(shown.Time, 1))} · {shown.Trace.Count:N0} occurrence{(shown.Trace.Count == 1 ? "" : "s")}" + (shown.TraceDropped > 0 ? $" · {shown.TraceDropped:N0} older discarded" : "")
@@ -76,11 +78,13 @@ public partial class MainWindow
             Duration = worldAnimationDuration is { } measured ? $"Duration: {measured.Kind} · {AnimationSeconds.Short(measured.Seconds)} · {measured.Explanation}" : null,
         });
         RefreshAnimationGraph(runtimeOnly);
-        RefreshAnimationTiming(runtimeOnly, playable);
+        RefreshAnimationTiming(runtimeOnly, playable, background: true);
         RefreshAnimationNotices();
         RefreshAnimationInspector(runtimeOnly);
         // The scenario's live readouts (the player now, what its rules affect) follow the run when it rests.
         if (state?.Playing != true) RefreshScenarioLive();
+        RefreshPathsChip();
+        RefreshAnimationOverlay(runtimeOnly);
     }
 
     /// <summary>The opened binding's map index, as the graph builds it (grouping by definition).</summary>
@@ -92,7 +96,15 @@ public partial class MainWindow
         return animationTimingIndex;
     }
 
-    private void RefreshAnimationTiming(bool runtimeOnly = false, bool? canSeek = null)
+    private CancellationTokenSource? animationTimingBuild;
+    /// <summary>What the background projection being built is for (the frame, the scenario and the group toggles it reads).</summary>
+    private (AnimationFrame Frame, AnimationScenario Scenario, int Toggles)? animationTimingPending;
+    /// <summary>
+    /// Projects the run onto Timing. The run's own refreshes (<paramref name="background"/>: playback, seeks, scenario changes)
+    /// build the projection off the UI thread, cancel one a newer frame supersedes and publish only while its frame is still the
+    /// shown one (a long trace takes tens of milliseconds); every other caller (MCP, selection, group toggles) builds it at once.
+    /// </summary>
+    private void RefreshAnimationTiming(bool runtimeOnly = false, bool? canSeek = null, bool background = false)
     {
         if (animationTimingView == null && !InAnimationMode) return;
         var view = TimingView;
@@ -121,11 +133,20 @@ public partial class MainWindow
         if (animationTiming == null || !ReferenceEquals(frame, animationTimingFrame) || !ReferenceEquals(scenario, animationTimingScenario) || animationTimingBuilt != animationTimingToggles)
         {
             var options = new AnimationTimingOptions { Starts = WorldAnimationActivations(), Index = index, Provenance = source.AnimationProvenance, Toggled = new HashSet<string>(animationTimingToggled, StringComparer.Ordinal) };
-            var cost = System.Diagnostics.Stopwatch.StartNew();
-            try { animationTiming = frame == null ? AnimationTiming.Empty(package, options) : AnimationTiming.Create(frame, package, options); }
-            catch (Exception ex) when (ex is System.IO.InvalidDataException or InvalidOperationException or ArgumentException) { animationTiming = null; ViewModel.Status = "Timing unavailable: " + ex.Message; }
-            animationTimingFrame = frame; animationTimingScenario = scenario; animationTimingBuilt = animationTimingToggles;
-            animationTimingInterval = Math.Clamp(cost.Elapsed.TotalMilliseconds * 4, 100, 1000);
+            if (background && frame != null)
+            {
+                if (animationTimingPending is not { } pending || !ReferenceEquals(pending.Frame, frame) || !ReferenceEquals(pending.Scenario, scenario) || pending.Toggles != animationTimingToggles)
+                    BuildTimingInBackground(target, frame, scenario, package, options);
+            }
+            else
+            {
+                CancelTimingBuild();
+                var cost = System.Diagnostics.Stopwatch.StartNew();
+                try { animationTiming = frame == null ? AnimationTiming.Empty(package, options) : AnimationTiming.Create(frame, package, options); }
+                catch (Exception ex) when (ex is System.IO.InvalidDataException or InvalidOperationException or ArgumentException) { animationTiming = null; ViewModel.Status = "Timing unavailable: " + ex.Message; }
+                animationTimingFrame = frame; animationTimingScenario = scenario; animationTimingBuilt = animationTimingToggles;
+                animationTimingInterval = Math.Clamp(cost.Elapsed.TotalMilliseconds * 4, 100, 1000);
+            }
         }
         bool current = target.Document == shownDocument && target.Revision == target.Document.Revision;
         bool seekable = canSeek ?? (current && sectionCard?.HasDraft != true && parachuteDraft == null);
@@ -137,7 +158,43 @@ public partial class MainWindow
             Timing = animationTiming, Time = state?.Time ?? 0, RangeStart = state?.RangeStart ?? worldAnimationRangeStart, RangeEnd = state?.RangeEnd ?? worldAnimationRangeEnd,
             CanSeek = seekable, Playing = playing, Evaluated = frame != null, Stale = stale, StaleByEdit = worldAnimationStaleByEdit,
             CanEditThreshold = ev => provenance?.FindEvent(ev) is { TimingFieldId: not null, ReadOnlyReason: null } found && (!drafting || found.Definition == draftDefinition),
+            Drops = TimingDrops(animationTiming, package),
         }, key);
+    }
+
+    private void CancelTimingBuild()
+    {
+        animationTimingBuild?.Cancel(); animationTimingBuild = null; animationTimingPending = null;
+    }
+    /// <summary>Builds the projection of <paramref name="frame"/> on the thread pool; a newer frame cancels it, and it is shown only while its inputs are current.</summary>
+    private void BuildTimingInBackground(WorldAnimationTarget target, AnimationFrame frame, AnimationScenario scenario, AnimationPackage package, AnimationTimingOptions options)
+    {
+        animationTimingBuild?.Cancel();
+        var cancellation = new CancellationTokenSource(); animationTimingBuild = cancellation;
+        int toggles = animationTimingToggles;
+        animationTimingPending = (frame, scenario, toggles);
+        var token = cancellation.Token;
+        _ = Task.Run(() =>
+        {
+            var cost = System.Diagnostics.Stopwatch.StartNew();
+            try { return (Timing: (AnimationTiming?)AnimationTiming.Create(frame, package, options, token), Error: (string?)null, Cost: cost.Elapsed.TotalMilliseconds); }
+            catch (Exception ex) when (ex is System.IO.InvalidDataException or InvalidOperationException or ArgumentException) { return (Timing: null, Error: ex.Message, Cost: cost.Elapsed.TotalMilliseconds); }
+        }, token).ContinueWith(task =>
+        {
+            if (animationTimingBuild == cancellation) { animationTimingBuild = null; animationTimingPending = null; }
+            cancellation.Dispose();
+            if (task.IsCanceled || task.IsFaulted || token.IsCancellationRequested) return;
+            // Published only while the frame, the scenario, the toggles and the opened binding are the ones it was built for.
+            var shown = worldAnimationSession?.CurrentFrame ?? worldAnimationSession?.LastFrame;
+            if (!ReferenceEquals(shown, frame) || !ReferenceEquals(worldAnimationConfiguration, scenario) || animationTimingToggles != toggles || animationMode != target) return;
+            var (timing, error, elapsed) = task.Result;
+            animationTiming = timing; animationTimingFrame = frame; animationTimingScenario = scenario; animationTimingBuilt = toggles;
+            animationTimingInterval = Math.Clamp(elapsed * 4, 100, 1000);
+            if (error != null) ViewModel.Status = "Timing unavailable: " + error;
+            RefreshAnimationTiming(runtimeOnly: false);
+            RefreshAnimationNotices();
+            RefreshAnimationInspector(runtimeOnly: true);
+        }, CancellationToken.None, TaskContinuationOptions.None, TaskScheduler.FromCurrentSynchronizationContext());
     }
 
     // ---------------------------------------------------------------- operations (GUI and MCP)
@@ -228,6 +285,7 @@ public partial class MainWindow
             TimingView.RevealTime(mark.Start);
             await WorldAnimationTransportAsync("seek", AnimationSeconds.OccurrenceTime(mark.Start), token);
             // The re-evaluated run keeps the occurrence's identity: select it again in the new projection.
+            RefreshAnimationTiming();
             if (animationTiming?.Lane(laneId)?.Marks.Any(m => m.Id == markId) == true) TimingView.Select(laneId, markId, mark.Event == Guid.Empty ? null : mark.Event);
         }
         return new { lane = laneId, mark = markId, seconds = mark.Start, playhead = AnimationSeconds.OccurrenceTime(mark.Start), actualSeconds = worldAnimationSession?.State.Time, graph };
@@ -394,7 +452,7 @@ public partial class MainWindow
             message = view.State.Message ?? (timing != null && !view.State.Evaluated ? "Nothing has run yet. Play, or click the ruler to seek; the preview runs the scenario up to that time." : null),
             lanes = timing?.Lanes.Count ?? 0, allLanes = timing?.AllLanes.Count ?? 0, marks = timing?.MarkCount ?? 0, log = timing?.Log.Count ?? 0,
             retained = timing?.Retained ?? 0, discarded = timing?.Discarded ?? 0, runExtent = timing?.RunStart is double a ? new[] { a, timing.RunEnd ?? a } : null,
-            truncated = timing?.Truncated ?? false,
+            truncated = timing?.Truncated ?? false, phasesDropped = animationTimingFrame?.PhasesDropped ?? 0, building = animationTimingPending != null,
         };
     }
     private static object TimingLaneJson(AnimationTimingLane lane) => new
@@ -534,6 +592,8 @@ public partial class MainWindow
                 default: throw new StudioCommandException("invalid_argument", "Unknown Timing operation.");
             }
             await Dispatcher.InvokeAsync(() => { }, System.Windows.Threading.DispatcherPriority.Loaded);
+            // MCP reads the projection of the frame shown now (a background build may still be running).
+            if (InAnimationMode && animationMode is { Entry: > 0 }) RefreshAnimationTiming();
             return Result(new { timing = TimingPresentation(), result });
         });
     }

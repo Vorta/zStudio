@@ -215,7 +215,7 @@ public partial class MainWindow
         WorldScenarios().Set(configuration, reason); worldAnimationScenarioEpoch = Guid.NewGuid(); worldAnimationDuration = null;
         ParachuteScenarioChanged();
         foreach (int definition in shownAnimationPaths.ToArray()) scene?.ClearAnimationPaths(definition.ToString(CultureInfo.InvariantCulture));
-        shownAnimationPaths.Clear(); refreshAnimationPathControls?.Invoke(); RefreshWorldAnimationRun(); RefreshRowEyes();
+        shownAnimationPaths.Clear(); RefreshPathsChip(); RefreshWorldAnimationRun(); RefreshRowEyes();
         if (playhead is double time && previous is { } session && session == worldAnimationSession)
         {
             long id = ++worldAnimationReevaluationId;

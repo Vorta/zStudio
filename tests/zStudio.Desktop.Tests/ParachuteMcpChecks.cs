@@ -38,6 +38,10 @@ internal static class ParachuteMcpChecks
             await main.ViewModel.OpenRootAsync(fixture.Project, token);
             var world = Document((await Job("source_world_open", new() { ["mission"] = "m1" }))["document"]!);
             await Preview();
+            // A source map's drop windows are the opened flight's: Animation mode's Inspector → Definition → Drop windows.
+            int delivery = ((zStudio.Core.Sources.SourceSceneSnapshot)world.Document).AnimationDefinitions.Definitions.Single(d => d.Name == "delivery").Index;
+            Assert.Equal("not_ready", (await Job("animation_paths", new() { ["action"] = "show", ["preview"] = (await Call("state", new()))["preview"]!.GetValue<string>(), ["document"] = Id(world), ["revision"] = world.Revision }, "failed"))["code"]!.GetValue<string>());
+            await Job("animation_mode", new() { ["action"] = "open", ["document"] = Id(world), ["revision"] = world.Revision, ["definition"] = delivery, ["preview"] = (await Call("state", new()))["preview"]!.GetValue<string>() });
             // Explicit export supplies the separate compiled-editor regression fixture.
             string compiled = Path.Combine(fixture.Root, "compiled");
             var exported = await zStudio.Core.Sources.SourceBuilder.ExportAsync(fixture.Project, compiled,
@@ -45,6 +49,7 @@ internal static class ParachuteMcpChecks
             Assert.All(exported.Outputs, output => Assert.Null(output.Error));
             var state = (await PathAction("show"))["parachute"]!;
             Assert.Equal(2, state["windows"]!.AsArray().Count);
+            Assert.True((await PathAction("frame"))["framed"]!.GetValue<bool>());
             Assert.True(state["cycleSeconds"]!.GetValue<double>() >= 10);
             // Analysis is passive; choosing a window explicitly opens its editable source card.
             Assert.Null(state["selected"]); Assert.Null(Viewport().SelectedParachuteWindow);
@@ -55,7 +60,7 @@ internal static class ParachuteMcpChecks
             main.UpdateLayout();
             Assert.True(((FrameworkElement)main.FindName("ParachutePanel")).IsVisible);
             Assert.Equal(secondWindow, (await State())!["selected"]!.GetValue<Guid>());
-            var windowsPicker = (ComboBox)main.FindName("ParachuteWindows");
+            var windowsPicker = (Selector)main.FindName("ParachuteWindows");
             Assert.True(windowsPicker.IsVisible); Assert.True(windowsPicker.IsEnabled);
             windowsPicker.SelectedIndex = 0;
             await ((Task)typeof(MainWindow).GetField("parachuteSelectionWork", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(main)!).WaitAsync(token);
@@ -298,7 +303,7 @@ internal static class ParachuteMcpChecks
             string compiledWindow = state["windows"]![0]!["id"]!.GetValue<string>();
             Assert.Equal("read_only", (await Job("animation_paths", await Arguments("select", new() { ["window"] = compiledWindow }), "failed"))["code"]!.GetValue<string>());
             Assert.Equal("read_only", (await Job("animation_paths", await Arguments("begin"), "failed"))["code"]!.GetValue<string>());
-            Assert.False(((ComboBox)main.FindName("ParachuteWindows")).IsEnabled);
+            Assert.False(((Selector)main.FindName("ParachuteWindows")).IsEnabled);
             Assert.False(owner.IsDirty); Assert.False(world.IsDirty);
 
             // An ordinary source timing edit can make one discovered flight unavailable without

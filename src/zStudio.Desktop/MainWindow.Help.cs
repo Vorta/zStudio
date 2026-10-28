@@ -117,7 +117,11 @@ public partial class MainWindow
         ("Drag a threshold bracket's end (Thresholds on)", "Proposes the event's new start threshold in its own clock, through the source draft"),
         ("Drag the Inspector ruler's diamond", "Proposes the threshold (0.025 s grid; Shift 0.1 s; Ctrl free)"),
         ("Pick in view, then click a surface", "Places the scenario's custom player or beam origin (right-click or Esc cancels)"),
-        ("Move along path, then click the flight path", "Moves a drop window (right-click or Esc cancels)"),
+        ("Paths ▾ (the 3D view, after Perspective)", "Evaluate paths (silent: the playhead, camera and panel stay), Show guides, Show range tests, Contacts and impacts, Frame paths, Clear cached paths"),
+        ("Hover or select a PLAYER_RANGE question or a range-gated activation", "The 3D view draws its ring around the attach node, the player pin and the dashed line with the distance and outcome (an edge arrow when the player is off screen)"),
+        ("Click a drop window's start (cyan) or release (orange) marker in the view", "Selects the window: Inspector → Definition → Drop windows"),
+        ("Move along path, then click the flight path", "Places the drop window's start there (Apply keeps it as one undo step; right-click or Esc cancels)"),
+        ("Drag a bar on Timing's Drop windows lane", "Moves that window's start on the flight sequence's clock (0.025 s grid; Shift 0.1 s; Ctrl free; never its length); a click selects it"),
     ];
 
     private void RegisterHelpCommands(StudioCommands r)

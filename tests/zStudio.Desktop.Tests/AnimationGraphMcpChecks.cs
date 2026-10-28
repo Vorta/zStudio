@@ -38,6 +38,25 @@ internal static class AnimationGraphMcpChecks
     {
         using var fixture = new SourceWorldFixture();
         fixture.Write(VtolDropFixture.Root, Definitions);
+        // m3's player tank, with a drive-in that suspends the player (callback 11) and then hands it the tank's pose (callback 10).
+        fixture.WritePlayerTank();
+        fixture.Write("data/m3/zrdr/bftm3.zad", """
+            (
+              ANIMATION_DEFINITIONS (
+                ANIMATION_LIST (
+                  ANIMATION_DEFINITION (
+                    NAME ( bft_00 ) ANIMATION_NAME ( drive_in ) ACTIVATION ( ON_CALL ) RESET_TIME ( -1.0 )
+                    SEQUENCE_DEFINITION ( NAME ( drive ) CALLBACK ( VALUE ( 11 ) ) CALLBACK ( VALUE ( 10 ) START_TIME ( ANIMATION_OFFSET 1 ) ) )
+                  )
+                  ANIMATION_DEFINITION (
+                    NAME ( ground ) ANIMATION_NAME ( m3_start_animation ) ACTIVATION ( ON_CALL ) RESET_TIME ( 0 -1 )
+                    RESET_STATE ( CALLBACK ( VALUE ( 15 ) ) CALLBACK ( VALUE ( 10 ) ) )
+                    SEQUENCE_DEFINITION ( NAME ( hold ) CALLBACK ( VALUE ( 14 ) ) )
+                  )
+                )
+              )
+            )
+            """);
         using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(180));
         var token = deadline.Token;
         var main = new MainWindow { Left = -12000, ShowInTaskbar = false, Width = 1600, Height = 1000 }; main.Show();
@@ -89,6 +108,21 @@ internal static class AnimationGraphMcpChecks
             // Selecting the PLAYER_RANGE question draws its range; expanding the rails shows their frame (presentation only).
             var selected = (await Graph("select", new() { ["row"] = question["id"]!.GetValue<string>() }))["result"]!;
             Assert.Equal(64, selected["rangeDrawing"]!["radius"]!.GetValue<double>(), 3);
+            // animation_paths ranges: the flare range test around its attach node, measured from the player (here far away).
+            await Job("animation_scenario", new() { ["action"] = "inputs", ["preview"] = await Preview(), ["player"] = new { kind = "custom", x = 4000.0, y = 0.0, z = 4000.0 } });
+            var ranges = await Paths("ranges");
+            var flareRange = ranges["ranges"]!["ranges"]!.AsArray().Single(r => r!["id"]!.GetValue<string>() == question["id"]!.GetValue<string>())!;
+            Assert.Equal("condition", flareRange["kind"]!.GetValue<string>());
+            Assert.Equal(64, flareRange["radius"]!.GetValue<double>(), 3);
+            Assert.False(flareRange["inside"]!.GetValue<bool>());
+            Assert.Equal("false", flareRange["outcome"]!.GetValue<string>());
+            Assert.True(flareRange["distance"]!.GetValue<double>() > 64);
+            Assert.True(flareRange["drawn"]!.GetValue<bool>());
+            Assert.Equal("custom", ranges["ranges"]!["player"]!["source"]!.GetValue<string>());
+            // Show range tests (the Paths chip's toggle) draws every range test, selected or not.
+            Assert.True((await Paths("overlay", new() { ["rangeTests"] = true }))["paths"]!["rangeTests"]!.GetValue<bool>());
+            await Paths("overlay", new() { ["rangeTests"] = false });
+            await Job("animation_scenario", new() { ["action"] = "inputs", ["preview"] = await Preview(), ["player"] = new { kind = "atStart" } });
             int included = (await Job("animation_scenario", new() { ["action"] = "read", ["preview"] = await Preview() }))["scenario"]!["calls"]!["included"]!.GetValue<int>();
             await Graph("expand", new() { ["node"] = rails });
             nodes = (await Graph("read"))["result"]!["items"]!.AsArray().OfType<JsonObject>().ToArray();
@@ -113,6 +147,31 @@ internal static class AnimationGraphMcpChecks
             var scenario = (await Job("animation_scenario", new() { ["action"] = "read", ["preview"] = await Preview() }))["scenario"]!;
             Assert.True(scenario["calls"]!["included"]!.GetValue<int>() > included);
 
+            // The player reference over time: callback 11 freezes it, callback 10 moves it to the tank's root at 1 s.
+            await Job("source_world_open", new() { ["mission"] = "m3" });
+            await ((Task)typeof(MainWindow).GetField("previewWork", flags)!.GetValue(main)!).WaitAsync(token);
+            var tankMap = main.ViewModel.Documents.Single(d => d.SourceWorld?.Mission == "m3");
+            int drive = ((SourceSceneSnapshot)tankMap.Document).AnimationDefinitions.Definitions.Single(d => d.Name == "drive_in").Index;
+            await Job("animation_mode", new() { ["action"] = "open", ["document"] = tankMap.SessionId.ToString(), ["revision"] = tankMap.Revision, ["definition"] = drive, ["preview"] = await Preview() });
+            await Job("animation_transport", new() { ["action"] = "seek", ["seconds"] = 0.5, ["preview"] = await Preview() });
+            var frozen = await Job("animation_runtime", new() { ["section"] = "player", ["preview"] = await Preview() });
+            Assert.True(frozen["player"]!["frozen"]!.GetValue<bool>(), frozen.ToJsonString());
+            Assert.Contains(frozen["player"]!["source"]!.GetValue<string>(), new[] { "aiv start", "opening handover" });
+            await Job("animation_transport", new() { ["action"] = "seek", ["seconds"] = 1.5, ["preview"] = await Preview() });
+            var moved = await Job("animation_runtime", new() { ["section"] = "player", ["preview"] = await Preview() });
+            Assert.Equal("callback 10", moved["player"]!["source"]!.GetValue<string>());
+            Assert.False(moved["player"]!["frozen"]!.GetValue<bool>());
+            Assert.InRange(moved["player"]!["since"]!.GetValue<double>(), .99, 1.05);
+            Assert.True(moved["changes"]!["total"]!.GetValue<int>() >= 3);
+            Assert.StartsWith("callback 10 at 1.0", moved["label"]!.GetValue<string>());
+
+            async Task<JsonNode> Paths(string action, Dictionary<string, object?>? extra = null)
+            {
+                var args = extra ?? new(); args["action"] = action; args["preview"] = await Preview();
+                var shown = main.ViewModel.Documents.Single(d => d.SourceWorld?.Mission == "m1");
+                args["document"] = shown.SessionId.ToString(); args["revision"] = shown.Revision;
+                return await Job("animation_paths", args);
+            }
             async Task<JsonNode> Graph(string action, Dictionary<string, object?>? extra = null)
             {
                 var args = extra ?? new(); args["action"] = action; args["preview"] = await Preview();

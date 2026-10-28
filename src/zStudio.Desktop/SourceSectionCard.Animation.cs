@@ -29,7 +29,7 @@ internal sealed partial class SourceSectionCard
     internal Action<InspectorInclude, bool>? InspectorIncludeChosen { get; set; }
     /// <summary>The Bindings section: Animation mode plays another binding (opens it).</summary>
     internal Action<int>? InspectorBindingChosen { get; set; }
-    /// <summary>Controls the window hosts as they are (Paths, Drop windows), by key.</summary>
+    /// <summary>Panels the window hosts in the card as they are (a flight's Drop windows), by key.</summary>
     internal Func<string, FrameworkElement?>? InspectorHostContent { get; set; }
     /// <summary>The header changed (Animation mode shows it above the Inspector | Scenario tabs).</summary>
     internal event Action? HeaderChanged;
@@ -74,7 +74,7 @@ internal sealed partial class SourceSectionCard
     private readonly Dictionary<string, SourceAnimationEdits.Change> animationChanges = [];
     private string? animationRecord;
     private long animationRevision = -1;
-    private FrameworkElement? animationPaths, animationDrops;
+    private FrameworkElement? animationDrops;
     private AnimationInspection? inspection;
     private SourceAnimationEdits.Definition? inspectedModel;
     private bool inspectorMode;
@@ -125,6 +125,13 @@ internal sealed partial class SourceSectionCard
         if (thresholdShown is { } shown && shown.Editor.IsVisible) { shown.Editor.BringIntoView(); shown.Editor.FocusValue(); return; }
         if (inspectorSections.TryGetValue("threshold", out var found)) { found.BringIntoView(); found.Body.MoveFocus(new TraversalRequest(FocusNavigationDirection.First)); }
     });
+    /// <summary>Expands a section of the shown card and scrolls it into view (a drop window picked in the view: Drop windows).</summary>
+    internal void RevealSection(string id) => Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Loaded, () =>
+    {
+        if (!inspectorSections.TryGetValue(id, out var section)) return;
+        section.Expand(); UpdateLayout();
+        section.BringIntoView(new Rect(0, 0, 1, Math.Min(section.ActualHeight, 240)));
+    });
     /// <summary>Alt+Enter: the card's first field (an editable box, combo, check box or switch), else its first control.</summary>
     internal bool FocusFirstField()
     {
@@ -135,14 +142,14 @@ internal sealed partial class SourceSectionCard
     }
 
     /// <summary>The source model is read: the card keeps it (and the draft of the same definition) until the window shows what to draw.</summary>
-    internal void ShowAnimation(DocumentModel document, DefinitionEntry entry, SourceAnimationEdits.Definition definition, FrameworkElement paths, FrameworkElement drops)
+    internal void ShowAnimation(DocumentModel document, DefinitionEntry entry, SourceAnimationEdits.Definition definition, FrameworkElement drops)
     {
         var kept = Entry?.Key == entry.Key && Document == document ? animationChanges.Values.ToArray() : [];
         string? selected = animationRecord;
         Begin(entry, document); animationDefinition = definition; animationRevision = document.Revision; animationWindowRecords.Clear();
         foreach (var change in kept) animationChanges[change.Field] = change;
         if (selected != null && definition.Records.Any(r => r.Id == selected)) animationRecord = selected;
-        animationPaths = paths; animationDrops = drops;
+        animationDrops = drops;
         heading.Text = definition.Name; subtitle.Text = "Definition · " + System.IO.Path.GetFileName(definition.File);
         subtitle.ToolTip = definition.File;
         SetTile("Definition", OutlinerKinds.SectionBrush(entry));
@@ -187,8 +194,6 @@ internal sealed partial class SourceSectionCard
             inspectorSections[section.Id] = card;
             foreach (var item in section.Items) card.Body.Children.Add(RenderItem(item, section));
             if (externalDraft && section.Title != "Drop windows") card.IsEnabled = false;
-            // The drop windows' panel shows itself only for a definition with a flight to callback 911: its section follows it.
-            if (section.Id == "drops" && animationDrops != null) card.SetBinding(VisibilityProperty, new System.Windows.Data.Binding("Visibility") { Source = animationDrops });
         }
         if (shown.Kind == "map" && openAnimation != null) openAnimation.Visibility = openAnimationShown ? Visibility.Visible : Visibility.Collapsed;
         RefreshFooterVisibility();
@@ -289,6 +294,7 @@ internal sealed partial class SourceSectionCard
         InspectorBindings bindings => BindingsItem(bindings),
         InspectorSource source => SourceItem(source),
         InspectorHost host => HostItem(host),
+        InspectorNoticeGroup group => NoticeGroupItem(group),
         _ => new TextBlock(),
     };
 
@@ -780,9 +786,35 @@ internal sealed partial class SourceSectionCard
         int common = lines.Skip(1).Where(l => l.Trim().Length > 0).Select(l => l.Length - l.TrimStart(' ', '\t').Length).DefaultIfEmpty(0).Min();
         return string.Join(Environment.NewLine, lines.Select((l, i) => i == 0 ? l.TrimStart() : l.Length >= common ? l[common..] : l.TrimStart()));
     }
+    /// <summary>Whether the card's "n preview approximations" line is open (kept while the same card refreshes with the run).</summary>
+    private bool noticeGroupOpen;
+    private string? noticeGroupKey;
+    private UIElement NoticeGroupItem(InspectorNoticeGroup group)
+    {
+        if (noticeGroupKey != inspection?.Key) { noticeGroupKey = inspection?.Key; noticeGroupOpen = false; }
+        StackPanel panel = new() { Margin = new(0, 0, 0, 4) };
+        StackPanel lines = new() { Margin = new(0, 4, 0, 0), Visibility = noticeGroupOpen ? Visibility.Visible : Visibility.Collapsed };
+        foreach (string line in group.Lines) lines.Children.Add(Notice(line, "Info", "TextFillColorTertiaryBrush", "ControlFillColorDefaultBrush"));
+        TextBlock label = new() { FontSize = 12, VerticalAlignment = VerticalAlignment.Center };
+        label.SetResourceReference(TextBlock.ForegroundProperty, "TextFillColorSecondaryBrush");
+        void Show() => label.Text = group.Label + (noticeGroupOpen ? " ▾" : " ▸");
+        Show();
+        Button toggle = new() { Content = label, HorizontalAlignment = HorizontalAlignment.Left, Padding = new(6, 0, 8, 0), Margin = new(-6, 0, 0, 0),
+            ToolTip = "How the preview approximates the game for this animation's kinds of events (not about one item)" };
+        toggle.SetResourceReference(StyleProperty, "RowLinkButton"); toggle.Width = double.NaN; toggle.Height = 26; toggle.HorizontalAlignment = HorizontalAlignment.Left;
+        AutomationProperties.SetName(toggle, group.Label);
+        AutomationProperties.SetHelpText(toggle, noticeGroupOpen ? "Expanded: click to collapse" : "Collapsed: click to list them");
+        toggle.Click += (_, _) =>
+        {
+            noticeGroupOpen = !noticeGroupOpen; lines.Visibility = noticeGroupOpen ? Visibility.Visible : Visibility.Collapsed; Show();
+            AutomationProperties.SetHelpText(toggle, noticeGroupOpen ? "Expanded: click to collapse" : "Collapsed: click to list them");
+        };
+        panel.Children.Add(toggle); panel.Children.Add(lines);
+        return panel;
+    }
     private UIElement HostItem(InspectorHost host)
     {
-        var content = InspectorHostContent?.Invoke(host.Key) ?? (host.Key == "paths" ? animationPaths : host.Key == "drops" ? animationDrops : null);
+        var content = InspectorHostContent?.Invoke(host.Key) ?? (host.Key == "drops" ? animationDrops : null);
         if (content == null) return TextItem(new InspectorText(host.Note ?? ""));
         switch (content.Parent)
         {

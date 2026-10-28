@@ -121,7 +121,9 @@ public partial class MainWindow
         // A typed start time, seed or height not yet committed is committed while the mode still holds its binding.
         scenarioPanel?.CommitPending();
         if (animationMode != mode) return;
-        EndScenarioPick();
+        EndScenarioPick(); EndDropMove();
+        // A source map's drop windows and shown guides belong to Animation mode (its Inspector, its Paths chip): they go with it.
+        if (mode.Document.SourceWorld != null) { CloseParachutes(); HideAllAnimationGuides(); }
         DetachWorldAnimationRun();
         animationKept = (mode.Document, mode.Definition, mode.Entry);
         animationMode = null; animationFailure = null; previewId = Guid.NewGuid();
@@ -163,7 +165,7 @@ public partial class MainWindow
     private void RebaseAnimationMode()
     {
         RefreshKeptAnimation();
-        if (animationMode is not { } mode) { EndScenarioPick(); return; }
+        if (animationMode is not { } mode) { EndScenarioPick(); EndDropMove(); return; }
         var document = shownDocument;
         if (document?.SourceWorld is not { } world || mode.Document.SourceWorld is not { } opened || world.Workspace != opened.Workspace || world.Mission != opened.Mission)
         {
@@ -177,7 +179,7 @@ public partial class MainWindow
         if (definition == null) { EndAnimationModeForMap(); Notice("The opened animation definition is no longer in the map; Animation mode ended."); return; }
         int entry = WorldScenarios().Current.Primary is int primary && definition.Entries.Contains(primary) ? primary
             : definition.Entries.Contains(mode.Entry) ? mode.Entry : definition.Entries.Count > 0 ? definition.Entries[0] : -1;
-        EndScenarioPick();
+        EndScenarioPick(); EndDropMove();
         DetachWorldAnimationRun();
         // The rebuilt map has new node numbers and graph identities: the graph's selection and its 3D outline go.
         animationGraphSelection = null; animationGraphOutline = null; animationInspected = null;
@@ -189,7 +191,9 @@ public partial class MainWindow
     }
     private void EndAnimationModeForMap()
     {
-        EndScenarioPick();
+        EndScenarioPick(); EndDropMove();
+        if (shownDocument?.SourceWorld != null || parachutes?.World.SourceWorld != null) CloseParachutes();
+        HideAllAnimationGuides();
         DetachWorldAnimationRun();
         animationMode = null; animationKept = null; animationFailure = null; previewId = Guid.NewGuid();
         animationBack.Clear(); animationForward.Clear();

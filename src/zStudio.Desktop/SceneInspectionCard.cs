@@ -104,6 +104,14 @@ internal sealed partial class SceneInspectionCard : Grid
     internal Func<SceneInspection, FrameworkElement?>? ExtraSections { get; set; }
     /// <summary>Sections after Details for a selection (a source map's Animations affecting this object), or null for none.</summary>
     internal Func<SceneInspection, FrameworkElement?>? TrailingSections { get; set; }
+    /// <summary>Sections before everything else for a selection (in Animation mode, the opened definition's Events naming it), or null.</summary>
+    internal Func<SceneInspection, FrameworkElement?>? LeadingSections { get; set; }
+    private readonly ContentControl leadingSections = new() { Focusable = false, IsTabStop = false, Visibility = Visibility.Collapsed };
+    private void HostLeadingSections(FrameworkElement? sections)
+    {
+        if (!ReferenceEquals(leadingSections.Content, sections)) leadingSections.Content = sections;
+        leadingSections.Visibility = sections == null ? Visibility.Collapsed : Visibility.Visible;
+    }
     private readonly ContentControl trailingSections = new() { Focusable = false, IsTabStop = false, Visibility = Visibility.Collapsed };
     private void HostTrailingSections(FrameworkElement? sections)
     {
@@ -204,7 +212,7 @@ internal sealed partial class SceneInspectionCard : Grid
         // The edit scope (which records an edit changes, or why it is read only) belongs to the placement: Details.
         modesFrame.Child = modes; detailsSection.Trailing = modesFrame; detailsSection.Body.Children.Add(scope); detailsSection.Body.Children.Add(rows); detailsSection.Body.Margin = new(10, 0, 10, 8);
         // Sections a selection adds (the player tank's Master type and Weapons) come before Details.
-        StackPanel body = new(); body.Children.Add(error); body.Children.Add(terrainEdit); body.Children.Add(sourceRows); body.Children.Add(extraSections); body.Children.Add(detailsSection); body.Children.Add(trailingSections);
+        StackPanel body = new(); body.Children.Add(error); body.Children.Add(leadingSections); body.Children.Add(terrainEdit); body.Children.Add(sourceRows); body.Children.Add(extraSections); body.Children.Add(detailsSection); body.Children.Add(trailingSections);
         emptyView = new ScrollViewer { Content = emptyBody, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled, Margin = new(0, 6, 0, 0), Visibility = Visibility.Collapsed };
         SetRow(emptyView, 1); layout.Children.Add(emptyView);
         terrainEdit.Click += (_, _) => { if (ResolvePending()) EditTerrain?.Invoke(); };
@@ -418,7 +426,7 @@ internal sealed partial class SceneInspectionCard : Grid
         pickupLabel = null;
         if (selected == null)
         {
-            HostExtraSections(null); HostTrailingSections(null);
+            HostExtraSections(null); HostTrailingSections(null); HostLeadingSections(null);
             if (!HasDraft) { EndObjectHandles(); ObjectEditor = null; objectBinding = null; sourceRows.Children.Clear(); sourceRows.Visibility = Visibility.Collapsed; }
             if (empty)
             {
@@ -436,8 +444,8 @@ internal sealed partial class SceneInspectionCard : Grid
         ToolTipService.SetShowOnDisabled(isolate, true);
         isolate.ToolTip = HasDraft ? "Apply or discard the edit first" : isolate.IsChecked == true ? "Show all objects" : "Isolate: show only this object";
         details = describe(selected);
-        if (RefreshSource()) { HostExtraSections(ExtraSections?.Invoke(selected)); HostTrailingSections(TrailingSections?.Invoke(selected)); return; }
-        HostExtraSections(ExtraSections?.Invoke(selected)); HostTrailingSections(TrailingSections?.Invoke(selected));
+        if (RefreshSource()) { HostLeadingSections(LeadingSections?.Invoke(selected)); HostExtraSections(ExtraSections?.Invoke(selected)); HostTrailingSections(TrailingSections?.Invoke(selected)); return; }
+        HostLeadingSections(LeadingSections?.Invoke(selected)); HostExtraSections(ExtraSections?.Invoke(selected)); HostTrailingSections(TrailingSections?.Invoke(selected));
         var pickup = PickupNameOf?.Invoke(selected);
         heading.Text = pickup?.Name ?? Display(details["Selected object"] ?? details["Node"]); heading.ToolTip = heading.Text; selectionName.Text = heading.Text;
         subtitle.Text = pickup?.Subtitle ?? Kind(selected); subtitle.ToolTip = pickup?.ToolTip ?? subtitle.Text;

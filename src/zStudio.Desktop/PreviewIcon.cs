@@ -106,7 +106,8 @@ public sealed class PreviewIcon : FrameworkElement
         ["ChevronRight"] = "M6,3.5 L10.5,8 L6,12.5",
         ["Scenario"] = "M2.5,4 H8 M11,4 H13.5 M2.5,8 H4.5 M7.5,8 H13.5 M2.5,12 H9 M12,12 H13.5 M9.5,2.5 V5.5 M6,6.5 V9.5 M10.5,10.5 V13.5",
         ["Pin"] = "M8,14.5 C8,14.5 3.5,9.6 3.5,6.2 A4.5,4.5 0 0 1 12.5,6.2 C12.5,9.6 8,14.5 8,14.5 Z M6.5,6.2 A1.5,1.5 0 1 0 9.5,6.2 A1.5,1.5 0 1 0 6.5,6.2",
-        ["More"] = "M3,8 A0.6,0.6 0 1 0 4.2,8 A0.6,0.6 0 1 0 3,8 M7.4,8 A0.6,0.6 0 1 0 8.6,8 A0.6,0.6 0 1 0 7.4,8 M11.8,8 A0.6,0.6 0 1 0 13,8 A0.6,0.6 0 1 0 11.8,8"
+        ["More"] = "M3,8 A0.6,0.6 0 1 0 4.2,8 A0.6,0.6 0 1 0 3,8 M7.4,8 A0.6,0.6 0 1 0 8.6,8 A0.6,0.6 0 1 0 7.4,8 M11.8,8 A0.6,0.6 0 1 0 13,8 A0.6,0.6 0 1 0 11.8,8",
+        ["Paths"] = "M2,13 C5,13 4,3 8,3 C12,3 11,13 14,13"
     }.ToDictionary(p => p.Key, p => { Geometry g = Geometry.Parse(p.Value); g.Freeze(); return g; });
 
     protected override void OnRender(DrawingContext drawing)

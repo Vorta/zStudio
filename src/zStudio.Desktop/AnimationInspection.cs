@@ -57,6 +57,7 @@ internal sealed record AnimationInspection(string Kind, string Title, string Sub
         InspectorSource source => new { type = "source", file = source.File, line = source.Line, excerpt = source.Excerpt, truncated = source.Truncated, note = source.Note,
             missions = source.Missions, record = source.Record },
         InspectorHost host => new { type = "host", key = host.Key, note = host.Note },
+        InspectorNoticeGroup group => new { type = "noticeGroup", label = group.Label, collapsed = true, notices = group.Lines },
         _ => new { type = "unknown" },
     };
     internal static string Clock(string mode) => mode switch { "SEQUENCE_OFFSET" => "sequence", "EVENT_OFFSET" => "previous", _ => "animation" };
@@ -168,7 +169,7 @@ internal sealed record InspectorSource(string File, string? Record) : InspectorI
     public IReadOnlyList<string> Missions { get; init; } = [];
 }
 
-/// <summary>A seam for controls the window hosts as they are (Paths, Drop windows until phase 6b reshapes them).</summary>
+/// <summary>A panel the window hosts in the card as it is: a VTOL flight's Drop windows ("drops").</summary>
 internal sealed record InspectorHost(string Key) : InspectorItem
 {
     public string? Note { get; init; }
@@ -190,11 +191,16 @@ internal sealed record AnimationNotice(string Id, string Kind, string Severity, 
     public double? Time { get; init; }
     public long Count { get; init; } = 1;
     public string Category { get; init; } = "Preview";
+    /// <summary>A generic preview approximation (not about this item): grouped as one collapsed line on the definition's card, left out of badges and the chip's count.</summary>
+    public bool Generic { get; init; }
     internal object Json() => new
     {
         id = Id, kind = Kind, severity = Severity, text = Text, category = Category, node = Node, row = Row, lane = Lane, entry = Entry, sequence = Sequence, @event = Event,
-        time = Time, count = Count,
+        time = Time, count = Count, generic = Generic ? true : (bool?)null,
     };
     internal string Where => Time is double t ? " · " + AnimationSeconds.Format(t) : "";
     internal static string Plural(long count, string one, string many) => count == 1 ? one : count.ToString("N0", CultureInfo.InvariantCulture) + " " + many;
 }
+
+/// <summary>The preview's generic approximations of the definition, as one collapsed line ("4 preview approximations ▸").</summary>
+internal sealed record InspectorNoticeGroup(string Label, IReadOnlyList<string> Lines) : InspectorItem;

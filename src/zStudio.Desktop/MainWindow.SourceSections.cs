@@ -234,7 +234,7 @@ public partial class MainWindow : ISourceSectionState
                 : SectionSelection?.Section is DefinitionEntry definition && sceneTree?.Sections?.DefinitionRoots.GetValueOrDefault(definition.Definition.Index) is { } roots
                 ? [.. roots.Take(SceneViewport.MaximumOutlinedNodes)] : [];
             if (!outlined.SequenceEqual(viewport.OutlinedNodes)) viewport.SetOutlinedNodes(outlined);
-            RefreshRowEyes(); RefreshViewportChips();
+            RefreshRowEyes(); RefreshViewportChips(); RefreshAnimationOverlay();
         }
     }
 
@@ -539,7 +539,7 @@ public partial class MainWindow : ISourceSectionState
             try { SelectSceneTreeRow(found); }
             catch (StudioCommandException ex) { Report(ex); }
         };
-        sectionCard.DraftChanged += () => { if (sectionCard.HasDraft) { StopWorldAnimationForEdit(); InvalidateWorldAnimationDropsForEdit(); sourcePathLoading?.Cancel(); } refreshAnimationPathControls?.Invoke(); UpdateDocumentCommands(); };
+        sectionCard.DraftChanged += () => { if (sectionCard.HasDraft) { StopWorldAnimationForEdit(); InvalidateWorldAnimationDropsForEdit(); sourcePathLoading?.Cancel(); } RefreshPathsChip(); UpdateDocumentCommands(); };
         return sectionCard;
     }
     /// <summary>Shows a section row's card (again, after an edit published a new tree: the draft stays with its zone or network).</summary>

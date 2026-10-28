@@ -28,6 +28,24 @@ internal sealed record AnimationTimingState
     public string? Message { get; init; }
     /// <summary>Whether an event's start threshold can be proposed (a bracket end drags).</summary>
     public Func<Guid, bool>? CanEditThreshold { get; init; }
+    /// <summary>The opened flight's drop windows: a "Drop windows" lane under its flight sequence lane (design §14).</summary>
+    public AnimationTimingDrops? Drops { get; init; }
+}
+
+/// <summary>
+/// The Drop windows lane: under <see cref="AnchorLane"/> (the flight sequence), each window of each flight cycle the run
+/// reached as a bar on the flight's sequence clock. <see cref="Editable"/> bars drag (their start only, never their length).
+/// </summary>
+internal sealed record AnimationTimingDrops(string AnchorLane, IReadOnlyList<AnimationTimingDropBar> Bars, bool Editable)
+{
+    public Guid? Selected { get; init; }
+    public string Note { get; init; } = "";
+}
+/// <summary>One window in one flight cycle: shared-clock start and end, the cycle's start, and its start's bounds on the sequence clock.</summary>
+internal sealed record AnimationTimingDropBar(Guid Window, int Number, double Cycle, double Start, double Duration, double Minimum, double Maximum)
+{
+    public bool Moved { get; init; }
+    public double End => Cycle + Start + Duration;
 }
 
 /// <summary>
@@ -83,6 +101,31 @@ internal sealed partial class AnimationTimingView : Grid
     internal event Action<Guid, double>? StartMoved;
     internal event Action<Guid>? StartRemoved;
     internal event Action<AnimationTimingMark, double>? ThresholdProposed;
+    /// <summary>A drop window chosen on its lane (a click), or moved there (a drag: its new start on the flight sequence's clock).</summary>
+    internal event Action<Guid>? DropWindowSelected;
+    internal event Action<Guid, double>? DropWindowMoved;
+    internal const string DropLaneId = "drops";
+    private AnimationTimingLane? dropLane;
+    private IReadOnlyList<AnimationTimingLane> rows = [];
+    /// <summary>The rows shown: the projection's lanes, with the Drop windows lane under its flight sequence lane.</summary>
+    internal IReadOnlyList<AnimationTimingLane> Rows => rows;
+    internal AnimationTimingLane? RowLane(string id) => id == DropLaneId ? dropLane : Timing?.Lane(id);
+    private void BuildRows()
+    {
+        var lanes = Timing?.Lanes ?? [];
+        dropLane = null;
+        if (State.Drops is not { } drops || lanes.FirstOrDefault(l => l.Id == drops.AnchorLane) is not { } anchor) { rows = lanes; return; }
+        dropLane = new(DropLaneId, AnimationTimingLaneKind.Sequence, "Drop windows", anchor.Depth)
+        {
+            Group = anchor.Group, State = AnimationNotice.Plural(drops.Bars.Select(b => b.Window).Distinct().Count(), "1 window", "windows"),
+            Tooltip = "Drop windows on the flight sequence's clock" + (drops.Editable ? ": click one to select it, drag it to move its start (0.025 s; Shift 0.1 s; Ctrl free); its length stays" : "") + (drops.Note.Length > 0 ? ". " + drops.Note : ""),
+        };
+        List<AnimationTimingLane> shown = new(lanes.Count + 1);
+        foreach (var lane in lanes) { shown.Add(lane); if (lane == anchor) shown.Add(dropLane); }
+        rows = shown;
+    }
+    internal void SelectDropWindow(Guid id) => DropWindowSelected?.Invoke(id);
+    internal void MoveDropWindow(Guid id, double start) => DropWindowMoved?.Invoke(id, start);
     internal event Action? EditTimingRequested, ScenarioRequested;
     /// <summary>A presentation change (visibleRange, labelWidth, thresholds, view, fit) for the window to keep.</summary>
     internal event Action<string>? PresentationChanged;
@@ -185,6 +228,7 @@ internal sealed partial class AnimationTimingView : Grid
         bool newKey = viewKey != key; key = viewKey;
         var previous = State;
         State = state;
+        BuildRows();
         if (newKey) { rangeChosen = false; vertical.Value = 0; SelectedLane = SelectedMark = null; SelectedEvent = null; }
         if (!rangeChosen) SetVisibleRange(state.RangeStart, Math.Max(state.RangeStart + AnimationSeconds.Tick, state.RangeEnd), user: false);
         else if ((state.Playing || Math.Abs(state.Time - previous.Time) > 1e-9) && (state.Time < VisibleStart || state.Time > VisibleEnd))
@@ -193,7 +237,7 @@ internal sealed partial class AnimationTimingView : Grid
             double span = VisibleEnd - VisibleStart, begin = Math.Clamp(state.Time - span * .2, 0, AnimationSeconds.Maximum - span);
             SetVisibleRange(begin, begin + span, user: false);
         }
-        if (SelectedLane != null && state.Timing?.Lane(SelectedLane) == null) { SelectedLane = null; SelectedMark = null; }
+        if (SelectedLane != null && RowLane(SelectedLane) == null) { SelectedLane = null; SelectedMark = null; }
         string? text = state.Message ?? (state.Timing == null ? "Open an animation in Animation mode." : !state.Evaluated
             ? "Nothing has run yet. Play, or click the ruler to seek; the preview runs the scenario up to that time." : null);
         messageText.Text = text ?? ""; message.Visibility = text == null ? Visibility.Collapsed : Visibility.Visible;
@@ -300,7 +344,7 @@ internal sealed partial class AnimationTimingView : Grid
     {
         if (Timing == null) return;
         double top = 0;
-        foreach (var row in Timing.Lanes)
+        foreach (var row in Rows)
         {
             double height = TimingSurface.RowHeight(row);
             if (row.Id == lane)
@@ -325,7 +369,7 @@ internal sealed partial class AnimationTimingView : Grid
         changing = true;
         try
         {
-            double total = Timing?.Lanes.Sum(TimingSurface.RowHeight) ?? 0, viewport = Math.Max(0, surface.ActualHeight);
+            double total = Rows.Sum(TimingSurface.RowHeight), viewport = Math.Max(0, surface.ActualHeight);
             vertical.Maximum = Math.Max(0, total - viewport); vertical.ViewportSize = viewport; vertical.LargeChange = Math.Max(24, viewport - 24);
             vertical.Visibility = total > viewport + .5 ? Visibility.Visible : Visibility.Collapsed;
             if (vertical.Value > vertical.Maximum) vertical.Value = vertical.Maximum;
@@ -346,7 +390,7 @@ internal sealed partial class AnimationTimingView : Grid
         if (!State.CanSeek || !double.IsFinite(seconds)) return;
         SeekRequested?.Invoke(Math.Clamp(seconds, 0, AnimationSeconds.Maximum), final);
     }
-    internal void ChooseLane(AnimationTimingLane lane) { Select(lane.Id); LaneSelected?.Invoke(lane); }
+    internal void ChooseLane(AnimationTimingLane lane) { if (lane.Id == DropLaneId) return; Select(lane.Id); LaneSelected?.Invoke(lane); }
     internal void ChooseMark(AnimationTimingLane lane, AnimationTimingMark mark) { Select(lane.Id, mark.Id); MarkSelected?.Invoke(lane, mark); }
     internal void Toggle(AnimationTimingLane group) { if (group.Kind == AnimationTimingLaneKind.Group) GroupToggled?.Invoke(group.Id, !group.Expanded); }
     internal void MoveStart(Guid id, double seconds) => StartMoved?.Invoke(id, seconds);

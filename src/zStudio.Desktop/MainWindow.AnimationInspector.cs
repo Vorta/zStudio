@@ -97,14 +97,38 @@ public partial class MainWindow
             "activation" => DefinitionCard(source, layout, target.Entry, mode.Definition, scrollTo: "activation"),
             _ => DefinitionCard(source, layout, target.Entry > 0 ? target.Entry : mode.Entry, mode.Definition),
         };
-        // The item's notices come first (design §15).
-        var own = notices.Where(n => Concerns(inspection, n, layout)).ToArray();
+        // The item's notices come first (design §15): what concerns this item expanded (refused or ignored starts, unavailable
+        // calls, limits, notes naming it); the preview's generic approximations only on the definition's card, as one collapsed line.
+        bool definitionCard = inspection.Kind is "definition" or "activation";
+        var own = notices.Where(n => n.Generic ? definitionCard && n.Entry == inspection.Entry : Concerns(inspection, n, layout)).ToArray();
         if (own.Length == 0) return inspection with { Notices = own };
-        List<InspectorItem> shownNotices = [.. own.Take(6).Select(n => (InspectorItem)new InspectorText(n.Text + (n.Count > 1 ? $" (×{n.Count:N0})" : "") + n.Where, n.Severity == "Warning" ? "caution" : "info"))];
-        if (own.Length > 6) shownNotices.Add(new InspectorText($"and {own.Length - 6} more: the view bar's ⚠ chip lists every notice."));
-        InspectorSection noticesSection = new("notices", "Notices") { Summary = own.Length.ToString(CultureInfo.InvariantCulture), Live = true, Items = shownNotices };
+        var specific = own.Where(n => !n.Generic).ToArray();
+        // One line per approximation, however many sequences of the binding it came from.
+        var generic = own.Where(n => n.Generic).GroupBy(n => n.Text).Select(g => g.First() with { Count = g.Sum(n => n.Count) }).ToArray();
+        List<InspectorItem> shownNotices = [.. specific.Take(6).Select(n => (InspectorItem)new InspectorText(n.Text + (n.Count > 1 ? $" (×{n.Count:N0})" : "") + n.Where, n.Severity == "Warning" ? "caution" : "info"))];
+        if (specific.Length > 6) shownNotices.Add(new InspectorText($"and {specific.Length - 6} more: the view bar's notices chip lists every notice."));
+        if (generic.Length > 0)
+            shownNotices.Add(new InspectorNoticeGroup(AnimationNotice.Plural(generic.Length, "1 preview approximation", "preview approximations"),
+                [.. generic.Take(32).Select(n => n.Text + (n.Count > 1 ? $" (×{n.Count:N0})" : ""))]));
+        InspectorSection noticesSection = new("notices", "Notices")
+        {
+            Summary = specific.Length > 0 ? specific.Length.ToString(CultureInfo.InvariantCulture) : AnimationNotice.Plural(generic.Length, "1 approximation", "approximations"),
+            Live = true, Items = shownNotices,
+        };
         return inspection with { Notices = own, Sections = [noticesSection, .. inspection.Sections] };
     }
+    /// <summary>
+    /// A generic preview approximation: a support note about how the preview runs this kind of event at all ("Approximate:
+    /// effect rendering", "Engine-based; collision uses explicit preview override", nested activation order, collision surfaces),
+    /// not about this item. The cards group them as one collapsed line; badges and the chip's count leave them out.
+    /// </summary>
+    private static bool GenericApproximation(string category, string severity, string message) =>
+        category == "Support" && severity == "Information" && GenericNotes.Any(prefix => message.StartsWith(prefix, StringComparison.Ordinal));
+    private static readonly string[] GenericNotes =
+    [
+        "Approximate:", "Engine-based", "Nested animation activation uses", "Preview collision", "Flat-ground preview collision", "Ground collision is disabled",
+        "Inherited gameplay launch velocity", "Beam activation points use", "Animation checkpoint storage", "Additional distinct preview diagnostics",
+    ];
     private static bool Concerns(AnimationInspection inspection, AnimationNotice notice, AnimationGraphLayout? layout)
     {
         if (inspection.Selection is { } selected && (notice.Node == selected || notice.Row == selected)) return true;
@@ -140,11 +164,13 @@ public partial class MainWindow
         // Prerequisites: each group as list editors with ✓/○ satisfaction at the playhead.
         if (PrerequisitesSection(model, activation, entry) is { } prerequisites) sections.Add(prerequisites);
         sections.Add(CallsSection(layout, package, source, entry, activation));
-        if (InAnimationMode && opened)
-        {
-            sections.Add(new("paths", "Paths") { Expanded = false, Items = [new InspectorHost("paths") { Note = "Evaluate, show, frame and clear the motion guides of the binding Animation mode plays (animation_paths)." }] });
-            sections.Add(new("drops", "Drop windows") { Items = [new InspectorHost("drops") { Note = "VTOL drop windows (animation_paths without a definition)." }] });
-        }
+        // Drop windows: only for a definition with recognised flight-to-callback-911 calls (design §14); the paths are the view's Paths chip.
+        if (InAnimationMode && opened && DropCandidates(definition) is { Count: > 0 } flights)
+            sections.Add(new("drops", "Drop windows")
+            {
+                Summary = parachutes is { Analysis: { } analysis } shown && shown.Entry is int analyzed && definition.Entries.Contains(analyzed) ? AnimationNotice.Plural(analysis.Windows.Count, "1 window", "windows") : AnimationNotice.Plural(flights.Count, "1 flight", "flights"),
+                Items = [new InspectorHost("drops") { Note = "VTOL drop windows: analyze, list, select, move along path, start, Apply / Revert (animation_paths without a definition)." }],
+            });
         sections.Add(SourceSection(definition, "settings", model));
         string root = entry > 0 && package != null && entry < package.Entries.Count ? $" · {package.Entries[entry].RootName} #{entry}" : "";
         return new(scrollTo == "activation" ? "activation" : "definition", definition.Name, "Definition · " + System.IO.Path.GetFileName(definition.File) + root)
@@ -794,9 +820,6 @@ public partial class MainWindow
             BindingsSection(definition, false),
             new("activation", "Activation") { Summary = activation?.Triggers.FirstOrDefault()?.Phrase is { } phrase ? Trim(phrase, 24) : null, Items = activationItems },
             CallsSection(null, package, source, entry, activation),
-            // Paths and Drop windows keep working where they did until phase 6b reshapes them (a seam, as in the Inspector).
-            new("paths", "Paths") { Expanded = false, Items = [new InspectorHost("paths") { Note = "Evaluate, show, frame and clear the motion guides of the card's binding (animation_paths)." }] },
-            new("drops", "Drop windows") { Items = [new InspectorHost("drops") { Note = "VTOL drop windows (animation_paths without a definition)." }] },
             SourceSection(definition, model == null ? null : "settings", model),
         ];
         return new("map", definition.Name, "Definition · " + System.IO.Path.GetFileName(definition.File))
@@ -1037,7 +1060,8 @@ public partial class MainWindow
                 .Select(g => g.Count() == 1 ? g.First() : g.First() with { Source = new(g.Key.Entry), Count = g.Sum(i => i.Count) });
             foreach (var issue in issues.Take(200))
             {
-                string kind = issue.Message.Contains("omitted", StringComparison.Ordinal) || issue.Message.Contains("limit", StringComparison.OrdinalIgnoreCase) ? "limit"
+                bool generic = GenericApproximation(issue.Category, issue.Severity, issue.Message);
+                string kind = generic ? "approximation" : issue.Message.Contains("omitted", StringComparison.Ordinal) || issue.Message.Contains("limit", StringComparison.OrdinalIgnoreCase) ? "limit"
                     : issue.Category == "Support" ? issue.Message.Contains("approximat", StringComparison.OrdinalIgnoreCase) ? "approximation" : "support" : "preview";
                 int entry = issue.Source.Entry;
                 string? row = issue.Source.Event is Guid ev && entry > 0 ? graph.RowOf(entry, ev)?.Id : null;
@@ -1045,6 +1069,7 @@ public partial class MainWindow
                 {
                     Node = entry > 0 ? NodeOf(entry, issue.Source.Sequence) : null, Row = row, Lane = entry > 0 ? LaneOf(entry, issue.Source.Sequence) : null,
                     Entry = entry > 0 ? entry : null, Sequence = issue.Source.Sequence, Event = issue.Source.Event, Time = issue.FirstTime, Count = issue.Count, Category = issue.Category,
+                    Generic = generic,
                 });
             }
             foreach (var group in frame.Refusals.Where(r => shown.Contains(r.Entry)).GroupBy(r => r.Entry))
@@ -1077,6 +1102,8 @@ public partial class MainWindow
         Dictionary<string, int> nodes = new(StringComparer.Ordinal), lanes = new(StringComparer.Ordinal);
         foreach (var notice in notices)
         {
+            // Badges count what concerns an item; the preview's generic approximations are grouped on the definition's card.
+            if (notice.Generic) continue;
             if (notice.Node is { } node) nodes[node] = nodes.GetValueOrDefault(node) + 1;
             if (notice.Lane is { } lane) lanes[lane] = lanes.GetValueOrDefault(lane) + 1;
         }

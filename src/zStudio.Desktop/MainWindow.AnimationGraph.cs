@@ -73,6 +73,7 @@ public partial class MainWindow
             view.RunOverlayChanged += value => { animationGraphRunOverlay = value; };
             view.IncludeAllRequested += choice => _ = ReportUi(() => { GraphIncludeAll(choice); return Task.CompletedTask; });
             view.EditTimingRequested += () => _ = ReportUi(() => { ShowAnimationRightTab("inspector"); sectionCard?.FocusAnimationTiming(); return Task.CompletedTask; });
+            view.HoverChanged += id => { if (animationGraphHover == id) return; animationGraphHover = id; RefreshAnimationOverlay(); };
             return view;
         }
     }
@@ -443,35 +444,19 @@ public partial class MainWindow
     }
 
     /// <summary>
-    /// What a PLAYER_RANGE row or a range gate draws (phase 6 draws it in the view): its attach node's position, the radius, the
-    /// player reference at the playhead (or as the scenario sets it) and their distance.
+    /// What a PLAYER_RANGE row or a range gate draws in the view (its ring, the player pin and the dashed line): its attach node's
+    /// position, the radius, the player reference at the playhead (or as the scenario sets it) and their distance.
     /// </summary>
     private object? GraphRangeDrawing(string id)
     {
-        if (animationGraphLayout is not { } layout) return null;
-        double radius; int entry;
-        if (layout.Item(id)?.Item is { Kind: AnimationGraphItemKind.Question, Branch.Condition: { Operand: "playerRange", Radius: double r } } item) { radius = r; entry = item.Row!.Entry; }
-        else if (layout.Node(id)?.Node.Activation is { } activation && activation.Triggers.FirstOrDefault(t => t.Kind == "rangeGate") is { Value: double gate }) { radius = gate; entry = activation.Entry; }
-        else return null;
-        Vector3? center = null;
-        if (scene?.Mission is { } mission && scene.PreviewScene is { } data && mission.AnimationEntryRoots.TryGetValue(entry, out int root) && root >= 0 && root < data.Nodes.Count)
-        {
-            var binding = layout.Graph.Index.Package.Entries[entry];
-            int attach = binding.AttachName == binding.RootName ? root : FindBelow(data, root, binding.AttachName) ?? root;
-            center = zStudio.Rendering.SceneViewport.WorldTransform(data, attach).Translation;
-        }
-        var scenario = worldAnimationConfiguration;
-        Vector3? player = animationGraphOverlay?.Player?.Position
-            ?? (scenario.Player.Kind == AnimationPlayerReferenceKind.Custom ? scenario.CustomPlayer
-                : scenario.Player.Kind == AnimationPlayerReferenceKind.None ? null : scene?.Mission?.PlayerStart);
-        double? distance = center is { } c && player is { } p ? Vector3.Distance(c, p) : null;
+        if (RangeOf(id) is not { } range) return null;
+        var player = PlayerNow();
+        double? distance = range.Center is { } c && player.Position is { } p ? Vector3.Distance(c, p) : null;
         return new
         {
-            center = center is { } at ? new[] { at.X, at.Y, at.Z } : null, radius,
-            player = player is { } pl ? new[] { pl.X, pl.Y, pl.Z } : null,
-            playerSource = animationGraphOverlay?.Player?.Source ?? scenario.Player.Kind.ToString(),
-            distance, inside = distance is double d ? d <= radius : (bool?)null,
-            attach = layout.Graph.Index.Package.Entries[entry].AttachName,
+            center = range.Center is { } at ? new[] { at.X, at.Y, at.Z } : null, radius = range.Radius, kind = range.Gate ? "gate" : "condition",
+            player = player.Position is { } pl ? new[] { pl.X, pl.Y, pl.Z } : null, playerSource = player.Source, frozen = player.Frozen,
+            distance, inside = distance is double d ? d <= range.Radius : (bool?)null, attach = range.Attach,
         };
     }
 }

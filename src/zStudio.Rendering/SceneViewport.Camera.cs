@@ -87,7 +87,7 @@ public sealed partial class SceneViewport
                 RefreshHorizon();
                 cameraPoseDirty = false; authoredCameraPose = false;
             }
-            UpdatePickupGizmoSize(); UpdateClipPlanes(); UpdateAiMarkers(); UpdateParachuteMarkers(); RefreshInspection(); RefreshZoneFrame();
+            UpdatePickupGizmoSize(); UpdateClipPlanes(); UpdateAiMarkers(); UpdateParachuteMarkers(); RefreshInspection(); RefreshZoneFrame(); ReportOverlayView();
             // Presentation only: report a projection or named-view change after this frame, never from inside it.
             string mode = ViewMode;
             if (mode != reportedViewMode) { reportedViewMode = mode; Dispatcher.BeginInvoke(() => ViewModeChanged?.Invoke()); }

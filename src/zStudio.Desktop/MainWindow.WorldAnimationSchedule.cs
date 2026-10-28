@@ -71,7 +71,7 @@ public partial class MainWindow
     private async Task FitWorldAnimationScenario()
     {
         double end = Math.Min(3600, WorldAnimationActivations().Max(s => s.Seconds) + 30);
-        await WorldAnimationOptionAsync("range", new[] { 0d, end });
+        await WorldAnimationOptionAsync("playbackRange", new[] { 0d, end });
         TimingView.SetVisibleRange(0, end);
         RefreshWorldAnimationRun();
     }

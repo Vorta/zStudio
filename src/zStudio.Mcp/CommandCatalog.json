@@ -1605,7 +1605,7 @@
   },
   {
     "Name": "zstudio_animation_runtime",
-    "Description": "Read preview status, sequence runtime, dispatched event occurrences, problems or bound scene nodes; in a source map also instances, scoped condition outcomes, each start attempt\u0027s activation prerequisites (prerequisites: outcome met, refused, or ignored by the scenario\u0027s rule, with every check; evidence only) and, in Animation mode, notices: every notice of the opened animation as the view bar\u0027s \u26A0 chip lists it (kind approximation, support, ignoredPrerequisites, refused, unavailable, preview or limit; its text, severity, count and time; node and lane name the graph node and Timing lane whose \u26A0 badge counts it, row the graph row; animation_graph select or animation_timing select go to it). Scene metadata previews retain at most 64 JSON nodes and 1024 text characters, with inspection_truncated; full metadata is available through JSON export. Identities remain complete; long rows shorten pages, so follow nextOffset. Timing thresholds and observed dispatches remain distinct.",
+    "Description": "Read preview status, sequence runtime, dispatched event occurrences, problems or bound scene nodes; in a source map also instances, scoped condition outcomes, each start attempt\u0027s activation prerequisites (prerequisites: outcome met, refused, or ignored by the scenario\u0027s rule, with every check; evidence only), player: the player reference range conditions and range gates measure from at the playhead (position, source: aiv start, opening handover, custom, none, or callback 10 or 17 with when it moved it; frozen once callback 11 suspended the player; evaluated false before a run, when it is the scenario\u0027s setting) and every change of the run (paged changes), and, in Animation mode, notices: every notice of the opened animation as the view bar\u0027s chip lists it (kind approximation, support, ignoredPrerequisites, refused, unavailable, preview or limit; generic true for a preview approximation the cards group as n preview approximations; its text, severity, count and time; node and lane name the graph node and Timing lane whose \u26A0 badge counts an item-specific one, row the graph row; animation_graph select or animation_timing select go to it). Scene metadata previews retain at most 64 JSON nodes and 1024 text characters, with inspection_truncated; full metadata is available through JSON export. Identities remain complete; long rows shorten pages, so follow nextOffset. Timing thresholds and observed dispatches remain distinct.",
     "Mutates": false,
     "Parameters": [
       {
@@ -1630,7 +1630,8 @@
           "instances",
           "conditions",
           "prerequisites",
-          "notices"
+          "notices",
+          "player"
         ],
         "Properties": null
       },
@@ -2462,7 +2463,7 @@
   },
   {
     "Name": "zstudio_animation_paths",
-    "Description": "With definition, analyze explicitly evaluates bounded source animation paths for an exact binding using the current finite child-inclusion policy; show/hide only changes compatible cached guides and never evaluates; clear discards the selected definition\u0027s cached paths. Frame its guides, preview/exit the shared world transport, state reads snapshots, samples pages points and markers pages dispatch traces. Selection and expansion are passive. preview_state.animationPaths reports status, diagnostics and per-path Kind (object or camera). Source paths use standable map terrain and stop procedural object motion at world Y -500 or 500 without impact cues; keyframes and cameras are unrestricted. Camera guides are orange, objects teal. With no definition, inspect and relocate complete existing VTOL drop windows in a Whole world. Show analyzes the first discovered flight; unavailable flights retain the candidate list, entry and analysisRefusal without a partial path. Analyze selects an exact entry. The verified-drop analysis admits only recognized flight-to-callback-911 callsites and does not change the main preview\u0027s inclusion or playback; the callback\u0027s conditions follow the map\u0027s animation scenario (its player, condition switches and rules), and a change to them makes the shown analysis stale (stale true; analyze and moves refused) until show runs again. Conditional release markers come from a frozen bounded runtime, never landing predictions; a release gated by the player\u0027s range appears only when the scenario\u0027s player is in range, so set it near the flight with animation_options activationTarget (on a compiled Whole world with no animation selected too). A source map\u0027s windows can be moved: select/begin/set/confirm/cancel share the GUI draft and one undo step, set takes a local start time or an exact path segment plus fraction to disambiguate crossings, and the edit uses token-preserving project history and in-memory scene evaluation (Apply creates no archives; Save writes the owning animation definitions; undo/redo/save target the project). A compiled world is read only: show, analyze, samples and releases work, its windows cannot be selected or moved. Samples/releases support offset/limit pagination without query; preview_state.parachute reports bounded state. No physical input is captured. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Description": "Animation mode\u0027s Paths chip and the drop windows. With definition (the opened one in Animation mode), analyze explicitly evaluates bounded source animation paths for an exact binding (default: the opened binding) with the scenario and its included call paths, silently (the playhead, camera and panel stay); show/hide only changes compatible cached guides and never evaluates; clear discards the definition\u0027s cached paths; frame frames its shown guides; preview/exit the shared world transport; state reads snapshots and the chip (state word not evaluated, evaluating, shown, hidden, out of date or partial; status line; rangeTests and contacts toggles); samples pages points; markers pages the evaluated contacts (kind contact: where a moving node touched the ground, \u22A5) and impact sounds (kind impact, \u25CE) with time, position, node and sound; events pages the analysis\u0027s dispatch traces. Guides carry time in the view: a dot at the playhead and faint ticks every second; a selected motion event emphasises its guide (alpha only). Selection and expansion are passive. preview_state.animationPaths reports status, diagnostics and per-path Kind (object or camera). Source paths use standable map terrain and stop procedural object motion at world Y -500 or 500 without impact cues; keyframes and cameras are unrestricted. Camera guides are orange, objects teal. Without definition: ranges lists every range condition (PLAYER_RANGE) and range gate of the opened animation and its expanded calls with the attach node, its position, the radius, the player reference at the playhead, the distance, inside and the outcome (the rings Show range tests draws; a selected or hovered one is drawn alone); overlay sets the chip\u0027s toggles rangeTests (Show range tests) and contacts (Contacts and impacts), presentation only; frame frames the drop-window flight path; the rest inspects and relocates complete existing VTOL drop windows in a Whole world. In a source map drop windows are the opened flight\u0027s (Animation mode, Inspector \u2192 Definition \u2192 Drop windows; refused for a definition without recognised flight-to-callback-911 calls): show analyzes the opened binding when it is a flight, else the definition\u0027s first; analyze takes an exact entry of the opened definition. A compiled Whole world\u0027s show analyzes its first discovered flight; unavailable flights retain the candidate list, entry and analysisRefusal without a partial path. The verified-drop analysis admits only recognized flight-to-callback-911 callsites and does not change the main preview\u0027s inclusion or playback; the callback\u0027s conditions follow the map\u0027s animation scenario (its player, condition switches on the flight as primary start, and rules; nothing is forced), and a change to them makes the shown analysis stale (stale true; analyze and moves refused) until show runs again. Conditional release markers come from a frozen bounded runtime, never landing predictions; a release gated by the player\u0027s range appears only when the scenario\u0027s player is in range (animation_scenario inputs player; on a compiled Whole world animation_options activationTarget). A source map\u0027s windows can be moved: select/begin/set/confirm/cancel share the GUI draft (Move along path, the start box, Timing\u0027s Drop windows lane) and Apply is one undo step; set takes a start on the flight sequence\u0027s clock or an exact path segment plus fraction to disambiguate crossings, and the edit uses token-preserving project history and in-memory scene evaluation (Apply creates no archives; Save writes the owning animation definitions; undo/redo/save target the project). A compiled world is read only: show, analyze, samples, releases and frame work, its windows cannot be selected or moved. Samples/releases/markers/events support offset/limit pagination without query; preview_state.parachute reports bounded state. No physical input is captured. Returns an operation ID; use zstudio_operation to await/read the result.",
     "Mutates": true,
     "Parameters": [
       {
@@ -2494,7 +2495,7 @@
       {
         "Name": "action",
         "Type": "string",
-        "Description": "Operation. With definition: source animation guides and preview; without definition: existing drop windows.",
+        "Description": "Operation. With definition: the opened binding\u0027s guides and preview; without definition: range tests, the chip\u0027s toggles and existing drop windows.",
         "Required": true,
         "Choices": [
           "show",
@@ -2515,7 +2516,10 @@
           "preview",
           "exit",
           "markers",
-          "clear"
+          "events",
+          "clear",
+          "ranges",
+          "overlay"
         ],
         "Properties": null
       },
@@ -2541,7 +2545,7 @@
       {
         "Name": "snapshot",
         "Type": "string",
-        "Description": "Current Parachute snapshot, required except show.",
+        "Description": "Current Parachute snapshot, required for drop-window actions except show.",
         "Required": false,
         "Choices": null,
         "Properties": null
@@ -2549,7 +2553,7 @@
       {
         "Name": "entry",
         "Type": "integer",
-        "Description": "Exact discovered flight entry index for analyze.",
+        "Description": "Exact binding for analyze (with definition: default the opened binding; without: a discovered flight entry).",
         "Required": false,
         "Choices": null,
         "Properties": null,
@@ -2575,7 +2579,7 @@
       {
         "Name": "start",
         "Type": "number",
-        "Description": "Local cycle start seconds; mutually exclusive with segment/fraction.",
+        "Description": "Window start on the flight sequence\u0027s clock in seconds; mutually exclusive with segment/fraction.",
         "Required": false,
         "Choices": null,
         "Properties": null,
@@ -2601,6 +2605,22 @@
         "Properties": null,
         "NumberMinimum": 0,
         "NumberMaximum": 1
+      },
+      {
+        "Name": "rangeTests",
+        "Type": "boolean",
+        "Description": "overlay: Show range tests (every range condition and gate with the player).",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "contacts",
+        "Type": "boolean",
+        "Description": "overlay: Contacts and impacts (\u22A5 and \u25CE markers of the evaluated paths).",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
       },
       {
         "Name": "offset",

@@ -121,7 +121,7 @@ public partial class MainWindow
     private void RequireNoSelectionDrafts(DocumentModel? doc = null)
     {
         if (parachuteDraft is { } drop && (doc == null || doc == drop.Session.World || doc == drop.Session.Owner))
-            throw new StudioCommandException("pending_drafts", "Confirm or cancel the Parachute move before continuing.");
+            throw new StudioCommandException("pending_drafts", "Apply or revert the drop-window move before continuing.");
         if (HasAiPathDraft && (doc == null || aiPathDraft!.Document == doc))
             throw new StudioCommandException("pending_drafts", "Confirm or cancel the AI path transform with ai_path before continuing.");
         if (HasInspectionDraft && (doc == null || inspectionDraft!.DraftDocument == doc))
@@ -137,7 +137,7 @@ public partial class MainWindow
         if (!committingSection && HasSectionDraft(doc))
             throw new StudioCommandException("pending_drafts", "Apply or revert the zone or AI network card's changes (drafts target section) before continuing.");
         if (parachuteDraft is { } drop && drop != committingParachute && (doc == null || doc == drop.Session.World || doc == drop.Session.Owner))
-            throw new StudioCommandException("pending_drafts", "Confirm or cancel the Parachute move before continuing.");
+            throw new StudioCommandException("pending_drafts", "Apply or revert the drop-window move before continuing.");
         if (HasAiPathDraft && aiPathDraft != committingAiPath && (doc == null || aiPathDraft!.Document == doc))
             throw new StudioCommandException("pending_drafts", "Confirm or cancel the AI path transform with ai_path before continuing.");
         if (HasInspectionDraft && inspectionDraft != committingCard && (doc == null || inspectionDraft!.DraftDocument == doc))

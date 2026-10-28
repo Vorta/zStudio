@@ -68,6 +68,8 @@ internal sealed class AnimationPanel : Border
     private readonly Border tip = new() { CornerRadius = new(6), BorderThickness = new(1), Padding = new(10, 6, 4, 6), Margin = new(10), HorizontalAlignment = HorizontalAlignment.Left, VerticalAlignment = VerticalAlignment.Bottom, Visibility = Visibility.Collapsed };
     private readonly Button noticesChip, legendButton;
     private readonly TextBlock noticesText = new() { FontSize = 12, VerticalAlignment = VerticalAlignment.Center };
+    private readonly AnimationGraphGlyph noticesGlyph;
+    private bool approximationsOpen;
     private readonly Popup noticesPopup = new() { StaysOpen = false, AllowsTransparency = true, Placement = PlacementMode.Bottom };
     private readonly Popup legendPopup = new() { StaysOpen = false, AllowsTransparency = true, Placement = PlacementMode.Bottom };
     private IReadOnlyList<AnimationNotice> notices = [];
@@ -178,9 +180,9 @@ internal sealed class AnimationPanel : Border
         // At the right: the notices chip (a count, its flyout with Go to and Show in Diagnostics) and the legend.
         StackPanel chips = new() { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
         StackPanel noticeContent = new() { Orientation = Orientation.Horizontal };
-        var caution = new AnimationGraphGlyph { Glyph = "warning", Size = 13, Margin = new(0, 0, 6, 0), VerticalAlignment = VerticalAlignment.Center };
-        caution.SetResourceReference(System.Windows.Documents.TextElement.ForegroundProperty, "SystemFillColorCautionBrush");
-        noticeContent.Children.Add(caution); noticeContent.Children.Add(noticesText);
+        noticesGlyph = new AnimationGraphGlyph { Glyph = "warning", Size = 13, Margin = new(0, 0, 6, 0), VerticalAlignment = VerticalAlignment.Center };
+        noticesGlyph.SetResourceReference(System.Windows.Documents.TextElement.ForegroundProperty, "SystemFillColorCautionBrush");
+        noticeContent.Children.Add(noticesGlyph); noticeContent.Children.Add(noticesText);
         noticesChip = new() { Content = noticeContent, Height = 24, Padding = new(9, 0, 10, 0), Margin = new(0, 0, 6, 0), Visibility = Visibility.Collapsed };
         noticesChip.SetResourceReference(StyleProperty, "ScenarioChip"); noticesChip.Height = 24;
         noticesChip.SetResourceReference(BackgroundProperty, "SystemFillColorCautionBackgroundBrush");
@@ -347,27 +349,40 @@ internal sealed class AnimationPanel : Border
 
     // ---------------------------------------------------------------- notices
 
-    /// <summary>The opened animation's notices: the chip shows their count, hidden when there are none.</summary>
+    /// <summary>
+    /// The opened animation's notices: the chip counts those about its items (as their badges and cards do); the preview's
+    /// generic approximations are one collapsed line in the flyout (and the chip's count when there is nothing else: ⓘ n).
+    /// Hidden when there are none.
+    /// </summary>
     internal void SetNotices(IReadOnlyList<AnimationNotice> shown)
     {
         notices = shown;
+        int specific = shown.Count(n => !n.Generic), generic = GenericNotices(shown).Count;
         noticesChip.Visibility = shown.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
-        noticesText.Text = shown.Count.ToString(CultureInfo.CurrentCulture);
-        string summary = string.Join("; ", shown.Select(n => n.Kind switch
+        noticesText.Text = (specific > 0 ? specific : generic).ToString(CultureInfo.CurrentCulture);
+        noticesGlyph.Glyph = specific > 0 ? "warning" : "legend"; noticesGlyph.InvalidateVisual();
+        noticesGlyph.SetResourceReference(System.Windows.Documents.TextElement.ForegroundProperty, specific > 0 ? "SystemFillColorCautionBrush" : "TextFillColorSecondaryBrush");
+        noticesChip.SetResourceReference(BackgroundProperty, specific > 0 ? "SystemFillColorCautionBackgroundBrush" : "ControlFillColorSecondaryBrush");
+        string summary = string.Join("; ", shown.Where(n => !n.Generic).Select(n => n.Kind switch
         {
             "ignoredPrerequisites" => "ignored prerequisites", "refused" => "refused starts", "approximation" => "approximations", "unavailable" => "unavailable calls",
             "limit" => "preview limits", "support" => "support notes", _ => "preview notes",
-        }).Distinct());
+        }).Distinct().Append(generic > 0 ? (generic == 1 ? "1 preview approximation" : generic.ToString(CultureInfo.CurrentCulture) + " preview approximations") : null).OfType<string>());
         noticesChip.ToolTip = "Notices of this animation: " + summary;
-        AutomationProperties.SetName(noticesChip, "Notices of this animation, " + shown.Count.ToString(CultureInfo.CurrentCulture));
+        AutomationProperties.SetName(noticesChip, specific > 0 ? "Notices of this animation, " + specific.ToString(CultureInfo.CurrentCulture) : "Preview approximations of this animation, " + generic.ToString(CultureInfo.CurrentCulture));
         if (noticesPopup.IsOpen) ShowNotices();
     }
+    /// <summary>The generic approximations, one per text (however many items they came from).</summary>
+    private static List<AnimationNotice> GenericNotices(IReadOnlyList<AnimationNotice> shown) =>
+        [.. shown.Where(n => n.Generic).GroupBy(n => n.Text).Select(g => g.First() with { Count = g.Sum(n => n.Count) })];
     private void ShowNotices()
     {
+        var specific = notices.Where(n => !n.Generic).ToArray();
+        var generic = GenericNotices(notices);
         StackPanel body = new() { Margin = new(12, 10, 12, 10), Width = 380 };
-        body.Children.Add(new TextBlock { Text = notices.Count == 1 ? "1 notice of this animation" : notices.Count.ToString(CultureInfo.CurrentCulture) + " notices of this animation", FontWeight = FontWeights.SemiBold, Margin = new(0, 0, 0, 8) });
+        body.Children.Add(new TextBlock { Text = specific.Length == 1 ? "1 notice of this animation" : specific.Length.ToString(CultureInfo.CurrentCulture) + " notices of this animation", FontWeight = FontWeights.SemiBold, Margin = new(0, 0, 0, 8) });
         StackPanel list = new();
-        foreach (var notice in notices.Take(64))
+        foreach (var notice in specific.Take(64))
         {
             DockPanel row = new() { Margin = new(0, 2, 0, 6) };
             StackPanel actions = new() { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Top };
@@ -388,7 +403,22 @@ internal sealed class AnimationPanel : Border
             row.Children.Add(text);
             list.Children.Add(row);
         }
-        if (notices.Count > 64) list.Children.Add(new TextBlock { Text = "and " + (notices.Count - 64).ToString("N0", CultureInfo.CurrentCulture) + " more (animation_runtime problems lists them all)", FontSize = 11.5, Opacity = .7 });
+        if (specific.Length > 64) list.Children.Add(new TextBlock { Text = "and " + (specific.Length - 64).ToString("N0", CultureInfo.CurrentCulture) + " more (animation_runtime notices lists them all)", FontSize = 11.5, Opacity = .7 });
+        if (generic.Count > 0)
+        {
+            // The preview's generic approximations: one collapsed line, its lines on demand.
+            StackPanel lines = new() { Visibility = approximationsOpen ? Visibility.Visible : Visibility.Collapsed, Margin = new(20, 2, 0, 4) };
+            foreach (var notice in generic.Take(32))
+                lines.Children.Add(new TextBlock { Text = notice.Text + (notice.Count > 1 ? " (×" + notice.Count.ToString("N0", CultureInfo.CurrentCulture) + ")" : ""), FontSize = 11.5, TextWrapping = TextWrapping.Wrap, Margin = new(0, 1, 0, 3), Opacity = .8 });
+            string label = generic.Count == 1 ? "1 preview approximation" : generic.Count.ToString(CultureInfo.CurrentCulture) + " preview approximations";
+            TextBlock caption = new() { Text = label + (approximationsOpen ? " ▾" : " ▸"), FontSize = 12 };
+            Button toggle = new() { Content = caption, HorizontalAlignment = HorizontalAlignment.Left, Padding = new(6, 0, 8, 0), Margin = new(-6, 2, 0, 0),
+                ToolTip = "How the preview approximates the game for this animation's kinds of events (not about one item)" };
+            toggle.SetResourceReference(StyleProperty, "RowLinkButton"); toggle.Width = double.NaN; toggle.Height = 26; toggle.HorizontalAlignment = HorizontalAlignment.Left;
+            AutomationProperties.SetName(toggle, label);
+            toggle.Click += (_, _) => { approximationsOpen = !approximationsOpen; lines.Visibility = approximationsOpen ? Visibility.Visible : Visibility.Collapsed; caption.Text = label + (approximationsOpen ? " ▾" : " ▸"); };
+            list.Children.Add(toggle); list.Children.Add(lines);
+        }
         body.Children.Add(new ScrollViewer { Content = list, MaxHeight = 360, VerticalScrollBarVisibility = ScrollBarVisibility.Auto });
         Button diagnostics = new() { Content = "Show in Diagnostics", Margin = new(0, 8, 0, 0), HorizontalAlignment = HorizontalAlignment.Left, ToolTip = "Show the Diagnostics strip under the panel" };
         AutomationProperties.SetName(diagnostics, "Show in Diagnostics");
@@ -436,7 +466,7 @@ internal sealed class AnimationPanel : Border
         {
             if (double.TryParse(rangeStart.Text, NumberStyles.Float, CultureInfo.InvariantCulture, out double a) && double.TryParse(rangeEnd.Text, NumberStyles.Float, CultureInfo.InvariantCulture, out double b)
                 && double.IsFinite(a) && double.IsFinite(b) && a >= 0 && b <= AnimationSeconds.Maximum && b > a && (a != state.RangeStart || b != state.RangeEnd))
-                OptionRequested?.Invoke("range", new[] { a, b });
+                OptionRequested?.Invoke("playbackRange", new[] { a, b });
         }
         foreach (var box in new[] { rangeStart, rangeEnd })
         {

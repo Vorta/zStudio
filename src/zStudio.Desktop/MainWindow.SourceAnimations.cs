@@ -26,15 +26,12 @@ public partial class MainWindow
     }
     private CancellationTokenSource? sourceAnimationLoading;
     private CancellationTokenSource? sourcePathLoading;
-    private Action? refreshAnimationPathControls;
     private readonly Dictionary<int, (string Id, DocumentModel Document, long Revision, int Entry, Guid Scenario, AnimationPaths Analysis)> sourceAnimationPaths = [];
     private readonly HashSet<int> shownAnimationPaths = [];
     private int? sourceAnimationEntry;
     private bool sourceAnimationPreview;
     private long sourceAnimationGeneration;
     private bool selectingAnimationCard;
-    private ComboBox? sourceAnimationBindings;
-    private bool synchronizingAnimationBinding;
     internal Action<CancellationToken>? SourceAnimationReading { get; set; }
     internal Action<CancellationToken>? SourceAnimationPathPreparing { get; set; }
     private void CancelSourceAnimationSelectionWork()
@@ -57,12 +54,14 @@ public partial class MainWindow
     {
         if (viewport != scene || sceneTree?.Projection is not { } projection || sceneTree.Sections is not { } sections || shownDocument?.SourceWorld == null) return null;
         int node = projection.Owner(selected.SelectionNode);
-        // In Animation mode the events of the opened definition that name it come first, each selecting its row.
-        var naming = InAnimationMode ? EventsNamingSection(selected.SelectionNode >= 0 ? selected.SelectionNode : node) : null;
-        var linked = AnimationLinksSection(sections, projection.AnimationUses.GetValueOrDefault(node));
-        if (naming == null) return linked;
-        StackPanel both = new(); both.Children.Add(naming); if (linked != null) both.Children.Add(linked);
-        return both;
+        return AnimationLinksSection(sections, projection.AnimationUses.GetValueOrDefault(node));
+    }
+    /// <summary>In Animation mode the object card opens with the opened definition's events naming it, each selecting its row.</summary>
+    private FrameworkElement? EventsNamingObject(SceneViewport viewport, SceneInspection selected)
+    {
+        if (!InAnimationMode || viewport != scene || sceneTree?.Projection is not { } projection || shownDocument?.SourceWorld == null) return null;
+        int node = projection.Owner(selected.SelectionNode);
+        return EventsNamingSection(selected.SelectionNode >= 0 ? selected.SelectionNode : node);
     }
     /// <summary>"Events naming rlbridge in destroy_tr_bridge (2)": the rows of the opened definition's shown sequences that name the object.</summary>
     private FrameworkElement? EventsNamingSection(int node)
@@ -183,13 +182,7 @@ public partial class MainWindow
             try { SelectSceneTreeRow(row); }
             finally { selectingAnimationCard = false; }
         }
-        if (SectionCard().ShowsAnimation(document, target))
-        {
-            synchronizingAnimationBinding = true;
-            try { if (sourceAnimationBindings?.Items.Cast<ComboBoxItem>().FirstOrDefault(i => (int)i.Tag == sourceAnimationEntry) is { } choice) sourceAnimationBindings.SelectedItem = choice; }
-            finally { synchronizingAnimationBinding = false; }
-            return;
-        }
+        if (SectionCard().ShowsAnimation(document, target)) return;
         await LoadAnimationCardCoreAsync(document, target, token, false, preserveTimeline);
         if (!SectionCard().ShowsAnimation(document, target)) throw new StudioCommandException("not_ready", "The animation definition could not be opened; inspect the reported source error.");
     }
@@ -231,8 +224,8 @@ public partial class MainWindow
             }, loading.Token);
             loading.Token.ThrowIfCancellationRequested();
             if (document != shownDocument || document.Revision != revision || SelectedAnimationDefinition()?.Key != definition.Key) return;
-            var controls = AnimationPathControls(document, definition);
-            SectionCard().ShowAnimation(document, definition, model, controls, ParachutePanel);
+            HostParachutePanel(inCard: true);
+            SectionCard().ShowAnimation(document, definition, model, ParachutePanel);
             RefreshWorldAnimationDropRelationships();
             RefreshAnimationInspector();
         }
@@ -242,76 +235,6 @@ public partial class MainWindow
         finally { if (sourceAnimationLoading == loading) sourceAnimationLoading = null; }
     }
 
-    private FrameworkElement AnimationPathControls(DocumentModel document, DefinitionEntry definition)
-    {
-        StackPanel panel = new();
-        panel.Children.Add(new TextBlock { Text = "Preview binding", Margin = new(0, 0, 0, 4) });
-        ComboBox bindings = new() { ItemsSource = definition.Definition.Entries.Select(e => new ComboBoxItem { Content = $"{definition.Definition.RootName} · entry #{e}", Tag = e }).ToArray(), SelectedIndex = definition.Definition.Entries.Count == 1 ? 0 : -1, MinHeight = 30 };
-        sourceAnimationBindings = bindings;
-        if (bindings.Items.Cast<ComboBoxItem>().FirstOrDefault(i => (int)i.Tag == sourceAnimationEntry) is { } chosen) bindings.SelectedItem = chosen;
-        AutomationProperties.SetName(bindings, "Animation binding entry"); panel.Children.Add(bindings);
-        TextBlock note = new() { Text = "Paths use the selected binding. Selecting an animation does not start playback.", TextWrapping = TextWrapping.Wrap, Margin = new(0, 5, 0, 5) }; panel.Children.Add(note);
-        WrapPanel legend = new() { Margin = new(0, 0, 0, 6) }; panel.Children.Add(legend);
-        foreach (var (label, color) in new[] { ("Objects", "#6FC8D6"), ("Cameras", "#F5A742") })
-        {
-            StackPanel item = new() { Orientation = Orientation.Horizontal, Margin = new(0, 0, 14, 2) };
-            item.Children.Add(new Border { Width = 18, Height = 3, CornerRadius = new(1.5), Background = OutlinerKinds.Frozen(color), VerticalAlignment = VerticalAlignment.Center, Margin = new(0, 0, 6, 0) });
-            item.Children.Add(new TextBlock { Text = label }); legend.Children.Add(item);
-        }
-        WrapPanel actions = new(); panel.Children.Add(actions);
-        Button Button(string name, Func<Task> action)
-        {
-            var button = new Button { Content = name, MinHeight = 30, Margin = new(0, 0, 4, 4) };
-            AutomationProperties.SetName(button, name); button.Click += (_, _) => _ = ReportUi(action); actions.Children.Add(button); return button;
-        }
-        int Entry() => bindings.SelectedItem is ComboBoxItem { Tag: int entry } ? entry : throw new StudioCommandException("not_ready", "This definition has no compiled binding in this map.");
-        var visibility = Button("Show guides", () => { if (shownAnimationPaths.Contains(definition.Definition.Index)) HideSourceAnimationPaths(definition.Definition.Index); else ShowSourceAnimationPaths(document, definition.Definition.Index, Entry()); return Task.CompletedTask; });
-        Button("Evaluate paths", () => AnalyzeSourceAnimationAsync(document, definition.Definition.Index, Entry(), null, CancellationToken.None));
-        Button("Frame paths", () => { scene?.FrameAnimationPaths(definition.Definition.Index.ToString(CultureInfo.InvariantCulture)); return Task.CompletedTask; });
-        Button("Clear cached paths", () => { ClearSourceAnimationPaths(definition.Definition.Index); return Task.CompletedTask; });
-        Button("Analyze drop windows", () => AnalyzeWorldDropWindowsAsync(document, definition.Definition.Index, Entry(), CancellationToken.None));
-        TextBlock analysisInfo = new() { TextWrapping = TextWrapping.Wrap, Margin = new(0, 5, 0, 5) }; panel.Children.Add(analysisInfo);
-        refreshAnimationPathControls = () =>
-        {
-            bindings.IsEnabled = sourcePathLoading == null && sectionCard?.HasDraft != true && parachuteDraft == null;
-            visibility.Content = shownAnimationPaths.Contains(definition.Definition.Index) ? "Hide guides" : "Show guides";
-            AutomationProperties.SetName(visibility, (string)visibility.Content);
-            if (sourceAnimationPaths.TryGetValue(definition.Definition.Index, out var data))
-                analysisInfo.Text = $"{data.Analysis.Status} · {data.Analysis.Seconds:0.###} s\n" + string.Join("\n", data.Analysis.Paths.Select(p => $"{p.Name} · {p.Points.Count} samples").Take(16)) + "\n" + string.Join("\n", data.Analysis.Diagnostics.Take(3).Select(d => Bounded(d, 240)));
-            else analysisInfo.Text = "No matching paths — Evaluate paths.\nDrop analysis admits only recognized callback 911 calls; main preview inclusion is unchanged.";
-        };
-        refreshAnimationPathControls();
-        bindings.SelectionChanged += (_, _) =>
-        {
-            if (synchronizingAnimationBinding || bindings.SelectedItem is not ComboBoxItem { Tag: int entry }) return;
-            int? previous = sourceAnimationEntry;
-            _ = ReportUi(async () =>
-            {
-                try
-                {
-                    RequireNoDrafts(); sourceAnimationEntry = entry;
-                    // In Animation mode the card's binding is the opened one: choosing another switches it.
-                    if (animationMode is { } opened && opened.Definition == definition.Definition.Index && opened.Entry != entry)
-                        await OpenAnimationModeAsync(document, definition.Definition.Index, entry, CancellationToken.None);
-                }
-                catch
-                {
-                    if (sourceAnimationBindings == bindings && bindings.SelectedItem is ComboBoxItem { Tag: int selected } && selected == entry)
-                    {
-                        synchronizingAnimationBinding = true;
-                        try { sourceAnimationEntry = previous; bindings.SelectedItem = bindings.Items.Cast<ComboBoxItem>().FirstOrDefault(i => (int)i.Tag == previous); }
-                        finally { synchronizingAnimationBinding = false; }
-                    }
-                    throw;
-                }
-            });
-        };
-        // The old controls now have one host in Properties, never a floating overlay in a source map.
-        if (ParachutePanel.Parent is Panel parent) parent.Children.Remove(ParachutePanel);
-        ParachutePanel.Width = double.NaN; ParachutePanel.Margin = new(0, 8, 0, 0); ParachutePanel.Padding = new(0);
-        ParachutePanel.HorizontalAlignment = HorizontalAlignment.Stretch; ParachutePanel.BorderThickness = new(0);
-        return panel;
-    }
 
     private async Task AnalyzeSourceAnimationAsync(DocumentModel document, int definition, int entry, double? seconds, CancellationToken token)
     {
@@ -322,7 +245,7 @@ public partial class MainWindow
         sourcePathLoading?.Cancel();
         using var pathLoading = CancellationTokenSource.CreateLinkedTokenSource(token, document.Lifetime.Token, shutdownToken);
         sourcePathLoading = pathLoading; token = pathLoading.Token;
-        refreshAnimationPathControls?.Invoke();
+        RefreshPathsChip();
         try
         {
             long generation = ++sourceAnimationGeneration;
@@ -350,15 +273,15 @@ public partial class MainWindow
             viewport.EmphasizeAnimationPaths(definition.ToString(CultureInfo.InvariantCulture));
             ApplySectionPresentation();
             TransportNote($"{result.Paths.Count} motion paths · {result.Status} · {result.Seconds:0.###} s");
-            refreshAnimationPathControls?.Invoke();
+            RefreshPathsChip();
             RefreshWorldAnimationRun();
             }
-        finally { if (sourcePathLoading == pathLoading) sourcePathLoading = null; refreshAnimationPathControls?.Invoke(); }
+        finally { if (sourcePathLoading == pathLoading) sourcePathLoading = null; RefreshPathsChip(); }
     }
     private void HideSourceAnimationPaths(int definition)
     {
         RequireNoDrafts(); sourcePathLoading?.Cancel(); ++sourceAnimationGeneration; shownAnimationPaths.Remove(definition); scene?.ClearAnimationPaths(definition.ToString(CultureInfo.InvariantCulture));
-        refreshAnimationPathControls?.Invoke(); ApplySectionPresentation();
+        RefreshPathsChip(); ApplySectionPresentation();
     }
     private void ShowSourceAnimationPaths(DocumentModel document, int definition, int entry)
     {
@@ -366,12 +289,12 @@ public partial class MainWindow
         if (!sourceAnimationPaths.TryGetValue(definition, out var paths) || paths.Document != document || paths.Revision != document.Revision || paths.Entry != entry || paths.Scenario != worldAnimationScenarioEpoch)
             throw new StudioCommandException("not_ready", "No matching paths — Evaluate paths first.");
         scene?.SetAnimationPaths(definition.ToString(CultureInfo.InvariantCulture), paths.Analysis.Paths);
-        shownAnimationPaths.Add(definition); refreshAnimationPathControls?.Invoke(); ApplySectionPresentation();
+        shownAnimationPaths.Add(definition); RefreshPathsChip(); ApplySectionPresentation();
     }
     private void ClearSourceAnimationPaths(int definition)
     {
         HideSourceAnimationPaths(definition); sourceAnimationPaths.Remove(definition);
-        refreshAnimationPathControls?.Invoke(); RefreshWorldAnimationRun();
+        RefreshPathsChip(); RefreshWorldAnimationRun();
     }
     private async Task<DocumentModel> EditSourceAnimationAsync(DocumentModel document, int definition, IReadOnlyList<SourceAnimationEdits.Change> changes, CancellationToken token, bool committingSection = false)
     {
@@ -471,22 +394,27 @@ public partial class MainWindow
         int definition = Int(args, "definition");
         if (document.Document is not SourceSceneSnapshot snapshot) throw new StudioCommandException("read_only", "Source animation selection requires a source map.");
         var source = snapshot.AnimationDefinitions.Definitions.FirstOrDefault(d => d.Index == definition) ?? throw new StudioCommandException("stale_record", "The definition is unavailable.");
-        int entry = args.ContainsKey("entry") ? Int(args, "entry") : source.Entries.Count == 1 ? source.Entries[0] : -1;
+        int entry = args.ContainsKey("entry") ? Int(args, "entry") : animationMode is { } opened && opened.Definition == definition && opened.Entry > 0 ? opened.Entry : source.Entries.Count == 1 ? source.Entries[0] : -1;
         if (action == "analyze") await AnalyzeSourceAnimationAsync(document, definition, entry, args.ContainsKey("seconds") ? Number(args, "seconds") : null, token);
         else if (action == "show") ShowSourceAnimationPaths(document, definition, entry);
         else if (action == "hide") HideSourceAnimationPaths(definition);
         else if (action == "clear") ClearSourceAnimationPaths(definition);
         else if (action == "preview") await StartSourceAnimationPreviewAsync(document, definition, entry);
         else if (action == "exit") await EndSourceAnimationPreview();
-        else if (action == "frame") scene?.FrameAnimationPaths(definition.ToString(CultureInfo.InvariantCulture));
-        else if (action is "samples" or "markers")
+        else if (action == "frame")
+        {
+            if (scene?.FrameAnimationPaths(definition.ToString(CultureInfo.InvariantCulture)) != true) throw new StudioCommandException("not_ready", "No shown guides of this definition to frame: evaluate or show its paths first.");
+        }
+        else if (action is "samples" or "markers" or "events")
         {
             if (!sourceAnimationPaths.TryGetValue(definition, out var state) || state.Document != document || state.Revision != document.Revision || Text(args, "snapshot") != state.Id)
                 throw new StudioCommandException("stale_snapshot", "Read the current animation path snapshot.");
-            return action == "markers" ? Page(state.Analysis.Events, args) : Page(state.Analysis.Paths.SelectMany(p => p.Points.Select((s, i) => new { path = p.Id, node = p.Node, segment = i, time = s.Time, position = JsonData.Vector(s.Position), discontinuity = s.Break })), args);
+            if (action == "markers") return Page(state.Analysis.Markers.Select(m => new { time = m.Time, kind = m.Kind, position = JsonData.Vector(m.Position), node = m.Node, instance = m.Instance, sound = m.Sound }), args);
+            return action == "events" ? Page(state.Analysis.Events, args) : Page(state.Analysis.Paths.SelectMany(p => p.Points.Select((s, i) => new { path = p.Id, node = p.Node, segment = i, time = s.Time, position = JsonData.Vector(s.Position), discontinuity = s.Break })), args);
         }
         else if (action != "state") throw new StudioCommandException("invalid_argument", "This operation is for drop windows; omit definition and use its drop-window snapshot.");
-        return Result(new { paths = SourceAnimationPathsState(), parachute = ParachuteState() });
+        RefreshPathsChip();
+        return Result(new { paths = SourceAnimationPathsState(), chip = InAnimationMode ? PathsChipJson() : null, parachute = ParachuteState() });
     }
     private object SourceAnimationPathsState() => new
     {

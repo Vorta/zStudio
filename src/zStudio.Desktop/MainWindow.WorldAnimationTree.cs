@@ -75,13 +75,7 @@ public partial class MainWindow
         }
         await LoadAnimationCardCoreAsync(document, definition, document.Lifetime.Token, false);
         if (sceneTree?.Selected != row || document != shownDocument) return;
-        synchronizingAnimationBinding = true;
-        try
-        {
-            if (sourceAnimationBindings?.Items.Cast<ComboBoxItem>().FirstOrDefault(i => (int)i.Tag == entry) is { } choice)
-                sourceAnimationBindings.SelectedItem = choice;
-        }
-        finally { synchronizingAnimationBinding = false; }
+        RefreshAnimationInspector();
         RefreshRowEyes();
     }
 }

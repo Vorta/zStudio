@@ -178,8 +178,14 @@ internal static class SourceAnimationMcpChecks
             Assert.Null(typeof(MainWindow).GetField("worldAnimationSession", flags)!.GetValue(main));
             Assert.All(paths["paths"]!["definitions"]!.AsArray().SelectMany(d => d!["paths"]!.AsArray()),
                 p => Assert.Contains(p!["Kind"]!.GetValue<string>(), new[] { "object", "camera" }));
-            // Dedicated flight analysis must not replace the opened definition or reset its scenario.
+            // Drop windows belong to the opened flight (Animation mode's Definition card): a definition without one refuses them.
             await Mode("open", new() { ["definition"] = 1 });
+            current = await Call("state", new());
+            Assert.Equal("unsupported", (await Job("animation_paths", new() { ["document"] = doc.SessionId.ToString(), ["revision"] = doc.Revision, ["preview"] = current["preview"]!.GetValue<string>(), ["action"] = "show" }, "failed"))["code"]!.GetValue<string>());
+            Assert.DoesNotContain((await Graph("inspector"))["result"]!["inspector"]!["sections"]!.AsArray(), section => section!["id"]!.GetValue<string>() == "drops");
+            // Dedicated flight analysis must not replace the opened definition or reset its scenario.
+            await Mode("open", new() { ["definition"] = 0 });
+            Assert.Contains((await Graph("inspector"))["result"]!["inspector"]!["sections"]!.AsArray(), section => section!["id"]!.GetValue<string>() == "drops");
             await Scenario("inputs", new() { ["seed"] = 17 });
             var candidateBeforeDrops = typeof(MainWindow).GetField("animationMode", flags)!.GetValue(main);
             var scenarioBeforeDrops = typeof(MainWindow).GetField("worldAnimationScenarioEpoch", flags)!.GetValue(main);
@@ -190,9 +196,11 @@ internal static class SourceAnimationMcpChecks
             Assert.Equal(candidateBeforeDrops, typeof(MainWindow).GetField("animationMode", flags)!.GetValue(main));
             Assert.Equal(scenarioBeforeDrops, typeof(MainWindow).GetField("worldAnimationScenarioEpoch", flags)!.GetValue(main));
             Assert.Equal(17, Assert.IsType<zStudio.Core.Animation.AnimationScenario>(typeof(MainWindow).GetProperty("worldAnimationConfiguration", flags)!.GetValue(main)).Seed);
-            Assert.Equal(1, Assert.IsType<DefinitionEntry>(card.Entry).Definition.Index);
+            Assert.Equal(0, Assert.IsType<DefinitionEntry>(card.Entry).Definition.Index);
             Assert.Null(paths["parachute"]!["selected"]);
-            Assert.Equal(Visibility.Collapsed, ((FrameworkElement)main.FindName("ParachutePanel")).Visibility);
+            Assert.Contains("follows the scenario's condition switches", paths["parachute"]!["policy"]!.GetValue<string>());
+            Assert.StartsWith("Admits 2 callsites", paths["parachute"]!["callsites"]!.GetValue<string>());
+            Assert.Equal(Visibility.Visible, ((FrameworkElement)main.FindName("ParachutePanel")).Visibility);
             paths = await Job("animation_paths", new() { ["document"] = doc.SessionId.ToString(), ["revision"] = doc.Revision, ["preview"] = current["preview"]!.GetValue<string>(), ["action"] = "analyze", ["snapshot"] = paths["parachute"]!["snapshot"]!.GetValue<string>(), ["entry"] = deliveryEntry });
             Assert.Equal(candidateBeforeDrops, typeof(MainWindow).GetField("animationMode", flags)!.GetValue(main));
             Assert.Equal(scenarioBeforeDrops, typeof(MainWindow).GetField("worldAnimationScenarioEpoch", flags)!.GetValue(main));
@@ -249,6 +257,8 @@ internal static class SourceAnimationMcpChecks
                 }
                 finally { release.Release(); main.SourceAnimationPathPreparing = null; }
             }
+            // Back on the callback, so the preview below opens the flight as another definition.
+            await Mode("open", new() { ["definition"] = 1 });
             current = await Call("state", new());
             string mapPreview = current["preview"]!.GetValue<string>();
             await Job("animation_paths", new() { ["document"] = doc.SessionId.ToString(), ["revision"] = doc.Revision, ["preview"] = current["preview"]!.GetValue<string>(), ["definition"] = 0, ["action"] = "preview" });

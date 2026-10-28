@@ -3,7 +3,9 @@ using System.Globalization;
 using System.IO;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Automation;
 using System.Windows.Input;
+using System.Windows.Media;
 using zStudio.Automation;
 using zStudio.Core.Animation;
 using zStudio.Core.Sources;
@@ -62,7 +64,99 @@ public partial class MainWindow
     private bool synchronizingParachutes, acceptingParachute;
     internal Action<CancellationToken>? ParachuteAnalysisPreparing { get; set; }
     private sealed record ParachuteChoice(int Entry, string Label) { public override string ToString() => Label; }
-    private sealed record ParachuteWindowChoice(Guid Id, string Label) { public override string ToString() => Label; }
+    /// <summary>A row of the window list: the window, its start on the flight sequence's clock and its duration.</summary>
+    internal sealed record ParachuteWindowChoice(Guid Id, string Window, string Start, string Duration)
+    {
+        public override string ToString() => $"{Window}: {Start} · {Duration} window";
+    }
+    /// <summary>The map's recognised flights (VTOL flight-to-callback-911 programs), discovered once per animation package.</summary>
+    private (AnimationPackage Package, VtolDropDiscovery Discovery)? dropDiscovery;
+    private ViewportChip? dropMoveBanner;
+    private VtolDropDiscovery? DropDiscovery(AnimationPackage? package)
+    {
+        if (package == null) return null;
+        if (dropDiscovery is { } cached && ReferenceEquals(cached.Package, package)) return cached.Discovery;
+        try { dropDiscovery = (package, VtolDropWindows.Discover(package)); }
+        catch (Exception ex) when (ex is InvalidDataException or ArgumentException) { dropDiscovery = (package, new VtolDropDiscovery([], [Bounded(ex.Message, 300)])); }
+        return dropDiscovery.Value.Discovery;
+    }
+    /// <summary>The recognised flights among <paramref name="definition"/>'s bindings (drop windows are offered only for those, design §14).</summary>
+    private IReadOnlyList<VtolDropCandidate> DropCandidates(SourceAnimationDefinition definition) =>
+        DropDiscovery((shownDocument?.Document as SourceSceneSnapshot)?.Animations)?.Candidates.Where(c => definition.Entries.Contains(c.EntryIndex)).ToArray() ?? [];
+    /// <summary>The flight Animation mode's drop windows analyze: the opened binding when it is one, else the opened definition's first.</summary>
+    private int OpenedFlightEntry()
+    {
+        if (animationMode is not { } mode || shownDocument?.Document is not SourceSceneSnapshot source
+            || source.AnimationDefinitions.Definitions.FirstOrDefault(d => d.Index == mode.Definition) is not { } definition)
+            throw new StudioCommandException("not_ready", "Drop windows belong to Animation mode: open the flight's definition (animation_mode open).");
+        var candidates = DropCandidates(definition);
+        if (candidates.Count == 0) throw new StudioCommandException("unsupported", "The opened definition has no recognised flight-to-callback-911 calls: open a flight's definition to analyze its drop windows.");
+        return candidates.FirstOrDefault(c => c.EntryIndex == mode.Entry)?.EntryIndex ?? candidates[0].EntryIndex;
+    }
+    /// <summary>
+    /// The drop-window panel's host: in a source map the Inspector's Definition → Drop windows section (Animation mode), otherwise
+    /// (a compiled Whole world) the floating panel over the view.
+    /// </summary>
+    private void HostParachutePanel(bool inCard)
+    {
+        if (inCard)
+        {
+            if (ParachutePanel.Parent == PreviewOverlayChrome) PreviewOverlayChrome.Children.Remove(ParachutePanel);
+            ParachutePanel.Width = double.NaN; ParachutePanel.Margin = new(0, 2, 0, 0); ParachutePanel.Padding = new(0);
+            ParachutePanel.HorizontalAlignment = HorizontalAlignment.Stretch; ParachutePanel.VerticalAlignment = VerticalAlignment.Top;
+            ParachutePanel.BorderThickness = new(0); ParachutePanel.Background = Brushes.Transparent;
+            return;
+        }
+        if (ParachutePanel.Parent == PreviewOverlayChrome) return;
+        switch (ParachutePanel.Parent)
+        {
+            case Panel parent: parent.Children.Remove(ParachutePanel); break;
+            case Decorator decorator: decorator.Child = null; break;
+            case ContentControl control: control.Content = null; break;
+        }
+        ParachutePanel.Width = 365; ParachutePanel.Margin = new(10); ParachutePanel.Padding = new(10);
+        ParachutePanel.HorizontalAlignment = HorizontalAlignment.Right; ParachutePanel.VerticalAlignment = VerticalAlignment.Bottom;
+        ParachutePanel.BorderThickness = new(1); ParachutePanel.SetResourceReference(Border.BackgroundProperty, "CardBackgroundFillColorDefaultBrush");
+        PreviewOverlayChrome.Children.Add(ParachutePanel);
+    }
+    /// <summary>
+    /// Move along path's banner (the Flycam banner style): "Moving drop window 2 · click a point on the flight path · right-click
+    /// or Esc cancels". It shows while the view moves a window's start and ends with it (placed, cancelled, Exit, map end, rebase).
+    /// </summary>
+    private void RefreshDropMoveBanner()
+    {
+        bool moving = parachuteDraft is { } draft && draft.Session.Viewport == scene && scene?.IsParachutePointerMoving == true && InAnimationMode;
+        if (!moving && dropMoveBanner == null) return;
+        if (dropMoveBanner == null)
+        {
+            dropMoveBanner = new() { HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Top, Margin = new(0, 12, 0, 0), MinHeight = 36, Padding = new(12, 0, 4, 0), FontSize = 13 };
+            AutomationProperties.SetName(dropMoveBanner, "Moving a drop window");
+            AutomationProperties.SetLiveSetting(dropMoveBanner, AutomationLiveSetting.Polite);
+            StackPanel content = new() { Orientation = Orientation.Horizontal };
+            var icon = new PreviewIcon { Kind = "Parachute", Width = 15, Height = 15, Margin = new(0, 0, 10, 0), VerticalAlignment = VerticalAlignment.Center };
+            icon.SetResourceReference(PreviewIcon.ForegroundProperty, "AccentFillColorDefaultBrush");
+            content.Children.Add(icon);
+            content.Children.Add(new TextBlock { VerticalAlignment = VerticalAlignment.Center, Margin = new(0, 0, 10, 0) });
+            Button cancel = new() { Content = "Cancel", Height = 28, Padding = new(12, 0, 12, 0), VerticalAlignment = VerticalAlignment.Center };
+            AutomationProperties.SetName(cancel, "Cancel moving the drop window");
+            cancel.Click += (_, _) => CancelParachuteDraft();
+            content.Children.Add(cancel);
+            dropMoveBanner.Content = content;
+            PreviewOverlayChrome.Children.Add(dropMoveBanner);
+        }
+        if (moving)
+        {
+            int number = parachuteDraft!.Session.Analysis?.Windows.ToList().FindIndex(w => w.Id == parachuteDraft.Window.Id) + 1 ?? 1;
+            ((TextBlock)((StackPanel)dropMoveBanner.Content).Children[1]).Text = $"Moving drop window {number} · click a point on the flight path · right-click or Esc cancels";
+        }
+        dropMoveBanner.Visibility = moving ? Visibility.Visible : Visibility.Collapsed;
+    }
+    /// <summary>The view's move ends with Animation mode, its map or a rebuild: the draft goes back (as Esc does), never left half done.</summary>
+    private void EndDropMove()
+    {
+        if (parachuteDraft != null && scene?.IsParachutePointerMoving == true) CancelParachuteDraft();
+        RefreshDropMoveBanner();
+    }
 
     private void ConfigureParachuteScene(SceneViewport viewport)
     {
@@ -89,7 +183,12 @@ public partial class MainWindow
             catch (Exception ex) when (ex is ArgumentException or InvalidDataException or InvalidOperationException)
             { draft.Error = ex.Message; UpdateParachutePanel(); }
         };
-        viewport.ParachuteConfirmRequested += () => _ = ReportUi(ConfirmParachuteFromGuiAsync);
+        // A click on the flight path places the window's start there (the draft stays for Apply or Revert); right-click cancels.
+        viewport.ParachuteConfirmRequested += () =>
+        {
+            if (parachuteDraft is not { Accepting: false } draft || draft.Session.Viewport != viewport) return;
+            viewport.SetParachutePointerMove(false); UpdateParachutePanel();
+        };
         viewport.ParachuteCancelRequested += CancelParachuteDraft;
     }
 
@@ -98,7 +197,17 @@ public partial class MainWindow
         await EnsureAnimationCardForEntryAsync(state.World, entry, state.World.Lifetime.Token);
         if (parachutes != state || shownDocument != state.World || state.World.Revision != state.WorldRevision)
             throw new StudioCommandException("context_changed", "The selected flight changed while opening its controls.");
+        // In Animation mode a window's marker shows the opened definition's card at Drop windows.
+        if (InAnimationMode && animationInspected != null)
+        {
+            animationGraphSelection = null; animationGraphOutline = null; animationInspected = null;
+            animationGraphView?.Select(null); animationTimingView?.Select(null);
+            ApplySectionPresentation();
+        }
+        if (InAnimationMode) ShowAnimationRightTab("inspector");
+        RefreshAnimationInspector();
         UpdateParachutePanel();
+        sectionCard?.RevealSection("drops");
     }
 
     private void CloseParachutes()
@@ -149,6 +258,15 @@ public partial class MainWindow
         RequireNoDrafts();
         if (!IsAiWorld || shownDocument is not { IsDisposed: false } world || ViewModel.Resolver is not { } resolver)
             throw new StudioCommandException("unsupported", "Open a Whole world to inspect VTOL drop windows.");
+        // A source map's drop windows are the opened flight's (Inspector → Definition → Drop windows in Animation mode).
+        if (world.SourceWorld != null)
+        {
+            int flight = OpenedFlightEntry();
+            if (entry is int asked && asked != flight && !DropCandidates(((SourceSceneSnapshot)world.Document).AnimationDefinitions.Definitions.First(d => d.Index == animationMode!.Definition)).Any(c => c.EntryIndex == asked))
+                throw new StudioCommandException("invalid_argument", "Choose a flight of the opened definition (its recognised flight-to-callback-911 bindings).");
+            entry ??= flight;
+        }
+        else HostParachutePanel(inCard: false);
         CloseParachutes();
         var viewport = scene!; long request = ++parachuteGeneration, revision = world.Revision;
         int baselineGeneration = viewport.SceneGeneration;
@@ -223,6 +341,8 @@ public partial class MainWindow
     {
         var state = RequireParachutes(); RequireNoDrafts();
         var candidate = state.Discovery.Candidates.FirstOrDefault(c => c.EntryIndex == entry) ?? throw new StudioCommandException("stale_record", "Choose a discovered flight entry.");
+        if (state.World.SourceWorld != null && (animationMode is not { } opened || ((SourceSceneSnapshot)state.World.Document).AnimationDefinitions.Definitions.FirstOrDefault(d => d.Index == opened.Definition)?.Entries.Contains(entry) != true))
+            throw new StudioCommandException("invalid_argument", "Choose a flight of the opened definition (its recognised flight-to-callback-911 bindings).");
         long request = ++parachuteGeneration; parachuteLoading?.Cancel();
         using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(token, state.World.Lifetime.Token, state.Owner?.Lifetime.Token ?? default, shutdownToken);
         parachuteLoading = cancellation;
@@ -382,7 +502,7 @@ public partial class MainWindow
     {
         if (parachuteDraft is not { } draft || document != null && document != draft.Session.World && document != draft.Session.Owner) return true;
         if (automationRequest.Value) return false;
-        if (MessageBox.Show(this, "Discard the pending drop-window move? Choose No to return to Confirm.", "Parachute draft", MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes) return false;
+        if (MessageBox.Show(this, "Discard the pending drop-window move? Choose No to return to Apply.", "Drop-window move", MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes) return false;
         CancelParachuteDraft(); return true;
     }
     private async Task ConfirmParachuteFromGuiAsync()
@@ -473,6 +593,7 @@ public partial class MainWindow
         string action = (sender as FrameworkElement)?.Tag as string ?? "show";
         if (action is not ("confirm" or "cancel") && !await ResolvePropertiesDraftsAsync()) return;
         if (action == "show") { if (parachutes != null) HideParachutes(); else await ShowParachutesAsync(CancellationToken.None); }
+        else if (action == "analyze" && animationMode is { } mode) await AnalyzeWorldDropWindowsAsync(mode.Document, mode.Definition, OpenedFlightEntry(), CancellationToken.None);
         else if (action == "begin") BeginParachute(pointer: true);
         else if (action == "numeric") BeginParachute();
         else if (action == "confirm") await ConfirmParachuteFromGuiAsync();
@@ -496,9 +617,109 @@ public partial class MainWindow
     }
     private void ParachuteInputChanged(object sender, TextChangedEventArgs e)
     {
-        if (synchronizingParachutes || parachuteDraft is not { } draft) return;
+        if (synchronizingParachutes) return;
+        // Typing a start for the selected window proposes a move: the draft begins with the first change.
+        if (parachuteDraft == null)
+        {
+            string typed = ParachuteStart.Text; int caret = ParachuteStart.CaretIndex;
+            try { BeginParachute(); }
+            catch (StudioCommandException ex) { Report(ex); UpdateParachutePanel(); return; }
+            synchronizingParachutes = true;
+            try { ParachuteStart.Text = typed; ParachuteStart.CaretIndex = Math.Min(caret, typed.Length); }
+            finally { synchronizingParachutes = false; }
+        }
+        if (parachuteDraft is not { } draft) return;
         if (draft.Accepting) { UpdateParachutePanel(); return; }
         draft.Input = ParachuteStart.Text; draft.Session.Viewport.SetParachutePointerMove(false); QueueParachutePreview(draft, debounce: true); UpdateParachutePanel();
+    }
+    /// <summary>
+    /// Timing's Drop windows lane (design §14): under the opened flight's sequence lane, each analyzed window on every flight
+    /// cycle the run reached (a cycle starts with the drop schedule's first event), the moved window at its proposed start.
+    /// </summary>
+    private AnimationTimingDrops? TimingDrops(AnimationTiming? timing, AnimationPackage package)
+    {
+        if (timing == null || parachutes is not { Analysis: { } analysis } state || state.World != shownDocument || state.World.SourceWorld == null || animationMode is not { } mode
+            || state.World.Document is not SourceSceneSnapshot source || source.AnimationDefinitions.Definitions.FirstOrDefault(d => d.Index == mode.Definition) is not { } definition) return null;
+        var candidate = analysis.Candidate;
+        if (!definition.Entries.Contains(candidate.EntryIndex) || candidate.EntryIndex >= package.Entries.Count) return null;
+        bool Of(AnimationTimingLane lane, Guid sequence) => lane.Kind == AnimationTimingLaneKind.Sequence && lane.Sequences.Any(s => s.Entry == candidate.EntryIndex && s.Sequence == sequence);
+        var anchor = timing.Lanes.Where(l => Of(l, candidate.MotionSequenceId)).OrderBy(l => l.Path.Length).FirstOrDefault();
+        if (anchor == null) return null;
+        var schedule = timing.AllLanes.Where(l => Of(l, candidate.ScheduleSequenceId)).OrderBy(l => l.Path == anchor.Path ? 0 : 1).FirstOrDefault();
+        Guid first = package.Entries[candidate.EntryIndex].AllSequences.FirstOrDefault(s => s.Id == candidate.ScheduleSequenceId)?.Events.FirstOrDefault()?.Id ?? Guid.Empty;
+        var cycles = schedule?.Marks.Where(m => m.Event == first).Select(m => m.Start).Distinct().Order().Take(64).ToArray() ?? [];
+        var preview = parachuteDraft?.DisplayedPreview;
+        List<AnimationTimingDropBar> bars = [];
+        foreach (double cycle in cycles)
+            for (int i = 0; i < analysis.Windows.Count; i++)
+            {
+                var window = analysis.Windows[i];
+                bool moved = parachuteDraft?.Window.Id == window.Id && preview?.Windows.FirstOrDefault(w => w.Id == window.Id) is not null;
+                var shown = moved ? preview!.Windows.First(w => w.Id == window.Id) : window;
+                double maximum = Math.Min(window.MaximumStart, analysis.CycleSeconds);
+                bars.Add(new(window.Id, i + 1, cycle, shown.EffectiveStart, window.EffectiveEnd - window.EffectiveStart, window.MinimumStart, maximum) { Moved = moved });
+            }
+        return new(anchor.Id, bars, !state.Stale && parachuteDraft?.Accepting != true)
+        {
+            Selected = state.Selected,
+            Note = state.Stale ? "Stale: analyze the drop windows again." : cycles.Length == 0 ? "Play or seek: the windows show on every flight cycle the run reaches." : "",
+        };
+    }
+    /// <summary>A window clicked on Timing's lane: selected, as a click on its marker in the view selects it.</summary>
+    private async Task SelectDropWindowAsync(Guid id)
+    {
+        var state = RequireParachutes();
+        if (state.Selected != id) await SelectParachuteAsync(id);
+        if (InAnimationMode) { ShowAnimationRightTab("inspector"); sectionCard?.RevealSection("drops"); }
+    }
+    /// <summary>A window dragged on Timing's lane: its start (on the flight sequence's clock) through the guarded draft; Apply keeps it.</summary>
+    private async Task MoveDropWindowAsync(Guid id, double start)
+    {
+        var state = RequireParachutes(edit: true);
+        if (parachuteDraft is { } open && open.Window.Id != id)
+            throw new StudioCommandException("pending_drafts", "Apply or revert the move of the other drop window first.");
+        if (parachuteDraft == null)
+        {
+            if (state.Selected != id) await SelectParachuteAsync(id);
+            BeginParachute();
+        }
+        var draft = RequireParachuteDraft();
+        draft.Input = start.ToString("G9", CultureInfo.InvariantCulture);
+        QueueParachutePreview(draft); UpdateParachutePanel();
+        if (InAnimationMode) { ShowAnimationRightTab("inspector"); sectionCard?.RevealSection("drops"); }
+        await draft.Work;
+    }
+    /// <summary>"Admits 2 callsites: drop_schedule › Call callback at 1.000 s, at 5.000 s → callback (CALLBACK 911)".</summary>
+    private string DropCallsites(VtolDropCandidate candidate)
+    {
+        var package = (shownDocument?.Document as SourceSceneSnapshot)?.Animations ?? parachutes?.Context.Package;
+        if (package == null || candidate.EntryIndex >= package.Entries.Count || candidate.CallbackEntryIndex >= package.Entries.Count) return "";
+        var flight = package.Entries[candidate.EntryIndex];
+        string schedule = flight.AllSequences.FirstOrDefault(s => s.Id == candidate.ScheduleSequenceId)?.Name ?? "schedule";
+        string callback = package.Entries[candidate.CallbackEntryIndex].Name;
+        string times = string.Join(", ", candidate.Windows.Take(16).Select(w => "at " + AnimationSeconds.Format(w.Start))) + (candidate.Windows.Count > 16 ? ", …" : "");
+        return $"Admits {AnimationNotice.Plural(candidate.Windows.Count, "1 callsite", "callsites")}: {schedule} › Call {callback} {times} → {callback} (CALLBACK 911, #{candidate.CallbackEntryIndex}). Nothing else of the flight's calls runs in the analysis.";
+    }
+    private static DataTemplate ParachuteWindowTemplate()
+    {
+        var grid = new FrameworkElementFactory(typeof(Grid));
+        foreach (var width in new[] { new GridLength(58), new GridLength(1, GridUnitType.Star), new GridLength(72) })
+        {
+            var column = new FrameworkElementFactory(typeof(ColumnDefinition)); column.SetValue(ColumnDefinition.WidthProperty, width); grid.AppendChild(column);
+        }
+        int index = 0;
+        foreach (var (path, right) in new[] { ("Window", false), ("Start", false), ("Duration", true) })
+        {
+            var text = new FrameworkElementFactory(typeof(TextBlock));
+            text.SetBinding(TextBlock.TextProperty, new System.Windows.Data.Binding(path));
+            text.SetValue(Grid.ColumnProperty, index++);
+            text.SetValue(TextBlock.FontSizeProperty, 12.5);
+            text.SetValue(System.Windows.Documents.Typography.NumeralAlignmentProperty, FontNumeralAlignment.Tabular);
+            if (right) text.SetValue(TextBlock.TextAlignmentProperty, TextAlignment.Right);
+            grid.AppendChild(text);
+        }
+        var template = new DataTemplate { VisualTree = grid }; template.Seal();
+        return template;
     }
     private bool ParachuteKeyboard(KeyEventArgs e)
     {
@@ -516,35 +737,72 @@ public partial class MainWindow
         synchronizingParachutes = true;
         try
         {
-            bool matchingCard = parachutes is { } visibleState && (visibleState.World.SourceWorld == null ||
-                sectionCard?.Document == visibleState.World && sectionCard.Entry is DefinitionEntry definition &&
-                visibleState.Entry is int entry && definition.Definition.Entries.Contains(entry));
-            ParachutePanel.Visibility = matchingCard ? Visibility.Visible : Visibility.Collapsed;
-            if (parachutes is not { } state) return;
-            ParachutePanel.IsEnabled = !sourceWorkspaceBusy && parachuteLoading == null && parachuteDraft?.Accepting != true;
+            bool source = shownDocument?.SourceWorld != null;
+            // A source map offers drop windows in Animation mode's Definition card of a flight (design §14); a compiled Whole
+            // world shows its floating panel once MCP shows them.
+            var openedDefinition = source && InAnimationMode && sectionCard?.Document == shownDocument && sectionCard?.Entry is DefinitionEntry shownDefinition
+                && shownDefinition.Definition.Index == animationMode!.Definition ? shownDefinition.Definition : null;
+            var candidates = openedDefinition == null ? [] : DropCandidates(openedDefinition);
+            bool offered = source ? candidates.Count > 0 : parachutes != null;
+            ParachutePanel.Visibility = offered ? Visibility.Visible : Visibility.Collapsed;
+            var state = parachutes is { } shownState && (!source || shownState.Entry is int analyzed && openedDefinition?.Entries.Contains(analyzed) == true) ? shownState : null;
+            bool busy = sourceWorkspaceBusy || parachuteLoading != null || parachuteDraft?.Accepting == true;
+            ParachuteAnalyze.Visibility = source ? Visibility.Visible : Visibility.Collapsed;
+            ParachuteAnalyze.IsEnabled = !busy && parachuteDraft == null && offered;
+            ParachuteAnalyze.Content = parachuteLoading != null ? "Analyzing drop windows…" : state == null ? "Analyze drop windows" : "Analyze again";
+            ParachutePolicy.Visibility = offered ? Visibility.Visible : Visibility.Collapsed;
+            // The callsites the analysis admits: each window's call of the callback-911 program, a visible list.
+            var candidate = state?.Discovery.Candidates.FirstOrDefault(c => c.EntryIndex == state.Entry)
+                ?? (animationMode is { } mode ? candidates.FirstOrDefault(c => c.EntryIndex == mode.Entry) : null) ?? candidates.FirstOrDefault();
+            ParachuteCallsites.Text = candidate == null ? "" : DropCallsites(candidate);
+            ParachuteCallsites.Visibility = candidate == null ? Visibility.Collapsed : Visibility.Visible;
+            bool analyzedHere = state != null;
+            foreach (UIElement part in new UIElement[] { ParachuteWindowsHeader, ParachuteWindows }) part.Visibility = analyzedHere && state!.Analysis != null ? Visibility.Visible : Visibility.Collapsed;
+            if (state == null)
+            {
+                ParachuteOwner.Visibility = ParachuteFlights.Visibility = ParachuteMoveButtons.Visibility = ParachuteDraftPanel.Visibility = ParachuteHistory.Visibility = Visibility.Collapsed;
+                ParachutePanel.IsEnabled = true;
+                ParachuteMessage.Text = !offered ? "" : parachuteLoading != null ? ParachuteAnalysisStatus
+                    : "Not analyzed. Analyze drop windows runs the flight's calls to callback 911 with the scenario's player, switches and rules; the main run stays as it is.";
+                return;
+            }
+            ParachutePanel.IsEnabled = !busy;
             bool editable = state.World.SourceWorld != null;
-            ParachuteOwner.Text = editable ? "Animation sources · project undo and save" : $"{state.Owner?.Title} · read only";
+            ParachuteOwner.Visibility = editable ? Visibility.Collapsed : Visibility.Visible;
+            ParachuteOwner.Text = editable ? "" : $"{state.Owner?.Title} · read only";
             ParachuteOwner.ToolTip = state.Owner?.Path ?? state.World.SourceWorld?.DefinitionsPath;
             ParachuteHistory.Visibility = Visibility.Collapsed;
             ParachuteUndo.IsEnabled = state.World.SourceWorld?.Workspace.CanUndo == true;
             ParachuteRedo.IsEnabled = state.World.SourceWorld?.Workspace.CanRedo == true;
-            ParachuteFlights.ItemsSource = state.Discovery.Candidates.Select(c => new ParachuteChoice(c.EntryIndex, $"#{c.EntryIndex} {ShortAiText(c.Name)} · {ShortAiText(c.RootName)}")).ToArray();
+            ParachuteFlights.ItemsSource = state.Discovery.Candidates.Where(c => !editable || openedDefinition!.Entries.Contains(c.EntryIndex))
+                .Select(c => new ParachuteChoice(c.EntryIndex, $"#{c.EntryIndex} {ShortAiText(c.Name)} · {ShortAiText(c.RootName)}")).ToArray();
             ParachuteFlights.SelectedItem = ParachuteFlights.Items.Cast<ParachuteChoice>().FirstOrDefault(c => c.Entry == state.Entry);
-            ParachuteWindows.ItemsSource = state.Analysis?.Windows.Select((w, i) => new ParachuteWindowChoice(w.Id, $"{i + 1}: {w.Start:G6} s · {w.Duration:G6} s window")).ToArray() ?? [];
+            ParachuteWindows.ItemTemplate ??= ParachuteWindowTemplate();
+            ParachuteWindows.HorizontalContentAlignment = HorizontalAlignment.Stretch;
+            var preview = parachuteDraft?.DisplayedPreview;
+            ParachuteWindows.ItemsSource = state.Analysis?.Windows.Select((w, i) =>
+            {
+                double start = parachuteDraft?.Window.Id == w.Id && preview?.Windows.FirstOrDefault(p => p.Id == w.Id) is { } moved ? moved.EffectiveStart : w.Start;
+                return new ParachuteWindowChoice(w.Id, (i + 1).ToString(CultureInfo.InvariantCulture), AnimationSeconds.Format(start), AnimationSeconds.Format(w.Duration));
+            }).ToArray() ?? [];
             ParachuteWindows.SelectedItem = ParachuteWindows.Items.Cast<ParachuteWindowChoice>().FirstOrDefault(w => w.Id == state.Selected);
-            ParachuteDraftPanel.Visibility = parachuteDraft == null ? Visibility.Collapsed : Visibility.Visible;
             var selectedWindow = state.Analysis?.Windows.FirstOrDefault(w => w.Id == state.Selected);
-            ParachuteMoveButtons.Visibility = parachuteDraft == null && editable ? Visibility.Visible : Visibility.Collapsed;
-            ParachuteMoveButtons.IsEnabled = !state.Stale && selectedWindow is { MoveRefusal: null };
+            // The start box shows with a selected window: typing proposes a move (Apply / Revert); Move along path picks it in the view.
+            ParachuteDraftPanel.Visibility = editable && (parachuteDraft != null || selectedWindow != null) ? Visibility.Visible : Visibility.Collapsed;
+            ParachuteStart.IsEnabled = parachuteDraft != null || !state.Stale && selectedWindow is { MoveRefusal: null };
+            ParachuteMoveButtons.Visibility = editable ? Visibility.Visible : Visibility.Collapsed;
+            ParachuteMoveButtons.IsEnabled = parachuteDraft == null && !state.Stale && selectedWindow is { MoveRefusal: null };
             ParachuteFlights.IsEnabled = parachuteDraft == null;
-            ParachuteFlights.Visibility = state.World.SourceWorld != null ? Visibility.Collapsed : Visibility.Visible;
+            ParachuteFlights.Visibility = !editable || ParachuteFlights.Items.Count > 1 ? Visibility.Visible : Visibility.Collapsed;
             ParachuteWindows.IsEnabled = parachuteDraft == null && editable;
-            ParachuteStart.Text = parachuteDraft?.Input ?? "";
+            ParachuteStart.Text = parachuteDraft?.Input ?? (selectedWindow?.Start.ToString("G9", CultureInfo.InvariantCulture) ?? "");
             ParachuteConfirm.IsEnabled = parachuteDraft is { Plan: not null, Preview: not null, Error: null };
-            ParachuteMessage.Text = state.Stale ? state.StaleReason ?? "Drop analysis is stale after an event draft. Apply or discard the draft, then explicitly analyze drop windows again." : parachuteDraft is { } d ? d.Error ?? (d.Preview == null ? "Analyzing proposed release positions…" : $"Start range {d.Window.MinimumStart:G6}–{d.Window.MaximumStart:G6} s. Confirm accepts one undo step.")
-                : state.AnalysisRefusal ?? selectedWindow?.MoveRefusal ?? (state.Analysis is { } a ? $"{a.CycleSeconds:G6} s cycle · {a.Releases.Count} eligible releases. Conditions still apply; markers are not landing predictions."
+            ParachuteRevert.IsEnabled = parachuteDraft != null;
+            ParachuteMessage.Text = state.Stale ? state.StaleReason ?? "Drop analysis is stale after an event draft. Apply or discard the draft, then explicitly analyze drop windows again." : parachuteDraft is { } d ? d.Error ?? (d.Preview == null ? "Analyzing proposed release positions…"
+                    : (state.Viewport.IsParachutePointerMoving ? "Click a point on the flight path to place the start (right-click or Esc cancels). " : "") + $"Start range {AnimationSeconds.Format(d.Window.MinimumStart)}–{(d.Window.MaximumStart > 3600 ? "end" : AnimationSeconds.Format(d.Window.MaximumStart))}. Apply makes it one undo step.")
+                : state.AnalysisRefusal ?? selectedWindow?.MoveRefusal ?? (state.Analysis is { } a ? $"{AnimationSeconds.Format(a.CycleSeconds)} cycle · {a.Releases.Count} eligible releases (orange in the view; starts cyan). Conditions still apply; markers are not landing predictions."
                 : state.Discovery.Diagnostics.Count == 0 ? "No supported callback-911 flight programs in this mission." : string.Join("\n", state.Discovery.Diagnostics.Take(3).Select(s => Bounded(s, 300))));
         }
-        finally { synchronizingParachutes = false; RefreshWorldAnimationRun(); }
+        finally { synchronizingParachutes = false; RefreshDropMoveBanner(); RefreshWorldAnimationRun(); }
     }
 }

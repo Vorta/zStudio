@@ -344,7 +344,10 @@ internal sealed class AnimationGraphView : Grid
     {
         var previous = HoveredBand; HoveredBand = band;
         previous?.Node.InvalidateVisual(); band?.Node.InvalidateVisual();
+        if (previous?.Target != band?.Target) HoverChanged?.Invoke(band?.Target);
     }
+    /// <summary>The row or node under the pointer changed (the 3D view draws a hovered range test).</summary>
+    internal event Action<string?>? HoverChanged;
     internal void RequestCondition(AnimationGraphRow row, AnimationConditionChoice choice) => ConditionRequested?.Invoke(row, choice);
     internal void RequestInclude(AnimationGraphEdge edge, bool value) => IncludeRequested?.Invoke(edge, value);
     internal void RequestExpand(string node, bool value) => ExpandRequested?.Invoke(node, value);

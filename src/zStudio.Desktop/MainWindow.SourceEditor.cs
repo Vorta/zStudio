@@ -91,7 +91,7 @@ public partial class MainWindow
         {
             card.IsSourceWorld = shownDocument?.SourceWorld != null;
             if (!sourceChromeActive) { card.WorldRebuilding = null; card.CategoryOf = null; card.PickupNameOf = null; card.ZoneLabel = null; card.RecentSelections = null; card.PickRecent = null; card.WorldSummary = null;
-                card.ExtraSections = null; card.TrailingSections = null; card.PlayerTankSummary = null; card.PickPlayerTank = null; }
+                card.ExtraSections = null; card.TrailingSections = null; card.LeadingSections = null; card.PlayerTankSummary = null; card.PickPlayerTank = null; }
         }
         RefreshSourceChrome();
     }
@@ -293,6 +293,7 @@ public partial class MainWindow
         }
         ViewModeChip.Visibility = shown && !flying ? Visibility.Visible : Visibility.Collapsed;
         RefreshViewMode();
+        RefreshPathsChip();
         FlyBanner.Visibility = shown && flying ? Visibility.Visible : Visibility.Collapsed;
         // The Zones group's overlays and tool work in a source map's Whole world.
         SourceZonesGroup.Visibility = !InAnimationMode && shownAsset?.Kind == zStudio.Core.AssetKind.World && shownDocument?.SourceWorld != null ? Visibility.Visible : Visibility.Collapsed;
@@ -336,7 +337,9 @@ public partial class MainWindow
             card.PickRecent = PickRecentSelection;
             card.WorldSummary = WorldSummary;
             var viewport = scene!;
-            // The player tank's sections come first; every object card, the tank's too, ends with its animations.
+            // In Animation mode the opened definition's events naming the object come first (design §11); the player tank's
+            // sections next; every object card, the tank's too, ends with the animations affecting it.
+            card.LeadingSections = selected => EventsNamingObject(viewport, selected);
             card.ExtraSections = selected => PlayerTankSections(viewport, selected);
             card.TrailingSections = selected => AnimationObjectLinks(viewport, selected);
             card.PlayerTankSummary = PlayerTankRowSummary;
