@@ -226,14 +226,35 @@ public sealed class AnimationGraphTests
         string below = reach.First(q => q.Parent == child.Path).Path;
         Assert.True(scenario.AllCalls); Assert.False(scenario.IsCustomized);
         Assert.All(reach, p => Assert.True(scenario.Includes(p.Path)));
-        var excluded = scenario.WithInclusion(child.Path, false);
+        var excluded = scenario.WithInclusion(child.Path, false, package, Token);
         Assert.False(excluded.Includes(child.Path)); Assert.False(excluded.Includes(below)); Assert.True(excluded.IsCustomized);
         var policy = excluded.ToExecutionPolicy();
         Assert.True(policy.IncludesAllCalls); Assert.False(policy.Includes(below)); Assert.True(policy.Includes(reach.First(p => p.Path != child.Path && !p.Path.StartsWith(child.Path + "/", StringComparison.Ordinal)).Path));
         // Including a path below an excluded one includes the calls that lead to it; Exclude all runs the start alone, Include all every call again.
-        Assert.True(excluded.WithInclusion(below, true).Includes(child.Path));
+        Assert.True(excluded.WithInclusion(below, true, package, Token).Includes(child.Path));
         Assert.Empty(excluded.ExcludeAll().ToExecutionPolicy().IncludedCalls); Assert.False(excluded.ExcludeAll().Includes(child.Path));
         Assert.Equal(AnimationScenario.Isolated(1), excluded.ExcludeAll().IncludeAll(package, Token).Scenario);
+        // ... and nothing else under that exclusion: the chain's other calls stay excluded, as a map's scenario adds only the chain.
+        var tree = Compile("""
+            ANIMATION_DEFINITIONS ( ANIMATION_LIST (
+              ANIMATION_DEFINITION ( NAME ( bridge ) ANIMATION_NAME ( top ) ANIMATION_ROOT_NAME ( healthy ) ACTIVATION ( ON_CALL )
+                SEQUENCE_DEFINITION ( NAME ( run ) CALL_ANIMATION ( NAME ( middle ) ) ) )
+              ANIMATION_DEFINITION ( NAME ( piece ) ANIMATION_NAME ( middle ) ANIMATION_ROOT_NAME ( healthy ) ACTIVATION ( ON_CALL )
+                SEQUENCE_DEFINITION ( NAME ( run ) CALL_ANIMATION ( NAME ( leaf_a ) ) CALL_ANIMATION ( NAME ( leaf_b ) ) ) )
+              ANIMATION_DEFINITION ( NAME ( rail_1 ) ANIMATION_NAME ( leaf_a ) ANIMATION_ROOT_NAME ( healthy ) ACTIVATION ( ON_CALL )
+                SEQUENCE_DEFINITION ( NAME ( run ) OBJECT_ACTIVE_STATE ( NAME ( piece ) STATE ( INACTIVE ) ) ) )
+              ANIMATION_DEFINITION ( NAME ( rail_2 ) ANIMATION_NAME ( leaf_b ) ANIMATION_ROOT_NAME ( healthy ) ACTIVATION ( ON_CALL )
+                SEQUENCE_DEFINITION ( NAME ( run ) OBJECT_ACTIVE_STATE ( NAME ( piece ) STATE ( ACTIVE ) ) ) )
+            ) )
+            """).Package;
+        var isolated = AnimationScenario.Isolated(tree.Entries.First(e => e.Name == "top").Index);
+        var calls = isolated.CallPaths(tree, Token).Paths;
+        var middle = calls.Single(p => p.Target == tree.Entries.First(e => e.Name == "middle").Index);
+        var leaves = calls.Where(p => p.Parent == middle.Path).ToArray();
+        Assert.Equal(2, leaves.Length);
+        var one = isolated.WithInclusion(middle.Path, false, tree, Token).WithInclusion(leaves[0].Path, true, tree, Token);
+        Assert.True(one.Includes(middle.Path)); Assert.True(one.Includes(leaves[0].Path)); Assert.False(one.Includes(leaves[1].Path));
+        Assert.False(one.ToExecutionPolicy().Includes(leaves[1].Path));
     }
 
     // Must-have: the scenario is kept per map in the project's settings and survives a recompile through source provenance.

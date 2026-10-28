@@ -252,15 +252,34 @@ public sealed record AnimationScenario
     public AnimationScenario WithStartTime(Guid id, double seconds) => Start(id) == null
         ? throw new InvalidDataException("The start is not part of this scenario.") : this with { Starts = starts.Select(s => s.Id == id ? s with { Seconds = seconds } : s).ToArray() };
 
-    /// <summary>Includes a call path, or excludes it with every path below it.</summary>
-    public AnimationScenario WithInclusion(string path, bool value)
+    /// <summary>
+    /// Includes a call path, or excludes it with every path below it. In an isolated preview (every call but the excluded ones)
+    /// including a path below an excluded one includes the calls that lead to it and nothing else: the other calls under that
+    /// exclusion (the siblings along the chain) stay excluded, as including one path of a map's scenario adds only its chain.
+    /// That needs the call paths of <paramref name="package"/>.
+    /// </summary>
+    public AnimationScenario WithInclusion(string path, bool value, AnimationPackage? package = null, CancellationToken token = default)
     {
         CheckPath(path, false);
         if (AllCalls)
         {
-            // Including a path includes the calls that lead to it (no exclusion above it stays); excluding it covers what is below it.
-            if (value) return Includes(path) ? this : this with { ExcludedCalls = excludedCalls.Where(e => path != e && !path.StartsWith(e + "/", StringComparison.Ordinal)).ToArray() };
-            return this with { ExcludedCalls = [.. excludedCalls.Where(e => !e.StartsWith(path + "/", StringComparison.Ordinal)), path] };
+            if (!value) return this with { ExcludedCalls = [.. excludedCalls.Where(e => !e.StartsWith(path + "/", StringComparison.Ordinal)), path] };
+            if (Includes(path)) return this;
+            var above = excludedCalls.Where(e => path == e || path.StartsWith(e + "/", StringComparison.Ordinal)).ToArray();
+            List<string> kept = [.. excludedCalls.Except(above, StringComparer.Ordinal)];
+            if (above.Any(e => e != path))
+            {
+                ArgumentNullException.ThrowIfNull(package);
+                var tree = CallPaths(package, token).Paths;
+                var parents = tree.GroupBy(p => p.Path, StringComparer.Ordinal).ToDictionary(g => g.Key, g => g.First().Parent, StringComparer.Ordinal);
+                string top = above.MinBy(e => e.Length)!;
+                // The chain: the excluded ancestor down to the path; their other children stay excluded.
+                HashSet<string> chain = new(StringComparer.Ordinal) { path };
+                for (string at = path; at != top && parents.TryGetValue(at, out string? parent) && chain.Add(parent); at = parent) { }
+                foreach (var call in tree)
+                    if (call.Parent != path && chain.Contains(call.Parent) && !chain.Contains(call.Path)) kept.Add(call.Path);
+            }
+            return this with { ExcludedCalls = kept.Distinct(StringComparer.Ordinal).ToArray() };
         }
         if (value) return Includes(path) ? this : this with { IncludedCalls = [.. includedCalls, path] };
         return this with { IncludedCalls = includedCalls.Where(p => p != path && !p.StartsWith(path + "/", StringComparison.Ordinal)).ToArray() };

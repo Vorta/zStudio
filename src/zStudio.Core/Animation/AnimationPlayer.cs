@@ -54,7 +54,14 @@ public sealed record AnimationConditionResult(long Instance, Guid Event, string 
     public double? Threshold { get; init; }
     public int? Draw { get; init; }
     public string? Unavailable { get; init; }
+    /// <summary>A range test's callback node, where the run measured the distance from (authored space; null for other kinds).</summary>
+    public Vector3? Center { get; init; }
 }
+/// <summary>
+/// Where a range-tested instance's callback node (the attach node its PLAYER_RANGE conditions and EXECUTION_BY_RANGE gate
+/// measure from) is at a frame, in authored space: a node without a model has no pose in <see cref="AnimationFrame.Nodes"/>.
+/// </summary>
+public sealed record AnimationAttachPosition(long Instance, int Entry, int Node, Vector3 Position);
 public sealed record AnimationFrame(double Time, IReadOnlyList<AnimationNodePose> Nodes, IReadOnlyList<AnimationLight> Lights,
     IReadOnlyList<AnimationSoundCue> Sounds, IReadOnlyList<AnimationSoundCue> ActiveSounds, AnimationCamera? Camera, AnimationFog? Fog,
     Vector4 ScreenColor, Vector4 ScreenWave, IReadOnlyList<AnimationTrace> Trace, IReadOnlyList<AnimationSequenceStatus> Sequences, IReadOnlyList<string> Diagnostics)
@@ -87,6 +94,8 @@ public sealed record AnimationFrame(double Time, IReadOnlyList<AnimationNodePose
     /// <summary>The reference at the start, then each change (callbacks 10, 11 and 17) in order.</summary>
     public IReadOnlyList<AnimationPlayerReferenceState> PlayerReferences { get; init; } = [];
     public long PlayerReferencesDropped { get; init; }
+    /// <summary>The callback node of each instance whose binding tests a range (a PLAYER_RANGE condition or a range gate).</summary>
+    public IReadOnlyList<AnimationAttachPosition> Attaches { get; init; } = [];
 }
 
 /// <summary>Retail event-clock semantics on a deterministic, device-independent 60 Hz clock.</summary>
@@ -689,6 +698,17 @@ public sealed partial class AnimationPlayer
                 else AddNote($"Camera {source.Name} #{index}: invalid transform or field of view; follow pose is unavailable.");
             }
         }
+        // Range tests measure from each binding's callback node, which often has no model (no pose above): where the run has it.
+        List<AnimationAttachPosition> attaches = [];
+        foreach (var instance in instances)
+        {
+            token.ThrowIfCancellationRequested();
+            if (attaches.Count >= MaximumInstances || !RangeTested(instance.Entry)) continue;
+            int callback = context.CallbackNode(instance.Entry, instance.Root, instance.Binding, frameBindings);
+            if (callback < 0 || callback >= context.Scene.Nodes.Count) continue;
+            var at = ParentNode(instance, callback) is { } attachNode ? ancestry.Get(instance, attachNode).World.Translation : context.WorldTransform(callback, frameBindings).Translation;
+            if (float.IsFinite(at.X) && float.IsFinite(at.Y) && float.IsFinite(at.Z)) attaches.Add(new(instance.Id, instance.Entry.Index, callback, at));
+        }
         // Finished children can leave lasting world changes (for example, a filled canal).
         // Their shared nodes outlive the child instance and still replace the static world.
         if (OriginCollision && instances.FirstOrDefault(i => i.Shared) is { } owner)
@@ -754,7 +774,8 @@ public sealed partial class AnimationPlayer
             Bindings = BindingStatuses(), Refusals = refusals.ToArray(), RefusalsDropped = refusalsDropped,
             PrerequisiteStarts = prerequisiteStarts.ToArray(), PrerequisiteStartsDropped = prerequisiteStartsDropped,
             Skipped = skipped.ToArray(), SkippedDropped = skippedDropped, Phases = phases.ToArray(), PhasesDropped = phasesDropped,
-            PlayerReference = CurrentReference, PlayerReferences = [InitialReference, .. referenceChanges], PlayerReferencesDropped = referenceChangesDropped
+            PlayerReference = CurrentReference, PlayerReferences = [InitialReference, .. referenceChanges], PlayerReferencesDropped = referenceChangesDropped,
+            Attaches = attaches,
         };
         token.ThrowIfCancellationRequested();
         return result;

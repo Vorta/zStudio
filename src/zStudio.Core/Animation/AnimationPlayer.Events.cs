@@ -225,7 +225,7 @@ public sealed partial class AnimationPlayer
         uint mask = ev.U32(12);
         bool forced = false, value;
         string kind = (mask & 1) != 0 ? "random" : (mask & 2) != 0 ? "playerRange" : (mask & 8) != 0 ? "playerCover" : (mask & 0x10) != 0 ? "cover" : (mask & 4) != 0 ? "effectsDetail" : "none";
-        double? measured = null, threshold = null; int? draw = null; string? unavailable = null;
+        double? measured = null, threshold = null; int? draw = null; string? unavailable = null; Vector3? center = null;
         if ((mask & 0x1f) != 0 && ExecutionPolicy?.TryCondition(instance.CallPath, instance.Entry.Index, ev.Id, out value) == true) forced = true;
         else if (ConditionOverride is bool global) { value = global; forced = true; }
         else if ((mask & 1) != 0)
@@ -238,7 +238,8 @@ public sealed partial class AnimationPlayer
             threshold = MathF.Sqrt(Math.Max(0, ev.F32(20)));
             if (CurrentReference.Position is Vector3 player)
             {
-                float distance = CallbackDistanceSquared(instance, player);
+                center = CallbackPosition(instance);
+                float distance = center is Vector3 at ? Vector3.DistanceSquared(player, at) : 0;
                 value = distance <= ev.F32(20); measured = MathF.Sqrt(distance);
             }
             else { value = false; unavailable = "no player"; }
@@ -269,7 +270,7 @@ public sealed partial class AnimationPlayer
             if (conditions.Count >= 20000) { conditions.RemoveRange(0, 10000); conditionsDropped += 10000; InvalidateRetainedState(); }
             RequireState(128);
             conditions.Add(new(instance.Id, ev.Id, instance.CallPath, dispatchedAt, value, forced, trace.Count == 0 ? 0 : trace[^1].Occurrence)
-                { Kind = kind, Measured = measured, Threshold = threshold, Draw = draw, Unavailable = unavailable });
+                { Kind = kind, Measured = measured, Threshold = threshold, Draw = draw, Unavailable = unavailable, Center = center });
             AdjustRetainedBytes(128);
         }
         return value;

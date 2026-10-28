@@ -429,12 +429,25 @@ public sealed partial class AnimationPlayer
     }
 
     /// <summary>The squared distance from <paramref name="reference"/> to the callback node; an unreadable position reads as zero (0x45c640).</summary>
-    private float CallbackDistanceSquared(Instance instance, Vector3 reference)
+    private float CallbackDistanceSquared(Instance instance, Vector3 reference) =>
+        CallbackPosition(instance) is Vector3 at ? Vector3.DistanceSquared(reference, at) : 0;
+    /// <summary>The callback node's world position (its run pose when the instance tracks it), or null when it cannot be read.</summary>
+    private Vector3? CallbackPosition(Instance instance)
     {
         var operation = bindingOperation!;
         int callback = context.CallbackNode(instance.Entry, instance.Root, instance.Binding, operation);
-        return callback < 0 || callback >= context.Scene.Nodes.Count ? 0 : Vector3.DistanceSquared(reference,
-            ParentNode(instance, callback) is { } node ? World(instance, node).Translation : context.WorldTransform(callback, operation).Translation);
+        return callback < 0 || callback >= context.Scene.Nodes.Count ? null
+            : ParentNode(instance, callback) is { } node ? World(instance, node).Translation : context.WorldTransform(callback, operation).Translation;
+    }
+    private Dictionary<int, bool>? rangeTested;
+    /// <summary>Whether a binding tests a range: an EXECUTION_BY_RANGE gate (flag 0x02) or an IF/ELSEIF with PLAYER_RANGE (operand bit 0x02).</summary>
+    private bool RangeTested(AnimationEntry entry)
+    {
+        rangeTested ??= [];
+        if (rangeTested.TryGetValue(entry.Index, out bool known)) return known;
+        bool tested = (entry.U32(148) & 2) != 0 || entry.AllSequences.Any(s => s.Events.Any(e => e.Type is 31 or 33 && e.Bytes.Length >= 16 && (e.U32(12) & 3) == 2));
+        if (rangeTested.Count < 4096) rangeTested[entry.Index] = tested;
+        return tested;
     }
     /// <summary>
     /// Whether <c>RunSequence</c> (0x45d010) runs a started binding's events this frame: EXECUTION_BY_RANGE (flag 0x02) needs
