@@ -152,11 +152,23 @@ public sealed class AnimationRunOverlay
             };
         }
         var nodes = AllNodes(graph);
+        // Each shown frame's occurrences and instances: those the player holds, and those it released that left occurrences
+        // (as Timing's groups). The shared state rule reads only these.
+        List<(AnimationGraphFrame Shown, AnimationTrace[] Trace, long[] Owned)> shownFrames = [];
+        foreach (var node in nodes)
+        {
+            if (node.Frame is not { } shown) continue;
+            token.ThrowIfCancellationRequested();
+            bool Owns(int entry, string path) => entry == shown.Entry && (shown.Path == null || path == shown.Path);
+            var trace = frame.Trace.Where(t => Owns(t.Entry, t.InstancePath)).ToArray();
+            shownFrames.Add((shown, trace, frame.Instances.Where(i => Owns(i.Entry, i.Path)).Select(i => i.Instance).Concat(trace.Select(t => t.Instance)).Distinct().Order().ToArray()));
+        }
+        var states = AnimationSequenceStates.Create(frame, package, shownFrames.SelectMany(f => f.Owned).ToHashSet(), token);
+        foreach (var (shown, trace, owned) in shownFrames) Project(graph, frame, states, shown, trace, owned, token);
         foreach (var node in nodes)
         {
             token.ThrowIfCancellationRequested();
-            if (node.Frame is { } shown) Project(graph, frame, shown, token);
-            else if (node.Reference is { } reference) references[node.Id] = ProjectReference(node.Id, reference, frame);
+            if (node.Reference is { } reference) references[node.Id] = ProjectReference(node.Id, reference, frame);
         }
         for (int offset = 0; ;)
         {
@@ -212,22 +224,16 @@ public sealed class AnimationRunOverlay
         _ => "unavailable",
     };
 
-    private void Project(AnimationGraph graph, AnimationFrame frame, AnimationGraphFrame shown, CancellationToken token)
+    private void Project(AnimationGraph graph, AnimationFrame frame, AnimationSequenceStates states, AnimationGraphFrame shown, AnimationTrace[] trace, long[] owned, CancellationToken token)
     {
-        bool Owns(int entry, string path) => entry == shown.Entry && (shown.Path == null || path == shown.Path);
-        var instances = frame.Instances.Where(i => Owns(i.Entry, i.Path)).ToArray();
-        var current = instances.Where(i => !i.Finished).OrderBy(i => i.Instance).LastOrDefault() ?? instances.OrderBy(i => i.Instance).LastOrDefault();
-        var binding = Binding(shown.Entry);
         var entry = package.Entries[shown.Entry];
-        var trace = frame.Trace.Where(t => Owns(t.Entry, t.InstancePath)).ToArray();
         foreach (var sequence in entry.AllSequences)
         {
             token.ThrowIfCancellationRequested();
             string node = AnimationGraph.SequenceId(entry.Index, sequence.Id);
             if (graph.Node(node) == null) continue;
-            var status = current == null ? null : frame.Sequences.FirstOrDefault(s => s.Instance == current.Instance && s.Sequence == sequence.Id);
             var ran = trace.Where(t => t.Sequence == sequence.Id).ToArray();
-            sequences[node] = ProjectSequence(graph, frame, node, sequence, status, ran.Length > 0, binding, current);
+            sequences[node] = ProjectSequence(graph, node, entry.Index, sequence, states.Of(owned.Select(i => (i, sequence.Id))));
             Dictionary<Guid, int> position = [];
             for (int i = 0; i < sequence.Events.Count; i++) position[sequence.Events[i].Id] = i;
             var skips = frame.Skipped.Where(s => s.Sequence == sequence.Id && (shown.Path == null || s.InstancePath == shown.Path)).ToArray();
@@ -245,23 +251,12 @@ public sealed class AnimationRunOverlay
         }
     }
 
-    private AnimationRunSequence ProjectSequence(AnimationGraph graph, AnimationFrame frame, string node, AnimationSequence sequence,
-        AnimationSequenceStatus? status, bool ran, AnimationRunBinding binding, AnimationInstanceStatus? instance)
+    /// <summary>A shown sequence by the rule Timing's lanes share (<see cref="AnimationSequenceStates"/>).</summary>
+    private static AnimationRunSequence ProjectSequence(AnimationGraph graph, string node, int entry, AnimationSequence sequence, AnimationSequenceState run)
     {
-        var state = status?.State switch
-        {
-            "Waiting for threshold" => AnimationSequenceRunState.WaitingForThreshold,
-            "Running" => AnimationSequenceRunState.Running,
-            "Complete" => AnimationSequenceRunState.Complete,
-            "Waiting for release" => AnimationSequenceRunState.WaitingForRelease,
-            "Awaiting excluded dependency" => AnimationSequenceRunState.Blocked,
-            "Unavailable" => AnimationSequenceRunState.Unavailable,
-            _ => ran ? binding.State == AnimationBindingLifecycle.Stopped ? AnimationSequenceRunState.Stopped : AnimationSequenceRunState.Complete : AnimationSequenceRunState.NotReached,
-        };
-        if (status != null && instance?.Cleanup == true && sequence.Id != package.Entries[instance.Entry].Primary.Id) state = AnimationSequenceRunState.Stopped;
-        string? paused = null;
-        if (binding.State == AnimationBindingLifecycle.Paused && state is AnimationSequenceRunState.Running or AnimationSequenceRunState.WaitingForThreshold)
-        { paused = binding.PausedBy; state = AnimationSequenceRunState.Paused; }
+        var state = run.State;
+        var status = run.Status;
+        string? paused = run.PausedBy;
         double? remaining = null;
         if (state == AnimationSequenceRunState.WaitingForThreshold && status != null && status.EventIndex >= 0 && status.EventIndex < sequence.Events.Count && sequence.Events[status.EventIndex].Bytes.Length >= 12)
         {
@@ -270,20 +265,11 @@ public sealed class AnimationRunOverlay
             remaining = Math.Max(0, ev.Threshold - clock);
         }
         var releasers = graph.EdgesOf(node).Where(e => e.To == node && e.Relation is AnimationGraphRelation.Release or AnimationGraphRelation.ContactRelease).Select(e => e.From).ToArray();
-        bool left = false;
-        if (state == AnimationSequenceRunState.WaitingForRelease && instance != null)
-            foreach (string id in releasers)
-            {
-                if (graph.Row(id) is not { } row) continue;
-                var other = frame.Sequences.FirstOrDefault(s => s.Instance == instance.Instance && s.Sequence == row.Sequence);
-                bool loops = graph.Blocks(row.Entry, row.Sequence).Any(b => b.Loop != null);
-                if (other?.State is "Waiting for threshold" or "Running" or "Waiting for release" && (other.EventIndex <= row.Index || loops)) left = true;
-            }
-        string? releasedBy = status?.ReleasedBy is Guid by && instance != null ? graph.RowOf(instance.Entry, by)?.Id ?? AnimationGraph.RowId(instance.Entry, by) : null;
+        string? releasedBy = status?.ReleasedBy is Guid by && run.Instance != null ? graph.RowOf(entry, by)?.Id ?? AnimationGraph.RowId(entry, by) : null;
         // A blocked sequence waits at its excluded call: that call row's edge carries the include toggle.
         string? blockedBy = null, blockedCall = null;
-        if (state == AnimationSequenceRunState.Blocked && status != null && instance != null && status.EventIndex >= 0 && status.EventIndex < sequence.Events.Count
-            && graph.RowOf(instance.Entry, sequence.Events[status.EventIndex].Id) is { } waiting)
+        if (state == AnimationSequenceRunState.Blocked && status != null && status.EventIndex >= 0 && status.EventIndex < sequence.Events.Count
+            && graph.RowOf(entry, sequence.Events[status.EventIndex].Id) is { } waiting)
         {
             var call = graph.EdgesOf(waiting.Id).FirstOrDefault(e => e.From == waiting.Id && e.Relation is AnimationGraphRelation.Call or AnimationGraphRelation.CallWait or AnimationGraphRelation.LocalChild);
             blockedBy = call?.Id;
@@ -294,7 +280,7 @@ public sealed class AnimationRunOverlay
             AnimationSequenceRunState.Running => "Running",
             AnimationSequenceRunState.Complete => "Complete",
             AnimationSequenceRunState.Stopped => "Stopped",
-            AnimationSequenceRunState.WaitingForRelease => left ? "Waiting for release" : "Waiting for release · no releaser left",
+            AnimationSequenceRunState.WaitingForRelease => run.NoReleaserLeft ? "Waiting for release · no releaser left" : "Waiting for release",
             AnimationSequenceRunState.WaitingForThreshold => remaining is double r ? "Waiting for threshold · +" + AnimationSeconds.Short(r) : "Waiting for threshold",
             AnimationSequenceRunState.Blocked => blockedCall is { Length: > 0 } called ? "Blocked · waits for excluded call " + called : "Blocked · waits for an excluded call",
             AnimationSequenceRunState.Paused => "Paused · " + (paused ?? "gate"),
@@ -303,9 +289,9 @@ public sealed class AnimationRunOverlay
         };
         return new(node, state, label)
         {
-            Instance = instance?.Instance, Pass = status?.Iteration ?? 0, EventIndex = status?.EventIndex ?? 0, ThresholdRemaining = remaining,
+            Instance = run.Instance, Pass = status?.Iteration ?? 0, EventIndex = status?.EventIndex ?? 0, ThresholdRemaining = remaining,
             ReleasedBy = releasedBy, ReleasedAt = status?.ReleasedAt, ReleaseKind = status?.ReleaseKind, Releasers = releasers,
-            NoReleaserLeft = state == AnimationSequenceRunState.WaitingForRelease && !left, PausedBy = paused,
+            NoReleaserLeft = run.NoReleaserLeft, PausedBy = paused,
             BlockedBy = blockedBy, BlockedCall = blockedCall,
         };
     }

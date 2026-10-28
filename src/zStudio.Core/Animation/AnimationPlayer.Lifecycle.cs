@@ -93,6 +93,8 @@ public sealed record AnimationSequencePhase(long Instance, Guid Sequence, Animat
     public Guid? ReleasedBy { get; init; }
     public long? ReleasedByInstance { get; init; }
     public string? PausedBy { get; init; }
+    /// <summary>A <see cref="AnimationSequencePhaseState.Finished"/> phase's instance start: the player releases a finished child, so its start stays here.</summary>
+    public double? StartedAt { get; init; }
 }
 
 /// <summary>
@@ -258,7 +260,7 @@ public sealed partial class AnimationPlayer
         if (initializingScene || measuringDuration) return;
         // What its sequences reached in the tick it ended, then the end.
         RecordPhases(instance);
-        AddPhase(new(instance.Id, Guid.Empty, AnimationSequencePhaseState.Finished, Time));
+        AddPhase(new(instance.Id, Guid.Empty, AnimationSequencePhaseState.Finished, Time) { StartedAt = instance.StartedAt });
     }
     private void AddPhase(AnimationSequencePhase phase)
     {

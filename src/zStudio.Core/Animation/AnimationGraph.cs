@@ -152,6 +152,24 @@ public sealed class AnimationGraph
     public static string RowId(int entry, Guid ev) => string.Create(CultureInfo.InvariantCulture, $"row:{entry}:{ev:N}");
     public static string ReferenceId(string group) => "ref:" + group;
 
+    /// <summary>
+    /// The runtime sequence of its own binding an event acts on, as the player resolves it (slot, else the first of the name):
+    /// CALL_SEQUENCE releases, STOP_SEQUENCE stops, a motion with contact release (flag 0x800) releases on ground contact.
+    /// </summary>
+    public static (AnimationGraphRelation Kind, AnimationSequence Sequence)? SequenceTarget(AnimationEntry entry, AnimationEvent ev)
+    {
+        (AnimationGraphRelation Kind, string Name, int Slot)? intra = ev.Type switch
+        {
+            22 when ev.Bytes.Length >= 48 => (AnimationGraphRelation.Release, ev.Text(12), ev.I32(44)),
+            23 when ev.Bytes.Length >= 48 => (AnimationGraphRelation.StopSequence, ev.Text(12), ev.I32(44)),
+            10 when ev.Bytes.Length >= 242 && (ev.U32(12) & 0x800) != 0 => (AnimationGraphRelation.ContactRelease, ev.Text(208), ev.I16(240)),
+            _ => null,
+        };
+        if (intra is not { } found) return null;
+        var target = found.Slot >= 0 && found.Slot < entry.Sequences.Count ? entry.Sequences[found.Slot] : entry.Sequences.FirstOrDefault(s => s.Name == found.Name);
+        return target == null ? null : (found.Kind, target);
+    }
+
     private SequenceLayout Layout(int entry, Guid sequence) => layouts.TryGetValue((entry, sequence), out var layout) ? layout
         : throw new InvalidDataException("The animation sequence is not shown in this graph.");
 
@@ -329,18 +347,8 @@ public sealed class AnimationGraph
                         continue;
                     }
                     // Releases, sequence stops and contact releases act on this binding's runtime sequences, never during its cleanup.
-                    (AnimationGraphRelation Kind, string Name, int Slot)? local2 = ev.Type switch
-                    {
-                        22 when ev.Bytes.Length >= 48 => (AnimationGraphRelation.Release, ev.Text(12), ev.I32(44)),
-                        23 when ev.Bytes.Length >= 48 => (AnimationGraphRelation.StopSequence, ev.Text(12), ev.I32(44)),
-                        10 when ev.Bytes.Length >= 242 && (ev.U32(12) & 0x800) != 0 => (AnimationGraphRelation.ContactRelease, ev.Text(208), ev.I16(240)),
-                        _ => null,
-                    };
-                    if (local2 is not { } intra) continue;
-                    var targetSequence = intra.Slot >= 0 && intra.Slot < entry.Sequences.Count ? entry.Sequences[intra.Slot]
-                        : entry.Sequences.FirstOrDefault(s => s.Name == intra.Name);
-                    if (targetSequence == null) continue;
-                    var edge = Add(intra.Kind, from, node, SequenceId(entry.Index, targetSequence.Id), false, ev, null, null, false, false);
+                    if (SequenceTarget(entry, ev) is not { } intra) continue;
+                    var edge = Add(intra.Kind, from, node, SequenceId(entry.Index, intra.Sequence.Id), false, ev, null, null, false, false);
                     if (cleanup) edge.Note = "no effect during cleanup: the runtime sequences do not run then";
                 }
             }

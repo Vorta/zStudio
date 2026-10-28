@@ -306,19 +306,24 @@ public sealed class AnimationGraphTests
     // Must-have: the Timing view's projection of a real run (design §9): lanes per sequence under the start's group, the
     // waiting-for-release band and the release mark pointing at the lane it released, condition and excluded-call marks,
     // threshold brackets from observed anchors, and the Log; a seek back replays the same phases.
+    // The fixture's world: bridge (healthy, piece under it) and the three rails.
+    private static AnimationPreviewContext Context(AnimationPackage package)
+    {
+        var doc = new AssetDocument("fixture", new(0, DateTime.MinValue), new(FormatFamily.GameZ, 15, Recognition.Supported, "fixture"), ReadOnlyMemory<byte>.Empty) { Scene = new() };
+        doc.Scene.Models.Add(new(0, [Vector3.Zero, Vector3.UnitX, Vector3.UnitY], [], [], [], []));
+        doc.Scene.Nodes.Add(new(0, "world", "world", null, [], [1, 4, 5, 6], new(), new()));
+        for (int i = 0; i < Nodes.Length; i++)
+            doc.Scene.Nodes.Add(new(i + 1, Nodes[i], "object3d", 0, i is 1 or 2 ? [1] : [0], i == 0 ? [2, 3] : [],
+                new System.Text.Json.Nodes.JsonObject { ["flags"] = 4 },
+                new System.Text.Json.Nodes.JsonObject { ["flags"] = 0, ["opacity"] = 1f, ["scale"] = JsonData.Vector(Vector3.One), ["transform"] = new System.Text.Json.Nodes.JsonArray(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0) }));
+        return new AnimationPreviewContext { Package = package, World = doc };
+    }
+
     [Fact]
     public void TheTimingProjectionShowsTheRunOnTheSharedClock()
     {
         var evaluated = Compile(Bridge()); var package = evaluated.Package;
-        var doc = new AssetDocument("fixture", new(0, DateTime.MinValue), new(FormatFamily.GameZ, 15, Recognition.Supported, "fixture"), ReadOnlyMemory<byte>.Empty) { Scene = new() };
-        doc.Scene.Models.Add(new(0, [Vector3.Zero, Vector3.UnitX, Vector3.UnitY], [], [], [], []));
-        doc.Scene.Nodes.Add(new(0, "world", "world", null, [], [1, 4, 5, 6], new(), new()));
-        string[] names = ["bridge", "healthy", "piece", "rail_1", "rail_2", "rail_3"];
-        for (int i = 0; i < names.Length; i++)
-            doc.Scene.Nodes.Add(new(i + 1, names[i], "object3d", 0, i is 1 or 2 ? [1] : [0], i == 0 ? [2, 3] : [],
-                new System.Text.Json.Nodes.JsonObject { ["flags"] = 4 },
-                new System.Text.Json.Nodes.JsonObject { ["flags"] = 0, ["opacity"] = 1f, ["scale"] = JsonData.Vector(Vector3.One), ["transform"] = new System.Text.Json.Nodes.JsonArray(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0) }));
-        var context = new AnimationPreviewContext { Package = package, World = doc };
+        var context = Context(package);
         AnimationScheduledStart[] starts = [new(Guid.Empty, 1, 0)];
         var player = new AnimationPlayer(context, 1, 1, false, Token, new AnimationSchedule(starts, package.Entries.Count))
             { ExecutionPolicy = new(rules: new() { Player = AnimationPlayerReference.None }) };
@@ -346,6 +351,68 @@ public sealed class AnimationGraphTests
         // A seek back restores the phases from a checkpoint and replays them exactly.
         var replay = player.AdvanceTo(.2, true, Token); Assert.All(replay.Phases, p => Assert.True(p.Time <= .2 + 1e-9));
         Assert.Equal(frame.Phases, player.AdvanceTo(1, token: Token).Phases);
+    }
+
+    // Must-have: Timing's lanes and the graph's run overlay read one sequence state rule (preview.md, "Source-world animation
+    // session"): a sequence still waiting when its instance ended is stopped, never complete, and one without evidence is not
+    // started. A called child the player released after it finished keeps its own start: its group and its animation-clock
+    // bracket are anchored at its launch, never at its first occurrence.
+    [Fact]
+    public void TimingAndTheRunOverlayShareOneSequenceStateRule()
+    {
+        var evaluated = Compile("""
+            ANIMATION_DEFINITIONS ( ANIMATION_LIST (
+              ANIMATION_DEFINITION (
+                NAME ( bridge ) ANIMATION_NAME ( caller ) ANIMATION_ROOT_NAME ( healthy ) RESET_TIME ( -1 )
+                SEQUENCE_DEFINITION ( NAME ( launch ) CALL_ANIMATION ( NAME ( faller ) START_TIME ( ANIMATION_OFFSET 0.2 ) ) )
+                SEQUENCE_DEFINITION ( NAME ( idle ) ACTIVATION ( ON_CALL ) OBJECT_ACTIVE_STATE ( NAME ( piece ) STATE ( ACTIVE ) ) )
+                SEQUENCE_DEFINITION ( NAME ( halt ) STOP_ANIMATION ( NAME ( caller ) START_TIME ( ANIMATION_OFFSET 2 ) ) )
+                SEQUENCE_DEFINITION ( NAME ( late ) OBJECT_ACTIVE_STATE ( NAME ( piece ) STATE ( INACTIVE ) START_TIME ( ANIMATION_OFFSET 5 ) ) ) )
+              ANIMATION_DEFINITION (
+                NAME ( rail_1 ) ANIMATION_NAME ( faller ) RESET_TIME ( -1 )
+                SEQUENCE_DEFINITION ( NAME ( fall ) OBJECT_ACTIVE_STATE ( NAME ( piece ) STATE ( INACTIVE ) START_TIME ( ANIMATION_OFFSET 0.5 ) ) ) )
+            ) )
+            """);
+        var package = evaluated.Package;
+        var index = AnimationGraphIndex.Create(package, evaluated.Provenance, token: Token);
+        var graph = AnimationGraph.Create(index, 1, token: Token);
+        var scenario = AnimationScenario.For(1).IncludeAll(package, Token).Scenario with { Player = AnimationPlayerReference.None };
+        var player = new AnimationPlayer(Context(package), 1, scenario.Seed, false, Token, scenario.Schedule(package.Entries.Count)) { ExecutionPolicy = scenario.ToExecutionPolicy() };
+        var options = new AnimationTimingOptions { Starts = scenario.Starts, Index = index };
+        Dictionary<string, AnimationSequenceRunState> States(AnimationFrame frame, out AnimationTiming timing)
+        {
+            var projected = timing = AnimationTiming.Create(frame, package, options, Token);
+            var overlay = AnimationRunOverlay.Create(graph, frame, scenario, Token);
+            var group = projected.AllLanes.Single(l => l.Kind == AnimationTimingLaneKind.Group && l.Members.SequenceEqual([1]));
+            Dictionary<string, AnimationSequenceRunState> states = [];
+            foreach (var lane in projected.AllLanes.Where(l => l.Group == group.Id && l.Kind == AnimationTimingLaneKind.Sequence))
+            {
+                if (overlay.Sequence(AnimationGraph.SequenceId(1, lane.Sequences[0].Sequence)) is { } run) Assert.Equal((lane.Label, run.State), (lane.Label, lane.Run!.Value));
+                states[lane.Label] = lane.Run!.Value;
+            }
+            return states;
+        }
+        var running = player.AdvanceTo(1, token: Token);
+        Assert.Equal(new Dictionary<string, AnimationSequenceRunState>
+        {
+            ["Cleanup"] = AnimationSequenceRunState.NotReached, ["launch"] = AnimationSequenceRunState.Complete, ["idle"] = AnimationSequenceRunState.WaitingForRelease,
+            ["halt"] = AnimationSequenceRunState.WaitingForThreshold, ["late"] = AnimationSequenceRunState.WaitingForThreshold,
+        }, States(running, out var timing));
+        Assert.Contains(timing.AllLanes.Single(l => l.Label == "idle").Bands, b => b.Open && b.Label == "waiting · no releaser left");
+        // The child finished at 0.7 s and the player released it: its start is its launch at 0.2 s.
+        Assert.DoesNotContain(running.Instances, i => i.Entry == 2);
+        var call = timing.AllLanes.Single(l => l.Label == "launch").Marks.Single(m => m.Type == 24);
+        var child = timing.AllLanes.Single(l => l.Kind == AnimationTimingLaneKind.Group && l.Members.SequenceEqual([2]));
+        var fall = timing.AllLanes.Single(l => l.Group == child.Id && l.Label == "fall").Marks.Single(m => m.Type != 0 && m.Bracket != null);
+        Assert.InRange(call.Start, .2 - AnimationSeconds.Tick - 1e-6, .2 + 1e-6);
+        Assert.Equal((call.Start, call.Start), (child.Started!.Value, fall.Bracket!.Anchor));
+        Assert.True(fall.Start > call.Start + .45);
+        // halt stops the binding at 2 s: waits it left behind ended with it.
+        Assert.Equal(new Dictionary<string, AnimationSequenceRunState>
+        {
+            ["Cleanup"] = AnimationSequenceRunState.NotReached, ["launch"] = AnimationSequenceRunState.Complete, ["idle"] = AnimationSequenceRunState.Stopped,
+            ["halt"] = AnimationSequenceRunState.Complete, ["late"] = AnimationSequenceRunState.Stopped,
+        }, States(player.AdvanceTo(3, token: Token), out _));
     }
     private sealed class BracketComparer : IEqualityComparer<(string, double, double)>
     {

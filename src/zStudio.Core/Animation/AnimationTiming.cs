@@ -134,6 +134,8 @@ public sealed class AnimationTiming
     public IReadOnlyList<AnimationTimingLogRow> Log { get; }
     public long Retained { get; }
     public long Discarded { get; }
+    /// <summary>Phases the player discarded (the oldest first): bands before the retained phases are not shown.</summary>
+    public long PhasesDropped { get; }
     /// <summary>The earliest and latest evidence (Fit run).</summary>
     public double? RunStart { get; }
     public double? RunEnd { get; }
@@ -151,7 +153,7 @@ public sealed class AnimationTiming
         public readonly List<Group> Children = [];
         public double First = double.PositiveInfinity;
     }
-    private sealed record InstanceInfo(long Id, int Entry, string Path, long? Parent, double? Started, bool Live, bool Finished, bool Cleanup);
+    private sealed record InstanceInfo(long Id, int Entry, string Path, long? Parent, double? Started);
     private sealed record EventInfo(AnimationEntry Entry, AnimationSequence Sequence, int Index, AnimationEvent Event);
 
     private readonly AnimationPackage package;
@@ -163,27 +165,39 @@ public sealed class AnimationTiming
     private AnimationTiming(AnimationFrame frame, AnimationPackage package, AnimationTimingOptions options, CancellationToken token)
     {
         this.package = package; this.options = options; Time = frame.Time;
+        var states = AnimationSequenceStates.Create(frame, package, token: token);
         // ---- instances and their parents
         Dictionary<long, InstanceInfo> instances = [];
         foreach (var live in frame.Instances)
-            instances[live.Instance] = new(live.Instance, live.Entry, live.Path, live.ParentInstance, live.StartedAt, !live.Finished, live.Finished, live.Cleanup);
+            instances[live.Instance] = new(live.Instance, live.Entry, live.Path, live.ParentInstance, live.StartedAt);
         Dictionary<long, long> launchedBy = [];
-        Dictionary<long, double> firstSeen = [];
+        Dictionary<long, double> launchedAt = [], firstSeen = [], lastSeen = [];
+        void Seen(long id, double at)
+        {
+            firstSeen[id] = Math.Min(firstSeen.GetValueOrDefault(id, double.PositiveInfinity), at);
+            lastSeen[id] = Math.Max(lastSeen.GetValueOrDefault(id, double.NegativeInfinity), at);
+        }
         foreach (var t in frame.Trace)
         {
-            if (t.ChildInstance is long child && t.Disposition == "launched") launchedBy.TryAdd(child, t.Instance);
-            firstSeen.TryAdd(t.Instance, t.Start);
+            // A launch starts its child at the call's own time (the child's StartedAt).
+            if (t.ChildInstance is long child && t.Disposition == "launched") { launchedBy.TryAdd(child, t.Instance); launchedAt.TryAdd(child, t.Start); }
+            Seen(t.Instance, t.Start); Seen(t.Instance, t.End ?? t.Start);
             if (!instances.ContainsKey(t.Instance) && t.Entry >= 0 && t.Entry < package.Entries.Count)
-                instances[t.Instance] = new(t.Instance, t.Entry, t.InstancePath, null, null, false, true, false);
+                instances[t.Instance] = new(t.Instance, t.Entry, t.InstancePath, null, null);
         }
-        Dictionary<long, double> finished = [];
+        Dictionary<long, double> finished = [], finishedStart = [];
         Dictionary<(long, Guid), List<AnimationSequencePhase>> phases = [];
         Dictionary<(long, Guid), List<AnimationSequencePhase>> released = [];
         foreach (var phase in frame.Phases)
         {
             token.ThrowIfCancellationRequested();
-            firstSeen.TryAdd(phase.Instance, phase.Time);
-            if (phase.State == AnimationSequencePhaseState.Finished) { finished[phase.Instance] = phase.Time; continue; }
+            Seen(phase.Instance, phase.Time);
+            if (phase.State == AnimationSequencePhaseState.Finished)
+            {
+                finished[phase.Instance] = phase.Time;
+                if (phase.StartedAt is double began) finishedStart[phase.Instance] = began;
+                continue;
+            }
             if (!phases.TryGetValue((phase.Instance, phase.Sequence), out var list)) phases[(phase.Instance, phase.Sequence)] = list = [];
             list.Add(phase);
             if (phase.ReleasedBy is Guid by && phase.ReleasedByInstance is long releaser)
@@ -192,6 +206,11 @@ public sealed class AnimationTiming
                 targets.Add(phase);
             }
         }
+        // An instance the player released has its start on its Finished phase or its launch; without either, its earliest
+        // evidence is only when it was first seen, never an anchor.
+        foreach (var (id, info) in instances.ToArray())
+            if (info.Started == null && (finishedStart.TryGetValue(id, out double began) || launchedAt.TryGetValue(id, out began)))
+                instances[id] = info with { Started = began };
         // ---- the starts, each a top-level group
         var starts = options.Starts.Count > 0 ? options.Starts.ToArray() : [];
         Dictionary<string, Group> groups = new(StringComparer.Ordinal);
@@ -272,7 +291,12 @@ public sealed class AnimationTiming
             {
                 var entry = package.Entries[instances[instance].Entry];
                 int index = 0;
-                foreach (var sequence in entry.AllSequences) laneOf[(instance, sequence.Id)] = LaneId(group.Key, index++);
+                foreach (var sequence in entry.AllSequences)
+                {
+                    string id = LaneId(group.Key, index++);
+                    laneOf[(instance, sequence.Id)] = id;
+                    if (builders.TryGetValue(id, out var builder)) builder.Pairs.Add((instance, sequence.Id));
+                }
             }
         }
         // ---- marks from the trace (in occurrence order), skipped spans and refused starts
@@ -281,6 +305,8 @@ public sealed class AnimationTiming
         Dictionary<(long, Guid), AnimationTrace> previous = [];
         Dictionary<long, AnimationTrace> occurrences = [];
         Dictionary<(long, Guid), double> passStart = [];
+        // Each event's occurrence starts per instance, in time order (a threshold wait ends at the earliest after it began).
+        Dictionary<(long, Guid), List<double>> occurred = [];
         List<AnimationTimingLogRow> log = [];
         int marks = 0;
         double runStart = double.PositiveInfinity, runEnd = double.NegativeInfinity;
@@ -292,6 +318,8 @@ public sealed class AnimationTiming
             byte type = info?.Event.Type ?? 0;
             var key = (t.Instance, t.Sequence);
             occurrences[t.Occurrence] = t;
+            if (!occurred.TryGetValue((t.Instance, t.Event), out var times)) occurred[(t.Instance, t.Event)] = times = [];
+            times.Add(t.Start);
             previous.TryGetValue(key, out var before); previous[key] = t;
             if (info?.Index == 0) passStart[key] = t.Start;
             if (type is 32 or 34) continue; // ELSE and ENDIF mark structure, not actions
@@ -314,13 +342,17 @@ public sealed class AnimationTiming
             bool? value = null; bool forced = false;
             if (kind == AnimationTimingMarkKind.Condition && conditions.TryGetValue((t.Occurrence, t.Event), out var outcome)) { value = outcome.Value; forced = outcome.Forced; shownConditions.Add((t.Occurrence, t.Event)); }
             string? target = null; string result;
+            // A CALL_SEQUENCE releases in its own dispatch: the released phase is at its start (tick resolution), never a later
+            // release by the same event.
             if (kind == AnimationTimingMarkKind.Release && released.TryGetValue((t.Instance, t.Event), out var targets)
-                && targets.Where(p => p.Time >= t.Start - 1e-6).OrderBy(p => p.Time).FirstOrDefault() is { } releasedPhase)
+                && First(targets, t.Start - 1e-6) is { } releasedPhase && releasedPhase.Time <= t.Start + AnimationSeconds.Tick + 1e-6)
                 laneOf.TryGetValue((releasedPhase.Instance, releasedPhase.Sequence), out target);
             result = kind switch
             {
                 AnimationTimingMarkKind.Condition => value is bool v ? (v ? "true" : "false") + (forced ? " · forced" : " · game") : "not evaluated · an earlier branch ran",
-                AnimationTimingMarkKind.Release => target != null && builders.TryGetValue(target, out var released2) ? "released " + released2.Name(package) : "nothing waited",
+                AnimationTimingMarkKind.Release => target != null && builders.TryGetValue(target, out var released2) ? "released " + released2.Name(package)
+                    // Truncation never proves nothing waited: the phases of that time may be discarded.
+                    : frame.PhasesDropped > 0 && (frame.Phases.Count == 0 || t.Start <= frame.Phases[0].Time + AnimationSeconds.Tick) ? "not known · older phases discarded" : "nothing waited",
                 AnimationTimingMarkKind.Excluded => "excluded",
                 AnimationTimingMarkKind.Blocked => "excluded · waits",
                 AnimationTimingMarkKind.Duplicate => "duplicate",
@@ -336,7 +368,8 @@ public sealed class AnimationTiming
                 byte clock = info.Event.StartMode;
                 double? anchor = clock switch
                 {
-                    1 => instances.TryGetValue(t.Instance, out var owner) ? owner.Started ?? firstSeen.GetValueOrDefault(t.Instance, double.NaN) : null,
+                    // The instance's own start; when no evidence names it, there is no anchor (first seen is not a start).
+                    1 => instances.TryGetValue(t.Instance, out var owner) ? owner.Started : null,
                     2 => info.Index > 0 && passStart.TryGetValue(key, out double started) ? started : null,
                     3 => info.Index > 0 ? before?.End : PhaseStart(phases, key, AnimationSequencePhaseState.WaitingForThreshold, t.Start),
                     _ => null,
@@ -361,10 +394,12 @@ public sealed class AnimationTiming
             runStart = Math.Min(runStart, t.Start); runEnd = Math.Max(runEnd, mark.End ?? t.Start);
             log.Add(new(t.Start, BindingLabel(t.Entry, t.Instance), lane.Name(package), label, result, laneId, mark.Id) { InstanceId = t.Instance, Occurrence = t.Occurrence, Entry = t.Entry, EventId = t.Event });
         }
+        // Conditions and skips name the occurrence that decided them: one older than the retained trace went with it.
+        long retainedFrom = frame.TraceDropped <= 0 ? long.MinValue : frame.Trace.Count > 0 ? frame.Trace[0].Occurrence : long.MaxValue;
         // An ELSEIF a false IF reached is evaluated inside the IF's dispatch: its outcome has no occurrence of its own.
         foreach (var condition in frame.Conditions)
         {
-            if (shownConditions.Contains((condition.Occurrence, condition.Event)) || Event(condition.Event) is not { } info) continue;
+            if (condition.Occurrence < retainedFrom || shownConditions.Contains((condition.Occurrence, condition.Event)) || Event(condition.Event) is not { } info) continue;
             if (!laneOf.TryGetValue((condition.Instance, info.Sequence.Id), out string? laneId) || !builders.TryGetValue(laneId, out var lane)) continue;
             string label = Phrase(info), result = (condition.Value ? "true" : "false") + (condition.Forced ? " · forced" : " · game");
             var mark = new AnimationTimingMark(laneId + "#c" + condition.Occurrence.ToString(CultureInfo.InvariantCulture) + ":" + condition.Event.ToString("N")[..8], AnimationTimingMarkKind.Condition, condition.Time, label)
@@ -379,7 +414,7 @@ public sealed class AnimationTiming
         foreach (var span in frame.Skipped)
         {
             token.ThrowIfCancellationRequested();
-            if (!laneOf.TryGetValue((span.Instance, span.Sequence), out string? laneId) || !builders.TryGetValue(laneId, out var lane)) continue;
+            if (span.Occurrence < retainedFrom || !laneOf.TryGetValue((span.Instance, span.Sequence), out string? laneId) || !builders.TryGetValue(laneId, out var lane)) continue;
             var info = Event(span.First);
             int entry = instances.TryGetValue(span.Instance, out var owner) ? owner.Entry : info?.Entry.Index ?? 0;
             string first = info == null ? "events" : Phrase(info);
@@ -415,17 +450,21 @@ public sealed class AnimationTiming
         foreach (var check in frame.PrerequisiteStarts.Where(p => p.ScenarioStart && p.Outcome == "ignored"))
             if (StartOf(check.InstancePath) is { } start && start.Entry == check.Entry) ignored.Add(start.Id);
         // ---- bands from the phases
+        double traceFrom = frame.Trace.Count > 0 ? frame.Trace[0].Start : frame.Time;
         foreach (var ((instance, sequence), list) in phases)
         {
             token.ThrowIfCancellationRequested();
             if (!laneOf.TryGetValue((instance, sequence), out string? laneId) || !builders.TryGetValue(laneId, out var lane)) continue;
-            double stop = finished.TryGetValue(instance, out double done) ? done : frame.Time;
-            var status = frame.Sequences.FirstOrDefault(s => s.Instance == instance && s.Sequence == sequence);
+            // A live instance's last phase holds at the frame's time; an ended one's ends with its instance.
+            bool live = states.Live(instance);
+            double stop = live ? frame.Time : finished.TryGetValue(instance, out double done) ? done : lastSeen.GetValueOrDefault(instance, frame.Time);
+            var current = states.Of(instance, sequence);
+            var status = live ? current.Status : null;
             for (int i = 0; i < list.Count; i++)
             {
                 var phase = list[i];
-                bool open = i == list.Count - 1;
-                double end = open ? stop : list[i + 1].Time;
+                bool last = i == list.Count - 1, open = last && live;
+                double end = last ? stop : list[i + 1].Time;
                 if (end < phase.Time) end = phase.Time;
                 var waitingAt = WaitingEvent(sequence, phase.EventIndex);
                 switch (phase.State)
@@ -433,21 +472,31 @@ public sealed class AnimationTiming
                     case AnimationSequencePhaseState.WaitingForRelease:
                         {
                             string label = "waiting for release";
-                            if (!open && list[i + 1].ReleasedBy is Guid by && Event(by) is { } releaser) label += " · released by " + AnimationPhrases.Safe(releaser.Sequence.Name) + " › " + Phrase(releaser);
-                            else if (open && !finished.ContainsKey(instance) && NoReleaserLeft(frame, instance, sequence)) label = "waiting · no releaser left";
+                            if (!last && list[i + 1].ReleasedBy is Guid by && Event(by) is { } releaser) label += " · released by " + AnimationPhrases.Safe(releaser.Sequence.Name) + " › " + Phrase(releaser);
+                            else if (open && current.NoReleaserLeft) label = "waiting · no releaser left";
                             lane.Bands.Add(new(AnimationTimingBandKind.WaitingForRelease, phase.Time, end, label) { Open = open, Instance = instance });
                             break;
                         }
                     case AnimationSequencePhaseState.WaitingForThreshold when end > phase.Time + 1e-6:
                         {
-                            // Phases have tick resolution: the wait ends where its event's occurrence started.
-                            if (waitingAt != null && lane.Marks.FirstOrDefault(m => m.Instance == instance && m.Event == waitingAt.Event.Id && m.Start >= phase.Time - 1e-6 && m.Start <= end + 1e-6) is { } reached)
-                            { end = reached.Start; open = false; }
+                            // A wait from before the retained trace holds only where the sequence provably stayed at that event on
+                            // that pass (the next phase's or the live status's cursor): truncation never proves an event did not run.
+                            bool atSameEvent = last ? status is { State: "Waiting for threshold" } && status.EventIndex == phase.EventIndex && status.Iteration == phase.Pass
+                                : list[i + 1].EventIndex == phase.EventIndex && list[i + 1].Pass == phase.Pass;
+                            if (frame.TraceDropped > 0 && phase.Time < traceFrom + AnimationSeconds.Tick - 1e-6 && !atSameEvent) break;
+                            // Phases have tick resolution: the wait ends at its event's earliest occurrence since it began.
+                            bool reached = false;
+                            if (waitingAt != null && occurred.TryGetValue((instance, waitingAt.Event.Id), out var times) && First(times, phase.Time - 1e-6) is double at && at <= end + 1e-6)
+                            { end = at; open = false; reached = true; }
                             if (end <= phase.Time + 1e-6) break;
                             string label = "waiting for threshold";
                             if (waitingAt != null && AnimationPhrases.ThresholdBadge(waitingAt.Event.StartMode, waitingAt.Event.Threshold) is { } badge)
                             {
-                                double? due = !open ? end : status == null ? null : frame.Time + Math.Max(0, waitingAt.Event.Threshold - waitingAt.Event.StartMode switch { 2 => status.SequenceElapsed, 3 => status.EventElapsed, _ => status.AnimationElapsed });
+                                // Due is the occurrence that ended the wait, or for a wait still holding at this event the clock's
+                                // remainder; a wait that ended otherwise (a pause, a stop) names no due time.
+                                double? due = reached ? end : open && atSameEvent && status != null
+                                    ? frame.Time + Math.Max(0, waitingAt.Event.Threshold - waitingAt.Event.StartMode switch { 2 => status.SequenceElapsed, 3 => status.EventElapsed, _ => status.AnimationElapsed })
+                                    : null;
                                 label += " · " + badge + (due is double d ? " → " + AnimationSeconds.Format(d) : "");
                             }
                             lane.Bands.Add(new(AnimationTimingBandKind.WaitingForThreshold, phase.Time, end, label) { Open = open, Event = waitingAt?.Event.Id, Instance = instance });
@@ -489,7 +538,7 @@ public sealed class AnimationTiming
             Emit(root, true);
         Truncated = truncated;
         Log = log.OrderBy(r => r.Time).ThenBy(r => r.Occurrence).ToArray();
-        Retained = frame.Trace.Count; Discarded = frame.TraceDropped;
+        Retained = frame.Trace.Count; Discarded = frame.TraceDropped; PhasesDropped = frame.PhasesDropped;
         MarkCount = marks;
         if (double.IsFinite(runStart)) { RunStart = runStart; RunEnd = Math.Max(runEnd, frame.Time); }
 
@@ -502,7 +551,8 @@ public sealed class AnimationTiming
             int laneCount = members.Length == 0 ? 0 : package.Entries[members[0]].AllSequences.Count();
             // A start the run refused (or has not reached) has no instance: nothing started.
             double? started = group.Instances.Count > 0 && double.IsFinite(group.First) ? group.First : null;
-            var ended = group.Instances.Count > 0 && group.Instances.All(finished.ContainsKey) ? group.Instances.Max(i => finished[i]) : (double?)null;
+            var ended = group.Instances.Count > 0 && !group.Instances.Any(states.Live)
+                ? group.Instances.Max(i => finished.TryGetValue(i, out double at) ? at : lastSeen.GetValueOrDefault(i, frame.Time)) : (double?)null;
             string state = GroupState(frame, members, group, refusedStarts);
             string label = GroupLabel(group, members);
             var row = new AnimationTimingLane("group:" + group.Key, AnimationTimingLaneKind.Group, label, group.Depth)
@@ -519,7 +569,7 @@ public sealed class AnimationTiming
             {
                 if (all.Count >= MaximumLanes) { truncated = true; return; }
                 if (!builders.TryGetValue(LaneId(group.Key, index), out var builder)) continue;
-                Add(builder.Build(package, group, index, members, frame, instances, phases, finished), visible && expanded);
+                Add(builder.Build(package, group, index, members, instances, states), visible && expanded);
             }
             foreach (var child in group.Children.OrderBy(c => c.First).ThenBy(c => c.Key, StringComparer.Ordinal)) Emit(child, visible && expanded);
         }
@@ -611,31 +661,27 @@ public sealed class AnimationTiming
             _ => null,
         };
     }
-    /// <summary>Whether every event that releases this sequence in its instance is done (none can release it again).</summary>
-    private bool NoReleaserLeft(AnimationFrame frame, long instance, Guid sequence)
+    /// <summary>The first phase at or after <paramref name="from"/> in a list in time order.</summary>
+    private static AnimationSequencePhase? First(List<AnimationSequencePhase> list, double from)
     {
-        var owner = frame.Instances.FirstOrDefault(i => i.Instance == instance);
-        if (owner == null || owner.Entry <= 0 || owner.Entry >= package.Entries.Count) return false;
-        var entry = package.Entries[owner.Entry];
-        var runtime = entry.Sequences;
-        int slot = runtime.FindIndex(s => s.Id == sequence);
-        if (slot < 0) return false;
-        string name = runtime[slot].Name;
-        foreach (var candidate in runtime)
-        {
-            int index = candidate.Events.FindIndex(e => e.Type == 22 && e.Bytes.Length >= 48 && (e.I32(44) == slot || e.I32(44) < 0 && e.Text(12) == name));
-            if (index < 0) continue;
-            var status = frame.Sequences.FirstOrDefault(s => s.Instance == instance && s.Sequence == candidate.Id);
-            bool loops = candidate.Events.Any(e => e.Type == 30);
-            if (status?.State is "Waiting for threshold" or "Running" or "Waiting for release" && (status.EventIndex <= index || loops)) return false;
-        }
-        return true;
+        int low = 0, high = list.Count;
+        while (low < high) { int mid = (low + high) >>> 1; if (list[mid].Time < from) low = mid + 1; else high = mid; }
+        return low < list.Count ? list[low] : null;
+    }
+    /// <summary>The first time at or after <paramref name="from"/> in a list in time order.</summary>
+    private static double? First(List<double> list, double from)
+    {
+        int low = 0, high = list.Count;
+        while (low < high) { int mid = (low + high) >>> 1; if (list[mid] < from) low = mid + 1; else high = mid; }
+        return low < list.Count ? list[low] : null;
     }
 
     private sealed class Builder(string id)
     {
         public readonly string Id = id;
         public readonly List<AnimationTimingSequence> Sequences = [];
+        /// <summary>Each instance of the group with its sequence on this lane.</summary>
+        public readonly List<(long Instance, Guid Sequence)> Pairs = [];
         public readonly List<AnimationTimingMark> Marks = [];
         public readonly List<AnimationTimingBand> Bands = [];
         public string Name(AnimationPackage package)
@@ -644,45 +690,16 @@ public sealed class AnimationTiming
             var sequence = package.Entries[Sequences[0].Entry].AllSequences.FirstOrDefault(s => s.Id == Sequences[0].Sequence);
             return sequence == null ? "" : sequence == package.Entries[Sequences[0].Entry].Primary ? "Cleanup" : sequence.Name.Length == 0 ? "Sequence" : AnimationPhrases.Safe(sequence.Name);
         }
-        public AnimationTimingLane Build(AnimationPackage package, Group group, int index, IReadOnlyList<int> members, AnimationFrame frame,
-            Dictionary<long, InstanceInfo> instances, Dictionary<(long, Guid), List<AnimationSequencePhase>> phases, Dictionary<long, double> finished)
+        public AnimationTimingLane Build(AnimationPackage package, Group group, int index, IReadOnlyList<int> members,
+            Dictionary<long, InstanceInfo> instances, AnimationSequenceStates states)
         {
             string name = Name(package);
             var first = Sequences.Count == 0 ? null : package.Entries[Sequences[0].Entry].AllSequences.FirstOrDefault(s => s.Id == Sequences[0].Sequence);
             bool waits = first?.ResetMode == 3;
             string label = name + (group.Instances.Count > 1 ? " ×" + group.Instances.Count.ToString(CultureInfo.InvariantCulture) : "");
-            // The state at the frame's time: the latest live instance's, else what its last phase left.
-            AnimationSequenceRunState run = AnimationSequenceRunState.NotReached; string state = "not started";
-            HashSet<Guid> ids = [.. Sequences.Select(s => s.Sequence)];
-            var live = group.Instances.Where(i => instances.TryGetValue(i, out var info) && info.Live).OrderByDescending(i => i).ToArray();
-            AnimationSequenceStatus? status = null;
-            foreach (long instance in live) { status = frame.Sequences.FirstOrDefault(s => s.Instance == instance && ids.Contains(s.Sequence)); if (status != null) break; }
-            var owner = status == null ? null : frame.Instances.FirstOrDefault(i => i.Instance == status.Instance);
-            bool paused = status != null && frame.Bindings.Any(b => b.Instance == status.Instance && b.State == AnimationBindingLifecycle.Paused);
-            if (status != null && owner is { Finished: false })
-            {
-                (run, state) = status.State switch
-                {
-                    "Waiting for threshold" => paused ? (AnimationSequenceRunState.Paused, "paused") : (AnimationSequenceRunState.WaitingForThreshold, "waiting for threshold"),
-                    "Running" => paused ? (AnimationSequenceRunState.Paused, "paused") : (AnimationSequenceRunState.Running, "running"),
-                    "Complete" => (AnimationSequenceRunState.Complete, "complete"),
-                    "Waiting for release" => (AnimationSequenceRunState.WaitingForRelease, "waiting for release"),
-                    "Awaiting excluded dependency" => (AnimationSequenceRunState.Blocked, "blocked"),
-                    _ => (AnimationSequenceRunState.Unavailable, "unavailable"),
-                };
-                if (owner.Cleanup && index != 0) (run, state) = (AnimationSequenceRunState.Stopped, "stopped");
-            }
-            else if (Bands.Count > 0 || Marks.Count > 0)
-            {
-                var last = group.Instances.SelectMany(i => Sequences.Select(s => phases.GetValueOrDefault((i, s.Sequence)))).Where(l => l is { Count: > 0 }).Select(l => l![^1]).OrderBy(p => p.Time).LastOrDefault();
-                (run, state) = last?.State switch
-                {
-                    AnimationSequencePhaseState.Stopped => (AnimationSequenceRunState.Stopped, "stopped"),
-                    AnimationSequencePhaseState.WaitingForRelease => (AnimationSequenceRunState.WaitingForRelease, "waiting for release"),
-                    AnimationSequencePhaseState.Unavailable => (AnimationSequenceRunState.Unavailable, "unavailable"),
-                    _ => (AnimationSequenceRunState.Complete, "complete"),
-                };
-            }
+            // The state at the frame's time by the rule the graph's run overlay shares.
+            var run = states.Of(Pairs).State;
+            string state = AnimationSequenceState.Words(run);
             var bands = Merge(Bands);
             double? started = Marks.Count > 0 ? Marks.Min(m => m.Start) : null;
             return new(Id, AnimationTimingLaneKind.Sequence, label, group.Depth + 1)
@@ -694,18 +711,28 @@ public sealed class AnimationTiming
                 Tooltip = (index == 0 ? "Cleanup · runs on stop or reset" : name + (waits ? " · waits for release" : "")) + " · " + state,
             };
         }
-        /// <summary>Overlapping bands of one kind (several instances in a group) as one; at most <see cref="MaximumBandsPerLane"/>.</summary>
+        /// <summary>
+        /// Overlapping bands of one kind that several instances of a group hold at once, as one with the label and state of the
+        /// band that holds longest (an open one). An instance's own consecutive bands never share one (only a release, or a wait
+        /// that began again, separates them): a band joins only when its instance's previous band of that kind ended before the
+        /// merged band began. At most <see cref="MaximumBandsPerLane"/>.
+        /// </summary>
         private static IReadOnlyList<AnimationTimingBand> Merge(List<AnimationTimingBand> bands)
         {
             List<AnimationTimingBand> merged = [];
             foreach (var kind in bands.GroupBy(b => b.Kind))
             {
                 AnimationTimingBand? current = null;
-                foreach (var band in kind.OrderBy(b => b.Start))
+                Dictionary<long, double> previous = [];
+                foreach (var band in kind.OrderBy(b => b.Start).ThenBy(b => b.Instance))
                 {
-                    if (current != null && band.Kind != AnimationTimingBandKind.Complete && band.Start <= current.End + 1e-6)
+                    bool joins = current != null && band.Kind != AnimationTimingBandKind.Complete && band.Start <= current.End + 1e-6
+                        && !(previous.TryGetValue(band.Instance, out double ended) && ended > current.Start - 1e-6);
+                    previous[band.Instance] = Math.Max(previous.GetValueOrDefault(band.Instance, double.NegativeInfinity), band.End);
+                    if (joins)
                     {
-                        current = current with { End = Math.Max(current.End, band.End), Open = current.Open || band.Open && band.End >= current.End };
+                        var longer = band.Open && !current!.Open || band.Open == current!.Open && band.End > current.End + 1e-9 ? band : current;
+                        current = longer with { Start = current.Start, End = Math.Max(current.End, band.End), Open = current.Open || band.Open };
                         continue;
                     }
                     if (current != null) merged.Add(current);
