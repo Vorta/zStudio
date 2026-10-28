@@ -333,7 +333,7 @@ public partial class MainWindow
                 return Result(shownDocument?.SourceWorld != null ? WorldAnimationRuntimeData(Text(a,"section"),Int(a,"offset"),Int(a,"limit",100),Text(a,"query"))
                     : TargetAnimation(a).RuntimeData(Text(a,"section"),Int(a,"offset"),Int(a,"limit",100),Text(a,"query")));
             });
-        RegisterJob(r, "animation_select", "Select an authored sequence/event without changing playback phase. Source-world selection opens its Properties record without seeking or retargeting the pinned root.",
+        RegisterJob(r, "animation_select", "Select an authored sequence/event without changing playback phase or seeking: in a source map's Animation mode the opened binding's sequence or event shows in the Inspector; in a compiled animation its node or row is selected in the graph, as animation_graph select does.",
             [PreviewParameter,P("sequence","string","Sequence GUID; omit for entry."),P("event","string","Event GUID; omit for sequence.")], false, async (a, token) =>
         {
             if (shownDocument?.SourceWorld != null)

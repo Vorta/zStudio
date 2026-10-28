@@ -17,9 +17,10 @@
       "gui": "MainWindow.Navigation:CameraKeyboard",
       "tools": [
         "zstudio_camera",
-        "zstudio_animation_options"
+        "zstudio_animation_options",
+        "zstudio_animation_transport"
       ],
-      "note": "Numpad views/orbit/pan/zoom/projection/framing and Home use shared semantic operations. Keyboard zoom uses the pointer inside the viewport, otherwise its center, matching camera zoom screenPoint. Native text, timeline and menu keys remain native; Numpad 0 shares Follow camera."
+      "note": "Numpad views/orbit/pan/zoom/projection/framing and Home use shared semantic operations (in Animation mode and a compiled animation Home and End in the view go to the playback range's start and end: animation_transport seek). Keyboard zoom uses the pointer inside the viewport, otherwise its center, matching camera zoom screenPoint. Native text, Timing and menu keys remain native; Numpad 0 shares Follow camera."
     },
     {
       "gui": "SceneViewport.Navigation:ConfigureNavigation",

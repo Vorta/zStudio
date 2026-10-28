@@ -29,7 +29,7 @@ public partial class MainWindow
                 P("action", "string", "Operation. With definition: the opened binding's guides and preview; without definition: range tests, the chip's toggles and existing drop windows.", true, "show", "hide", "analyze", "select", "begin", "set", "confirm", "cancel", "undo", "redo", "save", "samples", "releases", "state", "frame", "preview", "exit", "markers", "events", "clear", "ranges", "overlay"),
                 new("definition", "integer", "Source definition index for generic motion paths.", Minimum: 0),
                 new("seconds", "number", "Optional analyzed preview range (seconds).", NumberMinimum: 0.0166666666666667, NumberMaximum: 3600),
-                P("snapshot", "string", "Current Parachute snapshot, required for drop-window actions except show."),
+                P("snapshot", "string", "Current drop-window snapshot, required for drop-window actions except show."),
                 new("entry", "integer", "Exact binding for analyze (with definition: default the opened binding; without: a discovered flight entry).", Minimum: 0, Maximum: short.MaxValue),
                 P("window", "string", "Current drop-window UUID for select."), P("token", "string", "Current draft token for set/confirm/cancel."),
                 new("start", "number", "Window start on the flight sequence's clock in seconds; mutually exclusive with segment/fraction.", NumberMinimum: 0, NumberMaximum: 3600),

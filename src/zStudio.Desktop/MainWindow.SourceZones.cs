@@ -188,7 +188,7 @@ public partial class MainWindow
             if (viewport.IsPickupDragging || viewport.IsTerrainStroking || viewport.IsAiPathPointerTransform || viewport.IsParachutePointerMoving)
                 throw new StudioCommandException("busy", "Finish the current drag first.");
             if (viewport.AiPathEditingNetwork != null || viewport.HasParachutePreview)
-                throw new StudioCommandException("busy", "Finish the AI path or VTOL route editing before painting polygon zones.");
+                throw new StudioCommandException("busy", "Finish the AI path or drop-window editing before painting polygon zones.");
             ZoneFolder(session, build);
             StopWorldAnimationForEdit();
             if (flyCamera?.IsActive == true) flyCamera.End();
@@ -215,7 +215,7 @@ public partial class MainWindow
         RefreshZoneToolChrome();
     }
     /// <summary>
-    /// Another tool (AI path or VTOL route editing) takes the pointer: the polygon zone tool ends. It waits for the strokes
+    /// Another tool (AI path or drop-window editing) takes the pointer: the polygon zone tool ends. It waits for the strokes
     /// still applying, also those released before the tool was left.
     /// </summary>
     private const string ZoneOperationRunning = "another operation (such as an export, a check or terrain planning) is running; paint again when it has finished.";

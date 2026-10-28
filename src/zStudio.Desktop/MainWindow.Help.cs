@@ -85,7 +85,7 @@ public partial class MainWindow
     /// <summary>Animation mode's keys (design §17), as Help → Controls and formats and MCP help topic=animation-mode list them.</summary>
     internal static readonly (string Keys, string Where, string Does)[] AnimationModeKeys =
     [
-        ("Space", "Animation mode, outside text fields and focused buttons", "Play / Pause (over the Structure view a Space+drag pans)"),
+        ("Space", "Animation mode and a compiled animation, outside text fields and focused buttons", "Play / Pause (over the Structure view a Space+drag pans)"),
         (", .", "Animation mode and a compiled animation, outside text fields", "Step back / forward one 1/60 s tick (Shift: one second)"),
         ("← →", "Timing (lanes focused)", "Step one tick (Shift: one second); Ctrl+← → the previous / next mark on the selected lane"),
         ("Home End", "Timing; the 3D view (a compiled animation's too)", "Go to the playback range's start / end"),
@@ -94,7 +94,7 @@ public partial class MainWindow
         ("Enter / Ctrl+Enter", "Structure: a reference node", "Expand / Open (Back returns)"),
         ("G T F", "Structure: a condition's question row", "Game / True / False switch"),
         ("F2", "An event in Structure, Timing or the Log", "Focus the Inspector's Start threshold"),
-        ("Alt+Enter", "Anywhere in Animation mode", "Focus the Inspector's first field"),
+        ("Alt+Enter", "Animation mode and a compiled animation", "Focus the Inspector's first field"),
         ("Ctrl+0, Ctrl+=, Ctrl+−", "Structure", "Fit, zoom in, zoom out"),
         ("Ctrl+1 / Ctrl+2 / Ctrl+3", "Animation mode and a compiled animation", "Structure / Timing / Split"),
         ("Alt+← / Alt+→", "Animation mode", "Back / Forward through opened definitions"),
