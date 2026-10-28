@@ -344,7 +344,7 @@ internal sealed partial class SourceSectionCard : Border
     internal void Discard()
     {
         if (Applying) return;
-        animationChanges.Clear(); RerenderAnimation();
+        animationChanges.Clear(); typedFrom.Clear(); RerenderAnimation();
         if (label != null) label.Text = labelInitial;
         foreach (var input in inputs)
             for (int i = 0; i < input.Boxes.Length; i++) Restore(input.Boxes[i], input.Initial[i]);
@@ -371,7 +371,7 @@ internal sealed partial class SourceSectionCard : Border
     /// <summary>The shown values become the stored ones (after an accepted edit).</summary>
     private void Adopt()
     {
-        animationChanges.Clear();
+        animationChanges.Clear(); typedFrom.Clear();
         if (label != null) labelInitial = label.Text.Trim();
         // The edit stored Buddies Activate when it was checked, or when Buddies Attack was turned on (Plan adds it then).
         var attack = inputs.FirstOrDefault(i => i.Field.Key == "attack_buddy");
@@ -412,7 +412,7 @@ internal sealed partial class SourceSectionCard : Border
 
     private void Begin(SectionEntry entry, DocumentModel document)
     {
-        animationChanges.Clear(); animationDefinition = null; inspection = null; inspectedModel = null; inspectorSections.Clear(); fieldMarks.Clear(); thresholdShown = null;
+        animationChanges.Clear(); typedFrom.Clear(); animationDefinition = null; inspection = null; inspectedModel = null; inspectorSections.Clear(); fieldMarks.Clear(); thresholdShown = null;
         if (Entry?.Key != entry.Key || !ReferenceEquals(Document, document)) draftId = Guid.NewGuid();
         Entry = entry; Document = document;
         body.Children.Clear(); inputs.Clear(); networkRows.Clear(); buddiesBar = null; activateWritten = false; label = null; labelInitial = "";

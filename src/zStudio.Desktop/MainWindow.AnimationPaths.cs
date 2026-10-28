@@ -268,16 +268,33 @@ public partial class MainWindow
         else return null;
         if (entry <= 0 || entry >= graph.Index.Package.Entries.Count) return null;
         var binding = graph.Index.Package.Entries[entry];
-        Vector3? center = null;
+        return new(id, entry, radius, gate, binding.AttachName, AttachCenter(entry, gate ? null : graph.Row(id)?.Event), where);
+    }
+    /// <summary>
+    /// Where a range test of <paramref name="entry"/> measures from: its callback node where the run has it now (a node without a
+    /// model has no pose, so the run reports it), else where the latest pass of <paramref name="condition"/> measured from, else
+    /// where the map places the binding's attach node.
+    /// </summary>
+    private Vector3? AttachCenter(int entry, Guid? condition)
+    {
+        var frame = worldAnimationSession?.CurrentFrame ?? worldAnimationSession?.LastFrame;
+        if (frame != null)
+        {
+            // The instance whose latest pass tested the condition, when it is still held; else the binding's latest instance.
+            var latest = condition is Guid ev ? frame.Conditions.LastOrDefault(c => c.Event == ev && c.Center != null) : null;
+            var attach = (latest != null ? frame.Attaches.FirstOrDefault(a => a.Instance == latest.Instance) : null)
+                ?? frame.Attaches.Where(a => a.Entry == entry).MaxBy(a => a.Instance);
+            if (attach != null) return attach.Position;
+            if (latest?.Center is Vector3 measured) return measured;
+        }
+        if (animationGraphIndex?.Package is not { } package || entry <= 0 || entry >= package.Entries.Count) return null;
+        var binding = package.Entries[entry];
         if (scene?.Mission is { } mission && scene.PreviewScene is { } data && mission.AnimationEntryRoots.TryGetValue(entry, out int root) && root >= 0 && root < data.Nodes.Count)
         {
-            int attach = binding.AttachName == binding.RootName ? root : FindBelow(data, root, binding.AttachName) ?? root;
-            // The attach node where the run has it now (it may move), else where the map places it.
-            var frame = worldAnimationSession?.CurrentFrame ?? worldAnimationSession?.LastFrame;
-            center = frame?.Nodes.FirstOrDefault(p => p.SourceNode == attach) is { } pose ? pose.Transform.Translation
-                : zStudio.Rendering.SceneViewport.WorldTransform(data, attach).Translation;
+            int node = binding.AttachName == binding.RootName ? root : FindBelow(data, root, binding.AttachName) ?? root;
+            return zStudio.Rendering.SceneViewport.WorldTransform(data, node).Translation;
         }
-        return new(id, entry, radius, gate, binding.AttachName, center, where);
+        return null;
     }
     /// <summary>Every range condition and range gate of the opened animation and its expanded calls (the graph's shown frames).</summary>
     private List<RangeTestGeometry> AllRanges()

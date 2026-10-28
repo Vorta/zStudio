@@ -359,6 +359,9 @@ internal sealed class AnimationPanel : Border
     /// </summary>
     internal void SetNotices(IReadOnlyList<AnimationNotice> shown)
     {
+        // The run refreshes this many times a second: an open flyout is rebuilt only when what it lists changed (its scroll
+        // position, an open approximations line and a hovered Go to stay otherwise).
+        if (ReferenceEquals(shown, notices) || shown.SequenceEqual(notices)) return;
         notices = shown;
         int specific = shown.Count(n => !n.Generic), generic = GenericNotices(shown).Count;
         noticesChip.Visibility = shown.Count > 0 ? Visibility.Visible : Visibility.Collapsed;

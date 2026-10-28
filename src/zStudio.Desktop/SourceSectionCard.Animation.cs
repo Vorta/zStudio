@@ -72,6 +72,8 @@ internal sealed partial class SourceSectionCard
 
     private SourceAnimationEdits.Definition? animationDefinition;
     private readonly Dictionary<string, SourceAnimationEdits.Change> animationChanges = [];
+    /// <summary>A threshold value box being typed in: the field's draft change before the typing (null: none), which Escape restores.</summary>
+    private readonly Dictionary<string, SourceAnimationEdits.Change?> typedFrom = new(StringComparer.Ordinal);
     private string? animationRecord;
     private long animationRevision = -1;
     private FrameworkElement? animationDrops;
@@ -629,9 +631,19 @@ internal sealed partial class SourceSectionCard
             editor.SetText(numeric ? Sentence(clock, seconds) : "The stored value is not a number; edit it in the value box.", item.Observed, item.Note);
             if (field != null)
             {
+                editor.TypingBegan += () => typedFrom[field.Id] = animationChanges.GetValueOrDefault(field.Id);
                 editor.TextEdited += text => Change(field, [Current(field).Values.ElementAtOrDefault(0) ?? clock, text]);
+                // Escape in the value box: the field's draft change goes back to what it was before the typing (P1: Apply never
+                // writes text the field no longer shows).
+                editor.TypingReverted += () =>
+                {
+                    if (Applying || !typedFrom.Remove(field.Id, out var before)) return;
+                    if (before == null) animationChanges.Remove(field.Id); else animationChanges[field.Id] = before;
+                    Changed();
+                };
                 editor.ValueProposed += value =>
                 {
+                    typedFrom.Remove(field.Id);
                     string mode = Current(field).Values.ElementAtOrDefault(0) ?? clock;
                     Change(field, [mode, value.ToString("R", CultureInfo.InvariantCulture)]);
                     editor.SetValue(mode, value, editable);
@@ -639,6 +651,7 @@ internal sealed partial class SourceSectionCard
                 };
                 editor.ClockProposed += mode =>
                 {
+                    typedFrom.Remove(field.Id);
                     var current = Current(field).Values;
                     Change(field, [mode, current.ElementAtOrDefault(1) ?? "0"]);
                     editor.SetValue(mode, double.TryParse(current.ElementAtOrDefault(1), NumberStyles.Float, CultureInfo.InvariantCulture, out double kept) && double.IsFinite(kept) ? kept : 0, editable);
@@ -904,6 +917,7 @@ internal sealed partial class SourceSectionCard
         if (animationChanges.Keys.Concat(changes.Select(c => c.Field)).Distinct().Count() > 256) throw new InvalidOperationException("Apply the current changes before editing more fields.");
         foreach (var change in changes)
         {
+            typedFrom.Remove(change.Field);
             var field = animationDefinition.Records.SelectMany(r => r.Fields).Single(f => f.Id == change.Field);
             if (change.Values == null && !field.Present || change.Values != null && field.Present && change.Values.SequenceEqual(field.Values)) animationChanges.Remove(change.Field);
             else animationChanges[change.Field] = change;

@@ -95,6 +95,9 @@ public partial class MainWindow
                 animationForward.Clear();
             }
             if (entering && ZoneToolEngaged) LeaveZoneTool();
+            // The drop-window analysis and the shown guides belong to the opened definition: opening another one closes them
+            // (selecting another definition's items in the graph or Timing, which shows their card, keeps them).
+            if (!entering && animationMode!.Definition != definition) { EndDropMove(); CloseParachutes(); HideAllAnimationGuides(); }
             DetachWorldAnimationRun();
             animationMode = target; animationKept = null; animationFailure = null; previewId = Guid.NewGuid();
             animationGraphSelection = null; animationGraphOutline = null; animationInspected = null;

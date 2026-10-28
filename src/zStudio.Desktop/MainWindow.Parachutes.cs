@@ -649,11 +649,12 @@ public partial class MainWindow
                 bool moved = parachuteDraft?.Window.Id == window.Id && preview?.Windows.FirstOrDefault(w => w.Id == window.Id) is not null;
                 var shown = moved ? preview!.Windows.First(w => w.Id == window.Id) : window;
                 double maximum = Math.Min(window.MaximumStart, analysis.CycleSeconds);
-                bars.Add(new(window.Id, i + 1, cycle, shown.EffectiveStart, window.EffectiveEnd - window.EffectiveStart, window.MinimumStart, maximum) { Moved = moved });
+                // The authored start and duration on the flight sequence's clock (what a drag moves and the list shows), not the dispatch tick.
+                bars.Add(new(window.Id, i + 1, cycle, shown.Start, window.Duration, window.MinimumStart, maximum) { Moved = moved });
             }
         return new(anchor.Id, bars, !state.Stale && parachuteDraft?.Accepting != true)
         {
-            Selected = state.Selected,
+            Selected = state.Selected, Stale = state.Stale,
             Note = state.Stale ? "Stale: analyze the drop windows again." : cycles.Length == 0 ? "Play or seek: the windows show on every flight cycle the run reaches." : "",
         };
     }
@@ -774,7 +775,7 @@ public partial class MainWindow
             var preview = parachuteDraft?.DisplayedPreview;
             ParachuteWindows.ItemsSource = state.Analysis?.Windows.Select((w, i) =>
             {
-                double start = parachuteDraft?.Window.Id == w.Id && preview?.Windows.FirstOrDefault(p => p.Id == w.Id) is { } moved ? moved.EffectiveStart : w.Start;
+                double start = parachuteDraft?.Window.Id == w.Id && preview?.Windows.FirstOrDefault(p => p.Id == w.Id) is { } moved ? moved.Start : w.Start;
                 return new ParachuteWindowChoice(w.Id, (i + 1).ToString(CultureInfo.InvariantCulture), AnimationSeconds.Format(start), AnimationSeconds.Format(w.Duration));
             }).ToArray() ?? [];
             ParachuteWindows.SelectedItem = ParachuteWindows.Items.Cast<ParachuteWindowChoice>().FirstOrDefault(w => w.Id == state.Selected);

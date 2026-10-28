@@ -40,6 +40,8 @@ internal sealed record AnimationTimingDrops(string AnchorLane, IReadOnlyList<Ani
 {
     public Guid? Selected { get; init; }
     public string Note { get; init; } = "";
+    /// <summary>The analysis is stale (an event draft or edit, a scenario change): the bars show where it found the windows, muted.</summary>
+    public bool Stale { get; init; }
 }
 /// <summary>One window in one flight cycle: shared-clock start and end, the cycle's start, and its start's bounds on the sequence clock.</summary>
 internal sealed record AnimationTimingDropBar(Guid Window, int Number, double Cycle, double Start, double Duration, double Minimum, double Maximum)

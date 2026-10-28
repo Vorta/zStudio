@@ -559,7 +559,7 @@ public partial class MainWindow
                     string source = PlayerSourceWords(animationGraphOverlay?.Player?.Source ?? scenario.Player.Kind switch { AnimationPlayerReferenceKind.Custom => "custom", _ => "aiv start" });
                     if (pass is { Unavailable: "no player" })
                         return $"The player ({source}) has no position on this map (no player start on this difficulty), so within {AnimationPhrases.Number(radius)} of {attach} is false.";
-                    double? distance = pass?.Measured ?? (RangeGeometry(row.Entry) is { Center: { } c, Player: { } p } ? Vector3.Distance(c, p) : null);
+                    double? distance = pass?.Measured ?? (RangeGeometry(row.Entry, row.Event) is { Center: { } c, Player: { } p } ? Vector3.Distance(c, p) : null);
                     if (distance is not double d) return $"True when the player ({source}) is within {AnimationPhrases.Number(radius)} of {attach}. The player's position is unknown on this difficulty.";
                     bool inside = pass?.Value ?? d <= radius;
                     if (pass is { Forced: true }) inside = d <= radius;
@@ -596,16 +596,12 @@ public partial class MainWindow
         "callback 10" or "callback 17" => "moved by " + source, _ => source,
     };
     /// <summary>A range test's geometry: the attach node's position, the player reference now (or as the scenario sets it) and where it came from.</summary>
-    private (Vector3? Center, Vector3? Player, string Attach)? RangeGeometry(int entry)
+    private (Vector3? Center, Vector3? Player, string Attach)? RangeGeometry(int entry, Guid condition)
     {
         if (animationGraphIndex?.Package is not { } package || entry <= 0 || entry >= package.Entries.Count) return null;
-        Vector3? center = null;
         var binding = package.Entries[entry];
-        if (scene?.Mission is { } mission && scene.PreviewScene is { } data && mission.AnimationEntryRoots.TryGetValue(entry, out int root) && root >= 0 && root < data.Nodes.Count)
-        {
-            int attach = binding.AttachName == binding.RootName ? root : FindBelow(data, root, binding.AttachName) ?? root;
-            center = zStudio.Rendering.SceneViewport.WorldTransform(data, attach).Translation;
-        }
+        // As the view's ring: the callback node where the run has it, else where the latest pass measured, else the map's.
+        Vector3? center = AttachCenter(entry, condition);
         var scenario = worldAnimationConfiguration;
         Vector3? player = animationGraphOverlay?.Player?.Position
             ?? (scenario.Player.Kind == AnimationPlayerReferenceKind.Custom ? scenario.CustomPlayer
@@ -631,11 +627,36 @@ public partial class MainWindow
         if (block != null)
         {
             int index = block.Branches.ToList().FindIndex(br => br.Marker == row.Event);
-            var taken = latest.Value ? block.Branches[index] : block.Branches.ElementAtOrDefault(index + 1);
+            var taken = TakenBranch(block, index, latest, frame!.Conditions);
             if (taken != null)
-                items.Add(new InspectorText($"Taken at {AnimationSeconds.Format(latest.Time)}: {taken.Label}" + (taken.Empty ? " (nothing)" : $" ({AnimationNotice.Plural(taken.Last - taken.First + 1, "1 event", "events")})") + "."));
+                items.Add(new InspectorText($"Taken at {AnimationSeconds.Format(latest.Time)}: {taken.Label}" + (taken.Empty ? taken.Label.EndsWith("(nothing)", StringComparison.Ordinal) ? "" : " (nothing)" : $" ({AnimationNotice.Plural(taken.Last - taken.First + 1, "1 event", "events")})") + "."));
         }
         return new("outcomes", "Outcomes") { Summary = AnimationNotice.Plural(results.Length, "1 pass", "passes"), Live = true, Items = items };
+    }
+
+    /// <summary>
+    /// The branch a pass of the condition at <paramref name="index"/> took: its own when true; when false the chain goes on to
+    /// the next ELSEIF, whose result of the same pass (the same instance, in the same tick) decides, and so on to the ELSE or the
+    /// implicit "if false". Null when a later ELSEIF of that pass is not in the retained results.
+    /// </summary>
+    private static AnimationGraphBranch? TakenBranch(AnimationGraphBlock block, int index, AnimationConditionResult latest, IReadOnlyList<AnimationConditionResult> conditions)
+    {
+        if (latest.Value) return block.Branches[index];
+        int at = -1;
+        for (int i = conditions.Count - 1; i >= 0; i--) if (ReferenceEquals(conditions[i], latest)) { at = i; break; }
+        for (int b = index + 1; b < block.Branches.Count; b++)
+        {
+            var branch = block.Branches[b];
+            if (branch.Condition == null || branch.Marker is not Guid marker) return branch;
+            // The ELSEIF a false IF reaches is tested in the same dispatch, right after it.
+            int next = -1;
+            for (int i = at + 1; at >= 0 && i < conditions.Count && conditions[i].Time - latest.Time <= AnimationPlayer.StepSeconds + 1e-9; i++)
+                if (conditions[i].Instance == latest.Instance && conditions[i].Event == marker) { next = i; break; }
+            if (next < 0) return null;
+            if (conditions[next].Value) return branch;
+            at = next;
+        }
+        return null;
     }
 
     private InspectorSection TargetSection(SourceSceneSnapshot source, AnimationGraph graph, AnimationGraphRow row)
@@ -935,10 +956,13 @@ public partial class MainWindow
     private async Task ClearAnimationSelectionAsync(CancellationToken token)
     {
         if (animationMode is not { } mode) return;
-        animationGraphSelection = null; animationGraphOutline = null; animationInspected = null;
+        // An open draft keeps the drafted record's card (switching the card's definition would drop the draft, and the opened
+        // definition's card on another definition's model would mismatch it): only the selection and its outline go.
+        bool draft = HasSectionDraft();
+        animationGraphSelection = null; animationGraphOutline = null;
+        if (!draft) animationInspected = null;
         animationGraphView?.Select(null); animationTimingView?.Select(null);
-        // An open draft keeps its card (switching the card's definition would drop it): only the selection goes.
-        if (mode.Document == shownDocument && !HasSectionDraft() && (SectionSelection == null || SelectedAnimationDefinition()?.Definition.Index != mode.Definition))
+        if (mode.Document == shownDocument && !draft && (SectionSelection == null || SelectedAnimationDefinition()?.Definition.Index != mode.Definition))
             await EnsureAnimationCardAsync(mode.Document, mode.Definition, mode.Entry > 0 ? mode.Entry : null, token, preserveTimeline: true);
         ApplySectionPresentation();
         RefreshAnimationInspector();
@@ -1078,11 +1102,12 @@ public partial class MainWindow
                     Generic = generic,
                 });
             }
-            foreach (var group in frame.Refusals.Where(r => shown.Contains(r.Entry)).GroupBy(r => r.Entry))
+            // One notice per binding and reason: refusals for different reasons (invalidated, prerequisites, a back-link) stay apart.
+            foreach (var group in frame.Refusals.Where(r => shown.Contains(r.Entry)).GroupBy(r => (r.Entry, r.Reason)))
             {
                 var last = group.Last();
-                notices.Add(new($"refused:{group.Key}", "refused", "Warning", $"Refused start of {last.Name} #{last.Entry}: {AnimationRunOverlay.Refusal(last)}" + (last.ScenarioStart ? " (a scenario start)" : ""))
-                { Node = NodeOf(group.Key), Lane = LaneOf(group.Key), Entry = group.Key, Time = last.Time, Count = group.Count(), Category = "Preview" });
+                notices.Add(new($"refused:{group.Key.Entry}:{group.Key.Reason}", "refused", "Warning", $"Refused start of {last.Name} #{last.Entry}: {AnimationRunOverlay.Refusal(last)}" + (last.ScenarioStart ? " (a scenario start)" : ""))
+                { Node = NodeOf(group.Key.Entry), Lane = LaneOf(group.Key.Entry), Entry = group.Key.Entry, Time = last.Time, Count = group.Count(), Category = "Preview" });
             }
             foreach (var group in frame.PrerequisiteStarts.Where(p => p.Outcome == "ignored" && shown.Contains(p.Entry)).GroupBy(p => p.Entry))
             {

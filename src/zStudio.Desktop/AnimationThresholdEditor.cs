@@ -37,11 +37,17 @@ public sealed class AnimationThresholdEditor : UserControl
     private string mode = "ANIMATION_OFFSET";
     private bool editable;
     private bool updating;
+    /// <summary>The value box holds typed text the draft took but no Enter, focus loss, step or drag has committed yet.</summary>
+    private bool typing;
     public event Action<double>? ValueProposed;
     /// <summary>Another clock was chosen: an explicit edit of the threshold's clock (its value stays).</summary>
     public event Action<string>? ClockProposed;
     /// <summary>Every user text edit, including incomplete or invalid input, participates in the shared draft.</summary>
     public event Action<string>? TextEdited;
+    /// <summary>The first text edit since the value box was last committed or restored (raised before its <see cref="TextEdited"/>).</summary>
+    public event Action? TypingBegan;
+    /// <summary>Escape restored the value box: the draft takes back what the typing changed since <see cref="TypingBegan"/>.</summary>
+    public event Action? TypingReverted;
     public double Value => value;
     public string ClockMode => mode;
 
@@ -52,11 +58,13 @@ public sealed class AnimationThresholdEditor : UserControl
         Border segmented = new() { CornerRadius = new(5), BorderThickness = new(1), Padding = new(2), HorizontalAlignment = HorizontalAlignment.Left };
         segmented.SetResourceReference(BackgroundProperty, "ControlFillColorTertiaryBrush");
         segmented.SetResourceReference(BorderBrushProperty, "DividerStrokeColorDefaultBrush");
-        StackPanel options = new() { Orientation = Orientation.Horizontal };
+        AnimationSegmentRow options = new();
         clocks = Clocks.Select(c =>
         {
-            ToggleButton option = new() { Content = new TextBlock { Text = c.Text, FontSize = 12.5 }, ToolTip = c.Tip, Padding = new(10, 0, 10, 0), Height = 26, Tag = c.Mode };
+            // A narrow Inspector wraps "After previous" rather than trimming it.
+            ToggleButton option = new() { Content = new TextBlock { Text = c.Text, FontSize = 12.5, TextWrapping = TextWrapping.WrapWithOverflow, TextAlignment = TextAlignment.Center }, ToolTip = c.Tip, Padding = new(6, 2, 6, 2), Tag = c.Mode };
             option.SetResourceReference(StyleProperty, "SegmentOption");
+            option.Height = double.NaN; option.MinHeight = 26; option.VerticalAlignment = VerticalAlignment.Stretch;
             AutomationProperties.SetName(option, c.Text + " clock");
             option.Click += (_, _) => { if (!updating) { RefreshClock(); if (editable && c.Mode != mode) ClockProposed?.Invoke(c.Mode); } };
             options.Children.Add(option);
@@ -83,19 +91,26 @@ public sealed class AnimationThresholdEditor : UserControl
         error.SetResourceReference(TextBlock.ForegroundProperty, "SystemFillColorCriticalBrush");
         panel.Children.Add(error); panel.Children.Add(sentence); panel.Children.Add(observed); panel.Children.Add(note);
         AutomationProperties.SetName(number, "Start threshold in seconds");
-        number.ToolTip = "The threshold in its own clock, in seconds. Enter keeps it in the draft; Escape restores the field.";
+        number.ToolTip = "The threshold in its own clock, in seconds. Enter keeps it in the draft; Escape restores the field and takes the typing out of the draft.";
         previous.Click += (_, _) => Propose(Nudge(-1));
         next.Click += (_, _) => Propose(Nudge(1));
         number.KeyDown += (_, e) =>
         {
-            if (e.Key == Key.Enter) { ProposeText(); e.Handled = true; }
-            else if (e.Key == Key.Escape) { updating = true; try { number.Text = Format(value); } finally { updating = false; } ShowError(null); e.Handled = true; }
+            if (e.Key == Key.Enter) { if (ProposeText()) typing = false; e.Handled = true; }
+            else if (e.Key == Key.Escape)
+            {
+                // The field and the draft both go back to what they held before the typing.
+                updating = true; try { number.Text = Format(value); } finally { updating = false; }
+                ShowError(null); e.Handled = true;
+                if (typing) { typing = false; TypingReverted?.Invoke(); }
+            }
             else if (e.Key is Key.Up or Key.Down) { Propose(Nudge(e.Key == Key.Up ? 1 : -1)); e.Handled = true; }
         };
-        number.LostKeyboardFocus += (_, _) => ProposeText();
+        number.LostKeyboardFocus += (_, _) => { if (ProposeText()) typing = false; };
         number.TextChanged += (_, _) =>
         {
             if (updating || !editable) return;
+            if (!typing) { typing = true; TypingBegan?.Invoke(); }
             ShowError(double.TryParse(number.Text, NumberStyles.Float, CultureInfo.InvariantCulture, out double parsed) && double.IsFinite(parsed) ? null : "Enter a finite time in seconds.");
             TextEdited?.Invoke(number.Text);
         };
@@ -137,7 +152,7 @@ public sealed class AnimationThresholdEditor : UserControl
         if (!double.IsFinite(threshold)) throw new ArgumentOutOfRangeException(nameof(threshold));
         mode = clockMode; value = threshold; editable = canEdit;
         updating = true;
-        try { if (!number.IsKeyboardFocusWithin) number.Text = Format(value); }
+        try { if (!number.IsKeyboardFocusWithin) { number.Text = Format(value); typing = false; } }
         finally { updating = false; }
         RefreshClock();
         number.IsReadOnly = !editable; previous.IsEnabled = next.IsEnabled = ruler.IsEnabled = editable;
@@ -159,15 +174,18 @@ public sealed class AnimationThresholdEditor : UserControl
     public void SetObserved(string? seen) { observed.Text = seen ?? ""; observed.Visibility = seen == null ? Visibility.Collapsed : Visibility.Visible; }
     /// <summary>The stored value exactly (never rounded by viewing).</summary>
     private static string Format(double n) => n.ToString("R", CultureInfo.InvariantCulture);
-    private void ProposeText()
+    /// <summary>Commits the typed value; false while the text is not a finite number (the typing stays revertible).</summary>
+    private bool ProposeText()
     {
-        if (!editable) return;
-        if (!double.TryParse(number.Text, NumberStyles.Float, CultureInfo.InvariantCulture, out double parsed) || !double.IsFinite(parsed)) { ShowError("Enter a finite time in seconds."); return; }
+        if (!editable) return false;
+        if (!double.TryParse(number.Text, NumberStyles.Float, CultureInfo.InvariantCulture, out double parsed) || !double.IsFinite(parsed)) { ShowError("Enter a finite time in seconds."); return false; }
         ShowError(null); Propose(parsed);
+        return true;
     }
     private void Propose(double proposed)
     {
         if (!editable || !double.IsFinite(proposed) || proposed == value) return;
+        typing = false;
         ValueProposed?.Invoke(proposed);
     }
     /// <summary>F2 and Alt+Enter land here.</summary>

@@ -4621,7 +4621,7 @@
   },
   {
     "Name": "zstudio_drafts",
-    "Description": "Read pending GUI drafts and their conflict token without committing or changing focus. section is the source map\u0027s zone or AI network card (its label or header fields).",
+    "Description": "Read pending GUI drafts and their conflict token without committing or changing focus. section is the source map\u0027s zone, AI network or animation card (its label, header fields or animation draft; source_animation apply and cancel resolve the last too).",
     "Mutates": false,
     "Parameters": [
       {

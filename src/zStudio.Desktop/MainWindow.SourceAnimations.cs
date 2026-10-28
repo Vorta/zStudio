@@ -209,7 +209,9 @@ public partial class MainWindow
     private async Task LoadAnimationCardCoreAsync(DocumentModel document, DefinitionEntry definition, CancellationToken token, bool analyze, bool preserveTimeline = false)
     {
         if (SectionCard().ShowsAnimation(document, definition)) return;
-        if (parachutes?.Entry is int priorEntry && !definition.Definition.Entries.Contains(priorEntry)) CloseParachutes();
+        // In Animation mode the analysis follows the opened definition (OpenAnimationModeAsync, Exit), not the card: a selection of
+        // another definition's item (a called animation's node, its rows or Timing lanes) shows that card and keeps it.
+        if (!InAnimationMode && parachutes?.Entry is int priorEntry && !definition.Definition.Entries.Contains(priorEntry)) CloseParachutes();
         sourceAnimationLoading?.Cancel();
         using var loading = CancellationTokenSource.CreateLinkedTokenSource(token, document.Lifetime.Token, shutdownToken);
         sourceAnimationLoading = loading;
@@ -266,8 +268,17 @@ public partial class MainWindow
             RequireNoDrafts();
             foreach (int stale in sourceAnimationPaths.Where(p => p.Value.Document != document || p.Value.Revision != revision).Select(p => p.Key).ToArray())
             { sourceAnimationPaths.Remove(stale); shownAnimationPaths.Remove(stale); viewport.ClearAnimationPaths(stale.ToString(CultureInfo.InvariantCulture)); }
-            if (sourceAnimationPaths.Count >= 32 && !sourceAnimationPaths.ContainsKey(definition) || sourceAnimationPaths.Where(p => p.Key != definition).Sum(p => p.Value.Analysis.Paths.Sum(path => (long)path.Points.Count)) + result.Paths.Sum(path => (long)path.Points.Count) > 432002)
-                throw new StudioCommandException("limit_exceeded", "The path cache is full; clear cached paths before analyzing more targets.");
+            long added = result.Paths.Sum(path => (long)path.Points.Count);
+            bool Full() => sourceAnimationPaths.Count >= 32 && !sourceAnimationPaths.ContainsKey(definition)
+                || sourceAnimationPaths.Where(p => p.Key != definition).Sum(p => p.Value.Analysis.Paths.Sum(path => (long)path.Points.Count)) + added > 432002;
+            // Paths evaluated for an earlier scenario can never be shown again (Show guides needs this scenario): they make room first.
+            if (Full())
+                foreach (int stale in sourceAnimationPaths.Where(p => p.Key != definition && p.Value.Scenario != scenario).Select(p => p.Key).ToArray())
+                {
+                    sourceAnimationPaths.Remove(stale); shownAnimationPaths.Remove(stale); viewport.ClearAnimationPaths(stale.ToString(CultureInfo.InvariantCulture));
+                    if (!Full()) break;
+                }
+            if (Full()) throw new StudioCommandException("limit_exceeded", "The path cache is full; clear cached paths before analyzing more targets.");
             sourceAnimationPaths[definition] = (Guid.NewGuid().ToString(), document, revision, entry, scenario, result); shownAnimationPaths.Add(definition);
             viewport.SetAnimationPaths(definition.ToString(CultureInfo.InvariantCulture), result.Paths);
             viewport.EmphasizeAnimationPaths(definition.ToString(CultureInfo.InvariantCulture));

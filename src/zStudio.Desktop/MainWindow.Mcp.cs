@@ -127,15 +127,19 @@ public partial class MainWindow
         if (HasInspectionDraft && (doc == null || inspectionDraft!.DraftDocument == doc))
             throw new StudioCommandException("pending_drafts", "Resolve the scene card draft explicitly before continuing.");
         if (HasSectionDraft(doc))
-            throw new StudioCommandException("pending_drafts", "Apply or revert the zone or AI network card's changes (drafts target section) before continuing.");
+            throw new StudioCommandException("pending_drafts", SectionDraftRefusal);
         if ((doc == null || shownDocument == doc) && animation?.HasAutomationDrafts == true)
             throw new StudioCommandException("pending_drafts", "Unfinished GUI input is retained. Inspect and explicitly resolve drafts before continuing.");
     }
+    /// <summary>The refusal a pending section card draft gives, naming the card that holds it and how MCP resolves it.</summary>
+    private string SectionDraftRefusal => sectionCard?.Entry is DefinitionEntry
+        ? "Apply or revert the animation card's changes (source_animation apply or cancel, or drafts target section) before continuing."
+        : "Apply or revert the zone or AI network card's changes (drafts target section) before continuing.";
     /// <remarks>With <paramref name="committing"/>, drafts whose commit is running (and called this) do not count.</remarks>
     private void RequireNoDrafts(DocumentModel? doc = null, bool committing = false, SceneInspectionCard? committingCard = null, AiPathDraft? committingAiPath = null, ParachuteDraft? committingParachute = null, bool committingSection = false)
     {
         if (!committingSection && HasSectionDraft(doc))
-            throw new StudioCommandException("pending_drafts", "Apply or revert the zone or AI network card's changes (drafts target section) before continuing.");
+            throw new StudioCommandException("pending_drafts", SectionDraftRefusal);
         if (parachuteDraft is { } drop && drop != committingParachute && (doc == null || doc == drop.Session.World || doc == drop.Session.Owner))
             throw new StudioCommandException("pending_drafts", "Apply or revert the drop-window move before continuing.");
         if (HasAiPathDraft && aiPathDraft != committingAiPath && (doc == null || aiPathDraft!.Document == doc))

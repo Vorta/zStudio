@@ -276,8 +276,9 @@ internal sealed partial class AnimationTimingView
         {
             var g = owner.Palette.Graph;
             if (owner.State.Drops is not { } drops) return;
-            var fill = new SolidColorBrush(Color.FromArgb(g.Dark ? (byte)110 : (byte)90, 0x22, 0xC6, 0xE6)); fill.Freeze();
-            var edge = new Pen(new SolidColorBrush(Color.FromRgb(0x22, 0xC6, 0xE6)), 1.25); edge.Freeze();
+            // A stale analysis keeps its bars where it found the windows, muted with a dashed edge, and says so at the lane's start.
+            var fill = new SolidColorBrush(Color.FromArgb(drops.Stale ? (byte)36 : g.Dark ? (byte)110 : (byte)90, 0x22, 0xC6, 0xE6)); fill.Freeze();
+            var edge = new Pen(new SolidColorBrush(Color.FromArgb(drops.Stale ? (byte)150 : (byte)255, 0x22, 0xC6, 0xE6)), 1.25); if (drops.Stale) edge.DashStyle = new DashStyle([3, 2], 0); edge.Freeze();
             var ghost = new Pen(g.Accent, 1.5) { DashStyle = new DashStyle([2, 2], 0) }; ghost.Freeze();
             if (drops.Bars.Count == 0 && drops.Note.Length > 0)
             {
@@ -292,7 +293,7 @@ internal sealed partial class AnimationTimingView
                 var rect = new Rect(Math.Max(a, ClockLeft - 2), y + 4, Math.Max(2, Math.Min(b, ActualWidth + 2) - Math.Max(a, ClockLeft - 2)), height - 8);
                 dc.DrawRoundedRectangle(fill, edge, rect, 3, 3);
                 if (drops.Selected == bar.Window) dc.DrawRoundedRectangle(null, g.AccentOutline, new Rect(rect.X - 2, rect.Y - 2, rect.Width + 4, rect.Height + 4), 4, 4);
-                var number = Text(bar.Number.ToString(CultureInfo.InvariantCulture), 10, g.T1, g.Strong);
+                var number = Text(bar.Number.ToString(CultureInfo.InvariantCulture), 10, drops.Stale ? g.T3 : g.T1, g.Strong);
                 if (rect.Width >= number.Width + 6) dc.DrawText(number, new Point(rect.X + 4, y + (height - number.Height) / 2));
                 dropHits.Add((new Rect(rect.X - 3, y, rect.Width + 6, height), bar));
                 if (dropDrag is { } dragged && dropStart is double proposed && dragged.Window == bar.Window && dragged.Cycle == bar.Cycle)
@@ -303,6 +304,13 @@ internal sealed partial class AnimationTimingView
                     dc.DrawRoundedRectangle(g.Pane, null, new Rect(gb + 4, y + (height - label.Height) / 2 - 1, label.Width + 6, label.Height + 2), 3, 3);
                     dc.DrawText(label, new Point(gb + 7, y + (height - label.Height) / 2));
                 }
+            }
+            if (drops.Stale && drops.Note.Length > 0)
+            {
+                var stale = Text(drops.Note, 10.5, g.Caution, g.Text, Math.Max(40, ClockWidth - 16));
+                var pill = new Rect(ClockLeft + 4, y + (height - stale.Height) / 2 - 1, stale.Width + 10, stale.Height + 2);
+                dc.DrawRoundedRectangle(owner.Palette.BandBackground, new Pen(g.Caution, 1) { DashStyle = new DashStyle([3, 2], 0) }, pill, 3, 3);
+                dc.DrawText(stale, new Point(pill.X + 5, pill.Y + 1));
             }
         }
 

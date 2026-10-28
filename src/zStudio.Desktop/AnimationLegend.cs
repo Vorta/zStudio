@@ -3,6 +3,7 @@ using System.Windows.Automation;
 using System.Windows.Controls;
 using System.Windows.Documents;
 using System.Windows.Media;
+using zStudio.Core.Animation;
 
 namespace zStudio.Desktop;
 
@@ -26,7 +27,17 @@ internal static class AnimationLegend
         ("refused", "Start refused (reason in the tooltip)"), ("waitRelease", "Waiting for release"), ("waitThreshold", "Waiting for threshold"),
         ("paused", "Paused by a range or zone gate (clocks frozen)"),
     ];
-    internal const string SequenceStates = "Running · ✓ Complete · ⏸ Waiting for release · ◷ +0.1 s (waiting for threshold) · ⊘ Blocked · ○ Not started";
+    internal const string SequenceStates = "Running · ✓ Complete · ⏸ Waiting for release · ◷ +0.1 s (waiting for threshold) · ‖ Paused by a range or zone gate (clocks frozen) · ■ Stopped (its binding stopped, reset or ended first) · ⊘ Blocked · ○ Not started";
+    /// <summary>Every sequence state <c>AnimationSequenceStates</c> gives, as Structure's run chip and Timing's lane glyph draw it.</summary>
+    internal static readonly (AnimationSequenceRunState State, string Text)[] States =
+    [
+        (AnimationSequenceRunState.Running, "Running"), (AnimationSequenceRunState.Complete, "Complete"),
+        (AnimationSequenceRunState.WaitingForRelease, "Waiting for release (by what, or no releaser left)"),
+        (AnimationSequenceRunState.WaitingForThreshold, "Waiting for threshold (+0.1 s: the time left)"),
+        (AnimationSequenceRunState.Paused, "Paused by a range or zone gate (its clocks frozen)"),
+        (AnimationSequenceRunState.Stopped, "Stopped: its binding stopped, reset or ended before it completed"),
+        (AnimationSequenceRunState.Blocked, "Blocked at an excluded call"), (AnimationSequenceRunState.NotReached, "Not started"),
+    ];
     internal const string BindingStates = "Binding: Not started · Running · Running, invalidated · Finished, pose kept · Stopped · Invalidated · Paused · Refused";
     internal static readonly (string Glyph, string Text)[] Families =
     [
@@ -53,8 +64,9 @@ internal static class AnimationLegend
         Heading("Timing marks", 10);
         foreach (var (kind, text) in Marks) body.Children.Add(Line(new Sample(kind, p) { Width = 44, Height = 14 }, text));
         Heading("States", 10);
-        body.Children.Add(new TextBlock { Text = SequenceStates, FontSize = 12, TextWrapping = TextWrapping.Wrap, Margin = new(0, 0, 0, 4), Foreground = p.T2 });
-        body.Children.Add(new TextBlock { Text = BindingStates, FontSize = 12, TextWrapping = TextWrapping.Wrap, Foreground = p.T3 });
+        body.Children.Add(new TextBlock { Text = "Structure's run chip · Timing's lane glyph", FontSize = 11, Margin = new(0, 0, 0, 4), Foreground = p.T3 });
+        foreach (var (state, text) in States) body.Children.Add(Line(new StateSample(state, p) { Width = 44, Height = 16 }, text));
+        body.Children.Add(new TextBlock { Text = BindingStates, FontSize = 12, TextWrapping = TextWrapping.Wrap, Margin = new(0, 4, 0, 0), Foreground = p.T3 });
         Heading("Families", 10);
         WrapPanel families = new();
         foreach (var (glyph, text) in Families)
@@ -72,7 +84,9 @@ internal static class AnimationLegend
         body.Children.Add(families);
         TextBlock keys = new() { Text = "Help → Controls and formats lists every key and pointer action.", FontSize = 11.5, TextWrapping = TextWrapping.Wrap, Margin = new(0, 10, 0, 0), Foreground = p.T3 };
         body.Children.Add(keys);
-        Border frame = new() { Child = body, CornerRadius = new(8), BorderThickness = new(1) };
+        // Taller than the space under its button on a short screen: it scrolls.
+        ScrollViewer scroll = new() { Content = body, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled, MaxHeight = Math.Max(320, SystemParameters.WorkArea.Height - 160) };
+        Border frame = new() { Child = scroll, CornerRadius = new(8), BorderThickness = new(1) };
         frame.SetResourceReference(Border.BackgroundProperty, "SolidBackgroundFillColorBaseBrush");
         frame.SetResourceReference(Border.BorderBrushProperty, "DividerStrokeColorDefaultBrush");
         AutomationProperties.SetName(frame, "Animation mode legend");
@@ -87,6 +101,41 @@ internal static class AnimationLegend
             line.Children.Add(new TextBlock { Text = text, FontSize = 12, TextWrapping = TextWrapping.Wrap, VerticalAlignment = VerticalAlignment.Center, Foreground = p.T2 });
             AutomationProperties.SetName(line, text);
             return line;
+        }
+    }
+
+    /// <summary>A sequence state as Structure's run chip marks it (left) and Timing's lane label glyph draws it (right).</summary>
+    private sealed class StateSample(AnimationSequenceRunState state, AnimationGraphPalette p) : FrameworkElement
+    {
+        protected override void OnRender(DrawingContext dc)
+        {
+            double y = ActualHeight / 2;
+            // Structure: the chip's dot, ring, outline or glyph (AnimationGraphNodes' run chip and name-chip mark).
+            switch (state)
+            {
+                case AnimationSequenceRunState.Running: dc.DrawEllipse(p.Run, null, new Point(7, y), 3.5, 3.5); break;
+                case AnimationSequenceRunState.WaitingForRelease: dc.DrawRoundedRectangle(null, new Pen(p.Release, 1), new Rect(1, y - 5, 14, 10), 5, 5); break;
+                case AnimationSequenceRunState.NotReached: dc.DrawEllipse(null, new Pen(p.T4, 1.2), new Point(7, y), 3.5, 3.5); break;
+                default:
+                    {
+                        var (glyph, brush) = state switch
+                        {
+                            AnimationSequenceRunState.Complete => ("check", p.T3), AnimationSequenceRunState.WaitingForThreshold => ("clock", p.T3),
+                            AnimationSequenceRunState.Paused => ("pause", p.T3), AnimationSequenceRunState.Stopped => ("stop", p.T3), _ => ("invalidate", p.Stop),
+                        };
+                        AnimationGraphGlyphs.Draw(dc, glyph, new Point(1.5, y - 5.5), 11, brush);
+                        break;
+                    }
+            }
+            // Timing: the glyph at the lane label's right (AnimationTimingView.TimingSurface.Glyph).
+            var (mark, ink) = AnimationTimingView.TimingSurface.Glyph(state, p);
+            if (state == AnimationSequenceRunState.WaitingForRelease) AnimationGraphGlyphs.Draw(dc, "pause", new Point(28, y - 5.5), 11, ink);
+            else if (mark.Length > 0)
+            {
+                var text = new FormattedText(mark, System.Globalization.CultureInfo.InvariantCulture, FlowDirection.LeftToRight, p.Text, 11, ink, VisualTreeHelper.GetDpi(this).PixelsPerDip);
+                dc.DrawText(text, new Point(33.5 - text.Width / 2, y - text.Height / 2));
+            }
+            else dc.DrawLine(new Pen(p.T4, 1), new Point(29, y), new Point(38, y));
         }
     }
 

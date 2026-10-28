@@ -67,7 +67,8 @@ internal static class SourceAnimationMcpChecks
             Assert.True(card.HasDraft);
             var pendingThreshold = System.Text.Json.JsonSerializer.SerializeToNode(card.AnimationDraft)!["changes"]!.AsArray();
             Assert.Contains(pendingThreshold, change => change!["Values"]!.AsArray().Last()!.GetValue<string>() == "-");
-            await Animation("cancel", new() { ["token"] = card.DraftToken });
+            // Escape restores the box and takes the typing back out of the draft: Apply never writes what the box no longer shows.
+            thresholdText.RaiseEvent(new System.Windows.Input.KeyEventArgs(System.Windows.Input.Keyboard.PrimaryDevice, PresentationSource.FromVisual(main)!, 0, System.Windows.Input.Key.Escape) { RoutedEvent = System.Windows.Input.Keyboard.KeyDownEvent });
             Assert.False(card.HasDraft);
             await Animation("set", new() { ["changes"] = new[] { new { field, values = new[] { "ON_STARTUP" } } } });
             Assert.True(card.HasDraft);

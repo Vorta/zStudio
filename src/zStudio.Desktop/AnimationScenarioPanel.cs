@@ -549,13 +549,14 @@ internal sealed class AnimationScenarioPanel : UserControl
         Border frame = new() { CornerRadius = new(5), BorderThickness = new(1), Padding = new(2), HorizontalAlignment = HorizontalAlignment.Stretch };
         frame.SetResourceReference(Border.BackgroundProperty, "ControlFillColorTertiaryBrush");
         frame.SetResourceReference(Border.BorderBrushProperty, "DividerStrokeColorDefaultBrush");
-        UniformGrid grid = new() { Rows = 1 };
+        AnimationSegmentRow grid = new();
         for (int i = 0; i < options.Length; i++)
         {
             var (value, label) = options[i];
-            ToggleButton option = new() { Content = new TextBlock { Text = label, TextTrimming = TextTrimming.CharacterEllipsis }, IsChecked = value == chosen, ToolTip = tips?[i] ?? label, Padding = new(6, 0, 6, 0) };
+            // Every label stays whole: a narrow pane wraps a label of several words (never inside a word), it never trims it.
+            ToggleButton option = new() { Content = new TextBlock { Text = label, TextWrapping = TextWrapping.WrapWithOverflow, TextAlignment = TextAlignment.Center }, IsChecked = value == chosen, ToolTip = tips?[i] ?? label, Padding = new(6, 2, 6, 2) };
             option.SetResourceReference(StyleProperty, "SegmentOption");
-            option.Height = 26;
+            option.Height = double.NaN; option.MinHeight = 26; option.VerticalAlignment = VerticalAlignment.Stretch;
             AutomationProperties.SetName(option, name + ": " + label);
             // Through Checked, so a click and UI Automation's Toggle both request it; the chosen option cannot be unchecked.
             option.Checked += (_, _) => { if (value != chosen) choose(value); };

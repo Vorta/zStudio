@@ -98,7 +98,7 @@ public partial class MainWindow
             if (!float.IsFinite(position.X) || !float.IsFinite(position.Y) || !float.IsFinite(position.Z)) throw new StudioCommandException("invalid_argument", "Coordinates must fit finite game floats.");
             return Result(DocumentState(await MoveSourcePlacementAsync(d, source, edits.Transform(source) with { Position = position }, token)));
         });
-        Register(r, "drafts", "Read pending GUI drafts and their conflict token without committing or changing focus. section is the source map's zone or AI network card (its label or header fields).", false, [P("target", "string", "Draft owner.", true, "properties", "preview", "scene", "section")], a =>
+        Register(r, "drafts", "Read pending GUI drafts and their conflict token without committing or changing focus. section is the source map's zone, AI network or animation card (its label, header fields or animation draft; source_animation apply and cancel resolve the last too).", false, [P("target", "string", "Draft owner.", true, "properties", "preview", "scene", "section")], a =>
         {
             if (Text(a, "target") == "section") return Result(new { document = sectionCard?.Document?.SessionId, drafts = sectionCard?.Entry == null ? null : sectionCard.Describe() });
             if (Text(a, "target") == "scene") return Result(new { document = inspectionDraft?.DraftDocument?.SessionId ?? shownDocument?.SessionId, drafts = (HasInspectionDraft ? inspectionDraft : CurrentInspectionCard)?.DescribeDraft() });
