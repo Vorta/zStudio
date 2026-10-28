@@ -177,7 +177,7 @@ public partial class MainWindow
             await Dispatcher.InvokeAsync(() => { }, System.Windows.Threading.DispatcherPriority.Loaded);
             return Result(AnimationModeState());
         });
-        RegisterJob(registry, "animation_scenario", "The shown map's animation scenario (the Scenario tab and the command bar's scenario chip): starts on the shared clock (at most 32; the primary, id 00000000-0000-0000-0000-000000000000, is Animation mode's opened binding), included call paths, condition switches (IF and ELSEIF, per call path), inputs (player at start, custom or none; random seed; effects detail; phase; height; beam origin) and rules (prerequisites check, ignoreStarts (default) or ignore; range gates game or ignore; zone gates ignore (default) or view). Every change stops playback and re-evaluates the run up to the playhead, as a seek does, before it returns; it is saved with the map in the project's .zstudio/settings.json and survives Exit, other definitions, difficulty changes and source edits. read lists it with the call paths the starts reach, grouped by calling and called definition (Include all leaves back-links excluded). include includes paths with the calls that lead to them, or excludes them with every path below them. pick places the player or the beam origin on the surface under a point of the 3D view (DIP, as Pick in view does). reset returns everything to the defaults with the opened binding as primary. fitRange sets the playback range to the latest start plus 30 s. starts, include, includeAll, excludeAll, conditions, pick and fitRange need Animation mode.",
+        RegisterJob(registry, "animation_scenario", "The shown map's animation scenario (the Scenario tab and the command bar's scenario chip): starts on the shared clock (at most 32; the primary, id 00000000-0000-0000-0000-000000000000, is Animation mode's opened binding), included call paths, condition switches (IF and ELSEIF, per call path), inputs (player at start, custom or none; random seed; effects detail; phase; height; beam origin) and rules (prerequisites check, ignoreStarts (default) or ignore; range gates game or ignore; zone gates ignore (default) or view). Every change stops playback and re-evaluates the run up to the playhead, as a seek does, before it returns (a change during another's re-evaluation re-evaluates to the same playhead; conditions sets all its switches as one change); it is saved with the map in the project's .zstudio/settings.json and survives Exit, other definitions, difficulty changes and source edits. read lists it (in the map layout too) with the call paths the starts reach, grouped by calling and called definition (Include all leaves back-links excluded): groups paged by offset and limit, each with its first 16 paths; read with group pages that group's paths. include includes paths with the calls that lead to them, or excludes them with every path below them. pick places the player or the beam origin on the surface under a point of the 3D view (DIP, as Pick in view does). reset returns everything to the defaults with the opened binding (after Exit, the kept one) as primary. fitRange sets the playback range to the latest start plus 30 s. starts, include, includeAll, excludeAll, conditions, pick and fitRange need Animation mode.",
             [PreviewParameter,
              P("action", "string", "Operation.", true, "read", "starts", "include", "includeAll", "excludeAll", "conditions", "inputs", "pick", "rules", "reset", "fitRange"),
              new("starts", "array", "starts: the whole list; ids are GUIDs (a new start may omit its id), the primary keeps the empty GUID.", Items: new("", "object", "A start.", Properties:
@@ -199,11 +199,16 @@ public partial class MainWindow
              new("screenPoint", "array", "pick: a point of the 3D view in DIP from its top left.", Items: new("", "number", "DIP."), MinItems: 2, MaxItems: 2),
              P("prerequisites", "string", "rules: check, ignoreStarts or ignore.", false, "check", "ignoreStarts", "ignore"),
              P("rangeGates", "string", "rules: game or ignore.", false, "game", "ignore"),
-             P("zoneGates", "string", "rules: ignore or view (the view's zones).", false, "ignore", "view")], false, async (a, token) =>
+             P("zoneGates", "string", "rules: ignore or view (the view's zones).", false, "ignore", "view"),
+             P("group", "string", "read: a group of call paths (calls.groups[].group) whose paths to page."),
+             new("offset", "integer", "read: the first group, or with group the first path.", Minimum: 0, Maximum: int.MaxValue),
+             new("limit", "integer", "read: groups, or with group paths, per page (at most 100).", Minimum: 1, Maximum: 100)], false, async (a, token) =>
         {
             RequirePreview(a); RequireScenarioMap();
             string action = Text(a, "action");
             object? result = null;
+            // This call awaits only the re-evaluation it starts: an earlier call's failed one is that call's to report.
+            var before = worldAnimationReevaluation;
             if (action != "read") RequireNoDrafts();
             switch (action)
             {
@@ -225,13 +230,18 @@ public partial class MainWindow
                 case "includeAll": result = ScenarioIncludeAll(token); break;
                 case "excludeAll": ScenarioExcludeAll(); break;
                 case "conditions":
-                    foreach (var item in (a["conditions"] as JsonArray ?? throw new StudioCommandException("invalid_argument", "Supply the conditions.")).OfType<JsonObject>())
                     {
-                        if (!Guid.TryParse(Text(item, "event"), out Guid ev)) throw new StudioCommandException("invalid_argument", "Use an event GUID.");
-                        var choice = Text(item, "value") switch { "true" => AnimationConditionChoice.True, "false" => AnimationConditionChoice.False, "game" => AnimationConditionChoice.Game, _ => throw new StudioCommandException("invalid_argument", "A switch is game, true or false.") };
-                        ScenarioCondition(Text(item, "instancePath"), Int(item, "entry"), ev, choice);
+                        // Every switch of the call is one scenario change: one stop and one re-evaluation to the playhead.
+                        List<(string, int, Guid, AnimationConditionChoice)> switches = [];
+                        foreach (var item in (a["conditions"] as JsonArray ?? throw new StudioCommandException("invalid_argument", "Supply the conditions.")).OfType<JsonObject>())
+                        {
+                            if (!Guid.TryParse(Text(item, "event"), out Guid ev)) throw new StudioCommandException("invalid_argument", "Use an event GUID.");
+                            var choice = Text(item, "value") switch { "true" => AnimationConditionChoice.True, "false" => AnimationConditionChoice.False, "game" => AnimationConditionChoice.Game, _ => throw new StudioCommandException("invalid_argument", "A switch is game, true or false.") };
+                            switches.Add((Text(item, "instancePath"), Int(item, "entry"), ev, choice));
+                        }
+                        ScenarioConditions(switches);
+                        break;
                     }
-                    break;
                 case "inputs":
                     {
                         var next = worldAnimationConfiguration;
@@ -280,8 +290,8 @@ public partial class MainWindow
                 default: throw new StudioCommandException("invalid_argument", "Unknown scenario operation.");
             }
             // The change shows at once: the run is re-evaluated up to the playhead before the result returns.
-            await worldAnimationReevaluation;
-            return Result(new { scenario = ScenarioReadState(), result, animation = InAnimationMode ? WorldAnimationCommandState : null });
+            if (!ReferenceEquals(worldAnimationReevaluation, before)) await worldAnimationReevaluation;
+            return Result(new { scenario = ScenarioReadState(a), result, animation = InAnimationMode ? WorldAnimationCommandState : null });
         });
     }
 
@@ -299,7 +309,7 @@ public partial class MainWindow
                 bound = mode.Entry > 0,
             };
         var scenario = worldAnimationConfiguration;
-        object? kept = !InAnimationMode && animationKept is { } previous && previous.Document.SourceWorld != null && previous.Document.SourceWorld == shownDocument?.SourceWorld
+        object? kept = KeptAnimation() is { } previous
             ? new { definition = previous.Definition, entry = previous.Entry > 0 ? (int?)previous.Entry : null, name = DefinitionName(previous.Definition), starts = scenario.Starts.Count, summary = ScenarioSummary(scenario), customized = scenario.IsCustomized }
             : null;
         return new

@@ -9,7 +9,7 @@ public partial class MainWindow
 {
     private void RegisterAnimationGraphCommands(StudioCommands registry)
     {
-        RegisterJob(registry, "animation_graph", "Animation mode's Structure view: the opened binding's node graph (the activation; the definition frame with the cleanup and runtime sequences, their grouped rows, condition blocks and loop brackets; reference nodes for the called and calling animations, expanded ones as frames per binding; every edge: call, callWait, localChild, release, contactRelease, stopSequence, stopAnimation, resetAnimation, invalidateAnimation, prerequisite, with backLink for a call back to a binding on the path) with its deterministic layout (bounds in DIP at 100 %) and the run overlay at the playhead. Identities are the GUI's: frame:<entry>, activation:<entry>, sequence:<entry>:<guid>, row:<entry>:<guid>, ref:<group>, and edge ids from read. read pages nodes, edges (section edges) or one sequence's rows with its blocks (section rows, node) by at most 100, each with its run (binding, sequence or row state; a condition's passes, at most 40, with its Game/True/False switch). expand and collapse change presentation only (never include, run or evaluate): a reference node expands into a frame per binding (at most 64 expanded frames), a sequence opens or collapses (showAll lists every row), a grouped row lists its members, all opens or collapses every sequence. select selects a node, row or edge (an edge selects its source row) as a click does: the Inspector shows its card and the view outlines the nodes it names; a PLAYER_RANGE question or a range-gated activation returns rangeDrawing (attach node position, radius, player, distance). viewport sets zoom (0.25–2), center, fit, reveal and the run overlay. callers lists every call or by-name event of the map that reaches a binding. Condition switches are animation_scenario conditions and call ports animation_scenario include (the GUI's switches and ports use the same operations); animation_mode opens and exits.",
+        RegisterJob(registry, "animation_graph", "Animation mode's Structure view: the opened binding's node graph (the activation; the definition frame with the cleanup and runtime sequences, their grouped rows, condition blocks and loop brackets; reference nodes for the called and calling animations, an expanded one as one frame showing one of its bindings (its member); every edge: call, callWait, localChild, release, contactRelease, stopSequence, stopAnimation, resetAnimation, invalidateAnimation, prerequisite, with backLink for a call back to a binding on the path) with its deterministic layout (bounds in DIP at 100 %) and the run overlay at the playhead. Identities are the GUI's: frame:<entry>, activation:<entry>, sequence:<entry>:<guid>, row:<entry>:<guid>, ref:<group>, and edge ids from read. read pages nodes, edges (section edges) or one sequence's rows with its blocks (section rows, node) by at most 100, each with its run (binding, sequence or row state; a blocked sequence's blockedBy edge, whose port includes the call it waits for; an activation's prerequisites at its latest start attempt: met, unmet · refused or unmet · ignored for this start; a condition's passes, at most 40, with its Game/True/False switch and where its pips are drawn). expand and collapse change presentation only (never include, run or evaluate): a reference node expands into one frame for the group (at most 64 expanded; member chooses the binding it shows, as the frame header's switcher does), a sequence opens or collapses (showAll lists every row), a grouped row lists its members, all opens or collapses every sequence. select selects a node, row or edge (an edge selects its source row) as a click does: the Inspector shows its card and the view outlines the nodes it names; a PLAYER_RANGE question or a range-gated activation returns rangeDrawing (attach node position, radius, player, distance). viewport sets zoom (0.25–2), center, fit, reveal and the run overlay. callers lists every call or by-name event of the map that reaches a binding. Condition switches are animation_scenario conditions and call ports animation_scenario include (the GUI's switches and ports use the same operations); animation_mode opens and exits.",
             [PreviewParameter,
              P("action", "string", "Operation.", true, "read", "expand", "collapse", "select", "viewport", "callers"),
              P("section", "string", "read: nodes (default), edges, or rows (a sequence's rows and blocks; give node).", false, "nodes", "edges", "rows"),
@@ -18,6 +18,7 @@ public partial class MainWindow
              P("edge", "string", "An edge identity from read edges: select its source row."),
              P("all", "boolean", "expand/collapse: every sequence of the graph."),
              P("showAll", "boolean", "expand a sequence: also show every row (beyond the first twelve)."),
+             new("member", "integer", "expand a reference node (or its expanded frame): the binding its one frame shows (reference.entries; the member switcher).", Minimum: 1),
              new("zoom", "number", "viewport: zoom, 0.25–2 (1 = 100 %).", NumberMinimum: .25, NumberMaximum: 2),
              new("center", "array", "viewport: the layout point (DIP) to centre the panel on.", Items: new("", "number", "DIP."), MinItems: 2, MaxItems: 2),
              P("fit", "boolean", "viewport: fit the whole graph in the panel (Ctrl+0)."),
@@ -53,7 +54,10 @@ public partial class MainWindow
                         {
                             string node = Text(a, "node");
                             var placement = layout.Node(node) ?? throw new StudioCommandException("stale_record", "The graph has no node with that identity; read it again.");
-                            if (placement.Node.Kind == AnimationGraphNodeKind.Reference) GraphExpand(node, value);
+                            int? member = a.ContainsKey("member") ? Int(a, "member") : null;
+                            if (placement.Node.Kind == AnimationGraphNodeKind.Reference) GraphExpand(node, value, member);
+                            else if (placement.Node.Frame?.Group != null && member is int shown && value) GraphMember(node, shown);
+                            else if (member != null) throw new StudioCommandException("invalid_argument", "A member is chosen on a reference node or an expanded group's frame.");
                             else if (placement.Node.Kind == AnimationGraphNodeKind.Sequence) GraphPresentationChange(value ? Flag(a, "showAll") ? "showAll" : "open" : "collapse", node);
                             else throw new StudioCommandException("invalid_argument", "Expand a reference node, a sequence or a grouped row.");
                         }
@@ -164,11 +168,17 @@ public partial class MainWindow
                 var placed = layout.Node(node.Id);
                 object? run = overlay == null ? null : node.Kind switch
                 {
-                    AnimationGraphNodeKind.Sequence when overlay.Sequence(node.Id) is { } s => new { state = Lower(s.State.ToString()), label = s.Label, pass = s.Pass, eventIndex = s.EventIndex, thresholdRemaining = s.ThresholdRemaining, releasedBy = s.ReleasedBy, releasedAt = s.ReleasedAt, releasers = s.Releasers.Take(100).ToArray(), noReleaserLeft = s.NoReleaserLeft, pausedBy = s.PausedBy },
+                    AnimationGraphNodeKind.Sequence when overlay.Sequence(node.Id) is { } s => new { state = Lower(s.State.ToString()), label = s.Label, pass = s.Pass, eventIndex = s.EventIndex, thresholdRemaining = s.ThresholdRemaining, releasedBy = s.ReleasedBy, releasedAt = s.ReleasedAt, releasers = s.Releasers.Take(100).ToArray(), noReleaserLeft = s.NoReleaserLeft, pausedBy = s.PausedBy, blockedBy = s.BlockedBy, blockedCall = s.BlockedCall },
                     AnimationGraphNodeKind.Reference when overlay.Reference(node.Id) is { } r => new { instances = r.Instances, label = r.Label, excluded = r.Excluded, refused = r.Refused, refusedReason = r.RefusedReason, lastTime = r.LastTime, states = r.States.Select(s => new { state = Lower(s.State.ToString()), bindings = s.Bindings }).ToArray() },
-                    AnimationGraphNodeKind.Activation or AnimationGraphNodeKind.Frame when node.Entry is int entry && overlay.Binding(entry) is { } b => new { state = Lower(b.State.ToString()), label = b.Label, invalidated = b.Invalidated, pausedBy = b.PausedBy, time = b.Time, refusals = b.Refusals.Select(r => new { time = r.Time, reason = AnimationRunOverlay.Refusal(r) }).ToArray(), refusalCount = b.RefusalCount },
+                    AnimationGraphNodeKind.Activation or AnimationGraphNodeKind.Frame when node.Entry is int entry && overlay.Binding(entry) is { } b => new
+                    {
+                        state = Lower(b.State.ToString()), label = b.Label, invalidated = b.Invalidated, pausedBy = b.PausedBy, time = b.Time, refusals = b.Refusals.Select(r => new { time = r.Time, reason = AnimationRunOverlay.Refusal(r) }).ToArray(), refusalCount = b.RefusalCount,
+                        prerequisites = b.Prerequisites is { } start ? new { time = start.Time, outcome = start.Outcome, matched = start.Result.Matched, minimum = start.Result.Minimum, instancePath = start.InstancePath, scenarioStart = start.ScenarioStart, starts = b.PrerequisiteStartCount } : null,
+                        members = node.Frame?.Group is { } group && overlay.Reference(AnimationGraph.ReferenceId(group)) is { } membersRun ? membersRun.States.Select(s => new { state = Lower(s.State.ToString()), bindings = s.Bindings }).ToArray() : null,
+                    },
                     _ => null,
                 };
+                var binding = overlay != null && node.Activation is { } shownActivation ? overlay.Binding(shownActivation.Entry) : null;
                 return new
                 {
                     id = node.Id, kind = Lower(node.Kind.ToString()), label = node.Label, column = node.Column, order = node.Order, depth = node.Depth, parent = node.Parent, entry = node.Entry,
@@ -182,7 +192,7 @@ public partial class MainWindow
                     } : null,
                     reference = node.Reference is { } reference ? new
                     {
-                        group = reference.Group, name = reference.Name, entries = reference.Entries, entryCount = reference.EntryCount, calling = reference.Calling, expanded = reference.Expanded,
+                        group = reference.Group, name = reference.Name, entries = reference.Entries, entryCount = reference.EntryCount, calling = reference.Calling, expanded = reference.Expanded, member = reference.Member,
                         expandable = reference.Expandable, unresolved = reference.Unresolved, file = reference.File, detail = reference.Detail, summary = reference.Summary,
                         calls = reference.Calls.Select(c => new { name = c.Name, events = c.Events, backLink = c.BackLink, node = c.Node }).ToArray(), neededBy = reference.NeededBy, caution = reference.Caution,
                     } : null,
@@ -190,10 +200,25 @@ public partial class MainWindow
                     {
                         attach = activation.AttachNode, newGameStart = activation.NewGameStart, callerCount = activation.CallerCount,
                         triggers = activation.Triggers.Select(t => new { kind = t.Kind, phrase = t.Phrase, keyword = t.Keyword, value = t.Value }).ToArray(),
-                        prerequisites = activation.Prerequisites.Select(g => new { header = g.Header, required = g.Required, minimum = g.Minimum, items = g.Items.Select(i => new { target = i.Target, kind = i.Kind, entry = i.Entry, met = i.Entry is int needed && overlay != null ? overlay.Binding(needed).State != AnimationBindingLifecycle.Stopped : (bool?)null }).ToArray() }).ToArray(),
+                        // At the binding's latest start attempt each item's check there (met, or unmet with what the start did); before
+                        // any, an animation item is met unless stopped at the playhead and an object item is unknown (null).
+                        prerequisites = activation.Prerequisites.Select(g => new
+                        {
+                            header = g.Header, required = g.Required, minimum = g.Minimum, outcome = GraphView.PrerequisiteGroupOutcome(binding, g),
+                            items = g.Items.Select(i =>
+                            {
+                                var check = binding?.Prerequisites?.Result.Checks.FirstOrDefault(c => c.Record == i.Record);
+                                bool? met = check != null ? check.Satisfied : i.Entry is int needed && overlay != null ? overlay.Binding(needed).State != AnimationBindingLifecycle.Stopped : null;
+                                return new { target = i.Target, kind = i.Kind, entry = i.Entry, met, status = overlay == null ? null : GraphView.PrerequisiteRow(binding, i, overlay).Status, atStart = check != null };
+                            }).ToArray(),
+                        }).ToArray(),
                         callers = activation.Callers.Select(c => new { group = c.Group, name = c.Name, bindings = c.Bindings, events = c.Events, node = c.Node, backLink = c.BackLink, relations = c.Relations.Select(RelationName).ToArray() }).ToArray(),
                     } : null,
-                    frame = node.Frame is { } frame ? new { entry = frame.Entry, name = frame.Name, root = frame.Root, attach = frame.Attach, path = frame.Path, depth = frame.Depth, sequenceCount = frame.SequenceCount, file = frame.File } : null,
+                    frame = node.Frame is { } frame ? new
+                    {
+                        entry = frame.Entry, name = frame.Name, root = frame.Root, attach = frame.Attach, path = frame.Path, depth = frame.Depth, sequenceCount = frame.SequenceCount, file = frame.File,
+                        group = frame.Group, members = frame.Group == null ? null : frame.Members, memberIndex = frame.Group == null ? (int?)null : frame.MemberIndex,
+                    } : null,
                     run,
                 };
             }).ToArray(),
@@ -253,6 +278,11 @@ public partial class MainWindow
                 var band = layout.Item(row.Id);
                 var run = overlay?.Row(row.Id);
                 var condition = row.Role == AnimationGraphRowRole.Question ? overlay?.Condition(row.Id) : null;
+                // Where the GUI draws the condition's pips: its pass strip (in a loop, or once tested more often than the outcome
+                // line holds), else the outcome line (at most 3, the latest).
+                var strip = row.Role == AnimationGraphRowRole.Question && band is { } shownBand ? shownBand.Node.Items.FirstOrDefault(i => i.Kind == AnimationGraphItemKind.Passes && i.Row?.Id == row.Id) : null;
+                int pipCapacity = strip != null ? AnimationGraphLayout.StripPips : AnimationGraphLayout.OutcomePips;
+                int pipsShown = condition == null || condition.PassCount <= 1 && strip == null ? 0 : Math.Min(pipCapacity, condition.Passes.Count);
                 return new
                 {
                     id = row.Id, @event = row.Event, index = row.Index, type = row.Type, keyword = row.Keyword, family = Lower(row.Family.ToString()), role = Lower(row.Role.ToString()), label = row.Label,
@@ -266,9 +296,11 @@ public partial class MainWindow
                         disposition = Lower(run.Disposition.ToString()), occurrences = run.Occurrences, skipped = run.Skipped, lastStart = run.LastStart, lastEnd = run.LastEnd, detail = run.Detail,
                         childEntry = run.ChildEntry, counts = run.Counts.Select(c => new { disposition = Lower(c.Disposition.ToString()), count = c.Count }).ToArray(),
                     },
+                    passStrip = strip == null ? null : new { y = strip.Y, height = strip.Height },
                     condition = condition == null ? null : new
                     {
                         passCount = condition.PassCount, outcome = condition.Latest?.Outcome,
+                        pips = new { line = strip != null ? "strip" : "outcome", shown = pipsShown, more = Math.Max(0, condition.PassCount - pipsShown) },
                         passes = condition.Passes.Select(p => new { pass = p.Pass, time = p.Time, value = p.Value, forced = p.Forced, kind = p.Kind, outcome = p.Outcome, measured = p.Measured, threshold = p.Threshold, draw = p.Draw, unavailable = p.Unavailable, instancePath = p.InstancePath }).ToArray(),
                     },
                 };

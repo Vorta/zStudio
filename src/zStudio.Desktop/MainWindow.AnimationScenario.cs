@@ -89,11 +89,18 @@ public partial class MainWindow
         lastIncludeAll = null;
         SetWorldAnimationScenario(worldAnimationConfiguration.ExcludeAll());
     }
-    private void ScenarioCondition(string instancePath, int entry, Guid ev, AnimationConditionChoice choice)
+    private void ScenarioCondition(string instancePath, int entry, Guid ev, AnimationConditionChoice choice) => ScenarioConditions([(instancePath, entry, ev, choice)]);
+    /// <summary>Sets condition switches in order as one scenario change (one stop and one re-evaluation to the playhead).</summary>
+    private void ScenarioConditions(IReadOnlyList<(string InstancePath, int Entry, Guid Event, AnimationConditionChoice Choice)> switches)
     {
         RequireOpenedBinding();
-        ValidateWorldCondition(entry, instancePath, ev);
-        SetWorldAnimationScenario(worldAnimationConfiguration.WithCondition(instancePath, entry, ev, choice));
+        var next = worldAnimationConfiguration;
+        foreach (var (instancePath, entry, ev, choice) in switches)
+        {
+            ValidateWorldCondition(entry, instancePath, ev);
+            next = next.WithCondition(instancePath, entry, ev, choice);
+        }
+        SetWorldAnimationScenario(next);
     }
     private void ScenarioInputs(AnimationScenario next)
     {
@@ -105,8 +112,10 @@ public partial class MainWindow
     {
         RequireScenarioMap();
         lastIncludeAll = null;
-        // The opened binding stays the primary start; everything else returns to its default.
-        SetWorldAnimationScenario(animationMode is { Entry: > 0 } target ? AnimationScenario.For(target.Entry) : AnimationScenario.Default, "reset");
+        // The opened binding (after Exit, the kept one) stays the primary start; everything else returns to its default.
+        int? primary = animationMode is { Entry: > 0 } target ? target.Entry
+            : KeptAnimation() is { Entry: > 0 } kept ? kept.Entry : null;
+        SetWorldAnimationScenario(primary is int entry ? AnimationScenario.For(entry) : AnimationScenario.Default, "reset");
     }
     /// <summary>The player or beam origin placed on the surface under <paramref name="point"/> (DIP in the 3D view).</summary>
     private Vector3 ScenarioPick(string target, Point point)
@@ -125,6 +134,16 @@ public partial class MainWindow
     {
         AnimationScenarioPanel panel = new() { BindingChoices = ScenarioBindingChoices };
         panel.Requested += (action, value) => _ = ReportUi(async () =>
+        {
+            // A refused change leaves the tab showing the scenario as it is, not the toggle the click made.
+            try { await ApplyScenarioRequest(action, value); }
+            catch { RefreshScenarioPanel(); throw; }
+        });
+        return panel;
+    }
+    /// <summary>One Scenario tab request, named as animation_scenario's actions.</summary>
+    private async Task ApplyScenarioRequest(string action, object? value)
+    {
         {
             switch (action)
             {
@@ -154,9 +173,7 @@ public partial class MainWindow
                 case "clearBeamOrigin": ScenarioInputs(worldAnimationConfiguration with { BeamOrigin = null }); break;
                 case "reset": ScenarioReset(); break;
             }
-            // A refused change leaves the tab showing the scenario as it is.
-        });
-        return panel;
+        }
     }
     private static AnimationPrerequisiteRule PrerequisiteRule(string value) => value switch
     {
@@ -213,10 +230,11 @@ public partial class MainWindow
         List<ScenarioGroupRow> groups = [];
         int included = 0, reachable = 0, unresolved = 0; bool truncated = false;
         List<ScenarioOverrideRow> overrides = [];
-        if (opened && source.Animations is { } package)
+        // The scenario's starts and what they reach are the map's, in the map layout too (animation_scenario read).
+        if (source.Animations is { } package)
         {
             var plan = GetWorldAnimationStructurePlan();
-            foreach (var start in WorldAnimationActivations().Where(s => s.Entry < plan.EntryCount))
+            foreach (var start in (opened ? WorldAnimationActivations() : scenario.Starts).Where(s => s.Entry > 0 && s.Entry < plan.EntryCount))
             {
                 var binding = plan.Entry(start.Entry);
                 starts.Add(new(start.Id, start.Entry, binding.Name, binding.Root, start.Seconds, start.Id == Guid.Empty));
@@ -230,16 +248,18 @@ public partial class MainWindow
             {
                 var rows = group.Select(p => new ScenarioPathRow(p.Path, $"{package.Entries[p.Caller].Name} #{p.Caller} → {package.Entries[p.Target].Name} #{p.Target}" + (p.BackLink ? " ↩" : ""),
                     scenario.Includes(p.Path), p.BackLink)).ToArray();
-                groups.Add(new($"{group.Key.Caller}\u0001{group.Key.Target}\u0001{group.Key.BackLink}", $"{group.Key.Caller} → {group.Key.Target}" + (group.Key.BackLink ? " ↩ cycle" : ""),
+                // The key is the group's identity in animation_scenario read (group): caller > target, ">back" for back-links.
+                groups.Add(new($"{group.Key.Caller}>{group.Key.Target}{(group.Key.BackLink ? ">back" : "")}", $"{group.Key.Caller} → {group.Key.Target}" + (group.Key.BackLink ? " ↩ cycle" : ""),
                     rows.Count(r => r.Included), rows.Length, group.Key.BackLink, rows));
             }
+            int primary = scenario.Primary ?? -1;
             foreach (var condition in scenario.Conditions)
             {
                 var entry = package.Entries.ElementAtOrDefault(condition.Entry);
                 var sequence = entry?.AllSequences.FirstOrDefault(s => s.Events.Any(e => e.Id == condition.Event));
                 var ev = sequence?.Events.First(e => e.Id == condition.Event);
                 string label = entry == null || ev == null ? "A condition no longer in this map"
-                    : $"{(sequence!.Name.Length == 0 ? "Cleanup" : sequence.Name)} › {AnimationPhrases.Event(entry, ev)}" + (condition.Entry != animationMode!.Entry ? $" · {entry.Name}" : "");
+                    : $"{(sequence!.Name.Length == 0 ? "Cleanup" : sequence.Name)} › {AnimationPhrases.Event(entry, ev)}" + (condition.Entry != primary ? $" · {entry.Name}" : "");
                 overrides.Add(new(condition, label));
             }
         }
@@ -250,7 +270,7 @@ public partial class MainWindow
 
     private void BeginScenarioPick(string target)
     {
-        RequireScenarioMap();
+        RequireOpenedBinding();
         if (scene == null || SceneHost.Visibility != Visibility.Visible) throw new StudioCommandException("not_ready", "The 3D view is not shown.");
         scenarioPick = target;
         if (scenarioPickBanner == null)
@@ -275,35 +295,58 @@ public partial class MainWindow
         scenarioPickBanner.Visibility = Visibility.Visible;
         SceneHost.Focus();
     }
+    /// <summary>Ends Pick in view (placed, cancelled, or the mode or map ended); the tab shows the scenario as it is (a Custom radio chosen for the pick goes back).</summary>
     private void EndScenarioPick()
     {
+        if (scenarioPick == null && scenarioPickBanner?.Visibility != Visibility.Visible) return;
         scenarioPick = null;
         if (scenarioPickBanner != null) scenarioPickBanner.Visibility = Visibility.Collapsed;
+        RefreshScenarioPanel();
     }
     private void ScenarioPickMouseDown(object sender, MouseButtonEventArgs e)
     {
-        if (scenarioPick is not { } target || scene is not { } viewport) return;
+        if (scenarioPick is not { } target) return;
+        // Picking belongs to Animation mode: outside it (or without a view) it is over.
+        if (!InAnimationMode || !sourceChromeActive || scene is not { } viewport) { EndScenarioPick(); return; }
+        // A right click cancels; the middle button still orbits.
+        if (e.ChangedButton == MouseButton.Right) { e.Handled = true; EndScenarioPick(); return; }
+        if (e.ChangedButton != MouseButton.Left) return;
         e.Handled = true;
-        if (e.ChangedButton != MouseButton.Left) { EndScenarioPick(); return; }
         var point = e.GetPosition(viewport.RenderSurface);
         if (viewport.ProbeInspection(point)?.Surface == null) return; // Nothing there: keep waiting for a surface.
-        EndScenarioPick();
-        _ = ReportUi(() => { ScenarioPick(target, point); return Task.CompletedTask; });
+        scenarioPick = null;
+        _ = ReportUi(() => { try { ScenarioPick(target, point); } finally { EndScenarioPick(); } return Task.CompletedTask; });
     }
-    /// <summary>Escape ends Pick in view first (the existing Escape order then goes on).</summary>
+    /// <summary>Escape ends Pick in view first (the existing Escape order then goes on); Shift+Esc goes on to exit the mode, which ends it too.</summary>
     private bool ScenarioPickKey(KeyEventArgs e)
     {
-        if (scenarioPick == null || e.Key != Key.Escape) return false;
+        if (scenarioPick == null || e.Key != Key.Escape || System.Windows.Input.Keyboard.Modifiers != ModifierKeys.None) return false;
         EndScenarioPick(); e.Handled = true; return true;
     }
 
     // ---------------------------------------------------------------- MCP state
 
-    /// <summary>The scenario as animation_scenario read reports it.</summary>
-    private object ScenarioReadState()
+    /// <summary>
+    /// The scenario as animation_scenario read reports it: the groups paged by offset and limit, each with its first 16 paths
+    /// (pathsNextOffset when it has more); with group, that group's paths paged by offset and limit.
+    /// </summary>
+    private object ScenarioReadState(System.Text.Json.Nodes.JsonObject? a = null)
     {
         var view = BuildScenarioView();
         var scenario = view.Scenario;
+        int offset = a?.ContainsKey("offset") == true ? Int(a, "offset") : 0, limit = a?.ContainsKey("limit") == true ? Int(a, "limit") : 100;
+        if (offset < 0 || limit is < 1 or > 100) throw new StudioCommandException("invalid_argument", "Use offset >= 0 and limit 1–100.");
+        const int FirstPaths = 16;
+        object Path(ScenarioPathRow p) => new { path = p.Path, label = p.Label, included = p.Included, backLink = p.BackLink };
+        object? groupPage = null;
+        if (a?.ContainsKey("group") == true)
+        {
+            string key = Text(a, "group");
+            var group = view.Groups.FirstOrDefault(g => g.Key == key) ?? throw new StudioCommandException("stale_record", "The scenario's starts reach no such group of calls; read the scenario again.");
+            var rows = group.Paths.Skip(offset).Take(limit).Select(Path).ToArray();
+            groupPage = new { group = group.Key, caller = group.Label, total = group.Paths.Count, offset, nextOffset = offset + rows.Length < group.Paths.Count ? (int?)(offset + rows.Length) : null, paths = rows };
+        }
+        var shownGroups = groupPage != null ? view.Groups.Take(0).ToArray() : view.Groups.Skip(offset).Take(limit).ToArray();
         return new
         {
             mission = view.Mission, summary = ScenarioSummary(scenario), customized = scenario.IsCustomized, opened = view.Opened,
@@ -311,8 +354,14 @@ public partial class MainWindow
             calls = new
             {
                 included = view.Included, reachable = view.Reachable, unresolved = view.Unresolved, truncated = view.Truncated, includeAll = view.IncludeResult,
-                groups = view.Groups.Take(100).Select(g => new { caller = g.Label, included = g.Included, total = g.Total, backLink = g.BackLink, paths = g.Paths.Take(16).Select(p => new { path = p.Path, label = p.Label, included = p.Included, backLink = p.BackLink }).ToArray(), morePaths = Math.Max(0, g.Paths.Count - 16) }).ToArray(),
-                moreGroups = Math.Max(0, view.Groups.Count - 100),
+                totalGroups = view.Groups.Count,
+                groups = shownGroups.Select(g => new
+                {
+                    group = g.Key, caller = g.Label, included = g.Included, total = g.Total, backLink = g.BackLink,
+                    paths = g.Paths.Take(FirstPaths).Select(Path).ToArray(), pathsNextOffset = g.Paths.Count > FirstPaths ? (int?)FirstPaths : null,
+                }).ToArray(),
+                nextOffset = groupPage == null && offset + shownGroups.Length < view.Groups.Count ? (int?)(offset + shownGroups.Length) : null,
+                groupPage,
             },
             conditions = view.Overrides.Take(100).Select(o => new { instancePath = o.Override.InstancePath, entry = o.Override.Entry, @event = o.Override.Event, value = o.Override.Value ? "true" : "false", label = o.Label }).ToArray(),
             conditionCount = scenario.Conditions.Count,

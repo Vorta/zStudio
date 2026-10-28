@@ -13,7 +13,11 @@ internal sealed record ScenarioStartRow(Guid Id, int Entry, string Name, string 
 internal sealed record ScenarioPathRow(string Path, string Label, bool Included, bool BackLink);
 internal sealed record ScenarioGroupRow(string Key, string Label, int Included, int Total, bool BackLink, IReadOnlyList<ScenarioPathRow> Paths);
 internal sealed record ScenarioOverrideRow(AnimationConditionOverride Override, string Label);
-internal sealed record ScenarioBindingChoice(int Entry, string Name, string Detail);
+internal sealed record ScenarioBindingChoice(int Entry, string Name, string Detail)
+{
+    /// <summary>What UI Automation reads for the list item.</summary>
+    public override string ToString() => $"{Name}, {Detail}";
+}
 /// <summary>What the Scenario tab shows: one snapshot of the map's scenario and what the starts reach.</summary>
 internal sealed record AnimationScenarioView(string Mission, AnimationScenario Scenario, bool Opened, IReadOnlyList<ScenarioStartRow> Starts,
     IReadOnlyList<ScenarioGroupRow> Groups, int Included, int Reachable, int Unresolved, bool Truncated, string? IncludeResult,
@@ -75,17 +79,58 @@ internal sealed class AnimationScenarioPanel : UserControl
 
     internal AnimationScenarioView? View => view;
 
-    /// <summary>Shows a scenario snapshot (the scroll position stays).</summary>
+    /// <summary>
+    /// Shows a scenario snapshot. The scroll position stays, and keyboard focus returns to the same field (by its name and
+    /// its place among fields of that name), so a change made from the keyboard keeps its place.
+    /// </summary>
     internal void SetView(AnimationScenarioView value)
     {
         view = value;
         double offset = scroll.VerticalOffset;
+        var focus = FocusedField();
         header.Text = $"Kept for {value.Mission} · saved with the project";
         header.ToolTip = "The scenario is saved with the map in the project's .zstudio/settings.json. A change stops playback and re-evaluates the run up to the playhead.";
+        // The fields being replaced commit nothing more (their typed text was committed or is shown again).
+        pendingCommits.Clear();
         body.Children.Clear();
         playerNow = prerequisitesCount = rangeCount = zoneCount = null;
         BuildStarts(value); BuildCalls(value); BuildConditions(value); BuildRules(value); BuildWorld(value);
         scroll.UpdateLayout(); scroll.ScrollToVerticalOffset(offset);
+        if (focus is { } field) RestoreFocus(field);
+    }
+
+    /// <summary>Commits every field whose typed text is not applied yet (Exit commits before it leaves the mode).</summary>
+    internal void CommitPending()
+    {
+        foreach (var commit in pendingCommits.ToArray()) commit();
+    }
+    private readonly List<Action> pendingCommits = [];
+
+    private (string Name, Type Type, int Index)? FocusedField()
+    {
+        if (Keyboard.FocusedElement is not Visual focused || !IsAncestorOf(focused)) return null;
+        for (DependencyObject? at = focused; at != null && at != this; at = VisualTreeHelper.GetParent(at))
+            if (at is Control control && AutomationProperties.GetName(control) is { Length: > 0 } name)
+            {
+                int index = Fields(body).Where(c => c.GetType() == control.GetType() && AutomationProperties.GetName(c) == name).TakeWhile(c => c != control).Count();
+                return (name, control.GetType(), index);
+            }
+        return null;
+    }
+    private void RestoreFocus((string Name, Type Type, int Index) field)
+    {
+        var match = Fields(body).Where(c => c.GetType() == field.Type && AutomationProperties.GetName(c) == field.Name).ElementAtOrDefault(field.Index)
+            ?? Fields(body).FirstOrDefault(c => c.GetType() == field.Type && AutomationProperties.GetName(c) == field.Name);
+        if (match is { IsVisible: true, Focusable: true }) Keyboard.Focus(match);
+    }
+    private static IEnumerable<Control> Fields(DependencyObject root)
+    {
+        for (int i = 0; i < VisualTreeHelper.GetChildrenCount(root); i++)
+        {
+            var child = VisualTreeHelper.GetChild(root, i);
+            if (child is Control control) yield return control;
+            foreach (var nested in Fields(child)) yield return nested;
+        }
     }
 
     /// <summary>Updates the readouts that follow the run without rebuilding the tab.</summary>
@@ -126,6 +171,7 @@ internal sealed class AnimationScenarioPanel : UserControl
             }
             seconds.KeyDown += (_, e) => { if (e.Key == Key.Enter) { Commit(); e.Handled = true; } else if (e.Key == Key.Escape) { seconds.Text = applied; e.Handled = true; } };
             seconds.LostKeyboardFocus += (_, _) => Commit();
+            pendingCommits.Add(Commit);
             DockPanel.SetDock(seconds, Dock.Right); row.Children.Add(seconds);
             TextBlock mark = new() { Text = start.Primary ? "★" : "▶", Width = 16, FontSize = start.Primary ? 13 : 10, VerticalAlignment = VerticalAlignment.Center, ToolTip = start.Primary ? "Primary: the opened binding" : "A start you scheduled" };
             mark.SetResourceReference(TextBlock.ForegroundProperty, start.Primary ? "AccentTextFillColorPrimaryBrush" : "TextFillColorTertiaryBrush");
@@ -210,7 +256,7 @@ internal sealed class AnimationScenarioPanel : UserControl
             TextBlock count = Tertiary($"{group.Included} of {group.Total}");
             count.Margin = new(8, 0, 2, 0);
             DockPanel.SetDock(count, Dock.Right); row.Children.Add(count);
-            ToggleButton expand = new() { Content = new PreviewIcon { Kind = "Chevron", Width = 11, Height = 11 }, Width = 22, Height = 24, IsChecked = expandedGroups.Contains(group.Key), ToolTip = "Show each call path" };
+            ToggleButton expand = new() { Content = new PreviewIcon { Kind = "Chevron", Width = 11, Height = 11 }, Width = 22, Height = 24, IsChecked = expandedGroups.Contains(group.Key), ToolTip = "Show each call path of " + group.Label };
             expand.SetResourceReference(StyleProperty, "CardSegmentToggle"); expand.Width = 22; expand.Height = 24;
             ((PreviewIcon)expand.Content).RenderTransformOrigin = new(.5, .5);
             ((PreviewIcon)expand.Content).RenderTransform = expand.IsChecked == true ? Transform.Identity : new RotateTransform(-90);
@@ -219,8 +265,9 @@ internal sealed class AnimationScenarioPanel : UserControl
             CheckBox check = new() { IsThreeState = false, IsChecked = group.Included == group.Total ? true : group.Included == 0 ? false : null, VerticalAlignment = VerticalAlignment.Center, MinWidth = 0, Margin = new(2, 0, 0, 0) };
             TextBlock label = new() { Text = group.Label, TextTrimming = TextTrimming.CharacterEllipsis, VerticalAlignment = VerticalAlignment.Center, FontSize = 12.5 };
             check.Content = label;
-            check.ToolTip = group.BackLink ? "Calls back into their own chain (a cycle): the game refuses a call to an animation that is running or invalidated; including them shows the refusal."
-                : "Include or exclude these call paths. Excluding a path also excludes every path below it; including one includes the calls that lead to it.";
+            // The label trims: its tooltip starts with the whole of it.
+            check.ToolTip = $"{group.Label} ({group.Included} of {group.Total} included)\n" + (group.BackLink ? "Calls back into their own chain (a cycle): the game refuses a call to an animation that is running or invalidated; including them shows the refusal."
+                : "Include or exclude these call paths. Excluding a path also excludes every path below it; including one includes the calls that lead to it.");
             AutomationProperties.SetName(check, "Include " + group.Label);
             check.Click += (_, _) => Requested?.Invoke("include", (group.Paths.Select(p => p.Path).ToArray(), group.Included != group.Total));
             row.Children.Add(check);
@@ -228,7 +275,7 @@ internal sealed class AnimationScenarioPanel : UserControl
             StackPanel paths = new() { Margin = new(24, 0, 0, 4), Visibility = expand.IsChecked == true ? Visibility.Visible : Visibility.Collapsed };
             foreach (var path in group.Paths.Take(100))
             {
-                CheckBox pathCheck = new() { IsChecked = path.Included, Margin = new(0, 1, 0, 1), MinWidth = 0, Content = new TextBlock { Text = path.Label, FontSize = 12, TextTrimming = TextTrimming.CharacterEllipsis }, ToolTip = path.Path };
+                CheckBox pathCheck = new() { IsChecked = path.Included, Margin = new(0, 1, 0, 1), MinWidth = 0, Content = new TextBlock { Text = path.Label, FontSize = 12, TextTrimming = TextTrimming.CharacterEllipsis }, ToolTip = path.Label + "\n" + path.Path };
                 AutomationProperties.SetName(pathCheck, "Include " + path.Label);
                 pathCheck.Click += (_, _) => Requested?.Invoke("include", (new[] { path.Path }, !path.Included));
                 paths.Children.Add(pathCheck);
@@ -282,6 +329,7 @@ internal sealed class AnimationScenarioPanel : UserControl
         }
         seed.KeyDown += (_, e) => { if (e.Key == Key.Enter) { CommitSeed(); e.Handled = true; } else if (e.Key == Key.Escape) { seed.Text = seedApplied; e.Handled = true; } };
         seed.LostKeyboardFocus += (_, _) => CommitSeed();
+        pendingCommits.Add(CommitSeed);
         DockPanel.SetDock(seed, Dock.Left); seedRow.Children.Add(seed);
         var seedHelp = Help("Preview only: random in the game (p ≈ w)"); seedHelp.Margin = new(10, 0, 0, 0); seedHelp.VerticalAlignment = VerticalAlignment.Center;
         seedRow.Children.Add(seedHelp);
@@ -353,6 +401,7 @@ internal sealed class AnimationScenarioPanel : UserControl
         }
         height.KeyDown += (_, e) => { if (e.Key == Key.Enter) { CommitHeight(); e.Handled = true; } else if (e.Key == Key.Escape) { height.Text = heightApplied; e.Handled = true; } };
         height.LostKeyboardFocus += (_, _) => CommitHeight();
+        pendingCommits.Add(CommitHeight);
         DockPanel.SetDock(height, Dock.Left); heightRow.Children.Add(height);
         var heightHelp = Help("Preview only: lowers or raises the animation; −999 to 999."); heightHelp.Margin = new(10, 0, 0, 0); heightHelp.VerticalAlignment = VerticalAlignment.Center;
         heightRow.Children.Add(heightHelp);
@@ -436,7 +485,9 @@ internal sealed class AnimationScenarioPanel : UserControl
             option.SetResourceReference(StyleProperty, "SegmentOption");
             option.Height = 26;
             AutomationProperties.SetName(option, name + ": " + label);
-            option.Click += (_, _) => { option.IsChecked = true; if (value != chosen) choose(value); };
+            // Through Checked, so a click and UI Automation's Toggle both request it; the chosen option cannot be unchecked.
+            option.Checked += (_, _) => { if (value != chosen) choose(value); };
+            option.Unchecked += (_, _) => { if (value == chosen) option.IsChecked = true; };
             grid.Children.Add(option);
         }
         frame.Child = grid;

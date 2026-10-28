@@ -49,7 +49,7 @@ internal sealed class AnimationGraphView : Grid
     private readonly System.Windows.Shapes.Ellipse runDot = new() { Width = 7, Height = 7, Margin = new(0, 0, 7, 0), VerticalAlignment = VerticalAlignment.Center };
     private readonly Button rerun = new() { Content = "Re-run to here", Height = 22, Padding = new(6, 0, 6, 0), Margin = new(8, 0, -4, 0), FontSize = 12, Visibility = Visibility.Collapsed };
     private readonly TextBlock message = new() { TextWrapping = TextWrapping.Wrap, TextAlignment = TextAlignment.Center, MaxWidth = 460, FontSize = 13, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center, Visibility = Visibility.Collapsed };
-    private readonly Dictionary<string, (double X, int Shown)> pips = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, (double X, int Shown, double Pitch)> pips = new(StringComparer.Ordinal);
     private Point? panFrom; private Point panOrigin; private bool panned;
     private string? graphKey;
     private bool dark = true;
@@ -82,6 +82,8 @@ internal sealed class AnimationGraphView : Grid
     internal event Action<bool>? RunOverlayChanged;
     /// <summary>all, opened (this animation only) or none.</summary>
     internal event Action<string>? IncludeAllRequested;
+    /// <summary>An expanded group's frame should show another of its bindings (its member switcher): the frame and the binding.</summary>
+    internal event Action<string, int>? MemberRequested;
 
     internal AnimationGraphView()
     {
@@ -150,7 +152,7 @@ internal sealed class AnimationGraphView : Grid
             if (Selection != null && !Exists(Selection)) Selection = null;
         }
         else foreach (var node in realised.Values) node.Refresh();
-        foreach (var frame in frames.Values) frame.InvalidateVisual();
+        foreach (var frame in frames.Values) { frame.RefreshSwitcher(); frame.InvalidateVisual(); }
         Realise();
         edges.InvalidateVisual(); minimap.InvalidateVisual();
         UpdateRunTag(); UpdateMinimapVisibility(); UpdateTools();
@@ -304,7 +306,7 @@ internal sealed class AnimationGraphView : Grid
     {
         Focus();
         if (band.Id.StartsWith("showAll:", StringComparison.Ordinal)) { PresentationRequested?.Invoke("showAll", band.Node.Node.Id); return true; }
-        if (band.Id.StartsWith("outcome:", StringComparison.Ordinal))
+        if (band.Id.StartsWith("outcome:", StringComparison.Ordinal) || band.Id.StartsWith("passes:", StringComparison.Ordinal))
         {
             // A pip seeks to its pass.
             string row = band.Target;
@@ -332,6 +334,26 @@ internal sealed class AnimationGraphView : Grid
     internal void RequestExpand(string node, bool value) => ExpandRequested?.Invoke(node, value);
     internal void RequestOpen(string node) => OpenRequested?.Invoke(node);
     internal void RequestPresentation(string action, string? id) => PresentationRequested?.Invoke(action, id);
+    internal void RequestMember(string frame, int entry) => MemberRequested?.Invoke(frame, entry);
+    /// <summary>
+    /// A blocked sequence's link: selects the call row that waits on the excluded call and moves keyboard focus to its port,
+    /// the include toggle (a click or Space includes the call).
+    /// </summary>
+    internal void FollowBlocked(string edgeId)
+    {
+        if (Layout?.Graph.Edge(edgeId) is not { } edge) return;
+        // A call row beyond the first twelve (or in a collapsed sequence) has no port yet: show every row first.
+        if (Layout.Item(edge.From) == null && Layout.Node(edge.FromNode)?.Node.Kind == AnimationGraphNodeKind.Sequence) PresentationRequested?.Invoke("showAll", edge.FromNode);
+        SelectionRequested?.Invoke(edge.From);
+        Reveal(edge.From);
+        Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Input, () =>
+        {
+            if (Layout?.Node(edge.FromNode) is not { } placement) return;
+            var node = realised.TryGetValue(placement.Id, out var found) ? found : Realise(placement);
+            node.UpdateLayout();
+            node.Children.OfType<AnimationGraphPort>().FirstOrDefault(p => p.Edge.Id == edgeId)?.Focus();
+        });
+    }
     internal void SetRunOverlay(bool value)
     {
         if (RunOverlay == value) return;
@@ -408,6 +430,19 @@ internal sealed class AnimationGraphView : Grid
             _ => "The scenario ignores them for its own starts and checks everything the run starts.",
         };
         if (!OverlayShown || binding == null) return "Checked on every start. " + policy;
+        if (binding.Prerequisites is { } start)
+        {
+            // The latest start attempt: what the game would decide, and what the run did.
+            string counts = start.Result.Minimum > 0 ? $" · {start.Result.Matched} of {start.Result.Checks.Count(c => !c.Required)} options (needs {start.Result.Minimum})" : "";
+            string at = AnimationSeconds.Format(start.Time);
+            switch (start.Outcome)
+            {
+                case "ignored":
+                    return $"⚠ At {at}: unmet{counts}. The game refuses this start; " + (State.Scenario.Prerequisites == AnimationPrerequisiteRule.Ignore ? "the scenario ignores prerequisites." : "the scenario ignores prerequisites for its starts.");
+                case "met":
+                    return $"Met at {at}{counts}. " + policy;
+            }
+        }
         if (binding.Refusals.Count > 0)
         {
             var refusal = binding.Refusals[^1];
@@ -418,21 +453,66 @@ internal sealed class AnimationGraphView : Grid
         return "Not started yet. " + policy;
     }
 
-    internal void SetPips(string row, double x, int shown) => pips[row] = (x, shown);
+    /// <summary>
+    /// A prerequisite group's outcome at the binding's latest start attempt: "met", "unmet · refused" or "unmet · ignored for
+    /// this start"; null before any attempt (the header then says the scenario's rule).
+    /// </summary>
+    internal string? PrerequisiteGroupOutcome(AnimationRunBinding? binding, AnimationGraphPrerequisiteGroup group)
+    {
+        if (binding?.Prerequisites is not { } start) return null;
+        var checks = group.Items.Select(i => start.Result.Checks.FirstOrDefault(c => c.Record == i.Record)).ToArray();
+        bool met = group.Required ? checks.All(c => c?.Satisfied != false) : checks.Count(c => c?.Satisfied == true) >= group.Minimum;
+        return met ? "met" : Unmet(start);
+    }
+    private static string Unmet(AnimationPrerequisiteStart start) => start.Outcome switch
+    {
+        "refused" => "unmet · refused", "ignored" => "unmet · ignored for this start", _ => "unmet",
+    };
+    /// <summary>
+    /// A prerequisite row: at the binding's latest start attempt, its check there ("met", "unmet · refused", "unmet · ignored
+    /// for this start", or skipped for a node the load could not bind); before any, an animation item's state at the playhead
+    /// (met unless stopped) and a neutral mark for an object item, which only a start evaluates.
+    /// </summary>
+    internal (string Mark, Brush Brush, string Status) PrerequisiteRow(AnimationRunBinding? binding, AnimationGraphPrerequisite item, AnimationRunOverlay? overlay)
+    {
+        var p = Palette;
+        if (overlay != null && binding?.Prerequisites is { } start && start.Result.Checks.FirstOrDefault(c => c.Record == item.Record) is { } check)
+            return check.Satisfied switch
+            {
+                true => ("✓", State.Stale ? p.T3 : p.Run, "met"),
+                false => ("○", p.T2, Unmet(start)),
+                _ => ("–", p.T3, "skipped · node not bound"),
+            };
+        if (item.Kind == "object") return ("·", p.T3, "active?");
+        if (item.Entry is not int needed) return ("○", p.T2, "unresolved");
+        if (overlay == null) return ("·", p.T3, "not stopped?");
+        bool met = overlay.Binding(needed).State != AnimationBindingLifecycle.Stopped;
+        return (met ? "✓" : "○", met ? p.Run : p.T2, met ? "not stopped" : "stopped");
+    }
+
+    /// <summary>Where a band (an outcome line or a pass strip) drew its pips: the first one's left, how many (the latest), their pitch.</summary>
+    internal void SetPips(string band, double x, int shown, double pitch = 8) => pips[band] = (x, shown, pitch);
     private AnimationConditionPass? PassAt(AnimationGraphBand band, Point at)
     {
         string row = band.Target;
-        if (!pips.TryGetValue(row, out var strip) || strip.Shown == 0 || RunCondition(row) is not { } condition) return null;
-        int index = (int)Math.Floor((at.X - strip.X) / 8);
+        if (!pips.TryGetValue(band.Id, out var strip) || strip.Shown == 0 || RunCondition(row) is not { } condition) return null;
+        int index = (int)Math.Floor((at.X - strip.X) / strip.Pitch);
         if (index < 0 || index >= strip.Shown) return null;
         var passes = condition.Passes.Skip(condition.Passes.Count - strip.Shown).ToArray();
         return passes[index];
     }
+    /// <summary>A pass's hover text, as the spec words it: "Pass 3 · 24.317 s · false (game)".</summary>
+    internal static string PassTip(AnimationConditionPass pass) => $"Pass {pass.Pass} · {AnimationSeconds.Format(pass.Time)} · {(pass.Value ? "true" : "false")} ({(pass.Forced ? "forced" : "game")})";
     internal object OutcomeTip(AnimationGraphBand band, Point at)
     {
         string row = band.Target;
-        if (PassAt(band, at) is { } pass)
-            return $"Pass {pass.Pass} · {AnimationSeconds.Format(pass.Time)} · {(pass.Value ? "true" : "false")} ({(pass.Forced ? "forced" : "game")}). Click to seek there.";
+        if (PassAt(band, at) is { } pass) return PassTip(pass) + ". Click to seek there.";
+        if (band.Id.StartsWith("passes:", StringComparison.Ordinal))
+        {
+            var passes = RunCondition(row);
+            return passes == null || passes.PassCount == 0 ? "Each pass that tests this condition adds a pip (filled true, hollow false, ringed forced)."
+                : $"{passes.PassCount} passes; the latest {Math.Min(passes.Passes.Count, AnimationGraphLayout.StripPips)} as pips. Point at a pip for its pass; click it to seek there.";
+        }
         var condition = band.Item?.Branch?.Condition;
         var run = RunCondition(row);
         string outcome = run?.Latest is { } latest ? $"Latest: {latest.Outcome}" + (run.PassCount > 1 ? $" ({run.PassCount} passes)" : "") : "Not evaluated at the playhead.";
@@ -458,6 +538,7 @@ internal sealed class AnimationGraphView : Grid
         if (band.Id == "header") return node.NodeName();
         if (band.Id.StartsWith("showAll:", StringComparison.Ordinal)) return "Show all events of " + node.Node.Label;
         if (band.Id.StartsWith("outcome:", StringComparison.Ordinal)) return "Outcome of " + (band.Item?.Branch?.Condition?.Question ?? "the condition");
+        if (band.Id.StartsWith("passes:", StringComparison.Ordinal)) return "Passes of " + (band.Item?.Branch?.Condition?.Question ?? "the condition") + (RunCondition(band.Target) is { PassCount: > 0 } passes ? $", {passes.PassCount} passes" : "");
         if (band.Item?.Row is not { } row) return band.Id;
         string run = OverlayShown && RunRow(row.Id) is { } runRow ? ", " + runRow.Disposition switch
         {
@@ -500,7 +581,21 @@ internal sealed class AnimationGraphView : Grid
     {
         base.OnPreviewMouseDown(e);
         if (e.ChangedButton == MouseButton.Middle && Layout != null) { BeginPan(e); e.Handled = true; }
+        // Space held: a left drag pans, over nodes too (it never selects); Space then does not play on release.
+        else if (e.ChangedButton == MouseButton.Left && Layout != null && spacePanning && Keyboard.IsKeyDown(Key.Space)) { spaceDragged = true; BeginPan(e); e.Handled = true; }
     }
+    private bool spacePanning, spaceDragged;
+    /// <summary>Space went down with the pointer over the graph: a left drag now pans (design §8, Zoom and pan).</summary>
+    internal void SpaceDown() { spacePanning = true; spaceDragged = false; if (panFrom == null) Cursor = Cursors.Hand; }
+    /// <summary>Space went up: whether it was used to pan (else it plays or pauses, as Space does).</summary>
+    internal bool SpaceUp()
+    {
+        bool dragged = spaceDragged;
+        spacePanning = spaceDragged = false;
+        if (panFrom == null) Cursor = null;
+        return dragged;
+    }
+    internal bool SpaceHeld => spacePanning;
     protected override void OnMouseDown(MouseButtonEventArgs e)
     {
         base.OnMouseDown(e);
@@ -535,9 +630,9 @@ internal sealed class AnimationGraphView : Grid
     {
         base.OnMouseUp(e);
         if (panFrom == null) return;
-        panFrom = null; ReleaseMouseCapture(); Cursor = null;
-        // A plain click on empty space clears the selection.
-        if (!panned && e.ChangedButton == MouseButton.Left && Selection != null) SelectionRequested?.Invoke("");
+        panFrom = null; ReleaseMouseCapture(); Cursor = spacePanning ? Cursors.Hand : null;
+        // A plain click on empty space clears the selection (a Space pan never selects).
+        if (!panned && !spacePanning && e.ChangedButton == MouseButton.Left && Selection != null) SelectionRequested?.Invoke("");
     }
     protected override void OnMouseLeave(MouseEventArgs e) { base.OnMouseLeave(e); SetHoveredEdge(null); }
     private void SetHoveredEdge(AnimationGraphRoute? route)
@@ -546,7 +641,7 @@ internal sealed class AnimationGraphView : Grid
         hoveredEdge = route;
         edges.InvalidateVisual();
         ToolTip = route == null ? null : EdgeTip(route);
-        Cursor = route != null && route.Edge.From.StartsWith("row:", StringComparison.Ordinal) ? Cursors.Hand : null;
+        Cursor = spacePanning || route != null && route.Edge.From.StartsWith("row:", StringComparison.Ordinal) ? Cursors.Hand : null;
     }
     internal AnimationGraphRoute? HoveredEdge => hoveredEdge;
     private AnimationGraphRoute? EdgeAt(Point point, double tolerance)
@@ -828,19 +923,86 @@ internal sealed class AnimationGraphView : Grid
 
     // ------------------------------------------------------------ frames
 
-    /// <summary>A definition frame: its box, its header (definition glyph, name, binding and file), a click selects the definition.</summary>
-    private sealed class FrameView : FrameworkElement
+    /// <summary>
+    /// A definition frame: its box, its header (definition glyph, name, binding and file), a click selects the definition. An
+    /// expanded group's frame shows one member at a time: its header names the group, its member switcher ("rdrail01 · 1 of 8
+    /// ▾") chooses the member the frame and its run overlay show, and a line sums up every member's state at the playhead.
+    /// </summary>
+    private sealed class FrameView : Panel
     {
         private readonly AnimationGraphView view;
+        private readonly Button? switcher;
+        private readonly TextBlock? switcherText;
         internal AnimationGraphPlacement Placement { get; }
+        private double HeaderHeight => Placement.HeaderHeight;
         internal FrameView(AnimationGraphView view, AnimationGraphPlacement placement)
         {
             this.view = view; Placement = placement;
             Width = placement.Bounds.Width; Height = placement.Bounds.Height;
             var frame = placement.Node.Frame!;
-            AutomationProperties.SetName(this, $"Definition {frame.Name}, {frame.Root} #{frame.Entry}");
+            AutomationProperties.SetName(this, frame.Group != null ? $"Called animation {GroupName()}, showing {frame.Root} #{frame.Entry}, {frame.MemberIndex + 1} of {frame.Members.Count}" : $"Definition {frame.Name}, {frame.Root} #{frame.Entry}");
             ToolTip = "Select the definition (Inspector → Definition)";
             ToolTipService.SetInitialShowDelay(this, 700);
+            if (frame.Group != null && frame.Members.Count > 0)
+            {
+                switcherText = new() { FontSize = 11.5, VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis };
+                StackPanel content = new() { Orientation = Orientation.Horizontal };
+                content.Children.Add(switcherText);
+                content.Children.Add(new AnimationGraphGlyph { Glyph = "chevron", Size = 10, Margin = new(5, 1, 0, 0), VerticalAlignment = VerticalAlignment.Center });
+                switcher = new() { Content = content, Padding = new(6, 0, 4, 0), Focusable = true, HorizontalAlignment = HorizontalAlignment.Left };
+                switcher.SetResourceReference(StyleProperty, "CommandButton");
+                switcher.Width = double.NaN; switcher.Height = 18;
+                switcher.Click += (_, e) => { e.Handled = true; ShowMembers(); };
+                Children.Add(switcher);
+                RefreshSwitcher();
+            }
+        }
+        private string GroupName() => Placement.Node.Frame!.Group is { } group && view.Layout?.Graph.Node(AnimationGraph.ReferenceId(group))?.Reference is { } reference ? reference.Name : Placement.Node.Frame.Name;
+        private string MemberRoot(int entry) => view.Layout?.Graph.Index.Package.Entries is { } entries && entry < entries.Count ? entries[entry].RootName : "#" + entry.ToString(CultureInfo.InvariantCulture);
+        /// <summary>"8 bindings · 1 running · 7 not started": every member's state at the playhead.</summary>
+        internal string MembersSummary()
+        {
+            var frame = Placement.Node.Frame!;
+            int count = view.Layout?.Graph.Node(AnimationGraph.ReferenceId(frame.Group!))?.Reference?.EntryCount ?? frame.Members.Count;
+            string head = $"{count} binding{(count == 1 ? "" : "s")}";
+            if (!view.OverlayShown || view.RunReference(AnimationGraph.ReferenceId(frame.Group!)) is not { } run || run.States.Count == 0) return head;
+            return head + " · " + string.Join(" · ", run.States.Select(s => $"{s.Bindings} {AnimationRunOverlay.Label(s.State, null).ToLowerInvariant().Replace(" · ", ", ", StringComparison.Ordinal)}"));
+        }
+        internal void RefreshSwitcher()
+        {
+            if (switcher == null || switcherText == null) return;
+            var frame = Placement.Node.Frame!;
+            switcherText.Text = $"{frame.Root} · {frame.MemberIndex + 1} of {frame.Members.Count}";
+            switcher.SetResourceReference(Control.ForegroundProperty, "TextFillColorPrimaryBrush");
+            string summary = MembersSummary();
+            AutomationProperties.SetName(switcher, $"Shown binding {frame.Root} #{frame.Entry}, {frame.MemberIndex + 1} of {frame.Members.Count}; choose another. {summary}");
+            switcher.ToolTip = $"The frame shows {frame.Root} #{frame.Entry}; its run overlay is this binding's. Choose another binding of {GroupName()}.\n{summary}";
+            ToolTip = $"{GroupName()} · {summary}\nSelect the definition (Inspector → Definition)";
+        }
+        private void ShowMembers()
+        {
+            var frame = Placement.Node.Frame!;
+            ContextMenu menu = new() { PlacementTarget = switcher, Placement = PlacementMode.Bottom };
+            foreach (int entry in frame.Members)
+            {
+                string state = view.OverlayShown && view.RunBinding(entry) is { } binding ? " · " + binding.Label : "";
+                MenuItem item = new() { Header = new TextBlock { Text = $"{MemberRoot(entry)} · #{entry}{state}" }, IsCheckable = true, IsChecked = entry == frame.Entry };
+                AutomationProperties.SetName(item, $"{MemberRoot(entry)} #{entry}{state}");
+                int chosen = entry;
+                item.Click += (_, _) => { if (chosen != frame.Entry) view.RequestMember(Placement.Id, chosen); };
+                menu.Items.Add(item);
+            }
+            menu.IsOpen = true;
+        }
+        protected override Size MeasureOverride(Size availableSize)
+        {
+            switcher?.Measure(new Size(Math.Max(0, Width - 40), 18));
+            return new(Width, Height);
+        }
+        protected override Size ArrangeOverride(Size finalSize)
+        {
+            switcher?.Arrange(new Rect(26, AnimationGraphLayout.FrameHeader, Math.Min(switcher.DesiredSize.Width, Math.Max(0, Width - 36)), 18));
+            return finalSize;
         }
         protected override void OnRender(DrawingContext dc)
         {
@@ -849,19 +1011,28 @@ internal sealed class AnimationGraphView : Grid
             var rect = new Rect(.5, .5, Width - 1, Height - 1);
             dc.DrawRoundedRectangle(p.Frame, p.FramePen, rect, 8, 8);
             if (IsMouseOver && Mouse.GetPosition(this).Y < AnimationGraphLayout.FrameHeader) dc.DrawRoundedRectangle(p.HeaderHover, null, new Rect(1, 1, Width - 2, AnimationGraphLayout.FrameHeader - 1), 7.5, 7.5);
-            dc.DrawLine(frame.Path == null && Placement.Node.Parent != null ? new Pen(p.FrameBorder, 1) { DashStyle = new DashStyle([3, 2], 0) } : p.FramePen, new(1, AnimationGraphLayout.FrameHeader + .5), new(Width - 1, AnimationGraphLayout.FrameHeader + .5));
+            dc.DrawLine(frame.Path == null && Placement.Node.Parent != null ? new Pen(p.FrameBorder, 1) { DashStyle = new DashStyle([3, 2], 0) } : p.FramePen, new(1, HeaderHeight + .5), new(Width - 1, HeaderHeight + .5));
             if (view.Selection == Placement.Id) dc.DrawRoundedRectangle(null, p.AccentOutline, new Rect(-2, -2, Width + 4, Height + 4), 10, 10);
             AnimationGraphGlyphs.Draw(dc, "definition", new(10, 9.5), 15, p.T2);
             double pixels = VisualTreeHelper.GetDpi(this).PixelsPerDip;
-            var name = new FormattedText(frame.Name, CultureInfo.CurrentUICulture, FlowDirection.LeftToRight, p.Strong, 13, p.T1, pixels) { MaxTextWidth = Math.Max(1, Width - 60), Trimming = TextTrimming.CharacterEllipsis, MaxLineCount = 1 };
+            bool group = frame.Group != null;
+            var name = new FormattedText(group ? GroupName() : frame.Name, CultureInfo.CurrentUICulture, FlowDirection.LeftToRight, p.Strong, 13, p.T1, pixels) { MaxTextWidth = Math.Max(1, Width - 60), Trimming = TextTrimming.CharacterEllipsis, MaxLineCount = 1 };
             dc.DrawText(name, new Point(32, 17 - name.Height / 2));
-            string caption = $"{frame.Root} · #{frame.Entry}" + (frame.File is { } file ? " · " + System.IO.Path.GetFileName(file) : "") + (view.State.ReadOnly ? " · read only" : "");
+            string caption = (group ? $"{frame.Name} · #{frame.Entry}" : $"{frame.Root} · #{frame.Entry}") + (frame.File is { } file ? " · " + System.IO.Path.GetFileName(file) : "") + (view.State.ReadOnly ? " · read only" : "");
             var detail = new FormattedText(caption, CultureInfo.CurrentUICulture, FlowDirection.LeftToRight, p.Text, 12, p.T2, pixels) { MaxTextWidth = Math.Max(1, Width - 48 - name.Width), Trimming = TextTrimming.CharacterEllipsis, MaxLineCount = 1 };
             dc.DrawText(detail, new Point(32 + name.WidthIncludingTrailingWhitespace + 8, 17 - detail.Height / 2));
-            if (Placement.Node.Parent != null && view.Layout?.Graph.Index.Package.Entries.Count > frame.Entry && frame.Path == null)
+            if (Placement.Node.Parent != null && view.Layout?.Graph.Index.Package.Entries.Count > frame.Entry && frame.Path == null && !group)
             {
                 var note = new FormattedText("reached by name", CultureInfo.CurrentUICulture, FlowDirection.LeftToRight, p.Italic, 11, p.T4, pixels);
                 dc.DrawText(note, new Point(Width - 10 - note.Width, 17 - note.Height / 2));
+            }
+            if (group)
+            {
+                // The members' line: the switcher (a control), then every member's state at the playhead.
+                double x = 26 + (switcher?.DesiredSize.Width ?? 0) + 8;
+                var summary = new FormattedText(MembersSummary(), CultureInfo.CurrentUICulture, FlowDirection.LeftToRight, p.Text, 11, view.State.Stale ? p.T4 : p.T3, pixels)
+                    { MaxTextWidth = Math.Max(1, Width - x - 10), Trimming = TextTrimming.CharacterEllipsis, MaxLineCount = 1 };
+                dc.DrawText(summary, new Point(x, AnimationGraphLayout.FrameHeader + 9 - summary.Height / 2));
             }
         }
         protected override void OnMouseMove(MouseEventArgs e) { base.OnMouseMove(e); InvalidateVisual(); }
@@ -869,13 +1040,13 @@ internal sealed class AnimationGraphView : Grid
         protected override void OnMouseLeftButtonDown(MouseButtonEventArgs e)
         {
             base.OnMouseLeftButtonDown(e);
-            if (e.GetPosition(this).Y > AnimationGraphLayout.FrameHeader) return;
+            if (e.Handled || e.GetPosition(this).Y > HeaderHeight) return;
             view.Focus();
             view.SelectionRequested?.Invoke(Placement.Id);
             e.Handled = true;
         }
         protected override HitTestResult? HitTestCore(PointHitTestParameters hitTestParameters) =>
-            hitTestParameters.HitPoint.Y <= AnimationGraphLayout.FrameHeader && hitTestParameters.HitPoint.X >= 0 && hitTestParameters.HitPoint.X <= Width ? new PointHitTestResult(this, hitTestParameters.HitPoint) : null;
+            hitTestParameters.HitPoint.Y <= HeaderHeight && hitTestParameters.HitPoint.X >= 0 && hitTestParameters.HitPoint.X <= Width ? new PointHitTestResult(this, hitTestParameters.HitPoint) : null;
         protected override AutomationPeer OnCreateAutomationPeer() => new FramePeer(this);
         private sealed class FramePeer(FrameView owner) : FrameworkElementAutomationPeer(owner)
         {

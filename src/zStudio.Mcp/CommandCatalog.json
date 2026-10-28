@@ -1572,7 +1572,7 @@
   },
   {
     "Name": "zstudio_animation_runtime",
-    "Description": "Read preview status, sequence runtime, dispatched event occurrences, problems or bound scene nodes. Scene metadata previews retain at most 64 JSON nodes and 1024 text characters, with inspection_truncated; full metadata is available through JSON export. Identities remain complete; long rows shorten pages, so follow nextOffset. Timing thresholds and observed dispatches remain distinct.",
+    "Description": "Read preview status, sequence runtime, dispatched event occurrences, problems or bound scene nodes; in a source map also instances, scoped condition outcomes and each start attempt\u0027s activation prerequisites (prerequisites: outcome met, refused, or ignored by the scenario\u0027s rule, with every check; evidence only). Scene metadata previews retain at most 64 JSON nodes and 1024 text characters, with inspection_truncated; full metadata is available through JSON export. Identities remain complete; long rows shorten pages, so follow nextOffset. Timing thresholds and observed dispatches remain distinct.",
     "Mutates": false,
     "Parameters": [
       {
@@ -1586,7 +1586,7 @@
       {
         "Name": "section",
         "Type": "string",
-        "Description": "Data section; instances and conditions are source-world run observations.",
+        "Description": "Data section; instances, conditions and prerequisites are source-world run observations.",
         "Required": true,
         "Choices": [
           "status",
@@ -1595,7 +1595,8 @@
           "problems",
           "scene",
           "instances",
-          "conditions"
+          "conditions",
+          "prerequisites"
         ],
         "Properties": null
       },
@@ -1854,7 +1855,7 @@
   },
   {
     "Name": "zstudio_workspace_view",
-    "Description": "Read or set presentation preferences and read effective navigatorMode (hidden, tabbed, split). In a source map, navigator/inspector and navigatorWidth/inspectorWidth show, hide and size its World tree (left) and docked Properties pane (right) for the session, without overwriting compiled-explorer preferences, and tools/toolsHeight show, hide and size its Diagnostics pane (the problems alone, no toolsTab) the same way. Supports theme, preset, pane visibility/dimensions and stable section indices, including detached Files. Does not commit drafts.",
+    "Description": "Read or set presentation preferences and read effective navigatorMode (hidden, tabbed, split). In a source map, navigator/inspector and navigatorWidth/inspectorWidth show, hide and size its World tree (left) and docked Properties pane (right) for the session, without overwriting compiled-explorer preferences, and tools/toolsHeight show, hide and size its Diagnostics pane (the problems alone, no toolsTab) the same way. In Animation mode navigator and tools show or hide the mode\u0027s own World tree (remembered for the profile) and Diagnostics strip (remembered for the project), as animation_mode layout tree and diagnostics do; the map layout\u0027s keep theirs. Supports theme, preset, pane visibility/dimensions and stable section indices, including detached Files. Does not commit drafts.",
     "Mutates": true,
     "Parameters": [
       {
@@ -2852,7 +2853,7 @@
   },
   {
     "Name": "zstudio_animation_scenario",
-    "Description": "The shown map\u0027s animation scenario (the Scenario tab and the command bar\u0027s scenario chip): starts on the shared clock (at most 32; the primary, id 00000000-0000-0000-0000-000000000000, is Animation mode\u0027s opened binding), included call paths, condition switches (IF and ELSEIF, per call path), inputs (player at start, custom or none; random seed; effects detail; phase; height; beam origin) and rules (prerequisites check, ignoreStarts (default) or ignore; range gates game or ignore; zone gates ignore (default) or view). Every change stops playback and re-evaluates the run up to the playhead, as a seek does, before it returns; it is saved with the map in the project\u0027s .zstudio/settings.json and survives Exit, other definitions, difficulty changes and source edits. read lists it with the call paths the starts reach, grouped by calling and called definition (Include all leaves back-links excluded). include includes paths with the calls that lead to them, or excludes them with every path below them. pick places the player or the beam origin on the surface under a point of the 3D view (DIP, as Pick in view does). reset returns everything to the defaults with the opened binding as primary. fitRange sets the playback range to the latest start plus 30 s. starts, include, includeAll, excludeAll, conditions, pick and fitRange need Animation mode. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Description": "The shown map\u0027s animation scenario (the Scenario tab and the command bar\u0027s scenario chip): starts on the shared clock (at most 32; the primary, id 00000000-0000-0000-0000-000000000000, is Animation mode\u0027s opened binding), included call paths, condition switches (IF and ELSEIF, per call path), inputs (player at start, custom or none; random seed; effects detail; phase; height; beam origin) and rules (prerequisites check, ignoreStarts (default) or ignore; range gates game or ignore; zone gates ignore (default) or view). Every change stops playback and re-evaluates the run up to the playhead, as a seek does, before it returns (a change during another\u0027s re-evaluation re-evaluates to the same playhead; conditions sets all its switches as one change); it is saved with the map in the project\u0027s .zstudio/settings.json and survives Exit, other definitions, difficulty changes and source edits. read lists it (in the map layout too) with the call paths the starts reach, grouped by calling and called definition (Include all leaves back-links excluded): groups paged by offset and limit, each with its first 16 paths; read with group pages that group\u0027s paths. include includes paths with the calls that lead to them, or excludes them with every path below them. pick places the player or the beam origin on the surface under a point of the 3D view (DIP, as Pick in view does). reset returns everything to the defaults with the opened binding (after Exit, the kept one) as primary. fitRange sets the playback range to the latest start plus 30 s. starts, include, includeAll, excludeAll, conditions, pick and fitRange need Animation mode. Returns an operation ID; use zstudio_operation to await/read the result.",
     "Mutates": true,
     "Parameters": [
       {
@@ -3178,12 +3179,40 @@
           "view"
         ],
         "Properties": null
+      },
+      {
+        "Name": "group",
+        "Type": "string",
+        "Description": "read: a group of call paths (calls.groups[].group) whose paths to page.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "offset",
+        "Type": "integer",
+        "Description": "read: the first group, or with group the first path.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": 0,
+        "Maximum": 2147483647
+      },
+      {
+        "Name": "limit",
+        "Type": "integer",
+        "Description": "read: groups, or with group paths, per page (at most 100).",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": 1,
+        "Maximum": 100
       }
     ]
   },
   {
     "Name": "zstudio_animation_graph",
-    "Description": "Animation mode\u0027s Structure view: the opened binding\u0027s node graph (the activation; the definition frame with the cleanup and runtime sequences, their grouped rows, condition blocks and loop brackets; reference nodes for the called and calling animations, expanded ones as frames per binding; every edge: call, callWait, localChild, release, contactRelease, stopSequence, stopAnimation, resetAnimation, invalidateAnimation, prerequisite, with backLink for a call back to a binding on the path) with its deterministic layout (bounds in DIP at 100 %) and the run overlay at the playhead. Identities are the GUI\u0027s: frame:\u003Centry\u003E, activation:\u003Centry\u003E, sequence:\u003Centry\u003E:\u003Cguid\u003E, row:\u003Centry\u003E:\u003Cguid\u003E, ref:\u003Cgroup\u003E, and edge ids from read. read pages nodes, edges (section edges) or one sequence\u0027s rows with its blocks (section rows, node) by at most 100, each with its run (binding, sequence or row state; a condition\u0027s passes, at most 40, with its Game/True/False switch). expand and collapse change presentation only (never include, run or evaluate): a reference node expands into a frame per binding (at most 64 expanded frames), a sequence opens or collapses (showAll lists every row), a grouped row lists its members, all opens or collapses every sequence. select selects a node, row or edge (an edge selects its source row) as a click does: the Inspector shows its card and the view outlines the nodes it names; a PLAYER_RANGE question or a range-gated activation returns rangeDrawing (attach node position, radius, player, distance). viewport sets zoom (0.25\u20132), center, fit, reveal and the run overlay. callers lists every call or by-name event of the map that reaches a binding. Condition switches are animation_scenario conditions and call ports animation_scenario include (the GUI\u0027s switches and ports use the same operations); animation_mode opens and exits. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Description": "Animation mode\u0027s Structure view: the opened binding\u0027s node graph (the activation; the definition frame with the cleanup and runtime sequences, their grouped rows, condition blocks and loop brackets; reference nodes for the called and calling animations, an expanded one as one frame showing one of its bindings (its member); every edge: call, callWait, localChild, release, contactRelease, stopSequence, stopAnimation, resetAnimation, invalidateAnimation, prerequisite, with backLink for a call back to a binding on the path) with its deterministic layout (bounds in DIP at 100 %) and the run overlay at the playhead. Identities are the GUI\u0027s: frame:\u003Centry\u003E, activation:\u003Centry\u003E, sequence:\u003Centry\u003E:\u003Cguid\u003E, row:\u003Centry\u003E:\u003Cguid\u003E, ref:\u003Cgroup\u003E, and edge ids from read. read pages nodes, edges (section edges) or one sequence\u0027s rows with its blocks (section rows, node) by at most 100, each with its run (binding, sequence or row state; a blocked sequence\u0027s blockedBy edge, whose port includes the call it waits for; an activation\u0027s prerequisites at its latest start attempt: met, unmet \u00B7 refused or unmet \u00B7 ignored for this start; a condition\u0027s passes, at most 40, with its Game/True/False switch and where its pips are drawn). expand and collapse change presentation only (never include, run or evaluate): a reference node expands into one frame for the group (at most 64 expanded; member chooses the binding it shows, as the frame header\u0027s switcher does), a sequence opens or collapses (showAll lists every row), a grouped row lists its members, all opens or collapses every sequence. select selects a node, row or edge (an edge selects its source row) as a click does: the Inspector shows its card and the view outlines the nodes it names; a PLAYER_RANGE question or a range-gated activation returns rangeDrawing (attach node position, radius, player, distance). viewport sets zoom (0.25\u20132), center, fit, reveal and the run overlay. callers lists every call or by-name event of the map that reaches a binding. Condition switches are animation_scenario conditions and call ports animation_scenario include (the GUI\u0027s switches and ports use the same operations); animation_mode opens and exits. Returns an operation ID; use zstudio_operation to await/read the result.",
     "Mutates": true,
     "Parameters": [
       {
@@ -3260,6 +3289,15 @@
         "Required": false,
         "Choices": null,
         "Properties": null
+      },
+      {
+        "Name": "member",
+        "Type": "integer",
+        "Description": "expand a reference node (or its expanded frame): the binding its one frame shows (reference.entries; the member switcher).",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": 1
       },
       {
         "Name": "zoom",

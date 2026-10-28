@@ -37,6 +37,11 @@ public sealed record AnimationGraphFrame(int Entry, string Name, string Root, st
 {
     public string? File { get; init; }
     public AnimationEntrySource? Source { get; init; }
+    /// <summary>The reference group an expanded frame stands for: it shows one member at a time (<see cref="Members"/>[<see cref="MemberIndex"/>]).</summary>
+    public string? Group { get; init; }
+    /// <summary>The group's bindings in entry order (at most 100), any of which the frame can show.</summary>
+    public IReadOnlyList<int> Members { get; init; } = [];
+    public int MemberIndex { get; init; }
 }
 
 /// <summary>A sequence node. Rows come from <see cref="AnimationGraph.Rows"/>; <see cref="RowCount"/> counts its grouped rows.</summary>
@@ -171,12 +176,15 @@ public sealed record AnimationGraphCallerGroup(string Group, string Name, int Bi
 
 /// <summary>
 /// The bindings of one definition reached from the shown frames (or calling the opened binding), as one node:
-/// "rdrail_destroy0* · 8 bindings". Collapsed by default; expanded, each binding gets its own frame to the right.
+/// "rdrail_destroy0* · 8 bindings". Collapsed by default; expanded, one frame to the right shows one member at a time
+/// (<see cref="Member"/>, the first unless another is chosen), so a group counts once against the expansion budget.
 /// </summary>
 public sealed record AnimationGraphReference(string Group, string Name, IReadOnlyList<int> Entries, int EntryCount)
 {
     public bool Calling { get; init; }
     public bool Expanded { get; init; }
+    /// <summary>The member the expanded frame shows; null when the node has no frame.</summary>
+    public int? Member { get; init; }
     public bool Expandable { get; init; }
     public bool Unresolved { get; init; }
     public string? File { get; init; }

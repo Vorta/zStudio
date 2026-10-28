@@ -32,6 +32,11 @@ public enum AnimationGraphItemKind
     Question,
     /// <summary>The outcome line under a question: outcome, pips and the Game | True | False switch.</summary>
     Outcome,
+    /// <summary>
+    /// A question's pass strip under its outcome line, full width: a pip per pass (at most 40, then "+n"). A question inside a
+    /// loop always has one; another gets one once it shows more passes than its outcome line holds.
+    /// </summary>
+    Passes,
     /// <summary>A branch label: "if true", "else if", "if false"; an ELSE marker selects through it.</summary>
     Branch,
     /// <summary>The thin closing line of a condition block, which selects its ENDIF.</summary>
@@ -128,6 +133,8 @@ public sealed record AnimationGraphLayoutOptions
     public IReadOnlySet<string> ShowAll { get; init; } = new HashSet<string>(StringComparer.Ordinal);
     /// <summary>Grouped rows listing their members.</summary>
     public IReadOnlySet<string> ExpandedRows { get; init; } = new HashSet<string>(StringComparer.Ordinal);
+    /// <summary>Question rows outside loops that show their passes on a strip of their own (more than <see cref="AnimationGraphLayout.OutcomePips"/> passes).</summary>
+    public IReadOnlySet<string> PassStrips { get; init; } = new HashSet<string>(StringComparer.Ordinal);
 
     public bool IsCollapsed(AnimationGraphNode node) => node.Sequence is { } sequence
         && (Collapsed.Contains(node.Id) || sequence.CollapsedByDefault && !Opened.Contains(node.Id));
@@ -145,10 +152,19 @@ public sealed class AnimationGraphLayout
 {
     public const double NodeWidth = 232, ColumnGap = 24, FrameGap = 48, ActivationGap = 40, Margin = 24, ColumnBudget = 340;
     public const double FrameHeader = 34, FramePadding = 12, FrameTop = 46, FrameBottom = 14;
+    /// <summary>An expanded group's frame adds a line under its header: every member's state at the playhead.</summary>
+    public const double GroupLineHeight = 18;
     public const double Header = 28, StateHeight = 18, SummaryHeight = 20, RowHeight = 22, MemberHeight = 20, QuestionHeight = 26,
-        OutcomeHeight = 24, BranchHeight = 20, EndIfHeight = 6, BlockMargin = 3, BodyTop = 4, BodyBottom = 5, BlockInset = 6;
-    public const double TriggerHeight = 22, PrerequisiteHeaderHeight = 24, PrerequisiteHeight = 19, RunNoteHeight = 34, LineHeight = 18;
+        OutcomeHeight = 24, PassStripHeight = 16, BranchHeight = 20, EndIfHeight = 6, BlockMargin = 3, BodyTop = 4, BodyBottom = 5, BlockInset = 6;
+    /// <summary>A prerequisite group's header: its requirement, then the scenario's rule or what the latest start found ("unmet · ignored for this start").</summary>
+    public const double TriggerHeight = 22, PrerequisiteHeaderHeight = 38, PrerequisiteHeight = 19, RunNoteHeight = 34, LineHeight = 18;
     public const int ShownPrerequisites = 8;
+    /// <summary>Pips an outcome line holds beside its outcome and switch; more passes go on the question's pass strip.</summary>
+    public const int OutcomePips = 3;
+    /// <summary>Pips a pass strip shows (the latest), then "+n" for the rest.</summary>
+    public const int StripPips = 40;
+    /// <summary>The header height of a frame: an expanded group's adds its members' line.</summary>
+    public static double FrameHeaderHeight(AnimationGraphFrame frame) => FrameHeader + (frame.Group != null ? GroupLineHeight : 0);
     /// <summary>Spacing of parallel edges in a gutter or a channel.</summary>
     public const double LaneSpacing = 4;
 
@@ -210,9 +226,12 @@ public sealed class AnimationGraphLayout
             public Sized Frame { get; } = frame;
             public List<List<Sized>> Columns { get; } = [];
             public double ColumnsHeight;
+            /// <summary>Its header (an expanded group's has the members' line), then the padding above its nodes.</summary>
+            public double HeaderHeight => FrameHeaderHeight(Frame.Node.Frame!);
+            public double Top => HeaderHeight + FramePadding;
             public double Width => FramePadding * 2 + Columns.Count * NodeWidth + Math.Max(0, Columns.Count - 1) * ColumnGap;
             public double LaneX(int lane) => Frame.X + FramePadding + lane * (NodeWidth + ColumnGap);
-            public double ChannelTop => Frame.Y + FrameTop + ColumnsHeight + 8;
+            public double ChannelTop => Frame.Y + Top + ColumnsHeight + 8;
         }
         /// <summary>Parallel lanes in a gutter or channel: one per key, in first-use order, wrapping at its capacity.</summary>
         private sealed class Lanes
@@ -412,6 +431,11 @@ public sealed class AnimationGraphLayout
             y += QuestionHeight;
             node.Items.Add(new(AnimationGraphItemKind.Outcome, y, OutcomeHeight) { Row = row, Block = block, Branch = branch, Depth = depth, Looped = looped });
             y += OutcomeHeight;
+            if (looped || options.PassStrips.Contains(row.Id))
+            {
+                node.Items.Add(new(AnimationGraphItemKind.Passes, y, PassStripHeight) { Row = row, Block = block, Branch = branch, Depth = depth, Looped = looped });
+                y += PassStripHeight;
+            }
             node.Items.Add(new(AnimationGraphItemKind.Branch, y, BranchHeight) { Block = block, Branch = branch, Depth = depth, Looped = looped });
             return y + BranchHeight;
         }
@@ -551,13 +575,13 @@ public sealed class AnimationGraphLayout
                         var info = frames[node.Id];
                         var frame = info.Frame;
                         // An expanded frame sits beside its reference node, under the frame above it.
-                        double wanted = node.Parent is { } parent && sized.TryGetValue(parent, out var owner) ? owner.Y - FrameTop : top;
+                        double wanted = node.Parent is { } parent && sized.TryGetValue(parent, out var owner) ? owner.Y - info.Top : top;
                         frame.X = x; frame.Y = Math.Max(wanted, y);
                         double channel = LanesOf("frame:" + node.Id).Count;
-                        frame.Height = FrameTop + info.ColumnsHeight + FrameBottom + (channel > 0 ? 8 + channel * LaneSpacing : 0);
+                        frame.Height = info.Top + info.ColumnsHeight + FrameBottom + (channel > 0 ? 8 + channel * LaneSpacing : 0);
                         for (int lane = 0; lane < info.Columns.Count; lane++)
                         {
-                            double ny = frame.Y + FrameTop;
+                            double ny = frame.Y + info.Top;
                             foreach (var member in info.Columns[lane]) { member.X = info.LaneX(lane); member.Y = ny; ny += member.Height + FramePadding; }
                         }
                         y = frame.Y + frame.Height + 24;
@@ -580,7 +604,7 @@ public sealed class AnimationGraphLayout
                 double width = node.Kind == AnimationGraphNodeKind.Frame ? frames[node.Id].Width : NodeWidth;
                 var placement = new AnimationGraphPlacement(node, new(s.X, s.Y, width, s.Height))
                 {
-                    Frame = s.Frame, Lane = s.Lane, Collapsed = s.Collapsed, HeaderHeight = node.Kind == AnimationGraphNodeKind.Frame ? FrameHeader : Header,
+                    Frame = s.Frame, Lane = s.Lane, Collapsed = s.Collapsed, HeaderHeight = node.Frame is { } frame ? FrameHeaderHeight(frame) : Header,
                     Items = s.Items.AsReadOnly(), Boxes = s.Boxes.AsReadOnly(), HiddenRows = s.Hidden,
                 };
                 layout.nodes.Add(placement); layout.nodeById[node.Id] = placement;
@@ -635,7 +659,7 @@ public sealed class AnimationGraphLayout
                 int laneLeft = LanesOf("left:" + ColumnOf(target)).Of("to:" + edge.To);
                 if (!place) return null;
                 double startY = source.Y + Header / 2, gx = ColumnLeftLane(ColumnOf(source), laneDown), by = bottomChannel + laneBelow * LaneSpacing;
-                double ax = ColumnLeftLane(ColumnOf(target), laneLeft), ty = target.Y + (header == null ? Header / 2 : header.Y + header.Height / 2);
+                double ax = ColumnLeftLane(ColumnOf(target), laneLeft), ty = target.Y + (header == null ? Header / 2 : header.Y + 12);
                 points.AddRange([new(source.X, startY), new(gx, startY), new(gx, by), new(ax, by), new(ax, ty), new(target.X, ty)]);
                 return Route(edge, points, end, false, hidden, false, null);
             }
@@ -654,7 +678,7 @@ public sealed class AnimationGraphLayout
                 // A by-name event naming its own binding: up its gutter to its frame's header.
                 int lane = LanesOf(GutterKey(source.Frame!, source.Lane)).Of(edge.Id);
                 if (!place) return null;
-                double gx = GutterLane(sourceFrame, source.Lane, lane), hy = sourceFrame.Frame.Y + FrameHeader;
+                double gx = GutterLane(sourceFrame, source.Lane, lane), hy = sourceFrame.Frame.Y + sourceFrame.HeaderHeight;
                 points.AddRange([new(sx, sy), new(gx, sy), new(gx, hy)]);
                 string text = (edge.Label ?? "") + " · this animation";
                 var at = new AnimationGraphPoint(gx + 5, hy + 11);

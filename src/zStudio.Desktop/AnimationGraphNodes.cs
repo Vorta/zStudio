@@ -21,6 +21,7 @@ internal sealed class AnimationGraphNodeView : Panel
 {
     private readonly AnimationGraphView view;
     private readonly Dictionary<string, FormattedText> texts = new(StringComparer.Ordinal);
+    private Button? blockedLink;
     internal AnimationGraphPlacement Placement { get; }
     internal AnimationGraphNode Node => Placement.Node;
     internal List<AnimationGraphBand> Bands { get; } = [];
@@ -56,6 +57,9 @@ internal sealed class AnimationGraphNodeView : Panel
                 case AnimationGraphItemKind.Outcome when item.Row != null:
                     Bands.Add(new(view, this, item, "outcome:" + item.Row.Id));
                     break;
+                case AnimationGraphItemKind.Passes when item.Row != null:
+                    Bands.Add(new(view, this, item, "passes:" + item.Row.Id));
+                    break;
             }
         }
         foreach (var band in Bands) Children.Add(band);
@@ -65,6 +69,13 @@ internal sealed class AnimationGraphNodeView : Panel
                 (Placement.Collapsed ? "Expand" : "Collapse") + " the sequence (double-click its header)", () => view.RequestPresentation(Placement.Collapsed ? "open" : "collapse", node.Id));
             chevron.Tag = new Rect(4, 6, 16, 16);
             Children.Add(chevron);
+            // "Blocked · waits for excluded call X" is a link to that call's include toggle (shown while the run is blocked there).
+            blockedLink = new() { Padding = new(5, 0, 5, 0), Focusable = true, Visibility = Visibility.Collapsed, Cursor = Cursors.Hand };
+            blockedLink.SetResourceReference(StyleProperty, "CommandButton");
+            blockedLink.Width = double.NaN; blockedLink.Height = 20;
+            blockedLink.Click += (_, e) => { e.Handled = true; if (view.RunSequence(node.Id)?.BlockedBy is { } edge) view.FollowBlocked(edge); };
+            blockedLink.MouseDoubleClick += (_, e) => e.Handled = true;
+            Children.Add(blockedLink);
         }
         if (node.Reference is { } reference)
         {
@@ -154,9 +165,31 @@ internal sealed class AnimationGraphNodeView : Panel
         foreach (UIElement child in Children)
         {
             if (child is AnimationGraphBand band) { band.Arrange(band.Bounds); continue; }
+            if (child == blockedLink) { child.Arrange(new Rect(Placement.Bounds.Width - 6 - child.DesiredSize.Width, 4, child.DesiredSize.Width, 20)); continue; }
             if (child is FrameworkElement { Tag: Rect rect }) child.Arrange(rect);
         }
         return finalSize;
+    }
+    /// <summary>The blocked link shows while the run is blocked at an excluded call of this sequence.</summary>
+    private void RefreshBlockedLink()
+    {
+        if (blockedLink == null) return;
+        var run = view.OverlayShown ? view.RunSequence(Node.Id) : null;
+        bool blocked = run is { State: AnimationSequenceRunState.Blocked, BlockedBy: not null } && view.Level >= AnimationGraphLevel.Headers;
+        blockedLink.Visibility = blocked ? Visibility.Visible : Visibility.Collapsed;
+        if (!blocked) return;
+        var p = view.Palette;
+        StackPanel content = new() { Orientation = Orientation.Horizontal };
+        var glyph = new AnimationGraphGlyph { Glyph = "invalidate", Size = 11, Margin = new(0, 1, 5, 0), VerticalAlignment = VerticalAlignment.Center };
+        TextElement.SetForeground(glyph, p.Stop);
+        content.Children.Add(glyph);
+        var text = new TextBlock { Text = "Blocked ›", FontSize = 11, Foreground = p.Stop, VerticalAlignment = VerticalAlignment.Center };
+        text.TextDecorations = TextDecorations.Underline;
+        content.Children.Add(text);
+        blockedLink.Content = content;
+        AutomationProperties.SetName(blockedLink, run!.Label + ". Go to its include toggle");
+        blockedLink.ToolTip = run.Label + "\nClick to select the call and its include toggle (Space includes it).";
+        blockedLink.Measure(new Size(double.PositiveInfinity, 20));
     }
 
     // ------------------------------------------------------------ drawing
@@ -178,8 +211,9 @@ internal sealed class AnimationGraphNodeView : Panel
     {
         var level = view.Level;
         foreach (UIElement child in Children)
-            if (child is AnimationGraphSwitch or Button)
+            if (child is AnimationGraphSwitch or Button && child != blockedLink)
                 child.Visibility = level >= AnimationGraphLevel.Compact && !(child is AnimationGraphSwitch && view.State.ReadOnly) ? Visibility.Visible : Visibility.Hidden;
+        RefreshBlockedLink();
     }
 
     private double Pixels => VisualTreeHelper.GetDpi(this).PixelsPerDip;
@@ -230,8 +264,9 @@ internal sealed class AnimationGraphNodeView : Panel
         double width = Placement.Bounds.Width;
         double x = 24;
         if (sequence.Cleanup) { AnimationGraphGlyphs.Draw(dc, "cleanup", new(x, 7.5), 13, p.T3); x += 18; }
-        var chip = view.OverlayShown ? RunChip(run, p) : null;
-        double chipWidth = chip == null ? 0 : chip.Value.Width + 6;
+        bool linked = blockedLink?.Visibility == Visibility.Visible;
+        var chip = view.OverlayShown && !linked ? RunChip(run, p) : null;
+        double chipWidth = linked ? blockedLink!.DesiredSize.Width + 4 : chip == null ? 0 : chip.Value.Width + 6;
         DrawText(dc, Text(Node.Label, 12.5, p.T1, p.Strong, width - x - 8 - chipWidth, "name"), x, 14);
         if (chip is { } c) c.Draw(dc, width - 8, 14);
         if (sequence.Diagnostics.Count > 0) AnimationGraphGlyphs.Draw(dc, "warning", new(width - 8 - chipWidth - 16, 7), 13, p.Caution);
@@ -429,6 +464,9 @@ internal sealed class AnimationGraphNodeView : Panel
             case AnimationGraphItemKind.Outcome:
                 RenderOutcome(dc, p, item, level);
                 break;
+            case AnimationGraphItemKind.Passes:
+                RenderPasses(dc, p, item);
+                break;
             case AnimationGraphItemKind.Branch:
                 {
                     var branch = item.Branch;
@@ -466,47 +504,81 @@ internal sealed class AnimationGraphNodeView : Panel
         var choice = view.Choice(row);
         var condition = view.OverlayShown ? view.RunCondition(row.Id) : null;
         if (view.State.Stale) dc.PushOpacity(.5); else dc.PushOpacity(1);
+        string band = "outcome:" + row.Id;
+        // A question with a pass strip (in a loop, or tested more often than this line holds) keeps its pips there.
+        bool strip = Placement.Items.Any(i => i.Kind == AnimationGraphItemKind.Passes && i.Row?.Id == row.Id);
         if (condition?.Latest is { } latest)
         {
             var value = Text(latest.Value ? "true" : "false", 11, p.T1, p.Strong);
             DrawText(dc, value, x, cy); x += value.WidthIncludingTrailingWhitespace;
             var how = Text(" · " + (latest.Forced ? "forced" : "game"), 11, latest.Forced ? p.Accent : p.T3, latest.Forced ? p.Strong : p.Text);
             DrawText(dc, how, x, cy); x += how.WidthIncludingTrailingWhitespace;
-            if (condition.PassCount <= 1)
+            if (condition.PassCount <= 1 || strip)
             {
                 var at = Text(" · " + AnimationSeconds.Format(latest.Time), 11, p.T3, p.Text);
                 if (x + at.Width <= limit) DrawText(dc, at, x, cy);
-                view.SetPips(row.Id, x, 0);
+                view.SetPips(band, x, 0);
                 dc.Pop();
                 return;
             }
-            // Pips: one per pass (the latest ones that fit), "+n" before them for the rest.
+            // A few passes: a pip each after the outcome (the window gives a question with more its strip).
             x += 5;
-            int room = Math.Max(1, (int)((limit - x - 20) / 8));
-            int shown = Math.Min(room, condition.Passes.Count);
+            int shown = Math.Min(AnimationGraphLayout.OutcomePips, condition.Passes.Count);
             int more = condition.PassCount - shown;
-            if (more > 0)
-            {
-                var plus = Text("+" + more.ToString(CultureInfo.InvariantCulture), 10, p.T3, p.Text);
-                DrawText(dc, plus, x, cy); x += plus.Width + 3;
-            }
-            view.SetPips(row.Id, x, shown);
-            foreach (var pass in condition.Passes.Skip(condition.Passes.Count - shown))
-            {
-                var rect = new Rect(x + .5, cy - 4, 6, 9);
-                dc.DrawRoundedRectangle(pass.Value ? p.T2 : null, new Pen(p.T2, 1), rect, 1, 1);
-                if (pass.Forced) dc.DrawRoundedRectangle(null, new Pen(p.Accent, 1), new Rect(rect.X - 1.5, rect.Y - 1.5, rect.Width + 3, rect.Height + 3), 1.5, 1.5);
-                x += 8;
-            }
+            view.SetPips(band, x, shown);
+            x = DrawPips(dc, p, condition.Passes.Skip(condition.Passes.Count - shown), x, cy, 8, 6);
+            if (more > 0) DrawText(dc, Text("+" + more.ToString(CultureInfo.InvariantCulture), 10, p.T3, p.Text), x + 2, cy);
         }
         else
         {
             string text = choice == AnimationConditionChoice.Game ? (view.OverlayShown && view.State.Overlay != null ? "not evaluated yet" : "game rule") : (choice == AnimationConditionChoice.True ? "true · forced" : "false · forced");
             DrawText(dc, Text(text, 11, choice == AnimationConditionChoice.Game ? p.T3 : p.Accent, p.Text, limit - x), x, cy);
-            view.SetPips(row.Id, x, 0);
+            view.SetPips(band, x, 0);
         }
         dc.Pop();
         _ = level;
+    }
+
+    /// <summary>
+    /// A question's pass strip, the node's full width: a pip per pass (the latest 40), filled true, hollow false, an accent
+    /// ring when forced, then "+n" for the earlier passes; a pip's tooltip names its pass and a click seeks there.
+    /// </summary>
+    private void RenderPasses(DrawingContext dc, AnimationGraphPalette p, AnimationGraphItem item)
+    {
+        double width = Placement.Bounds.Width, cy = item.Y + item.Height / 2;
+        double inset = AnimationGraphLayout.BlockInset * Math.Max(1, item.Depth);
+        double x = inset + 9, right = width - inset - 9;
+        var row = item.Row!;
+        string band = "passes:" + row.Id;
+        var condition = view.OverlayShown ? view.RunCondition(row.Id) : null;
+        if (condition == null || condition.PassCount == 0)
+        {
+            DrawText(dc, Text(view.OverlayShown && view.State.Overlay != null ? "no passes yet" : "a pip per pass", 10.5, p.T4, p.Italic, right - x), x, cy);
+            view.SetPips(band, x, 0);
+            return;
+        }
+        if (view.State.Stale) dc.PushOpacity(.5); else dc.PushOpacity(1);
+        int shown = Math.Min(AnimationGraphLayout.StripPips, condition.Passes.Count);
+        int more = condition.PassCount - shown;
+        // The pitch fits 40 pips and "+n" in the strip, at most 8 DIP.
+        var plus = more > 0 ? Text("+" + more.ToString(CultureInfo.InvariantCulture), 10, p.T3, p.Text) : null;
+        double room = right - x - (plus == null ? 0 : plus.Width + 4);
+        double pitch = Math.Clamp(room / AnimationGraphLayout.StripPips, 3, 8);
+        view.SetPips(band, x, shown, pitch);
+        x = DrawPips(dc, p, condition.Passes.Skip(condition.Passes.Count - shown), x, cy, pitch, Math.Max(2, pitch - 1.5));
+        if (plus != null) DrawText(dc, plus, x + 3, cy);
+        dc.Pop();
+    }
+    private static double DrawPips(DrawingContext dc, AnimationGraphPalette p, IEnumerable<AnimationConditionPass> passes, double x, double cy, double pitch, double pipWidth)
+    {
+        foreach (var pass in passes)
+        {
+            var rect = new Rect(x + .5, cy - 4.5, pipWidth, 9);
+            dc.DrawRoundedRectangle(pass.Value ? p.T2 : null, new Pen(p.T2, 1), rect, 1, 1);
+            if (pass.Forced) dc.DrawRoundedRectangle(null, new Pen(p.Accent, 1.25), new Rect(rect.X - 1.5, rect.Y - 1.5, rect.Width + 3, rect.Height + 3), 1.5, 1.5);
+            x += pitch;
+        }
+        return x;
     }
 
     private void RenderActivation(DrawingContext dc, AnimationGraphPalette p, AnimationGraphLevel level)
@@ -551,21 +623,26 @@ internal sealed class AnimationGraphNodeView : Panel
                 case AnimationGraphItemKind.PrerequisiteHeader:
                     {
                         dc.DrawLine(p.DividerPen, new(0, item.Y + .5), new(width, item.Y + .5));
-                        AnimationGraphGlyphs.Draw(dc, "condition", new(-3.5, cy - 3.5), 7, p.Prerequisite);
-                        string policy = rule switch { AnimationPrerequisiteRule.Check => "checked", AnimationPrerequisiteRule.Ignore => "ignored", _ => "ignored for starts" };
-                        var pol = Text(policy, 11, p.T3, p.Text);
-                        DrawRight(dc, pol, width - 8, cy);
-                        DrawText(dc, Text(item.Text ?? "", 11.5, p.T2, p.Strong, width - 24 - pol.Width), 10, cy);
+                        AnimationGraphGlyphs.Draw(dc, "condition", new(-3.5, item.Y + 12 - 3.5), 7, p.Prerequisite);
+                        DrawText(dc, Text(item.Text ?? "", 11.5, p.T2, p.Strong, width - 20), 10, item.Y + 12);
+                        // Its second line: at the latest start attempt met, unmet · refused, or unmet · ignored for this start
+                        // (with when); before any, the scenario's rule.
+                        var outcome = view.OverlayShown ? view.PrerequisiteGroupOutcome(binding, item.Group!) : null;
+                        string policy = outcome != null && binding?.Prerequisites is { } start ? $"{outcome} · at {AnimationSeconds.Format(start.Time)}"
+                            : rule switch { AnimationPrerequisiteRule.Check => "Checked on every start", AnimationPrerequisiteRule.Ignore => "Ignored by the scenario", _ => "Ignored for the scenario's starts, checked for the rest" };
+                        Brush brush = outcome == null ? p.T3 : outcome == "met" ? p.Run : outcome.EndsWith("refused", StringComparison.Ordinal) ? p.Bad : p.Caution;
+                        if (view.State.Stale && outcome != null) brush = p.T4;
+                        DrawText(dc, Text(policy, 11, brush, outcome == null ? p.Text : p.Strong, width - 20), 10, item.Y + 27);
                         break;
                     }
                 case AnimationGraphItemKind.Prerequisite:
                     {
                         var prerequisite = item.Prerequisite!;
-                        bool? met = prerequisite.Entry is int needed && view.State.Overlay != null && view.OverlayShown ? view.RunBinding(needed)?.State != AnimationBindingLifecycle.Stopped : null;
-                        string mark = met == true ? "✓" : "○";
-                        DrawText(dc, Text(mark, 11.5, met == true ? p.Run : p.T2, p.Text), 12, cy);
-                        string status = prerequisite.Kind == "object" ? "active" : met == null ? (prerequisite.Entry == null ? "unresolved" : "not stopped?") : met == true ? "not stopped" : "stopped";
-                        var st = Text(status, 10.5, p.T3, p.Text);
+                        var (mark, markBrush, status) = view.PrerequisiteRow(binding, prerequisite, view.OverlayShown ? view.State.Overlay : null);
+                        // The group's header says "for this start"; the row keeps room for its target.
+                        status = status.Replace(" for this start", "", StringComparison.Ordinal);
+                        DrawText(dc, Text(mark, 11.5, markBrush, p.Text), 12, cy);
+                        var st = Text(status, 10.5, status.StartsWith("unmet", StringComparison.Ordinal) && !view.State.Stale ? (status.EndsWith("refused", StringComparison.Ordinal) ? p.Bad : status.Contains("ignored", StringComparison.Ordinal) ? p.Caution : p.T3) : p.T3, p.Text, width * .6);
                         DrawRight(dc, st, width - 8, cy);
                         DrawText(dc, Text(prerequisite.Target, 11.5, p.T2, p.Text, width - 40 - st.Width), 28, cy);
                         break;
@@ -644,8 +721,8 @@ internal sealed class AnimationGraphBand : FrameworkElement
     internal string Id { get; }
     internal Rect Bounds => Item == null ? new Rect(0, 0, Node.Placement.Bounds.Width, AnimationGraphLayout.Header) : new Rect(0, Item.Y, Node.Placement.Bounds.Width, Item.Height);
     /// <summary>The selection this band makes: its row, or its node for the header.</summary>
-    internal string Target => Id == "header" ? Node.Node.Id : Id.StartsWith("outcome:", StringComparison.Ordinal) ? Id["outcome:".Length..] : Id;
-    internal bool Selectable => !Id.StartsWith("showAll:", StringComparison.Ordinal) && !Id.StartsWith("outcome:", StringComparison.Ordinal);
+    internal string Target => Id == "header" ? Node.Node.Id : Id.StartsWith("outcome:", StringComparison.Ordinal) ? Id["outcome:".Length..] : Id.StartsWith("passes:", StringComparison.Ordinal) ? Id["passes:".Length..] : Id;
+    internal bool Selectable => !Id.StartsWith("showAll:", StringComparison.Ordinal) && !Id.StartsWith("outcome:", StringComparison.Ordinal) && !Id.StartsWith("passes:", StringComparison.Ordinal);
 
     internal AnimationGraphBand(AnimationGraphView view, AnimationGraphNodeView node, AnimationGraphItem? item, string id)
     {
@@ -686,7 +763,7 @@ internal sealed class AnimationGraphBand : FrameworkElement
     protected override void OnToolTipOpening(ToolTipEventArgs e)
     {
         base.OnToolTipOpening(e);
-        if (Id.StartsWith("outcome:", StringComparison.Ordinal)) ToolTip = view.OutcomeTip(this, Mouse.GetPosition(this));
+        if (Id.StartsWith("outcome:", StringComparison.Ordinal) || Id.StartsWith("passes:", StringComparison.Ordinal)) ToolTip = view.OutcomeTip(this, Mouse.GetPosition(this));
     }
 
     private sealed class BandPeer(AnimationGraphBand owner) : FrameworkElementAutomationPeer(owner)

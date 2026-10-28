@@ -43,7 +43,15 @@ public partial class MainWindow
         public HashSet<string> Opened { get; } = new(StringComparer.Ordinal);
         public HashSet<string> ShowAll { get; } = new(StringComparer.Ordinal);
         public HashSet<string> ExpandedRows { get; } = new(StringComparer.Ordinal);
-        public AnimationGraphLayoutOptions Options => new() { Collapsed = new HashSet<string>(Collapsed, StringComparer.Ordinal), Opened = new HashSet<string>(Opened, StringComparer.Ordinal), ShowAll = new HashSet<string>(ShowAll, StringComparer.Ordinal), ExpandedRows = new HashSet<string>(ExpandedRows, StringComparer.Ordinal) };
+        /// <summary>Questions outside loops that once showed more passes than their outcome line holds: their pips keep a line of their own.</summary>
+        public HashSet<string> PassStrips { get; } = new(StringComparer.Ordinal);
+        /// <summary>The member each expanded group's frame shows.</summary>
+        public Dictionary<string, int> Members { get; } = new(StringComparer.Ordinal);
+        public AnimationGraphLayoutOptions Options => new()
+        {
+            Collapsed = new HashSet<string>(Collapsed, StringComparer.Ordinal), Opened = new HashSet<string>(Opened, StringComparer.Ordinal), ShowAll = new HashSet<string>(ShowAll, StringComparer.Ordinal),
+            ExpandedRows = new HashSet<string>(ExpandedRows, StringComparer.Ordinal), PassStrips = new HashSet<string>(PassStrips, StringComparer.Ordinal),
+        };
     }
 
     private AnimationGraphView GraphView
@@ -57,6 +65,7 @@ public partial class MainWindow
             view.ConditionRequested += (row, choice) => _ = ReportUi(() => { GraphCondition(row.Id, choice); return Task.CompletedTask; });
             view.IncludeRequested += (edge, value) => _ = ReportUi(() => { GraphInclude(edge.Id, value); return Task.CompletedTask; });
             view.ExpandRequested += (node, value) => _ = ReportUi(() => { GraphExpand(node, value); return Task.CompletedTask; });
+            view.MemberRequested += (frame, entry) => _ = ReportUi(() => { GraphMember(frame, entry); return Task.CompletedTask; });
             view.OpenRequested += node => _ = ReportUi(() => GraphOpenAsync(node));
             view.PresentationRequested += (action, id) => _ = ReportUi(() => { GraphPresentationChange(action, id); return Task.CompletedTask; });
             view.SeekRequested += seconds => _ = ReportUi(() => WorldAnimationTransportAsync("seek", seconds));
@@ -91,11 +100,13 @@ public partial class MainWindow
         }
         if (target.Entry >= package.Entries.Count) { animationGraph = null; return null; }
         var expanded = ExpandedGroups;
-        if (animationGraph == null || animationGraph.Index != animationGraphIndex || animationGraph.Entry != target.Entry || !animationGraph.Expanded.SetEquals(expanded))
+        var members = Presentation.Members;
+        if (animationGraph == null || animationGraph.Index != animationGraphIndex || animationGraph.Entry != target.Entry || !animationGraph.Expanded.SetEquals(expanded)
+            || animationGraph.Members.Count != members.Count || members.Any(m => !animationGraph.Members.TryGetValue(m.Key, out int chosen) || chosen != m.Value))
         {
             try
             {
-                animationGraph = AnimationGraph.Create(animationGraphIndex, target.Entry, expanded);
+                animationGraph = AnimationGraph.Create(animationGraphIndex, target.Entry, expanded, members: members);
                 animationGraphLayout = null; animationGraphOverlay = null;
             }
             catch (Exception ex) when (ex is InvalidDataException or InvalidOperationException) { animationGraph = null; animationGraphError = ex.Message; return null; }
@@ -110,7 +121,7 @@ public partial class MainWindow
             animationGraphLayout = AnimationGraphLayout.Create(graph, options);
         return animationGraphLayout;
         static bool SameOptions(AnimationGraphLayoutOptions a, AnimationGraphLayoutOptions b) =>
-            a.Collapsed.SetEquals(b.Collapsed) && a.Opened.SetEquals(b.Opened) && a.ShowAll.SetEquals(b.ShowAll) && a.ExpandedRows.SetEquals(b.ExpandedRows);
+            a.Collapsed.SetEquals(b.Collapsed) && a.Opened.SetEquals(b.Opened) && a.ShowAll.SetEquals(b.ShowAll) && a.ExpandedRows.SetEquals(b.ExpandedRows) && a.PassStrips.SetEquals(b.PassStrips);
     }
     private AnimationGraphLayout RequireGraph()
     {
@@ -154,6 +165,17 @@ public partial class MainWindow
             try { animationGraphOverlay = AnimationRunOverlay.Create(layout.Graph, frame, scenario); }
             catch (Exception ex) when (ex is InvalidDataException or InvalidOperationException or ArgumentException) { animationGraphOverlay = null; ViewModel.Status = "Run overlay unavailable: " + ex.Message; }
             animationGraphOverlayFrame = frame; animationGraphOverlayScenario = scenario;
+        }
+        // A question tested more often than its outcome line holds gets a pass strip of its own, kept for the session so the
+        // nodes below it move once, not at every seek (a question in a loop has one from the start).
+        if (animationGraphOverlay is { } shownRun)
+        {
+            bool added = false;
+            foreach (var condition in shownRun.Conditions)
+                if (condition.PassCount > AnimationGraphLayout.OutcomePips && layout.Item(condition.Row) is { } band
+                    && !band.Node.Items.Any(i => i.Kind == AnimationGraphItemKind.Passes && i.Row?.Id == condition.Row))
+                    added |= Presentation.PassStrips.Add(condition.Row);
+            if (added && CurrentAnimationGraphLayout() is { } widened) layout = widened;
         }
         if (animationGraphSelection != null && layout.Node(animationGraphSelection) == null && layout.Item(animationGraphSelection) == null) animationGraphSelection = null;
         view.SetState(new()
@@ -347,16 +369,30 @@ public partial class MainWindow
             default: throw new StudioCommandException("invalid_argument", "Include all, opened or none.");
         }
     }
-    /// <summary>Expands or collapses a called animation's node (a frame per binding, at most 64 at once).</summary>
-    private void GraphExpand(string nodeId, bool value)
+    /// <summary>
+    /// Expands or collapses a called animation's node: one frame for the group (at most 64 expanded at once), showing
+    /// <paramref name="member"/> (one of its bindings) when given, else the member chosen before or its first.
+    /// </summary>
+    private void GraphExpand(string nodeId, bool value, int? member = null)
     {
         var layout = RequireGraph();
         var reference = layout.Node(nodeId)?.Node.Reference ?? throw new StudioCommandException("stale_record", "The graph has no reference node with that identity; read it again.");
         if (!reference.Expandable || reference.Unresolved) throw new StudioCommandException("invalid_argument", "Only a called animation expands into its frames.");
+        if (member is int chosen && !reference.Entries.Contains(chosen)) throw new StudioCommandException("invalid_argument", "Choose one of the called animation's bindings (reference.entries).");
+        if (!value && member != null) throw new StudioCommandException("invalid_argument", "A member is chosen when expanding.");
         try { _ = layout.Graph.WithExpanded(reference.Group, value); }
         catch (InvalidOperationException ex) { throw new StudioCommandException("limit_exceeded", ex.Message); }
         if (value) ExpandedGroups.Add(reference.Group); else ExpandedGroups.Remove(reference.Group);
+        if (member is int shown) Presentation.Members[reference.Group] = shown;
         RefreshAnimationGraph();
+    }
+    /// <summary>The frame of an expanded group shows another of its bindings (the member switcher in its header).</summary>
+    private void GraphMember(string frameId, int member)
+    {
+        var layout = RequireGraph();
+        var frame = layout.Node(frameId)?.Node.Frame;
+        if (frame?.Group == null) throw new StudioCommandException("stale_record", "The graph has no expanded group's frame with that identity; read it again.");
+        GraphExpand(AnimationGraph.ReferenceId(frame.Group), true, member);
     }
     /// <summary>Opens a reference node's definition in Animation mode (Back returns).</summary>
     private async Task GraphOpenAsync(string nodeId)

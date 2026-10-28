@@ -438,21 +438,38 @@ internal static class SourceAnimationMcpChecks
             Assert.Equal(0.5 + 1.0 / 60, (await Call("state", new()))["animationTime"]!.GetValue<double>(), 6);
             await Job("animation_transport", new() { ["preview"] = current["preview"]!.GetValue<string>(), ["action"] = "previous" });
             Assert.Equal(0.5, (await Call("state", new()))["animationTime"]!.GetValue<double>(), 6);
-            // A scenario change stops playback and re-evaluates up to the playhead: the switch's new outcome shows at once.
-            await Scenario("conditions", new() { ["conditions"] = new object[] { new { instancePath = "", entry = choicesEntry, @event = ifEvent.ToString(), value = "true" } } });
+            // A scenario change stops playback and re-evaluates up to the playhead: the switch's new outcome shows at once. Every
+            // switch of one call is one change, so the call ends at the playhead.
+            await Scenario("conditions", new() { ["conditions"] = new object[]
+            {
+                new { instancePath = "", entry = choicesEntry, @event = ifEvent.ToString(), value = "true" },
+                new { instancePath = "", entry = choicesEntry, @event = elseIfEvent.ToString(), value = "game" },
+            } });
+            current = await Call("state", new());
+            Assert.Equal(0.5, current["animationTime"]!.GetValue<double>(), 6);
+            // Two quick changes (two switch clicks: the second during the first's re-evaluation) still end at the playhead.
+            var condition = typeof(MainWindow).GetMethod("ScenarioCondition", flags)!;
+            condition.Invoke(main, ["", choicesEntry, elseIfEvent, zStudio.Core.Animation.AnimationConditionChoice.True]);
+            condition.Invoke(main, ["", choicesEntry, elseIfEvent, zStudio.Core.Animation.AnimationConditionChoice.Game]);
+            await ((Task)typeof(MainWindow).GetField("worldAnimationReevaluation", flags)!.GetValue(main)!).WaitAsync(token);
             current = await Call("state", new());
             Assert.Equal(0.5, current["animationTime"]!.GetValue<double>(), 6);
             outcomes = (await Call("animation_runtime", new() { ["preview"] = current["preview"]!.GetValue<string>(), ["section"] = "conditions" }))["items"]!.AsArray();
             Assert.Contains(outcomes, c => c!["Event"]!.GetValue<Guid>() == ifEvent && c["Value"]!.GetValue<bool>() && c["Forced"]!.GetValue<bool>());
-            // Shift+Esc exits (plain Esc never does); the scenario is kept and the definition stays selected.
+            // Shift+Esc exits (plain Esc never does); the scenario is kept and the definition stays selected. Pick in view ends
+            // with the mode: no later click in the map layout places the player.
             Assert.False(main.AnimationModeKey(System.Windows.Input.Key.Escape, System.Windows.Input.ModifierKeys.None, null, false));
             Assert.True(main.InAnimationMode);
+            typeof(MainWindow).GetMethod("BeginScenarioPick", flags)!.Invoke(main, ["player"]);
+            Assert.Equal("player", (await Scenario("read"))["scenario"]!["picking"]!.GetValue<string>());
             Assert.True(main.AnimationModeKey(System.Windows.Input.Key.Escape, System.Windows.Input.ModifierKeys.Shift, null, false));
             using (var exiting = CancellationTokenSource.CreateLinkedTokenSource(token))
             {
                 exiting.CancelAfter(TimeSpan.FromSeconds(10));
                 while (main.InAnimationMode) await Task.Delay(10, exiting.Token);
             }
+            Assert.Null(typeof(MainWindow).GetField("scenarioPick", flags)!.GetValue(main));
+            Assert.Null((await Scenario("read"))["scenario"]!["picking"]);
             var kept = await Mode("state");
             Assert.Equal(choices.Index, kept["keptScenario"]!["definition"]!.GetValue<int>());
             Assert.True(kept["keptScenario"]!["customized"]!.GetValue<bool>());

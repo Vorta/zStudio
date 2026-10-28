@@ -22,6 +22,9 @@ public partial class MainWindow
     private long worldAnimationPlanRevision;
     private WorldAnimationTimeline? worldTimeline;
     private AnimationDuration? worldAnimationDuration;
+    /// <summary>The time a running re-evaluation seeks to: a later scenario change re-evaluates to it again (P2-1).</summary>
+    private (WorldAnimationSession Session, double Seconds, long Id)? worldAnimationPendingPlayhead;
+    private long worldAnimationReevaluationId;
     private AnimationScenario WorldAnimationConfiguration => worldAnimationConfiguration;
     /// <summary>The binding Animation mode plays (its opened definition's chosen binding): the scenario's primary start.</summary>
     private WorldAnimationTarget? WorldAnimationTargetNow => animationMode;
@@ -133,7 +136,7 @@ public partial class MainWindow
     private async Task WorldAnimationTransportAsync(string action, double seconds = 0, CancellationToken token = default, bool editingFrame = false)
     {
         if (action == "exit") { await ExitAnimationModeAsync(token); return; }
-        if (action == "stop") { StopWorldAnimationForEdit(); return; }
+        if (action == "stop") { worldAnimationPendingPlayhead = null; StopWorldAnimationForEdit(); return; }
         if (action == "pause") { ++worldAnimationPreparation; worldAnimationPreparing = false; worldAnimationSession?.Pause(); RefreshWorldAnimationTimeline(); return; }
         RequireNoDrafts();
         if (action == "scenario") { ShowAnimationRightTab("scenario"); return; }
@@ -158,6 +161,8 @@ public partial class MainWindow
         // The range start (Home) is a seek; previous and next step one 1/60 s tick.
         if (action == "start") { action = "seek"; seconds = worldAnimationSession?.RangeStart ?? worldAnimationRangeStart; }
         if (!editingFrame && action is "seek" or "previous" or "next") { ++worldAnimationEditingSeek; worldTimeline?.SetRequestedTime(null); }
+        // The user moved the playhead: a pending re-evaluation's time is no longer it.
+        worldAnimationPendingPlayhead = null;
         animationFailure = null;
         var session = await EnsureWorldAnimationSessionAsync(token);
         await session.TransportAsync(action, seconds, token);
@@ -209,30 +214,42 @@ public partial class MainWindow
             try { _ = configuration.Schedule(target.Document.Document.Animations!.Entries.Count); }
             catch (InvalidDataException ex) { throw new StudioCommandException("invalid_argument", ex.Message); }
         }
-        // The playhead of a shown run: the change re-evaluates up to it.
-        double? playhead = worldAnimationSession is { IsDisposed: false, IsAttached: true, CurrentFrame: { } frame } ? frame.Time : null;
+        // The playhead the change re-evaluates up to: a re-evaluation still running keeps its time for the next change (a second
+        // switch click during the first's seek), else the shown run's.
         var previous = worldAnimationSession;
+        double? playhead = worldAnimationPendingPlayhead is { } pending && pending.Session == previous && previous is { IsDisposed: false } ? pending.Seconds
+            : previous is { IsDisposed: false, IsAttached: true, CurrentFrame: { } frame } ? frame.Time : null;
         StopWorldAnimationForEdit(); worldAnimationSession?.SetScenario(configuration);
         WorldScenarios().Set(configuration, reason); worldAnimationScenarioEpoch = Guid.NewGuid(); worldAnimationDuration = null;
         ParachuteScenarioChanged();
         foreach (int definition in shownAnimationPaths.ToArray()) scene?.ClearAnimationPaths(definition.ToString(CultureInfo.InvariantCulture));
         shownAnimationPaths.Clear(); refreshAnimationPathControls?.Invoke(); RefreshWorldAnimationTimeline(); RefreshRowEyes();
         if (playhead is double time && previous is { } session && session == worldAnimationSession)
-            worldAnimationReevaluation = ReevaluateWorldAnimationAsync(session, time);
+        {
+            long id = ++worldAnimationReevaluationId;
+            worldAnimationPendingPlayhead = (session, time, id);
+            worldAnimationReevaluation = ReevaluateWorldAnimationAsync(session, time, id);
+        }
+        else worldAnimationPendingPlayhead = null;
     }
 
-    /// <summary>Runs the changed scenario from 0 to <paramref name="seconds"/> without audio, playback or camera movement.</summary>
-    private async Task ReevaluateWorldAnimationAsync(WorldAnimationSession session, double seconds)
+    /// <summary>
+    /// Runs the changed scenario from 0 to <paramref name="seconds"/> without audio, playback or camera movement. A later
+    /// change supersedes it (and re-evaluates to the same time); a successful one clears the transport's failure line.
+    /// </summary>
+    private async Task ReevaluateWorldAnimationAsync(WorldAnimationSession session, double seconds, long id)
     {
         try
         {
             ++worldAnimationEditingSeek; worldTimeline?.SetRequestedTime(null);
             if (session != worldAnimationSession || session.IsDisposed) return;
             await session.TransportAsync("seek", seconds, shutdownToken);
+            if (id == worldAnimationReevaluationId && session == worldAnimationSession && animationFailure != null) { animationFailure = null; RefreshWorldAnimationTimeline(true); }
         }
         catch (OperationCanceledException) { }
         catch (StudioCommandException ex) when (ex.Code is "context_changed" or "superseded" or "stale_record" or "stale_preview") { }
         catch (InvalidOperationException) when (session.IsDisposed || session != worldAnimationSession) { }
+        finally { if (worldAnimationPendingPlayhead?.Id == id) worldAnimationPendingPlayhead = null; }
     }
 
     private bool CanIncludeWorldAnimationCall(int rootEntry, string parentPath)

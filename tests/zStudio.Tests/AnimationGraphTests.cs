@@ -112,13 +112,17 @@ public sealed class AnimationGraphTests
         Assert.Equal((3, reference.Id, back.Id), (callers.Bindings, callers.Node, callers.BackLink));
         Assert.Equal(4, graph.Callers(1).Total);
 
-        // Expanding the rails adds a frame per binding at the next column; their calls back are back-links from their rows.
+        // Expanding the rails adds one frame for the group at the next column, on its first binding (one against the budget);
+        // its call back is a back-link from its row. The member switcher shows another binding in the same frame.
         var expanded = graph.WithExpanded(reference.Reference.Group, true, Token);
-        var frames = expanded.Nodes(0, 100).Rows.Where(n => n.Kind == AnimationGraphNodeKind.Frame && n.Entry != 1).ToArray();
-        Assert.Equal([2, 3, 4], frames.Select(f => f.Entry!.Value));
-        Assert.All(frames, f => Assert.Equal((3, reference.Id), (f.Column, f.Parent)));
-        Assert.Equal(call.Paths[0], frames[0].Frame!.Path);
-        Assert.Equal(3, expanded.Edges().Rows.Count(e => e.BackLink && e.From.StartsWith("row:", StringComparison.Ordinal) && e.To == AnimationGraph.ActivationId(1)));
+        var frame = Assert.Single(expanded.Nodes(0, 100).Rows, n => n.Kind == AnimationGraphNodeKind.Frame && n.Entry != 1);
+        Assert.Equal((2, 3, reference.Id), (frame.Entry!.Value, frame.Column, frame.Parent));
+        Assert.Equal([2, 3, 4], frame.Frame!.Members);
+        Assert.Equal((0, call.Paths[0]), (frame.Frame.MemberIndex, frame.Frame.Path));
+        Assert.Equal(1, expanded.Edges().Rows.Count(e => e.BackLink && e.From.StartsWith("row:", StringComparison.Ordinal) && e.To == AnimationGraph.ActivationId(1)));
+        var third = expanded.WithMember(reference.Reference.Group, 4, Token);
+        Assert.Equal(4, Assert.Single(third.Nodes(0, 100).Rows, n => n.Kind == AnimationGraphNodeKind.Frame && n.Entry != 1).Entry);
+        Assert.Equal(4, third.Node(reference.Id)!.Reference!.Member);
         // Deterministic: the same inputs give the same layout and edges.
         var again = AnimationGraph.Create(index, 1, [reference.Reference.Group], Token);
         Assert.Equal(expanded.Nodes().Rows.Select(n => (n.Id, n.Column, n.Order)), again.Nodes().Rows.Select(n => (n.Id, n.Column, n.Order)));

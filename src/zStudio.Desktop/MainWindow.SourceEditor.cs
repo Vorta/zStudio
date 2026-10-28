@@ -160,6 +160,9 @@ public partial class MainWindow
     private void LeaveSourceChrome()
     {
         if (InAnimationMode) EndAnimationModeForMap();
+        // Pick in view and the kept Animation mode belong to the map (a reload of the same map keeps the latter).
+        EndScenarioPick();
+        if (animationKept is { } kept && !SameMap(kept.Document, ViewModel.SelectedDocument)) animationKept = null;
         OutlinerLegend.IsOpen = false;
         // The World tree's zone and network eyes and a definition's outlines belong to the source map, not to the next world.
         scene?.SetZonePresentation(new HashSet<byte>(), null); scene?.SetAiNetworkPresentation(new HashSet<string>(StringComparer.Ordinal), null); scene?.SetOutlinedNodes([]);

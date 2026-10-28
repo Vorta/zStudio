@@ -16,6 +16,9 @@ public sealed record AnimationRunBinding(int Entry, AnimationBindingLifecycle St
     public string? Cause { get; init; }
     public IReadOnlyList<AnimationStartRefusal> Refusals { get; init; } = [];
     public int RefusalCount { get; init; }
+    /// <summary>Its latest start attempt's activation prerequisites (met, refused or ignored for that start), when it has any.</summary>
+    public AnimationPrerequisiteStart? Prerequisites { get; init; }
+    public int PrerequisiteStartCount { get; init; }
 }
 
 /// <summary>
@@ -34,6 +37,9 @@ public sealed record AnimationRunSequence(string Node, AnimationSequenceRunState
     public IReadOnlyList<string> Releasers { get; init; } = [];
     public bool NoReleaserLeft { get; init; }
     public string? PausedBy { get; init; }
+    /// <summary>A blocked sequence's excluded call: the edge whose port includes it, and the name it calls.</summary>
+    public string? BlockedBy { get; init; }
+    public string? BlockedCall { get; init; }
 }
 
 /// <summary>A row's events in the run: the latest disposition, and how often each happened (grouped rows count their members).</summary>
@@ -114,6 +120,8 @@ public sealed class AnimationRunOverlay
     public AnimationRunSequence? Sequence(string node) => sequences.GetValueOrDefault(node);
     public AnimationRunRow? Row(string row) => rows.GetValueOrDefault(row);
     public AnimationRunCondition? Condition(string row) => conditions.GetValueOrDefault(row);
+    /// <summary>Every shown condition with its passes.</summary>
+    public IEnumerable<AnimationRunCondition> Conditions => conditions.Values;
     public AnimationRunReference? Reference(string node) => references.GetValueOrDefault(node);
     public AnimationRunEdge? Edge(string edge) => edges.GetValueOrDefault(edge);
     private readonly AnimationPackage package;
@@ -129,15 +137,18 @@ public sealed class AnimationRunOverlay
         foreach (var status in frame.Bindings) bindings[status.Entry] = FromStatus(status);
         foreach (var group in frame.Refusals.GroupBy(r => r.Entry))
             if (!bindings.ContainsKey(group.Key)) bindings[group.Key] = Unstarted(group.Key);
+        foreach (var group in frame.PrerequisiteStarts.GroupBy(p => p.Entry))
+            if (!bindings.ContainsKey(group.Key)) bindings[group.Key] = Unstarted(group.Key);
         foreach (var (entry, binding) in bindings.ToArray())
         {
             var refused = frame.Refusals.Where(r => r.Entry == entry).ToArray();
-            if (refused.Length == 0) continue;
-            string reason = Refusal(refused[^1]);
+            var checks = frame.PrerequisiteStarts.Where(p => p.Entry == entry).ToArray();
+            if (refused.Length == 0 && checks.Length == 0) continue;
             bindings[entry] = binding with
             {
                 Refusals = refused.TakeLast(8).ToArray(), RefusalCount = refused.Length,
-                Label = binding.State == AnimationBindingLifecycle.NotStarted ? "Refused · " + reason : binding.Label,
+                Label = refused.Length > 0 && binding.State == AnimationBindingLifecycle.NotStarted ? "Refused · " + Refusal(refused[^1]) : binding.Label,
+                Prerequisites = checks.Length == 0 ? null : checks[^1], PrerequisiteStartCount = checks.Length,
             };
         }
         var nodes = AllNodes(graph);
@@ -269,6 +280,15 @@ public sealed class AnimationRunOverlay
                 if (other?.State is "Waiting for threshold" or "Running" or "Waiting for release" && (other.EventIndex <= row.Index || loops)) left = true;
             }
         string? releasedBy = status?.ReleasedBy is Guid by && instance != null ? graph.RowOf(instance.Entry, by)?.Id ?? AnimationGraph.RowId(instance.Entry, by) : null;
+        // A blocked sequence waits at its excluded call: that call row's edge carries the include toggle.
+        string? blockedBy = null, blockedCall = null;
+        if (state == AnimationSequenceRunState.Blocked && status != null && instance != null && status.EventIndex >= 0 && status.EventIndex < sequence.Events.Count
+            && graph.RowOf(instance.Entry, sequence.Events[status.EventIndex].Id) is { } waiting)
+        {
+            var call = graph.EdgesOf(waiting.Id).FirstOrDefault(e => e.From == waiting.Id && e.Relation is AnimationGraphRelation.Call or AnimationGraphRelation.CallWait or AnimationGraphRelation.LocalChild);
+            blockedBy = call?.Id;
+            blockedCall = call != null && graph.Node(call.To) is { } target ? target.Reference?.Name ?? target.Label : waiting.Target;
+        }
         string label = state switch
         {
             AnimationSequenceRunState.Running => "Running",
@@ -276,7 +296,7 @@ public sealed class AnimationRunOverlay
             AnimationSequenceRunState.Stopped => "Stopped",
             AnimationSequenceRunState.WaitingForRelease => left ? "Waiting for release" : "Waiting for release · no releaser left",
             AnimationSequenceRunState.WaitingForThreshold => remaining is double r ? "Waiting for threshold · +" + AnimationSeconds.Short(r) : "Waiting for threshold",
-            AnimationSequenceRunState.Blocked => "Blocked · waits for an excluded call",
+            AnimationSequenceRunState.Blocked => blockedCall is { Length: > 0 } called ? "Blocked · waits for excluded call " + called : "Blocked · waits for an excluded call",
             AnimationSequenceRunState.Paused => "Paused · " + (paused ?? "gate"),
             AnimationSequenceRunState.Unavailable => "Unavailable",
             _ => "Not started",
@@ -286,6 +306,7 @@ public sealed class AnimationRunOverlay
             Instance = instance?.Instance, Pass = status?.Iteration ?? 0, EventIndex = status?.EventIndex ?? 0, ThresholdRemaining = remaining,
             ReleasedBy = releasedBy, ReleasedAt = status?.ReleasedAt, ReleaseKind = status?.ReleaseKind, Releasers = releasers,
             NoReleaserLeft = state == AnimationSequenceRunState.WaitingForRelease && !left, PausedBy = paused,
+            BlockedBy = blockedBy, BlockedCall = blockedCall,
         };
     }
 

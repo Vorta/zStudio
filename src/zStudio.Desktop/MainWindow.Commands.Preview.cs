@@ -306,11 +306,11 @@ public partial class MainWindow
             if (shownDocument?.SourceWorld != null) { RequirePreview(a); await WorldAnimationTransportAsync(Text(a,"action"), Number(a,"seconds")); return Result(WorldAnimationCommandState); }
             var editor = TargetAnimation(a); RequireNoDrafts(shownDocument); await editor.TransportAsync(Text(a,"action"),Number(a,"seconds")); return Result(editor.PreviewState());
         });
-        Register(r, "animation_runtime", "Read preview status, sequence runtime, dispatched event occurrences, problems or bound scene nodes. Scene metadata previews retain at most 64 JSON nodes and 1024 text characters, with inspection_truncated; full metadata is available through JSON export. Identities remain complete; long rows shorten pages, so follow nextOffset. Timing thresholds and observed dispatches remain distinct.", false,
-            [PreviewParameter,P("section","string","Data section; instances and conditions are source-world run observations.",true,"status","sequences","events","problems","scene","instances","conditions"),.. PageParameters], a =>
+        Register(r, "animation_runtime", "Read preview status, sequence runtime, dispatched event occurrences, problems or bound scene nodes; in a source map also instances, scoped condition outcomes and each start attempt's activation prerequisites (prerequisites: outcome met, refused, or ignored by the scenario's rule, with every check; evidence only). Scene metadata previews retain at most 64 JSON nodes and 1024 text characters, with inspection_truncated; full metadata is available through JSON export. Identities remain complete; long rows shorten pages, so follow nextOffset. Timing thresholds and observed dispatches remain distinct.", false,
+            [PreviewParameter,P("section","string","Data section; instances, conditions and prerequisites are source-world run observations.",true,"status","sequences","events","problems","scene","instances","conditions","prerequisites"),.. PageParameters], a =>
             {
                 RequirePreview(a);
-                if (shownDocument?.SourceWorld == null && Text(a, "section") is "instances" or "conditions")
+                if (shownDocument?.SourceWorld == null && Text(a, "section") is "instances" or "conditions" or "prerequisites")
                     throw new StudioCommandException("unsupported", "Instance and scoped-condition observations belong to source-world animation runs.");
                 return Result(shownDocument?.SourceWorld != null ? WorldAnimationRuntimeData(Text(a,"section"),Int(a,"offset"),Int(a,"limit",100),Text(a,"query"))
                     : TargetAnimation(a).RuntimeData(Text(a,"section"),Int(a,"offset"),Int(a,"limit",100),Text(a,"query")));

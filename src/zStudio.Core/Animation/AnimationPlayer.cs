@@ -74,6 +74,9 @@ public sealed record AnimationFrame(double Time, IReadOnlyList<AnimationNodePose
     public IReadOnlyList<AnimationBindingStatus> Bindings { get; init; } = [];
     public IReadOnlyList<AnimationStartRefusal> Refusals { get; init; } = [];
     public long RefusalsDropped { get; init; }
+    /// <summary>Each start attempt's activation prerequisites (met, refused or ignored), oldest first.</summary>
+    public IReadOnlyList<AnimationPrerequisiteStart> PrerequisiteStarts { get; init; } = [];
+    public long PrerequisiteStartsDropped { get; init; }
     public IReadOnlyList<AnimationSkippedSpan> Skipped { get; init; } = [];
     public long SkippedDropped { get; init; }
     /// <summary>The player reference at this frame.</summary>
@@ -218,6 +221,7 @@ public sealed partial class AnimationPlayer
         for (int i = 0; i < randomTable.Length; i++) { randomState = unchecked(randomState * 214013 + 2531011); randomTable[i] = ((randomState >> 16) & 32767) / 32767f; }
         instances = []; sharedNodes = []; effects = []; trace = []; conditions = []; conditionsDropped = 0; hasExcludedCalls = false;
         entryRuns = []; refusals = []; refusalsDropped = refusalBytes = 0; skipped = []; skippedDropped = 0; referenceChanges = []; referenceChangesDropped = 0;
+        prerequisiteStarts = []; prerequisiteStartsDropped = prerequisiteBytes = 0;
         notes = []; foreach (string message in context.Diagnostics) AddNote(message, "Resource", "Unclassified"); lights = []; activeSounds = []; cues.Clear(); checkpoints.Clear();
         screenColor = screenWave = Vector4.Zero; fog = null;
         nextScheduled = 0; originTerrain.Clear(); dispatchBudget = 10000;
@@ -427,6 +431,8 @@ public sealed partial class AnimationPlayer
             {
                 AnimationPrerequisiteRule.Check => true, AnimationPrerequisiteRule.IgnoreForScenarioStarts => !scenarioStart, _ => false,
             };
+            // Evidence of what the game checks on every start: met, refused, or ignored by the scenario's rule.
+            RecordPrerequisites(entry, prerequisites.Passed ? "met" : check ? "refused" : "ignored", prerequisites, callPath, root, parentInstance, callEvent, scenarioStart);
             if (!prerequisites.Passed)
             {
                 if (check) { RefuseStart(entry, "prerequisites", callPath, root, parentInstance, callEvent, scenarioStart, prerequisites); return null; }
@@ -740,6 +746,7 @@ public sealed partial class AnimationPlayer
             Conditions = conditions.ToArray(), ConditionsDropped = conditionsDropped,
             DependencyBlocked = IsDependencyBlocked, HasExcludedCalls = hasExcludedCalls,
             Bindings = BindingStatuses(), Refusals = refusals.ToArray(), RefusalsDropped = refusalsDropped,
+            PrerequisiteStarts = prerequisiteStarts.ToArray(), PrerequisiteStartsDropped = prerequisiteStartsDropped,
             Skipped = skipped.ToArray(), SkippedDropped = skippedDropped,
             PlayerReference = CurrentReference, PlayerReferences = [InitialReference, .. referenceChanges], PlayerReferencesDropped = referenceChangesDropped
         };
@@ -827,19 +834,25 @@ public sealed partial class AnimationPlayer
         HashSet<string> Notes, long TraceOrdinal, long TraceDropped, Dictionary<DiagnosticKey, AnimationPreviewDiagnostic> Issues, Dictionary<long, AnimationLight> Lights, Dictionary<long, AnimationSoundCue> Sounds, Vector4 Color, Vector4 Wave, AnimationFog? Fog,
         List<AnimationConditionResult> Conditions, long ConditionsDropped, bool HasExcludedCalls, int NextScheduled, Dictionary<int, EntryRun> EntryRuns,
         List<AnimationStartRefusal> Refusals, long RefusalsDropped, long RefusalBytes, List<AnimationSkippedSpan> Skipped, long SkippedDropped,
-        List<AnimationPlayerReferenceState> References, long ReferencesDropped);
+        List<AnimationPlayerReferenceState> References, long ReferencesDropped,
+        List<AnimationPrerequisiteStart> PrerequisiteStarts, long PrerequisiteStartsDropped, long PrerequisiteBytes)
+    {
+        /// <summary>The bytes of its refusals and prerequisite evidence.</summary>
+        public long StartEvidenceBytes => RefusalBytes + PrerequisiteBytes;
+    }
     private Checkpoint CaptureCheckpoint(CancellationToken token)
     {
         Dictionary<Node, Node> copies = [];
         Node Copy(Node n) { token.ThrowIfCancellationRequested(); if (!copies.TryGetValue(n, out var copy)) copies[n] = copy = n.Clone(); return copy; }
         return new(ticks, nextId, randomIndex, instances.Select(i => i.Clone(Copy, token)).ToList(), sharedNodes.ToDictionary(p => p.Key, p => Copy(p.Value)), effects.Select(e => e.Clone()).ToList(), [.. trace], [.. notes], traceOrdinal, traceDropped, new(previewIssues), new(lights), new(activeSounds), screenColor, screenWave, fog, [.. conditions], conditionsDropped, hasExcludedCalls, nextScheduled,
-            new(entryRuns), [.. refusals], refusalsDropped, refusalBytes, [.. skipped], skippedDropped, [.. referenceChanges], referenceChangesDropped);
+            new(entryRuns), [.. refusals], refusalsDropped, refusalBytes, [.. skipped], skippedDropped, [.. referenceChanges], referenceChangesDropped,
+            [.. prerequisiteStarts], prerequisiteStartsDropped, prerequisiteBytes);
     }
     private void Restore(Checkpoint c, CancellationToken token)
     {
         token.ThrowIfCancellationRequested();
         if (!AdmitState(StateBytes(c.Instances, c.SharedNodes) + ConditionBytes(c.Conditions.Count) + CloneScratch(c.Instances, c.SharedNodes)
-            + EvidenceBytes(c.EntryRuns, c.RefusalBytes, c.Skipped.Count, c.References.Count, null), c)) throw new StateLimitException();
+            + EvidenceBytes(c.EntryRuns, c.StartEvidenceBytes, c.Skipped.Count, c.References.Count, null), c)) throw new StateLimitException();
         Dictionary<Node, Node> copies = [];
         Node Copy(Node n) { token.ThrowIfCancellationRequested(); if (!copies.TryGetValue(n, out var copy)) copies[n] = copy = n.Clone(); return copy; }
         // Stage the complete replacement while the accepted state and checkpoint are still accounted.
@@ -855,6 +868,7 @@ public sealed partial class AnimationPlayer
         trace = restoredTrace; notes = restoredNotes; traceOrdinal = c.TraceOrdinal; traceDropped = c.TraceDropped; previewIssues = restoredIssues; lights = restoredLights; activeSounds = restoredSounds; screenColor = c.Color; screenWave = c.Wave; fog = c.Fog;
         conditions = restoredConditions; conditionsDropped = c.ConditionsDropped; hasExcludedCalls = c.HasExcludedCalls;
         entryRuns = new(c.EntryRuns); refusals = [.. c.Refusals]; refusalsDropped = c.RefusalsDropped; refusalBytes = c.RefusalBytes;
+        prerequisiteStarts = [.. c.PrerequisiteStarts]; prerequisiteStartsDropped = c.PrerequisiteStartsDropped; prerequisiteBytes = c.PrerequisiteBytes;
         skipped = [.. c.Skipped]; skippedDropped = c.SkippedDropped; referenceChanges = [.. c.References]; referenceChangesDropped = c.ReferencesDropped;
         nextScheduled = c.NextScheduled; originTerrain.Clear();
         retiredSequences.Clear(); InvalidateRetainedState(); interrupted = false;

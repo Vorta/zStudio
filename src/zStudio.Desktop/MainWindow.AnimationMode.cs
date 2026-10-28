@@ -75,13 +75,16 @@ public partial class MainWindow
             : sourceAnimationEntry is int shown && found.Entries.Contains(shown) ? shown : found.Entries.Count > 0 ? found.Entries[0] : -1);
         var target = new WorldAnimationTarget(document, document.Revision, definition, binding);
         bool entering = animationMode == null;
+        // Another binding of the primary's own definition (the binding picker) replaces the primary at its time; another
+        // definition keeps the previous primary as an ordinary start (design §7, Entering).
+        bool keepPrevious = !(WorldScenarios().Current.Primary is int primaryEntry && found.Entries.Contains(primaryEntry));
         if (animationMode != target)
         {
             if (binding > 0)
             {
                 // The opened binding is the primary start; a full schedule refuses a 33rd start rather than dropping one.
                 var scenarios = WorldScenarios();
-                try { _ = scenarios.Current.WithPrimary(binding, keepPrevious: true); }
+                try { _ = scenarios.Current.WithPrimary(binding, keepPrevious); }
                 catch (InvalidOperationException ex) { throw new StudioCommandException("limit_exceeded", ex.Message); }
             }
             if (!entering && history && animationMode!.Definition != definition)
@@ -97,7 +100,7 @@ public partial class MainWindow
             if (binding > 0)
             {
                 var scenarios = WorldScenarios();
-                scenarios.Set(scenarios.Current.WithPrimary(binding, keepPrevious: true), "open");
+                scenarios.Set(scenarios.Current.WithPrimary(binding, keepPrevious), "open");
             }
             worldAnimationScenarioEpoch = Guid.NewGuid(); worldAnimationDuration = null;
             worldAnimationExpanded.Clear(); worldAnimationCollapsed.Clear(); worldAnimationPageCounts.Clear();
@@ -114,6 +117,10 @@ public partial class MainWindow
     private async Task ExitAnimationModeAsync(CancellationToken token)
     {
         if (animationMode is not { } mode) return;
+        // A typed start time, seed or height not yet committed is committed while the mode still holds its binding.
+        scenarioPanel?.CommitPending();
+        if (animationMode != mode) return;
+        EndScenarioPick();
         DetachWorldAnimationRun();
         animationKept = (mode.Document, mode.Definition, mode.Entry);
         animationMode = null; animationFailure = null; previewId = Guid.NewGuid();
@@ -135,9 +142,17 @@ public partial class MainWindow
         var (definition, entry) = from[^1];
         var source = current.Document.Document as SourceSceneSnapshot;
         int? binding = source?.AnimationDefinitions.Definitions.FirstOrDefault(d => d.Index == definition)?.Entries.Contains(entry) == true ? entry : null;
-        await OpenAnimationModeAsync(current.Document, definition, binding, token, history: false);
+        // The entry leaves the history before the open awaits, so a second Back pressed meanwhile takes the next one.
         from.RemoveAt(from.Count - 1); to.Add((current.Definition, current.Entry));
-        RefreshAnimationModeChrome();
+        try { await OpenAnimationModeAsync(current.Document, definition, binding, token, history: false); }
+        catch when (animationMode == current)
+        {
+            // Refused before it switched: the history is as it was.
+            if (to.Count > 0 && to[^1] == (current.Definition, current.Entry)) to.RemoveAt(to.Count - 1);
+            from.Add((definition, entry));
+            throw;
+        }
+        finally { RefreshAnimationModeChrome(); }
     }
 
     /// <summary>
@@ -146,7 +161,8 @@ public partial class MainWindow
     /// </summary>
     private void RebaseAnimationMode()
     {
-        if (animationMode is not { } mode) return;
+        RefreshKeptAnimation();
+        if (animationMode is not { } mode) { EndScenarioPick(); return; }
         var document = shownDocument;
         if (document?.SourceWorld is not { } world || mode.Document.SourceWorld is not { } opened || world.Workspace != opened.Workspace || world.Mission != opened.Mission)
         {
@@ -160,6 +176,7 @@ public partial class MainWindow
         if (definition == null) { EndAnimationModeForMap(); Notice("The opened animation definition is no longer in the map; Animation mode ended."); return; }
         int entry = WorldScenarios().Current.Primary is int primary && definition.Entries.Contains(primary) ? primary
             : definition.Entries.Contains(mode.Entry) ? mode.Entry : definition.Entries.Count > 0 ? definition.Entries[0] : -1;
+        EndScenarioPick();
         DetachWorldAnimationRun();
         animationMode = new(document, document.Revision, mode.Definition, entry); previewId = Guid.NewGuid();
         if (entry > 0 && WorldScenarios().Current.Primary != entry)
@@ -169,12 +186,47 @@ public partial class MainWindow
     }
     private void EndAnimationModeForMap()
     {
+        EndScenarioPick();
         DetachWorldAnimationRun();
         animationMode = null; animationKept = null; animationFailure = null; previewId = Guid.NewGuid();
         animationBack.Clear(); animationForward.Clear();
         // The graph's presentation belongs to that map's definitions.
         animationGraphExpanded.Clear(); animationGraphPresentation.Clear(); animationGraphSelection = null; animationGraphOutline = null;
         RefreshAnimationModeChrome(); RefreshWorldAnimationTimeline(); ArrangeWorkspace();
+    }
+
+    /// <summary>Whether two documents show the same source map (a reload replaces the document of the same map).</summary>
+    private static bool SameMap(DocumentModel a, DocumentModel? b) => b != null && (a == b || a.SourceWorld is { } x && b.SourceWorld is { } y
+        && string.Equals(x.Root, y.Root, StringComparison.OrdinalIgnoreCase) && string.Equals(x.Mission, y.Mission, StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>
+    /// The kept Animation mode follows its map: a reload's new document takes it over; another map, a closed map or leaving
+    /// the map's chrome forgets it (the scenario itself stays saved with its map).
+    /// </summary>
+    private void RefreshKeptAnimation()
+    {
+        if (animationKept is not { } kept) return;
+        var current = ViewModel.SelectedDocument;
+        if (current is { IsDisposed: false } && SameMap(kept.Document, current))
+        {
+            if (shownDocument == current && kept.Document != current) animationKept = kept with { Document = current };
+            return;
+        }
+        if (current?.SourceWorld != null || current == null && kept.Document.IsDisposed) animationKept = null;
+    }
+    /// <summary>
+    /// The kept Animation mode of the shown map after Exit, re-resolved on the shown document: its binding is the scenario's
+    /// (remapped) primary when that is a binding of the kept definition, else the kept binding while it still exists, else -1.
+    /// </summary>
+    private (DocumentModel Document, int Definition, int Entry)? KeptAnimation()
+    {
+        RefreshKeptAnimation();
+        if (InAnimationMode || animationKept is not { } kept || shownDocument is not { Document: SourceSceneSnapshot source } shown || !SameMap(kept.Document, shown)) return null;
+        var definition = source.AnimationDefinitions.Definitions.FirstOrDefault(d => d.Index == kept.Definition);
+        if (definition == null) return null;
+        int entry = WorldScenarios().Current.Primary is int primary && definition.Entries.Contains(primary) ? primary
+            : definition.Entries.Contains(kept.Entry) ? kept.Entry : -1;
+        return (shown, kept.Definition, entry);
     }
 
     /// <summary>The GUI's Open: drafts are asked about first (Apply / Discard / Cancel); Cancel stays where it is.</summary>
@@ -438,12 +490,12 @@ public partial class MainWindow
         scenarioChipDot!.Visibility = scenario.IsCustomized ? Visibility.Visible : Visibility.Collapsed;
         AutomationProperties.SetName(scenarioChip, full);
         // After Exit, the status bar keeps the scenario in view and re-enters on a click.
-        bool kept = !InAnimationMode && animationKept is { } keptMode && keptMode.Document.SourceWorld != null && keptMode.Document.SourceWorld == shownDocument?.SourceWorld && !presentationUiHidden;
-        animationKeptButton!.Visibility = kept ? Visibility.Visible : Visibility.Collapsed;
-        if (kept)
+        var keptMode = presentationUiHidden ? null : KeptAnimation();
+        animationKeptButton!.Visibility = keptMode != null ? Visibility.Visible : Visibility.Collapsed;
+        if (keptMode is { } shownKept)
         {
             animationKeptText!.Text = $"Animation scenario kept · {scenario.Starts.Count} start{(scenario.Starts.Count == 1 ? "" : "s")}";
-            animationKeptButton.ToolTip = $"Return to Animation mode on {DefinitionName(animationKept!.Value.Definition)}";
+            animationKeptButton.ToolTip = $"Return to Animation mode on {DefinitionName(shownKept.Definition)}";
         }
     }
     /// <summary>"2 starts · 24 calls · 1 forced".</summary>
@@ -543,13 +595,11 @@ public partial class MainWindow
         }
     }
 
+    /// <summary>Re-enters the kept Animation mode on the shown map's document, on the scenario's primary (remapped by edits) or the kept binding.</summary>
     private void ReturnToAnimationMode()
     {
-        if (animationKept is not { } kept || kept.Document.IsDisposed) return;
-        var document = shownDocument ?? kept.Document;
-        var source = document.Document as SourceSceneSnapshot;
-        int? entry = source?.AnimationDefinitions.Definitions.FirstOrDefault(d => d.Index == kept.Definition)?.Entries.Contains(kept.Entry) == true ? kept.Entry : null;
-        _ = OpenAnimationFromGuiAsync(document, kept.Definition, entry);
+        if (KeptAnimation() is not { } kept) return;
+        _ = OpenAnimationFromGuiAsync(kept.Document, kept.Definition, kept.Entry > 0 ? kept.Entry : null);
     }
 
     /// <summary>The definition picker: a searchable list of the map's definitions; choosing one switches the opened definition.</summary>
@@ -590,7 +640,11 @@ public partial class MainWindow
         animationDefinitionPopup.IsOpen = true;
         Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Input, () => { search.Focus(); list.ScrollIntoView(list.SelectedItem ?? choices.FirstOrDefault()); });
     }
-    private sealed record DefinitionChoice(int Definition, string Name, string Detail);
+    private sealed record DefinitionChoice(int Definition, string Name, string Detail)
+    {
+        /// <summary>What UI Automation reads for the list item.</summary>
+        public override string ToString() => $"{Name}, {Detail}";
+    }
     private static DataTemplate DefinitionChoiceTemplate()
     {
         var panel = new FrameworkElementFactory(typeof(StackPanel)); panel.SetValue(FrameworkElement.MarginProperty, new Thickness(2, 3, 2, 3));
@@ -646,7 +700,7 @@ public partial class MainWindow
         open.IsEnabled = selected is { BindingKnown: true };
         open.ToolTip = selected == null ? "Select an animation definition in the World tree first" : null;
         ToolTipService.SetShowOnDisabled(open, true);
-        if (animationKept is { } kept && kept.Document.SourceWorld == shownDocument?.SourceWorld)
+        if (KeptAnimation() is { } kept)
             Add("Return to " + DefinitionName(kept.Definition), null, () => { ReturnToAnimationMode(); return Task.CompletedTask; });
 
         MenuItem Add(string header, string? gesture, Func<Task> action)
@@ -669,6 +723,14 @@ public partial class MainWindow
         if (!AnimationModeKey(e.Key == Key.System ? e.SystemKey : e.Key, System.Windows.Input.Keyboard.Modifiers, e.OriginalSource as DependencyObject, e.IsRepeat)) return false;
         e.Handled = true; return true;
     }
+    /// <summary>Space released after it went down over the Structure view: it plays or pauses unless it was used to pan.</summary>
+    private void AnimationModeKeyUp(KeyEventArgs e)
+    {
+        if (e.Key != Key.Space || animationGraphView is not { SpaceHeld: true } graph) return;
+        bool dragged = graph.SpaceUp();
+        e.Handled = true;
+        if (!dragged && InAnimationMode && sourceChromeActive) _ = ReportUi(() => WorldAnimationTransportAsync(worldAnimationSession?.IsPlaying == true ? "pause" : "play"));
+    }
     /// <summary>One key of Animation mode, with its modifiers and where it was pressed: whether the mode used it.</summary>
     internal bool AnimationModeKey(Key key, ModifierKeys modifiers, DependencyObject? source, bool repeat)
     {
@@ -677,7 +739,8 @@ public partial class MainWindow
         if (key is Key.Left or Key.Right && modifiers == ModifierKeys.Alt && !TextInput(source))
         {
             bool forward = key == Key.Right;
-            if (forward ? animationForward.Count > 0 : animationBack.Count > 0) _ = RunUi(() => AnimationHistoryAsync(forward, CancellationToken.None));
+            // A held key walks no further than one step per press.
+            if (!repeat && (forward ? animationForward.Count > 0 : animationBack.Count > 0)) _ = RunUi(() => AnimationHistoryAsync(forward, CancellationToken.None));
             return true;
         }
         if (modifiers == ModifierKeys.Control && key is Key.D1 or Key.D2 or Key.D3 or Key.NumPad1 or Key.NumPad2 or Key.NumPad3)
@@ -688,6 +751,8 @@ public partial class MainWindow
         if (TextInput(source)) return false;
         if (key == Key.Space && modifiers == ModifierKeys.None && !FocusedControl(source))
         {
+            // Over the Structure view Space waits for its release: a drag meanwhile pans, else it plays or pauses then.
+            if (animationGraphView is { IsVisible: true, IsMouseOver: true } graph && graph.Layout != null) { if (!repeat) graph.SpaceDown(); return true; }
             if (!repeat) _ = ReportUi(() => WorldAnimationTransportAsync(worldAnimationSession?.IsPlaying == true ? "pause" : "play"));
             return true;
         }

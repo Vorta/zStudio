@@ -52,6 +52,19 @@ public sealed record AnimationStartRefusal(int Entry, string Name, double Time, 
 }
 
 /// <summary>
+/// A binding's activation prerequisites at one start attempt, as evidence (the game checks them on every start):
+/// <see cref="Outcome"/> "met", "refused" (also a refusal) or "ignored" (unmet, and the scenario's rule let the start run,
+/// where the game would refuse it). It changes nothing in the run.
+/// </summary>
+public sealed record AnimationPrerequisiteStart(int Entry, string Name, double Time, string Outcome, string InstancePath, int Root, AnimationPrerequisiteResult Result)
+{
+    public long? Caller { get; init; }
+    public Guid? CallEvent { get; init; }
+    public bool ScenarioStart { get; init; }
+    public long Occurrence { get; init; }
+}
+
+/// <summary>
 /// The events a branch decision skipped on one pass: <see cref="Reason"/> "false" for a false IF/ELSEIF (its body), "taken"
 /// for the rest of the chain after a taken body reached its ELSE or ELSEIF. Events not covered were either run or not reached.
 /// </summary>
@@ -78,6 +91,8 @@ public sealed partial class AnimationPlayer
     private const long EntryRunBytes = 160;
     private List<AnimationStartRefusal> refusals = [];
     private long refusalsDropped, refusalBytes;
+    private List<AnimationPrerequisiteStart> prerequisiteStarts = [];
+    private long prerequisiteStartsDropped, prerequisiteBytes;
     private List<AnimationSkippedSpan> skipped = [];
     private long skippedDropped;
     private List<AnimationPlayerReferenceState> referenceChanges = [];
@@ -153,6 +168,24 @@ public sealed partial class AnimationPlayer
         long bytes = RefusalCost(refusal);
         RequireState(bytes);
         refusals.Add(refusal); refusalBytes += bytes; AdjustRetainedBytes(bytes);
+    }
+    private static long PrerequisiteCost(AnimationPrerequisiteStart start) => 256 + 2L * start.InstancePath.Length + 2L * start.Name.Length + 128L * start.Result.Checks.Count;
+    /// <summary>Records a start attempt's prerequisites (evidence only, bounded like the refusals).</summary>
+    private void RecordPrerequisites(AnimationEntry entry, string outcome, AnimationPrerequisiteResult result, string path, int root, long? caller, Guid? callEvent, bool scenarioStart)
+    {
+        if (initializingScene) return;
+        if (prerequisiteStarts.Count >= 20000)
+        {
+            prerequisiteBytes -= prerequisiteStarts.Take(10000).Sum(PrerequisiteCost);
+            prerequisiteStarts.RemoveRange(0, 10000); prerequisiteStartsDropped += 10000; InvalidateRetainedState();
+        }
+        AnimationPrerequisiteStart start = new(entry.Index, entry.Name, Time, outcome, path, root, result)
+        {
+            Caller = caller, CallEvent = callEvent, ScenarioStart = scenarioStart, Occurrence = trace.Count == 0 ? 0 : trace[^1].Occurrence,
+        };
+        long bytes = PrerequisiteCost(start);
+        RequireState(bytes);
+        prerequisiteStarts.Add(start); prerequisiteBytes += bytes; AdjustRetainedBytes(bytes);
     }
     private static string RefusalText(string? reason) => reason switch
     {

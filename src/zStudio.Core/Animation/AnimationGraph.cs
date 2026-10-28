@@ -5,15 +5,15 @@ namespace zStudio.Core.Animation;
 /// <summary>
 /// The Structure view's model of one opened binding (docs/agents/preview.md, "Animation structure"): its activation, its
 /// definition frame (cleanup, then runtime sequences in source order) with rows, condition and loop blocks, the reference
-/// nodes of the bindings it calls or names (one node per definition, collapsed unless expanded, one frame per expanded
-/// binding), the bindings that call it, and the edges between them. Calls and by-name events resolve as the runtime does
+/// nodes of the bindings it calls or names (one node per definition, collapsed unless expanded; an expanded one is one frame
+/// showing one of its bindings at a time), the bindings that call it, and the edges between them. Calls and by-name events resolve as the runtime does
 /// (the first entry of the name); a call to a binding already on its call path is a back-link. Deterministic, bounded and
 /// paged; identities are entries, sequence and event GUIDs of this compilation, never names. Read-only and immutable.
 /// </summary>
 public sealed class AnimationGraph
 {
     public const int MaximumPageSize = 100;
-    /// <summary>Expanded reference frames a graph shows at once.</summary>
+    /// <summary>Expanded reference nodes (one frame each) a graph shows at once.</summary>
     public const int MaximumExpandedFrames = 64;
     /// <summary>Events one grouped row or one bundled edge lists.</summary>
     public const int MaximumMembers = 100;
@@ -25,29 +25,36 @@ public sealed class AnimationGraph
     private readonly List<AnimationGraphEdge> edges = [];
     private readonly Dictionary<(int Entry, Guid Sequence), SequenceLayout> layouts = [];
     private readonly HashSet<string> expanded;
+    private readonly Dictionary<string, int> members;
 
     public AnimationGraphIndex Index { get; }
     /// <summary>The opened binding: the scenario's primary start, whose instance path is "".</summary>
     public int Entry { get; }
     public Guid Id { get; } = Guid.NewGuid();
     public IReadOnlySet<string> Expanded => expanded;
+    /// <summary>The member each expanded group's frame shows, where one other than its first was chosen.</summary>
+    public IReadOnlyDictionary<string, int> Members => members;
     public int NodeCount => nodes.Count;
-    /// <summary>Some expanded bindings have no frame: the graph already shows <see cref="MaximumExpandedFrames"/> expanded frames.</summary>
+    /// <summary>Some expanded groups have no frame: the graph already shows <see cref="MaximumExpandedFrames"/> expanded frames.</summary>
     public bool ExpansionTruncated { get; private set; }
     public int EdgeCount => edges.Count;
 
-    private AnimationGraph(AnimationGraphIndex index, int entry, HashSet<string> expanded, CancellationToken token)
+    private AnimationGraph(AnimationGraphIndex index, int entry, HashSet<string> expanded, Dictionary<string, int> members, CancellationToken token)
     {
-        Index = index; Entry = entry; this.expanded = expanded;
+        Index = index; Entry = entry; this.expanded = expanded; this.members = members;
         new Builder(this, token).Build();
     }
 
-    /// <summary>The graph of <paramref name="entry"/>, with the reference groups in <paramref name="expanded"/> shown as frames.</summary>
-    public static AnimationGraph Create(AnimationGraphIndex index, int entry, IEnumerable<string>? expanded = null, CancellationToken token = default)
+    /// <summary>
+    /// The graph of <paramref name="entry"/>, with the reference groups in <paramref name="expanded"/> shown as one frame each,
+    /// on the member <paramref name="members"/> chooses (else the group's first).
+    /// </summary>
+    public static AnimationGraph Create(AnimationGraphIndex index, int entry, IEnumerable<string>? expanded = null, CancellationToken token = default,
+        IReadOnlyDictionary<string, int>? members = null)
     {
         ArgumentNullException.ThrowIfNull(index);
         if (entry <= 0 || entry >= index.Package.Entries.Count) throw new InvalidDataException("Choose an animation binding of this package (entry 0 is the compiler's placeholder).");
-        return new(index, entry, new(expanded ?? [], StringComparer.Ordinal), token);
+        return new(index, entry, new(expanded ?? [], StringComparer.Ordinal), members == null ? new(StringComparer.Ordinal) : new(members, StringComparer.Ordinal), token);
     }
 
     /// <summary>The same graph with a reference group expanded or collapsed. Expansion shows; it never includes, runs or evaluates.</summary>
@@ -57,10 +64,20 @@ public sealed class AnimationGraph
         if (value == expanded.Contains(group)) return this;
         HashSet<string> next = new(expanded, StringComparer.Ordinal);
         if (value) next.Add(group); else next.Remove(group);
-        var graph = new AnimationGraph(Index, Entry, next, token);
+        var graph = new AnimationGraph(Index, Entry, next, new(members, StringComparer.Ordinal), token);
         if (value && graph.ExpansionTruncated && !ExpansionTruncated)
             throw new InvalidOperationException($"Collapse another called animation first ({MaximumExpandedFrames} expanded).");
         return graph;
+    }
+
+    /// <summary>The same graph with an expanded group's frame showing <paramref name="entry"/>, one of its members.</summary>
+    public AnimationGraph WithMember(string group, int entry, CancellationToken token = default)
+    {
+        ArgumentNullException.ThrowIfNull(group);
+        if (nodeById.GetValueOrDefault(ReferenceId(group))?.Reference is not { } reference || !reference.Entries.Contains(entry))
+            throw new InvalidDataException("Choose one of the called animation's bindings.");
+        if (members.TryGetValue(group, out int chosen) && chosen == entry) return this;
+        return new(Index, Entry, new(expanded, StringComparer.Ordinal), new(members, StringComparer.Ordinal) { [group] = entry }, token);
     }
 
     /// <summary>Nodes in layout order (column, then order; a frame's activation and sequences follow it).</summary>
@@ -139,7 +156,8 @@ public sealed class AnimationGraph
 
     /// <summary>
     /// Lays the graph out breadth first by call depth: each frame's related bindings join one reference node per definition
-    /// (first relation first), expanded reference nodes add a frame per binding, and only frames add nodes; then every edge.
+    /// (first relation first), an expanded reference node adds one frame for its chosen binding, and only frames add nodes;
+    /// then every edge.
     /// </summary>
     private sealed class Builder(AnimationGraph graph, CancellationToken token)
     {
@@ -166,6 +184,8 @@ public sealed class AnimationGraph
             public FrameState? Discoverer { get; } = discoverer; public bool Calling { get; } = calling;
             public List<int> Entries { get; } = [];
             public string? UnresolvedName { get; init; }
+            /// <summary>The frame of an expanded group (its shown member).</summary>
+            public FrameState? Frame { get; set; }
             public string Id => ReferenceId(Key);
         }
         private sealed class EdgeState(AnimationGraphRelation relation, string from, string fromNode, string to, bool backLink)
@@ -189,15 +209,16 @@ public sealed class AnimationGraph
                 List<FrameState> next = [];
                 foreach (var group in touched.Distinct())
                 {
-                    if (group.UnresolvedName != null || !graph.expanded.Contains(group.Key)) continue;
-                    foreach (int entry in group.Entries.Order())
-                    {
-                        if (frameOf.ContainsKey(entry)) continue;
-                        if (expandedFrames >= MaximumExpandedFrames) { graph.ExpansionTruncated = true; break; }
-                        var discoverer = group.Discoverer!;
-                        var frame = new FrameState(entry, firstPath.GetValueOrDefault(entry), group.Depth, group.Column + 1, [.. discoverer.Chain, entry], group);
-                        AddFrame(frame); next.Add(frame); expandedFrames++;
-                    }
+                    // An expanded group is one frame: its chosen member (else its first), so it counts once against the budget.
+                    if (group.UnresolvedName != null || !graph.expanded.Contains(group.Key) || group.Frame != null) continue;
+                    var candidates = group.Entries.Where(e => !frameOf.ContainsKey(e)).Order().ToList();
+                    if (candidates.Count == 0) continue;
+                    if (expandedFrames >= MaximumExpandedFrames) { graph.ExpansionTruncated = true; continue; }
+                    int entry = graph.members.TryGetValue(group.Key, out int chosen) && candidates.Contains(chosen) ? chosen : candidates[0];
+                    var discoverer = group.Discoverer!;
+                    var frame = new FrameState(entry, firstPath.GetValueOrDefault(entry), group.Depth, group.Column + 1, [.. discoverer.Chain, entry], group);
+                    group.Frame = frame;
+                    AddFrame(frame); next.Add(frame); expandedFrames++;
                 }
                 level = next;
             }
@@ -317,7 +338,8 @@ public sealed class AnimationGraph
         /// <summary>A collapsed reference node's own relations, drawn only to nodes on screen and back to its call path.</summary>
         private void GroupEdges(GroupState group)
         {
-            if (group.UnresolvedName != null) return;
+            // An expanded group's frame draws its shown member's relations from its rows.
+            if (group.UnresolvedName != null || group.Frame != null) return;
             foreach (int member in group.Entries)
             {
                 if (frameOf.ContainsKey(member)) continue;
@@ -436,7 +458,12 @@ public sealed class AnimationGraph
                         + (source == null ? "" : " · " + System.IO.Path.GetFileName(source.File)))
                     {
                         Entry = frame.Entry, Parent = frame.Group?.Id,
-                        Frame = new(frame.Entry, entry.Name, entry.RootName, entry.AttachName, frame.Path, frame.Depth, Shown(entry).Count()) { File = source?.File, Source = source },
+                        Frame = new(frame.Entry, entry.Name, entry.RootName, entry.AttachName, frame.Path, frame.Depth, Shown(entry).Count())
+                        {
+                            File = source?.File, Source = source, Group = frame.Group?.Key,
+                            Members = frame.Group == null ? [] : frame.Group.Entries.Order().Take(MaximumMembers).ToArray(),
+                            MemberIndex = frame.Group == null ? 0 : Math.Max(0, frame.Group.Entries.Order().Take(MaximumMembers).ToList().IndexOf(frame.Entry)),
+                        },
                     });
                     if (frame.Group != null)
                         Add(new(ActivationId(frame.Entry), AnimationGraphNodeKind.Activation, column, 0, frame.Depth, "Activation")
@@ -504,7 +531,7 @@ public sealed class AnimationGraph
             {
                 Reference = new(group.Key, name, members.Take(MaximumMembers).ToArray(), members.Length)
                 {
-                    Calling = group.Calling, Expanded = isExpanded, Expandable = !group.Calling, File = source?.File,
+                    Calling = group.Calling, Expanded = isExpanded, Expandable = !group.Calling, File = source?.File, Member = group.Frame?.Entry,
                     Detail = $"{file}{roots} · {range}", Summary = summary, Calls = calls.AsReadOnly(), NeededBy = neededBy, Caution = caution,
                 },
             };
@@ -518,7 +545,7 @@ public sealed class AnimationGraph
             // Its own events (an invalidate of itself) are not callers.
             foreach (var group in all.Where(c => c.Caller != entryIndex).GroupBy(c => index.Group(c.Caller)))
             {
-                string? node = groups.TryGetValue(group.Key, out var shown) ? shown.Id : group.Any(c => frameOf.ContainsKey(c.Caller)) ? FrameId(group.First().Caller) : null;
+                string? node = groups.TryGetValue(group.Key, out var shown) ? shown.Id : group.FirstOrDefault(c => frameOf.ContainsKey(c.Caller)) is { } framed ? FrameId(framed.Caller) : null;
                 string? back = node == null ? null : edgeOrder.FirstOrDefault(e => e.BackLink && e.To == ActivationId(entryIndex) && (e.FromNode == node || e.FromNode.StartsWith($"sequence:{group.First().Caller}:", StringComparison.Ordinal))) is { } edge
                     ? $"{Name(edge.Relation)}:{edge.From}>{edge.To}:back" : null;
                 if (callers.Count < MaximumMembers) callers.Add(new(group.Key, index.GroupName(group.Key), group.Select(c => c.Caller).Distinct().Count(), group.Count(), node, back)

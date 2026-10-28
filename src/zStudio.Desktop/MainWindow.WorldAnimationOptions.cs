@@ -44,6 +44,8 @@ public partial class MainWindow
             "scene" => Page(frame.Nodes, args, n => n.SourceNode.ToString(CultureInfo.InvariantCulture), maximumRowBytes: _ => 2048).Data,
             "instances" => Page(frame.Instances, args, i => i.Name, maximumRowBytes: i => 1024 + InspectionResultBudget.Text(i.Name) + InspectionResultBudget.Text(i.Path)).Data,
             "conditions" => Page(frame.Conditions, args, c => c.Event.ToString(), maximumRowBytes: c => 768 + InspectionResultBudget.Text(c.InstancePath) + InspectionResultBudget.Text(c.Unavailable ?? "")).Data,
+            // Each start attempt's activation prerequisites (met, refused, or ignored by the scenario's rule): evidence only.
+            "prerequisites" => new { page = Page(frame.PrerequisiteStarts, args, p => p.Name + " " + p.Outcome, maximumRowBytes: p => 1024 + InspectionResultBudget.Text(p.Name) + InspectionResultBudget.Text(p.InstancePath) + 384L * p.Result.Checks.Count).Data, dropped = frame.PrerequisiteStartsDropped },
             _ => throw new StudioCommandException("invalid_argument", "Unknown runtime section.")
         };
     }
