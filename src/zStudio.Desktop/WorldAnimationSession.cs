@@ -1,5 +1,5 @@
 using System.Diagnostics;
-using System.Numerics;
+using System.IO;
 using System.Windows.Threading;
 using zStudio.Automation;
 using zStudio.Core;
@@ -8,23 +8,6 @@ using zStudio.Rendering;
 
 namespace zStudio.Desktop;
 
-/// <summary>Inputs for an isolated run over the already initialized source-world baseline.</summary>
-public sealed record WorldAnimationScenario
-{
-    public int Seed { get; init; } = 1;
-    public bool Cleanup { get; init; }
-    public float Height { get; init; }
-    public Vector3? ReferencePosition { get; init; }
-    public Vector3? ActivationStart { get; init; }
-    public int EffectLevel { get; init; } = 2;
-    public AnimationExecutionPolicy Policy { get; init; } = AnimationExecutionPolicy.RootOnly;
-    /// <summary>The run's policy: a reference position stands in for the player (range tests measure from it), else the player at start.</summary>
-    public AnimationExecutionPolicy RunPolicy => ReferencePosition is { } position
-        ? Policy.WithRules(Policy.Rules with { Player = AnimationPlayerReference.Custom(position) }) : Policy;
-    public IReadOnlyList<AnimationScheduledStart> Activations { get; init; } = [];
-    public AnimationSchedule Schedule(int primary, int entryCount) => new(Activations.Count == 0
-        ? [new(Guid.Empty, primary, 0)] : Activations, entryCount);
-}
 
 public sealed record WorldAnimationSessionState(Guid Session, Guid Scenario, Guid? Run, string Status,
     bool Playing, bool Loading, bool Attached, double Time, double RangeStart, double RangeEnd,
@@ -64,7 +47,8 @@ public sealed class WorldAnimationSession : IDisposable
     public Guid? LastScenarioId { get; private set; }
     public AnimationPreviewContext Context { get; }
     public int EntryIndex { get; }
-    public WorldAnimationScenario Scenario { get; private set; } = new();
+    /// <summary>The map's scenario this run follows (<see cref="AnimationScenario"/>, with this binding as its primary).</summary>
+    public AnimationScenario Scenario { get; private set; }
     public AnimationFrame? CurrentFrame { get; private set; }
     public AnimationFrame? LastFrame { get; private set; }
     public bool IsPlaying => playing;
@@ -90,7 +74,7 @@ public sealed class WorldAnimationSession : IDisposable
         ArgumentOutOfRangeException.ThrowIfNegative(entry);
         ArgumentOutOfRangeException.ThrowIfGreaterThanOrEqual(entry, frozenContext.Package.Entries.Count);
         viewport.Dispatcher.VerifyAccess();
-        Context = frozenContext; EntryIndex = entry; this.viewport = viewport; this.resolver = resolver;
+        Context = frozenContext; EntryIndex = entry; Scenario = AnimationScenario.For(entry); this.viewport = viewport; this.resolver = resolver;
         this.isCurrent = isCurrent; worldGeneration = viewport.SceneGeneration;
         this.lod = Math.Clamp(lod, 0, Math.Max(0, frozenContext.Lods.Count() - 1));
         this.audio = audio; audio.Volume = .5f; audio.Diagnostic += AudioDiagnostic;
@@ -158,16 +142,14 @@ public sealed class WorldAnimationSession : IDisposable
         Changed?.Invoke();
     }
 
-    public void SetScenario(WorldAnimationScenario scenario)
+    /// <summary>Runs <paramref name="scenario"/> from now on: its primary must be this binding (a scenario without one gets it).</summary>
+    public void SetScenario(AnimationScenario scenario)
     {
-        Verify(); ArgumentNullException.ThrowIfNull(scenario); ArgumentNullException.ThrowIfNull(scenario.Policy);
-        var schedule = scenario.Schedule(EntryIndex, Context.Package.Entries.Count);
-        if (schedule.Starts.Single(s => s.Id == Guid.Empty).Entry != EntryIndex) throw Invalid("The primary activation must match the preview binding.");
-        scenario = scenario with { Activations = Array.AsReadOnly(scenario.Activations.ToArray()) };
-        if (!float.IsFinite(scenario.Height) || scenario.Height is < -999 or > 999)
-            throw Invalid("Preview height must be between -999 and 999 game units.");
-        if (scenario.EffectLevel is < 0 or > 2) throw Invalid("Effect level must be 0, 1 or 2.");
-        if (!Finite(scenario.ReferencePosition) || !Finite(scenario.ActivationStart)) throw Invalid("Preview positions must be finite.");
+        Verify(); ArgumentNullException.ThrowIfNull(scenario);
+        if (scenario.Primary == null) scenario = scenario.WithPrimary(EntryIndex, keepPrevious: false);
+        if (scenario.Primary != EntryIndex) throw Invalid("The primary activation must match the preview binding.");
+        try { _ = scenario.Schedule(Context.Package.Entries.Count); _ = scenario.ToExecutionPolicy(); }
+        catch (InvalidDataException ex) { throw Invalid(ex.Message); }
         Stop();
         scenarioLifetime.Cancel(); scenarioLifetime.Dispose();
         scenarioLifetime = CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token);
@@ -246,13 +228,20 @@ public sealed class WorldAnimationSession : IDisposable
         finally { analysisGate.Release(); }
     }
 
-    private AnimationPlayer CreatePlayer(WorldAnimationScenario scenario, CancellationToken token)
-        => new(Context, EntryIndex, scenario.Seed, scenario.Cleanup, token, scenario.Schedule(EntryIndex, Context.Package.Entries.Count))
+    private AnimationPlayer CreatePlayer(AnimationScenario scenario, CancellationToken token)
+        => Player(Context, EntryIndex, scenario, lod, token);
+
+    /// <summary>A player for <paramref name="scenario"/> on a frozen source-world context: its starts, inclusion, switches, inputs and rules.</summary>
+    internal static AnimationPlayer Player(AnimationPreviewContext context, int entry, AnimationScenario scenario, int lod, CancellationToken token)
+    {
+        if (scenario.Primary == null) scenario = scenario.WithPrimary(entry, keepPrevious: false);
+        return new(context, scenario.Primary!.Value, scenario.Seed, scenario.Phase == AnimationScenarioPhase.Cleanup, token, scenario.Schedule(context.Package.Entries.Count))
         {
-            ExecutionPolicy = scenario.RunPolicy, Terrain = Context.Terrain, OriginCollision = true, ProceduralLimitsEnabled = true,
-            PreviewHeight = scenario.Height, ReferencePosition = scenario.ReferencePosition,
-            ActivationStart = scenario.ActivationStart, EffectLevel = scenario.EffectLevel, LodLevel = lod
+            ExecutionPolicy = scenario.ToExecutionPolicy(), Terrain = context.Terrain, OriginCollision = true, ProceduralLimitsEnabled = true,
+            PreviewHeight = scenario.Height, ReferencePosition = scenario.CustomPlayer,
+            ActivationStart = scenario.BeamOrigin, EffectLevel = (int)scenario.EffectsDetail, LodLevel = Math.Max(0, lod)
         };
+    }
 
     private async Task EvaluateAsync(double seconds, bool playAfter, bool tick, CancellationToken external)
     {
@@ -359,10 +348,10 @@ public sealed class WorldAnimationSession : IDisposable
         else { timer.Stop(); clock.Stop(); audio.Stop(); }
     }
 
-    private async Task PrepareAudioAsync(WorldAnimationScenario scenario, CancellationToken token)
+    private async Task PrepareAudioAsync(AnimationScenario scenario, CancellationToken token)
     {
         if (!audioDirty && audio.IsPrepared) return;
-        await audio.PrepareAsync(Context, EntryIndex, scenario.Policy, false, token, scenario.Schedule(EntryIndex, Context.Package.Entries.Count));
+        await audio.PrepareAsync(Context, EntryIndex, scenario.ToExecutionPolicy(), false, token, scenario.Schedule(Context.Package.Entries.Count));
         token.ThrowIfCancellationRequested(); audioDirty = false;
     }
 
@@ -430,7 +419,6 @@ public sealed class WorldAnimationSession : IDisposable
         if (lifetime.IsCancellationRequested || viewport.SceneGeneration != worldGeneration || !isCurrent())
             throw new StudioCommandException("context_changed", "The source world or animation session changed.");
     }
-    private static bool Finite(Vector3? value) => value is not Vector3 p || float.IsFinite(p.X) && float.IsFinite(p.Y) && float.IsFinite(p.Z);
     private static StudioCommandException Invalid(string message) => new("invalid_argument", message);
 
     public void Dispose()

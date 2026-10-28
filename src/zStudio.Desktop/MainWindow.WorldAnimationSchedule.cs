@@ -13,11 +13,11 @@ public partial class MainWindow
     private IReadOnlyList<AnimationScheduledStart> WorldAnimationActivations()
     {
         var target = WorldAnimationTargetNow ?? throw new StudioCommandException("not_ready", "Choose an animation binding.");
-        return worldAnimationConfiguration.Activations.Count == 0 ? [new(Guid.Empty, target.Entry, 0)] : worldAnimationConfiguration.Activations;
+        return worldAnimationConfiguration.Starts.Count == 0 ? [new(Guid.Empty, target.Entry, 0)] : worldAnimationConfiguration.Starts;
     }
 
     private bool IsWorldAnimationActivationPath(string path) => path.Length == 0 ||
-        worldAnimationConfiguration.Activations.Any(s => s.Id != Guid.Empty && s.Path == path);
+        worldAnimationConfiguration.Starts.Any(s => s.Id != Guid.Empty && s.Path == path);
 
     private string WorldAnimationScopedPath(JsonObject args)
     {
@@ -40,11 +40,10 @@ public partial class MainWindow
             throw new StudioCommandException("invalid_argument", "Choose an animation binding; entry 0 is the compiler's empty placeholder.");
         var removed = WorldAnimationActivations().Where(old => old.Id != Guid.Empty && !starts.Any(s => s.Id == old.Id && s.Entry == old.Entry)).Select(s => s.Path).ToArray();
         bool Keep(string path) => !removed.Any(p => path == p || path.StartsWith(p + "/", StringComparison.Ordinal));
-        var policy = worldAnimationConfiguration.Policy;
-        SetWorldAnimationScenario(worldAnimationConfiguration with
+        var scenario = worldAnimationConfiguration;
+        SetWorldAnimationScenario(scenario with
         {
-            Activations = Array.AsReadOnly(starts.ToArray()),
-            Policy = new(policy.IncludedCalls.Where(Keep), policy.ConditionOverrides.Where(c => Keep(c.InstancePath)))
+            Starts = starts.ToArray(), IncludedCalls = scenario.IncludedCalls.Where(Keep).ToArray(), Conditions = scenario.Conditions.Where(c => Keep(c.InstancePath)).ToArray(),
         });
     }
 

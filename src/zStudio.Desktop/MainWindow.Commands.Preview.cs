@@ -289,9 +289,9 @@ public partial class MainWindow
                 foreach (var (name, value) in (JsonObject)a["changes"]!)
                 {
                     if (name != "activationTarget") throw new StudioCommandException("unsupported", "A compiled Whole world takes activationTarget alone (the player its VTOL drop-window analysis measures from); open its animation archive for the other options.");
-                    SetWorldAnimationScenario(worldAnimationConfiguration with { ReferencePosition = WorldAnimationPosition(value?.GetValue<string>() ?? "") });
+                    SetWorldAnimationScenario(worldAnimationConfiguration with { Player = WorldAnimationPosition(value?.GetValue<string>() ?? "") is { } point ? zStudio.Core.Animation.AnimationPlayerReference.Custom(point) : zStudio.Core.Animation.AnimationPlayerReference.AtStart });
                 }
-                var player = worldAnimationConfiguration.ReferencePosition;
+                var player = worldAnimationConfiguration.CustomPlayer;
                 return Result(new { preview = previewId, activationTarget = player is { } p ? new[] { p.X, p.Y, p.Z } : null, parachute = ParachuteState() });
             }
             var editor = TargetAnimation(a); RequireNoDrafts(shownDocument);

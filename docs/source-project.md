@@ -55,7 +55,7 @@ Every file goes where the original tree had it, as far as the shipped files reco
 ## The .zstudio folder
 
 zStudio writes into a project only its hidden `.zstudio\` folder beside `data` and `gamegen`:
-- `settings.json`: how the project was last viewed (Diagnostics shown or closed and its height, the mission **Difficulty**) and its [texture dithering](#texture-dithering);
+- `settings.json`: how the project was last viewed (Diagnostics shown or closed and its height, the mission **Difficulty**), each map's animation preview scenario and the project's [texture dithering](#texture-dithering);
 - `export\`: Blender checkouts and their exports;
 - `recovery\` and `staging\`: save journals and files being saved.
 

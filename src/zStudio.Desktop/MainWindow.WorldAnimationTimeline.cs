@@ -207,7 +207,7 @@ public partial class MainWindow
                     Add(new(id, ev.Call is { } targetCall ? "→ " + targetCall.TargetName : ev.Name)
                     {
                         Depth = depth, Expandable = ev.Call?.TargetEntry != null || ev.KeyframeCount > 0, Expanded = expanded,
-                        Included = ev.Call != null ? worldAnimationConfiguration.Policy.Includes(ev.Call.Path) : null,
+                        Included = ev.Call != null ? worldAnimationConfiguration.Includes(ev.Call.Path) : null,
                         InclusionEnabled = ev.Call != null && CanIncludeWorldAnimationCall(target.Entry, path),
                         InclusionReason = "Include this callsite in preview; parent calls must also be included",
                         CanEditTiming = ev.Source?.TimingFieldId != null && ev.Source.ReadOnlyReason == null,

@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.IO;
 using System.Numerics;
 using System.Text.Json.Nodes;
 using System.Windows;
@@ -14,7 +15,6 @@ public partial class MainWindow
     private sealed record WorldAnimationTarget(DocumentModel Document, long Revision, int Definition, int Entry);
     private WorldAnimationTarget? worldAnimationCandidate, worldAnimationPinned;
     private WorldAnimationSession? worldAnimationSession;
-    private WorldAnimationScenario worldAnimationConfiguration = new();
     private Guid worldAnimationScenarioEpoch = Guid.NewGuid();
     private long worldAnimationPreparation;
     private bool worldAnimationPreparing;
@@ -23,15 +23,15 @@ public partial class MainWindow
     private long worldAnimationPlanRevision;
     private WorldAnimationTimeline? worldTimeline;
     private AnimationDuration? worldAnimationDuration;
-    private WorldAnimationScenario WorldAnimationConfiguration => worldAnimationConfiguration;
+    private AnimationScenario WorldAnimationConfiguration => worldAnimationConfiguration;
     private WorldAnimationTarget? WorldAnimationTargetNow => worldAnimationPinned ?? worldAnimationCandidate;
     private bool HasWorldAnimationTarget => WorldAnimationTargetNow != null;
-    private sealed record WorldAnimationRebuild(WorldAnimationTarget? Candidate, WorldAnimationTarget? Pinned, WorldAnimationScenario Scenario);
+    private sealed record WorldAnimationRebuild(WorldAnimationTarget? Candidate, WorldAnimationTarget? Pinned);
 
     private WorldAnimationRebuild? CaptureWorldAnimationRebuild()
     {
         if (!HasWorldAnimationTarget) return null;
-        var saved = new WorldAnimationRebuild(worldAnimationCandidate, worldAnimationPinned, worldAnimationConfiguration);
+        var saved = new WorldAnimationRebuild(worldAnimationCandidate, worldAnimationPinned);
         StopWorldAnimationForEdit(); return saved;
     }
 
@@ -43,7 +43,8 @@ public partial class MainWindow
         worldAnimationSession?.Dispose(); worldAnimationSession = null;
         worldAnimationCandidate = saved.Candidate; worldAnimationPinned = saved.Pinned;
         sourceAnimationEntry = saved.Candidate?.Entry is >= 0 ? saved.Candidate.Entry : null;
-        worldAnimationConfiguration = saved.Scenario; worldAnimationScenarioEpoch = Guid.NewGuid(); worldAnimationDuration = null;
+        // The map's scenario outlived the rebuild in its session (remapped after a recompile).
+        worldAnimationScenarioEpoch = Guid.NewGuid(); worldAnimationDuration = null;
         ParachuteScenarioChanged();
         RefreshWorldAnimationTimeline(); RefreshRowEyes(); ArrangeWorkspace();
     }
@@ -66,8 +67,8 @@ public partial class MainWindow
         var found = source.AnimationDefinitions.Definitions.FirstOrDefault(d => d.Index == definition);
         if (found == null || entry >= 0 && !found.Entries.Contains(entry)) return;
         var candidate = new WorldAnimationTarget(document, document.Revision, definition, entry);
-        if (worldAnimationPinned == null && worldAnimationCandidate != candidate) ResetWorldAnimationConfiguration();
-        worldAnimationCandidate = candidate;
+        if (worldAnimationPinned == null && worldAnimationCandidate != candidate) ResetWorldAnimationConfiguration(entry);
+        worldAnimationCandidate = candidate; EnsureWorldScenarioPrimary();
         _ = GetWorldAnimationStructurePlan();
         RefreshWorldAnimationTimeline(); RefreshRowEyes();
         SectionCard().SetAnimationSetup(WorldAnimationScenarioPanel());
@@ -107,8 +108,8 @@ public partial class MainWindow
         if (worldAnimationPinned == target) return Task.CompletedTask;
         worldAnimationSession?.Dispose(); worldAnimationSession = null;
         ++worldAnimationPreparation; worldAnimationPreparing = false; sourceAnimationPreview = false;
-        if (WorldAnimationTargetNow != target) ResetWorldAnimationConfiguration();
-        worldAnimationPinned = target; previewId = Guid.NewGuid();
+        if (WorldAnimationTargetNow != target) ResetWorldAnimationConfiguration(entry);
+        worldAnimationPinned = target; previewId = Guid.NewGuid(); EnsureWorldScenarioPrimary();
         RefreshWorldAnimationTimeline(); RefreshRowEyes(); UpdateSourceAnimationControls(); ArrangeWorkspace();
         return Task.CompletedTask;
     }
@@ -125,15 +126,12 @@ public partial class MainWindow
         return context;
     }
 
-    private AnimationPlayer CreateWorldAnalysisPlayer(AnimationPreviewContext context, int entry, WorldAnimationScenario configuration, CancellationToken token, int lod = 0)
-        => new(context, configuration.Activations.FirstOrDefault(s => s.Id == Guid.Empty)?.Entry ?? entry, configuration.Seed, configuration.Cleanup, token,
-            configuration.Schedule(configuration.Activations.FirstOrDefault(s => s.Id == Guid.Empty)?.Entry ?? entry, context.Package.Entries.Count))
-        {
-            ExecutionPolicy = configuration.RunPolicy, Terrain = context.Terrain, OriginCollision = true, ProceduralLimitsEnabled = true,
-            PreviewHeight = configuration.Height, ReferencePosition = configuration.ReferencePosition,
-            ActivationStart = configuration.ActivationStart, EffectLevel = configuration.EffectLevel,
-            LodLevel = Math.Max(0, lod)
-        };
+    /// <summary>An analysis player: a scenario of its primary alone analyzes <paramref name="entry"/>; scheduled starts keep their own primary.</summary>
+    private static AnimationPlayer CreateWorldAnalysisPlayer(AnimationPreviewContext context, int entry, AnimationScenario configuration, CancellationToken token, int lod = 0)
+    {
+        if (configuration.Starts.Count <= 1 && configuration.Primary != entry) configuration = configuration.WithPrimary(entry, keepPrevious: false);
+        return WorldAnimationSession.Player(context, entry, configuration, lod, token);
+    }
 
     private async Task<WorldAnimationSession> EnsureWorldAnimationSessionAsync(CancellationToken token)
     {
@@ -230,7 +228,8 @@ public partial class MainWindow
         RefreshWorldAnimationTimeline(); UpdateSourceAnimationControls();
     }
 
-    private void ExitWorldAnimation()
+    /// <param name="keepScenario">The view is being cleared (a rebuild or another map), not exited: the map's scenario stays.</param>
+    private void ExitWorldAnimation(bool keepScenario = false)
     {
         ++worldAnimationEditingSeek;
         worldTimeline?.SetRequestedTime(null);
@@ -238,49 +237,53 @@ public partial class MainWindow
         var session = worldAnimationSession; worldAnimationSession = null; session?.Dispose();
         bool pinned = worldAnimationPinned != null; worldAnimationPinned = null; sourceAnimationPreview = false;
         ApplyWorldAnimationScreenEffects(null);
-        if (pinned) { previewId = Guid.NewGuid(); ResetWorldAnimationConfiguration(); }
+        if (pinned) { previewId = Guid.NewGuid(); ResetWorldAnimationConfiguration(reset: !keepScenario); }
         RefreshWorldAnimationTimeline(); RefreshRowEyes(); UpdateSourceAnimationControls(); ArrangeWorkspace();
     }
 
     private void ClearWorldAnimationTarget()
     {
-        ExitWorldAnimation(); worldAnimationCandidate = null; sourceAnimationEntry = null; worldAnimationPlan = null; worldAnimationPlanDocument = null;
-        ResetWorldAnimationConfiguration(); RefreshWorldAnimationTimeline(); ArrangeWorkspace();
+        ExitWorldAnimation(keepScenario: true); worldAnimationCandidate = null; sourceAnimationEntry = null; worldAnimationPlan = null; worldAnimationPlanDocument = null;
+        ResetWorldAnimationConfiguration(reset: false); RefreshWorldAnimationTimeline(); ArrangeWorkspace();
     }
 
-    private void ResetWorldAnimationConfiguration()
+    /// <summary>
+    /// Starts a new scenario for the binding being opened, unless the map's scenario already belongs to it (<paramref name="keep"/>,
+    /// as a restored or remapped one does); <paramref name="reset"/> false keeps it whatever it belongs to.
+    /// </summary>
+    private void ResetWorldAnimationConfiguration(int? keep = null, bool reset = true)
     {
         ++worldAnimationEditingSeek;
         worldTimeline?.SetRequestedTime(null);
-        worldAnimationConfiguration = new(); worldAnimationScenarioEpoch = Guid.NewGuid(); worldAnimationDuration = null;
+        if (reset && (keep is not int entry || entry <= 0 || worldAnimationConfiguration.Primary != entry)) WorldScenarios().Reset();
+        worldAnimationScenarioEpoch = Guid.NewGuid(); worldAnimationDuration = null;
         worldAnimationExpanded.Clear(); worldAnimationCollapsed.Clear(); worldAnimationPageCounts.Clear();
         ParachuteScenarioChanged();
     }
 
-    private void SetWorldAnimationScenario(WorldAnimationScenario configuration)
+    private void SetWorldAnimationScenario(AnimationScenario configuration)
     {
         RequireNoDrafts();
-        if (WorldAnimationTargetNow is { Entry: >= 0 } target)
+        if (WorldAnimationTargetNow is { Entry: > 0 } target)
         {
-            var schedule = configuration.Schedule(target.Entry, target.Document.Document.Animations!.Entries.Count);
-            if (schedule.Starts.Single(s => s.Id == Guid.Empty).Entry != target.Entry)
+            if (configuration.Primary == null) configuration = configuration.WithPrimary(target.Entry, keepPrevious: false);
+            if (configuration.Primary != target.Entry)
                 throw new StudioCommandException("invalid_argument", "Keep the primary activation bound to the selected animation.");
+            try { _ = configuration.Schedule(target.Document.Document.Animations!.Entries.Count); }
+            catch (InvalidDataException ex) { throw new StudioCommandException("invalid_argument", ex.Message); }
         }
-        // Validate before publishing a scenario even when the run has not been prepared.
-        if (!float.IsFinite(configuration.Height) || configuration.Height is < -999 or > 999 || configuration.EffectLevel is < 0 or > 2)
-            throw new StudioCommandException("invalid_argument", "Height must be -999..999 and effect level 0..2.");
         StopWorldAnimationForEdit(); worldAnimationSession?.SetScenario(configuration);
-        worldAnimationConfiguration = configuration; worldAnimationScenarioEpoch = Guid.NewGuid(); worldAnimationDuration = null;
+        WorldScenarios().Set(configuration); worldAnimationScenarioEpoch = Guid.NewGuid(); worldAnimationDuration = null;
         ParachuteScenarioChanged();
         foreach (int definition in shownAnimationPaths.ToArray()) scene?.ClearAnimationPaths(definition.ToString(CultureInfo.InvariantCulture));
         shownAnimationPaths.Clear(); refreshAnimationPathControls?.Invoke(); RefreshWorldAnimationTimeline(); RefreshRowEyes();
     }
 
     private bool IsWorldAnimationCallIncluded(int rootEntry, string path)
-        => WorldAnimationTargetNow?.Entry == rootEntry && worldAnimationConfiguration.Policy.Includes(path);
+        => WorldAnimationTargetNow?.Entry == rootEntry && worldAnimationConfiguration.Includes(path);
 
     private bool CanIncludeWorldAnimationCall(int rootEntry, string parentPath)
-        => WorldAnimationTargetNow?.Entry == rootEntry && (IsWorldAnimationActivationPath(parentPath) || worldAnimationConfiguration.Policy.Includes(parentPath));
+        => WorldAnimationTargetNow?.Entry == rootEntry && (IsWorldAnimationActivationPath(parentPath) || worldAnimationConfiguration.Includes(parentPath));
 
     private void SetWorldAnimationCallIncluded(int rootEntry, string path, bool value)
     {
@@ -288,10 +291,10 @@ public partial class MainWindow
         string parentPath = path[..Math.Max(0, path.LastIndexOf('/'))];
         if (!CanIncludeWorldAnimationCall(rootEntry, parentPath)) throw new StudioCommandException("not_ready", "Use this root as the preview target and include its parent call first.");
         ValidateWorldAnimationCallPath(rootEntry, path);
-        var included = worldAnimationConfiguration.Policy.IncludedCalls.ToHashSet(StringComparer.Ordinal);
+        var included = worldAnimationConfiguration.IncludedCalls.ToHashSet(StringComparer.Ordinal);
         if (value) included.Add(path);
         else included.RemoveWhere(p => p == path || p.StartsWith(path + "/", StringComparison.Ordinal));
-        SetWorldAnimationScenario(worldAnimationConfiguration with { Policy = new(included, worldAnimationConfiguration.Policy.ConditionOverrides) });
+        SetWorldAnimationScenario(worldAnimationConfiguration with { IncludedCalls = included.ToArray() });
     }
 
     private int ValidateWorldAnimationCallPath(int rootEntry, string path)

@@ -106,8 +106,8 @@ internal static class SourceAnimationMcpChecks
             var scheduleTimeline = Assert.IsType<WorldAnimationTimeline>(typeof(MainWindow).GetField("worldTimeline", flags)!.GetValue(main));
             var scheduledModels = Assert.IsAssignableFrom<IReadOnlyList<WorldAnimationTimelineRow>>(typeof(MainWindow).GetField("worldAnimationSourceRows", flags)!.GetValue(main));
             scheduleTimeline.MoveTiming(scheduledModels.Single(r => r.ActivationId == Guid.Empty), 2.125);
-            var configured = Assert.IsType<WorldAnimationScenario>(typeof(MainWindow).GetField("worldAnimationConfiguration", flags)!.GetValue(main));
-            Assert.Equal(2.125, configured.Activations.Single(s => s.Id == Guid.Empty).Seconds);
+            var configured = Assert.IsType<zStudio.Core.Animation.AnimationScenario>(typeof(MainWindow).GetProperty("worldAnimationConfiguration", flags)!.GetValue(main));
+            Assert.Equal(2.125, configured.Starts.Single(s => s.Id == Guid.Empty).Seconds);
             Assert.False(doc.IsDirty);
             await Timeline("options", new() { ["changes"] = new { fitScenario = true } });
             Assert.Equal(32.125, scheduleTimeline.PresentationState.VisibleEnd);
@@ -176,14 +176,14 @@ internal static class SourceAnimationMcpChecks
             Assert.True(paths["parachute"]?["windows"] is JsonArray, paths.ToJsonString() + " · " + main.ViewModel.Status);
             Assert.Equal(candidateBeforeDrops, typeof(MainWindow).GetField("worldAnimationCandidate", flags)!.GetValue(main));
             Assert.Equal(scenarioBeforeDrops, typeof(MainWindow).GetField("worldAnimationScenarioEpoch", flags)!.GetValue(main));
-            Assert.Equal(17, Assert.IsType<WorldAnimationScenario>(typeof(MainWindow).GetField("worldAnimationConfiguration", flags)!.GetValue(main)).Seed);
+            Assert.Equal(17, Assert.IsType<zStudio.Core.Animation.AnimationScenario>(typeof(MainWindow).GetProperty("worldAnimationConfiguration", flags)!.GetValue(main)).Seed);
             Assert.Equal(1, Assert.IsType<DefinitionEntry>(card.Entry).Definition.Index);
             Assert.Null(paths["parachute"]!["selected"]);
             Assert.Equal(Visibility.Collapsed, ((FrameworkElement)main.FindName("ParachutePanel")).Visibility);
             paths = await Job("animation_paths", new() { ["document"] = doc.SessionId.ToString(), ["revision"] = doc.Revision, ["preview"] = current["preview"]!.GetValue<string>(), ["action"] = "analyze", ["snapshot"] = paths["parachute"]!["snapshot"]!.GetValue<string>(), ["entry"] = deliveryEntry });
             Assert.Equal(candidateBeforeDrops, typeof(MainWindow).GetField("worldAnimationCandidate", flags)!.GetValue(main));
             Assert.Equal(scenarioBeforeDrops, typeof(MainWindow).GetField("worldAnimationScenarioEpoch", flags)!.GetValue(main));
-            Assert.Equal(17, Assert.IsType<WorldAnimationScenario>(typeof(MainWindow).GetField("worldAnimationConfiguration", flags)!.GetValue(main)).Seed);
+            Assert.Equal(17, Assert.IsType<zStudio.Core.Animation.AnimationScenario>(typeof(MainWindow).GetProperty("worldAnimationConfiguration", flags)!.GetValue(main)).Seed);
             Assert.Null(paths["parachute"]!["selected"]);
             paths = await Job("animation_paths", new() { ["document"] = doc.SessionId.ToString(), ["revision"] = doc.Revision, ["preview"] = current["preview"]!.GetValue<string>(), ["action"] = "select", ["snapshot"] = paths["parachute"]!["snapshot"]!.GetValue<string>(), ["window"] = paths["parachute"]!["windows"]![0]!["id"]!.GetValue<string>() });
             Assert.Equal(0, Assert.IsType<DefinitionEntry>(card.Entry).Definition.Index);
@@ -242,7 +242,7 @@ internal static class SourceAnimationMcpChecks
             Assert.Null(((ContentControl)main.FindName("AnimationHost")).Content);
             Assert.Same(mapViewport, ((ContentControl)main.FindName("SceneHost")).Content);
             var session = Assert.IsType<WorldAnimationSession>(typeof(MainWindow).GetField("worldAnimationSession", flags)!.GetValue(main));
-            Assert.Empty(session.Scenario.Policy.IncludedCalls);
+            Assert.Empty(session.Scenario.IncludedCalls);
             Assert.True(session.IsAttached);
             Assert.False(((Control)main.FindName("FlyEnabled")).IsEnabled);
             Assert.Equal("stale_preview", (await Job("animation_transport", new() { ["preview"] = mapPreview, ["action"] = "pause" }, "failed"))["code"]!.GetValue<string>());
@@ -375,6 +375,7 @@ internal static class SourceAnimationMcpChecks
             var firstMap = doc;
             // Accept a frame proposal through the same source transaction, including history and disk reopening.
             await Timeline("target", new() { ["definition"] = 0 });
+            await Timeline("options", new() { ["changes"] = new { seed = 23 } });
             var persistenceRows = (await Timeline("rows", new() { ["view"] = "source" }))["rows"]!.AsArray();
             string persistenceRow = persistenceRows.First(r => r!["CanEditTiming"]!.GetValue<bool>())!["Id"]!.GetValue<string>();
             byte[] beforeTiming = doc.SourceWorld!.Workspace.Read(VtolDropFixture.Root)!;
@@ -393,10 +394,15 @@ internal static class SourceAnimationMcpChecks
             doc = main.ViewModel.Documents.Single(d => d.SourceWorld != null);
             Assert.Equal(afterTiming, doc.SourceWorld!.Workspace.Read(VtolDropFixture.Root));
             await Job("save_document", new() { ["document"] = doc.SessionId.ToString(), ["revision"] = doc.Revision });
+            await main.Dispatcher.InvokeAsync(() => { }, System.Windows.Threading.DispatcherPriority.ApplicationIdle); await main.ViewModel.ProjectSettingsWritten.WaitAsync(token);
             await Call("close_document", new() { ["document"] = doc.SessionId.ToString(), ["revision"] = doc.Revision });
             await Job("source_world_open", new() { ["mission"] = "m1" }); await Preview();
             doc = main.ViewModel.Documents.Single(d => d.SourceWorld != null); firstMap = doc;
             Assert.False(doc.IsDirty); Assert.Equal(afterTiming, doc.SourceWorld!.Workspace.Read(VtolDropFixture.Root));
+            // The map's scenario is saved in the project and comes back with the map, through its edits, undo and redo too.
+            await Timeline("target", new() { ["definition"] = 0 });
+            Assert.Equal(23, Assert.IsType<zStudio.Core.Animation.AnimationScenario>(typeof(MainWindow).GetProperty("worldAnimationConfiguration", flags)!.GetValue(main)).Seed);
+            Assert.NotNull(zStudio.Core.Sources.SourceProjectSettings.ReadAnimationScenario(fixture.Project, "m1"));
             // Force the chain's IF false and its ELSEIF true in the opened binding's own path, then read both outcomes.
             var choices = Assert.IsType<SourceSceneSnapshot>(doc.Document).AnimationDefinitions.Definitions.Single(d => d.Name == "choices");
             int choicesEntry = Assert.Single(choices.Entries);
