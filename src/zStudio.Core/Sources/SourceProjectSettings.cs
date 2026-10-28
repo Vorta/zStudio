@@ -5,7 +5,12 @@ using zStudio.Core.Formats;
 namespace zStudio.Core.Sources;
 
 /// <summary>How the project was last viewed: Diagnostics shown (and its height) and the mission difficulty; null when not remembered.</summary>
-public sealed record SourceProjectView(bool? Diagnostics, double? DiagnosticsHeight, MissionDifficulty? Difficulty);
+public sealed record SourceProjectView(bool? Diagnostics, double? DiagnosticsHeight, MissionDifficulty? Difficulty)
+{
+    /// <summary>Animation mode's panel height, and whether its Diagnostics strip shows.</summary>
+    public double? AnimationPanelHeight { get; init; }
+    public bool? AnimationDiagnostics { get; init; }
+}
 
 /// <summary>
 /// What zStudio remembers for a source project (user decision): <c>.zstudio/settings.json</c>, a hidden folder beside
@@ -17,7 +22,7 @@ public static class SourceProjectSettings
 {
     public const string Folder = ".zstudio", File = Folder + "/settings.json";
     private const string DitheringKey = "textureDithering", DiagnosticsKey = "diagnostics", DiagnosticsHeightKey = "diagnosticsHeight", DifficultyKey = "difficulty",
-        AnimationScenariosKey = "animationScenarios";
+        AnimationScenariosKey = "animationScenarios", AnimationPanelHeightKey = "animationPanelHeight", AnimationDiagnosticsKey = "animationDiagnostics";
     /// <summary>The largest settings file read: room for each map's saved animation scenario (at most 64 KB each).</summary>
     internal const int MaximumFileBytes = 2 * 1024 * 1024;
 
@@ -45,7 +50,9 @@ public static class SourceProjectSettings
         double? height = settings?[DiagnosticsHeightKey] is JsonValue size && size.TryGetValue(out double h) && double.IsFinite(h) ? h : null;
         MissionDifficulty? difficulty = settings?[DifficultyKey] is JsonValue level && level.TryGetValue(out string? name)
             && Enum.TryParse<MissionDifficulty>(name, ignoreCase: false, out var d) && Enum.IsDefined(d) ? d : null;
-        return new(diagnostics, height, difficulty);
+        double? panel = settings?[AnimationPanelHeightKey] is JsonValue panelSize && panelSize.TryGetValue(out double p) && double.IsFinite(p) ? p : null;
+        bool? strip = settings?[AnimationDiagnosticsKey] is JsonValue stripShown && stripShown.TryGetValue(out bool s) ? s : null;
+        return new(diagnostics, height, difficulty) { AnimationPanelHeight = panel, AnimationDiagnostics = strip };
     }
 
     /// <summary>Remembers how the project is viewed: Diagnostics shown or hidden, with its height.</summary>
@@ -53,6 +60,13 @@ public static class SourceProjectSettings
     {
         settings[DiagnosticsKey] = shown;
         if (height is double h && double.IsFinite(h)) settings[DiagnosticsHeightKey] = h;
+    });
+
+    /// <summary>Remembers Animation mode's layout: its panel height and whether its Diagnostics strip shows (null leaves a value as it is).</summary>
+    public static void WriteAnimationLayout(string root, double? panelHeight, bool? diagnostics) => Update(root, settings =>
+    {
+        if (panelHeight is double h && double.IsFinite(h)) settings[AnimationPanelHeightKey] = h;
+        if (diagnostics is bool shown) settings[AnimationDiagnosticsKey] = shown;
     });
 
     /// <summary>Remembers the mission difficulty the project was last viewed at.</summary>

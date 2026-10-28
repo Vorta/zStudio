@@ -26,6 +26,15 @@ public sealed record AnimationIncludeAllResult(int Included, int BackLinks, int 
 }
 
 /// <summary>
+/// One call path the starts can reach: the calling binding and event, the binding it starts, its depth below its start, and
+/// whether it calls back into its own chain (a back-link: listed, never followed or included by Include all).
+/// </summary>
+public sealed record AnimationScenarioCallPath(string Path, string Parent, int Caller, int Target, Guid Event, int Depth, bool BackLink);
+
+/// <summary>Every call path the starts reach (at most <see cref="AnimationExecutionPolicy.MaximumPaths"/>), with the calls to missing animations counted.</summary>
+public sealed record AnimationScenarioCallPaths(IReadOnlyList<AnimationScenarioCallPath> Paths, int Unresolved, bool Truncated);
+
+/// <summary>
 /// The preview setup of one map (docs/agents/preview.md, "Animation scenario"): its starts on the shared clock (at most 32;
 /// the opened binding is the primary, <see cref="Guid.Empty"/>, whose instance path is ""), the call paths it includes, the
 /// condition switches it forces (IF and ELSEIF, per instance path, entry and event), its inputs (player, random seed,
@@ -250,6 +259,42 @@ public sealed record AnimationScenario
                     pending.Enqueue((path, target.Index, [.. item.Chain, target.Index]));
                 }
         return (this with { IncludedCalls = paths.ToArray() }, new(added, backLinks, unresolved, over));
+    }
+
+    /// <summary>
+    /// Every call path the starts reach, in breadth-first order from the starts in their order, whether included or not: what
+    /// the Scenario tab lists under Called animations. A back-link is listed and not followed; a call to a missing animation
+    /// is only counted. At most <see cref="AnimationExecutionPolicy.MaximumPaths"/> paths.
+    /// </summary>
+    public AnimationScenarioCallPaths CallPaths(AnimationPackage package, CancellationToken token = default)
+    {
+        ArgumentNullException.ThrowIfNull(package);
+        List<AnimationScenarioCallPath> paths = [];
+        HashSet<string> seen = new(StringComparer.Ordinal);
+        int unresolved = 0; bool truncated = false;
+        AnimationEntryLookup lookup = new(package);
+        Queue<(string Path, int Entry, int[] Chain)> pending = new(starts.Where(s => s.Entry < package.Entries.Count).Select(s => (s.Path, s.Entry, new[] { s.Entry })));
+        while (pending.TryDequeue(out var item) && !truncated)
+            foreach (var sequence in package.Entries[item.Entry].AllSequences)
+            {
+                foreach (var ev in sequence.Events)
+                {
+                    token.ThrowIfCancellationRequested();
+                    if (ev.Type is not (19 or 24) || ev.Bytes.Length < 80) continue;
+                    var target = lookup.ResolveChild(ev, token);
+                    if (target == null) { unresolved++; continue; }
+                    string path;
+                    try { path = AnimationExecutionPolicy.ChildPath(item.Path, item.Entry, ev.Id, target.Index); }
+                    catch (InvalidDataException) { truncated = true; break; }
+                    if (!seen.Add(path)) continue;
+                    if (paths.Count >= AnimationExecutionPolicy.MaximumPaths) { truncated = true; break; }
+                    bool backLink = item.Chain.Contains(target.Index);
+                    paths.Add(new(path, item.Path, item.Entry, target.Index, ev.Id, item.Chain.Length, backLink));
+                    if (!backLink) pending.Enqueue((path, target.Index, [.. item.Chain, target.Index]));
+                }
+                if (truncated) break;
+            }
+        return new(paths.AsReadOnly(), unresolved, truncated);
     }
 
     private static void CheckPath(string path, bool allowRoot)

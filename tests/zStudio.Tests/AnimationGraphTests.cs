@@ -167,6 +167,11 @@ public sealed class AnimationGraphTests
         var flare = Sequence(package, "flare_sequence"); var chance = Sequence(package, "chance");
         var (scenario, result) = AnimationScenario.For(1).WithStartTime(Guid.Empty, 20).WithStart(3, 5).IncludeAll(package, Token);
         Assert.True(result.Included > 0); Assert.True(result.BackLinks > 0);
+        // The Scenario tab's Called animations list every reachable path: Include all includes them all but the back-links.
+        var reachable = scenario.CallPaths(package, Token);
+        Assert.Equal(result.BackLinks, reachable.Paths.Count(p => p.BackLink));
+        Assert.Equal(scenario.IncludedCalls.Order(StringComparer.Ordinal), reachable.Paths.Where(p => !p.BackLink).Select(p => p.Path).Order(StringComparer.Ordinal));
+        Assert.All(reachable.Paths, p => Assert.True(p.Parent.Length == 0 || p.Parent.StartsWith("/@", StringComparison.Ordinal) || reachable.Paths.Any(q => q.Path == p.Parent)));
         scenario = scenario.WithCondition("", 1, flare.Events[0].Id, AnimationConditionChoice.True)
             .WithCondition("", 1, chance.Events.Single(e => e.Type == 33).Id, AnimationConditionChoice.False) with
         {
@@ -185,6 +190,8 @@ public sealed class AnimationGraphTests
             Assert.Empty(restored.Notices);
             Assert.Equal(scenario, restored.Current);
             Assert.Equal(MissionDifficulty.Hard, SourceProjectSettings.ReadView(project).Difficulty);
+            SourceProjectSettings.WriteAnimationLayout(project, 455, true);
+            Assert.Equal((455d, true, MissionDifficulty.Hard), (SourceProjectSettings.ReadView(project).AnimationPanelHeight, SourceProjectSettings.ReadView(project).AnimationDiagnostics, SourceProjectSettings.ReadView(project).Difficulty));
             SourceProjectSettings.WriteAnimationScenario(project, "m1", null);
             Assert.Null(SourceProjectSettings.ReadAnimationScenario(project, "m1"));
         }
