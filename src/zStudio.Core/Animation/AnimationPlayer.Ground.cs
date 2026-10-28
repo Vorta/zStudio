@@ -43,6 +43,7 @@ public sealed partial class AnimationPlayer
         LiftFromGround(instance, node, -bottom);
         if (bottom >= previousBottom) return false;
         contact = true;
+        MarkPath(instance, node, "contact");
         node.GroundSupported = true;
         return GroundImpact(instance, node, ev);
     }
@@ -83,7 +84,9 @@ public sealed partial class AnimationPlayer
                 float speed = ev.Vector(88).Length();
                 if (!float.IsFinite(threshold)) throw new InvalidDataException("Ground impact sound has a nonfinite gain threshold.");
                 float gain = threshold <= 0 || speed >= threshold ? 1 : speed / threshold;
-                PlaySound(instance, ReferenceName(instance, 4, sample), false, false, 0, World(instance, node).Translation, gain);
+                string sound = ReferenceName(instance, 4, sample);
+                MarkPath(instance, node, "impact", sound);
+                PlaySound(instance, sound, false, false, 0, World(instance, node).Translation, gain);
             }
         }
         return settled;
@@ -197,6 +200,7 @@ public sealed partial class AnimationPlayer
         if (first is not float fraction) return false;
         Vector3 origin = World(instance, node).Translation;
         MoveWorld(instance, node, (previousOrigin - origin) * (1 - fraction));
+        MarkPath(instance, node, "contact");
         PrepareGround(instance, node);
         node.GroundSupported = true; node.GroundHeight = GroundBottom(instance, node);
         return GroundImpact(instance, node, ev);

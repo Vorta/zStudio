@@ -8,11 +8,29 @@ public sealed record AnimationPath(string Id, int Entry, long Instance, int Node
 {
     public string Kind { get; init; } = "object";
 }
-public sealed record AnimationPaths(double Seconds, string Status, IReadOnlyList<AnimationPath> Paths, IReadOnlyList<AnimationTrace> Events, IReadOnlyList<string> Diagnostics);
+public sealed record AnimationPaths(double Seconds, string Status, IReadOnlyList<AnimationPath> Paths, IReadOnlyList<AnimationTrace> Events, IReadOnlyList<string> Diagnostics)
+{
+    /// <summary>Where procedural motions touched the ground ("contact") and where a contact played its impact sound ("impact"), oldest first.</summary>
+    public IReadOnlyList<AnimationPathMarker> Markers { get; init; } = [];
+}
+/// <summary>A ground contact or impact sound of a procedural motion during path analysis, at the node's world position (with the preview height).</summary>
+public sealed record AnimationPathMarker(double Time, Vector3 Position, string Kind, long Instance, int Node)
+{
+    /// <summary>The impact sound's name.</summary>
+    public string? Sound { get; init; }
+}
 
 public sealed partial class AnimationPlayer
 {
     private HashSet<Node>? pathDiscontinuities;
+    private List<AnimationPathMarker>? pathMarkers;
+    private const int MaximumPathMarkers = 4096;
+    /// <summary>Path analysis records where a procedural motion touches the ground and where its contact plays an impact sound.</summary>
+    private void MarkPath(Instance instance, Node node, string kind, string? sound = null)
+    {
+        if (pathMarkers == null || pathMarkers.Count >= MaximumPathMarkers) return;
+        pathMarkers.Add(new(Time, World(instance, node).Translation + Vector3.UnitY * PreviewHeight, kind, instance.Id, node.Source) { Sound = sound });
+    }
     private void ObservePathDiscontinuity(Instance instance, AnimationEvent ev, bool starting)
     {
         if (pathDiscontinuities == null || !starting) return;
@@ -52,6 +70,7 @@ public sealed partial class AnimationPlayer
         const int maximumPoints = 216001, maximumTracks = 128;
         measuringDuration = true;
         pathDiscontinuities = [];
+        pathMarkers = [];
         Dictionary<(long Instance, int Node), (Instance Instance, Node Node, List<AnimationPathPoint> Points)> tracks = [];
         HashSet<long> discovered = [];
         var watch = Stopwatch.StartNew();
@@ -113,7 +132,8 @@ public sealed partial class AnimationPlayer
             t.Key.Instance, t.Key.Node, t.Key.Node >= 0 && t.Key.Node < context.Scene.Nodes.Count ? context.Scene.Nodes[t.Key.Node].Name : "Motion target", Trim(t.Value.Points))
             { Kind = context.Scene.Nodes[t.Key.Node].Class == "camera" ? "camera" : "object" }).ToArray();
         pathDiscontinuities = null;
-        return new(Time, status, paths, trace.Take(4096).ToArray(), notes.Order(StringComparer.Ordinal).Take(256).ToArray());
+        var markers = pathMarkers.ToArray(); pathMarkers = null;
+        return new(Time, status, paths, trace.Take(4096).ToArray(), notes.Order(StringComparer.Ordinal).Take(256).ToArray()) { Markers = markers };
         static IReadOnlyList<AnimationPathPoint> Trim(List<AnimationPathPoint> points)
         {
             while (points.Count > 1 && !points[^1].Break && points[^1].Position == points[^2].Position) points.RemoveAt(points.Count - 1);

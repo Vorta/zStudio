@@ -67,6 +67,7 @@ public sealed partial class AnimationPlayer
             }
         }
         Position(node, delta, true);
+        if (contact) MarkPath(instance, node, "contact");
         return (contact || timeout) && (GroundImpact(instance, node, ev) || timeout);
     }
 }
