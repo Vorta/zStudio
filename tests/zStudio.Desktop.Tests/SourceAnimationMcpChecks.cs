@@ -47,8 +47,8 @@ internal static class SourceAnimationMcpChecks
             var firstCall = records.First(record => record!["Kind"]!.GetValue<string>() == "CALL_ANIMATION")!;
             card.SelectAnimationRecord(firstCall["Id"]!.GetValue<string>());
             main.UpdateLayout();
-            var thresholdEditor = Descendants(card).OfType<WorldAnimationThresholdEditor>().Single(editor => editor.ClockMode == "SEQUENCE_OFFSET");
-            var thresholdText = Descendants(thresholdEditor).OfType<TextBox>().Single(b => AutomationProperties.GetName(b) == "Source timing threshold in seconds");
+            var thresholdEditor = Descendants(card).OfType<AnimationThresholdEditor>().Single(editor => editor.ClockMode == "SEQUENCE_OFFSET");
+            var thresholdText = Descendants(thresholdEditor).OfType<TextBox>().Single(b => AutomationProperties.GetName(b) == "Start threshold in seconds");
             thresholdText.Text = "-";
             Assert.True(card.HasDraft);
             var pendingThreshold = System.Text.Json.JsonSerializer.SerializeToNode(card.AnimationDraft)!["changes"]!.AsArray();
@@ -80,8 +80,8 @@ internal static class SourceAnimationMcpChecks
             Assert.Null(typeof(MainWindow).GetField("worldAnimationSession", flags)!.GetValue(main));
             Assert.Null(((ContentControl)main.FindName("AnimationHost")).Content);
             int deliveryEntry = Assert.Single(Assert.IsType<SourceSceneSnapshot>(doc.Document).AnimationDefinitions.Definitions.Single(d => d.Index == 0).Entries);
-            var structure = await Timeline("structure", new() { ["section"] = "calls", ["entry"] = deliveryEntry });
-            var calls = structure["page"]!["Rows"]!.AsArray();
+            var plan = (zStudio.Core.Animation.AnimationStructurePlan)typeof(MainWindow).GetMethod("GetWorldAnimationStructurePlan", flags)!.Invoke(main, [])!;
+            var calls = plan.Calls(deliveryEntry, "", 0, 100, token).Rows;
             Assert.NotEmpty(calls);
             // Animation mode: Open enters it without moving the camera or running anything; the binding is the primary start.
             var cameraBeforeOpen = await Call("camera", new() { ["preview"] = current["preview"]!.GetValue<string>(), ["action"] = "read" });
@@ -100,7 +100,7 @@ internal static class SourceAnimationMcpChecks
             Assert.StartsWith("Included ", included["scenario"]!["calls"]!["includeAll"]!.GetValue<string>());
             Assert.Equal(0, (await Scenario("excludeAll"))["scenario"]!["calls"]!["included"]!.GetValue<int>());
             // A second scheduled binding must stay part of the same timeline when inspected.
-            int secondaryEntry = calls.First(c => c!["TargetEntry"] != null)!["TargetEntry"]!.GetValue<int>();
+            int secondaryEntry = calls.First(c => c.TargetEntry != null).TargetEntry!.Value;
             Guid scheduledActivation = Guid.NewGuid();
             var primaryCandidate = typeof(MainWindow).GetField("animationMode", flags)!.GetValue(main);
             await Scenario("starts", new() { ["starts"] = new[]
@@ -108,25 +108,26 @@ internal static class SourceAnimationMcpChecks
                 new { id = Guid.Empty, entry = deliveryEntry, seconds = 2d },
                 new { id = scheduledActivation, entry = secondaryEntry, seconds = 0d }
             } });
-            var scheduledRows = (await Timeline("rows", new() { ["view"] = "source" }))["rows"]!.AsArray();
-            Assert.Equal(2, scheduledRows.Count(r => r!["ActivationId"] != null));
-            string secondaryRow = $"entry:{secondaryEntry}:/@{scheduledActivation:N}";
-            await Timeline("expand", new() { ["row"] = secondaryRow, ["expanded"] = false });
-            var collapsedRows = (await Timeline("rows", new() { ["view"] = "source" }))["rows"]!.AsArray();
-            Assert.False(collapsedRows.Single(r => r!["Id"]!.GetValue<string>() == secondaryRow)!["Expanded"]!.GetValue<bool>());
-            Assert.DoesNotContain(collapsedRows, r => r!["ActivationId"]?.GetValue<Guid>() == scheduledActivation);
-            await Timeline("expand", new() { ["row"] = secondaryRow, ["expanded"] = true });
-            await Timeline("row", new() { ["row"] = secondaryRow });
-            await Timeline("select", new() { ["activation"] = scheduledActivation, ["entry"] = secondaryEntry });
+            var scheduledLanes = (await Timing("lanes"))["result"]!["items"]!.AsArray();
+            Assert.Equal(2, scheduledLanes.Single(l => l!["kind"]!.GetValue<string>() == "starts")!["starts"]!.AsArray().Count);
+            string secondaryGroup = scheduledLanes.Single(l => l!["kind"]!.GetValue<string>() == "group" && l["path"]!.GetValue<string>() == $"/@{scheduledActivation:N}")!["id"]!.GetValue<string>();
+            await Timing("expand", new() { ["lane"] = secondaryGroup, ["expanded"] = false });
+            var collapsedLanes = (await Timing("lanes"))["result"]!["items"]!.AsArray();
+            Assert.False(collapsedLanes.Single(l => l!["id"]!.GetValue<string>() == secondaryGroup)!["expanded"]!.GetValue<bool>());
+            Assert.DoesNotContain(collapsedLanes, l => l!["group"]?.GetValue<string>() == secondaryGroup);
+            await Timing("expand", new() { ["lane"] = secondaryGroup, ["expanded"] = true });
+            string secondaryLane = (await Timing("lanes"))["result"]!["items"]!.AsArray().First(l => l!["group"]?.GetValue<string>() == secondaryGroup && l["kind"]!.GetValue<string>() == "sequence")!["id"]!.GetValue<string>();
+            await Timing("select", new() { ["lane"] = secondaryGroup });
+            await Timing("select", new() { ["lane"] = secondaryLane });
             Assert.Equal(primaryCandidate, typeof(MainWindow).GetField("animationMode", flags)!.GetValue(main));
-            var scheduleTimeline = Assert.IsType<WorldAnimationTimeline>(typeof(MainWindow).GetField("worldTimeline", flags)!.GetValue(main));
-            var scheduledModels = Assert.IsAssignableFrom<IReadOnlyList<WorldAnimationTimelineRow>>(typeof(MainWindow).GetField("worldAnimationSourceRows", flags)!.GetValue(main));
-            scheduleTimeline.MoveTiming(scheduledModels.Single(r => r.ActivationId == Guid.Empty), 2.125);
+            // The Starts lane's drag moves a start through the scenario; nothing in the source changes.
+            var timingView = (AnimationTimingView)typeof(MainWindow).GetField("animationTimingView", flags)!.GetValue(main)!;
+            timingView.MoveStart(Guid.Empty, 2.125);
             var configured = Assert.IsType<zStudio.Core.Animation.AnimationScenario>(typeof(MainWindow).GetProperty("worldAnimationConfiguration", flags)!.GetValue(main));
             Assert.Equal(2.125, configured.Starts.Single(s => s.Id == Guid.Empty).Seconds);
             Assert.False(doc.IsDirty);
             await Scenario("fitRange");
-            Assert.Equal(32.125, scheduleTimeline.PresentationState.VisibleEnd);
+            Assert.Equal(32.125, timingView.VisibleEnd);
             // The Scenario tab shows the same scenario, live: an MCP change appears there at once.
             await Mode("layout", new() { ["rightTab"] = "scenario" });
             var scenarioTab = Assert.IsType<AnimationScenarioPanel>(typeof(MainWindow).GetField("scenarioPanel", flags)!.GetValue(main));
@@ -139,25 +140,18 @@ internal static class SourceAnimationMcpChecks
             await Scenario("starts", new() { ["starts"] = new[] { new { id = Guid.Empty, entry = deliveryEntry, seconds = 0d } } });
             // Inspecting a called definition before Play must preserve the opened binding.
             var unpinnedRoot = typeof(MainWindow).GetField("animationMode", flags)!.GetValue(main);
-            var beforeRows = (await Timeline("rows", new() { ["view"] = "source" }))["rows"]!.AsArray();
-            var callRow = beforeRows.First(r => r!["Included"] != null && r["Expandable"]!.GetValue<bool>())!;
-            await Timeline("expand", new() { ["row"] = callRow["Id"]!.GetValue<string>(), ["expanded"] = true });
-            var childRows = (await Timeline("rows", new() { ["view"] = "source" }))["rows"]!.AsArray();
-            var childEntry = childRows.First(r => r!["IsGroup"]!.GetValue<bool>() && r["Depth"]!.GetValue<int>() == 3)!;
-            await Timeline("expand", new() { ["row"] = childEntry["Id"]!.GetValue<string>(), ["expanded"] = true });
-            childRows = (await Timeline("rows", new() { ["view"] = "source" }))["rows"]!.AsArray();
-            foreach (var childSequence in childRows.Where(r => r!["IsGroup"]!.GetValue<bool>() && r["Depth"]!.GetValue<int>() == 4).ToArray())
-                await Timeline("expand", new() { ["row"] = childSequence!["Id"]!.GetValue<string>(), ["expanded"] = true });
-            childRows = (await Timeline("rows", new() { ["view"] = "source" }))["rows"]!.AsArray();
-            var childEvent = childRows.First(r => r!["Depth"]!.GetValue<int>() == 5 && r["markCount"]!.GetValue<int>() > 0)!;
-            string childRowId = childEvent["Id"]!.GetValue<string>();
-            var childMark = (await Timeline("marks", new() { ["row"] = childRowId }))["items"]![0]!;
-            var childContext = await Timeline("cell", new() { ["row"] = childRowId, ["mark"] = childMark["Id"]!.GetValue<string>(), ["seek"] = true });
-            Assert.NotNull(childContext["context"]); Assert.Null(childContext["requestedSeconds"]);
+            var graphNodes = (await Graph("read"))["result"]!["items"]!.AsArray();
+            var reference = graphNodes.First(n => n!["kind"]!.GetValue<string>() == "reference" && n["reference"]!["expandable"]!.GetValue<bool>())!;
+            await Graph("expand", new() { ["node"] = reference["id"]!.GetValue<string>() });
+            graphNodes = (await Graph("read"))["result"]!["items"]!.AsArray();
+            var childSequence = graphNodes.First(n => n!["kind"]!.GetValue<string>() == "sequence" && n["parent"]?.GetValue<string>() != $"frame:{deliveryEntry}")!;
+            await Graph("select", new() { ["node"] = childSequence["id"]!.GetValue<string>() });
+            Assert.Null(typeof(MainWindow).GetField("worldAnimationSession", flags)!.GetValue(main));
             Assert.Equal(unpinnedRoot, typeof(MainWindow).GetField("animationMode", flags)!.GetValue(main));
             await Mode("open", new() { ["definition"] = 0 });
             Assert.Null(typeof(MainWindow).GetField("worldAnimationSession", flags)!.GetValue(main));
-            await Timeline("options", new() { ["changes"] = new { range = new[] { 0.0, 60.0 }, labelWidth = 260.0 } });
+            await Job("animation_options", new() { ["preview"] = (await Call("state", new()))["preview"]!.GetValue<string>(), ["changes"] = new { playbackRange = new[] { 0.0, 60.0 } } });
+            await Timing("options", new() { ["changes"] = new { labelWidth = 260.0 } });
             // Browsing a definition only inspects source; explicit path evaluation has separate state.
             current = await Call("state", new());
             var paths = await Job("animation_paths", new() { ["document"] = doc.SessionId.ToString(), ["revision"] = doc.Revision, ["preview"] = current["preview"]!.GetValue<string>(), ["definition"] = 0, ["action"] = "analyze" });
@@ -283,9 +277,9 @@ internal static class SourceAnimationMcpChecks
             Assert.All(session.CurrentFrame!.Instances, instance => Assert.Equal(deliveryEntry, instance.Entry));
             var scriptEvent = session.Context.Package.Entries[deliveryEntry].AllSequences.SelectMany(s => s.Events).Single(e => e.Type == 12);
             var activeScript = session.CurrentFrame.Trace.Single(t => t.Event == scriptEvent.Id && t.End == null);
-            var observedRows = (IReadOnlyList<WorldAnimationTimelineRow>)typeof(MainWindow).GetField("worldAnimationRunRows", flags)!.GetValue(main)!;
-            var observedScript = observedRows.SelectMany(r => r.Marks).Single(m => m.Occurrence == activeScript.Occurrence);
-            Assert.Equal(WorldAnimationTimelineMarkKind.Running, observedScript.Kind);
+            var observed = (zStudio.Core.Animation.AnimationTiming)typeof(MainWindow).GetField("animationTiming", flags)!.GetValue(main)!;
+            var observedScript = observed.AllLanes.SelectMany(l => l.Marks).Single(m => m.Occurrence == activeScript.Occurrence);
+            Assert.Equal(zStudio.Core.Animation.AnimationTimingMarkKind.Running, observedScript.Kind);
             Assert.Equal(activeScript.Start, observedScript.Start); Assert.Equal(2, observedScript.End);
             // Selecting an animated source object is passive. Its first actual field draft returns to the static world,
             // preserving the typed text and rebinding the animated inspection identity to the baseline target.
@@ -311,57 +305,27 @@ internal static class SourceAnimationMcpChecks
             Assert.Same(mapViewport, ((ContentControl)main.FindName("SceneHost")).Content);
             Assert.Null(((ContentControl)main.FindName("AnimationHost")).Content);
             Assert.True(((Control)main.FindName("FlyEnabled")).IsEnabled);
-            await Scenario("include", new() { ["paths"] = new[] { calls[0]!["Path"]!.GetValue<string>() }, ["included"] = true });
+            await Scenario("include", new() { ["paths"] = new[] { calls[0].Path }, ["included"] = true });
             await Job("animation_transport", new() { ["preview"] = animationPreview, ["action"] = "seek", ["seconds"] = 2.0 });
             Assert.Contains(session.CurrentFrame!.Instances, instance => instance.Entry != deliveryEntry);
-            await Timeline("options", new() { ["changes"] = new { view = "run" } });
-            var runRows = (await Timeline("rows", new() { ["view"] = "run" }))["rows"]!.AsArray();
-            Assert.All(runRows, row => Assert.Null(row!["Marks"]));
-            var eventRow = runRows.First(row => row!["markCount"]!.GetValue<int>() > 1)!;
-            string rowId = eventRow["Id"]!.GetValue<string>();
-            var markPage = await Timeline("marks", new() { ["row"] = rowId, ["limit"] = 1 });
+            var runLanes = (await Timing("lanes"))["result"]!["items"]!.AsArray();
+            Assert.All(runLanes, lane => Assert.Null(lane!["marks"]));
+            string laneId = runLanes.First(lane => lane!["markCount"]!.GetValue<int>() > 1)!["id"]!.GetValue<string>();
+            var markPage = (await Timing("marks", new() { ["lane"] = laneId, ["limit"] = 1 }))["result"]!;
             Assert.Single(markPage["items"]!.AsArray()); Assert.Equal(1, markPage["nextOffset"]!.GetValue<int>());
-            var mark = markPage["items"]![0]!;
-            var selectedMark = await Timeline("row", new() { ["row"] = rowId, ["occurrence"] = mark["Occurrence"]!.GetValue<long>() });
-            Assert.Equal(mark["Id"]!.GetValue<string>(), selectedMark["presentation"]!["SelectedMark"]!.GetValue<string>());
-            Assert.Equal(2, session.CurrentFrame.Time);
-            // Frame cells share exact source identities, read-only context and the ordinary timing draft/history.
-            var frameSeek = await Timeline("frame", new() { ["frame"] = 2.0 });
-            Assert.Equal(2, frameSeek["presentation"]!["RequestedFrame"]!.GetValue<double>());
-            Assert.Equal(1.0 / 60, frameSeek["actualSeconds"]!.GetValue<double>(), 8);
-            // Same-frame seeks overlap under a deterministic simulation gate; the obsolete request cannot clear its successor.
-            var timelineControl = (WorldAnimationTimeline)typeof(MainWindow).GetField("worldTimeline", flags)!.GetValue(main)!;
-            var simulationGate = (SemaphoreSlim)typeof(WorldAnimationSession).GetField("simulationGate", flags)!.GetValue(session)!;
-            await simulationGate.WaitAsync(token);
-            Task oldSeek, newSeek;
-            try
-            {
-                var seekFrame = typeof(MainWindow).GetMethod("SeekWorldAnimationFrameAsync", flags)!;
-                oldSeek = (Task)seekFrame.Invoke(main, [.025, token])!;
-                newSeek = (Task)seekFrame.Invoke(main, [.025, token])!;
-                Assert.Equal(.025, timelineControl.RequestedTime);
-            }
-            finally { simulationGate.Release(); }
-            var superseded = await Assert.ThrowsAsync<zStudio.Automation.StudioCommandException>(() => oldSeek);
-            Assert.Contains("superseded", superseded.Message);
-            await newSeek; Assert.Equal(.025, timelineControl.RequestedTime);
-            await Job("animation_transport", new() { ["preview"] = animationPreview, ["action"] = "seek", ["seconds"] = 2.0 });
-            Assert.Null(timelineControl.RequestedTime);
-            await Timeline("frame", new() { ["frame"] = 401.0 });
-            await Timeline("options", new() { ["changes"] = new { range = new[] { 0.0, 1.0 } } });
-            Assert.Null(timelineControl.RequestedTime); Assert.Equal(0, session.State.Time);
-            await Timeline("options", new() { ["changes"] = new { range = new[] { 0.0, 60.0 } } });
+            var mark = (await Timing("marks", new() { ["lane"] = laneId }))["result"]!["items"]!.AsArray().First(m => !m!["band"]!.GetValue<bool>())!;
+            var selectedMark = await Timing("occurrence", new() { ["lane"] = laneId, ["mark"] = mark["id"]!.GetValue<string>() });
+            Assert.Equal(mark["id"]!.GetValue<string>(), selectedMark["timing"]!["selection"]!["mark"]!.GetValue<string>());
+            Assert.Equal(zStudio.Core.Animation.AnimationSeconds.OccurrenceTime(mark["start"]!.GetValue<double>()), session.CurrentFrame!.Time, 6);
+            // Shortening the playback range below the playhead returns it to the range's start.
+            await Job("animation_transport", new() { ["preview"] = animationPreview, ["action"] = "seek", ["seconds"] = 10.0 });
+            await Job("animation_options", new() { ["preview"] = animationPreview, ["changes"] = new { playbackRange = new[] { 0.0, 1.0 } } });
+            Assert.Equal(0, session.State.Time);
+            await Job("animation_options", new() { ["preview"] = animationPreview, ["changes"] = new { playbackRange = new[] { 0.0, 60.0 } } });
             await Job("animation_transport", new() { ["preview"] = animationPreview, ["action"] = "stop" });
-            Assert.Null((await Timeline("read"))["presentation"]!["RequestedFrame"]);
-            await Timeline("options", new() { ["changes"] = new { view = "source" } });
-            var sourceRows = (await Timeline("rows", new() { ["view"] = "source" }))["rows"]!.AsArray();
-            var timingRow = sourceRows.First(r => r!["CanEditTiming"]!.GetValue<bool>())!;
-            string timingRowId = timingRow["Id"]!.GetValue<string>();
-            var cellMark = (await Timeline("marks", new() { ["row"] = timingRowId }))["items"]![0]!;
-            var inspected = await Timeline("cell", new() { ["row"] = timingRowId, ["mark"] = cellMark["Id"]!.GetValue<string>(), ["seek"] = false });
-            Assert.NotNull(inspected["context"]!["Definition"]!["Text"]);
+            // A start threshold proposed in seconds lands in the card's draft as the source writes it.
             Assert.False(doc.IsDirty); Assert.False(card.HasDraft);
-            await Timeline("timing", new() { ["row"] = timingRowId, ["frame"] = 41.0 });
+            await Timing("threshold", new() { ["event"] = EditableEvent().ToString(), ["seconds"] = 1.0 });
             Assert.True(card.HasDraft);
             var timingChanges = System.Text.Json.JsonSerializer.SerializeToNode(card.AnimationDraft)!["changes"]!.AsArray();
             Assert.Equal("1", Assert.Single(timingChanges)!["Values"]![1]!.GetValue<string>());
@@ -380,14 +344,13 @@ internal static class SourceAnimationMcpChecks
             Assert.Equal("context_changed", (await Job("source_animation", Args("set", new() { ["changes"] = changes }), "failed"))["code"]!.GetValue<string>());
             Assert.False(card.HasDraft);
             var firstMap = doc;
-            // Accept a frame proposal through the same source transaction, including history and disk reopening.
+            // Accept a threshold proposal through the same source transaction, including history and disk reopening.
             await Mode("open", new() { ["definition"] = 0 });
             await Scenario("inputs", new() { ["seed"] = 23 });
-            var persistenceRows = (await Timeline("rows", new() { ["view"] = "source" }))["rows"]!.AsArray();
-            string persistenceRow = persistenceRows.First(r => r!["CanEditTiming"]!.GetValue<bool>())!["Id"]!.GetValue<string>();
+
             byte[] beforeTiming = doc.SourceWorld!.Workspace.Read(VtolDropFixture.Root)!;
             byte[] beforeScript = File.ReadAllBytes(fixture.Path("data/m1/zrdr/flight.zan"));
-            await Timeline("timing", new() { ["row"] = persistenceRow, ["frame"] = 101.0 });
+            await Timing("threshold", new() { ["event"] = EditableEvent().ToString(), ["seconds"] = 2.5 });
             await Animation("apply", new() { ["token"] = card.DraftToken }); await Preview();
             doc = main.ViewModel.Documents.Single(d => d.SourceWorld != null);
             // Animation mode and its scenario follow the definition onto the rebuilt map.
@@ -521,12 +484,23 @@ internal static class SourceAnimationMcpChecks
             Dictionary<string, object?> Args(string action, Dictionary<string, object?>? extra = null)
             { var args = extra ?? new(); args["document"] = doc.SessionId.ToString(); args["revision"] = doc.Revision; args["definition"] = 0; args["action"] = action; return args; }
             Task<JsonNode> Animation(string action, Dictionary<string, object?>? extra = null) => Job("source_animation", Args(action, extra));
-            async Task<JsonNode> Timeline(string action, Dictionary<string, object?>? extra = null)
+            async Task<JsonNode> Timing(string action, Dictionary<string, object?>? extra = null)
             {
                 var state = await Call("state", new()); var args = extra ?? new();
-                args["document"] = doc.SessionId.ToString(); args["revision"] = doc.Revision;
                 args["preview"] = state["preview"]!.GetValue<string>(); args["action"] = action;
-                return await Job("animation_timeline", args);
+                return await Job("animation_timing", args);
+            }
+            async Task<JsonNode> Graph(string action, Dictionary<string, object?>? extra = null)
+            {
+                var state = await Call("state", new()); var args = extra ?? new();
+                args["preview"] = state["preview"]!.GetValue<string>(); args["action"] = action;
+                return await Job("animation_graph", args);
+            }
+            Guid EditableEvent()
+            {
+                var shown = (SourceSceneSnapshot)doc.Document;
+                return shown.Animations!.Entries[deliveryEntry].AllSequences.SelectMany(s => s.Events)
+                    .First(e => shown.AnimationProvenance?.FindEvent(e.Id) is { TimingFieldId: not null, ReadOnlyReason: null }).Id;
             }
             async Task<JsonNode> Mode(string action, Dictionary<string, object?>? extra = null)
             {

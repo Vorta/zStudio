@@ -283,14 +283,6 @@ public partial class MainWindow
         }
         return null;
     }
-    /// <summary>Timing's lane of a sequence or event, where the timeline shows one.</summary>
-    private void RevealTimingRow(int entry, string path, Guid sequence, Guid? ev)
-    {
-        if (worldTimeline == null) return;
-        string id = "entry:" + entry.ToString(CultureInfo.InvariantCulture) + ":" + path + ":sequence:" + sequence + (ev is Guid e ? ":event:" + e : "");
-        if (worldAnimationSourceRows.Any(r => r.Id == id))
-            try { WorldTimeline.SelectRow(id); } catch (InvalidOperationException) { }
-    }
 
     /// <summary>The rows naming the object selected in the 3D view (an amber bar), in the bindings whose root holds it.</summary>
     private void RefreshAnimationGraphHighlight()

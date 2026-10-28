@@ -103,14 +103,14 @@ public partial class MainWindow
                 scenarios.Set(scenarios.Current.WithPrimary(binding, keepPrevious), "open");
             }
             worldAnimationScenarioEpoch = Guid.NewGuid(); worldAnimationDuration = null;
-            worldAnimationExpanded.Clear(); worldAnimationCollapsed.Clear(); worldAnimationPageCounts.Clear();
+            animationTimingToggled.Clear(); animationTimingToggles++;
             ParachuteScenarioChanged();
             if (entering && animationPanel != null) animationPanel.TipShown = !ViewModel.Settings.AnimationModeTipDismissed;
         }
-        RefreshAnimationModeChrome(); RefreshWorldAnimationTimeline(); RefreshScenarioPanel(); ArrangeWorkspace();
+        RefreshAnimationModeChrome(); RefreshWorldAnimationRun(); RefreshScenarioPanel(); ArrangeWorkspace();
         // The Inspector shows the opened definition's card: its World tree row is selected (the camera stays).
         await EnsureAnimationCardAsync(document, definition, binding > 0 ? binding : null, token);
-        if (animationMode == target) { RefreshAnimationModeChrome(); RefreshWorldAnimationTimeline(); }
+        if (animationMode == target) { RefreshAnimationModeChrome(); RefreshWorldAnimationRun(); }
     }
 
     /// <summary>Back to the map layout: the run stops, the scenario is kept, the definition stays selected with its card.</summary>
@@ -127,7 +127,7 @@ public partial class MainWindow
         animationGraphSelection = null; animationGraphOutline = null;
         animationBack.Clear(); animationForward.Clear();
         animationPanel?.SetValue(UIElement.VisibilityProperty, Visibility.Collapsed);
-        RefreshAnimationModeChrome(); RefreshWorldAnimationTimeline(); ArrangeWorkspace();
+        RefreshAnimationModeChrome(); RefreshWorldAnimationRun(); ArrangeWorkspace();
         if (mode.Document == shownDocument && !mode.Document.IsDisposed && SelectedAnimationDefinition()?.Definition.Index != mode.Definition)
         {
             try { await EnsureAnimationCardAsync(mode.Document, mode.Definition, mode.Entry > 0 ? mode.Entry : null, token); }
@@ -184,7 +184,7 @@ public partial class MainWindow
         if (entry > 0 && WorldScenarios().Current.Primary != entry)
             try { var scenarios = WorldScenarios(); scenarios.Set(scenarios.Current.WithPrimary(entry, keepPrevious: true), "open"); }
             catch (InvalidOperationException) { }
-        RefreshAnimationModeChrome(); RefreshWorldAnimationTimeline(); RefreshScenarioPanel(); ArrangeWorkspace(); ApplySectionPresentation();
+        RefreshAnimationModeChrome(); RefreshWorldAnimationRun(); RefreshScenarioPanel(); ArrangeWorkspace(); ApplySectionPresentation();
     }
     private void EndAnimationModeForMap()
     {
@@ -194,7 +194,7 @@ public partial class MainWindow
         animationBack.Clear(); animationForward.Clear();
         // The graph's presentation belongs to that map's definitions.
         animationGraphExpanded.Clear(); animationGraphPresentation.Clear(); animationGraphSelection = null; animationGraphOutline = null;
-        RefreshAnimationModeChrome(); RefreshWorldAnimationTimeline(); ArrangeWorkspace();
+        RefreshAnimationModeChrome(); RefreshWorldAnimationRun(); ArrangeWorkspace();
     }
 
     /// <summary>Whether two documents show the same source map (a reload replaces the document of the same map).</summary>
@@ -320,7 +320,7 @@ public partial class MainWindow
         diagnostics.Child = sourceDiagnosticsContent;
         Grid.SetRow(diagnostics, 2); sourceDock.Children.Add(diagnostics);
         SourceDiagnosticsHost.Content = sourceDock;
-        animationPanel.SetTiming(WorldTimeline, WorldTimeline.Tools);
+        animationPanel.SetTiming(TimingView, TimingView.Tools);
         animationPanel.SetStructure(GraphView, GraphView.Tools);
     }
 

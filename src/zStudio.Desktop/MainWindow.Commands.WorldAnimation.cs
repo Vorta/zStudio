@@ -9,109 +9,11 @@ namespace zStudio.Desktop;
 
 public partial class MainWindow
 {
-    private static StudioParameter WorldTimelineChanges => new("changes", "object", "Timeline presentation and the transport's playback options; the scenario is animation_scenario, source timing source_animation.", Properties:
-    [
-        P("view", "string", "Timeline projection.", false, "source", "run"),
-        new("labelWidth", "number", "Preferred timeline label width in DIP; displayed width also fits the viewport.", NumberMinimum: 80, NumberMaximum: 720), P("followPlayhead", "boolean", "Scroll with live playback."),
-        P("fit", "string", "Fit the timeline viewport.", false, "selection", "evaluated", "range"),
-        new("visibleRange", "array", "Visible start/end seconds; independent of playback range.", Items: new("", "number", "Seconds.", NumberMinimum: 0, NumberMaximum: 3600), MinItems: 2, MaxItems: 2),
-        new("range", "array", "Playback start/end seconds.", Items: new("", "number", "Seconds.", NumberMinimum: 0, NumberMaximum: 3600), MinItems: 2, MaxItems: 2),
-        P("followCamera", "boolean", "Follow the evaluated camera; manual navigation disengages."), P("effects", "boolean", "Preview effects."),
-        P("replay", "boolean", "Loop the playback range."), P("mute", "boolean", "Mute audio."),
-        new("volume", "number", "Audio volume.", NumberMinimum: 0, NumberMaximum: 1),
-        new("speed", "number", "Playback rate: 0.25, 0.5, 1, 2 or 4.", NumberMinimum: .25, NumberMaximum: 4)
-    ]);
-
     private void RegisterWorldAnimationCommands(StudioCommands registry)
     {
         RegisterAnimationModeCommands(registry);
         RegisterAnimationGraphCommands(registry);
-        RegisterJob(registry, "animation_timeline", "Inspect and operate Animation mode's Timing view (the opened binding's source and run rows on the shared clock). Structural paging and row selection never evaluate animation. The 40 fps cell action inspects source and optionally seeks a current occurrence; frame seeks a one-based editing position, timing proposes its existing event threshold draft. Source thresholds and Run observations are distinct. Keyframe samples are read only. animation_mode opens and exits; animation_scenario holds starts, call paths, condition switches, inputs and rules; animation_transport plays; animation_paths evaluates guides. Source timing edits use source_animation, verified drop moves use animation_paths without definition.",
-            [PreviewParameter, DocumentParameter, RevisionParameter,
-             P("action", "string", "Operation.", true, "read", "structure", "rows", "marks", "cell", "frame", "timing", "expand", "row", "options", "select", "evaluate_paths", "duration"),
-             P("section", "string", "Structural page.", false, "entries", "sequences", "events", "calls", "keyframes", "ignored"),
-             new("entry", "integer", "Exact compiled binding index for structure and select.", Minimum: 0),
-             P("activation", "string", "Optional scheduled start GUID for structural calls and selection; otherwise paths are canonical and primary is the default."),
-             P("sequence", "string", "Sequence GUID."), P("event", "string", "Event GUID."),
-             P("path", "string", "Canonical callsite path from the structural plan; empty for root."),
-             P("view", "string", "Rows projection.", false, "source", "run"),
-             P("row", "string", "Timeline row identity from rows."), P("expanded", "boolean", "Expand or collapse a source row."),
-             P("mark", "string", "Exact cell item identity from marks for cell inspection."),
-             P("seek", "boolean", "For cell: also seek an available current execution occurrence; ambiguous occurrences are returned for selection."),
-             new("frame", "number", "40 fps editing frame: frame 1 is time zero. frame seeks; timing proposes the row's existing event-start draft. Fractional frames preserve precise times."),
-             new("occurrence", "integer", "Retained Run mark occurrence to inspect; does not seek.", Minimum: 0, Maximum: long.MaxValue),
-             WorldTimelineChanges,
-             new("offset", "integer", "Page offset.", Minimum: 0, Maximum: int.MaxValue),
-             new("limit", "integer", "Page size, default 100.", Minimum: 1, Maximum: 100)], true, async (a, token) =>
-        {
-            RequirePreview(a);
-            var document = TargetDocument(a);
-            if (document != shownDocument || document.SourceWorld == null || document.Document is not SourceSceneSnapshot)
-                throw new StudioCommandException("unsupported", "Open a source map first.");
-            if (document.Revision != a["revision"]!.GetValue<long>())
-                throw new StudioCommandException("revision_conflict", "Read the source map's current revision.");
-            string action = Text(a, "action");
-            if (action == "rows") return Result(WorldAnimationTimelineRows(a.ContainsKey("view") ? Text(a, "view") : WorldTimeline.ViewMode, Int(a, "offset"), Int(a, "limit", 100)));
-            if (action == "marks") return Result(WorldAnimationTimelineMarks(Text(a, "row"), Int(a, "offset"), Int(a, "limit", 100)));
-            if (action == "cell") return Result(await WorldAnimationCellAsync(Text(a, "row"), Text(a, "mark"), Flag(a, "seek"),
-                a.ContainsKey("occurrence") ? a["occurrence"]!.GetValue<long>() : null, Int(a, "offset"), token));
-            if (action is "frame" or "timing")
-            {
-                if (!a.ContainsKey("frame")) throw new StudioCommandException("invalid_argument", "Supply a frame number.");
-                double frame = Number(a, "frame"), seconds = AnimationTimelineFrames.Seconds(frame);
-                if (!double.IsFinite(frame) || !double.IsFinite(seconds)) throw new StudioCommandException("invalid_argument", "Use a finite frame number.");
-                if (action == "timing") await ProposeWorldAnimationFrameAsync(Text(a, "row"), frame, token);
-                else
-                {
-                    if (seconds is < 0 or > 3600) throw new StudioCommandException("invalid_argument", "Preview frames must be within 1–144001.");
-                    await SeekWorldAnimationFrameAsync(seconds, token);
-                }
-                return Result(new { presentation = WorldTimeline.PresentationState, actualSeconds = worldAnimationSession?.State.Time, draft = SectionCard().AnimationDraft });
-            }
-            if (action == "structure")
-            {
-                var plan = GetWorldAnimationStructurePlan();
-                int offset = Int(a, "offset"), limit = Int(a, "limit", 100);
-                string section = Text(a, "section"), path = WorldAnimationScopedPath(a);
-                int entry = a.ContainsKey("entry") ? Int(a, "entry") : a.ContainsKey("activation")
-                    ? WorldAnimationActivations().Single(s => s.Id == GuidArg(a, "activation")).Entry : WorldAnimationTargetNow?.Entry ?? -1;
-                if (section == "entries")
-                {
-                    List<AnimationStructureEntry> rows = [];
-                    for (int i = offset; i < plan.EntryCount && rows.Count < limit; i++) { token.ThrowIfCancellationRequested(); rows.Add(plan.Entry(i)); }
-                    return Result(new { plan = plan.Id, provenance = plan.ProvenanceId, rows, total = plan.EntryCount, offset, nextOffset = rows.Count < plan.EntryCount - (long)offset ? (int?)(offset + rows.Count) : null });
-                }
-                if (entry < 0) throw new StudioCommandException("invalid_argument", "Supply an exact entry binding.");
-                object page = section switch
-                {
-                    "sequences" => plan.Sequences(entry, offset, limit, token),
-                    "events" => plan.Events(entry, GuidArg(a, "sequence"), offset, limit, path, token),
-                    "calls" => plan.Calls(entry, path, offset, limit, token),
-                    "keyframes" => plan.Keyframes(entry, GuidArg(a, "sequence"), GuidArg(a, "event"), offset, limit, token),
-                    "ignored" => plan.Ignored(entry, GuidArg(a, "sequence"), offset, limit, token),
-                    _ => throw new StudioCommandException("invalid_argument", "Choose a structural section.")
-                };
-                return Result(new { plan = plan.Id, provenance = plan.ProvenanceId, page });
-            }
-            if (action is not ("read" or "options" or "expand")) RequireNoDrafts(document);
-            switch (action)
-            {
-                case "expand":
-                    if (!a.ContainsKey("expanded")) throw new StudioCommandException("invalid_argument", "Supply expanded.");
-                    WorldAnimationExpandRow(Text(a, "row"), Flag(a, "expanded")); break;
-                case "row": await WorldAnimationSelectRowAsync(Text(a, "row"), a.ContainsKey("occurrence") ? a["occurrence"]!.GetValue<long>() : null); break;
-                case "options":
-                    var changes = a["changes"] as JsonObject ?? throw new StudioCommandException("invalid_argument", "Supply changes.");
-                    foreach (var (name, value) in changes) await WorldAnimationOptionAsync(name, value ?? throw new StudioCommandException("invalid_argument", "Supply explicit option values."), token);
-                    break;
-                case "select": await WorldAnimationSelectSourceAsync(GuidArg(a, "sequence"), GuidArg(a, "event"), token, a.ContainsKey("entry") ? Int(a, "entry") : a.ContainsKey("activation") ? WorldAnimationActivations().Single(s => s.Id == GuidArg(a, "activation")).Entry : null, WorldAnimationScopedPath(a), preserveTimeline: true); break;
-                case "evaluate_paths": await WorldAnimationTransportAsync("evaluatePaths", 0, token); break;
-                case "duration": await WorldAnimationTransportAsync("duration", 0, token); break;
-                case "read": break;
-                default: throw new StudioCommandException("invalid_argument", "Unknown timeline operation.");
-            }
-            return Result(new { animation = WorldAnimationCommandState, presentation = WorldTimeline.PresentationState });
-        });
+        RegisterAnimationTimingCommands(registry);
     }
 
     private void RegisterAnimationModeCommands(StudioCommands registry)

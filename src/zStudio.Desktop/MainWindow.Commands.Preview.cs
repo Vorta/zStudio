@@ -301,9 +301,15 @@ public partial class MainWindow
             foreach(var (name,value) in animationChanges) { RequirePreview(a); await editor.SetPreviewOptionAsync(name, value ?? throw new StudioCommandException("invalid_argument","Use an explicit value.")); }
             return Result(editor.PreviewState());
         });
-        RegisterJob(r, "animation_transport", "Play/pause/stop, frame-step or seek the current animation.", [PreviewParameter,P("action","string","Transport action.",true,"play","pause","stop","previous","next","seek"),P("seconds","number","Seek time in seconds.")], false, async (a, _) =>
+        RegisterJob(r, "animation_transport", "Play, pause, stop, step or seek the current animation, in seconds: previous and next step one 1/60 s preview tick and pause; seek goes to the tick at or before seconds (state.time reads it back). In Animation mode, start goes to the playback range's start and duration estimates how long the scenario runs (without moving the playhead; Open-ended when a sequence waits forever).", [PreviewParameter,P("action","string","Transport action.",true,"play","pause","stop","start","previous","next","seek","duration"),P("seconds","number","Seek time in seconds.")], false, async (a, token) =>
         {
-            if (shownDocument?.SourceWorld != null) { RequirePreview(a); await WorldAnimationTransportAsync(Text(a,"action"), Number(a,"seconds")); return Result(WorldAnimationCommandState); }
+            if (shownDocument?.SourceWorld != null)
+            {
+                RequirePreview(a);
+                await WorldAnimationTransportAsync(Text(a,"action"), Number(a,"seconds"), token);
+                return Result(WorldAnimationCommandState);
+            }
+            if (Text(a, "action") is "duration" or "start") throw new StudioCommandException("unsupported", "start and duration belong to Animation mode in a source map.");
             var editor = TargetAnimation(a); RequireNoDrafts(shownDocument); await editor.TransportAsync(Text(a,"action"),Number(a,"seconds")); return Result(editor.PreviewState());
         });
         Register(r, "animation_runtime", "Read preview status, sequence runtime, dispatched event occurrences, problems or bound scene nodes; in a source map also instances, scoped condition outcomes and each start attempt's activation prerequisites (prerequisites: outcome met, refused, or ignored by the scenario's rule, with every check; evidence only). Scene metadata previews retain at most 64 JSON nodes and 1024 text characters, with inspection_truncated; full metadata is available through JSON export. Identities remain complete; long rows shorten pages, so follow nextOffset. Timing thresholds and observed dispatches remain distinct.", false,

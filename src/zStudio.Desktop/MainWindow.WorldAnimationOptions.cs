@@ -61,17 +61,8 @@ public partial class MainWindow
             if (data is not JsonArray { Count: 2 } array) throw new StudioCommandException("invalid_argument", "Use two range endpoints.");
             return [array[0]!.GetValue<double>(), array[1]!.GetValue<double>()];
         }
-        switch (name)
-        {
-            case "view": WorldTimeline.SetView(data.GetValue<string>()); return;
-
-            case "labelWidth": WorldTimeline.SetLabelWidth(NumberValue()); return;
-            case "followPlayhead": WorldTimeline.FollowPlayhead = FlagValue(); return;
-            case "fit": WorldTimeline.Fit(data.GetValue<string>()); return;
-            case "visibleRange": var visible = Pair(); WorldTimeline.SetVisibleRange(visible[0], visible[1]); return;
-            case "traceRange": WorldTimeline.SetVisibleRange(0, NumberValue()); return;
-            case "fitTrace": if (FlagValue()) WorldTimeline.Fit("evaluated"); return;
-        }
+        if (name is "view" or "labelWidth" or "fit" or "visibleRange" or "thresholds")
+            throw new StudioCommandException("unsupported", $"{name} is the Timing view's: animation_timing options.");
         RequireNoDrafts();
         switch (name)
         {
@@ -85,13 +76,13 @@ public partial class MainWindow
             case "replay": worldAnimationReplay = FlagValue(); if (worldAnimationSession != null) worldAnimationSession.Replay = worldAnimationReplay; break;
             case "followCamera": worldAnimationFollowCamera = FlagValue(); if (worldAnimationSession != null) worldAnimationSession.FollowCamera = worldAnimationFollowCamera; break;
             case "effects": worldAnimationEffects = FlagValue(); if (worldAnimationSession != null) worldAnimationSession.Effects = worldAnimationEffects; ApplyWorldAnimationScreenEffects(worldAnimationSession?.CurrentFrame); break;
-            case "range":
+            case "range" or "playbackRange":
                 double[] range = data is JsonArray ? Pair() : [0, NumberValue()];
                 if (!range.All(double.IsFinite) || range[0] < 0 || range[1] > 3600 || range[1] <= range[0]) throw new StudioCommandException("invalid_argument", "Use an increasing range within 0–3600 seconds.");
                 worldAnimationSession?.SetRange(range[0], range[1]); worldAnimationRangeStart = Math.Floor(range[0] * 60 + 1e-7) / 60; worldAnimationRangeEnd = Math.Ceiling(range[1] * 60 - 1e-7) / 60; break;
-            default: throw new StudioCommandException("unsupported", "This option is not part of the animation transport or timeline. The scenario is animation_scenario; LOD, difficulty and scene presentation are the world's controls.");
+            default: throw new StudioCommandException("unsupported", "This option is not part of the animation transport. The Timing view's presentation is animation_timing options, the scenario animation_scenario; LOD, difficulty and scene presentation are the world's controls.");
         }
-        RefreshWorldAnimationTimeline();
+        RefreshWorldAnimationRun();
         await Task.CompletedTask;
     }
 

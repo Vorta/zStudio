@@ -11,7 +11,7 @@ public partial class MainWindow
         RequireWorldAnimationTarget(document, definition, entry);
         await ShowParachutesAsync(token, entry);
         RefreshWorldAnimationDropRelationships();
-        RefreshWorldAnimationTimeline();
+        RefreshWorldAnimationRun();
     }
 
     private void RefreshWorldAnimationDropRelationships()
@@ -34,53 +34,5 @@ public partial class MainWindow
         state.Stale = true; state.StaleReason = reason;
         state.Viewport.SetParachuteOverlay([], []);
         UpdateParachutePanel();
-    }
-
-    private IReadOnlyList<WorldAnimationTimelineRow> WorldAnimationDropRows(int targetEntry)
-    {
-        if (parachutes is not { Analysis: { } analysis } state || state.Entry != targetEntry || state.Stale ||
-            state.World != shownDocument || state.World.Revision != state.WorldRevision ||
-            state.Viewport.SceneGeneration != state.SceneGeneration) return [];
-        var shown = parachuteDraft?.DisplayedPreview ?? analysis;
-        return shown.Windows.Select((window, index) => new WorldAnimationTimelineRow(
-            $"drop:{state.Id}:{window.Id:D}", $"Drop window {index + 1}")
-        {
-            Depth = 1,
-            IsWindowClock = true,
-            WindowClockEnd = shown.CycleSeconds,
-            WindowStartThreshold = window.Start,
-            CanMoveWindow = window.MoveRefusal == null && state.World.SourceWorld != null && parachuteDraft == null,
-            WindowMoveReason = window.MoveRefusal ?? "Move changes the CALL threshold after validation; STOP duration is preserved.",
-            TimingLabel = $"SEQUENCE_OFFSET {window.Start.ToString("G9", CultureInfo.InvariantCulture)} s",
-            Detail = $"Verified flight clock · {window.Duration.ToString("G9", CultureInfo.InvariantCulture)} s window" +
-                (window.Conditional ? " · PLAYER_RANGE conditional; markers are not landing predictions" : " · markers are not landing predictions"),
-            Marks = [new(window.Id.ToString("D"), WorldAnimationTimelineMarkKind.Window,
-                window.EffectiveStart, window.EffectiveEnd, "Move drop window")]
-        }).ToArray();
-    }
-
-    private async Task MoveWorldAnimationDropAsync(WorldAnimationTimelineRow row, double start, CancellationToken token)
-    {
-        if (!double.IsFinite(start) || start < -float.MaxValue || start > float.MaxValue)
-            throw new StudioCommandException("invalid_argument", "Enter a finite drop-window time.");
-        await SelectWorldAnimationDropAsync(row, token);
-        BeginParachute();
-        var draft = RequireParachuteDraft();
-        draft.Input = ((float)start).ToString("R", CultureInfo.InvariantCulture);
-        QueueParachutePreview(draft, token: token);
-        await draft.Work;
-        UpdateParachutePanel();
-        // The normal Properties Confirm/Cancel controls own the single prepared transaction.
-    }
-
-    private async Task SelectWorldAnimationDropAsync(WorldAnimationTimelineRow row, CancellationToken token)
-    {
-        token.ThrowIfCancellationRequested();
-        var state = RequireParachutes(edit: true);
-        string prefix = $"drop:{state.Id}:";
-        if (!row.Id.StartsWith(prefix, StringComparison.Ordinal) || !Guid.TryParse(row.Id[prefix.Length..], out Guid id))
-            throw new StudioCommandException("stale_snapshot", "Analyze this flight's drop windows again.");
-        await SelectParachuteAsync(id);
-        token.ThrowIfCancellationRequested();
     }
 }

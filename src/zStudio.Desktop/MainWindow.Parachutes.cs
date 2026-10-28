@@ -545,6 +545,6 @@ public partial class MainWindow
                 : state.AnalysisRefusal ?? selectedWindow?.MoveRefusal ?? (state.Analysis is { } a ? $"{a.CycleSeconds:G6} s cycle · {a.Releases.Count} eligible releases. Conditions still apply; markers are not landing predictions."
                 : state.Discovery.Diagnostics.Count == 0 ? "No supported callback-911 flight programs in this mission." : string.Join("\n", state.Discovery.Diagnostics.Take(3).Select(s => Bounded(s, 300))));
         }
-        finally { synchronizingParachutes = false; RefreshWorldAnimationTimeline(); }
+        finally { synchronizingParachutes = false; RefreshWorldAnimationRun(); }
     }
 }

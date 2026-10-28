@@ -1477,6 +1477,26 @@
             "Properties": null
           },
           {
+            "Name": "playbackRange",
+            "Type": "array",
+            "Description": "Animation mode in a source map: the playback range [start, end] in seconds (the transport\u0027s range flyout).",
+            "Required": false,
+            "Choices": null,
+            "Properties": null,
+            "Items": {
+              "Name": "",
+              "Type": "number",
+              "Description": "Seconds.",
+              "Required": false,
+              "Choices": null,
+              "Properties": null,
+              "NumberMinimum": 0,
+              "NumberMaximum": 3600
+            },
+            "MinItems": 2,
+            "MaxItems": 2
+          },
+          {
             "Name": "traceRange",
             "Type": "number",
             "Description": "Visible dispatch range, 1/60\u20133600 seconds.",
@@ -1534,7 +1554,7 @@
   },
   {
     "Name": "zstudio_animation_transport",
-    "Description": "Play/pause/stop, frame-step or seek the current animation. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Description": "Play, pause, stop, step or seek the current animation, in seconds: previous and next step one 1/60 s preview tick and pause; seek goes to the tick at or before seconds (state.time reads it back). In Animation mode, start goes to the playback range\u0027s start and duration estimates how long the scenario runs (without moving the playhead; Open-ended when a sequence waits forever). Returns an operation ID; use zstudio_operation to await/read the result.",
     "Mutates": true,
     "Parameters": [
       {
@@ -1554,9 +1574,11 @@
           "play",
           "pause",
           "stop",
+          "start",
           "previous",
           "next",
-          "seek"
+          "seek",
+          "duration"
         ],
         "Properties": null
       },
@@ -2592,7 +2614,7 @@
   },
   {
     "Name": "zstudio_source_animation",
-    "Description": "Inspect and edit an existing source animation definition in the docked Properties pane. Addresses belong to the document revision. Edits preserve source trivia and apply to every expansion of the definition; tracks and event order are read only. begin selects the definition; set updates the shared draft; apply accepts one project undo step; cancel reverts the draft. read pages source records; each record contains its typed fields. context returns bounded read-only definition/script excerpts for a record, optionally near scriptTime. Save uses save_document. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Description": "Inspect and edit an existing source animation definition in the docked Properties pane. Addresses belong to the document revision. Edits preserve source trivia and apply to every expansion of the definition; tracks and event order are read only. begin selects the definition; set updates the shared draft (changes by field ID, or an event\u0027s start threshold in seconds with startClock and startSeconds for record or the selected event: the same draft as Timing\u0027s bracket drag and animation_timing threshold); apply accepts one project undo step; cancel reverts the draft. read pages source records; each record contains its typed fields. context returns bounded read-only definition/script excerpts for a record, optionally near scriptTime. Save uses save_document. Returns an operation ID; use zstudio_operation to await/read the result.",
     "Mutates": true,
     "Parameters": [
       {
@@ -2657,10 +2679,32 @@
       {
         "Name": "scriptTime",
         "Type": "number",
-        "Description": "Optional script-local seconds for read-only frame context.",
+        "Description": "Optional script-local seconds for read-only script context.",
         "Required": false,
         "Choices": null,
         "Properties": null
+      },
+      {
+        "Name": "startClock",
+        "Type": "string",
+        "Description": "set: the event\u0027s start threshold clock (record, else the selected event).",
+        "Required": false,
+        "Choices": [
+          "animation",
+          "sequence",
+          "previous"
+        ],
+        "Properties": null
+      },
+      {
+        "Name": "startSeconds",
+        "Type": "number",
+        "Description": "set: the event\u0027s start threshold in seconds, in its clock (record, else the selected event).",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "NumberMinimum": -3600,
+        "NumberMaximum": 3600
       },
       {
         "Name": "changes",
@@ -3394,8 +3438,8 @@
     ]
   },
   {
-    "Name": "zstudio_animation_timeline",
-    "Description": "Inspect and operate Animation mode\u0027s Timing view (the opened binding\u0027s source and run rows on the shared clock). Structural paging and row selection never evaluate animation. The 40 fps cell action inspects source and optionally seeks a current occurrence; frame seeks a one-based editing position, timing proposes its existing event threshold draft. Source thresholds and Run observations are distinct. Keyframe samples are read only. animation_mode opens and exits; animation_scenario holds starts, call paths, condition switches, inputs and rules; animation_transport plays; animation_paths evaluates guides. Source timing edits use source_animation, verified drop moves use animation_paths without definition. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Name": "zstudio_animation_timing",
+    "Description": "Animation mode\u0027s Timing view: the run on the shared clock in seconds (the GUI\u0027s identities). read reports the presentation (lanes or log, visible range, label width, thresholds), the selection and counts. lanes pages the shown rows by at most 100: the Starts lane (its starts: entry, seconds, primary, prerequisitesIgnored where the scenario\u0027s rule let an unmet start run, refused with its reason), instance groups (a scenario start\u0027s binding, then the instances its calls reached, nested under their caller and grouped by definition as the graph groups them; started, ended, binding state, expanded) and sequence lanes (state at the playhead, run). marks pages one lane\u0027s marks and state bands by time: kinds executed, interval, running, condition (value, forced), skipped (count), excluded, duplicate, blocked, release (targetLane), loop, refused, unresolved, and bands (band true) waitingRelease (released by / no releaser left), waitingThreshold (anim \u2265 23 s \u2192 43.000 s), paused, blocked, stopped, complete, unavailable and a group\u0027s binding state; an event with a start threshold whose anchor occurred carries its bracket (anchor, end, gap). log pages the Log (Time \u00B7 Instance \u00B7 Sequence \u00B7 Event \u00B7 Result, newest last; retained and discarded counts). options sets thresholds, visibleRange, fit (range, run or selection), labelWidth (160\u2013420 DIP) and view (lanes or log). select selects a lane (a sequence lane its sequence: the Inspector, the graph and the 3D outlines follow; a group its binding; the Starts lane opens the Scenario tab), occurrence a mark (its event, with the occurrence and its source in the Inspector) and seeks to it. expand opens or closes a group (presentation only). threshold proposes an event\u0027s start threshold in its own clock, in seconds, through the same source draft as the bracket drag (source_animation apply or cancel). Starts move and go with animation_scenario starts; the playhead moves with animation_transport. Returns an operation ID; use zstudio_operation to await/read the result.",
     "Mutates": true,
     "Parameters": [
       {
@@ -3407,124 +3451,27 @@
         "Properties": null
       },
       {
-        "Name": "document",
-        "Type": "string",
-        "Description": "Document lifetime ID from zstudio_state.",
-        "Required": true,
-        "Choices": null,
-        "Properties": null
-      },
-      {
-        "Name": "revision",
-        "Type": "integer",
-        "Description": "Expected current document revision. Read before editing.",
-        "Required": true,
-        "Choices": null,
-        "Properties": null,
-        "Minimum": 0,
-        "Maximum": 9223372036854775807
-      },
-      {
         "Name": "action",
         "Type": "string",
         "Description": "Operation.",
         "Required": true,
         "Choices": [
           "read",
-          "structure",
-          "rows",
+          "lanes",
           "marks",
-          "cell",
-          "frame",
-          "timing",
-          "expand",
-          "row",
+          "log",
           "options",
           "select",
-          "evaluate_paths",
-          "duration"
+          "occurrence",
+          "expand",
+          "threshold"
         ],
         "Properties": null
       },
       {
-        "Name": "section",
+        "Name": "lane",
         "Type": "string",
-        "Description": "Structural page.",
-        "Required": false,
-        "Choices": [
-          "entries",
-          "sequences",
-          "events",
-          "calls",
-          "keyframes",
-          "ignored"
-        ],
-        "Properties": null
-      },
-      {
-        "Name": "entry",
-        "Type": "integer",
-        "Description": "Exact compiled binding index for structure and select.",
-        "Required": false,
-        "Choices": null,
-        "Properties": null,
-        "Minimum": 0
-      },
-      {
-        "Name": "activation",
-        "Type": "string",
-        "Description": "Optional scheduled start GUID for structural calls and selection; otherwise paths are canonical and primary is the default.",
-        "Required": false,
-        "Choices": null,
-        "Properties": null
-      },
-      {
-        "Name": "sequence",
-        "Type": "string",
-        "Description": "Sequence GUID.",
-        "Required": false,
-        "Choices": null,
-        "Properties": null
-      },
-      {
-        "Name": "event",
-        "Type": "string",
-        "Description": "Event GUID.",
-        "Required": false,
-        "Choices": null,
-        "Properties": null
-      },
-      {
-        "Name": "path",
-        "Type": "string",
-        "Description": "Canonical callsite path from the structural plan; empty for root.",
-        "Required": false,
-        "Choices": null,
-        "Properties": null
-      },
-      {
-        "Name": "view",
-        "Type": "string",
-        "Description": "Rows projection.",
-        "Required": false,
-        "Choices": [
-          "source",
-          "run"
-        ],
-        "Properties": null
-      },
-      {
-        "Name": "row",
-        "Type": "string",
-        "Description": "Timeline row identity from rows.",
-        "Required": false,
-        "Choices": null,
-        "Properties": null
-      },
-      {
-        "Name": "expanded",
-        "Type": "boolean",
-        "Description": "Expand or collapse a source row.",
+        "Description": "A lane identity from lanes (marks, select, occurrence, expand).",
         "Required": false,
         "Choices": null,
         "Properties": null
@@ -3532,176 +3479,104 @@
       {
         "Name": "mark",
         "Type": "string",
-        "Description": "Exact cell item identity from marks for cell inspection.",
+        "Description": "A mark identity from marks (occurrence).",
         "Required": false,
         "Choices": null,
         "Properties": null
       },
       {
-        "Name": "seek",
+        "Name": "expanded",
         "Type": "boolean",
-        "Description": "For cell: also seek an available current execution occurrence; ambiguous occurrences are returned for selection.",
+        "Description": "expand: open (true) or close (false) the group.",
         "Required": false,
         "Choices": null,
         "Properties": null
       },
       {
-        "Name": "frame",
+        "Name": "event",
+        "Type": "string",
+        "Description": "threshold: the event GUID (a mark\u0027s event).",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "seconds",
         "Type": "number",
-        "Description": "40 fps editing frame: frame 1 is time zero. frame seeks; timing proposes the row\u0027s existing event-start draft. Fractional frames preserve precise times.",
-        "Required": false,
-        "Choices": null,
-        "Properties": null
-      },
-      {
-        "Name": "occurrence",
-        "Type": "integer",
-        "Description": "Retained Run mark occurrence to inspect; does not seek.",
+        "Description": "threshold: the new start threshold in the event\u0027s own clock, in seconds.",
         "Required": false,
         "Choices": null,
         "Properties": null,
-        "Minimum": 0,
-        "Maximum": 9223372036854775807
+        "NumberMinimum": -3600,
+        "NumberMaximum": 3600
       },
       {
         "Name": "changes",
         "Type": "object",
-        "Description": "Timeline presentation and the transport\u0027s playback options; the scenario is animation_scenario, source timing source_animation.",
+        "Description": "options: the Timing view\u0027s presentation.",
         "Required": false,
         "Choices": null,
         "Properties": [
           {
-            "Name": "view",
+            "Name": "thresholds",
+            "Type": "boolean",
+            "Description": "Show threshold brackets (off by default).",
+            "Required": false,
+            "Choices": null,
+            "Properties": null
+          },
+          {
+            "Name": "visibleRange",
+            "Type": "array",
+            "Description": "The visible start and end seconds (independent of the playback range).",
+            "Required": false,
+            "Choices": null,
+            "Properties": null,
+            "Items": {
+              "Name": "",
+              "Type": "number",
+              "Description": "Seconds.",
+              "Required": false,
+              "Choices": null,
+              "Properties": null,
+              "NumberMinimum": 0,
+              "NumberMaximum": 3600
+            },
+            "MinItems": 2,
+            "MaxItems": 2
+          },
+          {
+            "Name": "fit",
             "Type": "string",
-            "Description": "Timeline projection.",
+            "Description": "Fit the visible range.",
             "Required": false,
             "Choices": [
-              "source",
-              "run"
+              "range",
+              "run",
+              "selection"
             ],
             "Properties": null
           },
           {
             "Name": "labelWidth",
             "Type": "number",
-            "Description": "Preferred timeline label width in DIP; displayed width also fits the viewport.",
+            "Description": "The label column in DIP.",
             "Required": false,
             "Choices": null,
             "Properties": null,
-            "NumberMinimum": 80,
-            "NumberMaximum": 720
+            "NumberMinimum": 160,
+            "NumberMaximum": 420
           },
           {
-            "Name": "followPlayhead",
-            "Type": "boolean",
-            "Description": "Scroll with live playback.",
-            "Required": false,
-            "Choices": null,
-            "Properties": null
-          },
-          {
-            "Name": "fit",
+            "Name": "view",
             "Type": "string",
-            "Description": "Fit the timeline viewport.",
+            "Description": "Lanes or the Log.",
             "Required": false,
             "Choices": [
-              "selection",
-              "evaluated",
-              "range"
+              "lanes",
+              "log"
             ],
             "Properties": null
-          },
-          {
-            "Name": "visibleRange",
-            "Type": "array",
-            "Description": "Visible start/end seconds; independent of playback range.",
-            "Required": false,
-            "Choices": null,
-            "Properties": null,
-            "Items": {
-              "Name": "",
-              "Type": "number",
-              "Description": "Seconds.",
-              "Required": false,
-              "Choices": null,
-              "Properties": null,
-              "NumberMinimum": 0,
-              "NumberMaximum": 3600
-            },
-            "MinItems": 2,
-            "MaxItems": 2
-          },
-          {
-            "Name": "range",
-            "Type": "array",
-            "Description": "Playback start/end seconds.",
-            "Required": false,
-            "Choices": null,
-            "Properties": null,
-            "Items": {
-              "Name": "",
-              "Type": "number",
-              "Description": "Seconds.",
-              "Required": false,
-              "Choices": null,
-              "Properties": null,
-              "NumberMinimum": 0,
-              "NumberMaximum": 3600
-            },
-            "MinItems": 2,
-            "MaxItems": 2
-          },
-          {
-            "Name": "followCamera",
-            "Type": "boolean",
-            "Description": "Follow the evaluated camera; manual navigation disengages.",
-            "Required": false,
-            "Choices": null,
-            "Properties": null
-          },
-          {
-            "Name": "effects",
-            "Type": "boolean",
-            "Description": "Preview effects.",
-            "Required": false,
-            "Choices": null,
-            "Properties": null
-          },
-          {
-            "Name": "replay",
-            "Type": "boolean",
-            "Description": "Loop the playback range.",
-            "Required": false,
-            "Choices": null,
-            "Properties": null
-          },
-          {
-            "Name": "mute",
-            "Type": "boolean",
-            "Description": "Mute audio.",
-            "Required": false,
-            "Choices": null,
-            "Properties": null
-          },
-          {
-            "Name": "volume",
-            "Type": "number",
-            "Description": "Audio volume.",
-            "Required": false,
-            "Choices": null,
-            "Properties": null,
-            "NumberMinimum": 0,
-            "NumberMaximum": 1
-          },
-          {
-            "Name": "speed",
-            "Type": "number",
-            "Description": "Playback rate: 0.25, 0.5, 1, 2 or 4.",
-            "Required": false,
-            "Choices": null,
-            "Properties": null,
-            "NumberMinimum": 0.25,
-            "NumberMaximum": 4
           }
         ]
       },
@@ -3718,7 +3593,7 @@
       {
         "Name": "limit",
         "Type": "integer",
-        "Description": "Page size, default 100.",
+        "Description": "Page size, at most 100.",
         "Required": false,
         "Choices": null,
         "Properties": null,

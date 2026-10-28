@@ -20,7 +20,6 @@ public partial class MainWindow
     private AnimationStructurePlan? worldAnimationPlan;
     private DocumentModel? worldAnimationPlanDocument;
     private long worldAnimationPlanRevision;
-    private WorldAnimationTimeline? worldTimeline;
     private AnimationDuration? worldAnimationDuration;
     /// <summary>The time a running re-evaluation seeks to: a later scenario change re-evaluates to it again (P2-1).</summary>
     private (WorldAnimationSession Session, double Seconds, long Id)? worldAnimationPendingPlayhead;
@@ -98,7 +97,7 @@ public partial class MainWindow
         RequireWorldAnimationTarget(target.Document, target.Definition, target.Entry);
         var viewport = scene!; int generation = viewport.SceneGeneration; long request = ++worldAnimationPreparation;
         Guid scenario = worldAnimationScenarioEpoch;
-        worldAnimationPreparing = true; RefreshWorldAnimationTimeline();
+        worldAnimationPreparing = true; RefreshWorldAnimationRun();
         try
         {
             var context = await PrepareWorldAnimationContextAsync(target.Document, token);
@@ -120,33 +119,26 @@ public partial class MainWindow
                 bool previouslyAttached = sourceAnimationPreview;
                 sourceAnimationPreview = session.IsAttached || session.IsLoading;
                 var actual = session.State;
-                if (actual.Status == "Stopped") { ++worldAnimationEditingSeek; worldTimeline?.SetRequestedTime(null); }
                 worldAnimationFollowCamera = actual.FollowCamera; worldAnimationMuted = actual.Muted; worldAnimationEffects = actual.Effects;
                 worldAnimationRangeStart = actual.RangeStart; worldAnimationRangeEnd = actual.RangeEnd; worldAnimationSpeed = actual.Speed;
                 worldAnimationReplay = actual.Replay; worldAnimationVolume = actual.Volume;
                 if (!session.IsAttached) ApplyWorldAnimationScreenEffects(null);
-                RefreshWorldAnimationTimeline(true);
+                RefreshWorldAnimationRun(true);
                 if (sourceAnimationPreview != previouslyAttached) { UpdateSourceAnimationControls(); ArrangeWorkspace(); }
             };
             session.FramePublished += frame => { if (worldAnimationSession == session) ApplyWorldAnimationScreenEffects(frame); };
             session.Diagnostic += note => { if (worldAnimationSession == session) ViewModel.Status = note; };
             return session;
         }
-        finally { if (request == worldAnimationPreparation) { worldAnimationPreparing = false; RefreshWorldAnimationTimeline(); } }
+        finally { if (request == worldAnimationPreparation) { worldAnimationPreparing = false; RefreshWorldAnimationRun(); } }
     }
 
-    private async Task WorldAnimationTransportAsync(string action, double seconds = 0, CancellationToken token = default, bool editingFrame = false)
+    private async Task WorldAnimationTransportAsync(string action, double seconds = 0, CancellationToken token = default)
     {
         if (action == "exit") { await ExitAnimationModeAsync(token); return; }
-        if (action == "stop") { worldAnimationPendingPlayhead = null; StopWorldAnimationForEdit(); worldAnimationStaleByEdit = false; RefreshWorldAnimationTimeline(); return; }
-        if (action == "pause") { ++worldAnimationPreparation; worldAnimationPreparing = false; worldAnimationSession?.Pause(); RefreshWorldAnimationTimeline(); return; }
+        if (action == "stop") { worldAnimationPendingPlayhead = null; StopWorldAnimationForEdit(); worldAnimationStaleByEdit = false; RefreshWorldAnimationRun(); return; }
+        if (action == "pause") { ++worldAnimationPreparation; worldAnimationPreparing = false; worldAnimationSession?.Pause(); RefreshWorldAnimationRun(); return; }
         RequireNoDrafts();
-        if (action == "scenario") { ShowAnimationRightTab("scenario"); return; }
-        if (action == "evaluatePaths")
-        {
-            var target = WorldAnimationTargetNow is { Entry: > 0 } selected ? selected : throw new StudioCommandException("not_ready", "Open an animation binding in Animation mode.");
-            await AnalyzeSourceAnimationAsync(target.Document, target.Definition, target.Entry, worldAnimationSession?.RangeEnd ?? worldAnimationRangeEnd, token); return;
-        }
         if (action == "duration")
         {
             var target = WorldAnimationTargetNow is { Entry: > 0 } selected ? selected : throw new StudioCommandException("not_ready", "Open an animation binding in Animation mode.");
@@ -156,13 +148,12 @@ public partial class MainWindow
             var player = CreateWorldAnalysisPlayer(context, target.Entry, configuration, token, lod);
             var duration = await Task.Run(() => player.MeasureDuration(token), token);
             if (scenario != worldAnimationScenarioEpoch || target != WorldAnimationTargetNow) throw new StudioCommandException("context_changed", "The animation scenario changed during duration analysis.");
-            worldAnimationDuration = duration; RefreshWorldAnimationTimeline(); return;
+            worldAnimationDuration = duration; RefreshWorldAnimationRun(); return;
         }
         if (scene?.IsFlyActive == true || scene?.IsPickupDragging == true || ZoneToolEngaged || scene?.TerrainBrushActive == true || scene?.HasTransformDraft == true || scene?.AiPathEditingNetwork != null)
             throw new StudioCommandException("busy", "Finish navigation or zone editing before playing an animation.");
         // The range start (Home) is a seek; previous and next step one 1/60 s tick.
         if (action == "start") { action = "seek"; seconds = worldAnimationSession?.RangeStart ?? worldAnimationRangeStart; }
-        if (!editingFrame && action is "seek" or "previous" or "next") { ++worldAnimationEditingSeek; worldTimeline?.SetRequestedTime(null); }
         // The user moved the playhead: a pending re-evaluation's time is no longer it.
         worldAnimationPendingPlayhead = null;
         animationFailure = null;
@@ -174,23 +165,19 @@ public partial class MainWindow
     {
         // The kept last frame is from before an edit (a draft, a scenario change) unless the transport's Stop says otherwise.
         worldAnimationStaleByEdit = true;
-        ++worldAnimationEditingSeek;
-        worldTimeline?.SetRequestedTime(null);
         ++worldAnimationPreparation; worldAnimationPreparing = false; worldAnimationSession?.Stop();
         sourceAnimationPreview = false; ApplyWorldAnimationScreenEffects(null);
-        RefreshWorldAnimationTimeline(); UpdateSourceAnimationControls();
+        RefreshWorldAnimationRun(); UpdateSourceAnimationControls();
     }
 
     /// <summary>Ends the run: the session goes and the static map shows; the scenario and Animation mode stay.</summary>
     private void DetachWorldAnimationRun()
     {
-        ++worldAnimationEditingSeek;
-        worldTimeline?.SetRequestedTime(null);
         ++worldAnimationPreparation; worldAnimationPreparing = false;
         var session = worldAnimationSession; worldAnimationSession = null; session?.Dispose();
         sourceAnimationPreview = false;
         ApplyWorldAnimationScreenEffects(null);
-        RefreshWorldAnimationTimeline(); RefreshRowEyes(); UpdateSourceAnimationControls();
+        RefreshWorldAnimationRun(); RefreshRowEyes(); UpdateSourceAnimationControls();
     }
 
     /// <summary>The shown world is being replaced (a rebuild or another map): its run ends; Animation mode follows the map (<see cref="RebaseAnimationMode"/>).</summary>
@@ -198,9 +185,9 @@ public partial class MainWindow
     {
         DetachWorldAnimationRun(); sourceAnimationEntry = null; worldAnimationPlan = null; worldAnimationPlanDocument = null;
         worldAnimationScenarioEpoch = Guid.NewGuid(); worldAnimationDuration = null;
-        worldAnimationExpanded.Clear(); worldAnimationCollapsed.Clear(); worldAnimationPageCounts.Clear();
+        animationTimingToggled.Clear(); animationTimingToggles++; animationTimingIndex = null;
         ParachuteScenarioChanged();
-        RefreshWorldAnimationTimeline(); ArrangeWorkspace();
+        RefreshWorldAnimationRun(); ArrangeWorkspace();
     }
 
     /// <summary>
@@ -227,7 +214,7 @@ public partial class MainWindow
         WorldScenarios().Set(configuration, reason); worldAnimationScenarioEpoch = Guid.NewGuid(); worldAnimationDuration = null;
         ParachuteScenarioChanged();
         foreach (int definition in shownAnimationPaths.ToArray()) scene?.ClearAnimationPaths(definition.ToString(CultureInfo.InvariantCulture));
-        shownAnimationPaths.Clear(); refreshAnimationPathControls?.Invoke(); RefreshWorldAnimationTimeline(); RefreshRowEyes();
+        shownAnimationPaths.Clear(); refreshAnimationPathControls?.Invoke(); RefreshWorldAnimationRun(); RefreshRowEyes();
         if (playhead is double time && previous is { } session && session == worldAnimationSession)
         {
             long id = ++worldAnimationReevaluationId;
@@ -245,10 +232,9 @@ public partial class MainWindow
     {
         try
         {
-            ++worldAnimationEditingSeek; worldTimeline?.SetRequestedTime(null);
             if (session != worldAnimationSession || session.IsDisposed) return;
             await session.TransportAsync("seek", seconds, shutdownToken);
-            if (id == worldAnimationReevaluationId && session == worldAnimationSession && animationFailure != null) { animationFailure = null; RefreshWorldAnimationTimeline(true); }
+            if (id == worldAnimationReevaluationId && session == worldAnimationSession && animationFailure != null) { animationFailure = null; RefreshWorldAnimationRun(true); }
         }
         catch (OperationCanceledException) { }
         catch (StudioCommandException ex) when (ex.Code is "context_changed" or "superseded" or "stale_record" or "stale_preview") { }

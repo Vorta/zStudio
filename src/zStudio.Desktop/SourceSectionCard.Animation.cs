@@ -98,7 +98,7 @@ internal sealed partial class SourceSectionCard
     internal void FocusAnimationTiming()
     {
         var timing = animationFieldsHost?.Children.OfType<StackPanel>()
-            .SelectMany(panel => panel.Children.OfType<WorldAnimationThresholdEditor>()).FirstOrDefault();
+            .SelectMany(panel => panel.Children.OfType<AnimationThresholdEditor>()).FirstOrDefault();
         if (timing == null) return;
         timing.BringIntoView();
         timing.MoveFocus(new System.Windows.Input.TraversalRequest(System.Windows.Input.FocusNavigationDirection.First));
@@ -116,7 +116,7 @@ internal sealed partial class SourceSectionCard
         var dropSection = Section("Drop windows");
         dropSection.Body.Children.Add(drops);
         dropSection.SetBinding(VisibilityProperty, new System.Windows.Data.Binding("Visibility") { Source = drops });
-        animationContextSection = Section("Frame and source");
+        animationContextSection = Section("Occurrence and source");
         animationContextSection.Visibility = Visibility.Collapsed;
         animationContextHost = animationContextSection.Body;
         var events = Section("Events");
@@ -199,7 +199,7 @@ internal sealed partial class SourceSectionCard
         }
         else line.Children.Add(new TextBlock { Text = field.Label, Margin = new(0, 0, 0, 4) });
         List<Control> controls = [];
-        WorldAnimationThresholdEditor? threshold = null;
+        AnimationThresholdEditor? threshold = null;
         void RefreshThreshold()
         {
             if (threshold != null && values.Length == 2 && double.TryParse(values[1], NumberStyles.Float, CultureInfo.InvariantCulture, out double value) && double.IsFinite(value))
@@ -252,6 +252,27 @@ internal sealed partial class SourceSectionCard
         if (field.ReadOnly != null) line.Children.Add(AnimationHelp(field.ReadOnly));
         if (field.Key == "START_TIME") line.Children.Add(AnimationHelp("Stored clock threshold; earlier events, waits and conditions can delay dispatch."));
         panel.Children.Add(line);
+    }
+
+    /// <summary>
+    /// The START_TIME change of an event record (the selected one when <paramref name="record"/> is null): its clock
+    /// (animation, sequence or previous) and seconds, each kept from the draft or the source when not given.
+    /// </summary>
+    internal SourceAnimationEdits.Change StartTimeChange(string? record, string? clock, double? seconds)
+    {
+        if (animationDefinition == null) throw new InvalidOperationException("Select an animation definition first.");
+        string id = record ?? animationRecord ?? throw new InvalidOperationException("Select an event first.");
+        var item = animationDefinition.Records.FirstOrDefault(r => r.Id == id) ?? throw new InvalidOperationException("The event record is unavailable.");
+        var field = item.Fields.FirstOrDefault(f => f.Key == "START_TIME") ?? throw new InvalidOperationException("This record has no start threshold.");
+        if (field.ReadOnly != null) throw new InvalidOperationException(field.ReadOnly);
+        string[] current = animationChanges.GetValueOrDefault(field.Id)?.Values?.ToArray() ?? (field.Present && field.Values.Length == 2 ? field.Values.ToArray() : ["ANIMATION_OFFSET", "0"]);
+        string mode = clock switch
+        {
+            null => current[0], "animation" => "ANIMATION_OFFSET", "sequence" => "SEQUENCE_OFFSET", "previous" => "EVENT_OFFSET",
+            _ => throw new ArgumentException("The clock is animation, sequence or previous."),
+        };
+        string value = seconds is double given ? given.ToString("R", CultureInfo.InvariantCulture) : current.ElementAtOrDefault(1) ?? "0";
+        return new(field.Id, [mode, value]);
     }
 
     internal void SetAnimationChanges(IReadOnlyList<SourceAnimationEdits.Change> changes)

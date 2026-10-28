@@ -297,7 +297,7 @@ public partial class MainWindow
             ApplySectionPresentation();
             ViewModel.Status = $"{result.Paths.Count} motion paths · {result.Status} · {result.Seconds:0.###} s";
             refreshAnimationPathControls?.Invoke();
-            RefreshWorldAnimationTimeline();
+            RefreshWorldAnimationRun();
             }
         finally { if (sourcePathLoading == pathLoading) sourcePathLoading = null; refreshAnimationPathControls?.Invoke(); }
     }
@@ -317,7 +317,7 @@ public partial class MainWindow
     private void ClearSourceAnimationPaths(int definition)
     {
         HideSourceAnimationPaths(definition); sourceAnimationPaths.Remove(definition);
-        refreshAnimationPathControls?.Invoke(); RefreshWorldAnimationTimeline();
+        refreshAnimationPathControls?.Invoke(); RefreshWorldAnimationRun();
     }
     private async Task<DocumentModel> EditSourceAnimationAsync(DocumentModel document, int definition, IReadOnlyList<SourceAnimationEdits.Change> changes, CancellationToken token, bool committingSection = false)
     {
@@ -337,10 +337,12 @@ public partial class MainWindow
 
     private void RegisterSourceAnimationCommands(StudioCommands registry)
     {
-        RegisterJob(registry, "source_animation", "Inspect and edit an existing source animation definition in the docked Properties pane. Addresses belong to the document revision. Edits preserve source trivia and apply to every expansion of the definition; tracks and event order are read only. begin selects the definition; set updates the shared draft; apply accepts one project undo step; cancel reverts the draft. read pages source records; each record contains its typed fields. context returns bounded read-only definition/script excerpts for a record, optionally near scriptTime. Save uses save_document.",
+        RegisterJob(registry, "source_animation", "Inspect and edit an existing source animation definition in the docked Properties pane. Addresses belong to the document revision. Edits preserve source trivia and apply to every expansion of the definition; tracks and event order are read only. begin selects the definition; set updates the shared draft (changes by field ID, or an event's start threshold in seconds with startClock and startSeconds for record or the selected event: the same draft as Timing's bracket drag and animation_timing threshold); apply accepts one project undo step; cancel reverts the draft. read pages source records; each record contains its typed fields. context returns bounded read-only definition/script excerpts for a record, optionally near scriptTime. Save uses save_document.",
             [DocumentParameter, RevisionParameter, new("definition", "integer", "Definition index from scene_tree.", true, Minimum: 0),
              P("action", "string", "Operation.", true, "read", "context", "begin", "select", "set", "apply", "cancel"), P("record", "string", "Sequence or event record ID for select or context."), P("token", "string", "Current draft token for set (when pending), apply or cancel."),
-             new("scriptTime", "number", "Optional script-local seconds for read-only frame context."),
+             new("scriptTime", "number", "Optional script-local seconds for read-only script context."),
+             P("startClock", "string", "set: the event's start threshold clock (record, else the selected event).", false, "animation", "sequence", "previous"),
+             new("startSeconds", "number", "set: the event's start threshold in seconds, in its clock (record, else the selected event).", NumberMinimum: -3600, NumberMaximum: 3600),
              new("changes", "array", "Fields to set.", Items: new("", "object", "Field change.", Properties: [P("field", "string", "Field ID from read.", true),
                  new("values", "array", "Values as text; omit to remove an optional field.", Items: new("", "string", "Value."), MaxItems: 128)]), MaxItems: 256), ..PageParameters], false,
             async (a, token) =>
@@ -374,8 +376,17 @@ public partial class MainWindow
                     {
                         RequireNoDrafts(doc, committing: true, committingSection: true);
                         if (card.HasDraft) card.RequireDraft(Text(a, "token"));
-                        var changes = (a["changes"] as JsonArray ?? throw new StudioCommandException("invalid_argument", "Supply changes.")).OfType<JsonObject>()
-                            .Select(c => new SourceAnimationEdits.Change(Text(c, "field"), c["values"] is JsonArray values ? values.Select(v => v!.GetValue<string>()).ToArray() : null)).ToArray();
+                        List<SourceAnimationEdits.Change> changes = [];
+                        if (a["changes"] is JsonArray listed)
+                            changes.AddRange(listed.OfType<JsonObject>().Select(c => new SourceAnimationEdits.Change(Text(c, "field"), c["values"] is JsonArray values ? values.Select(v => v!.GetValue<string>()).ToArray() : null)));
+                        if (a.ContainsKey("startClock") || a.ContainsKey("startSeconds"))
+                        {
+                            double? seconds = a.ContainsKey("startSeconds") ? Number(a, "startSeconds") : null;
+                            if (seconds is double s && (!double.IsFinite(s) || Math.Abs(s) > 3600)) throw new StudioCommandException("invalid_argument", "startSeconds is a finite threshold within ±3,600 s.");
+                            try { changes.Add(card.StartTimeChange(a.ContainsKey("record") ? Text(a, "record") : null, a.ContainsKey("startClock") ? Text(a, "startClock") : null, seconds)); }
+                            catch (Exception ex) when (ex is InvalidOperationException or ArgumentException) { throw new StudioCommandException("invalid_argument", ex.Message); }
+                        }
+                        if (changes.Count == 0) throw new StudioCommandException("invalid_argument", "Supply changes, or startClock or startSeconds.");
                         card.SetAnimationChanges(changes);
                     }
                     else { card.RequireDraft(Text(a, "token")); if (action == "cancel") card.Discard(); else { await card.ApplyAsync(); if (card.HasDraft) throw new StudioCommandException("edit_failed", "The edit was not accepted; the Properties draft retains its error."); } }

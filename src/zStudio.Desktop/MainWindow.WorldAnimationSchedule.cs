@@ -72,7 +72,7 @@ public partial class MainWindow
     {
         double end = Math.Min(3600, WorldAnimationActivations().Max(s => s.Seconds) + 30);
         await WorldAnimationOptionAsync("range", new[] { 0d, end });
-        WorldTimeline.SetVisibleRange(0, end);
-        RefreshWorldAnimationTimeline();
+        TimingView.SetVisibleRange(0, end);
+        RefreshWorldAnimationRun();
     }
 }
