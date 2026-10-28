@@ -23,7 +23,7 @@ public sealed class WorkspaceLayout : System.Text.Json.Serialization.IJsonOnDese
     public int BrowserTab { get; set; }
     public int ContentBrowserTab { get; set; } = 1;
     /// <summary>The bottom tools' tab (0 Problems, 1 Related, 2 Bytes); Related by default.</summary>
-    public int ToolTab { get; set; } = 1;
+    public int ToolsTab { get; set; } = 1;
     public Dictionary<string, bool> Groups { get; set; } = [];
     public void Normalize()
     {
@@ -32,7 +32,7 @@ public sealed class WorkspaceLayout : System.Text.Json.Serialization.IJsonOnDese
         InspectorWidth = Bound(InspectorWidth, 352, 320, 650);
         ToolsHeight = Bound(ToolsHeight, 180, 100, 700);
         InspectionPanelHeight = NormalizeInspectionPanelHeight(InspectionPanelHeight);
-        BrowserTab = Math.Clamp(BrowserTab, 0, 3); ToolTab = Math.Clamp(ToolTab, 0, 2);
+        BrowserTab = Math.Clamp(BrowserTab, 0, 3); ToolsTab = Math.Clamp(ToolsTab, 0, 2);
         ContentBrowserTab = Math.Clamp(ContentBrowserTab, 1, 3);
         if (Preset is not ("Inspect" or "Edit" or "Debug" or "Focus preview")) Preset = "Edit";
         Groups ??= [];

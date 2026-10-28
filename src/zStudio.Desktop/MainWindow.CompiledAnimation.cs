@@ -370,7 +370,7 @@ public partial class MainWindow
         ToolTabs.Visibility = strip > 0 ? Visibility.Visible : Visibility.Collapsed;
         ToolsButtons.Visibility = Visibility.Collapsed;
         RelatedTab.Visibility = BytesTab.Visibility = Visibility.Collapsed;
-        // The strip is Problems alone; the bottom tools' own tab (Layout.ToolTab) comes back with the next viewer.
+        // The strip is Problems alone; the bottom tools' own tab (Layout.ToolsTab) comes back with the next viewer.
         compiledToolsTabForced = true;
         if (ToolTabs.SelectedItem != ProblemsTab) ToolTabs.SelectedItem = ProblemsTab;
         compiledPanel!.SetView(kept.View ?? (Workbench.ActualWidth >= 2200 ? "split" : "structure"));
@@ -384,7 +384,7 @@ public partial class MainWindow
         CompiledAnimationHost.Visibility = Visibility.Collapsed; CompiledPanelSplitter.Visibility = Visibility.Collapsed;
         ToolTabs.Visibility = Visibility.Visible; ToolsButtons.Visibility = Visibility.Visible;
         RelatedTab.Visibility = BytesTab.Visibility = Visibility.Visible;
-        if (compiledToolsTabForced) { compiledToolsTabForced = false; ToolTabs.SelectedIndex = Layout.ToolTab; }
+        if (compiledToolsTabForced) { compiledToolsTabForced = false; ToolTabs.SelectedIndex = Layout.ToolsTab; }
     }
     private bool compiledToolsTabForced;
     private void CompiledPanelSplitterCompleted(object sender, DragCompletedEventArgs e)

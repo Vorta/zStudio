@@ -62,7 +62,7 @@ internal static class PropertiesWindowChecks
             await Idle();
             Assert.Equal(0, navigation.SelectedIndex); Assert.Equal(1, tools.SelectedIndex);
             Assert.Equal(0, main.ViewModel.Settings.GetWorkspace().BrowserTab);
-            Assert.Equal(1, main.ViewModel.Settings.GetWorkspace().ToolTab);
+            Assert.Equal(1, main.ViewModel.Settings.GetWorkspace().ToolsTab);
             Assert.Same(first, popup.Document);
             popup.Close(); await Idle();
             Assert.Null(main.OpenPropertiesWindow);

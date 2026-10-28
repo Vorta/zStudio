@@ -31,7 +31,13 @@ internal static class SourceWorldTreeChecks
         byte[] original = File.ReadAllBytes(fixture.Path("data/m2/models/turret.gltf"));
         byte[] placement = File.ReadAllBytes(fixture.Path("data/m2/models/m2.gltf"));
         using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(90)); var token = deadline.Token;
+        // Problems remembered as the bottom tools' tab: entering the map re-hosts the Problems grid while the problems change
+        // (a reproduced regression: "An ItemsControl is inconsistent with its items source" when a removal re-hosted it).
+        var remembered = StudioSettings.Load(); int rememberedTab = remembered.GetWorkspace().ToolsTab;
+        remembered.GetWorkspace().ToolsTab = 0; remembered.Save();
         var main = new MainWindow { ShowInTaskbar = false }; main.Show();
+        // The generator checks itself after every change, so an inconsistency throws where it happens.
+        System.Diagnostics.PresentationTraceSources.SetTraceLevel(main.FileProblems.ItemContainerGenerator, System.Diagnostics.PresentationTraceLevel.High);
         try
         {
             await using var host = new LocalMcpHost(main.Commands, "test");
@@ -235,6 +241,7 @@ internal static class SourceWorldTreeChecks
             if (main.SceneHost.Content is SceneViewport { InspectionContent: SceneInspectionCard card }) card.CancelDraft();
             foreach (var doc in main.ViewModel.Documents.ToArray()) main.ViewModel.CloseResolved(doc);
             main.Close();
+            var restored = StudioSettings.Load(); restored.GetWorkspace().ToolsTab = rememberedTab; restored.Save();
         }
     }
     private static void CheckGutter(ScrollViewer scroll)

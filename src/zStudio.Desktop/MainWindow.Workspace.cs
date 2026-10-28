@@ -22,7 +22,7 @@ public partial class MainWindow
             // An approval waits for a release deferred by a rebuild or an opening; the release clears it.
             if (!ViewModel.Documents.Any(d => d.SourceWorld != null) && sourceWorkspace == null) discardApprovedWorkspace = null;
         };
-        NavigationTabs.SelectedIndex = layout.BrowserTab; ToolTabs.SelectedIndex = layout.ToolTab;
+        NavigationTabs.SelectedIndex = layout.BrowserTab; ToolTabs.SelectedIndex = layout.ToolsTab;
         InitializeResponsiveNavigator();
         InitializeChrome(); ApplyMetrics();
         foreach (var submenu in new[] { RecentMenu })
@@ -58,7 +58,10 @@ public partial class MainWindow
         ViewModel.RootPublished += ApplyProjectView;
         ViewModel.RootPublished += () => _ = RefreshSourceMapPickerAsync();
         ViewModel.SearchResults.CollectionChanged += (_, _) => UpdateSearchHint();
-        ViewModel.Problems.CollectionChanged += (_, _) => UpdateDocumentCommands();
+        // Only the Tools button follows the problem count. The rest of UpdateDocumentCommands can enter or leave a source map's
+        // chrome, which re-hosts the Problems grid: inside this change's dispatch the grid would rebind to the already changed
+        // collection and then receive the change again ("An ItemsControl is inconsistent with its items source").
+        ViewModel.Problems.CollectionChanged += (_, _) => ToolsPaneButton.IsEnabled = ViewModel.SelectedDocument != null || ViewModel.Problems.Count > 0;
         UpdateSearchHint();
         UpdateDocumentCommands();
     }
@@ -223,7 +226,7 @@ public partial class MainWindow
     {
         if (detachingWorkspace) return;
         // A compiled animation shows Problems alone under its panel: that is no choice of the bottom tools' tab.
-        if (!compiledToolsTabForced) Layout.ToolTab = Math.Max(0, ToolTabs.SelectedIndex);
+        if (!compiledToolsTabForced) Layout.ToolsTab = Math.Max(0, ToolTabs.SelectedIndex);
     }
     private void NavigatorButtonClick(object sender, RoutedEventArgs e)
     {

@@ -858,7 +858,7 @@ public partial class MainWindow : Window
             previousPreset = defaults.Preset;
             navigatorTemporary = inspectorTemporary = toolsMaximized = false;
             SelectNavigatorSection(defaults.BrowserTab);
-            ToolTabs.SelectedIndex = defaults.ToolTab;
+            ToolTabs.SelectedIndex = defaults.ToolsTab;
             ApplyMetrics(); ArrangeWorkspace();
         }
         finally { detachingWorkspace = false; }

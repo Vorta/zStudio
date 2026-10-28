@@ -67,11 +67,11 @@ public sealed class WorkspaceStateTests
     [Fact]
     public void CurrentFloatingBoundsAndToolsTabSurviveRoundTrip()
     {
-        var layout = new WorkspaceLayout { ToolTab = 2, PropertiesWindow = new() { Height = 830, Left = -100 } };
+        var layout = new WorkspaceLayout { ToolsTab = 2, PropertiesWindow = new() { Height = 830, Left = -100 } };
         var restored = JsonSerializer.Deserialize<WorkspaceLayout>(JsonSerializer.Serialize(layout))!;
-        restored.Normalize(); Assert.Equal(2, restored.ToolTab); Assert.Equal(830,restored.PropertiesWindow.Height); Assert.Equal(-100,restored.PropertiesWindow.Left);
-        var invalid = new WorkspaceLayout { PropertiesWindow = new() { Height = double.NaN, Width = double.PositiveInfinity, Left = double.NaN, Top = double.PositiveInfinity }, ToolTab = 99 };
-        invalid.Normalize(); Assert.Equal(720,invalid.PropertiesWindow.Height); Assert.Equal(640, invalid.PropertiesWindow.Width); Assert.Null(invalid.PropertiesWindow.Left); Assert.Null(invalid.PropertiesWindow.Top); Assert.Equal(2,invalid.ToolTab);
+        restored.Normalize(); Assert.Equal(2, restored.ToolsTab); Assert.Equal(830,restored.PropertiesWindow.Height); Assert.Equal(-100,restored.PropertiesWindow.Left);
+        var invalid = new WorkspaceLayout { PropertiesWindow = new() { Height = double.NaN, Width = double.PositiveInfinity, Left = double.NaN, Top = double.PositiveInfinity }, ToolsTab = 99 };
+        invalid.Normalize(); Assert.Equal(720,invalid.PropertiesWindow.Height); Assert.Equal(640, invalid.PropertiesWindow.Width); Assert.Null(invalid.PropertiesWindow.Left); Assert.Null(invalid.PropertiesWindow.Top); Assert.Equal(2,invalid.ToolsTab);
     }
     [Fact]
     public void ResponsiveFilesPreferencesRetainIndependentWidths()
