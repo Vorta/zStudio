@@ -74,6 +74,28 @@ public sealed record AnimationSkippedSpan(long Instance, Guid Sequence, string I
 }
 
 /// <summary>
+/// What a sequence does from <see cref="AnimationSequencePhase.Time"/> until its next phase: the sequence's own states, then
+/// <see cref="Paused"/> (a range or zone gate holds its binding; its clocks freeze), <see cref="Stopped"/> (its binding was
+/// stopped or reset: it waits for the reset time or its cleanup replaced it) and <see cref="Finished"/> (the instance ended;
+/// recorded once per instance, with an empty sequence).
+/// </summary>
+public enum AnimationSequencePhaseState { WaitingForThreshold, Running, Complete, WaitingForRelease, Unavailable, Blocked, Paused, Stopped, Finished }
+
+/// <summary>
+/// One change of a sequence's state in the run, at tick resolution, as evidence for the Timing view's lane bands (it changes
+/// nothing in the run). <see cref="ReleasedBy"/> is the CALL_SEQUENCE (or bouncing motion) that released a waiting sequence
+/// into this phase.
+/// </summary>
+public sealed record AnimationSequencePhase(long Instance, Guid Sequence, AnimationSequencePhaseState State, double Time)
+{
+    public int EventIndex { get; init; }
+    public int Pass { get; init; }
+    public Guid? ReleasedBy { get; init; }
+    public long? ReleasedByInstance { get; init; }
+    public string? PausedBy { get; init; }
+}
+
+/// <summary>
 /// The player reference range tests measure from, and where it came from: "aiv start", "opening handover", "custom",
 /// "none", "no mission start", "callback 10" or "callback 17". <see cref="Frozen"/> follows callback 11.
 /// </summary>
@@ -97,6 +119,8 @@ public sealed partial class AnimationPlayer
     private long skippedDropped;
     private List<AnimationPlayerReferenceState> referenceChanges = [];
     private long referenceChangesDropped;
+    private List<AnimationSequencePhase> phases = [];
+    private long phasesDropped;
     private AnimationPlayerReferenceState? initialReference;
     /// <summary>The reason the latest AddInstance call refused its start, for the caller's trace.</summary>
     private string? lastRefusal;
@@ -192,6 +216,58 @@ public sealed partial class AnimationPlayer
         "invalidated" => "invalidated", "unavailable" => "unavailable", "oneShot" => "one-shot used",
         "alreadyRunning" => "already running here", "prerequisites" => "prerequisites unmet", _ => "unavailable",
     };
+
+    /// <summary>
+    /// At the end of a tick, every live sequence whose state changed (or that a release reached) since its last phase gets a
+    /// new one; a gate's hold reads <see cref="AnimationSequencePhaseState.Paused"/>, a stop delay
+    /// <see cref="AnimationSequencePhaseState.Stopped"/>. Evidence only, bounded like the other run evidence.
+    /// </summary>
+    private void RecordPhases()
+    {
+        if (initializingScene || measuringDuration) return;
+        foreach (var instance in instances)
+            if (!instance.Finished) RecordPhases(instance);
+    }
+    private void RecordPhases(Instance instance)
+    {
+            foreach (var sequence in instance.Sequences)
+            {
+                int state = sequence.State is 0 or 1 && instance.Paused != null ? 6
+                    : instance.StopDelay >= 0 && sequence.State is 0 or 1 or 3 or 5 ? 7 : Math.Clamp(sequence.State, 0, 5);
+                bool released = sequence.ReleasedBy != null && sequence.ReleasedAt != sequence.RecordedRelease;
+                if (state == sequence.RecordedPhase && !released) continue;
+                double at = sequence.RecordedPhase < 0 && sequence.Created >= 0 ? Math.Min(sequence.Created, Time) : released ? Math.Min(sequence.ReleasedAt, Time) : Time;
+                AddPhase(new(instance.Id, sequence.Data.Id, (AnimationSequencePhaseState)state, at)
+                {
+                    EventIndex = sequence.Cursor, Pass = sequence.Iteration, PausedBy = state == 6 ? instance.Paused : null,
+                    ReleasedBy = released ? sequence.ReleasedBy : null, ReleasedByInstance = released ? sequence.ReleasedByInstance : null,
+                });
+                sequence.RecordedPhase = state;
+                if (released) sequence.RecordedRelease = sequence.ReleasedAt;
+            }
+    }
+    /// <summary>A cleanup replaced <paramref name="replaced"/>: those not complete end stopped.</summary>
+    private void RecordStopped(Instance instance, IEnumerable<Sequence> replaced)
+    {
+        if (initializingScene || measuringDuration) return;
+        foreach (var sequence in replaced)
+            if (sequence.RecordedPhase is >= 0 and not (2 or 7)) { AddPhase(new(instance.Id, sequence.Data.Id, AnimationSequencePhaseState.Stopped, Time) { EventIndex = sequence.Cursor, Pass = sequence.Iteration }); sequence.RecordedPhase = 7; }
+    }
+    private void RecordFinished(Instance instance)
+    {
+        if (initializingScene || measuringDuration) return;
+        // What its sequences reached in the tick it ended, then the end.
+        RecordPhases(instance);
+        AddPhase(new(instance.Id, Guid.Empty, AnimationSequencePhaseState.Finished, Time));
+    }
+    private void AddPhase(AnimationSequencePhase phase)
+    {
+        if (phases.Count >= 20000) { phases.RemoveRange(0, 10000); phasesDropped += 10000; InvalidateRetainedState(); }
+        // Evidence never refuses a tick: past the allowance the phase is counted as dropped instead.
+        if (!AdmitState(128)) { phasesDropped++; return; }
+        phases.Add(phase);
+        AdjustRetainedBytes(128);
+    }
 
     private void RecordSkip(Instance instance, Sequence sequence, AnimationEvent marker, int first, int last, string reason)
     {

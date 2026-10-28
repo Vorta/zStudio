@@ -38,12 +38,12 @@ public sealed partial class AnimationPlayer
             if (retainedStateBytes is long cached) return cached + (ExecutionPolicy?.RetainedBytes ?? 0);
             HashSet<Dictionary<int, Node>> saved = new(ReferenceEqualityComparer.Instance);
             long bytes = StateBytes(instances, sharedNodes, saved) + ConditionBytes(conditions.Count)
-                + EvidenceBytes(entryRuns, refusalBytes + prerequisiteBytes, skipped.Count, referenceChanges.Count, saved);
+                + EvidenceBytes(entryRuns, refusalBytes + prerequisiteBytes, skipped.Count + phases.Count, referenceChanges.Count, saved);
             RetainedAccountingSequenceVisits += instances.Sum(i => (long)i.Sequences.Count);
             foreach (var checkpoint in checkpoints.Values)
             {
                 bytes += StateBytes(checkpoint.Instances, checkpoint.SharedNodes, saved) + ConditionBytes(checkpoint.Conditions.Count)
-                    + EvidenceBytes(checkpoint.EntryRuns, checkpoint.StartEvidenceBytes, checkpoint.Skipped.Count, checkpoint.References.Count, saved);
+                    + EvidenceBytes(checkpoint.EntryRuns, checkpoint.StartEvidenceBytes, checkpoint.Skipped.Count + checkpoint.Phases.Count, checkpoint.References.Count, saved);
                 RetainedAccountingSequenceVisits += checkpoint.Instances.Sum(i => (long)i.Sequences.Count);
             }
             foreach (var retired in retiredSequences)
@@ -97,7 +97,7 @@ public sealed partial class AnimationPlayer
         conditions = replacement.conditions; conditionsDropped = replacement.conditionsDropped; hasExcludedCalls = replacement.hasExcludedCalls;
         entryRuns = replacement.entryRuns; refusals = replacement.refusals; refusalsDropped = replacement.refusalsDropped; refusalBytes = replacement.refusalBytes;
         prerequisiteStarts = replacement.prerequisiteStarts; prerequisiteStartsDropped = replacement.prerequisiteStartsDropped; prerequisiteBytes = replacement.prerequisiteBytes;
-        skipped = replacement.skipped; skippedDropped = replacement.skippedDropped;
+        skipped = replacement.skipped; skippedDropped = replacement.skippedDropped; phases = replacement.phases; phasesDropped = replacement.phasesDropped;
         referenceChanges = replacement.referenceChanges; referenceChangesDropped = replacement.referenceChangesDropped;
         lights = replacement.lights; activeSounds = replacement.activeSounds; checkpoints = replacement.checkpoints;
         previewIssues = replacement.previewIssues; diagnosticContext = replacement.diagnosticContext;
@@ -118,7 +118,7 @@ public sealed partial class AnimationPlayer
     {
         interrupted = true;
         instances = []; sharedNodes = []; effects = []; conditions = []; checkpoints = []; retiredSequences.Clear();
-        entryRuns = []; refusals = []; refusalBytes = 0; prerequisiteStarts = []; prerequisiteBytes = 0; skipped = []; referenceChanges = [];
+        entryRuns = []; refusals = []; refusalBytes = 0; prerequisiteStarts = []; prerequisiteBytes = 0; skipped = []; referenceChanges = []; phases = [];
         InvalidateRetainedState();
     }
     /// <summary>Binding states (with the rest poses only they still hold) and the bounded run evidence.</summary>

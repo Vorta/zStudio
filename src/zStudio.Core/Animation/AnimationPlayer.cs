@@ -79,6 +79,9 @@ public sealed record AnimationFrame(double Time, IReadOnlyList<AnimationNodePose
     public long PrerequisiteStartsDropped { get; init; }
     public IReadOnlyList<AnimationSkippedSpan> Skipped { get; init; } = [];
     public long SkippedDropped { get; init; }
+    /// <summary>Each sequence state change of the run, oldest first (the Timing view's lane bands).</summary>
+    public IReadOnlyList<AnimationSequencePhase> Phases { get; init; } = [];
+    public long PhasesDropped { get; init; }
     /// <summary>The player reference at this frame.</summary>
     public AnimationPlayerReferenceState? PlayerReference { get; init; }
     /// <summary>The reference at the start, then each change (callbacks 10, 11 and 17) in order.</summary>
@@ -221,7 +224,7 @@ public sealed partial class AnimationPlayer
         for (int i = 0; i < randomTable.Length; i++) { randomState = unchecked(randomState * 214013 + 2531011); randomTable[i] = ((randomState >> 16) & 32767) / 32767f; }
         instances = []; sharedNodes = []; effects = []; trace = []; conditions = []; conditionsDropped = 0; hasExcludedCalls = false;
         entryRuns = []; refusals = []; refusalsDropped = refusalBytes = 0; skipped = []; skippedDropped = 0; referenceChanges = []; referenceChangesDropped = 0;
-        prerequisiteStarts = []; prerequisiteStartsDropped = prerequisiteBytes = 0;
+        prerequisiteStarts = []; prerequisiteStartsDropped = prerequisiteBytes = 0; phases = []; phasesDropped = 0;
         notes = []; foreach (string message in context.Diagnostics) AddNote(message, "Resource", "Unclassified"); lights = []; activeSounds = []; cues.Clear(); checkpoints.Clear();
         screenColor = screenWave = Vector4.Zero; fog = null;
         nextScheduled = 0; originTerrain.Clear(); dispatchBudget = 10000;
@@ -311,6 +314,7 @@ public sealed partial class AnimationPlayer
             }
         }
         ReleaseReplacedSequences();
+        RecordPhases();
         // Landed debris remains above the solid preview plane during subsequent
         // shrink/sink stages and concurrent transform events, without new impacts.
         ConstrainSettledGround();
@@ -497,7 +501,7 @@ public sealed partial class AnimationPlayer
         // pose (StopAndCleanup 0x45d570 from ActivateRuntime); the rest pose is captured after it (ResetForNode 0x45d6c0).
         if (cleanupFirst) ActivationCleanup(instance);
         instance.SavedNodes = instance.Nodes.ToDictionary(p => p.Key, p => { operation.Reserve(1); return p.Value.Clone(); });
-        instance.Sequences = (primary ? new[] { entry.Primary } : entry.Sequences.ToArray()).Select(s => new Sequence(s) { WorkChanged = AdjustRetainedWork }).ToList();
+        instance.Sequences = (primary ? new[] { entry.Primary } : entry.Sequences.ToArray()).Select(s => new Sequence(s) { WorkChanged = AdjustRetainedWork, Created = instance.StartedAt }).ToList();
         if (activation) SetEntryState(entry, new(2, instance.Id, root, instance.SavedNodes, Time, "start", callPath));
         InvalidateRetainedState();
         return instance;
@@ -565,8 +569,9 @@ public sealed partial class AnimationPlayer
         RestoreRestPose(instance, rest);
         // The dispatch snapshot can still hold the replaced sequences until the frontier finishes.
         foreach (var replaced in instance.Sequences) replaced.Retired = true;
+        RecordStopped(instance, instance.Sequences);
         retiredSequences.Add(instance.Sequences);
-        var cleanup = new Sequence(instance.Entry.Primary) { WorkChanged = AdjustRetainedWork };
+        var cleanup = new Sequence(instance.Entry.Primary) { WorkChanged = AdjustRetainedWork, Created = Time };
         instance.Sequences = [cleanup];
         InvalidateRetainedState();
         if (instance.Entry.Primary.Events.Count == 0) { measuredEnd = Math.Max(measuredEnd, Time - StepSeconds); Finish(instance); return; }
@@ -602,6 +607,7 @@ public sealed partial class AnimationPlayer
     {
         if (instance.Finished) return;
         instance.Finished = true;
+        RecordFinished(instance);
         Release(instance);
         var run = EntryState(instance.Entry);
         if (run.Base == instance.Id)
@@ -747,7 +753,7 @@ public sealed partial class AnimationPlayer
             DependencyBlocked = IsDependencyBlocked, HasExcludedCalls = hasExcludedCalls,
             Bindings = BindingStatuses(), Refusals = refusals.ToArray(), RefusalsDropped = refusalsDropped,
             PrerequisiteStarts = prerequisiteStarts.ToArray(), PrerequisiteStartsDropped = prerequisiteStartsDropped,
-            Skipped = skipped.ToArray(), SkippedDropped = skippedDropped,
+            Skipped = skipped.ToArray(), SkippedDropped = skippedDropped, Phases = phases.ToArray(), PhasesDropped = phasesDropped,
             PlayerReference = CurrentReference, PlayerReferences = [InitialReference, .. referenceChanges], PlayerReferencesDropped = referenceChangesDropped
         };
         token.ThrowIfCancellationRequested();
@@ -780,6 +786,9 @@ public sealed partial class AnimationPlayer
         public long ReleasedByInstance;
         public double ReleasedAt;
         public string? ReleaseKind;
+        /// <summary>Phase evidence: when the sequence was created, its last recorded phase and the release that phase recorded.</summary>
+        public double Created = -1, RecordedRelease = double.NaN;
+        public int RecordedPhase = -1;
         public long Child = -1;
         private AnimationEvent? work;
         public Action<long>? WorkChanged;
@@ -835,7 +844,8 @@ public sealed partial class AnimationPlayer
         List<AnimationConditionResult> Conditions, long ConditionsDropped, bool HasExcludedCalls, int NextScheduled, Dictionary<int, EntryRun> EntryRuns,
         List<AnimationStartRefusal> Refusals, long RefusalsDropped, long RefusalBytes, List<AnimationSkippedSpan> Skipped, long SkippedDropped,
         List<AnimationPlayerReferenceState> References, long ReferencesDropped,
-        List<AnimationPrerequisiteStart> PrerequisiteStarts, long PrerequisiteStartsDropped, long PrerequisiteBytes)
+        List<AnimationPrerequisiteStart> PrerequisiteStarts, long PrerequisiteStartsDropped, long PrerequisiteBytes,
+        List<AnimationSequencePhase> Phases, long PhasesDropped)
     {
         /// <summary>The bytes of its refusals and prerequisite evidence.</summary>
         public long StartEvidenceBytes => RefusalBytes + PrerequisiteBytes;
@@ -846,13 +856,13 @@ public sealed partial class AnimationPlayer
         Node Copy(Node n) { token.ThrowIfCancellationRequested(); if (!copies.TryGetValue(n, out var copy)) copies[n] = copy = n.Clone(); return copy; }
         return new(ticks, nextId, randomIndex, instances.Select(i => i.Clone(Copy, token)).ToList(), sharedNodes.ToDictionary(p => p.Key, p => Copy(p.Value)), effects.Select(e => e.Clone()).ToList(), [.. trace], [.. notes], traceOrdinal, traceDropped, new(previewIssues), new(lights), new(activeSounds), screenColor, screenWave, fog, [.. conditions], conditionsDropped, hasExcludedCalls, nextScheduled,
             new(entryRuns), [.. refusals], refusalsDropped, refusalBytes, [.. skipped], skippedDropped, [.. referenceChanges], referenceChangesDropped,
-            [.. prerequisiteStarts], prerequisiteStartsDropped, prerequisiteBytes);
+            [.. prerequisiteStarts], prerequisiteStartsDropped, prerequisiteBytes, [.. phases], phasesDropped);
     }
     private void Restore(Checkpoint c, CancellationToken token)
     {
         token.ThrowIfCancellationRequested();
         if (!AdmitState(StateBytes(c.Instances, c.SharedNodes) + ConditionBytes(c.Conditions.Count) + CloneScratch(c.Instances, c.SharedNodes)
-            + EvidenceBytes(c.EntryRuns, c.StartEvidenceBytes, c.Skipped.Count, c.References.Count, null), c)) throw new StateLimitException();
+            + EvidenceBytes(c.EntryRuns, c.StartEvidenceBytes, c.Skipped.Count + c.Phases.Count, c.References.Count, null), c)) throw new StateLimitException();
         Dictionary<Node, Node> copies = [];
         Node Copy(Node n) { token.ThrowIfCancellationRequested(); if (!copies.TryGetValue(n, out var copy)) copies[n] = copy = n.Clone(); return copy; }
         // Stage the complete replacement while the accepted state and checkpoint are still accounted.
@@ -870,6 +880,7 @@ public sealed partial class AnimationPlayer
         entryRuns = new(c.EntryRuns); refusals = [.. c.Refusals]; refusalsDropped = c.RefusalsDropped; refusalBytes = c.RefusalBytes;
         prerequisiteStarts = [.. c.PrerequisiteStarts]; prerequisiteStartsDropped = c.PrerequisiteStartsDropped; prerequisiteBytes = c.PrerequisiteBytes;
         skipped = [.. c.Skipped]; skippedDropped = c.SkippedDropped; referenceChanges = [.. c.References]; referenceChangesDropped = c.ReferencesDropped;
+        phases = [.. c.Phases]; phasesDropped = c.PhasesDropped;
         nextScheduled = c.NextScheduled; originTerrain.Clear();
         retiredSequences.Clear(); InvalidateRetainedState(); interrupted = false;
     }

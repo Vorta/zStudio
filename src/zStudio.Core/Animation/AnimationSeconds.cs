@@ -42,12 +42,27 @@ public static class AnimationSeconds
         return (double)(Math.Round(clamped / step, MidpointRounding.AwayFromZero) * step);
     }
 
+    /// <summary>A dragged start threshold on its grid: as <see cref="Snap"/>, but a threshold may be negative (−3,600 … 3,600 s).</summary>
+    public static double SnapSigned(double seconds, AnimationSnap snap = AnimationSnap.Grid)
+    {
+        if (!double.IsFinite(seconds)) throw new ArgumentOutOfRangeException(nameof(seconds), "Use a finite time.");
+        decimal step = (decimal)Step(snap);
+        decimal clamped = (decimal)Math.Clamp(seconds, -Maximum, Maximum);
+        return (double)(Math.Round(clamped / step, MidpointRounding.AwayFromZero) * step);
+    }
+
     /// <summary>The preview tick at or before <paramref name="seconds"/>: what a seek shows and its readout reports.</summary>
     public static long TickIndex(double seconds) =>
         double.IsFinite(seconds) ? (long)Math.Floor(Math.Clamp(seconds, 0, Maximum) / Tick + 1e-7) : 0;
 
     /// <summary>The time of the tick at or before <paramref name="seconds"/>.</summary>
     public static double AtTick(double seconds) => TickIndex(seconds) * Tick;
+
+    /// <summary>
+    /// The playhead that shows an occurrence starting at <paramref name="start"/>: the end of the tick it ran in (a trace start
+    /// is the moment inside its tick, so the tick at or before it may not have run it yet).
+    /// </summary>
+    public static double OccurrenceTime(double start) => AtTick(Math.Min(Maximum, Math.Max(0, start) + Tick));
 
     /// <summary>One tick earlier (<paramref name="direction"/> −1) or later (+1) than the tick at or before <paramref name="seconds"/>, within the clock.</summary>
     public static double Stepped(double seconds, int direction) =>

@@ -303,6 +303,56 @@ public sealed class AnimationGraphTests
         finally { if (Directory.Exists(temp)) Directory.Delete(temp, true); }
     }
 
+    // Must-have: the Timing view's projection of a real run (design §9): lanes per sequence under the start's group, the
+    // waiting-for-release band and the release mark pointing at the lane it released, condition and excluded-call marks,
+    // threshold brackets from observed anchors, and the Log; a seek back replays the same phases.
+    [Fact]
+    public void TheTimingProjectionShowsTheRunOnTheSharedClock()
+    {
+        var evaluated = Compile(Bridge()); var package = evaluated.Package;
+        var doc = new AssetDocument("fixture", new(0, DateTime.MinValue), new(FormatFamily.GameZ, 15, Recognition.Supported, "fixture"), ReadOnlyMemory<byte>.Empty) { Scene = new() };
+        doc.Scene.Models.Add(new(0, [Vector3.Zero, Vector3.UnitX, Vector3.UnitY], [], [], [], []));
+        doc.Scene.Nodes.Add(new(0, "world", "world", null, [], [1, 4, 5, 6], new(), new()));
+        string[] names = ["bridge", "healthy", "piece", "rail_1", "rail_2", "rail_3"];
+        for (int i = 0; i < names.Length; i++)
+            doc.Scene.Nodes.Add(new(i + 1, names[i], "object3d", 0, i is 1 or 2 ? [1] : [0], i == 0 ? [2, 3] : [],
+                new System.Text.Json.Nodes.JsonObject { ["flags"] = 4 },
+                new System.Text.Json.Nodes.JsonObject { ["flags"] = 0, ["opacity"] = 1f, ["scale"] = JsonData.Vector(Vector3.One), ["transform"] = new System.Text.Json.Nodes.JsonArray(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0) }));
+        var context = new AnimationPreviewContext { Package = package, World = doc };
+        AnimationScheduledStart[] starts = [new(Guid.Empty, 1, 0)];
+        var player = new AnimationPlayer(context, 1, 1, false, Token, new AnimationSchedule(starts, package.Entries.Count))
+            { ExecutionPolicy = new(rules: new() { Player = AnimationPlayerReference.None }) };
+        var frame = player.AdvanceTo(1, token: Token);
+        var index = AnimationGraphIndex.Create(package, evaluated.Provenance, token: Token);
+        var timing = AnimationTiming.Create(frame, package, new() { Starts = starts, Index = index }, Token);
+        AnimationTimingLane Lane(string name) => timing.AllLanes.Single(l => l.Kind == AnimationTimingLaneKind.Sequence && l.Label == name);
+        var group = Assert.Single(timing.Lanes, l => l.Kind == AnimationTimingLaneKind.Group);
+        Assert.Equal(("destroy_bridge · bridge #1", true, 0d), (group.Label, group.Expanded, group.Started));
+        Assert.Equal(["Cleanup", "healthy_to_destroyed", "flare_sequence", "chance", "move_piece", "mainsplash"],
+            timing.Lanes.Where(l => l.Group == group.Id).Select(l => l.Label));
+        Assert.Equal(3, Lane("healthy_to_destroyed").Marks.Count(m => m.Kind == AnimationTimingMarkKind.Excluded));
+        var condition = Lane("flare_sequence").Marks.Single(m => m.Kind == AnimationTimingMarkKind.Condition);
+        Assert.Equal((false, false, "false · game"), (condition.Value, condition.Forced, condition.Result));
+        var release = Lane("move_piece").Marks.Single(m => m.Kind == AnimationTimingMarkKind.Release);
+        Assert.Equal((Lane("mainsplash").Id, "released mainsplash"), (release.TargetLane, release.Result));
+        var later = Lane("move_piece").Marks.Single(m => m.Kind == AnimationTimingMarkKind.Executed);
+        Assert.Equal(("≥ 0.1 s after previous", 0d, .1), (later.Bracket!.Label, later.Bracket.Anchor, later.Bracket.End), new BracketComparer());
+        Assert.Contains(Lane("mainsplash").Bands, b => b.Kind == AnimationTimingBandKind.WaitingForRelease);
+        Assert.Contains(Lane("mainsplash").Marks, m => m.Kind == AnimationTimingMarkKind.Loop);
+        var skipped = Lane("chance").Marks.Single(m => m.Kind == AnimationTimingMarkKind.Skipped);
+        Assert.Equal((3, "skipped · branch taken"), (skipped.Count, skipped.Result)); Assert.Equal(.5, skipped.Start, 6);
+        Assert.Contains(timing.Log, r => r.Result == "released mainsplash" && r.Mark == release.Id);
+        Assert.True(timing.Log.Zip(timing.Log.Skip(1)).All(p => p.First.Time <= p.Second.Time));
+        // A seek back restores the phases from a checkpoint and replays them exactly.
+        var replay = player.AdvanceTo(.2, true, Token); Assert.All(replay.Phases, p => Assert.True(p.Time <= .2 + 1e-9));
+        Assert.Equal(frame.Phases, player.AdvanceTo(1, token: Token).Phases);
+    }
+    private sealed class BracketComparer : IEqualityComparer<(string, double, double)>
+    {
+        public bool Equals((string, double, double) a, (string, double, double) b) => a.Item1 == b.Item1 && Math.Abs(a.Item2 - b.Item2) < 1e-6 && Math.Abs(a.Item3 - b.Item3) < 1e-6;
+        public int GetHashCode((string, double, double) value) => value.Item1.GetHashCode();
+    }
+
     private static void Copy(string from, string to)
     {
         foreach (string directory in Directory.EnumerateDirectories(from, "*", SearchOption.AllDirectories)) Directory.CreateDirectory(Path.Combine(to, Path.GetRelativePath(from, directory)));
