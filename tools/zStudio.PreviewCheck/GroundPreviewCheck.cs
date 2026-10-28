@@ -73,7 +73,9 @@ internal static class GroundPreviewCheck
                 ((System.Windows.Controls.Primitives.ToggleButton)editor.FindName("ShowLevel")).IsChecked = true; await Ready();
                 Require(viewport.GroundGrids.Single().Visible, "Mission refresh lost grid");
                 ((System.Windows.Controls.Primitives.ToggleButton)editor.FindName("ShowHorizon")).IsChecked = false; grid.IsChecked = false; await Ready();
-                Require(editor.StatusText.Contains("collision disabled", StringComparison.Ordinal), "Grid change during scene reload was lost");
+                // The reload kept the change: the preview runs without the ground plane (debris falls through it).
+                await editor.SeekAsync(8); await Ready();
+                Require(grid.IsChecked == false && editor.CurrentFrame!.Nodes.Any(n => n.Transform.M42 < -5), "Grid change during scene reload was lost");
                 grid.IsChecked = true; await Ready();
                 Require(viewport.GroundGrids.Count == 1, "Horizon refresh duplicated grid");
                 ((System.Windows.Controls.Primitives.ToggleButton)editor.FindName("ShowLevel")).IsChecked = false; await Ready();
@@ -139,8 +141,8 @@ internal static class GroundPreviewCheck
                 await editor.SeekAsync(1); editor.TogglePlayback(); await Task.Delay(150, timeout.Token);
                 before = editor.CurrentFrame!.Time; height.Text = "4"; height.Text = "40"; await Ready();
                 Require(editor.IsPlaying && editor.CurrentFrame.Time >= before, "Height did not preserve playback"); editor.Pause();
-                var row = (ToolBar)editor.FindName("ViewOptionsRow");
-                Require(row.Items.Contains(editor.FindName("Lod")),"LOD is not directly available in toolbar");
+                var row = (Panel)editor.FindName("ViewOptionsRow");
+                Require(row.Children.Contains((UIElement)editor.FindName("Lod")),"LOD is not directly available in toolbar");
                 foreach (string name in new[] { "DocumentUndo","DocumentRedo" })
                     Require(!string.IsNullOrWhiteSpace(AutomationProperties.GetName((Button)window.FindName(name))),name + " lacks accessible name");
                 Require(AutomationProperties.GetName((System.Windows.Controls.Primitives.ToggleButton)editor.FindName("ShowLevel")) == "Map","Map accessible name changed");

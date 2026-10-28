@@ -34,7 +34,7 @@ internal static class CameraFollowCheck
                 await editor.SeekAsync(.1);
                 follow.IsChecked = true; await Task.Delay(150);
                 CheckPose(editor.CurrentFrame!.Camera!);
-                Require(editor.StatusText.Contains("camera1 #2", StringComparison.Ordinal), "Preview status lacks camera identity");
+                Require(editor.FollowCamera.ToolTip is string followed && followed.Contains("camera1 #2", StringComparison.Ordinal) && editor.CameraLabel.StartsWith("camera1 #2", StringComparison.Ordinal), "Follow camera lacks the camera's identity");
                 ((System.Windows.Controls.Primitives.ToggleButton)editor.FindName("ShowLevel")).IsChecked = true;
                 while (((Border)editor.FindName("LoadingPanel")).Visibility == Visibility.Visible) await Task.Delay(100, timeout.Token);
                 foreach (double time in new double[] { .1, 5, 10, 15, 20 })

@@ -36,8 +36,8 @@ internal static class DifficultyPreviewCheck
                 }
                 var picker = (ComboBox)editor.FindName("Difficulty"); var map = (System.Windows.Controls.Primitives.ToggleButton)editor.FindName("ShowLevel");
                 var follow = (System.Windows.Controls.Primitives.ToggleButton)editor.FindName("FollowCamera"); var height = (TextBox)editor.FindName("PreviewHeight");
-                var row = (ToolBar)editor.FindName("ViewOptionsRow");
-                Require(row.Items.IndexOf(picker) == row.Items.IndexOf(editor.FindName("Lod")) + 1, "Difficulty must immediately follow LOD");
+                var row = (Panel)editor.FindName("ViewOptionsRow");
+                Require(row.Children.IndexOf((UIElement)editor.FindName("DifficultyGroup")) == row.Children.IndexOf((UIElement)editor.FindName("Lod")) + 1, "Difficulty must immediately follow LOD");
                 Require((MissionDifficulty)picker.SelectedItem == MissionDifficulty.Medium, "Initial difficulty is not Medium");
                 Require(!editor.Muted, "Mute default changed");
                 editor.SetTransport(newVolume: 0);
@@ -103,7 +103,7 @@ internal static class DifficultyPreviewCheck
                     var notices = (Button)window.FindName("PreviewNotices");
                     Require(Equals(notices.Content, $"{rows.Length} preview notices") && notices.Visibility == (rows.Length > 0 ? Visibility.Visible : Visibility.Collapsed),
                         "Notice count/visibility does not match the published scene");
-                    Require(((TextBlock)window.FindName("PreviewInfo")).Text == live.Mission!.Layout.Difficulty + " · " + live.PreviewSummary,
+                    Require(((TextBlock)window.FindName("PreviewInfo")).Text == live.Mission!.Layout.Label + " · " + live.PreviewSummary,
                         "Preview summary accumulated previous difficulty labels");
                 }
                 void CheckFollow()

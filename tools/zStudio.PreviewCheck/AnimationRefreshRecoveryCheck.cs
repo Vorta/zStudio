@@ -31,9 +31,12 @@ internal static class AnimationRefreshRecoveryCheck
         await CheckSeekSupersession(true);
         // Canceling a seek locally is not an MCP revocation and must not cause
         // the canceled seek to restart over subsequent GUI playback intent.
+        bool canceledLocally = false;
         Action cancelLocally = () =>
         {
-            if (editor.CanSeek) return;
+            // Once: the editor reports its state synchronously, also from inside what this handler starts.
+            if (editor.CanSeek || canceledLocally) return;
+            canceledLocally = true;
             ((CancellationTokenSource)typeof(AnimationEditor).GetField("seeking", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(editor)!).Cancel();
             editor.TogglePlayback(); // GUI Play queues playback while a seek owns the disabled button.
         };
@@ -84,7 +87,8 @@ internal static class AnimationRefreshRecoveryCheck
                 ((System.Windows.Controls.Primitives.ToggleButton)editor.FindName("ShowLevel")).IsChecked = false;
             }
             editor.Viewport.Information += Replace;
-            try { await editor.SetPreviewOptionAsync("worldPath", JsonValue.Create(context.World.Path)!); }
+            // The scenario's World (Choose GameZ…), rebinding the same scene.
+            try { await editor.BindWorldAsync(context.World.Path); }
             finally { editor.Viewport.Information -= Replace; }
             var player = (AnimationPlayer)typeof(AnimationEditor).GetField("player", flags)!.GetValue(editor)!;
             int meshes = editor.Viewport.StaticBatchCount;
@@ -177,10 +181,12 @@ internal static class AnimationRefreshRecoveryCheck
 
         async Task CheckSeekSupersession(bool option)
         {
-            Task? userSeek = null;
+            Task? userSeek = null; bool started = false;
             Action replace = () =>
             {
-                if (editor.CanSeek || userSeek != null) return;
+                // Once: the GUI seek reports its state synchronously, before it returns its task.
+                if (editor.CanSeek || started) return;
+                started = true;
                 // A real GUI action runs outside the MCP execution context.
                 using var gui = PreviewOperation.Begin(CancellationToken.None);
                 userSeek = editor.SeekAsync(.75);

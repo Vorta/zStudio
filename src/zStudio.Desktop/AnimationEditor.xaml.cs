@@ -216,9 +216,11 @@ public partial class AnimationEditor : FieldEditor, IDisposable
     }
     private void SetPlaying(bool value)
     {
+        bool changed = playing != value;
         playing = value;
         if (value) { clock.Restart(); lastClock = 0; playbackTarget = player?.Time ?? 0; timer.Start(); } else { timer.Stop(); audio.Stop(); }
-        Changed();
+        // Only a change is news (a paused seek stops nothing): every listener redraws the panel, the graph and the Inspector.
+        if (changed) Changed();
     }
     private void Changed() { if (!disposed) StateChanged?.Invoke(); }
     private void Tick(object? sender, EventArgs e)
@@ -409,9 +411,14 @@ public partial class AnimationEditor : FieldEditor, IDisposable
             Ellipse circle = new() { Width = radius * 2, Height = radius * 2, Stroke = Brushes.LightSkyBlue, StrokeThickness = Math.Clamp(Math.Abs(wave.W), 1, 12), Opacity = .55 };
             Canvas.SetLeft(circle, wave.X - radius); Canvas.SetTop(circle, wave.Y - radius); WaveOverlay.Children.Add(circle);
         }
+        // Follow camera names the camera it follows (at most ten times a second while playing).
+        if (frame.Time == 0 || Math.Round(frame.Time * 60) % 6 == 0 || !playing)
+            FollowCamera.ToolTip = "Follow camera — the view follows the animation's camera: " + CameraLabel + "; navigating turns it off (Numpad 0)";
         Changed();
         return true;
     }
+    /// <summary>The animation's camera at the playhead ("camera1 #2 · 60° horizontal FOV"), as Follow camera and preview_state name it.</summary>
+    internal string CameraLabel => frame?.Camera is { } camera ? $"{camera.Name} #{camera.SourceNode} · {camera.FieldOfView:0.#}° horizontal FOV" : "no animated camera pose at this time";
     /// <summary>The bound root as the scene resolves it ("rlbridge · node #3313"), or why it is unresolved.</summary>
     internal string BoundRootLabel()
     {
@@ -419,8 +426,6 @@ public partial class AnimationEditor : FieldEditor, IDisposable
         return root >= 0 && root < context!.Scene.Nodes.Count ? $"{context.Scene.Nodes[root].Name} · node #{root}" : $"unresolved ({Entry.RootName})";
     }
     internal bool RootOverridden => context?.RootOverrides.ContainsKey(entryIndex) == true;
-    /// <summary>A short explanation of the camera and the ground the preview uses (for notices and the run state).</summary>
-    internal string GroundNote => GroundCollision.IsChecked == true ? "Ground: Y=0 · mesh-based flat-ground collision" : "Ground: collision disabled (authored gravity retained)";
     internal async Task RefreshModelContextAsync(bool resourceChanges = false)
     {
         if (disposed) return;
