@@ -246,7 +246,7 @@
     {
       "gui": "MainWindow.AnimationMode:AnimationModeKey",
       "tools": ["zstudio_animation_mode", "zstudio_animation_transport"],
-      "note": "Shift+Esc is animation_mode exit (plain Esc never exits); Alt+←/→ are back/forward; Ctrl+1/2/3 are layout view structure/timing/split; Space is animation_transport play or pause outside text fields and focused buttons; , and . are previous/next (one 1/60 s tick), with Shift a seek of one second; Home and End in the 3D view are animation_transport seek to the playback range's start and end. F6 / Shift+F6 (focus: 3D view, transport, panel, Inspector) and Alt+Enter (the Inspector's first field) only move the keyboard focus; Esc, after what is in progress, clears the selection (animation_graph select with no node). help topic animation-mode lists every key and pointer action."
+      "note": "Shift+Esc is animation_mode exit (plain Esc never exits); Alt+←/→ are back/forward; Ctrl+1/2/3 are layout view structure/timing/split; Space is animation_transport play or pause outside text fields and focused buttons; , and . are previous/next (one 1/60 s tick), with Shift a seek of one second; Home and End in the 3D view are animation_transport seek to the playback range's start and end. F6 / Shift+F6 (focus: 3D view, transport, panel, Inspector) and Alt+Enter (the Inspector's first field) only move the keyboard focus; Esc, after what is in progress, clears the selection (animation_graph select with no node). A compiled animation takes the same , . Ctrl+1/2/3 F6 and Home/End keys (CompiledAnimationKey; animation_mode layout and animation_transport on its preview), and Esc ends its Pick in view. help topic animation-mode lists every key and pointer action."
     },
     {
       "gui": "MainWindow.AnimationScenario:PickInView",
@@ -457,7 +457,7 @@
       "tools": [
         "zstudio_animation_scenario"
       ],
-      "note": "A compiled animation's Scenario tab: one start (the shown animation at 0 s), Called animations with Include all and Exclude all (every call runs by default: animation_scenario include, includeAll, excludeAll), Conditions (player at start, custom with Pick in view, or none; random seed; effects detail; overrides with Go to and ✕: animation_scenario inputs, pick, conditions), Rules (animation_scenario rules), World (phase, height, beam origin; World: Choose GameZ… and back to automatic, Bound root: Bind root… and Clear override, Range: Auto or a custom end: animation_scenario inputs world, root (null clears the override) and range) and Reset… (animation_scenario reset). It is kept for the file's other animations and never saved."
+      "note": "A compiled animation's Scenario tab: one start (the shown animation at 0 s), Called animations with Include all and Exclude all (every call runs by default: animation_scenario include, includeAll, excludeAll), Conditions (player at start, custom with Pick in view, or none; random seed; effects detail; overrides with Go to and ✕: animation_scenario inputs, pick, conditions), Rules (animation_scenario rules), World (phase, height, beam origin; World: Choose GameZ… and back to automatic, Bound root: Bind root… and Clear override, Range: Auto or a custom end: animation_scenario inputs world, root (null clears the override) and range) and Reset… (animation_scenario reset: the world, bound root and range too). Its inputs, rules and world are kept for the file's other animations, never saved; call switches, condition overrides, a bound-root override and a custom range belong to the animation shown."
     },
     {
       "gui": "MainWindow.CompiledDrops:DropWindowsChip",
@@ -466,7 +466,7 @@
         "zstudio_preview_state",
         "zstudio_animation_scenario"
       ],
-      "note": "A compiled Whole world's Drop windows chip over the view (read only): its flyout's Analyze drop windows is animation_paths show (or analyze with a flight entry), the flight choice animation_paths analyze, the window list animation_paths select (its markers in the view), and the chip's word and the flyout's text are preview_state.parachute; the player the analysis measures from is animation_scenario inputs {player}. Moves, Apply and history belong to a source project's map."
+      "note": "A compiled Whole world's Drop windows chip over the view (read only): its flyout's Analyze drop windows is animation_paths show (or analyze with a flight entry), the flight choice animation_paths analyze, the window list read only (not selectable; preview_state.parachute.windows lists them and every window's markers show in the view), and the chip's word and the flyout's text are preview_state.parachute; the player the analysis measures from is animation_scenario inputs {player}. Moves, Apply and history belong to a source project's map."
 
     }
   ],
@@ -975,7 +975,7 @@
       "tools": [
         "zstudio_workspace_view"
       ],
-      "note": "Use the semantic tool with explicit identities and arguments."
+      "note": "workspace_view tools; with a compiled animation shown, Tools shows or hides its Diagnostics strip (compiledAnimation.diagnostics, as animation_mode layout diagnostics)."
     },
     {
       "gui": "MainWindow.xaml:ToolSelectionChanged",
