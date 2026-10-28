@@ -208,7 +208,7 @@ public sealed partial class AnimationTests
         }
         context.Sounds.Add("sound", new("sound", "sound.wav", false, wave));
         var duration = new AnimationPlayer(context, 0).MeasureDuration(TestContext.Current.CancellationToken);
-        Assert.True(duration.IsFinite); Assert.Equal(60, duration.Frames);
+        Assert.True(duration.IsFinite); Assert.Equal(60, duration.Ticks);
         var player = new AnimationPlayer(context, 0) { PreviewHeight = height }; var start = player.EvaluateForTest(.1);
         Assert.Single(start.Sounds); Assert.Single(start.ActiveSounds);
         Assert.Equal(height, start.Sounds[0].Position.Y); Assert.Equal(height, start.ActiveSounds[0].Position.Y);

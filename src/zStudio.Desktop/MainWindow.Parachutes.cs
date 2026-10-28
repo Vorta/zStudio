@@ -217,9 +217,9 @@ public partial class MainWindow
     {
         if (acceptingParachute || parachutes is not { } state) return;
         if (state.World.Revision == state.WorldRevision && (state.Owner?.Revision ?? state.World.Revision) == state.OwnerRevision) return;
-        CloseParachutes(); ViewModel.Status = "The Parachute owner changed. Open Parachute again to analyze its current animation.";
+        CloseParachutes(); ViewModel.Status = "The flight's definition changed. Analyze drop windows again for its current animation.";
     }
-    /// <summary>The route editor's world for Save: a source world, saved as the project is (save_document), whatever gesture runs.</summary>
+    /// <summary>The drop-window analysis's world for Save: a source world, saved as the project is (save_document), whatever gesture runs.</summary>
     private DocumentModel ParachuteSaveWorld(string? snapshot = null)
     {
         var world = RequireParachutes(snapshot).World;
@@ -227,8 +227,8 @@ public partial class MainWindow
     }
     private ParachuteSession RequireParachutes(string? snapshot = null, bool edit = false)
     {
-        var state = parachutes ?? throw new StudioCommandException("not_ready", "Open Parachute in a Whole world first.");
-        if (snapshot != null && snapshot != state.Id) throw new StudioCommandException("stale_snapshot", "Read the current Parachute snapshot.");
+        var state = parachutes ?? throw new StudioCommandException("not_ready", "Analyze drop windows first: in Animation mode on a VTOL flight, or with a compiled Whole world's Drop windows chip.");
+        if (snapshot != null && snapshot != state.Id) throw new StudioCommandException("stale_snapshot", "Read the current drop-window snapshot.");
         if (!IsAiWorld || shownDocument != state.World || scene != state.Viewport || state.World.IsDisposed || state.Owner?.IsDisposed == true ||
             state.World.Revision != state.WorldRevision || (state.Owner?.Revision ?? state.World.Revision) != state.OwnerRevision ||
             state.Viewport.SceneGeneration != state.SceneGeneration || state.Stale)
@@ -311,7 +311,7 @@ public partial class MainWindow
             if (owner != null && (owner.IsDisposed || owner.Revision != ownerRevision)) throw new StudioCommandException("context_changed", "The animation owner changed during analysis.");
             RequireParachutePublication(viewport);
             // Analysis publishes evidence only. Selecting a window is an explicit inspection action;
-            // doing it here would replace an unpinned animation candidate and its configured scenario.
+            // doing it here would change the Inspector's selection behind the user's back.
             state.Selected = null; parachutes = state;
             world.PropertyChanged += ParachuteDocumentChanged; world.Disposing += CloseParachutes;
             if (owner != null) { owner.PropertyChanged += ParachuteDocumentChanged; owner.Disposing += CloseParachutes; }
@@ -320,7 +320,7 @@ public partial class MainWindow
             CompleteParachuteStatus(request, world, viewport, ParachuteAnalysisResult(state));
         }
         catch (Exception ex) when (request != parachuteGeneration && ex is OperationCanceledException or StudioCommandException or IOException or InvalidDataException or UnauthorizedAccessException)
-        { throw new StudioCommandException("context_changed", "A newer Parachute request superseded this analysis."); }
+        { throw new StudioCommandException("context_changed", "A newer drop-window request superseded this analysis."); }
         catch (Exception ex) when (ex is OperationCanceledException or StudioCommandException or IOException or InvalidDataException or UnauthorizedAccessException)
         {
             CompleteParachuteStatus(request, world, viewport, ParachuteAnalysisFailure(ex));
@@ -343,7 +343,7 @@ public partial class MainWindow
         {
             var scenario = worldAnimationConfiguration.ToExecutionPolicy();
             var result = await Task.Run(() => AnalyzeParachuteCandidate(state.Context, candidate, scenario, cancellation.Token), cancellation.Token);
-            if (request != parachuteGeneration) throw new StudioCommandException("context_changed", "A newer Parachute analysis superseded this request.");
+            if (request != parachuteGeneration) throw new StudioCommandException("context_changed", "A newer drop-window analysis superseded this request.");
             RequireParachutes(state.Id); cancellation.Token.ThrowIfCancellationRequested();
             if (!SameDropScenario(scenario, worldAnimationConfiguration.ToExecutionPolicy()))
                 throw new StudioCommandException("context_changed", "The animation scenario changed while drop windows were analyzed.");
@@ -354,7 +354,7 @@ public partial class MainWindow
             CompleteParachuteStatus(request, state.World, state.Viewport, ParachuteAnalysisResult(state));
         }
         catch (Exception ex) when (request != parachuteGeneration && ex is OperationCanceledException or StudioCommandException or IOException or InvalidDataException or UnauthorizedAccessException)
-        { throw new StudioCommandException("context_changed", "A newer Parachute request superseded this analysis."); }
+        { throw new StudioCommandException("context_changed", "A newer drop-window request superseded this analysis."); }
         catch (Exception ex) when (ex is OperationCanceledException or StudioCommandException or IOException or InvalidDataException or UnauthorizedAccessException)
         {
             CompleteParachuteStatus(request, state.World, state.Viewport, ParachuteAnalysisFailure(ex));
@@ -442,7 +442,7 @@ public partial class MainWindow
     private ParachuteDraft RequireParachuteDraft(string? token = null)
     {
         var draft = parachuteDraft ?? throw new StudioCommandException("no_draft", "Begin moving a drop window first.");
-        if (token != null && token != draft.Token) throw new StudioCommandException("stale_draft", "Read the current Parachute draft token.");
+        if (token != null && token != draft.Token) throw new StudioCommandException("stale_draft", "Read the current drop-window draft token.");
         if (RequireParachutes(draft.Session.Id, edit: true) != draft.Session) throw new StudioCommandException("context_changed", "The draft's analysis changed.");
         return draft;
     }
@@ -581,17 +581,13 @@ public partial class MainWindow
     }
     private async void ParachuteActionClick(object sender, RoutedEventArgs e) => await ReportUi(async () =>
     {
-        string action = (sender as FrameworkElement)?.Tag as string ?? "show";
+        string action = (sender as FrameworkElement)?.Tag as string ?? "";
         if (action is not ("confirm" or "cancel") && !await ResolvePropertiesDraftsAsync()) return;
-        if (action == "show") { if (parachutes != null) HideParachutes(); else await ShowParachutesAsync(CancellationToken.None); }
-        else if (action == "analyze" && CompiledWorldShown) await ShowParachutesAsync(CancellationToken.None, parachutes?.Entry);
+        if (action == "analyze" && CompiledWorldShown) await ShowParachutesAsync(CancellationToken.None, parachutes?.Entry);
         else if (action == "analyze" && animationMode is { } mode) await AnalyzeWorldDropWindowsAsync(mode.Document, mode.Definition, OpenedFlightEntry(), CancellationToken.None);
         else if (action == "begin") BeginParachute(pointer: true);
-        else if (action == "numeric") BeginParachute();
         else if (action == "confirm") await ConfirmParachuteFromGuiAsync();
         else if (action == "cancel") CancelParachuteDraft();
-        else if (action is "undo" or "redo") await ParachuteHistoryAsync(action == "redo", CancellationToken.None);
-        else if (action == "save") await SaveSourceWorldDocumentAsync(ParachuteSaveWorld());
     });
     private async void ParachuteSelectionChanged(object sender, SelectionChangedEventArgs e)
     {
@@ -753,7 +749,7 @@ public partial class MainWindow
             foreach (UIElement part in new UIElement[] { ParachuteWindowsHeader, ParachuteWindows }) part.Visibility = analyzedHere && state!.Analysis != null ? Visibility.Visible : Visibility.Collapsed;
             if (state == null)
             {
-                ParachuteOwner.Visibility = ParachuteFlights.Visibility = ParachuteMoveButtons.Visibility = ParachuteDraftPanel.Visibility = ParachuteHistory.Visibility = Visibility.Collapsed;
+                ParachuteOwner.Visibility = ParachuteFlights.Visibility = ParachuteMoveButtons.Visibility = ParachuteDraftPanel.Visibility = Visibility.Collapsed;
                 ParachutePanel.IsEnabled = true;
                 ParachuteMessage.Text = !offered ? "" : parachuteLoading != null ? ParachuteAnalysisStatus
                     : "Not analyzed. Analyze drop windows runs the flight's calls to callback 911 with the scenario's player, switches and rules; the main run stays as it is.";
@@ -764,9 +760,6 @@ public partial class MainWindow
             ParachuteOwner.Visibility = editable ? Visibility.Collapsed : Visibility.Visible;
             ParachuteOwner.Text = editable ? "" : $"{state.Owner?.Title} · read only";
             ParachuteOwner.ToolTip = state.Owner?.Path ?? state.World.SourceWorld?.DefinitionsPath;
-            ParachuteHistory.Visibility = Visibility.Collapsed;
-            ParachuteUndo.IsEnabled = state.World.SourceWorld?.Workspace.CanUndo == true;
-            ParachuteRedo.IsEnabled = state.World.SourceWorld?.Workspace.CanRedo == true;
             ParachuteFlights.ItemsSource = state.Discovery.Candidates.Where(c => !editable || openedDefinition!.Entries.Contains(c.EntryIndex))
                 .Select(c => new ParachuteChoice(c.EntryIndex, $"#{c.EntryIndex} {ShortAiText(c.Name)} · {ShortAiText(c.RootName)}")).ToArray();
             ParachuteFlights.SelectedItem = ParachuteFlights.Items.Cast<ParachuteChoice>().FirstOrDefault(c => c.Entry == state.Entry);

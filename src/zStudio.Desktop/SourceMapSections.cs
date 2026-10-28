@@ -76,7 +76,7 @@ internal sealed class SourceMapSections
 
 /// <summary>A World tree row that is no scene object: a section header, a zone, an AI network, an animation definition or a note.</summary>
 internal abstract record SectionEntry(string Key);
-/// <summary>The Zones, AI Networks or Animations (definitions) section.</summary>
+/// <summary>The Zones, AI Networks or Animations section.</summary>
 internal sealed record SectionHeader(string Section) : SectionEntry("section:" + Section);
 internal sealed record ZoneEntry(SourceZoneRow Zone) : SectionEntry("zone:" + Zone.Zone.ToString(System.Globalization.CultureInfo.InvariantCulture));
 /// <summary>Polygons without a zone: listed for information (not a zone, not selectable).</summary>
@@ -92,8 +92,8 @@ internal sealed record DefinitionEntry(SourceAnimationDefinition Definition, Sou
 internal sealed record AnimationBindingEntry(DefinitionEntry Definition, AnimationStructureEntry Binding)
     : SectionEntry($"animationBinding:{Binding.Entry}");
 /// <summary>Another bounded page of a definition's bindings.</summary>
-internal sealed record AnimationPageEntry(DefinitionEntry? Definition, int RootEntry, int Entry, string ParentPath, int Offset)
-    : SectionEntry($"animationPage:{RootEntry}:{Entry}:{ParentPath}:{Offset}");
+internal sealed record AnimationPageEntry(DefinitionEntry Definition, int Offset)
+    : SectionEntry($"animationPage:{Offset}");
 internal sealed record MissingFileEntry(SourceAnimationListing Listing) : SectionEntry($"missing:{Listing.Index}:{Listing.File}");
 /// <summary>A tertiary line in an empty section saying why it is empty.</summary>
 internal sealed record NoteEntry(string Text) : SectionEntry("note");

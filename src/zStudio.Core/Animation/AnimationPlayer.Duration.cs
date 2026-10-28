@@ -6,9 +6,9 @@ namespace zStudio.Core.Animation;
 public enum AnimationDurationKind { Finite, Looping, OpenEnded, Unavailable, AnalysisLimit, DependencyBlocked }
 
 /// <summary>A finite preview duration, or an explicitly bounded view of an event program with no known end.</summary>
-public sealed record AnimationDuration(int Frames, AnimationDurationKind Kind, string Explanation)
+public sealed record AnimationDuration(int Ticks, AnimationDurationKind Kind, string Explanation)
 {
-    public double Seconds => Frames * AnimationPlayer.StepSeconds;
+    public double Seconds => Ticks * AnimationPlayer.StepSeconds;
     public bool IsFinite => Kind == AnimationDurationKind.Finite;
 }
 
@@ -30,7 +30,7 @@ public sealed partial class AnimationPlayer
             probe = new AnimationPlayer(context, entryIndex, Seed, resetPhase, token, maximumRetainedStateBytes,
                 () => RetainedStateBytes + (otherRetainedState?.Invoke() ?? 0), schedule)
             {
-                ConditionOverride = ConditionOverride, EffectLevel = EffectLevel, ExecutionPolicy = ExecutionPolicy,
+                EffectLevel = EffectLevel, ExecutionPolicy = ExecutionPolicy,
                 ReferencePosition = ReferencePosition, ActivationStart = ActivationStart, GroundPlaneEnabled = GroundPlaneEnabled, Terrain = Terrain, OriginCollision = OriginCollision,
                 ProceduralLimitsEnabled = ProceduralLimitsEnabled, PreviewHeight = PreviewHeight, measuringDuration = true
             };

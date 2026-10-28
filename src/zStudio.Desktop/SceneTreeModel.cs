@@ -45,7 +45,7 @@ internal interface ISourceSectionState
     bool AnyNetworkShown { get; }
     bool NetworkShown(string network);
     bool AnimationShown(int definition);
-    IReadOnlyList<SectionEntry> AnimationChildren(SourceMapSections sections, SectionEntry section, int maximum) => [];
+    IReadOnlyList<SectionEntry> AnimationChildren(SectionEntry section, int maximum) => [];
     /// <summary>The master eye of a section ("zones", "aiNetworks") or pass ("aiv", "puppies"): shown or hidden.</summary>
     bool MasterShown(string section);
 }
@@ -80,7 +80,7 @@ internal sealed class SceneTreeModel
     {
         int remaining = zStudio.Core.Animation.AnimationStructurePlan.MaximumDependencyRecords - animationRecords;
         if (remaining <= 0) return [new NoteEntry("Animation tree limit reached (4,096 rows). Close and reopen the map to browse a different branch.")];
-        var entries = Sections == null ? [] : SectionState?.AnimationChildren(Sections, section, remaining) ?? [];
+        var entries = Sections == null ? [] : SectionState?.AnimationChildren(section, remaining) ?? [];
         animationRecords += entries.Count;
         return entries;
     }
@@ -321,7 +321,7 @@ public sealed class SceneTreeItem : INotifyPropertyChanged
     /// <summary>The name alone: groups show no counts.</summary>
     public string OutlinerLabel => Section != null ? SectionLabel : Pass is { } pass ? pass.Label : Kind == "unlinked" ? "Unlinked nodes" : PickupName != null ? Pickup!.ShortName
         : Problem != null && !IsOtherDifficulty ? Label : Short(DisplayName, 180);
-    /// <summary>A section of the World tree (a later pass, the world, or Zones, AI Networks, Animations (definitions)): set in SemiBold, with its count.</summary>
+    /// <summary>A section of the World tree (a later pass, the world, or Zones, AI Networks, Animations): set in SemiBold, with its count.</summary>
     public bool IsSectionHeader => Pass != null || Section is SectionHeader || Owner.Projection != null && Parent == null && Category == "world";
     /// <summary>Whether this object is an initial root or known indirect recipient.</summary>
     public bool IsAnimated => Animations != null;
@@ -664,7 +664,6 @@ public sealed class SceneTreeItem : INotifyPropertyChanged
             PickupGroupEntry or PickupTypeEntry => PickupEntries!.Count == 0 ? $"No {PickupNoun(2)} in this mission" : $"Placed only on other difficulties: choose one to see them",
             ZoneEntry zone => IsHidden ? $"Show {ZoneName(zone.Zone.Zone).ToLowerInvariant()}'s colour" : $"Hide {ZoneName(zone.Zone.Zone).ToLowerInvariant()}'s colour",
             NetworkEntry network => IsHidden ? $"Show {SourceMapSections.NetworkStem(network.Network)} in the view" : $"Hide {SourceMapSections.NetworkStem(network.Network)} in the view",
-            DefinitionEntry => IsHidden ? "Show cached animation paths. Use Evaluate paths in Properties first." : "Hide animation paths",
             _ => "",
         },
     };
@@ -681,7 +680,7 @@ public sealed class SceneTreeItem : INotifyPropertyChanged
             + $"{network.Nodes.Count} nodes · {network.Nodes.Sum(n => n.PreviewLinks.Count(l => l.Target != null))} links\n{network.Id}",
         DefinitionScopeEntry scope => $"{scope.Folder}: {scope.Count} definitions",
         AnimationBindingEntry binding => $"Binding #{binding.Binding.Entry}: {binding.Binding.Name} on {binding.Binding.Root}\nOpen (▷, Enter or double-click) shows it in Animation mode; nothing plays until you play it.",
-        AnimationPageEntry => "Expand to read the next page of up to 100 direct rows. No animation is evaluated.",
+        AnimationPageEntry => "Expand to list the next bindings, up to 100. No animation is evaluated.",
         DefinitionFileEntry file => $"{file.Listing.File}\n{file.Definitions.Count} definitions\nListed by {file.Listing.ListedBy ?? "the map"}",
         DefinitionEntry { Definition: var definition } entry => $"{definition.Name}\n{definition.File} · definition {definition.Ordinal + 1}\nNAME {definition.RootName}{(definition.Pattern ? " (each * is one digit)" : "")}"
             + (definition.Activation != null ? " · " + definition.Activation : "") + $" · {definition.SequenceCount} sequence{(definition.SequenceCount == 1 ? "" : "s")}"

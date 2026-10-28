@@ -201,7 +201,7 @@ public partial class MainWindow
     {
         var layout = RequireGraph();
         var target = animationMode!;
-        // As the timeline's selection: an open card draft is applied or reverted first.
+        // As Timing's selection: an open card draft is applied or reverted first.
         if (id.Length > 0) RequireNoDrafts();
         if (id.Length == 0)
         {
@@ -213,7 +213,7 @@ public partial class MainWindow
         if ((layout.Item(id)?.Item.Row ?? graph.Row(id)) is { } row)
         {
             string path = graph.Node(AnimationGraph.FrameId(row.Entry))?.Frame?.Path ?? "";
-            await WorldAnimationSelectSourceAsync(row.Sequence, row.Event, token, row.Entry, path, preserveTimeline: true);
+            await WorldAnimationSelectSourceAsync(row.Sequence, row.Event, token, row.Entry, path);
             animationGraphOutline = GraphOutline(row.Entry, row.Members.Count > 0 ? row.Members : [row.Event]);
             RevealTimingRow(row.Entry, path, row.Sequence, row.Event);
         }
@@ -226,14 +226,14 @@ public partial class MainWindow
                     {
                         var sequence = node.Sequence!;
                         string path = graph.Node(AnimationGraph.FrameId(sequence.Entry))?.Frame?.Path ?? "";
-                        await WorldAnimationSelectSourceAsync(sequence.Id, Guid.Empty, token, sequence.Entry, path, preserveTimeline: true);
+                        await WorldAnimationSelectSourceAsync(sequence.Id, Guid.Empty, token, sequence.Entry, path);
                         var events = graph.Index.Package.Entries[sequence.Entry].AllSequences.FirstOrDefault(s => s.Id == sequence.Id)?.Events.Select(e => e.Id).ToArray() ?? [];
                         animationGraphOutline = GraphOutline(sequence.Entry, events);
                         RevealTimingRow(sequence.Entry, path, sequence.Id, null);
                         break;
                     }
                 case AnimationGraphNodeKind.Reference when node.Reference is { Entries.Count: > 0 } reference:
-                    await EnsureAnimationCardForEntryAsync(target.Document, reference.Entries[0], token, preserveTimeline: true);
+                    await EnsureAnimationCardForEntryAsync(target.Document, reference.Entries[0], token);
                     animationGraphOutline = scene?.Mission is { } mission ? [.. reference.Entries.Select(e => mission.AnimationEntryRoots.TryGetValue(e, out int root) ? root : -1).Where(r => r >= 0).Distinct().Take(zStudio.Rendering.SceneViewport.MaximumOutlinedNodes)] : null;
                     break;
                 case AnimationGraphNodeKind.Reference:
@@ -241,7 +241,7 @@ public partial class MainWindow
                     break;
                 default:
                     // The frame or the activation: the definition, its roots outlined.
-                    await EnsureAnimationCardForEntryAsync(target.Document, node.Entry ?? target.Entry, token, preserveTimeline: true);
+                    await EnsureAnimationCardForEntryAsync(target.Document, node.Entry ?? target.Entry, token);
                     animationGraphOutline = scene?.Mission is { } m && m.AnimationEntryRoots.TryGetValue(node.Entry ?? target.Entry, out int bound) ? [bound] : null;
                     break;
             }

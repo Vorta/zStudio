@@ -18,7 +18,7 @@ public sealed partial class AnimationTests
         var player = new AnimationPlayer(Context(package), 0);
         var before = player.EvaluateForTest(.1);
         var duration = player.MeasureDuration(TestContext.Current.CancellationToken);
-        Assert.Equal(AnimationDurationKind.Finite, duration.Kind); Assert.Equal(frames, duration.Frames);
+        Assert.Equal(AnimationDurationKind.Finite, duration.Kind); Assert.Equal(frames, duration.Ticks);
         Assert.Equal(before.Time, player.Time); Assert.Equal(before.Nodes, player.Frame(TestContext.Current.CancellationToken).Nodes);
         Assert.Equal(source, Pack(package));
     }
@@ -32,7 +32,7 @@ public sealed partial class AnimationTests
         var longMotion = AnimationCatalog.Create(11); longMotion.SetInt(16, 1); longMotion.SetFloat(140, 2); longMotion.Threshold = 1;
         var second = new AnimationSequence(new byte[64]); second.Name = "second"; second.Events.Add(longMotion); entry.Sequences.Add(second);
         var duration = new AnimationPlayer(Context(package), 0).MeasureDuration(TestContext.Current.CancellationToken);
-        Assert.True(duration.IsFinite); Assert.InRange(duration.Frames, 179, 181);
+        Assert.True(duration.IsFinite); Assert.InRange(duration.Ticks, 179, 181);
     }
 
     [Fact]
@@ -46,8 +46,8 @@ public sealed partial class AnimationTests
         var cleanup = AnimationCatalog.Create(11); cleanup.SetInt(16, 1); cleanup.SetFloat(140, 1); entry.Primary.Events.Add(cleanup);
         var context = Context(package);
         var runtime = new AnimationPlayer(context, 0).MeasureDuration(TestContext.Current.CancellationToken);
-        Assert.True(runtime.IsFinite); Assert.InRange(runtime.Frames, 178, 184);
-        Assert.Equal(60, new AnimationPlayer(context, 0, resetPhase: true).MeasureDuration(TestContext.Current.CancellationToken).Frames);
+        Assert.True(runtime.IsFinite); Assert.InRange(runtime.Ticks, 178, 184);
+        Assert.Equal(60, new AnimationPlayer(context, 0, resetPhase: true).MeasureDuration(TestContext.Current.CancellationToken).Ticks);
     }
 
     [Fact]
@@ -58,13 +58,13 @@ public sealed partial class AnimationTests
         var loop = AnimationCatalog.Create(30); loop.SetInt(12, 1); loop.SetInt(16, 3);
         entry.Sequences[0].Events.AddRange([motion, loop]);
         var finite = new AnimationPlayer(Context(package), 0).MeasureDuration(TestContext.Current.CancellationToken);
-        Assert.True(finite.IsFinite); Assert.InRange(finite.Frames, 90, 94);
+        Assert.True(finite.IsFinite); Assert.InRange(finite.Ticks, 90, 94);
         loop.SetInt(16, 65535);
         Assert.Equal(AnimationDurationKind.Looping, new AnimationPlayer(Context(package), 0).MeasureDuration(TestContext.Current.CancellationToken).Kind);
         var controller = new AnimationSequence(new byte[64]); controller.Name = "stopper";
         var stop = AnimationCatalog.Create(23); stop.SetInt(44, 0); stop.Threshold = 2; controller.Events.Add(stop); entry.Sequences.Add(controller);
         var stopped = new AnimationPlayer(Context(package), 0).MeasureDuration(TestContext.Current.CancellationToken);
-        Assert.True(stopped.IsFinite); Assert.InRange(stopped.Frames, 119, 121);
+        Assert.True(stopped.IsFinite); Assert.InRange(stopped.Ticks, 119, 121);
     }
 
     [Fact]
@@ -91,7 +91,7 @@ public sealed partial class AnimationTests
         var snapshot = context.Snapshot(); motion.SetFloat(140, 12);
         var player = new AnimationPlayer(snapshot, 0);
         var duration = player.MeasureDuration(TestContext.Current.CancellationToken);
-        Assert.Equal(AnimationDurationKind.Finite, duration.Kind); Assert.Equal(60, duration.Frames);
+        Assert.Equal(AnimationDurationKind.Finite, duration.Kind); Assert.Equal(60, duration.Ticks);
         using var cancel = new CancellationTokenSource(); cancel.Cancel();
         Assert.Throws<OperationCanceledException>(() => player.MeasureDuration(cancel.Token));
     }
@@ -102,9 +102,11 @@ public sealed partial class AnimationTests
         var package = Fixture(); var events = package.Entries[0].Sequences[0].Events;
         var shortMotion = AnimationCatalog.Create(11); shortMotion.SetInt(16, 1);
         var longMotion = new AnimationEvent((byte[])shortMotion.Bytes.Clone()) { Version = shortMotion.Version }; longMotion.SetFloat(140, 3);
-        events.AddRange([AnimationCatalog.Create(31), shortMotion, AnimationCatalog.Create(32), longMotion, AnimationCatalog.Create(34)]);
-        Assert.Equal(60, new AnimationPlayer(Context(package), 0) { ConditionOverride = true }.MeasureDuration(TestContext.Current.CancellationToken).Frames);
-        Assert.Equal(180, new AnimationPlayer(Context(package), 0) { ConditionOverride = false }.MeasureDuration(TestContext.Current.CancellationToken).Frames);
+        var condition = AnimationCatalog.Create(31); condition.SetInt(12, 1);
+        events.AddRange([condition, shortMotion, AnimationCatalog.Create(32), longMotion, AnimationCatalog.Create(34)]);
+        int Ticks(bool value) => new AnimationPlayer(Context(package), 0) { ExecutionPolicy = new(conditionOverrides: [new("", 0, condition.Id, value)]) }
+            .MeasureDuration(TestContext.Current.CancellationToken).Ticks;
+        Assert.Equal(60, Ticks(true)); Assert.Equal(180, Ticks(false));
     }
 
     [Fact]
@@ -116,7 +118,7 @@ public sealed partial class AnimationTests
         var sequence = new AnimationSequence(new byte[64]); sequence.Events.Add(motion); child.Sequences.Add(sequence); package.Entries.Add(child);
         var launch = AnimationCatalog.Create(24); launch.SetText(12, "child", 20); launch.SetShort(48, 1); parent.Sequences[0].Events.Add(launch);
         var duration = new AnimationPlayer(Context(package), 0).MeasureDuration(TestContext.Current.CancellationToken);
-        Assert.True(duration.IsFinite); Assert.InRange(duration.Frames, 120, 122);
+        Assert.True(duration.IsFinite); Assert.InRange(duration.Ticks, 120, 122);
         launch.SetShort(48, 0); launch.SetText(12, "missing", 20);
         Assert.Equal(AnimationDurationKind.Unavailable, new AnimationPlayer(Context(package), 0).MeasureDuration(TestContext.Current.CancellationToken).Kind);
     }

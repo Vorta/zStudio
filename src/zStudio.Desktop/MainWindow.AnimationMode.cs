@@ -945,7 +945,7 @@ public partial class MainWindow
     private static bool IsFocusedControl(DependencyObject? at)
     {
         for (var current = at; current != null; current = current is Visual or System.Windows.Media.Media3D.Visual3D ? VisualTreeHelper.GetParent(current) : LogicalTreeHelper.GetParent(current))
-            // The World tree keeps Space for opening rows, and a focused button or field for itself; the timeline's rows play.
+            // The World tree keeps Space for opening rows, and a focused button or field for itself; Structure's and Timing's rows play.
             if (current is ButtonBase or ComboBox or MenuItem or Slider or Thumb or TreeViewItem or DataGridRow) return true;
         return false;
     }

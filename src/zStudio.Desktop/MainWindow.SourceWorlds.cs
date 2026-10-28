@@ -841,7 +841,7 @@ public partial class MainWindow
         if (committingParachute != null)
         {
             if (RequireParachuteDraft(committingParachute.Token) != committingParachute)
-                throw new StudioCommandException("stale_draft", "The Parachute draft changed during preparation.");
+                throw new StudioCommandException("stale_draft", "The drop-window draft changed during preparation.");
             RequireNoDrafts(doc, committing: true, committingParachute: committingParachute);
             try { session.Workspace.ValidatePreparedEdit(prepared, cancellation.Token, verification.Value); }
             catch (SourceFileChangedException ex) { throw new StudioCommandException("external_change", ex.Message); }

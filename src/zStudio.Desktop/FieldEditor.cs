@@ -21,7 +21,6 @@ public partial class FieldEditor : UserControl
     internal event Action? PendingDraftStarted;
     private protected readonly List<DraftInput> draftInputs = [];
     protected readonly List<Action> valueRefresh = [];
-    protected readonly List<Action> referenceRefresh = [];
     protected string inputScope = "properties";
     public bool HasPendingDrafts => draftInputs.Any(d => d.Draft.IsPending || d.Draft.IsCommitting);
     /// <summary>Drafts with input no commit is applying yet (a committing draft is excluded).</summary>
@@ -108,8 +107,7 @@ public partial class FieldEditor : UserControl
             error.Text = draft.Error ?? ""; error.Visibility = draft.Error == null ? Visibility.Collapsed : Visibility.Visible; displaying = false;
         }
         var input = new DraftInput(draft,row,Display,inputScope); if (!readOnly) draftInputs.Add(input);
-        if (getter != null && inputScope is "properties" or "references")
-            (inputScope == "properties" ? valueRefresh : referenceRefresh).Add(() => { draft.Refresh(getter()); Display(); });
+        if (getter != null && inputScope == "properties") valueRefresh.Add(() => { draft.Refresh(getter()); Display(); });
         foreach (var box in boxes)
         {
             box.TextChanged += (_,_) =>
@@ -262,5 +260,4 @@ public partial class FieldEditor : UserControl
         };
         panel.Children.Add(button);
     }
-    protected sealed record ChoiceValue(int Value,string Label);
 }

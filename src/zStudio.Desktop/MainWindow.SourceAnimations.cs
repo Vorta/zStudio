@@ -158,16 +158,16 @@ public partial class MainWindow
     private Task SelectAnimationDefinitionAsync(DocumentModel document, int definition, int? entry, CancellationToken token)
         => EnsureAnimationCardAsync(document, definition, entry, token);
 
-    private async Task EnsureAnimationCardForEntryAsync(DocumentModel document, int entry, CancellationToken token, bool preserveTimeline = false)
+    private async Task EnsureAnimationCardForEntryAsync(DocumentModel document, int entry, CancellationToken token)
     {
         if (document.SourceWorld == null || sceneTree?.Sections is not { } sections) return;
         var definition = sections.Definitions.Definitions.FirstOrDefault(d => d.Entries.Contains(entry));
         if (definition == null) return;
-        await EnsureAnimationCardAsync(document, definition.Index, entry, token, preserveTimeline);
+        await EnsureAnimationCardAsync(document, definition.Index, entry, token);
     }
 
     /// <summary>Selects a definition's World tree row and shows its editable card, choosing <paramref name="entry"/> as the card's binding.</summary>
-    private async Task EnsureAnimationCardAsync(DocumentModel document, int definitionIndex, int? entry, CancellationToken token, bool preserveTimeline = false)
+    private async Task EnsureAnimationCardAsync(DocumentModel document, int definitionIndex, int? entry, CancellationToken token)
     {
         if (document.SourceWorld == null || sceneTree?.Sections is not { } sections) return;
         var definition = sections.Definitions.Definitions.FirstOrDefault(d => d.Index == definitionIndex);
@@ -183,7 +183,7 @@ public partial class MainWindow
             finally { selectingAnimationCard = false; }
         }
         if (SectionCard().ShowsAnimation(document, target)) return;
-        await LoadAnimationCardCoreAsync(document, target, token, false, preserveTimeline);
+        await LoadAnimationCardCoreAsync(document, target, token);
         if (!SectionCard().ShowsAnimation(document, target)) throw new StudioCommandException("not_ready", "The animation definition could not be opened; inspect the reported source error.");
     }
 
@@ -205,8 +205,8 @@ public partial class MainWindow
     private Task EndSourceAnimationPreview() => ExitAnimationModeAsync(CancellationToken.None);
 
     private Task LoadAnimationCardAsync(DocumentModel document, DefinitionEntry definition, CancellationToken token)
-        => LoadAnimationCardCoreAsync(document, definition, token, false);
-    private async Task LoadAnimationCardCoreAsync(DocumentModel document, DefinitionEntry definition, CancellationToken token, bool analyze, bool preserveTimeline = false)
+        => LoadAnimationCardCoreAsync(document, definition, token);
+    private async Task LoadAnimationCardCoreAsync(DocumentModel document, DefinitionEntry definition, CancellationToken token)
     {
         if (SectionCard().ShowsAnimation(document, definition)) return;
         // In Animation mode the analysis follows the opened definition (OpenAnimationModeAsync, Exit), not the card: a selection of
@@ -317,12 +317,6 @@ public partial class MainWindow
         }, token, committingSection: committingSection, requireAnimations: true);
     }
 
-    private Task PreviewSourceAnimationAsync(DocumentModel document, int definition, int entry)
-    {
-        // Implemented by the source-map transport host; it keeps the world navigation and source Properties card.
-        return StartSourceAnimationPreviewAsync(document, definition, entry);
-    }
-
     private void RegisterSourceAnimationCommands(StudioCommands registry)
     {
         RegisterJob(registry, "source_animation", "Inspect and edit an existing source animation definition. Addresses belong to the document revision. Edits preserve source trivia and apply to every expansion of the definition; tracks and event order are read only. begin selects the definition (the map layout's card: Open in Animation mode, Bindings, an Activation summary, Calls and callers, Source; no editing); card reads the card the pane shows (that summary, or in Animation mode the Inspector card; the same as animation_graph inspector); select and set edit only in Animation mode, as its Inspector does (animation_mode open first); set updates the shared draft (changes by field ID, or an event's start threshold in seconds with startClock and startSeconds for record or the selected event: the same draft as Timing's bracket drag and animation_timing threshold); apply accepts one project undo step; cancel reverts the draft. read pages source records; each record contains its typed fields. context returns bounded read-only definition/script excerpts for a record, optionally near scriptTime. Save uses save_document.",
@@ -385,7 +379,7 @@ public partial class MainWindow
                         if (changes.Count == 0) throw new StudioCommandException("invalid_argument", "Supply changes, or startClock or startSeconds.");
                         card.SetAnimationChanges(changes);
                     }
-                    else { card.RequireDraft(Text(a, "token")); if (action == "cancel") card.Discard(); else { await card.ApplyAsync(); if (card.HasDraft) throw new StudioCommandException("edit_failed", "The edit was not accepted; the Properties draft retains its error."); } }
+                    else { card.RequireDraft(Text(a, "token")); if (action == "cancel") card.Discard(); else { await card.ApplyAsync(); if (card.HasDraft) throw new StudioCommandException("edit_failed", "The edit was not accepted; the Inspector's draft retains its error."); } }
                 }
                 return Result(new { draft = SectionCard().AnimationDraft });
 

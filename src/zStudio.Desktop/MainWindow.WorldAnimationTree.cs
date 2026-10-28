@@ -1,6 +1,3 @@
-using System.Windows;
-using System.Windows.Controls;
-using zStudio.Automation;
 using zStudio.Core.Animation;
 using zStudio.Core.Sources;
 
@@ -8,7 +5,7 @@ namespace zStudio.Desktop;
 
 public partial class MainWindow
 {
-    IReadOnlyList<SectionEntry> ISourceSectionState.AnimationChildren(SourceMapSections sections, SectionEntry section, int maximum)
+    IReadOnlyList<SectionEntry> ISourceSectionState.AnimationChildren(SectionEntry section, int maximum)
     {
         if (maximum < 2) return [new NoteEntry("Animation tree limit reached (4,096 rows).")];
         if (shownDocument?.Document.Animations == null) return [];
@@ -19,7 +16,7 @@ public partial class MainWindow
         {
             case DefinitionEntry definition when definition.Definition.Entries.Count > 1:
                 return Bindings(definition, 0);
-            case AnimationPageEntry { Definition: not null } page:
+            case AnimationPageEntry page:
                 return Bindings(page.Definition, page.Offset);
             default: return [];
         }
@@ -31,7 +28,7 @@ public partial class MainWindow
             for (int i = offset; i < entries.Count && rows.Count < limit; i++)
                 if (entries[i] >= 0 && entries[i] < plan.EntryCount) rows.Add(new AnimationBindingEntry(definition, plan.Entry(entries[i])));
             int next = offset + limit;
-            if (next < entries.Count) rows.Add(new AnimationPageEntry(definition, -1, -1, "", next));
+            if (next < entries.Count) rows.Add(new AnimationPageEntry(definition, next));
             return rows;
         }
     }
@@ -73,7 +70,7 @@ public partial class MainWindow
             SectionCard().ShowDefinition(document, definition, named, notes, sceneTree?.Sections?.Definitions.Rejection,
                 Math.Min(roots.Length, zStudio.Rendering.SceneViewport.MaximumOutlinedNodes));
         }
-        await LoadAnimationCardCoreAsync(document, definition, document.Lifetime.Token, false);
+        await LoadAnimationCardCoreAsync(document, definition, document.Lifetime.Token);
         if (sceneTree?.Selected != row || document != shownDocument) return;
         RefreshAnimationInspector();
         RefreshRowEyes();

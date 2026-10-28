@@ -6,7 +6,7 @@ namespace zStudio.Desktop.Tests;
 public sealed class AnimationEventPresentationTests
 {
     [Fact]
-    public void ChildNamesRespectTheirStoredWidthsAndWaitingDoesNotBecomeATimestamp()
+    public void ChildNamesRespectTheirStoredWidths()
     {
         var entry = Entry(); var child = AnimationCatalog.Create(24);
         child.SetText(12, "vtol_destruction1", 20); child.SetInt(32, 0x41414141);
@@ -14,8 +14,6 @@ public sealed class AnimationEventPresentationTests
         byte[] before = child.Bytes.ToArray();
         var row = AnimationEventPresentation.Create(entry, child);
         Assert.Equal("Animation name: vtol_destruction1 · Wait for child to finish", row.Summary);
-        Assert.Equal("After previous event ≥ 0.1 s", row.Timing);
-        Assert.Contains("not duration or observed dispatch time", row.Description);
         Assert.Equal(before, child.Bytes);
         var between = AnimationCatalog.Create(19); between.SetText(16, "a_name_longer_than_twenty_chars");
         Assert.Equal("Animation name: a_name_longer_than_twenty_chars", AnimationEventPresentation.Create(entry, between).Summary);
@@ -59,22 +57,20 @@ public sealed class AnimationEventPresentationTests
     }
 
     [Fact]
-    public void UnknownTruncatedAndMalformedEventsHaveSafeDescriptions()
+    public void UnknownTruncatedAndMalformedEventsHaveSafeSummaries()
     {
         var entry = Entry();
-        Assert.Equal("Timing unavailable", AnimationEventPresentation.Create(entry, new([])).Timing);
+        Assert.Equal("Truncated event header", AnimationEventPresentation.Create(entry, new([])).Summary);
         var unknown = new AnimationEvent(new byte[12]); unknown.Bytes[0] = 0xff;
-        Assert.Contains("Unsupported", AnimationEventPresentation.Create(entry, unknown).Timing);
+        Assert.Contains("Unknown payload", AnimationEventPresentation.Create(entry, unknown).Summary);
         foreach (var spec in AnimationCatalog.Events)
         {
             var ev = AnimationCatalog.Create(spec.Type); byte[] before = ev.Bytes.ToArray();
-            Assert.NotEmpty(AnimationEventPresentation.Create(entry, ev).Description); Assert.Equal(before, ev.Bytes);
+            _ = AnimationEventPresentation.Create(entry, ev); Assert.Equal(before, ev.Bytes);
             if (spec.Size > 12) Assert.Contains("Incomplete record", AnimationEventPresentation.Create(entry, new(ev.Bytes[..(spec.Size - 1)])).Summary);
         }
         var malformed = AnimationCatalog.Create(12); malformed.SetInt(32, 7);
         Assert.Contains("Malformed keyframe data", AnimationEventPresentation.Create(entry, malformed).Summary);
-        var tiny = AnimationCatalog.Create(25); tiny.Threshold = .00001f;
-        Assert.DoesNotContain("≥ 0 s", AnimationEventPresentation.Create(entry, tiny).Timing);
     }
 
     private static AnimationEntry Entry() => new(new byte[308], 1, -1);

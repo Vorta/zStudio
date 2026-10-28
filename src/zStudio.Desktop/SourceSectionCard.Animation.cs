@@ -29,8 +29,6 @@ internal sealed partial class SourceSectionCard
     internal Action<InspectorInclude, bool>? InspectorIncludeChosen { get; set; }
     /// <summary>The Bindings section: Animation mode plays another binding (opens it).</summary>
     internal Action<int>? InspectorBindingChosen { get; set; }
-    /// <summary>Panels the window hosts in the card as they are (a flight's Drop windows), by key.</summary>
-    internal Func<string, FrameworkElement?>? InspectorHostContent { get; set; }
     /// <summary>The header changed (Animation mode shows it above the Inspector | Scenario tabs).</summary>
     internal event Action? HeaderChanged;
     internal string HeaderTitle => heading.Text;
@@ -108,8 +106,6 @@ internal sealed partial class SourceSectionCard
         foreach (var section in body.Children.OfType<CardSection>()) section.IsEnabled = !active || section.Title == "Drop windows";
     }
     internal bool ShowsAnimation(DocumentModel document, DefinitionEntry entry) => Document == document && Entry?.Key == entry.Key && animationDefinition != null && animationRevision == document.Revision;
-    internal bool IsAnimationRecord(DocumentModel document, int definition, string record) =>
-        Document == document && animationRevision == document.Revision && animationDefinition?.Index == definition && animationRecord == record;
     internal object? AnimationDraft => animationDefinition == null ? null : new { definition = animationDefinition.Index, file = animationDefinition.File, ordinal = animationDefinition.Ordinal, missions = animationDefinition.Missions, sequence = SelectedSequence, record = animationRecord, token = DraftToken, changes = animationChanges.Values.ToArray(), pending = HasDraft };
     private string? SelectedSequence => animationRecord is { } record && animationDefinition?.Records.FirstOrDefault(r => r.Kind == "sequence" && (r.Id == record || record.StartsWith(r.Id + "/event/", StringComparison.Ordinal))) is { } sequence ? sequence.Id : null;
     /// <summary>The record the card's selection edits (an event or a sequence): source_animation select, and what set's startSeconds targets.</summary>
@@ -870,7 +866,7 @@ internal sealed partial class SourceSectionCard
     }
     private UIElement HostItem(InspectorHost host)
     {
-        var content = InspectorHostContent?.Invoke(host.Key) ?? (host.Key == "drops" ? animationDrops : null);
+        var content = host.Key == "drops" ? animationDrops : null;
         if (content == null) return TextItem(new InspectorText(host.Note ?? ""));
         switch (content.Parent)
         {

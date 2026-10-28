@@ -283,16 +283,6 @@ public partial class MainWindow : ISourceSectionState
             default:
                 switch (row.Section)
                 {
-                    case DefinitionEntry definition:
-                        if (hide ?? shownAnimationPaths.Contains(definition.Definition.Index)) HideSourceAnimationPaths(definition.Definition.Index);
-                        else if (shownDocument is { } document)
-                        {
-                            int entry = definition.Definition.Entries.Contains(sourceAnimationEntry ?? -1) ? sourceAnimationEntry!.Value
-                                : definition.Definition.Entries.Count == 1 ? definition.Definition.Entries[0] : -1;
-                            if (entry < 0) throw new StudioCommandException("not_ready", "Select an exact binding in Properties, then Evaluate paths before showing its cached guides.");
-                            ShowSourceAnimationPaths(document, definition.Definition.Index, entry);
-                        }
-                        break;
                     case ZoneEntry zone:
                         if (ZoneToolEngaged) throw new StudioCommandException("busy", "Zone colours are paused while Edit zones is on.");
                         if (!zone.Zone.Used) throw new StudioCommandException("unsupported", "No polygon or object uses this zone: it has no colour to show.");
@@ -677,7 +667,7 @@ public partial class MainWindow : ISourceSectionState
             rootNodes = sceneTree?.Sections?.DefinitionRoots.GetValueOrDefault(definition.Definition.Index)?.Take(64).ToArray() },
         AnimationBindingEntry binding => new { kind = "animationBinding", entry = binding.Binding.Entry, definition = binding.Definition.Definition.Index,
             rootName = binding.Binding.Root, name = binding.Binding.Name },
-        AnimationPageEntry page => new { kind = "animationPage", rootEntry = page.RootEntry, entry = page.Entry, parentPath = page.ParentPath, offset = page.Offset },
+        AnimationPageEntry page => new { kind = "animationPage", offset = page.Offset },
         MissingFileEntry missing => new { definitionFile = missing.Listing.File, missing = true, listedBy = missing.Listing.ListedBy },
         NoteEntry note => new { note = note.Text },
         PickupGroupEntry group => new { kind = "pickupGroup", group = group.Group, count = group.Entries.Count, shown = group.Entries.Count(e => e.Row != null) },

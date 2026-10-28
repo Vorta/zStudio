@@ -18,9 +18,9 @@ internal sealed class AnimationGraphPalette
 
     public bool Dark { get; }
     public Brush Node, NodeBorder, Frame, FrameBorder, HeaderHover, Well, WellBorder, Selected, T1, T2, T3, T4, Accent, OnAccent, Run, Caution, CautionBack,
-        Bad, Hatch, Divider, Control, ControlBorder, Bound, Pane;
+        Bad, Hatch, Divider, Control, Pane;
     public Brush State, Motion, Camera, Sound, Effect, Call, Release, Stop, Prerequisite;
-    public Pen NodePen, FramePen, CleanupPen, WellPen, DividerPen, AccentOutline, RunOutline, BoundBar;
+    public Pen NodePen, FramePen, CleanupPen, WellPen, DividerPen, AccentOutline, RunOutline;
     public Typeface Text { get; } = new(new FontFamily("Segoe UI Variable Text, Segoe UI"), FontStyles.Normal, FontWeights.Normal, FontStretches.Normal);
     public Typeface Strong { get; } = new(new FontFamily("Segoe UI Variable Text, Segoe UI"), FontStyles.Normal, FontWeights.SemiBold, FontStretches.Normal);
     public Typeface Italic { get; } = new(new FontFamily("Segoe UI Variable Text, Segoe UI"), FontStyles.Italic, FontWeights.Normal, FontStretches.Normal);
@@ -39,7 +39,7 @@ internal sealed class AnimationGraphPalette
             Node = B(0xFF2F2F2F); NodeBorder = W(.09); Frame = W(.025); FrameBorder = W(.09); HeaderHover = W(.04); Well = K(.20); WellBorder = W(.06);
             Selected = W(.0837); T1 = B(0xFFFFFFFF); T2 = W(.786); T3 = W(.6); T4 = W(.45); Accent = B(0xFFFF9A4D); OnAccent = B(0xFF1A1A1A);
             Run = B(0xFF7BD88F); Caution = B(0xFFFCE100); CautionBack = B(0xFF433519); Bad = B(0xFFFF99A4); Hatch = W(.10); Divider = W(.0837);
-            Control = W(.0605); ControlBorder = W(.0698); Bound = B(0xFFFFD84A); Pane = B(0xFF272727);
+            Control = W(.0605); Pane = B(0xFF272727);
             State = B(0xFF9DB4C8); Motion = B(0xFF6FC8D6); Camera = B(0xFFF5A742); Sound = B(0xFFB9A6FF); Effect = B(0xFFF2C46D); Call = W(.72);
             Release = B(0xFF7BD88F); Stop = B(0xFFFF99A4); Prerequisite = B(0xFFC9A2FF);
         }
@@ -48,13 +48,13 @@ internal sealed class AnimationGraphPalette
             Node = B(0xFFFFFFFF); NodeBorder = K(.12); Frame = K(.022); FrameBorder = K(.12); HeaderHover = K(.037); Well = K(.035); WellBorder = K(.0578);
             Selected = K(.045); T1 = K(.896); T2 = K(.66); T3 = K(.52); T4 = K(.42); Accent = B(0xFFB85406); OnAccent = B(0xFFFFFFFF);
             Run = B(0xFF2F8A47); Caution = B(0xFF9D5D00); CautionBack = B(0xFFFFF4CE); Bad = B(0xFFC42B1C); Hatch = K(.09); Divider = K(.0803);
-            Control = B(0xB3FFFFFF); ControlBorder = K(.0878); Bound = B(0xFFC9A100); Pane = B(0xFFFAFAFA);
+            Control = B(0xB3FFFFFF); Pane = B(0xFFFAFAFA);
             State = B(0xFF4D6478); Motion = B(0xFF1F7F8C); Camera = B(0xFFB25E00); Sound = B(0xFF6E56C2); Effect = B(0xFF8A6200); Call = K(.62);
             Release = B(0xFF2F8A47); Stop = B(0xFFC42B1C); Prerequisite = B(0xFF7A4FC4);
         }
         Pen P(Brush brush, double thickness, DashStyle? dash = null) { var pen = new Pen(brush, thickness) { DashStyle = dash ?? DashStyles.Solid, StartLineCap = PenLineCap.Flat, EndLineCap = PenLineCap.Flat, LineJoin = PenLineJoin.Round }; pen.Freeze(); return pen; }
         NodePen = P(NodeBorder, 1); FramePen = P(FrameBorder, 1); CleanupPen = P(isDark ? W(.22) : K(.28), 1, new DashStyle([3, 2], 0));
-        WellPen = P(WellBorder, 1); DividerPen = P(Divider, 1); AccentOutline = P(Accent, 2); RunOutline = P(Run, 1); BoundBar = P(Effect, 3);
+        WellPen = P(WellBorder, 1); DividerPen = P(Divider, 1); AccentOutline = P(Accent, 2); RunOutline = P(Run, 1);
         var dot = new GeometryDrawing(isDark ? W(.055) : K(.07), null, new EllipseGeometry(new Point(1, 1), .6, .6));
         Dots = new DrawingBrush(dot) { TileMode = TileMode.Tile, Viewport = new Rect(0, 0, 14, 14), ViewportUnits = BrushMappingMode.Absolute, Viewbox = new Rect(0, 0, 14, 14), ViewboxUnits = BrushMappingMode.Absolute, Stretch = Stretch.None };
         Dots.Freeze();

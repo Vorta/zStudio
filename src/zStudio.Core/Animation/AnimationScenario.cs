@@ -237,18 +237,6 @@ public sealed record AnimationScenario
         if (identity == Guid.Empty) throw new InvalidDataException("The primary start is the opened binding; add another start with its own identity.");
         return this with { Starts = [.. starts, new(identity, entry, seconds)] };
     }
-    /// <summary>Removes a start with its call paths and switches. The primary cannot be removed.</summary>
-    public AnimationScenario WithoutStart(Guid id)
-    {
-        if (id == Guid.Empty) throw new InvalidDataException("The primary start cannot be removed.");
-        if (Start(id) is not { } start) return this;
-        bool Keep(string path) => !(path == start.Path || path.StartsWith(start.Path + "/", StringComparison.Ordinal));
-        return this with
-        {
-            Starts = starts.Where(s => s.Id != id).ToArray(),
-            IncludedCalls = includedCalls.Where(Keep).ToArray(), ExcludedCalls = excludedCalls.Where(Keep).ToArray(), Conditions = conditions.Where(c => Keep(c.InstancePath)).ToArray(),
-        };
-    }
     public AnimationScenario WithStartTime(Guid id, double seconds) => Start(id) == null
         ? throw new InvalidDataException("The start is not part of this scenario.") : this with { Starts = starts.Select(s => s.Id == id ? s with { Seconds = seconds } : s).ToArray() };
 
@@ -436,9 +424,6 @@ public sealed class AnimationScenarioSession
         Changed?.Invoke(new(previous, next, reason));
     }
     public void Reset() => Set(AnimationScenario.Default, "reset");
-
-    /// <summary>The scenario's durable form: source addresses instead of this compilation's identities. Null without provenance.</summary>
-    public AnimationScenarioRecord? ToRecord() => AnimationScenarioRecord.From(Current, Source);
 
     /// <summary>
     /// Moves the scenario to a new compilation of the same map (after an edit, undo or redo): starts, paths and switches are

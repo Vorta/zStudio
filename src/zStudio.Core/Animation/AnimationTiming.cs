@@ -73,7 +73,6 @@ public sealed record AnimationTimingLane(string Id, AnimationTimingLaneKind Kind
     public IReadOnlyList<int> Members { get; init; } = [];
     public IReadOnlyList<long> Instances { get; init; } = [];
     public IReadOnlyList<AnimationTimingSequence> Sequences { get; init; } = [];
-    public int SequenceIndex { get; init; } = -1;
     public bool Cleanup { get; init; }
     public bool WaitsForRelease { get; init; }
     /// <summary>A group shows its lanes (top-level groups are open, called ones closed, unless changed).</summary>
@@ -705,7 +704,7 @@ public sealed class AnimationTiming
             return new(Id, AnimationTimingLaneKind.Sequence, label, group.Depth + 1)
             {
                 Group = "group:" + group.Key, Members = members, Instances = group.Instances.Order().ToArray(), Sequences = Sequences.ToArray(),
-                SequenceIndex = index, Cleanup = index == 0, WaitsForRelease = waits, Run = run, State = state, Started = started,
+                Cleanup = index == 0, WaitsForRelease = waits, Run = run, State = state, Started = started,
                 Path = group.Instances.Count > 0 && instances.TryGetValue(group.Instances.Min(), out var info2) ? info2.Path : group.Start?.Path ?? "",
                 Marks = Marks.OrderBy(m => m.Start).ThenBy(m => m.Occurrence).ToArray(), Bands = bands,
                 Tooltip = (index == 0 ? "Cleanup · runs on stop or reset" : name + (waits ? " · waits for release" : "")) + " · " + state,

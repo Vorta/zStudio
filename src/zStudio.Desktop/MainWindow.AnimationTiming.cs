@@ -223,7 +223,7 @@ public partial class MainWindow
         if (lane.Kind == AnimationTimingLaneKind.Group)
         {
             int member = lane.Members.FirstOrDefault();
-            if (member > 0) await EnsureAnimationCardForEntryAsync(target.Document, member, token, preserveTimeline: true);
+            if (member > 0) await EnsureAnimationCardForEntryAsync(target.Document, member, token);
             graph = layout?.Node(AnimationGraph.FrameId(member)) != null ? AnimationGraph.FrameId(member)
                 : layout?.Nodes.FirstOrDefault(n => n.Node.Reference?.Entries.Contains(member) == true)?.Id;
             animationGraphOutline = scene?.Mission is { } mission ? [.. lane.Members.Select(e => mission.AnimationEntryRoots.TryGetValue(e, out int root) ? root : -1).Where(r => r >= 0).Distinct().Take(zStudio.Rendering.SceneViewport.MaximumOutlinedNodes)] : null;
@@ -271,7 +271,7 @@ public partial class MainWindow
         }
         else if (mark.Entry > 0)
         {
-            await EnsureAnimationCardForEntryAsync(target.Document, mark.Entry, token, preserveTimeline: true);
+            await EnsureAnimationCardForEntryAsync(target.Document, mark.Entry, token);
             graph = layout?.Node(AnimationGraph.FrameId(mark.Entry)) != null ? AnimationGraph.FrameId(mark.Entry) : null;
             animationInspected = new("definition", mark.Entry, lane.Path) { Graph = graph };
             ShowAnimationRightTab("inspector");
@@ -294,8 +294,8 @@ public partial class MainWindow
     /// <summary>Selects a source sequence or event for the Inspector in its instance's call path, or the opened binding's when the path no longer validates.</summary>
     private async Task SelectTimingSourceAsync(Guid sequence, Guid ev, int entry, string path, CancellationToken token)
     {
-        try { await WorldAnimationSelectSourceAsync(sequence, ev, token, entry, path, preserveTimeline: true); }
-        catch (StudioCommandException ex) when (ex.Code == "stale_record" && path.Length > 0) { await WorldAnimationSelectSourceAsync(sequence, ev, token, entry, "", preserveTimeline: true); }
+        try { await WorldAnimationSelectSourceAsync(sequence, ev, token, entry, path); }
+        catch (StudioCommandException ex) when (ex.Code == "stale_record" && path.Length > 0) { await WorldAnimationSelectSourceAsync(sequence, ev, token, entry, ""); }
     }
     private string? TimingInstancePath(long instance)
     {
@@ -386,7 +386,7 @@ public partial class MainWindow
     private bool SameDefinitionDraft(WorldAnimationTarget target, int definition) =>
         sectionCard is { HasDraft: true } card && card.Document == target.Document && (card.Entry as DefinitionEntry)?.Definition.Index == definition;
 
-    private async Task WorldAnimationSelectSourceAsync(Guid sequence, Guid ev, CancellationToken token, int? entry = null, string path = "", bool preserveTimeline = false)
+    private async Task WorldAnimationSelectSourceAsync(Guid sequence, Guid ev, CancellationToken token, int? entry = null, string path = "")
     {
         RequireNoDrafts(); var target = WorldAnimationTargetNow ?? throw new StudioCommandException("not_ready", "Open an animation in Animation mode first.");
         int selected = entry ?? target.Entry;
@@ -398,7 +398,7 @@ public partial class MainWindow
         var selectedSequence = sequence == Guid.Empty ? null : package.Entries[selected].AllSequences.FirstOrDefault(s => s.Id == sequence);
         if (sequence != Guid.Empty && selectedSequence == null || ev != Guid.Empty && selectedSequence?.Events.Any(e => e.Id == ev) != true)
             throw new StudioCommandException("stale_record", "The source sequence or event is unavailable.");
-        await EnsureAnimationCardForEntryAsync(target.Document, selected, token, preserveTimeline);
+        await EnsureAnimationCardForEntryAsync(target.Document, selected, token);
         if (target.Document.Document is SourceSceneSnapshot snapshot)
         {
             string? record = ev != Guid.Empty ? snapshot.AnimationProvenance?.FindEvent(ev)?.RecordId : snapshot.AnimationProvenance?.FindSequence(sequence)?.RecordId;

@@ -75,8 +75,8 @@ public sealed partial class AnimationPlayer
         HashSet<long> discovered = [];
         var watch = Stopwatch.StartNew();
         int retained = 0; string status = "Preview range";
-        int frames = (int)Math.Ceiling(seconds * 60);
-        for (int step = 0; step <= frames; step++)
+        int ticks = (int)Math.Ceiling(seconds * 60);
+        for (int step = 0; step <= ticks; step++)
         {
             token.ThrowIfCancellationRequested();
             pathDiscontinuities.Clear();

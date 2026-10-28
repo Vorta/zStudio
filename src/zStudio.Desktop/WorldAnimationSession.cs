@@ -27,7 +27,7 @@ public sealed class WorldAnimationSession : IDisposable
     private readonly CancellationTokenSource lifetime;
     private CancellationTokenSource scenarioLifetime;
     private CancellationTokenSource? request;
-    private readonly SemaphoreSlim simulationGate = new(1), analysisGate = new(1);
+    private readonly SemaphoreSlim simulationGate = new(1);
     private readonly DispatcherTimer timer;
     private readonly Stopwatch clock = new();
     private readonly AnimationAudio audio;
@@ -44,7 +44,6 @@ public sealed class WorldAnimationSession : IDisposable
     public Guid ScenarioId { get; private set; } = Guid.NewGuid();
     public Guid? RunId { get; private set; }
     public Guid? LastRunId { get; private set; }
-    public Guid? LastScenarioId { get; private set; }
     public AnimationPreviewContext Context { get; }
     public int EntryIndex { get; }
     /// <summary>The map's scenario this run follows (<see cref="AnimationScenario"/>, with this binding as its primary).</summary>
@@ -200,34 +199,6 @@ public sealed class WorldAnimationSession : IDisposable
         Changed?.Invoke();
     }
 
-    public async Task<AnimationPaths> AnalyzePathsAsync(double seconds, CancellationToken token = default)
-    {
-        Verify();
-        if (!double.IsFinite(seconds) || seconds is <= 0 or > 3600) throw Invalid("Path range must be greater than zero and at most one hour.");
-        Guid expected = ScenarioId; var scenario = Scenario;
-        using var linked = CancellationTokenSource.CreateLinkedTokenSource(token, scenarioLifetime.Token);
-        await analysisGate.WaitAsync(linked.Token);
-        try
-        {
-            var result = await Task.Run(() => CreatePlayer(scenario, linked.Token).AnalyzePaths(seconds, linked.Token), linked.Token);
-            CheckAnalysis(expected, linked.Token); return result;
-        }
-        finally { analysisGate.Release(); }
-    }
-
-    public async Task<AnimationDuration> MeasureDurationAsync(CancellationToken token = default)
-    {
-        Verify(); Guid expected = ScenarioId; var scenario = Scenario;
-        using var linked = CancellationTokenSource.CreateLinkedTokenSource(token, scenarioLifetime.Token);
-        await analysisGate.WaitAsync(linked.Token);
-        try
-        {
-            var result = await Task.Run(() => CreatePlayer(scenario, linked.Token).MeasureDuration(linked.Token), linked.Token);
-            CheckAnalysis(expected, linked.Token); return result;
-        }
-        finally { analysisGate.Release(); }
-    }
-
     private AnimationPlayer CreatePlayer(AnimationScenario scenario, CancellationToken token)
         => Player(Context, EntryIndex, scenario, lod, token);
 
@@ -379,7 +350,7 @@ public sealed class WorldAnimationSession : IDisposable
     }
     private void RetireFrame()
     {
-        if (CurrentFrame != null) { LastFrame = CurrentFrame; LastRunId = RunId; LastScenarioId = ScenarioId; }
+        if (CurrentFrame != null) { LastFrame = CurrentFrame; LastRunId = RunId; }
         CurrentFrame = null;
     }
     private void CancelRequest() { ++generation; request?.Cancel(); request = null; }
@@ -388,11 +359,6 @@ public sealed class WorldAnimationSession : IDisposable
         token.ThrowIfCancellationRequested(); Verify();
         if (expected != generation || scenario != ScenarioId)
             throw new StudioCommandException("context_changed", "The animation request was superseded.");
-    }
-    private void CheckAnalysis(Guid scenario, CancellationToken token)
-    {
-        token.ThrowIfCancellationRequested(); Verify();
-        if (scenario != ScenarioId) throw new StudioCommandException("context_changed", "The animation scenario changed during analysis.");
     }
     private void RefreshPresentation()
     {

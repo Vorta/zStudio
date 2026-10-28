@@ -227,7 +227,6 @@ public sealed partial class AnimationPlayer
         string kind = (mask & 1) != 0 ? "random" : (mask & 2) != 0 ? "playerRange" : (mask & 8) != 0 ? "playerCover" : (mask & 0x10) != 0 ? "cover" : (mask & 4) != 0 ? "effectsDetail" : "none";
         double? measured = null, threshold = null; int? draw = null; string? unavailable = null; Vector3? center = null;
         if ((mask & 0x1f) != 0 && ExecutionPolicy?.TryCondition(instance.CallPath, instance.Entry.Index, ev.Id, out value) == true) forced = true;
-        else if (ConditionOverride is bool global) { value = global; forced = true; }
         else if ((mask & 1) != 0)
         {
             draw = randomIndex; float unit = RandomUnit();

@@ -1208,7 +1208,7 @@
       "tools": [
         "zstudio_animation_paths"
       ],
-      "note": "Analyze drop windows (animation_paths show, or analyze with an entry of the opened definition), Move along path (begin; the view then places the start where the flight path is clicked: set with segment and fraction), Apply / Revert (confirm / cancel; one undo step) and project history/save. A source map's drop windows are the opened flight definition's, in Animation mode. A compiled world's flights are shown and analyzed read only: its windows are neither selected nor moved. A selected unavailable flight exposes analysisRefusal while other candidates remain selectable. Samples/releases use offset/limit without query."
+      "note": "Analyze drop windows (animation_paths show, or analyze with an entry of the opened definition), Move along path (begin; the view then places the start where the flight path is clicked: set with segment and fraction), Apply / Revert (confirm / cancel; one undo step). A source map's drop windows are the opened flight definition's, in Animation mode. A compiled world's flights are shown and analyzed read only: its windows are neither selected nor moved. A selected unavailable flight exposes analysisRefusal while other candidates remain selectable. Samples/releases use offset/limit without query."
     },
     {
       "gui": "MainWindow.xaml:ParachuteSelectionChanged",

@@ -34,8 +34,8 @@ foreach (string root in args.Where(a => !a.StartsWith("--", StringComparison.Ord
                     if (!frame.Nodes.SequenceEqual(replay.Nodes) || !frame.Sequences.SequenceEqual(replay.Sequences)) failures.Add(path + "/" + entry.Index + ": seek diverged");
                 }
                 var duration = args.Contains("--all") ? null : player.MeasureDuration();
-                if (duration?.Frames is < 1 or > 216000 || player.Time != frame.Time) failures.Add(path + "/" + entry.Index + ": invalid duration or changed player time");
-                previews++; reports.Add(new { path, entry.Index, entry.Name, frames = duration?.Frames, seconds = duration?.Seconds, durationKind = duration?.Kind.ToString(), poses = frame.Nodes.Count, events = frame.Trace.Count, diagnostics = frame.Diagnostics });
+                if (duration?.Ticks is < 1 or > 216000 || player.Time != frame.Time) failures.Add(path + "/" + entry.Index + ": invalid duration or changed player time");
+                previews++; reports.Add(new { path, entry.Index, entry.Name, ticks = duration?.Ticks, seconds = duration?.Seconds, durationKind = duration?.Kind.ToString(), poses = frame.Nodes.Count, events = frame.Trace.Count, diagnostics = frame.Diagnostics });
             }
             catch (Exception ex) { failures.Add(path + "/" + entry.Index + ": " + ex); }
         }

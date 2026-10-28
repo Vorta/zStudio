@@ -46,7 +46,7 @@ internal static class AnimationCheck
                         if (!editor.IsPlaying) throw new InvalidDataException("Queued Space did not play the selected animation.");
                         editor.Pause(); await CheckTransport(window, editor, output);
                     }
-                    Console.WriteLine($"{name}: {editor.Duration?.Kind}, {editor.Duration?.Frames} frames, {editor.Duration?.Seconds:0.###} seconds");
+                    Console.WriteLine($"{name}: {editor.Duration?.Kind}, {editor.Duration?.Ticks} ticks, {editor.Duration?.Seconds:0.###} seconds");
                     if (name == "vtol_destruction1")
                     {
                         await CheckSoundOutput(editor);
@@ -210,9 +210,9 @@ internal static class AnimationCheck
             if (Space(window, (UIElement)editor.FindName(name)) || editor.IsPlaying) throw new InvalidDataException(name + " lost its native Space behavior.");
         await editor.SeekAsync(0);
         editor.Step(1); await Task.Delay(150);
-        if (Math.Abs(editor.CurrentFrame!.Time - AnimationPlayer.StepSeconds) > 1e-8) throw new InvalidDataException("Next frame did not step exactly once.");
+        if (Math.Abs(editor.CurrentFrame!.Time - AnimationPlayer.StepSeconds) > 1e-8) throw new InvalidDataException("Step forward did not move exactly one tick.");
         editor.Step(-1); await Task.Delay(150);
-        if (editor.CurrentFrame!.Time != 0) throw new InvalidDataException("Previous frame did not return to frame zero.");
+        if (editor.CurrentFrame!.Time != 0) throw new InvalidDataException("Step back did not return to 0 s.");
         if (editor.Duration == null || editor.RangeEnd != editor.Duration.Seconds) throw new InvalidDataException("Automatic range does not match calculated duration.");
         await editor.SetRangeAsync(.1);
         if (Math.Abs(editor.RangeEnd - .1) > 1e-8) throw new InvalidDataException("Custom range did not apply.");
@@ -245,7 +245,7 @@ internal static class AnimationCheck
         Application.Current.ThemeMode = theme;
 #pragma warning restore WPF0001
         await Task.Delay(250);
-        Console.WriteLine("Space from focused Assets, harmless idle Escape/cancel, input exceptions, frame steps, range clamp, restart and the transport row at 1100, 1600 and 2560 DIP passed.");
+        Console.WriteLine("Space from focused Assets, harmless idle Escape/cancel, input exceptions, tick steps, range clamp, restart and the transport row at 1100, 1600 and 2560 DIP passed.");
     }
     /// <summary>The compiled preview's transport row: every visible control whole, inside the row, on one line, overlapping nothing.</summary>
     private static void CheckTransportRow(MainWindow window, double width)

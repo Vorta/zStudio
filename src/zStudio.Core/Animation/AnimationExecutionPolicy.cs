@@ -127,13 +127,6 @@ public sealed class AnimationExecutionPolicy
         RetainedBytes = 256L + 256L * (included.Count + conditions.Count) + 2L * characters;
     }
 
-    /// <summary>The same admission and overrides with other rules.</summary>
-    public AnimationExecutionPolicy WithRules(AnimationScenarioRules rules)
-    {
-        ArgumentNullException.ThrowIfNull(rules);
-        return rules == Rules ? this : IncludesAllCalls ? AllCalls(rules, ConditionOverrides, ExcludedCalls) : new(IncludedCalls, ConditionOverrides, rules);
-    }
-
     /// <summary>
     /// Every call is admitted, as at run time without a policy, but under the scenario's rules and overrides: the isolated
     /// preview of a compiled animation runs all its calls. Calls keep their canonical paths, which overrides may scope.

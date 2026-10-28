@@ -105,8 +105,6 @@ public sealed partial class SceneViewport
         }
         view.InvalidateRender();
     }
-    /// <summary>The guides shown for each definition key (what <see cref="SetAnimationPaths"/> drew).</summary>
-    public IReadOnlyDictionary<string, AnimationPath[]> AnimationGuides => animationGuidePaths;
     public bool FrameAnimationPaths(string definition)
     {
         if (IsFlyActive || IsPickupDragging || IsParachutePointerMoving || !animationGuidePaths.TryGetValue(definition, out var paths)) return false;

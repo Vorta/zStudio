@@ -203,7 +203,7 @@ public partial class MainWindow
         var package = shownDocument?.Document.Animations;
         var sequence = package?.Entries.ElementAtOrDefault(condition.Entry)?.AllSequences.FirstOrDefault(s => s.Events.Any(e => e.Id == condition.Event))
             ?? throw new StudioCommandException("stale_record", "The condition is no longer in this map.");
-        await WorldAnimationSelectSourceAsync(sequence.Id, condition.Event, CancellationToken.None, condition.Entry, condition.InstancePath, preserveTimeline: true);
+        await WorldAnimationSelectSourceAsync(sequence.Id, condition.Event, CancellationToken.None, condition.Entry, condition.InstancePath);
         ShowAnimationRightTab("inspector");
     }
 

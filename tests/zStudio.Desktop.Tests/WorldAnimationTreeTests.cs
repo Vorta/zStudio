@@ -59,7 +59,7 @@ public sealed class WorldAnimationTreeTests
         public bool NetworkShown(string network) => false;
         public bool AnimationShown(int definition) => false;
         public bool MasterShown(string section) => false;
-        public IReadOnlyList<SectionEntry> AnimationChildren(SourceMapSections sections, SectionEntry section, int maximum)
+        public IReadOnlyList<SectionEntry> AnimationChildren(SectionEntry section, int maximum)
         {
             Reads++;
             return section switch

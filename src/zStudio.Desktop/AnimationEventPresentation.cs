@@ -4,18 +4,15 @@ using zStudio.Core.Animation;
 
 namespace zStudio.Desktop;
 
-/// <summary>Read-only descriptions of authored instructions, not predicted dispatch times or runtime bindings.</summary>
-internal sealed record AnimationEventPresentation(string Summary, string Timing, string Description)
+/// <summary>A read-only summary of an authored instruction's stored operands, not a predicted dispatch time or runtime binding.</summary>
+internal sealed record AnimationEventPresentation(string Summary)
 {
     public static AnimationEventPresentation Create(AnimationEntry entry, AnimationEvent ev)
     {
-        if (ev.Bytes.Length < 12) return new("Truncated event header", "Timing unavailable", "The stored event header is incomplete.");
-        string timing = TimingText(ev);
+        if (ev.Bytes.Length < 12) return new("Truncated event header");
         var spec = ev.Spec;
-        string support = spec?.Support ?? "Unsupported: unknown event";
-        string description = $"{ev.Name}\n{timing}\nStored start threshold, not duration or observed dispatch time. Events execute in list order; earlier events can delay this event. See Dispatch / Event log for observed times.\nPreview: {support}";
-        if (spec == null) return new("Unknown payload · inspect source bytes", timing + " · Unsupported", description);
-        if (ev.Bytes.Length < spec.Size) return new($"Incomplete record: {ev.Bytes.Length} of {spec.Size} bytes", timing + " · Unavailable", description);
+        if (spec == null) return new("Unknown payload · inspect source bytes");
+        if (ev.Bytes.Length < spec.Size) return new($"Incomplete record: {ev.Bytes.Length} of {spec.Size} bytes");
 
         // Select the most useful stored operands, keeping the complete catalog in the tooltip.
         // Use the catalog's widths (notably 20 vs 32 byte animation names and I16 references).
@@ -54,20 +51,11 @@ internal sealed record AnimationEventPresentation(string Summary, string Timing,
             }
             catch (InvalidDataException) { parts.Add("Malformed keyframe data"); }
         }
-        description += "\n\nStored parameters:\n" + string.Join("\n", spec.Fields.Select(field => FormatField(entry, ev, field) + (field.ReadOnly ? " (serialized / read-only)" : "")));
-        string qualification = support.StartsWith("Approximate:", StringComparison.Ordinal) ? " · Approximate preview"
-            : support.StartsWith("Not executed:", StringComparison.Ordinal) ? " · Not executed in preview"
-            : support != "Engine-based" ? " · Preview limits" : "";
-        return new(string.Join(" · ", parts), timing + qualification, description);
+        return new(string.Join(" · ", parts));
     }
 
     public static string ResetState(byte state) => state switch { 0 => "Ready", 1 => "Running", 2 => "Stopped", 3 => "Waiting for release", _ => $"Unknown ({state})" };
 
-    private static string TimingText(AnimationEvent ev)
-    {
-        string clock = ev.StartMode switch { 1 => "Animation time", 2 => "Sequence time", 3 => "After previous event", _ => $"Unknown clock ({ev.StartMode})" };
-        return $"{clock} ≥ {Number(ev.Threshold)} s";
-    }
     private static string FormatField(AnimationEntry entry, AnimationEvent ev, AnimationField field)
     {
         string value;

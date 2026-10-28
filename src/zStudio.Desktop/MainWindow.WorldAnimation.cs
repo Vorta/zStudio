@@ -1,9 +1,5 @@
 using System.Globalization;
 using System.IO;
-using System.Numerics;
-using System.Text.Json.Nodes;
-using System.Windows;
-using System.Windows.Controls;
 using zStudio.Automation;
 using zStudio.Core.Animation;
 using zStudio.Core.Sources;

@@ -106,7 +106,7 @@ internal static class GroundPreviewCheck
                 height.Text = "100";
                 await Ready();
                 Require(editor.CurrentFrame!.Time == 0 && !editor.IsPlaying, "Height moved paused playhead");
-                Require(editor.Duration!.IsFinite && editor.Duration.Frames > originalDuration.Frames, "Height did not recalculate falling duration");
+                Require(editor.Duration!.IsFinite && editor.Duration.Ticks > originalDuration.Ticks, "Height did not recalculate falling duration");
                 foreach (var pose in originalPose.Nodes)
                     Require(Math.Abs(editor.CurrentFrame.Nodes.Single(n => n.Id == pose.Id).Transform.M42 - pose.Transform.M42 - 100) < .001, "Height did not raise initial pose");
                 Require(editor.RangeEnd == 35, "Height lost custom range");

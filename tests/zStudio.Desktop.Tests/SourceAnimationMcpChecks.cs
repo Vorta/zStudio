@@ -118,7 +118,7 @@ internal static class SourceAnimationMcpChecks
                 included["scenario"]!["calls"]!["included"]!.GetValue<int>());
             Assert.StartsWith("Included ", included["scenario"]!["calls"]!["includeAll"]!.GetValue<string>());
             Assert.Equal(0, (await Scenario("excludeAll"))["scenario"]!["calls"]!["included"]!.GetValue<int>());
-            // A second scheduled binding must stay part of the same timeline when inspected.
+            // A second scheduled binding must stay part of the same run when inspected.
             int secondaryEntry = calls.First(c => c.TargetEntry != null).TargetEntry!.Value;
             Guid scheduledActivation = Guid.NewGuid();
             var primaryCandidate = typeof(MainWindow).GetField("animationMode", flags)!.GetValue(main);

@@ -1,5 +1,3 @@
-using System.Globalization;
-using zStudio.Automation;
 using zStudio.Core.Sources;
 
 namespace zStudio.Desktop;

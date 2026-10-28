@@ -138,7 +138,6 @@ public sealed partial class AnimationPlayer
     private int dispatchBudget;
     public int Seed { get; }
     public int EffectLevel { get; init; } = 2;
-    public bool? ConditionOverride { get; init; }
     /// <summary>Finite preview-only child admission. Null retains the ordinary runtime's unrestricted calls.</summary>
     private AnimationExecutionPolicy? executionPolicy;
     /// <summary>
@@ -154,7 +153,7 @@ public sealed partial class AnimationPlayer
             if (resetInitialized && value?.Rules.Prerequisites == AnimationPrerequisiteRule.Check) Reset(default);
         }
     }
-    /// <summary>The activation target beams use (OBJECT_CONNECTOR); range tests use <see cref="AnimationScenarioRules.Player"/>.</summary>
+    /// <summary>The point beams aim at (OBJECT_CONNECTOR): the scenario's custom player; range tests use <see cref="AnimationScenarioRules.Player"/>.</summary>
     public Vector3? ReferencePosition { get; init; }
     public Vector3? ActivationStart { get; init; }
     /// <summary>Preview-only mesh contact with the infinite world Y=0 plane.</summary>

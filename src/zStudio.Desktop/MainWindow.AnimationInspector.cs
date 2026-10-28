@@ -963,7 +963,7 @@ public partial class MainWindow
         if (!draft) animationInspected = null;
         animationGraphView?.Select(null); animationTimingView?.Select(null);
         if (mode.Document == shownDocument && !draft && (SectionSelection == null || SelectedAnimationDefinition()?.Definition.Index != mode.Definition))
-            await EnsureAnimationCardAsync(mode.Document, mode.Definition, mode.Entry > 0 ? mode.Entry : null, token, preserveTimeline: true);
+            await EnsureAnimationCardAsync(mode.Document, mode.Definition, mode.Entry > 0 ? mode.Entry : null, token);
         ApplySectionPresentation();
         RefreshAnimationInspector();
     }

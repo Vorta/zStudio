@@ -1,6 +1,5 @@
 using System.Globalization;
 using System.IO;
-using System.Numerics;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Windows;
@@ -103,16 +102,5 @@ public partial class MainWindow
         var package = shownDocument!.Document.Animations!;
         var value = package.Entries[entry].AllSequences.SelectMany(s => s.Events).FirstOrDefault(e => e.Id == ev);
         if (value?.Type is not (31 or 33)) throw new StudioCommandException("invalid_argument", "Only an IF or ELSEIF condition event accepts a scoped override.");
-    }
-
-    private static Vector3? WorldAnimationPosition(string text)
-    {
-        if (string.IsNullOrWhiteSpace(text)) return null;
-        string[] parts = text.Split([',', ' ', ';'], StringSplitOptions.RemoveEmptyEntries);
-        if (parts.Length != 3 || !float.TryParse(parts[0], NumberStyles.Float, CultureInfo.InvariantCulture, out float x)
-            || !float.TryParse(parts[1], NumberStyles.Float, CultureInfo.InvariantCulture, out float y)
-            || !float.TryParse(parts[2], NumberStyles.Float, CultureInfo.InvariantCulture, out float z)
-            || !float.IsFinite(x) || !float.IsFinite(y) || !float.IsFinite(z)) throw new StudioCommandException("invalid_argument", "Enter three finite XYZ numbers, or leave blank for default.");
-        return new(x, y, z);
     }
 }

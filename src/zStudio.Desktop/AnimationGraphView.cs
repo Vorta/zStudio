@@ -911,7 +911,6 @@ internal sealed class AnimationGraphView : Grid
             if (VisualTreeHelper.GetChild(element, i) is UIElement child) Add(peers, child);
     }
     internal IEnumerable<AnimationGraphNodeView> RealisedIn(string frame) => realised.Values.Where(n => n.Placement.Frame == frame).OrderBy(n => n.Placement.Lane).ThenBy(n => n.Placement.Bounds.Y);
-    internal IReadOnlyCollection<AnimationGraphNodeView> RealisedNodes => realised.Values;
 
     // ------------------------------------------------------------ frames
 

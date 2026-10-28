@@ -129,8 +129,6 @@ internal sealed partial class AnimationTimingView : Grid
     internal void SelectDropWindow(Guid id) => DropWindowSelected?.Invoke(id);
     internal void MoveDropWindow(Guid id, double start) => DropWindowMoved?.Invoke(id, start);
     internal event Action? EditTimingRequested, ScenarioRequested;
-    /// <summary>A presentation change (visibleRange, labelWidth, thresholds, view, fit) for the window to keep.</summary>
-    internal event Action<string>? PresentationChanged;
 
     internal AnimationTimingView()
     {
@@ -158,8 +156,8 @@ internal sealed partial class AnimationTimingView : Grid
         Grid.SetRowSpan(grip, 2); lanesView.Children.Add(grip); Panel.SetZIndex(grip, 4);
         AutomationProperties.SetName(grip, "Resize the label column");
         grip.ToolTip = "Drag to resize the label column (160–420 DIP); ← → with the grip focused";
-        grip.DragDelta += (_, e) => SetLabelWidth(LabelWidth + e.HorizontalChange, true);
-        grip.KeyDown += (_, e) => { if (e.Key is Key.Left or Key.Right) { SetLabelWidth(LabelWidth + (e.Key == Key.Left ? -10 : 10), true); e.Handled = true; } };
+        grip.DragDelta += (_, e) => SetLabelWidth(LabelWidth + e.HorizontalChange);
+        grip.KeyDown += (_, e) => { if (e.Key is Key.Left or Key.Right) { SetLabelWidth(LabelWidth + (e.Key == Key.Left ? -10 : 10)); e.Handled = true; } };
         message.SetResourceReference(Border.BackgroundProperty, "SolidBackgroundFillColorBaseBrush");
         message.SetResourceReference(Border.BorderBrushProperty, "DividerStrokeColorDefaultBrush");
         messageText.SetResourceReference(TextBlock.ForegroundProperty, "TextFillColorSecondaryBrush");
@@ -170,7 +168,7 @@ internal sealed partial class AnimationTimingView : Grid
         // The view bar's tools: Lanes | Log, Thresholds, Fit range ▾.
         lanesToggle = Segment("Lanes", "Lanes: one row per sequence, grouped by instance");
         logToggle = Segment("Log", "Log: the same evidence as a table, newest last");
-        lanesToggle.Click += (_, _) => SetView("lanes", true); logToggle.Click += (_, _) => SetView("log", true);
+        lanesToggle.Click += (_, _) => SetView("lanes"); logToggle.Click += (_, _) => SetView("log");
         Border segmented = new() { CornerRadius = new(5), BorderThickness = new(1), Padding = new(2), VerticalAlignment = VerticalAlignment.Center };
         segmented.SetResourceReference(Border.BackgroundProperty, "ControlFillColorTertiaryBrush");
         segmented.SetResourceReference(Border.BorderBrushProperty, "DividerStrokeColorDefaultBrush");
@@ -180,11 +178,11 @@ internal sealed partial class AnimationTimingView : Grid
             ToolTip = "Thresholds: brackets from each event's observed anchor to anchor + its start threshold; with an event selected, drag its bracket end to propose a new threshold" };
         thresholdsToggle.SetResourceReference(StyleProperty, "CommandButton"); thresholdsToggle.Width = double.NaN; thresholdsToggle.Height = 28;
         AutomationProperties.SetName(thresholdsToggle, "Thresholds");
-        thresholdsToggle.Click += (_, _) => { if (!changing) SetThresholds(thresholdsToggle.IsChecked == true, true); };
+        thresholdsToggle.Click += (_, _) => { if (!changing) SetThresholds(thresholdsToggle.IsChecked == true); };
         Button fit = new() { Content = new TextBlock { Text = "Fit range", FontSize = 12.5 }, Padding = new(10, 0, 6, 0), Height = 28, Margin = new(4, 0, 0, 0), ToolTip = "Fit the visible range to the playback range" };
         fit.SetResourceReference(StyleProperty, "CommandButton"); fit.Width = double.NaN;
         AutomationProperties.SetName(fit, "Fit range");
-        fit.Click += (_, _) => Fit("range", true);
+        fit.Click += (_, _) => Fit("range");
         Button more = new() { Content = new PreviewIcon { Kind = "Chevron", Width = 12, Height = 12 }, Width = 24, Height = 28, ToolTip = "Fit range, Fit run or Fit selection" };
         more.SetResourceReference(StyleProperty, "CommandButton"); more.Width = 24;
         AutomationProperties.SetName(more, "More fits");
@@ -192,7 +190,7 @@ internal sealed partial class AnimationTimingView : Grid
         foreach (var (text, target, tip) in new[] { ("Fit range", "range", "The playback range"), ("Fit run", "run", "Everything the run did, up to the playhead"), ("Fit selection", "selection", "The selected event's or lane's marks") })
         {
             MenuItem item = new() { Header = new TextBlock { Text = text }, ToolTip = tip };
-            item.Click += (_, _) => Fit(target, true);
+            item.Click += (_, _) => Fit(target);
             fits.Items.Add(item);
         }
         more.Click += (_, _) => { fits.PlacementTarget = more; fits.IsOpen = true; };
@@ -265,30 +263,27 @@ internal sealed partial class AnimationTimingView : Grid
         double span = Math.Clamp(end - start, AnimationSeconds.Tick * 6, AnimationSeconds.Maximum);
         start = Math.Clamp(start, 0, AnimationSeconds.Maximum - span);
         VisibleStart = start; VisibleEnd = start + span;
-        if (user) { rangeChosen = true; PresentationChanged?.Invoke("visibleRange"); }
+        if (user) rangeChosen = true;
         ApplyScroll();
         surface.InvalidateVisual(); header.InvalidateVisual();
     }
-    internal void SetLabelWidth(double width, bool user = false)
+    internal void SetLabelWidth(double width)
     {
         if (!double.IsFinite(width)) throw new ArgumentException("Use a finite width.");
         LabelWidth = Math.Clamp(width, MinimumLabelWidth, MaximumLabelWidth);
         grip.Margin = new(LabelWidth - 3, 0, 0, 0);
-        if (user) PresentationChanged?.Invoke("labelWidth");
         surface.InvalidateVisual(); header.InvalidateVisual();
     }
-    internal void SetThresholds(bool value, bool user = false)
+    internal void SetThresholds(bool value)
     {
         Thresholds = value;
         changing = true; try { thresholdsToggle.IsChecked = value; } finally { changing = false; }
-        if (user) PresentationChanged?.Invoke("thresholds");
         surface.InvalidateVisual();
     }
-    internal void SetView(string value, bool user = false)
+    internal void SetView(string value)
     {
         if (value is not ("lanes" or "log")) throw new ArgumentException("Choose lanes or log.");
         View = value; ApplyView();
-        if (user) PresentationChanged?.Invoke("view");
     }
     private void ApplyView()
     {
@@ -303,7 +298,7 @@ internal sealed partial class AnimationTimingView : Grid
     }
 
     /// <summary>Fit range (the playback range), Fit run (all evidence up to the playhead) or Fit selection.</summary>
-    internal bool Fit(string target, bool user = false)
+    internal bool Fit(string target)
     {
         double begin, end;
         switch (target)
@@ -322,7 +317,6 @@ internal sealed partial class AnimationTimingView : Grid
         }
         double margin = Math.Max(.25, (end - begin) * .06);
         SetVisibleRange(Math.Max(0, begin - margin), Math.Min(AnimationSeconds.Maximum, end + margin), user: true);
-        if (user) PresentationChanged?.Invoke("fit");
         return true;
     }
     private IEnumerable<AnimationTimingMark> SelectionMarks()
@@ -507,7 +501,6 @@ internal sealed partial class AnimationTimingView : Grid
             + (timing.PhasesDropped > 0 ? "; older sequence state changes were discarded too, so bands before the oldest kept one may be missing" : "");
         if (followLatest.IsChecked == true && logItems.Length > 0) log.ScrollIntoView(logItems[^1]);
     }
-    internal int LogCount => logItems.Length;
     private void CopyLog()
     {
         var rows = log.SelectedItems.Count > 0 ? log.SelectedItems.OfType<AnimationTimingLogItem>().ToArray() : logItems;
