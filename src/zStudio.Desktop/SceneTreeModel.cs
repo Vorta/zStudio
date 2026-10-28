@@ -44,7 +44,6 @@ internal interface ISourceSectionState
     /// <summary>A network shows (the AI overlay is on).</summary>
     bool AnyNetworkShown { get; }
     bool NetworkShown(string network);
-    bool AnimationShown(int definition);
     IReadOnlyList<SectionEntry> AnimationChildren(SectionEntry section, int maximum) => [];
     /// <summary>The master eye of a section ("zones", "aiNetworks") or pass ("aiv", "puppies"): shown or hidden.</summary>
     bool MasterShown(string section);
@@ -649,7 +648,6 @@ public sealed class SceneTreeItem : INotifyPropertyChanged
     {
         ZoneEntry zone => State?.ZoneShown(zone.Zone.Zone) != true,
         NetworkEntry network => State?.NetworkShown(network.Network.Id) != true,
-        DefinitionEntry definition => State?.AnimationShown(definition.Definition.Index) != true,
         _ => false,
     };
     private string SectionEyeToolTip => MasterKey switch

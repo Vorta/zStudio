@@ -48,7 +48,6 @@ public partial class MainWindow : ISourceSectionState
     bool ISourceSectionState.ZoneShown(byte zone) => shownZones.Contains(zone);
     bool ISourceSectionState.AnyNetworkShown => shownNetworks.Count > 0;
     bool ISourceSectionState.NetworkShown(string network) => shownNetworks.Contains(network);
-    bool ISourceSectionState.AnimationShown(int definition) => shownAnimationPaths.Contains(definition);
     bool ISourceSectionState.MasterShown(string section) => MasterShown(section);
     private bool MasterShown(string section) => masterShown.TryGetValue(section, out bool shown) ? shown : InitialMasters.TryGetValue(section, out bool initial) ? initial : section.StartsWith("puppies:", StringComparison.Ordinal);
 

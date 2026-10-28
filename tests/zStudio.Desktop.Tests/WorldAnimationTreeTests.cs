@@ -57,7 +57,6 @@ public sealed class WorldAnimationTreeTests
         public bool ZoneShown(byte zone) => false;
         public bool AnyNetworkShown => false;
         public bool NetworkShown(string network) => false;
-        public bool AnimationShown(int definition) => false;
         public bool MasterShown(string section) => false;
         public IReadOnlyList<SectionEntry> AnimationChildren(SectionEntry section, int maximum)
         {
