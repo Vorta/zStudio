@@ -65,13 +65,13 @@ public sealed class WorkspaceStateTests
         Assert.Equal(layout.InspectorWidth, JsonSerializer.Deserialize<StudioSettings>(JsonSerializer.Serialize(current))!.GetWorkspace().InspectorWidth);
     }
     [Fact]
-    public void CurrentFloatingBoundsAndInspectorTabSurviveRoundTrip()
+    public void CurrentFloatingBoundsAndToolsTabSurviveRoundTrip()
     {
-        var layout = new WorkspaceLayout { InspectorTab = 2, PropertiesWindow = new() { Height = 830, Left = -100 } };
+        var layout = new WorkspaceLayout { ToolTab = 2, PropertiesWindow = new() { Height = 830, Left = -100 } };
         var restored = JsonSerializer.Deserialize<WorkspaceLayout>(JsonSerializer.Serialize(layout))!;
-        restored.Normalize(); Assert.Equal(2, restored.InspectorTab); Assert.Equal(830,restored.PropertiesWindow.Height); Assert.Equal(-100,restored.PropertiesWindow.Left);
-        var invalid = new WorkspaceLayout { PropertiesWindow = new() { Height = double.NaN, Width = double.PositiveInfinity, Left = double.NaN, Top = double.PositiveInfinity }, InspectorTab = 99 };
-        invalid.Normalize(); Assert.Equal(720,invalid.PropertiesWindow.Height); Assert.Equal(640, invalid.PropertiesWindow.Width); Assert.Null(invalid.PropertiesWindow.Left); Assert.Null(invalid.PropertiesWindow.Top); Assert.Equal(2,invalid.InspectorTab);
+        restored.Normalize(); Assert.Equal(2, restored.ToolTab); Assert.Equal(830,restored.PropertiesWindow.Height); Assert.Equal(-100,restored.PropertiesWindow.Left);
+        var invalid = new WorkspaceLayout { PropertiesWindow = new() { Height = double.NaN, Width = double.PositiveInfinity, Left = double.NaN, Top = double.PositiveInfinity }, ToolTab = 99 };
+        invalid.Normalize(); Assert.Equal(720,invalid.PropertiesWindow.Height); Assert.Equal(640, invalid.PropertiesWindow.Width); Assert.Null(invalid.PropertiesWindow.Left); Assert.Null(invalid.PropertiesWindow.Top); Assert.Equal(2,invalid.ToolTab);
     }
     [Fact]
     public void ResponsiveFilesPreferencesRetainIndependentWidths()

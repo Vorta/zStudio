@@ -76,7 +76,8 @@ internal static class Mw3LiveCheck
         var entry = source.Animations!.Entries.First(e => world.Scene!.Nodes.Count(n => n.Name == e.RootName && n.Class == "object3d") == 1 && e.Sequences.Any(s => s.Events.Any(v => v.Spec?.DurationOffset is >= 0 and int at && v.F32(at) >= 1)));
         var animation = await Call("open_document", new { path = animationPath }); string animationId = animation["id"]!.GetValue<string>();
         await Call("select_asset", new { document = animationId, kind = "Animation", index = entry.Index }); string animationPreview = await Preview();
-        await Call("animation_options", new { preview = animationPreview, changes = new { mute = true, map = true, range = 2 } });
+        await Call("animation_options", new { preview = animationPreview, changes = new { mute = true, map = true } });
+        await Call("animation_scenario", new { preview = animationPreview, action = "inputs", range = new[] { 0, 2 } });
         await Call("animation_transport", new { preview = animationPreview, action = "seek", seconds = .2 }); await Capture("compiled-animation");
         var animationChoices = await Call("missions", new { preview = animationPreview });
         await Call("missions", new { preview = animationPreview, archive = animationChoices["missions"]!["items"]![1]!["Archive"]!.GetValue<string>() });

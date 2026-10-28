@@ -317,9 +317,13 @@ internal static class ParachuteMcpChecks
             await main.ViewModel.OpenRootAsync(compiled, token);
             world = Document(await Job("open_document", new() { ["path"] = Path.Combine(compiled, "m1", "gamez.zbd") }));
             await Preview();
-            // A compiled world has no source scenario: MCP sets the player its drop analysis measures from.
-            var compiledPlayer = await Job("animation_options", new() { ["preview"] = (await Call("state", new()))["preview"]!.GetValue<string>(), ["changes"] = new { activationTarget = beside } });
-            Assert.Equal(3, compiledPlayer["activationTarget"]!.AsArray().Count);
+            // A compiled world has no source scenario: animation_scenario inputs {player} sets the player its drop analysis
+            // measures from, and animation_options refuses the moved activationTarget with a pointer to it (no aliases).
+            string compiledPreview = (await Call("state", new()))["preview"]!.GetValue<string>();
+            Assert.Equal("moved", (await Job("animation_options", new() { ["preview"] = compiledPreview, ["changes"] = new { activationTarget = beside } }, "failed"))["code"]!.GetValue<string>());
+            var compiledPlayer = await Job("animation_scenario", new() { ["preview"] = compiledPreview, ["action"] = "inputs",
+                ["player"] = new { kind = "custom", x = route["x"]!.GetValue<double>(), y = route["y"]!.GetValue<double>(), z = route["z"]!.GetValue<double>() } });
+            Assert.Equal(3, compiledPlayer["scenario"]!["inputs"]!["player"]!["position"]!.AsArray().Count);
             state = (await PathAction("show"))["parachute"]!;
             Assert.True(state["visible"]!.GetValue<bool>()); Assert.Equal(2, state["candidates"]!.AsArray().Count);
             Assert.Contains("did not complete", state["analysisRefusal"]!.GetValue<string>());

@@ -92,6 +92,13 @@ public partial class MainWindow
     }
     internal async Task<PropertiesWindow?> OpenAssetPropertiesAsync(DocumentModel doc, AssetRecord asset, CancellationToken cancellationToken = default, bool automation = false)
     {
+        // A compiled animation's stored properties are its Inspector card (Stored, Bytes, References, Related; design §19).
+        if (asset.Kind == AssetKind.Animation && doc.SourceWorld == null && doc.Document.Animations != null)
+        {
+            if (automation) throw new StudioCommandException("unsupported", "An animation's stored properties are its Inspector card: select it (select_asset) and read animation_graph inspector (Stored, Bytes, References, Related).");
+            await FocusCompiledInspectorAsync(doc, asset);
+            return null;
+        }
         if (!automation && !await ResolvePropertiesDraftsAsync()) return null;
         long request = ++propertyRequest;
         if (doc.IsDisposed) return null;
@@ -118,6 +125,9 @@ public partial class MainWindow
     internal async void OpenCurrentProperties()
     {
         if (ViewModel.SelectedDocument is not { } doc) return;
+        // A compiled animation: Alt+Enter focuses its Inspector (a scene object picked in its view still opens Properties).
+        if (CompiledAnimationShown && doc == shownDocument && !DocumentSceneTree.IsKeyboardFocusWithin && (selectedNode == null || AssetGrid.IsKeyboardFocusWithin))
+        { ShowCompiledTab("inspector"); compiledCard?.FocusFirstField(); return; }
         // A selected zone, network or definition: its card is the docked pane (its own draft stays as it is).
         if (doc.SourceWorld != null && SectionSelection != null) { sectionCard?.FocusFirst(); return; }
         if (!await ResolvePropertiesDraftsAsync()) return;

@@ -39,20 +39,18 @@ internal static class DifficultyPreviewCheck
                 var row = (ToolBar)editor.FindName("ViewOptionsRow");
                 Require(row.Items.IndexOf(picker) == row.Items.IndexOf(editor.FindName("Lod")) + 1, "Difficulty must immediately follow LOD");
                 Require((MissionDifficulty)picker.SelectedItem == MissionDifficulty.Medium, "Initial difficulty is not Medium");
-                Require(((CheckBox)editor.FindName("Mute")).IsChecked == false, "Mute default changed");
-                ((Slider)editor.FindName("Volume")).Value = 0;
+                Require(!editor.Muted, "Mute default changed");
+                editor.SetTransport(newVolume: 0);
                 int outputCount = editor.Audio.OutputInitializations;
                 map.IsChecked = true; await Ready(); height.Text = "100"; await Ready();
                 var lod = (ComboBox)editor.FindName("Lod"); lod.SelectedIndex = Math.Min(1, lod.Items.Count - 1); await Ready(); int originalLod = lod.SelectedIndex;
-                ((TextBox)editor.FindName("EndTime")).Text = "200";
-                ((TextBox)editor.FindName("EndTime")).RaiseEvent(new RoutedEventArgs(UIElement.LostFocusEvent)); await Ready();
-                await editor.SeekAsync(2); var pose = editor.Viewport.CaptureView(); var selectedEvent = ((TreeView)editor.FindName("ProgramTree")).SelectedItem;
+                await editor.SetRangeAsync(200);
+                await editor.SeekAsync(2); var pose = editor.Viewport.CaptureView();
                 picker.SelectedItem = MissionDifficulty.Easy; await Ready();
                 Require(editor.Viewport.Mission!.Layout.Difficulty == MissionDifficulty.Easy && AivCount(editor.Viewport) == 80, "Easy layout was not applied");
                 Require(Math.Abs(editor.CurrentFrame!.Time - 2) < .001 && !editor.IsPlaying, "Paused playhead changed");
                 Require(SameView(pose, editor.Viewport.CaptureView()), "Difficulty reframed camera");
-                Require(lod.SelectedIndex == originalLod && height.Text == "100" && ((Slider)editor.FindName("SeekSlider")).Maximum == 200, "Difficulty reset preview controls");
-                Require(ReferenceEquals(selectedEvent, ((TreeView)editor.FindName("ProgramTree")).SelectedItem), "Difficulty reset event selection");
+                Require(lod.SelectedIndex == originalLod && height.Text == "100" && editor.RangeEnd == 200, "Difficulty reset preview controls");
                 follow.IsChecked = true; await editor.SeekAsync(3); await Task.Delay(80, timeout.Token); CheckFollow();
                 picker.SelectedItem = MissionDifficulty.Hard; await Ready(); CheckFollow();
                 Require(AivCount(editor.Viewport) == 87, "Hard layout did not add its actors");
@@ -65,10 +63,9 @@ internal static class DifficultyPreviewCheck
                 Require(editor.Audio.IsPrepared && editor.Audio.OutputInitializations == outputCount, "Difficulty reinitialized audio output");
                 map.IsChecked = false; await Ready(); picker.SelectedItem = MissionDifficulty.Easy; await Ready();
                 Require(picker.IsEnabled && editor.Viewport.Mission!.Layout.Difficulty == MissionDifficulty.Easy, "Hidden map retained wrong binding context");
-                ((TabControl)window.FindName("InspectorTabs")).SelectedItem = window.FindName("PreviewSetupTab");
                 picker.BringIntoView(); await Capture("animation-easy");
                 window.Width = 1000; await Capture("animation-narrow");
-                Require(((Button)editor.FindName("PlayButton")).IsVisible && ((Slider)editor.FindName("SeekSlider")).ActualWidth >= 80, "Narrow toolbar displaced transport");
+                Require(editor.IsVisible && editor.CanSeek, "Narrow layout hid the preview");
                 window.Width = 1740;
                 var worldDocument = await window.ViewModel.OpenFileAsync(Path.Combine(root, "m1", "gamez.zbd")) ?? throw new InvalidDataException("Missing world");
                 var scene = await WorldReady(MissionDifficulty.Easy);
@@ -95,7 +92,7 @@ internal static class DifficultyPreviewCheck
 
                 async Task Ready()
                 {
-                    while (!((Button)editor.FindName("PlayButton")).IsEnabled || ((Border)editor.FindName("LoadingPanel")).Visibility == Visibility.Visible) await Task.Delay(30, timeout.Token);
+                    while (!editor.CanSeek || editor.Loading) await Task.Delay(30, timeout.Token);
                     await Task.Delay(80, timeout.Token);
                 }
                 void CheckWorldProblems(SceneViewport live)

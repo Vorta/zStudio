@@ -22,7 +22,7 @@ public partial class MainWindow
             // An approval waits for a release deferred by a rebuild or an opening; the release clears it.
             if (!ViewModel.Documents.Any(d => d.SourceWorld != null) && sourceWorkspace == null) discardApprovedWorkspace = null;
         };
-        NavigationTabs.SelectedIndex = layout.BrowserTab; InspectorTabs.SelectedIndex = layout.InspectorTab; ToolTabs.SelectedIndex = layout.ToolTab;
+        NavigationTabs.SelectedIndex = layout.BrowserTab; ToolTabs.SelectedIndex = layout.ToolTab;
         InitializeResponsiveNavigator();
         InitializeChrome(); ApplyMetrics();
         foreach (var submenu in new[] { RecentMenu })
@@ -125,41 +125,6 @@ public partial class MainWindow
             document.SourceWorldChanged += UpdateDocumentCommands;
         }
     }
-    private void AttachAnimationWorkspace(AnimationEditor editor)
-    {
-        AttachInspection(editor.Viewport);
-        editor.SceneHierarchyChanged += RefreshSceneTree;
-        int preferredTool = Layout.ToolTab, preferredInspector = Layout.InspectorTab; detachingWorkspace = true;
-        ProgramHost.Content = editor.ProgramView;
-        ReferencesHost.Content = editor.ReferencesView; PreviewSetupHost.Content = editor.PreviewSetupView;
-        DispatchHost.Content = editor.DispatchView; EventLogHost.Content = editor.EventLogView;
-        RuntimeHost.Content = editor.RuntimeView; ProblemsHost.Content = editor.ProblemsView;
-        editor.SetOperationDiagnostics(ViewModel.Problems);
-        editor.SourceSelectionChanged += UpdateDocumentCommands;
-        editor.SetupRequested += () => { Layout.InspectorVisible = true; inspectorTemporary = true; InspectorTabs.SelectedItem = PreviewSetupTab; ArrangeWorkspace(); };
-        editor.FileProblemSelected += async problem => await NavigateProblemAsync(problem);
-        editor.SourceNavigationRequested += (entry,sequence,ev) => NavigateAnimationSource(entry,sequence,ev);
-        ReferencesTab.IsEnabled = PreviewSetupTab.IsEnabled = ProgramTab.IsEnabled = true;
-        DispatchTab.IsEnabled = EventLogTab.IsEnabled = RuntimeTab.IsEnabled = true;
-        ReferencesTab.Visibility = PreviewSetupTab.Visibility = ProgramTab.Visibility = DispatchTab.Visibility = EventLogTab.Visibility = RuntimeTab.Visibility = Visibility.Visible;
-        InspectorTabs.SelectedIndex = preferredInspector;
-        ToolTabs.SelectedIndex = preferredTool; detachingWorkspace = false;
-        DiagnosticsExpander.Visibility = Visibility.Collapsed;
-        ArrangeWorkspace(); UpdateDocumentCommands();
-    }
-    private void DetachAnimationWorkspace()
-    {
-        detachingWorkspace = true;
-        ProgramHost.Content = ReferencesHost.Content = PreviewSetupHost.Content = null;
-        DispatchHost.Content = EventLogHost.Content = RuntimeHost.Content = ProblemsHost.Content = null;
-        ReferencesTab.IsEnabled = PreviewSetupTab.IsEnabled = ProgramTab.IsEnabled = false;
-        DispatchTab.IsEnabled = EventLogTab.IsEnabled = RuntimeTab.IsEnabled = false;
-        ReferencesTab.Visibility = PreviewSetupTab.Visibility = ProgramTab.Visibility = DispatchTab.Visibility = EventLogTab.Visibility = RuntimeTab.Visibility = Visibility.Collapsed;
-        DiagnosticsExpander.Visibility = Visibility.Visible;
-        if (ToolTabs.SelectedIndex is 0 or 1 or 3) ToolTabs.SelectedIndex = 4;
-        detachingWorkspace = false;
-        ArrangeWorkspace(); UpdateDocumentCommands();
-    }
     private void WorkbenchSizeChanged(object sender, SizeChangedEventArgs e) => ArrangeWorkspace();
     private void ArrangeWorkspace()
     {
@@ -185,11 +150,13 @@ public partial class MainWindow
             var layout = Layout; bool focus = layout.Preset == "Focus preview";
             double width = Workbench.ActualWidth;
             // Keep both side panes when the center still has a usable width.
-            double navigatorBreakpoint = layout.NavigatorWidth + (animation != null && layout.InspectorVisible ? layout.InspectorWidth + 12 : 6) + 360;
+            // A compiled animation keeps a usable panel (Structure, Timing): a narrow window collapses the Navigator first.
+            double navigatorBreakpoint = layout.NavigatorWidth + (animation != null && layout.InspectorVisible ? layout.InspectorWidth + 12 : 6) + (CompiledAnimationShown ? 600 : 360);
             navigatorCollapsed = width < navigatorBreakpoint + (navigatorCollapsed ? 40 : 0);
             bool nav = ViewModel.HasRoot && layout.NavigatorVisible && !focus && (!navigatorCollapsed || navigatorTemporary);
             bool inspector = animation != null && layout.InspectorVisible && !focus;
-            double splitThreshold = layout.FilesWidth + layout.NavigatorWidth + 600 + 12 + (inspector ? layout.InspectorWidth + 6 : 0);
+            // A compiled animation keeps its panel wide enough for Structure and Timing side by side before Files splits off.
+            double splitThreshold = layout.FilesWidth + layout.NavigatorWidth + (CompiledAnimationShown ? AnimationPanel.SplitWidth : 600) + 12 + (inspector ? layout.InspectorWidth + 6 : 0);
             bool splitFiles = nav && width >= splitThreshold + (filesDetached ? 0 : 40);
             SetFilesDetached(splitFiles);
             double navWidth = nav ? layout.NavigatorWidth + (splitFiles ? layout.FilesWidth + 6 : 0) : 0;
@@ -207,7 +174,6 @@ public partial class MainWindow
             PropertiesSplitterColumn.Width = new(inspector && !replacement ? 6 : 0);
             InspectorSplitter.Visibility = inspector && !replacement ? Visibility.Visible : Visibility.Collapsed;
             InspectorHost.Visibility = inspector ? Visibility.Visible : Visibility.Collapsed;
-            InspectorTabs.Visibility = animation != null ? Visibility.Visible : Visibility.Collapsed;
             Grid.SetColumn(InspectorHost, replacement ? 2 : 4); Grid.SetColumnSpan(InspectorHost, replacement ? 3 : 1);
             bool replaceViewport = replacement && inspector && animation != null;
             animation?.ShowInspectorReplacement(replaceViewport);
@@ -215,7 +181,10 @@ public partial class MainWindow
             InspectorHost.VerticalAlignment = replaceViewport ? VerticalAlignment.Top : VerticalAlignment.Stretch;
             InspectorHost.Height = replaceViewport ? animation!.ViewportRegion.ActualHeight : double.NaN;
             InspectorHost.Margin = replaceViewport ? new(0,animation!.ViewportRegion.TranslatePoint(new(),Workbench).Y,0,0) : new(0);
-            double previewChrome = animation is { ActualHeight: > 0 } ? animation.ActualHeight - animation.Viewport.ActualHeight + 78 : 190;
+            // A compiled animation: its panel (transport, Structure, Timing) under the view, Diagnostics under it when asked.
+            if (CompiledAnimationShown) { ArrangeCompiledAnimation(focus, layout.ToolsVisible); return; }
+            ArrangeCompiledTools();
+            double previewChrome = 190;
             double availableTools = Workbench.ActualHeight - Math.Max(400, 220 + previewChrome);
             bool tools = ViewModel.HasRoot && (ViewModel.SelectedDocument != null || ViewModel.Problems.Count > 0) && layout.ToolsVisible && !focus && availableTools >= 100;
             ToolsRow.Height = new(tools ? Math.Min(toolsMaximized ? availableTools : layout.ToolsHeight, availableTools) : 0);
@@ -253,8 +222,8 @@ public partial class MainWindow
     private void SaveWorkspacePreferences()
     {
         if (detachingWorkspace) return;
-        if (animation != null && ProgramHost.Content != null && InspectorTabs.SelectedIndex >= 0) Layout.InspectorTab = InspectorTabs.SelectedIndex;
-        Layout.ToolTab = Math.Max(0, ToolTabs.SelectedIndex);
+        // A compiled animation shows Problems alone under its panel: that is no choice of the bottom tools' tab.
+        if (!compiledToolsTabForced) Layout.ToolTab = Math.Max(0, ToolTabs.SelectedIndex);
     }
     private void NavigatorButtonClick(object sender, RoutedEventArgs e)
     {
@@ -282,7 +251,7 @@ public partial class MainWindow
         else if (preset == "Focus preview") previousPreset = Layout.Preset;
         Layout.Preset = preset;
         if (preset != "Focus preview") { Layout.NavigatorVisible = Layout.InspectorVisible = true; Layout.ToolsVisible = preset != "Inspect"; }
-        if (preset == "Debug") { Layout.ToolsHeight = 300; ToolTabs.SelectedIndex = 2; }
+        if (preset == "Debug") { Layout.ToolsHeight = 300; ToolTabs.SelectedItem = ProblemsTab; }
         ArrangeWorkspace();
     }
     /// <summary>The workbench's compact metrics: 13-point text, 32-DIP controls with 16-DIP icons.</summary>
@@ -295,13 +264,12 @@ public partial class MainWindow
         Resources["PreviewIconSize"] = 16d;
         Resources["WorkspaceControlPadding"] = new Thickness(8, 4, 8, 4);
     }
-    private void InspectorSelectionChanged(object sender, SelectionChangedEventArgs e) { if (ready && e.Source == InspectorTabs) SaveWorkspacePreferences(); }
     private void ToolSelectionChanged(object sender, SelectionChangedEventArgs e) { if (ready && e.Source == ToolTabs) SaveWorkspacePreferences(); }
     private void AnimationPlayClick(object sender, RoutedEventArgs e) => animation?.TogglePlayback();
     private void AnimationStopClick(object sender, RoutedEventArgs e) => animation?.Stop();
     private void AnimationPreviousClick(object sender, RoutedEventArgs e) => animation?.Step(-1);
     private void AnimationNextClick(object sender, RoutedEventArgs e) => animation?.Step(1);
-    private void PreviewSetupClick(object sender, RoutedEventArgs e) { if (animation != null) { Layout.InspectorVisible = true; inspectorTemporary = true; InspectorTabs.SelectedItem = PreviewSetupTab; ArrangeWorkspace(); } }
+    private void PreviewSetupClick(object sender, RoutedEventArgs e) { if (CompiledAnimationShown) ShowCompiledTab("scenario"); }
     private async void FileProblemDoubleClick(object sender, MouseButtonEventArgs e)
     {
         bool row = false;
@@ -326,18 +294,5 @@ public partial class MainWindow
             }
             ViewModel.Status = problem.Message;
         });
-    }
-    private async void NavigateAnimationSource(int entry,Guid sequence,Guid ev)
-    {
-        var doc = ViewModel.SelectedDocument;
-        if (doc == null || animation?.ResolvePendingDrafts() == false) return;
-        var asset = doc.Assets.FirstOrDefault(a => a.Record.Kind == Core.AssetKind.Animation && a.Index == entry);
-        if (asset == null) { ViewModel.Status = "The dispatched source entry is no longer available in this document."; return; }
-        doc.SelectedAsset = asset; AssetGrid.ScrollIntoView(asset);
-        for (int attempt = 0; attempt < 100 && ViewModel.SelectedDocument == doc && doc.SelectedAsset == asset; attempt++)
-        {
-            if (animation is { } current && current.EntryIndex == entry) { current.SelectSource(sequence,ev); return; }
-            await Task.Delay(30);
-        }
     }
 }

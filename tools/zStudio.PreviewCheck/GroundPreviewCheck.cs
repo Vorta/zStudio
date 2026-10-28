@@ -37,9 +37,8 @@ internal static class GroundPreviewCheck
                     await Task.Delay(100, timeout.Token);
                 }
                 var grid = (System.Windows.Controls.Primitives.ToggleButton)editor.FindName("GroundCollision");
-                ((TabControl)window.FindName("InspectorTabs")).SelectedItem = window.FindName("PreviewSetupTab");
                 Require(grid.IsChecked == true, "Grid must default checked");
-                ((CheckBox)editor.FindName("Mute")).IsChecked = true;
+                editor.SetTransport(newMuted: true);
                 var viewport = editor.Viewport;
                 var camera = viewport.DebugCamera;
                 var plane = viewport.GroundGrids.Single();
@@ -59,13 +58,12 @@ internal static class GroundPreviewCheck
                 Require(camera.Position == eye && camera.LookDirection == look, "Grid toggle reframed camera");
                 await Task.Delay(200, timeout.Token);
                 Require(Math.Abs(camera.NearPlaneDistance - near) < .001 && Math.Abs(camera.FarPlaneDistance - far) < .001, "Grid changed clip bounds at same pose");
-                ((TextBox)editor.FindName("EndTime")).Text = "35";
-                ((TextBox)editor.FindName("EndTime")).RaiseEvent(new RoutedEventArgs(UIElement.LostFocusEvent)); await Ready();
+                await editor.SetRangeAsync(35);
                 grid.IsChecked = false; await Ready(); grid.IsChecked = true; await Ready();
-                Require(((Slider)editor.FindName("SeekSlider")).Maximum == 35, "Grid lost custom range");
+                Require(editor.RangeEnd == 35, "Grid lost custom range");
                 await editor.SeekAsync(.8);
-                ((CheckBox)editor.FindName("Mute")).IsChecked = false; ((Slider)editor.FindName("Volume")).Value = 0;
-                var play = (Button)editor.FindName("PlayButton"); play.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                editor.SetTransport(newMuted: false); editor.SetTransport(newVolume: 0);
+                editor.TogglePlayback();
                 await Task.Delay(200, timeout.Token);
                 double before = editor.CurrentFrame!.Time;
                 grid.IsChecked = false; grid.IsChecked = true; await Ready();
@@ -75,7 +73,7 @@ internal static class GroundPreviewCheck
                 ((System.Windows.Controls.Primitives.ToggleButton)editor.FindName("ShowLevel")).IsChecked = true; await Ready();
                 Require(viewport.GroundGrids.Single().Visible, "Mission refresh lost grid");
                 ((System.Windows.Controls.Primitives.ToggleButton)editor.FindName("ShowHorizon")).IsChecked = false; grid.IsChecked = false; await Ready();
-                Require(((TextBox)editor.FindName("Diagnostics")).Text.Contains("collision disabled", StringComparison.Ordinal), "Grid change during scene reload was lost");
+                Require(editor.StatusText.Contains("collision disabled", StringComparison.Ordinal), "Grid change during scene reload was lost");
                 grid.IsChecked = true; await Ready();
                 Require(viewport.GroundGrids.Count == 1, "Horizon refresh duplicated grid");
                 ((System.Windows.Controls.Primitives.ToggleButton)editor.FindName("ShowLevel")).IsChecked = false; await Ready();
@@ -109,7 +107,7 @@ internal static class GroundPreviewCheck
                 Require(editor.Duration!.IsFinite && editor.Duration.Frames > originalDuration.Frames, "Height did not recalculate falling duration");
                 foreach (var pose in originalPose.Nodes)
                     Require(Math.Abs(editor.CurrentFrame.Nodes.Single(n => n.Id == pose.Id).Transform.M42 - pose.Transform.M42 - 100) < .001, "Height did not raise initial pose");
-                Require(((Slider)editor.FindName("SeekSlider")).Maximum == 35, "Height lost custom range");
+                Require(editor.RangeEnd == 35, "Height lost custom range");
                 Require(height.Text == "100", "Live height changed the edit text");
                 height.Text = "NaN"; height.RaiseEvent(new System.Windows.Input.KeyEventArgs(System.Windows.Input.Keyboard.PrimaryDevice, PresentationSource.FromVisual(window), Environment.TickCount, System.Windows.Input.Key.Enter) { RoutedEvent = System.Windows.Input.Keyboard.KeyDownEvent }); await Ready();
                 Require(height.Text == "100", "Invalid height was accepted");
@@ -138,7 +136,7 @@ internal static class GroundPreviewCheck
                     if (name == "top-down") Require(sceneFar < camera.Position.Y, "Top-down test did not exercise grid beyond scene far clipping");
                     Console.WriteLine($"PASS grid {name}: pixels per screen quarter {string.Join(",", bands)}; near/far {camera.NearPlaneDistance:0.###}/{sceneFar:0.###}");
                 }
-                await editor.SeekAsync(1); play.RaiseEvent(new RoutedEventArgs(Button.ClickEvent)); await Task.Delay(150, timeout.Token);
+                await editor.SeekAsync(1); editor.TogglePlayback(); await Task.Delay(150, timeout.Token);
                 before = editor.CurrentFrame!.Time; height.Text = "4"; height.Text = "40"; await Ready();
                 Require(editor.IsPlaying && editor.CurrentFrame.Time >= before, "Height did not preserve playback"); editor.Pause();
                 var row = (ToolBar)editor.FindName("ViewOptionsRow");
@@ -147,13 +145,13 @@ internal static class GroundPreviewCheck
                     Require(!string.IsNullOrWhiteSpace(AutomationProperties.GetName((Button)window.FindName(name))),name + " lacks accessible name");
                 Require(AutomationProperties.GetName((System.Windows.Controls.Primitives.ToggleButton)editor.FindName("ShowLevel")) == "Map","Map accessible name changed");
                 window.Width = 1080; await Task.Delay(250,timeout.Token);
-                Require(((Button)editor.FindName("PlayButton")).IsVisible,"Narrow layout hid transport");
-                Require(!((TextBox)editor.FindName("Diagnostics")).Text.Contains("3D preview unavailable", StringComparison.Ordinal), "Render failure");
+                Require(editor.IsVisible && editor.CanSeek,"Narrow layout hid the preview");
+                Require(!editor.StatusText.Contains("3D preview unavailable", StringComparison.Ordinal), "Render failure");
                 Console.WriteLine("PASS: live height without Enter/blur, no clear button, quiet incomplete/invalid input, latest-value cancellation, pause/play preservation; grid visibility/contact, same playhead, finite duration, custom range, camera/clips, mission/horizon reload, narrow layout and idle framebuffer stability.");
                 Console.WriteLine("Screenshots: " + output);
                 async Task Ready()
                 {
-                    while (!((Button)editor.FindName("PlayButton")).IsEnabled || ((Border)editor.FindName("LoadingPanel")).Visibility == Visibility.Visible) await Task.Delay(30, timeout.Token);
+                    while (!editor.CanSeek || editor.Loading) await Task.Delay(30, timeout.Token);
                     await Task.Delay(60, timeout.Token);
                 }
                 void Save(BitmapSource image, string name) { PngBitmapEncoder encoder = new(); encoder.Frames.Add(BitmapFrame.Create(image)); using var stream = File.Create(Path.Combine(output, name)); encoder.Save(stream); }

@@ -56,14 +56,13 @@ internal static class PropertiesWindowChecks
             Assert.InRange(savedHeight, popup.MinHeight, workArea.Height);
             popup.Width = savedWidth; popup.Height = savedHeight; await Idle();
             var navigation = (TabControl)main.FindName("NavigationTabs"); var tools = (TabControl)main.FindName("ToolTabs");
-            navigation.SelectedIndex = 2; tools.SelectedIndex = 5;
+            navigation.SelectedIndex = 2; tools.SelectedIndex = 2;
             var viewMenu = ((Menu)main.FindName("AppMenu")).Items.OfType<MenuItem>().Single(m => Equals(m.Header, "_View"));
             viewMenu.Items.OfType<MenuItem>().Single(m => Equals(m.Header, "Reset layout")).RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
             await Idle();
-            Assert.Equal(0, navigation.SelectedIndex); Assert.Equal(4, tools.SelectedIndex);
-            Assert.Equal(-1, ((TabControl)main.FindName("InspectorTabs")).SelectedIndex);
+            Assert.Equal(0, navigation.SelectedIndex); Assert.Equal(1, tools.SelectedIndex);
             Assert.Equal(0, main.ViewModel.Settings.GetWorkspace().BrowserTab);
-            Assert.Equal(4, main.ViewModel.Settings.GetWorkspace().ToolTab);
+            Assert.Equal(1, main.ViewModel.Settings.GetWorkspace().ToolTab);
             Assert.Same(first, popup.Document);
             popup.Close(); await Idle();
             Assert.Null(main.OpenPropertiesWindow);

@@ -36,7 +36,6 @@ public partial class MainWindow
         FilesColumn.Width = NavigatorSplitterColumn.Width = new(0);
         bool open = ViewModel.SelectedDocument?.SourceWorld != null && sourceMapOpening == null;
         ArrangeSourcePanes(open);
-        InspectorTabs.Visibility = Visibility.Collapsed;
         Grid.SetColumn(InspectorHost, 4); Grid.SetColumnSpan(InspectorHost, 1);
         InspectorHost.VerticalAlignment = VerticalAlignment.Stretch;
         InspectorHost.Height = double.NaN; InspectorHost.Margin = new(0);

@@ -33,6 +33,7 @@ public partial class MainWindow
         {
             RequirePreview(a);
             string action = Text(a, "action");
+            if (CompiledAnimationShown) { var compiledState = CompiledModeCommand(a, action); await Dispatcher.InvokeAsync(() => { }, System.Windows.Threading.DispatcherPriority.Loaded); return Result(compiledState); }
             switch (action)
             {
                 case "state": break;
@@ -79,7 +80,7 @@ public partial class MainWindow
             await Dispatcher.InvokeAsync(() => { }, System.Windows.Threading.DispatcherPriority.Loaded);
             return Result(AnimationModeState());
         });
-        RegisterJob(registry, "animation_scenario", "The shown map's animation scenario (the Scenario tab and the command bar's scenario chip): starts on the shared clock (at most 32; the primary, id 00000000-0000-0000-0000-000000000000, is Animation mode's opened binding), included call paths, condition switches (IF and ELSEIF, per call path), inputs (player at start, custom or none; random seed; effects detail; phase; height; beam origin) and rules (prerequisites check, ignoreStarts (default) or ignore; range gates game or ignore; zone gates ignore (default) or view). Every change stops playback and re-evaluates the run up to the playhead, as a seek does, before it returns (a change during another's re-evaluation re-evaluates to the same playhead; conditions sets all its switches as one change); it is saved with the map in the project's .zstudio/settings.json and survives Exit, other definitions, difficulty changes and source edits. read lists it (in the map layout too) with the call paths the starts reach, grouped by calling and called definition (Include all leaves back-links excluded): groups paged by offset and limit, each with its first 16 paths; read with group pages that group's paths. include includes paths with the calls that lead to them, or excludes them with every path below them. includeAll includes every reachable call path but back-links (scope opened: only those below the opened binding's start, the other starts' calls excluded). pick places the player or the beam origin on the surface under a point of the 3D view (DIP, as Pick in view does). reset returns everything to the defaults with the opened binding (after Exit, the kept one) as primary. fitRange sets the playback range to the latest start plus 30 s. starts, include, includeAll, excludeAll, conditions, pick and fitRange need Animation mode.",
+        RegisterJob(registry, "animation_scenario", "The shown map's animation scenario (the Scenario tab and the command bar's scenario chip): starts on the shared clock (at most 32; the primary, id 00000000-0000-0000-0000-000000000000, is Animation mode's opened binding), included call paths, condition switches (IF and ELSEIF, per call path), inputs (player at start, custom or none; random seed; effects detail; phase; height; beam origin) and rules (prerequisites check, ignoreStarts (default) or ignore; range gates game or ignore; zone gates ignore (default) or view). Every change stops playback and re-evaluates the run up to the playhead, as a seek does, before it returns (a change during another's re-evaluation re-evaluates to the same playhead; conditions sets all its switches as one change); it is saved with the map in the project's .zstudio/settings.json and survives Exit, other definitions, difficulty changes and source edits. read lists it (in the map layout too) with the call paths the starts reach, grouped by calling and called definition (Include all leaves back-links excluded): groups paged by offset and limit, each with its first 16 paths; read with group pages that group's paths. include includes paths with the calls that lead to them, or excludes them with every path below them. includeAll includes every reachable call path but back-links (scope opened: only those below the opened binding's start, the other starts' calls excluded). pick places the player or the beam origin on the surface under a point of the 3D view (DIP, as Pick in view does). reset returns everything to the defaults with the opened binding (after Exit, the kept one) as primary. fitRange sets the playback range to the latest start plus 30 s. starts, include, includeAll, excludeAll, conditions, pick and fitRange need Animation mode. On a compiled animation (its isolated preview) the scenario is the preview's, kept for the file's other animations and never saved: one start (the shown animation at 0 s; starts and fitRange are refused), every call included by default (allCalls; include excludes a path with what lies below it, includeAll brings every call back, excludeAll runs the animation alone), condition switches as in a map, inputs (player, seed, effectsDetail, phase, height, beamOrigin, and the world: range [0, end] or [] for Auto, world (a GameZ path; \"\" automatic), root (a scene node; null clears the override: Clear override)), pick on its view, rules and reset. On a compiled Whole world it reads and sets inputs {player} alone (the VTOL drop-window analysis measures from it).",
             [PreviewParameter,
              P("action", "string", "Operation.", true, "read", "starts", "include", "includeAll", "excludeAll", "conditions", "inputs", "pick", "rules", "reset", "fitRange"),
              new("starts", "array", "starts: the whole list; ids are GUIDs (a new start may omit its id), the primary keeps the empty GUID.", Items: new("", "object", "A start.", Properties:
@@ -97,6 +98,9 @@ public partial class MainWindow
              P("phase", "string", "inputs: runtime or cleanup.", false, "runtime", "cleanup"),
              new("height", "number", "inputs: preview-only world height offset.", NumberMinimum: -999, NumberMaximum: 999),
              new("beamOrigin", "array", "inputs: where beams start that take the activation's input position; [] is the root (default).", Items: new("", "number", "Coordinate."), MaxItems: 3),
+             new("range", "array", "inputs, a compiled animation: the playback range [0, end] in seconds; [] is Auto (the measured duration).", Items: new("", "number", "Seconds.", NumberMinimum: 0, NumberMaximum: 3600), MaxItems: 2),
+             P("world", "string", "inputs, a compiled animation: the GameZ scene it binds in (Choose GameZ…); \"\" is the automatic one beside the file."),
+             new("root", "integer", "inputs, a compiled animation: bind its root to this scene node (Bind root…); null clears the override (Clear override).", Minimum: 0, Maximum: int.MaxValue, Nullable: true),
              P("target", "string", "pick: what to place.", false, "player", "beamOrigin"),
              new("screenPoint", "array", "pick: a point of the 3D view in DIP from its top left.", Items: new("", "number", "DIP."), MinItems: 2, MaxItems: 2),
              P("prerequisites", "string", "rules: check, ignoreStarts or ignore.", false, "check", "ignoreStarts", "ignore"),
@@ -107,8 +111,12 @@ public partial class MainWindow
              new("offset", "integer", "read: the first group, or with group the first path.", Minimum: 0, Maximum: int.MaxValue),
              new("limit", "integer", "read: groups, or with group paths, per page (at most 100).", Minimum: 1, Maximum: 100)], false, async (a, token) =>
         {
-            RequirePreview(a); RequireScenarioMap();
+            RequirePreview(a);
             string action = Text(a, "action");
+            if (action != "read") RequireNoDrafts();
+            if (CompiledAnimationShown) return Result(await CompiledScenarioCommandAsync(a, action));
+            if (CompiledWorldShown && action is "read" or "inputs") return Result(await CompiledWorldScenarioAsync(a, action));
+            RequireScenarioMap();
             object? result = null;
             // This call awaits only the re-evaluation it starts: an earlier call's failed one is that call's to report.
             var before = worldAnimationReevaluation;

@@ -274,7 +274,7 @@ public partial class MainWindow
             else if (changesAi) SetAiOptions(Flag(changes, "aiNodes", aiVisible), Flag(changes, "aiThroughGeometry", aiThroughGeometry), requestedAiNetwork);
             return Result(new { preview = previewId, ViewModel.Status });
         });
-        RegisterJob(r, "animation_options", "Set animation options (collision toggles the isolated flat plane; source-map previews always use terrain): map/grid/collision/horizon/faceOrientation/followCamera/effects/replay/mute/followLog(bool), height(-999..999), lod, difficulty(RECOIL only; MW3 uses missions), speed, volume, phase(runtime/cleanup), seed, condition(0/1/2), range/traceRange(seconds), autoRange/fitTrace(true), problemFilter(0..4), worldPath, root, activationOrigin/activationTarget(XYZ text or blank; the target is the player range conditions and range gates measure from, blank is the player at start without range gates). On a compiled Whole world with no animation selected, referencePosition/activationTarget set the player the VTOL drop-window analysis measures from.", [PreviewParameter,AnimationChanges], false, async (a, _) =>
+        RegisterJob(r, "animation_options", "Set an animation preview's presentation and transport. A compiled animation (its isolated preview): map, grid, collision (the flat ground plane), horizon, faceOrientation, followCamera, effects (bool), height (-999..999, the scenario's Height), lod, difficulty (RECOIL only; MW3 uses missions), and the transport's speed (0.25, 0.5, 1, 2), replay, mute, volume. What the run is made of moved to animation_scenario (no aliases): seed, condition, activationOrigin, activationTarget, range, autoRange, worldPath, root and phase are refused (code moved) with a pointer to it. A source map in Animation mode: speed, volume, mute, replay, followCamera, effects and playbackRange [start, end] (collision is refused: source maps always use standable terrain). A compiled Whole world's drop-window player is animation_scenario inputs {player}.", [PreviewParameter,AnimationChanges], false, async (a, _) =>
         {
             if (shownDocument?.SourceWorld != null)
             {
@@ -283,19 +283,13 @@ public partial class MainWindow
                 return Result(WorldAnimationCommandState);
             }
             if (animation == null && IsAiWorld && shownDocument != null)
-            {
-                // A compiled Whole world without an animation: its scenario's player is what the VTOL drop analysis measures from.
-                RequirePreview(a); RequireNoDrafts(shownDocument);
-                foreach (var (name, value) in (JsonObject)a["changes"]!)
-                {
-                    if (name != "activationTarget") throw new StudioCommandException("unsupported", "A compiled Whole world takes activationTarget alone (the player its VTOL drop-window analysis measures from); open its animation archive for the other options.");
-                    SetWorldAnimationScenario(worldAnimationConfiguration with { Player = WorldAnimationPosition(value?.GetValue<string>() ?? "") is { } point ? zStudio.Core.Animation.AnimationPlayerReference.Custom(point) : zStudio.Core.Animation.AnimationPlayerReference.AtStart });
-                }
-                var player = worldAnimationConfiguration.CustomPlayer;
-                return Result(new { preview = previewId, activationTarget = player is { } p ? new[] { p.X, p.Y, p.Z } : null, parachute = ParachuteState() });
-            }
+                // A compiled Whole world: the player its VTOL drop analysis measures from is the scenario's (no aliases).
+                throw new StudioCommandException("moved", "The drop-window analysis measures from the scenario's player: animation_scenario inputs {player: {kind: custom, x, y, z}}.");
             var editor = TargetAnimation(a); RequireNoDrafts(shownDocument);
             var animationChanges = (JsonObject)a["changes"]!;
+            // Refused before anything changes: what moved to animation_scenario (seed, conditions, the player, the range, the world, the root).
+            foreach (var (name, _) in animationChanges)
+                if (AnimationEditor.MovedToScenario(name) is { } moved) throw new StudioCommandException("moved", moved);
             if (animationChanges.ContainsKey("difficulty") && !animationChanges.ContainsKey("worldPath") && editor.Mw3WorldPath != null)
                 throw new StudioCommandException("unsupported", "MechWarrior 3 previews use missions instead of difficulty.");
             foreach(var (name,value) in animationChanges) { RequirePreview(a); await editor.SetPreviewOptionAsync(name, value ?? throw new StudioCommandException("invalid_argument","Use an explicit value.")); }
@@ -309,13 +303,26 @@ public partial class MainWindow
                 await WorldAnimationTransportAsync(Text(a,"action"), Number(a,"seconds"), token);
                 return Result(WorldAnimationCommandState);
             }
-            if (Text(a, "action") is "duration" or "start") throw new StudioCommandException("unsupported", "start and duration belong to Animation mode in a source map.");
-            var editor = TargetAnimation(a); RequireNoDrafts(shownDocument); await editor.TransportAsync(Text(a,"action"),Number(a,"seconds")); return Result(editor.PreviewState());
+            var editor = TargetAnimation(a); RequireNoDrafts(shownDocument);
+            // Estimate duration: the scenario measured again without moving the playhead (an automatic range follows it).
+            if (Text(a, "action") == "duration")
+            {
+                var measured = await editor.MeasureAgainAsync();
+                if (CompiledAnimationShown) RefreshCompiledRun();
+                return Result(new { duration = measured is null ? null : new { kind = measured.Kind.ToString(), seconds = measured.Seconds, explanation = measured.Explanation }, state = editor.PreviewState() });
+            }
+            await editor.TransportAsync(Text(a,"action"),Number(a,"seconds")); return Result(editor.PreviewState());
         });
         Register(r, "animation_runtime", "Read preview status, sequence runtime, dispatched event occurrences, problems or bound scene nodes; in a source map also instances, scoped condition outcomes, each start attempt's activation prerequisites (prerequisites: outcome met, refused, or ignored by the scenario's rule, with every check; evidence only), player: the player reference range conditions and range gates measure from at the playhead (position, source: aiv start, opening handover, custom, none, or callback 10 or 17 with when it moved it; frozen once callback 11 suspended the player; evaluated false before a run, when it is the scenario's setting) and every change of the run (paged changes), and, in Animation mode, notices: every notice of the opened animation as the view bar's chip lists it (kind approximation, support, ignoredPrerequisites, refused, unavailable, preview or limit; generic true for a preview approximation the cards group as n preview approximations; its text, severity, count and time; node and lane name the graph node and Timing lane whose ⚠ badge counts an item-specific one, row the graph row; animation_graph select or animation_timing select go to it). Scene metadata previews retain at most 64 JSON nodes and 1024 text characters, with inspection_truncated; full metadata is available through JSON export. Identities remain complete; long rows shorten pages, so follow nextOffset. Timing thresholds and observed dispatches remain distinct.", false,
             [PreviewParameter,P("section","string","Data section; instances, conditions and prerequisites are source-world run observations.",true,"status","sequences","events","problems","scene","instances","conditions","prerequisites","notices","player"),.. PageParameters], a =>
             {
                 RequirePreview(a);
+                if (CompiledAnimationShown && Text(a, "section") == "notices")
+                {
+                    // The compiled preview's chip: the same notices of its shown animation.
+                    RefreshCompiledNotices();
+                    return Page(compiledNotices, a, n => n.Text + " " + n.Kind, project: n => n.Json(), maximumRowBytes: n => 1024 + 2L * n.Text.Length);
+                }
                 if (shownDocument?.SourceWorld == null && Text(a, "section") is "instances" or "conditions" or "prerequisites" or "notices" or "player")
                     throw new StudioCommandException("unsupported", "Instance and scoped-condition observations belong to source-world animation runs.");
                 return Result(shownDocument?.SourceWorld != null ? WorldAnimationRuntimeData(Text(a,"section"),Int(a,"offset"),Int(a,"limit",100),Text(a,"query"))
@@ -329,12 +336,17 @@ public partial class MainWindow
                 RequirePreview(a); await WorldAnimationSelectSourceAsync(GuidArg(a,"sequence"), GuidArg(a,"event"), token);
                 return Result(WorldAnimationCommandState);
             }
+            // A compiled animation: the graph's selection (its sequence node or its event's row), as animation_graph select.
             var editor = TargetAnimation(a); RequireNoDrafts(shownDocument);
             Guid sequence=GuidArg(a,"sequence"), ev=GuidArg(a,"event");
             var entry=shownDocument!.Document.Animations!.Entries[editor.EntryIndex];
             if (sequence != Guid.Empty && !entry.AllSequences.Any(s => s.Id==sequence && (ev==Guid.Empty || s.Events.Any(e=>e.Id==ev))) || sequence==Guid.Empty && ev!=Guid.Empty)
                 throw new StudioCommandException("stale_record","Authored sequence/event is unavailable.");
-            editor.SelectSource(sequence,ev); return Result(editor.PropertySelection);
+            var layout = RequireCompiledGraph();
+            string id = sequence == Guid.Empty ? "" : ev == Guid.Empty ? zStudio.Core.Animation.AnimationGraph.SequenceId(editor.EntryIndex, sequence)
+                : layout.Graph.RowOf(editor.EntryIndex, ev)?.Id ?? throw new StudioCommandException("stale_record", "The event has no row in the graph.");
+            await CompiledSelectAsync(id);
+            return Result(new { sequence, @event = ev, selection = compiledSelection });
         });
         Register(r, "texture_view", "Inspect or set texture presentation. Channels: 0 RGBA, 1 RGB, 2 Alpha, 3 Red, 4 Green, 5 Blue. Coordinates are texture pixels.", true,
             [PreviewParameter,P("zoom","number","Zoom factor."),P("fit","boolean","Fit texture to viewer."),P("channel","integer","Channel index 0–5."),P("smooth","boolean","Use smooth scaling."),P("panX","number","Horizontal scroll offset in DIP."),P("panY","number","Vertical scroll offset in DIP."),P("x","integer","Pixel X to inspect."),P("y","integer","Pixel Y to inspect.")], a =>

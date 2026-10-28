@@ -94,7 +94,7 @@ internal static class GuiReviewCapture
                     await Select(responsiveAnimation,responsiveAsset);
                     await Wait(() => ((ContentControl)window.FindName("AnimationHost")).Content is AnimationEditor a && a.CurrentFrame != null && ((Border)a.FindName("LoadingPanel")).Visibility == Visibility.Collapsed);
                     var responsiveEditor = (AnimationEditor)((ContentControl)window.FindName("AnimationHost")).Content;
-                    ((CheckBox)responsiveEditor.FindName("Mute")).IsChecked = true;
+                    responsiveEditor.SetTransport(newMuted: true);
                     await responsiveEditor.SeekAsync(.6); window.OpenPropertiesWindow?.Close();
                     var responsiveFrame = responsiveEditor.CurrentFrame;
                     var responsiveCamera = responsiveEditor.Viewport.CaptureView();
@@ -149,7 +149,7 @@ internal static class GuiReviewCapture
                 // This fixture opens the menu programmatically; leave its menu-mode
                 // capture before separately exercising window system commands.
                 Mouse.Capture(null); Keyboard.ClearFocus(); await Dispatcher.Yield(DispatcherPriority.ApplicationIdle);
-                Require(!((FrameworkElement)window.FindName("NavigatorHost")).IsVisible && !((FrameworkElement)window.FindName("InspectorTabs")).IsVisible && !((FrameworkElement)window.FindName("DocumentCommands")).IsVisible, "Startup exposed empty workspace controls");
+                Require(!((FrameworkElement)window.FindName("NavigatorHost")).IsVisible && !((FrameworkElement)window.FindName("InspectorHost")).IsVisible && !((FrameworkElement)window.FindName("DocumentCommands")).IsVisible, "Startup exposed empty workspace controls");
                 nint handle = new WindowInteropHelper(window).Handle;
                 SendMessage(handle, 0x0112, 0xF020, 0); await Task.Delay(250, timeout.Token);
                 Require(window.WindowState == WindowState.Minimized, "Native minimize failed");
@@ -168,7 +168,7 @@ internal static class GuiReviewCapture
                 await Capture("02-folder-open");
                 var missionFolders = window.ViewModel.Folders.Single().Children.Where(n => n.File == null).Select(n => n.Name).ToArray();
                 Require(Array.IndexOf(missionFolders,"m2") < Array.IndexOf(missionFolders,"m10"),"Natural mission directory order regressed");
-                Require(window.ViewModel.Settings.GetWorkspace().BrowserTab == 0 && ((FrameworkElement)window.FindName("FileTree")).IsVisible && !((FrameworkElement)window.FindName("DocumentCommands")).IsVisible && !((FrameworkElement)window.FindName("InspectorTabs")).IsVisible, "Folder-only state did not show Files without empty document controls");
+                Require(window.ViewModel.Settings.GetWorkspace().BrowserTab == 0 && ((FrameworkElement)window.FindName("FileTree")).IsVisible && !((FrameworkElement)window.FindName("DocumentCommands")).IsVisible && !((FrameworkElement)window.FindName("InspectorHost")).IsVisible, "Folder-only state did not show Files without empty document controls");
                 ((TabControl)window.FindName("NavigationTabs")).SelectedItem = window.FindName("FilesTab");
                 await Capture("03-files");
                 ((TabControl)window.FindName("NavigationTabs")).SelectedItem = window.FindName("SearchTab");
@@ -227,31 +227,11 @@ internal static class GuiReviewCapture
                 Require(((TabControl)window.FindName("NavigationTabs")).SelectedItem == window.FindName("AssetsTab"),"Switching away from a scene document left an unavailable page selected");
                 var editor = await Animation("vtol_destruction1");
                 await editor.SeekAsync(.6); editor.Viewport.FrameAnimation(); await Capture("11-animation-entry");
-                var inspector = (TabControl)window.FindName("InspectorTabs"); var tools = (TabControl)window.FindName("ToolTabs");
-                inspector.SelectedItem = window.FindName("ProgramTab"); await Capture("44-program-right");
-                Require(editor.ProgramView.IsDescendantOf(inspector) && !editor.ProgramView.IsDescendantOf((FrameworkElement)window.FindName("NavigatorHost")),"Program is not hosted solely in the right Inspector");
-                inspector.SelectedItem = window.FindName("PreviewSetupTab"); ((TextBox)editor.FindName("PreviewHeight")).Text = "40";
-                await Task.Delay(1000, timeout.Token); await editor.SeekAsync(1); editor.Viewport.FrameAnimation(); await Capture("12-preview-setup");
-                inspector.SelectedItem = window.FindName("ReferencesTab"); await Capture("13-references");
+                // The compiled preview: Animation mode's panel under the view and Inspector | Scenario on the right (design §19).
+                var compiledPanel = (FrameworkElement)((ContentControl)window.FindName("CompiledAnimationHost")).Content;
+                Require(compiledPanel.IsVisible && ((FrameworkElement)window.FindName("InspectorHost")).IsVisible, "The compiled preview lacks its panel or its right pane");
                 editor = await Animation("redsprks.flt");
-                var entry = animationDoc.Document.Animations!.Entries[editor.EntryIndex];
-                var sequence = entry.Sequences.First(s => s.Events.Any(e => e.Type == 10));
-                editor.SelectSource(sequence.Id); await Capture("14-sequence");
-                editor.SelectSource(sequence.Id, sequence.Events.First(e => e.Type == 10).Id);
                 await editor.SeekAsync(.4); editor.Viewport.FrameAnimation(); await Capture("15-procedural-event");
-                tools.SelectedIndex = 1; await Capture("16-event-log"); tools.SelectedIndex = 2; await Capture("17-problems");
-                tools.SelectedIndex = 3; await Capture("18-runtime"); tools.SelectedIndex = 5; await Capture("19-bytes"); tools.SelectedIndex = 0;
-                tools.SelectedIndex = 1; ((DataGrid)editor.FindName("EventLog")).SelectedIndex = 0;
-                CaptureDetails("Event details","27-event-details",editor.EventLogView,"Details…");
-                tools.SelectedIndex = 2; ((DataGrid)editor.FindName("Problems")).SelectedIndex = 0;
-                if (((DataGrid)editor.FindName("Problems")).SelectedItem != null) CaptureDetails("Problem details","28-problem-details",editor.ProblemsView,"Details…");
-                tools.SelectedIndex = 0;
-                inspector.SelectedItem = window.FindName("ReferencesTab"); await Dispatcher.Yield(DispatcherPriority.ApplicationIdle); window.UpdateLayout();
-                Descendants(editor.ReferencesView).OfType<ListBox>().Single().SelectedIndex = 1; await Capture("31-reference"); inspector.SelectedIndex = 0;
-                var keyEntry = animationDoc.Document.Animations!.Entries.First(e => e.Sequences.Any(s => s.Events.Any(v => v.Type == 12)));
-                editor = await Animation(animationDoc.Assets.First(a => a.Index == keyEntry.Index).Name);
-                var keySeq = keyEntry.Sequences.First(s => s.Events.Any(e => e.Type == 12)); editor.SelectSource(keySeq.Id, keySeq.Events.First(e => e.Type == 12).Id);
-                await Capture("20-keyframes");
 #pragma warning disable WPF0001
                 var assetScroller = Descendants((DataGrid)window.FindName("AssetGrid")).OfType<ScrollViewer>().First();
                 ((DataGrid)window.FindName("AssetGrid")).ScrollIntoView(animationDoc.SelectedAsset); await Dispatcher.Yield(DispatcherPriority.ApplicationIdle);
@@ -260,20 +240,14 @@ internal static class GuiReviewCapture
                 Require(Math.Abs(Descendants((DataGrid)window.FindName("AssetGrid")).OfType<ScrollViewer>().First().VerticalOffset - scrollOffset) < 1,"Theme changed Assets scroll position"); Theme("Dark");
 #pragma warning restore WPF0001
                 window.Width = 1080; window.Height = 650; await Capture("22-narrow");
-                inspector.SelectedItem = window.FindName("ProgramTab"); await Capture("45-program-narrow"); inspector.SelectedIndex = 0;
                 Require(GetClientRect(handle,out var shortClient),"Cannot measure short-window client area");
                 var shortDpi = VisualTreeHelper.GetDpi(window);
                 var shortWorkspace = (FrameworkElement)window.FindName("Workspace");
                 var shortViewport = (FrameworkElement)editor.FindName("ViewportArea");
-                var shortTransport = (FrameworkElement)editor.FindName("TransportRow");
-                var shortPhase = (FrameworkElement)editor.FindName("Phase");
-                double transportBottom = shortTransport.TranslatePoint(new(0,shortTransport.ActualHeight),window).Y;
-                double phaseBottom = shortPhase.TranslatePoint(new(0,shortPhase.ActualHeight),window).Y;
                 Require(Math.Abs((shortClient.Bottom - shortClient.Top) / shortDpi.DpiScaleY - 650) < 1 && Math.Abs(window.ActualWidth - 1080) < 1,"Narrow check did not reach the requested client size");
-                Require(shortTransport.IsVisible && shortPhase.IsVisible && transportBottom < 650 && phaseBottom < 650 && shortViewport.ActualHeight > 100,"Transport or viewport is clipped at 650 DIP");
                 var shortTools = (FrameworkElement)window.FindName("BottomTools");
-                Require(((FrameworkElement)window.FindName("InspectorTabs")).IsVisible && editor.Viewport.ActualHeight >= 180 && (!shortTools.IsVisible || shortTools.ActualHeight >= 100),"Short layout must retain usable viewport, Inspector and any visible tools");
-                Console.WriteLine($"Short-height evidence: client={shortClient.Right - shortClient.Left}x{shortClient.Bottom - shortClient.Top}px, DPI={shortDpi.DpiScaleX},{shortDpi.DpiScaleY}, window={window.ActualWidth}x{window.ActualHeight}DIP, workspace={shortWorkspace.ActualWidth}x{shortWorkspace.ActualHeight}, viewport={shortViewport.ActualWidth}x{shortViewport.ActualHeight}, transport bottom={transportBottom}, phase bottom={phaseBottom}; tools visible={shortTools.IsVisible}, Inspector scrollable.");
+                Require(shortViewport.ActualHeight > 100 && shortTools.IsVisible && shortTools.ActualHeight >= 100,"Short layout must retain a usable view and the animation panel");
+                Console.WriteLine($"Short-height evidence: client={shortClient.Right - shortClient.Left}x{shortClient.Bottom - shortClient.Top}px, DPI={shortDpi.DpiScaleX},{shortDpi.DpiScaleY}, window={window.ActualWidth}x{window.ActualHeight}DIP, workspace={shortWorkspace.ActualWidth}x{shortWorkspace.ActualHeight}, viewport={shortViewport.ActualWidth}x{shortViewport.ActualHeight}; panel={shortTools.ActualHeight}.");
                 window.Width = 1600; window.Height = 900;
                 await Dispatcher.Yield(DispatcherPriority.ApplicationIdle);
                 Require(((FrameworkElement)window.FindName("BottomTools")).IsVisible && ReferenceEquals(editor,((ContentControl)window.FindName("AnimationHost")).Content),"Restoring height lost tools preference or replaced editor");
@@ -315,7 +289,7 @@ internal static class GuiReviewCapture
                 foreach (var openDocument in window.ViewModel.Documents.ToArray()) await window.ViewModel.CloseAsync(openDocument);
                 await Capture("36-last-document-closed");
                 Require(window.ViewModel.Settings.GetWorkspace().BrowserTab == 0 && ((FrameworkElement)window.FindName("FileTree")).IsVisible,"Closing the last document did not return from Assets to Files");
-                Require(!((FrameworkElement)window.FindName("InspectorTabs")).IsVisible && !((FrameworkElement)window.FindName("DocumentCommands")).IsVisible && ((TextBlock)window.FindName("WelcomeTitle")).Text == "Choose a file to inspect","Last document close exposed empty editor controls");
+                Require(!((FrameworkElement)window.FindName("InspectorHost")).IsVisible && !((FrameworkElement)window.FindName("DocumentCommands")).IsVisible && ((TextBlock)window.FindName("WelcomeTitle")).Text == "Choose a file to inspect","Last document close exposed empty editor controls");
                 string stressText = "QA display fixture — deliberately long diagnostic; not a game/corpus finding.\n\n" + string.Join("\n",Enumerable.Range(1,80).Select(i => $"{i}: Full diagnostic detail remains selectable, wraps inside this owned window, and preserves record identity and source context when it exceeds the visible area."));
                 var detailsTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(650) };
                 Exception? detailFailure = null;
@@ -342,14 +316,6 @@ internal static class GuiReviewCapture
                     menu.Items.OfType<MenuItem>().First(m => Equals(m.Header,theme)).RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
                 }
                 void NavigationFiles() => ((TabControl)window.FindName("NavigationTabs")).SelectedItem = window.FindName("FilesTab");
-                void CaptureDetails(string title,string name,FrameworkElement page,string button)
-                {
-                    var timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(650) };
-                    timer.Tick += (_,_) => { var dialog = app.Windows.OfType<Window>().FirstOrDefault(w => w.Title == title); if (dialog == null) return; timer.Stop(); CaptureWindow(dialog,Path.Combine(output,name + ".png")); dialog.Close(); Console.WriteLine(name); };
-                    timer.Start();
-                    try { Descendants(page).OfType<Button>().First(b => Equals(b.Content,button)).RaiseEvent(new RoutedEventArgs(Button.ClickEvent)); }
-                    finally { timer.Stop(); }
-                }
                 async Task<DocumentModel> Open(string path) => await window.ViewModel.OpenFileAsync(Path.Combine(Path.GetFullPath(root), path)) ?? throw new InvalidDataException(path);
                 async Task Select(DocumentModel doc, AssetItem asset)
                 {
@@ -363,7 +329,7 @@ internal static class GuiReviewCapture
                     var asset = animationDoc.Assets.First(a => a.Name == name); await Select(animationDoc, asset);
                     await Wait(() => ((ContentControl)window.FindName("AnimationHost")).Content is AnimationEditor e && e.EntryIndex == asset.Index && e.CurrentFrame != null && ((Border)e.FindName("LoadingPanel")).Visibility == Visibility.Collapsed);
                     var e = (AnimationEditor)((ContentControl)window.FindName("AnimationHost")).Content;
-                    ((CheckBox)e.FindName("Mute")).IsChecked = true; return e;
+                    e.SetTransport(newMuted: true); return e;
                 }
                 async Task Wait(Func<bool> ready) { while (!ready()) await Task.Delay(100, timeout.Token); }
                 async Task Capture(string name)
@@ -379,7 +345,7 @@ internal static class GuiReviewCapture
                         await Task.Delay(650, timeout.Token);
                         CheckTitleCommands(window);
                         CheckNativeCorners(window);
-                        if (window.WindowState == WindowState.Normal) AnimationLayoutCheck.CheckChrome(window);
+                        if (window.WindowState == WindowState.Normal) WindowChromeCheck.CheckChrome(window);
                         CaptureWindow(window, Path.Combine(output, name + ".png"));
                         if (desktopView) CaptureHandle(new WindowInteropHelper(window).Handle,Path.Combine(output,name + "-desktop.png"),desktopView:true);
                         if (window.OpenPropertiesWindow is { IsVisible: true } popup) CaptureWindow(popup, Path.Combine(output, name + "-properties.png"));
@@ -413,7 +379,7 @@ internal static class GuiReviewCapture
         }
         Require(browser.SelectedItem is TabItem { Visibility: Visibility.Visible },"Navigator retains a hidden selected page");
         bool animationOpen = ((ContentControl)window.FindName("AnimationHost")).Content is AnimationEditor;
-        Require((((TabItem)window.FindName("ProgramTab")).Visibility == Visibility.Visible) == animationOpen,"Program tab availability does not follow the active animation");
+        Require((((FrameworkElement)window.FindName("CompiledAnimationHost")).Visibility == Visibility.Visible) == animationOpen,"The animation panel does not follow the active animation");
         Require(window.FindName("PropertiesPane") == null,"Docked Properties still exists");
         if (!animationOpen) Require(((FrameworkElement)window.FindName("InspectorHost")).Visibility == Visibility.Collapsed,"An empty inspector still consumes space outside animations");
 

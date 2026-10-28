@@ -24,8 +24,7 @@ public partial class MainWindow
             foreach (var (key, value) in a["changes"] as JsonObject ?? new())
                 if (key == "navigatorTab") ValidateNavigatorSection(value!.GetValue<int>());
                 else if (key == "toolsTab" && ViewModel.IsSourceProject) throw new StudioCommandException("unsupported","A source map's Diagnostics pane has no tabs.");
-                else if (key is "inspectorTab" or "toolsTab")
-                    ValidateTab(key == "inspectorTab" ? InspectorTabs : ToolTabs, value!.GetValue<int>());
+                else if (key == "toolsTab") ValidateTab(ToolTabs, value!.GetValue<int>());
             foreach(var (key,value) in a["changes"] as JsonObject ?? new())
             {
                 switch(key)
@@ -43,7 +42,6 @@ public partial class MainWindow
                     case "toolsHeight": if (ViewModel.IsSourceProject) { sourceToolsHeight = Math.Clamp(value!.GetValue<double>(), 100, 700); RememberSourceTools(); } else Layout.ToolsHeight=value!.GetValue<double>(); break;
                     case "inspectionPanelHeight": Layout.InspectionPanelHeight=value!.GetValue<double>(); break;
                     case "navigatorTab": SelectNavigatorSection(value!.GetValue<int>()); break;
-                    case "inspectorTab": SetTab(InspectorTabs,value!.GetValue<int>()); break;
                     case "toolsTab": SetTab(ToolTabs,value!.GetValue<int>()); break;
                     default: throw new StudioCommandException("unknown_option",key);
                 }

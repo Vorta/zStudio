@@ -22,8 +22,8 @@ public sealed class WorkspaceLayout : System.Text.Json.Serialization.IJsonOnDese
     public string Preset { get; set; } = "Edit";
     public int BrowserTab { get; set; }
     public int ContentBrowserTab { get; set; } = 1;
-    public int InspectorTab { get; set; }
-    public int ToolTab { get; set; }
+    /// <summary>The bottom tools' tab (0 Problems, 1 Related, 2 Bytes); Related by default.</summary>
+    public int ToolTab { get; set; } = 1;
     public Dictionary<string, bool> Groups { get; set; } = [];
     public void Normalize()
     {
@@ -32,7 +32,7 @@ public sealed class WorkspaceLayout : System.Text.Json.Serialization.IJsonOnDese
         InspectorWidth = Bound(InspectorWidth, 352, 320, 650);
         ToolsHeight = Bound(ToolsHeight, 180, 100, 700);
         InspectionPanelHeight = NormalizeInspectionPanelHeight(InspectionPanelHeight);
-        BrowserTab = Math.Clamp(BrowserTab, 0, 3); InspectorTab = Math.Clamp(InspectorTab, 0, 2); ToolTab = Math.Clamp(ToolTab, 0, 5);
+        BrowserTab = Math.Clamp(BrowserTab, 0, 3); ToolTab = Math.Clamp(ToolTab, 0, 2);
         ContentBrowserTab = Math.Clamp(ContentBrowserTab, 1, 3);
         if (Preset is not ("Inspect" or "Edit" or "Debug" or "Focus preview")) Preset = "Edit";
         Groups ??= [];
@@ -70,17 +70,3 @@ public sealed partial class AnimationPreviewOptions : ObservableObject
     [ObservableProperty] private bool effects = true;
 }
 
-public sealed partial class ProgramItem : ObservableObject
-{
-    public Guid Sequence { get; init; }
-    public Guid Event { get; init; }
-    public string Key => Event != Guid.Empty ? Event.ToString() : Sequence != Guid.Empty ? Sequence.ToString() : "entry";
-    [ObservableProperty] private string label = "";
-    [ObservableProperty] private string summary = "";
-    [ObservableProperty] private string detail = "";
-    [ObservableProperty] private string runtimeMarker = "";
-    [ObservableProperty] private string description = "";
-    [ObservableProperty] private bool isExpanded;
-    [ObservableProperty] private bool isSelected;
-    public ObservableCollection<ProgramItem> Children { get; } = [];
-}

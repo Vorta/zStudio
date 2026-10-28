@@ -37,8 +37,11 @@ internal static class DraftResolutionMcpChecks
                 typeof(AnimationEditor).GetField("player", flags)!.SetValue(editor, player);
                 typeof(AnimationEditor).GetField("frame", flags)!.SetValue(editor, player.Frame());
                 ((FrameworkElement)editor.FindName("LoadingPanel")).Visibility = Visibility.Collapsed;
-                ((TextBox)editor.FindName("Seed")).Text = "2";
-                ((TextBox)editor.FindName("EndTime")).Text = "1";
+                // A typed height not applied yet (as while typing): the preview's one draft.
+                typeof(AnimationEditor).GetField("changing", flags)!.SetValue(editor, true);
+                ((TextBox)editor.FindName("PreviewHeight")).Text = "2";
+                typeof(AnimationEditor).GetField("changing", flags)!.SetValue(editor, false);
+                Assert.True(editor.HasAutomationDrafts);
                 typeof(MainWindow).GetField("animation", flags)!.SetValue(main, editor);
                 typeof(MainWindow).GetField("shownDocument", flags)!.SetValue(main, document);
                 var gate = (SemaphoreSlim)typeof(AnimationEditor).GetField("simulationGate", flags)!.GetValue(editor)!;

@@ -1,3 +1,4 @@
+using System.IO;
 using System.IO.Pipes;
 using System.Reflection;
 using System.Text.Json.Nodes;
@@ -164,6 +165,52 @@ internal static class AnimationGraphMcpChecks
             Assert.InRange(moved["player"]!["since"]!.GetValue<double>(), .99, 1.05);
             Assert.True(moved["changes"]!["total"]!.GetValue<int>() >= 3);
             Assert.StartsWith("callback 10 at 1.0", moved["label"]!.GetValue<string>());
+
+            // The compiled preview (design §19, §20): the same bridge exported, opened read only, shown with Animation mode's components.
+            string compiled = Path.Combine(fixture.Root, "compiled-preview");
+            var exported = await SourceBuilder.ExportAsync(fixture.Project, compiled, ["m1/gamez.zbd", "m1/anim.zbd"], token: token);
+            Assert.All(exported.Outputs, output => Assert.Null(output.Error));
+            foreach (var document in main.ViewModel.Documents.ToArray()) main.ViewModel.CloseResolved(document);
+            await main.ViewModel.OpenRootAsync(compiled, token);
+            string archiveId = (await Job("open_document", new() { ["path"] = Path.Combine(compiled, "m1", "anim.zbd") }))["id"]!.GetValue<string>();
+            var archive = main.ViewModel.Documents.Single(d => d.SessionId.ToString() == archiveId);
+            int compiledBridge = archive.Assets.First(a => a.Record.Kind == zStudio.Core.AssetKind.Animation && a.Name == "destroy_tr_bridge").Index;
+            await Job("select_asset", new() { ["document"] = archive.SessionId.ToString(), ["kind"] = "Animation", ["index"] = compiledBridge });
+            var compiledState = await Job("animation_mode", new() { ["action"] = "state", ["preview"] = await Preview() });
+            Assert.True(compiledState["readOnly"]!.GetValue<bool>());
+            // Graph read: compiled numbering, the back-link from the rails.
+            var compiledNodes = (await Graph("read"))["result"]!["items"]!.AsArray().OfType<JsonObject>().ToArray();
+            var compiledFlare = compiledNodes.Single(n => n["label"]!.GetValue<string>() == "sequence 1 · flare_sequence");
+            Assert.Contains((await Graph("read", new() { ["section"] = "edges" }))["result"]!["items"]!.AsArray().OfType<JsonObject>(), e => e["backLink"]!.GetValue<bool>());
+            // Timing marks after a seek: the run's marks on a lane.
+            await Job("animation_transport", new() { ["action"] = "seek", ["seconds"] = 0.5, ["preview"] = await Preview() });
+            var lanes = (await Job("animation_timing", new() { ["action"] = "lanes", ["preview"] = await Preview() }))["result"]!["items"]!.AsArray().OfType<JsonObject>().ToArray();
+            string markedLane = lanes.First(l => l["kind"]!.GetValue<string>() == "sequence" && l["markCount"]!.GetValue<int>() > 0)["id"]!.GetValue<string>();
+            Assert.NotEmpty((await Job("animation_timing", new() { ["action"] = "marks", ["lane"] = markedLane, ["preview"] = await Preview() }))["result"]!["items"]!.AsArray());
+            // A condition override: the flare IF forced True in the shown animation's own path, read back on its switch and outcome.
+            var compiledQuestion = (await Rows(compiledFlare["id"]!.GetValue<string>())).First(r => r["role"]!.GetValue<string>() == "question");
+            await Job("animation_scenario", new() { ["action"] = "conditions", ["preview"] = await Preview(), ["conditions"] = new JsonArray(new JsonObject { ["instancePath"] = "", ["entry"] = compiledBridge, ["event"] = compiledQuestion["event"]!.GetValue<string>(), ["value"] = "true" }) });
+            await Job("animation_transport", new() { ["action"] = "seek", ["seconds"] = 0.5, ["preview"] = await Preview() });
+            var forcedQuestion = (await Rows(compiledFlare["id"]!.GetValue<string>())).First(r => r["role"]!.GetValue<string>() == "question");
+            Assert.Equal("true", forcedQuestion["switch"]!.GetValue<string>());
+            Assert.StartsWith("true · forced", forcedQuestion["condition"]!["outcome"]!.GetValue<string>());
+            // Bound root: an override, then root null clears it (Clear override).
+            var root = (await Job("animation_scenario", new() { ["action"] = "read", ["preview"] = await Preview() }))["scenario"]!["inputs"]!["root"]!;
+            int boundNode = root["node"]!.GetValue<int>();
+            var overridden = await Job("animation_scenario", new() { ["action"] = "inputs", ["root"] = boundNode == 0 ? 1 : 0, ["preview"] = await Preview() });
+            Assert.True(overridden["scenario"]!["inputs"]!["root"]!["overridden"]!.GetValue<bool>());
+            var cleared = await Job("animation_scenario", new() { ["action"] = "inputs", ["root"] = null, ["preview"] = await Preview() });
+            Assert.False(cleared["scenario"]!["inputs"]!["root"]!["overridden"]!.GetValue<bool>());
+            Assert.Equal(boundNode, cleared["scenario"]!["inputs"]!["root"]!["node"]!.GetValue<int>());
+            // Bytes: up to 4,096 original source bytes of the record.
+            var bytes = await Call("animation_records", new() { ["document"] = archive.SessionId.ToString(), ["entry"] = compiledBridge, ["action"] = "bytes", ["length"] = 4096 });
+            Assert.Equal("original source bytes", bytes["label"]!.GetValue<string>());
+            Assert.Equal(Math.Min(4096, bytes["recordLength"]!.GetValue<long>()), bytes["length"]!.GetValue<long>());
+            Assert.Equal(2 * bytes["length"]!.GetValue<long>(), bytes["hex"]!.GetValue<string>().Length);
+            // A removed animation_options key is refused with a pointer to animation_scenario (no aliases).
+            var movedOption = await Job("animation_options", new() { ["changes"] = new JsonObject { ["seed"] = 3 }, ["preview"] = await Preview() }, "failed");
+            Assert.Equal("moved", movedOption["code"]!.GetValue<string>());
+            Assert.Contains("animation_scenario", movedOption["message"]!.GetValue<string>());
 
             async Task<JsonNode> Paths(string action, Dictionary<string, object?>? extra = null)
             {

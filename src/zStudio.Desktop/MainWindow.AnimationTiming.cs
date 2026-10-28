@@ -505,10 +505,12 @@ public partial class MainWindow
              new("offset", "integer", "Page offset.", Minimum: 0, Maximum: int.MaxValue),
              new("limit", "integer", "Page size, at most 100.", Minimum: 1, Maximum: 100)], false, async (a, token) =>
         {
-            RequirePreview(a); RequireScenarioMap();
+            RequirePreview(a);
             string action = Text(a, "action");
             int offset = Int(a, "offset"), limit = Int(a, "limit", 100);
             if (offset < 0 || limit is < 1 or > 100) throw new StudioCommandException("invalid_argument", "Use offset >= 0 and limit 1–100.");
+            if (CompiledAnimationShown) return Result(await CompiledTimingCommandAsync(a, action, offset, limit));
+            RequireScenarioMap();
             var paging = new JsonObject { ["offset"] = offset, ["limit"] = limit };
             object? result = null;
             switch (action)

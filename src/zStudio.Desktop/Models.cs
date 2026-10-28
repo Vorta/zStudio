@@ -168,7 +168,8 @@ public sealed partial class DocumentModel : ObservableObject, IDisposable
         if (Document is zStudio.Core.Sources.SourceSceneSnapshot source)
             return Task.Run(() => AnimationPreviewContext.FromSources(source, difficulty, token), token);
         bool worldChanged = worldPath != null;
-        if (worldPath != null) animationWorldPath = worldPath;
+        // "" returns to the automatic scene beside the file; null keeps the one chosen before.
+        if (worldPath != null) animationWorldPath = worldPath.Length == 0 ? null : worldPath;
         // An explicit mission request must load exactly that reader, never a cached or fallback context.
         bool missionChanged = exactMission != null && (animationContext?.IsCompletedSuccessfully != true ||
             !string.Equals(animationContext.Result.Mission?.Layout.MissionArchive, exactMission, StringComparison.OrdinalIgnoreCase));

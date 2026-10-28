@@ -417,6 +417,57 @@
         "zstudio_preview_state"
       ],
       "note": "The source map status bar's player tank item, shown while preview_state.bft's choice differs from its defaults."
+    },
+    {
+      "gui": "MainWindow.CompiledAnimation:Chrome",
+      "tools": [
+        "zstudio_animation_mode",
+        "zstudio_animation_options",
+        "zstudio_animation_scenario"
+      ],
+      "note": "A compiled animation's command bar (design §19): its title block (name, the Read only tag, Animation · file · #entry · size) is animation_mode state (opened, readOnly); the view's labelled commands (LOD, Difficulty, Camera: Frame and Follow camera, Display: Map, Horizon, Effects, Face orientation, Ground: Grid, Ground collision, Height) are animation_options (lod, difficulty, followCamera, map, horizon, effects, faceOrientation, grid, collision, height) and Frame is camera frame; the scenario chip shows the Scenario tab (animation_mode layout rightTab scenario) and its summary is animation_scenario read summary. There is no Save, Undo or Redo: a compiled file is read only."
+    },
+    {
+      "gui": "MainWindow.CompiledAnimation:Panel",
+      "tools": [
+        "zstudio_animation_transport",
+        "zstudio_animation_options",
+        "zstudio_animation_scenario",
+        "zstudio_animation_mode",
+        "zstudio_animation_graph",
+        "zstudio_animation_timing",
+        "zstudio_animation_runtime"
+      ],
+      "note": "A compiled animation's Animation mode panel under its view: the one transport in seconds (animation_transport play/pause/stop/start/previous/next/seek; Estimate duration is animation_transport duration; Speed, Loop range, Mute, Volume and Follow camera are animation_options speed/replay/mute/volume/followCamera; the range flyout's end and Auto range are animation_scenario inputs range), Structure | Timing | Split (animation_mode layout view), the Structure view's graph, switches and call ports (animation_graph; a switch is animation_scenario conditions, a port animation_scenario include), Timing's lanes, marks and Log (animation_timing; starts and thresholds are read only), the notices chip (animation_runtime notices) and Show in Diagnostics (animation_mode layout diagnostics)."
+    },
+    {
+      "gui": "MainWindow.CompiledAnimation:Inspector",
+      "tools": [
+        "zstudio_animation_graph",
+        "zstudio_animation_records",
+        "zstudio_references",
+        "zstudio_related",
+        "zstudio_animation_scenario",
+        "zstudio_animation_transport"
+      ],
+      "note": "A compiled animation's Inspector (Alt+Enter, Properties… on its Assets row): the same cards as Animation mode's, read only, as animation_graph inspector or select returns them (value items are read-only fields), with Stored (type, size, offsets, flags as hex), Bytes (original source bytes, at most 4 KiB: animation_records bytes), References on the definition (references) and Related (related). A condition card's switches are animation_scenario conditions, a call's Included in preview animation_scenario include, a table row's Seek animation_transport seek, links animation_graph select or expand; the header's Frame is camera frame and ✕ is animation_graph select with no node."
+    },
+    {
+      "gui": "MainWindow.CompiledAnimation:Scenario",
+      "tools": [
+        "zstudio_animation_scenario"
+      ],
+      "note": "A compiled animation's Scenario tab: one start (the shown animation at 0 s), Called animations with Include all and Exclude all (every call runs by default: animation_scenario include, includeAll, excludeAll), Conditions (player at start, custom with Pick in view, or none; random seed; effects detail; overrides with Go to and ✕: animation_scenario inputs, pick, conditions), Rules (animation_scenario rules), World (phase, height, beam origin; World: Choose GameZ… and back to automatic, Bound root: Bind root… and Clear override, Range: Auto or a custom end: animation_scenario inputs world, root (null clears the override) and range) and Reset… (animation_scenario reset). It is kept for the file's other animations and never saved."
+    },
+    {
+      "gui": "MainWindow.CompiledDrops:DropWindowsChip",
+      "tools": [
+        "zstudio_animation_paths",
+        "zstudio_preview_state",
+        "zstudio_animation_scenario"
+      ],
+      "note": "A compiled Whole world's Drop windows chip over the view (read only): its flyout's Analyze drop windows is animation_paths show (or analyze with a flight entry), the flight choice animation_paths analyze, the window list animation_paths select (its markers in the view), and the chip's word and the flyout's text are preview_state.parachute; the player the analysis measures from is animation_scenario inputs {player}. Moves, Apply and history belong to a source project's map."
+
     }
   ],
   "handlers": [
@@ -428,56 +479,7 @@
       "note": "View Fullscreen and View Hide UI are independent transient presentation flags. They preserve the retained preview, camera, playback, layout preferences and drafts; enabling requires a 3D preview and disabling remains available. Hide UI hides chrome, panes, the Properties window and editor guides, makes clicks inert and leaves the polygon zone tool."
     },
     {
-      "gui": "AnimationEditor.xaml:AudioChanged",
-      "tools": [
-        "zstudio_animation_options"
-      ],
-      "note": "Use the semantic tool with explicit identities and arguments."
-    },
-    {
-      "gui": "AnimationEditor.xaml:AutoRangeClick",
-      "tools": [
-        "zstudio_animation_options"
-      ],
-      "note": "Use the semantic tool with explicit identities and arguments."
-    },
-    {
-      "gui": "AnimationEditor.xaml:BindClick",
-      "tools": [
-        "zstudio_animation_options"
-      ],
-      "note": "Use the semantic tool with explicit identities and arguments."
-    },
-    {
-      "gui": "AnimationEditor.xaml:CopyLogSelectedClick",
-      "tools": [
-        "zstudio_animation_runtime"
-      ],
-      "note": "Return structured data directly; no clipboard side effect is needed."
-    },
-    {
-      "gui": "AnimationEditor.xaml:CopyLogVisibleClick",
-      "tools": [
-        "zstudio_animation_runtime"
-      ],
-      "note": "Return structured data directly; no clipboard side effect is needed."
-    },
-    {
-      "gui": "AnimationEditor.xaml:CopyProblemClick",
-      "tools": [
-        "zstudio_animation_runtime"
-      ],
-      "note": "Return structured data directly; no clipboard side effect is needed."
-    },
-    {
       "gui": "AnimationEditor.xaml:DifficultyChanged",
-      "tools": [
-        "zstudio_animation_options"
-      ],
-      "note": "Use the semantic tool with explicit identities and arguments."
-    },
-    {
-      "gui": "AnimationEditor.xaml:FitTraceClick",
       "tools": [
         "zstudio_animation_options"
       ],
@@ -516,7 +518,7 @@
       "tools": [
         "zstudio_animation_options"
       ],
-      "note": "Use the semantic tool with explicit identities and arguments."
+      "note": "The compiled preview's Height box (Ground group) is the scenario's Height: animation_options height or animation_scenario inputs {height} (the same value)."
     },
     {
       "gui": "AnimationEditor.xaml:HeightKeyDown",
@@ -547,126 +549,7 @@
       "note": "Use the semantic tool with explicit identities and arguments."
     },
     {
-      "gui": "AnimationEditor.xaml:LogDetailsClick",
-      "tools": [
-        "zstudio_animation_runtime"
-      ],
-      "note": "Use the semantic tool with explicit identities and arguments."
-    },
-    {
-      "gui": "AnimationEditor.xaml:LogNavigate",
-      "tools": [
-        "zstudio_animation_select"
-      ],
-      "note": "Use the semantic tool with explicit identities and arguments."
-    },
-    {
-      "gui": "AnimationEditor.xaml:NextFrameClick",
-      "tools": [
-        "zstudio_animation_transport"
-      ],
-      "note": "Use the semantic tool with explicit identities and arguments."
-    },
-    {
-      "gui": "AnimationEditor.xaml:PlayClick",
-      "tools": [
-        "zstudio_animation_transport"
-      ],
-      "note": "Use the semantic tool with explicit identities and arguments."
-    },
-    {
       "gui": "AnimationEditor.xaml:PresentationChanged",
-      "tools": [
-        "zstudio_animation_options"
-      ],
-      "note": "Use the semantic tool with explicit identities and arguments."
-    },
-    {
-      "gui": "AnimationEditor.xaml:PreviewOptionChanged",
-      "tools": [
-        "zstudio_animation_options"
-      ],
-      "note": "Use the semantic tool with explicit identities and arguments."
-    },
-    {
-      "gui": "AnimationEditor.xaml:PreviousFrameClick",
-      "tools": [
-        "zstudio_animation_transport"
-      ],
-      "note": "Use the semantic tool with explicit identities and arguments."
-    },
-    {
-      "gui": "AnimationEditor.xaml:ProblemDetailsClick",
-      "tools": [
-        "zstudio_animation_runtime"
-      ],
-      "note": "Use the semantic tool with explicit identities and arguments."
-    },
-    {
-      "gui": "AnimationEditor.xaml:ProblemFilterChanged",
-      "tools": [
-        "zstudio_animation_options"
-      ],
-      "note": "Use the semantic tool with explicit identities and arguments."
-    },
-    {
-      "gui": "AnimationEditor.xaml:ProblemNavigate",
-      "tools": [
-        "zstudio_animation_select"
-      ],
-      "note": "Use the semantic tool with explicit identities and arguments."
-    },
-    {
-      "gui": "AnimationEditor.xaml:ProgramSelected",
-      "tools": [
-        "zstudio_animation_select"
-      ],
-      "note": "Use the semantic tool with explicit identities and arguments."
-    },
-    {
-      "gui": "AnimationEditor.xaml:RangeChanged",
-      "tools": [
-        "zstudio_animation_options"
-      ],
-      "note": "Use the semantic tool with explicit identities and arguments."
-    },
-    {
-      "gui": "AnimationEditor.xaml:RuntimeDetailsClick",
-      "tools": [
-        "zstudio_animation_runtime"
-      ],
-      "note": "Use the semantic tool with explicit identities and arguments."
-    },
-    {
-      "gui": "AnimationEditor.xaml:SeedChanged",
-      "tools": [
-        "zstudio_animation_options"
-      ],
-      "note": "Use the semantic tool with explicit identities and arguments."
-    },
-    {
-      "gui": "AnimationEditor.xaml:SeekChanged",
-      "tools": [
-        "zstudio_animation_transport"
-      ],
-      "note": "Use the semantic tool with explicit identities and arguments."
-    },
-    {
-      "gui": "AnimationEditor.xaml:SetupClick",
-      "tools": [
-        "zstudio_workspace_view"
-      ],
-      "note": "Use the semantic tool with explicit identities and arguments."
-    },
-    {
-      "gui": "AnimationEditor.xaml:StopClick",
-      "tools": [
-        "zstudio_animation_transport"
-      ],
-      "note": "Use the semantic tool with explicit identities and arguments."
-    },
-    {
-      "gui": "AnimationEditor.xaml:WorldClick",
       "tools": [
         "zstudio_animation_options"
       ],
@@ -893,13 +776,6 @@
       "note": "Use the semantic tool with explicit identities and arguments."
     },
     {
-      "gui": "MainWindow.xaml:InspectorSelectionChanged",
-      "tools": [
-        "zstudio_workspace_view"
-      ],
-      "note": "Use the semantic tool with explicit identities and arguments."
-    },
-    {
       "gui": "MainWindow.xaml:IsolateClick",
       "tools": [
         "zstudio_scene_selection"
@@ -970,9 +846,9 @@
     {
       "gui": "MainWindow.xaml:PreviewSetupClick",
       "tools": [
-        "zstudio_workspace_view"
+        "zstudio_animation_mode"
       ],
-      "note": "Use the semantic tool with explicit identities and arguments."
+      "note": "Animation → Scenario on a compiled animation shows its Scenario tab: animation_mode layout rightTab scenario."
     },
     {
       "gui": "MainWindow.xaml:ReleaseNotesClick",
@@ -1121,6 +997,14 @@
         "zstudio_validate"
       ],
       "note": "Use the semantic tool with explicit identities and arguments."
+    },
+    {
+      "gui": "MainWindow.xaml:CompiledPanelSplitterCompleted",
+      "tools": [
+        "zstudio_animation_mode",
+        "zstudio_workspace_view"
+      ],
+      "note": "The splitter between a compiled animation's panel and its Diagnostics strip: animation_mode layout panelHeight and diagnostics; the strip's height is workspace_view toolsHeight."
     },
     {
       "gui": "MainWindow.xaml:WorkspaceSplitterCompleted",

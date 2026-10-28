@@ -22,6 +22,8 @@ internal sealed record AnimationGraphState
     /// <summary>An edit (a draft, a scenario change) retired the run, not the transport's Stop.</summary>
     public bool StaleByEdit { get; init; } = true;
     public bool ReadOnly { get; init; }
+    /// <summary>A compiled file's graph: frames say read only; the scenario's switches and ports still work.</summary>
+    public bool Compiled { get; init; }
     /// <summary>Rows naming the object selected in the 3D view (amber bar).</summary>
     public IReadOnlySet<string> Highlighted { get; init; } = new HashSet<string>(StringComparer.Ordinal);
     /// <summary>Said instead of the graph ("Not bound on Hard …").</summary>
@@ -1008,7 +1010,7 @@ internal sealed class AnimationGraphView : Grid
             bool group = frame.Group != null;
             var name = new FormattedText(group ? GroupName() : frame.Name, CultureInfo.CurrentUICulture, FlowDirection.LeftToRight, p.Strong, 13, p.T1, pixels) { MaxTextWidth = Math.Max(1, Width - 60), Trimming = TextTrimming.CharacterEllipsis, MaxLineCount = 1 };
             dc.DrawText(name, new Point(32, 17 - name.Height / 2));
-            string caption = (group ? $"{frame.Name} · #{frame.Entry}" : $"{frame.Root} · #{frame.Entry}") + (frame.File is { } file ? " · " + System.IO.Path.GetFileName(file) : "") + (view.State.ReadOnly ? " · read only" : "");
+            string caption = (group ? $"{frame.Name} · #{frame.Entry}" : $"{frame.Root} · #{frame.Entry}") + (frame.File is { } file ? " · " + System.IO.Path.GetFileName(file) : "") + (view.State.ReadOnly || view.State.Compiled ? " · read only" : "");
             var detail = new FormattedText(caption, CultureInfo.CurrentUICulture, FlowDirection.LeftToRight, p.Text, 12, p.T2, pixels) { MaxTextWidth = Math.Max(1, Width - 48 - name.Width), Trimming = TextTrimming.CharacterEllipsis, MaxLineCount = 1 };
             dc.DrawText(detail, new Point(32 + name.WidthIncludingTrailingWhitespace + 8, 17 - detail.Height / 2));
             if (Placement.Node.Parent != null && view.Layout?.Graph.Index.Package.Entries.Count > frame.Entry && frame.Path == null && !group)

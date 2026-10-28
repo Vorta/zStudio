@@ -68,7 +68,7 @@ public partial class MainWindow
     internal static bool CameraInputIsNative(DependencyObject? source)
     {
         for (var current = source; current != null; current = current is Visual or System.Windows.Media.Media3D.Visual3D ? VisualTreeHelper.GetParent(current) : LogicalTreeHelper.GetParent(current))
-            if (current is TextBoxBase or PasswordBox or ComboBox or ButtonBase or MenuItem or Slider or Thumb or Selector or TreeView or AnimationTimeline or AnimationTimingView or AnimationThresholdEditor)
+            if (current is TextBoxBase or PasswordBox or ComboBox or ButtonBase or MenuItem or Slider or Thumb or Selector or TreeView or AnimationTimingView or AnimationThresholdEditor)
                 return true;
         return false;
     }

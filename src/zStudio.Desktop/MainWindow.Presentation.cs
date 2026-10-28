@@ -94,6 +94,13 @@ public partial class MainWindow
             CaptionMaximize.IsEnabled = !presentationFullscreen;
             foreach (var chrome in new UIElement[] { TitleArea, PresentationStatusBar, PreviewHeading, PreviewOverlayChrome })
                 chrome.Visibility = hidden ? Visibility.Collapsed : Visibility.Visible;
+            // A compiled animation's command bar takes the heading's place (its title block, view commands and scenario chip).
+            if (compiledBar != null)
+            {
+                compiledBar.Visibility = !hidden && CompiledAnimationShown ? Visibility.Visible : Visibility.Collapsed;
+                if (CompiledAnimationShown) PreviewHeading.Visibility = Visibility.Collapsed;
+            }
+            RefreshDropChip();
             // A source map's chrome keeps the compiled preview's toolbar and footer hidden (RefreshSourceChrome).
             if (hidden) PreviewToolbarHost.Visibility = PreviewFooter.Visibility = Visibility.Collapsed;
             else if (!sourceChromeActive) { PreviewToolbarHost.ClearValue(VisibilityProperty); PreviewFooter.ClearValue(VisibilityProperty); }

@@ -15,9 +15,36 @@ public partial class MainWindow
             ?? throw new StudioCommandException("unsupported", "No compiled animation entry at that index.");
     private void RegisterEditCommands(StudioCommands r)
     {
-        Register(r, "animation_records", "List authored sequence identities; supply sequence to page its events with decoded scalar fields and a 256-byte raw preview (raw_hex_truncated). Keyframe streams are omitted (keyframes_omitted); use JSON export for them. Event queries match these bounded displayed fields before pagination. Cleanup is listed separately from runtime sequences.", false, [DocumentParameter, P("entry", "integer", "Entry index.", true), P("sequence", "string", "Optional sequence UUID for event details."), .. PageParameters], a =>
+        Register(r, "animation_records", "A compiled animation's stored records, read only. list (default): sequence identities; with sequence, its events paged with decoded scalar fields and a 256-byte raw preview (raw_hex_truncated). Keyframe streams are omitted (keyframes_omitted); use JSON export for them. Event queries match these bounded displayed fields before pagination. Cleanup is listed separately from runtime sequences. bytes: the original source bytes of the entry, a sequence (sequence) or an event (event) as hex, from offset (relative to the record) for length bytes, at most 4,096 (the Inspector's Bytes section), with the record's source offset and length and nextOffset.", false,
+            [DocumentParameter, P("entry", "integer", "Entry index.", true), P("action", "string", "list (default) or bytes.", false, "list", "bytes"), P("sequence", "string", "Optional sequence UUID: its events (list) or its bytes (bytes)."),
+             P("event", "string", "bytes: an event UUID (its sequence is found)."), new("length", "integer", "bytes: how many bytes, 1–4096 (default 4096).", Minimum: 1, Maximum: CompiledByteLimit), .. PageParameters], a =>
         {
             var d = TargetDocument(a); var e = TargetEntry(d, a);
+            if (Text(a, "action", "list") == "bytes")
+            {
+                Guid sequenceId = GuidArg(a, "sequence"), eventId = GuidArg(a, "event");
+                long recordOffset = e.SourceOffset, recordLength = e.SourceLength; string record = $"entry #{e.Index} · {e.Name}";
+                if (eventId != Guid.Empty)
+                {
+                    var owner = e.AllSequences.FirstOrDefault(s => (sequenceId == Guid.Empty || s.Id == sequenceId) && s.Events.Any(v => v.Id == eventId)) ?? throw new StudioCommandException("stale_record", "Event is unavailable.");
+                    var ev = owner.Events.First(v => v.Id == eventId);
+                    (recordOffset, recordLength, record) = (ev.SourceOffset, ev.Bytes.Length, $"event {ev.Name} in {(owner == e.Primary ? "Cleanup" : owner.Name)}");
+                }
+                else if (sequenceId != Guid.Empty)
+                {
+                    var owner = e.AllSequences.FirstOrDefault(s => s.Id == sequenceId) ?? throw new StudioCommandException("stale_record", "Sequence is unavailable.");
+                    (recordOffset, recordLength, record) = (owner.SourceOffset, SequenceLength(owner), "sequence " + (owner == e.Primary ? "Cleanup" : owner.Name));
+                }
+                int start = Int(a, "offset"), count = Int(a, "length", CompiledByteLimit);
+                if (start < 0 || count is < 1 or > CompiledByteLimit) throw new StudioCommandException("invalid_argument", "Use offset >= 0 and length 1–4096.");
+                if (recordLength > 0 && start >= recordLength) throw new StudioCommandException("invalid_argument", "The offset is past the record's end.");
+                var bytes = CompiledSourceBytes(d, recordOffset, recordLength, start, count);
+                return Result(new
+                {
+                    d.Revision, label = "original source bytes", record, sourceOffset = recordOffset, recordLength, offset = start, length = bytes.Length,
+                    hex = Convert.ToHexString(bytes.Span), nextOffset = start + bytes.Length < recordLength ? (long?)(start + bytes.Length) : null,
+                });
+            }
             Guid id = GuidArg(a,"sequence");
             if (id != Guid.Empty)
             {

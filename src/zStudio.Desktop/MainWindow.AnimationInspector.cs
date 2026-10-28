@@ -1020,6 +1020,13 @@ public partial class MainWindow
         var scenario = worldAnimationConfiguration;
         if (animationNoticeCache is { } cached && ReferenceEquals(cached.Frame, frame) && cached.Graph == layout.Graph.Id && ReferenceEquals(cached.Scenario, scenario) && cached.Toggles == animationTimingToggles)
             return cached.Notices;
+        var computed = NoticesFor(layout, frame, animationTiming);
+        animationNoticeCache = (frame, layout.Graph.Id, scenario, animationTimingToggles, computed);
+        return computed;
+    }
+    /// <summary>The notices of a shown graph's items and the run (Animation mode's and the compiled preview's chip, badges and cards).</summary>
+    private static IReadOnlyList<AnimationNotice> NoticesFor(AnimationGraphLayout layout, AnimationFrame? frame, AnimationTiming? timing)
+    {
         var graph = layout.Graph;
         List<AnimationNotice> notices = [];
         HashSet<int> shown = [];
@@ -1035,7 +1042,6 @@ public partial class MainWindow
             if (layout.Node(AnimationGraph.FrameId(entry)) != null) return AnimationGraph.FrameId(entry);
             return layout.Nodes.FirstOrDefault(n => n.Node.Reference?.Entries.Contains(entry) == true)?.Id;
         }
-        var timing = animationTiming;
         string? LaneOf(int entry, Guid? sequence = null) => timing == null ? null : sequence is Guid s
             ? timing.AllLanes.FirstOrDefault(l => l.Kind == AnimationTimingLaneKind.Sequence && l.Sequences.Any(q => q.Entry == entry && q.Sequence == s))?.Id
               ?? timing.AllLanes.FirstOrDefault(l => l.Kind == AnimationTimingLaneKind.Group && l.Members.Contains(entry))?.Id
@@ -1095,7 +1101,6 @@ public partial class MainWindow
         // The same note on several bindings of one node (a called group's members) is one notice there.
         IReadOnlyList<AnimationNotice> result = notices.GroupBy(n => (n.Node ?? n.Id, n.Kind, n.Text))
             .Select(g => g.Count() == 1 ? g.First() : g.First() with { Count = g.Sum(n => n.Count) }).ToList().AsReadOnly();
-        animationNoticeCache = (frame, graph.Id, scenario, animationTimingToggles, result);
         return result;
     }
     /// <summary>The ⚠ counts the graph's nodes and Timing's lanes show.</summary>

@@ -25,7 +25,6 @@ internal static class AnimationCheck
         {
             var window = (MainWindow)app.MainWindow; window.Width = 1700; window.Height = 1000;
             ((ColumnDefinition)window.FindName("PropertiesColumn")).Width = new(320);
-            ((TabControl)window.FindName("InspectorTabs")).Visibility = Visibility.Visible;
             try
             {
                 await window.ViewModel.OpenRootAsync(root);
@@ -118,8 +117,8 @@ internal static class AnimationCheck
                     if (name == "pu000")
                     {
                         await editor.SeekAsync(0);
-                        var speed = (ComboBox)editor.FindName("Speed"); speed.SelectedIndex = 0;
-                        ((Button)editor.FindName("PlayButton")).RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                        editor.SetTransport(newSpeed: .25);
+                        editor.TogglePlayback();
                         double before = editor.CurrentFrame!.Time; await Task.Delay(600); editor.Pause();
                         if (editor.CurrentFrame!.Time <= before) throw new InvalidDataException("Quarter-speed playback stalled.");
                         await Task.Delay(200); window.UpdateLayout();
@@ -207,42 +206,32 @@ internal static class AnimationCheck
         if (window.ViewModel.Status != status) throw new InvalidDataException("Idle cancellation changed the status.");
         await editor.SeekAsync(.1);
         if (Math.Abs(editor.CurrentFrame!.Time - .1) > 1e-8) throw new InvalidDataException("Idle cancellation invalidated animation seeking.");
-        foreach (string name in new[] { "Seed", "Condition", "Mute", "Speed", "SeekSlider", "PlayButton" })
+        foreach (string name in new[] { "Lod", "PreviewHeight" })
             if (Space(window, (UIElement)editor.FindName(name)) || editor.IsPlaying) throw new InvalidDataException(name + " lost its native Space behavior.");
         await editor.SeekAsync(0);
-        ((Button)editor.FindName("NextFrameButton")).RaiseEvent(new RoutedEventArgs(Button.ClickEvent)); await Task.Delay(150);
+        editor.Step(1); await Task.Delay(150);
         if (Math.Abs(editor.CurrentFrame!.Time - AnimationPlayer.StepSeconds) > 1e-8) throw new InvalidDataException("Next frame did not step exactly once.");
-        ((Button)editor.FindName("PreviousFrameButton")).RaiseEvent(new RoutedEventArgs(Button.ClickEvent)); await Task.Delay(150);
+        editor.Step(-1); await Task.Delay(150);
         if (editor.CurrentFrame!.Time != 0) throw new InvalidDataException("Previous frame did not return to frame zero.");
-        var slider = (Slider)editor.FindName("SeekSlider");
-        if (editor.Duration == null || slider.Maximum != editor.Duration.Seconds) throw new InvalidDataException("Automatic range does not match calculated duration.");
-        var end = (TextBox)editor.FindName("EndTime"); end.Text = "0.1"; end.RaiseEvent(new RoutedEventArgs(UIElement.LostFocusEvent)); await Task.Delay(150);
-        if (Math.Abs(slider.Maximum - .1) > 1e-8) throw new InvalidDataException("Custom range did not apply.");
-        ((Button)editor.FindName("AutoRangeButton")).RaiseEvent(new RoutedEventArgs(Button.ClickEvent)); await Task.Delay(150);
-        if (slider.Maximum != editor.Duration.Seconds) throw new InvalidDataException("Auto did not restore the measured range.");
+        if (editor.Duration == null || editor.RangeEnd != editor.Duration.Seconds) throw new InvalidDataException("Automatic range does not match calculated duration.");
+        await editor.SetRangeAsync(.1);
+        if (Math.Abs(editor.RangeEnd - .1) > 1e-8) throw new InvalidDataException("Custom range did not apply.");
+        await editor.SetRangeAsync(null);
+        if (editor.RangeEnd != editor.Duration.Seconds) throw new InvalidDataException("Auto did not restore the measured range.");
         await editor.SeekAsync(3600);
-        if (Math.Abs(editor.CurrentFrame!.Time - slider.Maximum) > 1e-8) throw new InvalidDataException("Seek exceeded the displayed range.");
+        if (Math.Abs(editor.CurrentFrame!.Time - editor.RangeEnd) > 1e-8) throw new InvalidDataException("Seek exceeded the displayed range.");
         editor.TogglePlayback(); if (!editor.IsPlaying || editor.CurrentFrame!.Time != 0) throw new InvalidDataException("Play at the endpoint did not restart.");
         editor.Pause();
-        var transport = (Grid)editor.FindName("TransportRow");
+        // The transport is the window's Animation mode panel (captured by --gui-review); the shots show the preview at two widths.
         foreach (bool narrow in new[] { false, true })
         {
-            editor.Width = narrow ? 250 : double.NaN; window.UpdateLayout();
-            var bounds = new[] { "PlayButton", "StopButton", "PreviousFrameButton", "NextFrameButton", "SeekSlider" }
-                .Select(name => (FrameworkElement)editor.FindName(name)).Select(c => new Rect(c.TranslatePoint(new(), transport), c.RenderSize)).ToArray();
-            for (int i = 0; i < bounds.Length; i++)
-            {
-                if (bounds[i].Left < 0 || bounds[i].Right > transport.ActualWidth + .1 || Math.Abs(bounds[i].Top + bounds[i].Height / 2 - 17) > 1)
-                    throw new InvalidDataException("Transport is clipped or not on one row: " + bounds[i]);
-                if (i > 0 && bounds[i - 1].Right > bounds[i].Left) throw new InvalidDataException("Transport controls overlap.");
-            }
-            if (slider.ActualWidth < 80) throw new InvalidDataException("Seeker is too small at minimum center width.");
+            window.Width = narrow ? 1100 : 1700; window.UpdateLayout();
             await Dispatcher.Yield(DispatcherPriority.ApplicationIdle); await Task.Delay(250);
             var dpi = VisualTreeHelper.GetDpi(window);
             RenderTargetBitmap shot = new((int)Math.Ceiling(window.ActualWidth * dpi.DpiScaleX), (int)Math.Ceiling(window.ActualHeight * dpi.DpiScaleY), dpi.PixelsPerInchX, dpi.PixelsPerInchY, PixelFormats.Pbgra32);
             shot.Render(window); Save(shot, Path.Combine(output, narrow ? "player-narrow.png" : "player-normal.png"));
         }
-        editor.Width = double.NaN; window.UpdateLayout();
+        window.Width = 1700; window.UpdateLayout();
         // Theme switching is experimental in WPF 10; inspect both supported visual styles.
 #pragma warning disable WPF0001
         var theme = Application.Current.ThemeMode;
@@ -272,8 +261,7 @@ internal static class AnimationCheck
             Interlocked.Add(ref samples,buffer.Length / 4);
         };
         capture.StartRecording();
-        var mute = (CheckBox)editor.FindName("Mute");
-        if (mute.IsChecked != false || ((Slider)editor.FindName("Volume")).Value != .5)
+        if (editor.Muted || editor.Volume != .5)
             throw new InvalidDataException("Animation audio must default to unmuted at 50%.");
         if (!editor.Audio.IsPrepared || editor.Audio.PreparedSoundCount == 0 || editor.Audio.OutputInitializations != 1)
             throw new InvalidDataException("Sounds and one warm output must be ready before first Play.");
@@ -286,31 +274,30 @@ internal static class AnimationCheck
             previous = clock;
         }
         editor.AudioUpdated += Timing;
-        ((Slider)editor.FindName("Volume")).Value = .15;
-        var play = (Button)editor.FindName("PlayButton");
-        play.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+        editor.SetTransport(newVolume: .15);
+        editor.TogglePlayback();
         await Task.Delay(450); editor.Pause(); await Task.Delay(150);
         CheckPeak("default playback");
-        mute.IsChecked = true;
+        editor.SetTransport(newMuted: true);
         await editor.SeekAsync(0);
         Interlocked.Exchange(ref peak, 0);
-        play.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+        editor.TogglePlayback();
         // All four sample events occur by 0.5 s. Unmuting must resume a sound that
         // is still in progress, even though its original dispatch was muted.
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
         while (editor.CurrentFrame!.Time < .7) await Task.Delay(30, timeout.Token);
         if (peak > .0001f) throw new InvalidDataException("Muted animation produced sound.");
-        mute.IsChecked = false;
+        editor.SetTransport(newMuted: false);
         await Task.Delay(450); editor.Pause(); await Task.Delay(150);
         CheckPeak("unmute after sample events");
         await editor.SeekAsync(.2); await Task.Delay(150); Interlocked.Exchange(ref peak, 0);
         await Task.Delay(150);
         if (peak > .0001f) throw new InvalidDataException("Scrubbing played sound while paused.");
-        play.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+        editor.TogglePlayback();
         await Task.Delay(350); editor.Pause(); await Task.Delay(150);
         CheckPeak("play after seeking");
         Interlocked.Exchange(ref peak, 0);
-        play.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+        editor.TogglePlayback();
         await Task.Delay(350); editor.Pause(); await Task.Delay(150);
         CheckPeak("pause/resume");
         editor.AudioUpdated -= Timing;

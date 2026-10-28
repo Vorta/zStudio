@@ -32,6 +32,7 @@ public partial class MainWindow
             string action = Text(a, "action");
             int offset = Int(a, "offset"), limit = Int(a, "limit", 100);
             if (offset < 0 || limit is < 1 or > 100) throw new StudioCommandException("invalid_argument", "Use offset >= 0 and limit 1–100.");
+            if (CompiledAnimationShown) return Result(await CompiledGraphCommandAsync(a, action, offset, limit));
             var layout = RequireGraph();
             object? result = null;
             switch (action)
@@ -39,9 +40,9 @@ public partial class MainWindow
                 case "read":
                     result = Text(a, "section", "nodes") switch
                     {
-                        "nodes" => GraphNodesPage(layout, offset, limit),
-                        "edges" => GraphEdgesPage(layout, offset, limit),
-                        "rows" => GraphRowsPage(layout, a.ContainsKey("node") ? Text(a, "node") : throw new StudioCommandException("invalid_argument", "Supply the sequence node."), offset, limit),
+                        "nodes" => GraphNodesPage(layout, offset, limit, animationGraphOverlay, GraphView),
+                        "edges" => GraphEdgesPage(layout, offset, limit, animationGraphOverlay, worldAnimationConfiguration),
+                        "rows" => GraphRowsPage(layout, a.ContainsKey("node") ? Text(a, "node") : throw new StudioCommandException("invalid_argument", "Supply the sequence node."), offset, limit, animationGraphOverlay, worldAnimationConfiguration),
                         _ => throw new StudioCommandException("invalid_argument", "Read nodes, edges or rows."),
                     };
                     break;
@@ -166,10 +167,9 @@ public partial class MainWindow
         };
     }
 
-    private object GraphNodesPage(AnimationGraphLayout layout, int offset, int limit)
+    private static object GraphNodesPage(AnimationGraphLayout layout, int offset, int limit, AnimationRunOverlay? overlay, AnimationGraphView view)
     {
         var page = layout.Graph.Nodes(offset, limit);
-        var overlay = animationGraphOverlay;
         return new
         {
             section = "nodes", total = page.Total, offset = page.Offset, nextOffset = page.NextOffset,
@@ -214,12 +214,12 @@ public partial class MainWindow
                         // any, an animation item is met unless stopped at the playhead and an object item is unknown (null).
                         prerequisites = activation.Prerequisites.Select(g => new
                         {
-                            header = g.Header, required = g.Required, minimum = g.Minimum, outcome = GraphView.PrerequisiteGroupOutcome(binding, g),
+                            header = g.Header, required = g.Required, minimum = g.Minimum, outcome = view.PrerequisiteGroupOutcome(binding, g),
                             items = g.Items.Select(i =>
                             {
                                 var check = binding?.Prerequisites?.Result.Checks.FirstOrDefault(c => c.Record == i.Record);
                                 bool? met = check != null ? check.Satisfied : i.Entry is int needed && overlay != null ? overlay.Binding(needed).State != AnimationBindingLifecycle.Stopped : null;
-                                return new { target = i.Target, kind = i.Kind, entry = i.Entry, met, status = overlay == null ? null : GraphView.PrerequisiteRow(binding, i, overlay).Status, atStart = check != null };
+                                return new { target = i.Target, kind = i.Kind, entry = i.Entry, met, status = overlay == null ? null : view.PrerequisiteRow(binding, i, overlay).Status, atStart = check != null };
                             }).ToArray(),
                         }).ToArray(),
                         callers = activation.Callers.Select(c => new { group = c.Group, name = c.Name, bindings = c.Bindings, events = c.Events, node = c.Node, backLink = c.BackLink, relations = c.Relations.Select(RelationName).ToArray() }).ToArray(),
@@ -235,11 +235,9 @@ public partial class MainWindow
         };
     }
 
-    private object GraphEdgesPage(AnimationGraphLayout layout, int offset, int limit)
+    private static object GraphEdgesPage(AnimationGraphLayout layout, int offset, int limit, AnimationRunOverlay? overlay, AnimationScenario scenario)
     {
         var page = layout.Graph.Edges(offset, limit);
-        var overlay = animationGraphOverlay;
-        var scenario = worldAnimationConfiguration;
         return new
         {
             section = "edges", total = page.Total, offset = page.Offset, nextOffset = page.NextOffset,
@@ -261,14 +259,12 @@ public partial class MainWindow
         };
     }
 
-    private object GraphRowsPage(AnimationGraphLayout layout, string nodeId, int offset, int limit)
+    private static object GraphRowsPage(AnimationGraphLayout layout, string nodeId, int offset, int limit, AnimationRunOverlay? overlay, AnimationScenario scenario)
     {
         var node = layout.Node(nodeId)?.Node.Sequence ?? throw new StudioCommandException("stale_record", "The graph has no sequence node with that identity; read it again.");
         var graph = layout.Graph;
         var page = graph.Rows(node.Entry, node.Id, offset, limit);
-        var overlay = animationGraphOverlay;
         string? path = graph.Node(AnimationGraph.FrameId(node.Entry))?.Frame?.Path;
-        var scenario = worldAnimationConfiguration;
         string Choice(Guid ev) => path == null ? "game" : Lower(scenario.Choice(path, node.Entry, ev).ToString());
         return new
         {

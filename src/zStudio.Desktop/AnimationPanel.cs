@@ -56,6 +56,7 @@ internal sealed class AnimationPanel : Border
     private readonly Popup rangePopup = new() { StaysOpen = false, AllowsTransparency = true, Placement = PlacementMode.Bottom };
     private readonly ValueTextBox rangeStart = new() { Width = 80, Height = 30, MinHeight = 30, TextAlignment = TextAlignment.Right };
     private readonly ValueTextBox rangeEnd = new() { Width = 80, Height = 30, MinHeight = 30, TextAlignment = TextAlignment.Right };
+    private readonly Button fitRange = new() { Content = "Fit range to starts", Margin = new(0, 0, 6, 0), ToolTip = "The range from 0 s to the latest start plus 30 s" };
     private readonly TextBlock durationText = new() { FontSize = 12, TextWrapping = TextWrapping.Wrap, MaxWidth = 280, Margin = new(0, 6, 0, 0) };
     private readonly TextBlock status = new() { FontSize = 12, VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis, Margin = new(8, 0, 4, 0) };
     private readonly ToggleButton structureView, timingView, splitView;
@@ -266,6 +267,8 @@ internal sealed class AnimationPanel : Border
             SeekRequested?.Invoke(Math.Clamp(seconds, 0, AnimationSeconds.Maximum));
         else ShowReadout();
     }
+    /// <summary>The range flyout's fit command: Fit range to starts in a map; Auto range (the measured duration) in a compiled preview.</summary>
+    internal void SetFitRange(string text, string tip) { fitRange.Content = text; fitRange.ToolTip = tip; AutomationProperties.SetName(fitRange, text); }
     private static string Short(double seconds) => seconds.ToString("0.###", CultureInfo.InvariantCulture);
     private static string Number(double seconds) => seconds.ToString("0.###", CultureInfo.InvariantCulture);
 
@@ -474,7 +477,7 @@ internal sealed class AnimationPanel : Border
             box.LostKeyboardFocus += (_, _) => Commit();
         }
         WrapPanel actions = new() { Margin = new(0, 10, 0, 0) };
-        Button fit = new() { Content = "Fit range to starts", Margin = new(0, 0, 6, 0), ToolTip = "The range from 0 s to the latest start plus 30 s" };
+        Button fit = fitRange;
         fit.Click += (_, _) => FitRangeRequested?.Invoke();
         Button duration = new() { Content = "Estimate duration", ToolTip = "Measure how long the scenario runs, without moving the playhead" };
         duration.Click += (_, _) => DurationRequested?.Invoke();

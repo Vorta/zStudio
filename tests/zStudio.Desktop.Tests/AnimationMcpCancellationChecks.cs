@@ -73,96 +73,55 @@ internal static class AnimationMcpCancellationChecks
             typeof(AnimationEditor).GetField("player", flags)!.SetValue(editor, initialPlayer);
             typeof(AnimationEditor).GetField("frame", flags)!.SetValue(editor, initialPlayer.Frame());
             ((FrameworkElement)editor.FindName("LoadingPanel")).Visibility = Visibility.Collapsed;
-            var seedInput = (TextBox)editor.FindName("Seed");
-            var rangeInput = (TextBox)editor.FindName("EndTime");
-            var range = (Slider)editor.FindName("SeekSlider");
-            range.Maximum = 1;
-            seedInput.Text = "2"; rangeInput.Text = "10";
-            editor.ResolveAutomationDrafts(editor.DraftToken, apply: true);
-            await editor.AwaitOptionWorkAsync();
-            Assert.Equal(10, range.Maximum);
-            Assert.Equal(2, ((AnimationPlayer)typeof(AnimationEditor).GetField("player", flags)!.GetValue(editor)!).Seed);
-
+            // A scenario change rebuilds the run under the simulation gate; a failed rebuild is reported and finishes on retry.
             var gate = (SemaphoreSlim)typeof(AnimationEditor).GetField("simulationGate", flags)!.GetValue(editor)!;
+            AnimationPlayer Player() => (AnimationPlayer)typeof(AnimationEditor).GetField("player", flags)!.GetValue(editor)!;
+            await editor.ApplyScenarioAsync(editor.Scenario with { Seed = 2 });
+            Assert.Equal(2, Player().Seed);
             await gate.WaitAsync();
             Task applying;
             try
             {
-                seedInput.Text = "3"; rangeInput.Text = "12";
-                editor.ResolveAutomationDrafts(editor.DraftToken, apply: true);
-                applying = editor.AwaitOptionWorkAsync();
+                applying = editor.ApplyScenarioAsync(editor.Scenario with { Seed = 3 });
                 Assert.False(applying.IsCompleted);
-                seedInput.Text = "99"; rangeInput.Text = "20";
             }
             finally { gate.Release(); }
-            Assert.Equal("draft_conflict", (await Assert.ThrowsAsync<StudioCommandException>(() => applying)).Code);
-            Assert.Equal(12, range.Maximum); Assert.Equal("20", rangeInput.Text); Assert.Equal("99", seedInput.Text);
-            Assert.Equal(3, ((AnimationPlayer)typeof(AnimationEditor).GetField("player", flags)!.GetValue(editor)!).Seed);
-            editor.ResolveAutomationDrafts(editor.DraftToken, apply: false);
+            await applying;
+            Assert.Equal(3, Player().Seed);
             await editor.SeekAsync(.5);
             Assert.Equal(.5, ((AnimationFrame)typeof(AnimationEditor).GetField("frame", flags)!.GetValue(editor)!).Time, 6);
-
-            ((FrameworkElement)editor.FindName("LoadingPanel")).Visibility = Visibility.Visible;
-            seedInput.Text = "4";
-            editor.ResolveAutomationDrafts(editor.DraftToken, apply: true);
-            Assert.Equal("not_ready", (await Assert.ThrowsAsync<StudioCommandException>(() => editor.AwaitOptionWorkAsync())).Code);
-            Assert.Equal("4", seedInput.Text);
-            Assert.Equal(3, ((AnimationPlayer)typeof(AnimationEditor).GetField("player", flags)!.GetValue(editor)!).Seed);
-            ((FrameworkElement)editor.FindName("LoadingPanel")).Visibility = Visibility.Collapsed;
-            // Force an actual rebuild error. Seek reports failures through the
-            // editor; draft resolution must not turn that into MCP success.
+            // Force an actual rebuild error. The seek reports failures through the editor; the scenario change must not turn
+            // that into success, and the same change again must still finish the pending reconstruction.
             var retainedEntry = context.Package.Entries[0];
             await gate.WaitAsync();
             try
             {
-                editor.ResolveAutomationDrafts(editor.DraftToken, apply: true);
-                // Field refresh sees the valid document. Only the deferred
-                // simulation snapshot fails after it acquires its gate.
+                applying = editor.ApplyScenarioAsync(editor.Scenario with { Seed = 4 });
                 context.Package.Entries.Clear();
             }
             finally { gate.Release(); }
-            try
-            {
-                Assert.Equal("preview_unavailable", (await Assert.ThrowsAsync<StudioCommandException>(() => editor.AwaitOptionWorkAsync())).Code);
-            }
+            try { Assert.Equal("preview_unavailable", (await Assert.ThrowsAsync<StudioCommandException>(() => applying)).Code); }
             finally { context.Package.Entries.Add(retainedEntry); }
-            Assert.Equal(3, ((AnimationPlayer)typeof(AnimationEditor).GetField("player", flags)!.GetValue(editor)!).Seed);
-            // The accepted seed text already matches appliedSeed after failure.
-            // Retrying it must still finish the pending reconstruction.
-            editor.ResolveAutomationDrafts(editor.DraftToken, apply: true);
-            await editor.AwaitOptionWorkAsync();
-            Assert.Equal(4, ((AnimationPlayer)typeof(AnimationEditor).GetField("player", flags)!.GetValue(editor)!).Seed);
-            Assert.Equal(0, ((AnimationFrame)typeof(AnimationEditor).GetField("frame", flags)!.GetValue(editor)!).Time);
-            Assert.False((bool)typeof(AnimationEditor).GetField("resetSimulation", flags)!.GetValue(editor)!);
-            // A range-only failure can occur after simulation flags were reset.
-            // Its retained failure must also require successful reconstruction.
-            rangeInput.Text = "8";
-            await gate.WaitAsync();
-            try
-            {
-                editor.ResolveAutomationDrafts(editor.DraftToken, apply: true);
-                context.Package.Entries.Clear();
-            }
-            finally { gate.Release(); }
-            try { Assert.Equal("preview_unavailable", (await Assert.ThrowsAsync<StudioCommandException>(() => editor.AwaitOptionWorkAsync())).Code); }
-            finally { context.Package.Entries.Add(retainedEntry); }
-            Assert.False((bool)typeof(AnimationEditor).GetField("resetSimulation", flags)!.GetValue(editor)!);
+            Assert.Equal(3, Player().Seed);
+            Assert.True((bool)typeof(AnimationEditor).GetField("resetSimulation", flags)!.GetValue(editor)!);
             long lastSeek = (long)typeof(AnimationEditor).GetField("seekGeneration", flags)!.GetValue(editor)!;
-            editor.ResolveAutomationDrafts(editor.DraftToken, apply: true);
-            await editor.AwaitOptionWorkAsync();
+            await editor.ApplyScenarioAsync(editor.Scenario);
+            Assert.Equal(4, Player().Seed);
+            Assert.False((bool)typeof(AnimationEditor).GetField("resetSimulation", flags)!.GetValue(editor)!);
             Assert.Null(typeof(AnimationEditor).GetField("previewOperationFailure", flags)!.GetValue(editor));
             Assert.Equal(lastSeek + 1, (long)typeof(AnimationEditor).GetField("publishedSeekGeneration", flags)!.GetValue(editor)!);
-            Assert.Equal(8, range.Maximum);
+            // An option the compiled preview no longer takes points to its new place (no aliases).
+            Assert.Equal("moved", (await Assert.ThrowsAsync<StudioCommandException>(() => editor.SetPreviewOptionAsync("seed", JsonValue.Create(5)!))).Code);
 
             // Explicit scene rebinding must report a failed preview, rather than
             // returning a successful MCP result for the retained loading overlay.
             string missing = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"), "gamez.zbd");
-            var failure = await Assert.ThrowsAsync<StudioCommandException>(() => editor.SetPreviewOptionAsync("worldPath", JsonValue.Create(missing)!));
+            var failure = await Assert.ThrowsAsync<StudioCommandException>(() => editor.BindWorldAsync(missing));
             Assert.Equal("preview_unavailable", failure.Code);
             using var canceledBind = new CancellationTokenSource();
             canceledBind.Cancel();
             using (PreviewOperation.Begin(canceledBind.Token))
-                await Assert.ThrowsAnyAsync<OperationCanceledException>(() => editor.SetPreviewOptionAsync("worldPath", JsonValue.Create(missing)!));
+                await Assert.ThrowsAnyAsync<OperationCanceledException>(() => editor.BindWorldAsync(missing));
             // Recovery reached a terminal actionable error with a fresh token;
             // it did not leave an indefinitely spinning canceled loading request.
             Assert.DoesNotContain("Loading animation", ((TextBlock)editor.FindName("LoadingText")).Text);
@@ -188,11 +147,10 @@ internal static class AnimationMcpCancellationChecks
         object? Get(string name) => typeof(AnimationEditor).GetField(name, flags)!.GetValue(editor);
         Set("context", Context(900, 1300)); Set("player", retainedPlayer); Set("frame", retainedFrame);
         ((FrameworkElement)editor.FindName("LoadingPanel")).Visibility = Visibility.Collapsed;
-        ((Slider)editor.FindName("SeekSlider")).Maximum = 1;
-        ((TextBox)editor.FindName("EndTime")).Text = "1";
-        Assert.True(((Button)editor.FindName("PlayButton")).IsEnabled);
+        Set("rangeEnd", 1d);
+        Assert.True(editor.CanSeek);
         Assert.False(editor.HasAutomationDrafts);
-        Assert.True(retainedPlayer.Time >= ((Slider)editor.FindName("SeekSlider")).Maximum);
+        Assert.True(retainedPlayer.Time >= editor.RangeEnd);
         try
         {
             // Only 2,201 synthetic nodes. The real aggregate guard stops the shared-chain
@@ -266,9 +224,7 @@ internal static class AnimationMcpCancellationChecks
             Assert.Null(Get("player")); Assert.Null(editor.CurrentFrame);
             Assert.False(editor.IsPlaying); Assert.False((bool)Get("pendingPlay")!);
             Assert.Null(editor.Viewport.PreviewScene); Assert.Equal(0, editor.Viewport.AnimationMeshCount);
-            Assert.Equal(0, ((Slider)editor.FindName("SeekSlider")).Value);
-            Assert.Null(((AnimationTimeline)editor.FindName("Timeline")).Frame);
-            Assert.Equal("Preview unavailable", ((TextBlock)editor.FindName("TimeLabel")).Text);
+            Assert.NotNull(editor.PreviewFailure);
             var lighting = (System.Windows.Controls.Primitives.ToggleButton)editor.FindName("Lighting"); lighting.IsChecked = lighting.IsChecked != true;
             var follow = (System.Windows.Controls.Primitives.ToggleButton)editor.FindName("FollowCamera");
             var error = await Assert.ThrowsAsync<StudioCommandException>(() => editor.SetPreviewOptionAsync("followCamera", JsonValue.Create(follow.IsChecked != true)!));

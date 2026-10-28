@@ -175,6 +175,21 @@ internal sealed partial class SourceSectionCard
         bool keepScroll = inspection != null && inspection.Key == shown.Key;
         Render(shown, keepScroll);
     }
+    /// <summary>
+    /// A compiled animation's card (design §19): the same sections drawn read only, without a source model, a draft or a footer;
+    /// its switches, include boxes and links still raise their intents (the compiled scenario and selection).
+    /// </summary>
+    internal void InspectCompiled(AnimationInspection shown)
+    {
+        readOnlyInspection = true;
+        bool same = inspection != null && inspection.Key == shown.Key && inspectorMode
+            && inspection.Sections.Select(s => s.Id).SequenceEqual(shown.Sections.Select(s => s.Id));
+        inspectorMode = true;
+        if (same) { Refresh(shown); return; }
+        Render(shown, keepScroll: inspection != null && inspection.Key == shown.Key);
+    }
+    private bool readOnlyInspection;
+
     private void Render(AnimationInspection shown, bool keepScroll)
     {
         double offset = contentScroll.VerticalOffset;
@@ -257,6 +272,7 @@ internal sealed partial class SourceSectionCard
     }
     private void RefreshFooterVisibility()
     {
+        if (readOnlyInspection) { footer.Visibility = Visibility.Collapsed; return; }
         bool editable = inspectorMode && inspection?.Kind is "definition" or "activation" or "sequence" or "event" or "condition" or "call" && !externalDraft;
         footer.Visibility = editable || HasDraft && !externalDraft ? Visibility.Visible : Visibility.Collapsed;
     }
@@ -283,6 +299,7 @@ internal sealed partial class SourceSectionCard
     {
         InspectorText text => TextItem(text),
         InspectorPair pair => PairItem(pair),
+        InspectorValue value => ValueItem(value),
         InspectorLink { Primary: true } link => LinkButton(link, primary: true),
         InspectorLink link => LinkLine(link),
         InspectorActions actions => ActionsItem(actions),
@@ -344,6 +361,32 @@ internal sealed partial class SourceSectionCard
         UIElement value = pair.Link is { } link ? LinkText(link, pair.Value) : new TextBlock { Text = pair.Value, FontSize = 12.5, TextWrapping = TextWrapping.Wrap };
         Grid.SetColumn(value, 1); row.Children.Add(value);
         return row;
+    }
+    /// <summary>A stored value: its caption, then a selectable read-only field (a unit at its right; monospace for keywords and bytes).</summary>
+    private static UIElement ValueItem(InspectorValue item)
+    {
+        StackPanel panel = new() { Margin = new(0, 0, 0, 4) };
+        panel.Children.Add(FieldCaption(item.Label));
+        bool lines = item.Value.Contains('\n');
+        TextBox box = new()
+        {
+            Text = item.Value, IsReadOnly = true, IsReadOnlyCaretVisible = true, TextWrapping = lines ? TextWrapping.NoWrap : TextWrapping.Wrap, MinHeight = 30,
+            Padding = new(8, 4, item.Suffix == null ? 8 : 44, 4), VerticalContentAlignment = VerticalAlignment.Center, AcceptsReturn = lines,
+            HorizontalScrollBarVisibility = lines ? ScrollBarVisibility.Auto : ScrollBarVisibility.Disabled, VerticalScrollBarVisibility = lines ? ScrollBarVisibility.Auto : ScrollBarVisibility.Disabled,
+            MaxHeight = lines ? 260 : double.PositiveInfinity, FontSize = item.Mono ? 12 : 12.5,
+        };
+        if (item.Mono) box.FontFamily = new FontFamily("Cascadia Mono, Consolas");
+        AutomationProperties.SetName(box, item.Label);
+        Grid field = new(); field.Children.Add(box);
+        if (item.Suffix != null)
+        {
+            TextBlock unit = new() { Text = item.Suffix, FontSize = 12, Margin = new(0, 0, 10, 0), HorizontalAlignment = HorizontalAlignment.Right, VerticalAlignment = VerticalAlignment.Center, IsHitTestVisible = false };
+            unit.SetResourceReference(TextBlock.ForegroundProperty, "TextFillColorTertiaryBrush");
+            field.Children.Add(unit);
+        }
+        panel.Children.Add(field);
+        if (item.Help is { Length: > 0 } help) panel.Children.Add(TextItem(new InspectorText(help)));
+        return panel;
     }
     /// <summary>A link as literal text (an animation name keeps its underscores).</summary>
     private TextBlock LinkText(InspectorLink link, string? text = null)

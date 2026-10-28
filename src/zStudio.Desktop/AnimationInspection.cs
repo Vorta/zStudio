@@ -40,6 +40,7 @@ internal sealed record AnimationInspection(string Kind, string Title, string Sub
     {
         InspectorText text => new { type = "text", text = text.Text, style = text.Style },
         InspectorPair pair => new { type = "pair", label = pair.Label, value = pair.Value, link = pair.Link?.Json() },
+        InspectorValue value => new { type = "value", label = value.Label, value = value.Value, suffix = value.Suffix, mono = value.Mono ? true : (bool?)null, help = value.Help },
         InspectorLink link => new { type = "link", link = link.Json() },
         InspectorActions actions => new { type = "actions", actions = actions.Links.Select(l => l.Json()).ToArray() },
         InspectorField field => new { type = "field", field = field.FieldId, label = field.Label, help = field.Help, layout = field.Layout,
@@ -77,6 +78,17 @@ internal abstract record InspectorItem;
 
 /// <summary>A line of text: "help" (tertiary), "body", "mono" (source keyword), "caution" or "info" (a notice box).</summary>
 internal sealed record InspectorText(string Text, string Style = "help") : InspectorItem;
+
+/// <summary>
+/// A stored value shown read only (a compiled animation's cards): its caption above a selectable read-only field, with a unit
+/// (<see cref="Suffix"/>), in monospace for keywords and bytes (<see cref="Mono"/>; several lines for a hex dump).
+/// </summary>
+internal sealed record InspectorValue(string Label, string Value) : InspectorItem
+{
+    public string? Suffix { get; init; }
+    public bool Mono { get; init; }
+    public string? Help { get; init; }
+}
 
 /// <summary>A label left of its value ("Released by" → a link to the releasing row).</summary>
 internal sealed record InspectorPair(string Label, string Value) : InspectorItem

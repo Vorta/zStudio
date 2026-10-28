@@ -353,7 +353,7 @@ public partial class MainWindow : Window
         CaptureTreeLayout(); CaptureHiddenIdentities(); hiddenRows.Clear();
         pendingAnimationPlay = false;
         EndImagePan();
-        animation?.Dispose(); animation = null; AnimationHost.Content = null; DetachAnimationWorkspace();
+        bool compiledShown = animation != null; animation?.Dispose(); animation = null; AnimationHost.Content = null; if (compiledShown) DetachCompiledAnimation();
         motion?.Dispose(); motion = null;
         preview.Cancel(); preview.Dispose(); preview = CancellationTokenSource.CreateLinkedTokenSource(shutdownToken); scene?.Clear(); StopAudio(); decoded = null; TextureImage.Source = null;
         RefreshSceneTree();
@@ -382,9 +382,6 @@ public partial class MainWindow : Window
         { shownAsset = asset; await motion.RefreshClipAsync(); await RefreshAssetInspectionAsync(doc, asset, preview.Token); return; }
         if (!differentAsset && asset != null && shownDocument == doc && HasPublishedStaticScene && ViewModel.Resolver != null)
         { shownAsset = asset; await RefreshStaticSceneAsync(doc, asset); return; }
-        // Entering the animation viewer starts at Sequences. Consecutive animation
-        // selections (including asynchronous replacement) retain the chosen page.
-        if (asset?.Kind == AssetKind.Animation && shownAsset?.Kind != AssetKind.Animation) Layout.InspectorTab = 0;
         var previousMission = !differentAsset && asset?.Kind == AssetKind.World ? scene?.Mission : null;
         var previousView = previousMission == null ? null : scene?.CaptureView();
         int? previousSelection = selectedNode, previousIsolate = isolatedNode;
@@ -494,12 +491,11 @@ public partial class MainWindow : Window
             }
             else if (asset?.Kind == AssetKind.Animation && doc.Document.Animations != null && ViewModel.Resolver != null)
             {
-                var editor = new AnimationEditor(doc, asset.Index, ViewModel.Resolver, previewLifetime, ViewModel); animation = editor; editor.MissionRequested = path => SelectMissionAsync(path, false, CancellationToken.None); editor.ExactMission = PendingExactMission;
+                var editor = CreateCompiledEditor(doc, asset.Index, previewLifetime); animation = editor; editor.MissionRequested = path => SelectMissionAsync(path, false, CancellationToken.None); editor.ExactMission = PendingExactMission;
                 if (pendingAnimationPlay) { pendingAnimationPlay = false; editor.TogglePlayback(); }
                 editor.StatusChanged += text => { if (!previewLifetime.IsCancellationRequested) ViewModel.Status = text; };
-                editor.InspectionChanged += (json, data) => { if (previewLifetime.IsCancellationRequested) return; properties = json; var source = editor.SourceByteSelection(); RawText.Text = source.Scope + "\n\n" + (source.Offset >= 0 ? Hex(source.Bytes.Span,source.Offset) : "") + (source.Length > 4096 ? "\n… first 4,096 source bytes shown." : ""); };
                 ApplyRetainedPresentation();
-                AnimationHost.Content = editor; AttachAnimationWorkspace(editor);
+                AnimationHost.Content = editor; AttachCompiledAnimation(editor);
                 AnimationHost.Visibility = Visibility.Visible;
                 await editor.InitializeAsync();
             }
@@ -862,10 +858,8 @@ public partial class MainWindow : Window
             previousPreset = defaults.Preset;
             navigatorTemporary = inspectorTemporary = toolsMaximized = false;
             SelectNavigatorSection(defaults.BrowserTab);
-            InspectorTabs.SelectedIndex = animation != null ? defaults.InspectorTab : -1;
-            // Static viewers have no Dispatch page; use their normal Related fallback.
-            ToolTabs.SelectedIndex = animation != null ? defaults.ToolTab : 4;
-            ApplyMetrics(); animation?.ResetLayout(); ArrangeWorkspace();
+            ToolTabs.SelectedIndex = defaults.ToolTab;
+            ApplyMetrics(); ArrangeWorkspace();
         }
         finally { detachingWorkspace = false; }
         SaveWorkspacePreferences();
@@ -906,7 +900,7 @@ public partial class MainWindow : Window
         {
             // Let text entry and controls with their own Space action keep normal keyboard behavior.
             if (current is TextBoxBase or PasswordBox or ComboBox or ButtonBase or MenuItem or Slider or Thumb) return false;
-            if (current == AssetGrid || current == AnimationHost || current == ProgramHost) return true;
+            if (current == AssetGrid || current == AnimationHost || compiledPanel != null && current == compiledPanel) return true;
         }
         return false;
     }

@@ -21,7 +21,13 @@ internal sealed record ScenarioBindingChoice(int Entry, string Name, string Deta
 /// <summary>What the Scenario tab shows: one snapshot of the map's scenario and what the starts reach.</summary>
 internal sealed record AnimationScenarioView(string Mission, AnimationScenario Scenario, bool Opened, IReadOnlyList<ScenarioStartRow> Starts,
     IReadOnlyList<ScenarioGroupRow> Groups, int Included, int Reachable, int Unresolved, bool Truncated, string? IncludeResult,
-    IReadOnlyList<ScenarioOverrideRow> Overrides);
+    IReadOnlyList<ScenarioOverrideRow> Overrides)
+{
+    /// <summary>A compiled animation's isolated preview: its world, bound root and range (design §19); null in a map.</summary>
+    public AnimationScenarioCompiled? Compiled { get; init; }
+}
+/// <summary>The compiled preview's World section: its file, the mission scene (auto or chosen), the bound root (overridden or not) and the range.</summary>
+internal sealed record AnimationScenarioCompiled(string File, string World, bool WorldChosen, string Root, bool RootOverridden, string Range, bool CustomRange, double RangeEnd);
 /// <summary>The tab's readouts that follow the run: the player now and what each rule affects.</summary>
 internal sealed record AnimationScenarioLive(string PlayerAtStart, string Prerequisites, string RangeGates, string ZoneGates);
 
@@ -88,8 +94,9 @@ internal sealed class AnimationScenarioPanel : UserControl
         view = value;
         double offset = scroll.VerticalOffset;
         var focus = FocusedField();
-        header.Text = $"Kept for {value.Mission} · saved with the project";
-        header.ToolTip = "The scenario is saved with the map in the project's .zstudio/settings.json. A change stops playback and re-evaluates the run up to the playhead.";
+        header.Text = value.Compiled is { } compiled ? $"Preview settings of {compiled.File} · kept across assets" : $"Kept for {value.Mission} · saved with the project";
+        header.ToolTip = value.Compiled != null ? "The compiled preview's scenario: kept while this file is open, for every animation you select in it (never saved; the file is read only). A change stops playback and re-evaluates the run up to the playhead."
+            : "The scenario is saved with the map in the project's .zstudio/settings.json. A change stops playback and re-evaluates the run up to the playhead.";
         // The fields being replaced commit nothing more (their typed text was committed or is shown again).
         pendingCommits.Clear();
         body.Children.Clear();
@@ -146,6 +153,12 @@ internal sealed class AnimationScenarioPanel : UserControl
 
     private void BuildStarts(AnimationScenarioView value)
     {
+        if (value.Compiled != null)
+        {
+            var one = Section("Starts", "1");
+            one.Body.Children.Add(Help("The compiled preview plays one animation from 0 s: the one selected in Assets."));
+            return;
+        }
         var section = Section("Starts", $"{value.Starts.Count} of {AnimationSchedule.MaximumStarts}");
         if (!value.Opened) { section.Body.Children.Add(Help("Open an animation in Animation mode: it becomes the primary start.")); return; }
         foreach (var start in value.Starts)
@@ -290,7 +303,8 @@ internal sealed class AnimationScenarioPanel : UserControl
             section.Body.Children.Add(paths);
         }
         if (value.Groups.Count > 200) section.Body.Children.Add(Help($"and {value.Groups.Count - 200:N0} more groups"));
-        string note = "Include all leaves back-links excluded: a call back to a running or invalidated animation is refused.";
+        string note = value.Compiled != null ? "The compiled preview runs every call, back-links too (a call back to a running or invalidated animation is refused, as in the game); switch one off here or on its port in Structure. Include all brings every call back."
+            : "Include all leaves back-links excluded: a call back to a running or invalidated animation is refused.";
         if (value.Unresolved > 0) note += $" {value.Unresolved:N0} call{(value.Unresolved == 1 ? "" : "s")} name a missing animation.";
         if (value.Truncated) note += $" The list stops at {AnimationExecutionPolicy.MaximumPaths:N0} paths.";
         section.Body.Children.Add(Help(note));
@@ -419,6 +433,64 @@ internal sealed class AnimationScenarioPanel : UserControl
         }
         beam.Children.Add(new TextBlock { Text = scenario.BeamOrigin is { } origin ? string.Create(CultureInfo.InvariantCulture, $"{origin.X:0.0}, {origin.Y:0.0}, {origin.Z:0.0}") : "Root (default)", VerticalAlignment = VerticalAlignment.Center, FontSize = 12.5 });
         section.Body.Children.Add(beam);
+        if (value.Compiled is { } compiled) BuildCompiledWorld(section, compiled);
+    }
+
+    /// <summary>
+    /// A compiled preview's world (design §19): the mission scene it binds in (Choose GameZ…, automatic by default), the bound
+    /// root (Bind root… and Clear override) and the playback range (Auto, or a custom end).
+    /// </summary>
+    private void BuildCompiledWorld(CardSection section, AnimationScenarioCompiled compiled)
+    {
+        section.Body.Children.Add(Caption("World", top: 10));
+        DockPanel world = new();
+        Button choose = TextButton("Choose GameZ…", "Choose the mission scene (gamez.zbd) this animation binds in");
+        DockPanel.SetDock(choose, Dock.Right); world.Children.Add(choose);
+        choose.Click += (_, _) => Requested?.Invoke("world", null);
+        if (compiled.WorldChosen)
+        {
+            Button automatic = SmallIcon("Close", "Back to the automatic scene (the file's own folder)", "Use the automatic mission scene");
+            automatic.Click += (_, _) => Requested?.Invoke("world", "");
+            DockPanel.SetDock(automatic, Dock.Right); world.Children.Add(automatic);
+        }
+        world.Children.Add(new TextBlock { Text = compiled.World + (compiled.WorldChosen ? "" : " (auto)"), VerticalAlignment = VerticalAlignment.Center, FontSize = 12.5, TextTrimming = TextTrimming.CharacterEllipsis, ToolTip = compiled.World });
+        section.Body.Children.Add(world);
+
+        section.Body.Children.Add(Caption("Bound root", top: 10));
+        TextBlock root = new() { Text = compiled.Root + (compiled.RootOverridden ? " · override" : ""), FontSize = 12.5, TextWrapping = TextWrapping.Wrap, Margin = new(0, 0, 0, 4) };
+        section.Body.Children.Add(root);
+        WrapPanel rootActions = new();
+        Button bind = TextButton("Bind root…", "Bind this animation's root to another node of the scene (a preview override)");
+        bind.Click += (_, _) => Requested?.Invoke("bindRoot", null);
+        Button clear = TextButton("Clear override", "Bind the root as the game does again (the first node with the animation's root name)");
+        clear.IsEnabled = compiled.RootOverridden;
+        clear.Click += (_, _) => Requested?.Invoke("clearRoot", null);
+        rootActions.Children.Add(bind); rootActions.Children.Add(clear);
+        section.Body.Children.Add(rootActions);
+
+        section.Body.Children.Add(Caption("Range", top: 10));
+        section.Body.Children.Add(Segmented("Range", [("auto", "Auto"), ("custom", "Custom")], compiled.CustomRange ? "custom" : "auto",
+            v => Requested?.Invoke(v == "auto" ? "autoRange" : "range", v == "auto" ? null : compiled.RangeEnd),
+            ["Auto: the measured duration (a looping or open-ended animation previews a bounded range)", "Custom: the range ends where you say"]));
+        DockPanel end = new() { Margin = new(0, 6, 0, 0) };
+        var endBox = new ValueTextBox { Width = 90, Height = 30, MinHeight = 30, Text = AnimationSeconds.Value(compiled.RangeEnd).Replace(",", ""), VerticalContentAlignment = VerticalAlignment.Center, TextAlignment = TextAlignment.Right };
+        AutomationProperties.SetName(endBox, "Range end seconds");
+        endBox.ToolTip = "The playback range's end in seconds (it starts at 0 s); Enter applies it as a custom range";
+        string endApplied = endBox.Text;
+        void CommitEnd()
+        {
+            if (endBox.Text == endApplied) return;
+            if (double.TryParse(endBox.Text.Trim().TrimEnd('s').Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out double seconds) && double.IsFinite(seconds) && seconds > 0 && seconds <= AnimationSeconds.Maximum)
+            { endApplied = endBox.Text; Requested?.Invoke("range", seconds); }
+            else endBox.Text = endApplied;
+        }
+        endBox.KeyDown += (_, e) => { if (e.Key == Key.Enter) { CommitEnd(); e.Handled = true; } else if (e.Key == Key.Escape) { endBox.Text = endApplied; e.Handled = true; } };
+        endBox.LostKeyboardFocus += (_, _) => CommitEnd();
+        pendingCommits.Add(CommitEnd);
+        DockPanel.SetDock(endBox, Dock.Left); end.Children.Add(endBox);
+        var rangeHelp = Help(compiled.Range + " · from 0 s"); rangeHelp.Margin = new(10, 0, 0, 0); rangeHelp.VerticalAlignment = VerticalAlignment.Center;
+        end.Children.Add(rangeHelp);
+        section.Body.Children.Add(end);
     }
 
     // ---------------------------------------------------------------- building

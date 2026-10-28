@@ -36,7 +36,7 @@ public partial class MainWindow
         // In Animation mode Diagnostics is the strip under the panel; a reported problem never opens it there (design §15).
         if (ViewModel.IsSourceProject && InAnimationMode) { if (!problems && animationDiagnostics != visible) { animationDiagnostics = visible; RememberAnimationLayout(); } }
         else if (ViewModel.IsSourceProject) { bool changed = SourceToolsVisible != visible; sourceToolsVisible = visible; if (changed) RememberSourceTools(); }
-        else { Layout.ToolsVisible = visible; if (problems) ToolTabs.SelectedIndex = 2; }
+        else { Layout.ToolsVisible = visible; if (problems) ToolTabs.SelectedItem = ProblemsTab; }
         ArrangeWorkspace();
     }
     /// <summary>Remembers the project's Diagnostics pane as it now is.</summary>

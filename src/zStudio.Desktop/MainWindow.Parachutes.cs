@@ -107,17 +107,8 @@ public partial class MainWindow
             ParachutePanel.BorderThickness = new(0); ParachutePanel.Background = Brushes.Transparent;
             return;
         }
-        if (ParachutePanel.Parent == PreviewOverlayChrome) return;
-        switch (ParachutePanel.Parent)
-        {
-            case Panel parent: parent.Children.Remove(ParachutePanel); break;
-            case Decorator decorator: decorator.Child = null; break;
-            case ContentControl control: control.Content = null; break;
-        }
-        ParachutePanel.Width = 365; ParachutePanel.Margin = new(10); ParachutePanel.Padding = new(10);
-        ParachutePanel.HorizontalAlignment = HorizontalAlignment.Right; ParachutePanel.VerticalAlignment = VerticalAlignment.Bottom;
-        ParachutePanel.BorderThickness = new(1); ParachutePanel.SetResourceReference(Border.BackgroundProperty, "CardBackgroundFillColorDefaultBrush");
-        PreviewOverlayChrome.Children.Add(ParachutePanel);
+        // A compiled Whole world: the Drop windows chip's flyout over the view (read only).
+        HostParachuteInChip();
     }
     /// <summary>
     /// Move along path's banner (the Flycam banner style): "Moving drop window 2 · click a point on the flight path · right-click
@@ -593,6 +584,7 @@ public partial class MainWindow
         string action = (sender as FrameworkElement)?.Tag as string ?? "show";
         if (action is not ("confirm" or "cancel") && !await ResolvePropertiesDraftsAsync()) return;
         if (action == "show") { if (parachutes != null) HideParachutes(); else await ShowParachutesAsync(CancellationToken.None); }
+        else if (action == "analyze" && CompiledWorldShown) await ShowParachutesAsync(CancellationToken.None, parachutes?.Entry);
         else if (action == "analyze" && animationMode is { } mode) await AnalyzeWorldDropWindowsAsync(mode.Document, mode.Definition, OpenedFlightEntry(), CancellationToken.None);
         else if (action == "begin") BeginParachute(pointer: true);
         else if (action == "numeric") BeginParachute();
@@ -743,11 +735,11 @@ public partial class MainWindow
             var openedDefinition = source && InAnimationMode && sectionCard?.Document == shownDocument && sectionCard?.Entry is DefinitionEntry shownDefinition
                 && shownDefinition.Definition.Index == animationMode!.Definition ? shownDefinition.Definition : null;
             var candidates = openedDefinition == null ? [] : DropCandidates(openedDefinition);
-            bool offered = source ? candidates.Count > 0 : parachutes != null;
+            bool offered = source ? candidates.Count > 0 : parachutes != null || CompiledWorldShown;
             ParachutePanel.Visibility = offered ? Visibility.Visible : Visibility.Collapsed;
             var state = parachutes is { } shownState && (!source || shownState.Entry is int analyzed && openedDefinition?.Entries.Contains(analyzed) == true) ? shownState : null;
             bool busy = sourceWorkspaceBusy || parachuteLoading != null || parachuteDraft?.Accepting == true;
-            ParachuteAnalyze.Visibility = source ? Visibility.Visible : Visibility.Collapsed;
+            ParachuteAnalyze.Visibility = source || CompiledWorldShown ? Visibility.Visible : Visibility.Collapsed;
             ParachuteAnalyze.IsEnabled = !busy && parachuteDraft == null && offered;
             ParachuteAnalyze.Content = parachuteLoading != null ? "Analyzing drop windows…" : state == null ? "Analyze drop windows" : "Analyze again";
             ParachutePolicy.Visibility = offered ? Visibility.Visible : Visibility.Collapsed;
@@ -803,6 +795,6 @@ public partial class MainWindow
                 : state.AnalysisRefusal ?? selectedWindow?.MoveRefusal ?? (state.Analysis is { } a ? $"{AnimationSeconds.Format(a.CycleSeconds)} cycle · {a.Releases.Count} eligible releases (orange in the view; starts cyan). Conditions still apply; markers are not landing predictions."
                 : state.Discovery.Diagnostics.Count == 0 ? "No supported callback-911 flight programs in this mission." : string.Join("\n", state.Discovery.Diagnostics.Take(3).Select(s => Bounded(s, 300))));
         }
-        finally { synchronizingParachutes = false; RefreshDropMoveBanner(); RefreshWorldAnimationRun(); }
+        finally { synchronizingParachutes = false; RefreshDropMoveBanner(); RefreshWorldAnimationRun(); RefreshDropChip(); }
     }
 }
